@@ -1,0 +1,31 @@
+# --- Données de recherche : NON versionnées ---------------------------------
+# data/ = enregistrements EEG (données biométriques) + modèles entraînés + logs de séance (~85 Mo).
+# Régénérables par calibration, et le repo "produit" n'en a pas besoin -> à archiver À PART, hors git.
+data/
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Environnements virtuels ------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- Modèles / artefacts entraînés (régénérables) ---------------------------
+*.joblib
+*.npz
+
+# --- OS / éditeurs ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Divers -----------------------------------------------------------------
+*.log
+crash.txt
