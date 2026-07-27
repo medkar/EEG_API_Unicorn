@@ -17,7 +17,7 @@ using LSL;
 /// </summary>
 public class SsvepIntentReceiver : MonoBehaviour
 {
-    [Tooltip("Stream name published by the engine. Must match src/lsl_io.py.")]
+    [Tooltip("Stream name published by the engine. Must match src/core/lsl_io.py.")]
     public string streamName = "EEG_API_Unicorn_decoded_ssvep";
 
     [Tooltip("Engine instance to attach to (headset serial). Leave empty to take the first one found.")]

@@ -66,6 +66,35 @@ doit en dépendre.
   de clavier, événement de jeu…) est le travail de l'application avale, **pas** de l'API. L'émetteur
   UDP-JSON existant devient donc un simple **exemple** (§9), utile à qui veut recevoir sans dépendance.
 
+### 3.1 Où vit le code (`core/` vs `research/`) — fait le 2026-07-27
+
+Le schéma ci-dessus se lit directement dans l'arborescence, sur un critère **vérifiable** plutôt
+qu'un jugement : **un module est dans `src/core/` si et seulement si `server.py` en a besoin pour
+tourner.** Tout le reste est dans `src/research/`.
+
+```
+src/core/       config · acquisition · cca_decoder · lsl_io · server · dashboard(.py/.html)
+src/research/   app + ui + stimulus · décodeurs des modes non publiés · calibrations · analyses
+```
+
+Deux règles en découlent, et elles sont ce qui empêche la frontière de s'effacer avec le temps :
+
+1. **`core` n'importe jamais `research`** (l'inverse est permis). Le jour où l'envie s'en présente,
+   c'est le signe que le module visé a fini de mûrir : il **déménage** dans `core`. C'est la
+   définition opérationnelle de « publier un mode » (§10, incréments v1/v2) — on ne tire pas un fil
+   à travers la frontière. La restructuration a d'ailleurs révélé une telle arête : `acquisition.py`
+   importait `controller.run_live` pour une démo joystick, vestige du banc d'essai robot ; la démo a
+   été supprimée (`controller.simulate()` couvre déjà ce câblage).
+2. **Aucun pygame dans `core`** : le moteur doit tourner sur une machine sans écran.
+
+`research` ne veut pas dire « brouillon » — le P300 et le MI y sont validés sur casque. Ça veut dire
+que le moteur ne les publie pas encore, donc qu'ils ne font pas partie du contrat rendu aux étudiants.
+
+Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
+**centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
+par `dirname(dirname(__file__))` — après déplacement, les dix auraient silencieusement pointé sur
+`src/` au lieu de la racine.
+
 ## 4. Les flux (contrat d'API)
 
 Noms de flux LSL préfixés `EEG_API_Unicorn_`. **Contrat stable** : un client ne doit pas casser si on ajoute
@@ -191,7 +220,7 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 **v1 :** `MI_decoded` (endogène, calibration native) · `P300` via marqueurs entrants · control plane LSL
 complet (`control` + `status`) · `neuro_decoded`.
 
-**v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27]** `src/dashboard.py` + `src/dashboard.html` · évolutions parkées F1/F2 (§13).
+**v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27]** `src/core/dashboard.py` + `src/core/dashboard.html` · évolutions parkées F1/F2 (§13).
 
 ## 11. Non-objectifs (assumés, à documenter)
 
@@ -240,7 +269,7 @@ Contreparties assumées :
 **Techno RETENUE (implémentée 2026-07-27)** : Python + **FastAPI/uvicorn**, page `/docs` interactive
 offerte. Rafraîchissement par **sondage** à 4 Hz : l'état complet tient en ~1 Ko et ne change qu'à
 1-5 Hz, un WebSocket n'aurait ajouté qu'une reconnexion à gérer. La page est un **fichier séparé**
-(`src/dashboard.html`), relu à chaque requête, pour qu'un étudiant l'édite et rafraîchisse sans
+(`src/core/dashboard.html`), relu à chaque requête, pour qu'un étudiant l'édite et rafraîchisse sans
 redémarrer le moteur ni rouvrir la session casque.
 
 Le navigateur ne parle pas au moteur directement : ses commandes passent par l'**API de commande
@@ -272,17 +301,19 @@ calibré » par mode · bouton de calibration · sortie décodée en direct · f
 
 1. **[fait]** Import du code existant dans le dépôt GitHub (`medkar/EEG_API_Unicorn`).
 2. **[en cours]** Cette spec.
-3. Extraire le **moteur** (acquisition + filtres + décodeurs) en cœur réutilisable ; restructurer
-   `core/` (moteur) vs `research/` (calibrations lourdes, analyses, modes exploratoires).
-   → au passage, **purger le vocabulaire « Waffle / robot »** du code et de la doc (le robot n'était qu'un
-   banc d'essai) : `UDP_HOST`, l'exemple joystick, `WAFFLE.md`, le README, les entêtes de modules.
-   Sortir aussi `UNICORN_SERIAL` et l'hôte de sortie du code → configuration (chaque élève a son casque).
+3. **[fait 2026-07-27]** Extraire le **moteur** en cœur réutilisable ; restructurer `core/` vs
+   `research/` (détail et règles en **§3.1**). Les 8 tests headless passent aux nouveaux chemins.
+   - **[fait]** vocabulaire « Waffle / robot » purgé du code et de la doc ; l'émetteur UDP est
+     devenu `examples/actuator_udp.py`, `WAFFLE.md` est devenu `docs/robot_testbed.md`.
+   - **[à faire]** sortir `UNICORN_SERIAL` et l'hôte de sortie du code → configuration (chaque
+     élève a son casque). Aujourd'hui encore en dur dans `core/config.py`, contournable par
+     `--serial` en ligne de commande.
 4. Couche **LSL** : `eeg_raw` + `quality` + `SSVEP_decoded` (MVP).
    → **tester tôt** : `pip install pylsl` + découverte multicast **sur un poste et le réseau de l'école**
    (pare-feu). C'est le risque technique n°1 du choix tout-LSL : le lever avant de construire dessus.
    - **[fait 2026-07-27]** risque LSL levé **en local** (mesures au §4) ; `requirements.txt` créé.
-   - **[fait 2026-07-27]** `src/lsl_io.py` (publication + pont d'horloge BrainFlow→LSL + autotest) et
-     `src/server.py` (**moteur headless** : `raw` + `quality` + `status`, `--synthetic`, `--smoke`).
+   - **[fait 2026-07-27]** `src/core/lsl_io.py` (publication + pont d'horloge BrainFlow→LSL + autotest) et
+     `src/core/server.py` (**moteur headless** : `raw` + `quality` + `status`, `--synthetic`, `--smoke`).
    - **[fait 2026-07-27]** validé sur le **vrai casque** : horodatage à ±0,5 ms, `quality` à
      4,6-9 µV sur les 8 voies. Deux défauts **pré-existants** corrigés au passage (`_filter`
      modifiait son entrée ; `quality()` mesurait le transitoire du filtre, pas l'électrode).

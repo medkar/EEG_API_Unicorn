@@ -2,7 +2,7 @@
 
 This is the smallest useful client. Start the engine in one terminal:
 
-    python src/server.py --synthetic
+    python src/core/server.py --synthetic
 
 then run this in another:
 
@@ -66,7 +66,7 @@ def main(argv):
     print(f"Looking for '{name}'...")
     found = resolve_byprop("name", name, timeout=10.0)
     if not found:
-        print(f"Not found. Start the engine first:  python src/server.py --synthetic")
+        print(f"Not found. Start the engine first:  python src/core/server.py --synthetic")
         return 1
 
     # A machine with several network interfaces answers once per interface, so the same

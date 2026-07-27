@@ -48,7 +48,7 @@ path, so any two laptops will do.
 On machine A:
 
 ```powershell
-python src/server.py --synthetic --id testA
+python src/core/server.py --synthetic --id testA
 ```
 
 On machine B — **you do not need the repository**. The client depends on `pylsl` and
@@ -128,7 +128,7 @@ Every engine publishes the *same stream names*; that is the point of a stable co
 distinguishes them is the instance id, which defaults to the headset serial number:
 
 ```powershell
-python src/server.py --mode ssvep --id alice
+python src/core/server.py --mode ssvep --id alice
 ```
 
 Clients should then select on it — `examples/receiver.py` warns when more than one engine

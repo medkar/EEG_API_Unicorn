@@ -24,8 +24,8 @@ empty GameObject, add both components to it, and drag any object (a cube will do
 On the machine with the headset:
 
 ```powershell
-python src/ssvep_stimulus.py --refresh 60        # the flickering targets
-python src/server.py --mode ssvep --refresh 60   # acquisition and decoding
+python src/research/ssvep_stimulus.py --refresh 60     # the flickering targets
+python src/core/server.py --mode ssvep --refresh 60    # acquisition and decoding
 ```
 
 The engine starts with a warm-up and a short rest measurement — **look at nothing and stay

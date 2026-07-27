@@ -32,14 +32,14 @@ Three entry points, from the most useful to the most specialised.
 **The engine** — no interface, streams over the network. This is the product.
 
 ```bash
-python src/server.py --mode ssvep --refresh 60   # acquire, decode, publish
-python src/server.py --synthetic                 # no headset (BrainFlow test board)
+python src/core/server.py --mode ssvep --refresh 60   # acquire, decode, publish
+python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
 
 **The dashboard** — the engine plus a local web page, at <http://localhost:8000>.
 
 ```bash
-python src/dashboard.py --mode ssvep --refresh 60
+python src/core/dashboard.py --mode ssvep --refresh 60
 ```
 
 Live channel quality, a detached-reference alarm, the decoded target against its threshold, and the
@@ -49,10 +49,10 @@ controls. Its `/docs` page documents the HTTP API interactively.
 neuro-monitoring. It owns the headset and publishes nothing.
 
 ```bash
-python src/app.py                 # fullscreen, real headset — main menu
-python src/app.py --windowed      # windowed (keeps the console visible)
-python src/app.py --synthetic     # no headset (BrainFlow synthetic board)
-python src/app.py --smoke         # headless end-to-end self-test (CI)
+python src/research/app.py                 # fullscreen, real headset — main menu
+python src/research/app.py --windowed      # windowed (keeps the console visible)
+python src/research/app.py --synthetic     # no headset (BrainFlow synthetic board)
+python src/research/app.py --smoke         # headless end-to-end self-test (CI)
 ```
 
 ⚠️ The engine and the app both open the headset, so **run only one at a time**.
@@ -100,32 +100,53 @@ automatically to the display refresh rate.
 
 ## Layout
 
-| Part | Where |
+The source splits in two, on a rule you can check rather than a matter of taste: **a module lives in
+`core/` if and only if the engine needs it to run.** Everything else is `research/`. `research` may
+import `core`; `core` must never import `research`. When a mode graduates from exploration to a
+published stream, its decoder *moves* to `core/` — nobody threads an import across the boundary.
+
+### [`src/core/`](src/core/) — the engine, and therefore the product
+
+| Module | What it does |
 |---|---|
-| Engine — acquisition, decoding, LSL streams | [`src/server.py`](src/server.py) |
-| Stream contract — publishers, clock bridge | [`src/lsl_io.py`](src/lsl_io.py) |
-| Web dashboard — server and page | [`src/dashboard.py`](src/dashboard.py) · [`src/dashboard.html`](src/dashboard.html) |
-| pygame app — menu and all six modes | [`src/app.py`](src/app.py) |
-| Shared config — channels, frequencies, codes, per-mode constants | [`src/config.py`](src/config.py) |
-| Acquisition — Unicorn via BrainFlow, sliding windows and epochs | [`src/acquisition.py`](src/acquisition.py) |
-| Shared window, headset session, signal-quality screen | [`src/ui.py`](src/ui.py) |
-| Decoders | `cca_decoder` · `cvep_decoder` · `mi_decoder` · `p300_decoder` · `errp_decoder` · `neuro_monitor` |
-| Calibrations | `mi_calibrate` · `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
-| Offline analysis | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` |
+| [`server.py`](src/core/server.py) | The headless loop: acquire, decode, publish. Start here. |
+| [`lsl_io.py`](src/core/lsl_io.py) | Stream publishers and the clock bridge — **the public contract** |
+| [`acquisition.py`](src/core/acquisition.py) | Unicorn via BrainFlow: sliding windows, epochs, link check |
+| [`cca_decoder.py`](src/core/cca_decoder.py) | SSVEP by CCA, no training, z-scored against a rest floor |
+| [`config.py`](src/core/config.py) | Channels, frequencies, codes, per-mode constants, repo paths |
+| [`dashboard.py`](src/core/dashboard.py) · [`dashboard.html`](src/core/dashboard.html) | Web dashboard over the engine, same process |
+
+No pygame anywhere in here: the engine runs on a machine without a screen.
+
+### [`src/research/`](src/research/) — everything not yet in the engine
+
+Not a synonym for "unfinished" — several of these modes are hardware-validated. It means the engine
+does not publish them yet, so they are not part of what students consume and may still change shape.
+
+| Family | Modules |
+|---|---|
+| pygame app | [`app.py`](src/research/app.py) (menu, six modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
+| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `mi_decoder` · `p300_decoder` · `errp_decoder` · `neuro_monitor` |
+| Calibrations — long protocols, train a model into `data/` | `mi_calibrate` · `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
+| Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
+| Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
 
 ## Self-tests (no headset needed)
 
 ```bash
-python src/server.py --smoke         # engine + streams + SSVEP decoding, end to end
-python src/dashboard.py --smoke      # engine + HTTP API + page
-python src/lsl_io.py                 # stream contract: channel names, round-trip, clock bridge
-python src/app.py --smoke            # whole app headless: menu + every mode + calibrations
-python src/cvep_code.py              # m-sequence properties (balance, autocorrelation, lags)
-python src/cvep_decoder.py           # c-VEP accuracy vs SNR on synthetic responses
-python src/cca_decoder.py            # CCA accuracy on synthetic SSVEP
-python src/errp_decoder.py           # ErrP pipeline on synthetic error potentials
-python src/neuro_monitor.py          # spectral indices on synthetic EEG
-python src/itr.py                    # information transfer rate — common yardstick
+python src/core/server.py --smoke        # engine + streams + SSVEP decoding, end to end
+python src/core/dashboard.py --smoke     # engine + HTTP API + page
+python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
+python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
+python src/core/acquisition.py --synthetic  # acquisition alone, on the test board
+
+python src/research/app.py --smoke       # whole app headless: menu + every mode + calibrations
+python src/research/cvep_code.py         # m-sequence properties (balance, autocorrelation, lags)
+python src/research/cvep_decoder.py      # c-VEP accuracy vs SNR on synthetic responses
+python src/research/errp_decoder.py      # ErrP pipeline on synthetic error potentials
+python src/research/neuro_monitor.py     # spectral indices on synthetic EEG
+python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
+python src/research/itr.py               # information transfer rate — common yardstick
 ```
 
 ## Things worth knowing
