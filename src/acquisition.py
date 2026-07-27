@@ -91,8 +91,19 @@ class UnicornAcquisition:
         self.stop()
 
     def _filter(self, sig):
-        """Detrend + bandpass + notch 50 Hz, in-place par voie (BrainFlow attend du 1D contigu)."""
-        out = np.ascontiguousarray(sig, dtype=np.float64)
+        """Detrend + bandpass + notch 50 Hz. Rend un NOUVEAU tableau, sans toucher à `sig`.
+
+        ⚠️ Ne jamais remplacer ce `np.array(..., copy=True)` par `np.ascontiguousarray` :
+        celui-ci rend l'objet TEL QUEL quand il est déjà float64 C-contigu, et le filtrage
+        écrase alors les données de l'appelant. Le bug a existé (2026-07-27) et il est
+        sournois : tous les appelants historiques passent `data[rows, :].T`, une vue
+        TRANSPOSÉE donc non contiguë, qui était copiée par chance. Le premier appelant à
+        passer un tampon persistant et contigu (le serveur LSL) a vu son tampon se faire
+        filtrer sur place, puis re-filtrer à chaque tour, avec une marche géante à la
+        frontière entre la partie déjà filtrée et les échantillons bruts fraîchement
+        ajoutés — σ mesuré 40 000 µV pour un EEG à 5 µV.
+        """
+        out = np.array(sig, dtype=np.float64, order="C")
         lo, hi = self.bandpass
         for c in range(out.shape[1]):
             col = np.ascontiguousarray(out[:, c])
@@ -117,6 +128,25 @@ class UnicornAcquisition:
         out = self._filter(sig) if filtered else sig
         return out[-self.window_n:]
 
+    def sigma_from_block(self, block):
+        """σ par voie d'un bloc (n x C) DÉJÀ collecté, transitoire du filtre écarté.
+
+        ⚠️ Écarter le transitoire n'est pas un raffinement, c'est ce qui sépare une mesure
+        utilisable d'une mesure fausse d'un facteur 100. L'Unicorn sort un offset DC énorme et
+        DÉRIVANT (mesuré le 2026-07-27 : 10⁵ µV, en rampe sur des dizaines de secondes après
+        l'ouverture de session). `_filter` ne retire que la MOYENNE (`detrend(CONSTANT)`), pas
+        la rampe ; le Butterworth étant à PASSE UNIQUE, ce résidu se présente comme une marche
+        géante en début de tampon et son transitoire d'établissement domine tout le σ.
+        Mesuré sur casque, même tampon : **σ = 2060 µV transitoire compris, 22 µV sans**.
+        Le second chiffre est de l'EEG, le premier est du filtre.
+
+        `block` doit donc contenir `margin_n` échantillons de PLUS que la fenêtre à mesurer.
+        Retourne None si le bloc est trop court.
+        """
+        if block is None or len(block) <= self.margin_n:
+            return None
+        return self._filter(block)[self.margin_n:].std(axis=0)
+
     def quality(self, seconds=2.0, rows=None):
         """σ par voie après filtrage — détecte une voie morte ou saturée.
 
@@ -124,13 +154,16 @@ class UnicornAcquisition:
         plat ou quasi plat : σ s'effondre. Une voie flottante ou saturée donne au contraire un
         σ énorme. Entre les deux se trouve l'EEG réel (typiquement 5-20 en bande 5-40 Hz).
         Retourne un tableau de σ, ou None tant que le buffer n'est pas rempli.
+
+        On récupère `margin_n` échantillons de plus que demandé, et on les jette après
+        filtrage (cf. `sigma_from_block`) : sans ça, le σ mesure le filtre, pas l'électrode.
         """
         rows = self.eeg_rows if rows is None else rows
-        n = int(round(seconds * self.fs))
+        n = int(round(seconds * self.fs)) + self.margin_n
         data = self.board.get_current_board_data(n)
         if data.shape[1] < n:
             return None
-        return self._filter(data[rows, :].T).std(axis=0)
+        return self.sigma_from_block(data[rows, :].T)
 
     def get_epoch(self, seconds, rows=None, filtered=False, margin_s=0.0):
         """Époque des `rows` (défaut : TOUTES les voies EEG) sur les dernières `seconds`,
@@ -151,6 +184,27 @@ class UnicornAcquisition:
         sig = data[rows, :].T
         out = self._filter(sig) if filtered else sig
         return out if extra else out[-n:]
+
+    def get_new_data(self):
+        """Échantillons ARRIVÉS DEPUIS LE DERNIER APPEL : (eeg (n x 8), ts (n,)), non filtrés.
+
+        Pour la diffusion en continu (serveur LSL) : on veut publier chaque échantillon une
+        fois et une seule, sans trou ni doublon, ce que `get_current_board_data` ne permet pas
+        (elle rend toujours la même fenêtre glissante).
+
+        ⚠️ CETTE MÉTHODE VIDE LE TAMPON de BrainFlow. Les autres accesseurs (`get_window`,
+        `get_epoch`, `get_raw`, `quality`) lisent, eux, un tampon glissant qu'ils supposent
+        REMPLI : les mélanger avec celle-ci dans la même session leur ferait rendre des
+        fenêtres tronquées ou None. Un seul lecteur incrémental par session, donc — le jour
+        où le moteur devra à la fois diffuser et décoder, ce sera à lui de tenir son propre
+        tampon à partir de ce que rend cette méthode.
+
+        Retourne (None, None) si rien de neuf.
+        """
+        data = self.board.get_board_data()
+        if data.shape[1] < 1:
+            return None, None
+        return data[self.eeg_rows, :].T, data[self.ts_row, :]
 
     def get_raw(self, seconds):
         """Flux BRUT (non filtré) des `seconds` dernières secondes : (eeg (n x 8), ts (n,)).
