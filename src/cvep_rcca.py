@@ -222,7 +222,7 @@ def calibrate_rcca(app, cycles=None, save_path=CVEP_RCCA_MODEL_PATH):
     try:
         for b_idx, (target, n_cyc) in enumerate(blocks, start=1):
             if not app.smoke:
-                _, qrows = app.signal_ok(0.5)
+                _, qrows, _ = app.signal_ok(0.5)
                 dead = [nm for nm, _, v in qrows if v == "morte"]
                 if dead:
                     print(f"[rcca-cal] ⛔ LIAISON PERDUE (voies plates : {', '.join(dead)}) "

@@ -22,6 +22,22 @@ SIGNAL_DEAD_SIGMA = 0.5
 SIGNAL_SAT_SIGMA = 500.0
 
 
+# Corrélation médiane entre voies au-delà de laquelle la RÉFÉRENCE (mastoïde) est décrochée.
+# Défaut invisible au σ : les 8 voies mesurent alors la même référence flottante avec des
+# amplitudes plausibles, et l'écran de contrôle affiche 8 barres rassurantes sur un signal vide.
+# Mesuré sur casque le 2026-07-27 : mastoïdes absentes -> médiane +1,000 (mode commun pur) ;
+# mastoïdes en place -> +0,31 à +0,50. Le seuil est posé à mi-chemin, avec une marge énorme des
+# deux côtés — ce n'est pas un réglage statistique fin mais la détection d'un régime physique.
+# ⚠️ Calibré sur UNE séance ; si un montage sain déclenchait l'alerte, c'est ce seuil qu'il faut
+# revoir en premier (et non l'ignorer).
+COMMON_MODE_MAX = 0.90
+
+
+def reference_lost(common_mode):
+    """True si la corrélation inter-voies trahit une référence décrochée. None -> False."""
+    return common_mode is not None and common_mode > COMMON_MODE_MAX
+
+
 def signal_verdict(sigma):
     """'morte' | 'saturée' | 'ok' pour une voie, depuis son σ filtré."""
     if sigma < SIGNAL_DEAD_SIGMA:

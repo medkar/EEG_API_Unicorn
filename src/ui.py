@@ -15,7 +15,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_REPO, "examples"))
-from config import CH_NAMES, UDP_HOST, UDP_PORT, apply_invert, signal_verdict  # noqa: E402
+from config import (CH_NAMES, UDP_HOST, UDP_PORT, apply_invert,  # noqa: E402
+                    reference_lost, signal_verdict)
 from ssvep_stimulus import arrow_polygon, measure_refresh  # noqa: E402
 
 BG = (10, 10, 16)
@@ -199,13 +200,19 @@ class App:
         self.win.blit(self.small.render(text, True, color), (14, 12))
 
     def signal_ok(self, seconds=1.0):
-        """(tout_ok, [(nom, σ, verdict)]) — état instantané des voies. None si pas prêt."""
-        sig = self.acq.quality(seconds)
+        """(tout_ok, [(nom, σ, verdict)], mode_commun) — état instantané des voies.
+
+        `mode_commun` = corrélation médiane entre voies. Au-delà de COMMON_MODE_MAX, la
+        référence (mastoïde) est décrochée : les 8 voies mesurent la même chose et le σ,
+        lui, reste plausible — c'est le défaut que cet écran laissait passer.
+        """
+        sig, common = self.acq.link_check(seconds)
         if sig is None:
-            return None, []
+            return None, [], None
         rows = [(CH_NAMES[i], float(s), signal_verdict(float(s)))
                 for i, s in enumerate(sig)]
-        return all(v == "ok" for _, _, v in rows), rows
+        ok = all(v == "ok" for _, _, v in rows) and not reference_lost(common)
+        return ok, rows, common
 
     def signal_check(self, blocking=True, highlight=None, mode_label=None):
         """Écran de contrôle de la liaison casque AVANT tout enregistrement coûteux.
@@ -224,7 +231,7 @@ class App:
         highlight = set(highlight or [])
         pg = self.pygame
         while True:
-            ok, rows = self.signal_ok()
+            ok, rows, common = self.signal_ok()
             if self.smoke:
                 return True
             pressed = []
@@ -257,9 +264,18 @@ class App:
                     surf = self.small.render(txt, True, col)   # couleur = verdict (ok/défaut)
                     self.win.blit(surf, (int(w * 0.20), y - 10))
                     y += int(h * 0.045)
-                msg = ("signal plausible sur les 8 voies — touche pour continuer"
-                       if ok else
-                       "VOIES EN DÉFAUT : vérifie le câble, les électrodes et les mastoïdes")
+                # La référence décrochée passe AVANT le verdict par voie : c'est le défaut
+                # que les 8 barres ne montrent pas, et il invalide toute la séance.
+                if reference_lost(common):
+                    self.center(self.mid, f"RÉFÉRENCE DÉCROCHÉE — les 8 voies mesurent la même "
+                                f"chose (corrélation {common:.2f})", WARN, int(h * 0.74))
+                    self.center(self.small, "remets les électrodes MASTOÏDES, puis relance le mode",
+                                WARN, int(h * 0.775))
+                    msg = "signal INEXPLOITABLE malgré des barres plausibles"
+                elif ok:
+                    msg = "signal plausible sur les 8 voies — touche pour continuer"
+                else:
+                    msg = "VOIES EN DÉFAUT : vérifie le câble, les électrodes et les mastoïdes"
                 self.center(self.mid, msg, GO if ok else WARN, int(h * 0.80))
                 self.center(self.small,
                             "touche = continuer   ·   ESC = retour au menu", DIM, int(h * 0.87))

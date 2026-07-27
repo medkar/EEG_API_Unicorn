@@ -34,6 +34,12 @@ from config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, OCCIPITAL, UDP_PORT,  #
                     UNICORN_SERIAL, WINDOW_S, use_utf8_console)
 
 
+def _median_offdiag(filtered):
+    """Corrélation médiane entre paires de voies distinctes d'un bloc (n x C) filtré."""
+    c = np.corrcoef(filtered.T)
+    return float(np.median(c[~np.eye(c.shape[0], dtype=bool)]))
+
+
 class UnicornAcquisition:
     """Session BrainFlow + extraction de la fenêtre occipitale la plus récente.
 
@@ -143,9 +149,51 @@ class UnicornAcquisition:
         `block` doit donc contenir `margin_n` échantillons de PLUS que la fenêtre à mesurer.
         Retourne None si le bloc est trop court.
         """
+        source = self.sigma_source(block)
+        return None if source is None else source.std(axis=0)
+
+    def common_mode(self, block):
+        """Corrélation médiane entre voies (signal filtré) — détecte une RÉFÉRENCE DÉCROCHÉE.
+
+        Le σ par voie ne voit PAS ce défaut : quand une mastoïde se décolle, les 8 voies
+        mesurent toutes la même chose (la référence qui flotte) avec des amplitudes qui
+        restent plausibles. L'écran de contrôle affiche alors 8 barres rassurantes sur un
+        signal sans aucune information — une séance entière perdue, deux fois le 2026-07-27.
+
+        Mesuré sur casque le même jour : mastoïdes absentes -> médiane **+1,000** (mode
+        commun pur, min +1,000 sur toutes les paires) ; mastoïdes en place -> **+0,31 à
+        +0,50**. La séparation est énorme et le mécanisme est physique, pas statistique :
+        deux voies qui mesurent la même référence flottante corrèlent exactement à 1.
+
+        On prend la MÉDIANE et non le max : avec un bon montage, certaines paires voisines
+        (occipitales adjacentes) montent légitimement à +0,87.
+
+        Retourne None si le bloc est trop court.
+        """
+        source = self.sigma_source(block)
+        return None if source is None else _median_offdiag(source)
+
+    def sigma_source(self, block):
+        """Bloc filtré, transitoire écarté — la base commune de `sigma_from_block`/`common_mode`."""
         if block is None or len(block) <= self.margin_n:
             return None
-        return self._filter(block)[self.margin_n:].std(axis=0)
+        return self._filter(block)[self.margin_n:]
+
+    def link_check(self, seconds=2.0, rows=None):
+        """(σ par voie, corrélation inter-voies) — l'état de la liaison en UNE lecture.
+
+        Les deux indicateurs sont complémentaires et aucun ne remplace l'autre : le σ voit
+        une voie morte ou saturée, la corrélation voit une référence décrochée. Ils sont
+        calculés ici sur le MÊME tampon filtré, pour ne pas payer deux fois le filtrage ni
+        risquer de décrire deux instants différents.
+        """
+        rows = self.eeg_rows if rows is None else rows
+        n = int(round(seconds * self.fs)) + self.margin_n
+        data = self.board.get_current_board_data(n)
+        if data.shape[1] < n:
+            return None, None
+        source = self.sigma_source(data[rows, :].T)
+        return source.std(axis=0), _median_offdiag(source)
 
     def occipital_window(self, block):
         """Fenêtre SSVEP (window_n x len(OCCIPITAL)) depuis un bloc DÉJÀ collecté (n x 8).

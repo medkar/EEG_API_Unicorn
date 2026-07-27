@@ -197,7 +197,7 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=CVEP_MODEL_PATH):
             # Surveillance en cours de séance : une liaison qui lâche au bloc 3 produirait
             # sinon 3 minutes de signal plat, puis un modèle à 0 % sans le moindre indice.
             if not app.smoke:
-                _, qrows = app.signal_ok(0.5)
+                _, qrows, _ = app.signal_ok(0.5)
                 dead = [n for n, _, v in qrows if v == "morte"]
                 if dead:
                     print(f"[cvep-cal] ⛔ LIAISON PERDUE (voies plates : {', '.join(dead)}) "

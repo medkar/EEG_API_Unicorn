@@ -46,7 +46,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from acquisition import UnicornAcquisition  # noqa: E402
 from cca_decoder import CCADecoder  # noqa: E402
 from config import (ARTIFACT_SIGMA_RATIO, CH_NAMES, SSVEP_BASELINE_S,  # noqa: E402
-                    SSVEP_WARMUP_S, choose_frequencies, use_utf8_console)
+                    SSVEP_WARMUP_S, choose_frequencies, reference_lost,
+                    use_utf8_console)
 from lsl_io import (ClockBridge, DecodedSSVEPPublisher, QualityPublisher,  # noqa: E402
                     RawPublisher, StatusPublisher, default_instance_id, stream_name,
                     verdict_from_sigma)
@@ -104,6 +105,7 @@ class EngineServer:
         self._baseline_done = False
         self._baseline_warned = False
         self._last_log = 0.0
+        self._reference_lost = None
         if mode == "ssvep":
             self._setup_ssvep(freqs, refresh)
 
@@ -191,8 +193,21 @@ class EngineServer:
         seraient pires que pas de mesure du tout.
         """
         sigmas = self.acq.sigma_from_block(self._recent)
-        if sigmas is not None:
-            self.quality_out.push(sigmas, lsl_ts)
+        if sigmas is None:
+            return
+        self.quality_out.push(sigmas, lsl_ts)
+        # Référence décrochée : invisible sur les σ, fatale pour la séance. On le dit
+        # une fois par changement d'état plutôt qu'à chaque seconde.
+        common = self.acq.common_mode(self._recent)
+        lost = reference_lost(common)
+        if lost != self._reference_lost:
+            self._reference_lost = lost
+            if lost:
+                print(f"[server] ⚠️  RÉFÉRENCE DÉCROCHÉE (corrélation inter-voies "
+                      f"{common:.2f}) — les 8 voies mesurent la même chose. Remets les "
+                      f"MASTOÏDES et relance : tout ce qui suit est inexploitable.")
+            else:
+                print(f"[server] référence OK (corrélation inter-voies {common:.2f})")
 
     def _tick_ssvep(self, lsl_ts):
         """Un pas de décodage SSVEP : d'abord mesurer le repos, ensuite décider."""
