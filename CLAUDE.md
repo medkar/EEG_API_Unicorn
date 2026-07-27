@@ -1,33 +1,52 @@
-# Contexte projet — MLF_EEG_Waffle
+# Contexte projet — EEG_API_Unicorn
 
-Projet : **piloter un TurtleBot3 Waffle avec un casque EEG Unicorn** (g.tec Hybrid Black).
+Projet : **une API BCI utilisable par des étudiants**. Un casque EEG **Unicorn Hybrid Black** est
+acquis et décodé par cet outil, et le résultat est **diffusé sur le réseau (LSL)** pour être consommé
+par n'importe quelle application externe (Unity, Python, MATLAB, web).
 
 ## Ce qu'il faut savoir en arrivant
 
-- Le **robot est déjà entièrement configuré et validé** (voir [WAFFLE.md](WAFFLE.md)). Il a été mis en
-  place dans le projet voisin `../MLF_CoinDetector`. **Ne PAS refaire le setup du robot.**
-- Le Waffle expose une interface générique : il accepte un **joystick en UDP** — datagramme JSON
-  `{"jx": <-1..1>, "jy": <-1..1>}` sur le **port 5005** du Pi. Un nœud ROS2 (`joystick_teleop`) déjà
-  installé sur le Pi le traduit en `/cmd_vel`.
-  - `jy>0` = avance, `jx>0` = tourne à droite, silence > 0,5 s = stop (watchdog).
-- **Le PC EEG n'a PAS besoin de ROS2.** Juste une socket UDP. Voir `examples/send_joystick_udp.py`.
-- Le travail de ce projet est **entièrement côté EEG** : acquisition Unicorn → décodage → `{jx, jy}` → UDP.
-
-## Façon de travailler (préférences de l'utilisateur)
-
-- Répondre en **français** ; README et messages de commit **en anglais** pour GitHub.
-- Avancer par **petits pas testés sur le matériel** : éditer → (push/pull si besoin) → lancer → coller les logs.
-- **Vérifier la doc** (SDK Unicorn, ROS2) avant d'affirmer ; citer les sources sur les points incertains.
-- Recommander **une option claire** plutôt qu'un catalogue ; privilégier la simplicité.
-- Sécurité robot : **roues en l'air** d'abord, vitesses basses, batterie chargée.
-
-## Démarrage rapide du robot
-
-Voir [WAFFLE.md](WAFFLE.md) §« Démarrer le robot ». En résumé : trouver l'IP du Pi
-(`ping -4 wafflebot.local`), 2 sessions SSH → `ros2 launch turtlebot3_bringup robot.launch.py`
-puis `ros2 run mlf_coin_teleop joystick_teleop`, et envoyer l'UDP depuis le PC.
+- **Lire [docs/SPEC.md](docs/SPEC.md) en premier** : but, architecture, contrat des flux, décisions
+  figées et roadmap. C'est le document de référence du projet.
+- Le produit est **agnostique de l'application avale** : chaque mode publie une **intention neutre**
+  (quelle cible, quelle classe, quel état mental), **jamais une commande d'actionneur**. Traduire ça
+  en action (jeu, visualisation, robot…) est le travail de l'application cliente.
+- Un **TurtleBot3 Waffle** a servi de banc d'essai historique au décodage. Ce n'est **plus un
+  objectif** : voir [docs/robot_testbed.md](docs/robot_testbed.md) au besoin, mais rien de neuf ne
+  doit en dépendre.
+- Le code actuel est une **application pygame** (`src/app.py`, menu à 6 modes) issue d'une phase
+  d'exploration. Le chantier en cours est de l'ouvrir : extraire un **moteur** (acquisition → décodage
+  → diffusion) qui tourne **sans interface**, l'interface devenant un client parmi d'autres.
+- Public visé = **des étudiants qui vont lire et modifier ce code**. Écrire en conséquence.
 
 ## Matériel
 
-Casque **Unicorn Hybrid Black** (8 voies EEG, 250 Hz, Bluetooth) + **TurtleBot3 Waffle**
-(Raspberry Pi sous Ubuntu 22.04 + ROS2 Humble). PC de dev sous **Windows** (PowerShell).
+Casque **Unicorn Hybrid Black** : 8 voies EEG sèches, 250 Hz, Bluetooth. Montage fixe
+`[Fz, C3, Cz, C4, Pz, PO7, Oz, PO8]` (indices 0-7). PC de dev sous **Windows** (PowerShell).
+
+## Façon de travailler (préférences de l'utilisateur)
+
+- Répondre en **français** ; README, doc et messages de commit **en anglais** pour GitHub.
+- Avancer par **petits pas testés sur le matériel** : éditer → lancer → coller les logs.
+- **Vérifier la doc** (SDK Unicorn, LSL, littérature BCI) avant d'affirmer ; citer les sources sur les
+  points incertains.
+- Recommander **une option claire** plutôt qu'un catalogue ; privilégier la simplicité.
+- **Rigueur statistique** : ne jamais conclure sur du bruit. Sur de petits échantillons EEG, valider
+  une hypothèse par un test (permutation, validation croisée honnête) avant d'y croire.
+
+## Commandes utiles
+
+```bash
+python src/app.py                 # l'appli, plein écran, casque réel
+python src/app.py --windowed      # en fenêtre (console visible à côté)
+python src/app.py --synthetic     # sans casque (board de test BrainFlow)
+python src/app.py --smoke         # test headless de bout en bout — à lancer après toute modif
+```
+
+## Pièges matériels à connaître
+
+- **Ne pas fermer/rouvrir l'appli** en cours de séance : les voies C3/Cz saturent à la réouverture
+  (redémarrage de l'amplificateur). Garder une seule session ouverte.
+- **Saliner les électrodes** est le principal levier de qualité du signal (gain mesuré très net).
+- Vérifier le contact **avant** d'enregistrer : une électrode ou une référence décollée produit une
+  séance entière inexploitable, sans autre signal d'alerte que l'écran de contrôle de liaison.

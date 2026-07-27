@@ -1,7 +1,13 @@
-# WAFFLE.md — tout sur le robot (handoff auto-suffisant)
+# Banc d'essai historique — robot TurtleBot3 Waffle
+
+> ⚠️ **Note d'archive.** Ce robot a servi de **banc d'essai** pour valider le décodage EEG en
+> conditions réelles (« est-ce qu'une intention décodée pilote vraiment quelque chose ? »). Ce
+> **n'est plus un objectif du projet** : EEG_API_Unicorn diffuse des intentions neutres, et
+> l'application cliente décide quoi en faire. Ce document est conservé pour pouvoir refaire une
+> démonstration robot, pas comme référence d'architecture — voir [SPEC.md](SPEC.md) pour le projet.
 
 Le TurtleBot3 Waffle est **déjà configuré et validé**. Ce document contient tout pour le reprendre en
-main sans rien réinstaller. Interface pour ton appli : un **joystick UDP** (voir §0).
+main sans rien réinstaller. Interface : un **joystick UDP** (voir §0).
 
 ---
 
