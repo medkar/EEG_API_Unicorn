@@ -12,7 +12,7 @@ alpha quand on ne fixe rien, et CALIBRER rho_min — avant de brancher le robot.
 
     python src/live_ssvep.py                 # plein écran, casque réel, ESC pour quitter
     python src/live_ssvep.py --windowed      # fenêtre (voir la console à côté)
-    python src/live_ssvep.py --send          # + envoi UDP au Waffle (config.UDP_HOST)
+    python src/live_ssvep.py --send          # + envoi UDP à l'actionneur (config.UDP_HOST)
     python src/live_ssvep.py --synthetic     # sans casque (board de test) — pour déboguer l'UI
     python src/live_ssvep.py --smoke         # test headless (CI), n'affiche rien
 """
@@ -100,7 +100,7 @@ def run(windowed=False, send=False, synthetic=False, smoke=False):
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("SSVEP live — EEG Waffle")
+    pygame.display.set_caption("SSVEP live — EEG_API_Unicorn")
     pygame.mouse.set_visible(False)
 
     refresh = 60.0 if smoke else measure_refresh(pygame, win)
@@ -125,8 +125,8 @@ def run(windowed=False, send=False, synthetic=False, smoke=False):
     sender = None
     if send:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples"))
-        from send_joystick_udp import JoystickSender
-        sender = JoystickSender(UDP_HOST, UDP_PORT)
+        from actuator_udp import ActuatorSender
+        sender = ActuatorSender(UDP_HOST, UDP_PORT)
 
     shared = _Shared()
     stop = threading.Event()
@@ -284,7 +284,7 @@ def guided(windowed=False, synthetic=False, smoke=False):
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("SSVEP guidé — EEG Waffle")
+    pygame.display.set_caption("SSVEP guidé — EEG_API_Unicorn")
     pygame.mouse.set_visible(False)
 
     refresh = 60.0 if smoke else measure_refresh(pygame, win)
@@ -417,10 +417,10 @@ def _save_raw(epochs, labels, plan, fs, refresh, smoke):
 
 
 def _parse_args(argv):
-    p = argparse.ArgumentParser(description="Diagnostic SSVEP live (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Diagnostic SSVEP live (EEG_API_Unicorn).")
     p.add_argument("--guided", action="store_true", help="protocole guidé (consignes + ρ par étape)")
     p.add_argument("--windowed", action="store_true")
-    p.add_argument("--send", action="store_true", help="envoyer {jx,jy} en UDP au Waffle")
+    p.add_argument("--send", action="store_true", help="envoyer {jx,jy} en UDP à l'actionneur")
     p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")
     p.add_argument("--smoke", action="store_true", help="test headless (CI)")
     return p.parse_args(argv)

@@ -64,7 +64,7 @@ def sweep(path):
 
 if __name__ == "__main__":
     use_utf8_console()
-    p = argparse.ArgumentParser(description="Comparaison méthodes MI (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Comparaison méthodes MI (EEG_API_Unicorn).")
     p.add_argument("path", nargs="?", help="fichier .npz (défaut : data/mi_calib_last.npz)")
     p.add_argument("--drop", type=int, default=0, help="ignore les N premiers essais")
     p.add_argument("--sweep", action="store_true", help="analyse échauffement (drop + moitiés)")

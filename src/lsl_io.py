@@ -274,11 +274,18 @@ def _autotest():
     from pylsl import StreamInlet, resolve_byprop
 
     bridge = ClockBridge()
-    raw, qual, status = RawPublisher(), QualityPublisher(), StatusPublisher()
+    instance = "autotest"
+    raw = RawPublisher(instance=instance)
+    qual, status = QualityPublisher(instance=instance), StatusPublisher(instance=instance)
     ok = True
 
     # 1. Découverte + métadonnées du flux brut.
-    found = resolve_byprop("name", stream_name("raw"), timeout=5.0)
+    # On exige NOTRE instance : les noms de flux sont un contrat public, donc identiques pour
+    # tous les moteurs. Sans ce filtre, un serveur laissé ouvert sur le poste répond à la
+    # place du nôtre et l'autotest compare ses données à notre motif — il a échoué ainsi le
+    # 2026-07-27 sur « valeurs altérées ». `minimum` élevé force à attendre tout le monde.
+    found = [i for i in resolve_byprop("name", stream_name("raw"), minimum=32, timeout=2.0)
+             if i.source_id().endswith(f"@{instance}")]
     if not found:
         print("[lsl] ÉCHEC : flux 'raw' introuvable")
         return False

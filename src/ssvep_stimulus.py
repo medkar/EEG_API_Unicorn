@@ -16,7 +16,7 @@ Pourquoi « comptage de frames » et pas un timer ?
 Mapping (utilisé plus tard par le décodeur, pas ici) :
     AVANT  -> jy > 0     ARRIERE -> jy < 0
     GAUCHE -> jx < 0     DROITE  -> jx > 0
-    (aucune cible fixée -> aucune détection -> watchdog du Waffle -> stop)
+    (aucune cible fixée -> aucune détection -> chien de garde de l'actionneur -> stop)
 
 Lancer :
     python src/ssvep_stimulus.py                 # plein écran, ESC pour quitter
@@ -131,7 +131,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False):
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("SSVEP stimulus — EEG Waffle")
+    pygame.display.set_caption("SSVEP stimulus — EEG_API_Unicorn")
     pygame.mouse.set_visible(False)
 
     if refresh is None:
@@ -208,7 +208,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False):
 
 
 def _parse_args(argv):
-    p = argparse.ArgumentParser(description="Stimulus SSVEP 4 fleches (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Stimulus SSVEP 4 fleches (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenetre au lieu du plein ecran")
     p.add_argument("--refresh", type=float, default=None, help="forcer le refresh (Hz)")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit apres N secondes")

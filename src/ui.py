@@ -66,7 +66,7 @@ class App:
             self.win = pygame.display.set_mode(size, flags, vsync=1)
         except (TypeError, pygame.error):
             self.win = pygame.display.set_mode(size, flags)
-        pygame.display.set_caption("EEG Waffle — pilotage par la pensée")
+        pygame.display.set_caption("EEG_API_Unicorn — décodage BCI")
         pygame.mouse.set_visible(False)
 
         self.clock = pygame.time.Clock()
@@ -110,8 +110,8 @@ class App:
     @property
     def sender(self):
         if self._sender is None:
-            from send_joystick_udp import JoystickSender
-            self._sender = JoystickSender(self.host, UDP_PORT)
+            from actuator_udp import ActuatorSender
+            self._sender = ActuatorSender(self.host, UDP_PORT)
         return self._sender
 
     def emit(self, jx, jy):

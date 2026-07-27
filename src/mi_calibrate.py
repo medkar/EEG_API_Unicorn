@@ -261,7 +261,7 @@ def calibrate(session=None, synthetic=False, smoke=False, imagery_s=IMAGERY_S, a
         size = (1100, 760)
         flags = pygame.SCALED | (0 if (synthetic or smoke) else pygame.FULLSCREEN)
         win = pygame.display.set_mode(size, flags)
-        pygame.display.set_caption("MI calibration — EEG Waffle")
+        pygame.display.set_caption("MI calibration — EEG_API_Unicorn")
         pygame.mouse.set_visible(False)
         span = min(size)
         big = pygame.font.SysFont("consolas", max(24, int(span * 0.045)), bold=True)
@@ -381,7 +381,7 @@ def _train_and_save(recorded, fs, win, pygame, big, mid, smoke):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Calibration Motor Imagery (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Calibration Motor Imagery (EEG_API_Unicorn).")
     p.add_argument("--session", choices=list(PRESETS), default=None, help="durée (saute le menu)")
     p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")
     p.add_argument("--smoke", action="store_true", help="test headless (CI)")

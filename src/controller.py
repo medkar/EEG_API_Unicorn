@@ -1,4 +1,4 @@
-"""Boucle d'intégration SSVEP : fenêtre EEG -> CCA -> lissage -> {jx,jy} -> UDP Waffle.
+"""Boucle d'intégration SSVEP : fenêtre EEG -> CCA -> lissage -> consigne -> UDP.
 
 AUJOURD'HUI (sans casque) : `simulate()` fabrique des fenêtres SYNTHÉTIQUES selon un
 scénario d'intentions, envoie l'UDP en local (127.0.0.1) vers un mini-récepteur intégré,
@@ -24,11 +24,11 @@ import numpy as np
 # Imports internes : marche en script (`python src/controller.py`) ou en import.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))                       # src/
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_REPO, "examples"))                                  # JoystickSender
+sys.path.insert(0, os.path.join(_REPO, "examples"))                                  # ActuatorSender
 from config import (FS_UNICORN, MARGIN, MIN_VOTES, RHO_MIN, UDP_HOST, UDP_PORT, VOTE_LEN,  # noqa: E402
                     WINDOW_S, apply_invert, choose_frequencies, use_utf8_console)
 from cca_decoder import CCADecoder, synth_ssvep  # noqa: E402
-from send_joystick_udp import JoystickSender  # noqa: E402
+from actuator_udp import ActuatorSender  # noqa: E402
 
 STOP_CMD = {"name": "STOP", "jx": 0.0, "jy": 0.0}
 
@@ -80,13 +80,13 @@ def run_live(window_provider, plan=None, host=UDP_HOST, port=UDP_PORT,
     """Câblage temps réel pour DEMAIN (non exercé aujourd'hui : pas de casque).
 
     Deux threads : décodage à `decode_hz` (met à jour la consigne) et émission UDP à
-    `send_hz` (ré-émet la consigne courante — indispensable au watchdog du Waffle).
+    `send_hz` (ré-émet la consigne courante — indispensable au chien de garde de l'actionneur).
     `window_provider()` doit renvoyer la fenêtre EEG (T x C) la plus récente, ou None.
     Retourne (stop_event, sender) ; l'appelant fait `stop_event.set()` pour arrêter.
     """
     plan = plan or choose_frequencies(60)
     ctrl = SSVEPController(plan, **ctrl_kw)
-    sender = JoystickSender(host, port)
+    sender = ActuatorSender(host, port)
     state = dict(STOP_CMD)
     stop = threading.Event()
 
@@ -134,7 +134,7 @@ def simulate(port=UDP_PORT, snr_db=-6.0, seed=0):
     plan = choose_frequencies(60)
     by_name = {c["name"]: c for c in plan}
     ctrl = SSVEPController(plan)
-    sender = JoystickSender("127.0.0.1", port)
+    sender = ActuatorSender("127.0.0.1", port)
 
     received, stop = [], threading.Event()
     listener = threading.Thread(target=_udp_listener, args=(port, received, stop), daemon=True)

@@ -94,7 +94,7 @@ def report(screen_cm, screen_px, span_px, distances, n_targets=CVEP_N_TARGETS):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Angle visuel du stimulus (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Angle visuel du stimulus (EEG_API_Unicorn).")
     p.add_argument("--screen-cm", type=float, default=53.0,
                    help="largeur PHYSIQUE de l'écran en cm (24 pouces 16:9 ≈ 53)")
     p.add_argument("--screen-px", type=int, default=1920, help="largeur de l'écran en pixels")

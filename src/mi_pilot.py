@@ -1,7 +1,7 @@
 """Pilotage du robot par Motor Imagery + feedback en direct (= entraînement neurofeedback).
 
 Charge le modèle MI entraîné (calibration), lit l'EEG en continu, décode GAUCHE/DROITE/REPOS,
-lisse par vote, et envoie {jx,jy} en UDP au Waffle. En 2 classes, ça pilote les ROTATIONS :
+lisse par vote, et envoie {jx,jy} en UDP à l'actionneur. En 2 classes, ça pilote les ROTATIONS :
   GAUCHE -> tourne à gauche · DROITE -> tourne à droite · REPOS/incertain -> stop.
 L'écran montre la commande décodée + les probabilités (utile pour progresser : tu vois l'effet).
 
@@ -29,7 +29,7 @@ from config import (COMMANDS, MI_MIN_VOTES, MI_MODEL_PATH, MI_PROB_MIN, MI_VOTE_
 from acquisition import UnicornAcquisition  # noqa: E402
 from mi_decoder import MI_LABELS, MIDecoder, MIModel  # noqa: E402
 from ssvep_stimulus import arrow_polygon  # noqa: E402
-from send_joystick_udp import JoystickSender  # noqa: E402
+from actuator_udp import ActuatorSender  # noqa: E402
 
 BG = (12, 12, 18)
 FG = (225, 225, 235)
@@ -96,7 +96,7 @@ def pilot(calibrate_first=False, session=None, synthetic=False, send=False,
     decoder = MIDecoder(model, prob_min=MI_PROB_MIN)
     label_to_cmd = {c["name"]: c for c in COMMANDS if c["name"] in decoder.labels}
     ctrl = MIController(decoder, label_to_cmd)
-    sender = JoystickSender(host, UDP_PORT) if (send and not smoke) else None
+    sender = ActuatorSender(host, UDP_PORT) if (send and not smoke) else None
     print(f"[mi-pilot] classes={model.labels} méthode={model.method} "
           f"fenêtre={MI_WINDOW_S}s vote={ctrl.min_votes}/{ctrl.buffer.maxlen} "
           f"UDP={'ON -> ' + host if sender else 'off (feedback seul)'}")
@@ -200,7 +200,7 @@ def _render_loop(state, lock, stop, decoder, sending, windowed, smoke):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Pilotage robot par Motor Imagery (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Pilotage par Motor Imagery (EEG_API_Unicorn).")
     p.add_argument("--calibrate", action="store_true", help="calibration AVANT le pilotage")
     p.add_argument("--session", default=None, help="durée de calibration (court/5min/7min/long)")
     p.add_argument("--send", action="store_true", help="envoyer {jx,jy} au robot (roues en l'air !)")

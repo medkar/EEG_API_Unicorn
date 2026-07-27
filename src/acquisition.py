@@ -355,7 +355,7 @@ def _demo_run_live(acq):
 
 
 def _parse_args(argv):
-    p = argparse.ArgumentParser(description="Acquisition Unicorn (BrainFlow) - EEG Waffle.")
+    p = argparse.ArgumentParser(description="Acquisition Unicorn (BrainFlow) — EEG_API_Unicorn.")
     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
     p.add_argument("--serial", default=None, help="numéro de série Unicorn (si plusieurs appairés)")
     p.add_argument("--run", action="store_true", help="enchaîner sur run_live -> UDP 127.0.0.1")

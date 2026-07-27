@@ -71,7 +71,8 @@ CH_NAMES = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
 OCCIPITAL = [4, 5, 6, 7]  # Pz, PO7, Oz, PO8
 
 # Table maîtresse des commandes. `desired_hz` sera arrondi au diviseur entier du refresh
-# écran (voir choose_frequencies). `jx, jy` = consigne joystick envoyée au Waffle.
+# écran (voir choose_frequencies). `jx, jy` = consigne à deux axes pour l'actionneur d'exemple
+# (l'API LSL, elle, ne publie QUE l'intention : quelle cible — jamais de commande d'actionneur).
 #   jy>0 avance, jy<0 recule ; jx>0 droite, jx<0 gauche.
 # 3 cibles (avant + 2 rotations ; demi-tour = tourner). Fréquences choisies pour ENJAMBER le
 # pic alpha de l'utilisateur (~10.5 Hz) SANS cible dessus. Une cible pile sur le pic (10 Hz)
@@ -97,7 +98,10 @@ COMMON_REFRESH = [60, 75, 90, 100, 120, 144, 165, 240]  # pour « snapper » la 
 # ré-estimer par `alpha_check.py` si le pic bouge.
 ALPHA_PEAK_HZ = 10.5
 
-# Cible UDP du Waffle. On vise le NOM mDNS, pas une IP : le Pi est en DHCP et son adresse
+# Hôte par défaut de l'ACTIONNEUR d'exemple (examples/actuator_udp.py). Rien dans l'API n'en
+# dépend : le moteur publie une intention neutre sur LSL, traduire ça en action appartient au
+# client. Cette valeur est celle du banc d'essai robot historique, gardée parce qu'un montage
+# existant l'écoute encore. On vise le NOM mDNS, pas une IP : le Pi est en DHCP et son adresse
 # change (observé : .104 -> .102 le 2026-07-20, ce qui aurait envoyé les commandes dans le vide
 # SANS message d'erreur — l'UDP ne signale rien). Résolution vérifiée depuis Python sous Windows.
 # Si le mDNS venait à ne plus répondre : `ping -4 wafflebot.local` puis remettre l'IP en dur ici.
@@ -158,7 +162,7 @@ ARTIFACT_SIGMA_RATIO = 4.0
 Z_MIN = 2.5              # écarts-types au-dessus du bruit pour accepter une détection
 Z_MARGIN = 0.0           # marge sur l'échelle z (la normalisation rend la marge quasi inutile)
 
-# --- Correction du sens (le PC maîtrise le signe envoyé — cf. WAFFLE.md §7) ---
+# --- Correction du sens (le PC maîtrise le signe envoyé — cf. docs/robot_testbed.md) ---
 # Observé le 2026-07-17 : avant/arrière inversés sur ce robot -> on inverse jy à la source.
 # Vérifier gauche/droite au prochain essai ; si inversé aussi, passer JOY_INVERT_X à True.
 JOY_INVERT_X = False

@@ -12,19 +12,41 @@ The tool is **agnostic of what you build**. Each mode publishes a **neutral inte
 which class, which mental state) — never an actuator command. Turning that intent into an action (a
 game event, a visualisation, a robot command) is the client application's job.
 
-> **Status.** The decoding side is working and hardware-validated: a self-contained pygame app with
-> six modes (below). The network API layer is **in progress** — see **[docs/SPEC.md](docs/SPEC.md)**
-> for the target architecture, the stream contract and the roadmap. Read it first.
+> **Status.** The engine streams over the network and is hardware-validated end to end: raw EEG,
+> signal quality and decoded SSVEP reach a client on another machine, with millisecond timestamps.
+> Modes beyond SSVEP are decoded by the pygame app but not yet published as streams — see
+> **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
 
 ## Requirements
 
 Python 3.10+, an Unicorn Hybrid Black headset paired over Bluetooth.
 
 ```bash
-pip install pygame brainflow numpy scipy scikit-learn pyriemann joblib
+pip install -r requirements.txt
 ```
 
 ## Run
+
+Three entry points, from the most useful to the most specialised.
+
+**The engine** — no interface, streams over the network. This is the product.
+
+```bash
+python src/server.py --mode ssvep --refresh 60   # acquire, decode, publish
+python src/server.py --synthetic                 # no headset (BrainFlow test board)
+```
+
+**The dashboard** — the engine plus a local web page, at <http://localhost:8000>.
+
+```bash
+python src/dashboard.py --mode ssvep --refresh 60
+```
+
+Live channel quality, a detached-reference alarm, the decoded target against its threshold, and the
+controls. Its `/docs` page documents the HTTP API interactively.
+
+**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI, ErrP and
+neuro-monitoring. It owns the headset and publishes nothing.
 
 ```bash
 python src/app.py                 # fullscreen, real headset — main menu
@@ -32,6 +54,32 @@ python src/app.py --windowed      # windowed (keeps the console visible)
 python src/app.py --synthetic     # no headset (BrainFlow synthetic board)
 python src/app.py --smoke         # headless end-to-end self-test (CI)
 ```
+
+⚠️ The engine and the app both open the headset, so **run only one at a time**.
+
+## Consume the stream
+
+The client depends on `pylsl` and nothing else — not on this repository.
+
+```bash
+pip install pylsl
+python examples/receiver.py --list                  # what is on the network
+python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
+```
+
+Unity: see [`examples/unity/`](examples/unity/). Two machines: see
+[`docs/network.md`](docs/network.md).
+
+| Stream | Contents |
+|---|---|
+| `EEG_API_Unicorn_raw` | 8 channels, µV, unfiltered, 250 Hz |
+| `EEG_API_Unicorn_quality` | per-channel σ, ~1 Hz |
+| `EEG_API_Unicorn_status` | engine state, JSON |
+| `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
+
+The stimulus is **not** rendered by the engine: your application flickers the targets and declares
+their frequencies (`--refresh` or `--freqs`). A mismatch fails silently — the decoder correlates
+against a sinusoid nobody is displaying — so pass the same refresh rate to both sides.
 
 `ESC` returns to the menu from any mode; the BrainFlow session stays open, so switching modes is
 instant. **Do not close and reopen the app mid-session** — C3/Cz saturate when the amplifier restarts.
@@ -54,7 +102,10 @@ automatically to the display refresh rate.
 
 | Part | Where |
 |---|---|
-| Entry point — menu and all modes | [`src/app.py`](src/app.py) |
+| Engine — acquisition, decoding, LSL streams | [`src/server.py`](src/server.py) |
+| Stream contract — publishers, clock bridge | [`src/lsl_io.py`](src/lsl_io.py) |
+| Web dashboard — server and page | [`src/dashboard.py`](src/dashboard.py) · [`src/dashboard.html`](src/dashboard.html) |
+| pygame app — menu and all six modes | [`src/app.py`](src/app.py) |
 | Shared config — channels, frequencies, codes, per-mode constants | [`src/config.py`](src/config.py) |
 | Acquisition — Unicorn via BrainFlow, sliding windows and epochs | [`src/acquisition.py`](src/acquisition.py) |
 | Shared window, headset session, signal-quality screen | [`src/ui.py`](src/ui.py) |
@@ -65,6 +116,9 @@ automatically to the display refresh rate.
 ## Self-tests (no headset needed)
 
 ```bash
+python src/server.py --smoke         # engine + streams + SSVEP decoding, end to end
+python src/dashboard.py --smoke      # engine + HTTP API + page
+python src/lsl_io.py                 # stream contract: channel names, round-trip, clock bridge
 python src/app.py --smoke            # whole app headless: menu + every mode + calibrations
 python src/cvep_code.py              # m-sequence properties (balance, autocorrelation, lags)
 python src/cvep_decoder.py           # c-VEP accuracy vs SNR on synthetic responses
@@ -77,8 +131,12 @@ python src/itr.py                    # information transfer rate — common yard
 ## Things worth knowing
 
 - **Signal quality dominates everything.** Saline on the electrodes is the single biggest lever
-  measured. Always check contact before recording: a detached reference produces a whole unusable
-  session with no other warning than the link-check screen.
+  measured. A detached reference produces a whole unusable session, and per-channel σ does not
+  reveal it — every channel then measures the same floating reference at a plausible amplitude. The
+  engine watches inter-channel correlation instead: above 0.90, the reference has come off.
+- **The Unicorn has a huge, drifting DC offset** (10⁵ µV, ramping for tens of seconds after a session
+  opens). Any σ computed without discarding the filter's settling transient measures the filter, not
+  the electrode — by a factor of a hundred. Let the amplifier settle before measuring anything.
 - **Compare paradigms by information transfer rate** (`itr.py`), not raw accuracy — 70 % over 6
   targets is worth far more than 70 % over 3.
 - **Per-frequency noise floor.** Each SSVEP target sits on a different amount of background alpha, and
@@ -95,4 +153,6 @@ python src/itr.py                    # information transfer rate — common yard
 
 A TurtleBot3 Waffle robot served as the original **testbed** for this work — proof that a decoded
 intent could drive something real. It is no longer a goal of the project; see
-[docs/robot_testbed.md](docs/robot_testbed.md) if you want to reproduce that demo.
+[docs/robot_testbed.md](docs/robot_testbed.md) if you want to reproduce that demo, and
+[`examples/actuator_udp.py`](examples/actuator_udp.py) for the pattern it left behind: turning an
+intent into an action belongs to the client, never to the API.

@@ -1,4 +1,4 @@
-"""Appli unifiée EEG -> Waffle : un menu, quatre modes de décodage, un seul robot.
+"""Application EEG_API_Unicorn : un menu, six modes de décodage, une seule session casque.
 
     python src/app.py                 # plein écran, casque réel
     python src/app.py --windowed      # fenêtre (pour garder la console à côté)
@@ -6,7 +6,7 @@
     python src/app.py --synthetic     # sans casque (board de test BrainFlow)
     python src/app.py --smoke         # test headless (CI)
 
-Les quatre modes produisent la MÊME chose — une commande {jx, jy} envoyée en UDP au Waffle —
+Les modes de commande produisent la MÊME chose — une consigne {jx, jy} émise en UDP —
 mais par quatre voies neurophysiologiques différentes :
 
   [1] SSVEP   flèches clignotant à 8.57/15/20 Hz, décodage CCA. Aucune calibration, marche
@@ -89,8 +89,8 @@ class Live:
 
 
 def _sender_loop(app, live, hz=15.0):
-    """Ré-émet la consigne courante en continu : sans réémission, le watchdog du Waffle
-    coupe au bout de 0.5 s (cf. WAFFLE.md)."""
+    """Ré-émet la consigne courante en continu : sans réémission, le chien de garde de
+    l'actionneur coupe au bout de 0,5 s (cf. docs/robot_testbed.md)."""
     while not live.stop.is_set():
         cmd, _, _, _ = live.snapshot()
         app.emit(cmd["jx"] if cmd else 0.0, cmd["jy"] if cmd else 0.0)
@@ -597,7 +597,7 @@ def _p300_panel(app, order, scores, cmd):
 
 def _p300_emit_burst(app, plan, spots, cmd, scores):
     """Exécute la commande sélectionnée en RAFALE pendant P300_BURST_S (ré-émission ~15 Hz pour
-    le watchdog du Waffle), puis STOP. Aucune commande nette -> rien émis (robot à l'arrêt)."""
+    le chien de garde de l'actionneur), puis STOP. Aucune commande nette -> rien émis."""
     order = [c["name"] for c in plan]
     t0 = time.perf_counter()
     last = 0.0
@@ -1365,7 +1365,7 @@ def home(app):
              ("P300", "oddball — fixe et compte la cible (6 cibles) — nécessite une calibration"),
              ("Neuro-monitoring", "état mental passif (charge / somnolence / engagement) — histogramme, aucun robot"),
              ("ErrP", "la machine se trompe exprès, ton cerveau réagit — démonstrateur, aucun robot")]
-    idx = _navigate(app, "EEG Waffle — choisis un mode", modes, allow_back=False,
+    idx = _navigate(app, "EEG_API_Unicorn — choisis un mode", modes, allow_back=False,
                     status_fn=lambda: _status(app),
                     hotkeys={"r": _toggle_robot, "c": _check_signal})
     return None if idx is None else ("ssvep", "mi", "cvep", "p300", "neuro", "errp")[idx]
@@ -1450,11 +1450,11 @@ def _smoke(app):
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Appli unifiée EEG -> Waffle (SSVEP / MI / c-VEP).")
+    p = argparse.ArgumentParser(description="Application EEG_API_Unicorn (SSVEP / MI / c-VEP / P300 / neuro / ErrP).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
     p.add_argument("--send", action="store_true", help="armer l'envoi UDP dès le lancement")
     p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")
-    p.add_argument("--host", default=UDP_HOST, help="IP du Waffle")
+    p.add_argument("--host", default=UDP_HOST, help="hôte de l'actionneur UDP (exemple de sortie applicative)")
     p.add_argument("--smoke", action="store_true", help="test headless (CI)")
     return p.parse_args(argv)
 

@@ -147,7 +147,7 @@ class CCADecoder:
         Les scores rendus sont ceux qui ont servi a decider : rho brut, ou z si un plancher
         de repos a ete appris (`fit_baseline`) — l'affichage montre ainsi ce qui decide.
         freq=None signifie "aucune cible fixee de facon fiable" -> le robot s'arretera
-        (on n'envoie pas de commande, le watchdog du Waffle coupe apres 0.5 s).
+        (on n'envoie pas de commande ; un actionneur a chien de garde s'arrete de lui-meme).
         """
         sc = self.z_scores(self.scores(window))
         lo, mg = self.thresholds

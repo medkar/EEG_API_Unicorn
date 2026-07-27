@@ -108,7 +108,7 @@ def main(path, order):
 
 if __name__ == "__main__":
     use_utf8_console()
-    p = argparse.ArgumentParser(description="Analyse hors ligne d'un run P300 live (EEG Waffle).")
+    p = argparse.ArgumentParser(description="Analyse hors ligne d'un run P300 live (EEG_API_Unicorn).")
     p.add_argument("path", nargs="?", default=DATA, help="npz (défaut : data/p300_live_last.npz)")
     p.add_argument("--order", default=",".join(RING),
                    help="cibles visées, séparées par des virgules (défaut : ordre horaire)")
