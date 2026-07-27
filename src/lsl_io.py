@@ -16,6 +16,7 @@ Autotest (sans casque, sans LSL entrant) :
 
 import json
 import os
+import socket
 import sys
 import time
 
@@ -24,7 +25,7 @@ from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (CH_NAMES, FS_UNICORN, SIGNAL_DEAD_SIGMA,  # noqa: E402
-                    SIGNAL_SAT_SIGMA)
+                    SIGNAL_SAT_SIGMA, UNICORN_SERIAL)
 
 # Préfixe de TOUS les flux. Figé avant diffusion aux étudiants (SPEC §12.3) : le changer
 # après coup casserait leur code, puisque c'est par ce nom qu'ils trouvent le flux.
@@ -34,6 +35,29 @@ STREAM_PREFIX = "EEG_API_Unicorn"
 def stream_name(suffix):
     """Nom public d'un flux, ex. `stream_name("raw")` -> "EEG_API_Unicorn_raw"."""
     return f"{STREAM_PREFIX}_{suffix}"
+
+
+def default_instance_id(serial=None, synthetic=False):
+    """Identité de CETTE instance du moteur — ce qui distingue deux casques sur un réseau.
+
+    ⚠️ Sans identité distincte, deux moteurs qui tournent en même temps (une salle de TP
+    entière) publient des flux de MÊME nom ET de même `source_id`. Or LSL se sert du
+    `source_id` pour rattacher un flux après une coupure : deux sources identiques et il
+    entremêle les deux casques dans un seul flux, en silence. Constaté le 2026-07-27 :
+    1509 échantillons reçus pour 1491 publiés, cadence apparente 401 Hz au lieu de 250.
+
+    On prend le numéro de série du casque (identité stable, propre à l'étudiant) plutôt
+    qu'un identifiant de processus : `source_id` doit rester le MÊME d'un lancement à
+    l'autre, sinon les clients perdent la capacité de se reconnecter après un redémarrage.
+    """
+    if synthetic:
+        return f"synthetic-{socket.gethostname()}"
+    return serial or UNICORN_SERIAL or socket.gethostname()
+
+
+def _source_id(suffix, instance):
+    """Identifiant LSL d'un flux : le nom du flux, plus l'instance qui le produit."""
+    return f"{STREAM_PREFIX}_{suffix}@{instance}" if instance else f"{STREAM_PREFIX}_{suffix}"
 
 
 # --- Ponts d'horloge ---------------------------------------------------------
@@ -100,10 +124,10 @@ class RawPublisher:
     seul mode. Le décodage filtré est publié séparément par les flux `decoded_*`.
     """
 
-    def __init__(self, ch_names=CH_NAMES, fs=FS_UNICORN, source_id="raw"):
+    def __init__(self, ch_names=CH_NAMES, fs=FS_UNICORN, instance=""):
         self.ch_names = list(ch_names)
         info = StreamInfo(stream_name("raw"), "EEG", len(self.ch_names), float(fs),
-                          "float32", f"{STREAM_PREFIX}_{source_id}")
+                          "float32", _source_id("raw", instance))
         _describe_eeg_channels(info, self.ch_names, "microvolts")
         info.desc().append_child_value("manufacturer", "g.tec Unicorn Hybrid Black")
         # chunk_size=25 : on regroupe les échantillons par paquets de 100 ms au lieu d'un
@@ -137,10 +161,10 @@ class QualityPublisher:
     lui-même (cf. `verdict_from_sigma`).
     """
 
-    def __init__(self, ch_names=CH_NAMES, source_id="quality"):
+    def __init__(self, ch_names=CH_NAMES, instance=""):
         self.ch_names = list(ch_names)
         info = StreamInfo(stream_name("quality"), "Quality", len(self.ch_names),
-                          IRREGULAR_RATE, "float32", f"{STREAM_PREFIX}_{source_id}")
+                          IRREGULAR_RATE, "float32", _source_id("quality", instance))
         _describe_eeg_channels(info, self.ch_names, "microvolts_stddev")
         thr = info.desc().append_child("thresholds")
         thr.append_child_value("dead_below", str(SIGNAL_DEAD_SIGMA))
@@ -169,12 +193,12 @@ class DecodedSSVEPPublisher:
     sont nommées dans les métadonnées, un client ne doit pas les compter en dur.
     """
 
-    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), source_id="ssvep"):
+    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), instance=""):
         self.freqs = [float(f) for f in freqs]
         labels = ["target_index", "freq_hz", "confidence"]
         labels += [f"score_{f:g}Hz" for f in self.freqs]
         info = StreamInfo(stream_name("decoded_ssvep"), "Decoded", len(labels),
-                          IRREGULAR_RATE, "float32", f"{STREAM_PREFIX}_{source_id}")
+                          IRREGULAR_RATE, "float32", _source_id("decoded_ssvep", instance))
         chans = info.desc().append_child("channels")
         for label in labels:
             ch = chans.append_child("channel")
@@ -206,9 +230,9 @@ class StatusPublisher:
     qui se connecte en cours de route sache où on en est.
     """
 
-    def __init__(self, source_id="status"):
+    def __init__(self, instance=""):
         info = StreamInfo(stream_name("status"), "Markers", 1, IRREGULAR_RATE,
-                          "string", f"{STREAM_PREFIX}_{source_id}")
+                          "string", _source_id("status", instance))
         self.outlet = StreamOutlet(info)
         self._last_key = None
 

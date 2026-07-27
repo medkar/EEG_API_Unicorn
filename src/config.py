@@ -125,6 +125,14 @@ N_HARMONICS = 3          # harmoniques (fondamentale incluse) des références C
 # Le plancher étant re-mesuré à CHAQUE session, le réglage s'adapte à l'alpha du jour —
 # c'est ce qui manquait quand « ça marchait la semaine dernière ».
 SSVEP_BASELINE_S = 8.0   # durée de la mesure du plancher au repos (0 = désactiver la normalisation)
+# Stabilisation JETÉE avant de mesurer le plancher, comme NEURO_WARMUP_S. L'Unicorn sort un offset
+# DC énorme qui DÉRIVE pendant des dizaines de secondes après l'ouverture de session (mesuré le
+# 2026-07-27 : 10⁵ µV en rampe) ; un plancher mesuré là-dedans hérite d'un σ très dispersé, et comme
+# on décide sur z=(ρ-μ)/σ, un σ gonflé rend le seuil INATTEIGNABLE. Vu sur casque : σ=0,19 sur 15 et
+# 8,57 Hz => il aurait fallu ρ≈0,94 pour déclencher, impossible en électrodes sèches — ces cibles ne
+# pouvaient pas être détectées, quoi que l'utilisateur fixe. `app.py` échappait au piège sans le
+# savoir : son écran `signal_check` s'intercale et laisse le casque se stabiliser.
+SSVEP_WARMUP_S = 15.0
 # Rejet d'artefact. Mesuré le 2026-07-20 sur un run guidé : σ médian 8,5 mais **max 429** (50×),
 # et 12 % des fenêtres au-dessus de 3× la médiane — mouvements/clignements au changement de
 # fixation. Une fenêtre pareille ne contient pas d'EEG : décoder dessus produit des ρ aléatoires.

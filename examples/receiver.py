@@ -69,6 +69,13 @@ def main(argv):
         print(f"Not found. Start the engine first:  python src/server.py --synthetic")
         return 1
 
+    if len(found) > 1:
+        # Plusieurs moteurs publient le même flux : une salle de TP entière, ou un serveur
+        # resté ouvert. Se brancher au hasard, c'est lire l'EEG de quelqu'un d'autre.
+        print(f"WARNING: {len(found)} engines publish '{name}'. Using the first one.")
+        for info in found:
+            print(f"  - {info.source_id()} on {info.hostname()}")
+
     inlet = StreamInlet(found[0], max_buflen=30)
     # Open the connection BEFORE the interesting data arrives. An inlet only connects on its
     # first pull, and LSL never replays what was sent before you connected: skip this and you

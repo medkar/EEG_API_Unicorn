@@ -24,13 +24,14 @@ Lancer :
     python src/server.py --mode ssvep              # + décodage SSVEP (cibles par défaut)
     python src/server.py --mode ssvep --refresh 60 # cibles accordées à un écran 60 Hz
     python src/server.py --mode ssvep --freqs 15,20,8.57
-
-Essai complet sur casque, en trois terminaux (le stimulus n'ouvre PAS le casque) :
-    python src/ssvep_stimulus.py --windowed --refresh 60     # les cibles clignotent
-    python src/server.py --mode ssvep --refresh 60           # acquisition + décodage
-    python -u examples/receiver.py --stream decoded_ssvep    # ce que voit un client
     python src/server.py --duration 60             # s'arrête tout seul au bout de 60 s
     python src/server.py --smoke                   # test headless de bout en bout (CI)
+
+Essai sur casque, en deux terminaux (le stimulus n'ouvre PAS le casque, aucun conflit) :
+    python src/ssvep_stimulus.py --windowed --refresh 60   # les cibles clignotent
+    python src/server.py --mode ssvep --refresh 60         # décode et trace en console
+Un troisième terminal montre ce que reçoit un vrai client :
+    python -u examples/receiver.py --stream decoded_ssvep
 """
 
 import argparse
@@ -45,9 +46,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from acquisition import UnicornAcquisition  # noqa: E402
 from cca_decoder import CCADecoder  # noqa: E402
 from config import (ARTIFACT_SIGMA_RATIO, CH_NAMES, SSVEP_BASELINE_S,  # noqa: E402
-                    choose_frequencies, use_utf8_console)
+                    SSVEP_WARMUP_S, choose_frequencies, use_utf8_console)
 from lsl_io import (ClockBridge, DecodedSSVEPPublisher, QualityPublisher,  # noqa: E402
-                    RawPublisher, StatusPublisher, stream_name, verdict_from_sigma)
+                    RawPublisher, StatusPublisher, default_instance_id, stream_name,
+                    verdict_from_sigma)
 
 # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
 # signal d'un coup. Assez court pour rester très en dessous des fenêtres de décision d'un
@@ -71,14 +73,16 @@ class EngineServer:
     """
 
     def __init__(self, serial=None, synthetic=False, verbose=False, mode=None, freqs=None,
-                 refresh=None):
+                 refresh=None, instance=None):
         self.synthetic = synthetic
         self.mode = mode
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
         self.clock = ClockBridge()
-        self.raw_out = RawPublisher(ch_names=CH_NAMES, fs=self.acq.fs)
-        self.quality_out = QualityPublisher(ch_names=CH_NAMES)
-        self.status_out = StatusPublisher()
+        self.instance = instance or default_instance_id(serial, synthetic)
+        self.raw_out = RawPublisher(ch_names=CH_NAMES, fs=self.acq.fs,
+                                    instance=self.instance)
+        self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
+        self.status_out = StatusPublisher(instance=self.instance)
         self.samples = 0
         self._stop = False
         self._recent = np.zeros((0, len(CH_NAMES)))
@@ -96,7 +100,10 @@ class EngineServer:
         self._sigma_ref = None
         self._baseline_until = None
         self._baseline_s = SSVEP_BASELINE_S
+        self._warmup_until = None
         self._baseline_done = False
+        self._baseline_warned = False
+        self._last_log = 0.0
         if mode == "ssvep":
             self._setup_ssvep(freqs, refresh)
 
@@ -114,16 +121,23 @@ class EngineServer:
         ⚠️ Une fréquence mal accordée ne produit aucune erreur, juste un décodage qui ne
         détecte jamais rien : la CCA corrèle contre une sinusoïde que personne n'affiche.
 
-        Le flux `decoded_ssvep` n'est PAS créé ici : il naît à la fin de la mesure du repos
-        (`_finish_baseline`), quand on sait sur quelle échelle on décidera. Publier un flux
-        dont les métadonnées annonceraient la mauvaise échelle, ou le recréer en cours de
-        route, obligerait les clients déjà connectés à le redécouvrir — le contrat doit être
-        stable une fois le flux visible.
+        Le flux décodé est créé TOUT DE SUITE, avant même la mesure du repos, et reste
+        silencieux jusqu'à ce que le décodage commence. Le faire apparaître seulement à la
+        fin du repos serait un piège : un client qui cherche le flux au lancement ne le
+        trouve pas et abandonne (`resolve_byprop` a un délai fini) — c'est exactement ce qui
+        s'est produit au premier essai casque. Un flux qui existe dès le départ et ne dit
+        rien encore est bien plus facile à consommer ; c'est `status` qui explique pourquoi.
         """
         if not freqs:
             freqs = [c["actual_hz"] for c in choose_frequencies(refresh or 60)]
         self.freqs = [float(f) for f in freqs]
         self.decoder = CCADecoder(self.freqs, fs=self.acq.fs)
+        # L'échelle de décision fait partie du contrat et ne change donc jamais : le moteur
+        # décide TOUJOURS sur z, quitte à prolonger le repos jusqu'à pouvoir le mesurer.
+        self.ssvep_out = DecodedSSVEPPublisher(
+            self.freqs, decision_scale="z",
+            thresholds=(self.decoder.z_min, self.decoder.z_margin),
+            instance=self.instance)
 
     def stop(self):
         self._stop = True
@@ -133,17 +147,22 @@ class EngineServer:
         """« baseline » pendant la mesure du repos, « decoding » ensuite, sinon « streaming »."""
         if self.decoder is None:
             return "streaming"
-        return "decoding" if self._baseline_done else "baseline"
+        if self._baseline_done:
+            return "decoding"
+        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
+            return "warmup"
+        return "baseline"
 
     def _status_key(self, running):
         """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push)."""
         return (running, self.synthetic, self.mode, self.phase)
 
     def _state(self, running):
-        streams = ["raw", "quality", "status"] + (["decoded_ssvep"] if self.ssvep_out else [])
+        streams = ["raw", "quality", "status"] + (["decoded_ssvep"] if self.decoder else [])
         state = {
             "running": running,
             "board": "synthetic" if self.synthetic else "unicorn",
+            "instance": self.instance,
             "fs_hz": float(self.acq.fs),
             "channels": list(CH_NAMES),
             "mode": self.mode,
@@ -181,6 +200,10 @@ class EngineServer:
         if window is None:
             return
 
+        # Chauffe : on jette les premières secondes au lieu de les verser dans le plancher.
+        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
+            return
+
         if not self._baseline_done:
             self._collect_baseline(window)
             return
@@ -191,15 +214,39 @@ class EngineServer:
         sd = float(window.std(axis=0).mean())
         if self._sigma_ref and sd > ARTIFACT_SIGMA_RATIO * self._sigma_ref:
             self.ssvep_out.push(-1, 0.0, 0.0, [0.0] * len(self.freqs), lsl_ts)
+            self._log_decision(-1, [0.0] * len(self.freqs), artifact=True)
             return
 
         freq, scores = self.decoder.classify(window)
         ordered = [scores[f] for f in self.freqs]
         if freq is None:
             self.ssvep_out.push(-1, 0.0, max(ordered), ordered, lsl_ts)
+            self._log_decision(-1, ordered)
         else:
             index = self.freqs.index(freq)
             self.ssvep_out.push(index, freq, scores[freq], ordered, lsl_ts)
+            self._log_decision(index, ordered)
+
+    def _log_decision(self, index, scores, artifact=False):
+        """Trace la décision en console ~1×/s.
+
+        Le moteur est fait pour être consommé par un client, mais pendant une séance casque
+        on veut voir ce qu'il décode SANS dépendre d'un troisième terminal branché au bon
+        moment. Les scores sont affichés à côté de la décision : c'est ce qui permet de dire
+        si une non-détection vient d'un signal absent ou d'un seuil trop haut.
+        """
+        now = time.perf_counter()
+        if now - self._last_log < 1.0:
+            return
+        self._last_log = now
+        detail = "  ".join(f"{f:g}Hz z={s:+5.2f}" for f, s in zip(self.freqs, scores))
+        if artifact:
+            verdict = "ARTEFACT (fenêtre rejetée)"
+        elif index < 0:
+            verdict = f"— (rien au-dessus de z={self.decoder.z_min})"
+        else:
+            verdict = f"CIBLE {index} ({self.freqs[index]:g} Hz)"
+        print(f"[ssvep] {verdict:<34} {detail}")
 
     def _collect_baseline(self, window):
         """Accumule le plancher de ρ au repos, puis ajuste le décodeur.
@@ -223,43 +270,56 @@ class EngineServer:
         if time.perf_counter() < self._baseline_until:
             return
 
-        if self.decoder.fit_baseline(self._baseline_samples):
-            self._sigma_ref = float(np.median(self._baseline_sigmas))
-            line = "  ".join(f"{f:g}Hz: μ={m:.2f} σ={s:.2f}"
-                             for f, (m, s) in self.decoder.baseline.items())
-            print(f"[server] plancher de repos ({len(self._baseline_samples)} fenêtres) — {line}")
-            print(f"[server] σ de référence {self._sigma_ref:.1f} -> rejet d'artefact au-delà "
-                  f"de {ARTIFACT_SIGMA_RATIO * self._sigma_ref:.0f}")
-        else:
-            # Trop peu de fenêtres pour un plancher fiable. On décode quand même, mais sur ρ
-            # BRUT — et surtout on laisse `decoder.baseline` à None : y mettre un plancher
-            # neutre ferait basculer `decoder.thresholds` sur l'échelle z (seuil 2,5) tout en
-            # comparant des ρ compris entre 0 et 1, donc plus aucune détection, en silence.
-            print(f"[server] plancher NON mesuré ({len(self._baseline_samples)} fenêtres) "
-                  f"-> décodage sur ρ brut, seuils moins justes")
+        if not self.decoder.fit_baseline(self._baseline_samples):
+            # Pas encore assez de fenêtres pour un plancher fiable. On PROLONGE le repos au
+            # lieu de basculer sur les ρ bruts : l'échelle de décision est annoncée dans les
+            # métadonnées du flux, en changer en cours de route casserait le contrat. Les
+            # fenêtres arrivent à 5 Hz, l'attente supplémentaire se compte en secondes.
+            if not self._baseline_warned:
+                self._baseline_warned = True
+                print(f"[server] repos prolongé : {len(self._baseline_samples)} fenêtres, "
+                      f"pas encore de quoi mesurer un plancher fiable")
+            return
 
+        self._sigma_ref = float(np.median(self._baseline_sigmas))
+        line = "  ".join(f"{f:g}Hz: μ={m:.2f} σ={s:.2f}"
+                         for f, (m, s) in self.decoder.baseline.items())
+        print(f"[server] plancher de repos ({len(self._baseline_samples)} fenêtres) — {line}")
+
+        # Un plancher trop DISPERSÉ rend le seuil inatteignable, en silence : on décide sur
+        # z=(ρ-μ)/σ, donc un σ gonflé exige un ρ que le SSVEP ne produit jamais en électrodes
+        # sèches. Vécu sur casque le 2026-07-27 : σ=0,19 => il aurait fallu ρ≈0,94. Mieux vaut
+        # le dire tout de suite que laisser l'utilisateur fixer une cible qui ne peut pas sortir.
+        for f, (mu, sd) in self.decoder.baseline.items():
+            needed = mu + self.decoder.z_min * sd
+            if needed > 0.85:
+                print(f"[server] ⚠️  {f:g} Hz : plancher trop dispersé (μ={mu:.2f} σ={sd:.2f}) "
+                      f"-> il faudrait ρ={needed:.2f} pour détecter. Cible quasi INDÉTECTABLE : "
+                      f"contact des électrodes occipitales, ou refaire le repos immobile.")
+        print(f"[server] σ de référence {self._sigma_ref:.1f} -> rejet d'artefact au-delà "
+              f"de {ARTIFACT_SIGMA_RATIO * self._sigma_ref:.0f}")
+        print(f"[server] décodage en cours sur {stream_name('decoded_ssvep')} "
+              f"(échelle z, seuil {self.decoder.z_min}) — fixe une cible")
         self._baseline_done = True
-        scale = "z" if self.decoder.baseline else "rho"
-        self.ssvep_out = DecodedSSVEPPublisher(self.freqs, decision_scale=scale,
-                                               thresholds=self.decoder.thresholds)
-        print(f"[server] flux LSL publie : {stream_name('decoded_ssvep')} "
-              f"(échelle {scale}, seuil {self.decoder.thresholds[0]})")
 
-    def run(self, duration_s=None, baseline_s=SSVEP_BASELINE_S):
+    def run(self, duration_s=None, baseline_s=SSVEP_BASELINE_S, warmup_s=SSVEP_WARMUP_S):
         """Boucle principale. `duration_s=None` = jusqu'à Ctrl+C."""
         started = time.perf_counter()
         last_quality = last_status = last_ssvep = 0.0
 
         with self.acq:
-            print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz")
+            print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz instance={self.instance}")
             for suffix in ("raw", "quality", "status"):
                 print(f"[server] flux LSL publie : {stream_name(suffix)}")
             if self.decoder is not None:
+                print(f"[server] flux LSL publie : {stream_name('decoded_ssvep')} "
+                      f"(silencieux pendant le repos)")
                 print(f"[server] mode {self.mode} — cibles "
                       + ", ".join(f"{f:g} Hz" for f in self.freqs))
-                print(f"[server] REPOS {baseline_s:.0f} s : ne fixe AUCUNE cible "
-                      f"(mesure du bruit de fond)")
+                print(f"[server] stabilisation {warmup_s:.0f} s, puis REPOS {baseline_s:.0f} s : "
+                      f"ne fixe AUCUNE cible (mesure du bruit de fond)")
                 self._baseline_s = baseline_s
+                self._warmup_until = time.perf_counter() + warmup_s
             self.status_out.push(self._state(True), key=self._status_key(True), force=True)
 
             while not self._stop:
@@ -399,13 +459,17 @@ def _smoke_ssvep():
 
     freqs = [15.0, 20.0, 8.57]
     server = EngineServer(synthetic=True, mode="ssvep", freqs=freqs)
-    thread = threading.Thread(target=server.run,
-                              kwargs={"duration_s": 12.0, "baseline_s": 3.0}, daemon=True)
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"duration_s": 14.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
     thread.start()
 
-    found = resolve_byprop("name", stream_name("decoded_ssvep"), timeout=12.0)
+    # Le flux doit exister DÈS le démarrage, avant même la fin du repos : c'est ce qui
+    # permet à un client de le trouver au lancement (cf. _setup_ssvep). Un délai court
+    # vérifie donc une vraie propriété du contrat, pas seulement la présence du flux.
+    found = resolve_byprop("name", stream_name("decoded_ssvep"), timeout=5.0)
     if not found:
-        print("[smoke-ssvep] ÉCHEC : le flux décodé n'apparaît pas après la baseline")
+        print("[smoke-ssvep] ÉCHEC : le flux décodé n'existe pas dès le démarrage")
         server.stop()
         return False
     inlet = StreamInlet(found[0])
@@ -414,8 +478,18 @@ def _smoke_ssvep():
     scale = inlet.info().desc().child("decoding").child_value("decision_scale")
     print(f"[smoke-ssvep] flux décodé : {n_ch} voies, échelle « {scale} »")
 
+    # Le flux existe dès le départ mais reste muet pendant la chauffe et le repos : on
+    # attend que le moteur annonce lui-même être passé en décodage avant de compter.
+    t0 = time.perf_counter()
+    while server.phase != "decoding" and time.perf_counter() - t0 < 12.0 and thread.is_alive():
+        inlet.pull_chunk(timeout=0.1, max_samples=64)
+    if server.phase != "decoding":
+        print(f"[smoke-ssvep] ÉCHEC : toujours en phase « {server.phase} » après 12 s")
+        server.stop()
+        return False
+
     rows, t0 = [], time.perf_counter()
-    while time.perf_counter() - t0 < 4.0 and thread.is_alive():
+    while time.perf_counter() - t0 < 3.0 and thread.is_alive():
         chunk, _ts = inlet.pull_chunk(timeout=0.2, max_samples=64)
         rows.extend(chunk)
     server.stop()
@@ -455,6 +529,11 @@ def _parse_args(argv):
                         "mêmes fréquences que src/ssvep_stimulus.py lancé avec ce refresh")
     p.add_argument("--baseline", type=float, default=SSVEP_BASELINE_S,
                    help="durée du repos initial en s (mesure du bruit de fond)")
+    p.add_argument("--warmup", type=float, default=SSVEP_WARMUP_S,
+                   help="stabilisation jetée avant le repos (dérive DC des électrodes sèches)")
+    p.add_argument("--id", dest="instance", default=None,
+                   help="identité de cette instance (défaut : n° de série du casque). Distingue "
+                        "les moteurs quand plusieurs tournent sur le même réseau — une salle de TP")
     p.add_argument("--smoke", action="store_true", help="test headless de bout en bout, puis quitte")
     p.add_argument("--verbose", action="store_true", help="logs BrainFlow détaillés")
     return p.parse_args(argv)
@@ -468,9 +547,10 @@ if __name__ == "__main__":
 
     freqs = [float(f) for f in args.freqs.split(",")] if args.freqs else None
     engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
-                          mode=args.mode, freqs=freqs, refresh=args.refresh)
+                          mode=args.mode, freqs=freqs, refresh=args.refresh,
+                          instance=args.instance)
     # Ctrl+C doit fermer PROPREMENT la session BrainFlow : une session laissée ouverte
     # empêche la suivante de s'ouvrir (BOARD_NOT_READY au relancement).
     signal.signal(signal.SIGINT, lambda *_: engine.stop())
     print("[server] Ctrl+C pour arrêter.")
-    engine.run(duration_s=args.duration, baseline_s=args.baseline)
+    engine.run(duration_s=args.duration, baseline_s=args.baseline, warmup_s=args.warmup)
