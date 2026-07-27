@@ -95,7 +95,9 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 - ⚠️ **Risque réseau école** : LSL découvre les flux par **multicast UDP**, que des pare-feux ou des réseaux
   de campus verrouillés peuvent bloquer. En local (même machine) c'est en général transparent ; entre deux
   machines, prévoir une doc « autoriser l'appli dans le pare-feu » et, si besoin, la configuration des pairs
-  connus de LSL. **À tester tôt sur le réseau de l'école.**
+  connus de LSL. **À tester tôt sur le réseau de l'école.** → procédure et contournement écrits :
+  [docs/network.md](network.md). Le test ne demande **pas le casque** (`--synthetic` suffit), donc il peut
+  être fait avec deux portables quelconques avant d'être en salle.
 - **Mesuré en local le 2026-07-27** (poste de dev Windows 11, `pylsl` 1.18.2) : `pip install pylsl` fournit
   une roue `win_amd64` avec `liblsl` embarqué — **aucune installation supplémentaire côté étudiant**.
   Découverte d'un flux par son nom en **0,04 s**, décalage d'horloge **−0,01 ms**, **0 échantillon perdu**
