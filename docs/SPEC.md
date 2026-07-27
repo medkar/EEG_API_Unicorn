@@ -274,7 +274,9 @@ calibré » par mode · bouton de calibration · sortie décodée en direct · f
    - **[à faire]** test multicast **entre deux machines** sur le réseau de l'école.
 5. **Exemples** : `receiver.py` + Unity SSVEP.
    - **[fait 2026-07-27]** `examples/receiver.py` (`--list` / `--stream raw|quality|status|decoded_ssvep`).
-   - **[à faire]** l'exemple Unity/C#.
+   - **[fait 2026-07-27]** `examples/unity/` (SsvepIntentReceiver + IntentToMotion + README).
+     ⚠️ écrit contre l'API LSL4Unity vérifiée sur les sources, mais **jamais exécuté dans Unity**
+     (pas d'installation Unity sur le poste de dev) — à faire valider par un premier utilisateur.
 6. Incréments v1/v2 (MI, P300, control plane, neuro, ErrP, nouvelle GUI).
 7. **[fin] Nettoyage des commentaires** — mode par mode, style validé sur un fichier témoin d'abord :
    garder/écrire le « quoi + pourquoi pour un nouveau venu qui va MODIFIER le code », retirer le journal
