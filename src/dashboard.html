@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EEG_API_Unicorn — tableau de bord</title>
+<style>
+/* Palette : rôles d'abord, hex ensuite, pour que le mode sombre bascule en un seul endroit.
+   La couleur ne porte JAMAIS une information à elle seule ici — chaque voie affiche son
+   verdict en toutes lettres, la cible détectée est nommée. C'est la règle d'accessibilité,
+   et c'est aussi ce qui rend la page lisible sur un vidéoprojecteur fatigué. */
+:root {
+  color-scheme: light;
+  --surface:      #fcfcfb;
+  --plane:        #f9f9f7;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --muted:        #898781;
+  --grid:         #e1e0d9;
+  --baseline:     #c3c2b7;
+  --border:       rgba(11,11,11,0.10);
+  --accent:       #2a78d6;
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --critical:     #d03b3b;
+  --track:        #e1e0d9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface:  #1a1a19;
+    --plane:    #0d0d0d;
+    --ink:      #ffffff;
+    --ink-2:    #c3c2b7;
+    --grid:     #2c2c2a;
+    --baseline: #383835;
+    --border:   rgba(255,255,255,0.10);
+    --accent:   #3987e5;
+    --track:    #2c2c2a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --plane: #0d0d0d; --ink: #fff; --ink-2: #c3c2b7;
+  --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #3987e5; --track: #2c2c2a;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 20px;
+  background: var(--plane); color: var(--ink);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+h1 { font-size: 18px; margin: 0 0 2px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+     color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+.wrap { max-width: 1000px; margin: 0 auto; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 18px; margin-bottom: 14px;
+}
+.head { display: flex; justify-content: space-between; align-items: baseline;
+        flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.sub { color: var(--ink-2); font-size: 13px; }
+
+/* Bandeau d'alerte : icône + texte, jamais la couleur seule. */
+.alert {
+  border-left: 4px solid var(--critical); background: var(--surface);
+  padding: 12px 16px; border-radius: 8px; margin-bottom: 14px;
+  border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.alert b { color: var(--critical); }
+
+/* Tuiles d'état : un chiffre lisible de loin, son libellé en dessous. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 12px 14px; }
+.tile .v { font-size: 22px; font-weight: 600; }
+.tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* Barres. Marques fines, extrémité arrondie, piste discrète. */
+.row { display: grid; grid-template-columns: 46px 1fr 68px 76px;
+       align-items: center; gap: 10px; margin-bottom: 8px; }
+.name { font-weight: 600; }
+.track { position: relative; height: 10px; background: var(--track); border-radius: 5px; }
+.fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; min-width: 3px; }
+.val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.verdict { font-size: 12px; color: var(--ink-2); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+       margin-right: 6px; vertical-align: 1px; }
+
+/* Barres de score : zéro au centre, seuil marqué. Le z est SIGNÉ, l'afficher
+   d'un seul côté cacherait la moitié de l'information. */
+.zrow { display: grid; grid-template-columns: 76px 1fr 60px 62px;
+        align-items: center; gap: 10px; margin-bottom: 8px; }
+.ztrack { position: relative; height: 12px; background: var(--track); border-radius: 6px; }
+.zzero { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--baseline); }
+.zthr  { position: absolute; top: -5px; bottom: -5px; width: 2px; background: var(--muted); }
+.zfill { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+.hit { font-size: 12px; font-weight: 600; color: var(--good); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 10px 6px 0; }
+th { color: var(--muted); font-weight: 600; font-size: 12px;
+     text-transform: uppercase; letter-spacing: .05em; }
+td { font-variant-numeric: tabular-nums; border-top: 1px solid var(--grid); }
+
+button {
+  font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+}
+button:hover { border-color: var(--baseline); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink-2); }
+.stale { opacity: .45; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>EEG_API_Unicorn</h1>
+      <div class="sub" id="ident">connexion…</div>
+    </div>
+    <div class="sub" id="link">—</div>
+  </div>
+
+  <div id="alert"></div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Qualité du signal</h2>
+    <div id="quality"><div class="sub">en attente de données…</div></div>
+    <div class="sub" style="margin-top:10px" id="common"></div>
+  </div>
+
+  <div class="card" id="decodecard" hidden>
+    <h2>Décodage</h2>
+    <div id="decoded"></div>
+  </div>
+
+  <div class="card" id="baselinecard" hidden>
+    <h2>Plancher de repos</h2>
+    <div id="baseline"></div>
+  </div>
+
+  <div class="card">
+    <h2>Commandes</h2>
+    <div class="controls">
+      <button class="primary" onclick="cmd('set_mode',{mode:'ssvep'})">Décoder le SSVEP</button>
+      <button onclick="cmd('set_mode',{mode:null})">Diffusion seule</button>
+      <button onclick="cmd('recalibrate')">Refaire le repos</button>
+    </div>
+    <div class="sub" style="margin-top:10px">
+      « Refaire le repos » est obligatoire après avoir touché une électrode : un plancher
+      mesuré pendant qu'un contact se stabilisait reste faux pour toute la séance.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Flux publiés</h2>
+    <div id="streams" class="sub"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let failures = 0;
+
+// Sondage plutôt que WebSocket : l'état tient dans quelques centaines d'octets et change
+// à 1-5 Hz. Un WebSocket n'apporterait ici qu'une reconnexion à gérer en plus.
+async function poll() {
+  try {
+    const state = await (await fetch('/api/state')).json();
+    failures = 0;
+    document.body.classList.remove('stale');
+    render(state);
+  } catch (e) {
+    if (++failures > 3) {
+      document.body.classList.add('stale');
+      $('link').textContent = 'moteur injoignable';
+    }
+  }
+}
+
+async function cmd(command, params = {}) {
+  await fetch('/api/command', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({command, ...params})
+  });
+  poll();
+}
+
+const PHASES = {
+  streaming: 'diffusion seule',
+  warmup: 'stabilisation',
+  baseline: 'mesure du repos',
+  decoding: 'décodage'
+};
+const STATUS = {ok: 'var(--good)', 'douteux': 'var(--warning)',
+                'morte': 'var(--critical)', 'saturée': 'var(--critical)'};
+
+function render(s) {
+  $('ident').textContent = `${s.board} · instance ${s.instance} · ${s.fs_hz} Hz`;
+  $('link').textContent = s.running ? 'en marche' : 'arrêté';
+
+  $('alert').innerHTML = (s.quality && s.quality.reference_lost)
+    ? `<div class="alert"><b>⚠ Référence décrochée</b> — les 8 voies mesurent la même chose
+       (corrélation ${s.quality.common_mode}). Remets les électrodes mastoïdes puis refais le
+       repos : tout ce qui est enregistré d'ici là est inexploitable.</div>` : '';
+
+  $('tiles').innerHTML = [
+    ['Mode', s.mode || 'aucun'],
+    ['Phase', PHASES[s.phase] || s.phase],
+    ['Échantillons', s.samples_published.toLocaleString('fr-FR')],
+    ['Flux', s.streams.length]
+  ].map(([k, v]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`)
+   .join('');
+
+  // Qualité : barre + valeur + verdict écrit. Échelle 0-40 µV, au-delà on sature la barre
+  // mais le chiffre reste lisible — un σ de 600 doit se voir, pas déborder la page.
+  if (s.quality) {
+    $('quality').innerHTML = s.channels.map((name, i) => {
+      const sigma = s.quality.sigmas[i], verdict = s.quality.verdicts[i];
+      const color = STATUS[verdict] || 'var(--muted)';
+      const pct = Math.min(sigma / 40, 1) * 100;
+      return `<div class="row">
+        <span class="name">${name}</span>
+        <span class="track"><span class="fill" style="width:${pct}%;background:${color}"></span></span>
+        <span class="val">${sigma.toFixed(1)}</span>
+        <span class="verdict"><span class="dot" style="background:${color}"></span>${verdict}</span>
+      </div>`;
+    }).join('');
+    $('common').textContent =
+      `corrélation inter-voies ${s.quality.common_mode} — au-delà de 0,90 la référence a lâché`;
+  }
+
+  // Décodage : le z est signé, donc zéro au centre et seuil matérialisé.
+  const d = s.decoded;
+  $('decodecard').hidden = !d;
+  if (d) {
+    const lo = -5, hi = 10, span = hi - lo;
+    const x = (v) => ((Math.max(lo, Math.min(hi, v)) - lo) / span) * 100;
+    const zero = x(0), thr = x(d.threshold);
+    const head = d.artifact
+      ? '<b>fenêtre rejetée</b> — artefact (mouvement, clignement)'
+      : (d.target_index < 0
+          ? `<b>aucune cible</b> — rien au-dessus de z = ${d.threshold}`
+          : `<b class="hit">cible ${d.target_index} — ${d.freq_hz} Hz</b>`);
+    $('decoded').innerHTML = `<div class="sub" style="margin-bottom:12px">${head}</div>` +
+      (s.frequencies_hz || []).map((f, i) => {
+        const z = d.scores[i], on = i === d.target_index && !d.artifact;
+        const a = Math.min(zero, x(z)), b = Math.max(zero, x(z));
+        return `<div class="zrow">
+          <span class="name">${f} Hz</span>
+          <span class="ztrack">
+            <span class="zzero" style="left:${zero}%"></span>
+            <span class="zfill" style="left:${a}%;width:${Math.max(b - a, 0.6)}%;
+                  background:${on ? 'var(--good)' : 'var(--accent)'}"></span>
+            <span class="zthr" style="left:${thr}%"></span>
+          </span>
+          <span class="val">${z.toFixed(2)}</span>
+          <span class="hit">${on ? 'DÉTECTÉE' : ''}</span>
+        </div>`;
+      }).join('') +
+      `<div class="sub" style="margin-top:8px">trait vertical épais = seuil de décision
+       (z = ${d.threshold}) · trait fin = repos (z = 0)</div>`;
+  }
+
+  // Plancher : c'est ici qu'on voit une cible impossible à détecter AVANT de perdre la séance.
+  const b = s.baseline;
+  $('baselinecard').hidden = !b;
+  if (b) {
+    const rows = b.targets.map(t => {
+      const bad = t.rho_needed > 0.85;
+      return `<tr>
+        <td>${t.freq_hz} Hz</td><td>${t.mu}</td><td>${t.sigma}</td>
+        <td>${t.rho_needed}</td>
+        <td>${bad ? '<span style="color:var(--critical)">⚠ quasi indétectable</span>' : 'ok'}</td>
+      </tr>`;
+    }).join('');
+    $('baseline').innerHTML =
+      `<table><thead><tr><th>Cible</th><th>μ</th><th>σ</th><th>ρ requis</th><th>verdict</th>
+       </tr></thead><tbody>${rows}</tbody></table>
+       <div class="sub" style="margin-top:8px">mesuré sur ${b.windows} fenêtres. Un ρ requis
+       au-delà de 0,85 n'est pas atteignable en électrodes sèches : refais le repos, immobile,
+       sans rien fixer.</div>`;
+  }
+
+  $('streams').innerHTML = s.streams.map(n => `<code>${n}</code>`).join('<br>');
+}
+
+poll();
+setInterval(poll, 250);
+</script>
+</body>
+</html>

@@ -191,7 +191,7 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 **v1 :** `MI_decoded` (endogène, calibration native) · `P300` via marqueurs entrants · control plane LSL
 complet (`control` + `status`) · `neuro_decoded`.
 
-**v2 :** `ErrP` (marqueurs) · **tableau de bord web** (§12.2) · évolutions parkées F1/F2 (§13).
+**v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27]** `src/dashboard.py` + `src/dashboard.html` · évolutions parkées F1/F2 (§13).
 
 ## 11. Non-objectifs (assumés, à documenter)
 
@@ -237,9 +237,18 @@ Contreparties assumées :
 - le navigateur **ne parle pas LSL** : le tableau de bord dialogue avec le moteur qui le sert, lequel
   applique les commandes via l'API interne (§12.1) — le même chemin que les commandes LSL externes.
 
-**Techno** : Python + un micro-serveur HTTP (FastAPI ou Flask ; FastAPI offre en prime une page
-`/docs` interactive utile pédagogiquement). Rafraîchissement de l'état par sondage périodique (simple) ou
-WebSocket (plus fluide) — à trancher à l'implémentation, sans impact sur le reste.
+**Techno RETENUE (implémentée 2026-07-27)** : Python + **FastAPI/uvicorn**, page `/docs` interactive
+offerte. Rafraîchissement par **sondage** à 4 Hz : l'état complet tient en ~1 Ko et ne change qu'à
+1-5 Hz, un WebSocket n'aurait ajouté qu'une reconnexion à gérer. La page est un **fichier séparé**
+(`src/dashboard.html`), relu à chaque requête, pour qu'un étudiant l'édite et rafraîchisse sans
+redémarrer le moteur ni rouvrir la session casque.
+
+Le navigateur ne parle pas au moteur directement : ses commandes passent par l'**API de commande
+interne** (§12.1), qui les met en FILE pour que la boucle du moteur les applique elle-même. La session
+BrainFlow n'est donc touchée que par un seul thread, et `/api/command` répond un **accusé**, pas un
+résultat — exactement comme un client LSL devra observer l'effet sur `status`. Les deux chemins de
+contrôle se comportent pareil, ce qui évite qu'une interface prenne l'habitude d'un confort que
+l'autre n'offre pas.
 
 **Contenu du tableau de bord** : qualité des 8 voies en direct · choix du mode · état « calibré / non
 calibré » par mode · bouton de calibration · sortie décodée en direct · flux LSL publiés (noms/état).

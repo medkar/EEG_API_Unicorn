@@ -9,3 +9,5 @@ pyriemann>=0.5         # xDAWN + géométrie riemannienne (P300, ErrP)
 joblib>=1.3            # sauvegarde des modèles calibrés
 pygame>=2.5            # stimulus natif : clignotement verrouillé à la frame (vsync)
 pylsl>=1.16            # diffusion réseau (Lab Streaming Layer) — le contrat d'API
+fastapi>=0.110         # tableau de bord web local (src/dashboard.py) + sa page /docs
+uvicorn>=0.27          # serveur qui sert le tableau de bord

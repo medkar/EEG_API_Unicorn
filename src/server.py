@@ -36,6 +36,7 @@ Un troisième terminal montre ce que reçoit un vrai client :
 
 import argparse
 import os
+import queue
 import signal
 import sys
 import time
@@ -106,6 +107,11 @@ class EngineServer:
         self._baseline_warned = False
         self._last_log = 0.0
         self._reference_lost = None
+        self._commands = queue.Queue()
+        self._warmup_s = SSVEP_WARMUP_S
+        self._quality = None        # dernier σ par voie, pour l'afficheur
+        self._decoded = None        # dernière décision, pour l'afficheur
+        self._baseline_report = None
         if mode == "ssvep":
             self._setup_ssvep(freqs, refresh)
 
@@ -155,6 +161,80 @@ class EngineServer:
             return "warmup"
         return "baseline"
 
+    # --- API de commande interne (SPEC §12.1) --------------------------------
+    # Le tableau de bord web et, plus tard, l'adaptateur de commandes LSL passent tous les
+    # deux PAR ICI. Un seul chemin à tester, et le protocole de contrôle reste remplaçable
+    # sans réécrire le moteur.
+    #
+    # Les commandes ne sont PAS appliquées par le thread qui les soumet : elles sont mises en
+    # file et exécutées par la boucle du moteur. C'est ce qui garantit que la session
+    # BrainFlow n'est touchée que depuis un seul thread — la partager entre le serveur web et
+    # la boucle d'acquisition produirait des corruptions qu'aucun test ne rattraperait.
+
+    def submit(self, command, **params):
+        """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard)."""
+        if command not in ("set_mode", "recalibrate", "stop"):
+            return {"accepted": False, "reason": f"commande inconnue : {command}"}
+        self._commands.put((command, params))
+        return {"accepted": True, "command": command}
+
+    def _drain_commands(self):
+        while True:
+            try:
+                command, params = self._commands.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._apply(command, params)
+            except Exception as e:  # noqa: BLE001 - une commande fautive ne doit pas tuer le moteur
+                print(f"[server] commande '{command}' rejetée : {e}")
+
+    def _apply(self, command, params):
+        if command == "stop":
+            self.stop()
+        elif command == "recalibrate":
+            self._restart_baseline()
+        elif command == "set_mode":
+            mode = params.get("mode") or None
+            if mode == self.mode and mode is not None:
+                self._restart_baseline()
+                return
+            self.mode = mode
+            self.decoder = None
+            self.ssvep_out = None
+            self.freqs = []
+            if mode == "ssvep":
+                self._setup_ssvep(params.get("freqs"), params.get("refresh"))
+                self._restart_baseline()
+            print(f"[server] mode -> {self.mode or 'aucun (diffusion seule)'}")
+
+    def _restart_baseline(self):
+        """Refait chauffe + repos. Indispensable après avoir touché une électrode : un
+        plancher mesuré pendant qu'un contact se stabilisait reste faux toute la séance."""
+        self._baseline_samples, self._baseline_sigmas = [], []
+        self._sigma_ref, self._baseline_until = None, None
+        self._baseline_done = self._baseline_warned = False
+        self._warmup_until = time.perf_counter() + self._warmup_s
+        self._decoded = None
+        print(f"[server] repos relancé : stabilisation {self._warmup_s:.0f} s "
+              f"puis {self._baseline_s:.0f} s sans rien fixer")
+
+    def snapshot(self):
+        """État complet pour un afficheur, en lecture seule. Sûr depuis un autre thread.
+
+        On rend un dictionnaire déjà construit plutôt que des références vers l'état vivant :
+        l'appelant ne peut donc pas lire une valeur à moitié écrite par la boucle.
+        """
+        state = self._state(not self._stop)
+        state.update({
+            "quality": self._quality,
+            "decoded": self._decoded,
+            "baseline": self._baseline_report,
+            "warmup_s": self._warmup_s,
+            "baseline_s": self._baseline_s,
+        })
+        return state
+
     def _status_key(self, running):
         """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push)."""
         return (running, self.synthetic, self.mode, self.phase)
@@ -200,6 +280,12 @@ class EngineServer:
         # une fois par changement d'état plutôt qu'à chaque seconde.
         common = self.acq.common_mode(self._recent)
         lost = reference_lost(common)
+        self._quality = {
+            "sigmas": [round(float(v), 2) for v in sigmas],
+            "verdicts": [verdict_from_sigma(float(v)) for v in sigmas],
+            "common_mode": round(float(common), 3),
+            "reference_lost": bool(lost),
+        }
         if lost != self._reference_lost:
             self._reference_lost = lost
             if lost:
@@ -229,6 +315,7 @@ class EngineServer:
         sd = float(window.std(axis=0).mean())
         if self._sigma_ref and sd > ARTIFACT_SIGMA_RATIO * self._sigma_ref:
             self.ssvep_out.push(-1, 0.0, 0.0, [0.0] * len(self.freqs), lsl_ts)
+            self._remember_decision(-1, [0.0] * len(self.freqs), artifact=True)
             self._log_decision(-1, [0.0] * len(self.freqs), artifact=True)
             return
 
@@ -236,11 +323,22 @@ class EngineServer:
         ordered = [scores[f] for f in self.freqs]
         if freq is None:
             self.ssvep_out.push(-1, 0.0, max(ordered), ordered, lsl_ts)
+            self._remember_decision(-1, ordered)
             self._log_decision(-1, ordered)
         else:
             index = self.freqs.index(freq)
             self.ssvep_out.push(index, freq, scores[freq], ordered, lsl_ts)
+            self._remember_decision(index, ordered)
             self._log_decision(index, ordered)
+
+    def _remember_decision(self, index, scores, artifact=False):
+        self._decoded = {
+            "target_index": int(index),
+            "freq_hz": float(self.freqs[index]) if index >= 0 else 0.0,
+            "scores": [round(float(v), 2) for v in scores],
+            "artifact": bool(artifact),
+            "threshold": float(self.decoder.z_min),
+        }
 
     def _log_decision(self, index, scores, artifact=False):
         """Trace la décision en console ~1×/s.
@@ -315,10 +413,23 @@ class EngineServer:
               f"de {ARTIFACT_SIGMA_RATIO * self._sigma_ref:.0f}")
         print(f"[server] décodage en cours sur {stream_name('decoded_ssvep')} "
               f"(échelle z, seuil {self.decoder.z_min}) — fixe une cible")
+        self._baseline_report = {
+            "windows": len(self._baseline_samples),
+            "targets": [{"freq_hz": float(f), "mu": round(mu, 3), "sigma": round(sd, 3),
+                         "rho_needed": round(mu + self.decoder.z_min * sd, 2)}
+                        for f, (mu, sd) in self.decoder.baseline.items()],
+        }
         self._baseline_done = True
 
     def run(self, duration_s=None, baseline_s=SSVEP_BASELINE_S, warmup_s=SSVEP_WARMUP_S):
         """Boucle principale. `duration_s=None` = jusqu'à Ctrl+C."""
+        # Le moteur écrit des µ, des σ et des accents. Sous PowerShell, stdout est en cp1252
+        # par défaut : un simple print tuait alors le thread d'acquisition sur un
+        # UnicodeEncodeError. On le fait ici plutôt que dans le seul `__main__`, parce que
+        # le moteur est aussi utilisé comme bibliothèque (tableau de bord, tests) — et
+        # qu'un échec d'AFFICHAGE ne doit jamais interrompre une ACQUISITION.
+        use_utf8_console()
+
         started = time.perf_counter()
         last_quality = last_status = last_ssvep = 0.0
 
@@ -333,11 +444,12 @@ class EngineServer:
                       + ", ".join(f"{f:g} Hz" for f in self.freqs))
                 print(f"[server] stabilisation {warmup_s:.0f} s, puis REPOS {baseline_s:.0f} s : "
                       f"ne fixe AUCUNE cible (mesure du bruit de fond)")
-                self._baseline_s = baseline_s
+                self._baseline_s, self._warmup_s = baseline_s, warmup_s
                 self._warmup_until = time.perf_counter() + warmup_s
             self.status_out.push(self._state(True), key=self._status_key(True), force=True)
 
             while not self._stop:
+                self._drain_commands()
                 now = time.perf_counter()
                 if duration_s is not None and now - started >= duration_s:
                     break
@@ -375,6 +487,29 @@ class EngineServer:
         return self.samples
 
 
+def _resolve_own(suffix, instance, timeout=10.0):
+    """Résout un flux en exigeant l'instance qui l'a publié.
+
+    Chercher par NOM seul ne suffit pas : les noms sont un contrat public, donc identiques
+    pour tous les moteurs. Un serveur laissé ouvert sur le poste — ou le casque d'un voisin
+    en salle — répond alors à la place du nôtre, et le test mesure quelqu'un d'autre
+    (vécu deux fois le 2026-07-27 : cadence lue à 401 Hz au lieu de 250, échantillons reçus
+    en surnombre). On filtre donc sur le `source_id`, qui porte l'instance.
+    """
+    from pylsl import resolve_byprop
+    # Deux précautions, chacune pour un piège distinct :
+    # `minimum` élevé — sinon resolve_byprop rend la main dès le PREMIER flux trouvé et peut
+    #   donc ne jamais voir le nôtre si un autre moteur répond en premier ;
+    # passes COURTES répétées — parce que ce `minimum` fait justement consommer tout le délai
+    #   à chaque appel, et trois résolutions de 10 s dépasseraient la durée du test.
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        for info in resolve_byprop("name", stream_name(suffix), minimum=32, timeout=0.5):
+            if info.source_id().endswith(f"@{instance}"):
+                return info
+    return None
+
+
 def _smoke():
     """Test de bout en bout sans casque : le serveur publie, un client local reçoit.
 
@@ -385,7 +520,8 @@ def _smoke():
 
     from pylsl import StreamInlet, resolve_byprop
 
-    server = EngineServer(synthetic=True)
+    instance = "smoke"
+    server = EngineServer(synthetic=True, instance=instance)
 
     # Garde-fou : `_filter` ne doit JAMAIS modifier son entrée. Le serveur lui passe un
     # tampon persistant ; s'il était filtré sur place, les échantillons bruts suivants
@@ -401,16 +537,16 @@ def _smoke():
     thread = threading.Thread(target=server.run, kwargs={"duration_s": 6.0}, daemon=True)
     thread.start()
 
-    raw = resolve_byprop("name", stream_name("raw"), timeout=10.0)
-    qual = resolve_byprop("name", stream_name("quality"), timeout=5.0)
-    stat = resolve_byprop("name", stream_name("status"), timeout=5.0)
+    raw = _resolve_own("raw", instance)
+    qual = _resolve_own("quality", instance, 5.0)
+    stat = _resolve_own("status", instance, 5.0)
     if not raw or not qual or not stat:
         print("[smoke] ÉCHEC : flux introuvables")
         server.stop()
         return False
 
-    raw_in, qual_in = StreamInlet(raw[0], max_buflen=30), StreamInlet(qual[0], max_buflen=30)
-    stat_in = StreamInlet(stat[0], max_buflen=30)
+    raw_in, qual_in = StreamInlet(raw, max_buflen=30), StreamInlet(qual, max_buflen=30)
+    stat_in = StreamInlet(stat, max_buflen=30)
     raw_in.open_stream(timeout=5.0)   # sinon on rate tout ce qui précède le 1er pull
     qual_in.open_stream(timeout=5.0)
     stat_in.open_stream(timeout=5.0)
@@ -473,7 +609,8 @@ def _smoke_ssvep():
     from pylsl import StreamInlet, resolve_byprop
 
     freqs = [15.0, 20.0, 8.57]
-    server = EngineServer(synthetic=True, mode="ssvep", freqs=freqs)
+    instance = "smoke-ssvep"
+    server = EngineServer(synthetic=True, mode="ssvep", freqs=freqs, instance=instance)
     thread = threading.Thread(
         target=server.run,
         kwargs={"duration_s": 14.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
@@ -482,12 +619,12 @@ def _smoke_ssvep():
     # Le flux doit exister DÈS le démarrage, avant même la fin du repos : c'est ce qui
     # permet à un client de le trouver au lancement (cf. _setup_ssvep). Un délai court
     # vérifie donc une vraie propriété du contrat, pas seulement la présence du flux.
-    found = resolve_byprop("name", stream_name("decoded_ssvep"), timeout=5.0)
+    found = _resolve_own("decoded_ssvep", instance, 5.0)
     if not found:
         print("[smoke-ssvep] ÉCHEC : le flux décodé n'existe pas dès le démarrage")
         server.stop()
         return False
-    inlet = StreamInlet(found[0])
+    inlet = StreamInlet(found)
     inlet.open_stream(timeout=5.0)
     n_ch = inlet.info().channel_count()
     scale = inlet.info().desc().child("decoding").child_value("decision_scale")
