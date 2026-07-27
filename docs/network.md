@@ -18,6 +18,28 @@ that hears it answers. Concretely, liblsl uses:
 This is why a locked-down campus network can break it: many block multicast between hosts by
 default. Nothing crashes — the client simply finds nothing.
 
+## Both machines must be on the same subnet
+
+Same Wi-Fi network, normally. Discovery relies on broadcast and multicast, and the addresses
+involved (`224.0.0.1`, `224.0.0.183`) are *link-local*: routers never forward them between
+subnets, by design. Two different VLANs, two different SSIDs, or one machine behind another
+router, and discovery cannot work — that is IP, not a limitation of this tool.
+
+**Check reachability first, it takes ten seconds:**
+
+```powershell
+ping <ip-of-the-other-machine>
+```
+
+If the ping fails, stop looking at LSL. The most common cause on campus and guest Wi-Fi is
+**client isolation**: same SSID, same subnet, but the access point forbids clients from
+talking to each other. Neither discovery nor the `KnownPeers` workaround can help there,
+because plain unicast is blocked too.
+
+Working alternatives, in increasing order of hassle: a phone hotspot with both machines on
+it (perfect for a demo), a cable into the same switch, or a network your IT department has
+opened between hosts.
+
 ## Test it before you need it
 
 You do **not** need the headset for this. The synthetic board exercises the whole network
