@@ -35,6 +35,7 @@ Un troisième terminal montre ce que reçoit un vrai client :
 """
 
 import argparse
+import math
 import os
 import queue
 import signal
@@ -46,9 +47,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.cca_decoder import CCADecoder  # noqa: E402
-from core.config import (ARTIFACT_SIGMA_RATIO, CH_NAMES, SSVEP_BASELINE_S,  # noqa: E402
-                    SSVEP_WARMUP_S, choose_frequencies, reference_lost,
-                    use_utf8_console)
+from core.config import (ARTIFACT_SIGMA_RATIO, BANDPASS, CH_NAMES,  # noqa: E402
+                    SSVEP_BASELINE_S, SSVEP_WARMUP_S, WINDOW_S, choose_frequencies,
+                    reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedSSVEPPublisher, QualityPublisher,  # noqa: E402
                     RawPublisher, StatusPublisher, default_instance_id, stream_name,
                     verdict_from_sigma)
@@ -62,6 +63,20 @@ STATUS_PERIOD_S = 2.0     # rappel périodique de l'état (pour un client qui ar
 QUALITY_WINDOW_S = 2.0    # longueur de signal sur laquelle on mesure le σ par voie
 SSVEP_DECODE_HZ = 5.0     # cadence de décodage SSVEP (fenêtres glissantes de WINDOW_S)
 SSVEP_BASELINE_SAMPLE_HZ = 5.0   # cadence d'échantillonnage du plancher de repos
+
+
+def _json_float(value, digits=2):
+    """Arrondi sûr pour un état destiné à JSON : rend None au lieu d'un NaN ou d'un infini.
+
+    JSON n'a pas de NaN. Python l'écrit quand même (`NaN` nu, invalide), mais les
+    sérialiseurs stricts — celui de Starlette, derrière le tableau de bord — lèvent une
+    exception. Le prix d'une seule valeur indéfinie serait alors la perte de TOUT l'état :
+    plus de qualité, plus de phase, plus de flux, une page vide et rien pour comprendre.
+    """
+    if value is None:
+        return None
+    value = float(value)
+    return None if not math.isfinite(value) else round(value, digits)
 
 
 class EngineServer:
@@ -172,11 +187,65 @@ class EngineServer:
     # la boucle d'acquisition produirait des corruptions qu'aucun test ne rattraperait.
 
     def submit(self, command, **params):
-        """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard)."""
-        if command not in ("set_mode", "recalibrate", "stop"):
+        """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
+
+        Une exception à la règle « accusé seulement » : la VALIDITÉ des paramètres est
+        vérifiée ici, tout de suite. Le refus d'une commande mal formée est une propriété du
+        message, pas de l'état du moteur, et la renvoyer immédiatement évite à l'étudiant de
+        chercher dans la console pourquoi son réglage n'a rien fait. Ce que `submit` ne
+        promet toujours pas, c'est que la commande ait été APPLIQUÉE : ça s'observe sur
+        `/api/state` ou sur le flux `status`.
+        """
+        if command not in ("set_mode", "set_freqs", "recalibrate", "stop"):
             return {"accepted": False, "reason": f"commande inconnue : {command}"}
+        if command == "set_freqs":
+            freqs, reason = self._validate_freqs(params.get("freqs"), params.get("refresh"))
+            if freqs is None:
+                return {"accepted": False, "reason": reason}
+            params = {"freqs": freqs}
         self._commands.put((command, params))
         return {"accepted": True, "command": command}
+
+    def _validate_freqs(self, freqs, refresh=None):
+        """(liste de fréquences, None) si le jeu est exploitable, sinon (None, raison).
+
+        Refuser tôt plutôt que décoder dans le vide : une fréquence hors bande passante ou
+        deux cibles trop proches ne produisent AUCUNE erreur à l'exécution, seulement un
+        décodage qui ne détecte jamais rien. C'est le mode de panne le plus coûteux du SSVEP
+        parce qu'il ressemble à « l'utilisateur fixe mal ».
+        """
+        if self.mode != "ssvep":
+            return None, "le moteur n'est pas en mode SSVEP — choisis d'abord « Décoder le SSVEP »"
+        if not freqs and refresh:
+            freqs = [c["actual_hz"] for c in choose_frequencies(float(refresh))]
+        if not freqs:
+            return None, "aucune fréquence fournie"
+        try:
+            freqs = [float(f) for f in freqs]
+        except (TypeError, ValueError):
+            return None, "fréquences illisibles (attendu : des nombres en Hz)"
+        if len(freqs) < 2:
+            return None, "il faut au moins 2 cibles"
+        if len(freqs) > len(CH_NAMES):
+            return None, f"trop de cibles (maximum {len(CH_NAMES)})"
+
+        lo, hi = BANDPASS
+        hors = [f for f in freqs if not (lo <= f <= hi)]
+        if hors:
+            return None, (f"hors bande passante {lo:g}-{hi:g} Hz : "
+                          + ", ".join(f"{f:g}" for f in hors)
+                          + " — le filtre d'acquisition les supprime avant le décodage")
+
+        # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
+        # 1/WINDOW_S ne sont pas séparables, quelle que soit la qualité du signal.
+        ecart_min = 1.0 / WINDOW_S
+        ordonne = sorted(freqs)
+        trop_proches = [(a, b) for a, b in zip(ordonne, ordonne[1:]) if b - a < ecart_min]
+        if trop_proches:
+            return None, (f"cibles trop proches pour une fenêtre de {WINDOW_S:g} s "
+                          f"(écart minimum {ecart_min:.2f} Hz) : "
+                          + ", ".join(f"{a:g} et {b:g}" for a, b in trop_proches))
+        return freqs, None
 
     def _drain_commands(self):
         while True:
@@ -194,6 +263,8 @@ class EngineServer:
             self.stop()
         elif command == "recalibrate":
             self._restart_baseline()
+        elif command == "set_freqs":
+            self._set_freqs(params["freqs"])
         elif command == "set_mode":
             mode = params.get("mode") or None
             if mode == self.mode and mode is not None:
@@ -207,6 +278,27 @@ class EngineServer:
                 self._setup_ssvep(params.get("freqs"), params.get("refresh"))
                 self._restart_baseline()
             print(f"[server] mode -> {self.mode or 'aucun (diffusion seule)'}")
+
+    def _set_freqs(self, freqs):
+        """Change les fréquences décodées en cours de séance (contrôle demandé par §12.2).
+
+        Deux conséquences qu'on ne peut pas contourner, seulement assumer :
+
+        1. **Le flux `decoded_ssvep` est RECRÉÉ.** Les fréquences ne sont pas qu'un réglage
+           interne : elles nomment les voies du flux (`score_15Hz`) et figurent dans ses
+           métadonnées. Or les métadonnées LSL sont figées à la création. Garder l'ancien
+           flux reviendrait à publier des étiquettes fausses — un client afficherait « 15 Hz »
+           pour une cible à 12. On préfère couper : **les clients connectés doivent se
+           réabonner** (le NOM du flux, lui, ne change pas, donc un re-`resolve` suffit).
+        2. **Le plancher de repos est refait.** Il est mesuré PAR FRÉQUENCE ; le réutiliser
+           après changement comparerait les ρ d'une cible au bruit de fond d'une autre.
+        """
+        ancien = list(self.freqs)
+        self.ssvep_out = None       # libère l'outlet avant d'en créer un autre
+        self._setup_ssvep(freqs)
+        self._restart_baseline()
+        print(f"[server] fréquences {ancien} -> {self.freqs} Hz ; "
+              "flux decoded_ssvep RECRÉÉ (les clients doivent se réabonner)")
 
     def _restart_baseline(self):
         """Refait chauffe + repos. Indispensable après avoir touché une électrode : un
@@ -282,10 +374,12 @@ class EngineServer:
         # Sur le board de test il n'y a aucune électrode : un verdict sur la référence y serait
         # un contresens. On publie la mesure (honnête) mais jamais le verdict.
         lost = reference_lost(common) and not self.synthetic
+        # `None` plutôt que NaN partout : l'état part en JSON, où NaN n'existe pas et fait
+        # échouer la sérialisation entière (page blanche au lieu d'une valeur manquante).
         self._quality = {
-            "sigmas": [round(float(v), 2) for v in sigmas],
+            "sigmas": [_json_float(v) for v in sigmas],
             "verdicts": [verdict_from_sigma(float(v)) for v in sigmas],
-            "common_mode": round(float(common), 3),
+            "common_mode": _json_float(common, digits=3),
             "reference_lost": bool(lost),
         }
         if lost != self._reference_lost and not self.synthetic:

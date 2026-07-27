@@ -148,6 +148,43 @@ def _smoke():
             print("[smoke] ÉCHEC : le mode n'a pas changé")
             ok = False
 
+        # Changer les fréquences depuis le navigateur : la commande doit être appliquée ET
+        # se relire dans l'état, sinon l'étudiant croirait décoder des cibles qu'il n'a pas.
+        def post(payload):
+            r = urllib.request.Request(
+                base + "/api/command", method="POST", data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            return json.loads(urllib.request.urlopen(r, timeout=5).read())
+
+        ack = post({"command": "set_freqs", "freqs": [12.0, 15.0, 20.0]})
+        if not ack.get("accepted"):
+            print(f"[smoke] ÉCHEC : set_freqs refusé ({ack.get('reason')})")
+            ok = False
+        applied = False
+        for _ in range(40):
+            time.sleep(0.2)
+            state = json.loads(urllib.request.urlopen(base + "/api/state", timeout=5).read())
+            if [round(f, 2) for f in state.get("frequencies_hz", [])] == [12.0, 15.0, 20.0]:
+                applied = True
+                break
+        print(f"[smoke] fréquences changées depuis l'API : {applied}")
+        if not applied:
+            print("[smoke] ÉCHEC : les fréquences n'ont pas changé dans l'état")
+            ok = False
+
+        # Un jeu de fréquences inexploitable doit être refusé AVEC SA RAISON, pas accepté
+        # puis décodé dans le vide (le mode de panne le plus coûteux du SSVEP).
+        for payload, attendu in (
+                ({"command": "set_freqs", "freqs": [15.0, 60.0]}, "hors bande passante"),
+                ({"command": "set_freqs", "freqs": [15.0, 15.2]}, "trop proches"),
+                ({"command": "set_freqs", "freqs": [15.0]}, "au moins 2")):
+            ack = post(payload)
+            if ack.get("accepted") or attendu not in ack.get("reason", ""):
+                print(f"[smoke] ÉCHEC : {payload['freqs']} mal refusé -> {ack}")
+                ok = False
+            else:
+                print(f"[smoke] {payload['freqs']} refusé : {ack['reason'][:60]}...")
+
         # Une commande inconnue doit être refusée proprement, pas planter le moteur.
         req = urllib.request.Request(
             base + "/api/command", method="POST",

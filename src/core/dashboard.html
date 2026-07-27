@@ -114,6 +114,19 @@ button {
 button:hover { border-color: var(--baseline); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.field label { font-size: 13px; color: var(--ink-2); }
+.field .unit { font-size: 13px; color: var(--muted); margin-left: -4px; }
+input[type=text] {
+  font: inherit; padding: 8px 10px; border-radius: 8px; min-width: 190px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+input[type=text]:focus { outline: none; border-color: var(--accent); }
+#cmdmsg { margin-top: 8px; font-size: 13px; }
+#cmdmsg.refus { color: var(--critical); }
+#cmdmsg.ok { color: var(--good); }
 code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink-2); }
 .stale { opacity: .45; }
 </style>
@@ -155,7 +168,31 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: v
       <button onclick="cmd('set_mode',{mode:null})">Diffusion seule</button>
       <button onclick="cmd('recalibrate')">Refaire le repos</button>
     </div>
+
+    <div class="field">
+      <label for="freqs">Fréquences décodées</label>
+      <input id="freqs" type="text" inputmode="decimal" autocomplete="off"
+             placeholder="15, 20, 8.57"
+             oninput="touched = true"
+             onkeydown="if (event.key === 'Enter') applyFreqs()">
+      <span class="unit">Hz</span>
+      <button onclick="applyFreqs()">Appliquer</button>
+    </div>
+    <div class="sub" id="freqnow">—</div>
+    <div id="cmdmsg"></div>
+
     <div class="sub" style="margin-top:10px">
+      ⚠️ Le moteur <b>ne fabrique pas</b> le stimulus, il décode les fréquences déclarées ici :
+      ton application doit faire clignoter les cibles exactement à ces valeurs. Un désaccord ne
+      produit aucune erreur, seulement un décodage qui ne détecte jamais rien.
+    </div>
+    <div class="sub" style="margin-top:6px">
+      Changer les fréquences <b>recrée le flux <code>decoded_ssvep</code></b> — elles nomment ses
+      voies, et les métadonnées LSL sont figées à la création. Les clients connectés doivent se
+      réabonner (le nom du flux, lui, ne change pas). La mesure du repos repart aussi : le
+      plancher est mesuré par fréquence et n'a plus de sens sur d'autres cibles.
+    </div>
+    <div class="sub" style="margin-top:6px">
       « Refaire le repos » est obligatoire après avoir touché une électrode : un plancher
       mesuré pendant qu'un contact se stabilisait reste faux pour toute la séance.
     </div>
@@ -187,12 +224,41 @@ async function poll() {
   }
 }
 
+// `touched` : tant que l'étudiant n'a pas tapé dedans, le champ des fréquences suit l'état du
+// moteur. Dès qu'il y touche, on cesse de l'écraser — sinon le sondage à 4 Hz effacerait sa
+// saisie entre deux caractères.
+let touched = false;
+
 async function cmd(command, params = {}) {
-  await fetch('/api/command', {
+  const res = await fetch('/api/command', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({command, ...params})
   });
+  const ack = await res.json().catch(() => null);
+  showAck(ack);
   poll();
+  return ack;
+}
+
+// Le moteur REFUSE une commande mal formée avec une raison lisible (fréquence hors bande,
+// cibles trop proches...). L'afficher est le seul moyen que l'étudiant la voie : la console
+// du moteur tourne souvent sur une autre machine.
+function showAck(ack, forced) {
+  const el = $('cmdmsg');
+  const message = forced || (ack && !ack.accepted ? 'Refusé — ' + ack.reason : '');
+  el.textContent = message;
+  el.className = message ? 'refus' : '';
+}
+
+function applyFreqs() {
+  const parts = $('freqs').value.split(/[,;\s]+/).filter(Boolean);
+  const freqs = parts.map(Number);
+  if (!parts.length || freqs.some((f) => !Number.isFinite(f))) {
+    showAck(null, 'Refusé — écris des nombres séparés par des virgules, par exemple 15, 20, 8.57');
+    return;
+  }
+  touched = false;   // la valeur appliquée redevient celle du moteur
+  cmd('set_freqs', {freqs});
 }
 
 const PHASES = {
@@ -230,6 +296,15 @@ function render(s) {
   ].map(([k, v]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`)
    .join('');
 
+  // Fréquences : le moteur reste la source de vérité. Le champ ne sert qu'à en proposer
+  // d'autres, et il se resynchronise tant que l'étudiant n'y a pas touché.
+  const freqs = s.frequencies_hz || [];
+  const texte = freqs.map((f) => (Math.round(f * 100) / 100)).join(', ');
+  $('freqnow').textContent = freqs.length
+    ? `décodées en ce moment : ${texte} Hz — ton stimulus doit clignoter à ces valeurs`
+    : 'aucune : le moteur diffuse sans décoder';
+  if (!touched) $('freqs').value = texte;
+
   // Qualité : barre + valeur + verdict écrit. Échelle 0-40 µV, au-delà on sature la barre
   // mais le chiffre reste lisible — un σ de 600 doit se voir, pas déborder la page.
   if (s.quality) {
@@ -244,10 +319,15 @@ function render(s) {
         <span class="verdict"><span class="dot" style="background:${color}"></span>${verdict}</span>
       </div>`;
     }).join('');
-    $('common').innerHTML = fake
-      ? `corrélation inter-voies ${s.quality.common_mode} — <b>sans signification sur le board
-         de test</b> (signal fabriqué, aucune électrode)`
-      : `corrélation inter-voies ${s.quality.common_mode} — au-delà de 0,90 la référence a lâché`;
+    // `null` = corrélation indéfinie (une voie strictement constante). On le dit, plutôt que
+    // d'afficher « null » ou de laisser croire à une mesure.
+    const cm = s.quality.common_mode;
+    $('common').innerHTML = cm === null || cm === undefined
+      ? `corrélation inter-voies indisponible — au moins une voie est parfaitement plate`
+      : (fake
+          ? `corrélation inter-voies ${cm} — <b>sans signification sur le board
+             de test</b> (signal fabriqué, aucune électrode)`
+          : `corrélation inter-voies ${cm} — au-delà de 0,90 la référence a lâché`);
   }
 
   // Décodage : le z est signé, donc zéro au centre et seuil matérialisé.

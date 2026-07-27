@@ -39,8 +39,19 @@ from core.config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, OCCIPITAL,  # noqa
 
 
 def _median_offdiag(filtered):
-    """Corrélation médiane entre paires de voies distinctes d'un bloc (n x C) filtré."""
-    c = np.corrcoef(filtered.T)
+    """Corrélation médiane entre paires de voies distinctes d'un bloc (n x C) filtré.
+
+    Retourne **None** quand la corrélation n'est pas définie. Ce n'est pas de la prudence
+    décorative : une voie strictement constante (câble débranché, saturation à fond, board de
+    test entre deux blocs) donne une variance nulle, `np.corrcoef` répond NaN, et ce NaN se
+    propage jusqu'à l'état publié. Or NaN n'existe pas en JSON : il ne dégrade pas l'affichage,
+    il fait échouer la sérialisation de TOUT l'état et le tableau de bord se vide d'un coup.
+    Mieux vaut « corrélation indisponible » qu'une page blanche.
+    """
+    with np.errstate(invalid="ignore", divide="ignore"):
+        c = np.corrcoef(filtered.T)
+    if not np.all(np.isfinite(c)):
+        return None
     return float(np.median(c[~np.eye(c.shape[0], dtype=bool)]))
 
 

@@ -43,7 +43,15 @@ python src/core/dashboard.py --mode ssvep --refresh 60
 ```
 
 Live channel quality, a detached-reference alarm, the decoded target against its threshold, and the
-controls. Its `/docs` page documents the HTTP API interactively.
+controls — including **which frequencies to decode**, editable mid-session. Its `/docs` page documents
+the HTTP API interactively.
+
+Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
+(`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
+that lie. Connected clients must re-resolve — the stream name itself does not change. The rest floor
+restarts too, since it is measured per frequency. A frequency set outside the acquisition band, or
+with two targets closer than the `1/WINDOW_S` resolution, is rejected with a reason rather than
+accepted and decoded into the void.
 
 **The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI, ErrP and
 neuro-monitoring. It owns the headset and publishes nothing.

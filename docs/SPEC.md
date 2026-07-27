@@ -279,8 +279,33 @@ résultat — exactement comme un client LSL devra observer l'effet sur `status`
 contrôle se comportent pareil, ce qui évite qu'une interface prenne l'habitude d'un confort que
 l'autre n'offre pas.
 
-**Contenu du tableau de bord** : qualité des 8 voies en direct · choix du mode · état « calibré / non
-calibré » par mode · bouton de calibration · sortie décodée en direct · flux LSL publiés (noms/état).
+**Contenu du tableau de bord** : qualité des 8 voies en direct · choix du mode · **choix des fréquences
+SSVEP** · état « calibré / non calibré » par mode · bouton de calibration · sortie décodée en direct ·
+flux LSL publiés (noms/état).
+
+#### Commandes exposées (API interne, §12.1)
+
+| Commande | Paramètres | Effet |
+|---|---|---|
+| `set_mode` | `mode` (`"ssvep"` / `null`), `freqs` ou `refresh` | change de mode ; relance chauffe + repos |
+| `set_freqs` | `freqs` (liste en Hz) ou `refresh` | change les cibles décodées (voir ci-dessous) |
+| `recalibrate` | — | refait chauffe + repos, sans rien changer d'autre |
+| `stop` | — | arrête le moteur |
+
+**`set_freqs` a deux conséquences qu'on assume plutôt que de les masquer :**
+
+1. **Le flux `decoded_ssvep` est RECRÉÉ.** Les fréquences ne sont pas un réglage interne : elles
+   nomment les voies du flux (`score_15Hz`) et figurent dans ses métadonnées, or **les métadonnées
+   LSL sont figées à la création**. Conserver l'ancien flux publierait des étiquettes fausses. Les
+   clients connectés doivent donc **se réabonner** — le NOM du flux ne change pas, un nouveau
+   `resolve_byprop` suffit.
+2. **Le plancher de repos repart.** Il est mesuré *par fréquence* ; le réutiliser après changement
+   comparerait le ρ d'une cible au bruit de fond d'une autre.
+
+C'est aussi la seule commande **validée à la soumission** plutôt qu'à l'application : un jeu de
+fréquences hors bande passante, ou dont deux cibles sont plus proches que la résolution `1/WINDOW_S`,
+est refusé **avec sa raison**. Sans ça, le mode de panne serait le pire du SSVEP — aucune erreur,
+seulement un décodage qui ne détecte jamais rien, indiscernable d'un utilisateur qui fixe mal.
 
 ### 12.3 Reste ouvert
 
