@@ -96,6 +96,14 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
   de campus verrouillés peuvent bloquer. En local (même machine) c'est en général transparent ; entre deux
   machines, prévoir une doc « autoriser l'appli dans le pare-feu » et, si besoin, la configuration des pairs
   connus de LSL. **À tester tôt sur le réseau de l'école.**
+- **Mesuré en local le 2026-07-27** (poste de dev Windows 11, `pylsl` 1.18.2) : `pip install pylsl` fournit
+  une roue `win_amd64` avec `liblsl` embarqué — **aucune installation supplémentaire côté étudiant**.
+  Découverte d'un flux par son nom en **0,04 s**, décalage d'horloge **−0,01 ms**, **0 échantillon perdu**
+  sur 8 voies à 250 Hz, latence bout-en-bout médiane **0,16 ms** (p95 0,32 ms). ⚠️ **Ceci ne teste que le
+  localhost** : le multicast entre deux machines sur le réseau de l'école reste à vérifier sur place.
+- ⚠️ **Piège à documenter pour les étudiants** : un `StreamInlet` n'ouvre sa connexion qu'au premier `pull`,
+  et LSL **ne rejoue jamais** ce qui a été publié avant. Sans `inlet.open_stream()` explicite, un client
+  perd la première seconde de signal — silencieusement.
 
 > **Porte de sortie assumée** : si le tout-LSL se révèle pénible (contrôle sans réponse, blocage réseau,
 > friction d'installation), le control plane peut être remplacé par une petite **API WebSocket/JSON** sans
@@ -255,7 +263,15 @@ calibré » par mode · bouton de calibration · sortie décodée en direct · f
 4. Couche **LSL** : `eeg_raw` + `quality` + `SSVEP_decoded` (MVP).
    → **tester tôt** : `pip install pylsl` + découverte multicast **sur un poste et le réseau de l'école**
    (pare-feu). C'est le risque technique n°1 du choix tout-LSL : le lever avant de construire dessus.
+   - **[fait 2026-07-27]** risque LSL levé **en local** (mesures au §4) ; `requirements.txt` créé.
+   - **[fait 2026-07-27]** `src/lsl_io.py` (publication + pont d'horloge BrainFlow→LSL + autotest) et
+     `src/server.py` (**moteur headless** : `raw` + `quality` + `status`, `--synthetic`, `--smoke`).
+   - **[à faire]** valider `python src/server.py` sur le **vrai casque** (jamais lancé sur Unicorn).
+   - **[à faire]** test multicast **entre deux machines** sur le réseau de l'école.
+   - **[à faire]** `decoded_ssvep` : brancher le décodeur CCA existant sur la même boucle.
 5. **Exemples** : `receiver.py` + Unity SSVEP.
+   - **[fait 2026-07-27]** `examples/receiver.py` (`--list` / `--stream raw|quality|status`).
+   - **[à faire]** l'exemple Unity/C#.
 6. Incréments v1/v2 (MI, P300, control plane, neuro, ErrP, nouvelle GUI).
 7. **[fin] Nettoyage des commentaires** — mode par mode, style validé sur un fichier témoin d'abord :
    garder/écrire le « quoi + pourquoi pour un nouveau venu qui va MODIFIER le code », retirer le journal

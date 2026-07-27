@@ -1,0 +1,11 @@
+# EEG_API_Unicorn — dépendances (docs/SPEC.md §8)
+#   pip install -r requirements.txt
+
+brainflow>=5.12        # pilote du casque Unicorn (parle à l'API g.tec)
+numpy>=1.24
+scipy>=1.10            # filtres du c-VEP et du Motor Imagery (filtfilt)
+scikit-learn>=1.3      # classifieurs MI / P300 / ErrP
+pyriemann>=0.5         # xDAWN + géométrie riemannienne (P300, ErrP)
+joblib>=1.3            # sauvegarde des modèles calibrés
+pygame>=2.5            # stimulus natif : clignotement verrouillé à la frame (vsync)
+pylsl>=1.16            # diffusion réseau (Lab Streaming Layer) — le contrat d'API
