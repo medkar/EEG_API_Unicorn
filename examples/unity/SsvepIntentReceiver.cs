@@ -73,9 +73,14 @@ public class SsvepIntentReceiver : MonoBehaviour
                     // A whole classroom may run engines on one network. Each publishes the
                     // same stream name, so without an instance id you may well connect to a
                     // classmate's headset -- and nothing would look wrong.
-                    if (found.Length > 1 && string.IsNullOrEmpty(instanceId))
+                    // Count distinct source ids: a machine with several network interfaces
+                    // answers once per interface, so the same engine comes back two or three
+                    // times and a naive count would warn on every normal setup.
+                    var ids = new HashSet<string>();
+                    foreach (StreamInfo info in found) ids.Add(info.source_id());
+                    if (ids.Count > 1 && string.IsNullOrEmpty(instanceId))
                     {
-                        Debug.LogWarning($"[EEG] {found.Length} engines publish '{streamName}'. " +
+                        Debug.LogWarning($"[EEG] {ids.Count} engines publish '{streamName}'. " +
                                          "Set instanceId to your own headset serial.");
                     }
 

@@ -69,12 +69,16 @@ def main(argv):
         print(f"Not found. Start the engine first:  python src/server.py --synthetic")
         return 1
 
-    if len(found) > 1:
-        # Plusieurs moteurs publient le même flux : une salle de TP entière, ou un serveur
-        # resté ouvert. Se brancher au hasard, c'est lire l'EEG de quelqu'un d'autre.
-        print(f"WARNING: {len(found)} engines publish '{name}'. Using the first one.")
-        for info in found:
-            print(f"  - {info.source_id()} on {info.hostname()}")
+    # A machine with several network interfaces answers once per interface, so the same
+    # outlet comes back two or three times. Count distinct source_ids, not replies, or the
+    # warning below cries wolf on every single-engine setup.
+    engines = {info.source_id(): info for info in found}
+    if len(engines) > 1:
+        # Genuinely several engines: a whole classroom, or a server left running. Attaching
+        # to whichever answered first means reading someone else's EEG.
+        print(f"WARNING: {len(engines)} engines publish '{name}'. Using the first one.")
+        for source_id, info in engines.items():
+            print(f"  - {source_id} on {info.hostname()}")
 
     inlet = StreamInlet(found[0], max_buflen=30)
     # Open the connection BEFORE the interesting data arrives. An inlet only connects on its

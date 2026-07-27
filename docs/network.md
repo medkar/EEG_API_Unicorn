@@ -51,12 +51,24 @@ On machine A:
 python src/server.py --synthetic --id testA
 ```
 
-On machine B:
+On machine B — **you do not need the repository**. The client depends on `pylsl` and
+nothing else, which is rather the point of shipping an API rather than a program:
+
+```powershell
+pip install pylsl
+python -c "from pylsl import resolve_streams; [print(s.name(), s.source_id(), s.hostname()) for s in resolve_streams(wait_time=3)]"
+```
+
+Copy `examples/receiver.py` over if you want to read actual values; it imports nothing
+from `src/`:
 
 ```powershell
 python examples/receiver.py --list
 python examples/receiver.py --stream quality
 ```
+
+Expect each stream to be listed **once per network interface** on the answering machine —
+same name, same `source_id`. That is normal; count distinct source ids, not lines.
 
 If `--list` shows `EEG_API_Unicorn_raw`, `_quality` and `_status`, you are done. If it shows
 nothing while the same command works on machine A itself, discovery is being blocked.
