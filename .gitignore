@@ -29,3 +29,6 @@ Thumbs.db
 # --- Divers -----------------------------------------------------------------
 *.log
 crash.txt
+
+# --- Brainstorming visuel (superpowers) : maquettes de travail --------------
+.superpowers/

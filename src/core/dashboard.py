@@ -73,7 +73,9 @@ def run(args):
     engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
                           mode=args.mode, refresh=args.refresh, instance=args.instance,
                           freqs=[float(f) for f in args.freqs.split(",")] if args.freqs else None)
-    thread = threading.Thread(target=engine.run, daemon=True)
+    thread = threading.Thread(
+        target=engine.run,
+        kwargs={"baseline_s": args.baseline, "warmup_s": args.warmup}, daemon=True)
     thread.start()
 
     import uvicorn
@@ -222,13 +224,20 @@ def _parse_args(argv):
     p = argparse.ArgumentParser(description="EEG_API_Unicorn — tableau de bord web local.")
     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
     p.add_argument("--serial", default=None, help="numéro de série Unicorn")
-    p.add_argument("--mode", choices=["ssvep"], default=None, help="décodeur au démarrage")
+    p.add_argument("--mode", choices=["ssvep", "neuro"], default=None,
+                   help="décodeur au démarrage (les deux boutons de la page font la même chose)")
     p.add_argument("--freqs", default=None, help="fréquences des cibles, ex. 15,20,8.57")
     p.add_argument("--refresh", type=float, default=None, help="refresh de l'écran du stimulus")
     p.add_argument("--id", dest="instance", default=None, help="identité de cette instance")
     p.add_argument("--host", default="127.0.0.1",
                    help="0.0.0.0 pour suivre depuis un autre poste (SPEC §12.2)")
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--baseline", type=float, default=None,
+                   help="raccourcir le repos initial — pour REGARDER l'interface sans attendre. "
+                        "Ne jamais s'en servir pour une vraie séance : le plancher serait mesuré "
+                        "sur trop peu de fenêtres et fausserait toute la suite")
+    p.add_argument("--warmup", type=float, default=None,
+                   help="raccourcir la stabilisation (même réserve que --baseline)")
     p.add_argument("--smoke", action="store_true", help="test headless de bout en bout, puis quitte")
     p.add_argument("--verbose", action="store_true", help="logs BrainFlow détaillés")
     return p.parse_args(argv)
