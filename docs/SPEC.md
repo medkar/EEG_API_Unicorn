@@ -92,7 +92,13 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 - **Commandes = messages JSON** dans un flux de marqueurs (chaîne unique), ex. `{"cmd":"start","mode":"ssvep"}`.
 - **Pas de client LSL depuis un navigateur** (liblsl est une bibliothèque native, sans binding JS) : une
   interface web doit donc être servie par le moteur lui-même, qui fait le pont (§12.2).
-- ⚠️ **Risque réseau école** : LSL découvre les flux par **multicast UDP**, que des pare-feux ou des réseaux
+- ✅ **RISQUE LEVÉ ENTRE DEUX MACHINES (2026-07-27)** : découverte ET transfert validés d'un poste à
+  l'autre, sans configuration particulière. Latence bout-en-bout de quelques dizaines de ms, très en
+  dessous des fenêtres de décision (1-2 s). ⚠️ Un piège confirmé au passage : `local_clock()` compte
+  depuis le démarrage de CHAQUE machine, donc un écart de plusieurs SEMAINES entre deux postes est
+  normal — il faut appliquer `time_correction()` à tout horodatage distant, sans quoi les dates sont
+  absurdes. C'est précisément le service que LSL rend et qui justifie le choix. Cf. [docs/network.md](network.md).
+- ⚠️ **Risque réseau école (historique)** : LSL découvre les flux par **multicast UDP**, que des pare-feux ou des réseaux
   de campus verrouillés peuvent bloquer. En local (même machine) c'est en général transparent ; entre deux
   machines, prévoir une doc « autoriser l'appli dans le pare-feu » et, si besoin, la configuration des pairs
   connus de LSL. **À tester tôt sur le réseau de l'école.** → procédure et contournement écrits :

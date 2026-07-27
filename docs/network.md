@@ -73,6 +73,31 @@ same name, same `source_id`. That is normal; count distinct source ids, not line
 If `--list` shows `EEG_API_Unicorn_raw`, `_quality` and `_status`, you are done. If it shows
 nothing while the same command works on machine A itself, discovery is being blocked.
 
+**Discovery working does not mean data flows.** Discovery is UDP 16571, transfer is TCP
+16572-16604, and a firewall can allow one and block the other. Read actual values to be sure:
+
+```powershell
+python -c "from pylsl import resolve_byprop, StreamInlet, local_clock; i = StreamInlet(resolve_byprop('name','EEG_API_Unicorn_quality',timeout=5)[0]); i.open_stream(5); off = i.time_correction(timeout=5); print('clock offset %.3f s' % off); [print('age %6.1f ms  %s' % ((local_clock()-(t+off))*1000, [round(v,1) for v in s])) for s, t in (i.pull_sample(timeout=5) for _ in range(5))]"
+```
+
+## Always add the clock correction to a remote timestamp
+
+`local_clock()` counts from each machine's own start, so two computers have unrelated
+origins — an offset of *weeks* between them is perfectly normal, not a bug. `time_correction()`
+returns the value to **add** to a remote timestamp to express it in your local clock:
+
+```python
+age_seconds = local_clock() - (timestamp + inlet.time_correction())
+```
+
+Forget the correction and your timestamps look absurd (measured between two machines here:
+an apparent age of 45 days). This is also the whole reason LSL is worth using across
+machines: it measures and corrects that offset for you, which is what makes EEG and markers
+from different computers line up to the millisecond.
+
+Measured on this network once corrected: end-to-end latency in the tens of milliseconds,
+comfortably inside the 1-2 s decision window of every mode.
+
 ## When discovery is blocked
 
 **First, the firewall.** On Windows, allow `python.exe` (and Unity, if that is your client)
