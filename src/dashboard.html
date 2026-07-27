@@ -208,10 +208,19 @@ function render(s) {
   $('ident').textContent = `${s.board} · instance ${s.instance} · ${s.fs_hz} Hz`;
   $('link').textContent = s.running ? 'en marche' : 'arrêté';
 
-  $('alert').innerHTML = (s.quality && s.quality.reference_lost)
-    ? `<div class="alert"><b>⚠ Référence décrochée</b> — les 8 voies mesurent la même chose
-       (corrélation ${s.quality.common_mode}). Remets les électrodes mastoïdes puis refais le
-       repos : tout ce qui est enregistré d'ici là est inexploitable.</div>` : '';
+  // Sur le board de test il n'y a AUCUNE électrode : parler de référence décrochée y serait
+  // un contresens, et afficher l'indicateur sans le dire laisse croire qu'on surveille le
+  // casque alors qu'on regarde des sinusoïdes fabriquées. Le dire franchement.
+  const fake = s.board === 'synthetic';
+  $('alert').innerHTML = fake
+    ? `<div class="alert" style="border-left-color:var(--warning)">
+       <b>Board de test — aucun casque connecté.</b> Les valeurs ci-dessous sont des signaux
+       fabriqués par BrainFlow. La qualité du signal et la détection de référence décrochée
+       n'ont pas de sens ici : relance sans <code>--synthetic</code> pour les exercer.</div>`
+    : ((s.quality && s.quality.reference_lost)
+        ? `<div class="alert"><b>⚠ Référence décrochée</b> — les 8 voies mesurent la même chose
+           (corrélation ${s.quality.common_mode}). Remets les électrodes mastoïdes puis refais le
+           repos : tout ce qui est enregistré d'ici là est inexploitable.</div>` : '');
 
   $('tiles').innerHTML = [
     ['Mode', s.mode || 'aucun'],
@@ -235,8 +244,10 @@ function render(s) {
         <span class="verdict"><span class="dot" style="background:${color}"></span>${verdict}</span>
       </div>`;
     }).join('');
-    $('common').textContent =
-      `corrélation inter-voies ${s.quality.common_mode} — au-delà de 0,90 la référence a lâché`;
+    $('common').innerHTML = fake
+      ? `corrélation inter-voies ${s.quality.common_mode} — <b>sans signification sur le board
+         de test</b> (signal fabriqué, aucune électrode)`
+      : `corrélation inter-voies ${s.quality.common_mode} — au-delà de 0,90 la référence a lâché`;
   }
 
   // Décodage : le z est signé, donc zéro au centre et seuil matérialisé.

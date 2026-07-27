@@ -279,14 +279,16 @@ class EngineServer:
         # Référence décrochée : invisible sur les σ, fatale pour la séance. On le dit
         # une fois par changement d'état plutôt qu'à chaque seconde.
         common = self.acq.common_mode(self._recent)
-        lost = reference_lost(common)
+        # Sur le board de test il n'y a aucune électrode : un verdict sur la référence y serait
+        # un contresens. On publie la mesure (honnête) mais jamais le verdict.
+        lost = reference_lost(common) and not self.synthetic
         self._quality = {
             "sigmas": [round(float(v), 2) for v in sigmas],
             "verdicts": [verdict_from_sigma(float(v)) for v in sigmas],
             "common_mode": round(float(common), 3),
             "reference_lost": bool(lost),
         }
-        if lost != self._reference_lost:
+        if lost != self._reference_lost and not self.synthetic:
             self._reference_lost = lost
             if lost:
                 print(f"[server] ⚠️  RÉFÉRENCE DÉCROCHÉE (corrélation inter-voies "
