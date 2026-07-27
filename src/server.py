@@ -22,7 +22,13 @@ Lancer :
     python src/server.py --synthetic              # sans casque (board de test BrainFlow)
     python src/server.py                           # vrai Unicorn, brut + qualité seulement
     python src/server.py --mode ssvep              # + décodage SSVEP (cibles par défaut)
+    python src/server.py --mode ssvep --refresh 60 # cibles accordées à un écran 60 Hz
     python src/server.py --mode ssvep --freqs 15,20,8.57
+
+Essai complet sur casque, en trois terminaux (le stimulus n'ouvre PAS le casque) :
+    python src/ssvep_stimulus.py --windowed --refresh 60     # les cibles clignotent
+    python src/server.py --mode ssvep --refresh 60           # acquisition + décodage
+    python -u examples/receiver.py --stream decoded_ssvep    # ce que voit un client
     python src/server.py --duration 60             # s'arrête tout seul au bout de 60 s
     python src/server.py --smoke                   # test headless de bout en bout (CI)
 """
@@ -64,7 +70,8 @@ class EngineServer:
     la publication brute et les décodeurs.
     """
 
-    def __init__(self, serial=None, synthetic=False, verbose=False, mode=None, freqs=None):
+    def __init__(self, serial=None, synthetic=False, verbose=False, mode=None, freqs=None,
+                 refresh=None):
         self.synthetic = synthetic
         self.mode = mode
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
@@ -91,14 +98,21 @@ class EngineServer:
         self._baseline_s = SSVEP_BASELINE_S
         self._baseline_done = False
         if mode == "ssvep":
-            self._setup_ssvep(freqs)
+            self._setup_ssvep(freqs, refresh)
 
-    def _setup_ssvep(self, freqs):
+    def _setup_ssvep(self, freqs, refresh=None):
         """Prépare le décodage SSVEP. `freqs` = les fréquences que l'appli cliente affiche.
 
         Elles sont une ENTRÉE, pas une constante du moteur : c'est l'application externe qui
-        rend le stimulus (SPEC §7) et qui déclare donc son jeu de fréquences. Le défaut
-        correspond aux cibles historiques ramenées aux diviseurs entiers d'un écran 60 Hz.
+        rend le stimulus (SPEC §7) et qui déclare donc son jeu de fréquences.
+
+        Trois façons de les fournir, de la plus explicite à la plus commode :
+        `freqs` en clair ; `refresh` (le moteur applique alors `choose_frequencies`, la MÊME
+        fonction que le stimulus — passer le même refresh des deux côtés garantit l'accord
+        sans recopier des décimales) ; ou rien, et on retombe sur un écran 60 Hz.
+
+        ⚠️ Une fréquence mal accordée ne produit aucune erreur, juste un décodage qui ne
+        détecte jamais rien : la CCA corrèle contre une sinusoïde que personne n'affiche.
 
         Le flux `decoded_ssvep` n'est PAS créé ici : il naît à la fin de la mesure du repos
         (`_finish_baseline`), quand on sait sur quelle échelle on décidera. Publier un flux
@@ -107,7 +121,7 @@ class EngineServer:
         stable une fois le flux visible.
         """
         if not freqs:
-            freqs = [c["actual_hz"] for c in choose_frequencies(60)]
+            freqs = [c["actual_hz"] for c in choose_frequencies(refresh or 60)]
         self.freqs = [float(f) for f in freqs]
         self.decoder = CCADecoder(self.freqs, fs=self.acq.fs)
 
@@ -436,6 +450,9 @@ def _parse_args(argv):
                    help="décodeur à publier en plus du brut (défaut : aucun)")
     p.add_argument("--freqs", default=None,
                    help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.57")
+    p.add_argument("--refresh", type=float, default=None,
+                   help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
+                        "mêmes fréquences que src/ssvep_stimulus.py lancé avec ce refresh")
     p.add_argument("--baseline", type=float, default=SSVEP_BASELINE_S,
                    help="durée du repos initial en s (mesure du bruit de fond)")
     p.add_argument("--smoke", action="store_true", help="test headless de bout en bout, puis quitte")
@@ -450,8 +467,8 @@ if __name__ == "__main__":
         sys.exit(0 if _smoke() else 1)
 
     freqs = [float(f) for f in args.freqs.split(",")] if args.freqs else None
-    engine = EngineServer(serial=args.serial, synthetic=args.synthetic,
-                          verbose=args.verbose, mode=args.mode, freqs=freqs)
+    engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
+                          mode=args.mode, freqs=freqs, refresh=args.refresh)
     # Ctrl+C doit fermer PROPREMENT la session BrainFlow : une session laissée ouverte
     # empêche la suivante de s'ouvrir (BOARD_NOT_READY au relancement).
     signal.signal(signal.SIGINT, lambda *_: engine.stop())
