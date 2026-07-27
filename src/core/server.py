@@ -9,9 +9,15 @@ Ce qu'il publie aujourd'hui (SPEC §4) :
     EEG_API_Unicorn_quality        σ par voie, ~1 Hz (électrode décollée ?)
     EEG_API_Unicorn_status         état du moteur, JSON, à chaque changement + périodique
     EEG_API_Unicorn_decoded_ssvep  cible regardée, ~5 Hz (avec --mode ssvep)
+    EEG_API_Unicorn_decoded_neuro  charge / somnolence / engagement, ~5 Hz (--mode neuro)
 
-Pas encore : les autres flux `decoded_*`, le control plane entrant, les marqueurs. Ils
-viendront poser leurs publications sur le même squelette de boucle.
+Les deux modes décodés illustrent les deux familles de la BCI, et un client ne doit pas les
+traiter pareil : le SSVEP est **actif** (l'utilisateur choisit, il y a une bonne réponse, un
+stimulus est requis côté client), le neuro est **passif** (on observe un état, il n'y a rien à
+choisir et aucun stimulus). Un seul mode tourne à la fois — même casque, même boucle.
+
+Pas encore : MI, c-VEP, P300, le control plane entrant, les marqueurs. Ils viendront poser
+leurs publications sur le même squelette de boucle.
 
 ⚠️ Le moteur ne rend AUCUN stimulus. Pour le SSVEP, c'est l'application cliente qui fait
 clignoter les cibles ; elle déclare simplement leurs fréquences au moteur (`--freqs`). Le
@@ -48,11 +54,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.cca_decoder import CCADecoder  # noqa: E402
 from core.config import (ARTIFACT_SIGMA_RATIO, BANDPASS, CH_NAMES,  # noqa: E402
-                    SSVEP_BASELINE_S, SSVEP_WARMUP_S, WINDOW_S, choose_frequencies,
-                    reference_lost, use_utf8_console)
-from core.lsl_io import (ClockBridge, DecodedSSVEPPublisher, QualityPublisher,  # noqa: E402
-                    RawPublisher, StatusPublisher, default_instance_id, stream_name,
-                    verdict_from_sigma)
+                    NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH, NEURO_UPDATE_HZ,
+                    NEURO_WARMUP_S, NEURO_WINDOW_S, SSVEP_BASELINE_S, SSVEP_WARMUP_S,
+                    WINDOW_S, choose_frequencies, reference_lost, use_utf8_console)
+from core.lsl_io import (ClockBridge, DecodedNeuroPublisher,  # noqa: E402
+                    DecodedSSVEPPublisher, QualityPublisher, RawPublisher, StatusPublisher,
+                    default_instance_id, stream_name, verdict_from_sigma)
+from core.neuro_monitor import NeuroDecoder  # noqa: E402
 
 # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
 # signal d'un coup. Assez court pour rester très en dessous des fenêtres de décision d'un
@@ -105,13 +113,20 @@ class EngineServer:
         self._recent = np.zeros((0, len(CH_NAMES)))
 
         # Le tampon doit satisfaire le plus gourmand des consommateurs : la qualité veut
-        # QUALITY_WINDOW_S, le SSVEP veut WINDOW_S — chacun plus la marge de filtre.
+        # QUALITY_WINDOW_S, le SSVEP WINDOW_S, le neuro NEURO_WINDOW_S — chacun plus la marge
+        # de filtre. On dimensionne sur TOUS les modes, pas sur celui qui tourne : changer de
+        # mode en cours de séance ne doit pas dépendre de la taille d'un tampon.
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
+                        int(NEURO_WINDOW_S * self.acq.fs),
                         self.acq.window_n) + self.acq.margin_n
 
-        self.decoder = None
+        self.decoder = None         # décodeur SSVEP (actif)
         self.ssvep_out = None
         self.freqs = []
+        self.neuro = None           # décodeur neuro (passif) — les deux ne tournent jamais ensemble
+        self.neuro_out = None
+        self._neuro_samples = []
+        self._neuro_state = None
         self._baseline_samples = []
         self._baseline_sigmas = []
         self._sigma_ref = None
@@ -129,6 +144,29 @@ class EngineServer:
         self._baseline_report = None
         if mode == "ssvep":
             self._setup_ssvep(freqs, refresh)
+        elif mode == "neuro":
+            self._setup_neuro()
+
+    def _setup_neuro(self):
+        """Prépare le neuro-monitoring passif : trois indices d'état, aucun stimulus.
+
+        C'est le mode le moins exigeant côté client — rien à afficher, rien à synchroniser,
+        aucun modèle à entraîner. Il ne demande qu'une chose, mais elle est impérative : un
+        REPOS de `NEURO_BASELINE_S` en début de mode, parce que les indices sont des ratios
+        spectraux individuels et dérivants, qui ne veulent rien dire sans un zéro personnel.
+
+        La chauffe et le repos sont plus longs qu'en SSVEP (15 s + 25 s) : les échelles sont
+        calées sur une MÉDIANE et une MAD, qui demandent plus de fenêtres qu'une moyenne.
+        """
+        self.neuro = NeuroDecoder(self.acq.fs)
+        self.neuro_out = DecodedNeuroPublisher(instance=self.instance,
+                                               smoothing=NEURO_SMOOTH,
+                                               rebaseline_s=NEURO_REBASELINE_S)
+        self._neuro_samples = []
+        self._baseline_s, self._warmup_s = NEURO_BASELINE_S, NEURO_WARMUP_S
+
+    def _setup_ssvep_durations(self):
+        self._baseline_s, self._warmup_s = SSVEP_BASELINE_S, SSVEP_WARMUP_S
 
     def _setup_ssvep(self, freqs, refresh=None):
         """Prépare le décodage SSVEP. `freqs` = les fréquences que l'appli cliente affiche.
@@ -151,6 +189,7 @@ class EngineServer:
         s'est produit au premier essai casque. Un flux qui existe dès le départ et ne dit
         rien encore est bien plus facile à consommer ; c'est `status` qui explique pourquoi.
         """
+        self._setup_ssvep_durations()
         if not freqs:
             freqs = [c["actual_hz"] for c in choose_frequencies(refresh or 60)]
         self.freqs = [float(f) for f in freqs]
@@ -166,9 +205,14 @@ class EngineServer:
         self._stop = True
 
     @property
+    def decoding(self):
+        """Un mode décodé tourne-t-il ? (SSVEP actif ou neuro passif — jamais les deux.)"""
+        return self.decoder is not None or self.neuro is not None
+
+    @property
     def phase(self):
         """« baseline » pendant la mesure du repos, « decoding » ensuite, sinon « streaming »."""
-        if self.decoder is None:
+        if not self.decoding:
             return "streaming"
         if self._baseline_done:
             return "decoding"
@@ -198,6 +242,11 @@ class EngineServer:
         """
         if command not in ("set_mode", "set_freqs", "recalibrate", "stop"):
             return {"accepted": False, "reason": f"commande inconnue : {command}"}
+        if command == "set_mode":
+            mode = params.get("mode") or None
+            if mode not in (None, "ssvep", "neuro"):
+                return {"accepted": False,
+                        "reason": f"mode inconnu : {mode} (attendu : ssvep, neuro, ou aucun)"}
         if command == "set_freqs":
             freqs, reason = self._validate_freqs(params.get("freqs"), params.get("refresh"))
             if freqs is None:
@@ -274,8 +323,14 @@ class EngineServer:
             self.decoder = None
             self.ssvep_out = None
             self.freqs = []
+            self.neuro = None
+            self.neuro_out = None
+            self._neuro_state = None
             if mode == "ssvep":
                 self._setup_ssvep(params.get("freqs"), params.get("refresh"))
+                self._restart_baseline()
+            elif mode == "neuro":
+                self._setup_neuro()
                 self._restart_baseline()
             print(f"[server] mode -> {self.mode or 'aucun (diffusion seule)'}")
 
@@ -308,6 +363,13 @@ class EngineServer:
         self._baseline_done = self._baseline_warned = False
         self._warmup_until = time.perf_counter() + self._warmup_s
         self._decoded = None
+        if self.neuro is not None:
+            # Un NeuroDecoder neuf : ses échelles (médiane/MAD des indices, σ et EMG de
+            # référence) sont TOUTES issues du repos. En garder une partie mélangerait deux
+            # états du casque, ce qui est précisément ce qu'un « refaire le repos » corrige.
+            self.neuro = NeuroDecoder(self.acq.fs)
+            self._neuro_samples = []
+            self._neuro_state = None
         print(f"[server] repos relancé : stabilisation {self._warmup_s:.0f} s "
               f"puis {self._baseline_s:.0f} s sans rien fixer")
 
@@ -321,6 +383,7 @@ class EngineServer:
         state.update({
             "quality": self._quality,
             "decoded": self._decoded,
+            "neuro": self._neuro_state,
             "baseline": self._baseline_report,
             "warmup_s": self._warmup_s,
             "baseline_s": self._baseline_s,
@@ -332,7 +395,11 @@ class EngineServer:
         return (running, self.synthetic, self.mode, self.phase)
 
     def _state(self, running):
-        streams = ["raw", "quality", "status"] + (["decoded_ssvep"] if self.decoder else [])
+        streams = ["raw", "quality", "status"]
+        if self.decoder is not None:
+            streams.append("decoded_ssvep")
+        if self.neuro is not None:
+            streams.append("decoded_neuro")
         state = {
             "running": running,
             "board": "synthetic" if self.synthetic else "unicorn",
@@ -351,6 +418,15 @@ class EngineServer:
             # les seuils sortent faux pour toute la séance.
             state["instruction"] = ("Ne fixe AUCUNE cible : mesure du bruit de fond."
                                     if self.phase == "baseline" else "Fixe une cible.")
+        if self.neuro is not None:
+            state["indices"] = list(DecodedNeuroPublisher.KEYS)
+            # Ici le repos ne sert pas à un seuil mais à un ZÉRO personnel : sans consigne, les
+            # échelles se calent pendant que l'utilisateur travaille, et tout le reste de la
+            # séance se lit contre un « repos » qui n'en était pas un.
+            state["instruction"] = (
+                "Repos : regarde l'écran, immobile et détendu — on cale TON zéro du jour."
+                if self.phase == "baseline"
+                else "Vaque à ton activité : les indices se lisent en écart à ton repos.")
         return state
 
     def _publish_quality(self, lsl_ts):
@@ -426,6 +502,62 @@ class EngineServer:
             self.ssvep_out.push(index, freq, scores[freq], ordered, lsl_ts)
             self._remember_decision(index, ordered)
             self._log_decision(index, ordered)
+
+    def _tick_neuro(self, lsl_ts):
+        """Un pas de neuro-monitoring : chauffe, puis repos, puis publication continue."""
+        n = int(NEURO_WINDOW_S * self.acq.fs)
+        if len(self._recent) < n:
+            return
+        # Fenêtre BRUTE : le passe-bande d'acquisition couperait le bas du θ. Le décodeur
+        # applique lui-même son propre passe-haut avant la PSD.
+        sample = self.neuro.sample(self._recent[-n:])
+        if sample is None:
+            return
+
+        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
+            return
+
+        if not self._baseline_done:
+            if self._baseline_until is None:
+                self._baseline_until = time.perf_counter() + self._baseline_s
+            self._neuro_samples.append(sample)
+            if time.perf_counter() < self._baseline_until:
+                return
+            if not self.neuro.fit_baseline(self._neuro_samples):
+                if not self._baseline_warned:
+                    self._baseline_warned = True
+                    print(f"[server] repos prolongé : {len(self._neuro_samples)} fenêtres, "
+                          "pas encore de quoi caler les échelles")
+                return
+            centres = "  ".join(f"{k}: repos≈{self.neuro.norm.center(k):.3f}"
+                                for k in self.neuro.norm.mu)
+            print(f"[server] échelles calées ({len(self._neuro_samples)} fenêtres) — {centres}")
+            print(f"[server] publication sur {stream_name('decoded_neuro')} "
+                  "(z contre CE repos — ni comparable entre personnes, ni absolu)")
+            self._baseline_report = {
+                "kind": "neuro",
+                "windows": len(self._neuro_samples),
+                "targets": [{"index": k, "rest_center": _json_float(self.neuro.norm.center(k), 4)}
+                            for k in self.neuro.norm.mu],
+            }
+            self._baseline_done = True
+            return
+
+        out = self.neuro.step(sample)
+        self.neuro_out.push(out["z"], out["artifact"], lsl_ts)
+        self._neuro_state = {
+            "z": {k: _json_float(v) for k, v in out["z"].items()},
+            "raw": {k: _json_float(v, 4) for k, v in (out["raw"] or {}).items()},
+            "artifact": bool(out["artifact"]),
+            "reason": out["reason"],
+            "artifacts": self.neuro.artifacts,
+        }
+        now = time.perf_counter()
+        if now - self._last_log >= 2.0:
+            self._last_log = now
+            print("[neuro] z " + "  ".join(f"{k}={v:+.2f}" for k, v in out["z"].items())
+                  + f"  artefacts={self.neuro.artifacts}"
+                  + (f"  ({out['reason']})" if out["artifact"] else ""))
 
     def _remember_decision(self, index, scores, artifact=False):
         self._decoded = {
@@ -510,6 +642,7 @@ class EngineServer:
         print(f"[server] décodage en cours sur {stream_name('decoded_ssvep')} "
               f"(échelle z, seuil {self.decoder.z_min}) — fixe une cible")
         self._baseline_report = {
+            "kind": "ssvep",
             "windows": len(self._baseline_samples),
             "targets": [{"freq_hz": float(f), "mu": round(mu, 3), "sigma": round(sd, 3),
                          "rho_needed": round(mu + self.decoder.z_min * sd, 2)}
@@ -517,8 +650,18 @@ class EngineServer:
         }
         self._baseline_done = True
 
-    def run(self, duration_s=None, baseline_s=SSVEP_BASELINE_S, warmup_s=SSVEP_WARMUP_S):
-        """Boucle principale. `duration_s=None` = jusqu'à Ctrl+C."""
+    def run(self, duration_s=None, baseline_s=None, warmup_s=None):
+        """Boucle principale. `duration_s=None` = jusqu'à Ctrl+C.
+
+        `baseline_s` / `warmup_s` à None = les durées PROPRES AU MODE, posées par son
+        `_setup_*` (SSVEP 8 s + 15 s ; neuro 25 s + 15 s — plus long parce que ses échelles
+        reposent sur une médiane et une MAD, qui demandent plus de fenêtres qu'une moyenne).
+        Les passer explicitement les remplace, pour les deux modes.
+        """
+        if baseline_s is not None:
+            self._baseline_s = baseline_s
+        if warmup_s is not None:
+            self._warmup_s = warmup_s
         # Le moteur écrit des µ, des σ et des accents. Sous PowerShell, stdout est en cp1252
         # par défaut : un simple print tuait alors le thread d'acquisition sur un
         # UnicodeEncodeError. On le fait ici plutôt que dans le seul `__main__`, parce que
@@ -527,7 +670,7 @@ class EngineServer:
         use_utf8_console()
 
         started = time.perf_counter()
-        last_quality = last_status = last_ssvep = 0.0
+        last_quality = last_status = last_decode = 0.0
 
         with self.acq:
             print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz instance={self.instance}")
@@ -538,10 +681,17 @@ class EngineServer:
                       f"(silencieux pendant le repos)")
                 print(f"[server] mode {self.mode} — cibles "
                       + ", ".join(f"{f:g} Hz" for f in self.freqs))
-                print(f"[server] stabilisation {warmup_s:.0f} s, puis REPOS {baseline_s:.0f} s : "
-                      f"ne fixe AUCUNE cible (mesure du bruit de fond)")
-                self._baseline_s, self._warmup_s = baseline_s, warmup_s
-                self._warmup_until = time.perf_counter() + warmup_s
+                print(f"[server] stabilisation {self._warmup_s:.0f} s, puis REPOS "
+                      f"{self._baseline_s:.0f} s : ne fixe AUCUNE cible (mesure du bruit de fond)")
+                self._warmup_until = time.perf_counter() + self._warmup_s
+            elif self.neuro is not None:
+                print(f"[server] flux LSL publie : {stream_name('decoded_neuro')} "
+                      f"(silencieux pendant le repos)")
+                print(f"[server] mode {self.mode} — indices "
+                      + ", ".join(DecodedNeuroPublisher.KEYS) + " (PASSIF : aucune commande)")
+                print(f"[server] stabilisation {self._warmup_s:.0f} s, puis REPOS "
+                      f"{self._baseline_s:.0f} s : immobile et détendu, on cale TON zéro du jour")
+                self._warmup_until = time.perf_counter() + self._warmup_s
             self.status_out.push(self._state(True), key=self._status_key(True), force=True)
 
             while not self._stop:
@@ -562,9 +712,13 @@ class EngineServer:
                 if self.decoder is not None:
                     period = 1.0 / (SSVEP_BASELINE_SAMPLE_HZ if not self._baseline_done
                                     else SSVEP_DECODE_HZ)
-                    if now - last_ssvep >= period:
+                    if now - last_decode >= period:
                         self._tick_ssvep(self.clock.to_lsl(time.time()))
-                        last_ssvep = now
+                        last_decode = now
+                elif self.neuro is not None:
+                    if now - last_decode >= 1.0 / NEURO_UPDATE_HZ:
+                        self._tick_neuro(self.clock.to_lsl(time.time()))
+                        last_decode = now
 
                 # Publié quand l'état change, plus un rappel périodique pour les clients qui
                 # se connectent après le démarrage (LSL ne rejoue pas le passé).
@@ -689,7 +843,81 @@ def _smoke():
             ok = False
 
     print(f"[smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
-    return ok and _smoke_ssvep()
+    return ok and _smoke_ssvep() and _smoke_neuro()
+
+
+def _smoke_neuro():
+    """Le mode neuro câblé de bout en bout, sur board synthétique.
+
+    Comme pour le SSVEP, on ne juge PAS le contenu : des sinusoïdes fabriquées n'ont ni charge
+    mentale ni somnolence. On vérifie le CÂBLAGE et le CONTRAT — le flux existe dès le
+    démarrage, il se tait pendant le repos, puis publie 4 voies dans le bon ordre, avec un
+    drapeau d'artefact binaire et des z finis (un NaN passerait inaperçu jusque chez le client).
+    """
+    import threading
+
+    from pylsl import StreamInlet
+
+    instance = "smoke-neuro"
+    server = EngineServer(synthetic=True, mode="neuro", instance=instance)
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"duration_s": 14.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
+    thread.start()
+
+    found = _resolve_own("decoded_neuro", instance, 5.0)
+    if not found:
+        print("[smoke-neuro] ÉCHEC : le flux décodé n'existe pas dès le démarrage")
+        server.stop()
+        return False
+    inlet = StreamInlet(found)
+    inlet.open_stream(timeout=5.0)
+    n_ch = inlet.info().channel_count()
+    labels, ch = [], inlet.info().desc().child("channels").child("channel")
+    while not ch.empty():
+        labels.append(ch.child_value("label"))
+        ch = ch.next_sibling()
+    scale = inlet.info().desc().child("decoding").child_value("decision_scale")
+    print(f"[smoke-neuro] flux décodé : {n_ch} voies {labels}, échelle « {scale} »")
+
+    t0 = time.perf_counter()
+    while server.phase != "decoding" and time.perf_counter() - t0 < 12.0 and thread.is_alive():
+        inlet.pull_chunk(timeout=0.1, max_samples=64)
+    if server.phase != "decoding":
+        print(f"[smoke-neuro] ÉCHEC : toujours en phase « {server.phase} » après 12 s")
+        server.stop()
+        return False
+
+    rows, t0 = [], time.perf_counter()
+    while time.perf_counter() - t0 < 3.0 and thread.is_alive():
+        chunk, _ts = inlet.pull_chunk(timeout=0.2, max_samples=64)
+        rows.extend(chunk)
+    server.stop()
+    thread.join(timeout=5.0)
+
+    ok = True
+    expected = list(DecodedNeuroPublisher.KEYS) + ["artifact"]
+    if labels != expected:
+        print(f"[smoke-neuro] ÉCHEC : voies {labels} au lieu de {expected}")
+        ok = False
+    if len(rows) < 5:
+        print(f"[smoke-neuro] ÉCHEC : {len(rows)} publications reçues, trop peu")
+        ok = False
+    for r in rows:
+        if not all(math.isfinite(v) for v in r):
+            print(f"[smoke-neuro] ÉCHEC : valeur non finie publiée ({r})")
+            ok = False
+            break
+        if r[3] not in (0.0, 1.0):
+            print(f"[smoke-neuro] ÉCHEC : drapeau artifact non binaire ({r[3]})")
+            ok = False
+            break
+    if rows:
+        arts = sum(1 for r in rows if r[3] == 1.0)
+        print(f"[smoke-neuro] {len(rows)} publications, dont {arts} marquées artefact "
+              f"(contenu sans valeur sur board synthétique — on teste le câblage)")
+    print(f"[smoke-neuro] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
 
 
 def _smoke_ssvep():
@@ -768,17 +996,21 @@ def _parse_args(argv):
     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
     p.add_argument("--serial", default=None, help="numéro de série Unicorn (si plusieurs appairés)")
     p.add_argument("--duration", type=float, default=None, help="durée en s (défaut : jusqu'à Ctrl+C)")
-    p.add_argument("--mode", choices=["ssvep"], default=None,
-                   help="décodeur à publier en plus du brut (défaut : aucun)")
+    p.add_argument("--mode", choices=["ssvep", "neuro"], default=None,
+                   help="décodeur à publier en plus du brut (défaut : aucun). ssvep = cible "
+                        "regardée (actif, demande un stimulus côté client) ; neuro = charge / "
+                        "somnolence / engagement (passif, aucun stimulus)")
     p.add_argument("--freqs", default=None,
                    help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.57")
     p.add_argument("--refresh", type=float, default=None,
                    help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
                         "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce refresh")
-    p.add_argument("--baseline", type=float, default=SSVEP_BASELINE_S,
-                   help="durée du repos initial en s (mesure du bruit de fond)")
-    p.add_argument("--warmup", type=float, default=SSVEP_WARMUP_S,
-                   help="stabilisation jetée avant le repos (dérive DC des électrodes sèches)")
+    p.add_argument("--baseline", type=float, default=None,
+                   help=f"durée du repos initial en s (défaut : {SSVEP_BASELINE_S:g} en ssvep, "
+                        f"{NEURO_BASELINE_S:g} en neuro)")
+    p.add_argument("--warmup", type=float, default=None,
+                   help=f"stabilisation jetée avant le repos, dérive DC des électrodes sèches "
+                        f"(défaut : {SSVEP_WARMUP_S:g} s)")
     p.add_argument("--id", dest="instance", default=None,
                    help="identité de cette instance (défaut : n° de série du casque). Distingue "
                         "les moteurs quand plusieurs tournent sur le même réseau — une salle de TP")

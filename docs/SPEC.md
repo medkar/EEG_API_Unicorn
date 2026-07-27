@@ -154,13 +154,19 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 | **SSVEP** | évoqué | `{target_index, freq_hz, confidence, scores[]}` — **implémenté** ; flux numérique, `target_index = -1` quand aucune cible n'est fixée de façon fiable. Les métadonnées portent `decision_scale` (`z` après mesure du repos, sinon `rho`) et le seuil : sans cette indication, un seuil posé côté client n'a aucun sens. |
 | **Motor Imagery** | endogène | `{class: left\|right\|rest, probs{left,right,rest}}` |
 | **P300** | évoqué | `{selected_target}` (événementiel, après N répétitions) + scores par flash |
-| **Neuro-monitoring** | passif | `{charge, somnolence, engagement}` (z relatifs au repos) |
+| **Neuro-monitoring** | passif | `{charge, somnolence, engagement, artifact}` — **implémenté** (2026-07-27). z relatifs à un repos mesuré **en début de mode, pour cet utilisateur, ce jour-là** : les valeurs ne se comparent ni entre personnes, ni entre séances, et n'ont aucun sens absolu. `artifact = 1` republie les derniers z valides plutôt que des indices calculés sur un clignement — ceux-ci seraient plausibles, donc indétectables en aval. ⚠️ Plomberie testée, **contenu jamais validé sur casque**. |
 | **ErrP** | évoqué | `{error: bool, score}` (événementiel, sur marqueur « feedback ») |
 | **c-VEP** | évoqué | `{target_index, confidence}` — **stimulus natif au MVP** |
 
 Chaque mode publie **une intention neutre** (quelle cible / quelle classe / quel état), jamais une commande
 d'actionneur. La conversion en action appartient à l'application avale : c'est ce qui rend le même flux
 utilisable par un jeu, une visualisation ou un robot sans rien changer côté API.
+
+**Actif vs passif : un client ne doit pas les traiter pareil.** SSVEP, c-VEP, P300 et MI sont *actifs* —
+l'utilisateur CHOISIT, il existe une bonne réponse, et (sauf MI) un stimulus est requis côté client. Le
+neuro-monitoring est *passif* : on observe un état, il n'y a rien à choisir, aucun stimulus, et donc ni
+justesse ni erreur à mesurer. Traiter un indice passif comme une sélection est le contresens à éviter
+en premier ; c'est pourquoi les métadonnées portent `paradigm` (`SSVEP` / `neuro-passive`).
 
 ## 6. Calibration
 

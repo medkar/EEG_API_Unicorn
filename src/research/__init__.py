@@ -10,11 +10,12 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
 1. **L'application pygame** — `app.py` (menu, 6 modes), `ui.py`, `ssvep_stimulus.py`,
    `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
    moteur, le casque n'accepte qu'une connexion.
-2. **Les décodeurs des modes** — `cvep_*`, `mi_decoder`, `p300_decoder`, `errp_decoder`,
-   `neuro_monitor`. Ce sont eux qui migreront vers `core` quand leur mode sera publié.
+2. **Les décodeurs des modes** — `cvep_*`, `mi_decoder`, `p300_decoder`, `errp_decoder`. Ce sont
+   eux qui migreront vers `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet
+   le 2026-07-27, il vit maintenant dans `core`.
 3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
    `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
-4. **Les analyses hors ligne** — `*_analyze.py`, `mi_compare.py`, `itr.py`, `alpha_check.py` :
+4. **Les analyses hors ligne** — `*_analyze.py`, `ssvep_guided.py`, `mi_compare.py`, `itr.py` :
    rejouer un enregistrement, comparer, mesurer. C'est ici qu'on décide si une hypothèse tient,
    et il n'y a rien de honteux à ce qu'une analyse conclue « bruit ».
 

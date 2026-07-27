@@ -4,11 +4,12 @@
 seulement si `server.py` en a besoin pour tourner.** Le graphe est donc volontairement plat et
 sans cycle :
 
-    config  <-  acquisition, cca_decoder, lsl_io  <-  server  <-  dashboard
+    config  <-  acquisition, cca_decoder, neuro_monitor, lsl_io  <-  server  <-  dashboard
 
 - `config.py`      constantes partagées + chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`)
 - `acquisition.py` BrainFlow : ouverture du casque, filtrage, tampon, contrôle de liaison
 - `cca_decoder.py` SSVEP par CCA (aucun entraînement) + normalisation z contre un plancher
+- `neuro_monitor.py` indices passifs charge/somnolence/engagement, z contre le repos du jour
 - `lsl_io.py`      publication LSL et pont d'horloge — **le contrat public** avec les clients
 - `server.py`      la boucle headless qui relie tout ça
 - `dashboard.py`   tableau de bord web (FastAPI) au-dessus du moteur, dans le même processus

@@ -14,8 +14,10 @@ game event, a visualisation, a robot command) is the client application's job.
 
 > **Status.** The engine streams over the network and is hardware-validated end to end: raw EEG,
 > signal quality and decoded SSVEP reach a client on another machine, with millisecond timestamps.
-> Modes beyond SSVEP are decoded by the pygame app but not yet published as streams — see
-> **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
+> SSVEP decoding is measured, not asserted: 100 % accurate whenever it commits, on 36 interleaved
+> trials — but it only commits 44 % of the time. Neuro-monitoring is published too, though its
+> content is not yet hardware-validated. c-VEP, P300 and MI still live in the pygame app only —
+> see **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
 
 ## Requirements
 
@@ -33,8 +35,16 @@ Three entry points, from the most useful to the most specialised.
 
 ```bash
 python src/core/server.py --mode ssvep --refresh 60   # acquire, decode, publish
+python src/core/server.py --mode neuro                # passive: no stimulus, no calibration
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
+
+Two published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses a
+target, there is a right answer, and your application must render the flickering stimulus. **Neuro is
+passive**: it reports a mental state, there is nothing to choose and no stimulus — but its values are
+z-scores against a rest measured at the start of the mode, *for this person, today*. They compare
+across neither people nor sessions, and mean nothing in absolute terms. The stream metadata carries
+`paradigm` so a client can tell the two apart.
 
 **The dashboard** — the engine plus a local web page, at <http://localhost:8000>.
 
@@ -53,8 +63,9 @@ restarts too, since it is measured per frequency. A frequency set outside the ac
 with two targets closer than the `1/WINDOW_S` resolution, is rejected with a reason rather than
 accepted and decoded into the void.
 
-**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI, ErrP and
-neuro-monitoring. It owns the headset and publishes nothing.
+**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI and ErrP,
+and the only place with a live histogram for neuro-monitoring. It owns the headset and publishes
+nothing.
 
 ```bash
 python src/research/app.py                 # fullscreen, real headset — main menu
@@ -73,6 +84,7 @@ The client depends on `pylsl` and nothing else — not on this repository.
 pip install pylsl
 python examples/receiver.py --list                  # what is on the network
 python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
+python examples/receiver.py --stream decoded_neuro  # workload / drowsiness / engagement
 ```
 
 Unity: see [`examples/unity/`](examples/unity/). Two machines: see
@@ -84,6 +96,7 @@ Unity: see [`examples/unity/`](examples/unity/). Two machines: see
 | `EEG_API_Unicorn_quality` | per-channel σ, ~1 Hz |
 | `EEG_API_Unicorn_status` | engine state, JSON |
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
+| `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
 
 The stimulus is **not** rendered by the engine: your application flickers the targets and declares
 their frequencies (`--refresh` or `--freqs`). A mismatch fails silently — the decoder correlates
@@ -103,7 +116,7 @@ automatically to the display refresh rate.
 | **c-VEP** | One m-sequence at circular shifts, learned template (eCCA) | ~1 min | ✅ 6 targets, ~22 bits/min |
 | **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min | ✅ validated on hardware |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min | ✅ left/right significant (79 %) |
-| **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 coded, being validated |
+| **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
 | **ErrP** | Error potential: single-trial detection when the machine errs | ~4 min | 🟡 demonstrator, needs real calibration |
 
 ## Layout
@@ -121,6 +134,7 @@ published stream, its decoder *moves* to `core/` — nobody threads an import ac
 | [`lsl_io.py`](src/core/lsl_io.py) | Stream publishers and the clock bridge — **the public contract** |
 | [`acquisition.py`](src/core/acquisition.py) | Unicorn via BrainFlow: sliding windows, epochs, link check |
 | [`cca_decoder.py`](src/core/cca_decoder.py) | SSVEP by CCA, no training, z-scored against a rest floor |
+| [`neuro_monitor.py`](src/core/neuro_monitor.py) | Passive spectral indices, z-scored against a per-session rest |
 | [`config.py`](src/core/config.py) | Channels, frequencies, codes, per-mode constants, repo paths |
 | [`dashboard.py`](src/core/dashboard.py) · [`dashboard.html`](src/core/dashboard.html) | Web dashboard over the engine, same process |
 
@@ -134,7 +148,7 @@ does not publish them yet, so they are not part of what students consume and may
 | Family | Modules |
 |---|---|
 | pygame app | [`app.py`](src/research/app.py) (menu, six modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
-| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `mi_decoder` · `p300_decoder` · `errp_decoder` · `neuro_monitor` |
+| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `mi_decoder` · `p300_decoder` · `errp_decoder` |
 | Calibrations — long protocols, train a model into `data/` | `mi_calibrate` · `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
@@ -147,12 +161,12 @@ python src/core/dashboard.py --smoke     # engine + HTTP API + page
 python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board
+python src/core/neuro_monitor.py         # spectral indices on synthetic EEG
 
 python src/research/app.py --smoke       # whole app headless: menu + every mode + calibrations
 python src/research/cvep_code.py         # m-sequence properties (balance, autocorrelation, lags)
 python src/research/cvep_decoder.py      # c-VEP accuracy vs SNR on synthetic responses
 python src/research/errp_decoder.py      # ErrP pipeline on synthetic error potentials
-python src/research/neuro_monitor.py     # spectral indices on synthetic EEG
 python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
 python src/research/itr.py               # information transfer rate — common yardstick
 ```

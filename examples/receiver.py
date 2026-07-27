@@ -7,8 +7,9 @@ This is the smallest useful client. Start the engine in one terminal:
 then run this in another:
 
     python examples/receiver.py                       # signal quality, one line per second
-    python examples/receiver.py --stream raw          # the 8 raw channels
+    python examples/receiver.py --stream raw            # the 8 raw channels
     python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
+    python examples/receiver.py --stream decoded_neuro  # workload / drowsiness / engagement
     python examples/receiver.py --list                # what is currently on the network
 
 The decoded stream only appears once the engine finishes its short rest measurement, so
@@ -55,7 +56,7 @@ def channel_labels(inlet):
 def main(argv):
     p = argparse.ArgumentParser(description="Minimal EEG_API_Unicorn LSL client.")
     p.add_argument("--stream", default="quality",
-                   help="suffix: raw | quality | status | decoded_ssvep")
+                   help="suffix: raw | quality | status | decoded_ssvep | decoded_neuro")
     p.add_argument("--list", action="store_true", help="list visible LSL streams and exit")
     args = p.parse_args(argv)
 

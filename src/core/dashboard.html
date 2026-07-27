@@ -156,6 +156,21 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: v
     <div id="decoded"></div>
   </div>
 
+  <div class="card" id="neurocard" hidden>
+    <h2>État mental <span class="sub" style="font-weight:400">— passif, rien à commander</span></h2>
+    <div id="neuro"></div>
+    <div class="sub" style="margin-top:12px">
+      Échelle : <b>écart au repos mesuré en début de mode, pour toi et aujourd'hui</b>. Ces valeurs
+      ne se comparent ni à celles d'une autre personne, ni à celles d'hier, et n'ont aucun sens
+      absolu — <b>+1 veut dire « au-dessus de mon propre repos »</b>, pas « chargé ». Les trois
+      indices sortent du même calcul spectral et restent corrélés entre eux : à lire en tendance.
+    </div>
+    <div class="sub" style="margin-top:6px">
+      ⚠️ Mode <b>jamais validé sur casque</b> : la plomberie est testée, pas le fait que ces
+      indices suivent réellement ton état. Ne rien en conclure sans protocole.
+    </div>
+  </div>
+
   <div class="card" id="baselinecard" hidden>
     <h2>Plancher de repos</h2>
     <div id="baseline"></div>
@@ -165,11 +180,12 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: v
     <h2>Commandes</h2>
     <div class="controls">
       <button class="primary" onclick="cmd('set_mode',{mode:'ssvep'})">Décoder le SSVEP</button>
+      <button onclick="cmd('set_mode',{mode:'neuro'})">Neuro-monitoring</button>
       <button onclick="cmd('set_mode',{mode:null})">Diffusion seule</button>
       <button onclick="cmd('recalibrate')">Refaire le repos</button>
     </div>
 
-    <div class="field">
+    <div class="field" id="freqfield">
       <label for="freqs">Fréquences décodées</label>
       <input id="freqs" type="text" inputmode="decimal" autocomplete="off"
              placeholder="15, 20, 8.57"
@@ -362,10 +378,44 @@ function render(s) {
        (z = ${d.threshold}) · trait fin = repos (z = 0)</div>`;
   }
 
+  // Neuro : trois z divergents autour du repos (z = 0). Pas de seuil — rien à décider ici,
+  // c'est un mode PASSIF : on observe une tendance, on ne déclenche rien.
+  const nz = s.neuro;
+  $('neurocard').hidden = !nz;
+  if (nz) {
+    const lo = -4, hi = 4, span = hi - lo;
+    const x = (v) => ((Math.max(lo, Math.min(hi, v)) - lo) / span) * 100;
+    const zero = x(0);
+    const LIB = {charge: ['Charge mentale', '+ = plus chargé'],
+                 somnolence: ['Somnolence', '+ = assoupissement'],
+                 engagement: ['Engagement', '+ = plus attentif']};
+    const head = nz.artifact
+      ? `<b>fenêtre rejetée</b> — ${nz.reason} (dernières valeurs valides affichées)`
+      : 'fenêtre propre';
+    $('neuro').innerHTML =
+      `<div class="sub" style="margin-bottom:12px">${head} · ${nz.artifacts} rejet(s) depuis le début</div>` +
+      (s.indices || []).map((k) => {
+        const z = nz.z[k], [nom, sens] = LIB[k] || [k, ''];
+        const a = Math.min(zero, x(z)), b2 = Math.max(zero, x(z));
+        return `<div class="zrow">
+          <span class="name">${nom}</span>
+          <span class="ztrack">
+            <span class="zzero" style="left:${zero}%"></span>
+            <span class="zfill" style="left:${a}%;width:${Math.max(b2 - a, 0.6)}%;
+                  background:${z >= 0 ? 'var(--accent)' : 'var(--muted)'};
+                  opacity:${nz.artifact ? 0.35 : 1}"></span>
+          </span>
+          <span class="val">${z === null ? '—' : z.toFixed(2)}</span>
+          <span class="sub">${sens}</span>
+        </div>`;
+      }).join('') +
+      `<div class="sub" style="margin-top:8px">trait fin = ton repos (z = 0) · échelle ±4 écarts-types</div>`;
+  }
+
   // Plancher : c'est ici qu'on voit une cible impossible à détecter AVANT de perdre la séance.
   const b = s.baseline;
   $('baselinecard').hidden = !b;
-  if (b) {
+  if (b && b.kind === 'ssvep') {
     const rows = b.targets.map(t => {
       const bad = t.rho_needed > 0.85;
       return `<tr>
@@ -380,7 +430,21 @@ function render(s) {
        <div class="sub" style="margin-top:8px">mesuré sur ${b.windows} fenêtres. Un ρ requis
        au-delà de 0,85 n'est pas atteignable en électrodes sèches : refais le repos, immobile,
        sans rien fixer.</div>`;
+  } else if (b && b.kind === 'neuro') {
+    const rows = b.targets.map(t =>
+      `<tr><td>${t.index}</td><td>${t.rest_center}</td></tr>`).join('');
+    $('baseline').innerHTML =
+      `<table><thead><tr><th>Indice</th><th>centre au repos (brut)</th></tr></thead>
+       <tbody>${rows}</tbody></table>
+       <div class="sub" style="margin-top:8px">mesuré sur ${b.windows} fenêtres. C'est le zéro
+       de l'échelle : tout ce qui est publié est un écart à CES valeurs. Elles n'ont pas de sens
+       à comparer d'une personne ou d'une séance à l'autre.</div>`;
   }
+
+  // Les fréquences n'existent qu'en SSVEP : proposer le champ dans les autres modes
+  // laisserait croire à un réglage qui n'a rien à régler.
+  $('freqfield').hidden = s.mode !== 'ssvep';
+  $('freqnow').hidden = s.mode !== 'ssvep';
 
   $('streams').innerHTML = s.streams.map(n => `<code>${n}</code>`).join('<br>');
 }

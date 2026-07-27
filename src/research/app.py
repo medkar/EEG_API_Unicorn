@@ -43,14 +43,14 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS
                     ERRP_MAX_RUN_STEPS, ERRP_MIDLINE, ERRP_MODEL_PATH, ERRP_PRE_S,
                     ERRP_TRACK_CELLS, MI_KEY_CHANNELS, MI_MODEL_PATH,
                     MI_PROB_MIN, MI_WINDOW_S, N_HARMONICS,
-                    NEURO_ARTIFACT_RATIO, NEURO_BANDS, NEURO_BASELINE_S, NEURO_EMG_RATIO,
-                    NEURO_HIGHPASS_HZ, NEURO_KEY_CHANNELS, NEURO_REBASELINE_S, NEURO_UPDATE_HZ,
+                    NEURO_BASELINE_S, NEURO_KEY_CHANNELS, NEURO_UPDATE_HZ,
                     NEURO_WARMUP_S, NEURO_WINDOW_S, NEURO_Z_SPAN, OCCIPITAL,
                     P300_BURST_S, P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR,
                     P300_MIDLINE, P300_MIN_REPS, P300_MODEL_PATH, P300_PRE_S, P300_REPS,
                     P300_SELECT_MARGIN, P300_STOP_MARGIN,
                     p300_targets, RHO_MIN, SSVEP_BASELINE_S, UDP_HOST,
                     available_frequencies, choose_frequencies, use_utf8_console)
+from core.neuro_monitor import IndexNormalizer, NeuroDecoder  # noqa: E402
 from research.controller import SSVEPController  # noqa: E402
 from research.itr import itr as _itr  # noqa: E402
 from research.ssvep_stimulus import is_on as ssvep_on  # noqa: E402
@@ -751,22 +751,13 @@ _NEURO_VIEW = [   # (clé, libellé, formule courte, couleur, sens de la montée
 ]
 
 
-def _neuro_sample(app):
-    """Une fenêtre BRUTE (n, 8) -> dict {idx, emg, sig}, ou None si buffer pas prêt.
+def _neuro_sample(app, decoder):
+    """Une fenêtre BRUTE (n, 8) -> échantillon du décodeur, ou None si le buffer n'est pas prêt.
 
-    BRUT (filtered=False) à dessein pour les INDICES (le passe-bande 5-40 Hz couperait le bas du θ) ;
-    passe-haut léger UNE fois puis PSD -> indices + proxy EMG. Le σ de CONTRÔLE QUALITÉ (`sig`), en
-    revanche, est calculé sur une version BANDE-LIMITÉE + NOTCH séparée (artifact_sigma) : un σ pris
-    sur le signal quasi-brut est trop volatil (ronflement secteur, bruit) et déclenche des faux
-    rejets même à l'arrêt complet — cf. eeg-modes-a-venir §mode 5."""
-    from research.neuro_monitor import artifact_sigma, band_powers, emg_power, highpass_filter, indices_from_bp
-    w = app.acq.get_epoch(NEURO_WINDOW_S, filtered=False)
-    if w is None:
-        return None
-    w = np.asarray(w, dtype=np.float64)
-    wf = highpass_filter(w, app.acq.fs, NEURO_HIGHPASS_HZ)
-    bp = band_powers(wf, app.acq.fs, NEURO_BANDS, highpass=None)   # wf déjà passe-hauté
-    return {"idx": indices_from_bp(bp), "emg": emg_power(bp), "sig": artifact_sigma(w, app.acq.fs)}
+    Le calcul lui-même vit dans `core.neuro_monitor.NeuroDecoder`, partagé avec le moteur : ce
+    mode s'affiche ici ET se publie sur le réseau, et deux copies du même calcul finiraient par
+    diverger — l'écran montrerait une charge mentale, le flux LSL une autre."""
+    return decoder.sample(app.acq.get_epoch(NEURO_WINDOW_S, filtered=False))
 
 
 def _neuro_warmup(app, seconds):
@@ -790,12 +781,12 @@ def _neuro_warmup(app, seconds):
             return
 
 
-def _neuro_baseline(app, seconds):
-    """Repos yeux ouverts (précédé d'un warm-up jeté) : mesure μ/σ_log de chaque indice (échelles du
-    z), le σ de référence PAR VOIE (rejet par voie) et la puissance EMG de référence (veto EMG)."""
-    from research.neuro_monitor import IndexNormalizer
+def _neuro_baseline(app, decoder, seconds):
+    """Repos yeux ouverts (précédé d'un warm-up jeté) : cale les échelles du jour sur `decoder`.
+
+    Retourne True si le plancher a pu être mesuré."""
     _neuro_warmup(app, NEURO_WARMUP_S)
-    t0, last, samples, sigs, emgs = time.perf_counter(), 0.0, [], [], []
+    t0, last, samples = time.perf_counter(), 0.0, []
     while True:
         app.drain()                          # ESC -> Abort -> retour menu (absorbé par _mode_page)
         now = time.perf_counter()
@@ -804,9 +795,9 @@ def _neuro_baseline(app, seconds):
             break
         if now - last >= 1.0 / NEURO_UPDATE_HZ:
             last = now
-            s = _neuro_sample(app)
+            s = _neuro_sample(app, decoder)
             if s is not None:
-                samples.append(s["idx"]); sigs.append(s["sig"]); emgs.append(s["emg"])
+                samples.append(s)
         app.win.fill(BG)
         h = app.size[1]
         app.center(app.big, "REPOS — regarde l'écran, détends-toi", FG, int(h * 0.30))
@@ -818,16 +809,12 @@ def _neuro_baseline(app, seconds):
         app.clock.tick(30)
         if app.smoke and (len(samples) >= 3 or time.perf_counter() - t0 > 1.0):
             break
-    if len(samples) < 3:
-        return None, None, None
-    norm = IndexNormalizer().fit(samples)
-    sigma_ref = np.median(np.stack(sigs), axis=0) if sigs else None    # (n_ch,) par voie
-    emg_ref = float(np.median(emgs)) if emgs else None
-    print("[neuro] repos %d fenêtres — %s  σ_ref(moy)=%s  emg_ref=%s" % (
-        len(samples), "  ".join(f"{k}:μ≈{norm.center(k):.2f}" for k in norm.mu),
-        f"{float(np.mean(sigma_ref)):.0f}" if sigma_ref is not None else "?",
-        f"{emg_ref:.2f}" if emg_ref else "?"))
-    return norm, sigma_ref, emg_ref
+    if not decoder.fit_baseline(samples):
+        return False
+    print("[neuro] repos %d fenêtres — %s  σ_ref(moy)=%.0f  emg_ref=%.2f" % (
+        len(samples), "  ".join(f"{k}:μ≈{decoder.norm.center(k):.2f}" for k in decoder.norm.mu),
+        float(np.mean(decoder.sigma_ref)), decoder.emg_ref))
+    return True
 
 
 def _neuro_bars(app, z, artifact, arts, reason):
@@ -866,42 +853,31 @@ def _neuro_bars(app, z, artifact, arts, reason):
     app.hud(f"Neuro-monitoring PASSIF (aucun envoi robot)   artefacts ignorés={arts}   ESC=menu", DIM)
 
 
-def _neuro_live(app, norm, sigma_ref, emg_ref):
-    """Boucle d'affichage : recalcule les indices à NEURO_UPDATE_HZ, normalise (z lissés), dessine
-    l'histogramme. Fenêtre IGNORÉE si UNE voie décroche (σ par voie > 4× repos -> clignement localisé)
-    OU si l'EMG spectral (30-45 Hz) explose. Sur fenêtre PROPRE : re-calage LENT du zéro (creep)
-    contre la dérive multi-minutes."""
-    sig_limit = None if sigma_ref is None else NEURO_ARTIFACT_RATIO * np.asarray(sigma_ref)
-    emg_limit = None if not emg_ref else NEURO_EMG_RATIO * emg_ref
-    rate = (1.0 / NEURO_UPDATE_HZ) / NEURO_REBASELINE_S if NEURO_REBASELINE_S > 0 else 0.0
+def _neuro_live(app, decoder):
+    """Boucle d'affichage : recalcule les indices à NEURO_UPDATE_HZ et dessine l'histogramme.
+
+    Le veto d'artefact, la normalisation et le re-calage lent du zéro sont dans le décodeur
+    partagé — ici il ne reste que le rythme, l'affichage et le journal."""
     z = {k: 0.0 for k, *_ in _NEURO_VIEW}
-    last, arts, artifact, reason, frame = 0.0, 0, False, "", 0
-    last_log = 0.0
+    last, artifact, reason, frame, last_log = 0.0, False, "", 0, 0.0
     while True:
         app.drain()
         now = time.perf_counter()
         if now - last >= 1.0 / NEURO_UPDATE_HZ:
             last = now
-            s = _neuro_sample(app)
+            s = _neuro_sample(app, decoder)
             if s is not None:
-                bad_emg = emg_limit is not None and s["emg"] > emg_limit
-                bad_sig = sig_limit is not None and bool(np.any(s["sig"] > sig_limit))
-                if bad_emg or bad_sig:
-                    artifact, arts = True, arts + 1
-                    reason = "EMG mâchoire/muscle" if bad_emg else "mouvement / clignement"
-                else:
-                    artifact = False
-                    z = norm.z(s["idx"])
-                    norm.creep(s["idx"], rate)      # re-calage lent du zéro sur fenêtre propre
+                out = decoder.step(s)
+                z, artifact, reason = out["z"], out["artifact"], out["reason"]
                 if now - last_log >= 1.0:           # diagnostic : brut vs normalisé, ~1×/s
                     last_log = now
                     keys = [k for k, *_ in _NEURO_VIEW]
                     print("[neuro] brut " +
                           "  ".join(f"{k}={s['idx'][k]:.3f}" for k in keys) +
                           "  z " + "  ".join(f"{k}={z[k]:+.2f}" for k in keys) +
-                          f"  centre_eng≈{norm.center('engagement'):.3f}"
-                          f"  artefacts={arts}" + (f"  ({reason})" if artifact else ""))
-        _neuro_bars(app, z, artifact, arts, reason)
+                          f"  centre_eng≈{decoder.norm.center('engagement'):.3f}"
+                          f"  artefacts={decoder.artifacts}" + (f"  ({reason})" if artifact else ""))
+        _neuro_bars(app, z, artifact, decoder.artifacts, reason)
         app.pygame.display.flip()
         app.clock.tick(30)
         frame += 1
@@ -918,17 +894,15 @@ def mode_neuro(app):
         return                    # liaison + voies clés (Fz/Pz) ; casque KO ou ESC -> retour
     print(f"[neuro] fenêtre PSD {NEURO_WINDOW_S}s  maj {NEURO_UPDATE_HZ:.0f}Hz  "
           f"warm-up {NEURO_WARMUP_S:.0f}s + repos {NEURO_BASELINE_S:.0f}s  (passif — aucun envoi robot)")
-    norm, sigma_ref, emg_ref = _neuro_baseline(app, NEURO_BASELINE_S)
-    if norm is None:
+    decoder = NeuroDecoder(app.acq.fs)
+    if not _neuro_baseline(app, decoder, NEURO_BASELINE_S):
         if app.smoke:             # pas de vraies données en headless -> normaliseur neutre
-            from research.neuro_monitor import IndexNormalizer
-            norm, sigma_ref, emg_ref = (IndexNormalizer.identity([k for k, *_ in _NEURO_VIEW]),
-                                        None, None)
+            decoder.norm = IndexNormalizer.identity([k for k, *_ in _NEURO_VIEW])
         else:
             app.flash("Repos trop court",
                       "pas assez de fenêtres pour caler les échelles — réessaie", 3.0)
             return
-    _neuro_live(app, norm, sigma_ref, emg_ref)
+    _neuro_live(app, decoder)
 
 
 # --- Mode 6 : ErrP — démonstrateur autonome (potentiel d'erreur) -------------

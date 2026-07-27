@@ -28,7 +28,7 @@ Le calcul travaille sur le flux BRUT (non filtré) : le passe-bande d'acquisitio
 couperait le bas du θ. La PSD de Welch détend (linéaire) chaque segment -> l'offset DC et la
 dérive lente de l'électrode mouillée ne polluent pas les bandes (toutes ≥ 4 Hz).
 
-    python src/research/neuro_monitor.py        # auto-test : les indices bougent-ils dans le bon sens ?
+    python src/core/neuro_monitor.py        # auto-test : les indices bougent-ils dans le bon sens ?
 """
 
 import os
@@ -39,8 +39,10 @@ from scipy.integrate import trapezoid
 from scipy.signal import butter, filtfilt, welch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (FS_UNICORN, NEURO_BANDS, NEURO_ENGAGEMENT_CH,  # noqa: E402
-                    NEURO_FRONTAL, NEURO_PARIETAL, NEURO_SMOOTH, use_utf8_console)
+from core.config import (FS_UNICORN, NEURO_ARTIFACT_RATIO, NEURO_BANDS,  # noqa: E402
+                    NEURO_EMG_RATIO, NEURO_ENGAGEMENT_CH, NEURO_FRONTAL,
+                    NEURO_HIGHPASS_HZ, NEURO_PARIETAL, NEURO_REBASELINE_S,
+                    NEURO_SMOOTH, NEURO_UPDATE_HZ, use_utf8_console)
 
 INDEX_KEYS = ("charge", "somnolence", "engagement")
 
@@ -205,6 +207,94 @@ class IndexNormalizer:
         for k, v in raw.items():
             if k in self.mu:
                 self.mu[k] = (1.0 - rate) * self.mu[k] + rate * self._tf(v)
+
+
+class NeuroDecoder:
+    """Une fenêtre brute -> trois z lissés, veto d'artefact compris. **Une seule définition.**
+
+    Cette classe existe pour une raison précise : le mode est utilisé par DEUX programmes —
+    l'appli pygame (histogramme) et le moteur (flux `decoded_neuro`). Les mêmes vingt lignes
+    recopiées des deux côtés dériveraient au premier réglage, et on afficherait alors une
+    charge mentale à l'écran pendant qu'on en publierait une autre sur le réseau. Le projet a
+    déjà payé ce genre de divergence sur la mesure de qualité (cf. `sigma_from_block`).
+
+    Cycle d'utilisation :
+        d = NeuroDecoder(fs)
+        # 1. repos : accumuler des échantillons pendant NEURO_BASELINE_S
+        s = d.sample(window);  reposes.append(s)
+        # 2. caler les échelles du jour
+        d.fit_baseline(reposes)
+        # 3. en continu
+        out = d.step(d.sample(window))   # {"z": {...}, "artifact": bool, "reason": str}
+
+    Ce que la classe NE fait pas : la chauffe (jeter les premières secondes) et le rythme
+    d'appel. Ils appartiennent à la boucle appelante, qui seule sait afficher un décompte.
+    """
+
+    def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S):
+        self.fs = float(fs)
+        self.norm = None
+        self.sigma_ref = None      # σ par voie au repos -> rejet par voie
+        self.emg_ref = None        # puissance 30-45 Hz au repos -> veto EMG
+        # Vitesse de re-calage du zéro : une fraction dt/τ par fenêtre. Sur cette échelle
+        # (τ ~ 3 min) la dérive d'impédance est suivie, tandis que les variations d'état
+        # mental, plus rapides, se moyennent à zéro et ne sont donc PAS absorbées.
+        self.rate = (1.0 / update_hz) / rebaseline_s if rebaseline_s > 0 else 0.0
+        self.z = {k: 0.0 for k in INDEX_KEYS}
+        self.artifacts = 0
+
+    @property
+    def ready(self):
+        return self.norm is not None
+
+    def sample(self, window):
+        """Fenêtre BRUTE (n, 8) -> {"idx", "emg", "sig"}, ou None si la fenêtre est trop courte.
+
+        Brute à dessein : le passe-bande d'acquisition (5-40 Hz) couperait le bas du θ. Le σ de
+        contrôle, lui, est calculé à part sur une version bande-limitée + notch — un σ pris sur
+        du quasi-brut est dominé par le secteur et la dérive, et déclenche de faux rejets même
+        immobile (retour utilisateur 2026-07-23).
+        """
+        if window is None or len(window) < int(0.5 * self.fs):
+            return None
+        w = np.asarray(window, dtype=np.float64)
+        wf = highpass_filter(w, self.fs, NEURO_HIGHPASS_HZ)
+        bp = band_powers(wf, self.fs, NEURO_BANDS, highpass=None)   # wf déjà passe-hauté
+        return {"idx": indices_from_bp(bp), "emg": emg_power(bp),
+                "sig": artifact_sigma(w, self.fs)}
+
+    def fit_baseline(self, samples, min_samples=3):
+        """Cale les échelles du jour sur des échantillons de REPOS. False si trop peu."""
+        samples = [s for s in samples if s is not None]
+        if len(samples) < min_samples:
+            return False
+        self.norm = IndexNormalizer().fit([s["idx"] for s in samples])
+        self.sigma_ref = np.median(np.stack([s["sig"] for s in samples]), axis=0)
+        self.emg_ref = float(np.median([s["emg"] for s in samples]))
+        return True
+
+    def step(self, sample):
+        """Échantillon courant -> {"z", "artifact", "reason", "raw"}.
+
+        Une fenêtre artefactée ne met à jour NI les z NI le zéro : on rend les derniers z
+        valides en signalant `artifact`. Publier des indices calculés sur un clignement serait
+        pire que ne rien publier — ils sont plausibles, donc indétectables en aval.
+        """
+        if sample is None or not self.ready:
+            return {"z": dict(self.z), "artifact": False, "reason": "", "raw": None}
+
+        emg_limit = None if not self.emg_ref else NEURO_EMG_RATIO * self.emg_ref
+        sig_limit = None if self.sigma_ref is None else NEURO_ARTIFACT_RATIO * np.asarray(self.sigma_ref)
+        bad_emg = emg_limit is not None and sample["emg"] > emg_limit
+        bad_sig = sig_limit is not None and bool(np.any(sample["sig"] > sig_limit))
+        if bad_emg or bad_sig:
+            self.artifacts += 1
+            return {"z": dict(self.z), "artifact": True, "raw": sample["idx"],
+                    "reason": "EMG mâchoire/muscle" if bad_emg else "mouvement / clignement"}
+
+        self.z = self.norm.z(sample["idx"])
+        self.norm.creep(sample["idx"], self.rate)   # re-calage lent, fenêtres propres seulement
+        return {"z": dict(self.z), "artifact": False, "reason": "", "raw": sample["idx"]}
 
 
 # --- Auto-test (les indices vont-ils dans le bon sens ?) --------------------

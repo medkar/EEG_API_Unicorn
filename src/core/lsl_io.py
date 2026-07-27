@@ -221,6 +221,51 @@ class DecodedSSVEPPublisher:
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
 
+class DecodedNeuroPublisher:
+    """`<PREFIX>_decoded_neuro` : trois indices d'état mental, ~5 Hz. BCI **passif**.
+
+    Passif = l'utilisateur ne commande rien, on observe un état. C'est la différence de nature
+    avec `decoded_ssvep` : il n'y a pas de « cible », donc pas de bonne ou de mauvaise réponse,
+    et un client ne doit PAS traiter ces valeurs comme une sélection.
+
+    Voies : `charge`, `somnolence`, `engagement` (z lissés), puis `artifact` (1 = fenêtre
+    rejetée : clignement, mouvement ou EMG). Sur une fenêtre rejetée on republie les DERNIERS
+    z valides avec `artifact=1` plutôt que des indices calculés sur un clignement — ceux-ci
+    seraient parfaitement plausibles, donc indétectables en aval.
+
+    ⚠️ **L'échelle est un z contre le repos du jour de CET utilisateur**, mesuré au début du
+    mode. Les valeurs ne sont comparables ni entre deux personnes, ni entre deux séances, ni
+    dans l'absolu : `+1` veut dire « au-dessus de mon propre repos », pas « chargé ». Les trois
+    indices dérivent en outre du même calcul spectral et restent corrélés entre eux. À lire en
+    TENDANCE. Un client qui afficherait ça comme une mesure de fatigue mentirait à son
+    utilisateur.
+    """
+
+    KEYS = ("charge", "somnolence", "engagement")
+
+    def __init__(self, instance="", smoothing=0.0, rebaseline_s=0.0):
+        labels = list(self.KEYS) + ["artifact"]
+        info = StreamInfo(stream_name("decoded_neuro"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_neuro", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "neuro-passive")
+        desc.append_child_value("decision_scale", "z")
+        desc.append_child_value("reference", "repos mesure en debut de mode, par utilisateur")
+        desc.append_child_value("smoothing_ema", str(smoothing))
+        desc.append_child_value("rebaseline_s", str(rebaseline_s))
+        self.outlet = StreamOutlet(info)
+
+    def push(self, z, artifact=False, lsl_ts=None):
+        """`z` : dict {charge, somnolence, engagement}. Ordre de voies garanti par KEYS."""
+        row = [float(z.get(k, 0.0)) for k in self.KEYS] + [1.0 if artifact else 0.0]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 class StatusPublisher:
     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
 
