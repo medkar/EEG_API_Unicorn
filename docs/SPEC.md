@@ -73,7 +73,7 @@ un champ. Métadonnées (noms de voies, unités, fréquence) portées par le flu
 
 | Flux (type LSL) | Sens | Contenu | Débit |
 |---|---|---|---|
-| `EEG_API_Unicorn_raw` (EEG) | sortant | 8 voies µV, float32 + timestamps | 250 Hz |
+| `EEG_API_Unicorn_raw` (EEG) | sortant | 8 voies µV **non filtrées**, float32 + timestamps | 250 Hz |
 | `EEG_API_Unicorn_decoded_<mode>` | sortant | sortie du mode (voir §5) | ~5 Hz ou événementiel |
 | `EEG_API_Unicorn_quality` | sortant | σ + verdict par voie (ok/douteux/mort) | ~1 Hz |
 | `EEG_API_Unicorn_markers` | sortant | événements API (mode changé, calib début/fin) | événementiel |
@@ -114,7 +114,7 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 
 | Mode | Type | Sortie décodée (`decoded_<mode>`) |
 |---|---|---|
-| **SSVEP** | évoqué | `{target_index, freq_hz, confidence, scores[]}` |
+| **SSVEP** | évoqué | `{target_index, freq_hz, confidence, scores[]}` — **implémenté** ; flux numérique, `target_index = -1` quand aucune cible n'est fixée de façon fiable. Les métadonnées portent `decision_scale` (`z` après mesure du repos, sinon `rho`) et le seuil : sans cette indication, un seuil posé côté client n'a aucun sens. |
 | **Motor Imagery** | endogène | `{class: left\|right\|rest, probs{left,right,rest}}` |
 | **P300** | évoqué | `{selected_target}` (événementiel, après N répétitions) + scores par flash |
 | **Neuro-monitoring** | passif | `{charge, somnolence, engagement}` (z relatifs au repos) |
@@ -266,11 +266,14 @@ calibré » par mode · bouton de calibration · sortie décodée en direct · f
    - **[fait 2026-07-27]** risque LSL levé **en local** (mesures au §4) ; `requirements.txt` créé.
    - **[fait 2026-07-27]** `src/lsl_io.py` (publication + pont d'horloge BrainFlow→LSL + autotest) et
      `src/server.py` (**moteur headless** : `raw` + `quality` + `status`, `--synthetic`, `--smoke`).
-   - **[à faire]** valider `python src/server.py` sur le **vrai casque** (jamais lancé sur Unicorn).
+   - **[fait 2026-07-27]** validé sur le **vrai casque** : horodatage à ±0,5 ms, `quality` à
+     4,6-9 µV sur les 8 voies. Deux défauts **pré-existants** corrigés au passage (`_filter`
+     modifiait son entrée ; `quality()` mesurait le transitoire du filtre, pas l'électrode).
+   - **[fait 2026-07-27]** `decoded_ssvep` : décodeur CCA branché sur la même boucle, avec
+     mesure du repos, normalisation z et rejet d'artefact. **Pas encore validé sur casque.**
    - **[à faire]** test multicast **entre deux machines** sur le réseau de l'école.
-   - **[à faire]** `decoded_ssvep` : brancher le décodeur CCA existant sur la même boucle.
 5. **Exemples** : `receiver.py` + Unity SSVEP.
-   - **[fait 2026-07-27]** `examples/receiver.py` (`--list` / `--stream raw|quality|status`).
+   - **[fait 2026-07-27]** `examples/receiver.py` (`--list` / `--stream raw|quality|status|decoded_ssvep`).
    - **[à faire]** l'exemple Unity/C#.
 6. Incréments v1/v2 (MI, P300, control plane, neuro, ErrP, nouvelle GUI).
 7. **[fin] Nettoyage des commentaires** — mode par mode, style validé sur un fichier témoin d'abord :

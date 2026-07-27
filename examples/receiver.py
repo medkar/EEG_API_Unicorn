@@ -6,9 +6,13 @@ This is the smallest useful client. Start the engine in one terminal:
 
 then run this in another:
 
-    python examples/receiver.py              # signal quality, one line per second
-    python examples/receiver.py --stream raw # the 8 raw channels
-    python examples/receiver.py --list       # what is currently on the network
+    python examples/receiver.py                       # signal quality, one line per second
+    python examples/receiver.py --stream raw          # the 8 raw channels
+    python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
+    python examples/receiver.py --list                # what is currently on the network
+
+The decoded stream only appears once the engine finishes its short rest measurement, so
+start the engine with --mode ssvep and give it a few seconds before looking for it.
 
 The only dependency is `pylsl`. The same three steps (resolve, open, pull) work identically
 in Unity (LSL4Unity), MATLAB and C++ — that is the whole point of using LSL.
@@ -50,7 +54,8 @@ def channel_labels(inlet):
 
 def main(argv):
     p = argparse.ArgumentParser(description="Minimal EEG_API_Unicorn LSL client.")
-    p.add_argument("--stream", default="quality", help="suffix: raw | quality | status")
+    p.add_argument("--stream", default="quality",
+                   help="suffix: raw | quality | status | decoded_ssvep")
     p.add_argument("--list", action="store_true", help="list visible LSL streams and exit")
     args = p.parse_args(argv)
 

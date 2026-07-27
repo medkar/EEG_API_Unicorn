@@ -155,6 +155,48 @@ class QualityPublisher:
         return True
 
 
+class DecodedSSVEPPublisher:
+    """`<PREFIX>_decoded_ssvep` : quelle cible l'utilisateur regarde, ~5 Hz.
+
+    Le contrat (SPEC §5) : on publie une **intention neutre** — quelle cible, à quelle
+    fréquence, avec quelle confiance — et JAMAIS une commande d'actionneur. C'est ce qui
+    rend le même flux utilisable par un jeu, une visualisation ou un robot : la traduction
+    en action appartient au client.
+
+    Voies : `target_index` (-1 = aucune cible fixée de façon fiable), `freq_hz` (0 si
+    aucune), `confidence` (le score du gagnant sur l'échelle de décision), puis un score
+    par cible. Le nombre de voies dépend donc du nombre de fréquences déclarées — elles
+    sont nommées dans les métadonnées, un client ne doit pas les compter en dur.
+    """
+
+    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), source_id="ssvep"):
+        self.freqs = [float(f) for f in freqs]
+        labels = ["target_index", "freq_hz", "confidence"]
+        labels += [f"score_{f:g}Hz" for f in self.freqs]
+        info = StreamInfo(stream_name("decoded_ssvep"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", f"{STREAM_PREFIX}_{source_id}")
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "SSVEP")
+        desc.append_child_value("frequencies_hz", ",".join(f"{f:g}" for f in self.freqs))
+        # `decision_scale` dit au client sur quelle échelle lire `confidence` : "rho" =
+        # corrélation CCA brute (0-1), "z" = écarts-types au-dessus du bruit de repos une
+        # fois le plancher mesuré. Sans cette indication, un seuil côté client n'a pas de sens.
+        desc.append_child_value("decision_scale", decision_scale)
+        desc.append_child_value("threshold", str(thresholds[0]))
+        desc.append_child_value("margin", str(thresholds[1]))
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, freq_hz, confidence, scores, lsl_ts=None):
+        """`scores` : liste des scores dans le MÊME ordre que `freqs`."""
+        row = [float(target_index), float(freq_hz), float(confidence)] + [float(s) for s in scores]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 class StatusPublisher:
     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
 

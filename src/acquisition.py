@@ -147,6 +147,22 @@ class UnicornAcquisition:
             return None
         return self._filter(block)[self.margin_n:].std(axis=0)
 
+    def occipital_window(self, block):
+        """Fenêtre SSVEP (window_n x len(OCCIPITAL)) depuis un bloc DÉJÀ collecté (n x 8).
+
+        Même résultat que `get_window()`, mais sur un tampon que l'appelant possède au lieu
+        du tampon glissant de BrainFlow. C'est ce qui permet à un moteur qui DIFFUSE (donc
+        qui vide le tampon avec `get_new_data`) de DÉCODER en même temps : il tient son
+        propre historique et le passe ici.
+
+        `block` indexe les 8 voies dans l'ordre de `CH_NAMES` — pas les rows du board.
+        Retourne None tant que le bloc est trop court.
+        """
+        need = self.window_n + self.margin_n
+        if block is None or len(block) < need:
+            return None
+        return self._filter(block[-need:][:, OCCIPITAL])[-self.window_n:]
+
     def quality(self, seconds=2.0, rows=None):
         """σ par voie après filtrage — détecte une voie morte ou saturée.
 
