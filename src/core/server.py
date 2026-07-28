@@ -996,6 +996,9 @@ def _smoke_repos_partage():
     que par `run`), mais chacun reçoit un `instance=` distinct pour ne pas se confondre sur le
     réseau, et chacun est nettoyé explicitement en fin de bloc (voir plus bas).
     """
+    from core.modes.contract import ModeSpec, Rest
+    from core.modes.runtime import ModeRuntime
+
     ok = True
 
     def chk(cond, msg):
@@ -1011,10 +1014,19 @@ def _smoke_repos_partage():
     a, b = server.active["ssvep"], server.active["neuro"]
     chk(a._rest_s == b._rest_s == max(ssvep.rest.duration_s, neuro.rest.duration_s),
         f"une seule durée de repos, la plus longue ({a._rest_s:g} s)")
+    # ⚠️ Assertion FAIBLE : SSVEP_WARMUP_S == NEURO_WARMUP_S == 15.0 aujourd'hui, donc cette
+    # égalité passerait MÊME SI le partage de la chauffe était cassé (chacun garderait sa propre
+    # chauffe, qui vaut 15 s des deux côtés par pure coïncidence). Elle documente quand même le
+    # comportement attendu sur les VRAIS modes — c'est la partie 1b, sur des contrats fabriqués à
+    # valeurs distinctes, qui prouve réellement la règle « chauffe = maximum ».
     chk(a._warmup_s == b._warmup_s == max(ssvep.rest.warmup_s, neuro.rest.warmup_s),
         f"une seule chauffe, la plus longue ({a._warmup_s:g} s)")
     chk(server.rest_instruction == neuro.rest.instruction,
         f"la consigne est celle du repos le plus long — « {server.rest_instruction[:40]}… »")
+    # ⚠️ Assertion FAIBLE, même raison : ssvep et neuro démarrent dans le MÊME appel `_start`, au
+    # MÊME `now` — donc même si chacun gardait SA PROPRE chauffe (15 s, non partagée),
+    # `_warmup_until = now + 15` coïnciderait quand même pour les deux. Ne prouve que « même
+    # instant affiché », pas « chauffe réellement partagée » ; 1b couvre ce trou.
     chk(a._warmup_until == b._warmup_until,
         "les deux modes sortent de chauffe au MÊME instant (un seul repos, pas deux)")
     # Casse le cycle self.active <-> ModeRuntime.engine (cf. le commentaire de run().finally) :
@@ -1023,6 +1035,42 @@ def _smoke_repos_partage():
     for runtime in server.active.values():
         runtime.close()
     server.active = {}
+
+    # 1b. La règle « chauffe = maximum » ne peut PAS être prouvée par les deux VRAIS modes :
+    # SSVEP_WARMUP_S et NEURO_WARMUP_S valent tous deux 15 s aujourd'hui, donc l'égalité
+    # vérifiée ci-dessus passerait même si le partage était cassé. On la prouve donc sur des
+    # contrats FABRIQUÉS, aux valeurs distinctes — et le test restera valable le jour où l'une
+    # des deux constantes bougera.
+    #
+    # Le mode qui a la plus longue CHAUFFE n'est volontairement pas celui qui a le plus long
+    # REPOS : c'est ce qui vérifie que les deux maximums sont calculés séparément, et que la
+    # consigne affichée suit bien la DURÉE du repos et non la chauffe.
+    court = ModeSpec(id="court", label="Court", family="actif", summary="", status="moteur",
+                     rest=Rest(warmup_s=2.0, duration_s=30.0,
+                               instruction="consigne du repos le plus long"),
+                     stream="decoded_court", channels=("x",))
+    longue = ModeSpec(id="longue", label="Longue chauffe", family="actif", summary="",
+                      status="moteur",
+                      rest=Rest(warmup_s=9.0, duration_s=5.0,
+                                instruction="consigne de la chauffe la plus longue"),
+                      stream="decoded_longue", channels=("x",))
+    faux = EngineServer(synthetic=True, modes=(), instance="smoke-repos-4")
+    a, b = ModeRuntime(court, {}, faux), ModeRuntime(longue, {}, faux)
+    faux._begin_shared_rest([a, b], now=0.0)
+    chk(a._warmup_s == b._warmup_s == 9.0,
+        f"chauffe partagée = le MAXIMUM des chauffes ({a._warmup_s:g} s pour 2 et 9)")
+    chk(a._rest_s == b._rest_s == 30.0,
+        f"durée partagée = le MAXIMUM des durées ({a._rest_s:g} s pour 30 et 5)")
+    chk(faux.rest_instruction == court.rest.instruction,
+        f"la consigne suit la DURÉE du repos, pas la chauffe — « {faux.rest_instruction} »")
+    # Même cleanup que les trois autres blocs, par cohérence. Ici `_begin_shared_rest` est
+    # appelée DIRECTEMENT (pas via `_start`), donc `a`/`b` ne sont jamais entrés dans
+    # `faux.active` : ce bloc est un no-op en pratique, sans session BrainFlow ni cycle formé
+    # (rien dans `faux` ne référence `a`/`b` en retour). On le garde quand même pour que le
+    # motif reste identique aux trois autres blocs, y compris si ce test évolue vers `_start`.
+    for runtime in faux.active.values():
+        runtime.close()
+    faux.active = {}
 
     # 2. Séparément : chacun garde la sienne.
     server = EngineServer(synthetic=True, modes=("ssvep",), instance="smoke-repos-2")
