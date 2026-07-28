@@ -231,11 +231,13 @@ class NeuroDecoder:
     d'appel. Ils appartiennent à la boucle appelante, qui seule sait afficher un décompte.
     """
 
-    def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S):
+    def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S, smoothing=NEURO_SMOOTH):
         self.fs = float(fs)
         self.norm = None
         self.sigma_ref = None      # σ par voie au repos -> rejet par voie
         self.emg_ref = None        # puissance 30-45 Hz au repos -> veto EMG
+        self.smoothing = float(smoothing)  # Lissage EMA, stocké ici car l'IndexNormalizer
+        # n'existe pas encore à la construction (il est créé dans fit_baseline).
         # Vitesse de re-calage du zéro : une fraction dt/τ par fenêtre. Sur cette échelle
         # (τ ~ 3 min) la dérive d'impédance est suivie, tandis que les variations d'état
         # mental, plus rapides, se moyennent à zéro et ne sont donc PAS absorbées.
@@ -268,7 +270,7 @@ class NeuroDecoder:
         samples = [s for s in samples if s is not None]
         if len(samples) < min_samples:
             return False
-        self.norm = IndexNormalizer().fit([s["idx"] for s in samples])
+        self.norm = IndexNormalizer(smooth=self.smoothing).fit([s["idx"] for s in samples])
         self.sigma_ref = np.median(np.stack([s["sig"] for s in samples]), axis=0)
         self.emg_ref = float(np.median([s["emg"] for s in samples]))
         return True
