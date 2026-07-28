@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,  # noq
                                QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
+from console.grid import ModeGrid  # noqa: E402
 from core.config import use_utf8_console  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.server import EngineServer  # noqa: E402
@@ -68,6 +69,10 @@ class Console(QMainWindow):
 
         self.banner = Banner()
         self.stack = QStackedWidget()
+        self.grid = ModeGrid(registry.catalog())
+        self.grid.ouvrir.connect(self.show_mode)
+        self.grid.publier.connect(self._publier)
+        self.stack.addWidget(self.grid)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -86,6 +91,27 @@ class Console(QMainWindow):
 
     def apply_state(self, state):
         self.banner.update_from(state)
+        self.grid.update_from(state)
+
+    def _publier(self, mode_id, on):
+        """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
+        self.commande("set_published", id=mode_id, on=on)
+
+    def commande(self, name, **params):
+        """Soumet une commande et retient le refus, s'il y en a un, pour l'afficher."""
+        if self.engine is None:
+            return {"accepted": False, "reason": "aucun moteur (mode test)"}
+        ack = self.engine.submit(name, **params)
+        if not ack.get("accepted"):
+            print(f"[console] refusé : {ack.get('reason')}")
+        return ack
+
+    def show_grid(self):
+        self.stack.setCurrentWidget(self.grid)
+
+    def show_mode(self, mode_id):
+        """À compléter à la tâche 13 : pour l'instant on reste sur la grille."""
+        self.show_grid()
 
 
 def fake_state():
@@ -143,6 +169,10 @@ def _smoke():
             self.appels += 1
             return fake_state()
 
+        def submit(self, name, **params):
+            """Simule la soumission d'une commande (toujours acceptée en test)."""
+            return {"accepted": True}
+
     ok = True
 
     def chk(cond, msg):
@@ -162,6 +192,31 @@ def _smoke():
         f"le bandeau dit que c'est un board de test — « {console.banner.liaison.text()} »")
     chk("σ" in console.banner.sigmas.text(), f"et les σ — « {console.banner.sigmas.text()} »")
     chk(console.banner.alarme.text() == "", "aucune alarme sur un montage sain")
+
+    console.apply_state(state)
+    chk(len(console.grid.tuiles) == len(registry.MODES),
+        f"une tuile par mode du registre ({len(console.grid.tuiles)})")
+
+    # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison.
+    externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
+    chk(len(externes) == 4, f"{len(externes)} tuiles pour les modes de l'appli pygame")
+    chk(all(not t.isEnabled() and t.detail.text() for t in externes),
+        "chacune est grisée ET dit pourquoi elle ne démarre pas")
+
+    chk(console.grid.tuiles["ssvep"].etat.text() == "décode",
+        f"le SSVEP est annoncé « {console.grid.tuiles['ssvep'].etat.text()} »")
+    chk(console.grid.tuiles["neuro"].etat.text() == "arrêté",
+        "un mode non démarré est annoncé arrêté, pas absent")
+    chk(console.grid.tuiles["ssvep"].publie.isChecked(), "et coché comme publié")
+
+    # Pendant un repos, la tuile porte la CONSIGNE — sans elle, le plancher est mesuré pendant
+    # que l'étudiant fixe une cible, et il est faux pour toute la séance.
+    en_repos = {**state, "modes_state": {**state["modes_state"], "ssvep": {
+        **state["modes_state"]["ssvep"], "phase": "rest",
+        "instruction": "Ne fixe AUCUNE cible : on mesure le bruit de fond."}}}
+    console.apply_state(en_repos)
+    chk("AUCUNE cible" in console.grid.tuiles["ssvep"].detail.text(),
+        "pendant le repos, la tuile affiche la consigne")
 
     # Référence décrochée : le défaut qui rend une séance inexploitable sans autre symptôme.
     state["quality"] = {**state["quality"], "reference_lost": True, "common_mode": 1.0}
