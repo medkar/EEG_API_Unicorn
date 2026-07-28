@@ -54,6 +54,21 @@ def signal_verdict(sigma):
     return "ok"
 
 
+def json_float(value, digits=2):
+    """Arrondi sûr pour un état destiné à JSON : rend None au lieu d'un NaN ou d'un infini.
+
+    JSON n'a pas de NaN. Python l'écrit quand même (`NaN` nu, invalide), mais les sérialiseurs
+    stricts lèvent une exception — et le prix d'UNE seule valeur indéfinie serait alors la perte
+    de TOUT l'état : plus de qualité, plus de phase, plus de flux, un écran vide et rien pour
+    comprendre. Vécu le 2026-07-27 : une voie constante suffisait à faire sortir un NaN de
+    `np.corrcoef`, et toute la page devenait blanche.
+    """
+    if value is None:
+        return None
+    value = float(value)
+    return None if not _math.isfinite(value) else round(value, digits)
+
+
 def use_utf8_console():
     """Force stdout/stderr en UTF-8. PowerShell est en cp1252 par défaut et plante sur
     les caractères non-latins (σ, →, ...). À appeler au début de chaque `__main__`."""

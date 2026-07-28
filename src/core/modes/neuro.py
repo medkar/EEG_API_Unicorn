@@ -14,8 +14,8 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH,  # noqa: E402
-                         NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S, use_utf8_console)
-from core.lsl_io import DecodedNeuroPublisher  # noqa: E402
+                         NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S, json_float, use_utf8_console)
+from core.lsl_io import DecodedNeuroPublisher, stream_name  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 from core.neuro_monitor import NeuroDecoder  # noqa: E402
@@ -98,10 +98,12 @@ class NeuroRuntime(ModeRuntime):
                             for k in self.decoder.norm.mu)
         print(f"[neuro] échelles calées ({len(self._samples)} fenêtres) — {centres}")
         print("[neuro] z contre CE repos — ni comparable entre personnes, ni absolu")
+        print(f"[neuro] publication sur {stream_name('decoded_neuro')} "
+              "(z contre CE repos — ni comparable entre personnes, ni absolu)")
         self.rest_report = {
             "kind": "neuro",
             "windows": len(self._samples),
-            "targets": [{"index": k, "rest_center": round(float(self.decoder.norm.center(k)), 4)}
+            "targets": [{"index": k, "rest_center": json_float(self.decoder.norm.center(k), 4)}
                         for k in self.decoder.norm.mu],
         }
         return True
@@ -118,8 +120,8 @@ class NeuroRuntime(ModeRuntime):
         if self._out is not None:
             self._out.push(out["z"], out["artifact"], lsl_ts)
         self._state = {
-            "z": {k: round(float(v), 2) for k, v in out["z"].items()},
-            "raw": {k: round(float(v), 4) for k, v in (out["raw"] or {}).items()},
+            "z": {k: json_float(v, 2) for k, v in out["z"].items()},
+            "raw": {k: json_float(v, 4) for k, v in (out["raw"] or {}).items()},
             "artifact": bool(out["artifact"]),
             "reason": out["reason"],
             "artifacts": self.decoder.artifacts,
@@ -237,6 +239,9 @@ def _selftest():
     sortie = rt.output()
     chk(sortie and set(sortie["z"]) == set(DecodedNeuroPublisher.KEYS),
         "la sortie pour l'affichage porte les trois indices")
+    chk(all(v is None or math.isfinite(v) for v in sortie["z"].values())
+        and all(v is None or math.isfinite(v) for v in sortie["raw"].values()),
+        f"la sortie pour l'affichage ne contient ni NaN ni infini ({sortie['z']})")
 
     print(f"[neuro] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
