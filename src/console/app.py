@@ -131,6 +131,18 @@ def _smoke():
     qu'elle encaisse un état où tout est absent (moteur pas encore démarré), et qu'elle survit à
     une alarme. Le contenu métier, lui, est testé côté moteur — il n'y en a pas ici.
     """
+    class _FauxMoteur:
+        """Juste ce que la console lit : un état. Assez pour couvrir `refresh()`, qui est la
+        SEULE ligne du fichier à toucher le moteur — sans ça, une faute de nom y passerait
+        tous les tests et n'échouerait que devant un étudiant."""
+
+        def __init__(self):
+            self.appels = 0
+
+        def snapshot(self):
+            self.appels += 1
+            return fake_state()
+
     ok = True
 
     def chk(cond, msg):
@@ -139,7 +151,8 @@ def _smoke():
         ok = ok and bool(cond)
 
     app = QApplication.instance() or QApplication([])
-    console = Console(engine=None)
+    moteur_faux = _FauxMoteur()
+    console = Console(moteur_faux)
     console.timer.stop()          # pas de moteur : on pilote l'état à la main
     console.show()
 
@@ -162,6 +175,11 @@ def _smoke():
     chk("attente" in console.banner.sigmas.text(),
         f"un état vide est encaissé — « {console.banner.sigmas.text()} »")
 
+    # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
+    console.refresh()
+    chk(moteur_faux.appels == 1,
+        f"refresh() a consulté le moteur (appels={moteur_faux.appels})")
+
     app.processEvents()
     print(f"[console-smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
@@ -181,10 +199,10 @@ def run(args):
         kwargs={"baseline_s": args.baseline, "warmup_s": args.warmup}, daemon=True)
     thread.start()
 
-    app = QApplication([])
-    console = Console(engine)
-    console.show()
     try:
+        app = QApplication([])
+        console = Console(engine)
+        console.show()
         app.exec()
     finally:
         # Ctrl+C ou fermeture de la fenêtre doivent fermer PROPREMENT la session BrainFlow :

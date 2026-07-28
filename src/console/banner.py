@@ -13,7 +13,6 @@ import sys
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import SIGNAL_DEAD_SIGMA, SIGNAL_SAT_SIGMA  # noqa: E402
 
 
 class Banner(QWidget):
@@ -45,9 +44,11 @@ class Banner(QWidget):
             self.alarme.setText("")
             return
 
-        valeurs = [v for v in quality["sigmas"] if v is not None]
-        mortes = sum(1 for v in valeurs if v < SIGNAL_DEAD_SIGMA)
-        saturees = sum(1 for v in valeurs if v > SIGNAL_SAT_SIGMA)
+        sigmas = quality.get("sigmas", [])
+        valeurs = [v for v in sigmas if v is not None]
+        verdicts = quality.get("verdicts", [])
+        mortes = sum(1 for v in verdicts if v == "morte")
+        saturees = sum(1 for v in verdicts if v == "saturée")
         detail = f"σ {min(valeurs):.1f}–{max(valeurs):.1f} µV sur {len(valeurs)} voies" \
             if valeurs else "σ indisponible"
         if mortes:

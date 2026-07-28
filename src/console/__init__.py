@@ -1,3 +1,13 @@
+import os as _os
+import sys as _sys
+
+# Qt choisit son backend d'affichage à l'IMPORT, pas à la création de la QApplication : ce
+# réglage doit donc être posé avant le premier `import PySide6`, où qu'il ait lieu. Ici plutôt
+# que dans `app.py` parce que Python exécute TOUJOURS ce fichier avant n'importe quel
+# sous-module du paquet — un futur `import console.grid` isolé reste donc couvert.
+if "--smoke" in _sys.argv:
+    _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 """`console` — la console d'expérimentation (PySide6). Un CLIENT du moteur, pas le moteur.
 
 Elle crée un `EngineServer`, lance sa boucle dans un fil, et sonde `snapshot()` par un `QTimer`.
