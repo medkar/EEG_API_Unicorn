@@ -325,9 +325,18 @@ class EngineServer:
                         "reason": f"« {spec.label} » n'a pas de repos à refaire"}
             self._commands.put(("recalibrate", {"id": spec.id}))
         elif command == "set_params":
+            # ⚠️ `_one` (juste au-dessus) vient de vérifier que `spec.id` est dans `self.active`
+            # — mais `submit` tourne sur le fil de l'APPELANT (la console), pas sur celui de la
+            # boucle, qui peut arrêter ce mode entre les deux. Indexer `self.active[spec.id]`
+            # sans garde lèverait un `KeyError` ICI, dans le fil appelant : exactement ce que
+            # `submit` promet de ne jamais faire (un accusé, toujours — jamais une exception).
+            runtime = self.active.get(spec.id)
+            if runtime is None:
+                return {"accepted": False,
+                        "reason": f"« {spec.label} » a été arrêté entre-temps"}
             # On fusionne sur les réglages COURANTS : un appelant peut n'envoyer que ce qu'il
             # change, sans avoir à relire et renvoyer tout le reste.
-            merged = dict(self.active[spec.id].params)
+            merged = dict(runtime.params)
             merged.update(params.get("params") or {})
             values, reason = contract.validate(spec, merged)
             if values is None:
@@ -416,13 +425,28 @@ class EngineServer:
         return (running, self.synthetic, self.phase,
                 tuple((mid, r.phase, r.published) for mid, r in sorted(self.active.items())))
 
-    def _state(self, running):
+    def _state(self, running, active=None):
+        """État public (`status` / `snapshot`).
+
+        `active` : copie déjà prise de `self.active`, à passer quand l'appelant en a déjà une
+        (voir `snapshot`) pour ne pas en reprendre une seconde qui pourrait différer de la
+        première si la boucle a bougé entre-temps. Sans argument, `_state` en prend une elle-même
+        — jamais `self.active` en direct : un `for mid in self.active` ou un dict-comprehension
+        sur `self.active.items()` itère le dict VIVANT, et la boucle peut démarrer ou arrêter un
+        mode entre deux pas de cette itération (elle tourne sur un autre fil que l'appelant de
+        `snapshot`) — ce qui lève `RuntimeError: dictionary changed size during iteration` chez
+        l'appelant. `dict(self.active)` copie en C, sans repasser la main : c'est pour ça que la
+        boucle de `run()` fait déjà `list(self.active.items())` avant d'itérer, même depuis SON
+        propre fil.
+        """
+        if active is None:
+            active = dict(self.active)
         streams = ["quality", "status"]
         for spec in registry.MODES:
-            runtime = self.active.get(spec.id)
+            runtime = active.get(spec.id)
             if runtime is not None and runtime.published and spec.stream:
                 streams.append(spec.stream)
-        actifs = [mid for mid in self.active]
+        actifs = list(active)
         # `mode` (au singulier) reste publié pour ne pas casser un client écrit contre le flux
         # `status` d'hier : il porte le premier mode DÉCODÉ actif, ou null. `modes` porte la
         # vérité complète. Le jour où plusieurs modes décodent, `mode` en montre un seul — c'est
@@ -447,14 +471,23 @@ class EngineServer:
     def snapshot(self):
         """État complet pour un afficheur, en lecture seule. Sûr depuis un autre fil.
 
-        On rend un dictionnaire déjà construit plutôt que des références vers l'état vivant :
+        La console (tâches 11-15) sonde ceci depuis le fil Qt, à 10 Hz, pendant que la boucle du
+        moteur tourne sur le sien et peut démarrer ou arrêter un mode À TOUT INSTANT. On prend
+        donc UNE SEULE copie atomique de `self.active` (`dict(...)`, copié en C d'un coup — pas
+        de point où l'autre fil pourrait s'intercaler) et on la fait servir PARTOUT dans cet
+        appel : à `_state()` d'abord, à `modes_state` ensuite. Reprendre `self.active` une
+        seconde fois pour `modes_state` referait courir le même risque, ET pourrait rendre un
+        `modes_state` qui ne correspond plus au `modes` déjà écrit dans `state` (un mode présent
+        dans l'un, absent de l'autre) si la boucle a bougé entre les deux lectures. On rend
+        ensuite un dictionnaire déjà construit plutôt que des références vers l'état vivant :
         l'appelant ne peut donc pas lire une valeur à moitié écrite par la boucle.
         """
-        state = self._state(not self._stop)
+        active = dict(self.active)
+        state = self._state(not self._stop, active=active)
         state.update({
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
-            "modes_state": {mid: r.state() for mid, r in self.active.items()},
+            "modes_state": {mid: r.state() for mid, r in active.items()},
             "catalog": registry.catalog(),
         })
         return state
@@ -538,55 +571,87 @@ class EngineServer:
                         {s.id: v for s, v in self._pending}, time.perf_counter())
             self.status_out.push(self._state(True), key=self._status_key(True), force=True)
 
-            while not self._stop:
-                self._drain_commands()
-                now = time.perf_counter()
-                if duration_s is not None and now - started >= duration_s:
-                    break
+            try:
+                while not self._stop:
+                    self._drain_commands()
+                    now = time.perf_counter()
+                    if duration_s is not None and now - started >= duration_s:
+                        break
 
-                # UNE seule lecture par tour, quels que soient les modes actifs :
-                # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
-                # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
-                eeg, ts_unix = self.acq.get_new_data()
-                self.new_block = None
-                if eeg is not None and len(eeg):
-                    self.new_block = (eeg, self.clock.to_lsl(ts_unix))
-                    self.recent = np.vstack([self.recent, eeg])[-self.keep:]
+                    # UNE seule lecture par tour, quels que soient les modes actifs :
+                    # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
+                    # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
+                    eeg, ts_unix = self.acq.get_new_data()
+                    self.new_block = None
+                    if eeg is not None and len(eeg):
+                        self.new_block = (eeg, self.clock.to_lsl(ts_unix))
+                        self.recent = np.vstack([self.recent, eeg])[-self.keep:]
 
-                if now - last_quality >= QUALITY_PERIOD_S:
-                    self._publish_quality(self.clock.to_lsl(time.time()))
-                    last_quality = now
+                    if now - last_quality >= QUALITY_PERIOD_S:
+                        self._publish_quality(self.clock.to_lsl(time.time()))
+                        last_quality = now
 
-                for mode_id, runtime in list(self.active.items()):
-                    if now - self._last_tick.get(mode_id, 0.0) >= runtime.period_s():
-                        runtime.tick(self, self.clock.to_lsl(time.time()), now)
-                        self._last_tick[mode_id] = now
+                    for mode_id, runtime in list(self.active.items()):
+                        if now - self._last_tick.get(mode_id, 0.0) >= runtime.period_s():
+                            runtime.tick(self, self.clock.to_lsl(time.time()), now)
+                            self._last_tick[mode_id] = now
 
-                # Publié quand l'état change, plus un rappel périodique pour les clients qui se
-                # connectent après le démarrage (LSL ne rejoue pas le passé).
-                due = now - last_status >= STATUS_PERIOD_S
-                if self.status_out.push(self._state(True), key=self._status_key(True),
-                                        force=due) and due:
-                    last_status = now
+                    # Publié quand l'état change, plus un rappel périodique pour les clients qui
+                    # se connectent après le démarrage (LSL ne rejoue pas le passé).
+                    due = now - last_status >= STATUS_PERIOD_S
+                    if self.status_out.push(self._state(True), key=self._status_key(True),
+                                            force=due) and due:
+                        last_status = now
 
-                time.sleep(POLL_S)
+                    time.sleep(POLL_S)
 
-            self.status_out.push(self._state(False), key=self._status_key(False), force=True)
-            for runtime in self.active.values():
-                runtime.close()
-            # Un `ModeRuntime` garde `self.engine` : `self.active` référence donc `self`, qui
-            # référence `self.active` — un cycle. CPython ne le casse pas par comptage de
-            # références, seulement par un passage du ramasse-miettes CYCLIQUE, à une date que
-            # rien ici ne contrôle. Tant que le cycle tient, la session BrainFlow (`self.acq`)
-            # reste en vie APRÈS le retour de `run()`. Mesuré le 2026-07-28 : deux `EngineServer`
-            # synthétiques lancés l'un après l'autre dans le même processus, le second échoue sur
-            # `get_new_data()` avec `BOARD_NOT_CREATED_ERROR` — parce que la session du PREMIER,
-            # toujours vivante quelque part en mémoire, n'a pas encore été nettoyée quand la
-            # seconde démarre. Vider `active` casse le cycle : `self` redevient collectable par
-            # simple comptage de références, aussi déterministe qu'avant l'introduction des
-            # runtimes. Sans ce test-là (deux moteurs de suite, comme le fait `--smoke`), rien ne
-            # révèle le problème — un seul moteur par processus ne le voit jamais.
-            self.active = {}
+                self.status_out.push(self._state(False), key=self._status_key(False), force=True)
+            finally:
+                # DOIT s'exécuter sur TOUTE sortie de la boucle, y compris une EXCEPTION — casque
+                # perdu en séance, erreur BrainFlow : précisément ce que ce produit doit survivre.
+                # Sans ce `finally`, une exception levée par `get_new_data()` ou par un `tick()`
+                # saute tout ce bloc et va droit à `__exit__` : ni les flux ne se ferment, ni le
+                # cycle plus bas ne se rompt. Le bug revient alors pour le PROCHAIN moteur du même
+                # processus — au pire moment, celui où on relance juste après l'incident.
+                for runtime in self.active.values():
+                    try:
+                        runtime.close()
+                    except Exception as e:  # noqa: BLE001 - la fermeture d'UN flux ne doit pas
+                        # empêcher les autres de se libérer.
+                        print(f"[server] fermeture de {runtime.spec.label} en erreur : {e}")
+                # Un `ModeRuntime` garde `self.engine` : `self.active` référence donc `self`, qui
+                # référence `self.active` — un cycle. CPython ne le casse pas par comptage de
+                # références, seulement par un passage du ramasse-miettes CYCLIQUE, à une date
+                # que rien ici ne contrôle.
+                #
+                # Ce que le cycle retarde n'est PAS la session BrainFlow : `UnicornAcquisition.
+                # __exit__`, juste en dessous, la libère bel et bien tout de suite. Ce qu'il
+                # retarde, c'est le nettoyage de l'OBJET PYTHON `BoardShim` — et donc l'appel de
+                # son destructeur `__del__`, qui rappelle `release_session()` si `is_prepared()`
+                # répond vrai. Le piège tient dans COMMENT BrainFlow identifie une session :
+                # `prepare_session`, `release_session` et `is_prepared` passent tous
+                # `(self.board_id, self.input_json)` au MÊME singleton `BoardControllerDLL.
+                # get_instance()`, un objet DLL partagé par tout le PROCESSUS — jamais par
+                # identité d'objet Python (vérifié dans brainflow/board_shim.py). Deux moteurs
+                # synthétiques — ou deux vrais casques de même numéro de série — adressent donc
+                # la MÊME clé.
+                #
+                # Quand le ramasse-miettes finit par appeler `__del__` sur le `BoardShim` du
+                # PREMIER moteur, `is_prepared()` répond sur CETTE clé — et si un DEUXIÈME
+                # moteur a, entre-temps, préparé sa propre session sous la même clé, la réponse
+                # est vraie pour LA SESSION DU DEUXIÈME. Le destructeur zombie du premier appelle
+                # alors `release_session()` et libère la session du second, en pleine séance :
+                # ce n'est pas une session qui traîne, c'est un destructeur qui se trompe de
+                # cible. Mesuré le 2026-07-28 : deux `EngineServer` synthétiques lancés l'un
+                # après l'autre dans le même processus, le second échoue sur `get_new_data()`
+                # avec `BOARD_NOT_CREATED_ERROR`.
+                #
+                # Vider `active` casse le cycle : `self` (et son `BoardShim`) redevient
+                # collectable par simple comptage de références, donc nettoyé tout de suite —
+                # avant qu'un `__del__` tardif ait la moindre chance de viser la mauvaise
+                # session. Sans ce test-là (deux moteurs de suite, comme le fait `--smoke`),
+                # rien ne révèle le problème : un seul moteur par processus ne le voit jamais.
+                self.active = {}
 
         elapsed = time.perf_counter() - started
         print(f"[server] arrêt : {self.samples} échantillons publiés en {elapsed:.1f} s "
