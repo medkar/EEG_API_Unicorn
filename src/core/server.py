@@ -1,23 +1,31 @@
 """Moteur headless : casque Unicorn -> flux LSL. C'est le MVP de docs/SPEC.md §10.
 
 Ce fichier est le **cœur du produit** : il tourne SANS interface graphique. L'application
-pygame (`src/research/app.py`), le futur tableau de bord web et le code d'un étudiant sont tous, du
+pygame (`src/research/app.py`), la future console PySide6 et le code d'un étudiant sont tous, du
 point de vue du moteur, des clients qui écoutent les mêmes flux.
 
+Le moteur ne garde que le **vraiment commun** : la session BrainFlow, le tampon glissant, le pont
+d'horloge, la qualité du signal, la file de commandes. Tout le reste — la séquence chauffe /
+repos / décodage, ce qui se règle, ce qui se publie — vit dans `src/core/modes/` : un
+`ModeRuntime` par mode actif, tenu dans `self.active`. Plusieurs modes tournent EN MÊME TEMPS,
+chacun à sa propre phase ; lancés ENSEMBLE ils partagent une seule mesure de repos
+(`_begin_shared_rest`), lancés séparément chacun fait la sienne.
+
 Ce qu'il publie aujourd'hui (SPEC §4) :
-    EEG_API_Unicorn_raw            les 8 voies, µV, 250 Hz
-    EEG_API_Unicorn_quality        σ par voie, ~1 Hz (électrode décollée ?)
-    EEG_API_Unicorn_status         état du moteur, JSON, à chaque changement + périodique
-    EEG_API_Unicorn_decoded_ssvep  cible regardée, ~5 Hz (avec --mode ssvep)
-    EEG_API_Unicorn_decoded_neuro  charge / somnolence / engagement, ~5 Hz (--mode neuro)
+    EEG_API_Unicorn_raw            les 8 voies, µV, 250 Hz (mode "raw", actif par défaut)
+    EEG_API_Unicorn_quality        σ par voie, ~1 Hz (électrode décollée ?) — toujours publié
+    EEG_API_Unicorn_status         état du moteur, JSON, à chaque changement + périodique — idem
+    EEG_API_Unicorn_decoded_ssvep  cible regardée, ~5 Hz (mode "ssvep")
+    EEG_API_Unicorn_decoded_neuro  charge / somnolence / engagement, ~5 Hz (mode "neuro")
 
-Les deux modes décodés illustrent les deux familles de la BCI, et un client ne doit pas les
-traiter pareil : le SSVEP est **actif** (l'utilisateur choisit, il y a une bonne réponse, un
-stimulus est requis côté client), le neuro est **passif** (on observe un état, il n'y a rien à
-choisir et aucun stimulus). Un seul mode tourne à la fois — même casque, même boucle.
+SSVEP et neuro illustrent les deux familles de la BCI, et un client ne doit pas les traiter
+pareil : le SSVEP est **actif** (l'utilisateur choisit, il y a une bonne réponse, un stimulus est
+requis côté client), le neuro est **passif** (on observe un état, il n'y a rien à choisir et
+aucun stimulus).
 
-Pas encore : MI, c-VEP, P300, le control plane entrant, les marqueurs. Ils viendront poser
-leurs publications sur le même squelette de boucle.
+Pas encore dans le moteur : MI, c-VEP, P300, ErrP — voir `src/core/modes/registry.py` pour le
+catalogue complet ; ils restent l'affaire de `src/research/app.py`. Pas encore non plus : le
+control plane entrant, les marqueurs.
 
 ⚠️ Le moteur ne rend AUCUN stimulus. Pour le SSVEP, c'est l'application cliente qui fait
 clignoter les cibles ; elle déclare simplement leurs fréquences au moteur (`--freqs`). Le
@@ -30,6 +38,8 @@ Lancer :
     python src/core/server.py --mode ssvep              # + décodage SSVEP (cibles par défaut)
     python src/core/server.py --mode ssvep --refresh 60 # cibles accordées à un écran 60 Hz
     python src/core/server.py --mode ssvep --freqs 15,20,8.57
+    python src/core/server.py --mode ssvep,neuro        # plusieurs modes EN MÊME TEMPS
+    python src/core/server.py --mode neuro --no-raw     # sans le flux brut
     python src/core/server.py --duration 60             # s'arrête tout seul au bout de 60 s
     python src/core/server.py --smoke                   # test headless de bout en bout (CI)
 
@@ -52,15 +62,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from core.cca_decoder import CCADecoder  # noqa: E402
-from core.config import (ARTIFACT_SIGMA_RATIO, BANDPASS, CH_NAMES,  # noqa: E402
-                    NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH, NEURO_UPDATE_HZ,
-                    NEURO_WARMUP_S, NEURO_WINDOW_S, SSVEP_BASELINE_S, SSVEP_WARMUP_S,
-                    WINDOW_S, choose_frequencies, reference_lost, use_utf8_console)
-from core.lsl_io import (ClockBridge, DecodedNeuroPublisher,  # noqa: E402
-                    DecodedSSVEPPublisher, QualityPublisher, RawPublisher, StatusPublisher,
-                    default_instance_id, stream_name, verdict_from_sigma)
-from core.neuro_monitor import NeuroDecoder  # noqa: E402
+from core.config import (CH_NAMES, NEURO_WINDOW_S, choose_frequencies,  # noqa: E402
+                    json_float, reference_lost, use_utf8_console)
+from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
+                    StatusPublisher, default_instance_id, stream_name, verdict_from_sigma)
+from core.modes import contract, registry  # noqa: E402
 
 # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
 # signal d'un coup. Assez court pour rester très en dessous des fenêtres de décision d'un
@@ -69,232 +75,305 @@ POLL_S = 0.05
 QUALITY_PERIOD_S = 1.0    # cadence du flux `quality`
 STATUS_PERIOD_S = 2.0     # rappel périodique de l'état (pour un client qui arrive en retard)
 QUALITY_WINDOW_S = 2.0    # longueur de signal sur laquelle on mesure le σ par voie
-SSVEP_DECODE_HZ = 5.0     # cadence de décodage SSVEP (fenêtres glissantes de WINDOW_S)
-SSVEP_BASELINE_SAMPLE_HZ = 5.0   # cadence d'échantillonnage du plancher de repos
-
-
-def _json_float(value, digits=2):
-    """Arrondi sûr pour un état destiné à JSON : rend None au lieu d'un NaN ou d'un infini.
-
-    JSON n'a pas de NaN. Python l'écrit quand même (`NaN` nu, invalide), mais les
-    sérialiseurs stricts — celui de Starlette, derrière le tableau de bord — lèvent une
-    exception. Le prix d'une seule valeur indéfinie serait alors la perte de TOUT l'état :
-    plus de qualité, plus de phase, plus de flux, une page vide et rien pour comprendre.
-    """
-    if value is None:
-        return None
-    value = float(value)
-    return None if not math.isfinite(value) else round(value, digits)
 
 
 class EngineServer:
-    """Boucle acquisition -> publication. Un objet, une session casque, N flux.
+    """Boucle acquisition -> publication. Un objet, une session casque, N modes actifs.
 
-    Le moteur tient **son propre tampon glissant** (`_recent`). C'est le point d'architecture
+    Le moteur tient **son propre tampon glissant** (`recent`). C'est le point d'architecture
     central : `get_new_data()` VIDE le tampon de BrainFlow, donc les accesseurs à fenêtre
     glissante (`get_window`, `get_epoch`) ne peuvent plus servir. Diffuser et décoder en même
     temps n'est possible qu'en gardant l'historique ici, et en alimentant depuis lui à la fois
-    la publication brute et les décodeurs.
+    la publication brute et les décodeurs des `ModeRuntime` actifs.
     """
 
-    def __init__(self, serial=None, synthetic=False, verbose=False, mode=None, freqs=None,
-                 refresh=None, instance=None):
+    def __init__(self, serial=None, synthetic=False, verbose=False, modes=("raw",),
+                 params=None, instance=None):
+        """`modes` : les identifiants à démarrer. `params` : {mode_id: {clé: valeur}}, facultatif.
+
+        Un identifiant inconnu ou un réglage invalide lève ici, au démarrage — bruyamment et
+        tout de suite, plutôt qu'en séance sur un décodage qui ne détecte jamais rien.
+        """
         self.synthetic = synthetic
-        self.mode = mode
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
         self.clock = ClockBridge()
         self.instance = instance or default_instance_id(serial, synthetic)
-        self.raw_out = RawPublisher(ch_names=CH_NAMES, fs=self.acq.fs,
-                                    instance=self.instance)
         self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
         self.status_out = StatusPublisher(instance=self.instance)
         self.samples = 0
+        self.new_block = None       # le bloc lu au tour courant : (eeg, horodatages LSL) ou None
+        self.recent = np.zeros((0, len(CH_NAMES)))
+        self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
+        self.rest_instruction = ""  # la consigne du repos en cours, partagée s'il l'est
         self._stop = False
-        self._recent = np.zeros((0, len(CH_NAMES)))
+        self._last_tick = {}
+        self._commands = queue.Queue()
+        self._quality = None
+        self._reference_lost = None
+        self._warmup_override = None
+        self._rest_override = None
 
         # Le tampon doit satisfaire le plus gourmand des consommateurs : la qualité veut
-        # QUALITY_WINDOW_S, le SSVEP WINDOW_S, le neuro NEURO_WINDOW_S — chacun plus la marge
-        # de filtre. On dimensionne sur TOUS les modes, pas sur celui qui tourne : changer de
-        # mode en cours de séance ne doit pas dépendre de la taille d'un tampon.
+        # QUALITY_WINDOW_S, le SSVEP WINDOW_S, le neuro NEURO_WINDOW_S — chacun plus la marge de
+        # filtre. On dimensionne sur TOUS les modes, pas sur ceux qui tournent : démarrer un mode
+        # en cours de séance ne doit pas dépendre de la taille d'un tampon.
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
                         self.acq.window_n) + self.acq.margin_n
 
-        self.decoder = None         # décodeur SSVEP (actif)
-        self.ssvep_out = None
-        self.freqs = []
-        self.neuro = None           # décodeur neuro (passif) — les deux ne tournent jamais ensemble
-        self.neuro_out = None
-        self._neuro_samples = []
-        self._neuro_state = None
-        self._baseline_samples = []
-        self._baseline_sigmas = []
-        self._sigma_ref = None
-        self._baseline_until = None
-        self._baseline_s = SSVEP_BASELINE_S
-        self._warmup_until = None
-        self._baseline_done = False
-        self._baseline_warned = False
-        self._last_log = 0.0
-        self._reference_lost = None
-        self._commands = queue.Queue()
-        self._warmup_s = SSVEP_WARMUP_S
-        self._quality = None        # dernier σ par voie, pour l'afficheur
-        self._decoded = None        # dernière décision, pour l'afficheur
-        self._baseline_report = None
-        if mode == "ssvep":
-            self._setup_ssvep(freqs, refresh)
-        elif mode == "neuro":
-            self._setup_neuro()
+        self._pending = self._prepare(modes or (), params or {})
 
-    def _setup_neuro(self):
-        """Prépare le neuro-monitoring passif : trois indices d'état, aucun stimulus.
-
-        C'est le mode le moins exigeant côté client — rien à afficher, rien à synchroniser,
-        aucun modèle à entraîner. Il ne demande qu'une chose, mais elle est impérative : un
-        REPOS de `NEURO_BASELINE_S` en début de mode, parce que les indices sont des ratios
-        spectraux individuels et dérivants, qui ne veulent rien dire sans un zéro personnel.
-
-        La chauffe et le repos sont plus longs qu'en SSVEP (15 s + 25 s) : les échelles sont
-        calées sur une MÉDIANE et une MAD, qui demandent plus de fenêtres qu'une moyenne.
-        """
-        self.neuro = NeuroDecoder(self.acq.fs)
-        self.neuro_out = DecodedNeuroPublisher(instance=self.instance,
-                                               smoothing=NEURO_SMOOTH,
-                                               rebaseline_s=NEURO_REBASELINE_S)
-        self._neuro_samples = []
-        self._baseline_s, self._warmup_s = NEURO_BASELINE_S, NEURO_WARMUP_S
-
-    def _setup_ssvep_durations(self):
-        self._baseline_s, self._warmup_s = SSVEP_BASELINE_S, SSVEP_WARMUP_S
-
-    def _setup_ssvep(self, freqs, refresh=None):
-        """Prépare le décodage SSVEP. `freqs` = les fréquences que l'appli cliente affiche.
-
-        Elles sont une ENTRÉE, pas une constante du moteur : c'est l'application externe qui
-        rend le stimulus (SPEC §7) et qui déclare donc son jeu de fréquences.
-
-        Trois façons de les fournir, de la plus explicite à la plus commode :
-        `freqs` en clair ; `refresh` (le moteur applique alors `choose_frequencies`, la MÊME
-        fonction que le stimulus — passer le même refresh des deux côtés garantit l'accord
-        sans recopier des décimales) ; ou rien, et on retombe sur un écran 60 Hz.
-
-        ⚠️ Une fréquence mal accordée ne produit aucune erreur, juste un décodage qui ne
-        détecte jamais rien : la CCA corrèle contre une sinusoïde que personne n'affiche.
-
-        Le flux décodé est créé TOUT DE SUITE, avant même la mesure du repos, et reste
-        silencieux jusqu'à ce que le décodage commence. Le faire apparaître seulement à la
-        fin du repos serait un piège : un client qui cherche le flux au lancement ne le
-        trouve pas et abandonne (`resolve_byprop` a un délai fini) — c'est exactement ce qui
-        s'est produit au premier essai casque. Un flux qui existe dès le départ et ne dit
-        rien encore est bien plus facile à consommer ; c'est `status` qui explique pourquoi.
-        """
-        self._setup_ssvep_durations()
-        if not freqs:
-            freqs = [c["actual_hz"] for c in choose_frequencies(refresh or 60)]
-        self.freqs = [float(f) for f in freqs]
-        self.decoder = CCADecoder(self.freqs, fs=self.acq.fs)
-        # L'échelle de décision fait partie du contrat et ne change donc jamais : le moteur
-        # décide TOUJOURS sur z, quitte à prolonger le repos jusqu'à pouvoir le mesurer.
-        self.ssvep_out = DecodedSSVEPPublisher(
-            self.freqs, decision_scale="z",
-            thresholds=(self.decoder.z_min, self.decoder.z_margin),
-            instance=self.instance)
+    def _prepare(self, modes, params):
+        """Valide les modes demandés au démarrage. Retourne [(spec, réglages), ...]."""
+        prepared = []
+        for spec in registry.MODES:            # l'ordre du registre, toujours
+            if spec.id not in modes:
+                continue
+            if spec.runtime_cls is None:
+                raise ValueError(f"« {spec.label} » ne tourne pas dans le moteur : "
+                                 f"{spec.unavailable}")
+            values, reason = contract.validate(spec, params.get(spec.id, {}))
+            if values is None:
+                raise ValueError(reason)
+            prepared.append((spec, values))
+        inconnus = sorted(set(modes) - {s.id for s, _ in prepared})
+        if inconnus:
+            connus = ", ".join(s.id for s in registry.runnable())
+            raise ValueError(f"mode inconnu : {', '.join(inconnus)} (disponibles : {connus})")
+        return prepared
 
     def stop(self):
         self._stop = True
 
-    @property
-    def decoding(self):
-        """Un mode décodé tourne-t-il ? (SSVEP actif ou neuro passif — jamais les deux.)"""
-        return self.decoder is not None or self.neuro is not None
+    # --- démarrer, arrêter, régler — les opérations sur les modes -----------
 
-    @property
-    def phase(self):
-        """« baseline » pendant la mesure du repos, « decoding » ensuite, sinon « streaming »."""
-        if not self.decoding:
-            return "streaming"
-        if self._baseline_done:
-            return "decoding"
-        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
-            return "warmup"
-        return "baseline"
+    def _start(self, ids, values, now):
+        """Démarre des modes. Ceux lancés ENSEMBLE partagent une seule phase de repos."""
+        demarres = []
+        for spec in registry.MODES:            # ordre du registre : il arbitre les égalités
+            if spec.id not in ids:
+                continue
+            runtime = spec.runtime_cls(spec, values[spec.id], self)
+            runtime.open()
+            self.active[spec.id] = runtime
+            self._last_tick[spec.id] = 0.0
+            demarres.append(runtime)
+        self._begin_shared_rest(demarres, now)
+        for runtime in demarres:
+            if runtime.spec.stream:
+                print(f"[server] {runtime.spec.label} démarré — flux "
+                      f"{stream_name(runtime.spec.stream)}"
+                      + (" (silencieux pendant le repos)" if runtime.spec.rest else ""))
+
+    def _begin_shared_rest(self, runtimes, now):
+        """Un seul repos pour tous ceux qui en demandent un, si on les lance ensemble.
+
+        Les consignes sont compatibles — « ne fixe aucune cible » et « immobile et détendu »
+        décrivent le même moment — donc imposer deux repos de suite ferait attendre l'étudiant
+        pour rien. Lancés SÉPARÉMENT, chacun fait le sien : un mode démarré alors qu'un autre
+        tourne déjà ne peut pas réutiliser un repos qu'il n'a pas observé.
+
+        Trois règles déterministes, pour qu'il n'y ait rien à interpréter : la durée retenue est
+        le MAXIMUM des durées demandées, la chauffe le MAXIMUM des chauffes, et la consigne
+        affichée celle du mode dont le repos est le plus long. À égalité, `max` rend le premier
+        de la liste — qui est dans l'ordre du registre.
+        """
+        for runtime in runtimes:
+            if runtime.spec.rest is None:
+                runtime.begin_rest(now)        # met la phase à « running », rien de plus
+        au_repos = [r for r in runtimes if r.spec.rest is not None]
+        if not au_repos:
+            return
+
+        chauffe = max(r.spec.rest.warmup_s for r in au_repos)
+        duree = max(r.spec.rest.duration_s for r in au_repos)
+        if self._warmup_override is not None:
+            chauffe = self._warmup_override
+        if self._rest_override is not None:
+            duree = self._rest_override
+        meneur = max(au_repos, key=lambda r: r.spec.rest.duration_s)
+        self.rest_instruction = meneur.spec.rest.instruction
+        for runtime in au_repos:
+            runtime.begin_rest(now, warmup_s=chauffe, duration_s=duree)
+        quoi = ", ".join(r.spec.label for r in au_repos)
+        print(f"[server] repos ({quoi}) : stabilisation {chauffe:.0f} s puis {duree:.0f} s — "
+              f"{self.rest_instruction}")
+
+    def _stop_mode(self, mode_id):
+        runtime = self.active.pop(mode_id, None)
+        if runtime is None:
+            return
+        runtime.close()
+        self._last_tick.pop(mode_id, None)
+        if not any(r.phase in ("warmup", "rest") for r in self.active.values()):
+            self.rest_instruction = ""
+        print(f"[server] {runtime.spec.label} arrêté — son flux disparaît du réseau")
+
+    def _set_params(self, mode_id, values):
+        """Applique des réglages. Le repos de CE mode repart s'il en a un.
+
+        Un plancher mesuré sous d'autres réglages est faux : pour le SSVEP il est mesuré PAR
+        FRÉQUENCE, le garder après changement comparerait le ρ d'une cible au bruit de fond
+        d'une autre. On recrée aussi le flux, parce que les métadonnées LSL sont figées à la
+        création et que les voies portent les fréquences (`score_15Hz`) — garder l'ancien flux
+        publierait des étiquettes fausses. Les clients doivent se réabonner, le NOM ne change
+        pas, un nouveau `resolve_byprop` suffit.
+
+        ⚠️ Une commande peut être appliquée après que la boucle a arrêté ce mode entre-temps
+        (soumise puis le mode stoppé avant d'être drainée) : `mode_id` peut donc avoir disparu
+        de `self.active`. On l'ignore avec un message clair plutôt que de laisser un `KeyError`
+        remonter jusqu'à `_drain_commands`.
+        """
+        ancien = self.active.get(mode_id)
+        if ancien is None:
+            print(f"[server] réglage ignoré : « {mode_id} » a été arrêté entre-temps")
+            return
+        spec = ancien.spec
+        avant = dict(ancien.params)
+        ancien.close()
+        runtime = spec.runtime_cls(spec, values, self)
+        runtime.published = ancien.published
+        if runtime.published:
+            runtime.open()
+        self.active[mode_id] = runtime
+        self._last_tick[mode_id] = 0.0
+        self._begin_shared_rest([runtime], time.perf_counter())
+        changes = ", ".join(f"{k} : {avant[k]} -> {v}" for k, v in values.items()
+                            if avant.get(k) != v)
+        print(f"[server] {spec.label} — {changes or 'aucun changement'}"
+              + (f" ; flux {stream_name(spec.stream)} RECRÉÉ (réabonnez-vous)"
+                 if spec.stream else ""))
+
+    def _set_published(self, mode_id, on):
+        """⚠️ Même tolérance que `_set_params` : le mode peut avoir été arrêté entre-temps."""
+        runtime = self.active.get(mode_id)
+        if runtime is None:
+            print(f"[server] publication ignorée : « {mode_id} » a été arrêté entre-temps")
+            return
+        runtime.set_published(on)
+        print(f"[server] {runtime.spec.label} : "
+              + ("publié sur le réseau" if on else "décodé pour l'affichage seulement, "
+                                                   "son flux disparaît du réseau"))
+
+    def _recalibrate(self, mode_id):
+        """⚠️ Même tolérance que `_set_params` : le mode peut avoir été arrêté entre-temps."""
+        runtime = self.active.get(mode_id)
+        if runtime is None:
+            print(f"[server] repos ignoré : « {mode_id} » a été arrêté entre-temps")
+            return
+        self._begin_shared_rest([runtime], time.perf_counter())
 
     # --- API de commande interne (SPEC §12.1) --------------------------------
-    # Le tableau de bord web et, plus tard, l'adaptateur de commandes LSL passent tous les
-    # deux PAR ICI. Un seul chemin à tester, et le protocole de contrôle reste remplaçable
-    # sans réécrire le moteur.
+    # La console et, plus tard, l'adaptateur de commandes LSL passent tous les deux PAR ICI.
+    # Un seul chemin à tester, et le protocole de contrôle reste remplaçable sans réécrire le
+    # moteur.
     #
-    # Les commandes ne sont PAS appliquées par le thread qui les soumet : elles sont mises en
-    # file et exécutées par la boucle du moteur. C'est ce qui garantit que la session
-    # BrainFlow n'est touchée que depuis un seul thread — la partager entre le serveur web et
-    # la boucle d'acquisition produirait des corruptions qu'aucun test ne rattraperait.
+    # Les commandes ne sont PAS appliquées par le fil qui les soumet : elles sont mises en file
+    # et exécutées par la boucle. C'est ce qui garantit que la session BrainFlow n'est touchée
+    # que depuis un seul fil — la partager entre l'interface et l'acquisition produirait des
+    # corruptions qu'aucun test ne rattraperait.
+
+    COMMANDS = ("start_mode", "stop_mode", "set_params", "set_published", "recalibrate", "stop")
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
 
-        Une exception à la règle « accusé seulement » : la VALIDITÉ des paramètres est
-        vérifiée ici, tout de suite. Le refus d'une commande mal formée est une propriété du
-        message, pas de l'état du moteur, et la renvoyer immédiatement évite à l'étudiant de
-        chercher dans la console pourquoi son réglage n'a rien fait. Ce que `submit` ne
-        promet toujours pas, c'est que la commande ait été APPLIQUÉE : ça s'observe sur
-        `/api/state` ou sur le flux `status`.
+        Une exception à la règle « accusé seulement » : la VALIDITÉ est vérifiée ici, tout de
+        suite. Le refus d'une commande mal formée est une propriété du message, pas de l'état du
+        moteur, et la renvoyer immédiatement évite à l'étudiant de chercher pourquoi son réglage
+        n'a rien fait. Ce que `submit` ne promet toujours pas, c'est que la commande ait été
+        APPLIQUÉE : ça s'observe sur `snapshot()` ou sur le flux `status`.
         """
-        if command not in ("set_mode", "set_freqs", "recalibrate", "stop"):
-            return {"accepted": False, "reason": f"commande inconnue : {command}"}
-        if command == "set_mode":
-            mode = params.get("mode") or None
-            if mode not in (None, "ssvep", "neuro"):
-                return {"accepted": False,
-                        "reason": f"mode inconnu : {mode} (attendu : ssvep, neuro, ou aucun)"}
-        if command == "set_freqs":
-            freqs, reason = self._validate_freqs(params.get("freqs"), params.get("refresh"))
-            if freqs is None:
+        if command not in self.COMMANDS:
+            return {"accepted": False,
+                    "reason": f"commande inconnue : {command} "
+                              f"(connues : {', '.join(self.COMMANDS)})"}
+
+        if command == "stop":
+            self._commands.put(("stop", {}))
+            return {"accepted": True, "command": "stop"}
+
+        if command == "start_mode":
+            ids = params.get("ids") or ([params["id"]] if params.get("id") else [])
+            if not ids:
+                return {"accepted": False, "reason": "aucun mode demandé (id ou ids)"}
+            specs, reason = self._resolve(ids, doit_tourner=False)
+            if specs is None:
                 return {"accepted": False, "reason": reason}
-            params = {"freqs": freqs}
-        self._commands.put((command, params))
-        return {"accepted": True, "command": command}
+            wanted, values = params.get("params") or {}, {}
+            for spec in specs:
+                v, reason = contract.validate(spec, wanted.get(spec.id, {}))
+                if v is None:
+                    return {"accepted": False, "reason": reason}
+                values[spec.id] = v
+            ids = [s.id for s in specs]
+            self._commands.put(("start_mode", {"ids": ids, "params": values}))
+            return {"accepted": True, "command": "start_mode", "ids": ids}
 
-    def _validate_freqs(self, freqs, refresh=None):
-        """(liste de fréquences, None) si le jeu est exploitable, sinon (None, raison).
+        spec, reason = self._one(params.get("id"))
+        if spec is None:
+            return {"accepted": False, "reason": reason}
 
-        Refuser tôt plutôt que décoder dans le vide : une fréquence hors bande passante ou
-        deux cibles trop proches ne produisent AUCUNE erreur à l'exécution, seulement un
-        décodage qui ne détecte jamais rien. C'est le mode de panne le plus coûteux du SSVEP
-        parce qu'il ressemble à « l'utilisateur fixe mal ».
-        """
-        if self.mode != "ssvep":
-            return None, "le moteur n'est pas en mode SSVEP — choisis d'abord « Décoder le SSVEP »"
-        if not freqs and refresh:
-            freqs = [c["actual_hz"] for c in choose_frequencies(float(refresh))]
-        if not freqs:
-            return None, "aucune fréquence fournie"
-        try:
-            freqs = [float(f) for f in freqs]
-        except (TypeError, ValueError):
-            return None, "fréquences illisibles (attendu : des nombres en Hz)"
-        if len(freqs) < 2:
-            return None, "il faut au moins 2 cibles"
-        if len(freqs) > len(CH_NAMES):
-            return None, f"trop de cibles (maximum {len(CH_NAMES)})"
+        if command == "stop_mode":
+            self._commands.put(("stop_mode", {"id": spec.id}))
+        elif command == "set_published":
+            self._commands.put(("set_published",
+                                {"id": spec.id, "on": bool(params.get("on", True))}))
+        elif command == "recalibrate":
+            if spec.rest is None:
+                return {"accepted": False,
+                        "reason": f"« {spec.label} » n'a pas de repos à refaire"}
+            self._commands.put(("recalibrate", {"id": spec.id}))
+        elif command == "set_params":
+            # On fusionne sur les réglages COURANTS : un appelant peut n'envoyer que ce qu'il
+            # change, sans avoir à relire et renvoyer tout le reste.
+            merged = dict(self.active[spec.id].params)
+            merged.update(params.get("params") or {})
+            values, reason = contract.validate(spec, merged)
+            if values is None:
+                return {"accepted": False, "reason": reason}
+            self._commands.put(("set_params", {"id": spec.id, "params": values}))
+        return {"accepted": True, "command": command, "id": spec.id}
 
-        lo, hi = BANDPASS
-        hors = [f for f in freqs if not (lo <= f <= hi)]
-        if hors:
-            return None, (f"hors bande passante {lo:g}-{hi:g} Hz : "
-                          + ", ".join(f"{f:g}" for f in hors)
-                          + " — le filtre d'acquisition les supprime avant le décodage")
+    def _resolve(self, ids, doit_tourner):
+        """(specs dans l'ordre du registre, None) ou (None, raison). Refuse tôt et en clair."""
+        for mode_id in ids:
+            spec = registry.get(mode_id)
+            if spec is None:
+                connus = ", ".join(s.id for s in registry.runnable())
+                return None, f"mode inconnu : {mode_id} (disponibles : {connus})"
+            if spec.runtime_cls is None:
+                # C'est exactement ce que la tuile doit dire à l'étudiant : POURQUOI ça ne
+                # démarre pas, jamais un échec silencieux.
+                return None, f"« {spec.label} » ne tourne pas dans le moteur : {spec.unavailable}"
+            if not doit_tourner and spec.id in self.active:
+                return None, (f"« {spec.label} » est déjà démarré — utilise « refaire le repos » "
+                              f"pour le relancer")
+            if doit_tourner and spec.id not in self.active:
+                return None, f"« {spec.label} » n'est pas démarré"
+        return [s for s in registry.MODES if s.id in ids], None
 
-        # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
-        # 1/WINDOW_S ne sont pas séparables, quelle que soit la qualité du signal.
-        ecart_min = 1.0 / WINDOW_S
-        ordonne = sorted(freqs)
-        trop_proches = [(a, b) for a, b in zip(ordonne, ordonne[1:]) if b - a < ecart_min]
-        if trop_proches:
-            return None, (f"cibles trop proches pour une fenêtre de {WINDOW_S:g} s "
-                          f"(écart minimum {ecart_min:.2f} Hz) : "
-                          + ", ".join(f"{a:g} et {b:g}" for a, b in trop_proches))
-        return freqs, None
+    def _one(self, mode_id):
+        specs, reason = self._resolve([mode_id] if mode_id else [], doit_tourner=True)
+        if specs is None:
+            return None, reason
+        if not specs:
+            return None, "aucun mode désigné (id manquant)"
+        return specs[0], None
+
+    def _apply(self, command, params):
+        if command == "stop":
+            self.stop()
+        elif command == "start_mode":
+            self._start(params["ids"], params["params"], time.perf_counter())
+        elif command == "stop_mode":
+            self._stop_mode(params["id"])
+        elif command == "set_params":
+            self._set_params(params["id"], params["params"])
+        elif command == "set_published":
+            self._set_published(params["id"], params["on"])
+        elif command == "recalibrate":
+            self._recalibrate(params["id"])
 
     def _drain_commands(self):
         while True:
@@ -307,74 +386,66 @@ class EngineServer:
             except Exception as e:  # noqa: BLE001 - une commande fautive ne doit pas tuer le moteur
                 print(f"[server] commande '{command}' rejetée : {e}")
 
-    def _apply(self, command, params):
-        if command == "stop":
-            self.stop()
-        elif command == "recalibrate":
-            self._restart_baseline()
-        elif command == "set_freqs":
-            self._set_freqs(params["freqs"])
-        elif command == "set_mode":
-            mode = params.get("mode") or None
-            if mode == self.mode and mode is not None:
-                self._restart_baseline()
-                return
-            self.mode = mode
-            self.decoder = None
-            self.ssvep_out = None
-            self.freqs = []
-            self.neuro = None
-            self.neuro_out = None
-            self._neuro_state = None
-            if mode == "ssvep":
-                self._setup_ssvep(params.get("freqs"), params.get("refresh"))
-                self._restart_baseline()
-            elif mode == "neuro":
-                self._setup_neuro()
-                self._restart_baseline()
-            print(f"[server] mode -> {self.mode or 'aucun (diffusion seule)'}")
+    # --- la phase globale et l'état publié ------------------------------------
+    # Le contrat public de `status` emploie « baseline » et « decoding » depuis le début ; les
+    # runtimes emploient le vocabulaire de la spec (« rest », « running »). On traduit ici
+    # plutôt que de renommer une valeur du contrat pour un confort interne.
+    _PHASES_PUBLIQUES = {"warmup": "warmup", "rest": "baseline", "running": "decoding"}
 
-    def _set_freqs(self, freqs):
-        """Change les fréquences décodées en cours de séance (contrôle demandé par §12.2).
+    @property
+    def phase(self):
+        """La phase la MOINS avancée parmi les modes qui mesurent un repos.
 
-        Deux conséquences qu'on ne peut pas contourner, seulement assumer :
-
-        1. **Le flux `decoded_ssvep` est RECRÉÉ.** Les fréquences ne sont pas qu'un réglage
-           interne : elles nomment les voies du flux (`score_15Hz`) et figurent dans ses
-           métadonnées. Or les métadonnées LSL sont figées à la création. Garder l'ancien
-           flux reviendrait à publier des étiquettes fausses — un client afficherait « 15 Hz »
-           pour une cible à 12. On préfère couper : **les clients connectés doivent se
-           réabonner** (le NOM du flux, lui, ne change pas, donc un re-`resolve` suffit).
-        2. **Le plancher de repos est refait.** Il est mesuré PAR FRÉQUENCE ; le réutiliser
-           après changement comparerait les ρ d'une cible au bruit de fond d'une autre.
+        « streaming » quand aucun mode actif n'a de repos à faire : c'est le cas du brut seul.
         """
-        ancien = list(self.freqs)
-        self.ssvep_out = None       # libère l'outlet avant d'en créer un autre
-        self._setup_ssvep(freqs)
-        self._restart_baseline()
-        print(f"[server] fréquences {ancien} -> {self.freqs} Hz ; "
-              "flux decoded_ssvep RECRÉÉ (les clients doivent se réabonner)")
+        phases = [r.phase for r in self.active.values() if r.spec.rest is not None]
+        if not phases:
+            return "streaming"
+        for interne in ("warmup", "rest", "running"):
+            if interne in phases:
+                return self._PHASES_PUBLIQUES[interne]
+        return "streaming"
 
-    def _restart_baseline(self):
-        """Refait chauffe + repos. Indispensable après avoir touché une électrode : un
-        plancher mesuré pendant qu'un contact se stabilisait reste faux toute la séance."""
-        self._baseline_samples, self._baseline_sigmas = [], []
-        self._sigma_ref, self._baseline_until = None, None
-        self._baseline_done = self._baseline_warned = False
-        self._warmup_until = time.perf_counter() + self._warmup_s
-        self._decoded = None
-        if self.neuro is not None:
-            # Un NeuroDecoder neuf : ses échelles (médiane/MAD des indices, σ et EMG de
-            # référence) sont TOUTES issues du repos. En garder une partie mélangerait deux
-            # états du casque, ce qui est précisément ce qu'un « refaire le repos » corrige.
-            self.neuro = NeuroDecoder(self.acq.fs)
-            self._neuro_samples = []
-            self._neuro_state = None
-        print(f"[server] repos relancé : stabilisation {self._warmup_s:.0f} s "
-              f"puis {self._baseline_s:.0f} s sans rien fixer")
+    def _status_key(self, running):
+        """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push).
+
+        Un compteur glissé ici défait la déduplication : mesuré une fois à 19,6 Hz de messages
+        d'état au lieu de 0,5 Hz, assez discret pour passer inaperçu, assez bruyant pour noyer
+        un client.
+        """
+        return (running, self.synthetic, self.phase,
+                tuple((mid, r.phase, r.published) for mid, r in sorted(self.active.items())))
+
+    def _state(self, running):
+        streams = ["quality", "status"]
+        for spec in registry.MODES:
+            runtime = self.active.get(spec.id)
+            if runtime is not None and runtime.published and spec.stream:
+                streams.append(spec.stream)
+        actifs = [mid for mid in self.active]
+        # `mode` (au singulier) reste publié pour ne pas casser un client écrit contre le flux
+        # `status` d'hier : il porte le premier mode DÉCODÉ actif, ou null. `modes` porte la
+        # vérité complète. Le jour où plusieurs modes décodent, `mode` en montre un seul — c'est
+        # assumé, et c'est pour ça que `modes` existe.
+        decodes = [mid for mid in actifs if mid != "raw"]
+        state = {
+            "running": running,
+            "board": "synthetic" if self.synthetic else "unicorn",
+            "instance": self.instance,
+            "fs_hz": float(self.acq.fs),
+            "channels": list(CH_NAMES),
+            "mode": decodes[0] if decodes else None,
+            "modes": actifs,
+            "phase": self.phase,
+            "samples_published": self.samples,
+            "streams": [stream_name(s) for s in streams],
+        }
+        if self.rest_instruction and self.phase in ("warmup", "baseline"):
+            state["instruction"] = self.rest_instruction
+        return state
 
     def snapshot(self):
-        """État complet pour un afficheur, en lecture seule. Sûr depuis un autre thread.
+        """État complet pour un afficheur, en lecture seule. Sûr depuis un autre fil.
 
         On rend un dictionnaire déjà construit plutôt que des références vers l'état vivant :
         l'appelant ne peut donc pas lire une valeur à moitié écrite par la boucle.
@@ -382,52 +453,24 @@ class EngineServer:
         state = self._state(not self._stop)
         state.update({
             "quality": self._quality,
-            "decoded": self._decoded,
-            "neuro": self._neuro_state,
-            "baseline": self._baseline_report,
-            "warmup_s": self._warmup_s,
-            "baseline_s": self._baseline_s,
+            "rest_instruction": self.rest_instruction,
+            "modes_state": {mid: r.state() for mid, r in self.active.items()},
+            "catalog": registry.catalog(),
         })
         return state
 
-    def _status_key(self, running):
-        """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push)."""
-        return (running, self.synthetic, self.mode, self.phase)
+    def recent_window(self, seconds):
+        """Copie des `seconds` dernières secondes de signal BRUT (n, 8), ou None.
 
-    def _state(self, running):
-        streams = ["raw", "quality", "status"]
-        if self.decoder is not None:
-            streams.append("decoded_ssvep")
-        if self.neuro is not None:
-            streams.append("decoded_neuro")
-        state = {
-            "running": running,
-            "board": "synthetic" if self.synthetic else "unicorn",
-            "instance": self.instance,
-            "fs_hz": float(self.acq.fs),
-            "channels": list(CH_NAMES),
-            "mode": self.mode,
-            "phase": self.phase,
-            "samples_published": self.samples,
-            "streams": [stream_name(s) for s in streams],
-        }
-        if self.decoder is not None:
-            state["frequencies_hz"] = self.freqs
-            # Ce que le client doit AFFICHER à l'utilisateur pendant le repos : sans cette
-            # consigne, le plancher est mesuré pendant que l'étudiant fixe une cible, et
-            # les seuils sortent faux pour toute la séance.
-            state["instruction"] = ("Ne fixe AUCUNE cible : mesure du bruit de fond."
-                                    if self.phase == "baseline" else "Fixe une cible.")
-        if self.neuro is not None:
-            state["indices"] = list(DecodedNeuroPublisher.KEYS)
-            # Ici le repos ne sert pas à un seuil mais à un ZÉRO personnel : sans consigne, les
-            # échelles se calent pendant que l'utilisateur travaille, et tout le reste de la
-            # séance se lit contre un « repos » qui n'en était pas un.
-            state["instruction"] = (
-                "Repos : regarde l'écran, immobile et détendu — on cale TON zéro du jour."
-                if self.phase == "baseline"
-                else "Vaque à ton activité : les indices se lisent en écart à ton repos.")
-        return state
+        Accesseur PUBLIC pour un afficheur. Le tampon est réécrit par le fil d'acquisition : le
+        lire directement depuis le fil Qt donnerait, tôt ou tard, une vue à moitié écrite. On
+        rend donc une copie — c'est quelques centaines de Ko, payés une fois par rafraîchissement.
+        """
+        buffer = self.recent
+        if buffer is None or len(buffer) == 0:
+            return None
+        n = max(1, int(seconds * self.acq.fs))
+        return np.array(buffer[-n:], dtype=float, copy=True)
 
     def _publish_quality(self, lsl_ts):
         """σ par voie sur les dernières secondes, calculé sur du signal FILTRÉ.
@@ -440,22 +483,22 @@ class EngineServer:
         avec l'écran `signal_check` de l'appli : deux mesures de qualité qui divergeraient
         seraient pires que pas de mesure du tout.
         """
-        sigmas = self.acq.sigma_from_block(self._recent)
+        sigmas = self.acq.sigma_from_block(self.recent)
         if sigmas is None:
             return
         self.quality_out.push(sigmas, lsl_ts)
         # Référence décrochée : invisible sur les σ, fatale pour la séance. On le dit
         # une fois par changement d'état plutôt qu'à chaque seconde.
-        common = self.acq.common_mode(self._recent)
+        common = self.acq.common_mode(self.recent)
         # Sur le board de test il n'y a aucune électrode : un verdict sur la référence y serait
         # un contresens. On publie la mesure (honnête) mais jamais le verdict.
         lost = reference_lost(common) and not self.synthetic
         # `None` plutôt que NaN partout : l'état part en JSON, où NaN n'existe pas et fait
         # échouer la sérialisation entière (page blanche au lieu d'une valeur manquante).
         self._quality = {
-            "sigmas": [_json_float(v) for v in sigmas],
+            "sigmas": [json_float(v) for v in sigmas],
             "verdicts": [verdict_from_sigma(float(v)) for v in sigmas],
-            "common_mode": _json_float(common, digits=3),
+            "common_mode": json_float(common, digits=3),
             "reference_lost": bool(lost),
         }
         if lost != self._reference_lost and not self.synthetic:
@@ -467,231 +510,32 @@ class EngineServer:
             else:
                 print(f"[server] référence OK (corrélation inter-voies {common:.2f})")
 
-    def _tick_ssvep(self, lsl_ts):
-        """Un pas de décodage SSVEP : d'abord mesurer le repos, ensuite décider."""
-        window = self.acq.occipital_window(self._recent)
-        if window is None:
-            return
-
-        # Chauffe : on jette les premières secondes au lieu de les verser dans le plancher.
-        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
-            return
-
-        if not self._baseline_done:
-            self._collect_baseline(window)
-            return
-
-        # Rejet d'artefact : une fenêtre dont l'amplitude explose par rapport au repos ne
-        # contient pas d'EEG (mouvement, clignement). En décoder des ρ produirait des
-        # détections aléatoires ; on publie « aucune cible » plutôt que du bruit habillé.
-        sd = float(window.std(axis=0).mean())
-        if self._sigma_ref and sd > ARTIFACT_SIGMA_RATIO * self._sigma_ref:
-            self.ssvep_out.push(-1, 0.0, 0.0, [0.0] * len(self.freqs), lsl_ts)
-            self._remember_decision(-1, [0.0] * len(self.freqs), artifact=True)
-            self._log_decision(-1, [0.0] * len(self.freqs), artifact=True)
-            return
-
-        freq, scores = self.decoder.classify(window)
-        ordered = [scores[f] for f in self.freqs]
-        if freq is None:
-            self.ssvep_out.push(-1, 0.0, max(ordered), ordered, lsl_ts)
-            self._remember_decision(-1, ordered)
-            self._log_decision(-1, ordered)
-        else:
-            index = self.freqs.index(freq)
-            self.ssvep_out.push(index, freq, scores[freq], ordered, lsl_ts)
-            self._remember_decision(index, ordered)
-            self._log_decision(index, ordered)
-
-    def _tick_neuro(self, lsl_ts):
-        """Un pas de neuro-monitoring : chauffe, puis repos, puis publication continue."""
-        n = int(NEURO_WINDOW_S * self.acq.fs)
-        if len(self._recent) < n:
-            return
-        # Fenêtre BRUTE : le passe-bande d'acquisition couperait le bas du θ. Le décodeur
-        # applique lui-même son propre passe-haut avant la PSD.
-        sample = self.neuro.sample(self._recent[-n:])
-        if sample is None:
-            return
-
-        if self._warmup_until is not None and time.perf_counter() < self._warmup_until:
-            return
-
-        if not self._baseline_done:
-            if self._baseline_until is None:
-                self._baseline_until = time.perf_counter() + self._baseline_s
-            self._neuro_samples.append(sample)
-            if time.perf_counter() < self._baseline_until:
-                return
-            if not self.neuro.fit_baseline(self._neuro_samples):
-                if not self._baseline_warned:
-                    self._baseline_warned = True
-                    print(f"[server] repos prolongé : {len(self._neuro_samples)} fenêtres, "
-                          "pas encore de quoi caler les échelles")
-                return
-            centres = "  ".join(f"{k}: repos≈{self.neuro.norm.center(k):.3f}"
-                                for k in self.neuro.norm.mu)
-            print(f"[server] échelles calées ({len(self._neuro_samples)} fenêtres) — {centres}")
-            print(f"[server] publication sur {stream_name('decoded_neuro')} "
-                  "(z contre CE repos — ni comparable entre personnes, ni absolu)")
-            self._baseline_report = {
-                "kind": "neuro",
-                "windows": len(self._neuro_samples),
-                "targets": [{"index": k, "rest_center": _json_float(self.neuro.norm.center(k), 4)}
-                            for k in self.neuro.norm.mu],
-            }
-            self._baseline_done = True
-            return
-
-        out = self.neuro.step(sample)
-        self.neuro_out.push(out["z"], out["artifact"], lsl_ts)
-        self._neuro_state = {
-            "z": {k: _json_float(v) for k, v in out["z"].items()},
-            "raw": {k: _json_float(v, 4) for k, v in (out["raw"] or {}).items()},
-            "artifact": bool(out["artifact"]),
-            "reason": out["reason"],
-            "artifacts": self.neuro.artifacts,
-        }
-        now = time.perf_counter()
-        if now - self._last_log >= 2.0:
-            self._last_log = now
-            print("[neuro] z " + "  ".join(f"{k}={v:+.2f}" for k, v in out["z"].items())
-                  + f"  artefacts={self.neuro.artifacts}"
-                  + (f"  ({out['reason']})" if out["artifact"] else ""))
-
-    def _remember_decision(self, index, scores, artifact=False):
-        self._decoded = {
-            "target_index": int(index),
-            "freq_hz": float(self.freqs[index]) if index >= 0 else 0.0,
-            "scores": [round(float(v), 2) for v in scores],
-            "artifact": bool(artifact),
-            "threshold": float(self.decoder.z_min),
-        }
-
-    def _log_decision(self, index, scores, artifact=False):
-        """Trace la décision en console ~1×/s.
-
-        Le moteur est fait pour être consommé par un client, mais pendant une séance casque
-        on veut voir ce qu'il décode SANS dépendre d'un troisième terminal branché au bon
-        moment. Les scores sont affichés à côté de la décision : c'est ce qui permet de dire
-        si une non-détection vient d'un signal absent ou d'un seuil trop haut.
-        """
-        now = time.perf_counter()
-        if now - self._last_log < 1.0:
-            return
-        self._last_log = now
-        detail = "  ".join(f"{f:g}Hz z={s:+5.2f}" for f, s in zip(self.freqs, scores))
-        if artifact:
-            verdict = "ARTEFACT (fenêtre rejetée)"
-        elif index < 0:
-            verdict = f"— (rien au-dessus de z={self.decoder.z_min})"
-        else:
-            verdict = f"CIBLE {index} ({self.freqs[index]:g} Hz)"
-        print(f"[ssvep] {verdict:<34} {detail}")
-
-    def _collect_baseline(self, window):
-        """Accumule le plancher de ρ au repos, puis ajuste le décodeur.
-
-        Pourquoi c'est nécessaire alors que le SSVEP est réputé « sans calibration » : chaque
-        fréquence a un fond de corrélation DIFFÉRENT au repos, selon sa proximité au pic alpha
-        du jour. Un seuil commun est donc structurellement injuste — mesuré sur ce casque, une
-        cible proche de l'alpha n'émettait jamais alors que son ρ moyen dépassait le seuil.
-        Ce n'est pas un modèle appris, juste un étalonnage de quelques secondes, à refaire à
-        chaque séance. Le client DOIT afficher la consigne « ne fixe rien » (voir `_state`).
-        """
-        # Le décompte part de la PREMIÈRE fenêtre exploitable, pas du démarrage : il faut
-        # d'abord WINDOW_S + la marge de filtre (2,5 s) pour que le tampon en produise une.
-        # Compter depuis le lancement rognerait le repos d'autant — mesuré : 3 fenêtres
-        # récoltées au lieu de 15, donc plancher rejeté faute d'effectif.
-        if self._baseline_until is None:
-            self._baseline_until = time.perf_counter() + self._baseline_s
-
-        self._baseline_samples.append(self.decoder.scores(window))
-        self._baseline_sigmas.append(float(window.std(axis=0).mean()))
-        if time.perf_counter() < self._baseline_until:
-            return
-
-        if not self.decoder.fit_baseline(self._baseline_samples):
-            # Pas encore assez de fenêtres pour un plancher fiable. On PROLONGE le repos au
-            # lieu de basculer sur les ρ bruts : l'échelle de décision est annoncée dans les
-            # métadonnées du flux, en changer en cours de route casserait le contrat. Les
-            # fenêtres arrivent à 5 Hz, l'attente supplémentaire se compte en secondes.
-            if not self._baseline_warned:
-                self._baseline_warned = True
-                print(f"[server] repos prolongé : {len(self._baseline_samples)} fenêtres, "
-                      f"pas encore de quoi mesurer un plancher fiable")
-            return
-
-        self._sigma_ref = float(np.median(self._baseline_sigmas))
-        line = "  ".join(f"{f:g}Hz: μ={m:.2f} σ={s:.2f}"
-                         for f, (m, s) in self.decoder.baseline.items())
-        print(f"[server] plancher de repos ({len(self._baseline_samples)} fenêtres) — {line}")
-
-        # Un plancher trop DISPERSÉ rend le seuil inatteignable, en silence : on décide sur
-        # z=(ρ-μ)/σ, donc un σ gonflé exige un ρ que le SSVEP ne produit jamais en électrodes
-        # sèches. Vécu sur casque le 2026-07-27 : σ=0,19 => il aurait fallu ρ≈0,94. Mieux vaut
-        # le dire tout de suite que laisser l'utilisateur fixer une cible qui ne peut pas sortir.
-        for f, (mu, sd) in self.decoder.baseline.items():
-            needed = mu + self.decoder.z_min * sd
-            if needed > 0.85:
-                print(f"[server] ⚠️  {f:g} Hz : plancher trop dispersé (μ={mu:.2f} σ={sd:.2f}) "
-                      f"-> il faudrait ρ={needed:.2f} pour détecter. Cible quasi INDÉTECTABLE : "
-                      f"contact des électrodes occipitales, ou refaire le repos immobile.")
-        print(f"[server] σ de référence {self._sigma_ref:.1f} -> rejet d'artefact au-delà "
-              f"de {ARTIFACT_SIGMA_RATIO * self._sigma_ref:.0f}")
-        print(f"[server] décodage en cours sur {stream_name('decoded_ssvep')} "
-              f"(échelle z, seuil {self.decoder.z_min}) — fixe une cible")
-        self._baseline_report = {
-            "kind": "ssvep",
-            "windows": len(self._baseline_samples),
-            "targets": [{"freq_hz": float(f), "mu": round(mu, 3), "sigma": round(sd, 3),
-                         "rho_needed": round(mu + self.decoder.z_min * sd, 2)}
-                        for f, (mu, sd) in self.decoder.baseline.items()],
-        }
-        self._baseline_done = True
-
     def run(self, duration_s=None, baseline_s=None, warmup_s=None):
         """Boucle principale. `duration_s=None` = jusqu'à Ctrl+C.
 
-        `baseline_s` / `warmup_s` à None = les durées PROPRES AU MODE, posées par son
-        `_setup_*` (SSVEP 8 s + 15 s ; neuro 25 s + 15 s — plus long parce que ses échelles
-        reposent sur une médiane et une MAD, qui demandent plus de fenêtres qu'une moyenne).
-        Les passer explicitement les remplace, pour les deux modes.
+        `baseline_s` / `warmup_s` à None = les durées PROPRES À CHAQUE MODE, posées par son
+        contrat. Les passer explicitement les remplace, pour tous les modes — ce dont les tests
+        headless ont besoin pour ne pas durer 40 s chacun.
         """
-        if baseline_s is not None:
-            self._baseline_s = baseline_s
-        if warmup_s is not None:
-            self._warmup_s = warmup_s
-        # Le moteur écrit des µ, des σ et des accents. Sous PowerShell, stdout est en cp1252
-        # par défaut : un simple print tuait alors le thread d'acquisition sur un
-        # UnicodeEncodeError. On le fait ici plutôt que dans le seul `__main__`, parce que
-        # le moteur est aussi utilisé comme bibliothèque (tableau de bord, tests) — et
-        # qu'un échec d'AFFICHAGE ne doit jamais interrompre une ACQUISITION.
+        self._warmup_override = warmup_s
+        self._rest_override = baseline_s
+        # Le moteur écrit des µ, des σ et des accents. Sous PowerShell, stdout est en cp1252 par
+        # défaut : un simple print tuait alors le fil d'acquisition sur un UnicodeEncodeError. On
+        # le fait ici plutôt que dans le seul `__main__`, parce que le moteur est aussi utilisé
+        # comme bibliothèque (console, tests) — et qu'un échec d'AFFICHAGE ne doit jamais
+        # interrompre une ACQUISITION.
         use_utf8_console()
 
         started = time.perf_counter()
-        last_quality = last_status = last_decode = 0.0
+        last_quality = last_status = 0.0
 
         with self.acq:
-            print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz instance={self.instance}")
-            for suffix in ("raw", "quality", "status"):
+            print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz "
+                  f"instance={self.instance}")
+            for suffix in ("quality", "status"):
                 print(f"[server] flux LSL publie : {stream_name(suffix)}")
-            if self.decoder is not None:
-                print(f"[server] flux LSL publie : {stream_name('decoded_ssvep')} "
-                      f"(silencieux pendant le repos)")
-                print(f"[server] mode {self.mode} — cibles "
-                      + ", ".join(f"{f:g} Hz" for f in self.freqs))
-                print(f"[server] stabilisation {self._warmup_s:.0f} s, puis REPOS "
-                      f"{self._baseline_s:.0f} s : ne fixe AUCUNE cible (mesure du bruit de fond)")
-                self._warmup_until = time.perf_counter() + self._warmup_s
-            elif self.neuro is not None:
-                print(f"[server] flux LSL publie : {stream_name('decoded_neuro')} "
-                      f"(silencieux pendant le repos)")
-                print(f"[server] mode {self.mode} — indices "
-                      + ", ".join(DecodedNeuroPublisher.KEYS) + " (PASSIF : aucune commande)")
-                print(f"[server] stabilisation {self._warmup_s:.0f} s, puis REPOS "
-                      f"{self._baseline_s:.0f} s : immobile et détendu, on cale TON zéro du jour")
-                self._warmup_until = time.perf_counter() + self._warmup_s
+            self._start([s.id for s, _ in self._pending],
+                        {s.id: v for s, v in self._pending}, time.perf_counter())
             self.status_out.push(self._state(True), key=self._status_key(True), force=True)
 
             while not self._stop:
@@ -700,28 +544,26 @@ class EngineServer:
                 if duration_s is not None and now - started >= duration_s:
                     break
 
+                # UNE seule lecture par tour, quels que soient les modes actifs :
+                # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
+                # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
                 eeg, ts_unix = self.acq.get_new_data()
+                self.new_block = None
                 if eeg is not None and len(eeg):
-                    self.samples += self.raw_out.push(eeg, self.clock.to_lsl(ts_unix))
-                    self._recent = np.vstack([self._recent, eeg])[-self.keep:]
+                    self.new_block = (eeg, self.clock.to_lsl(ts_unix))
+                    self.recent = np.vstack([self.recent, eeg])[-self.keep:]
 
                 if now - last_quality >= QUALITY_PERIOD_S:
                     self._publish_quality(self.clock.to_lsl(time.time()))
                     last_quality = now
 
-                if self.decoder is not None:
-                    period = 1.0 / (SSVEP_BASELINE_SAMPLE_HZ if not self._baseline_done
-                                    else SSVEP_DECODE_HZ)
-                    if now - last_decode >= period:
-                        self._tick_ssvep(self.clock.to_lsl(time.time()))
-                        last_decode = now
-                elif self.neuro is not None:
-                    if now - last_decode >= 1.0 / NEURO_UPDATE_HZ:
-                        self._tick_neuro(self.clock.to_lsl(time.time()))
-                        last_decode = now
+                for mode_id, runtime in list(self.active.items()):
+                    if now - self._last_tick.get(mode_id, 0.0) >= runtime.period_s():
+                        runtime.tick(self, self.clock.to_lsl(time.time()), now)
+                        self._last_tick[mode_id] = now
 
-                # Publié quand l'état change, plus un rappel périodique pour les clients qui
-                # se connectent après le démarrage (LSL ne rejoue pas le passé).
+                # Publié quand l'état change, plus un rappel périodique pour les clients qui se
+                # connectent après le démarrage (LSL ne rejoue pas le passé).
                 due = now - last_status >= STATUS_PERIOD_S
                 if self.status_out.push(self._state(True), key=self._status_key(True),
                                         force=due) and due:
@@ -730,6 +572,21 @@ class EngineServer:
                 time.sleep(POLL_S)
 
             self.status_out.push(self._state(False), key=self._status_key(False), force=True)
+            for runtime in self.active.values():
+                runtime.close()
+            # Un `ModeRuntime` garde `self.engine` : `self.active` référence donc `self`, qui
+            # référence `self.active` — un cycle. CPython ne le casse pas par comptage de
+            # références, seulement par un passage du ramasse-miettes CYCLIQUE, à une date que
+            # rien ici ne contrôle. Tant que le cycle tient, la session BrainFlow (`self.acq`)
+            # reste en vie APRÈS le retour de `run()`. Mesuré le 2026-07-28 : deux `EngineServer`
+            # synthétiques lancés l'un après l'autre dans le même processus, le second échoue sur
+            # `get_new_data()` avec `BOARD_NOT_CREATED_ERROR` — parce que la session du PREMIER,
+            # toujours vivante quelque part en mémoire, n'a pas encore été nettoyée quand la
+            # seconde démarre. Vider `active` casse le cycle : `self` redevient collectable par
+            # simple comptage de références, aussi déterministe qu'avant l'introduction des
+            # runtimes. Sans ce test-là (deux moteurs de suite, comme le fait `--smoke`), rien ne
+            # révèle le problème — un seul moteur par processus ne le voit jamais.
+            self.active = {}
 
         elapsed = time.perf_counter() - started
         print(f"[server] arrêt : {self.samples} échantillons publiés en {elapsed:.1f} s "
@@ -771,7 +628,7 @@ def _smoke():
     from pylsl import StreamInlet, resolve_byprop
 
     instance = "smoke"
-    server = EngineServer(synthetic=True, instance=instance)
+    server = EngineServer(synthetic=True, instance=instance)               # inchangé (raw seul)
 
     # Garde-fou : `_filter` ne doit JAMAIS modifier son entrée. Le serveur lui passe un
     # tampon persistant ; s'il était filtré sur place, les échantillons bruts suivants
@@ -859,7 +716,7 @@ def _smoke_neuro():
     from pylsl import StreamInlet
 
     instance = "smoke-neuro"
-    server = EngineServer(synthetic=True, mode="neuro", instance=instance)
+    server = EngineServer(synthetic=True, modes=("raw", "neuro"), instance=instance)
     thread = threading.Thread(
         target=server.run,
         kwargs={"duration_s": 14.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
@@ -934,14 +791,15 @@ def _smoke_ssvep():
 
     freqs = [15.0, 20.0, 8.57]
     instance = "smoke-ssvep"
-    server = EngineServer(synthetic=True, mode="ssvep", freqs=freqs, instance=instance)
+    server = EngineServer(synthetic=True, modes=("raw", "ssvep"),
+                          params={"ssvep": {"freqs": freqs}}, instance=instance)
     thread = threading.Thread(
         target=server.run,
         kwargs={"duration_s": 14.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
     thread.start()
 
     # Le flux doit exister DÈS le démarrage, avant même la fin du repos : c'est ce qui
-    # permet à un client de le trouver au lancement (cf. _setup_ssvep). Un délai court
+    # permet à un client de le trouver au lancement (cf. modes/ssvep.py). Un délai court
     # vérifie donc une vraie propriété du contrat, pas seulement la présence du flux.
     found = _resolve_own("decoded_ssvep", instance, 5.0)
     if not found:
@@ -996,21 +854,28 @@ def _parse_args(argv):
     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
     p.add_argument("--serial", default=None, help="numéro de série Unicorn (si plusieurs appairés)")
     p.add_argument("--duration", type=float, default=None, help="durée en s (défaut : jusqu'à Ctrl+C)")
-    p.add_argument("--mode", choices=["ssvep", "neuro"], default=None,
-                   help="décodeur à publier en plus du brut (défaut : aucun). ssvep = cible "
-                        "regardée (actif, demande un stimulus côté client) ; neuro = charge / "
-                        "somnolence / engagement (passif, aucun stimulus)")
+    p.add_argument("--mode", default=None,
+                   help="décodeurs à démarrer, séparés par des virgules : "
+                        + ", ".join(s.id for s in registry.runnable() if s.id != "raw")
+                        + ". Ils tournent EN MÊME TEMPS et partagent une seule phase de repos. "
+                          "Le brut est diffusé en plus, sauf avec --no-raw")
+    p.add_argument("--no-raw", action="store_true",
+                   help="ne pas diffuser le signal brut (le décodage continue)")
     p.add_argument("--freqs", default=None,
-                   help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.57")
+                   help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.57 "
+                        "(mode ssvep uniquement)")
     p.add_argument("--refresh", type=float, default=None,
                    help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
-                        "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce refresh")
+                        "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce "
+                        "refresh (mode ssvep uniquement)")
     p.add_argument("--baseline", type=float, default=None,
-                   help=f"durée du repos initial en s (défaut : {SSVEP_BASELINE_S:g} en ssvep, "
-                        f"{NEURO_BASELINE_S:g} en neuro)")
+                   help="durée du repos initial en s, pour TOUS les modes démarrés ensemble "
+                        "(défaut : celle du contrat de chaque mode, voir modes/ssvep.py et "
+                        "modes/neuro.py)")
     p.add_argument("--warmup", type=float, default=None,
-                   help=f"stabilisation jetée avant le repos, dérive DC des électrodes sèches "
-                        f"(défaut : {SSVEP_WARMUP_S:g} s)")
+                   help="stabilisation jetée avant le repos, dérive DC des électrodes sèches, "
+                        "pour TOUS les modes démarrés ensemble (défaut : celle du contrat de "
+                        "chaque mode)")
     p.add_argument("--id", dest="instance", default=None,
                    help="identité de cette instance (défaut : n° de série du casque). Distingue "
                         "les moteurs quand plusieurs tournent sur le même réseau — une salle de TP")
@@ -1025,10 +890,22 @@ if __name__ == "__main__":
     if args.smoke:
         sys.exit(0 if _smoke() else 1)
 
-    freqs = [float(f) for f in args.freqs.split(",")] if args.freqs else None
+    modes = [m.strip() for m in (args.mode or "").split(",") if m.strip()]
+    if not args.no_raw:
+        modes.insert(0, "raw")
+    params = {}
+    if args.freqs:
+        params["ssvep"] = {"freqs": [float(f) for f in args.freqs.split(",")]}
+    elif args.refresh:
+        params["ssvep"] = {"freqs": [c["actual_hz"] for c in choose_frequencies(args.refresh)]}
+    # `_prepare` ignore de toute façon un réglage dont le mode n'a pas été demandé (elle boucle
+    # sur `registry.MODES` et ne lit `params.get(spec.id)` que pour les id présents dans
+    # `modes`) : filtrer ici est donc redondant pour la validité. On le fait quand même — un
+    # `--freqs` donné sans `--mode ssvep` ne doit pas laisser un réglage mort dans ce qui part
+    # au moteur, même inoffensif.
+    params = {mode_id: settings for mode_id, settings in params.items() if mode_id in modes}
     engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
-                          mode=args.mode, freqs=freqs, refresh=args.refresh,
-                          instance=args.instance)
+                          modes=modes, params=params, instance=args.instance)
     # Ctrl+C doit fermer PROPREMENT la session BrainFlow : une session laissée ouverte
     # empêche la suivante de s'ouvrir (BOARD_NOT_READY au relancement).
     signal.signal(signal.SIGINT, lambda *_: engine.stop())
