@@ -179,6 +179,17 @@ class QualityPublisher:
         return True
 
 
+def ssvep_channel_labels(freqs):
+    """Voies du flux `decoded_ssvep` pour ce jeu de fréquences.
+
+    Une seule fonction pour le publieur ET pour le `ModeSpec` : les voies sont du contrat public
+    (un client les lit dans les métadonnées), et deux façons de les construire finiraient par
+    diverger d'un espace ou d'une décimale.
+    """
+    return (["target_index", "freq_hz", "confidence"]
+            + [f"score_{float(f):g}Hz" for f in freqs])
+
+
 class DecodedSSVEPPublisher:
     """`<PREFIX>_decoded_ssvep` : quelle cible l'utilisateur regarde, ~5 Hz.
 
@@ -195,8 +206,7 @@ class DecodedSSVEPPublisher:
 
     def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), instance=""):
         self.freqs = [float(f) for f in freqs]
-        labels = ["target_index", "freq_hz", "confidence"]
-        labels += [f"score_{f:g}Hz" for f in self.freqs]
+        labels = ssvep_channel_labels(self.freqs)
         info = StreamInfo(stream_name("decoded_ssvep"), "Decoded", len(labels),
                           IRREGULAR_RATE, "float32", _source_id("decoded_ssvep", instance))
         chans = info.desc().append_child("channels")
