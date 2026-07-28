@@ -280,20 +280,36 @@ def _selftest():
     chk(values is None and reason and "dépasse le maximum" in reason,
         f"un float_list borné sans contrainte reste borné : {reason}")
 
-    # « Brancher un client » : le texte doit être du Python VALIDE, et porter les vrais noms.
+    # « Brancher un client » : un extrait par mode, vérifié sur TOUT le registre.
+    # La version précédente ne testait que le SSVEP, dont le résumé n'a par hasard aucun accent —
+    # elle aurait donc validé une règle fausse pour le brut (« µV ») et le neuro (« écart »).
+    from core.modes import registry
+
+    for spec in registry.MODES:
+        extrait = client_snippet(spec)
+        if not spec.stream:
+            chk(extrait == "", f"{spec.id} ne publie rien -> aucun extrait proposé")
+            continue
+        try:
+            compile(extrait, f"<{spec.id}>", "exec")
+            compile_ok = True
+        except SyntaxError as e:
+            compile_ok, erreur = False, e
+        chk(compile_ok, f"{spec.id} : l'extrait est du Python valide"
+                        + ("" if compile_ok else f" — {erreur}"))
+        chk(_stream_name(spec.stream) in extrait, f"{spec.id} : l'extrait nomme le vrai flux")
+        chk(all(v in extrait for v in spec.channels_for(spec.defaults())),
+            f"{spec.id} : toutes les voies annoncées figurent dans l'extrait")
+        chk("open_stream" in extrait,
+            f"{spec.id} : open_stream est là — sans lui, un client perd le début du signal")
+
+    # Test complémentaire : les voies DÉPENDENT des réglages (SSVEP avec freqs différentes).
+    # La boucle ci-dessus ne teste que les défauts.
     from core.modes import ssvep as _ssvep
 
-    extrait = client_snippet(_ssvep.SPEC, {"freqs": (15.0, 20.0, 8.57)})
-    chk("EEG_API_Unicorn_decoded_ssvep" in extrait, "l'extrait nomme le vrai flux")
-    chk("score_15Hz" in extrait and "score_8.57Hz" in extrait,
-        "et les voies telles qu'elles seront publiées")
-    chk("open_stream" in extrait,
-        "et il appelle open_stream — sans ça un client perd tout ce qui précède son 1er pull")
-    try:
-        compile(extrait, "<extrait>", "exec")
-        chk(True, "l'extrait compile : c'est du Python qu'on peut vraiment coller")
-    except SyntaxError as e:
-        chk(False, f"l'extrait ne compile pas : {e}")
+    extrait_ssvep = client_snippet(_ssvep.SPEC, {"freqs": (15.0, 20.0, 8.57)})
+    chk("score_15Hz" in extrait_ssvep and "score_8.57Hz" in extrait_ssvep,
+        "SSVEP : les voies reflètent les fréquences réglées, pas seulement les défauts")
 
     chk(client_snippet(ModeSpec(id="x", label="X", family="actif", summary="", status="prevu",
                                 unavailable="pas encore")) == "",
@@ -314,6 +330,12 @@ def client_snippet(spec, params=None):
     qu'au premier `pull_*`, et LSL ne rejoue RIEN de ce qui a été publié avant. Sans cette
     ligne on perd la première seconde de signal. C'est le piège classique de LSL, à répéter
     dans tout ce qu'on met sous les yeux d'un étudiant.
+
+    ⚠️ La TEMPLATE (les lignes écrites ici) reste ASCII, mais le texte INTERPOLÉ vient du
+    contrat : `spec.label`, `spec.summary`, noms de voies. Ils peuvent porter des accents ou
+    des caractères spéciaux (µV, écart). Stripping les accents transformerait le contrat
+    (« µV » -> « V » silencieusement casserait une unité). Python 3 source est UTF-8 par
+    défaut (PEP 3120) : une docstring accentuée est du Python ordinaire valide.
     """
     if not spec.stream:
         return ""
