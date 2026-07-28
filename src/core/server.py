@@ -793,7 +793,16 @@ def _smoke():
             ok = False
 
     print(f"[smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
-    return ok and _smoke_ssvep() and _smoke_neuro()
+    # Le contrat et le registre d'abord : un défaut là-dedans explique tous les suivants, et
+    # c'est instantané. `and` court-circuite, donc l'ordre est aussi celui du diagnostic.
+    integre, defauts = registry.check()
+    for d in defauts:
+        print(f"[smoke-registry] ÉCHEC : {d}")
+    print(f"[smoke-registry] {len(registry.MODES)} modes, "
+          f"dont {len(registry.runnable())} dans le moteur — "
+          f"{'OK' if integre else 'PROBLÈME'}")
+    return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
+            and _smoke_ssvep() and _smoke_neuro() and _smoke_cumul())
 
 
 def _smoke_neuro():
@@ -939,6 +948,240 @@ def _smoke_ssvep():
         print(f"[smoke-ssvep] {len(rows)} décisions, dont {detected} avec une cible "
               f"(sans valeur sur bruit synthétique — on teste le câblage)")
     print(f"[smoke-ssvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_frontiere():
+    """`core` n'importe ni `research`, ni `console`, ni pygame.
+
+    La règle est vérifiable, c'est tout son intérêt : un module est dans `core` si et seulement
+    si `server.py` en a besoin pour tourner, et le moteur doit tourner sur une machine sans
+    écran. Le jour où un import de `research` devient nécessaire, ce n'est pas ce test qu'il
+    faut assouplir — c'est le module visé qui doit DÉMÉNAGER dans `core`.
+    """
+    import re
+
+    racine = os.path.dirname(os.path.abspath(__file__))
+    interdits = re.compile(r"^\s*(?:from|import)\s+(research|console|pygame)\b", re.MULTILINE)
+    fautes = []
+    for dossier, _sous, fichiers in os.walk(racine):
+        if "__pycache__" in dossier:
+            continue
+        for nom in fichiers:
+            if not nom.endswith(".py"):
+                continue
+            chemin = os.path.join(dossier, nom)
+            with open(chemin, encoding="utf-8") as f:
+                for m in interdits.finditer(f.read()):
+                    rel = os.path.relpath(chemin, racine)
+                    fautes.append(f"core/{rel} importe {m.group(1)}")
+
+    for faute in fautes:
+        print(f"[smoke-frontiere] ÉCHEC : {faute}")
+    print(f"[smoke-frontiere] {len(fautes)} violation(s) de frontière")
+    print(f"[smoke-frontiere] VERDICT : {'OK' if not fautes else 'PROBLÈME'}")
+    return not fautes
+
+
+def _smoke_repos_partage():
+    """Lancés ENSEMBLE : un seul repos. Lancés SÉPARÉMENT : chacun le sien.
+
+    La règle vient du terrain : « ne fixe aucune cible » et « immobile et détendu » décrivent le
+    même moment, donc enchaîner deux repos ferait attendre l'étudiant pour rien. Mais un mode
+    démarré alors qu'un autre tourne déjà ne peut PAS réutiliser un repos qu'il n'a pas observé.
+
+    Sans LSL ni fil : c'est de la logique pure, et un test qui ne dort pas se relance sans
+    hésiter. ⚠️ Les trois `EngineServer` ouvrent des `StreamOutlet` sans jamais tourner (`run()`
+    n'est jamais appelé) : sûr (aucune session BrainFlow n'est ouverte, `self.acq` n'est démarré
+    que par `run`), mais chacun reçoit un `instance=` distinct pour ne pas se confondre sur le
+    réseau, et chacun est nettoyé explicitement en fin de bloc (voir plus bas).
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    ssvep, neuro = registry.get("ssvep"), registry.get("neuro")
+
+    # 1. Ensemble : durée = max, chauffe = max, consigne = celle du repos le plus long.
+    server = EngineServer(synthetic=True, modes=("ssvep", "neuro"), instance="smoke-repos")
+    server._start(["ssvep", "neuro"], {s.id: v for s, v in server._pending}, now=0.0)
+    a, b = server.active["ssvep"], server.active["neuro"]
+    chk(a._rest_s == b._rest_s == max(ssvep.rest.duration_s, neuro.rest.duration_s),
+        f"une seule durée de repos, la plus longue ({a._rest_s:g} s)")
+    chk(a._warmup_s == b._warmup_s == max(ssvep.rest.warmup_s, neuro.rest.warmup_s),
+        f"une seule chauffe, la plus longue ({a._warmup_s:g} s)")
+    chk(server.rest_instruction == neuro.rest.instruction,
+        f"la consigne est celle du repos le plus long — « {server.rest_instruction[:40]}… »")
+    chk(a._warmup_until == b._warmup_until,
+        "les deux modes sortent de chauffe au MÊME instant (un seul repos, pas deux)")
+    # Casse le cycle self.active <-> ModeRuntime.engine (cf. le commentaire de run().finally) :
+    # sans ça, un __del__ tardif du BoardShim de CE moteur peut libérer la session BrainFlow
+    # d'un AUTRE moteur créé plus tard dans ce même processus — exactement ce que `--smoke` révèle.
+    for runtime in server.active.values():
+        runtime.close()
+    server.active = {}
+
+    # 2. Séparément : chacun garde la sienne.
+    server = EngineServer(synthetic=True, modes=("ssvep",), instance="smoke-repos-2")
+    server._start(["ssvep"], {s.id: v for s, v in server._pending}, now=0.0)
+    seul_a = server.active["ssvep"]._rest_s
+    values, _ = contract.validate(neuro, {})
+    server._start(["neuro"], {"neuro": values}, now=100.0)
+    seul_b = server.active["neuro"]._rest_s
+    chk(seul_a == ssvep.rest.duration_s and seul_b == neuro.rest.duration_s,
+        f"lancés séparément, chacun garde sa durée ({seul_a:g} s et {seul_b:g} s)")
+    chk(server.active["ssvep"]._warmup_until != server.active["neuro"]._warmup_until,
+        "et leurs repos ne sont pas alignés")
+    # Même cycle à casser qu'au bloc 1 — ce moteur-ci a démarré deux fois (ssvep puis neuro).
+    for runtime in server.active.values():
+        runtime.close()
+    server.active = {}
+
+    # 3. Un mode sans repos ne déclenche rien et démarre tout de suite.
+    server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-repos-3")
+    server._start(["raw"], {s.id: v for s, v in server._pending}, now=0.0)
+    chk(server.active["raw"].phase == "running" and server.rest_instruction == "",
+        "le brut seul ne déclenche aucun repos")
+    # Toujours le même cycle : ce moteur non plus n'est jamais passé par `run()`.
+    for runtime in server.active.values():
+        runtime.close()
+    server.active = {}
+
+    print(f"[smoke-repos] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_cumul():
+    """Deux modes qui tournent ENSEMBLE : chacun publie, arrêter l'un ne perturbe pas l'autre.
+
+    C'est la propriété neuve de ce chantier, et celle qu'on ne peut pas déduire des tests par
+    mode : deux décodeurs sur le même tampon glissant, deux flux, deux phases.
+    """
+    import threading
+
+    from pylsl import StreamInlet
+
+    instance = "smoke-cumul"
+    server = EngineServer(synthetic=True, modes=("raw", "ssvep", "neuro"), instance=instance)
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"duration_s": 20.0, "baseline_s": 3.0, "warmup_s": 1.0}, daemon=True)
+    thread.start()
+
+    ok = True
+    inlets = {}
+    for suffix in ("decoded_ssvep", "decoded_neuro"):
+        found = _resolve_own(suffix, instance, 6.0)
+        if not found:
+            print(f"[smoke-cumul] ÉCHEC : {suffix} introuvable — les deux modes doivent "
+                  f"publier en même temps")
+            server.stop()
+            return False
+        inlets[suffix] = StreamInlet(found)
+        inlets[suffix].open_stream(timeout=5.0)
+
+    t0 = time.perf_counter()
+    while server.phase != "decoding" and time.perf_counter() - t0 < 15.0 and thread.is_alive():
+        for inlet in inlets.values():
+            inlet.pull_chunk(timeout=0.05, max_samples=64)
+    if server.phase != "decoding":
+        print(f"[smoke-cumul] ÉCHEC : toujours en « {server.phase} » après 15 s")
+        server.stop()
+        return False
+
+    recu = {suffix: 0 for suffix in inlets}
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < 3.0 and thread.is_alive():
+        for suffix, inlet in inlets.items():
+            chunk, _ts = inlet.pull_chunk(timeout=0.1, max_samples=64)
+            recu[suffix] += len(chunk)
+    print(f"[smoke-cumul] reçu {recu} pendant que les deux décodent")
+    for suffix, n in recu.items():
+        if n < 3:
+            print(f"[smoke-cumul] ÉCHEC : {suffix} n'a publié que {n} fois")
+            ok = False
+
+    # `set_published` doit couper la publication SANS toucher au décodage (contrat documenté
+    # dans ModeRuntime.set_published) — et jusqu'ici rien ne le vérifiait : un flux qui refuserait
+    # de disparaître serait un défaut SILENCIEUX, invisible à l'étudiant qui l'a coupé.
+    ack = server.submit("set_published", id="ssvep", on=False)
+    if not ack.get("accepted"):
+        print(f"[smoke-cumul] ÉCHEC : set_published(on=False) refusé ({ack})")
+        ok = False
+    parti = False
+    for _ in range(40):
+        time.sleep(0.1)
+        if stream_name("decoded_ssvep") not in server.snapshot()["streams"]:
+            parti = True
+            break
+    if not parti:
+        print("[smoke-cumul] ÉCHEC : le flux SSVEP est toujours annoncé après set_published(on=False)")
+        ok = False
+    etat = server.snapshot()
+    if stream_name("decoded_neuro") not in etat["streams"]:
+        print("[smoke-cumul] ÉCHEC : couper la publication du SSVEP a aussi coupé celle du neuro")
+        ok = False
+    if etat["modes_state"].get("ssvep", {}).get("phase") != "running":
+        print(f"[smoke-cumul] ÉCHEC : couper la publication a aussi arrêté le décodage "
+              f"({etat['modes_state'].get('ssvep')})")
+        ok = False
+    else:
+        print("[smoke-cumul] set_published(on=False) : flux SSVEP disparu, décodage toujours actif")
+
+    ack = server.submit("set_published", id="ssvep", on=True)
+    if not ack.get("accepted"):
+        print(f"[smoke-cumul] ÉCHEC : set_published(on=True) refusé ({ack})")
+        ok = False
+    revenu = False
+    for _ in range(40):
+        time.sleep(0.1)
+        if stream_name("decoded_ssvep") in server.snapshot()["streams"]:
+            revenu = True
+            break
+    if not revenu:
+        print("[smoke-cumul] ÉCHEC : le flux SSVEP ne revient pas après set_published(on=True)")
+        ok = False
+    else:
+        print("[smoke-cumul] set_published(on=True) : le flux SSVEP est revenu")
+
+    # Arrêter l'un ne doit pas perturber l'autre : c'est ce qui rend le cumul utilisable.
+    ack = server.submit("stop_mode", id="ssvep")
+    if not ack.get("accepted"):
+        print(f"[smoke-cumul] ÉCHEC : stop_mode refusé ({ack})")
+        ok = False
+    arrete = False
+    for _ in range(40):
+        time.sleep(0.1)
+        if "ssvep" not in server.snapshot()["modes"]:
+            arrete = True
+            break
+    if not arrete:
+        print("[smoke-cumul] ÉCHEC : le SSVEP est toujours actif après stop_mode")
+        ok = False
+
+    apres, t0 = 0, time.perf_counter()
+    while time.perf_counter() - t0 < 2.0 and thread.is_alive():
+        chunk, _ts = inlets["decoded_neuro"].pull_chunk(timeout=0.1, max_samples=64)
+        apres += len(chunk)
+    print(f"[smoke-cumul] le neuro a publié {apres} fois APRÈS l'arrêt du SSVEP")
+    if apres < 3:
+        print("[smoke-cumul] ÉCHEC : arrêter un mode a perturbé l'autre")
+        ok = False
+
+    # Dernier mode décodé arrêté : le moteur reste vivant, quality et status continuent.
+    server.submit("stop_mode", id="neuro")
+    time.sleep(0.5)
+    state = server.snapshot()
+    if not state["running"] or stream_name("quality") not in state["streams"]:
+        print(f"[smoke-cumul] ÉCHEC : le moteur ne survit pas au dernier mode arrêté ({state})")
+        ok = False
+
+    server.stop()
+    thread.join(timeout=5.0)
+    print(f"[smoke-cumul] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
