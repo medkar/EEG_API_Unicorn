@@ -9,13 +9,13 @@ Les modes que le moteur ne sait pas faire sont affichés, grisés, avec leur rai
 l'attend dans `src/research/app.py`.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
 
 COLONNES = 4
-VERT, BLEU, GRIS = QColor("#4ac97e"), QColor("#4c8dff"), QColor("#8a8f9c")
+BLEU, GRIS = QColor("#4c8dff"), QColor("#8a8f9c")
 
 
 class MiniBars(QWidget):
@@ -94,7 +94,7 @@ class ModeTile(QFrame):
             # Grisée mais LISIBLE, et surtout : elle dit pourquoi.
             self.setEnabled(False)
             self.detail.setText(spec["unavailable"])
-            self.etat.setText({"appli_pygame": "appli pygame", "prevu": "prévu"}[spec["status"]])
+            self.etat.setText({"appli_pygame": "appli pygame", "prevu": "prévu"}.get(spec["status"], spec["status"]))
             self.publie.hide()
             self.bouton.hide()
 
