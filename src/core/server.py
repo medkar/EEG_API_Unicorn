@@ -401,19 +401,35 @@ class EngineServer:
     # plutôt que de renommer une valeur du contrat pour un confort interne.
     _PHASES_PUBLIQUES = {"warmup": "warmup", "rest": "baseline", "running": "decoding"}
 
-    @property
-    def phase(self):
-        """La phase la MOINS avancée parmi les modes qui mesurent un repos.
+    def _phase_of(self, active):
+        """La phase publique, calculée sur une COPIE de la table des modes actifs.
 
-        « streaming » quand aucun mode actif n'a de repos à faire : c'est le cas du brut seul.
+        Séparée de la propriété pour que `_state` puisse la calculer sur la MÊME copie que le
+        reste de son payload : deux copies distinctes laisseraient `phase` et `modes` se
+        contredire à l'intérieur d'un seul appel. `active` doit déjà être une copie — cette
+        méthode ne protège rien elle-même, elle fait confiance à l'appelant (voir `phase` et
+        `_state` pour les deux qui en fournissent une).
         """
-        phases = [r.phase for r in self.active.values() if r.spec.rest is not None]
+        phases = [r.phase for r in active.values() if r.spec.rest is not None]
         if not phases:
             return "streaming"
         for interne in ("warmup", "rest", "running"):
             if interne in phases:
                 return self._PHASES_PUBLIQUES[interne]
         return "streaming"
+
+    @property
+    def phase(self):
+        """La phase la MOINS avancée parmi les modes qui mesurent un repos. Sûre depuis un autre
+        fil : ELLE copie `self.active` avant de le lire — une propriété nue ne peut pas recevoir
+        la copie déjà prise par un appelant, donc c'est ici, et nulle part ailleurs, qu'elle doit
+        se faire. `_smoke_ssvep`/`_smoke_neuro` sondent `server.phase` depuis le fil du test
+        pendant que la boucle du moteur tourne sur le sien : exactement la lecture inter-fils
+        que cette copie protège.
+
+        « streaming » quand aucun mode actif n'a de repos à faire : c'est le cas du brut seul.
+        """
+        return self._phase_of(dict(self.active))
 
     def _status_key(self, running):
         """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push).
@@ -438,6 +454,11 @@ class EngineServer:
         l'appelant. `dict(self.active)` copie en C, sans repasser la main : c'est pour ça que la
         boucle de `run()` fait déjà `list(self.active.items())` avant d'itérer, même depuis SON
         propre fil.
+
+        Même discipline pour la phase : on appelle `_phase_of(active)` sur CETTE copie, une
+        seule fois, plutôt que de lire la propriété `self.phase` (qui en reprendrait une AUTRE,
+        à un instant différent). Deux copies pourraient se contredire — `modes` listant un mode
+        que `phase` ne voit plus, par exemple — la même copie ne le peut pas.
         """
         if active is None:
             active = dict(self.active)
@@ -452,6 +473,7 @@ class EngineServer:
         # vérité complète. Le jour où plusieurs modes décodent, `mode` en montre un seul — c'est
         # assumé, et c'est pour ça que `modes` existe.
         decodes = [mid for mid in actifs if mid != "raw"]
+        phase = self._phase_of(active)
         state = {
             "running": running,
             "board": "synthetic" if self.synthetic else "unicorn",
@@ -460,11 +482,11 @@ class EngineServer:
             "channels": list(CH_NAMES),
             "mode": decodes[0] if decodes else None,
             "modes": actifs,
-            "phase": self.phase,
+            "phase": phase,
             "samples_published": self.samples,
             "streams": [stream_name(s) for s in streams],
         }
-        if self.rest_instruction and self.phase in ("warmup", "baseline"):
+        if self.rest_instruction and phase in ("warmup", "baseline"):
             state["instruction"] = self.rest_instruction
         return state
 
