@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import BANDPASS, WINDOW_S, use_utf8_console  # noqa: E402
+from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -279,8 +280,61 @@ def _selftest():
     chk(values is None and reason and "dépasse le maximum" in reason,
         f"un float_list borné sans contrainte reste borné : {reason}")
 
+    # « Brancher un client » : le texte doit être du Python VALIDE, et porter les vrais noms.
+    from core.modes import ssvep as _ssvep
+
+    extrait = client_snippet(_ssvep.SPEC, {"freqs": (15.0, 20.0, 8.57)})
+    chk("EEG_API_Unicorn_decoded_ssvep" in extrait, "l'extrait nomme le vrai flux")
+    chk("score_15Hz" in extrait and "score_8.57Hz" in extrait,
+        "et les voies telles qu'elles seront publiées")
+    chk("open_stream" in extrait,
+        "et il appelle open_stream — sans ça un client perd tout ce qui précède son 1er pull")
+    try:
+        compile(extrait, "<extrait>", "exec")
+        chk(True, "l'extrait compile : c'est du Python qu'on peut vraiment coller")
+    except SyntaxError as e:
+        chk(False, f"l'extrait ne compile pas : {e}")
+
+    chk(client_snippet(ModeSpec(id="x", label="X", family="actif", summary="", status="prevu",
+                                unavailable="pas encore")) == "",
+        "un mode sans flux ne propose aucun extrait")
+
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def client_snippet(spec, params=None):
+    """Un extrait Python prêt à coller pour consommer le flux de ce mode. "" s'il n'en a pas.
+
+    Généré depuis le contrat, jamais écrit à la main dans l'interface : les voies d'un flux
+    SSVEP dépendent des fréquences réglées, et un exemple qui vieillit mal est pire que pas
+    d'exemple — l'étudiant croit avoir copié le bon code.
+
+    `open_stream()` est dans l'extrait pour une raison : un StreamInlet n'ouvre sa connexion
+    qu'au premier `pull_*`, et LSL ne rejoue RIEN de ce qui a été publié avant. Sans cette
+    ligne on perd la première seconde de signal. C'est le piège classique de LSL, à répéter
+    dans tout ce qu'on met sous les yeux d'un étudiant.
+    """
+    if not spec.stream:
+        return ""
+    voies = spec.channels_for(spec.defaults() if params is None else params)
+    return f'''"""{spec.label} - {spec.summary}
+
+Voies publiees : {", ".join(voies)}
+"""
+from pylsl import StreamInlet, resolve_byprop
+
+flux = resolve_byprop("name", "{_stream_name(spec.stream)}", timeout=10)
+if not flux:
+    raise SystemExit("flux introuvable - le moteur tourne-t-il, et ce mode est-il demarre ?")
+
+inlet = StreamInlet(flux[0])
+inlet.open_stream()   # AVANT le premier pull : LSL ne rejoue rien de ce qui precede
+
+while True:
+    valeurs, horodatage = inlet.pull_sample()
+    print(horodatage, dict(zip({list(voies)!r}, valeurs)))
+'''
 
 
 if __name__ == "__main__":
