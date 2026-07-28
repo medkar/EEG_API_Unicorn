@@ -691,7 +691,13 @@ def _smoke():
         ok = False
     if len(stamps) > 2:
         gaps = np.diff(np.asarray(stamps))
-        rate = 1.0 / np.median(gaps)
+        span = float(stamps[-1] - stamps[0])
+        # Cadence sur la DURÉE TOTALE, pas la médiane des écarts. Le board synthétique livre
+        # par RAFALES (mesuré : écarts de 6 µs à 20 ms, médiane 15 µs, moyenne 4001 µs), donc
+        # une médiane d'écart mesure la gigue de livraison et non le débit — elle s'effondre
+        # dès que la machine est chargée. Ce contrôle vise un timestamp mal CONVERTI (pont
+        # d'horloge cassé), pas un problème de débit : la cadence moyenne le dit, pas la médiane.
+        rate = (len(stamps) - 1) / span if span > 0 else 0.0
         print(f"[smoke] cadence mesurée {rate:.1f} Hz, plus grand trou {gaps.max() * 1000:.1f} ms")
         # Le board synthétique tourne à 250 Hz nominal comme l'Unicorn ; un écart franc
         # signalerait un timestamp mal converti, pas un problème de débit.
