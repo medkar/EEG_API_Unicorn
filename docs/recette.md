@@ -286,6 +286,14 @@ python src/core/server.py --mode ssvep,neuro --duration 120
 - [ ] Attendu : les deux proches de 250 Hz. Un écart net signifie que la boucle n'absorbe pas deux
       décodeurs → il faudra espacer les `period_s`.
 
+  Référence en synthétique, mesurée le 2026-07-29 avec un seul mode :
+  `18741 échantillons publiés en 75.1 s (249.6 Hz effectif)`.
+
+> ⚠️ **Un bruit de sortie à ne pas confondre avec une panne.** Après la ligne d'arrêt, BrainFlow
+> peut afficher `ctypes.ArgumentError … Python is likely shutting down`, venant de son finaliseur
+> `BoardShim.__del__` exécuté trop tard pendant l'extinction de l'interpréteur. Observé le
+> 2026-07-29 avec un **code de sortie 0** et un arrêt propre. Ça n'invalide aucun relevé.
+
 ### 2.4 — Le repos partagé, vécu
 
 Refaire le test 1.7, mais au casque et en le vivant : la consigne doit être tenable pendant 25 s
