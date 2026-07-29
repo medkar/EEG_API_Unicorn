@@ -213,17 +213,22 @@ def _check_constraints(param, values):
             # sinusoïde que personne n'affiche. Panne parfaitement silencieuse — aucune erreur,
             # juste zéro détection — donc on la refuse ICI plutôt que de la laisser en séance.
             refresh = float(values.get("refresh_hz") or 0.0)
-            if refresh > 0:
-                for v in _as_list(values.get(param.key)):
-                    k = refresh / v if v else 0.0
-                    if not v or abs(k - round(k)) > 1e-6:
-                        proches = sorted((f for _n, f in available_frequencies(refresh)),
-                                         key=lambda f: abs(f - v))[:2]
-                        return (f"« {param.label} » : {v:g} Hz n'est pas un diviseur entier de "
-                                f"{refresh:g} Hz — l'affichage sauterait des cycles et le décodeur "
-                                f"corrélerait contre une sinusoïde que personne n'affiche. Les "
-                                f"plus proches sont "
-                                + " et ".join(f"{f:g}" for f in proches) + " Hz")
+            if refresh <= 0:
+                return (f"« {param.label} » : le rafraîchissement doit être strictement positif "
+                        f"({refresh:g} Hz est invalide)")
+            for v in _as_list(values.get(param.key)):
+                if v <= 0:
+                    return (f"« {param.label} » : une fréquence doit être strictement positive "
+                            f"({v:g} Hz est invalide)")
+                k = refresh / v
+                if abs(k - round(k)) > 1e-6:
+                    proches = sorted((f for _n, f in available_frequencies(refresh)),
+                                     key=lambda f: abs(f - v))[:2]
+                    return (f"« {param.label} » : {v:g} Hz n'est pas un diviseur entier de "
+                            f"{refresh:g} Hz — l'affichage sauterait des cycles et le décodeur "
+                            f"corrélerait contre une sinusoïde que personne n'affiche. Les "
+                            f"plus proches sont "
+                            + " et ".join(f"{f:g}" for f in proches) + " Hz")
 
         else:
             return f"contrainte inconnue « {name} » sur « {param.label} » (défaut du contrat)"
@@ -360,6 +365,19 @@ def _selftest():
 
     chk(ecran.params[0].affecte_decodage is False and ecran.params[1].affecte_decodage is True,
         "un Param déclare s'il affecte le décodage, et le défaut est « oui »")
+
+    # Cas limites : rafraîchissement négatif, nul, fréquence négative
+    _v, raison = validate(ecran, {"refresh_hz": -60.0, "freqs": [17.0, 18.0]})
+    chk(raison is not None and "strictement positif" in raison and "-60" in raison,
+        f"refresh négatif est refusé ({raison})")
+
+    _v, raison = validate(ecran, {"refresh_hz": 0.0, "freqs": [17.0, 18.0]})
+    chk(raison is not None and "strictement positif" in raison and "0" in raison,
+        f"refresh nul est refusé ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [-20.0, -15.0]})
+    chk(raison is not None and "strictement positive" in raison and "-20" in raison,
+        f"fréquence négative est refusée ({raison})")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
