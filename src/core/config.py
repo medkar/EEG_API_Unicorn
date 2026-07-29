@@ -7,6 +7,8 @@ d'intégration (`controller.py`) pour qu'ils ne divergent JAMAIS (une seule tabl
 import math as _math
 import os as _os
 import sys as _sys
+import time as _time
+import itertools as _itertools
 
 # Racine du dépôt, déduite de l'emplacement de CE fichier (src/core/config.py -> ../../).
 # Tout le monde passe par ces trois constantes plutôt que de recompter des `dirname` : le jour
@@ -114,10 +116,11 @@ COMMANDS = [
 
 COMMON_REFRESH = [60, 75, 90, 100, 120, 144, 165, 240]  # pour « snapper » la mesure
 
-# Pic alpha APPROXIMATIF de l'utilisateur (mesuré ~10,5 Hz les 2026-07-16..20). Sert
-# UNIQUEMENT à signaler dans le sélecteur de fréquences les cibles proches du pic (fond de ρ
-# élevé au repos, cf. le cas de GAUCHE à 12 Hz). Ce n'est pas un seuil de décision : à
-# ré-estimer par `alpha_check.py` si le pic bouge.
+# ⚠️ MESURE PERSONNELLE, pas une constante universelle. C'est le pic alpha du développeur.
+# Le pic alpha individuel varie fortement d'une personne à l'autre (moyenne de population ~9,6 Hz,
+# écart-type ~1 Hz, plage 7-13 Hz, décroissant avec l'âge). Un seul consommateur aujourd'hui :
+# `research/app.py`, pour ses propres séances. Tout ce qui s'adresse à QUELQU'UN D'AUTRE doit
+# passer par le réglage `alpha_hz` du mode SSVEP, pas par cette valeur.
 ALPHA_PEAK_HZ = 10.5
 
 # Hôte par défaut de l'ACTIONNEUR d'exemple (examples/actuator_udp.py). Rien dans l'API n'en
@@ -157,6 +160,28 @@ BANDPASS = (5.0, 40.0)   # passe-bande acquisition (Hz)
 # en ajouter en ligne créerait un décalage entre calibration et usage, pour un gain nul.
 FILTER_MARGIN_S = 1.0
 N_HARMONICS = 3          # harmoniques (fondamentale incluse) des références CCA
+
+# --- Proposition de fréquences SSVEP (chantier 2) ------------------------------------------
+# Écart minimum entre une cible et le pic alpha de la personne. Une cible posée sur le pic ne se
+# distingue pas du fond : la corrélation de repos y est déjà élevée, donc la normalisation z ne
+# fait plus émerger la réponse.
+#
+# 1,9 Hz est ENCADRÉ par les deux seules mesures dont ce projet dispose, sur une personne dont le
+# pic est à 10,5 Hz :
+#   12 Hz    (à 1,50 Hz du pic) ÉCHOUE — séparabilité 0,3-0,5 contre 2-6 pour les autres cibles
+#   8,571 Hz (à 1,93 Hz du pic) MARCHE — c'est une des trois fréquences validées casque
+# C'est donc la plus grande valeur compatible avec les deux. ⚠️ n = 1 personne : à réviser dès
+# qu'on aura mesuré sur plusieurs. Elle n'interdit rien, elle oriente seulement la proposition.
+ALPHA_GARDE_HZ = 1.9
+
+# Pic alpha par défaut : la MOYENNE DE POPULATION, délibérément pas celle du développeur.
+ALPHA_DEFAUT_HZ = 9.6
+
+# Plage où l'on propose en priorité. En dessous, le scintillement est pénible et la réponse
+# chevauche le thêta ; au-dessus, l'amplitude SSVEP décroît nettement. ⚠️ Seul choix de la règle
+# qui ne s'adosse à AUCUNE mesure de ce projet — il vient de la pratique courante du SSVEP. Isolé
+# ici pour être révisable. La proposition en sort d'elle-même quand il le faut, en le disant.
+CONFORT_HZ = (8.0, 20.0)
 
 # --- Normalisation par le bruit propre à chaque fréquence --------------------
 # Chaque cible a un plancher de ρ DIFFÉRENT au repos : celles proches du pic alpha héritent
@@ -400,6 +425,83 @@ def available_frequencies(refresh, fmin=None):
     return out
 
 
+def _plus_ecartees(candidats, n):
+    """Les `n` fréquences dont le PLUS PETIT écart mutuel est le plus grand. `None` si impossible.
+
+    Pourquoi ce critère : la séparabilité est la seule propriété qu'on puisse affirmer depuis la
+    résolution fréquentielle (`1/WINDOW_S`), sans rien supposer de la physiologie. Deux cibles plus
+    proches que cette résolution ne sont pas distinguables, quelle que soit la qualité du signal.
+
+    Pourquoi pas en force brute : à 240 Hz et 8 cibles, énumérer les combinaisons en ferait 314
+    MILLIONS. On procède donc par écart décroissant + placement glouton depuis la plus basse, ce
+    qui est exact ici (c'est le schéma classique « maximiser la distance minimale ») et instantané.
+
+    À égalité, le jeu aux fréquences les plus basses l'emporte — on ne remplace qu'à écart
+    STRICTEMENT meilleur, et les candidats sont parcourus triés. Ce départage n'a rien de profond :
+    il rend la fonction DÉTERMINISTE, sans quoi ni le test de non-régression ni le compte rendu
+    d'un étudiant ne voudraient dire quoi que ce soit.
+    """
+    xs = sorted(candidats)
+    if n < 1 or len(xs) < n:
+        return None
+    if n == 1:
+        return [xs[0]]
+    ecart_min = 1.0 / WINDOW_S
+
+    def place(g):
+        """Le jeu le plus bas espacé d'au moins `g`, ou None s'il n'y a pas la place."""
+        out = [xs[0]]
+        for f in xs[1:]:
+            if f - out[-1] >= g:
+                out.append(f)
+                if len(out) == n:
+                    return out
+        return None
+
+    for g in sorted({b - a for i, a in enumerate(xs) for b in xs[i + 1:]}, reverse=True):
+        if g < ecart_min:
+            break               # même le meilleur écart possible est sous la résolution
+        jeu = place(g)
+        if jeu is not None:
+            return jeu
+    return None
+
+
+def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
+    """`(fréquences, note)` : `n` cibles affichables à ce refresh ET décodables pour cet alpha.
+
+    `note` est vide si tout va bien, porte un avertissement si l'on a dû sortir de la plage
+    confortable, et porte la raison si c'est impossible — auquel cas la liste est VIDE. On ne rend
+    jamais une liste plus courte que demandé : rendre 3 cibles à qui en demande 4 est un mensonge
+    silencieux, exactement le genre de panne que ce chantier existe pour supprimer.
+
+    L'alpha est un PARAMÈTRE, jamais une constante : le pic varie fortement d'une personne à
+    l'autre, et le jeu accordé à quelqu'un pose une cible sur le pic de quelqu'un d'autre.
+    """
+    # ⚠️ `available_frequencies` ne borne QUE le bas (son `fmin`) : à 100 Hz elle rend 50 Hz, que
+    # le passe-bande d'acquisition supprime AVANT le décodage. Le haut se borne donc ici.
+    divisibles = [f for _k, f in available_frequencies(refresh)
+                  if BANDPASS[0] <= f <= BANDPASS[1] and abs(f - alpha) >= ALPHA_GARDE_HZ]
+
+    lo, hi = CONFORT_HZ
+    jeu = _plus_ecartees([f for f in divisibles if lo <= f <= hi], n)
+    if jeu is not None:
+        return jeu, ""
+
+    jeu = _plus_ecartees(divisibles, n)
+    if jeu is not None:
+        hors = [f for f in jeu if not lo <= f <= hi]
+        return jeu, (f"hors de la plage confortable {lo:g}-{hi:g} Hz : "
+                     + ", ".join(f"{f:g}" for f in hors)
+                     + " — scintillement plus pénible, réponse plus bruitée")
+
+    for k in range(n - 1, 1, -1):
+        if _plus_ecartees(divisibles, k) is not None:
+            return [], (f"impossible : {k} cibles au maximum à {refresh:g} Hz avec un alpha à "
+                        f"{alpha:g} Hz — il faut un écran plus rapide")
+    return [], f"impossible : aucun jeu de {n} cibles à {refresh:g} Hz"
+
+
 def cvep_lags(n_targets, code_len):
     """Lags équirépartis sur la période du code (max de séparation entre cibles)."""
     return [round(i * code_len / n_targets) for i in range(n_targets)]
@@ -560,3 +662,99 @@ ERRP_FEEDBACK_S = 1.0        # affichage du feedback écran = fenêtre de décis
 ERRP_ARTIFACT_RATIO = 4.0    # rejet d'une époque si σ (par voie) > ratio × repos (clignement sur l'erreur)
 ERRP_MODEL_PATH = _os.path.join(DATA_DIR, "errp_model.joblib")
 ERRP_MIDLINE = [0, 2, 4]     # Fz, Cz, Pz — voies clés (surlignage contrôle liaison ; xDAWN utilise les 8)
+
+
+def _selftest():
+    """La proposition de fréquences : les invariants, la non-régression, et la tenue en charge."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # 1. LE test de non-régression : la règle doit régénérer le trio validé sur casque réel.
+    # Les deux constantes viennent d'ailleurs (mesures pour la garde, pratique pour la plage) ;
+    # que le trio en tombe est le seul argument dont on dispose qu'elle n'est pas arbitraire.
+    trio, note = propose_frequencies(60.0, 3, 10.5)
+    attendu = sorted([15.0, 20.0, 60.0 / 7])
+    chk([round(f, 6) for f in sorted(trio)] == [round(f, 6) for f in attendu],
+        f"60 Hz, alpha 10,5, n=3 régénère le trio validé casque ({[f'{f:.3f}' for f in trio]})")
+    chk(note == "", f"et sans avertissement ({note!r})")
+
+    # 2. Les invariants, sur TOUT le domaine — pas sur un échantillon. Une propriété vérifiée sur
+    # un seul cas où elle tient par accident, ce projet en a déjà fait les frais deux fois.
+    mauvais = []
+    for refresh in (60.0, 75.0, 100.0, 120.0, 144.0, 165.0, 240.0):
+        for alpha in (7.5, 8.5, 9.6, 10.5, 11.5, 13.0):
+            for n in range(2, 9):
+                jeu, note = propose_frequencies(refresh, n, alpha)
+                if not jeu:
+                    if not note.startswith("impossible"):
+                        mauvais.append(("vide sans raison", refresh, alpha, n))
+                    continue
+                if len(jeu) != n:
+                    mauvais.append(("mauvais compte", refresh, alpha, n, len(jeu)))
+                for f in jeu:
+                    k = refresh / f
+                    if abs(k - round(k)) > 1e-9:
+                        mauvais.append(("pas un diviseur", refresh, n, f))
+                    if not BANDPASS[0] <= f <= BANDPASS[1]:
+                        mauvais.append(("hors bande passante", refresh, n, f))
+                    if abs(f - alpha) < ALPHA_GARDE_HZ:
+                        mauvais.append(("sur le pic alpha", refresh, alpha, n, f))
+                trie = sorted(jeu)
+                if any(b - a < 1.0 / WINDOW_S - 1e-9 for a, b in zip(trie, trie[1:])):
+                    mauvais.append(("cibles non séparables", refresh, alpha, n))
+    chk(not mauvais, f"7 refresh x 6 alpha x 7 nombres de cibles : {len(mauvais)} violation(s)")
+    for m in mauvais[:5]:
+        print(f"       {m}")
+
+    # 3. L'accélération ne doit pas changer le RÉSULTAT : là où la force brute est calculable,
+    # elle doit tomber d'accord. Sans ça, « c'est plus rapide » ne vaudrait rien.
+    def brute(pool, n):
+        best = None
+        for jeu in _itertools.combinations(sorted(pool), n):
+            ec = [b - a for a, b in zip(jeu, jeu[1:])]
+            if min(ec) < 1.0 / WINDOW_S:
+                continue
+            if best is None or min(ec) > best[0]:
+                best = (min(ec), list(jeu))
+        return None if best is None else best[1]
+
+    desaccords = 0
+    for refresh in (60.0, 75.0, 120.0, 144.0):
+        for alpha in (8.5, 9.6, 10.5, 12.0):
+            pool = [f for _k, f in available_frequencies(refresh)
+                    if BANDPASS[0] <= f <= BANDPASS[1] and abs(f - alpha) >= ALPHA_GARDE_HZ]
+            if len(pool) > 20:
+                continue                      # au-delà, la force brute n'est plus calculable
+            for n in (2, 3, 4, 5):
+                if _plus_ecartees(pool, n) != brute(pool, n):
+                    desaccords += 1
+    chk(desaccords == 0, f"l'algorithme rapide donne le même résultat que la force brute "
+                         f"({desaccords} désaccord(s))")
+
+    # 4. Un écran rapide et beaucoup de cibles : la force brute ferait 314 millions de
+    # combinaisons. Ce test échoue en TIMEOUT si quelqu'un la réintroduit un jour.
+    debut = _time.perf_counter()
+    jeu, _note = propose_frequencies(240.0, 8, 9.6)
+    duree = _time.perf_counter() - debut
+    chk(len(jeu) == 8 and duree < 0.5,
+        f"240 Hz et 8 cibles en {duree * 1000:.1f} ms ({len(jeu)} cibles)")
+
+    # 5. L'élargissement et l'impossibilité DISENT ce qui se passe.
+    _jeu, note = propose_frequencies(60.0, 5, 10.5)
+    chk("hors de la plage confortable" in note,
+        f"sortir de la plage confortable est annoncé ({note[:60]}…)")
+    jeu, note = propose_frequencies(60.0, 12, 10.5)
+    chk(jeu == [] and note.startswith("impossible") and "maximum" in note,
+        f"un nombre impossible est refusé, avec le maximum atteignable ({note})")
+
+    print(f"[config] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)
