@@ -24,6 +24,8 @@ class ParamsForm(QWidget):
         super().__init__()
         self.params = list(params)
         self.champs = {}
+        self.boutons_proposer = {}      # {clé : bouton} — pour qu'un smoke puisse le CLIQUER
+        self._params_par_cle = {p["key"]: p for p in self.params}
 
         formulaire = QFormLayout()
         for param in self.params:
@@ -35,9 +37,10 @@ class ParamsForm(QWidget):
                 bouton = QPushButton(f"Proposer « {param['proposes']} »")
                 bouton.clicked.connect(lambda _c=False, k=param["key"]: self.proposer.emit(k))
                 formulaire.addRow("", bouton)
+                self.boutons_proposer[param["key"]] = bouton
             if param["key"] == "refresh_hz":
                 ecran = QApplication.primaryScreen()
-                if ecran is not None:
+                if ecran is not None and ecran.refreshRate() > 0:
                     detecte = QLabel(f"cette fenêtre est sur un écran à "
                                      f"{ecran.refreshRate():g} Hz — mais c'est le rafraîchissement "
                                      f"de l'écran qui AFFICHE les cibles qu'il faut mettre ici")
@@ -55,6 +58,12 @@ class ParamsForm(QWidget):
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e2603f;")
+        # Un avertissement dit qu'un réglage a été ACCEPTÉ, avec réserve — PAS refusé. Étiquette
+        # séparée, couleur différente : le rouge de `refus` sur un succès ferait passer une
+        # proposition acceptée pour une panne.
+        self.avertissement = QLabel("")
+        self.avertissement.setWordWrap(True)
+        self.avertissement.setStyleSheet("color: #b8860b;")
 
         bas = QHBoxLayout()
         bas.addWidget(self.bouton)
@@ -69,6 +78,7 @@ class ParamsForm(QWidget):
         layout.addLayout(formulaire)
         layout.addLayout(bas)
         layout.addWidget(self.refus)
+        layout.addWidget(self.avertissement)
 
     def _champ(self, param):
         kind = param["kind"]
@@ -127,11 +137,24 @@ class ParamsForm(QWidget):
 
         L'étudiant voit ce qu'on lui propose et clique « Appliquer » lui-même. Appliquer à sa
         place lui retirerait la seule occasion de comprendre ce qui vient de changer.
+
+        Aiguille sur `kind`, comme `set_values` : un `setText` à l'aveugle lève `AttributeError`
+        dès que `proposes` désigne un champ qui n'en a pas (un `QSpinBox`, par exemple). Un type
+        non géré ne fait rien plutôt que de lever — dans le fil Qt, une exception ici arrêterait
+        toute la console.
         """
         champ = self.champs.get(cle)
-        if champ is None:
+        param = self._params_par_cle.get(cle)
+        if champ is None or param is None:
             return
-        champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
+        if param["kind"] == "bool":
+            champ.setChecked(bool(valeurs))
+        elif param["kind"] == "choice":
+            champ.setCurrentText(str(valeurs))
+        elif param["kind"] == "float_list":
+            champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
+        elif param["kind"] in ("float", "int"):
+            champ.setValue(valeurs)
 
     def values(self):
         """Ce que l'utilisateur a saisi, tel quel. Aucune conversion « intelligente ».
@@ -157,4 +180,22 @@ class ParamsForm(QWidget):
         return out
 
     def show_refus(self, reason):
+        """Un REFUS : ce qui vient d'être soumis n'a PAS été accepté."""
         self.refus.setText(reason or "")
+        if reason:
+            # Un refus frais rend caduc tout avertissement affiché avant lui — il parlait d'un
+            # réglage qu'on est en train de remplacer par celui-ci, refusé.
+            self.avertissement.setText("")
+
+    def show_avertissement(self, texte):
+        """Un AVERTISSEMENT : ce qui vient d'être soumis a été ACCEPTÉ, mais mérite une réserve.
+
+        `show_refus` et `show_avertissement` s'effacent mutuellement dès que l'un des deux a un
+        vrai message à montrer — un seul est vrai à la fois. Mais un avertissement VIDE (le cas
+        courant : proposition acceptée sans réserve) ne touche PAS `refus` : sinon un « Proposer »
+        réussi effacerait le rappel « en vigueur : … » qu'un refus précédent affichait, sans rien
+        mettre à la place.
+        """
+        self.avertissement.setText(texte or "")
+        if texte:
+            self.refus.setText("")

@@ -206,6 +206,19 @@ neuro-monitoring est *passif* : on observe un état, il n'y a rien à choisir, a
 justesse ni erreur à mesurer. Traiter un indice passif comme une sélection est le contresens à éviter
 en premier ; c'est pourquoi les métadonnées portent `paradigm` (`SSVEP` / `neuro-passive`).
 
+**Le réglage SSVEP dépend de la personne, pas seulement de l'écran.** Les fréquences des cibles
+doivent être des **diviseurs entiers du rafraîchissement de l'écran qui affiche le stimulus** (à
+60 Hz : 30, 20, 15, 12, 10, 8,571 Hz…) — sinon l'affichage saute des cycles et le décodeur corrèle
+contre une sinusoïde que personne n'affiche, sans la moindre erreur pour le signaler. Une fois ce
+filtre passé, la proposition automatique de fréquences (réglage `refresh_hz` ou `alpha_hz` →
+`freqs`) s'écarte en plus du **pic alpha de la personne** : ce pic varie fortement d'un individu à
+l'autre (moyenne de population ≈ 9,6 Hz, plage 7-13 Hz) et une cible posée dessus ne se distingue
+pas du bruit de fond au repos. Conséquence directe : **un jeu de fréquences qui marche pour une
+personne peut échouer pour la suivante.** Un enseignant ne doit donc jamais distribuer un réglage
+unique à toute une promotion sans le dire — chacun doit régler `alpha_hz` sur son propre pic
+(mesurable avec `python src/research/alpha_check.py`) et laisser la console lui proposer son propre
+jeu de fréquences.
+
 ## 6. Calibration
 
 **Par défaut : calibration NATIVE et standardisée, possédée par l'API** (les écrans de calibration

@@ -170,8 +170,10 @@ N_HARMONICS = 3          # harmoniques (fondamentale incluse) des références C
 # pic est à 10,5 Hz :
 #   12 Hz    (à 1,50 Hz du pic) ÉCHOUE — séparabilité 0,3-0,5 contre 2-6 pour les autres cibles
 #   8,571 Hz (à 1,93 Hz du pic) MARCHE — c'est une des trois fréquences validées casque
-# C'est donc la plus grande valeur compatible avec les deux. ⚠️ n = 1 personne : à réviser dès
-# qu'on aura mesuré sur plusieurs. Elle n'interdit rien, elle oriente seulement la proposition.
+# 1,9 est la valeur RETENUE dans l'intervalle [1,50 ; 1,93] que ces deux mesures encadrent — ce
+# n'est PAS la plus grande valeur compatible avec les deux (qui serait 1,9286 Hz, l'écart exact de
+# 8,571 Hz au pic). ⚠️ n = 1 personne : à réviser dès qu'on aura mesuré sur plusieurs. Elle
+# n'interdit rien, elle oriente seulement la proposition.
 ALPHA_GARDE_HZ = 1.9
 
 # Pic alpha par défaut : la MOYENNE DE POPULATION, délibérément pas celle du développeur.
@@ -182,6 +184,15 @@ ALPHA_DEFAUT_HZ = 9.6
 # qui ne s'adosse à AUCUNE mesure de ce projet — il vient de la pratique courante du SSVEP. Isolé
 # ici pour être révisable. La proposition en sort d'elle-même quand il le faut, en le disant.
 CONFORT_HZ = (8.0, 20.0)
+
+# Tolérance RELATIVE pour reconnaître un diviseur du refresh dans une valeur SAISIE À LA MAIN.
+# Elle ne peut pas confondre deux diviseurs voisins : à 60 Hz, les plus proches sont 60/7 = 8,571
+# et 60/8 = 7,5, soit 12 % d'écart — cent fois cette tolérance.
+# ⚠️ Une tolérance ABSOLUE sur le rapport `refresh/f` a été essayée, et elle s'est retournée contre
+# elle-même : réglée à 1e-6, elle refusait « 8.57143 » — la valeur que son PROPRE message de refus
+# affichait — et n'acceptait que le flottant exact à seize chiffres. Le garde-fou censé supprimer
+# une panne silencieuse en devenait une.
+TOLERANCE_DIVISEUR = 1e-3
 
 # --- Normalisation par le bruit propre à chaque fréquence --------------------
 # Chaque cible a un plancher de ρ DIFFÉRENT au repos : celles proches du pic alpha héritent
@@ -436,10 +447,13 @@ def _plus_ecartees(candidats, n):
     MILLIONS. On procède donc par écart décroissant + placement glouton depuis la plus basse, ce
     qui est exact ici (c'est le schéma classique « maximiser la distance minimale ») et instantané.
 
-    À égalité, le jeu aux fréquences les plus basses l'emporte — on ne remplace qu'à écart
-    STRICTEMENT meilleur, et les candidats sont parcourus triés. Ce départage n'a rien de profond :
-    il rend la fonction DÉTERMINISTE, sans quoi ni le test de non-régression ni le compte rendu
-    d'un étudiant ne voudraient dire quoi que ce soit.
+    À égalité, le jeu aux fréquences les plus basses l'emporte : la fonction DESCEND les écarts
+    candidats du plus grand au plus petit et renvoie le PREMIER jeu faisable qu'elle trouve, sans
+    jamais comparer deux jeux entre eux — c'est l'implémentation de RÉFÉRENCE de l'autotest, en
+    force brute, qui elle ne remplace qu'à écart STRICTEMENT meilleur (le test 3 vérifie que les
+    deux s'accordent). Ce départage n'a rien de profond : il rend la fonction DÉTERMINISTE, sans
+    quoi ni le test de non-régression ni le compte rendu d'un étudiant ne voudraient dire quoi que
+    ce soit.
     """
     xs = sorted(candidats)
     if n < 1 or len(xs) < n:

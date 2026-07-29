@@ -23,7 +23,8 @@ import sys as _sys
 from dataclasses import dataclass
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import BANDPASS, WINDOW_S, available_frequencies, use_utf8_console  # noqa: E402
+from core.config import (BANDPASS, TOLERANCE_DIVISEUR, WINDOW_S,  # noqa: E402
+                         available_frequencies, use_utf8_console)
 from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
@@ -220,8 +221,11 @@ def _check_constraints(param, values):
                 if v <= 0:
                     return (f"« {param.label} » : une fréquence doit être strictement positive "
                             f"({v:g} Hz est invalide)")
-                k = refresh / v
-                if abs(k - round(k)) > 1e-6:
+                k = round(refresh / v)
+                exact = refresh / k if k >= 2 else 0.0
+                # k < 2 : soit la fréquence dépasse le refresh, soit elle l'égale — dans les
+                # deux cas il n'y a pas de clignotement du tout.
+                if k < 2 or abs(v - exact) > TOLERANCE_DIVISEUR * exact:
                     proches = sorted((f for _n, f in available_frequencies(refresh)),
                                      key=lambda f: abs(f - v))[:2]
                     return (f"« {param.label} » : {v:g} Hz n'est pas un diviseur entier de "
@@ -362,6 +366,21 @@ def _selftest():
 
     _v, raison = validate(ecran, {"freqs": [24.0, 18.0], "refresh_hz": 144.0})
     chk(raison is None, f"les mêmes valeurs jugées contre 144 Hz passent ({raison})")
+
+    # TOLERANCE_DIVISEUR : une saisie humaine doit passer, même très arrondie par rapport au
+    # flottant exact que Python calcule en interne (60/7 = 8.571428571428571). C'est la panne que
+    # la tolérance ABSOLUE (1e-6) provoquait : elle refusait sa PROPRE valeur affichée.
+    for valeur in (8.571, 8.57143, 60.0 / 7):
+        _v, raison = validate(ecran, {"freqs": [15.0, valeur]})
+        chk(raison is None, f"{valeur!r} Hz (diviseur 60/7 arrondi ou exact) est accepté ({raison})")
+
+    for valeur in (8.5, 17.0):
+        _v, raison = validate(ecran, {"freqs": [15.0, valeur]})
+        chk(raison is not None, f"{valeur:g} Hz n'est pas un diviseur de 60 Hz : refusé ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [15.0, 70.0]})
+    chk(raison is not None,
+        f"une fréquence supérieure au refresh ne peut pas clignoter : refusée ({raison})")
 
     chk(ecran.params[0].affecte_decodage is False and ecran.params[1].affecte_decodage is True,
         "un Param déclare s'il affecte le décodage, et le défaut est « oui »")

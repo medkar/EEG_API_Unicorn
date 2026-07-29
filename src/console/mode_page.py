@@ -99,15 +99,25 @@ class ModePage(QWidget):
     def _proposer(self, cle):
         """Demande une proposition au MOTEUR et la met dans le champ. La console ne calcule rien.
 
-        Le refus et l'avertissement passent par le même endroit que ceux d'« Appliquer » : un
-        étudiant n'a pas à apprendre deux façons de lire un message d'erreur.
+        Envoie ce que le formulaire contient EN CE MOMENT (`params`) : sans ça, la proposition se
+        calcule sur les réglages STOCKÉS plutôt que sur ce que l'étudiant est en train d'éditer —
+        déclarer un nouvel écran ne servirait à rien tant qu'il n'a pas cliqué « Appliquer ».
+
+        Le refus et l'avertissement sont deux étiquettes distinctes : un avertissement dit qu'un
+        réglage a été ACCEPTÉ, avec réserve ; un refus dit qu'il ne l'a PAS été. Les confondre
+        ferait passer un succès pour une panne.
         """
-        ack = self.console.commande("propose_params", id=self.mode_id, key=cle)
+        ack = self.console.commande("propose_params", id=self.mode_id, key=cle,
+                                    params=self.formulaire.values())
         if not ack.get("accepted"):
             self.formulaire.show_refus(ack.get("reason", ""))
             return
-        self.formulaire.remplir(ack["key"], ack["value"])
-        self.formulaire.show_refus(ack.get("warning", ""))
+        # Un accusé incomplet (clé ou valeur absente) ne doit pas planter l'interface en séance :
+        # on ne remplit rien plutôt que de lever, comme `_appliquer` le fait déjà pour son refus.
+        cle_recue, valeur_recue = ack.get("key"), ack.get("value")
+        if cle_recue is not None and valeur_recue is not None:
+            self.formulaire.remplir(cle_recue, valeur_recue)
+        self.formulaire.show_avertissement(ack.get("warning", ""))
 
     def _copier(self):
         from PySide6.QtWidgets import QApplication

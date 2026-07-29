@@ -53,7 +53,7 @@ from console.banner import Banner  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
-from core.config import use_utf8_console  # noqa: E402
+from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.server import EngineServer  # noqa: E402
 
@@ -394,17 +394,35 @@ def _smoke():
 
     # Le bouton « Proposer » de bout en bout : clic -> commande au moteur -> champ rempli -> et la
     # valeur obtenue est ACCEPTÉE. C'est ce dernier point qui compte : une proposition que la
-    # validation refuse serait le pire des deux mondes.
+    # validation refuse serait le pire des deux mondes. Le bouton est CLIQUÉ, pas contourné en
+    # appelant `_proposer` directement — sinon une clé mal capturée par le lambda du bouton, ou un
+    # `proposes` sur le mauvais champ, passerait tous les tests sans jamais être exercé.
     page = reelle.pages["ssvep"]
     page.formulaire.champs["freqs"].setText("15, 20, 8.57143")
-    page._proposer("refresh_hz")
+    page.formulaire.boutons_proposer["refresh_hz"].click()
     propose = page.formulaire.values()["freqs"]
     chk(len(propose) == 3, f"« Proposer » remplit le champ ({propose})")
-    chk(all(abs(60.0 / f - round(60.0 / f)) < 1e-6 for f in propose),
+    chk(all(abs(60.0 / f - round(60.0 / f)) < TOLERANCE_DIVISEUR for f in propose),
         "avec des diviseurs du rafraîchissement déclaré")
     page._appliquer(page.formulaire.values())
     chk(page.formulaire.refus.text() == "",
         f"et le moteur accepte ce qu'il a lui-même proposé ({page.formulaire.refus.text()})")
+
+    # Un avertissement (proposition ACCEPTÉE, mais hors de la plage confortable) ne doit PAS
+    # ressembler à un refus. Cas connu : 60 Hz, alpha 10,5 Hz, 5 cibles — le même triplet que le
+    # test de non-régression `propose_frequencies` de config.py, qui produit déjà cet avertissement.
+    # Seule la LONGUEUR du texte tapé dans « freqs » compte ici (c'est elle qui fixe `n`) : les
+    # valeurs elles-mêmes n'ont pas besoin d'être un jeu SSVEP valide, on ne les applique jamais.
+    page.formulaire.champs["alpha_hz"].setValue(10.5)
+    page.formulaire.champs["freqs"].setText("1, 2, 3, 4, 5")
+    page.formulaire.boutons_proposer["refresh_hz"].click()
+    chk(len(page.formulaire.values()["freqs"]) == 5,
+        f"la proposition avec avertissement remplit quand même le champ "
+        f"({page.formulaire.values()['freqs']})")
+    chk("hors de la plage confortable" in page.formulaire.avertissement.text(),
+        f"l'avertissement est affiché, en ambre — « {page.formulaire.avertissement.text()[:60]}… »")
+    chk(page.formulaire.refus.text() == "",
+        f"et rien dans l'étiquette de refus ({page.formulaire.refus.text()!r})")
 
     # Le refus qui ferme le trou, vu depuis l'interface.
     page.formulaire.champs["freqs"].setText("15, 17")

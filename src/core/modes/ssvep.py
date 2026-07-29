@@ -211,8 +211,9 @@ SPEC = ModeSpec(
             help="Les fréquences que TON application fait clignoter. Le nombre de cibles est la "
                  "longueur de cette liste. Une fréquence n'est stable que si c'est un diviseur "
                  "entier du refresh de ton écran (à 60 Hz : 30, 20, 15, 12, 10, 8,571…). Évite le "
-                 "voisinage de ton pic alpha (~10 Hz) : le fond de corrélation y est élevé au "
-                 "repos. Changer cette liste RECRÉE le flux — les clients doivent se réabonner.",
+                 "voisinage de ton pic alpha : réglage « alpha_hz » ci-dessous — le fond de "
+                 "corrélation y est élevé au repos. Changer cette liste RECRÉE le flux — les "
+                 "clients doivent se réabonner.",
         ),
         Param(
             key="refresh_hz",
@@ -236,9 +237,10 @@ SPEC = ModeSpec(
             unit="Hz",
             default=ALPHA_DEFAUT_HZ,
             min=6.0, max=14.0,
+            proposes="freqs",
             affecte_decodage=False,
             help="Le pic alpha varie FORTEMENT d'une personne à l'autre (moyenne ~9,6 Hz, plage "
-                 "7-13 Hz) et il est stable chez chacun. Une cible posée dessus ne se distingue "
+                 "6-14 Hz) et il est stable chez chacun. Une cible posée dessus ne se distingue "
                  "pas du fond au repos. La proposition s'en écarte. Pour mesurer le tien : "
                  "`python src/research/alpha_check.py`. Ne relance pas le repos.",
         ),
@@ -352,6 +354,8 @@ def _selftest():
         and par_cle["alpha_hz"].affecte_decodage is False,
         "le refresh et l'alpha, non")
     chk(par_cle["refresh_hz"].proposes == "freqs", "et le refresh PROPOSE les fréquences")
+    chk(par_cle["alpha_hz"].proposes == "freqs",
+        "l'alpha aussi PROPOSE les fréquences — sans bouton, changer son pic ne recalcule rien")
 
     # Le refus qui ferme le trou.
     _v, raison = validate(SPEC, {"freqs": [15.0, 17.0]})

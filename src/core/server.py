@@ -63,7 +63,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, NEURO_WINDOW_S,  # noqa: E402
-                    choose_frequencies, json_float, propose_frequencies,
+                    TOLERANCE_DIVISEUR, choose_frequencies, json_float, propose_frequencies,
                     reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
                     StatusPublisher, default_instance_id, stream_name, verdict_from_sigma)
@@ -350,10 +350,28 @@ class EngineServer:
                                   f"(qui propose : {', '.join(proposeurs) or 'aucun'})"}
             runtime = self.active.get(spec.id)
             courant = dict(runtime.params) if runtime is not None else spec.defaults()
+            # Ce que l'appelant est en train d'éditer prime sur ce qui est stocké : sans ça,
+            # déclarer un écran 144 Hz est refusé (les anciennes fréquences ne le divisent pas)
+            # ET la proposition continue de calculer sur 60 — l'étudiant n'a aucune porte de sortie.
+            courant.update(params.get("params") or {})
             cible = source.proposes
-            n = len(courant.get(cible) or spec.defaults().get(cible) or ())
-            valeurs, note = propose_frequencies(float(courant.get("refresh_hz") or 60.0), n,
-                                                float(courant.get("alpha_hz") or ALPHA_DEFAUT_HZ))
+
+            def _nombre(valeur, repli):
+                """Convertit en float avec un repli : `submit` ne doit JAMAIS lever — il tourne
+                sur le fil de l'interface, et une saisie illisible ne doit pas le faire planter."""
+                try:
+                    return float(valeur) if valeur else repli
+                except (TypeError, ValueError):
+                    return repli
+
+            # `courant[cible]` peut être une CHAÎNE si l'étudiant a mal tapé la liste : `len()`
+            # rendrait alors le nombre de CARACTÈRES, pas de fréquences. On ne compte que sur une
+            # vraie liste, sinon on retombe sur le nombre de cibles par défaut du contrat.
+            valeur_cible = courant.get(cible)
+            n = (len(valeur_cible) if isinstance(valeur_cible, (list, tuple))
+                 else len(spec.defaults().get(cible) or ()))
+            valeurs, note = propose_frequencies(_nombre(courant.get("refresh_hz"), 60.0), n,
+                                                _nombre(courant.get("alpha_hz"), ALPHA_DEFAUT_HZ))
             if not valeurs:
                 return {"accepted": False, "reason": note}
             return {"accepted": True, "command": command, "id": spec.id,
@@ -1171,7 +1189,7 @@ def _smoke_proposition():
     ack = server.submit("propose_params", id="ssvep", key="refresh_hz")
     chk(ack.get("accepted") and len(ack.get("value") or []) == 3,
         f"proposer rend autant de cibles qu'il y en a réglées ({ack.get('value')})")
-    chk(all(abs(60.0 / f - round(60.0 / f)) < 1e-6 for f in ack["value"]),
+    chk(all(abs(60.0 / f - round(60.0 / f)) < TOLERANCE_DIVISEUR for f in ack["value"]),
         "et toutes divisent le refresh déclaré")
 
     # La proposition doit être ACCEPTABLE par le moteur : c'est ce qui prouve que la règle et la
@@ -1179,6 +1197,21 @@ def _smoke_proposition():
     # des valeurs aussitôt refusées — le pire des deux mondes.
     ack2 = server.submit("set_params", id="ssvep", params={"freqs": ack["value"]})
     chk(ack2.get("accepted"), f"et le moteur accepte ce qu'il vient de proposer ({ack2}) ")
+
+    # La proposition doit se calculer sur ce que l'appelant est EN TRAIN D'ÉDITER (`params`), pas
+    # sur ce qui est stocké : sinon déclarer un écran 144 Hz est refusé (les fréquences en vigueur,
+    # calées sur 60, ne le divisent pas) ET la proposition continue de calculer sur 60 — aucune
+    # porte de sortie pour l'étudiant qui change d'écran.
+    ack5 = server.submit("propose_params", id="ssvep", key="refresh_hz",
+                         params={"refresh_hz": 144.0})
+    chk(ack5.get("accepted") and len(ack5.get("value") or []) == 3,
+        f"proposer avec un refresh en cours d'édition rend 3 cibles ({ack5.get('value')})")
+    chk(all(abs(144.0 / f - round(144.0 / f)) < TOLERANCE_DIVISEUR for f in ack5["value"]),
+        f"et ce sont des diviseurs de 144 Hz, pas de 60 ({ack5.get('value')})")
+    ack6 = server.submit("set_params", id="ssvep",
+                         params={"freqs": ack5["value"], "refresh_hz": 144.0})
+    chk(ack6.get("accepted"),
+        f"et le jeu proposé pour 144 Hz est accepté avec refresh_hz=144 ({ack6})")
 
     # Un réglage sans effet sur le décodage ne reconstruit RIEN. On compare l'objet lui-même et
     # pas la phase : les deux chemins laissent le mode en « warmup » juste après un démarrage, donc
@@ -1200,8 +1233,10 @@ def _smoke_proposition():
         f"et relance le repos (phase {server.active['ssvep'].phase})")
 
     # Une clé qui ne propose rien est refusée AVEC sa raison : la commande reste atteignable
-    # depuis un client LSL même quand la console n'affiche aucun bouton.
-    ack3 = server.submit("propose_params", id="ssvep", key="alpha_hz")
+    # depuis un client LSL même quand la console n'affiche aucun bouton. `freqs` est la CIBLE des
+    # propositions, jamais leur source (contrairement à `refresh_hz` ET, depuis la critique 5,
+    # `alpha_hz`) : elle ne propose donc jamais rien elle-même.
+    ack3 = server.submit("propose_params", id="ssvep", key="freqs")
     chk(not ack3.get("accepted") and "propose" in (ack3.get("reason") or ""),
         f"un réglage qui ne propose rien est refusé ({ack3.get('reason')})")
 
