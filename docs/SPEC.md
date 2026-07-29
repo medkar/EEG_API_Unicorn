@@ -73,7 +73,8 @@ qu'un jugement : **un module est dans `src/core/` si et seulement si `server.py`
 tourner.** Tout le reste est dans `src/research/`.
 
 ```
-src/core/       config · acquisition · cca_decoder · lsl_io · server · dashboard(.py/.html)
+src/core/       config · acquisition · cca_decoder · lsl_io · neuro_monitor · server · modes/
+src/console/    la console PySide6 : app · banner · grid · mode_page · params_form · live_views
 src/research/   app + ui + stimulus · décodeurs des modes non publiés · calibrations · analyses
 ```
 
@@ -95,6 +96,18 @@ Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMP
 par `dirname(dirname(__file__))` — après déplacement, les dix auraient silencieusement pointé sur
 `src/` au lieu de la racine.
 
+**Depuis le 2026-07-28, il y a un troisième paquet : `src/console/`** (la console PySide6). La
+règle ne change pas, elle s'étend : `console` importe `core`, et `core` n'importe **ni `research`,
+ni `console`, ni pygame, ni Qt**. Le moteur doit continuer à tourner sur une machine sans écran.
+C'est vérifié par un test, pas par la discipline : `python src/core/server.py --smoke` scanne
+`src/core/**/*.py` et échoue sur le moindre import interdit.
+
+`src/core/modes/` est arrivé en même temps : un mode y est un **contrat** (`ModeSpec` : ce qu'il
+est, ce qui s'y règle, ce qu'il publie) posé à côté de son **runtime**. L'algorithme reste
+séparé — `cca_decoder.py` est une CCA, indifférente au produit ; `modes/ssvep.py` est le mode.
+C'est ce contrat qui génère la grille de la console, ses formulaires de réglages et l'extrait de
+code client : aucun de ces trois ne recopie de catalogue, donc aucun ne peut vieillir séparément.
+
 ## 4. Les flux (contrat d'API)
 
 Noms de flux LSL préfixés `EEG_API_Unicorn_`. **Contrat stable** : un client ne doit pas casser si on ajoute
@@ -109,6 +122,31 @@ un champ. Métadonnées (noms de voies, unités, fréquence) portées par le flu
 | `EEG_API_Unicorn_status` | sortant | état du moteur (mode actif, calibré ou non, prêt) | ~1 Hz + à chaque changement |
 | `EEG_API_Unicorn_control` | entrant | commandes vers le moteur (start/stop, calibrer, config) | événementiel |
 | `EEG_API_Unicorn_stim` | entrant | marqueurs de stimulus depuis l'appli externe (modes évoqués) | événementiel |
+
+**Contenu du flux `status`** (JSON, un message par changement d'état). Amendé le **2026-07-28** avec
+le passage au moteur multi-modes :
+
+| Champ | Contenu |
+|---|---|
+| `running` · `board` · `instance` | le moteur tourne ; `unicorn` ou `synthetic` ; quelle instance |
+| `fs_hz` · `channels` | 250 Hz, et les 8 noms de voies |
+| `mode` | le premier mode **décodé** actif, ou `null` — conservé pour les clients d'hier |
+| `modes` | **la vérité complète** : tous les modes actifs, `raw` compris |
+| `phase` | `streaming` · `warmup` · `baseline` · `decoding` — vocabulaire public inchangé |
+| `samples_published` · `streams` | compteur, et les noms complets des flux réellement publiés |
+| `instruction` | la consigne de repos, **seulement pendant `warmup` / `baseline`** |
+
+⚠️ **Trois champs ont été RETIRÉS** en même temps, et c'est un changement de contrat assumé :
+
+- `frequencies_hz` et `indices` : ils décrivaient les cibles SSVEP, donc un seul mode. Avec plusieurs
+  modes actifs à la fois, un champ de premier niveau nommé d'après l'un d'eux n'a plus de sens. Ces
+  informations n'ont pas disparu — elles sont dans les **métadonnées du flux `decoded_ssvep`** (où
+  elles étaient déjà) et dans `modes_state` côté console.
+- `instruction` **pendant la phase de décodage** : elle y restait affichée alors qu'il n'y avait plus
+  rien à faire, ce qui laissait croire qu'un repos était en cours.
+
+Un client qui lisait ces champs doit lire les métadonnées du flux décodé à la place. C'est le seul
+endroit où ce chantier casse le contrat public, et il est cassé sciemment plutôt que rapiécé.
 
 **Décidé : TOUT passe par LSL** — données ET commandes (§12.1). Une seule dépendance, un seul concept à
 enseigner, et le client Unity/Python n'apprend qu'une API.
@@ -201,7 +239,8 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 ## 8. Dépendances et installation
 
 - `requirements.txt` : `brainflow`, `numpy`, `scipy`, `scikit-learn`, `pyriemann`, `pylsl`, `pygame`,
-  `joblib`, + le micro-serveur du tableau de bord (`fastapi` + `uvicorn`, ou `flask`).
+  `joblib`, + l'interface de la console (`PySide6` + `pyqtgraph`). `fastapi`/`uvicorn` ne sont plus
+  requis depuis la suppression du tableau de bord web (§12.2).
   Installation automatique : `pip install -r requirements.txt` (idéalement `pip install -e .`).
 - `pylsl` embarque `liblsl` via pip sur la plupart des plateformes (**à vérifier sur les postes de l'école**,
   avec le test pare-feu/multicast du §4).
@@ -226,7 +265,7 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 **v1 :** `MI_decoded` (endogène, calibration native) · `P300` via marqueurs entrants · control plane LSL
 complet (`control` + `status`) · `neuro_decoded`.
 
-**v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27]** `src/core/dashboard.py` + `src/core/dashboard.html` · évolutions parkées F1/F2 (§13).
+**v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27, puis SUPPRIMÉ 2026-07-28]** remplacé par la **console d'expérimentation** `src/console/` (PySide6) · évolutions parkées F1/F2 (§13).
 
 ## 11. Non-objectifs (assumés, à documenter)
 
@@ -247,7 +286,12 @@ seule API à apprendre côté client. Conséquences et limites : voir §4.
 **adaptateur**. Si le tout-LSL déçoit, on branche un adaptateur WebSocket/JSON **sans réécrire le moteur**,
 et les flux de données ne bougent pas. Cette porte de sortie est un choix de conception, pas un regret.
 
-### 12.2 Interface de contrôle : **tableau de bord web servi en local** ✅
+### 12.2 Interface de contrôle : ~~tableau de bord web servi en local~~ → **console PySide6** ⚠️ RENVERSÉE le 2026-07-27
+
+> **Cette décision a été renversée.** Ce qui suit décrit le choix d'origine et pourquoi il avait
+> été fait ; le renversement est en fin de section. Les deux restent ici volontairement : la
+> décision web était bien argumentée et pourrait redevenir la bonne le jour où le suivi à
+> distance comptera plus que le tracé temps réel.
 
 Recommandation retenue (critère demandé : le plus **ergonomique** et le plus **simple à installer** pour
 l'élève). Le moteur sert une page web ; l'élève ouvre `http://localhost:<port>`.
@@ -313,6 +357,45 @@ fréquences hors bande passante, ou dont deux cibles sont plus proches que la r�
 est refusé **avec sa raison**. Sans ça, le mode de panne serait le pire du SSVEP — aucune erreur,
 seulement un décodage qui ne détecte jamais rien, indiscernable d'un utilisateur qui fixe mal.
 
+#### Renversement (2026-07-27) : Python + PySide6
+
+Le tableau de bord web a été implémenté, utilisé, et écarté après usage. Le cadrage du produit a
+changé en même temps : d'un **moteur qui diffuse** avec une interface en périphérie, on passe à une
+**console d'expérimentation** où la diffusion réseau devient une sortie parmi d'autres, activable
+mode par mode. Conception complète :
+[docs/superpowers/specs/2026-07-27-console-experimentation-design.md](superpowers/specs/2026-07-27-console-experimentation-design.md).
+
+**Ce qui est perdu, et assumé :**
+- **l'installation zéro** — PySide6 ajoute ~100 Mo aux dépendances ;
+- **le suivi à distance** — plus d'encadrant observant la qualité du signal depuis un autre poste ;
+- **la modifiabilité par un élève** — Qt est moins connu que HTML/CSS/JS, ce qui était l'argument
+  numéro un du choix web.
+
+**Ce qui est gagné :** un seul langage ; le tracé EEG temps réel devient facile au lieu d'être un
+chantier ; et surtout **les consignes de calibration et le stimulus local peuvent vivre dans la
+même application**, ce qui supprime la couture « navigateur pour le MI, fenêtre native pour le
+c-VEP » que la section ci-dessus assumait comme inhérente.
+
+`src/core/dashboard.py` et `src/core/dashboard.html` sont **supprimés**. Le travail moteur du
+2026-07-27 reste intégralement : la validation déclarée des réglages, le flux `decoded_neuro`, le
+correctif NaN→null. Seul le rendu HTML est parti.
+
+#### Commandes exposées (API interne, §12.1) — table à jour
+
+| Commande | Paramètres | Effet |
+|---|---|---|
+| `start_mode` | `id` ou `ids`, `params?` | démarre un ou plusieurs modes ; ceux lancés **ensemble** partagent une seule phase de repos |
+| `stop_mode` | `id` | arrête un mode, son flux disparaît du réseau |
+| `set_params` | `id`, `params` | valide contre `spec.params`, applique ; **relance le repos** si le mode en a un |
+| `set_published` | `id`, `on` | publie ou non le flux de ce mode ; le décodage continue pour l'affichage |
+| `recalibrate` | `id` | refait chauffe + repos de ce mode seul |
+| `stop` | — | arrête le moteur |
+
+`set_mode` et `set_freqs` **n'existent plus** : la première est remplacée par
+`start_mode`/`stop_mode`, la seconde par `set_params`. Leurs deux conséquences documentées
+ci-dessus (flux recréé, plancher refait) valent toujours, et s'appliquent désormais à **tout**
+réglage de **tout** mode, pas seulement aux fréquences SSVEP.
+
 ### 12.3 Reste ouvert
 
 - **« Spec de stimulus » P300** (SOA, taille des cibles) : à figer seulement quand on externalisera le P300
@@ -330,6 +413,16 @@ seulement un décodage qui ne détecte jamais rien, indiscernable d'un utilisate
 
 ## 14. Roadmap / TODO
 
+0. **[fait 2026-07-28]** **Console d'expérimentation** : contrat de mode (`src/core/modes/`),
+   moteur multi-modes avec cumul et repos partagé, console PySide6 (grille + page de mode,
+   réglages en lecture-écriture, tracés EEG). Tableau de bord web supprimé.
+   - **[à faire — chantier 2]** proposition automatique de fréquences (`Param.proposes`) et
+     réglages des autres modes.
+   - **[à faire — chantier 3]** lancer une calibration et gérer les modèles depuis la console ;
+     le MI est le premier candidat à migrer vers le moteur.
+   - **[à faire — séance matérielle]** la console n'a **jamais été ouverte en fenêtre** : tout est
+     vérifié hors écran (`--smoke`, Qt en `offscreen`). Restent à faire au casque : non-régression
+     SSVEP, charge CPU en cumul de modes, et un repos partagé vécu de bout en bout.
 1. **[fait]** Import du code existant dans le dépôt GitHub (`medkar/EEG_API_Unicorn`).
 2. **[en cours]** Cette spec.
 3. **[fait 2026-07-27]** Extraire le **moteur** en cœur réutilisable ; restructurer `core/` vs

@@ -14,14 +14,23 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - Un **TurtleBot3 Waffle** a servi de banc d'essai historique au décodage. Ce n'est **plus un
   objectif** : voir [docs/robot_testbed.md](docs/robot_testbed.md) au besoin, mais rien de neuf ne
   doit en dépendre.
-- **Le code se divise en deux paquets, sur une règle vérifiable** : `src/core/` = ce dont le moteur
-  (`server.py`) a besoin pour tourner ; `src/research/` = tout le reste (appli pygame, décodeurs des
-  modes non publiés, calibrations, analyses). `research` importe `core`, **jamais l'inverse** — si
-  l'envie s'en présente, c'est que le module visé doit DÉMÉNAGER dans `core`. Aucun pygame dans
-  `core` : le moteur tourne sans écran.
-- L'**application pygame** (`src/research/app.py`, menu à 6 modes) reste le seul accès aux 5 modes
-  autres que le SSVEP. Elle ouvre le casque elle-même : **ne jamais la lancer en même temps que le
-  moteur**, le casque n'accepte qu'une connexion.
+- **Le code se divise en TROIS paquets, sur une règle vérifiable** : `src/core/` = ce dont le moteur
+  (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/console/` = la console PySide6 ;
+  `src/research/` = tout le reste (appli pygame, décodeurs des modes non publiés, calibrations,
+  analyses). `console` et `research` importent `core`, **jamais l'inverse** — si l'envie s'en
+  présente, c'est que le module visé doit DÉMÉNAGER dans `core`. Ni pygame ni Qt dans `core` : le
+  moteur tourne sans écran. Vérifié par un test, pas par la discipline : `server.py --smoke` scanne
+  `src/core/**/*.py` et échoue sur le moindre import interdit.
+- **La console est un CLIENT du moteur**, pas le moteur : elle crée un `EngineServer`, lance sa
+  boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
+  action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
+  pas de validation côté interface, pas de catalogue de modes recopié.
+- L'**application pygame** (`src/research/app.py`, menu à 6 modes) reste le seul accès aux **4 modes
+  que le moteur ne sait pas faire** : c-VEP, P300, MI, ErrP. Le SSVEP et le neuro, eux, sont publiés
+  par le moteur et pilotés depuis la console.
+- ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, appli pygame. Le casque
+  n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
+  sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
 - Public visé = **des étudiants qui vont lire et modifier ce code**. Écrire en conséquence.
 
 ## Matériel
@@ -42,17 +51,20 @@ Casque **Unicorn Hybrid Black** : 8 voies EEG sèches, 250 Hz, Bluetooth. Montag
 ## Commandes utiles
 
 ```bash
-python src/core/server.py --mode ssvep --refresh 60   # le moteur : décode et publie sur LSL
-python src/core/dashboard.py --mode ssvep --refresh 60  # + tableau de bord sur localhost:8000
+python src/console/app.py --mode ssvep     # LA console : grille des modes, réglages, tracés
+python src/console/app.py --synthetic      # la console sans casque (board de test BrainFlow)
+python src/core/server.py --mode ssvep --refresh 60   # le moteur seul (headless) : décode et publie
+python src/core/server.py --mode ssvep,neuro   # deux modes en même temps
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)
 python src/research/app.py --synthetic     # sans casque (board de test BrainFlow)
 ```
 
-**Après toute modification**, les deux tests headless qui couvrent le plus de code (aucun casque) :
+**Après toute modification**, les trois tests headless qui couvrent le plus de code (aucun casque) :
 
 ```bash
-python src/core/server.py --smoke          # moteur : acquisition → décodage → flux LSL
+python src/core/server.py --smoke          # moteur : registre, frontière, repos partagé, cumul, flux
+python src/console/app.py --smoke          # console : grille, page de mode, réglages (Qt offscreen)
 python src/research/app.py --smoke         # appli : menu + les 6 modes + les calibrations
 ```
 

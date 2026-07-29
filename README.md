@@ -46,15 +46,23 @@ z-scores against a rest measured at the start of the mode, *for this person, tod
 across neither people nor sessions, and mean nothing in absolute terms. The stream metadata carries
 `paradigm` so a client can tell the two apart.
 
-**The dashboard** — the engine plus a local web page, at <http://localhost:8000>.
+**The console** — the engine plus a desktop window, one page per mode.
 
 ```bash
-python src/core/dashboard.py --mode ssvep --refresh 60
+python src/console/app.py --mode ssvep        # set up, watch, publish
+python src/console/app.py --synthetic         # no headset (BrainFlow test board)
+python src/core/server.py --mode ssvep,neuro  # the engine alone, no interface (headless)
+python src/core/server.py --no-raw --mode neuro   # decode without broadcasting the raw signal
 ```
 
-Live channel quality, a detached-reference alarm, the decoded target against its threshold, and the
-controls — including **which frequencies to decode**, editable mid-session. Its `/docs` page documents
-the HTTP API interactively.
+A grid of every mode — including the ones the engine cannot run, greyed out with the reason. Open one
+and you get what it produces live, its settings, and a Python snippet that consumes its stream, both
+generated from the mode's contract rather than written by hand. Across the top, permanently: channel
+quality and a detached-reference alarm. The raw mode draws the eight channels themselves.
+
+Settings are **not validated by the interface**. It submits, and shows the engine's refusal in its own
+words — a rule copied into the UI drifts from the engine's eventually, and the day it drifts it lets
+through a setting that decodes nothing, silently.
 
 Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
 (`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
@@ -136,9 +144,25 @@ published stream, its decoder *moves* to `core/` — nobody threads an import ac
 | [`cca_decoder.py`](src/core/cca_decoder.py) | SSVEP by CCA, no training, z-scored against a rest floor |
 | [`neuro_monitor.py`](src/core/neuro_monitor.py) | Passive spectral indices, z-scored against a per-session rest |
 | [`config.py`](src/core/config.py) | Channels, frequencies, codes, per-mode constants, repo paths |
-| [`dashboard.py`](src/core/dashboard.py) · [`dashboard.html`](src/core/dashboard.html) | Web dashboard over the engine, same process |
+| [`modes/`](src/core/modes/) | One contract per mode (`ModeSpec`) beside its runtime — what it is, what you can set, what it publishes |
 
-No pygame anywhere in here: the engine runs on a machine without a screen.
+No pygame and no Qt anywhere in here: the engine runs on a machine without a screen. A self-test
+enforces it rather than trusting discipline.
+
+### [`src/console/`](src/console/) — the desktop console, a client of the engine
+
+It creates an engine, runs its loop in a thread, and polls `snapshot()`. Nothing else. Two rules hold
+it together: the Qt thread never touches the BrainFlow session — every action goes through the
+engine's command queue — and no logic lives here that the engine does not already own.
+
+| Module | What it does |
+|---|---|
+| [`app.py`](src/console/app.py) | The window: reads state, sends commands, and the headless self-test |
+| [`grid.py`](src/console/grid.py) | The mode grid — every mode, runnable or not |
+| [`mode_page.py`](src/console/mode_page.py) | One page per mode: live output · settings · how to consume it |
+| [`params_form.py`](src/console/params_form.py) | The settings form, generated from the contract. Validates nothing |
+| [`live_views.py`](src/console/live_views.py) | Rendering picked by **family** — active, passive, raw traces |
+| [`banner.py`](src/console/banner.py) | Channel quality and the detached-reference alarm, always visible |
 
 ### [`src/research/`](src/research/) — everything not yet in the engine
 
@@ -156,8 +180,8 @@ does not publish them yet, so they are not part of what students consume and may
 ## Self-tests (no headset needed)
 
 ```bash
-python src/core/server.py --smoke        # engine + streams + SSVEP decoding, end to end
-python src/core/dashboard.py --smoke     # engine + HTTP API + page
+python src/core/server.py --smoke        # engine: registry, package boundary, shared rest, streams
+python src/console/app.py --smoke        # console: grid, mode page, settings (Qt offscreen)
 python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board

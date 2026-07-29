@@ -9,6 +9,7 @@ une sélection, ce qui est exactement le contresens que le contrat des flux cher
 import os
 import sys
 
+import numpy as np
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,8 +63,6 @@ class TracesView(QWidget):
         bloc = self.source(self.SECONDES)
         if bloc is None or len(bloc) < 2:
             return
-        import numpy as np
-
         t = np.arange(len(bloc)) / max(len(bloc) / self.SECONDES, 1e-9)
         for i, courbe in enumerate(self.courbes):
             if i >= bloc.shape[1]:
