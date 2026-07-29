@@ -682,8 +682,9 @@ def _selftest():
         f"60 Hz, alpha 10,5, n=3 régénère le trio validé casque ({[f'{f:.3f}' for f in trio]})")
     chk(note == "", f"et sans avertissement ({note!r})")
 
-    # 2. Les invariants, sur TOUT le domaine — pas sur un échantillon. Une propriété vérifiée sur
-    # un seul cas où elle tient par accident, ce projet en a déjà fait les frais deux fois.
+    # 2. Les invariants, sur une grille dense : 7 refresh (60-240 Hz), 6 pics alpha, 7 nombres
+    # de cibles. Pas sur UN seul cas où elle tient par accident — ce projet en a déjà subi deux fois.
+    # (Grille dense, pas "tout le domaine" — mais suffisant pour attraper les régressions.)
     mauvais = []
     for refresh in (60.0, 75.0, 100.0, 120.0, 144.0, 165.0, 240.0):
         for alpha in (7.5, 8.5, 9.6, 10.5, 11.5, 13.0):
@@ -750,6 +751,26 @@ def _selftest():
     jeu, note = propose_frequencies(60.0, 12, 10.5)
     chk(jeu == [] and note.startswith("impossible") and "maximum" in note,
         f"un nombre impossible est refusé, avec le maximum atteignable ({note})")
+
+    # 6. Cas limites : refresh trop bas, n=0, n=1. Ces branches ne sont jamais exercées
+    # par les grilles du test 2 ; elles méritent une couverture explicite.
+
+    # Refresh trop bas : à 10 Hz, seul 5 Hz est dans la bande, donc n>=2 est impossible.
+    jeu, note = propose_frequencies(10.0, 2, 9.6)
+    chk(jeu == [] and note.startswith("impossible") and "aucun jeu" in note,
+        f"refresh trop bas (10 Hz, n=2) : liste vide avec raison "
+        f"({note[:50]}…)")
+
+    # n=0 : demander 0 cibles est un cas dégénéré. Retour cohérent : liste vide, raison "impossible".
+    jeu, note = propose_frequencies(60.0, 0, 9.6)
+    chk(jeu == [] and note.startswith("impossible"),
+        f"n=0 : liste vide signalée impossible ({note[:50]}…)")
+
+    # n=1 : demander 1 cible doit toujours réussir si au moins 1 fréquence est disponible.
+    # À 60 Hz avec alpha 9.6, il y a plusieurs candidats -> devrait retourner le premier.
+    jeu, note = propose_frequencies(60.0, 1, 9.6)
+    chk(len(jeu) == 1 and note == "",
+        f"n=1 : une seule fréquence retournée ({jeu[0] if jeu else 'ÉCHOUÉ'})")
 
     print(f"[config] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
