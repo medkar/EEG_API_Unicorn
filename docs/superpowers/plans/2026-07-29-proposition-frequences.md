@@ -506,25 +506,76 @@ Dans `_selftest()` de `ssvep.py`, avant le `VERDICT` :
         f"17 Hz sur un écran 60 Hz est refusé ({raison})")
 ```
 
-- [ ] **Étape 3 : lancer**
+- [ ] **Étape 3 : faire passer `proposes` jusqu'à la console**
+
+`registry.serialize()` ne recopie **pas tous** les champs d'un `Param` : il en construit un
+dictionnaire clé par clé. `proposes` n'y est pas. Or la console lit ce dictionnaire — sans cette
+étape, elle ne saurait jamais qu'un réglage en propose un autre, et le bouton de la tâche 5
+n'apparaîtrait **jamais, sans la moindre erreur**.
+
+Dans `src/core/modes/registry.py`, fonction `serialize`, ajouter la clé à la construction du
+dictionnaire de chaque paramètre :
+
+```python
+             "proposes": p.proposes,
+```
+
+⚠️ Ne PAS y ajouter `affecte_decodage` : ce champ ne sert qu'au moteur, pour décider s'il refait le
+repos. La console n'en a aucun usage, et un champ exposé sans usage est une invitation à ce qu'une
+interface s'en serve un jour à la place du moteur.
+
+Et dans `_selftest()` de `registry.py`, avant le `VERDICT` :
+
+```python
+    # Le catalogue doit porter `proposes`, sinon la console ne peut pas savoir qu'un réglage en
+    # propose un autre — et le bouton correspondant n'apparaîtrait jamais, sans erreur.
+    ssvep_serialise = serialize(get("ssvep"))
+    par_cle = {p["key"]: p for p in ssvep_serialise["params"]}
+    chk(par_cle["refresh_hz"]["proposes"] == "freqs",
+        f"le catalogue transmet `proposes` ({par_cle['refresh_hz'].get('proposes')!r})")
+    chk("affecte_decodage" not in par_cle["freqs"],
+        "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
+```
+
+- [ ] **Étape 4 : réparer l'assertion que cette tâche casse, dans le smoke de la console**
+
+Ajouter deux réglages au SSVEP invalide une affirmation écrite au chantier précédent.
+`src/console/app.py` ligne 366 dit aujourd'hui :
+
+```python
+    chk(len(page.formulaire.champs) == 1, "le SSVEP expose un réglage : ses fréquences")
+```
+
+La remplacer par une assertion qui décrit le NOUVEL état, et qui reste juste si un réglage
+s'ajoute encore un jour :
+
+```python
+    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz"},
+        f"le SSVEP expose ses trois réglages ({sorted(page.formulaire.champs)})")
+```
+
+⚠️ Ne pas se contenter d'un `== 3` : compter les champs ne dit pas LESQUELS, et c'est exactement
+le genre d'assertion qui reste verte pendant qu'un réglage disparaît et qu'un autre apparaît.
+
+- [ ] **Étape 5 : lancer**
 
 Run: `python src/core/modes/ssvep.py`
 Expected: `[ssvep] VERDICT : OK`
 
-- [ ] **Étape 4 : l'intégrité du registre**
+- [ ] **Étape 6 : l'intégrité du registre**
 
 Run: `python src/core/modes/registry.py`
 Expected: `[registry] VERDICT : OK` — c'est ce test qui vérifie qu'aucun `default` ne sort de ses
 propres bornes.
 
-- [ ] **Étape 5 : les trois smokes**
+- [ ] **Étape 7 : les trois smokes**
 
 Run: les trois `--smoke`. Expected: trois `VERDICT : OK`.
 
-- [ ] **Étape 6 : commit**
+- [ ] **Étape 8 : commit**
 
 ```bash
-git add src/core/modes/ssvep.py
+git add src/core/modes/ssvep.py src/core/modes/registry.py src/console/app.py
 git commit -m "Let the SSVEP mode carry the screen and the person it is tuned for"
 ```
 
