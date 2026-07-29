@@ -226,16 +226,44 @@ horodatent les leurs. C'est ce qui a fait perdre les époques de la séance à 4
 Nouveau nommage, aligné sur l'existant : `mi_calib_AAAAMMJJ-HHMMSS_nNN.npz`, et un modèle par
 calibration. **Rien n'est jamais écrasé.**
 
-## 9. Ce qui est retiré
+## 9. Ce qui est archivé — pas supprimé
 
 **Tout ceci arrive à la FIN de la moitié B** (§10), jamais avant : tant que la console ne sait pas
 calibrer, l'écran pygame est le seul moyen de produire un modèle.
 
-- Le **mode MI de l'appli pygame** disparaît du menu : l'appli passe de 6 à 5 modes.
-- `src/research/mi_calibrate.py` et `src/research/mi_pilot.py` sont **supprimés** : leur fonction
-  est intégralement reprise par le moteur. Git en garde l'historique.
-- `src/research/mi_compare.py` est **conservé** et repointé sur `core.mi_decoder` : c'est un outil
-  d'analyse (comparer CSP et Riemannien sur une calibration enregistrée) que rien ne remplace.
+Un dossier **`archive/`** est créé à la racine du dépôt, avec son `README.md` qui dit en une phrase
+ce qu'il contient et ce qu'il ne garantit pas. Y sont déplacés :
+
+- `src/research/mi_calibrate.py` → `archive/mi_calibrate.py`
+- `src/research/mi_pilot.py` → `archive/mi_pilot.py`
+
+**Ils restent exécutables**, et c'est la condition qui donne son sens à l'archive. Deux
+retouches suffisent, vérifiées dans le code :
+
+1. le `sys.path.insert` de chaque fichier remonte d'un cran de trop depuis `archive/` — il doit
+   viser explicitement `<dépôt>/src` au lieu de `os.path.dirname(os.path.dirname(__file__))` ;
+2. l'import `from research.mi_decoder import …` devient `from core.mi_decoder import …`.
+
+**Pourquoi archiver plutôt que supprimer.** `mi_calibrate.py` est la **référence contre laquelle
+vérifier la calibration du moteur** : faire tourner les deux et comparer minutage, étiquettes et
+époques produites est un vrai test, qui n'existe que tant que les deux existent. Supprimer avant
+cette vérification reviendrait à retirer le filet juste avant le saut. « Git garde l'historique »
+est vrai mais faible : personne ne va chercher dans l'historique un fichier dont il ignore
+l'existence.
+
+**Ce que l'archive n'est pas.** Elle n'est **pas maintenue** et **pas couverte par les tests
+automatiques**. Chaque fichier garde son `--smoke`, qui est le moyen de vérifier à la main qu'il
+tourne encore, le jour où on en a besoin. Le `README.md` du dossier doit le dire franchement,
+sinon l'archive se lira comme du code courant — c'est exactement le piège qu'on cherche à éviter.
+
+Le reste :
+
+- Le **mode MI de l'appli pygame** disparaît du menu : l'appli passe de 6 à 5 modes. `app.py`
+  perd ses imports de `mi_pilot` (`MIController`, `_dummy_model`) ; la logique de vote glissant
+  que portait `MIController` est reprise par `MIRuntime`.
+- `src/research/mi_compare.py` est **conservé sur place** et repointé sur `core.mi_decoder` : c'est
+  un outil d'analyse (comparer CSP et Riemannien sur une calibration enregistrée) que rien ne
+  remplace, et il reste utile après ce chantier.
 - CLAUDE.md et le README disent aujourd'hui « menu à 6 modes » et « seul accès à c-VEP, P300, MI,
   ErrP ». **Les deux deviennent faux** et sont mis à jour par ce chantier.
 
@@ -249,8 +277,8 @@ testable avant que la seconde commence** :
   `decoded_mi`, réglage `model`, exemple Unity. À la fin de A, l'objectif d'usage est atteint : le
   MI arrive dans Unity, avec un modèle entraîné par l'ancien écran pygame tant qu'il existe.
 - **Moitié B — la calibration et les modèles.** `CalibrationRuntime`, page de calibration dans la
-  console, accuracy honnête, archive horodatée, liste des modèles. C'est seulement à la fin de B
-  que l'écran pygame est retiré.
+  console, accuracy honnête, enregistrements horodatés, liste des modèles. C'est seulement à la fin
+  de B que l'écran pygame part en `archive/` (§9).
 
 Cet ordre a une conséquence pratique : **si le temps manque, s'arrêter après A laisse un produit
 cohérent**. S'arrêter au milieu de B laisserait le MI sans aucune calibration.
