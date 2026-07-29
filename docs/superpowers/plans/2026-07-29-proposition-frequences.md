@@ -903,7 +903,29 @@ git commit -m "Give the form a button that asks the engine what the screen can d
 ## Tâche 6 : la documentation dit ce que le code fait
 
 **Files:**
-- Modify: `docs/SPEC.md`, `README.md`
+- Modify: `docs/SPEC.md`, `README.md`, `src/core/server.py`
+
+- [ ] **Étape 0 : l'aide en ligne de commande enseigne une valeur qu'on refuse**
+
+`src/core/server.py`, l'aide du drapeau `--freqs`, donne aujourd'hui l'exemple `15,20,8.57`.
+Depuis la tâche 3, ce jeu est **refusé** — 8,57 est un arrondi, et 60/8,57 = 7,0012 n'est pas
+entier. Un étudiant qui recopie l'exemple de notre propre aide se fait rejeter.
+
+Remplacer `8.57` par `8.571` dans cette chaîne d'aide, et ajouter la raison :
+
+```python
+                   help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.571 "
+                        "(diviseurs entiers du refresh — 8,571 est 60/7, et 8,57 serait refusé)"
+```
+
+⚠️ Vérifier le reste de la chaîne d'aide existante et la conserver : seul l'exemple change.
+Vérifier ensuite qu'aucune AUTRE aide ou docstring destinée à l'étudiant ne propose un jeu
+refusé :
+
+Run: `grep -rn "8\.57[^0-9]" src/core/server.py src/core/modes/ src/console/`
+Expected: plus aucune occurrence dans une chaîne d'aide ou un docstring. Celles qui restent dans
+des états FABRIQUÉS de test (`fake_state`, les `ModeSpec` d'essai) ne passent jamais par la
+validation : les laisser.
 
 - [ ] **Étape 1 : SPEC §12.2, la table des commandes**
 
@@ -955,7 +977,7 @@ Run: les trois `--smoke`. Expected: trois `VERDICT : OK`.
 - [ ] **Étape 6 : commit**
 
 ```bash
-git add README.md docs/SPEC.md
+git add README.md docs/SPEC.md src/core/server.py
 git commit -m "Document the trap the proposal exists to close"
 ```
 
