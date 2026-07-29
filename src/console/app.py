@@ -51,6 +51,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,  # noq
 
 from console.banner import Banner  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
+from console.mode_page import ModePage  # noqa: E402
+from console import live_views  # noqa: E402
 from core.config import use_utf8_console  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.server import EngineServer  # noqa: E402
@@ -74,6 +76,15 @@ class Console(QMainWindow):
         self.grid.publier.connect(self._publier)
         self.stack.addWidget(self.grid)
 
+        self.pages = {}
+        for spec in registry.catalog():
+            if spec["status"] != "moteur":
+                continue          # pas de page pour un mode que le moteur ne sait pas faire
+            page = ModePage(spec, self)
+            page.retour.connect(self.show_grid)
+            self.pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -92,6 +103,9 @@ class Console(QMainWindow):
     def apply_state(self, state):
         self.banner.update_from(state)
         self.grid.update_from(state)
+        page = self.stack.currentWidget()
+        if page is not self.grid:
+            page.update_from(state)
 
     def _publier(self, mode_id, on):
         """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
@@ -110,8 +124,9 @@ class Console(QMainWindow):
         self.stack.setCurrentWidget(self.grid)
 
     def show_mode(self, mode_id):
-        """À compléter à la tâche 13 : pour l'instant on reste sur la grille."""
-        self.show_grid()
+        page = self.pages.get(mode_id)
+        if page is not None:
+            self.stack.setCurrentWidget(page)
 
 
 def fake_state():
@@ -223,6 +238,37 @@ def _smoke():
     console.apply_state(state)
     chk("RÉFÉRENCE DÉCROCHÉE" in console.banner.alarme.text(),
         "l'alarme de référence s'affiche, en clair")
+
+    # Entrer dans une page de mode, en ressortir.
+    console.apply_state(state)
+    console.show_mode("ssvep")
+    page = console.stack.currentWidget()
+    chk(page is console.pages["ssvep"], "on entre dans la page du SSVEP")
+    page.update_from(state)
+    chk("CIBLE 0" in page.vue.verdict.text(),
+        f"la sortie en direct montre la cible ({page.vue.verdict.text()})")
+    chk("seuil" in page.vue.seuil.text(), "et le seuil, à côté des scores")
+    chk("score_15Hz" in page.extrait.toPlainText(),
+        "l'extrait client porte les voies réellement publiées")
+    chk("decoded_ssvep" in page.flux.text(), f"et le nom du flux ({page.flux.text()})")
+
+    # Un mode PASSIF ne se rend pas comme un mode actif.
+    neuro_state = {**state, "modes_state": {**state["modes_state"], "neuro": {
+        "id": "neuro", "label": "Neuro", "family": "passif", "phase": "running",
+        "published": True, "params": {"smoothing": 0.85, "rebaseline_s": 180.0},
+        "instruction": "", "stream": "decoded_neuro",
+        "channels": ["charge", "somnolence", "engagement", "artifact"], "rest_report": None,
+        "output": {"z": {"charge": 1.2, "somnolence": -0.4, "engagement": 0.3},
+                   "raw": {}, "artifact": False, "reason": "", "artifacts": 2}}}}
+    console.show_mode("neuro")
+    console.apply_state(neuro_state)
+    page = console.pages["neuro"]
+    chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
+    chk("TENDANCE" in page.vue.avertissement.text(),
+        "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
+
+    console.show_grid()
+    chk(console.stack.currentWidget() is console.grid, "et on ressort sur la grille")
 
     # Moteur pas encore démarré : rien ne doit lever.
     console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,
