@@ -6,7 +6,13 @@ choisir, et aucune bonne réponse. Les afficher pareil laisserait croire qu'un z
 une sélection, ce qui est exactement le contresens que le contrat des flux cherche à éviter.
 """
 
+import os
+import sys
+
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 
 class ActiveView(QWidget):
@@ -32,12 +38,20 @@ class ActiveView(QWidget):
         self._barres = []
 
     def _assure(self, n, etiquettes):
+        """Exactement `n` barres : on en ajoute, et surtout on en RETIRE.
+
+        Le retrait compte autant que l'ajout : régler moins de fréquences en cours de séance
+        laisserait sinon une barre orpheline, figée sur le score d'une cible qui n'existe plus.
+        """
         while len(self._barres) < n:
             barre = QProgressBar()
             barre.setRange(0, 100)
             barre.setTextVisible(False)
             self._barres.append((QLabel(""), barre))
             self.barres.addRow(self._barres[-1][0], barre)
+        while len(self._barres) > n:
+            self._barres.pop()
+            self.barres.removeRow(self.barres.rowCount() - 1)
         for i, (etiquette, _b) in enumerate(self._barres):
             etiquette.setText(etiquettes[i] if i < len(etiquettes) else "")
 
@@ -49,7 +63,7 @@ class ActiveView(QWidget):
 
         freqs = (mode_state.get("params") or {}).get("freqs") or []
         scores = sortie.get("scores") or []
-        seuil = float(sortie.get("threshold", 2.5))
+        seuil = float(sortie.get("threshold", Z_MIN))
         self._assure(len(scores), [f"{f:g} Hz" for f in freqs])
         self.seuil.setText(f"échelle z · seuil {seuil:g} — un score au-dessus déclenche")
 
@@ -77,7 +91,10 @@ class PassiveView(QWidget):
     n'ouvrira : un affichage qui présenterait ça comme une mesure de fatigue mentirait.
     """
 
-    SPAN = 3.0     # au-delà de ±3 z, la barre est pleine
+    # Au-delà de ±NEURO_Z_SPAN, la barre est pleine. La constante vient de `core/config.py`,
+    # comme celle de l'appli pygame : la recopier ici ferait diverger les deux affichages le jour
+    # où quelqu'un la retouche pour rendre les barres plus ou moins sensibles.
+    SPAN = NEURO_Z_SPAN
 
     def __init__(self):
         super().__init__()

@@ -247,10 +247,29 @@ def _smoke():
     page.update_from(state)
     chk("CIBLE 0" in page.vue.verdict.text(),
         f"la sortie en direct montre la cible ({page.vue.verdict.text()})")
-    chk("seuil" in page.vue.seuil.text(), "et le seuil, à côté des scores")
+    chk(f"{state['modes_state']['ssvep']['output']['threshold']:g}" in page.vue.seuil.text(),
+        f"et le seuil CHIFFRÉ, à côté des scores ({page.vue.seuil.text()})")
+    chk(len(page.vue._barres) == 3, "une barre par cible")
     chk("score_15Hz" in page.extrait.toPlainText(),
         "l'extrait client porte les voies réellement publiées")
-    chk("decoded_ssvep" in page.flux.text(), f"et le nom du flux ({page.flux.text()})")
+    chk("EEG_API_Unicorn_decoded_ssvep" in page.flux.text(),
+        f"et le nom COMPLET du flux, celui que resolve_byprop demande ({page.flux.text()})")
+
+    # « Copier » est le geste que fera l'étudiant : le smoke le CLIQUE, sinon le seul bouton qui
+    # sort de l'application n'est jamais exercé.
+    page.copier.click()
+    chk(QApplication.clipboard().text() == page.extrait.toPlainText(),
+        "cliquer « Copier » met l'extrait dans le presse-papiers")
+
+    # Retirer une fréquence retire sa barre : sinon la vue garderait le score d'une cible morte.
+    moins = {**state, "modes_state": {**state["modes_state"], "ssvep": {
+        **state["modes_state"]["ssvep"], "params": {"freqs": [15.0, 20.0]},
+        "output": {**state["modes_state"]["ssvep"]["output"], "scores": [3.1, 0.4]}}}}
+    page.update_from(moins)
+    chk(len(page.vue._barres) == 2,
+        f"régler deux fréquences ne laisse que deux barres ({len(page.vue._barres)})")
+    chk("score_8.57Hz" not in page.extrait.toPlainText(),
+        "et l'extrait client est regénéré sur les nouvelles voies")
 
     # Un mode PASSIF ne se rend pas comme un mode actif.
     neuro_state = {**state, "modes_state": {**state["modes_state"], "neuro": {
@@ -266,9 +285,15 @@ def _smoke():
     chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
     chk("TENDANCE" in page.vue.avertissement.text(),
         "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
+    z = neuro_state["modes_state"]["neuro"]["output"]["z"]
+    attendu = int(z["charge"] / live_views.PassiveView.SPAN * 100)
+    chk(page.vue._barres["charge"].value() == attendu,
+        f"et la barre porte le z réellement reçu ({page.vue._barres['charge'].value()} pour "
+        f"z={z['charge']:+.1f} sur ±{live_views.PassiveView.SPAN:g})")
 
-    console.show_grid()
-    chk(console.stack.currentWidget() is console.grid, "et on ressort sur la grille")
+    # Le bouton « ← Modes » est CLIQUÉ, pas contourné : c'est la seule sortie de la page.
+    page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et « ← Modes » ramène sur la grille")
 
     # Moteur pas encore démarré : rien ne doit lever.
     console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,

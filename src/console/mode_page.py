@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import live_views  # noqa: E402
+from core.lsl_io import stream_name  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.contract import client_snippet  # noqa: E402
 
@@ -31,9 +32,9 @@ class ModePage(QWidget):
         self._derniers_params = None
 
         entete = QHBoxLayout()
-        bouton = QPushButton("← Modes")
-        bouton.clicked.connect(self.retour)
-        entete.addWidget(bouton)
+        self.bouton_retour = QPushButton("← Modes")
+        self.bouton_retour.clicked.connect(self.retour)
+        entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
         entete.addStretch(1)
         self.etat = QLabel("")
@@ -77,7 +78,9 @@ class ModePage(QWidget):
         texte = client_snippet(spec, params)
         self.extrait.setPlainText(texte or "ce mode ne publie aucun flux")
         voies = ", ".join(spec.channels_for(params or spec.defaults()))
-        self.flux.setText(f"{self.spec['stream'] or '—'} · voies : {voies}"
+        # Le nom COMPLET, pas le suffixe : c'est celui-là qu'un `resolve_byprop` demande. Afficher
+        # « decoded_ssvep » enverrait l'étudiant chercher un flux qui n'existe pas sous ce nom.
+        self.flux.setText(f"{stream_name(self.spec['stream'])} · voies : {voies}"
                           if self.spec["stream"] else "aucun flux publié")
 
     def update_from(self, state):
