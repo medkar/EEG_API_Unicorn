@@ -82,7 +82,7 @@ class ParamsForm(QWidget):
             return champ
         if kind == "float_list":
             # Une ligne de valeurs séparées par des virgules : c'est la MÊME écriture que
-            # `--freqs 15,20,8.57` en ligne de commande, et le nombre d'éléments se règle en
+            # `--freqs 15,20,8.571` en ligne de commande, et le nombre d'éléments se règle en
             # ajoutant ou retirant une valeur — c'est ainsi qu'on choisit le nombre de cibles.
             champ = QLineEdit(", ".join(f"{float(v):g}" for v in (param["default"] or ())))
             bornes = param["count"] or [0, 0]

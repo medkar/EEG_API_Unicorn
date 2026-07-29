@@ -1365,7 +1365,8 @@ def _parse_args(argv):
                    help="ne pas diffuser le signal brut (le décodage continue)")
     p.add_argument("--freqs", default=None,
                    help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.571 "
-                        "(diviseurs entiers du refresh — 8,571 est 60/7, et 8,57 serait refusé)")
+                        "(diviseurs entiers du refresh — 8,571 est 60/7, et 8,57 serait refusé) "
+                        "(mode ssvep uniquement)")
     p.add_argument("--refresh", type=float, default=None,
                    help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
                         "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce "
