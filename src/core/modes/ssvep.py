@@ -14,7 +14,7 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (SSVEP_BASELINE_S, SSVEP_WARMUP_S, ARTIFACT_SIGMA_RATIO,  # noqa: E402
-                         use_utf8_console, choose_frequencies)
+                         ALPHA_DEFAUT_HZ, use_utf8_console, choose_frequencies)
 import numpy as np  # noqa: E402
 
 from core.cca_decoder import CCADecoder  # noqa: E402
@@ -207,16 +207,41 @@ SPEC = ModeSpec(
             unit="Hz",
             default=FREQS_60HZ,
             count=(2, 8),
-            constraints=("dans_la_bande", "separables"),
+            constraints=("dans_la_bande", "separables", "divise_le_refresh"),
             help="Les fréquences que TON application fait clignoter. Le nombre de cibles est la "
                  "longueur de cette liste. Une fréquence n'est stable que si c'est un diviseur "
                  "entier du refresh de ton écran (à 60 Hz : 30, 20, 15, 12, 10, 8,57…). Évite le "
                  "voisinage de ton pic alpha (~10 Hz) : le fond de corrélation y est élevé au "
                  "repos. Changer cette liste RECRÉE le flux — les clients doivent se réabonner.",
         ),
-        # `proposes` est déclaré nulle part dans ce chantier : le nombre de cibles se règle par la
-        # LONGUEUR de la liste ci-dessus. La proposition automatique de fréquences est le
-        # chantier 2 (spec §3.1) ; le contrat la permet déjà, on ne la livre pas à moitié.
+        Param(
+            key="refresh_hz",
+            label="Rafraîchissement de l'écran du stimulus",
+            kind="float",
+            unit="Hz",
+            default=60.0,
+            min=20.0, max=480.0,
+            proposes="freqs",
+            affecte_decodage=False,
+            help="Le rafraîchissement de l'écran qui AFFICHE les cibles — pas celui de cette "
+                 "fenêtre : ton jeu tourne peut-être sur un autre écran, ou une autre machine. "
+                 "Les fréquences affichables sans saut de cycle en sont les diviseurs entiers. "
+                 "Le changer PROPOSE un nouveau jeu de fréquences ; il ne relance pas le repos, "
+                 "parce que le décodeur ne le lit jamais.",
+        ),
+        Param(
+            key="alpha_hz",
+            label="Pic alpha de la personne",
+            kind="float",
+            unit="Hz",
+            default=ALPHA_DEFAUT_HZ,
+            min=6.0, max=14.0,
+            affecte_decodage=False,
+            help="Le pic alpha varie FORTEMENT d'une personne à l'autre (moyenne ~9,6 Hz, plage "
+                 "7-13 Hz) et il est stable chez chacun. Une cible posée dessus ne se distingue "
+                 "pas du fond au repos. La proposition s'en écarte. Pour mesurer le tien : "
+                 "`python src/research/alpha_check.py`. Ne relance pas le repos.",
+        ),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
@@ -307,6 +332,31 @@ def _selftest():
     index, _f, _c, scores = rt._out.lignes[-1]
     chk(index == -1 and rt.output()["artifact"],
         f"une fenêtre d'artefact est rejetée, pas décodée (index={index})")
+
+    # Les défauts du mode ne bougent PAS : ils sont validés sur casque réel. La proposition est
+    # une action que l'étudiant déclenche, jamais un recalcul silencieux au démarrage.
+    defauts = SPEC.defaults()
+    chk(tuple(round(f, 6) for f in defauts["freqs"]) == tuple(round(f, 6) for f in FREQS_60HZ),
+        f"les fréquences par défaut sont inchangées ({defauts['freqs']})")
+    chk(defauts["refresh_hz"] == 60.0 and defauts["alpha_hz"] == ALPHA_DEFAUT_HZ,
+        f"le refresh et l'alpha ont leurs défauts ({defauts['refresh_hz']}, {defauts['alpha_hz']})")
+
+    # Et les défauts doivent être COHÉRENTS entre eux : 15/20/8,571 sont bien des diviseurs de 60.
+    _v, raison = validate(SPEC, {})
+    chk(raison is None, f"les défauts du mode passent leur propre validation ({raison})")
+
+    # Aucun des deux nouveaux réglages ne relance le repos.
+    par_cle = {p.key: p for p in SPEC.params}
+    chk(par_cle["freqs"].affecte_decodage is True, "changer les fréquences affecte le décodage")
+    chk(par_cle["refresh_hz"].affecte_decodage is False
+        and par_cle["alpha_hz"].affecte_decodage is False,
+        "le refresh et l'alpha, non")
+    chk(par_cle["refresh_hz"].proposes == "freqs", "et le refresh PROPOSE les fréquences")
+
+    # Le refus qui ferme le trou.
+    _v, raison = validate(SPEC, {"freqs": [15.0, 17.0]})
+    chk(raison is not None and "diviseur entier" in raison,
+        f"17 Hz sur un écran 60 Hz est refusé ({raison})")
 
     print(f"[ssvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

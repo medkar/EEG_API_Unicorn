@@ -363,7 +363,8 @@ def _smoke():
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
-    chk(len(page.formulaire.champs) == 1, "le SSVEP expose un réglage : ses fréquences")
+    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz"},
+        f"le SSVEP expose ses trois réglages ({sorted(page.formulaire.champs)})")
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
 

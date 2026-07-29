@@ -61,6 +61,7 @@ def serialize(spec, params=None):
              "default": list(p.default) if isinstance(p.default, tuple) else p.default,
              "min": p.min, "max": p.max,
              "count": list(p.count) if p.count else None,
+             "proposes": p.proposes,
              "choices": list(p.choices), "help": p.help}
             for p in spec.params
         ],
@@ -141,6 +142,12 @@ def check():
 
 def _selftest():
     ok, defauts = check()
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
     for spec in MODES:
         marque = {"moteur": "●", "appli_pygame": "○", "prevu": "·"}[spec.status]
         detail = f" — {spec.unavailable}" if spec.unavailable else ""
@@ -148,6 +155,16 @@ def _selftest():
     for d in defauts:
         print(f"  ÉCHEC {d}")
     print(f"[registry] {len(MODES)} modes, dont {len(runnable())} dans le moteur")
+
+    # Le catalogue doit porter `proposes`, sinon la console ne peut pas savoir qu'un réglage en
+    # propose un autre — et le bouton correspondant n'apparaîtrait jamais, sans erreur.
+    ssvep_serialise = serialize(get("ssvep"))
+    par_cle = {p["key"]: p for p in ssvep_serialise["params"]}
+    chk(par_cle["refresh_hz"]["proposes"] == "freqs",
+        f"le catalogue transmet `proposes` ({par_cle['refresh_hz'].get('proposes')!r})")
+    chk("affecte_decodage" not in par_cle["freqs"],
+        "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
+
     print(f"[registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 

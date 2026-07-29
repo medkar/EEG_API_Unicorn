@@ -897,7 +897,12 @@ def _smoke_ssvep():
 
     from pylsl import StreamInlet, resolve_byprop
 
-    freqs = [15.0, 20.0, 8.57]
+    # Les fréquences viennent de `choose_frequencies`, comme celles du mode et celles du
+    # stimulus. Le littéral arrondi 8.57 qui était ici n'est PAS un diviseur entier de 60 Hz
+    # (60/8.57 = 7,0012, soit un millier de fois la tolérance) : il passait tant que personne ne
+    # le vérifiait, et il tombe maintenant que la contrainte `divise_le_refresh` existe. Repasser
+    # par la fonction supprime la classe entière du problème plutôt que ce cas-là.
+    freqs = [c["actual_hz"] for c in choose_frequencies(60.0)]
     instance = "smoke-ssvep"
     server = EngineServer(synthetic=True, modes=("raw", "ssvep"),
                           params={"ssvep": {"freqs": freqs}}, instance=instance)
