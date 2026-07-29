@@ -823,7 +823,25 @@ Ajouter `QApplication` à l'import PySide6 de ce fichier. Et la méthode de remp
         champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
 ```
 
-- [ ] **Étape 2 : brancher dans la page**
+- [ ] **Étape 2 : corriger un docstring que la tâche 4 a rendu faux**
+
+Toujours dans `src/console/mode_page.py`, la méthode `_appliquer` porte un docstring qui affirme,
+sans condition, qu'appliquer un réglage relance le repos et recrée le flux. **Ce n'est plus vrai**
+depuis la tâche 4 : `refresh_hz` et `alpha_hz` ne sont lus par aucun décodeur, donc les changer ne
+refait ni l'un ni l'autre. Un docstring qui ment sur le comportement du moteur est pire qu'absent.
+
+Remplacer le paragraphe `⚠️ Appliquer un réglage RELANCE le repos…` par :
+
+```python
+        ⚠️ Appliquer un réglage que le DÉCODEUR lit — les fréquences, par exemple — relance le
+        repos de ce mode et recrée son flux. C'est obligatoire, pas prudent : un plancher mesuré
+        sous d'autres réglages est faux, et pour le SSVEP il est mesuré PAR FRÉQUENCE. Les clients
+        doivent alors se réabonner. Les réglages qui ne servent qu'à proposer ou à valider — le
+        rafraîchissement de l'écran, le pic alpha — ne coûtent rien de tout ça : c'est le contrat
+        qui le déclare, et le moteur qui en décide.
+```
+
+- [ ] **Étape 3 : brancher dans la page**
 
 Dans `src/console/mode_page.py`, après `self.formulaire.appliquer.connect(self._appliquer)` :
 
@@ -848,7 +866,7 @@ Et la méthode :
         self.formulaire.show_refus(ack.get("warning", ""))
 ```
 
-- [ ] **Étape 3 : le test**
+- [ ] **Étape 4 : le test**
 
 Dans `_smoke()` de `src/console/app.py`, dans le bloc qui utilise le VRAI moteur (`reelle`), après
 les vérifications de refus existantes :
@@ -875,23 +893,23 @@ les vérifications de refus existantes :
         f"17 Hz est refusé avec sa raison ({page.formulaire.refus.text()[:70]}…)")
 ```
 
-- [ ] **Étape 4 : lancer**
+- [ ] **Étape 5 : lancer**
 
 Run: `python src/console/app.py --smoke`
 Expected: `[console-smoke] VERDICT : OK`
 
-- [ ] **Étape 5 : les deux autres smokes**
+- [ ] **Étape 6 : les deux autres smokes**
 
 Run: `python src/core/server.py --smoke` · `python src/research/app.py --smoke`
 Expected: deux `VERDICT : OK`.
 
-- [ ] **Étape 6 : NE PAS lancer la console en fenêtre**
+- [ ] **Étape 7 : NE PAS lancer la console en fenêtre**
 
 Un sous-agent n'a pas d'écran, et une console laissée vivante tient une session BrainFlow tout en
 publiant sous les noms de flux PUBLICS. **Ne lancer aucun processus long.** L'essai fenêtré est
 noté pour la séance matérielle.
 
-- [ ] **Étape 7 : commit**
+- [ ] **Étape 8 : commit**
 
 ```bash
 git add src/console/
