@@ -122,6 +122,12 @@ class EngineServer:
                         self.acq.window_n) + self.acq.margin_n
 
         self._pending = self._prepare(modes or (), params or {})
+        if not self._pending:
+            # `--no-raw` sans `--mode` donne un moteur qui n'a rien à publier. Il tourne, il
+            # acquiert, et le réseau reste muet — panne silencieuse dont le seul symptôme est un
+            # client qui ne trouve jamais son flux. On le dit plutôt que de le laisser deviner.
+            print("[server] AUCUN mode demandé : seuls `quality` et `status` seront publiés. "
+                  "Ajoute --mode, ou retire --no-raw.")
 
     def _prepare(self, modes, params):
         """Valide les modes demandés au démarrage. Retourne [(spec, réglages), ...]."""

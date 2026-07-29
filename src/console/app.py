@@ -179,13 +179,20 @@ def _smoke():
 
         def __init__(self):
             self.appels = 0
+            self.commandes = []
 
         def snapshot(self):
             self.appels += 1
             return fake_state()
 
         def submit(self, name, **params):
-            """Simule la soumission d'une commande (toujours acceptée en test)."""
+            """Simule la soumission d'une commande, et RETIENT ce qui a été soumis.
+
+            Retenir compte : c'est ce qui permet de vérifier qu'un geste de l'interface arrive
+            bien au moteur, avec les bons arguments. Sans ça, une case à cocher débranchée
+            passerait tous les tests.
+            """
+            self.commandes.append((name, params))
             return {"accepted": True}
 
         def recent_window(self, seconds):
@@ -229,6 +236,24 @@ def _smoke():
     chk(console.grid.tuiles["neuro"].etat.text() == "arrêté",
         "un mode non démarré est annoncé arrêté, pas absent")
     chk(console.grid.tuiles["ssvep"].publie.isChecked(), "et coché comme publié")
+
+    # Le chemin « publier » de bout en bout : case cochée -> signal de la tuile -> signal de la
+    # grille -> commande au moteur. C'est le seul geste de la grille qui change quelque chose sur
+    # le RÉSEAU, et rien ne l'exerçait : une case débranchée aurait passé tous les tests.
+    moteur_faux.commandes.clear()
+    console.grid.tuiles["ssvep"].publie.click()
+    chk(("set_published", {"id": "ssvep", "on": False}) in moteur_faux.commandes,
+        f"décocher « publié » ordonne au moteur de retirer le flux ({moteur_faux.commandes})")
+    console.grid.tuiles["ssvep"].publie.click()
+    chk(("set_published", {"id": "ssvep", "on": True}) in moteur_faux.commandes,
+        "et le recocher le remet")
+
+    # ...et le rafraîchissement suivant ne doit PAS renvoyer la commande : la case se règle sur
+    # l'état reçu, ce qui rejouerait le signal en boucle si `blockSignals` sautait un jour.
+    moteur_faux.commandes.clear()
+    console.apply_state(state)
+    chk(not moteur_faux.commandes,
+        f"et afficher l'état ne réémet aucune commande ({moteur_faux.commandes})")
 
     # Pendant un repos, la tuile porte la CONSIGNE — sans elle, le plancher est mesuré pendant
     # que l'étudiant fixe une cible, et il est faux pour toute la séance.
