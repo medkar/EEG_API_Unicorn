@@ -41,7 +41,10 @@ class ModePage(QWidget):
         self.etat = QLabel("")
         entete.addWidget(self.etat)
 
-        self.vue = live_views.build(spec["family"])
+        self.vue = live_views.build(spec["family"], spec["channels"])
+        if hasattr(self.vue, "set_source") and console.engine is not None:
+            # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`.
+            self.vue.set_source(console.engine.recent_window)
         bloc_sortie = QGroupBox("Sortie en direct")
         QVBoxLayout(bloc_sortie).addWidget(self.vue)
 

@@ -15,6 +15,65 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 
+class TracesView(QWidget):
+    """Les 8 voies en direct. La seule vue qui lit le SIGNAL et pas une décision.
+
+    Elle ne touche pas au tampon du moteur : `set_source` lui donne un accesseur
+    (`engine.recent_window`) qui rend une COPIE. Le tampon est réécrit par le fil d'acquisition ;
+    le lire depuis le fil Qt donnerait, tôt ou tard, une vue à moitié écrite.
+
+    Les voies sont DÉCALÉES verticalement plutôt que superposées : superposées, une seule voie
+    qui dérive écrase les sept autres et on ne voit plus rien — or la dérive d'une voie est
+    précisément ce qu'on cherche à repérer ici.
+    """
+
+    SECONDES = 4.0
+    ECART_UV = 100.0     # décalage vertical entre deux voies
+
+    def __init__(self, ch_names):
+        super().__init__()
+        import pyqtgraph as pg
+
+        self.source = None
+        self.ch_names = list(ch_names)
+        self.plot = pg.PlotWidget()
+        self.plot.setMenuEnabled(False)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.showGrid(x=True, y=False, alpha=0.2)
+        self.plot.setLabel("bottom", "secondes")
+        self.plot.getAxis("left").setTicks([[
+            (-i * self.ECART_UV, nom) for i, nom in enumerate(self.ch_names)]])
+        self.courbes = [self.plot.plot(pen=pg.mkPen(width=1)) for _ in self.ch_names]
+
+        self.echelle = QLabel(f"signal BRUT, non filtré · une graduation = {self.ECART_UV:g} µV "
+                              f"· {self.SECONDES:g} dernières secondes")
+        self.echelle.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.plot, 1)
+        layout.addWidget(self.echelle)
+
+    def set_source(self, source):
+        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`."""
+        self.source = source
+
+    def update_from(self, _mode_state):
+        if self.source is None:
+            return
+        bloc = self.source(self.SECONDES)
+        if bloc is None or len(bloc) < 2:
+            return
+        import numpy as np
+
+        t = np.arange(len(bloc)) / max(len(bloc) / self.SECONDES, 1e-9)
+        for i, courbe in enumerate(self.courbes):
+            if i >= bloc.shape[1]:
+                break
+            # Centré voie par voie : l'Unicorn sort un offset DC énorme (10⁵ µV, en rampe après
+            # l'ouverture de session). Sans ce centrage, les 8 courbes sortiraient de l'écran.
+            voie = bloc[:, i] - float(np.median(bloc[:, i]))
+            courbe.setData(t, voie - i * self.ECART_UV)
+
+
 class ActiveView(QWidget):
     """Une barre par cible, plus le seuil de décision, plus la cible retenue.
 
@@ -137,6 +196,8 @@ class PassiveView(QWidget):
             self.etat.setText(f"{artefacts} fenêtre(s) rejetée(s) depuis le début du mode")
 
 
-def build(family):
-    """Le rendu qui convient à cette famille. Le brut a le sien, ajouté à la tâche 15."""
+def build(family, ch_names=()):
+    """Le rendu qui convient à cette famille — jamais à un identifiant de mode."""
+    if family == "brut":
+        return TracesView(ch_names)
     return PassiveView() if family == "passif" else ActiveView()

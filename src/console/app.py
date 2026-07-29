@@ -188,6 +188,12 @@ def _smoke():
             """Simule la soumission d'une commande (toujours acceptée en test)."""
             return {"accepted": True}
 
+        def recent_window(self, seconds):
+            """Un moteur factice n'a pas de tampon d'acquisition. La TracesView demande cette
+            méthode, mais sur le faux moteur elle rend None. Le vrai tracé est éprouvé plus bas
+            contre un vrai EngineServer."""
+            return None
+
     ok = True
 
     def chk(cond, msg):
@@ -355,6 +361,28 @@ def _smoke():
     chk(reelle.pages["raw"].formulaire.vide is not None
         and reelle.pages["raw"].formulaire.vide.isVisibleTo(reelle.pages["raw"]),
         "et le formulaire l'écrit, au lieu de laisser un cadre vide")
+
+    # Les tracés, contre un vrai tampon. `recent_window` rend une COPIE : la modifier ne doit
+    # rien changer au moteur — c'est ce qui protège l'acquisition du fil Qt.
+    import numpy as np
+
+    moteur_channels = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
+    moteur.recent = np.random.default_rng(0).normal(0.0, 20.0, (1000, 8))
+    bloc = moteur.recent_window(2.0)
+    chk(bloc is not None and bloc.shape == (500, 8),
+        f"recent_window rend 2 s de signal ({None if bloc is None else bloc.shape})")
+    bloc[0, 0] = 999999.0
+    chk(moteur.recent[-500, 0] != 999999.0,
+        "et c'est une COPIE : l'afficheur ne peut pas abîmer le tampon d'acquisition")
+
+    page = reelle.pages["raw"]
+    page.update_from({"modes_state": {"raw": {
+        "id": "raw", "label": "Brut", "family": "brut", "phase": "running", "published": True,
+        "params": {}, "instruction": "", "stream": "raw", "channels": list(moteur_channels),
+        "rest_report": None, "output": None}}})
+    chk(len(page.vue.courbes) == 8, f"huit courbes, une par voie ({len(page.vue.courbes)})")
+    chk(page.vue.courbes[0].xData is not None and len(page.vue.courbes[0].xData) > 100,
+        "et elles portent des données après un rafraîchissement")
 
     # Moteur pas encore démarré : rien ne doit lever.
     console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,
