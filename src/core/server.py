@@ -62,8 +62,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from core.config import (CH_NAMES, NEURO_WINDOW_S, choose_frequencies,  # noqa: E402
-                    json_float, reference_lost, use_utf8_console)
+from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, NEURO_WINDOW_S,  # noqa: E402
+                    choose_frequencies, json_float, propose_frequencies,
+                    reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
                     StatusPublisher, default_instance_id, stream_name, verdict_from_sigma)
 from core.modes import contract, registry  # noqa: E402
@@ -236,6 +237,20 @@ class EngineServer:
             return
         spec = ancien.spec
         avant = dict(ancien.params)
+        # Le décodeur ne lit pas tous les réglages : le rafraîchissement de l'écran et le pic
+        # alpha ne servent qu'à proposer et à valider. Quand rien de ce qu'il lit n'a bougé, on
+        # met les réglages à jour EN PLACE. Reconstruire le runtime jetterait le plancher de repos
+        # déjà mesuré et recréerait le flux — 23 secondes et un réabonnement des clients, pour un
+        # changement qui n'affecte ni l'un ni l'autre. Et ça apprendrait à l'étudiant à ne plus
+        # toucher aux réglages, ce qui est l'inverse du but.
+        comptent = {p.key for p in spec.params if p.affecte_decodage}
+        if not [k for k, v in values.items() if k in comptent and avant.get(k) != v]:
+            ancien.params = dict(values)
+            hors = ", ".join(f"{k} : {avant.get(k)} -> {v}"
+                             for k, v in values.items() if avant.get(k) != v)
+            print(f"[server] {spec.label} — {hors or 'aucun changement'} "
+                  f"(sans effet sur le décodage : ni repos refait, ni flux recréé)")
+            return
         ancien.close()
         runtime = spec.runtime_cls(spec, values, self)
         runtime.published = ancien.published
@@ -279,7 +294,8 @@ class EngineServer:
     # que depuis un seul fil — la partager entre l'interface et l'acquisition produirait des
     # corruptions qu'aucun test ne rattraperait.
 
-    COMMANDS = ("start_mode", "stop_mode", "set_params", "set_published", "recalibrate", "stop")
+    COMMANDS = ("start_mode", "propose_params", "stop_mode", "set_params", "set_published",
+                "recalibrate", "stop")
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
@@ -315,6 +331,33 @@ class EngineServer:
             ids = [s.id for s in specs]
             self._commands.put(("start_mode", {"ids": ids, "params": values}))
             return {"accepted": True, "command": "start_mode", "ids": ids}
+
+        if command == "propose_params":
+            # Une commande en LECTURE : elle ne met rien en file et ne touche pas la session
+            # BrainFlow, donc elle peut répondre tout de suite. Elle reste ici pour que la console
+            # et un client LSL empruntent le même chemin — un seul endroit à tester.
+            spec = registry.get(params.get("id"))
+            if spec is None:
+                connus = ", ".join(s.id for s in registry.runnable())
+                return {"accepted": False,
+                        "reason": f"mode inconnu : {params.get('id')} (disponibles : {connus})"}
+            cle = params.get("key")
+            source = next((p for p in spec.params if p.key == cle and p.proposes), None)
+            if source is None:
+                proposeurs = [p.key for p in spec.params if p.proposes]
+                return {"accepted": False,
+                        "reason": f"« {cle} » ne propose aucun réglage pour « {spec.label} » "
+                                  f"(qui propose : {', '.join(proposeurs) or 'aucun'})"}
+            runtime = self.active.get(spec.id)
+            courant = dict(runtime.params) if runtime is not None else spec.defaults()
+            cible = source.proposes
+            n = len(courant.get(cible) or spec.defaults().get(cible) or ())
+            valeurs, note = propose_frequencies(float(courant.get("refresh_hz") or 60.0), n,
+                                                float(courant.get("alpha_hz") or ALPHA_DEFAUT_HZ))
+            if not valeurs:
+                return {"accepted": False, "reason": note}
+            return {"accepted": True, "command": command, "id": spec.id,
+                    "key": cible, "value": valeurs, "warning": note}
 
         spec, reason = self._one(params.get("id"))
         if spec is None:
@@ -808,7 +851,7 @@ def _smoke():
           f"dont {len(registry.runnable())} dans le moteur — "
           f"{'OK' if integre else 'PROBLÈME'}")
     return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
-            and _smoke_ssvep() and _smoke_neuro() and _smoke_cumul())
+            and _smoke_ssvep() and _smoke_neuro() and _smoke_cumul() and _smoke_proposition())
 
 
 def _smoke_neuro():
@@ -1110,6 +1153,70 @@ def _smoke_repos_partage():
     server.active = {}
 
     print(f"[smoke-repos] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_proposition():
+    """La proposition et le repos sélectif, contre un VRAI moteur — jamais une maquette."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    server = EngineServer(synthetic=True, modes=("ssvep",), instance="smoke-proposition")
+    server._start(["ssvep"], {s.id: v for s, v in server._pending}, now=0.0)
+
+    ack = server.submit("propose_params", id="ssvep", key="refresh_hz")
+    chk(ack.get("accepted") and len(ack.get("value") or []) == 3,
+        f"proposer rend autant de cibles qu'il y en a réglées ({ack.get('value')})")
+    chk(all(abs(60.0 / f - round(60.0 / f)) < 1e-6 for f in ack["value"]),
+        "et toutes divisent le refresh déclaré")
+
+    # La proposition doit être ACCEPTABLE par le moteur : c'est ce qui prouve que la règle et la
+    # validation sont d'accord. Deux morceaux qui divergeraient produiraient un bouton qui propose
+    # des valeurs aussitôt refusées — le pire des deux mondes.
+    ack2 = server.submit("set_params", id="ssvep", params={"freqs": ack["value"]})
+    chk(ack2.get("accepted"), f"et le moteur accepte ce qu'il vient de proposer ({ack2}) ")
+
+    # Un réglage sans effet sur le décodage ne reconstruit RIEN. On compare l'objet lui-même et
+    # pas la phase : les deux chemins laissent le mode en « warmup » juste après un démarrage, donc
+    # la phase ne prouverait rien. L'identité du runtime, si — et c'est elle qui porte le plancher
+    # de repos déjà mesuré.
+    avant = server.active["ssvep"]
+    server._set_params("ssvep", {**avant.params, "refresh_hz": 144.0})
+    chk(server.active["ssvep"] is avant,
+        "changer le refresh seul garde le MÊME runtime, donc son plancher de repos")
+    chk(server.active["ssvep"].params["refresh_hz"] == 144.0,
+        f"et le réglage est bien pris ({server.active['ssvep'].params['refresh_hz']})")
+
+    # Un réglage que le décodeur lit, lui, reconstruit et refait le repos.
+    avant = server.active["ssvep"]
+    server._set_params("ssvep", {**avant.params, "freqs": [12.0, 18.0], "refresh_hz": 60.0})
+    chk(server.active["ssvep"] is not avant,
+        "changer les fréquences reconstruit le mode")
+    chk(server.active["ssvep"].phase == "warmup",
+        f"et relance le repos (phase {server.active['ssvep'].phase})")
+
+    # Une clé qui ne propose rien est refusée AVEC sa raison : la commande reste atteignable
+    # depuis un client LSL même quand la console n'affiche aucun bouton.
+    ack3 = server.submit("propose_params", id="ssvep", key="alpha_hz")
+    chk(not ack3.get("accepted") and "propose" in (ack3.get("reason") or ""),
+        f"un réglage qui ne propose rien est refusé ({ack3.get('reason')})")
+
+    # Proposer AVANT d'avoir démarré le mode doit marcher : on se règle puis on lance.
+    arrete = EngineServer(synthetic=True, modes=(), instance="smoke-proposition-2")
+    ack4 = arrete.submit("propose_params", id="ssvep", key="refresh_hz")
+    chk(ack4.get("accepted") and ack4.get("value"),
+        f"on peut demander une proposition sur un mode PAS ENCORE démarré ({ack4.get('reason')})")
+
+    # Ce moteur n'est jamais passé par `run()` : on casse le cycle à la main, comme les autres
+    # smokes de ce fichier, sinon un `__del__` tardif du BoardShim libère la session BrainFlow.
+    for runtime in server.active.values():
+        runtime.close()
+    server.active = {}
+    print(f"[smoke-proposition] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
