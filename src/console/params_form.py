@@ -45,9 +45,12 @@ class ParamsForm(QWidget):
         bas.addWidget(self.bouton)
         bas.addStretch(1)
 
+        # `None` quand le mode a des réglages : un QLabel construit sans parent serait une
+        # fenêtre de premier niveau en Qt, pas un widget inerte.
+        self.vide = None if self.params else QLabel("aucun réglage pour ce mode")
         layout = QVBoxLayout(self)
-        if not self.params:
-            layout.addWidget(QLabel("aucun réglage pour ce mode"))
+        if self.vide is not None:
+            layout.addWidget(self.vide)
         layout.addLayout(formulaire)
         layout.addLayout(bas)
         layout.addWidget(self.refus)
@@ -72,11 +75,12 @@ class ParamsForm(QWidget):
                                      f"par des virgules")
             return champ
         champ = QSpinBox() if kind == "int" else QDoubleSpinBox()
-        # Des bornes larges par défaut : les vraies bornes sont dans le contrat et c'est le
-        # moteur qui refuse. Un widget qui EMPÊCHE de saisir une valeur hors bornes priverait
-        # l'étudiant du message qui lui dit pourquoi elle est hors bornes.
-        champ.setRange(param["min"] if param["min"] is not None else -1e9,
-                       param["max"] if param["max"] is not None else 1e9)
+        # Volontairement PLUS LARGES que les bornes du contrat, et pas seulement quand le contrat
+        # n'en donne pas. Un QSpinBox écrête en silence : réglé sur [0 ; 0.99], il transforme un
+        # « 5 » saisi en « 0.99 » et l'envoie sans un mot. L'étudiant croit avoir demandé 5, le
+        # moteur reçoit 0.99, et personne ne lui dit pourquoi 5 était impossible. C'est le moteur
+        # qui refuse, avec sa raison — c'est la règle de ce fichier, et l'écrêtage la contournait.
+        champ.setRange(-1e9, 1e9)
         if kind != "int":
             champ.setDecimals(3)
             champ.setSingleStep(0.05)
@@ -84,7 +88,12 @@ class ParamsForm(QWidget):
         return champ
 
     def set_values(self, values):
-        """Recharge les champs depuis l'état du moteur (après application ou refus)."""
+        """Recharge les champs depuis l'état du moteur — appelé quand les réglages EN VIGUEUR changent.
+
+        Donc pas après un refus : un refus ne change rien au moteur, et la saisie fautive reste
+        sous les yeux pour être corrigée plutôt qu'à retaper. C'est `show_refus()` qui se charge
+        de dire, dans le même mouvement, ce qui reste réellement en vigueur.
+        """
         for param in self.params:
             if param["key"] not in values:
                 continue

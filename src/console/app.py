@@ -298,7 +298,8 @@ def _smoke():
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
     # soumission, sans avoir besoin de la boucle.
-    moteur = EngineServer(synthetic=True, modes=("raw", "ssvep"), instance="console-smoke")
+    moteur = EngineServer(synthetic=True, modes=("raw", "ssvep", "neuro"),
+                          instance="console-smoke")
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
@@ -308,7 +309,7 @@ def _smoke():
 
     # `submit` ne peut valider que sur un mode DÉMARRÉ : on applique la commande à la main,
     # comme la boucle le ferait.
-    moteur._start(["raw", "ssvep"], {s.id: v for s, v in moteur._pending}, now=0.0)
+    moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)
 
     page.formulaire.champs["freqs"].setText("12, 15, 20")
     page._appliquer(page.formulaire.values())
@@ -330,9 +331,30 @@ def _smoke():
     chk("liste de nombres" in page.formulaire.refus.text(),
         "une saisie illisible est refusée par le MOTEUR, pas par le formulaire")
 
-    # Le mode « brut » n'a aucun réglage : la page doit le dire, pas afficher un cadre vide.
+    # Un réglage BORNÉ par le contrat (le lissage du neuro, 0 à 0.99) : le champ ne doit PAS
+    # écrêter la saisie. Un QSpinBox réglé sur les bornes du contrat transformerait « 5 » en
+    # « 0.99 » sans un mot, et le moteur n'aurait jamais l'occasion de dire pourquoi 5 est exclu.
+    neuro = reelle.pages["neuro"]
+    reelle.show_mode("neuro")
+    reelle.apply_state(moteur.snapshot())      # comme le ferait le QTimer : la page apprend l'état
+    neuro.formulaire.champs["smoothing"].setValue(5.0)
+    chk(neuro.formulaire.values()["smoothing"] == 5.0,
+        f"une valeur hors bornes SORT du formulaire telle quelle "
+        f"({neuro.formulaire.values()['smoothing']}, et non écrêtée à 0.99)")
+    neuro._appliquer(neuro.formulaire.values())
+    chk(neuro.formulaire.refus.text() != "",
+        "et c'est le MOTEUR qui la refuse, avec sa raison")
+    chk("en vigueur" in neuro.formulaire.refus.text(),
+        f"le refus rappelle ce qui reste appliqué — « {neuro.formulaire.refus.text()[-40:]} »")
+    chk(neuro.formulaire.champs["smoothing"].value() == 5.0,
+        "et la saisie fautive reste dans le champ, pour être corrigée plutôt que retapée")
+
+    # Le mode « brut » n'a aucun réglage : la page doit le DIRE, pas afficher un cadre vide.
     chk(len(reelle.pages["raw"].formulaire.champs) == 0,
-        "le brut n'a aucun réglage, et le formulaire l'assume")
+        "le brut n'a aucun réglage")
+    chk(reelle.pages["raw"].formulaire.vide is not None
+        and reelle.pages["raw"].formulaire.vide.isVisibleTo(reelle.pages["raw"]),
+        "et le formulaire l'écrit, au lieu de laisser un cadre vide")
 
     # Moteur pas encore démarré : rien ne doit lever.
     console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,

@@ -78,7 +78,16 @@ class ModePage(QWidget):
         FRÉQUENCE. Le flux est recréé au passage — les clients doivent se réabonner.
         """
         ack = self.console.commande("set_params", id=self.mode_id, params=values)
-        self.formulaire.show_refus("" if ack.get("accepted") else ack.get("reason", ""))
+        if ack.get("accepted"):
+            self.formulaire.show_refus("")
+            return
+        # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
+        # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire
+        # comme l'état du moteur, et l'étudiant croit décoder sur des réglages jamais appliqués.
+        vigueur = self._derniers_params or {}
+        rappel = ("  ·  en vigueur : " + ", ".join(f"{c} = {v}" for c, v in vigueur.items())
+                  if vigueur else "")
+        self.formulaire.show_refus(ack.get("reason", "") + rappel)
 
     def _copier(self):
         from PySide6.QtWidgets import QApplication
