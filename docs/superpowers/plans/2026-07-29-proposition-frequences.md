@@ -629,13 +629,11 @@ Dans `src/core/server.py`, ajouter `"propose_params"` au tuple `COMMANDS`, impor
             # Une commande en LECTURE : elle ne met rien en file et ne touche pas la session
             # BrainFlow, donc elle peut répondre tout de suite. Elle reste ici pour que la console
             # et un client LSL empruntent le même chemin — un seul endroit à tester.
-            specs, reason = self._resolve([params["id"]] if params.get("id") else [],
-                                          doit_tourner=False)
-            if specs is None:
-                return {"accepted": False, "reason": reason}
-            if not specs:
-                return {"accepted": False, "reason": "aucun mode désigné (id manquant)"}
-            spec = specs[0]
+            spec = registry.get(params.get("id"))
+            if spec is None:
+                connus = ", ".join(s.id for s in registry.runnable())
+                return {"accepted": False,
+                        "reason": f"mode inconnu : {params.get('id')} (disponibles : {connus})"}
             cle = params.get("key")
             source = next((p for p in spec.params if p.key == cle and p.proposes), None)
             if source is None:
@@ -655,9 +653,12 @@ Dans `src/core/server.py`, ajouter `"propose_params"` au tuple `COMMANDS`, impor
                     "key": cible, "value": valeurs, "warning": note}
 ```
 
-On passe par `self._resolve(..., doit_tourner=False)` et non par `self._one` : `_one` exige un mode
-DÉMARRÉ, or on veut pouvoir demander une proposition avant de lancer quoi que ce soit. Ajouter aussi
-`ALPHA_DEFAUT_HZ` à l'import de `core.config`.
+⚠️ **On n'utilise ni `_one` ni `_resolve`, et ce n'est pas un oubli.** Les deux imposent un état :
+`_one` exige un mode DÉMARRÉ, et `_resolve(..., doit_tourner=False)` fait l'inverse — il **refuse**
+un mode déjà démarré, parce que c'est la règle de `start_mode`. Or proposer doit marcher dans les
+deux cas : avant de lancer, pour se régler ; et pendant, pour changer d'avis. On interroge donc
+directement le registre. Ajouter `ALPHA_DEFAUT_HZ` à l'import de `core.config` (`registry` est
+déjà importé).
 
 - [ ] **Étape 4 : le repos sélectif**
 
