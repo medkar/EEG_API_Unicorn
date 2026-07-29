@@ -23,7 +23,7 @@ import sys as _sys
 from dataclasses import dataclass
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import BANDPASS, WINDOW_S, use_utf8_console  # noqa: E402
+from core.config import BANDPASS, WINDOW_S, available_frequencies, use_utf8_console  # noqa: E402
 from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
@@ -42,6 +42,7 @@ class Param:
     choices: tuple = ()
     constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
     proposes: str = ""        # ce paramètre en PROPOSE un autre (chantier 2 ; cf. spec §3.1)
+    affecte_decodage: bool = True   # False = le décodeur ne le lit jamais (cf. _set_params)
     help: str = ""
 
 
@@ -206,6 +207,24 @@ def _check_constraints(param, values):
                         f"{WINDOW_S:g} s (écart minimum {ecart_min:.2f} Hz) : "
                         + ", ".join(f"{a:g} et {b:g}" for a, b in proches))
 
+        elif name == "divise_le_refresh":
+            # Une fréquence n'est affichable sans jitter que si c'est un diviseur ENTIER du
+            # rafraîchissement : sinon l'écran saute des cycles, et le décodeur corrèle contre une
+            # sinusoïde que personne n'affiche. Panne parfaitement silencieuse — aucune erreur,
+            # juste zéro détection — donc on la refuse ICI plutôt que de la laisser en séance.
+            refresh = float(values.get("refresh_hz") or 0.0)
+            if refresh > 0:
+                for v in _as_list(values.get(param.key)):
+                    k = refresh / v if v else 0.0
+                    if not v or abs(k - round(k)) > 1e-6:
+                        proches = sorted((f for _n, f in available_frequencies(refresh)),
+                                         key=lambda f: abs(f - v))[:2]
+                        return (f"« {param.label} » : {v:g} Hz n'est pas un diviseur entier de "
+                                f"{refresh:g} Hz — l'affichage sauterait des cycles et le décodeur "
+                                f"corrélerait contre une sinusoïde que personne n'affiche. Les "
+                                f"plus proches sont "
+                                + " et ".join(f"{f:g}" for f in proches) + " Hz")
+
         else:
             return f"contrainte inconnue « {name} » sur « {param.label} » (défaut du contrat)"
     return None
@@ -314,6 +333,33 @@ def _selftest():
     chk(client_snippet(ModeSpec(id="x", label="X", family="actif", summary="", status="prevu",
                                 unavailable="pas encore")) == "",
         "un mode sans flux ne propose aucun extrait")
+
+    # `divise_le_refresh` : la contrainte regarde un AUTRE réglage du mode. C'est ce que
+    # `_check_constraints` permet depuis le chantier 1 ; c'est ici qu'on s'en sert enfin.
+    ecran = ModeSpec(
+        id="essai_refresh", label="Essai", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(
+            Param(key="refresh_hz", label="Rafraîchissement", kind="float", unit="Hz",
+                  default=60.0, affecte_decodage=False),
+            Param(key="freqs", label="Fréquences des cibles", kind="float_list", unit="Hz",
+                  default=(15.0, 20.0), count=(2, 8), constraints=("divise_le_refresh",)),
+        ),
+    )
+    _v, raison = validate(ecran, {"freqs": [15.0, 20.0]})
+    chk(raison is None, f"des diviseurs de 60 Hz passent ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [15.0, 17.0]})
+    chk(raison is not None and "17" in raison and "60" in raison,
+        f"17 Hz est refusé, en nommant le refresh déclaré ({raison})")
+    chk(raison is not None and "20" in raison and "15" in raison,
+        f"et le refus donne les diviseurs les plus proches ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [24.0, 18.0], "refresh_hz": 144.0})
+    chk(raison is None, f"les mêmes valeurs jugées contre 144 Hz passent ({raison})")
+
+    chk(ecran.params[0].affecte_decodage is False and ecran.params[1].affecte_decodage is True,
+        "un Param déclare s'il affecte le décodage, et le défaut est « oui »")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
