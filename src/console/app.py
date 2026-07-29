@@ -302,6 +302,15 @@ def _smoke():
     chk("score_8.57Hz" not in page.extrait.toPlainText(),
         "et l'extrait client est regénéré sur les nouvelles voies")
 
+    # Mode arrêté : le bloc « brancher un client » doit le DIRE. Sans ça il continue d'annoncer
+    # un nom de flux que plus personne ne publie, et l'étudiant s'abonne dans le vide.
+    page.update_from({"modes_state": {}})
+    chk("ARRÊTÉ" in page.flux.text(),
+        f"un mode arrêté ne laisse pas croire que son flux existe ({page.flux.text()})")
+    page.update_from(state)
+    chk("EEG_API_Unicorn_decoded_ssvep" in page.flux.text(),
+        "et le redémarrage rétablit le nom du flux")
+
     # Un mode PASSIF ne se rend pas comme un mode actif.
     neuro_state = {**state, "modes_state": {**state["modes_state"], "neuro": {
         "id": "neuro", "label": "Neuro", "family": "passif", "phase": "running",
@@ -316,6 +325,26 @@ def _smoke():
     chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
     chk("TENDANCE" in page.vue.avertissement.text(),
         "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
+
+    # L'APERÇU DE LA TUILE suit la même règle que la page : c'est la famille qui décide.
+    # Un mode actif met en avant la cible que le MOTEUR a retenue ; un mode passif ne met rien
+    # en avant du tout — surligner le plus grand indice le ferait passer pour une sélection.
+    chk(console.grid.tuiles["ssvep"].apercu._retenue == 0
+        and not console.grid.tuiles["ssvep"].apercu._centre,
+        "la tuile d'un mode ACTIF montre la cible retenue par le moteur")
+    chk(console.grid.tuiles["neuro"].apercu._retenue == -1
+        and console.grid.tuiles["neuro"].apercu._centre,
+        "celle d'un mode PASSIF ne désigne aucun gagnant, et signe ses valeurs")
+
+    # Un indice qui cesse d'être rapporté perd sa barre, au lieu de rester figé sur sa dernière
+    # valeur — le même défaut que la barre orpheline d'une cible SSVEP retirée.
+    sans_engagement = {**neuro_state, "modes_state": {**neuro_state["modes_state"], "neuro": {
+        **neuro_state["modes_state"]["neuro"],
+        "output": {**neuro_state["modes_state"]["neuro"]["output"],
+                   "z": {"charge": 1.2, "somnolence": -0.4}}}}}
+    console.apply_state(sans_engagement)
+    chk(set(page.vue._barres) == {"charge", "somnolence"},
+        f"un indice qui disparaît perd sa barre ({sorted(page.vue._barres)})")
     z = neuro_state["modes_state"]["neuro"]["output"]["z"]
     attendu = int(z["charge"] / live_views.PassiveView.SPAN * 100)
     chk(page.vue._barres["charge"].value() == attendu,

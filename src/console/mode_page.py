@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import live_views  # noqa: E402
+from console import PHASES_FR, live_views  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from core.lsl_io import stream_name  # noqa: E402
 from core.modes import registry  # noqa: E402
@@ -112,8 +112,13 @@ class ModePage(QWidget):
         if mode_state is None:
             self.etat.setText("arrêté")
             self.vue.update_from(None)
+            # Le bloc « brancher un client » doit le dire AUSSI. L'extrait reste lisible — c'est
+            # ce qu'on vient copier — mais annoncer un nom de flux sans réserve enverrait
+            # l'étudiant s'abonner à quelque chose que plus personne ne publie.
+            self.flux.setText("mode ARRÊTÉ — ce flux n'est pas publié en ce moment")
+            self._derniers_params = None      # forcer la régénération au redémarrage
             return
-        libelle = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
+        libelle = PHASES_FR
         self.etat.setText(libelle.get(mode_state["phase"], mode_state["phase"])
                           + ("" if mode_state["published"] else " · non publié"))
         self.vue.update_from(mode_state)

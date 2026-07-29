@@ -7,12 +7,7 @@ rassurantes sur un signal vide. Ça a coûté 3,4 minutes d'enregistrement dans 
 2026-07-20, sans le moindre avertissement.
 """
 
-import os
-import sys
-
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Banner(QWidget):

@@ -9,10 +9,17 @@ Les modes que le moteur ne sait pas faire sont affichés, grisés, avec leur rai
 l'attend dans `src/research/app.py`.
 """
 
+import os
+import sys
+
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import PHASES_FR  # noqa: E402
+from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 COLONNES = 4
 BLEU, GRIS = QColor("#4c8dff"), QColor("#8a8f9c")
@@ -24,16 +31,26 @@ class MiniBars(QWidget):
     Au QPainter plutôt qu'en pyqtgraph : une tuile en montre trois ou quatre, elles sont
     redessinées 10 fois par seconde, et un widget de tracé complet par tuile coûterait cher
     pour trois rectangles.
+
+    **Deux rendus, choisis par la famille du mode, comme les vues de la page.** Un mode ACTIF a
+    une décision : la barre mise en avant est celle que le MOTEUR a retenue, jamais un maximum
+    recalculé ici. Un mode PASSIF n'a aucune décision et ses valeurs sont signées : elles se
+    dessinent de part et d'autre d'un axe, et rien n'est mis en avant. Colorier le plus grand
+    indice comme une sélection laisserait croire qu'un z d'engagement est une commande — le
+    contresens exact que le contrat des flux cherche à empêcher.
     """
 
     def __init__(self):
         super().__init__()
         self.setMinimumHeight(26)
         self._values, self._span = [], 1.0
+        self._retenue, self._centre = -1, False
 
-    def set_values(self, values, span=1.0):
+    def set_values(self, values, span=1.0, retenue=-1, centre=False):
+        """`retenue` : l'indice choisi par le MOTEUR (-1 = aucun). `centre` : valeurs signées."""
         self._values = [float(v) for v in (values or [])]
         self._span = max(float(span), 1e-6)
+        self._retenue, self._centre = int(retenue), bool(centre)
         self.update()
 
     def paintEvent(self, _event):
@@ -42,14 +59,20 @@ class MiniBars(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         largeur = self.width() / max(len(self._values), 1)
-        haut = self.height()
-        meilleur = max(range(len(self._values)), key=lambda i: self._values[i])
+        haut, demi = self.height(), self.height() / 2.0
         for i, valeur in enumerate(self._values):
-            part = min(abs(valeur) / self._span, 1.0)
-            h = max(2.0, part * haut)
-            painter.fillRect(int(i * largeur) + 2, int(haut - h),
-                             int(largeur) - 4, int(h),
-                             BLEU if i == meilleur else GRIS)
+            part = max(-1.0, min(valeur / self._span, 1.0))
+            if self._centre:
+                # Passif : un -3 et un +3 ne doivent PAS se ressembler, c'est tout ce que
+                # l'indice dit. On dessine donc de part et d'autre de l'axe médian.
+                h = part * demi
+                y, hauteur = (demi - h, h) if h >= 0 else (demi, -h)
+            else:
+                # Actif : un score négatif veut dire « aucune preuve », donc rien à montrer.
+                hauteur = max(part, 0.0) * haut
+                y = haut - hauteur
+            painter.fillRect(int(i * largeur) + 2, int(y), int(largeur) - 4,
+                             max(2, int(hauteur)), BLEU if i == self._retenue else GRIS)
 
 
 class ModeTile(QFrame):
@@ -110,7 +133,7 @@ class ModeTile(QFrame):
             self.detail.setText(self.spec["summary"])
             return
 
-        libelle = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
+        libelle = PHASES_FR
         self.etat.setText(libelle.get(mode_state["phase"], mode_state["phase"]))
         self.publie.setEnabled(True)
         self.publie.blockSignals(True)     # sinon régler la case RÉÉMET la commande, en boucle
@@ -124,9 +147,11 @@ class ModeTile(QFrame):
 
         sortie = mode_state.get("output") or {}
         if "scores" in sortie:
-            self.apercu.set_values(sortie["scores"], span=max(sortie.get("threshold", 2.5), 1.0))
+            self.apercu.set_values(sortie["scores"],
+                                   span=max(sortie.get("threshold", Z_MIN), 1.0),
+                                   retenue=sortie.get("target_index", -1))
         elif "z" in sortie:
-            self.apercu.set_values(list(sortie["z"].values()), span=3.0)
+            self.apercu.set_values(list(sortie["z"].values()), span=NEURO_Z_SPAN, centre=True)
         else:
             self.apercu.set_values([])
 
@@ -135,10 +160,13 @@ def _resume(mode_state):
     """Une ligne : ce que le mode produit en ce moment. "" si rien de parlant."""
     sortie = mode_state.get("output") or {}
     if "scores" in sortie:
-        index = sortie["target_index"]
+        # `.get` et pas `[...]` : cette ligne tourne 10 fois par seconde dans le rafraîchissement
+        # de la grille. Un mode actif qui publierait des scores sans cible nommée y ferait tomber
+        # TOUTE l'interface sur un KeyError, pas seulement sa propre tuile.
+        index = sortie.get("target_index", -1)
         if sortie.get("artifact"):
             return "artefact — fenêtre rejetée"
-        return "aucune cible" if index < 0 else f"cible {index} · {sortie['freq_hz']:g} Hz"
+        return "aucune cible" if index < 0 else f"cible {index} · {sortie.get('freq_hz', 0):g} Hz"
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
     params = mode_state.get("params") or {}

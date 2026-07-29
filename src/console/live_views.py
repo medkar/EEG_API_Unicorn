@@ -177,6 +177,11 @@ class PassiveView(QWidget):
             self.etat.setText(mode_state["instruction"] if mode_state else "en attente")
             return
 
+        # Un indice qui cesse d'être rapporté perd sa barre. Sans ça elle resterait à l'écran,
+        # figée sur sa dernière valeur, sans rien pour dire qu'elle ne mesure plus rien.
+        for disparu in [c for c in self._barres if c not in z]:
+            self.barres.removeRow(self._barres.pop(disparu))
+
         for cle, valeur in z.items():
             if cle not in self._barres:
                 barre = QProgressBar()

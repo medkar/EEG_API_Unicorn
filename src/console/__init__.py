@@ -25,3 +25,8 @@ import sys as _sys
 # sous-module du paquet — un futur `import console.grid` isolé reste donc couvert.
 if "--smoke" in _sys.argv:
     _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# Le vocabulaire de phase du moteur, rendu en français. UNE seule fois : la tuile de la grille et
+# la page du mode affichent la même phase du même mode, et deux tables séparées finiraient par se
+# contredire — un mode annoncé « repos » ici et « rest » là.
+PHASES_FR = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
