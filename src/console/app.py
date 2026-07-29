@@ -295,6 +295,45 @@ def _smoke():
     page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et « ← Modes » ramène sur la grille")
 
+    # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
+    # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
+    # soumission, sans avoir besoin de la boucle.
+    moteur = EngineServer(synthetic=True, modes=("raw", "ssvep"), instance="console-smoke")
+    reelle = Console(moteur)
+    reelle.timer.stop()
+    page = reelle.pages["ssvep"]
+    chk(len(page.formulaire.champs) == 1, "le SSVEP expose un réglage : ses fréquences")
+    chk(page.formulaire.champs["freqs"].text().startswith("15"),
+        f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
+
+    # `submit` ne peut valider que sur un mode DÉMARRÉ : on applique la commande à la main,
+    # comme la boucle le ferait.
+    moteur._start(["raw", "ssvep"], {s.id: v for s, v in moteur._pending}, now=0.0)
+
+    page.formulaire.champs["freqs"].setText("12, 15, 20")
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"un jeu valide est accepté ({page.formulaire.refus.text()})")
+
+    page.formulaire.champs["freqs"].setText("15, 60")
+    page._appliquer(page.formulaire.values())
+    chk("hors bande passante" in page.formulaire.refus.text(),
+        f"et un jeu hors bande est refusé AVEC sa raison — « {page.formulaire.refus.text()[:60]}… »")
+
+    page.formulaire.champs["freqs"].setText("15, 15.2")
+    page._appliquer(page.formulaire.values())
+    chk("trop proches" in page.formulaire.refus.text(),
+        "deux cibles trop proches pour la fenêtre : refusées, avec l'écart minimum indiqué")
+
+    page.formulaire.champs["freqs"].setText("quinze, vingt")
+    page._appliquer(page.formulaire.values())
+    chk("liste de nombres" in page.formulaire.refus.text(),
+        "une saisie illisible est refusée par le MOTEUR, pas par le formulaire")
+
+    # Le mode « brut » n'a aucun réglage : la page doit le dire, pas afficher un cadre vide.
+    chk(len(reelle.pages["raw"].formulaire.champs) == 0,
+        "le brut n'a aucun réglage, et le formulaire l'assume")
+
     # Moteur pas encore démarré : rien ne doit lever.
     console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,
                          "modes": [], "quality": None, "catalog": []})

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import live_views  # noqa: E402
+from console.params_form import ParamsForm  # noqa: E402
 from core.lsl_io import stream_name  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.contract import client_snippet  # noqa: E402
@@ -44,9 +45,10 @@ class ModePage(QWidget):
         bloc_sortie = QGroupBox("Sortie en direct")
         QVBoxLayout(bloc_sortie).addWidget(self.vue)
 
+        self.formulaire = ParamsForm(spec["params"])
+        self.formulaire.appliquer.connect(self._appliquer)
         self.reglages = QGroupBox("Réglages")
-        QVBoxLayout(self.reglages).addWidget(
-            QLabel("aucun réglage pour ce mode"))   # remplacé à la tâche 14
+        QVBoxLayout(self.reglages).addWidget(self.formulaire)
 
         self.client = QGroupBox("Brancher un client")
         self.extrait = QPlainTextEdit()
@@ -67,6 +69,16 @@ class ModePage(QWidget):
         layout.addWidget(self.client)
 
         self._remplir_extrait(None)
+
+    def _appliquer(self, values):
+        """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.
+
+        ⚠️ Appliquer un réglage RELANCE le repos de ce mode. C'est obligatoire, pas prudent : un
+        plancher mesuré sous d'autres réglages est faux, et pour le SSVEP il est mesuré PAR
+        FRÉQUENCE. Le flux est recréé au passage — les clients doivent se réabonner.
+        """
+        ack = self.console.commande("set_params", id=self.mode_id, params=values)
+        self.formulaire.show_refus("" if ack.get("accepted") else ack.get("reason", ""))
 
     def _copier(self):
         from PySide6.QtWidgets import QApplication
@@ -97,3 +109,4 @@ class ModePage(QWidget):
         if params != self._derniers_params:
             self._derniers_params = dict(params)
             self._remplir_extrait(params)
+            self.formulaire.set_values(params)
