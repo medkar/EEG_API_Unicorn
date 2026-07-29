@@ -50,6 +50,7 @@ class ModePage(QWidget):
 
         self.formulaire = ParamsForm(spec["params"])
         self.formulaire.appliquer.connect(self._appliquer)
+        self.formulaire.proposer.connect(self._proposer)
         self.reglages = QGroupBox("Réglages")
         QVBoxLayout(self.reglages).addWidget(self.formulaire)
 
@@ -76,9 +77,12 @@ class ModePage(QWidget):
     def _appliquer(self, values):
         """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.
 
-        ⚠️ Appliquer un réglage RELANCE le repos de ce mode. C'est obligatoire, pas prudent : un
-        plancher mesuré sous d'autres réglages est faux, et pour le SSVEP il est mesuré PAR
-        FRÉQUENCE. Le flux est recréé au passage — les clients doivent se réabonner.
+        ⚠️ Appliquer un réglage que le DÉCODEUR lit — les fréquences, par exemple — relance le
+        repos de ce mode et recrée son flux. C'est obligatoire, pas prudent : un plancher mesuré
+        sous d'autres réglages est faux, et pour le SSVEP il est mesuré PAR FRÉQUENCE. Les clients
+        doivent alors se réabonner. Les réglages qui ne servent qu'à proposer ou à valider — le
+        rafraîchissement de l'écran, le pic alpha — ne coûtent rien de tout ça : c'est le contrat
+        qui le déclare, et le moteur qui en décide.
         """
         ack = self.console.commande("set_params", id=self.mode_id, params=values)
         if ack.get("accepted"):
@@ -91,6 +95,19 @@ class ModePage(QWidget):
         rappel = ("  ·  en vigueur : " + ", ".join(f"{c} = {v}" for c, v in vigueur.items())
                   if vigueur else "")
         self.formulaire.show_refus(ack.get("reason", "") + rappel)
+
+    def _proposer(self, cle):
+        """Demande une proposition au MOTEUR et la met dans le champ. La console ne calcule rien.
+
+        Le refus et l'avertissement passent par le même endroit que ceux d'« Appliquer » : un
+        étudiant n'a pas à apprendre deux façons de lire un message d'erreur.
+        """
+        ack = self.console.commande("propose_params", id=self.mode_id, key=cle)
+        if not ack.get("accepted"):
+            self.formulaire.show_refus(ack.get("reason", ""))
+            return
+        self.formulaire.remplir(ack["key"], ack["value"])
+        self.formulaire.show_refus(ack.get("warning", ""))
 
     def _copier(self):
         from PySide6.QtWidgets import QApplication

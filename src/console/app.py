@@ -392,6 +392,26 @@ def _smoke():
     chk("liste de nombres" in page.formulaire.refus.text(),
         "une saisie illisible est refusée par le MOTEUR, pas par le formulaire")
 
+    # Le bouton « Proposer » de bout en bout : clic -> commande au moteur -> champ rempli -> et la
+    # valeur obtenue est ACCEPTÉE. C'est ce dernier point qui compte : une proposition que la
+    # validation refuse serait le pire des deux mondes.
+    page = reelle.pages["ssvep"]
+    page.formulaire.champs["freqs"].setText("15, 20, 8.57143")
+    page._proposer("refresh_hz")
+    propose = page.formulaire.values()["freqs"]
+    chk(len(propose) == 3, f"« Proposer » remplit le champ ({propose})")
+    chk(all(abs(60.0 / f - round(60.0 / f)) < 1e-6 for f in propose),
+        "avec des diviseurs du rafraîchissement déclaré")
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"et le moteur accepte ce qu'il a lui-même proposé ({page.formulaire.refus.text()})")
+
+    # Le refus qui ferme le trou, vu depuis l'interface.
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page._appliquer(page.formulaire.values())
+    chk("diviseur entier" in page.formulaire.refus.text(),
+        f"17 Hz est refusé avec sa raison ({page.formulaire.refus.text()[:70]}…)")
+
     # Un réglage BORNÉ par le contrat (le lissage du neuro, 0 à 0.99) : le champ ne doit PAS
     # écrêter la saisie. Un QSpinBox réglé sur les bornes du contrat transformerait « 5 » en
     # « 0.99 » sans un mot, et le moteur n'aurait jamais l'occasion de dire pourquoi 5 est exclu.

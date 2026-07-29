@@ -9,14 +9,16 @@ Le formulaire envoie donc, et affiche la RAISON du refus telle que le moteur l'a
 """
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
+                               QWidget)
 
 
 class ParamsForm(QWidget):
     """Un champ par `Param`, plus son aide, plus un bouton et une ligne de refus."""
 
     appliquer = Signal(dict)
+    proposer = Signal(str)      # la clé du réglage qui en PROPOSE un autre
 
     def __init__(self, params):
         super().__init__()
@@ -29,6 +31,19 @@ class ParamsForm(QWidget):
             self.champs[param["key"]] = champ
             etiquette = param["label"] + (f" ({param['unit']})" if param["unit"] else "")
             formulaire.addRow(etiquette, champ)
+            if param.get("proposes"):
+                bouton = QPushButton(f"Proposer « {param['proposes']} »")
+                bouton.clicked.connect(lambda _c=False, k=param["key"]: self.proposer.emit(k))
+                formulaire.addRow("", bouton)
+            if param["key"] == "refresh_hz":
+                ecran = QApplication.primaryScreen()
+                if ecran is not None:
+                    detecte = QLabel(f"cette fenêtre est sur un écran à "
+                                     f"{ecran.refreshRate():g} Hz — mais c'est le rafraîchissement "
+                                     f"de l'écran qui AFFICHE les cibles qu'il faut mettre ici")
+                    detecte.setWordWrap(True)
+                    detecte.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+                    formulaire.addRow("", detecte)
             if param["help"]:
                 aide = QLabel(param["help"])
                 aide.setWordWrap(True)
@@ -106,6 +121,17 @@ class ParamsForm(QWidget):
                 champ.setText(", ".join(f"{float(v):g}" for v in valeur))
             else:
                 champ.setValue(valeur)
+
+    def remplir(self, cle, valeurs):
+        """Écrit une proposition dans un champ, SANS l'appliquer.
+
+        L'étudiant voit ce qu'on lui propose et clique « Appliquer » lui-même. Appliquer à sa
+        place lui retirerait la seule occasion de comprendre ce qui vient de changer.
+        """
+        champ = self.champs.get(cle)
+        if champ is None:
+            return
+        champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
 
     def values(self):
         """Ce que l'utilisateur a saisi, tel quel. Aucune conversion « intelligente ».
