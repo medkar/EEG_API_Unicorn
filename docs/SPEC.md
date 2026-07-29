@@ -462,7 +462,12 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
      modifiait son entrée ; `quality()` mesurait le transitoire du filtre, pas l'électrode).
    - **[fait 2026-07-27]** `decoded_ssvep` : décodeur CCA branché sur la même boucle, avec
      mesure du repos, normalisation z et rejet d'artefact. **Pas encore validé sur casque.**
-   - **[à faire]** test multicast **entre deux machines** sur le réseau de l'école.
+   - **[clos 2026-07-29 — décision d'exploitation]** le test multicast sur le réseau de l'école
+     devient **sans objet** : les séances se feront sur un **routeur dédié**, pas sur le réseau de
+     l'établissement. Le risque n°1 du choix tout-LSL est donc levé par l'organisation plutôt que
+     par un test. ⚠️ La contrepartie est à connaître : la découverte LSL n'est plus garantie hors
+     de ce routeur, donc un étudiant qui branche son poste sur le WiFi du campus ne verra rien —
+     c'est [docs/network.md](network.md) qui reste la marche à suivre dans ce cas.
 5. **Exemples** : `receiver.py` + Unity SSVEP.
    - **[fait 2026-07-27]** `examples/receiver.py` (`--list` / `--stream raw|quality|status|decoded_ssvep`).
    - **[fait 2026-07-27]** `examples/unity/` (SsvepIntentReceiver + IntentToMotion + README).
