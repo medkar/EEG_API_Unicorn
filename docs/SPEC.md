@@ -387,6 +387,7 @@ correctif NaN→null. Seul le rendu HTML est parti.
 | `start_mode` | `id` ou `ids`, `params?` | démarre un ou plusieurs modes ; ceux lancés **ensemble** partagent une seule phase de repos |
 | `stop_mode` | `id` | arrête un mode, son flux disparaît du réseau |
 | `set_params` | `id`, `params` | valide contre `spec.params`, applique ; **relance le repos** si le mode en a un |
+| `propose_params` | `id`, `key` | rend un jeu de valeurs proposé pour le réglage que `key` propose ; **ne l'applique pas** |
 | `set_published` | `id`, `on` | publie ou non le flux de ce mode ; le décodage continue pour l'affichage |
 | `recalibrate` | `id` | refait chauffe + repos de ce mode seul |
 | `stop` | — | arrête le moteur |
@@ -416,8 +417,13 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
 0. **[fait 2026-07-28]** **Console d'expérimentation** : contrat de mode (`src/core/modes/`),
    moteur multi-modes avec cumul et repos partagé, console PySide6 (grille + page de mode,
    réglages en lecture-écriture, tracés EEG). Tableau de bord web supprimé.
-   - **[à faire — chantier 2]** proposition automatique de fréquences (`Param.proposes`) et
-     réglages des autres modes.
+   - **[fait 2026-07-29 — chantier 2]** proposition de fréquences SSVEP accordée au pic alpha de
+     la personne (`refresh_hz` propose `freqs`), et refus d'une fréquence qui ne divise pas le
+     rafraîchissement déclaré. Conception :
+     [docs/superpowers/specs/2026-07-29-proposition-frequences-design.md](superpowers/specs/2026-07-29-proposition-frequences-design.md).
+     - **[à faire]** mesurer le pic alpha au casque plutôt que le faire saisir — la vraie bonne
+       réponse, écartée pour tenir le chantier court.
+     - **[à faire]** réglages des autres modes, quand ils auront un runtime.
    - **[à faire — chantier 3]** lancer une calibration et gérer les modèles depuis la console ;
      le MI est le premier candidat à migrer vers le moteur.
    - **[à faire — séance matérielle]** la console n'a **jamais été ouverte en fenêtre** : tout est

@@ -210,7 +210,7 @@ SPEC = ModeSpec(
             constraints=("dans_la_bande", "separables", "divise_le_refresh"),
             help="Les fréquences que TON application fait clignoter. Le nombre de cibles est la "
                  "longueur de cette liste. Une fréquence n'est stable que si c'est un diviseur "
-                 "entier du refresh de ton écran (à 60 Hz : 30, 20, 15, 12, 10, 8,57…). Évite le "
+                 "entier du refresh de ton écran (à 60 Hz : 30, 20, 15, 12, 10, 8,571…). Évite le "
                  "voisinage de ton pic alpha (~10 Hz) : le fond de corrélation y est élevé au "
                  "repos. Changer cette liste RECRÉE le flux — les clients doivent se réabonner.",
         ),

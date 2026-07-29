@@ -37,7 +37,7 @@ Lancer :
     python src/core/server.py                           # vrai Unicorn, brut + qualité seulement
     python src/core/server.py --mode ssvep              # + décodage SSVEP (cibles par défaut)
     python src/core/server.py --mode ssvep --refresh 60 # cibles accordées à un écran 60 Hz
-    python src/core/server.py --mode ssvep --freqs 15,20,8.57
+    python src/core/server.py --mode ssvep --freqs 15,20,8.571
     python src/core/server.py --mode ssvep,neuro        # plusieurs modes EN MÊME TEMPS
     python src/core/server.py --mode neuro --no-raw     # sans le flux brut
     python src/core/server.py --duration 60             # s'arrête tout seul au bout de 60 s
@@ -1364,8 +1364,8 @@ def _parse_args(argv):
     p.add_argument("--no-raw", action="store_true",
                    help="ne pas diffuser le signal brut (le décodage continue)")
     p.add_argument("--freqs", default=None,
-                   help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.57 "
-                        "(mode ssvep uniquement)")
+                   help="fréquences des cibles affichées par l'appli cliente, ex. 15,20,8.571 "
+                        "(diviseurs entiers du refresh — 8,571 est 60/7, et 8,57 serait refusé)")
     p.add_argument("--refresh", type=float, default=None,
                    help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
                         "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce "

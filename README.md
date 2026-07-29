@@ -71,6 +71,16 @@ restarts too, since it is measured per frequency. A frequency set outside the ac
 with two targets closer than the `1/WINDOW_S` resolution, is rejected with a reason rather than
 accepted and decoded into the void.
 
+Frequencies must be **integer divisors of the refresh rate of the screen showing the targets** — at
+60 Hz: 30, 20, 15, 12, 10, 8.571. Anything else makes the display skip cycles, and the decoder
+correlates against a sinusoid nobody is displaying: no error, no detection, nothing to debug. The
+engine now refuses those, and the console has a **Propose** button that asks it for a valid set.
+
+The proposal steers away from the **individual alpha peak**, which is a per-person trait (population
+mean ≈ 9.6 Hz, range 7–13). A target sitting on someone's peak does not stand out from their own
+resting background — so the set that works for one person can fail for the next. Set `alpha_hz` per
+person; `python src/research/alpha_check.py` measures it.
+
 **The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI and ErrP,
 and the only place with a live histogram for neuro-monitoring. It owns the headset and publishes
 nothing.
