@@ -276,6 +276,20 @@ def _check_constraints(param, values):
                             f"plus proches sont "
                             + " et ".join(f"{f:g}" for f in proches) + " Hz")
 
+        elif name == "votes_atteignables":
+            # Deux réglages numériques bornés INDÉPENDAMMENT (chacun dans sa propre plage),
+            # mais dont la COMBINAISON peut être irréalisable : exiger plus d'accords qu'il
+            # n'y a de fenêtres pour les compter ne peut JAMAIS être satisfait, quel que soit
+            # le signal — le mode ne publierait plus jamais que -1, en silence. C'est la panne
+            # que ce produit existe pour éliminer : aucune erreur à l'exécution, juste un
+            # décodage qui ne conclut plus rien, ce qui ressemble à un signal absent.
+            min_votes = values.get(param.key)
+            vote_len = values.get("vote_len")
+            if min_votes is not None and vote_len is not None and min_votes > vote_len:
+                return (f"« {param.label} » : {min_votes} votes exigés sur seulement "
+                        f"{vote_len} fenêtres de vote — jamais atteignable, le mode ne "
+                        f"déciderait plus jamais rien")
+
         else:
             return f"contrainte inconnue « {name} » sur « {param.label} » (défaut du contrat)"
     return None
@@ -439,6 +453,26 @@ def _selftest():
     _v, raison = validate(ecran, {"freqs": [-20.0, -15.0]})
     chk(raison is not None and "strictement positive" in raison and "-20" in raison,
         f"fréquence négative est refusée ({raison})")
+
+    # `votes_atteignables` : une contrainte croisée entre DEUX réglages NUMÉRIQUES simples
+    # (pas des float_list comme `divise_le_refresh`) — chacun borné indépendamment, mais dont
+    # la combinaison peut être irréalisable.
+    vote = ModeSpec(
+        id="essai_vote", label="Essai vote", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(
+            Param(key="vote_len", label="Fenêtres du vote", kind="int", default=5, min=1, max=15),
+            Param(key="min_votes", label="Votes concordants", kind="int", default=3, min=1,
+                  max=15, constraints=("votes_atteignables",)),
+        ),
+    )
+    _v, raison = validate(vote, {"vote_len": 5, "min_votes": 3})
+    chk(raison is None, f"moins de votes exigés que de fenêtres : accepté ({raison})")
+    _v, raison = validate(vote, {"vote_len": 5, "min_votes": 5})
+    chk(raison is None, f"autant de votes que de fenêtres : accepté, c'est la limite ({raison})")
+    _v, raison = validate(vote, {"vote_len": 3, "min_votes": 10})
+    chk(raison is not None and "3" in raison and "10" in raison,
+        f"plus de votes que de fenêtres : refusé, en nommant les deux valeurs ({raison})")
 
     # --- choix dynamiques : la liste n'existe qu'à l'exécution -------------------
     dispo = ["a.joblib", "b.joblib"]

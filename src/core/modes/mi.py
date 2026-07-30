@@ -107,7 +107,17 @@ class MIRuntime(ModeRuntime):
         window = engine.acq.motor_window(engine.recent)
         if window is None:
             return
-        label, scores = self.decoder.classify(window)
+        # `self.decoder.scores(window)` seul, PAS `.classify()` : ce dernier renvoie None dans
+        # DEUX cas différents — probabilité sous le seuil, OU classe gagnante = REPOS — et les
+        # confond. Ici REPOS est une classe ORDINAIRE du vote, exactement comme GAUCHE et
+        # DROITE : elle peut gagner et se publier avec SON indice. Seul un écart sous le seuil
+        # produit None. Sans cette distinction, l'indice de REPOS est INATTEIGNABLE : le flux
+        # répondrait « je ne sais pas » quand le modèle est certain à 99 % que la personne se
+        # repose — exactement ce que `DecodedMIPublisher` interdit (cf. sa docstring : « -1 et
+        # la classe REPOS sont deux choses différentes »).
+        scores = self.decoder.scores(window)
+        meilleure = max(scores, key=scores.get)
+        label = meilleure if scores[meilleure] >= self.decoder.prob_min else None
         self._votes.append(label)
 
         # Le vote peut désigner None : « aucune fenêtre récente n'était assez sûre » est une
@@ -206,8 +216,11 @@ SPEC = ModeSpec(
             kind="int",
             default=MI_MIN_VOTES,
             min=1, max=15,
+            constraints=("votes_atteignables",),
             help="Combien de ces fenêtres doivent être d'accord pour émettre une intention. "
-                 "En demander plus retarde la décision et la rend plus sûre.",
+                 "En demander plus retarde la décision et la rend plus sûre. Ne peut pas "
+                 "dépasser « Fenêtres du vote » : au-delà, aucun vote ne peut plus jamais "
+                 "aboutir, et le mode ne décide plus rien — en silence.",
         ),
     ),
     rest=Rest(
@@ -256,6 +269,10 @@ def _selftest():
             self.instance = "selftest"
             self.recent = recent
 
+    # Capturée AVANT le `try` : si `MIModel.fit` levait à l'intérieur, un `finally` qui la
+    # restaure aurait lu une variable jamais assignée (`UnboundLocalError`), masquant l'erreur
+    # réelle ET sautant le nettoyage du dossier temporaire.
+    vrai_dispo = mi_models.modeles_disponibles
     dossier = tempfile.mkdtemp(prefix="mi_mode_")
     try:
         # Un modèle jetable, entraîné sur de l'ERD synthétique.
@@ -272,7 +289,6 @@ def _selftest():
         # fonction dans son module. C'est possible — et propre — parce que le contrat appelle
         # `mi_models.modeles_disponibles()` à travers un lambda : la résolution a lieu à
         # l'appel, pas à l'import. Aucun `data/` n'est touché, aucun objet gelé n'est mutilé.
-        vrai_dispo = mi_models.modeles_disponibles
 
         # 1. Sans modèle du tout, le mode REFUSE et dit comment en obtenir un.
         vide = _os.path.join(dossier, "aucun")
@@ -325,13 +341,49 @@ def _selftest():
             f"la toute première fenêtre ne peut pas conclure — le vote exige "
             f"{values['min_votes']} accords (index={premiere})")
 
-        # 5. Le contrat du mode.
+        # 5. REPOS est une classe ORDINAIRE du vote, pas un synonyme de « je ne sais pas ».
+        # `MIDecoder.classify()` la traite comme un cas d'arrêt (comme une proba sous le
+        # seuil) ; `_run_step` ne doit PLUS s'en servir pour cette raison précise. On fixe ICI
+        # les scores rendus par le décodeur, plutôt que d'espérer qu'un signal synthétique y
+        # mène : sur seulement 8 essais/classe, un modèle jetable ne classe pas forcément une
+        # fenêtre de repos fraîche comme REPOS (question de justesse du décodage, que ce
+        # fichier ne juge PAS — cf. docstring de `_selftest`). Ce qu'on vérifie ici est le
+        # CONTRAT du runtime : quand le décodeur est certain de REPOS, le mode publie SON
+        # indice, jamais -1. Le `chk(-1 <= index < len(MI_LABELS))` du bloc précédent passe
+        # dans les DEUX mondes (REPOS atteignable ou non) ; celui-ci fabrique la situation au
+        # lieu d'espérer qu'elle survienne.
+        vrais_scores = rt.decoder.scores
+        rt.decoder.scores = lambda window: {"GAUCHE": 0.05, "DROITE": 0.05, "REPOS": 0.90}
+        try:
+            rt._votes.clear()
+            rt._out.lignes.clear()
+            for i in range(int(values["vote_len"])):
+                moteur.recent = rng.normal(0.0, 8.0, (int(5.0 * 250), 8))
+                rt.tick(moteur, lsl_ts=20.0 + i, now=20.0 + i)
+        finally:
+            rt.decoder.scores = vrais_scores
+        index_repos, conf_repos, probas_repos = rt._out.lignes[-1]
+        chk(index_repos == MI_LABELS.index("REPOS"),
+            f"un décodeur certain de REPOS publie SON indice, jamais -1 (index={index_repos}, "
+            f"probas={probas_repos})")
+        chk(conf_repos == 0.90,
+            f"avec la confiance réellement rapportée par le décodeur, pas une confiance nulle "
+            f"({conf_repos:.2f})")
+
+        # 6. Le contrat du mode.
         chk(SPEC.rest.duration_s == 0.0 and SPEC.rest.warmup_s == SSVEP_WARMUP_S,
             f"chauffe obligatoire, aucun plancher ({SPEC.rest})")
         chk(SPEC.stream == "decoded_mi" and SPEC.status == "moteur",
             "le mode publie decoded_mi et tourne dans le moteur")
         chk(all(p.affecte_decodage for p in SPEC.params),
             "tous les réglages du MI affectent le décodage : en changer un refait le mode")
+
+        # 7. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
+        # aboutir, et le mode ne décide plus rien — en silence, la panne type de ce produit.
+        _v, raison = validate(SPEC, {"vote_len": 3, "min_votes": 10})
+        chk(raison is not None and "3" in raison and "10" in raison,
+            f"exiger plus de votes que de fenêtres est refusé, en nommant les deux valeurs "
+            f"({raison})")
     finally:
         mi_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)

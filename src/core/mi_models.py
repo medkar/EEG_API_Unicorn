@@ -38,6 +38,22 @@ def charger(chemin):
         return None, f"modèle illisible ({type(e).__name__}) : {_os.path.basename(chemin)}"
     if not hasattr(modele, "labels") or not hasattr(modele, "predict_proba"):
         return None, f"ce n'est pas un modèle MI : {_os.path.basename(chemin)}"
+    # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
+    # hérité (d'avant le déménagement du décodeur dans core/) porte "mi_decoder" (racine) — et
+    # RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`, le dossier
+    # du script rejoint sys.path et rend "mi_decoder" importable comme module de PREMIER
+    # NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la console ou l'appli pygame, ce
+    # chemin n'existe pas et le même fichier est refusé plus haut (ModuleNotFoundError).
+    # Vérifié empiriquement le 2026-07-30 : les quatre `.joblib` de `data/` portent bien
+    # "mi_decoder" sous ce sys.path-là. Cette divergence selon la commande de lancement, pour
+    # un modèle abandonné par décision de conception (spec §3), est exactement le « pire des
+    # deux mondes » que ce module existe pour éliminer : décoder avec les probabilités de
+    # quelqu'un d'autre, en silence.
+    module = type(modele).__module__
+    if module != "core.mi_decoder":
+        return None, (f"modèle hérité (module {module!r}, attendu 'core.mi_decoder'), "
+                      f"abandonné délibérément — refais une calibration : "
+                      f"{_os.path.basename(chemin)}")
     return modele, None
 
 
@@ -85,11 +101,26 @@ def decrire(chemin):
     return infos
 
 
+class _ModeleEtranger:
+    """Même interface qu'un `MIModel` (`labels` + `predict_proba`), mais TOUJOURS d'un module
+    différent de `core.mi_decoder` — sert `_selftest` à vérifier le refus d'un modèle hérité
+    sans dépendre du répertoire de lancement pour le reproduire. Définie ICI, au niveau du
+    module, et pas dans `_selftest` : `pickle`/`joblib` ne sait pas sérialiser une classe
+    locale à une fonction (elle n'est pas retrouvable par son nom qualifié au chargement).
+    """
+
+    labels = ["GAUCHE", "DROITE", "REPOS"]
+
+    def predict_proba(self, window):
+        return {c: 1.0 / len(self.labels) for c in self.labels}
+
+
 def _selftest():
     """Sur un dossier temporaire : un modèle valide, un fichier corrompu, un dossier vide."""
     import shutil
     import tempfile
 
+    import joblib
     import numpy as np
 
     from core.mi_decoder import MI_LABELS, MIModel, synth_mi_trial
@@ -134,6 +165,20 @@ def _selftest():
         _m, raison = charger(_os.path.join(dossier, "absent.joblib"))
         chk(_m is None and "introuvable" in (raison or ""),
             f"un chemin inexistant est signalé comme tel ({raison})")
+
+        # Un modèle dont la classe vient d'un AUTRE module que core.mi_decoder : c'est
+        # exactement l'état d'un modèle hérité une fois qu'un sys.path particulier (celui de
+        # `python src/core/server.py`, entre autres) le rend importable malgré tout — un
+        # défaut que « ça charge sans lever » ne peut PAS voir, puisque ce modèle-là charge
+        # très bien et porte labels/predict_proba comme un vrai MIModel.
+        etranger = _os.path.join(dossier, "mi_model_etranger.joblib")
+        joblib.dump(_ModeleEtranger(), etranger)
+        _m, raison = charger(etranger)
+        chk(_m is None and "hérité" in (raison or "") and "core.mi_decoder" in (raison or ""),
+            f"un modèle dont la classe vient d'ailleurs est refusé, même avec labels et "
+            f"predict_proba ({raison})")
+        chk(etranger not in modeles_disponibles(dossier),
+            "et il n'apparaît donc pas non plus dans la liste")
 
         d = decrire(bon)
         chk(d["nom"] == "mi_model.joblib", f"la description porte le nom du fichier ({d['nom']})")
