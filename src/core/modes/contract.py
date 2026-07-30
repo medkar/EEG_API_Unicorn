@@ -114,10 +114,37 @@ class Rest:
 
 @dataclass(frozen=True)
 class Calib:
-    """Ce qu'il faudrait pour entraîner ce mode. Informatif dans ce chantier (spec §3)."""
+    """Comment ce mode s'entraîne : par qui, avec quels réglages, et pour quel coût en signal.
 
-    kind: str        # "console" (consignes rendues par la console) | "natif" (fenêtre pygame)
-    reason: str = ""  # pourquoi "natif" — c'est une contrainte PHYSIQUE, pas une préférence
+    Deux valeurs de `kind`, et elles ne décrivent pas une préférence mais une CONTRAINTE :
+      - "console" — les consignes sont du texte et un décompte, rendus par la console. Le moteur
+        joue le protocole et enregistre. C'est le cas du Motor Imagery : il est ENDOGÈNE, donc il
+        n'a aucun stimulus à afficher à la milliseconde près.
+      - "natif" — le protocole a besoin d'un stimulus verrouillé à la frame (c-VEP, P300), qui ne
+        peut pas être rendu par une interface Qt. `reason` dit pourquoi, et la calibration reste
+        dans l'appli pygame.
+
+    ⚠️ `epoch_s` n'est pas décoratif : c'est la plus longue tranche que cette calibration
+    prélèvera dans le tampon glissant du moteur. `EngineServer` dimensionne son tampon dessus. La
+    déclarer trop courte tronquerait chaque époque enregistrée SANS erreur — l'entraînement
+    porterait sur trois fois moins de données que l'écran n'en annonce.
+    """
+
+    kind: str              # "console" | "natif"
+    reason: str = ""       # pourquoi "natif" — une contrainte PHYSIQUE, pas un goût
+    label: str = ""        # "Calibration Motor Imagery" — le titre de la page
+    briefing: tuple = ()   # les consignes à lire AVANT de commencer, une ligne par élément
+    params: tuple = ()     # les `Param` de la calibration (durée de séance…)
+    epoch_s: float = 0.0   # la plus longue tranche prélevée dans le tampon du moteur
+    runtime_cls: object = None   # la classe `CalibrationRuntime`, ou None si "natif"
+
+    def defaults(self):
+        """Les réglages par défaut de cette calibration, résolus maintenant.
+
+        Même corps que `ModeSpec.defaults` — et c'est ce qui permet à `validate` de traiter les
+        deux sans distinction.
+        """
+        return {p.key: p.default_now() for p in self.params}
 
 
 @dataclass(frozen=True)
@@ -467,6 +494,33 @@ def _selftest():
 
     chk(ecran.params[0].affecte_decodage is False and ecran.params[1].affecte_decodage is True,
         "un Param déclare s'il affecte le décodage, et le défaut est « oui »")
+
+    # --- le contrat d'une CALIBRATION ---------------------------------------------
+    # `Calib` réutilise `validate` : elle expose `.label`, `.params` et `.defaults()`, exactement
+    # ce que le validateur lit. Un second validateur pour les calibrations serait une deuxième
+    # vérité, avec ses propres messages de refus — le défaut que ce module existe pour éliminer.
+    calib = Calib(
+        kind="console", label="Calibration d'essai",
+        briefing=("Première ligne.", "Deuxième ligne."),
+        epoch_s=4.0,
+        params=(Param("trials_per_class", "Essais par classe", "int", default=14,
+                      min=2, max=40, help="Plus d'essais = plus long, pas forcément mieux."),),
+    )
+    chk(calib.defaults() == {"trials_per_class": 14},
+        f"une calibration a des défauts comme un mode ({calib.defaults()})")
+    values, raison = validate(calib, {})
+    chk(values == {"trials_per_class": 14} and raison is None,
+        f"et le MÊME validateur les accepte ({values}, {raison})")
+    values, raison = validate(calib, {"trials_per_class": 999})
+    chk(values is None and raison and "maximum" in raison,
+        f"les bornes s'appliquent, avec la même formulation de refus ({raison})")
+    values, raison = validate(calib, {"duree": "longue"})
+    chk(values is None and raison and "réglage inconnu" in raison,
+        f"et un réglage inconnu est refusé pareil ({raison})")
+
+    vide = Calib(kind="natif", reason="stimulus verrouillé à la frame")
+    chk(vide.defaults() == {} and vide.runtime_cls is None and vide.epoch_s == 0.0,
+        "une calibration NATIVE ne déclare ni réglage, ni runtime, ni époque")
 
     # Cas limites : rafraîchissement négatif, nul, fréquence négative
     _v, raison = validate(ecran, {"refresh_hz": -60.0, "freqs": [17.0, 18.0]})

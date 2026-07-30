@@ -259,6 +259,23 @@ MI_MODEL_PATH = _os.path.join(DATA_DIR, "mi_model.joblib")   # modèle entraîn�
 MI_KEY_CHANNELS = [1, 2, 3]
 
 
+# --- Calibration Motor Imagery : le protocole, tel qu'il a été validé au casque ---------------
+# CUE = mise en route NON enregistrée après le top (le temps d'établir l'imagerie), puis on garde
+# les IMAGERY secondes suivantes. 2026-07-22 : le CUE est passé de 2 à 3 s — il faut « environ
+# 2 s » pour bien lancer le poing, et 2 s ne laissaient aucune marge (le début de l'enregistrement
+# attrapait la fin de la montée). IMAGERY reste à 4 s : allonger n'aiderait pas, le facteur
+# limitant MESURÉ est la FATIGUE, pas la durée par essai (le 3 classes tombe de 57 % à 33 % en
+# deuxième moitié de séance).
+MI_CUE_S = 3.0             # mise en route, jetée
+MI_IMAGERY_S = 4.0         # la partie ENREGISTRÉE d'un essai
+MI_REST_S = 1.5            # pause entre deux essais
+MI_WARMUP_PER_CLASS = 2    # essais d'échauffement NON enregistrés (le MI s'améliore en séance)
+MI_TRAIN_STEP_S = 1.0      # pas du découpage en fenêtres -> 3 fenêtres par essai de 4 s
+# Durées de séance proposées, en essais PAR CLASSE. Le temps estimé se calcule, il ne se stocke
+# pas : il dépend de CUE + IMAGERY + REST, qui sont juste au-dessus.
+MI_SESSIONS = (10, 14, 18, 26)
+
+
 # --- c-VEP (3e mode : code-VEP, codes pseudo-aléatoires) ---------------------
 # Toutes les cibles affichent LE MÊME code (m-séquence), décalé circulairement. Le décodage
 # compare la réponse EEG au template appris, décalé de chaque lag -> la cible fixée gagne.

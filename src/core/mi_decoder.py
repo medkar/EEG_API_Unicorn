@@ -28,7 +28,8 @@ from scipy.linalg import eigh
 from scipy.signal import butter, filtfilt
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,  # noqa: E402
+                                     train_test_split)
 from sklearn.pipeline import Pipeline
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -131,6 +132,11 @@ class MIModel:
         self.reref_mode = reref_mode
         self.pipe = build_pipe(method, n_per_class)
         self.cv_ = None
+        # La CV HONNÊTE (par essai) et le nombre d'essais. `None` tant qu'on n'a pas dit à `fit`
+        # à quel essai appartient chaque fenêtre — voir `fit`. `mi_models.decrire()` les lit et
+        # les affiche absents plutôt que de recopier `cv_`, qui est gonflée.
+        self.cv_groupee_ = None
+        self.n_essais_ = None
 
     def _prep(self, epochs):
         epochs = np.asarray(epochs, dtype=float)
@@ -143,9 +149,43 @@ class MIModel:
         epochs = reref(epochs, getattr(self, "reref_mode", "none"))
         return bandpass(epochs, self.fs, self.band)
 
-    def fit(self, epochs, y):
+    def fit(self, epochs, y, groups=None):
+        """Entraîne. `groups` = l'indice d'ESSAI de chaque fenêtre — c'est lui qui rend la CV honnête.
+
+        Deux chiffres sortent d'ici, et ils ne disent pas la même chose :
+
+        - `cv_` — validation croisée ORDINAIRE, fenêtres mélangées. Gardée parce qu'elle permet de
+          comparer avec les mesures antérieures du projet, et parce que l'écart entre les deux EST
+          l'information : c'est la fuite, chiffrée.
+        - `cv_groupee_` — validation croisée par ESSAI : toutes les fenêtres d'un essai tombent
+          dans le MÊME pli. C'est la seule qui réponde à la question de l'étudiant, « est-ce que ça
+          marchera sur un essai que le modèle n'a jamais vu ? ». C'est celle-là, et elle seule,
+          qu'on affiche.
+
+        On prend `StratifiedGroupKFold` et non `GroupKFold` : le second ne regarde pas les
+        étiquettes et peut composer un pli d'apprentissage où une classe manque entièrement — la
+        LDA lève alors, ou pire, apprend sur deux classes et se fait juger sur trois. Le premier
+        respecte les DEUX contraintes : groupes entiers ET classes représentées.
+
+        `n_splits` est borné par le plus petit effectif d'essais par classe : demander 5 plis quand
+        une classe n'a que 3 essais est irréalisable, et sklearn le refuserait en pleine fin de
+        séance de calibration — après sept minutes d'imagerie. On borne AVANT plutôt que de laisser
+        lever.
+        """
         Xf, y = self._prep(epochs), np.asarray(y)
         self.cv_ = float(cross_val_score(self.pipe, Xf, y, cv=5).mean())
+        self.cv_groupee_, self.n_essais_ = None, None
+        if groups is not None:
+            groups = np.asarray(groups)
+            self.n_essais_ = int(len(np.unique(groups)))
+            # Essais DISTINCTS par classe : c'est ce qui borne le nombre de plis, pas le nombre de
+            # fenêtres (elles se comptent par trois pour un même essai).
+            par_classe = [len(np.unique(groups[y == c])) for c in np.unique(y)]
+            n_splits = min(5, min(par_classe)) if par_classe else 0
+            if n_splits >= 2:
+                cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=0)
+                self.cv_groupee_ = float(
+                    cross_val_score(self.pipe, Xf, y, groups=groups, cv=cv).mean())
         self.pipe.fit(Xf, y)
         return self
 
@@ -238,6 +278,68 @@ def _eval(method, Xtr, ytr, Xte, yte, reref_mode=MI_REREF):
     return model.cv_, ctrl_ok / ctrl_tot, rest_ok / rest_tot
 
 
+def _test_cv_honnete():
+    """L'invariant de la CV groupée : elle doit être INFÉRIEURE à la naïve, toujours.
+
+    Pourquoi c'est un invariant et pas une observation : la CV naïve mélange entre plis des
+    fenêtres GLISSANTES issues du même essai. Deux fenêtres d'un même essai partagent une seconde
+    de signal sur deux et la même étiquette — le classifieur retrouve donc en test un morceau
+    exact de ce qu'il a vu en apprentissage. Le score obtenu ne dit plus rien de sa capacité à
+    généraliser à un NOUVEL essai, qui est pourtant la seule question qui compte pour un étudiant.
+
+    Mesuré sur les 30 essais archivés du projet : 55,6 % naïve contre 40,0 % honnête à 3 classes,
+    73,3 % contre 63,3 % à 2 classes. L'écart est de 10 à 16 points, et c'est CE chiffre-là qui
+    était affiché à la fin d'une séance de calibration.
+
+    Le test ne vérifie PAS une valeur : il vérifie le SENS de l'écart, qui ne dépend d'aucun jeu
+    de données. Une valeur attendue serait fausse dès qu'on change la graine.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    rng = np.random.default_rng(0)
+    fs, n_essais_par_classe = 250.0, 8
+    n_fen = int(round(2.0 * fs))          # MI_WINDOW_S
+    pas = int(round(1.0 * fs))            # MI_TRAIN_STEP_S -> 3 fenêtres par essai de 4 s
+    X, y, groupes = [], [], []
+    essai = 0
+    for label in MI_LABELS:
+        for _ in range(n_essais_par_classe):
+            # Une époque de 4 s, comme en produira la calibration : (n_ch, 4*fs).
+            epoque = synth_mi_trial(label, n_samp=int(4.0 * fs), fs=fs, rng=rng)
+            for debut in range(0, epoque.shape[1] - n_fen + 1, pas):
+                X.append(epoque[:, debut:debut + n_fen])
+                y.append(label)
+                groupes.append(essai)
+            essai += 1
+    X, y, groupes = np.asarray(X), np.asarray(y), np.asarray(groupes)
+    chk(len(X) == essai * 3, f"3 fenêtres par essai de 4 s ({len(X)} pour {essai} essais)")
+
+    modele = MIModel(fs=fs, reref_mode="none").fit(X, y, groups=groupes)
+    chk(modele.cv_ is not None and modele.cv_groupee_ is not None,
+        f"les deux CV sont calculées (naïve={modele.cv_}, groupée={modele.cv_groupee_})")
+    chk(modele.n_essais_ == essai,
+        f"le nombre d'ESSAIS est retenu, pas celui des fenêtres ({modele.n_essais_})")
+    chk(modele.cv_groupee_ < modele.cv_,
+        f"la CV groupée est INFÉRIEURE à la naïve : {modele.cv_groupee_*100:.1f}% contre "
+        f"{modele.cv_*100:.1f}% — la fuite entre fenêtres d'un même essai vaut "
+        f"{(modele.cv_ - modele.cv_groupee_)*100:.1f} points")
+
+    # Sans `groups`, la CV honnête n'est pas INVENTÉE : elle reste absente. Recopier la naïve
+    # ferait passer un chiffre gonflé pour un chiffre honnête — exactement le défaut corrigé.
+    sans = MIModel(fs=fs, reref_mode="none").fit(X, y)
+    chk(sans.cv_ is not None and sans.cv_groupee_ is None and sans.n_essais_ is None,
+        f"sans `groups`, la CV honnête reste absente au lieu d'être inventée "
+        f"({sans.cv_groupee_}, {sans.n_essais_})")
+
+    print(f"[mi-cv] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
 def _demo():
     # Le synthétique = 8 oscillateurs INDÉPENDANTS (pas de conduction volumique ni de mode commun) :
     # il valide la MÉCANIQUE du classifieur (CSP+LDA sépare-t-il l'ERD ?), PAS le re-référencement.
@@ -272,4 +374,6 @@ def _demo():
 
 if __name__ == "__main__":
     use_utf8_console()
-    _demo()
+    ok_cv = _test_cv_honnete()
+    ok_demo = _demo()
+    sys.exit(0 if (ok_cv and ok_demo) else 1)

@@ -93,7 +93,22 @@ def serialize(spec, params=None):
             "instruction": spec.rest.instruction,
         },
         "calibration": None if spec.calibration is None else {
-            "kind": spec.calibration.kind, "reason": spec.calibration.reason,
+            "kind": spec.calibration.kind,
+            "reason": spec.calibration.reason,
+            "label": spec.calibration.label,
+            "briefing": list(spec.calibration.briefing),
+            "epoch_s": spec.calibration.epoch_s,
+            # Même forme que les `params` d'un mode, juste au-dessus : la console réutilise
+            # `ParamsForm` sans une ligne de code particulière.
+            "params": [
+                {
+                    "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
+                    "default": p.default_now(), "min": p.min, "max": p.max,
+                    "count": list(p.count) if p.count else None, "proposes": p.proposes,
+                    "choices": list(p.choices_now()), "help": p.help,
+                }
+                for p in spec.calibration.params
+            ],
         },
     }
 
