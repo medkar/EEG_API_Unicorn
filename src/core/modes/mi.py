@@ -32,6 +32,7 @@ from core.lsl_io import DecodedMIPublisher, mi_channel_labels, stream_name  # no
 from core.mi_decoder import MIDecoder  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
+from core.modes import mi_calib  # noqa: E402
 
 MI_DECODE_HZ = 5.0     # cadence de décodage — la même que le SSVEP, pour que les deux se lisent pareil
 
@@ -271,7 +272,7 @@ SPEC = ModeSpec(
         duration_s=0.0,
         instruction="Le casque se stabilise — reste immobile.",
     ),
-    calibration=None,   # la calibration est la moitié B ; le mode consomme un modèle déjà entraîné
+    calibration=mi_calib.CALIB,   # la calibration est jouée par le MOTEUR (moitié B)
     stream="decoded_mi",
     channels_fn=_channels,
     runtime_cls=MIRuntime,
