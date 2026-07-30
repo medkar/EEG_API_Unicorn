@@ -1625,3 +1625,65 @@ la **moitié B**, dont le plan sera écrit quand celle-ci sera posée.
 - Tâche 6 : le smoke écrit dans `data/`, le vrai dossier. Le `finally` qui retire le fichier n'est
   pas une précaution mais une obligation — un modèle de test oublié serait proposé à l'étudiant
   dans la console.
+
+---
+
+# Bilan du chantier (2026-07-30) — ce que la revue a trouvé, ce qui reste parké
+
+**Moitié A terminée.** 24 commits. Sept tâches, chacune relue ; puis une revue de branche en
+quatre tranches par sous-système ; puis une vague de correction unique ; puis trois re-relectures.
+**Zéro constat critique. 16 constats importants, 18 traitements vérifiés sur 18.** Les dix tests
+(sept autotests, trois smokes) sont verts, `data/` est sans résidu.
+
+## Trois des seize venaient du PLAN, pas de l'exécution
+
+1. Le `_run_step` prescrit utilisait `MIDecoder.classify`, qui rend `None` **aussi** quand REPOS
+   gagne — donc l'indice de REPOS était **inatteignable** et le flux disait « je ne sais pas »
+   avec un modèle certain à 99 % que la personne se repose.
+2. `intent_index` sortait du vote, mais `confidence` et `probas` de la dernière fenêtre seule : un
+   même échantillon pouvait annoncer « intention GAUCHE » avec `p_DROITE = 0,90` et une confiance
+   **sous le seuil que le flux annonce lui-même**. Régime normal à chaque changement d'intention.
+3. Le `_smoke_mi` prescrit écrivait son modèle de test dans le vrai `data/` **avant** son `try`.
+
+## Un défaut latent que personne ne cherchait
+
+`python src/core/server.py` met `src/core` dans `sys.path`, ce qui rend importable un module
+`mi_decoder` de premier niveau et **ressuscitait les quatre modèles abandonnés**. Le moteur décodait
+avec un modèle de juillet, d'avant le re-référencement CAR, **selon la commande de lancement**.
+`mi_models.charger` vérifie désormais le module de la classe picklée.
+
+## Le chiffre qui justifie la revue
+
+L'autotest du mode laissait survivre **quatre mutants sur quatre** : seuil ignoré, longueur du vote
+ignorée, probabilités dans l'ordre inverse, confiance codée en dur. Les quatre meurent maintenant,
+vérifié par un harnais écrit indépendamment du correcteur.
+
+## Parké délibérément — à reprendre en moitié B
+
+- `_channels` relit le modèle sur disque à chaque `state()` (**mesuré 0,348 ms, O(1)**) et retombe
+  **en silence** sur trois classes si le fichier a bougé. Inerte aujourd'hui ; **atteignable dès que
+  la calibration écrira pendant qu'un mode tourne**. Correctif connu : surcharger `state()` dans
+  `MIRuntime` pour rendre `mi_channel_labels(self.classes)` — le runtime a déjà son modèle en mémoire.
+- L'égalité du vote est tranchée par ordre d'apparition, donc publie l'intention la plus **ancienne**
+  — au moment précis où l'utilisateur bascule. Inatteignable aux défauts (3+3 > 5), atteignable dès
+  `vote_len ≥ 6`, qui est dans la plage du curseur.
+- Un `None` majoritaire **écrase** une classe qui atteint pourtant `min_votes`. L'aide du réglage ne
+  le dit pas.
+- **Aucun rejet d'artefact sur le MI**, contrairement au SSVEP. Le CSP lit précisément la variance
+  8-30 Hz que l'EMG fait exploser : un vrai serrement de main produira une intention confiante.
+- `charger(None)` lève, malgré « ne lève jamais » : la moitié B l'appellera avec des chemins venant
+  d'un formulaire.
+- `rest_index` vaut `-1` sur un modèle à deux classes, donc collisionne avec `no_decision_index`.
+- Le vocabulaire d'actionneur subsiste dans `mi_decoder.py` (« 2 commandes », « stop » fiable,
+  `MI_CONTROL`) et dans `config.py:238`. À prendre au nettoyage de commentaires (SPEC §7).
+- L'aide du réglage `model` pointe `mi_calibrate.py`, qui deviendra faux quand la moitié B
+  l'archivera — et elle ne dit pas qu'il faut **fermer la console d'abord** (un seul programme à la
+  fois ; la réouverture fait saturer C3/Cz, les voies mêmes que lit le MI).
+- La correction de l'affichage n'est épinglée par aucune assertion : le smoke console vérifie
+  « probabilité » et « pas de z », donc l'ancien texte faux repasserait vert.
+
+## Rien n'a été vérifié au casque
+
+Tout ce chantier est synthétique. La recette porte les tests matériels, dont le nouveau **2.6**
+(entraîner un modèle, le voir dans la console, décoder) — avec ce qu'il faut attendre : **63 % à
+deux classes, donc une erreur sur trois est normale**.
