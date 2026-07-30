@@ -294,16 +294,26 @@ class DecodedMIPublisher:
 
     Voies : `intent_index`, `confidence`, puis une probabilité par classe.
 
+    ⚠️ **Les trois ne décrivent pas le même instant.** `intent_index` et `confidence` décrivent
+    le **vote** — jusqu'à `vote_len` fenêtres, dont `min_votes` d'accord ; `confidence` est la
+    moyenne des probabilités de ces fenêtres-là, donc toujours `>= threshold` quand
+    `intent_index >= 0`. Les `p_*`, eux, décrivent la **dernière fenêtre seule**. Pendant un
+    changement d'intention, il est donc NORMAL de lire « intention GAUCHE » à côté d'un
+    `p_DROITE` élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
+    jamais du `p_*` de la classe retenue.
+
     ⚠️ **`-1` et la classe REPOS sont deux choses différentes.** `-1` = le vote n'a pas conclu
     (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; l'indice de REPOS = le
     modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
-    n'appellent pas la même réaction dans une application.
+    n'appellent pas la même réaction dans une application. Les deux indices voyagent dans les
+    métadonnées (`no_decision_index`, `rest_index`) : un client n'a pas à les deviner, ni à
+    supposer que REPOS est toujours la dernière classe.
 
     ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
     entraîné sur quelqu'un d'autre sont plausibles et fausses.
     """
 
-    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance=""):
+    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance="", rest_label="REPOS"):
         self.classes = [str(c) for c in classes]
         labels = mi_channel_labels(self.classes)
         info = StreamInfo(stream_name("decoded_mi"), "Decoded", len(labels),
@@ -321,6 +331,15 @@ class DecodedMIPublisher:
         desc.append_child_value("threshold", str(prob_min))
         desc.append_child_value("min_votes", str(votes[0]))
         desc.append_child_value("vote_len", str(votes[1]))
+        # La distinction la plus coûteuse à confondre du mode est celle que les métadonnées
+        # taisaient : « je ne sais pas » (-1) contre « la personne se repose » (l'indice de
+        # REPOS). Ce module promet en tête qu'un client peut se décrire l'API tout seul — alors
+        # les deux indices y sont, plutôt que dans une documentation qu'il n'ouvrira pas.
+        # `rest_index` vaut -1 quand le modèle n'a pas de classe de repos : un modèle à deux
+        # classes est possible, et supposer que REPOS existe toujours serait faux.
+        desc.append_child_value("no_decision_index", "-1")
+        rest_index = self.classes.index(rest_label) if rest_label in self.classes else -1
+        desc.append_child_value("rest_index", str(rest_index))
         self.outlet = StreamOutlet(info)
 
     def push(self, intent_index, confidence, probas, lsl_ts=None):

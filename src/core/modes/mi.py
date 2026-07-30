@@ -117,12 +117,16 @@ class MIRuntime(ModeRuntime):
         # la classe REPOS sont deux choses différentes »).
         scores = self.decoder.scores(window)
         meilleure = max(scores, key=scores.get)
-        label = meilleure if scores[meilleure] >= self.decoder.prob_min else None
-        self._votes.append(label)
+        proba = float(scores[meilleure])
+        label = meilleure if proba >= self.decoder.prob_min else None
+        # On garde la PROBABILITÉ à côté du vote, pas seulement l'étiquette : c'est elle qui
+        # servira de confiance publiée. Voir juste en dessous pourquoi la probabilité de la
+        # dernière fenêtre ne pouvait pas jouer ce rôle.
+        self._votes.append((label, proba))
 
         # Le vote peut désigner None : « aucune fenêtre récente n'était assez sûre » est une
         # réponse, et c'est celle qu'il faut publier plutôt qu'un second choix inventé.
-        gagnant, compte = Counter(self._votes).most_common(1)[0]
+        gagnant, compte = Counter(etiquette for etiquette, _p in self._votes).most_common(1)[0]
         if gagnant is None or compte < int(self.params["min_votes"]):
             retenu = None
         else:
@@ -132,7 +136,20 @@ class MIRuntime(ModeRuntime):
         if retenu is None:
             self._publish(-1, 0.0, probas, lsl_ts)
         else:
-            self._publish(self.classes.index(retenu), float(scores[retenu]), probas, lsl_ts)
+            # La confiance décrit le VOTE, comme l'indice qu'elle accompagne : c'est la moyenne
+            # des probabilités des fenêtres qui ont voté pour la classe retenue. Publier celle de
+            # la SEULE dernière fenêtre mélangeait deux instants — un même échantillon LSL disait
+            # « intention GAUCHE » avec une confiance SOUS le seuil que le flux annonce lui-même
+            # dans ses métadonnées, et un client qui refiltre sur ce seuil (le geste naturel,
+            # celui que le SSVEP invite à faire) jetait les intentions stables. Chaque changement
+            # d'intention traversait cette zone. Chacune de ces probabilités valant au moins
+            # `prob_min` par construction (sinon la fenêtre aurait voté None), leur moyenne aussi :
+            # l'invariant « confidence >= threshold quand intent_index >= 0 » est donc tenu par
+            # construction, pas par surveillance. `probas`, lui, décrit toujours la DERNIÈRE
+            # fenêtre — c'est écrit dans la docstring de `DecodedMIPublisher`.
+            votantes = [p for etiquette, p in self._votes if etiquette == retenu]
+            confiance = sum(votantes) / len(votantes)
+            self._publish(self.classes.index(retenu), confiance, probas, lsl_ts)
 
     def _publish(self, index, confidence, probas, lsl_ts):
         if self._out is not None:
@@ -341,44 +358,112 @@ def _selftest():
             f"la toute première fenêtre ne peut pas conclure — le vote exige "
             f"{values['min_votes']} accords (index={premiere})")
 
-        # 5. REPOS est une classe ORDINAIRE du vote, pas un synonyme de « je ne sais pas ».
-        # `MIDecoder.classify()` la traite comme un cas d'arrêt (comme une proba sous le
-        # seuil) ; `_run_step` ne doit PLUS s'en servir pour cette raison précise. On fixe ICI
-        # les scores rendus par le décodeur, plutôt que d'espérer qu'un signal synthétique y
-        # mène : sur seulement 8 essais/classe, un modèle jetable ne classe pas forcément une
-        # fenêtre de repos fraîche comme REPOS (question de justesse du décodage, que ce
-        # fichier ne juge PAS — cf. docstring de `_selftest`). Ce qu'on vérifie ici est le
-        # CONTRAT du runtime : quand le décodeur est certain de REPOS, le mode publie SON
-        # indice, jamais -1. Le `chk(-1 <= index < len(MI_LABELS))` du bloc précédent passe
-        # dans les DEUX mondes (REPOS atteignable ou non) ; celui-ci fabrique la situation au
-        # lieu d'espérer qu'elle survienne.
+        # Les blocs 5 à 8 fabriquent les scores du décodeur au lieu d'espérer qu'un signal
+        # synthétique y mène : sur 8 essais/classe, un modèle jetable ne classe pas ce qu'on
+        # voudrait. Ce qui est jugé ici n'est PAS la justesse du décodage (cf. docstring), c'est
+        # le CONTRAT du runtime — et un contrat se prouve sur une situation construite.
         vrais_scores = rt.decoder.scores
-        rt.decoder.scores = lambda window: {"GAUCHE": 0.05, "DROITE": 0.05, "REPOS": 0.90}
-        try:
+        vote_len, min_votes = int(values["vote_len"]), int(values["min_votes"])
+        seuil = float(values["prob_min"])
+        GAUCHE_SUR = {"GAUCHE": 0.90, "DROITE": 0.05, "REPOS": 0.05}
+        DROITE_SUR = {"GAUCHE": 0.05, "DROITE": 0.90, "REPOS": 0.05}
+
+        def rejoue(suite, t0):
+            """Fait tourner le mode sur une suite de scores bouchonnés. Rend les lignes publiées.
+
+            Le tampon `recent` est régénéré à chaque pas : sans ça, un décodeur qui ignorerait
+            son entrée serait indiscernable d'un décodeur qui la lit.
+            """
             rt._votes.clear()
             rt._out.lignes.clear()
-            for i in range(int(values["vote_len"])):
-                moteur.recent = rng.normal(0.0, 8.0, (int(5.0 * 250), 8))
-                rt.tick(moteur, lsl_ts=20.0 + i, now=20.0 + i)
-        finally:
-            rt.decoder.scores = vrais_scores
-        index_repos, conf_repos, probas_repos = rt._out.lignes[-1]
+            try:
+                for i, scores_i in enumerate(suite):
+                    rt.decoder.scores = lambda window, s=scores_i: dict(s)
+                    moteur.recent = rng.normal(0.0, 8.0, (int(5.0 * 250), 8))
+                    rt.tick(moteur, lsl_ts=t0 + i, now=t0 + i)
+            finally:
+                rt.decoder.scores = vrais_scores
+            return list(rt._out.lignes)
+
+        # 5. REPOS est une classe ORDINAIRE du vote, pas un synonyme de « je ne sais pas ».
+        # `MIDecoder.classify()` la traite comme un cas d'arrêt (comme une proba sous le
+        # seuil) ; `_run_step` ne doit PLUS s'en servir pour cette raison précise. Quand le
+        # décodeur est certain de REPOS, le mode publie SON indice, jamais -1.
+        #
+        # Les probabilités bouchonnées ne ressemblent à AUCUNE constante du fichier, et c'est
+        # délibéré : la version précédente bouchonnait REPOS à 0,90 puis vérifiait
+        # `conf == 0.90` — ce qui passait même avec une confiance CODÉE EN DUR à 0,9 dans
+        # `_publish`. Une assertion ne prouve quelque chose que sur une valeur que le code fautif
+        # n'a aucune raison de deviner.
+        repos_sur = {"GAUCHE": 0.04, "DROITE": 0.13, "REPOS": 0.83}
+        lignes = rejoue([repos_sur] * vote_len, t0=20.0)
+        index_repos, conf_repos, probas_repos = lignes[-1]
         chk(index_repos == MI_LABELS.index("REPOS"),
             f"un décodeur certain de REPOS publie SON indice, jamais -1 (index={index_repos}, "
             f"probas={probas_repos})")
-        chk(conf_repos == 0.90,
-            f"avec la confiance réellement rapportée par le décodeur, pas une confiance nulle "
-            f"({conf_repos:.2f})")
+        chk(abs(conf_repos - 0.83) < 1e-9,
+            f"avec la confiance réellement rapportée par le décodeur, pas une constante "
+            f"({conf_repos})")
+        # L'appariement `p_<classe>` ↔ classe est le CONTRAT PUBLIC du flux : `mi_channel_labels`
+        # nomme les voies dans l'ordre de `classes`, et `push` publie dans ce même ordre. Une
+        # inversion ne se voit ni sur les bornes de l'index, ni sur la somme à 1, ni sur le
+        # nombre de voies — seulement ici. Un client lirait p_REPOS en croyant lire p_GAUCHE.
+        attendu = [repos_sur[c] for c in rt.classes]
+        chk(len(probas_repos) == len(attendu)
+            and all(abs(a - b) < 1e-9 for a, b in zip(probas_repos, attendu)),
+            f"les probabilités sortent dans l'ORDRE de {rt.classes} "
+            f"({probas_repos} attendu {attendu})")
 
-        # 6. Le contrat du mode.
+        # 6. Une fenêtre sous le seuil ne vote pour PERSONNE. Sans ce bloc, `prob_min` n'est
+        # prouvé nulle part : le mode publierait la meilleure classe quelle que soit sa
+        # probabilité, et le réglage le plus visible du mode ne servirait à rien.
+        tiede = {"GAUCHE": seuil - 0.05, "DROITE": 0.25, "REPOS": 0.20}
+        indices = {ligne[0] for ligne in rejoue([tiede] * (2 * vote_len), t0=40.0)}
+        chk(indices == {-1},
+            f"une meilleure classe à {tiede['GAUCHE']:g}, sous le seuil {seuil:g}, ne vote pour "
+            f"personne — même répétée {2 * vote_len} fois ({sorted(indices)})")
+
+        # 7. `vote_len` BORNE vraiment la fenêtre du vote. `vote_len` fenêtres GAUCHE puis
+        # `min_votes` fenêtres DROITE : la fenêtre glissante ne retient que les `vote_len`
+        # dernières, donc DROITE l'emporte. Un vote qui garderait TOUT l'historique compterait
+        # encore les GAUCHE et publierait GAUCHE — le mode n'oublierait jamais ce que
+        # l'utilisateur a cessé de faire, ce qui est exactement ce que la borne existe pour
+        # empêcher.
+        lignes = rejoue([GAUCHE_SUR] * vote_len + [DROITE_SUR] * min_votes, t0=60.0)
+        chk(lignes[-1][0] == rt.classes.index("DROITE"),
+            f"après {vote_len} fenêtres GAUCHE puis {min_votes} DROITE, seules les {vote_len} "
+            f"dernières comptent : le vote donne DROITE (index={lignes[-1][0]})")
+
+        # 8. INVARIANT : `confidence >= threshold` dès que `intent_index >= 0`.
+        # Un client refiltre naturellement sur la confiance, puisque le flux annonce son seuil
+        # dans ses métadonnées. Or `intent_index` sort du VOTE (jusqu'à `vote_len` fenêtres) et
+        # la dernière fenêtre ne parle que d'elle-même : publier la probabilité de cette seule
+        # fenêtre à côté d'un index issu du vote donnait « intention GAUCHE, confiance 0,05 »,
+        # SOUS le seuil que le flux annonce. Ce n'est pas un cas limite — CHAQUE changement
+        # d'intention traverse cette zone, et le client jetterait les intentions stables.
+        lignes = rejoue([GAUCHE_SUR] * min_votes + [DROITE_SUR] * (vote_len - min_votes),
+                        t0=80.0)
+        viole = [(i, c) for i, c, _p in lignes if i >= 0 and c < seuil]
+        chk(not viole,
+            f"quand le vote conclut, la confiance publiée est au-dessus du seuil {seuil:g} "
+            f"annoncé par le flux — y compris pendant un changement d'intention "
+            f"({viole or 'aucune violation'} ; lignes={[(i, round(c, 3)) for i, c, _p in lignes]})")
+
+        # 9. Le contrat du mode.
         chk(SPEC.rest.duration_s == 0.0 and SPEC.rest.warmup_s == SSVEP_WARMUP_S,
             f"chauffe obligatoire, aucun plancher ({SPEC.rest})")
         chk(SPEC.stream == "decoded_mi" and SPEC.status == "moteur",
             "le mode publie decoded_mi et tourne dans le moteur")
         chk(all(p.affecte_decodage for p in SPEC.params),
             "tous les réglages du MI affectent le décodage : en changer un refait le mode")
+        # Le jeu de clés de `output()` est ce que la console lit pour choisir SON rendu : elle
+        # aiguille sur la présence de « probas ». Renommer cette clé côté moteur ferait retomber
+        # la page MI sur l'affichage SSVEP (« aucune cible… échelle z »), silencieusement, et les
+        # trois smokes passeraient. On l'épingle donc ICI, du côté qui la produit.
+        chk(set(rt.output()) == {"intent_index", "label", "confidence", "probas", "threshold"},
+            f"la sortie du moteur porte exactement les clés attendues ({sorted(rt.output())})")
 
-        # 7. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
+        # 10. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
         # aboutir, et le mode ne décide plus rien — en silence, la panne type de ce produit.
         _v, raison = validate(SPEC, {"vote_len": 3, "min_votes": 10})
         chk(raison is not None and "3" in raison and "10" in raison,
