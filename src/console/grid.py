@@ -150,6 +150,11 @@ class ModeTile(QFrame):
             self.apercu.set_values(sortie["scores"],
                                    span=max(sortie.get("threshold", Z_MIN), 1.0),
                                    retenue=sortie.get("target_index", -1))
+        elif "probas" in sortie:
+            # Motor Imagery : une probabilité par classe, déjà bornée à 1 — pas de seuil à
+            # dépasser pour l'échelle du dessin, contrairement au z du SSVEP.
+            self.apercu.set_values(list(sortie["probas"].values()), span=1.0,
+                                   retenue=sortie.get("intent_index", -1))
         elif "z" in sortie:
             self.apercu.set_values(list(sortie["z"].values()), span=NEURO_Z_SPAN, centre=True)
         else:
@@ -167,6 +172,12 @@ def _resume(mode_state):
         if sortie.get("artifact"):
             return "artefact — fenêtre rejetée"
         return "aucune cible" if index < 0 else f"cible {index} · {sortie.get('freq_hz', 0):g} Hz"
+    if "probas" in sortie:
+        # Motor Imagery : pas de "cible", une INTENTION — les deux mots ne sont pas
+        # interchangeables (cf. DecodedMIPublisher), donc pas le même résumé que le SSVEP.
+        index = sortie.get("intent_index", -1)
+        return ("vote non conclu" if index < 0
+                else f"intention {sortie.get('label', '')} · {sortie.get('confidence', 0):.2f}")
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
     params = mode_state.get("params") or {}

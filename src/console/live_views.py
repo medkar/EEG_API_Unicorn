@@ -79,6 +79,16 @@ class ActiveView(QWidget):
     Le seuil est affiché À CÔTÉ des scores, et pas seulement la décision : c'est ce qui permet
     de dire si une non-détection vient d'un signal absent ou d'un seuil trop haut. Sans ça, une
     séance muette n'a qu'une explication apparente — « l'utilisateur fixe mal ».
+
+    ⚠️ **Deux modes « actif » du moteur, deux formes de sortie.** Le SSVEP publie un score PAR
+    CIBLE sur l'échelle z (`scores`, `target_index`, `freq_hz`) ; le Motor Imagery publie une
+    PROBABILITÉ par classe (`probas`, `intent_index`, `label`, `confidence`) — il n'a ni cible
+    ni z, la référence y est APPRISE, pas mesurée au repos du jour. Confondre les deux
+    afficherait « aucune cible » en PERMANENCE pour le MI, puisque `target_index` n'existe
+    simplement pas dans sa sortie : silencieusement faux, le genre de panne que ce produit
+    existe pour éliminer. D'où les deux rendus ci-dessous, choisis sur la CLÉ présente dans la
+    sortie plutôt que sur l'identifiant du mode — cohérent avec le principe du fichier (rendre
+    par famille), affiné ici parce que la famille « actif » recouvre déjà deux formes.
     """
 
     def __init__(self):
@@ -118,7 +128,13 @@ class ActiveView(QWidget):
         if not sortie:
             self.verdict.setText(mode_state["instruction"] if mode_state else "en attente")
             return
+        if "probas" in sortie:
+            self._update_probas(sortie)
+        else:
+            self._update_scores(mode_state, sortie)
 
+    def _update_scores(self, mode_state, sortie):
+        """SSVEP (et tout futur mode à score continu) : un score par cible, sur l'échelle z."""
         freqs = (mode_state.get("params") or {}).get("freqs") or []
         scores = sortie.get("scores") or []
         seuil = float(sortie.get("threshold", Z_MIN))
@@ -138,6 +154,30 @@ class ActiveView(QWidget):
             self.verdict.setText(f"aucune cible (rien au-dessus de z={seuil:g})")
         else:
             self.verdict.setText(f"CIBLE {index} · {sortie.get('freq_hz', 0):g} Hz")
+
+    def _update_probas(self, sortie):
+        """Motor Imagery (et tout futur mode à vote de classe) : une probabilité par classe.
+
+        Pas d'échelle 2× ici : une probabilité est déjà bornée à 1, contrairement au z du
+        SSVEP qui n'a pas de plafond naturel.
+        """
+        probas = sortie.get("probas") or {}
+        classes = list(probas.keys())
+        seuil = float(sortie.get("threshold", 0.0))
+        self._assure(len(classes), classes)
+        self.seuil.setText(f"échelle probabilité · seuil {seuil:g} — "
+                           f"la classe gagnante doit le dépasser")
+
+        for i, (_e, barre) in enumerate(self._barres):
+            valeur = probas.get(classes[i], 0.0) if i < len(classes) else 0.0
+            barre.setValue(int(max(0.0, min(valeur, 1.0)) * 100))
+
+        index = sortie.get("intent_index", -1)
+        if index < 0:
+            self.verdict.setText(f"— (vote non conclu, seuil {seuil:g})")
+        else:
+            self.verdict.setText(f"INTENTION {sortie.get('label', '')} "
+                                 f"· confiance {sortie.get('confidence', 0.0):.2f}")
 
 
 class PassiveView(QWidget):

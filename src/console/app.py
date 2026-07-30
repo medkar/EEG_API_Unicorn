@@ -227,7 +227,7 @@ def _smoke():
 
     # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison.
     externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
-    chk(len(externes) == 4, f"{len(externes)} tuiles pour les modes de l'appli pygame")
+    chk(len(externes) == 3, f"{len(externes)} tuiles pour les modes de l'appli pygame")
     chk(all(not t.isEnabled() and t.detail.text() for t in externes),
         "chacune est grisée ET dit pourquoi elle ne démarre pas")
 
@@ -354,6 +354,50 @@ def _smoke():
     # Le bouton « ← Modes » est CLIQUÉ, pas contourné : c'est la seule sortie de la page.
     page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et « ← Modes » ramène sur la grille")
+
+    # Motor Imagery : même famille « actif » que le SSVEP (donc la MÊME classe de vue), mais une
+    # sortie de forme DIFFÉRENTE — des probabilités par classe, pas un score par cible. C'est
+    # justement ce que la vue doit encaisser sans se mettre à mentir : avant ce correctif, elle
+    # aurait affiché « aucune cible » en PERMANENCE (la clé `target_index` n'existe pas dans la
+    # sortie du MI), quelle que soit l'intention réellement décodée.
+    mi_state = {**state, "modes_state": {**state["modes_state"], "mi": {
+        "id": "mi", "label": "Motor Imagery", "family": "actif", "phase": "running",
+        "published": True,
+        "params": {"model": "mi_model.joblib", "prob_min": 0.6, "vote_len": 5, "min_votes": 3},
+        "instruction": "", "stream": "decoded_mi",
+        "channels": ["intent_index", "confidence", "p_GAUCHE", "p_DROITE", "p_REPOS"],
+        "rest_report": {"kind": "mi", "model": "mi_model.joblib",
+                        "classes": ["GAUCHE", "DROITE", "REPOS"]},
+        "output": {"intent_index": 0, "label": "GAUCHE", "confidence": 0.81,
+                   "probas": {"GAUCHE": 0.81, "DROITE": 0.12, "REPOS": 0.07},
+                   "threshold": 0.6}}}}
+    console.show_mode("mi")
+    console.apply_state(mi_state)
+    mi_page = console.pages["mi"]
+    chk(isinstance(mi_page.vue, live_views.ActiveView),
+        "le MI a le rendu ACTIF, comme le SSVEP — même famille")
+    chk("INTENTION GAUCHE" in mi_page.vue.verdict.text(),
+        f"mais la sortie en direct nomme l'INTENTION décodée, pas une cible "
+        f"({mi_page.vue.verdict.text()})")
+    chk("probabilité" in mi_page.vue.seuil.text() and "z" not in mi_page.vue.seuil.text(),
+        f"et l'échelle affichée est la PROBABILITÉ, jamais le z du SSVEP "
+        f"({mi_page.vue.seuil.text()})")
+    chk(len(mi_page.vue._barres) == 3,
+        f"une barre par classe du modèle, pas par cible ({len(mi_page.vue._barres)})")
+    chk(console.grid.tuiles["mi"].apercu._retenue == 0,
+        "la tuile MI met aussi en avant la classe retenue par le moteur")
+
+    # Vote non conclu (intent_index = -1) : ni cible, ni z — un message propre au MI, qui ne
+    # doit jamais se lire comme le « aucune cible (rien au-dessus de z=...) » du SSVEP.
+    mi_indecis = {**mi_state, "modes_state": {**mi_state["modes_state"], "mi": {
+        **mi_state["modes_state"]["mi"],
+        "output": {**mi_state["modes_state"]["mi"]["output"], "intent_index": -1}}}}
+    console.apply_state(mi_indecis)
+    chk("vote non conclu" in mi_page.vue.verdict.text() and "cible" not in mi_page.vue.verdict.text(),
+        f"un vote non conclu le dit sans jamais parler de « cible » ({mi_page.vue.verdict.text()})")
+
+    mi_page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le MI ramène aussi sur la grille")
 
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
