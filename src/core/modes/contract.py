@@ -47,25 +47,42 @@ class Param:
     affecte_decodage: bool = True   # False = le décodeur ne le lit jamais (cf. _set_params)
     help: str = ""
 
+    def choices_status(self):
+        """(choix, None) si la source a répondu, ((), raison) si elle a LEVÉ.
+
+        `choices_now` confond les deux exprès — un affichage ne doit pas tomber parce qu'une
+        liste est illisible. Mais `registry.check()`, lui, doit les séparer : une liste vide est
+        l'état normal d'un dépôt fraîchement cloné (aucun modèle entraîné), tandis qu'un
+        `choices_fn` qui lève est un DÉFAUT de déclaration. Les rapporter pareil ferait passer
+        le second pour une situation normale.
+        """
+        if not self.choices_fn:
+            return tuple(self.choices), None
+        try:
+            return tuple(self.choices_fn()), None
+        except Exception as e:  # noqa: BLE001 - une source de choix casse de mille façons
+            return (), f"{type(e).__name__}: {e}"
+
     def choices_now(self):
-        """Les choix, résolus maintenant.
+        """Les choix, résolus maintenant. `()` si la source a levé — jamais d'exception.
 
         Un modèle entraîné apparaît dans `data/` à la fin d'une calibration, donc bien après que
         ce contrat a été déclaré. Résoudre à l'appel — sans cache — est ce qui fait qu'il est
         proposable tout de suite au lieu du prochain démarrage du moteur.
         """
-        if self.choices_fn:
+        choix, erreur = self.choices_status()
+        if erreur:
+            # Un echec d'affichage ne doit jamais arreter une fonction. Le texte ECRIT ICI reste
+            # ASCII, car cette fonction peut etre appelee avant use_utf8_console() (le `label`
+            # interpole, lui, vient du contrat et peut porter des accents — meme regle que
+            # `client_snippet`). L'ASCII etait la contrainte, pas l'anglais : ce message est lu
+            # par un etudiant, il est donc en francais.
             try:
-                return tuple(self.choices_fn())
-            except Exception as e:
-                # Un echec d'affichage ne doit jamais arreter une fonction. Le message en ASCII pur,
-                # car cette fonction peut etre appelee avant use_utf8_console() (ex: initialisation).
-                try:
-                    print(f"WARNING: '{self.label}' ({self.key}): cannot list choices - {e}")
-                except Exception:
-                    pass  # Affichage echoue (pipe ferme, encodage impossible, etc.), silencieusement
-                return ()
-        return tuple(self.choices)
+                print(f"ATTENTION : impossible de lister les choix de "
+                      f"'{self.label}' ({self.key}) - {erreur}")
+            except Exception:
+                pass  # Affichage echoue (pipe ferme, encodage impossible, etc.), silencieusement
+        return choix
 
     def default_now(self):
         """Le défaut de ce réglage. Pour un « choice » sans défaut : le PREMIER choix.
@@ -283,9 +300,19 @@ def _check_constraints(param, values):
             # le signal — le mode ne publierait plus jamais que -1, en silence. C'est la panne
             # que ce produit existe pour éliminer : aucune erreur à l'exécution, juste un
             # décodage qui ne conclut plus rien, ce qui ressemble à un signal absent.
+            #
+            # La clé partenaire est nommée en dur ici, comme `refresh_hz` chez la voisine. Si
+            # elle manque, on REFUSE au lieu de laisser passer : une contrainte croisée déclarée
+            # mais jamais évaluée est une garantie qui n'existe pas, et personne ne s'en
+            # apercevrait — c'est le mode de panne que ce module entier existe pour éliminer.
             min_votes = values.get(param.key)
             vote_len = values.get("vote_len")
-            if min_votes is not None and vote_len is not None and min_votes > vote_len:
+            if vote_len is None or min_votes is None:
+                manquante = "vote_len" if vote_len is None else param.key
+                return (f"« {param.label} » : contrainte « votes_atteignables » déclarée, mais "
+                        f"« {manquante} » n'a pas de valeur dans ce mode — la contrainte ne "
+                        f"pourrait jamais être vérifiée (défaut du contrat)")
+            if min_votes > vote_len:
                 return (f"« {param.label} » : {min_votes} votes exigés sur seulement "
                         f"{vote_len} fenêtres de vote — jamais atteignable, le mode ne "
                         f"déciderait plus jamais rien")
@@ -474,6 +501,21 @@ def _selftest():
     chk(raison is not None and "3" in raison and "10" in raison,
         f"plus de votes que de fenêtres : refusé, en nommant les deux valeurs ({raison})")
 
+    # La clé partenaire ABSENTE doit être refusée, pas ignorée. Sans ce refus, un mode qui
+    # déclare la contrainte sans déclarer `vote_len` était accepté EN SILENCE : la contrainte
+    # figurait dans le contrat, ne s'évaluait jamais, et rien ne le disait. Sa voisine
+    # `divise_le_refresh` refuse déjà dans le même cas — deux comportements opposés côte à côte
+    # étaient le vrai défaut.
+    vote_orphelin = ModeSpec(
+        id="essai_vote_orphelin", label="Essai vote orphelin", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(Param(key="min_votes", label="Votes concordants", kind="int", default=3, min=1,
+                      max=15, constraints=("votes_atteignables",)),),
+    )
+    _v, raison = validate(vote_orphelin, {})
+    chk(raison is not None and "vote_len" in raison,
+        f"la contrainte sans sa clé partenaire est refusée, en la nommant ({raison})")
+
     # --- choix dynamiques : la liste n'existe qu'à l'exécution -------------------
     dispo = ["a.joblib", "b.joblib"]
     spec_dyn = ModeSpec(
@@ -507,6 +549,21 @@ def _selftest():
     chk(raison is not None and "aucun choix disponible" in raison
         and "Produit par une calibration." in raison,
         f"et le refus reprend l'aide du réglage ({raison})")
+
+    # « Liste vide » et « la source a LEVÉ » sont deux situations opposées : la première est
+    # normale sur un dépôt fraîchement cloné, la seconde est un défaut de déclaration.
+    # `choices_now` les confond exprès (un affichage ne doit pas tomber), `choices_status` les
+    # sépare — c'est de cette distinction que `registry.check()` a besoin pour ne pas classer un
+    # vrai bug en « situation normale ».
+    chk(p.choices_status() == ((), None),
+        f"une liste vide est rapportée sans erreur ({p.choices_status()})")
+    p_casse = Param(key="modele", label="Modèle entraîné", kind="choice",
+                    choices_fn=lambda: 1 / 0, help="Produit par une calibration.")
+    choix_casse, erreur_casse = p_casse.choices_status()
+    chk(choix_casse == () and erreur_casse and "ZeroDivisionError" in erreur_casse,
+        f"une source qui lève est rapportée AVEC sa raison ({erreur_casse})")
+    chk(p_casse.choices_now() == (),
+        "et `choices_now` rend quand même une liste vide, sans propager l'exception")
 
     # --- validation des défauts : un défaut hors de ses propres bornes doit être refusé -------
     # Protège contre un contrat mal écrit qui déclare default=99 avec max=10. Sans cette

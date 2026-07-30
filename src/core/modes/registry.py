@@ -10,6 +10,7 @@ Autotest :
 
 import os as _os
 import sys as _sys
+from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
@@ -48,10 +49,13 @@ def serialize(spec, params=None):
     """
     # Défauts résolus UNE SEULE fois, et réutilisés pour DEUX usages : le repli quand `params`
     # est absent (juste en dessous), et la clé "default" plus bas (qui doit rester le défaut
-    # DÉCLARÉ même quand `params` est fourni — voir son commentaire). Chaque résolution peut
-    # déclencher une source dynamique (choices_fn), coûteuse — joblib.load pour vérifier qu'un
-    # modèle existe, accès au système de fichiers, etc. — et cette fonction est appelée à 10 Hz
-    # depuis snapshot(), donc chaque résolution évitée compte.
+    # DÉCLARÉ même quand `params` est fourni — voir son commentaire).
+    #
+    # ⚠️ Ce n'est PAS une optimisation de chemin chaud : le catalogue a quitté `snapshot()`, donc
+    # cette fonction n'est plus appelée qu'à l'ouverture de la console. Une seule résolution parce
+    # qu'une source dynamique (`choices_fn`) peut lire le disque et que deux appels pourraient
+    # rendre deux réponses DIFFÉRENTES — un modèle apparu entre les deux, et un catalogue qui se
+    # contredirait lui-même. C'est de la cohérence, pas de la vitesse : ne pas « ré-optimiser ».
     #
     # Il reste malgré tout DEUX résolutions par choix dynamique par appel, pas une seule :
     # default_now() appelle choices_now() en interne pour un « choice » sans défaut déclaré, et
@@ -106,6 +110,10 @@ def check():
     visiblement — le mode refuse simplement d'appliquer ses réglages, et on le découvre en
     séance, casque sur la tête. Deux modes qui publieraient le même suffixe de flux seraient
     pires encore : LSL les accepterait tous les deux, et un client recevrait un mélange.
+
+    Un seul réglage échappe au contrôle de son défaut : celui dont la liste de choix est VIDE
+    (aucun modèle entraîné). Les autres réglages du même mode, eux, restent vérifiés — voir le
+    commentaire dans la boucle.
     """
     defauts = []
     vus_id, vus_stream = set(), {}
@@ -134,19 +142,36 @@ def check():
 
         # Chaque défaut doit respecter les bornes de son PROPRE paramètre. Sinon le mode
         # démarre et refuse ses propres réglages à la première soumission.
-        # Exception : les choix dynamiques peuvent être vides (aucun modèle entraîné encore) ;
-        # c'est normal après un git clone, pas un défaut de contrat.
-        sans_choix = [p.key for p in spec.params if p.choices_fn and not p.choices_now()]
+        #
+        # Une seule exception, et elle porte sur LE PARAMÈTRE, pas sur le mode : un choix
+        # dynamique peut être vide (aucun modèle entraîné encore), ce qui est l'état normal de
+        # tout dépôt fraîchement cloné — `data/` est gitignoré. Exempter le mode ENTIER, comme
+        # c'était fait, faisait cesser toute vérification de ses autres défauts (`prob_min`,
+        # `vote_len`, `min_votes`…) dans l'état le plus courant qui soit. On retire donc le seul
+        # paramètre sans choix, et on valide tout le reste.
+        #
+        # Une source de choix qui LÈVE, elle, n'est pas une situation normale : c'est un défaut
+        # de déclaration, et il part dans `defauts`. `choices_now()` rend `()` dans les deux cas
+        # (à dessein : un affichage ne doit pas tomber), d'où `choices_status()`.
+        sans_choix, sources_cassees = [], []
+        for p in spec.params:
+            if not p.choices_fn:
+                continue
+            choix, erreur = p.choices_status()
+            if erreur:
+                sources_cassees.append(f"{spec.id}.{p.key} : la source de choix a levé — {erreur}")
+            elif not choix:
+                sans_choix.append(p.key)
+        defauts.extend(sources_cassees)
+
         if sans_choix:
-            # Indiquer informativement qu'on saute la vérification : le mode est normal, l'état du
-            # poste est en attente (aucun modèle entraîné pour ce(s) paramètre(s) encore).
-            clés_str = ", ".join(sans_choix)
-            print(f"  NORMAL {spec.id}: verifications sautees pour {clés_str} "
-                  f"(aucun modele encore - sera valide quand rempli)")
-        else:
-            values, reason = validate(spec, {})
-            if values is None:
-                defauts.append(f"{spec.id} : ses valeurs par défaut sont refusées — {reason}")
+            print(f"  NORMAL {spec.id}: {', '.join(sans_choix)} sans choix pour l'instant "
+                  f"(aucun modele encore - sera valide quand rempli) ; les autres defauts du "
+                  f"mode sont verifies")
+        verifiable = replace(spec, params=tuple(p for p in spec.params if p.key not in sans_choix))
+        values, reason = validate(verifiable, {})
+        if values is None:
+            defauts.append(f"{spec.id} : ses valeurs par défaut sont refusées — {reason}")
 
         cles = {p.key for p in spec.params}
         for p in spec.params:
@@ -192,6 +217,44 @@ def _selftest():
         f"le catalogue transmet `proposes` ({par_cle['refresh_hz'].get('proposes')!r})")
     chk("affecte_decodage" not in par_cle["freqs"],
         "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
+
+    # --- l'assouplissement des choix vides, sur un registre PIÉGÉ ---------------
+    # Il n'était couvert par rien, alors que c'est l'état par défaut de tout dépôt fraîchement
+    # cloné (`data/` est gitignoré, donc zéro modèle MI). On ne peut pas le prouver sur les
+    # vrais modes — leur état dépend du poste — donc on remplace le registre le temps du test.
+    from core.modes.contract import ModeSpec, Param
+
+    def defauts_de(*params):
+        """Les défauts que `check()` signale sur un registre fabriqué d'un seul mode."""
+        global MODES
+        vrais = MODES
+        MODES = (ModeSpec(id="piege", label="Piégé", family="actif", summary="",
+                          status="moteur", params=params, stream="decoded_piege",
+                          channels=("x",)),)
+        try:
+            return check()[1]
+        finally:
+            MODES = vrais
+
+    vide = Param(key="modele", label="Modèle", kind="choice", choices_fn=lambda: [],
+                 help="aucun modèle entraîné pour l'instant")
+    d = defauts_de(vide, Param(key="gain", label="Gain", kind="float", default=99.0, max=10.0,
+                               help="entre 0 et 10"))
+    chk(any("dépasse le maximum" in x for x in d),
+        f"un choix vide n'exempte plus les AUTRES défauts du mode ({d})")
+
+    d = defauts_de(vide,
+                   Param(key="vote_len", label="Fenêtres du vote", kind="int", default=3,
+                         min=1, max=15, help="fenêtres"),
+                   Param(key="min_votes", label="Votes concordants", kind="int", default=10,
+                         min=1, max=15, constraints=("votes_atteignables",), help="votes"))
+    chk(any("jamais atteignable" in x for x in d),
+        f"les contraintes croisées sont évaluées elles aussi ({d})")
+
+    d = defauts_de(Param(key="modele", label="Modèle", kind="choice",
+                         choices_fn=lambda: 1 / 0, help="source cassée"))
+    chk(any("a levé" in x and "ZeroDivisionError" in x for x in d),
+        f"une source de choix qui LÈVE est un défaut, pas une situation normale ({d})")
 
     print(f"[registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
