@@ -17,13 +17,16 @@ Ce qu'il publie aujourd'hui (SPEC §4) :
     EEG_API_Unicorn_status         état du moteur, JSON, à chaque changement + périodique — idem
     EEG_API_Unicorn_decoded_ssvep  cible regardée, ~5 Hz (mode "ssvep")
     EEG_API_Unicorn_decoded_neuro  charge / somnolence / engagement, ~5 Hz (mode "neuro")
+    EEG_API_Unicorn_decoded_mi     intention gauche/droite/repos, ~5 Hz (mode "mi")
 
 SSVEP et neuro illustrent les deux familles de la BCI, et un client ne doit pas les traiter
 pareil : le SSVEP est **actif** (l'utilisateur choisit, il y a une bonne réponse, un stimulus est
 requis côté client), le neuro est **passif** (on observe un état, il n'y a rien à choisir et
-aucun stimulus).
+aucun stimulus). Le MI est actif lui aussi, mais SANS stimulus (il est endogène) — en échange, il
+exige un modèle ENTRAÎNÉ propre à la personne, là où le SSVEP décode sans calibration : sans
+modèle, le mode refuse de démarrer plutôt que de publier des probabilités qui ne veulent rien dire.
 
-Pas encore dans le moteur : MI, c-VEP, P300, ErrP — voir `src/core/modes/registry.py` pour le
+Pas encore dans le moteur : c-VEP, P300, ErrP — voir `src/core/modes/registry.py` pour le
 catalogue complet ; ils restent l'affaire de `src/research/app.py`. Pas encore non plus : le
 control plane entrant, les marqueurs.
 
@@ -62,7 +65,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, NEURO_WINDOW_S,  # noqa: E402
+from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MI_WINDOW_S, NEURO_WINDOW_S,  # noqa: E402
                     TOLERANCE_DIVISEUR, choose_frequencies, json_float, propose_frequencies,
                     reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
@@ -115,11 +118,14 @@ class EngineServer:
         self._rest_override = None
 
         # Le tampon doit satisfaire le plus gourmand des consommateurs : la qualité veut
-        # QUALITY_WINDOW_S, le SSVEP WINDOW_S, le neuro NEURO_WINDOW_S — chacun plus la marge de
-        # filtre. On dimensionne sur TOUS les modes, pas sur ceux qui tournent : démarrer un mode
-        # en cours de séance ne doit pas dépendre de la taille d'un tampon.
+        # QUALITY_WINDOW_S, le SSVEP WINDOW_S, le neuro NEURO_WINDOW_S, le MI MI_WINDOW_S —
+        # chacun plus la marge de filtre. On dimensionne sur TOUS les modes, pas sur ceux qui
+        # tournent : démarrer un mode en cours de séance ne doit pas dépendre de la taille d'un
+        # tampon. MI_WINDOW_S vaut 2.0 s comme NEURO_WINDOW_S aujourd'hui — le max ne bouge donc
+        # pas maintenant, mais doit rester correct si l'une des deux constantes change.
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
+                        int(MI_WINDOW_S * self.acq.fs),
                         self.acq.window_n) + self.acq.margin_n
 
         self._pending = self._prepare(modes or (), params or {})
@@ -873,7 +879,8 @@ def _smoke():
           f"dont {len(registry.runnable())} dans le moteur — "
           f"{'OK' if integre else 'PROBLÈME'}")
     return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
-            and _smoke_ssvep() and _smoke_neuro() and _smoke_cumul() and _smoke_proposition())
+            and _smoke_ssvep() and _smoke_neuro() and _smoke_mi() and _smoke_cumul()
+            and _smoke_proposition())
 
 
 def _smoke_neuro():
@@ -1024,6 +1031,78 @@ def _smoke_ssvep():
         print(f"[smoke-ssvep] {len(rows)} décisions, dont {detected} avec une cible "
               f"(sans valeur sur bruit synthétique — on teste le câblage)")
     print(f"[smoke-ssvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_mi():
+    """Le mode MI de bout en bout, sans casque : un modèle entraîné à la volée, puis le flux.
+
+    Le modèle est écrit dans `data/` sous un nom réservé, puis retiré : le mode découvre ses
+    choix dans ce dossier, donc un modèle ailleurs ne serait pas proposable. Le `finally` est
+    obligatoire — un `mi_model_smoke.joblib` oublié se retrouverait proposé à l'étudiant.
+    """
+    import threading
+
+    import numpy as np
+
+    from core.config import DATA_DIR
+    from core.mi_decoder import MI_LABELS, MIModel, synth_mi_trial
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    chemin = os.path.join(DATA_DIR, "mi_model_smoke.joblib")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    rng = np.random.default_rng(0)
+    epochs, y = [], []
+    for label in MI_LABELS:
+        for _ in range(8):
+            epochs.append(synth_mi_trial(label, rng=rng))
+            y.append(label)
+    MIModel(fs=250.0).fit(np.asarray(epochs), np.asarray(y)).save(chemin)
+
+    instance = "smoke-mi"
+    server = EngineServer(synthetic=True, modes=("mi",), params={"mi": {"model": chemin}},
+                          instance=instance)
+    thread = threading.Thread(target=server.run,
+                             kwargs={"duration_s": 12.0, "baseline_s": 0.0, "warmup_s": 1.0},
+                             daemon=True)
+    try:
+        thread.start()
+        info = _resolve_own("decoded_mi", instance, timeout=15.0)
+        chk(info is not None, "le flux decoded_mi est publié")
+        if info is not None:
+            chk(info.channel_count() == 2 + len(MI_LABELS),
+                f"5 voies : intent_index, confidence, et une par classe ({info.channel_count()})")
+            from pylsl import StreamInlet
+            inlet = StreamInlet(info)
+            inlet.open_stream()
+            recus, indices = 0, set()
+            fin = time.perf_counter() + 8.0
+            while time.perf_counter() < fin:
+                echantillon, _ts = inlet.pull_sample(timeout=1.0)
+                if echantillon is None:
+                    continue
+                recus += 1
+                indices.add(int(round(echantillon[0])))
+                somme = sum(echantillon[2:])
+                if abs(somme - 1.0) > 1e-2:
+                    chk(False, f"les probabilités doivent sommer à 1 (reçu {somme:.3f})")
+                    break
+            chk(recus >= 10, f"des décisions arrivent en continu ({recus} en 8 s)")
+            chk(all(-1 <= i < len(MI_LABELS) for i in indices),
+                f"tous les indices sont dans les bornes ({sorted(indices)})")
+    finally:
+        server.stop()
+        thread.join(timeout=5.0)
+        if os.path.exists(chemin):
+            os.remove(chemin)
+
+    print(f"[smoke-mi] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
