@@ -69,7 +69,8 @@ from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MI_WINDOW_S, NEURO_WINDOW_S,
                     TOLERANCE_DIVISEUR, choose_frequencies, json_float, propose_frequencies,
                     reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
-                    StatusPublisher, default_instance_id, stream_name, verdict_from_sigma)
+                    StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
+                    verdict_from_sigma)
 from core.modes import contract, registry  # noqa: E402
 
 # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
@@ -257,8 +258,14 @@ class EngineServer:
             print(f"[server] {spec.label} — {hors or 'aucun changement'} "
                   f"(sans effet sur le décodage : ni repos refait, ni flux recréé)")
             return
-        ancien.close()
+        # CONSTRUIRE d'abord, FERMER ensuite. Un constructeur de runtime peut lever — celui du MI
+        # le fait PAR CONCEPTION quand le modèle a disparu entre la validation et le démarrage.
+        # Dans l'autre ordre, l'ancien runtime restait dans `active` avec son flux déjà fermé mais
+        # `published = True` : la console affichait « publié, en décodage » alors que plus rien ne
+        # sortait du réseau. Aucun doublon de flux à craindre ici — un constructeur n'ouvre aucun
+        # outlet, c'est `open()` qui le fait, et il n'est appelé qu'après la fermeture.
         runtime = spec.runtime_cls(spec, values, self)
+        ancien.close()
         runtime.published = ancien.published
         if runtime.published:
             runtime.open()
@@ -666,11 +673,18 @@ class EngineServer:
                   f"instance={self.instance}")
             for suffix in ("quality", "status"):
                 print(f"[server] flux LSL publie : {stream_name(suffix)}")
-            self._start([s.id for s, _ in self._pending],
-                        {s.id: v for s, v in self._pending}, time.perf_counter())
-            self.status_out.push(self._state(True), key=self._status_key(True), force=True)
-
             try:
+                # `_start` est DANS le `try`, et pas avant : un constructeur de runtime peut lever
+                # — celui du MI le fait PAR CONCEPTION quand le modèle a disparu entre la
+                # validation et le démarrage. Or le `finally` plus bas n'est pas un nettoyage
+                # optionnel : c'est lui qui casse le cycle `active ↔ engine`, sans quoi un
+                # `BoardShim.__del__` tardif libère la session d'un AUTRE moteur (voir son long
+                # commentaire). Le sauter parce qu'un mode n'a pas su démarrer ferait payer
+                # l'incident au moteur SUIVANT du même processus.
+                self._start([s.id for s, _ in self._pending],
+                            {s.id: v for s, v in self._pending}, time.perf_counter())
+                self.status_out.push(self._state(True), key=self._status_key(True), force=True)
+
                 while not self._stop:
                     self._drain_commands()
                     now = time.perf_counter()
@@ -1093,7 +1107,30 @@ def _smoke_mi():
                 f"5 voies : intent_index, confidence, et une par classe ({info.channel_count()})")
             from pylsl import StreamInlet
             inlet = StreamInlet(info)
-            inlet.open_stream()
+            inlet.open_stream(timeout=5.0)
+
+            # Les MÉTADONNÉES relues sur le flux réel, comme le fait `_smoke_neuro` : compter les
+            # voies ne prouve rien sur leurs NOMS, et ce sont les noms que le client lit. Un
+            # `mi_channel_labels` correct câblé sur de mauvaises `classes` publierait cinq voies
+            # bien nommées pour un modèle qui n'a pas ces classes-là — invisible à un compte.
+            etiquettes, noeud = [], inlet.info().desc().child("channels").child("channel")
+            while not noeud.empty():
+                etiquettes.append(noeud.child_value("label"))
+                noeud = noeud.next_sibling()
+            decodage = inlet.info().desc().child("decoding")
+            echelle = decodage.child_value("decision_scale")
+            sans_decision = decodage.child_value("no_decision_index")
+            repos = decodage.child_value("rest_index")
+            attendues = mi_channel_labels(MI_LABELS)
+            chk(etiquettes == attendues,
+                f"les voies annoncées sont celles du contrat ({etiquettes})")
+            chk(echelle == "proba",
+                f"l'échelle de décision annoncée est « proba », pas le z du SSVEP ({echelle!r})")
+            # « Je ne sais pas » et « la personne se repose » sont la confusion la plus coûteuse
+            # du mode : les deux indices doivent voyager dans les métadonnées, et être DIFFÉRENTS.
+            chk(sans_decision == "-1" and repos == str(MI_LABELS.index("REPOS")),
+                f"le flux dit lui-même ce que valent « aucune décision » et « repos » "
+                f"(no_decision_index={sans_decision!r}, rest_index={repos!r})")
             recus, indices, probas_vues = 0, set(), set()
             fin = time.perf_counter() + 8.0
             while time.perf_counter() < fin:
@@ -1126,12 +1163,17 @@ def _smoke_mi():
                 f"lit la fenêtre, pas qu'il republie une valeur figée ({len(probas_vues)} "
                 f"jeu(x) distinct(s) sur {recus} échantillons)")
     finally:
-        if server is not None:
-            server.stop()
-        if thread is not None:
-            thread.join(timeout=5.0)
+        # Le retrait du fichier PASSE EN PREMIER, et le `join` ne s'exécute que sur un fil
+        # réellement démarré. `thread.join()` sur un fil jamais démarré lève `RuntimeError` :
+        # dans l'ordre inverse, un `thread.start()` en échec sautait le `os.remove` et laissait
+        # `mi_model_smoke.joblib` dans le VRAI `data/`, donc proposé à l'étudiant au prochain
+        # lancement de la console — précisément ce que ce `finally` existe pour empêcher.
         if os.path.exists(chemin):
             os.remove(chemin)
+        if server is not None:
+            server.stop()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
 
     print(f"[smoke-mi] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
@@ -1556,8 +1598,17 @@ if __name__ == "__main__":
     # `--freqs` donné sans `--mode ssvep` ne doit pas laisser un réglage mort dans ce qui part
     # au moteur, même inoffensif.
     params = {mode_id: settings for mode_id, settings in params.items() if mode_id in modes}
-    engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
-                          modes=modes, params=params, instance=args.instance)
+    # `_prepare` refuse un réglage invalide en levant un `ValueError` dont le message est déjà
+    # rédigé pour être lu. Un traceback autour ne dit rien de plus et enterre ce message sous
+    # quinze lignes de pile — or c'est le PREMIER contact de tout étudiant qui lance `--mode mi`
+    # avant d'avoir calibré : sans modèle entraîné, ce refus est le comportement normal du mode,
+    # pas un plantage. Code de sortie 2 : « la commande est mal formée », comme argparse.
+    try:
+        engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
+                              modes=modes, params=params, instance=args.instance)
+    except ValueError as refus:
+        print(f"[server] {refus}")
+        sys.exit(2)
     # Ctrl+C doit fermer PROPREMENT la session BrainFlow : une session laissée ouverte
     # empêche la suivante de s'ouvrir (BOARD_NOT_READY au relancement).
     signal.signal(signal.SIGINT, lambda *_: engine.stop())
