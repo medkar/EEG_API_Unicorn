@@ -41,10 +41,34 @@ class Param:
     max: float = None
     count: tuple = None       # (mini, maxi) d'éléments, pour les listes
     choices: tuple = ()
+    choices_fn: object = None  # () -> choix, quand ils sont DÉCOUVERTS à l'exécution (modèles MI)
     constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
     proposes: str = ""        # ce paramètre en PROPOSE un autre (chantier 2 ; cf. spec §3.1)
     affecte_decodage: bool = True   # False = le décodeur ne le lit jamais (cf. _set_params)
     help: str = ""
+
+    def choices_now(self):
+        """Les choix, résolus maintenant.
+
+        Un modèle entraîné apparaît dans `data/` à la fin d'une calibration, donc bien après que
+        ce contrat a été déclaré. Résoudre à l'appel — sans cache — est ce qui fait qu'il est
+        proposable tout de suite au lieu du prochain démarrage du moteur.
+        """
+        return tuple(self.choices_fn()) if self.choices_fn else tuple(self.choices)
+
+    def default_now(self):
+        """Le défaut de ce réglage. Pour un « choice » sans défaut : le PREMIER choix.
+
+        Les listes dynamiques sont rendues du plus récent au plus ancien, donc « le premier »
+        veut dire « le dernier entraîné » — le choix qu'un étudiant attend après une calibration.
+        None quand il n'y a rien : c'est `validate` qui le refusera, avec l'aide du réglage.
+        """
+        if self.default is not None:
+            return self.default
+        if self.kind == "choice":
+            choix = self.choices_now()
+            return choix[0] if choix else None
+        return None
 
 
 @dataclass(frozen=True)
@@ -92,8 +116,8 @@ class ModeSpec:
     runtime_cls: object = None  # la classe ModeRuntime, ou None si le moteur ne sait pas le faire
 
     def defaults(self):
-        """Le jeu de réglages par défaut de ce mode."""
-        return {p.key: p.default for p in self.params}
+        """Le jeu de réglages par défaut de ce mode, résolu maintenant."""
+        return {p.key: p.default_now() for p in self.params}
 
     def channels_for(self, params):
         """Les voies réellement publiées pour ces réglages.
@@ -117,9 +141,8 @@ def validate(spec, params):
 
     values = spec.defaults()
     for key, param in known.items():
-        if key not in params:
-            continue
-        value, reason = _coerce(param, params[key])
+        # Toujours coercer, qu'elle vienne du défaut ou de l'utilisateur
+        value, reason = _coerce(param, values[key] if key not in params else params[key])
         if reason:
             return None, reason
         values[key] = value
@@ -151,9 +174,15 @@ def _coerce(param, value):
         return bool(value), None
 
     if param.kind == "choice":
-        if value not in param.choices:
+        choix = param.choices_now()
+        if not choix:
+            # Cas courant, pas exceptionnel : aucun modèle entraîné encore. Le refus doit dire
+            # comment en obtenir un, sinon l'étudiant voit un champ vide et rien d'autre.
+            detail = f" — {param.help}" if param.help else ""
+            return None, f"« {param.label} » : aucun choix disponible{detail}"
+        if value not in choix:
             return None, (f"« {param.label} » : {value!r} n'est pas un choix valide "
-                          f"({', '.join(str(c) for c in param.choices)})")
+                          f"({', '.join(str(c) for c in choix)})")
         return value, None
 
     if param.kind == "float_list":
@@ -397,6 +426,40 @@ def _selftest():
     _v, raison = validate(ecran, {"freqs": [-20.0, -15.0]})
     chk(raison is not None and "strictement positive" in raison and "-20" in raison,
         f"fréquence négative est refusée ({raison})")
+
+    # --- choix dynamiques : la liste n'existe qu'à l'exécution -------------------
+    dispo = ["a.joblib", "b.joblib"]
+    spec_dyn = ModeSpec(
+        id="dyn", label="Dynamique", family="actif", summary="", status="moteur",
+        params=(Param(key="modele", label="Modèle entraîné", kind="choice",
+                      choices_fn=lambda: list(dispo),
+                      help="Produit par une calibration."),),
+        stream="decoded_dyn", channels=("x",))
+    p = spec_dyn.params[0]
+    chk(p.choices_now() == ("a.joblib", "b.joblib"),
+        f"les choix sont résolus à l'appel ({p.choices_now()})")
+    chk(spec_dyn.defaults()["modele"] == "a.joblib",
+        f"sans défaut déclaré, un « choice » prend le PREMIER choix ({spec_dyn.defaults()})")
+
+    _v, raison = validate(spec_dyn, {"modele": "b.joblib"})
+    chk(raison is None, f"un choix présent dans la liste est accepté ({raison})")
+    _v, raison = validate(spec_dyn, {"modele": "z.joblib"})
+    chk(raison is not None and "n'est pas un choix valide" in raison,
+        f"un choix absent de la liste est refusé ({raison})")
+
+    # La liste change SANS que le contrat soit rechargé : c'est tout l'intérêt.
+    dispo.append("c.joblib")
+    chk(p.choices_now()[-1] == "c.joblib",
+        "un nouveau choix apparaît sans redémarrer — aucun cache ne le masque")
+
+    # Liste VIDE : le refus doit dire quoi faire, sinon l'étudiant reste devant un champ mort.
+    dispo.clear()
+    chk(spec_dyn.defaults()["modele"] is None,
+        f"sans aucun choix, le défaut est None ({spec_dyn.defaults()})")
+    _v, raison = validate(spec_dyn, {})
+    chk(raison is not None and "aucun choix disponible" in raison
+        and "Produit par une calibration." in raison,
+        f"et le refus reprend l'aide du réglage ({raison})")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

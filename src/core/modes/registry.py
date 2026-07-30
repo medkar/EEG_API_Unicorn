@@ -62,7 +62,7 @@ def serialize(spec, params=None):
              "min": p.min, "max": p.max,
              "count": list(p.count) if p.count else None,
              "proposes": p.proposes,
-             "choices": list(p.choices), "help": p.help}
+             "choices": list(p.choices_now()), "help": p.help}
             for p in spec.params
         ],
         "rest": None if spec.rest is None else {
