@@ -171,7 +171,16 @@ class MIRuntime(ModeRuntime):
             return
         self._last_log = now
         detail = "  ".join(f"{c} p={p:.2f}" for c, p in zip(self.classes, probas))
-        verdict = (f"— (vote non conclu, seuil {self.params['prob_min']:g})" if index < 0
+        # Le seuil filtre CHAQUE fenêtre ; c'est ensuite le VOTE (`min_votes` fenêtres d'accord
+        # sur les `vote_len` dernières) qui décide — jamais « la classe gagnante doit dépasser
+        # le seuil ». Dire l'inverse ici affichait un p AU-DESSUS du seuil annoncé juste à côté
+        # de « vote non conclu » (ex. GAUCHE p=0.90, seuil 0.6) : la même contradiction que celle
+        # corrigée dans `console/live_views.py` (`ActiveView._update_probas`). Les deux textes
+        # doivent dire la MÊME règle — on reprend donc ici les valeurs que le runtime a sous la
+        # main (`self.params`), comme le fait déjà l'écran.
+        verdict = (f"— (vote non conclu : moins de {self.params['min_votes']} des "
+                   f"{self.params['vote_len']} dernières fenêtres d'accord ; seuil "
+                   f"{self.params['prob_min']:g} par fenêtre)" if index < 0
                    else f"INTENTION {self.classes[index]}")
         print(f"[mi] {verdict:<34} {detail}")
 
@@ -424,15 +433,24 @@ def _selftest():
             f"personne — même répétée {2 * vote_len} fois ({sorted(indices)})")
 
         # 7. `vote_len` BORNE vraiment la fenêtre du vote. `vote_len` fenêtres GAUCHE puis
-        # `min_votes` fenêtres DROITE : la fenêtre glissante ne retient que les `vote_len`
-        # dernières, donc DROITE l'emporte. Un vote qui garderait TOUT l'historique compterait
-        # encore les GAUCHE et publierait GAUCHE — le mode n'oublierait jamais ce que
-        # l'utilisateur a cessé de faire, ce qui est exactement ce que la borne existe pour
-        # empêcher.
-        lignes = rejoue([GAUCHE_SUR] * vote_len + [DROITE_SUR] * min_votes, t0=60.0)
+        # `vote_len` fenêtres DROITE : la fenêtre glissante (maxlen=`vote_len`) a alors ÉVINCÉ
+        # la dernière GAUCHE, elle ne contient plus que des DROITE — DROITE l'emporte par
+        # construction, sans dépendre d'aucun calcul de majorité. Un vote qui garderait TOUT
+        # l'historique compterait encore les GAUCHE et publierait GAUCHE — le mode n'oublierait
+        # jamais ce que l'utilisateur a cessé de faire, ce qui est exactement ce que la borne
+        # existe pour empêcher.
+        #
+        # ⚠️ La version précédente rejouait `vote_len` GAUCHE puis seulement `min_votes` DROITE,
+        # en supposant IMPLICITEMENT qu'aucune égalité n'était en jeu dans le décompte — vrai
+        # UNIQUEMENT aux valeurs par défaut (5 et 3 : `2 * min_votes = 6 > vote_len = 5`, DE
+        # JUSTESSE), sans le dire. Faux dès 6/3, 7/3 ou 5/2 : des réglages plausibles, puisque
+        # `MI_VOTE_LEN`/`MI_MIN_VOTES` (core/config.py) sont faits pour être ajustés — l'autotest
+        # échouait alors sur du code par ailleurs correct.
+        lignes = rejoue([GAUCHE_SUR] * vote_len + [DROITE_SUR] * vote_len, t0=60.0)
         chk(lignes[-1][0] == rt.classes.index("DROITE"),
-            f"après {vote_len} fenêtres GAUCHE puis {min_votes} DROITE, seules les {vote_len} "
-            f"dernières comptent : le vote donne DROITE (index={lignes[-1][0]})")
+            f"après {vote_len} fenêtres GAUCHE puis {vote_len} DROITE, seules les {vote_len} "
+            f"dernières comptent (toutes les GAUCHE évincées) : le vote donne DROITE "
+            f"(index={lignes[-1][0]})")
 
         # 8. INVARIANT : `confidence >= threshold` dès que `intent_index >= 0`.
         # Un client refiltre naturellement sur la confiance, puisque le flux annonce son seuil
