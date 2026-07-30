@@ -1255,7 +1255,31 @@ git commit -m "Run and smoke-test the Motor Imagery mode end to end"
 
 ---
 
-## Task 7 : le récepteur Unity et la documentation
+## Task 7 : la documentation
+
+> **Recadrage de l'utilisateur, 2026-07-30.** Le **récepteur Unity est sorti de ce plan** et fera
+> l'objet d'un lot séparé — avec ce motif, qui vaut au-delà de cette tâche : **Unity n'était qu'un
+> exemple**, donné pour rendre une question concrète, pas une cible produit. Le produit reste
+> **agnostique de l'application avale** (Unity, Python, MATLAB, web), comme CLAUDE.md le dit depuis
+> le début. La documentation, elle, **reste dans ce plan** : trois fichiers deviennent faux dès la
+> tâche 6 posée, et les laisser mentir coûterait plus cher que de les corriger tout de suite.
+>
+> **Les étapes 1 et 2 ci-dessous sont donc REPORTÉES** (le script C# et le README d'`examples/unity/`).
+> Les étapes 3 à 8 sont à faire.
+
+**Files:**
+- Modify: `README.md`, `docs/SPEC.md`, `CLAUDE.md`
+
+**Interfaces:**
+- Consomme : le flux `decoded_mi` et ses voies (tâches 4 à 6).
+- Produit : rien de logiciel — de la documentation qui cesse d'être fausse.
+
+**Ce qui devient faux après la tâche 6, et qu'il faut corriger :** `CLAUDE.md` et le `README`
+affirment que l'appli pygame est le **seul accès** au Motor Imagery, et qu'elle a **6 modes**. Le
+moteur sait désormais faire le MI ; l'appli pygame n'en garde que la **calibration**, jusqu'à la
+moitié B.
+
+### Étapes 1 et 2 — reportées au lot séparé
 
 **Files:**
 - Create: `examples/unity/MiIntentReceiver.cs`
@@ -1503,11 +1527,14 @@ Remplacer la ligne du chantier 3 par :
 
 ```markdown
    - **[fait 2026-07-29 — chantier 3, moitié A]** le Motor Imagery est publié par le moteur
-     (`--mode mi` → flux `decoded_mi`) : le décodeur a déménagé dans `core/`, le modèle se choisit
-     dans la console, et `examples/unity/MiIntentReceiver.cs` le consomme. Conception :
+     (`--mode mi` → flux `decoded_mi`) : le décodeur a déménagé dans `core/`, et le modèle se
+     choisit dans la console. N'importe quel client LSL le consomme — Python, MATLAB, Unity, web.
+     Conception :
      [docs/superpowers/specs/2026-07-29-motor-imagery-moteur-design.md](superpowers/specs/2026-07-29-motor-imagery-moteur-design.md).
      - **[à faire — chantier 3, moitié B]** la calibration jouée par le moteur, la gestion des
        modèles, l'accuracy honnête et l'archivage des écrans pygame.
+     - **[à faire — lot séparé]** un exemple de récepteur pour le MI, à écrire quand on saura pour
+       quel client il est le plus utile.
 ```
 
 - [ ] **Étape 5 : mettre à jour `CLAUDE.md`**
@@ -1540,8 +1567,8 @@ Expected: trois verdicts OK.
 - [ ] **Étape 8 : commit**
 
 ```bash
-git add examples/unity/ README.md CLAUDE.md docs/SPEC.md
-git commit -m "Give Unity a Motor Imagery receiver, and say what it is worth"
+git add README.md CLAUDE.md docs/SPEC.md
+git commit -m "Stop the docs saying Motor Imagery is pygame-only"
 ```
 
 ---
