@@ -46,12 +46,20 @@ def serialize(spec, params=None):
     l'intérieur du moteur, et ce même dictionnaire pourra partir sur le flux `status` le jour où
     un client voudra découvrir les modes tout seul.
     """
-    params = spec.defaults() if params is None else params
-    # Calcule les défauts une fois ; réutilise-les plutôt que de rappeler default_now() dans la
-    # compréhension. Chaque appel peut déclencher une source dynamique (choices_fn), qui peut être
-    # coûteux — joblib.load pour vérifier qu'un modèle existe, accès au système de fichiers, etc.
-    # Cette fonction est appelée à 10 Hz depuis snapshot(), donc résoudre une fois par appel compte.
-    defaults_computed = {p.key: p.default_now() for p in spec.params}
+    # Défauts résolus UNE SEULE fois, et réutilisés pour DEUX usages : le repli quand `params`
+    # est absent (juste en dessous), et la clé "default" plus bas (qui doit rester le défaut
+    # DÉCLARÉ même quand `params` est fourni — voir son commentaire). Chaque résolution peut
+    # déclencher une source dynamique (choices_fn), coûteuse — joblib.load pour vérifier qu'un
+    # modèle existe, accès au système de fichiers, etc. — et cette fonction est appelée à 10 Hz
+    # depuis snapshot(), donc chaque résolution évitée compte.
+    #
+    # Il reste malgré tout DEUX résolutions par choix dynamique par appel, pas une seule :
+    # default_now() appelle choices_now() en interne pour un « choice » sans défaut déclaré, et
+    # la clé "choices" plus bas a besoin de la liste ENTIÈRE, pas seulement du premier élément
+    # que default_now() en tire. Recopier ici la logique de default_now() pour descendre à un
+    # seul appel créerait deux vérités qui finiraient par diverger — la dépense reste à 2, pas 1.
+    defauts = {p.key: p.default_now() for p in spec.params}
+    params = defauts if params is None else params
 
     return {
         "id": spec.id,
@@ -65,7 +73,9 @@ def serialize(spec, params=None):
         "params": [
             {
                 "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
-                "default": list(defaults_computed[p.key]) if isinstance(defaults_computed[p.key], tuple) else defaults_computed[p.key],
+                # Le défaut DÉCLARÉ, jamais la valeur courante : toujours tiré de `defauts`,
+                # jamais de `params`, même quand l'appelant a soumis des `params` explicites.
+                "default": list(defauts[p.key]) if isinstance(defauts[p.key], tuple) else defauts[p.key],
                 "min": p.min, "max": p.max,
                 "count": list(p.count) if p.count else None,
                 "proposes": p.proposes,
