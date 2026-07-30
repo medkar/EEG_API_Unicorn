@@ -54,7 +54,13 @@ class Param:
         ce contrat a été déclaré. Résoudre à l'appel — sans cache — est ce qui fait qu'il est
         proposable tout de suite au lieu du prochain démarrage du moteur.
         """
-        return tuple(self.choices_fn()) if self.choices_fn else tuple(self.choices)
+        if self.choices_fn:
+            try:
+                return tuple(self.choices_fn())
+            except Exception as e:
+                print(f"⚠️  « {self.label} » ({self.key}): impossible de lister les choix — {e}")
+                return ()
+        return tuple(self.choices)
 
     def default_now(self):
         """Le défaut de ce réglage. Pour un « choice » sans défaut : le PREMIER choix.
@@ -141,8 +147,10 @@ def validate(spec, params):
 
     values = spec.defaults()
     for key, param in known.items():
-        # Toujours coercer, qu'elle vienne du défaut ou de l'utilisateur
-        value, reason = _coerce(param, values[key] if key not in params else params[key])
+        # Toujours coercer les défauts aussi : un défaut hors de ses propres bornes doit être
+        # refusé comme tout réglage, sinon le mode démarre et refuse ses propres valeurs.
+        value_to_coerce = params[key] if key in params else values[key]
+        value, reason = _coerce(param, value_to_coerce)
         if reason:
             return None, reason
         values[key] = value
@@ -460,6 +468,28 @@ def _selftest():
     chk(raison is not None and "aucun choix disponible" in raison
         and "Produit par une calibration." in raison,
         f"et le refus reprend l'aide du réglage ({raison})")
+
+    # --- validation des défauts : un défaut hors de ses propres bornes doit être refusé -------
+    # Protège contre un contrat mal écrit qui déclare default=99 avec max=10. Sans cette
+    # vérification, le mode démarre en silence puis refuse ses propres valeurs à la première
+    # soumission — découvert en séance, casque sur la tête.
+    bad_default = ModeSpec(
+        id="bad", label="Mauvais défaut", family="actif", summary="", status="moteur",
+        params=(Param("valeur", "Valeur", "float", default=99.0, max=10.0, help="Entre 0 et 10"),),
+        stream="decoded_bad", channels=("x",))
+    _v, raison = validate(bad_default, {})
+    chk(raison is not None and "dépasse le maximum" in raison,
+        f"un défaut hors de bornes est refusé, pas caché ({raison})")
+
+    # Un Param numérique sans défaut explicite doit aussi être validé : sa valeur par défaut
+    # (None) est souvent invalide pour un type numérique.
+    no_default = ModeSpec(
+        id="nodef", label="Sans défaut", family="actif", summary="", status="moteur",
+        params=(Param("gain", "Gain", "float", min=0.0, max=1.0, help="Gain [0-1]"),),
+        stream="decoded_nodef", channels=("x",))
+    _v, raison = validate(no_default, {})
+    chk(raison is not None and "nombre attendu" in raison,
+        f"un défaut None pour un nombre est refusé ({raison})")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

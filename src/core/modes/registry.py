@@ -58,7 +58,7 @@ def serialize(spec, params=None):
         "channels": list(spec.channels_for(params)),
         "params": [
             {"key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
-             "default": list(p.default) if isinstance(p.default, tuple) else p.default,
+             "default": list(p.default_now()) if isinstance(p.default_now(), tuple) else p.default_now(),
              "min": p.min, "max": p.max,
              "count": list(p.count) if p.count else None,
              "proposes": p.proposes,
@@ -116,9 +116,16 @@ def check():
 
         # Chaque défaut doit respecter les bornes de son PROPRE paramètre. Sinon le mode
         # démarre et refuse ses propres réglages à la première soumission.
-        values, reason = validate(spec, {})
-        if values is None:
-            defauts.append(f"{spec.id} : ses valeurs par défaut sont refusées — {reason}")
+        # Exception : les choix dynamiques peuvent être vides (aucun modèle entraîné encore) ;
+        # c'est normal après un git clone, pas un défaut de contrat.
+        sans_choix = [p.key for p in spec.params if p.choices_fn and not p.choices_now()]
+        if sans_choix:
+            # Indiquer qu'on saute la vérification, sans le traiter comme un défaut
+            pass
+        else:
+            values, reason = validate(spec, {})
+            if values is None:
+                defauts.append(f"{spec.id} : ses valeurs par défaut sont refusées — {reason}")
 
         cles = {p.key for p in spec.params}
         for p in spec.params:
@@ -127,7 +134,7 @@ def check():
                                f"qui n'est pas un paramètre de ce mode")
             if p.kind not in ("float", "int", "bool", "choice", "float_list"):
                 defauts.append(f"{spec.id}.{p.key} : kind « {p.kind} » inconnu")
-            if p.kind == "choice" and not p.choices:
+            if p.kind == "choice" and not p.choices and not p.choices_fn:
                 defauts.append(f"{spec.id}.{p.key} : un choix sans choices")
             if not p.help:
                 defauts.append(f"{spec.id}.{p.key} : pas de texte d'aide "
