@@ -72,6 +72,17 @@ python src/console/app.py --smoke          # console : grille, page de mode, ré
 python src/research/app.py --smoke         # appli : menu + les 6 modes + les calibrations
 ```
 
+Et les trois gardes du Motor Imagery, qu'**aucun des trois smokes ci-dessus n'exécute** :
+
+```bash
+python src/core/acquisition.py --synthetic # fenêtre MI NON filtrée (double filtrage = bruit à p=0,99)
+python src/core/modes/mi.py                # seuil, longueur du vote, appariement p_<classe> ↔ classe
+python src/core/mi_models.py               # refus des modèles hérités, tri du plus récent au plus ancien
+```
+
+Le non-filtrage de la fenêtre MI est l'invariant central du sous-système et il n'est vérifié que
+par le premier : un double filtrage réintroduit demain passerait les trois smokes sans un mot.
+
 ⚠️ **Ne laisser tourner AUCUN moteur pendant un test.** Les noms de flux sont un contrat public,
 donc identiques pour toutes les instances : un serveur oublié répond à la place de celui qu'on teste
 (les smokes filtrent sur le `source_id`, mais la confusion reste facile).

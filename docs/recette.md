@@ -12,7 +12,7 @@ chacun se suffit à lui-même.
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
 | 1 | un écran | ~30 min | la console marche pour un humain |
-| 2 | le casque | ~45 min | le décodage n'a pas régressé |
+| 2 | le casque | ~60 min | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
 
 ## Avant toute séance — trois pièges qui ont déjà coûté des heures
@@ -50,14 +50,22 @@ python src/core/config.py            # proposition de fréquences, choix des div
 python src/core/modes/contract.py    # validation des réglages, messages de refus
 python src/core/modes/registry.py    # catalogue des 7 modes, ce qui sort vers la console
 python src/core/modes/ssvep.py       # les réglages du mode SSVEP
+python src/core/modes/mi.py          # le mode MI : seuil, vote, appariement p_<classe> ↔ classe
+python src/core/mi_models.py         # les modèles MI sur le disque : lesquels se chargent vraiment
+python src/core/acquisition.py --synthetic   # acquisition seule + fenêtre MI NON filtrée
 python src/core/lsl_io.py            # publication LSL, pont d'horloge, verdicts qualité
 python src/core/server.py --smoke    # le moteur : frontière core/, cumul, repos partagé, flux
 python src/console/app.py --smoke    # la console : grille, page de mode, formulaire (Qt offscreen)
 python src/research/app.py --smoke   # l'appli pygame : menu + 6 modes + calibrations (~3 min)
 ```
 
-Attendu : `VERDICT : OK` pour les cinq premiers, `VERDICT : OK` pour les deux smokes suivants, et
-`smoke OK : menu + SSVEP + c-VEP … câblés (headless)` pour le dernier.
+Attendu : `VERDICT : OK` pour tous, **sauf `acquisition.py`** qui n'imprime pas de ligne de verdict
+— pour celui-là, lire les `OK` ligne à ligne et le code de sortie (`$LASTEXITCODE` sous PowerShell,
+qui doit valoir 0) — et `smoke OK : menu + SSVEP + c-VEP … câblés (headless)` pour le dernier.
+
+⚠️ **Les trois lignes MI ne sont pas décoratives.** Aucun des trois smokes ne les exécute, et le
+**non-filtrage de la fenêtre MI** — l'invariant central du mode, un double filtrage décoderait du
+bruit avec des probabilités à 0,99 — n'est vérifié que par `acquisition.py --synthetic`.
 
 **Ce que le niveau 0 ne peut pas voir** : rien de ce qui s'affiche. Qt tourne en `offscreen`, et un
 écran hors écran répond même à des questions absurdes — il annonce par exemple un rafraîchissement
@@ -91,24 +99,31 @@ python src/console/app.py --synthetic
 - [ ] En haut, un **bandeau permanent** : liaison casque, fréquence d'échantillonnage, et σ par voie.
 - [ ] En dessous, une **grille de 7 tuiles** dans cet ordre : Brut, SSVEP, Neuro, Motor
       Imagery, c-VEP, P300, ErrP.
-- [ ] La tuile « Brut » est **en marche** (le brut démarre par défaut) ; SSVEP et Neuro
-      affichent « arrêté ».
+- [ ] La tuile « Brut » est **en marche** (le brut démarre par défaut) ; SSVEP, Neuro et Motor
+      Imagery affichent « arrêté ».
 
 > Rien ne peut être lu ? Le bandeau et les tuiles sont dimensionnés pour 1100 px de large. Note la
 > taille de police du système si c'est illisible : c'est un vrai défaut, pas un détail.
 
-### 1.2 — Les 4 tuiles grisées disent *pourquoi*
+### 1.2 — Les 3 tuiles grisées disent *pourquoi*
 
 C'est le point qui t'a fait croire que le produit était cassé. Une tuile grisée doit être grisée
 **et lisible**, et donner sa raison, jamais rester muette.
 
-- [ ] Motor Imagery, c-VEP, P300, ErrP sont grisées, marquées « appli pygame », **sans** case
-      « publié » ni bouton « Ouvrir ».
+- [ ] c-VEP, P300, ErrP sont grisées, marquées « appli pygame », **sans** case « publié » ni
+      bouton « Ouvrir ».
 - [ ] Chacune affiche sa raison propre, pas un texte générique. Attendu :
-  - **Motor Imagery** — « Le moteur ne sait pas encore charger un modèle MI entraîné. »
   - **c-VEP** — « Demande un stimulus verrouillé à la FRAME… »
   - **P300** — « Demande des MARQUEURS entrants (l'onset de chaque flash)… »
   - **ErrP** — « Demande un MARQUEUR entrant : l'instant exact où le feedback s'affiche. »
+- [ ] **Motor Imagery n'est PLUS grisé** : il a rejoint le moteur. Sa tuile est active, avec sa
+      case « publié » et son bouton « Ouvrir », comme SSVEP et Neuro. Si tu la vois grise, c'est
+      une régression.
+
+> **Sans modèle MI entraîné sur ce poste, c'est normal** : la tuile reste active, mais lancer le
+> mode sera refusé avec « aucun choix disponible » et l'aide qui dit de calibrer. `data/` est
+> gitignoré, donc un dépôt fraîchement cloné est toujours dans cet état. Le modèle s'obtient au
+> niveau 2 (test 2.6).
 
 ### 1.3 — Le mode brut montre vraiment le signal
 
@@ -311,6 +326,46 @@ casque**. Il sort des indices, personne n'a confirmé qu'ils veulent dire quelqu
       (yeux fermés, calcul mental, relâchement). Ce n'est **pas** une validation — c'est un premier
       regard, à consigner tel quel.
 
+### 2.6 — Motor Imagery : entraîner un modèle, puis décoder À TRAVERS LE MOTEUR
+
+C'est le chemin complet du chantier : une calibration écrit un modèle dans `data/`, la console le
+propose, le moteur le charge et publie `decoded_mi`. Chaque bout a été testé séparément ; les trois
+ensemble, sur une tête, jamais.
+
+⚠️ **Un seul programme à la fois.** La calibration est dans l'appli pygame, le décodage dans la
+console : il faut FERMER l'une avant d'ouvrir l'autre. Et la réouverture fait saturer C3/Cz —
+précisément les voies que lit le MI. Prévois donc une pause de stabilisation après la bascule, et
+ne juge rien sur les premières dizaines de secondes.
+
+```bash
+python src/research/mi_calibrate.py     # 5-7 min, fatigant : sujet frais
+# puis fermer, et seulement ensuite :
+python src/console/app.py --mode mi
+```
+
+- [ ] La calibration va au bout et annonce avoir écrit un modèle. Noter sa CV : ______ %.
+- [ ] Dans la console, ouvrir **Motor Imagery** → le champ « Modèle entraîné » propose le fichier
+      qui vient d'être écrit, en tête de liste (le plus récent d'abord).
+- [ ] Après la chauffe de 15 s, la page affiche une barre par classe et un verdict qui alterne
+      entre « vote non conclu » et « INTENTION … ». La règle affichée au-dessus des barres doit
+      nommer le **vote** (« seuil 0,6 par fenêtre, puis 3 fenêtres d'accord sur les 5 dernières »),
+      pas « la classe gagnante doit dépasser le seuil ».
+- [ ] Imaginer 10 fois la main gauche, 10 fois la droite, en alternant. Compter les intentions
+      justes : ______ / 20.
+
+**Ce qu'il faut attendre — à lire AVANT de compter.** Le chiffre honnête de ce mode est **63 % à
+deux classes** (validation croisée groupée par essai, 30 essais, une personne). **Une erreur sur
+trois est donc NORMALE**, et 13/20 est un résultat conforme, pas un échec. Le 79 % qui circule
+vient d'une autre séance dont les données brutes ont été perdues (cf. README). Ne conclus rien
+d'un écart sur 20 essais : c'est du bruit à cette taille d'échantillon.
+
+- [ ] En parallèle, sur un autre terminal, vérifier que l'intention sort **vraiment** sur le
+      réseau : `python -u examples/receiver.py --stream decoded_mi`. Attendu : `intent_index`,
+      `confidence`, puis `p_GAUCHE`, `p_DROITE`, `p_REPOS`.
+- [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REPOS (« la personne se
+      repose ») ne veulent **pas** dire la même chose. Le flux donne les deux dans ses
+      métadonnées (`no_decision_index`, `rest_index`) : vérifier qu'ils diffèrent.
+
 ---
 
 ## Niveau 3 — le réseau
@@ -367,12 +422,15 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
 
 À lire avant de conclure que « tout marche ».
 
-- **4 modes de décodage sur 6 ne sont pas sur le réseau.** Motor Imagery, c-VEP, P300 et ErrP sont
-  décodés par l'appli pygame, pour elle-même, à l'écran. **Rien dans `src/research/` ne publie sur
-  LSL** — aucun `StreamOutlet`. Aucun test ci-dessus ne peut donc les couvrir côté API. Les avoir
-  dans Unity demande le **chantier 3** (le moteur doit savoir charger un modèle entraîné), jamais
-  commencé. Le MI en est le candidat le plus simple : fenêtre glissante, aucun marqueur à
-  synchroniser, modèle à 79 % déjà entraîné.
+- **3 modes de décodage sur 6 ne sont pas sur le réseau.** c-VEP, P300 et ErrP sont décodés par
+  l'appli pygame, pour elle-même, à l'écran. **Rien dans `src/research/` ne publie sur LSL** —
+  aucun `StreamOutlet`. Aucun test ci-dessus ne peut donc les couvrir côté API. Les trois
+  attendent des **marqueurs entrants** ou un stimulus verrouillé à la frame, que le moteur ne
+  sait pas encore faire. Le Motor Imagery, lui, a fait le trajet le 2026-07-29 : le moteur charge
+  un modèle entraîné et publie `decoded_mi` (test 2.6).
+- **Le MI n'a jamais été décodé au casque À TRAVERS LE MOTEUR.** Le pont modèle → moteur → flux
+  est vérifié sans casque (`server.py --smoke`), et le décodage lui-même l'a été dans l'appli
+  pygame. Les deux bouts ensemble, sur une tête, restent à faire : c'est 2.6.
 - **La console ne démarre pas un mode.** Elle affiche, règle et publie ; le choix des modes se fait
   au lancement avec `--mode`. C'est conforme à la spec, mais ça surprend devant l'écran.
 - **La garde de 1,9 Hz autour de l'alpha repose sur une seule personne.** Elle est encadrée par les

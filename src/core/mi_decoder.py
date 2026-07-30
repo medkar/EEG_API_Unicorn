@@ -2,19 +2,21 @@
 + un état REPOS explicite (indispensable pour un « stop » fiable).
 
 Contrairement au SSVEP (CCA, zéro entraînement), le MI doit être ENTRAÎNÉ :
-  1. calibration  -> essais EEG étiquetés GAUCHE / DROITE / REPOS   [voir mi_calibrate.py, à venir]
+  1. calibration  -> essais EEG étiquetés GAUCHE / DROITE / REPOS   [src/research/mi_calibrate.py]
   2. entraînement -> CSP (filtres spatiaux) + LDA                    [MIModel.fit]
-  3. online       -> MIModel classe la fenêtre en direct            [MIDecoder.classify]
+  3. online       -> MIModel classe la fenêtre en direct            [MIModel.predict_proba]
 
 Pourquoi REPOS comme 3e classe : un classifieur 2 classes choisit TOUJOURS un côté (même sans
-imagerie) => faux mouvements au repos. En apprenant « repos », le modèle peut dire « ne rien
-faire » -> le robot s'arrête. Le contrôle reste à 2 commandes (REPOS -> None).
+imagerie) => faux mouvements au repos. En apprenant « repos », le modèle peut dire « la personne
+ne fait rien » — ce qui est une intention à part entière, DIFFÉRENTE de « je ne sais pas ». Ce
+que l'application en fait (s'arrêter, attendre, ignorer) ne regarde pas ce module : le flux
+publie une intention neutre, jamais une commande d'actionneur (docs/SPEC.md §5).
 
 Signal : ERD (désynchronisation) mu/beta du cortex moteur — la puissance chute sur l'hémisphère
 OPPOSÉ à la main imaginée (main droite -> baisse sur C3 ; main gauche -> sur C4). Le CSP apprend
 les filtres spatiaux qui maximisent ce contraste de variance.
 
-Validé ici sur ERD SYNTHÉTIQUE (pas de casque).   python src/research/mi_decoder.py
+Validé ici sur ERD SYNTHÉTIQUE (pas de casque).   python src/core/mi_decoder.py
 """
 
 import os
@@ -162,7 +164,7 @@ class MIModel:
 
 class MIDecoder:
     """Décodeur online. Interface commune à CCADecoder : `.classify(window) -> (label|None, scores)`.
-    `window` = (n_samp, n_ch), comme côté acquisition. REPOS ou proba < prob_min -> None (stop)."""
+    `window` = (n_samp, n_ch), comme côté acquisition. REPOS ou proba < prob_min -> None."""
 
     def __init__(self, model, prob_min=0.60, rest_label="REPOS"):
         self.model = model
@@ -175,6 +177,20 @@ class MIDecoder:
         return self.model.predict_proba(w)
 
     def classify(self, window):
+        """⚠️ **Ce n'est PAS la règle de décision du flux réseau.** Elle vit dans
+        `core/modes/mi.py`, `MIRuntime._run_step`, et c'est celle-là qui fait foi pour
+        `decoded_mi`.
+
+        Deux différences, et elles comptent :
+          - ici, REPOS et « probabilité trop basse » rendent tous les deux `None` — deux
+            situations confondues, alors que le flux les distingue par contrat (l'indice de
+            REPOS d'un côté, `-1` de l'autre) ;
+          - ici, une seule fenêtre décide ; là-bas, un vote glissant sur `vote_len` fenêtres.
+
+        Cette méthode reste utilisée par l'appli pygame (`research/app.py`, `mi_pilot.py`), qui
+        pilote un affichage local et n'a pas de contrat public à tenir. Elle n'est donc pas
+        morte — mais ne t'en sers pas pour raisonner sur ce que publie le moteur.
+        """
         sc = self.scores(window)
         best = max(sc, key=sc.get)
         if best == self.rest_label or sc[best] < self.prob_min:

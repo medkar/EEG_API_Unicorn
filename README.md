@@ -15,9 +15,10 @@ game event, a visualisation, a robot command) is the client application's job.
 > **Status.** The engine streams over the network and is hardware-validated end to end: raw EEG,
 > signal quality and decoded SSVEP reach a client on another machine, with millisecond timestamps.
 > SSVEP decoding is measured, not asserted: 100 % accurate whenever it commits, on 36 interleaved
-> trials — but it only commits 44 % of the time. Neuro-monitoring is published too, though its
-> content is not yet hardware-validated. c-VEP, P300 and MI still live in the pygame app only —
-> see **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
+> trials — but it only commits 44 % of the time. Neuro-monitoring and Motor Imagery are published
+> too, though neither has been hardware-validated *through the engine* yet. c-VEP, P300 and ErrP
+> still live in the pygame app only — see **[docs/SPEC.md](docs/SPEC.md)** for the stream contract
+> and the roadmap.
 
 ## Requirements
 
@@ -39,12 +40,13 @@ python src/core/server.py --mode neuro                # passive: no stimulus, no
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
 
-Two published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses a
-target, there is a right answer, and your application must render the flickering stimulus. **Neuro is
-passive**: it reports a mental state, there is nothing to choose and no stimulus — but its values are
-z-scores against a rest measured at the start of the mode, *for this person, today*. They compare
-across neither people nor sessions, and mean nothing in absolute terms. The stream metadata carries
-`paradigm` so a client can tell the two apart.
+Three published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
+a target, there is a right answer, and your application must render the flickering stimulus. **Motor
+Imagery is active** too, but it decodes an imagined movement — no stimulus to render, and a model
+trained per person (its own section below). **Neuro is passive**: it reports a mental state, there is
+nothing to choose and no stimulus — but its values are z-scores against a rest measured at the start
+of the mode, *for this person, today*. They compare across neither people nor sessions, and mean
+nothing in absolute terms. The stream metadata carries `paradigm` so a client can tell them apart.
 
 **The console** — the engine plus a desktop window, one page per mode.
 
@@ -101,11 +103,19 @@ Two values are easy to confuse and mean different things:
 
 For an application, that is the difference between "wait" and "stop".
 
-**What it is worth.** Motor Imagery is the hardest paradigm here. Measured honestly —
-cross-validation grouped by trial, so windows from one trial cannot leak across folds — on one
-person, one session: **63% on left-vs-right** (chance 50%, p = 0.038), and 40% on the three classes
-(chance 33%, not significant). It is slow and imprecise: a demonstrator, not a fine control. Do not
-design something that needs a correct answer every second.
+**What it is worth.** Motor Imagery is the hardest paradigm here. Two accuracy figures circulate for
+it, and both are real — they come from two different sessions, on the same person:
+
+- **79 %** on left-vs-right (p = 0.002, 42 trials, 2026-07-22). This is the session that first showed
+  the left/right contrast exists at all. Its raw recording has since been lost, so the figure can no
+  longer be re-derived or re-audited.
+- **63 %** on left-vs-right (chance 50 %, p = 0.038, 30 trials), measured by cross-validation
+  **grouped by trial** so that windows from one trial cannot leak across folds. This is the only
+  surviving session, and therefore the number to plan against. On the three classes it falls to 40 %
+  (chance 33 %, not significant).
+
+So expect roughly **one error in three** on two classes. It is slow and imprecise: a demonstrator,
+not a fine control. Do not design something that needs a correct answer every second.
 
 A model belongs to the person it was trained on. Someone else's model produces probabilities that
 look plausible and are wrong, which is worse than no output at all.
@@ -165,7 +175,7 @@ automatically to the display refresh rate.
 | **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable |
 | **c-VEP** | One m-sequence at circular shifts, learned template (eCCA) | ~1 min | ✅ 6 targets, ~22 bits/min |
 | **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min | ✅ validated on hardware |
-| **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min | ✅ left/right significant (79 %) |
+| **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
 | **ErrP** | Error potential: single-trial detection when the machine errs | ~4 min | 🟡 demonstrator, needs real calibration |
 
@@ -185,6 +195,8 @@ published stream, its decoder *moves* to `core/` — nobody threads an import ac
 | [`acquisition.py`](src/core/acquisition.py) | Unicorn via BrainFlow: sliding windows, epochs, link check |
 | [`cca_decoder.py`](src/core/cca_decoder.py) | SSVEP by CCA, no training, z-scored against a rest floor |
 | [`neuro_monitor.py`](src/core/neuro_monitor.py) | Passive spectral indices, z-scored against a per-session rest |
+| [`mi_decoder.py`](src/core/mi_decoder.py) | Motor Imagery by CSP + LDA — the only decoder here that must be **trained** |
+| [`mi_models.py`](src/core/mi_models.py) | Which trained MI models exist on disk, and which actually load |
 | [`config.py`](src/core/config.py) | Channels, frequencies, codes, per-mode constants, repo paths |
 | [`modes/`](src/core/modes/) | One contract per mode (`ModeSpec`) beside its runtime — what it is, what you can set, what it publishes |
 
@@ -214,7 +226,7 @@ does not publish them yet, so they are not part of what students consume and may
 | Family | Modules |
 |---|---|
 | pygame app | [`app.py`](src/research/app.py) (menu, six modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
-| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `mi_decoder` · `p300_decoder` · `errp_decoder` |
+| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `p300_decoder` · `errp_decoder` |
 | Calibrations — long protocols, train a model into `data/` | `mi_calibrate` · `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
