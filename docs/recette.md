@@ -439,7 +439,7 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
   qu'on croit acquis parce qu'il est écrit.
 - **Le contenu du mode neuro n'a jamais été validé.** Cf. 2.5.
 - **Les marqueurs entrants n'existent pas.** Ils débloqueraient P300 et ErrP d'un coup.
-- **L'appli pygame n'est couverte que par son smoke.** Les quatre modes qu'elle seule sait faire se
+- **L'appli pygame n'est couverte que par son smoke.** Les trois modes qu'elle seule sait faire se
   testent avec `python src/research/app.py`, mode par mode, au casque. C'est une autre séance —
   celle-ci vérifie l'API, pas l'appli d'expérimentation.
 
