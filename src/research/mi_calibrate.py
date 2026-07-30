@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (FS_UNICORN, MI_KEY_CHANNELS, MI_MODEL_PATH,  # noqa: E402
                     MI_WINDOW_S, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from research.mi_decoder import MI_LABELS, MIModel  # noqa: E402
+from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
 
 # Durées sélectionnables (essais PAR CLASSE). Le temps estimé est calculé plus bas.
 PRESETS = {

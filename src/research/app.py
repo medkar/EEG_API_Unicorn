@@ -422,7 +422,7 @@ def _mi_decode(app, live, ctrl, hz=2.5):
 
 
 def mode_mi(app, model_path=MI_MODEL_PATH):
-    from research.mi_decoder import MIDecoder, MIModel
+    from core.mi_decoder import MIDecoder, MIModel
     from research.mi_pilot import MIController
 
     if not os.path.exists(model_path):

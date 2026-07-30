@@ -26,7 +26,7 @@ from core.config import (COMMANDS, EXAMPLES_DIR, MI_MIN_VOTES, MI_MODEL_PATH,  #
                     MI_PROB_MIN, MI_VOTE_LEN, MI_WINDOW_S, UDP_HOST, UDP_PORT,
                     apply_invert, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from research.mi_decoder import MI_LABELS, MIDecoder, MIModel  # noqa: E402
+from core.mi_decoder import MI_LABELS, MIDecoder, MIModel  # noqa: E402
 from research.ssvep_stimulus import arrow_polygon  # noqa: E402
 
 sys.path.insert(0, EXAMPLES_DIR)  # l'actionneur d'exemple vit dans examples/, hors du paquet

@@ -18,7 +18,7 @@ from sklearn.model_selection import GroupKFold, cross_val_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import DATA_DIR, MI_REREF, MI_WINDOW_S, use_utf8_console  # noqa: E402
-from research.mi_decoder import MI_BAND, bandpass, build_pipe, reref  # noqa: E402
+from core.mi_decoder import MI_BAND, bandpass, build_pipe, reref  # noqa: E402
 
 
 def _windows(epochs, labels, fs):
