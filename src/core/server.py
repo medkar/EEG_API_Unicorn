@@ -1039,11 +1039,22 @@ def _smoke_mi():
 
     Le modèle est écrit dans `data/` sous un nom réservé, puis retiré : le mode découvre ses
     choix dans ce dossier, donc un modèle ailleurs ne serait pas proposable. Le `finally` est
-    obligatoire — un `mi_model_smoke.joblib` oublié se retrouverait proposé à l'étudiant.
+    obligatoire — un `mi_model_smoke.joblib` oublié se retrouverait proposé à l'étudiant — et il
+    doit couvrir l'ÉCRITURE du fichier ET la construction du serveur : `EngineServer.__init__`
+    lève PAR CONCEPTION dès qu'un réglage est invalide (« lève ici, au démarrage — bruyamment et
+    tout de suite », cf. sa docstring), et peut aussi lever si la session BrainFlow refuse de
+    s'ouvrir. Sans cette couverture, une levée à cet endroit laisserait le fichier orphelin —
+    exactement ce que ce `finally` existe pour empêcher. `server`/`thread` sont donc initialisés
+    à `None` AVANT le `try`, pour que le `finally` puisse s'exécuter même si `EngineServer(...)`
+    n'a jamais rendu la main, sans jamais lire une variable non assignée.
+
+    Comme pour le SSVEP et le neuro (cf. leurs docstrings), on ne juge PAS la justesse du
+    décodage : le board synthétique n'émet aucune vraie imagerie motrice. On vérifie le
+    CÂBLAGE — le flux existe, porte le bon nombre de voies, publie en continu, ses valeurs
+    restent finies et somment à 1, et le décodeur LIT vraiment la fenêtre qu'on lui passe (les
+    probabilités varient d'un échantillon à l'autre) plutôt que de republier une valeur figée.
     """
     import threading
-
-    import numpy as np
 
     from core.config import DATA_DIR
     from core.mi_decoder import MI_LABELS, MIModel, synth_mi_trial
@@ -1057,21 +1068,23 @@ def _smoke_mi():
 
     chemin = os.path.join(DATA_DIR, "mi_model_smoke.joblib")
     os.makedirs(DATA_DIR, exist_ok=True)
-    rng = np.random.default_rng(0)
-    epochs, y = [], []
-    for label in MI_LABELS:
-        for _ in range(8):
-            epochs.append(synth_mi_trial(label, rng=rng))
-            y.append(label)
-    MIModel(fs=250.0).fit(np.asarray(epochs), np.asarray(y)).save(chemin)
-
-    instance = "smoke-mi"
-    server = EngineServer(synthetic=True, modes=("mi",), params={"mi": {"model": chemin}},
-                          instance=instance)
-    thread = threading.Thread(target=server.run,
-                             kwargs={"duration_s": 12.0, "baseline_s": 0.0, "warmup_s": 1.0},
-                             daemon=True)
+    server = None
+    thread = None
     try:
+        rng = np.random.default_rng(0)
+        epochs, y = [], []
+        for label in MI_LABELS:
+            for _ in range(8):
+                epochs.append(synth_mi_trial(label, rng=rng))
+                y.append(label)
+        MIModel(fs=250.0).fit(np.asarray(epochs), np.asarray(y)).save(chemin)
+
+        instance = "smoke-mi"
+        server = EngineServer(synthetic=True, modes=("mi",), params={"mi": {"model": chemin}},
+                              instance=instance)
+        thread = threading.Thread(target=server.run,
+                                 kwargs={"duration_s": 12.0, "baseline_s": 0.0, "warmup_s": 1.0},
+                                 daemon=True)
         thread.start()
         info = _resolve_own("decoded_mi", instance, timeout=15.0)
         chk(info is not None, "le flux decoded_mi est publié")
@@ -1081,14 +1094,21 @@ def _smoke_mi():
             from pylsl import StreamInlet
             inlet = StreamInlet(info)
             inlet.open_stream()
-            recus, indices = 0, set()
+            recus, indices, probas_vues = 0, set(), set()
             fin = time.perf_counter() + 8.0
             while time.perf_counter() < fin:
                 echantillon, _ts = inlet.pull_sample(timeout=1.0)
                 if echantillon is None:
                     continue
                 recus += 1
+                # `math.isfinite` d'abord : une comparaison AVEC un NaN rend toujours False
+                # (sémantique IEEE-754), donc le contrôle de somme juste en dessous ne verrait
+                # JAMAIS un NaN passer — exactement comme `_smoke_neuro` s'en protège déjà.
+                if not all(math.isfinite(v) for v in echantillon):
+                    chk(False, f"toutes les valeurs publiées sont finies (reçu {list(echantillon)})")
+                    break
                 indices.add(int(round(echantillon[0])))
+                probas_vues.add(tuple(echantillon[2:]))
                 somme = sum(echantillon[2:])
                 if abs(somme - 1.0) > 1e-2:
                     chk(False, f"les probabilités doivent sommer à 1 (reçu {somme:.3f})")
@@ -1096,9 +1116,20 @@ def _smoke_mi():
             chk(recus >= 10, f"des décisions arrivent en continu ({recus} en 8 s)")
             chk(all(-1 <= i < len(MI_LABELS) for i in indices),
                 f"tous les indices sont dans les bornes ({sorted(indices)})")
+            # Ne prouve PAS la justesse du décodage (cf. docstring) : prouve que le décodeur LIT
+            # la fenêtre qu'on lui passe. Le tampon glissant change en continu ; un décodeur
+            # sourd à son entrée, ou qui republierait une valeur figée, donnerait toujours le
+            # MÊME jeu de probabilités — ce que la seule borne sur les indices ne peut pas voir
+            # (elle passerait même avec indices == {-1} tout seul).
+            chk(len(probas_vues) > 1,
+                f"les probabilités varient d'un échantillon à l'autre — signe que le décodeur "
+                f"lit la fenêtre, pas qu'il republie une valeur figée ({len(probas_vues)} "
+                f"jeu(x) distinct(s) sur {recus} échantillons)")
     finally:
-        server.stop()
-        thread.join(timeout=5.0)
+        if server is not None:
+            server.stop()
+        if thread is not None:
+            thread.join(timeout=5.0)
         if os.path.exists(chemin):
             os.remove(chemin)
 
