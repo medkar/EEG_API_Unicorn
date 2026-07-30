@@ -577,7 +577,11 @@ class EngineServer:
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
             "modes_state": {mid: r.state() for mid, r in active.items()},
-            "catalog": registry.catalog(),
+            # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
+            # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
+            # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
+            # Un client qui voudra le catalogue le demandera explicitement — c'est la forme correcte
+            # pour une donnée de ce genre (appel `registry.catalog()` direct, plutôt que via snapshot).
         })
         return state
 

@@ -47,6 +47,12 @@ def serialize(spec, params=None):
     un client voudra découvrir les modes tout seul.
     """
     params = spec.defaults() if params is None else params
+    # Calcule les défauts une fois ; réutilise-les plutôt que de rappeler default_now() dans la
+    # compréhension. Chaque appel peut déclencher une source dynamique (choices_fn), qui peut être
+    # coûteux — joblib.load pour vérifier qu'un modèle existe, accès au système de fichiers, etc.
+    # Cette fonction est appelée à 10 Hz depuis snapshot(), donc résoudre une fois par appel compte.
+    defaults_computed = {p.key: p.default_now() for p in spec.params}
+
     return {
         "id": spec.id,
         "label": spec.label,
@@ -59,7 +65,7 @@ def serialize(spec, params=None):
         "params": [
             {
                 "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
-                "default": (lambda dflt: list(dflt) if isinstance(dflt, tuple) else dflt)(p.default_now()),
+                "default": list(defaults_computed[p.key]) if isinstance(defaults_computed[p.key], tuple) else defaults_computed[p.key],
                 "min": p.min, "max": p.max,
                 "count": list(p.count) if p.count else None,
                 "proposes": p.proposes,
@@ -125,8 +131,8 @@ def check():
             # Indiquer informativement qu'on saute la vérification : le mode est normal, l'état du
             # poste est en attente (aucun modèle entraîné pour ce(s) paramètre(s) encore).
             clés_str = ", ".join(sans_choix)
-            print(f"  NORMAL {spec.id}: defaults not checked for {clés_str} "
-                  f"(no trained models yet — will validate when populated)")
+            print(f"  NORMAL {spec.id}: verifications sautees pour {clés_str} "
+                  f"(aucun modele encore - sera valide quand rempli)")
         else:
             values, reason = validate(spec, {})
             if values is None:
