@@ -748,9 +748,9 @@ from core.config import (MI_MIN_VOTES, MI_PROB_MIN, MI_VOTE_LEN,  # noqa: E402
                          SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
+from core import mi_models  # noqa: E402
 from core.lsl_io import DecodedMIPublisher, mi_channel_labels, stream_name  # noqa: E402
 from core.mi_decoder import MIDecoder  # noqa: E402
-from core.mi_models import charger, modeles_disponibles  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
@@ -775,7 +775,7 @@ class MIRuntime(ModeRuntime):
         self._out = None
         self._decoded = None
         self._last_log = 0.0
-        self.model, raison = charger(params["model"])
+        self.model, raison = mi_models.charger(params["model"])
         if self.model is None:
             # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
             # « aucun modèle » ; il reste celui du fichier effacé entre la validation et le
@@ -878,7 +878,7 @@ def _channels(params):
     les classes par défaut plutôt que de lever — cette fonction est appelée par l'affichage.
     """
     chemin = params.get("model")
-    modele = charger(chemin)[0] if chemin else None
+    modele = mi_models.charger(chemin)[0] if chemin else None
     classes = list(modele.labels) if modele is not None else ["GAUCHE", "DROITE", "REPOS"]
     return mi_channel_labels(classes)
 
@@ -894,7 +894,10 @@ SPEC = ModeSpec(
             key="model",
             label="Modèle entraîné",
             kind="choice",
-            choices_fn=modeles_disponibles,
+            # Le lambda est délibéré : il résout `modeles_disponibles` À L'APPEL. Lier la
+            # fonction directement figerait la référence à l'import, et l'autotest ne pourrait
+            # plus rediriger la recherche vers un dossier temporaire sans toucher à `data/`.
+            choices_fn=lambda: mi_models.modeles_disponibles(),
             help="Le modèle produit par une calibration MI, propre à TA personne — celui de "
                  "quelqu'un d'autre donne des probabilités plausibles et fausses. Aucun modèle "
                  "dans la liste ? Lance une calibration : "
@@ -994,18 +997,23 @@ def _selftest():
         chemin = _os.path.join(dossier, "mi_model.joblib")
         MIModel(fs=250.0).fit(np.asarray(epochs), np.asarray(y)).save(chemin)
 
+        # On redirige la RECHERCHE de modèles vers un dossier temporaire, en remplaçant la
+        # fonction dans son module. C'est possible — et propre — parce que le contrat appelle
+        # `mi_models.modeles_disponibles()` à travers un lambda : la résolution a lieu à
+        # l'appel, pas à l'import. Aucun `data/` n'est touché, aucun objet gelé n'est mutilé.
+        vrai_dispo = mi_models.modeles_disponibles
+
         # 1. Sans modèle du tout, le mode REFUSE et dit comment en obtenir un.
         vide = _os.path.join(dossier, "aucun")
         _os.makedirs(vide, exist_ok=True)
-        sans = SPEC.params[0].choices_fn
-        object.__setattr__(SPEC.params[0], "choices_fn", lambda: modeles_disponibles(vide))
+        mi_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
         _v, raison = validate(SPEC, {})
         chk(raison is not None and "aucun choix disponible" in raison
             and "calibration" in raison,
             f"sans modèle, le mode refuse en disant quoi faire ({raison})")
 
         # 2. Avec un modèle, les défauts sont valides et le plus récent est pris.
-        object.__setattr__(SPEC.params[0], "choices_fn", lambda: modeles_disponibles(dossier))
+        mi_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
         values, raison = validate(SPEC, {})
         chk(values is not None, f"avec un modèle, les défauts passent ({raison})")
         chk(values["model"] == chemin, f"et c'est le modèle trouvé qui est pris ({values['model']})")
@@ -1054,7 +1062,7 @@ def _selftest():
         chk(all(p.affecte_decodage for p in SPEC.params),
             "tous les réglages du MI affectent le décodage : en changer un refait le mode")
     finally:
-        object.__setattr__(SPEC.params[0], "choices_fn", sans)
+        mi_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)
 
     print(f"[mi] VERDICT : {'OK' if ok else 'PROBLÈME'}")
@@ -1581,10 +1589,12 @@ la **moitié B**, dont le plan sera écrit quand celle-ci sera posée.
 
 - Tâche 5, étape 8 : la console construit une page pour tout mode `"moteur"`. Le nombre de voies
   du MI dépend du modèle — vérifier que les barres de `live_views` l'encaissent.
-- Tâche 5, autotest : il remplace `choices_fn` sur un `Param` **gelé**, via
-  `object.__setattr__`. C'est laid et volontaire : c'est le seul moyen de tester le cas « aucun
-  modèle » sans toucher à `data/`. Le `finally` doit remettre la valeur d'origine, sinon les tests
-  suivants du même processus verraient un dossier temporaire effacé.
+- Tâche 5, autotest : il remplace `mi_models.modeles_disponibles` le temps du test, pour chercher
+  dans un dossier temporaire au lieu de `data/`. C'est possible parce que le `choices_fn` du
+  contrat est un **lambda** qui résout la fonction à l'appel — lier la fonction directement
+  figerait la référence à l'import et rendrait le test impossible sans mutiler un objet gelé. Le
+  `finally` doit remettre la fonction d'origine, sinon les tests suivants du même processus
+  chercheraient dans un dossier effacé.
 - Tâche 6 : le smoke écrit dans `data/`, le vrai dossier. Le `finally` qui retire le fichier n'est
   pas une précaution mais une obligation — un modèle de test oublié serait proposé à l'étudiant
   dans la console.
