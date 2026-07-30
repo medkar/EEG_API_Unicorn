@@ -25,9 +25,11 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
-- L'**application pygame** (`src/research/app.py`, menu à 6 modes) reste le seul accès aux **4 modes
-  que le moteur ne sait pas faire** : c-VEP, P300, MI, ErrP. Le SSVEP et le neuro, eux, sont publiés
-  par le moteur et pilotés depuis la console.
+- L'**application pygame** (`src/research/app.py`, menu à 6 modes) reste le seul accès aux **3 modes
+  que le moteur ne sait pas faire** : c-VEP, P300, ErrP. Le SSVEP, le neuro et le **Motor Imagery**
+  sont publiés par le moteur et pilotés depuis la console. ⚠️ La **calibration** MI, elle, vit encore
+  dans l'appli pygame (`src/research/mi_calibrate.py`) : le moteur consomme un modèle entraîné, il ne
+  sait pas encore l'entraîner. C'est la moitié B du chantier 3.
 - ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, appli pygame. Le casque
   n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
   sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
@@ -55,6 +57,8 @@ python src/console/app.py --mode ssvep     # LA console : grille des modes, rég
 python src/console/app.py --synthetic      # la console sans casque (board de test BrainFlow)
 python src/core/server.py --mode ssvep --refresh 60   # le moteur seul (headless) : décode et publie
 python src/core/server.py --mode ssvep,neuro   # deux modes en même temps
+python src/core/server.py --mode mi        # le Motor Imagery sur le réseau (EXIGE un modèle entraîné)
+python src/research/mi_calibrate.py        # entraîner ce modèle (seul chemin aujourd'hui)
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)
 python src/research/app.py --synthetic     # sans casque (board de test BrainFlow)

@@ -81,9 +81,38 @@ mean ≈ 9.6 Hz, range 7–13). A target sitting on someone's peak does not stan
 resting background — so the set that works for one person can fail for the next. Set `alpha_hz` per
 person; `python src/research/alpha_check.py` measures it.
 
-**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300, MI and ErrP,
-and the only place with a live histogram for neuro-monitoring. It owns the headset and publishes
-nothing.
+### Motor Imagery
+
+`--mode mi` publishes `EEG_API_Unicorn_decoded_mi`: `intent_index`, `confidence`, then one
+probability per class (`GAUCHE`, `DROITE`, `REPOS`).
+
+Unlike SSVEP, this mode **must be trained per person**. It loads a model produced by a calibration
+and **refuses to start without one**, saying so — a mode that started without a model would publish
+probabilities and never decide anything, which is the silent failure this project exists to remove.
+Train one with `python src/research/mi_calibrate.py`; the console then lists the models it finds and
+lets you pick one.
+
+Two values are easy to confuse and mean different things:
+
+| `intent_index` | Meaning |
+|---|---|
+| `-1` | the sliding vote did not conclude — not enough recent windows agreed, or the classifier stayed under its threshold |
+| index of `REPOS` | the model decided the user is at rest |
+
+For an application, that is the difference between "wait" and "stop".
+
+**What it is worth.** Motor Imagery is the hardest paradigm here. Measured honestly —
+cross-validation grouped by trial, so windows from one trial cannot leak across folds — on one
+person, one session: **63% on left-vs-right** (chance 50%, p = 0.038), and 40% on the three classes
+(chance 33%, not significant). It is slow and imprecise: a demonstrator, not a fine control. Do not
+design something that needs a correct answer every second.
+
+A model belongs to the person it was trained on. Someone else's model produces probabilities that
+look plausible and are wrong, which is worse than no output at all.
+
+**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300 and ErrP, and
+the only place with a live histogram for neuro-monitoring. It also still owns **MI calibration**,
+until the engine learns to run it. It owns the headset and publishes nothing.
 
 ```bash
 python src/research/app.py                 # fullscreen, real headset — main menu
@@ -103,9 +132,11 @@ pip install pylsl
 python examples/receiver.py --list                  # what is on the network
 python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
 python examples/receiver.py --stream decoded_neuro  # workload / drowsiness / engagement
+python examples/receiver.py --stream decoded_mi     # imagined left / right hand movement
 ```
 
-Unity: see [`examples/unity/`](examples/unity/). Two machines: see
+Any LSL client works — Python, MATLAB, C++, a game engine. Unity happens to have a worked example
+in [`examples/unity/`](examples/unity/), for SSVEP. Two machines: see
 [`docs/network.md`](docs/network.md).
 
 | Stream | Contents |
@@ -115,6 +146,7 @@ Unity: see [`examples/unity/`](examples/unity/). Two machines: see
 | `EEG_API_Unicorn_status` | engine state, JSON |
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
+| `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}`, ~5 Hz |
 
 The stimulus is **not** rendered by the engine: your application flickers the targets and declares
 their frequencies (`--refresh` or `--freqs`). A mismatch fails silently — the decoder correlates

@@ -190,7 +190,7 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 | Mode | Type | Sortie décodée (`decoded_<mode>`) |
 |---|---|---|
 | **SSVEP** | évoqué | `{target_index, freq_hz, confidence, scores[]}` — **implémenté** ; flux numérique, `target_index = -1` quand aucune cible n'est fixée de façon fiable. Les métadonnées portent `decision_scale` (`z` après mesure du repos, sinon `rho`) et le seuil : sans cette indication, un seuil posé côté client n'a aucun sens. |
-| **Motor Imagery** | endogène | `{class: left\|right\|rest, probs{left,right,rest}}` |
+| **Motor Imagery** | endogène | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}` — **implémenté** (2026-07-30). ⚠️ `intent_index = -1` (« le vote glissant n'a pas conclu ») et l'indice de **REPOS** (« le modèle a décidé que la personne se repose ») sont **deux choses différentes** : pour une application, c'est la différence entre « attends » et « arrête ». Les voies sont dérivées des **classes du modèle chargé**, pas d'une liste figée. Métadonnées : `decision_scale = "proba"`, plus le seuil et les paramètres du vote. ⚠️ Exige un **modèle entraîné par personne** ; le mode refuse de démarrer sans, en le disant. Mesuré honnêtement (validation croisée groupée par essai, 1 personne, 1 séance) : **63 % en gauche-vs-droite** (hasard 50 %, p = 0,038), 40 % à trois classes (hasard 33 %, non significatif). Démonstrateur, pas pilotage fin. |
 | **P300** | évoqué | `{selected_target}` (événementiel, après N répétitions) + scores par flash |
 | **Neuro-monitoring** | passif | `{charge, somnolence, engagement, artifact}` — **implémenté** (2026-07-27). z relatifs à un repos mesuré **en début de mode, pour cet utilisateur, ce jour-là** : les valeurs ne se comparent ni entre personnes, ni entre séances, et n'ont aucun sens absolu. `artifact = 1` republie les derniers z valides plutôt que des indices calculés sur un clignement — ceux-ci seraient plausibles, donc indétectables en aval. ⚠️ Plomberie testée, **contenu jamais validé sur casque**. |
 | **ErrP** | évoqué | `{error: bool, score}` (événementiel, sur marqueur « feedback ») |
@@ -275,8 +275,9 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 - `SSVEP_decoded` **sans calibration** (le mode qui marche tout de suite, sans protocole).
 - 1 exemple Python + 1 exemple Unity SSVEP (+ l'exemple d'actionneur UDP).
 
-**v1 :** `MI_decoded` (endogène, calibration native) · `P300` via marqueurs entrants · control plane LSL
-complet (`control` + `status`) · `neuro_decoded`.
+**v1 :** ~~`MI_decoded` (endogène, calibration native)~~ **[fait 2026-07-30 : flux `decoded_mi`
+publié ; la calibration reste native pygame, cf. §14 moitié B]** · `P300` via marqueurs entrants ·
+control plane LSL complet (`control` + `status`) · ~~`neuro_decoded`~~ **[fait 2026-07-27]**.
 
 **v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27, puis SUPPRIMÉ 2026-07-28]** remplacé par la **console d'expérimentation** `src/console/` (PySide6) · évolutions parkées F1/F2 (§13).
 
@@ -437,8 +438,23 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
      - **[à faire]** mesurer le pic alpha au casque plutôt que le faire saisir — la vraie bonne
        réponse, écartée pour tenir le chantier court.
      - **[à faire]** réglages des autres modes, quand ils auront un runtime.
-   - **[à faire — chantier 3]** lancer une calibration et gérer les modèles depuis la console ;
-     le MI est le premier candidat à migrer vers le moteur.
+   - **[fait 2026-07-30 — chantier 3, moitié A]** le **Motor Imagery est publié par le moteur**
+     (`--mode mi` → flux `decoded_mi`) : le décodeur a déménagé dans `core/`, un `MIRuntime` glisse
+     une fenêtre de 2 s et vote, et le modèle se choisit dans la console — la liste des modèles
+     entraînés est découverte à l'exécution (`Param.choices_fn`). N'importe quel client LSL le
+     consomme : Python, MATLAB, C++, un moteur de jeu. Conception :
+     [docs/superpowers/specs/2026-07-29-motor-imagery-moteur-design.md](superpowers/specs/2026-07-29-motor-imagery-moteur-design.md).
+     ⚠️ **`intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REPOS (« la personne se
+     repose ») sont distincts** — pour une application, c'est la différence entre « attends » et
+     « arrête ».
+     ⚠️ **Les quatre modèles MI d'avant la restructuration sont abandonnés**, par décision : leur
+     pickle référence un module disparu. `mi_models.charger` les refuse explicitement, y compris
+     quand un accident de chemin d'import les rendrait chargeables.
+     - **[à faire — chantier 3, moitié B]** la calibration jouée par le moteur (la console ne fait
+       que l'afficher), la gestion des modèles, l'accuracy honnête à la fin d'une calibration, et
+       l'archivage des écrans pygame du MI.
+     - **[à faire — lot séparé]** un exemple de récepteur pour le MI, à écrire quand on saura pour
+       quel client il est le plus utile.
    - **[à faire — séance matérielle]** la console n'a **jamais été ouverte en fenêtre** : tout est
      vérifié hors écran (`--smoke`, Qt en `offscreen`). Restent à faire au casque : non-régression
      SSVEP, charge CPU en cumul de modes, et un repos partagé vécu de bout en bout.
