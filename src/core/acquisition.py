@@ -34,8 +34,8 @@ from brainflow.board_shim import BoardShim, BoardIds, BrainFlowInputParams
 from brainflow.data_filter import DataFilter, DetrendOperations, FilterTypes, NoiseTypes
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))      # -> src/
-from core.config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, OCCIPITAL,  # noqa: E402
-                    UNICORN_SERIAL, WINDOW_S, use_utf8_console)
+from core.config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, MI_WINDOW_S,  # noqa: E402
+                    OCCIPITAL, UNICORN_SERIAL, WINDOW_S, use_utf8_console)
 
 
 def _median_offdiag(filtered):
@@ -226,6 +226,23 @@ class UnicornAcquisition:
             return None
         return self._filter(block[-need:][:, OCCIPITAL])[-self.window_n:]
 
+    def motor_window(self, block, seconds=MI_WINDOW_S):
+        """Fenêtre MI (n x 8) depuis un bloc possédé par l'appelant. **Non filtrée**, exprès.
+
+        Le Motor Imagery utilise les 8 voies — le CSP fait lui-même le tri spatial — et le
+        modèle applique son propre re-référencement CAR puis son passe-bande 8-30 Hz dans
+        `MIModel._prep`. Filtrer ici filtrerait deux fois : phase décalée et variances
+        modifiées, or ce sont exactement les variances que le CSP exploite. Le modèle
+        décoderait alors sur autre chose que ce sur quoi il a été entraîné — sans erreur, avec
+        des probabilités parfaitement plausibles.
+
+        Retourne None tant que le bloc est trop court.
+        """
+        need = int(round(seconds * self.fs))
+        if block is None or len(block) < need:
+            return None
+        return np.asarray(block[-need:], dtype=float)
+
     def quality(self, seconds=2.0, rows=None):
         """σ par voie après filtrage — détecte une voie morte ou saturée.
 
@@ -303,6 +320,24 @@ class UnicornAcquisition:
 
 
 def _demo(args):
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # Fenêtre MI : toutes les voies, 2 s, et surtout NON filtrée — le modèle filtre lui-même.
+    acq_mi = UnicornAcquisition(synthetic=True)
+    bloc = np.random.default_rng(0).normal(0.0, 8.0, (int(5.0 * acq_mi.fs), 8))
+    fen = acq_mi.motor_window(bloc)
+    chk(fen is not None and fen.shape == (int(MI_WINDOW_S * acq_mi.fs), 8),
+        f"la fenêtre MI fait 2 s sur les 8 voies ({None if fen is None else fen.shape})")
+    chk(np.allclose(fen, bloc[-len(fen):]),
+        "et elle rend le signal TEL QUEL : le modèle applique son propre CAR et son passe-bande")
+    chk(acq_mi.motor_window(bloc[:10]) is None,
+        "un bloc trop court rend None plutôt qu'une fenêtre incomplète")
+
     with UnicornAcquisition(serial=args.serial, synthetic=args.synthetic,
                             verbose=args.verbose) as acq:
         print(f"[acq] board={acq.board_id.name} fs={acq.fs}Hz  voies occ={acq.occ_names} "
@@ -328,7 +363,7 @@ def _demo(args):
             print("[acq] liaison : " + "  ".join(
                 f"{_CH[i]}={s:.1f}({_verdict(s)})" for i, s in enumerate(q)))
 
-    return True
+    return ok
 
 
 def _parse_args(argv):

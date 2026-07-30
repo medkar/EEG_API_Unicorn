@@ -276,6 +276,60 @@ class DecodedNeuroPublisher:
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
 
+def mi_channel_labels(classes):
+    """Voies du flux `decoded_mi` pour ces classes.
+
+    Une seule fonction pour le publieur ET pour le `ModeSpec`, comme pour le SSVEP : les voies
+    sont du contrat public, et deux façons de les construire finiraient par diverger.
+    """
+    return ["intent_index", "confidence"] + [f"p_{c}" for c in classes]
+
+
+class DecodedMIPublisher:
+    """`<PREFIX>_decoded_mi` : quelle imagerie motrice l'utilisateur produit, ~5 Hz. BCI **active**.
+
+    Le contrat (SPEC §5) : une **intention neutre** — quelle classe, avec quelle probabilité —
+    et JAMAIS une commande d'actionneur. « GAUCHE » veut dire « imagerie de la main gauche »,
+    pas « tourne à gauche » : c'est le client qui décide ce que ça déclenche.
+
+    Voies : `intent_index`, `confidence`, puis une probabilité par classe.
+
+    ⚠️ **`-1` et la classe REPOS sont deux choses différentes.** `-1` = le vote n'a pas conclu
+    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; l'indice de REPOS = le
+    modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
+    n'appellent pas la même réaction dans une application.
+
+    ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
+    entraîné sur quelqu'un d'autre sont plausibles et fausses.
+    """
+
+    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance=""):
+        self.classes = [str(c) for c in classes]
+        labels = mi_channel_labels(self.classes)
+        info = StreamInfo(stream_name("decoded_mi"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_mi", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "motor-imagery")
+        desc.append_child_value("classes", ",".join(self.classes))
+        # L'échelle est une PROBABILITÉ de classifieur, pas un z comme le SSVEP : sans cette
+        # indication, un seuil posé côté client n'a pas le même sens d'un mode à l'autre.
+        desc.append_child_value("decision_scale", "proba")
+        desc.append_child_value("threshold", str(prob_min))
+        desc.append_child_value("min_votes", str(votes[0]))
+        desc.append_child_value("vote_len", str(votes[1]))
+        self.outlet = StreamOutlet(info)
+
+    def push(self, intent_index, confidence, probas, lsl_ts=None):
+        """`probas` : les probabilités dans le MÊME ordre que `classes`."""
+        row = [float(intent_index), float(confidence)] + [float(p) for p in probas]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 class StatusPublisher:
     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
 
@@ -391,6 +445,16 @@ def _autotest():
     qual.push(np.array([8.0, 0.1, 12.0, 9.0, 7.0, 11.0, 600.0, 10.0]))
     status.push({"running": True, "mode": None, "calibrated": {}})
     print(f"[lsl] verdicts : {[verdict_from_sigma(s) for s in (8.0, 0.1, 600.0)]}")
+
+    # 5. decoded_mi : voies attendues, et le publieur pousse sans lever (indice ET repos).
+    labels = mi_channel_labels(("GAUCHE", "DROITE", "REPOS"))
+    print(f"  voies decoded_mi : {labels}")
+    assert labels == ["intent_index", "confidence", "p_GAUCHE", "p_DROITE", "p_REPOS"], labels
+    pub = DecodedMIPublisher(("GAUCHE", "DROITE", "REPOS"), prob_min=0.6, votes=(3, 5),
+                             instance="selftest-mi")
+    pub.push(0, 0.81, [0.81, 0.12, 0.07])
+    pub.push(-1, 0.0, [0.34, 0.33, 0.33])
+    print("  [lsl] decoded_mi publie sans lever")
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
