@@ -88,6 +88,23 @@ class MIRuntime(ModeRuntime):
     def output(self):
         return self._decoded
 
+    def state(self):
+        """L'état du mode, avec les voies tirées du modèle EN MÉMOIRE.
+
+        `ModeRuntime.state()` passe par `spec.channels_for(self.params)`, donc par `_channels`,
+        qui RELIT le modèle sur disque. Deux raisons de ne pas le faire ici, et la seconde est la
+        vraie : c'est appelé dix fois par seconde par la console (0,348 ms de lecture disque à
+        chaque fois), et surtout `_channels` retombe EN SILENCE sur trois classes par défaut si le
+        fichier n'est plus lisible. Dès que la calibration écrit dans `data/` pendant qu'un mode
+        tourne, l'état publié pourrait donc annoncer des voies que le flux ne publie pas.
+
+        `_channels` reste ce qu'elle est — c'est ce que le CATALOGUE utilise, avant qu'aucun
+        runtime n'existe, et elle n'a alors que le disque pour savoir.
+        """
+        etat = super().state()
+        etat["channels"] = mi_channel_labels(self.classes)
+        return etat
+
     def _rest_step(self, engine, now):
         """Rien à mesurer : le repos de ce mode dure 0 s, seule la chauffe compte.
 
@@ -215,8 +232,8 @@ SPEC = ModeSpec(
             choices_fn=lambda: mi_models.modeles_disponibles(),
             help="Le modèle produit par une calibration MI, propre à TA personne — celui de "
                  "quelqu'un d'autre donne des probabilités plausibles et fausses. Aucun modèle "
-                 "dans la liste ? Lance une calibration : "
-                 "`python src/research/mi_calibrate.py`.",
+                 "dans la liste ? Lance une calibration depuis cette console : bouton "
+                 "« Calibrer » sur cette page.",
         ),
         Param(
             key="prob_min",
@@ -259,6 +276,13 @@ SPEC = ModeSpec(
     channels_fn=_channels,
     runtime_cls=MIRuntime,
 )
+
+
+class _ModeleDeux:
+    """Modèle mock à 2 classes seulement, pour tester que state() ne relit pas le disque."""
+    labels = ["GAUCHE", "DROITE"]
+    def predict_proba(self, window):
+        return {"GAUCHE": 0.5, "DROITE": 0.5}
 
 
 def _selftest():
@@ -480,6 +504,54 @@ def _selftest():
         # trois smokes passeraient. On l'épingle donc ICI, du côté qui la produit.
         chk(set(rt.output()) == {"intent_index", "label", "confidence", "probas", "threshold"},
             f"la sortie du moteur porte exactement les clés attendues ({sorted(rt.output())})")
+
+        # 9. `state()` est appelé à CHAQUE `snapshot()`, donc 10 fois par seconde par la console.
+        # La version héritée passait par `_channels(params)`, qui RELIT le modèle sur disque —
+        # 0,348 ms mesurées, et surtout un retour SILENCIEUX à trois classes par défaut si le
+        # fichier a bougé. Inerte jusqu'ici ; atteignable dès que la calibration écrit dans
+        # `data/` pendant qu'un mode tourne, ce qui est précisément ce que la moitié B ajoute.
+        # Le runtime a son modèle EN MÉMOIRE : il n'a aucune raison d'aller le redemander au
+        # disque, et encore moins de mentir si le disque a changé sous ses pieds.
+
+        # Crée un modèle à 2 classes pour ce test : si on utilisait un modèle à 3 classes,
+        # les listes coïncideraient par hasard quand _channels retombe sur les valeurs par défaut.
+        chemin_test_2classes = _os.path.join(dossier, "mi_model_2classes.joblib")
+        import joblib
+        joblib.dump(_ModeleDeux(), chemin_test_2classes)
+
+        # Construis les paramètres du runtime avec les défauts, en remplaçant juste model
+        values_2c = {p.key: p.default if hasattr(p, "default") else
+                     p.choices_fn()[0] if hasattr(p, "choices_fn") else None
+                     for p in SPEC.params}
+        values_2c["model"] = chemin_test_2classes
+
+        # Crée le runtime avec le mock. On passe par la normal init mais on injecte le mock
+        # directement après via une surcharge de charger temporaire.
+        modele_mock = _ModeleDeux()
+        vrai_charger = mi_models.charger
+        mi_models.charger = lambda chemin: (modele_mock, None)
+        try:
+            rt_2c = MIRuntime(SPEC, values_2c, moteur)
+            rt_2c._out = _FauxPublieur()
+            rt_2c._opened = True
+
+            etat = rt_2c.state()
+            chk(etat["channels"] == mi_channel_labels(rt_2c.classes),
+                f"les voies de l'état viennent du modèle CHARGÉ ({etat['channels']})")
+        finally:
+            # Restaure charger AVANT de faire disparaître le fichier, pour que _channels
+            # retombe vraiment sur les défauts quand il ne trouve pas le fichier.
+            mi_models.charger = vrai_charger
+
+        chemin_modele = values_2c["model"]
+        _os.rename(chemin_modele, chemin_modele + ".deplace")
+        try:
+            etat_apres = rt_2c.state()
+            chk(etat_apres["channels"] == etat["channels"],
+                f"et elles ne changent pas si le fichier disparaît du disque — le runtime ne "
+                f"relit rien ({etat_apres['channels']})")
+        finally:
+            _os.rename(chemin_modele + ".deplace", chemin_modele)
 
         # 10. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
         # aboutir, et le mode ne décide plus rien — en silence, la panne type de ce produit.

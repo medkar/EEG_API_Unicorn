@@ -29,6 +29,12 @@ def charger(chemin):
     modèle écrit avant que `mi_decoder` ne rejoigne `core/`. Le signaler par une exception
     ferait tomber le moteur pour un fichier qu'on aurait simplement dû ignorer.
     """
+    # Un chemin vide n'est pas un incident : c'est l'état d'un formulaire dont la liste de
+    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
+    # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
+    if not chemin:
+        return None, ("aucun modèle désigné — lance une calibration depuis la console pour en "
+                      "produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:
@@ -165,6 +171,15 @@ def _selftest():
         _m, raison = charger(_os.path.join(dossier, "absent.joblib"))
         chk(_m is None and "introuvable" in (raison or ""),
             f"un chemin inexistant est signalé comme tel ({raison})")
+
+        # `charger` promet dans sa docstring de ne JAMAIS lever. Elle levait pourtant sur None,
+        # et la moitié B l'appelle avec ce que rend un formulaire — donc potentiellement rien du
+        # tout, quand aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt
+        # et arrêterait toute la console.
+        for entree in (None, "", 0):
+            _m, raison = charger(entree)
+            chk(_m is None and raison and "aucun modèle" in raison,
+                f"charger({entree!r}) rend une raison au lieu de lever ({raison})")
 
         # Un modèle dont la classe vient d'un AUTRE module que core.mi_decoder : c'est
         # exactement l'état d'un modèle hérité une fois qu'un sys.path particulier (celui de
