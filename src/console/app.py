@@ -541,8 +541,17 @@ def run(args):
     modes = [m.strip() for m in (args.mode or "").split(",") if m.strip()]
     if not args.no_raw:
         modes.insert(0, "raw")
-    engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
-                          modes=modes, instance=args.instance)
+    # `EngineServer` valide les modes demandés dans son constructeur et lève un `ValueError`
+    # déjà rédigé pour être lu (cf. core/server.py) — sans modèle MI entraîné, par exemple,
+    # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Un traceback autour
+    # n'ajouterait rien et enterrait ce message sous la pile : on l'attrape ici, comme le fait
+    # déjà `core/server.py` pour le même appel lancé sans interface.
+    try:
+        engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
+                              modes=modes, instance=args.instance)
+    except ValueError as refus:
+        print(f"[console] {refus}")
+        sys.exit(2)
 
     # Le moteur tourne dans SON fil et possède seul la session BrainFlow. Le fil Qt ne fait que
     # lire `snapshot()` et poser des commandes en file.
