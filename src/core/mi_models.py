@@ -145,9 +145,14 @@ def _selftest():
         chk(d["date"], f"et une date lisible ({d['date']})")
 
         # Le plus récent d'abord : c'est ce qui rend le défaut du réglage « le dernier entraîné ».
-        recent = _os.path.join(dossier, "mi_model_2.joblib")
+        # On renomme ainsi pour que le tri alphabétique et chronologique divergent : si on oublie
+        # key=_os.path.getmtime, le tri alphabétique réversé donnerait ["mi_model_z", "mi_model_a"],
+        # OPPOSÉ au tri par date qu'on attend. Le test ne peut donc passer que si on trie sur mtime.
+        ancien = _os.path.join(dossier, "mi_model_z.joblib")
+        recent = _os.path.join(dossier, "mi_model_a.joblib")
+        _os.rename(bon, ancien)
         modele.save(recent)
-        _os.utime(bon, (1_600_000_000, 1_600_000_000))
+        _os.utime(ancien, (1_600_000_000, 1_600_000_000))
         chk(modeles_disponibles(dossier)[0] == recent,
             f"le plus récent vient en tête ({modeles_disponibles(dossier)})")
     finally:
