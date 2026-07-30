@@ -58,7 +58,12 @@ class Param:
             try:
                 return tuple(self.choices_fn())
             except Exception as e:
-                print(f"⚠️  « {self.label} » ({self.key}): impossible de lister les choix — {e}")
+                # Un echec d'affichage ne doit jamais arreter une fonction. Le message en ASCII pur,
+                # car cette fonction peut etre appelee avant use_utf8_console() (ex: initialisation).
+                try:
+                    print(f"WARNING: '{self.label}' ({self.key}): cannot list choices - {e}")
+                except Exception:
+                    pass  # Affichage echoue (pipe ferme, encodage impossible, etc.), silencieusement
                 return ()
         return tuple(self.choices)
 

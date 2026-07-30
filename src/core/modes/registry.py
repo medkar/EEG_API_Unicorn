@@ -57,12 +57,14 @@ def serialize(spec, params=None):
         "stream": spec.stream,
         "channels": list(spec.channels_for(params)),
         "params": [
-            {"key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
-             "default": list(p.default_now()) if isinstance(p.default_now(), tuple) else p.default_now(),
-             "min": p.min, "max": p.max,
-             "count": list(p.count) if p.count else None,
-             "proposes": p.proposes,
-             "choices": list(p.choices_now()), "help": p.help}
+            {
+                "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
+                "default": (lambda dflt: list(dflt) if isinstance(dflt, tuple) else dflt)(p.default_now()),
+                "min": p.min, "max": p.max,
+                "count": list(p.count) if p.count else None,
+                "proposes": p.proposes,
+                "choices": list(p.choices_now()), "help": p.help
+            }
             for p in spec.params
         ],
         "rest": None if spec.rest is None else {
@@ -120,8 +122,11 @@ def check():
         # c'est normal après un git clone, pas un défaut de contrat.
         sans_choix = [p.key for p in spec.params if p.choices_fn and not p.choices_now()]
         if sans_choix:
-            # Indiquer qu'on saute la vérification, sans le traiter comme un défaut
-            pass
+            # Indiquer informativement qu'on saute la vérification : le mode est normal, l'état du
+            # poste est en attente (aucun modèle entraîné pour ce(s) paramètre(s) encore).
+            clés_str = ", ".join(sans_choix)
+            print(f"  NORMAL {spec.id}: defaults not checked for {clés_str} "
+                  f"(no trained models yet — will validate when populated)")
         else:
             values, reason = validate(spec, {})
             if values is None:
