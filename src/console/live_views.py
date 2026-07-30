@@ -129,7 +129,7 @@ class ActiveView(QWidget):
             self.verdict.setText(mode_state["instruction"] if mode_state else "en attente")
             return
         if "probas" in sortie:
-            self._update_probas(sortie)
+            self._update_probas(mode_state, sortie)
         else:
             self._update_scores(mode_state, sortie)
 
@@ -155,18 +155,33 @@ class ActiveView(QWidget):
         else:
             self.verdict.setText(f"CIBLE {index} · {sortie.get('freq_hz', 0):g} Hz")
 
-    def _update_probas(self, sortie):
+    def _update_probas(self, mode_state, sortie):
         """Motor Imagery (et tout futur mode à vote de classe) : une probabilité par classe.
 
         Pas d'échelle 2× ici : une probabilité est déjà bornée à 1, contrairement au z du
         SSVEP qui n'a pas de plafond naturel.
+
+        ⚠️ **Les barres et le verdict ne décrivent pas le même instant.** Les barres montrent la
+        dernière fenêtre, le verdict sort du VOTE sur les `vote_len` dernières. Il est donc
+        NORMAL de les voir se contredire pendant que l'utilisateur change d'intention — d'où la
+        règle affichée en toutes lettres au-dessus des barres.
+
+        Cette règle est celle du MOTEUR, écrite avec les valeurs que le moteur publie
+        (`threshold` dans la sortie, `min_votes` et `vote_len` dans les réglages) : rien n'est
+        décidé ici. L'écran annonçait « la classe gagnante doit dépasser le seuil », ce qui est
+        faux — le seuil filtre CHAQUE fenêtre, puis c'est le vote qui décide — et il affichait
+        donc « 0,99 » à côté de « vote non conclu », sur le même écran.
         """
+        params = (mode_state or {}).get("params") or {}
         probas = sortie.get("probas") or {}
         classes = list(probas.keys())
         seuil = float(sortie.get("threshold", 0.0))
+        min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
+        vote_connu = min_votes is not None and vote_len is not None
         self._assure(len(classes), classes)
-        self.seuil.setText(f"échelle probabilité · seuil {seuil:g} — "
-                           f"la classe gagnante doit le dépasser")
+        regle = (f"puis {min_votes} fenêtres d'accord sur les {vote_len} dernières"
+                 if vote_connu else "puis un vote sur les fenêtres récentes")
+        self.seuil.setText(f"échelle probabilité · seuil {seuil:g} par fenêtre, {regle}")
 
         for i, (_e, barre) in enumerate(self._barres):
             valeur = probas.get(classes[i], 0.0) if i < len(classes) else 0.0
@@ -174,10 +189,15 @@ class ActiveView(QWidget):
 
         index = sortie.get("intent_index", -1)
         if index < 0:
-            self.verdict.setText(f"— (vote non conclu, seuil {seuil:g})")
+            manque = (f"moins de {min_votes} des {vote_len} dernières fenêtres d'accord"
+                      if vote_connu else "pas assez de fenêtres récentes d'accord")
+            self.verdict.setText(f"— (vote non conclu : {manque})")
         else:
+            # « du vote » n'est pas décoratif : le moteur publie ici la moyenne des fenêtres qui
+            # ont voté pour cette classe, pas la probabilité de la dernière fenêtre affichée
+            # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
             self.verdict.setText(f"INTENTION {sortie.get('label', '')} "
-                                 f"· confiance {sortie.get('confidence', 0.0):.2f}")
+                                 f"· confiance du vote {sortie.get('confidence', 0.0):.2f}")
 
 
 class PassiveView(QWidget):

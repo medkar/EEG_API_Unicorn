@@ -236,6 +236,11 @@ class UnicornAcquisition:
         décoderait alors sur autre chose que ce sur quoi il a été entraîné — sans erreur, avec
         des probabilités parfaitement plausibles.
 
+        `block` indexe les 8 voies dans l'ordre de `CH_NAMES` — pas les rows du board, comme
+        pour `occipital_window`. Ce n'est pas un détail de forme ici : le CSP est un filtre
+        SPATIAL, il apprend une combinaison des voies dans CET ordre. Un appelant qui passerait
+        des rows du board décoderait du bruit, et le dirait avec des probabilités à 0,99.
+
         Retourne None tant que le bloc est trop court.
         """
         need = int(round(seconds * self.fs))
