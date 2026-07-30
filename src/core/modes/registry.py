@@ -13,15 +13,15 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import external, neuro, raw, ssvep  # noqa: E402
+from core.modes import external, mi, neuro, raw, ssvep  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 MODES = (
     raw.SPEC,           # le brut d'abord : c'est ce qui existe même sans décodage
     ssvep.SPEC,
     neuro.SPEC,
-    external.MI,        # puis les modes de l'appli pygame, dans l'ordre où ils ont été écrits
-    external.CVEP,
+    mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
+    external.CVEP,      # puis les modes de l'appli pygame, dans l'ordre où ils ont été écrits
     external.P300,
     external.ERRP,
 )

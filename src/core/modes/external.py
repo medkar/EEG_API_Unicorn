@@ -1,8 +1,9 @@
 """Les modes que le MOTEUR ne sait pas faire — décrits quand même.
 
-C'est le point d'honnêteté de l'interface. Sans ces quatre entrées, la grille ne montrerait que
-ce qui est chargé : un étudiant croirait que le produit ne fait que trois choses, et ne saurait
-pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
+C'est le point d'honnêteté de l'interface. Sans ces trois entrées, la grille ne montrerait que
+ce qui est chargé : un étudiant croirait que le produit ne fait que quatre choses (brut, SSVEP,
+neuro, MI), et ne saurait pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
+Le MI, lui, a rejoint le moteur (`core/modes/mi.py`) : ce n'est plus une entrée « appli pygame ».
 
 Chacun porte la RAISON de son absence, et c'est presque toujours la même famille de raison : le
 moteur ne reçoit pas de marqueurs entrants, et ne rend pas de stimulus verrouillé à la frame.
@@ -16,17 +17,6 @@ from core.modes.contract import Calib, ModeSpec  # noqa: E402
 
 _PYGAME = "Lance `python src/research/app.py` — jamais en même temps que le moteur, le casque " \
           "n'accepte qu'une connexion."
-
-MI = ModeSpec(
-    id="mi", label="Motor Imagery", family="actif",
-    summary="Imagination d'un mouvement main gauche / main droite (CSP+LDA).",
-    status="appli_pygame",
-    unavailable="Le moteur ne sait pas encore charger un modèle MI entraîné. " + _PYGAME,
-    # Premier candidat à la migration vers le moteur : fenêtre glissante, aucun marqueur requis,
-    # modèle à 79 % déjà entraîné. C'est le chantier 3 (entraînements et gestion des modèles).
-    calibration=Calib(kind="console",
-                      reason="consignes à l'échelle de la seconde — la console suffit à les rendre"),
-)
 
 CVEP = ModeSpec(
     id="cvep", label="c-VEP", family="actif",
