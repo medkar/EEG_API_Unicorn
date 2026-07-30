@@ -122,6 +122,17 @@ class ModeRuntime:
         """La dernière sortie du mode, pour l'affichage. None si rien encore."""
         return None
 
+    def channels(self):
+        """Les voies de ce mode, d'après le contrat et les paramètres.
+
+        Point d'extension pour les modes dont les voies dépendent d'un MODÈLE CHARGÉ : plutôt que
+        de relire le modèle via le contrat (qui n'a que le disque pour savoir), la sous-classe
+        peut surcharger cette méthode pour retourner les voies du modèle EN MÉMOIRE. Utile quand
+        la calibration écrit dans `data/` pendant qu'un mode tourne : l'état publié ne mentirait
+        jamais sur ses voies.
+        """
+        return list(self.spec.channels_for(self.params))
+
     def state(self):
         """L'état de ce mode, en dictionnaire JSON-able. Sûr depuis un autre fil."""
         return {
@@ -134,7 +145,7 @@ class ModeRuntime:
                        for k, v in self.params.items()},
             "instruction": self.instruction(),
             "stream": self.spec.stream,
-            "channels": list(self.spec.channels_for(self.params)),
+            "channels": self.channels(),
             "rest_report": self.rest_report,
             "output": self.output(),
         }

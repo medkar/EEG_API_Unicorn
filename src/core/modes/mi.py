@@ -89,10 +89,10 @@ class MIRuntime(ModeRuntime):
     def output(self):
         return self._decoded
 
-    def state(self):
-        """L'état du mode, avec les voies tirées du modèle EN MÉMOIRE.
+    def channels(self):
+        """Les voies du MI, tirées du modèle EN MÉMOIRE.
 
-        `ModeRuntime.state()` passe par `spec.channels_for(self.params)`, donc par `_channels`,
+        `ModeRuntime.channels()` passe par `spec.channels_for(self.params)`, donc par `_channels`,
         qui RELIT le modèle sur disque. Deux raisons de ne pas le faire ici, et la seconde est la
         vraie : c'est appelé dix fois par seconde par la console (0,348 ms de lecture disque à
         chaque fois), et surtout `_channels` retombe EN SILENCE sur trois classes par défaut si le
@@ -102,9 +102,7 @@ class MIRuntime(ModeRuntime):
         `_channels` reste ce qu'elle est — c'est ce que le CATALOGUE utilise, avant qu'aucun
         runtime n'existe, et elle n'a alors que le disque pour savoir.
         """
-        etat = super().state()
-        etat["channels"] = mi_channel_labels(self.classes)
-        return etat
+        return mi_channel_labels(self.classes)
 
     def _rest_step(self, engine, now):
         """Rien à mesurer : le repos de ce mode dure 0 s, seule la chauffe compte.
@@ -280,7 +278,12 @@ SPEC = ModeSpec(
 
 
 class _ModeleDeux:
-    """Modèle mock à 2 classes seulement, pour tester que state() ne relit pas le disque."""
+    """Modèle mock à 2 classes seulement, pour tester que channels() ne relit pas le disque.
+
+    Définie ICI, au niveau du module, et pas dans `_selftest` : `pickle`/`joblib` ne sait pas
+    sérialiser une classe locale à une fonction (elle n'est pas retrouvable par son nom qualifié
+    au chargement).
+    """
     labels = ["GAUCHE", "DROITE"]
     def predict_proba(self, window):
         return {"GAUCHE": 0.5, "DROITE": 0.5}
@@ -506,19 +509,20 @@ def _selftest():
         chk(set(rt.output()) == {"intent_index", "label", "confidence", "probas", "threshold"},
             f"la sortie du moteur porte exactement les clés attendues ({sorted(rt.output())})")
 
-        # 9. `state()` est appelé à CHAQUE `snapshot()`, donc 10 fois par seconde par la console.
-        # La version héritée passait par `_channels(params)`, qui RELIT le modèle sur disque —
-        # 0,348 ms mesurées, et surtout un retour SILENCIEUX à trois classes par défaut si le
-        # fichier a bougé. Inerte jusqu'ici ; atteignable dès que la calibration écrit dans
-        # `data/` pendant qu'un mode tourne, ce qui est précisément ce que la moitié B ajoute.
-        # Le runtime a son modèle EN MÉMOIRE : il n'a aucune raison d'aller le redemander au
-        # disque, et encore moins de mentir si le disque a changé sous ses pieds.
-
-        # Crée un modèle à 2 classes pour ce test : si on utilisait un modèle à 3 classes,
-        # les listes coïncideraient par hasard quand _channels retombe sur les valeurs par défaut.
+        # 9. `channels()` est appelé à CHAQUE `snapshot()` qui appelle `state()`, donc 10 fois par
+        # seconde par la console. La version héritée passait par `_channels(params)`, qui RELIT
+        # le modèle sur disque — 0,348 ms mesurées, et surtout un retour SILENCIEUX à trois
+        # classes par défaut si le fichier a bougé. Inerte jusqu'ici ; atteignable dès que la
+        # calibration écrit dans `data/` pendant qu'un mode tourne, ce qui est précisément ce que
+        # la moitié B ajoute. Le runtime a son modèle EN MÉMOIRE : il n'a aucune raison d'aller
+        # le redemander au disque, et encore moins de mentir si le disque a changé sous ses pieds.
+        # On teste DEUX choses : (1) que les voies sont justes, et (2) qu'AUCUNE lecture disque
+        # n'a lieu. Crée un modèle à 2 classes pour ce test : si on utilisait un modèle à 3
+        # classes, les listes coïncideraient par hasard quand _channels retombe sur les défauts.
         chemin_test_2classes = _os.path.join(dossier, "mi_model_2classes.joblib")
-        import joblib
-        joblib.dump(_ModeleDeux(), chemin_test_2classes)
+        # Crée un fichier factice (le vrai charger ne le chargera jamais, car on l'injecte)
+        with open(chemin_test_2classes, "wb") as f:
+            f.write(b"")
 
         # Construis les paramètres du runtime avec les défauts, en remplaçant juste model
         values_2c = {p.key: p.default if hasattr(p, "default") else
@@ -526,19 +530,34 @@ def _selftest():
                      for p in SPEC.params}
         values_2c["model"] = chemin_test_2classes
 
-        # Crée le runtime avec le mock. On passe par la normal init mais on injecte le mock
-        # directement après via une surcharge de charger temporaire.
+        # Crée le runtime avec le mock. Compte les appels à `charger` pour prouver que
+        # `channels()` ne relit pas le disque.
         modele_mock = _ModeleDeux()
         vrai_charger = mi_models.charger
-        mi_models.charger = lambda chemin: (modele_mock, None)
+        compte_charger = [0]     # liste pour permettre mutation dans le lambda
+        def charger_compteur(chemin):
+            compte_charger[0] += 1
+            # Retourne le mock injecté, pas le fichier
+            if chemin == chemin_test_2classes:
+                return modele_mock, None
+            return vrai_charger(chemin)
+        mi_models.charger = charger_compteur
         try:
             rt_2c = MIRuntime(SPEC, values_2c, moteur)
             rt_2c._out = _FauxPublieur()
             rt_2c._opened = True
+            # L'__init__ appelle charger une fois : la comptage commence à 1
+            appels_init = compte_charger[0]
 
             etat = rt_2c.state()
             chk(etat["channels"] == mi_channel_labels(rt_2c.classes),
                 f"les voies de l'état viennent du modèle CHARGÉ ({etat['channels']})")
+
+            # state() appelle channels(), qui ne doit PAS appeler charger à nouveau
+            appels_apres_state1 = compte_charger[0]
+            chk(appels_apres_state1 == appels_init,
+                f"channels() (appelé par state()) n'appelle pas charger — compte reste à "
+                f"{appels_init} ({appels_apres_state1 - appels_init} appels supplémentaires)")
         finally:
             # Restaure charger AVANT de faire disparaître le fichier, pour que _channels
             # retombe vraiment sur les défauts quand il ne trouve pas le fichier.
