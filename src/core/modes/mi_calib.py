@@ -66,6 +66,26 @@ def horodatage(maintenant=None):
     return _time.strftime("%Y%m%d-%H%M%S", _time.localtime(maintenant or _time.time()))
 
 
+def _chemins_libres(dossier, n_essais):
+    """Le couple (chemin du modèle, chemin de l'enregistrement) pour CETTE séance — les DEUX
+    chemins sont GARANTIS libres au moment du retour, sans changer le FORMAT du nom.
+
+    `horodatage()` n'a qu'une résolution d'une seconde : deux séances qui finissent la même
+    seconde produiraient sinon le MÊME couple de noms, et `save`/`savez` écrasent sans vérifier —
+    exactement la panne que l'horodatage existe pour fermer (cf. docstring du module, point 2).
+    On avance donc d'une seconde tant que l'un des deux fichiers existe déjà : un décalage de
+    quelques secondes sur l'estampille est un prix dérisoire devant la perte d'une séance.
+    """
+    maintenant = _time.time()
+    while True:
+        stamp = horodatage(maintenant)
+        chemin_modele = _os.path.join(dossier, f"mi_model_{stamp}.joblib")
+        chemin_npz = _os.path.join(dossier, f"mi_calib_{stamp}_n{n_essais:02d}.npz")
+        if not _os.path.exists(chemin_modele) and not _os.path.exists(chemin_npz):
+            return chemin_modele, chemin_npz
+        maintenant += 1.0
+
+
 def decouper(epoque, n, pas):
     """Découpe une époque (n_samp, n_ch) en fenêtres (n_ch, n) glissantes.
 
@@ -129,13 +149,12 @@ class MICalibration(CalibrationRuntime):
 
         modele = MIModel(fs=fs).fit(np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
 
-        stamp = horodatage()
         _os.makedirs(self.dossier, exist_ok=True)
         # Le motif `mi_model*.joblib` est celui que `mi_models.modeles_disponibles` cherche :
         # ne pas s'en écarter, sinon le modèle produit n'apparaîtra jamais dans la liste.
-        chemin_modele = _os.path.join(self.dossier, f"mi_model_{stamp}.joblib")
-        chemin_npz = _os.path.join(self.dossier,
-                                   f"mi_calib_{stamp}_n{len(enregistre):02d}.npz")
+        # `_chemins_libres` (pas `horodatage` appelée seule) : deux séances qui finissent la
+        # même seconde ne doivent PAS produire le même couple de fichiers — cf. sa docstring.
+        chemin_modele, chemin_npz = _chemins_libres(self.dossier, len(enregistre))
         modele.save(chemin_modele)
         np.savez(chemin_npz,
                  epochs=np.asarray([e for e, _l in enregistre]),
@@ -189,6 +208,7 @@ CALIB = Calib(
 
 def _selftest():
     """Une séance complète, jouée en accéléré sur du signal FABRIQUÉ, dans un dossier temporaire."""
+    import hashlib
     import shutil
     import tempfile
 
@@ -201,6 +221,12 @@ def _selftest():
         nonlocal ok
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
+
+    def _hash_fichier(chemin):
+        """L'empreinte OCTET POUR OCTET d'un fichier — la preuve la plus directe qu'un contenu
+        n'a pas bougé, plus fiable qu'une comparaison de valeurs qui pourraient coïncider."""
+        with open(chemin, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
 
     class _FausseAcq:
         fs = 250.0
@@ -270,7 +296,9 @@ def _selftest():
         chk(abs(res.get("hasard", 0) - 1 / 3) < 1e-9,
             f"le niveau du hasard est rapporté à côté ({res.get('hasard')})")
 
-        # Rien n'est écrasé : deux séances donnent deux fichiers, et le modèle est visible.
+        # Le modèle et l'enregistrement de CETTE séance sont horodatés et visibles dans le
+        # catalogue. (« Rien n'est jamais écrasé » — même à la même seconde — est prouvé plus
+        # bas, par DEUX séances RÉUSSIES : une seule séance ici ne pourrait rien en dire.)
         from core import mi_models
 
         chk(_os.path.basename(res["modele"]).startswith("mi_model_")
@@ -303,6 +331,89 @@ def _selftest():
             f"({court.phase}, {court.probleme})")
         chk(len(mi_models.modeles_disponibles(dossier)) == 1,
             "et n'ajoute AUCUN modèle à la liste")
+
+        # --- `_chemins_libres` seule, avant l'intégration complète --------------------------
+        # Une collision sur le premier essai force une avance d'exactement 1 s, sur les DEUX
+        # chemins à la fois — c'est ce qui la rend testable indépendamment de toute séance.
+        sonde_dossier = _os.path.join(dossier, "sonde")
+        _os.makedirs(sonde_dossier, exist_ok=True)
+        vrai_time = _time.time
+        _time.time = lambda: 1_800_000_000.0
+        try:
+            m1, n1 = _chemins_libres(sonde_dossier, 7)
+            open(m1, "wb").close()
+            open(n1, "wb").close()
+            m2, n2 = _chemins_libres(sonde_dossier, 7)
+        finally:
+            _time.time = vrai_time
+        chk(m1 != m2 and n1 != n2,
+            f"une collision force une avance sur les DEUX chemins "
+            f"({_os.path.basename(m1)} -> {_os.path.basename(m2)})")
+        chk(horodatage(1_800_000_001.0) in m2,
+            f"et l'avance est de exactement 1 s, pas plus ({_os.path.basename(m2)})")
+
+        # --- « rien n'est jamais écrasé » : preuve par DEUX séances, pas affirmation --------
+        # Le format du nom (AAAAMMJJ-HHMMSS) a une résolution d'une SECONDE : deux séances
+        # RÉUSSIES qui finissent la même seconde sont le cas exact qui a fait perdre les époques
+        # d'une séance à 42 essais (nom fixe, à l'époque). Horloge ÉPINGLÉE pour reproduire cette
+        # collision à coup sûr plutôt que de compter sur la chance, restaurée dans un `finally`.
+        vrai_time = _time.time
+        _time.time = lambda: 1_700_000_000.0
+        try:
+            premiere = MICalibration(_mi.SPEC, {"trials_per_class": 6}, None,
+                                     rng=_random.Random(2), dossier=dossier)
+            premiere.engine = _FauxMoteur(premiere, rng)
+            t = 0.0
+            for _ in range(20000):
+                premiere.tick(premiere.engine, t)
+                if premiere.terminee:
+                    break
+                t += 0.25
+            chk(premiere.phase == "fini",
+                f"la première des deux séances à la même seconde aboutit ({premiere.phase})")
+
+            # L'empreinte est prise ICI, entre les deux séances — c'est elle qui distingue
+            # « le fichier a survécu » de « un fichier du même nom existe, peu importe lequel ».
+            hash_modele_avant = (_hash_fichier(premiere.resultat["modele"])
+                                 if premiere.resultat else None)
+            hash_npz_avant = (_hash_fichier(premiere.resultat["enregistrement"])
+                              if premiere.resultat else None)
+
+            seconde = MICalibration(_mi.SPEC, {"trials_per_class": 6}, None,
+                                    rng=_random.Random(3), dossier=dossier)
+            seconde.engine = _FauxMoteur(seconde, rng)
+            t = 0.0
+            for _ in range(20000):
+                seconde.tick(seconde.engine, t)
+                if seconde.terminee:
+                    break
+                t += 0.25
+            chk(seconde.phase == "fini",
+                f"la seconde des deux séances à la même seconde aboutit ({seconde.phase})")
+        finally:
+            _time.time = vrai_time
+
+        res1, res2 = premiere.resultat or {}, seconde.resultat or {}
+        chk(bool(res1.get("modele")) and bool(res2.get("modele"))
+            and res1["modele"] != res2["modele"],
+            f"deux séances à la MÊME seconde produisent deux modèles DISTINCTS "
+            f"({_os.path.basename(res1.get('modele', '?'))} vs "
+            f"{_os.path.basename(res2.get('modele', '?'))})")
+        chk(bool(res1.get("enregistrement")) and bool(res2.get("enregistrement"))
+            and res1["enregistrement"] != res2["enregistrement"],
+            f"et deux enregistrements DISTINCTS "
+            f"({_os.path.basename(res1.get('enregistrement', '?'))} vs "
+            f"{_os.path.basename(res2.get('enregistrement', '?'))})")
+        disponibles = mi_models.modeles_disponibles(dossier)
+        chk(res1.get("modele") in disponibles and res2.get("modele") in disponibles,
+            f"et les DEUX modèles sont listés, aucun n'a chassé l'autre "
+            f"({[_os.path.basename(p) for p in disponibles]})")
+        chk(hash_modele_avant is not None and bool(res1.get("modele"))
+            and _hash_fichier(res1["modele"]) == hash_modele_avant,
+            "le modèle de la PREMIÈRE séance est resté OCTET POUR OCTET intact après la seconde")
+        chk(hash_npz_avant is not None and bool(res1.get("enregistrement"))
+            and _hash_fichier(res1["enregistrement"]) == hash_npz_avant,
+            "et son enregistrement aussi")
 
         chk(verdict(0.70) == "EXCELLENT" and verdict(0.50) == "UTILISABLE"
             and verdict(0.40).startswith("FAIBLE"),

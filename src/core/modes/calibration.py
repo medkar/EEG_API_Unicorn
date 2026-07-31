@@ -234,7 +234,7 @@ class CalibrationRuntime:
             "rappel": self.rappel(),
             "essai": self.essai,
             "total": self.total(),
-            "restant_s": round(self.restant_s(now or 0.0), 1) if now else 0.0,
+            "restant_s": round(self.restant_s(now), 1) if now is not None else 0.0,
             "duree_estimee_s": round(self.duree_estimee_s(), 1),
             "params": dict(self.params),
             "classes": list(self.classes),
@@ -300,6 +300,13 @@ def _selftest():
     t = 100.0
     rt.tick(moteur, t)
     chk(rt.phase == "chauffe", f"on commence par la chauffe ({rt.phase})")
+    # `now=0.0` est une horloge VALIDE (l'instant zéro d'une séance), pas une absence d'horloge —
+    # confusion qu'un `if now else ...` ferait puisque 0.0 est aussi FALSY en Python. La
+    # distinction que documente `state(now=None)` (« sans lui, le décompte vaut 0 ») porte sur
+    # l'ABSENCE de l'argument, jamais sur sa valeur.
+    chk(rt.state(now=0.0)["restant_s"] == round(rt.restant_s(0.0), 1) > 0.0,
+        f"now=0.0 est une horloge valide, distincte de l'absence d'horloge "
+        f"({rt.state(now=0.0)['restant_s']})")
     rt.tick(moteur, t + 14.9)
     chk(rt.phase == "chauffe" and not moteur.demandes,
         "pendant la chauffe, RIEN n'est prélevé (la dérive DC fausserait les époques)")
