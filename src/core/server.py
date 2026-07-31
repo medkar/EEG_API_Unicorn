@@ -1383,8 +1383,12 @@ def _smoke_calibration():
             chk(res.get("n_essais") == 54, f"54 essais enregistrés ({res.get('n_essais')})")
 
             # Les époques prélevées dans le VRAI tampon glissant font la longueur annoncée.
+            # ⚠️ `calib` peut être None ici : le `chk` ci-dessus ne court-circuite PAS (il imprime
+            # et continue) — sur un build réellement cassé, déréférencer `calib._enregistre` sans
+            # garde donnerait une trace Python brute au lieu du diagnostic ligne à ligne que ce
+            # smoke doit rendre jusqu'au bout.
             attendu = int(round(mi_calib.MICalibration.imagery_s * server.acq.fs))
-            longueurs = {len(e) for e, _l in calib._enregistre}
+            longueurs = {len(e) for e, _l in calib._enregistre} if calib is not None else set()
             chk(longueurs == {attendu},
                 f"chaque époque fait exactement {attendu} échantillons ({sorted(longueurs)})")
 
@@ -1411,15 +1415,20 @@ def _smoke_calibration():
             produits = mi_models.modeles_disponibles(dossier)
             chk(len(produits) == 1 and produits[0] == res.get("modele"),
                 f"le modèle produit est chargeable et listé ({produits})")
-            # ⚠️ RÉSIDU DE FRAGILITÉ CONNU (rapport de tâche) : contrairement aux autotests de
-            # mi_calib.py/mi_decoder.py, qui fabriquent une ERD, ceci entraîne sur le bruit RÉEL du
-            # board synthétique — sans signal appris, la CV groupée n'est PAS toujours strictement
-            # sous la naïve (mesuré ~1 tirage sur 6 même à 18 essais/classe). Un échec isolé de
-            # CETTE seule ligne n'est donc pas forcément une régression : relancer avant de
-            # diagnostiquer. Un échec de n'importe quelle AUTRE assertion de ce test, lui, l'est.
-            chk(res.get("cv_groupee") is not None and res["cv_groupee"] < res["cv_naive"],
-                f"l'accuracy rapportée est l'HONNÊTE, plus basse que la naïve "
-                f"({res.get('cv_groupee')}, {res.get('cv_naive')})")
+            # Que la CV honnête soit RAPPORTÉE est un fait déterministe — une vraie propriété du
+            # chantier — donc reste une assertion. Que cv_groupee < cv_naive, en revanche, n'EN
+            # est plus une : `_smoke_calibration` entraîne sur le bruit RÉEL du board synthétique
+            # (c'est tout l'intérêt du test), donc sans aucun signal appris, l'ORDRE des deux CV
+            # est un tirage — mesuré ~1 échec sur 6 même à 18 essais/classe. Conclure sur du bruit
+            # est justement ce que ce projet interdit (CLAUDE.md, « rigueur statistique »).
+            # L'invariant reste vérifié, lui, là où il a un sens : sur de l'ERD FABRIQUÉE, par
+            # `mi_calib._selftest()` et `mi_decoder._test_cv_honnete()` — pas abandonné ici, mesuré
+            # au bon endroit. On imprime donc les deux chiffres pour mémoire, sans en juger l'ordre.
+            chk(res.get("cv_groupee") is not None,
+                f"l'accuracy HONNÊTE (validation croisée par essai) est rapportée "
+                f"({res.get('cv_groupee')})")
+            print(f"[smoke-calib] pour mémoire, PAS une assertion (cf. commentaire ci-dessus) : "
+                  f"cv_groupee={res.get('cv_groupee')} cv_naive={res.get('cv_naive')}")
 
             # Et le mode MI peut alors démarrer sur ce modèle : c'est tout l'objet du chantier.
             #
