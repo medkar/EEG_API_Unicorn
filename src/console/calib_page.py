@@ -54,9 +54,11 @@ class CalibPage(QWidget):
         self.console = console
         self.mode_id = spec["id"]
         self.calib = spec.get("calibration") or {}
-        # (phase, essai, etape) du dernier top JOUÉ — pour ne jamais rejouer sur un simple
-        # rafraîchissement (la page est mise à jour ~10 fois par seconde), cf. _maybe_beep.
-        self._derniere_cue_sonnee = None
+        # `etape` telle que vue au DERNIER rafraîchissement — pour détecter le FRONT MONTANT
+        # vers "cue" (cf. _maybe_beep), indépendamment de `essai` et de `phase` : ni l'un ni
+        # l'autre ne varie forcément d'un essai au suivant (l'échauffement, notamment, ne fait
+        # avancer aucun des deux).
+        self._etape_precedente = None
 
         entete = QHBoxLayout()
         self.bouton_retour = QPushButton("← Modes")
@@ -165,18 +167,25 @@ class CalibPage(QWidget):
         self.console.commande("cancel_calibration")
 
     def _maybe_beep(self, calib_state):
-        """Joue le top de la classe cuée UNE SEULE fois par mise en route, jamais de plus.
+        """Joue le top de la classe cuée sur le FRONT MONTANT de `etape` vers « cue », jamais de
+        plus.
 
-        La clé retenue est `(phase, essai, etape)` : elle ne bouge PAS entre deux
-        rafraîchissements de la MÊME étape (la page est repeinte ~10 fois par seconde), et
-        change dès qu'une nouvelle étape « cue » commence. Elle est remise à zéro dès que la
-        séance n'est plus « en cours » (cf. `update_from`), pour qu'une séance ultérieure sonne
-        de nouveau son tout premier essai.
+        ⚠️ Ne PAS retenir `(phase, essai, etape)` comme clé — une version antérieure de ce fichier
+        le faisait, et c'était un bug, pas une prudence : `essai` (le compteur d'essais
+        ENREGISTRÉS) ne bouge JAMAIS pendant l'échauffement, seule la phase « essais » l'incrémente
+        (`core/modes/calibration.py::_pas_essai`), et `phase` elle-même reste constante tout du
+        long d'une même phase. Une clé assise dessus vaut donc EXACTEMENT la même chose pour les
+        six essais d'échauffement du MI (2 par classe × 3 classes), quelle que soit la classe
+        tirée : le premier top sonne, les cinq suivants ne sonnent JAMAIS — pas une coïncidence de
+        tirage, une garantie, à chaque séance. La seule chose qui distingue de façon fiable « un
+        nouvel essai commence » de « la page se repeint pendant le même cue » (~10 fois par
+        seconde) est la TRANSITION de `etape` elle-même, indépendamment de tout compteur que le
+        moteur pourrait ne pas faire avancer.
         """
-        cle = (calib_state.get("phase"), calib_state.get("essai"), calib_state.get("etape"))
-        if calib_state.get("etape") == "cue" and cle != self._derniere_cue_sonnee:
+        etape = calib_state.get("etape")
+        if etape == "cue" and self._etape_precedente != "cue":
             self.console.beeps.jouer(calib_state.get("classe"))
-            self._derniere_cue_sonnee = cle
+        self._etape_precedente = etape
 
     def update_from(self, state):
         """Ressort `state["calibration"]`, choisit les écrans, ne calcule rien.
@@ -210,9 +219,11 @@ class CalibPage(QWidget):
         else:
             self.duree.setText("")
 
-        if not en_cours:
-            self._derniere_cue_sonnee = None      # une future séance repart sonner de zéro
-
+        # Rien à remettre à zéro ici quand la séance s'arrête : `_maybe_beep` n'est appelée que
+        # si `en_cours`, et le moteur ne quitte JAMAIS `etape == "cue"` directement vers une
+        # phase terminale — `_pas_essai`/`_commencer_essais`/`_terminer` posent tous `etape = ""`
+        # avant `entrainement`/`fini`/`annule` (cf. core/modes/calibration.py). `_etape_precedente`
+        # ne peut donc jamais valoir « cue » au moment où une NOUVELLE séance commence.
         if en_cours:
             self._maybe_beep(calib_state)
             self.consigne.setText(calib_state.get("instruction") or "")

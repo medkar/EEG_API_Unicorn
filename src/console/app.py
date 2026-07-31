@@ -541,6 +541,65 @@ def _smoke():
     chk(console.stack.currentWidget() is console.grid,
         "et la page de calibration ramène sur la grille")
 
+    # --- régression : les tops de l'ÉCHAUFFEMENT, pas seulement ceux des essais enregistrés ----
+    # `essai` (le compteur d'essais ENREGISTRÉS) ne bouge JAMAIS pendant l'échauffement — seule
+    # la phase « essais » l'incrémente (core/modes/calibration.py::_pas_essai, `if self.phase ==
+    # "essais":`). Et `phase` elle-même reste constante tout du long d'une même phase. Une clé
+    # anti-répétition assise sur (phase, essai, etape) — la version précédente de cette page —
+    # vaut donc EXACTEMENT la même chose pour les six essais d'échauffement du MI (2 par classe ×
+    # 3 classes), quelle que soit la classe tirée : le premier top sonne, les cinq suivants
+    # produisent la MÊME clé et ne sonnent JAMAIS. Pas une coïncidence de tirage — une garantie, à
+    # chaque séance. Aucun `chk` plus haut ne le voit : la fixture « en_cours » démarre
+    # directement en phase « essais ». Celui-ci exerce l'échauffement pour de vrai.
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+
+    class _BeepsEnregistreur:
+        """Remplace `console.beeps` le temps du test : compte les tops RÉELLEMENT déclenchés par
+        `_maybe_beep`, sans dépendre d'une vraie sortie audio (présente ou non sur la machine qui
+        lance ce smoke)."""
+
+        def __init__(self):
+            self.appels = []
+
+        def jouer(self, classe):
+            self.appels.append(classe)
+
+    vrais_beeps = console.beeps
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
+                "essai": 0, "total": 42, "duree_estimee_s": 400.0,
+                "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+                "resultat": None, "probleme": ""}
+        # Six essais d'échauffement (2 par classe × 3 classes) ; classes délibérément PAS toutes
+        # distinctes d'un essai au suivant (comme un mélange aléatoire peut en produire) : la clé
+        # correcte ne doit dépendre NI de la classe NI d'un compteur qui ne bouge pas ici.
+        classes_echauffement = ["GAUCHE", "DROITE", "REPOS", "GAUCHE", "DROITE", "REPOS"]
+        for classe in classes_echauffement:
+            cue = {**base, "etape": "cue", "classe": classe,
+                  "instruction": f"Imagine : {classe}", "rappel": "", "restant_s": 3.0}
+            console.apply_state({**mi_state, "calibration": cue})
+            # Le MÊME état, rejoué (la page est repeinte ~10 fois par seconde pendant les 3 s du
+            # cue) : ça ne doit PAS déclencher un second top pour le même essai.
+            console.apply_state({**mi_state, "calibration": cue})
+            imagerie = {**base, "etape": "imagerie", "classe": classe,
+                       "instruction": "", "rappel": "", "restant_s": 4.0}
+            console.apply_state({**mi_state, "calibration": imagerie})
+            repos = {**base, "etape": "repos", "classe": "",
+                    "instruction": "", "rappel": "", "restant_s": 1.5}
+            console.apply_state({**mi_state, "calibration": repos})
+
+        chk(console.beeps.appels == classes_echauffement,
+            f"chacun des SIX essais d'échauffement sonne son propre top, pas un seul sur six, "
+            f"et sans doublon sur le rafraîchissement répété du même cue ({console.beeps.appels})")
+    finally:
+        console.beeps = vrais_beeps
+
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid,
+        "et la page de calibration ramène sur la grille, après ce test aussi")
+
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
     # soumission, sans avoir besoin de la boucle.
