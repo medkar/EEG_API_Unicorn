@@ -99,6 +99,17 @@ class Param:
         return None
 
 
+def _defaults_of(params):
+    """Les réglages par défaut d'un jeu de `Param`, résolus maintenant.
+
+    Partagée entre `Calib.defaults` et `ModeSpec.defaults` : les deux avaient EXACTEMENT le même
+    corps, affirmé en commentaire (« même corps que… ») plutôt que garanti en code — une
+    convention que rien n'empêchait de diverger silencieusement le jour où l'un des deux
+    changerait sans l'autre. La factoriser transforme la garantie en STRUCTURE.
+    """
+    return {p.key: p.default_now() for p in params}
+
+
 @dataclass(frozen=True)
 class Rest:
     """Le plancher de repos exigé par un mode avant de pouvoir décoder."""
@@ -141,10 +152,10 @@ class Calib:
     def defaults(self):
         """Les réglages par défaut de cette calibration, résolus maintenant.
 
-        Même corps que `ModeSpec.defaults` — et c'est ce qui permet à `validate` de traiter les
-        deux sans distinction.
+        Partage sa mécanique avec `ModeSpec.defaults` (`_defaults_of`) — c'est ce qui permet à
+        `validate` de traiter les deux sans distinction.
         """
-        return {p.key: p.default_now() for p in self.params}
+        return _defaults_of(self.params)
 
 
 @dataclass(frozen=True)
@@ -172,7 +183,7 @@ class ModeSpec:
 
     def defaults(self):
         """Le jeu de réglages par défaut de ce mode, résolu maintenant."""
-        return {p.key: p.default_now() for p in self.params}
+        return _defaults_of(self.params)
 
     def channels_for(self, params):
         """Les voies réellement publiées pour ces réglages.

@@ -205,6 +205,54 @@ def check():
         if spec.stream and not spec.channels_for(spec.defaults()):
             defauts.append(f"{spec.id} : publie {spec.stream} sans annoncer ses voies")
 
+        # La calibration de ce mode, si le moteur sait la jouer. `check()` est appelée EN
+        # PREMIER par le smoke, précisément parce qu'« un défaut là-dedans explique tous les
+        # suivants » (cf. sa docstring) — mais elle ignorait `spec.calibration` : un défaut
+        # invalide dans un `Calib.params` traversait les quatre tests verts et n'était
+        # découvert qu'au clic « Calibrer ». Une calibration « native » (kind="natif",
+        # runtime_cls=None) n'est en revanche JAMAIS jouée par le moteur — c'est
+        # `src/research/app.py` qui la joue — donc vérifier ses défauts ici n'aurait aucun
+        # sens et signalerait des « défauts » qui n'en sont pas.
+        calib = spec.calibration
+        if calib is not None and calib.runtime_cls is not None:
+            # Même traitement que les params du MODE juste au-dessus : un choix dynamique
+            # vide reste normal sur un dépôt fraîchement cloné, une source qui LÈVE ne l'est
+            # jamais.
+            calib_sans_choix, calib_sources_cassees = [], []
+            for p in calib.params:
+                if not p.choices_fn:
+                    continue
+                choix, erreur = p.choices_status()
+                if erreur:
+                    calib_sources_cassees.append(
+                        f"{spec.id}.calibration.{p.key} : la source de choix a levé — {erreur}")
+                elif not choix:
+                    calib_sans_choix.append(p.key)
+            defauts.extend(calib_sources_cassees)
+
+            calib_verifiable = replace(
+                calib, params=tuple(p for p in calib.params if p.key not in calib_sans_choix))
+            calib_values, calib_reason = validate(calib_verifiable, {})
+            if calib_values is None:
+                defauts.append(f"{spec.id} : les défauts de sa calibration sont refusés — "
+                               f"{calib_reason}")
+
+            # Le contrôle qui empêche le défaut de REVENIR : `epoch_s` (ici) dimensionne le
+            # tampon du moteur (et, via lui, la fenêtre de mesure de la qualité — cf. A5) ;
+            # `imagery_s` (côté runtime) décide combien on en PRÉLÈVE à la fin de chaque essai.
+            # Deux sources de vérité pour le MÊME nombre, et rien ne les liait : un `epoch_s`
+            # sous `imagery_s` tronquerait CHAQUE époque enregistrée EN SILENCE — un modèle
+            # entraîné sur moins de signal que l'écran ne l'annonce, sans la moindre erreur.
+            imagery_s = getattr(calib.runtime_cls, "imagery_s", None)
+            if calib.epoch_s <= 0:
+                defauts.append(f"{spec.id} : sa calibration a un runtime_cls mais "
+                               f"epoch_s={calib.epoch_s:g} — le moteur ne dimensionnerait "
+                               f"aucun tampon pour elle")
+            elif imagery_s is not None and calib.epoch_s < imagery_s:
+                defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
+                               f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
+                               f"serait tronquée en silence")
+
     return (not defauts), defauts
 
 

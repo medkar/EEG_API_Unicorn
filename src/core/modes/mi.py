@@ -509,7 +509,7 @@ def _selftest():
         chk(set(rt.output()) == {"intent_index", "label", "confidence", "probas", "threshold"},
             f"la sortie du moteur porte exactement les clés attendues ({sorted(rt.output())})")
 
-        # 9. `channels()` est appelé à CHAQUE `snapshot()` qui appelle `state()`, donc 10 fois par
+        # 10. `channels()` est appelé à CHAQUE `snapshot()` qui appelle `state()`, donc 10 fois par
         # seconde par la console. La version héritée passait par `_channels(params)`, qui RELIT
         # le modèle sur disque — 0,348 ms mesurées, et surtout un retour SILENCIEUX à trois
         # classes par défaut si le fichier a bougé. Inerte jusqu'ici ; atteignable dès que la
@@ -524,10 +524,12 @@ def _selftest():
         with open(chemin_test_2classes, "wb") as f:
             f.write(b"")
 
-        # Construis les paramètres du runtime avec les défauts, en remplaçant juste model
-        values_2c = {p.key: p.default if hasattr(p, "default") else
-                     p.choices_fn()[0] if hasattr(p, "choices_fn") else None
-                     for p in SPEC.params}
+        # Construis les paramètres du runtime avec les défauts, en remplaçant juste model.
+        # `default_now()` est la même résolution que `ModeSpec.defaults()` — pas besoin de la
+        # réinventer ici : `Param` est un dataclass, `hasattr(p, "default")` vaut donc TOUJOURS
+        # vrai (le champ existe, valant None au pire), et les deux branches `hasattr` qui
+        # suivaient étaient mortes : la seconde (`choices_fn`) n'était jamais atteinte.
+        values_2c = {p.key: p.default_now() for p in SPEC.params}
         values_2c["model"] = chemin_test_2classes
 
         # Crée le runtime avec le mock. Compte les appels à `charger` pour prouver que
@@ -573,7 +575,7 @@ def _selftest():
         finally:
             _os.rename(chemin_modele + ".deplace", chemin_modele)
 
-        # 10. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
+        # 11. min_votes ne peut pas dépasser vote_len : au-delà, aucun vote ne peut plus jamais
         # aboutir, et le mode ne décide plus rien — en silence, la panne type de ce produit.
         _v, raison = validate(SPEC, {"vote_len": 3, "min_votes": 10})
         chk(raison is not None and "3" in raison and "10" in raison,
