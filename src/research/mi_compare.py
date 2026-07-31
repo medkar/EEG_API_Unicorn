@@ -3,13 +3,14 @@
 CV « par essai » (GroupKFold : les fenêtres d'un même essai restent ensemble -> pas de fuite
 -> estimation honnête). Sert à choisir la méthode sur TES données réelles après calibration.
 
-    python src/research/mi_compare.py                    # data/mi_calib_last.npz
+    python src/research/mi_compare.py                    # le mi_calib_*.npz le PLUS RÉCENT de data/
     python src/research/mi_compare.py --drop 10           # ignore les 10 premiers essais (échauffement)
     python src/research/mi_compare.py --sweep             # teste l'hypothèse "meilleur à la fin"
     python src/research/mi_compare.py chemin/vers.npz
 """
 
 import argparse
+import glob
 import os
 import sys
 
@@ -19,6 +20,20 @@ from sklearn.model_selection import GroupKFold, cross_val_score
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import DATA_DIR, MI_REREF, MI_WINDOW_S, use_utf8_console  # noqa: E402
 from core.mi_decoder import MI_BAND, bandpass, build_pipe, reref  # noqa: E402
+
+
+def plus_recent(dossier=DATA_DIR):
+    """Le `mi_calib_*.npz` le plus récent de `dossier`, ou None s'il n'y en a aucun.
+
+    La calibration jouée par le moteur (`core/modes/mi_calib.py`) horodate chaque enregistrement
+    — `mi_calib_last.npz`, le nom FIXE que ce chantier a supprimé, n'existe plus que sur les
+    postes où l'ancien écran pygame archivé a tourné. Pointer dessus par défaut analyserait cette
+    séance périmée indéfiniment, sans jamais le dire : ici, le PLUS RÉCENT par date de fichier,
+    quel que soit son nom, et l'appelant DIT lequel il a retenu (cf. `__main__`).
+    """
+    chemins = sorted(glob.glob(os.path.join(dossier, "mi_calib_*.npz")),
+                     key=os.path.getmtime, reverse=True)
+    return chemins[0] if chemins else None
 
 
 def _windows(epochs, labels, fs):
@@ -65,9 +80,20 @@ def sweep(path):
 if __name__ == "__main__":
     use_utf8_console()
     p = argparse.ArgumentParser(description="Comparaison méthodes MI (EEG_API_Unicorn).")
-    p.add_argument("path", nargs="?", help="fichier .npz (défaut : data/mi_calib_last.npz)")
+    p.add_argument("path", nargs="?",
+                   help="fichier .npz (défaut : le mi_calib_*.npz le plus récent de data/)")
     p.add_argument("--drop", type=int, default=0, help="ignore les N premiers essais")
     p.add_argument("--sweep", action="store_true", help="analyse échauffement (drop + moitiés)")
     a = p.parse_args(sys.argv[1:])
-    path = a.path or os.path.join(DATA_DIR, "mi_calib_last.npz")
+    path = a.path
+    if path is None:
+        # Choisi EN SILENCE, ce fichier analyserait indéfiniment une séance périmée sans jamais
+        # le dire (cf. docstring de `plus_recent`) : dire lequel a été retenu n'est pas facultatif.
+        path = plus_recent(DATA_DIR)
+        if path is None:
+            print(f"[mi-compare] aucun mi_calib_*.npz dans {DATA_DIR} — calibre d'abord "
+                  f"(console, page Motor Imagery, bouton « Calibrer »), ou passe un chemin en argument")
+            sys.exit(1)
+        print(f"[mi-compare] aucun fichier donné — le plus récent retenu : "
+              f"{os.path.basename(path)}")
     sweep(path) if a.sweep else compare(path, a.drop)
