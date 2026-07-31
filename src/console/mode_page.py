@@ -37,6 +37,15 @@ class ModePage(QWidget):
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
+        # Le bouton n'existe que si le CONTRAT dit que ce mode se calibre depuis la console. Rien
+        # ici ne sait qu'un MI s'entraîne et qu'un SSVEP non : c'est `Calib.kind` qui le dit.
+        calib = spec.get("calibration") or {}
+        self.bouton_calibrer = None
+        if calib.get("kind") == "console":
+            self.bouton_calibrer = QPushButton("Calibrer")
+            self.bouton_calibrer.clicked.connect(
+                lambda: console.show_calibration(self.mode_id))
+            entete.addWidget(self.bouton_calibrer)
         entete.addStretch(1)
         self.etat = QLabel("")
         entete.addWidget(self.etat)
@@ -154,3 +163,17 @@ class ModePage(QWidget):
             self._derniers_params = dict(params)
             self._remplir_extrait(params)
             self.formulaire.set_values(params)
+
+    def rafraichir_choix(self):
+        """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).
+
+        Appelée sur ÉVÉNEMENT — entrée dans la page, retour d'une calibration — jamais dans le
+        rafraîchissement périodique : résoudre ces choix lit le disque, et le faire dix fois par
+        seconde a déjà coûté 30 % d'un cœur à ce projet.
+        """
+        spec = registry.get(self.mode_id)
+        if spec is None:
+            return
+        for param in spec.params:
+            if param.choices_fn is not None:
+                self.formulaire.set_choices(param.key, param.choices_now())

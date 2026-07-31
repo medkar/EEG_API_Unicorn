@@ -89,6 +89,15 @@ class ParamsForm(QWidget):
         if kind == "choice":
             champ = QComboBox()
             champ.addItems([str(c) for c in param["choices"]])
+            # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément —
+            # c'était invisible tant que tous les « choice » du projet avaient leur défaut EN
+            # PREMIÈRE position (`model`, dont le défaut est toujours choices_now()[0]). La
+            # calibration MI est le premier à déclarer un défaut ailleurs dans la liste
+            # (`trials_per_class` vaut MI_SESSIONS[1]) : sans cette ligne, le formulaire
+            # affichait 10 essais/classe alors que le contrat dit « commence par la valeur par
+            # défaut » (14) — un mensonge visuel dès la première ouverture de la page.
+            if param["default"] is not None:
+                champ.setCurrentText(str(param["default"]))
             return champ
         if kind == "float_list":
             # Une ligne de valeurs séparées par des virgules : c'est la MÊME écriture que
@@ -168,7 +177,16 @@ class ParamsForm(QWidget):
             if param["kind"] == "bool":
                 out[param["key"]] = champ.isChecked()
             elif param["kind"] == "choice":
-                out[param["key"]] = champ.currentText()
+                # `currentText()` ne rend jamais qu'une CHAÎNE — correct pour `model`, dont les
+                # choix SONT des chaînes (des chemins), mais faux pour `trials_per_class` (la
+                # calibration MI), dont les choix sont des ENTIERS (10, 14, 18, 26) : soumettre
+                # "14" au lieu de 14 est refusé par `contract.validate` (`"14" not in (10, 14,
+                # 18, 26)`), en silence pour l'étudiant jusqu'à ce qu'il lise le refus. On
+                # retrouve donc le choix d'ORIGINE par sa représentation textuelle, pour rendre
+                # au moteur le type qu'il a lui-même déclaré dans `param["choices"]`.
+                texte = champ.currentText()
+                correspond = [c for c in param["choices"] if str(c) == texte]
+                out[param["key"]] = correspond[0] if correspond else texte
             elif param["kind"] == "float_list":
                 morceaux = [m.strip() for m in champ.text().split(",") if m.strip()]
                 try:
@@ -199,3 +217,27 @@ class ParamsForm(QWidget):
         self.avertissement.setText(texte or "")
         if texte:
             self.refus.setText("")
+
+    def set_choices(self, cle, choix, garder=True):
+        """Recharge la liste d'un champ « choice » sans reconstruire le formulaire.
+
+        Nécessaire parce qu'une calibration fait APPARAÎTRE un modèle : la liste résolue à
+        l'ouverture de la page devient fausse à la seconde où la séance se termine, et
+        reconstruire tout le formulaire perdrait la saisie en cours dans les autres champs.
+
+        ⚠️ N'est PAS appelée à chaque rafraîchissement : résoudre les choix du réglage `model`
+        lit le disque (`joblib.load` par fichier). Une version antérieure de ce projet a mis
+        30 % d'un cœur sur le fil Qt en résolvant un catalogue dix fois par seconde. On appelle
+        ceci sur ÉVÉNEMENT — entrée dans la page, fin d'une calibration.
+        """
+        champ = self.champs.get(cle)
+        param = self._params_par_cle.get(cle)
+        if champ is None or param is None or param["kind"] != "choice":
+            return
+        courant = champ.currentText()
+        champ.blockSignals(True)
+        champ.clear()
+        champ.addItems([str(c) for c in choix])
+        if garder and courant in [str(c) for c in choix]:
+            champ.setCurrentText(courant)
+        champ.blockSignals(False)

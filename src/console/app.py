@@ -50,6 +50,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,  # noq
                                QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
+from console.beeps import Beeps  # noqa: E402
+from console.calib_page import CalibPage  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
@@ -84,6 +86,20 @@ class Console(QMainWindow):
             page = ModePage(spec, self)
             page.retour.connect(self.show_grid)
             self.pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
+        # Une page de calibration par mode qui se calibre DEPUIS la console. Les autres (c-VEP,
+        # P300 : stimulus verrouillé à la frame) n'en ont pas — leur contrat le dit, et le moteur
+        # refuserait la commande de toute façon.
+        self.beeps = Beeps()
+        self.calib_pages = {}
+        for spec in registry.catalog():
+            calib = spec.get("calibration") or {}
+            if calib.get("kind") != "console" or spec["status"] != "moteur":
+                continue
+            page = CalibPage(spec, self)
+            page.retour.connect(self.show_grid)
+            self.calib_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
         central = QWidget()
@@ -139,9 +155,17 @@ class Console(QMainWindow):
     def show_grid(self):
         self.stack.setCurrentWidget(self.grid)
 
+    def show_calibration(self, mode_id):
+        page = self.calib_pages.get(mode_id)
+        if page is not None:
+            self.stack.setCurrentWidget(page)
+
     def show_mode(self, mode_id):
         page = self.pages.get(mode_id)
         if page is not None:
+            # Entrer dans la page est l'événement qui justifie de relire le disque : c'est là
+            # qu'un modèle fraîchement entraîné doit apparaître dans la liste.
+            page.rafraichir_choix()
             self.stack.setCurrentWidget(page)
 
 
@@ -162,6 +186,7 @@ def fake_state():
         "quality": {"sigmas": [7.2, 8.1, 6.9, 9.4, 5.5, 11.2, 6.1, 7.8],
                     "verdicts": ["ok"] * 8, "common_mode": 0.38, "reference_lost": False},
         "rest_instruction": "",
+        "calibration": None,
         "modes_state": {
             "raw": {"id": "raw", "label": "Brut", "family": "brut", "phase": "running",
                     "published": True, "params": {}, "instruction": "", "stream": "raw",
@@ -436,6 +461,86 @@ def _smoke():
     mi_page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et le MI ramène aussi sur la grille")
 
+    # --- la page de calibration -------------------------------------------------
+    # Elle est éprouvée sur des états FABRIQUÉS, phase par phase : c'est le seul moyen de
+    # vérifier chaque écran sans jouer sept minutes de séance.
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+    chk(cal is console.calib_pages["mi"], "« Calibrer » ouvre la page de calibration du MI")
+    chk(len(console.calib_pages) == 1,
+        f"et seul le MI en a une — le c-VEP et le P300 ont un stimulus natif "
+        f"({sorted(console.calib_pages)})")
+
+    # 1. Avant : le briefing du CONTRAT, pas un texte recopié dans l'interface.
+    console.apply_state({**mi_state, "calibration": None})
+    from core.modes import mi_calib
+    chk(mi_calib.BRIEFING[0] in cal.briefing.text(),
+        "le briefing affiché vient du contrat du mode")
+    chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
+
+    moteur_faux.commandes.clear()
+    cal.bouton_commencer.click()
+    envoyees = [c for c in moteur_faux.commandes if c[0] == "start_calibration"]
+    chk(envoyees and envoyees[0][1]["id"] == "mi"
+        and "trials_per_class" in envoyees[0][1]["params"],
+        f"cliquer « Commencer » soumet start_calibration avec la durée choisie ({envoyees})")
+
+    # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
+    en_cours = {**mi_state, "calibration": {
+        "mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "essais",
+        "etape": "imagerie", "classe": "GAUCHE",
+        "instruction": "Imagine : SERRE le POING GAUCHE", "rappel": "sens le serrement",
+        "essai": 7, "total": 42, "restant_s": 2.4, "duree_estimee_s": 400.0,
+        "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+        "resultat": None, "probleme": ""}}
+    console.apply_state(en_cours)
+    chk("SERRE le POING GAUCHE" in cal.consigne.text(),
+        f"la consigne du moteur est affichée telle quelle ({cal.consigne.text()})")
+    chk("2.4" in cal.decompte.text() or "2,4" in cal.decompte.text(),
+        f"le décompte vient du moteur, pas d'un timer local ({cal.decompte.text()})")
+    chk("7" in cal.progression.text() and "42" in cal.progression.text(),
+        f"et la progression nomme les deux nombres ({cal.progression.text()})")
+    chk(not cal.formulaire.isEnabled(),
+        "le formulaire est verrouillé pendant la séance : le changer n'aurait aucun effet")
+
+    moteur_faux.commandes.clear()
+    cal.bouton_abandon.click()
+    chk(("cancel_calibration", {}) in moteur_faux.commandes,
+        f"« Abandonner » passe par la file de commandes ({moteur_faux.commandes})")
+
+    # 3. Après : l'accuracy HONNÊTE, le hasard à côté, et la phrase qui dit ce que ça vaut.
+    fini = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "fini",
+            "etape": "", "classe": "", "instruction": "", "restant_s": 0.0,
+            "resultat": {"modele": "/tmp/mi_model_20260730-141205.joblib",
+                         "nom": "mi_model_20260730-141205.joblib",
+                         "enregistrement": "/tmp/mi_calib_20260730-141205_n42.npz",
+                         "n_essais": 42, "n_fenetres": 126, "cv_groupee": 0.401,
+                         "cv_naive": 0.556, "hasard": 1 / 3,
+                         "classes": ["GAUCHE", "DROITE", "REPOS"],
+                         "verdict": "FAIBLE — ré-essaie"}}}
+    console.apply_state(fini)
+    chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
+        f"l'accuracy affichée est l'HONNÊTE ({cal.resultat.text()})")
+    chk("55.6" not in cal.resultat.text() and "55,6" not in cal.resultat.text(),
+        f"et JAMAIS la naïve, qui est gonflée de 10 à 16 points ({cal.resultat.text()})")
+    chk("33" in cal.resultat.text(),
+        f"le niveau du hasard est à côté — sans lui, 40 % ne veut rien dire ({cal.resultat.text()})")
+    chk("mi_model_20260730-141205.joblib" in cal.details.text(),
+        f"le nom du modèle produit est donné ({cal.details.text()})")
+    chk("séance de référence" in cal.honnetete.text(),
+        "et la page dit franchement ce qu'un résultat modeste signifie")
+
+    # 4. Abandon : pas de modèle, et la raison.
+    annule = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "annule",
+              "resultat": None, "probleme": "ValueError : pas assez de données"}}
+    console.apply_state(annule)
+    chk("pas assez de données" in cal.resultat.text(),
+        f"une calibration annulée dit pourquoi ({cal.resultat.text()})")
+
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid,
+        "et la page de calibration ramène sur la grille")
+
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
     # soumission, sans avoir besoin de la boucle.
@@ -535,6 +640,29 @@ def _smoke():
     chk(reelle.pages["raw"].formulaire.vide is not None
         and reelle.pages["raw"].formulaire.vide.isVisibleTo(reelle.pages["raw"]),
         "et le formulaire l'écrit, au lieu de laisser un cadre vide")
+
+    # --- régression : un « choice » NUMÉRIQUE round-trip son TYPE, contre le VRAI validateur ----
+    # Trouvé en écrivant cette page, AVANT tout écran : `trials_per_class` (calibration MI) est le
+    # premier « choice » du projet dont le défaut n'est PAS le premier choix (MI_SESSIONS[1] = 14,
+    # pas 10) et dont les choix sont des ENTIERS, pas des chemins de fichiers (`model`, le seul
+    # autre « choice » existant). `ParamsForm` ne couvrait ni l'un ni l'autre cas : le QComboBox
+    # affichait le PREMIER choix (10, pas 14) et `values()` rendait toujours une CHAÎNE ("10"),
+    # que `contract.validate` refuse contre (10, 14, 18, 26) — des entiers. Corrigés dans
+    # `params_form.py` (`_champ` et `values`) ; vérifié ici contre le VRAI validateur — le moteur
+    # FACTICE du bloc « calibration » plus haut n'appelle jamais `contract.validate` et n'aurait
+    # rien détecté.
+    cal_reelle = reelle.calib_pages["mi"]
+    chk(cal_reelle.formulaire.champs["trials_per_class"].currentText() == "14",
+        f"le formulaire de calibration affiche le DÉFAUT déclaré (14), pas le premier choix "
+        f"({cal_reelle.formulaire.champs['trials_per_class'].currentText()})")
+    valeurs_calib = cal_reelle.formulaire.values()
+    chk(valeurs_calib["trials_per_class"] == 14
+        and isinstance(valeurs_calib["trials_per_class"], int),
+        f"et rend un ENTIER, pas '14' — sinon le moteur le refuse comme choix invalide "
+        f"({valeurs_calib['trials_per_class']!r})")
+    ack_calib = reelle.commande("start_calibration", id="mi", params=valeurs_calib)
+    chk(ack_calib.get("accepted"),
+        f"soumis au VRAI validateur (pas au moteur factice), ce défaut est accepté ({ack_calib})")
 
     # Les tracés, contre un vrai tampon. `recent_window` rend une COPIE : la modifier ne doit
     # rien changer au moteur — c'est ce qui protège l'acquisition du fil Qt.
