@@ -530,6 +530,31 @@ def _smoke():
     chk("séance de référence" in cal.honnetete.text(),
         "et la page dit franchement ce qu'un résultat modeste signifie")
 
+    # 3bis. Après, mais SANS CV honnête mesurable (B2) : `cv_groupee: None` — pas assez d'essais
+    # DISTINCTS par classe pour former deux plis, cf. mi_calib.py. C'est le pendant console d'un
+    # défaut déjà corrigé côté moteur : `calib_page.py` avait son PROPRE effondrement en 0.0,
+    # indépendant de celui du moteur — corrigé, cette page-ci ne doit JAMAIS afficher « 0 % »,
+    # un diagnostic (contact des électrodes, immobilité…) qui n'a aucun rapport avec la vraie
+    # cause. Elle doit montrer la raison à la place.
+    sans_cv = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "fini",
+              "etape": "", "classe": "", "instruction": "", "restant_s": 0.0,
+              "resultat": {"modele": "/tmp/mi_model_20260731-090000.joblib",
+                           "nom": "mi_model_20260731-090000.joblib",
+                           "enregistrement": "/tmp/mi_calib_20260731-090000_n06.npz",
+                           "n_essais": 6, "n_fenetres": 18, "cv_groupee": None,
+                           "cv_naive": 0.50, "hasard": 1 / 3,
+                           "classes": ["GAUCHE", "DROITE", "REPOS"],
+                           "verdict": "justesse non mesurable : pas assez d'essais distincts "
+                                      "par classe pour une validation croisée"}}}
+    console.apply_state(sans_cv)
+    chk("non mesurable" in cal.resultat.text(),
+        f"une CV absente affiche la RAISON en clair, jamais un chiffre inventé "
+        f"({cal.resultat.text()})")
+    chk("0.0" not in cal.resultat.text() and "0,0" not in cal.resultat.text()
+        and "0 %" not in cal.resultat.text(),
+        f"et surtout pas « 0 % » — le second effondrement, indépendant de celui du moteur, que "
+        f"ce correctif ferme ({cal.resultat.text()})")
+
     # 4. Abandon : pas de modèle, et la raison.
     annule = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "annule",
               "resultat": None, "probleme": "ValueError : pas assez de données"}}
@@ -599,6 +624,55 @@ def _smoke():
     cal.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid,
         "et la page de calibration ramène sur la grille, après ce test aussi")
+
+    # --- régression : le premier top d'une séance RELANCÉE après un ABANDON (B1) ---------------
+    # `cancel()` (core/modes/calibration.py) pose l'étape vide ET la phase terminale dans le MÊME
+    # appel : contrairement à la fin NORMALE (qui traverse la phase "entrainement", non
+    # terminale, étape vide — capturée par `_maybe_beep` toute seule), il n'existe donc AUCUN état
+    # intermédiaire où `en_cours` est vrai avec une étape vide à observer. Sans remise à zéro
+    # explicite de `_etape_precedente`, la page (jamais recréée : elle vit tant que la console
+    # tourne) reste bloquée sur la dernière étape non vide vue avant l'abandon — ici "cue" — et le
+    # tout premier top de la séance SUIVANTE ne sonnerait pas. Silencieusement, sans rapport avec
+    # le tirage : l'étudiant relance justement pour de MEILLEURES données après avoir repéré une
+    # électrode mal placée pendant la mise en route, et perd le seul repère qui lui évite de LIRE
+    # l'instruction à l'écran — la contamination du regard que les tops existent pour empêcher.
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
+                "essai": 0, "total": 42, "duree_estimee_s": 400.0,
+                "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+                "resultat": None, "probleme": ""}
+
+        # Première séance : elle sonne son premier top, pendant la mise en route (échauffement)
+        # — le moment le plus probable pour s'apercevoir d'une électrode mal placée...
+        premier_cue = {**base, "etape": "cue", "classe": "GAUCHE",
+                       "instruction": "Imagine : GAUCHE", "rappel": "", "restant_s": 3.0}
+        console.apply_state({**mi_state, "calibration": premier_cue})
+        chk(console.beeps.appels == ["GAUCHE"],
+            f"la première séance sonne son premier top normalement ({console.beeps.appels})")
+
+        # ...et qu'on ABANDONNE EN PLEIN dedans : le moteur livre directement l'état terminal,
+        # comme `cancel()` le fait réellement — jamais d'étape vide non terminale entre les deux.
+        annule = {**base, "phase": "annule", "etape": "", "classe": "",
+                 "instruction": "", "rappel": "", "restant_s": 0.0}
+        console.apply_state({**mi_state, "calibration": annule})
+
+        # Relance, sur la MÊME page : son tout premier "cue" doit sonner, sans exception.
+        console.beeps.appels = []
+        cue_relance = {**base, "etape": "cue", "classe": "DROITE",
+                       "instruction": "Imagine : DROITE", "rappel": "", "restant_s": 3.0}
+        console.apply_state({**mi_state, "calibration": cue_relance})
+        chk(console.beeps.appels == ["DROITE"],
+            f"et le premier top de la séance RELANCÉE après un abandon sonne aussi — pas muet "
+            f"({console.beeps.appels})")
+    finally:
+        console.beeps = vrais_beeps
+
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid,
+        "et la page de calibration ramène sur la grille, après l'abandon aussi")
 
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la

@@ -218,11 +218,18 @@ class CalibPage(QWidget):
         else:
             self.duree.setText("")
 
-        # Rien à remettre à zéro ici quand la séance s'arrête : `_maybe_beep` n'est appelée que
-        # si `en_cours`, et le moteur ne quitte JAMAIS `etape == "cue"` directement vers une
-        # phase terminale — `_pas_essai`/`_commencer_essais`/`_terminer` posent tous `etape = ""`
-        # avant `entrainement`/`fini`/`annule` (cf. core/modes/calibration.py). `_etape_precedente`
-        # ne peut donc jamais valoir « cue » au moment où une NOUVELLE séance commence.
+        # Remettre `_etape_precedente` à zéro dès qu'AUCUNE séance ne tourne. Ça semble redondant
+        # pour la fin NORMALE : `_pas_essai`/`_commencer_essais`/`_terminer` posent tous
+        # `etape = ""` AVANT `entrainement`/`fini` (cf. core/modes/calibration.py), donc un poll
+        # voit cette étape vide pendant que `en_cours` est ENCORE vrai (phase "entrainement" n'est
+        # pas terminale), et `_maybe_beep` la capture déjà toute seule. Mais c'est FAUX pour
+        # l'abandon : `cancel()` pose `etape = ""` ET la phase terminale dans le MÊME appel — il
+        # n'existe donc AUCUN poll où `en_cours` est vrai avec une étape vide à observer.
+        # `_etape_precedente` resterait alors bloqué sur la dernière étape non vide vue avant
+        # l'abandon (souvent "cue"), et le tout premier top d'une séance relancée ensuite ne
+        # sonnerait pas — silencieusement, sans rapport avec le tirage. Remettre ICI, hors du
+        # `if en_cours`, couvre les DEUX sorties (fin normale et abandon) par le même geste, sans
+        # dépendre de la manière dont chacune est sortie.
         if en_cours:
             self._maybe_beep(calib_state)
             self.consigne.setText(calib_state.get("instruction") or "")
@@ -234,13 +241,31 @@ class CalibPage(QWidget):
             self.progression.setText(f"essai {essai} sur {total}")
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(essai, max(total, 1)))
+        else:
+            self._etape_precedente = None
 
         if termine:
             resultat = calib_state.get("resultat")
-            if resultat is not None:
+            if resultat is not None and resultat.get("cv_groupee") is None:
+                # `cv_groupee` vaut `None`, jamais 0.0, quand la CV honnête n'a pas pu être
+                # calculée (pas assez d'essais distincts par classe pour former deux plis) — cf.
+                # `mi_calib.py`. `float(None or 0.0)` afficherait « 0 % » : un diagnostic précis
+                # (contact des électrodes, immobilité…) et SANS RAPPORT avec la vraie cause. Le
+                # `verdict` du moteur porte déjà la raison en clair dans ce cas (« justesse non
+                # mesurable : … ») — l'afficher SEUL évite de le faire suivre d'un chiffre qui
+                # n'existe pas.
+                self.resultat.setText(resultat.get("verdict", ""))
+                self.details.setText(
+                    f"Modèle : {resultat.get('nom', '')}\n"
+                    f"{resultat.get('n_essais', 0)} essais enregistrés, "
+                    f"{resultat.get('n_fenetres', 0)} fenêtres d'entraînement — classes : "
+                    f"{', '.join(resultat.get('classes') or [])}")
+                # Rien à mettre en garde : sans accuracy, il n'y a rien à sur-interpréter.
+                self.honnetete.setVisible(False)
+            elif resultat is not None:
                 # `cv_groupee` — jamais `cv_naive` (gonflée de 10 à 16 points, cf. HONNETETE) —
                 # et le niveau du hasard À CÔTÉ : un « 40 % » seul ne veut rien dire.
-                cv = float(resultat.get("cv_groupee") or 0.0)
+                cv = float(resultat["cv_groupee"])
                 hasard = float(resultat.get("hasard") or 0.0)
                 self.resultat.setText(
                     f"{resultat.get('verdict', '')} — accuracy honnête (validation croisée par "
