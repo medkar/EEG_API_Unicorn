@@ -300,9 +300,16 @@ def _smoke():
     # commande au moteur. Le bouton est CLIQUÉ, pas contourné : c'est la seule façon de prouver
     # que le lambda capture le bon identifiant et le bon sens.
     moteur_faux.commandes.clear()
+    etiquette_avant_clic = console.grid.tuiles["neuro"].demarrage.text()
     console.grid.tuiles["neuro"].demarrage.click()      # neuro est arrêté dans l'état factice
     chk(("start_mode", {"id": "neuro"}) in moteur_faux.commandes,
         f"un mode arrêté se DÉMARRE depuis sa tuile ({moteur_faux.commandes})")
+    # La règle centrale du sous-système : la tuile RESSORT l'état reçu, elle n'en déduit aucun.
+    # Le clic poste une commande et rien d'autre — muter l'étiquette ICI la ferait mentir tant
+    # que le moteur (le vrai, pas ce double factice) n'a pas réellement traité la commande.
+    chk(console.grid.tuiles["neuro"].demarrage.text() == etiquette_avant_clic,
+        f"et le clic ne mute PAS l'étiquette de sa propre tuile — seul le PROCHAIN état reçu le "
+        f"fera ({console.grid.tuiles['neuro'].demarrage.text()})")
     chk(console.grid.tuiles["ssvep"].demarrage.text() == "Arrêter",
         f"et un mode qui décode propose « Arrêter » "
         f"({console.grid.tuiles['ssvep'].demarrage.text()})")
@@ -479,11 +486,16 @@ def _smoke():
     chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
 
     moteur_faux.commandes.clear()
+    # Capturé AVANT le clic : c'est ce que le formulaire contient RÉELLEMENT en ce moment, pas une
+    # valeur supposée — un formulaire qui soumettrait 999 en dur, peu importe ce qu'il affiche,
+    # doit faire échouer la comparaison ci-dessous.
+    valeurs_formulaire = cal.formulaire.values()
     cal.bouton_commencer.click()
     envoyees = [c for c in moteur_faux.commandes if c[0] == "start_calibration"]
     chk(envoyees and envoyees[0][1]["id"] == "mi"
-        and "trials_per_class" in envoyees[0][1]["params"],
-        f"cliquer « Commencer » soumet start_calibration avec la durée choisie ({envoyees})")
+        and envoyees[0][1]["params"] == valeurs_formulaire,
+        f"cliquer « Commencer » soumet EXACTEMENT ce que le formulaire contenait ({envoyees} "
+        f"pour un formulaire à {valeurs_formulaire})")
 
     # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
     en_cours = {**mi_state, "calibration": {
@@ -498,8 +510,10 @@ def _smoke():
         f"la consigne du moteur est affichée telle quelle ({cal.consigne.text()})")
     chk("2.4" in cal.decompte.text() or "2,4" in cal.decompte.text(),
         f"le décompte vient du moteur, pas d'un timer local ({cal.decompte.text()})")
-    chk("7" in cal.progression.text() and "42" in cal.progression.text(),
-        f"et la progression nomme les deux nombres ({cal.progression.text()})")
+    # Égalité, pas sous-chaîne : un mutant qui inverserait en « essai 42 sur 7 » contient
+    # toujours « 7 » et « 42 » et passerait un test par `in`.
+    chk(cal.progression.text() == "essai 7 sur 42",
+        f"et la progression nomme les deux nombres, à l'identique ({cal.progression.text()!r})")
     chk(not cal.formulaire.isEnabled(),
         "le formulaire est verrouillé pendant la séance : le changer n'aurait aucun effet")
 

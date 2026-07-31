@@ -96,6 +96,10 @@ class ModeTile(QFrame):
         self.apercu = MiniBars()
         self.publie = QCheckBox("publié")
         self._arrete = True
+        # Démarrer / arrêter. Le moteur possède déjà les deux commandes et les valide (mode
+        # inconnu, déjà démarré, réglages invalides) : la tuile ne fait que les poster. Elle
+        # n'affiche AUCUN état déduit — c'est le prochain `snapshot()` qui dira ce qui s'est
+        # réellement passé.
         self.demarrage = QPushButton("Démarrer")
         self.demarrage.clicked.connect(
             lambda: self.demarrer.emit(self.spec["id"], self._arrete))
