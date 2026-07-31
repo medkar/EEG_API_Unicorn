@@ -739,7 +739,15 @@ class EngineServer:
         buffer = self.recent
         if buffer is None or len(buffer) == 0:
             return None
-        n = max(1, int(seconds * self.acq.fs))
+        # `int(round(...))`, PAS `int(...)` : la garde de longueur côté calibration
+        # (`CalibrationRuntime._pas_essai`, `attendu = int(round(self.imagery_s * fs))`) arrondit
+        # déjà, comme le fait tout le reste du fichier pour cette même conversion
+        # (`motor_window`, `occipital_window`, `window_n`, `margin_n`…). Tronquer ICI aurait
+        # rendu `n` strictement INFÉRIEUR à `attendu` dès que `seconds * fs` a une partie
+        # fractionnaire >= 0,5 — et donc TOUS les essais auraient été écartés comme « tampon pas
+        # rempli », jamais un seul. Inatteignable à 4,0 s × 250 Hz (produit entier), mais
+        # `imagery_s` est explicitement conçue pour être raccourcie (cf. les smokes de test).
+        n = max(1, int(round(seconds * self.acq.fs)))
         return np.array(buffer[-n:], dtype=float, copy=True)
 
     def _publish_quality(self, lsl_ts):
