@@ -28,6 +28,12 @@ from core.config import use_utf8_console  # noqa: E402
 # `snapshot()["calibration"]["phase"]` : la console les traduit, elle n'en invente aucune.
 PHASES = ("chauffe", "echauffement", "essais", "entrainement", "fini", "annule")
 
+# Le sous-ensemble TERMINAL de PHASES — dérivé d'elle, pas recopié : `terminee` (juste plus bas)
+# s'en sert, et c'est la constante que la console doit IMPORTER plutôt que redéclarer sa propre
+# copie de ("fini", "annule") (le « catalogue recopié » que CLAUDE.md interdit — renommer une
+# phase ici sans y penser laisserait la console sans écran de résultat).
+PHASES_TERMINALES = PHASES[-2:]
+
 # Les étapes À L'INTÉRIEUR d'un essai.
 ETAPES = ("cue", "imagerie", "repos")
 
@@ -85,7 +91,7 @@ class CalibrationRuntime:
 
     @property
     def terminee(self):
-        return self.phase in ("fini", "annule")
+        return self.phase in PHASES_TERMINALES
 
     def trials_per_class(self):
         return int(self.params.get("trials_per_class", 0))
@@ -111,6 +117,18 @@ class CalibrationRuntime:
         if not self.terminee:
             self.phase = "annule"
             self.etape, self.classe, self._echeance = "", "", None
+        # `run()` (server.py) casse le cycle self.active <-> ModeRuntime.engine en vidant
+        # `self.active` — mais pour la calibration, son commentaire promettait ce nettoyage à
+        # CETTE méthode alors que c'était en réalité `self.calibration = None`, LÀ-BAS, qui
+        # faisait tout le travail : `cancel()` ne libérait ni `self.engine` (une référence vers
+        # le moteur ENTIER) ni les époques déjà enregistrées (plusieurs minutes de signal, mortes
+        # dès qu'on renonce à entraîner). Les deux sont libérées ICI, inconditionnellement — même
+        # sur une calibration déjà "fini" (le `finally` de `run()` appelle `cancel()` sans
+        # regarder `terminee`) — pour qu'un abandon EN COURS DE SÉANCE (`cancel_calibration`,
+        # sans arrêt du moteur) ne les garde pas vivantes jusqu'au prochain passage du
+        # ramasse-miettes cyclique.
+        self._enregistre = []
+        self.engine = None
 
     def tick(self, engine, now):
         """Un pas. Appelé par la boucle du moteur, jamais par une interface."""
@@ -213,10 +231,19 @@ class CalibrationRuntime:
     # --- l'état, pour l'afficheur -------------------------------------------
 
     def restant_s(self, now):
-        """Secondes restantes sur l'étape en cours. 0 quand il n'y a rien à décompter."""
-        if self._echeance is None:
+        """Secondes restantes sur l'étape en cours. 0 quand il n'y a rien à décompter.
+
+        ⚠️ Copie LOCALE de `self._echeance` avant de la tester : `state()` (donc cette méthode)
+        est appelée depuis le fil de l'afficheur (cf. sa docstring) pendant que la boucle du
+        moteur peut la remettre à `None` entre-temps — dans `cancel()` et `_terminer()`. Sans
+        cette copie, `self._echeance` pourrait valoir `None` ici même après avoir passé le test
+        `is None` juste au-dessus : `None - now` lève `TypeError` chez l'appelant. Même motif
+        que `_status_key` dans `server.py`.
+        """
+        echeance = self._echeance
+        if echeance is None:
             return 0.0
-        return max(0.0, self._echeance - now)
+        return max(0.0, echeance - now)
 
     def state(self, now=None):
         """L'état complet, en dictionnaire JSON-able. Sûr depuis un autre fil.
@@ -363,11 +390,38 @@ def _selftest():
     chk(rt3.phase == "annule" and "pas assez de données" in rt3.probleme,
         f"un entraînement qui lève se solde par un refus lisible ({rt3.phase}, {rt3.probleme})")
 
-    # L'état est JSON-able : il part dans `snapshot()`, que la console sérialise.
+    # La branche « tampon pas encore rempli » : c'est elle qui décide ce qui entre dans le jeu
+    # d'entraînement, et rien ne l'exerçait. Le moteur rend une fenêtre plus COURTE que demandée
+    # au TOUT PREMIER prélèvement (`recent_window` n'est appelée que pendant "essais", jamais
+    # pendant l'échauffement — vérifié plus haut — donc son premier appel EST le premier essai de
+    # cette phase) ; l'essai correspondant doit être ignoré, sans faire échouer la séance.
+    class _MoteurTronque(_FauxMoteur):
+        def recent_window(self, seconds):
+            fenetre = super().recent_window(seconds)
+            return fenetre[:-1] if len(self.demandes) == 1 else fenetre
+
+    rt4 = _Essai(spec, {"trials_per_class": 3}, _MoteurTronque(), rng=_random.Random(3))
+    t = 0.0
+    for _ in range(4000):
+        rt4.tick(rt4.engine, t)
+        if rt4.terminee:
+            break
+        t += 0.25
+    chk(rt4.phase == "fini" and rt4.essai == rt4.total() - 1,
+        f"un tampon pas encore rempli au premier essai en ignore UN, pas plus "
+        f"({rt4.essai} sur {rt4.total()})")
+
+    # L'état est JSON-able : il part dans `snapshot()`, que la console sérialise. `chk(True, ...)`
+    # ne prouverait rien par elle-même (un `json.dumps` qui lève ferait planter la ligne d'AVANT,
+    # jamais échouer celle-ci) : on capture donc le VRAI résultat de la sérialisation.
     import json
 
-    json.dumps(rt.state(now=t))
-    chk(True, "l'état est sérialisable en JSON")
+    try:
+        json.dumps(rt.state(now=t))
+        serialisable = True
+    except (TypeError, ValueError):
+        serialisable = False
+    chk(serialisable, "l'état est sérialisable en JSON")
     etat = rt.state(now=t)
     chk(set(etat) >= {"phase", "etape", "classe", "instruction", "essai", "total", "restant_s",
                       "resultat", "probleme"},
