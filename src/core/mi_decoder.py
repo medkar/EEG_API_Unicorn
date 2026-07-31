@@ -29,7 +29,7 @@ from scipy.linalg import eigh
 from scipy.signal import butter, filtfilt
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,  # noqa: E402
+from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
 
@@ -344,7 +344,87 @@ def _test_cv_honnete():
         f"sans `groups`, la CV honnête reste absente au lieu d'être inventée "
         f"({sans.cv_groupee_}, {sans.n_essais_})")
 
+    # L'invariant ci-dessus (`cv_groupee_ < cv_`) ne protège PAS contre une DÉCOTE ARBITRAIRE :
+    # un faux `cv_groupee_ = 0.85 * cv_`, qui ne regarderait même pas `groups`, satisferait cette
+    # inégalité sur N'IMPORTE QUEL jeu de données. On teste donc le MÉCANISME plutôt que
+    # d'inférer sa correction depuis un agrégat — en espionnant le VRAI découpage que `fit`
+    # utilise (pas un découpage reconstruit à côté, qui ne prouverait que la sûreté de
+    # sklearn, jamais celle de `fit`) et en vérifiant qu'à CHAQUE pli, les groupes (essais)
+    # d'apprentissage et de test sont bien DISJOINTS.
+    plis_espionnes = []
+    vraie_split = StratifiedGroupKFold.split
+
+    def _split_espion(self, X_arg, y_arg=None, groups=None):
+        for train_idx, test_idx in vraie_split(self, X_arg, y_arg, groups=groups):
+            plis_espionnes.append((set(groups[train_idx]), set(groups[test_idx])))
+            yield train_idx, test_idx
+
+    StratifiedGroupKFold.split = _split_espion
+    try:
+        MIModel(fs=fs, reref_mode="none").fit(X, y, groups=groupes)
+    finally:
+        StratifiedGroupKFold.split = vraie_split
+
+    chk(len(plis_espionnes) >= 2,
+        f"le VRAI découpage utilisé par fit() a bien produit au moins 2 plis "
+        f"({len(plis_espionnes)})")
+    chk(all(not (train_g & test_g) for train_g, test_g in plis_espionnes),
+        "et à CHAQUE pli, les groupes d'apprentissage et de test sont DISJOINTS — vérifié sur "
+        "le découpage RÉELLEMENT utilisé, pas un équivalent reconstruit à côté")
+
     print(f"[mi-cv] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _test_n_splits_insuffisant():
+    """La garde `n_splits < 2` : rien ne l'exerçait, alors que sa sûreté ne tenait QUE sur une
+    coïncidence arithmétique non documentée entre deux fichiers (cf. `mi_calib._entrainer`).
+
+    Moins de 2 essais DISTINCTS pour au moins une classe doit laisser `cv_groupee_` à `None` —
+    MÊME quand cette classe a plein de FENÊTRES (un seul essai en produit plusieurs, cf.
+    `decouper`) : c'est le nombre d'essais qui compte pour la CV groupée, jamais celui des
+    fenêtres. GAUCHE et DROITE ont ici 8 essais distincts chacune (comme d'habitude) ; REPOS
+    n'en a qu'UN SEUL, découpé en 10 fenêtres — assez de fenêtres pour que la CV NAÏVE (5-fold
+    ordinaire, indifférente aux groupes) se calcule sans encombre, mais un seul groupe, donc
+    `n_splits` retomberait à 1 pour la CV groupée : sous le plancher de 2 posé par `fit`.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    rng = np.random.default_rng(0)
+    fs = 250.0
+    n_fen = int(round(2.0 * fs))          # MI_WINDOW_S -> une fenêtre MI ordinaire
+    X, y, groupes = [], [], []
+    essai = 0
+    for label in MI_CONTROL:              # ("GAUCHE", "DROITE") : 8 essais distincts chacune
+        for _ in range(8):
+            for _ in range(3):            # 3 fenêtres par essai, comme un essai réel de 4 s
+                X.append(synth_mi_trial(label, n_samp=n_fen, fs=fs, rng=rng))
+                y.append(label)
+                groupes.append(essai)
+            essai += 1
+    for _ in range(10):                   # REPOS : 10 FENÊTRES, mais un SEUL essai (le groupe
+        X.append(synth_mi_trial("REPOS", n_samp=n_fen, fs=fs, rng=rng))  # ne change pas)
+        y.append("REPOS")
+        groupes.append(essai)
+    n_essais_attendu = essai + 1          # +1 pour l'unique essai REPOS
+
+    modele = MIModel(fs=fs, reref_mode="none").fit(np.asarray(X), np.asarray(y),
+                                                    groups=np.asarray(groupes))
+    chk(modele.cv_ is not None,
+        f"la CV naïve se calcule quand même — son n_splits=5 est FIXE, indifférent aux groupes "
+        f"({modele.cv_})")
+    chk(modele.n_essais_ == n_essais_attendu,
+        f"le nombre d'essais DISTINCTS est bien recensé (17 = 8+8+1) ({modele.n_essais_})")
+    chk(modele.cv_groupee_ is None,
+        f"mais la CV honnête reste ABSENTE : REPOS n'a qu'UN essai distinct malgré ses 10 "
+        f"fenêtres, `n_splits` tomberait à 1, sous le plancher de 2 ({modele.cv_groupee_})")
+
+    print(f"[mi-cv-n_splits] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
@@ -383,5 +463,6 @@ def _demo():
 if __name__ == "__main__":
     use_utf8_console()
     ok_cv = _test_cv_honnete()
+    ok_n_splits = _test_n_splits_insuffisant()
     ok_demo = _demo()
-    sys.exit(0 if (ok_cv and ok_demo) else 1)
+    sys.exit(0 if (ok_cv and ok_n_splits and ok_demo) else 1)
