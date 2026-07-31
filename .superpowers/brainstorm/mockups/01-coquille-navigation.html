@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coquille de navigation — 3 structures</title>
+<style>
+:root{
+  --bg:#0e1014; --surface:#171a21; --surface2:#1e222b; --border:#2a2f3a;
+  --ink:#e7e9ee; --ink2:#aab1c0; --muted:#6f7788;
+  --accent:#4c8dff; --good:#4ac97e; --warn:#e0a03c; --crit:#e2603f;
+  --grid:#242935;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f6f7f9; --surface:#ffffff; --surface2:#eef0f4; --border:#d7dbe3;
+    --ink:#161a21; --ink2:#4c5566; --muted:#7d8698;
+    --grid:#e4e7ee;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+.wrap{max-width:1180px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:24px;margin:0 0 6px}
+h2{font-size:17px;margin:0 0 4px}
+.sub{color:var(--ink2);font-size:14px;margin:0 0 28px}
+.q{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);
+   border-radius:10px;padding:14px 16px;margin:0 0 30px;font-size:14px;color:var(--ink2)}
+.q b{color:var(--ink)}
+
+.opt{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+     padding:20px;margin-bottom:26px}
+.opthead{display:flex;align-items:baseline;gap:12px;margin-bottom:4px;flex-wrap:wrap}
+.letter{width:26px;height:26px;border-radius:7px;background:var(--accent);color:#fff;
+        display:grid;place-items:center;font-weight:700;font-size:14px;flex:none}
+.tag{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+     border:1px solid var(--border);border-radius:99px;padding:2px 9px}
+.desc{color:var(--ink2);font-size:14px;margin:8px 0 16px}
+
+/* --- wireframe --- */
+.wf{background:var(--bg);border:1px solid var(--grid);border-radius:10px;overflow:hidden;
+    font-size:11px;color:var(--ink2)}
+.wf-top{background:var(--surface2);border-bottom:1px solid var(--grid);padding:7px 11px;
+        display:flex;justify-content:space-between;align-items:center;font-size:11px}
+.wf-top b{color:var(--ink);font-size:12px}
+.pill{border:1px solid var(--border);border-radius:99px;padding:1px 8px;font-size:10px;color:var(--muted)}
+.wf-body{padding:12px;min-height:186px}
+.row{display:flex;gap:10px}
+
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{border:1px solid var(--grid);border-radius:8px;padding:10px 9px;background:var(--surface);
+      min-height:56px;display:flex;flex-direction:column;justify-content:space-between}
+.tile .n{color:var(--ink);font-weight:600;font-size:11.5px}
+.dot{width:6px;height:6px;border-radius:99px;display:inline-block;margin-right:5px;vertical-align:1px}
+.on{background:var(--good)} .off{background:var(--muted)}
+.tile.dim{opacity:.5}
+
+.side{width:112px;flex:none;border:1px solid var(--grid);border-radius:8px;background:var(--surface);padding:7px}
+.side .it{padding:5px 7px;border-radius:6px;font-size:11px;margin-bottom:2px;color:var(--ink2)}
+.side .it.sel{background:var(--accent);color:#fff;font-weight:600}
+.side .it.dim{opacity:.45}
+.main{flex:1;border:1px solid var(--grid);border-radius:8px;background:var(--surface);padding:10px}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--grid);margin-bottom:10px;flex-wrap:wrap}
+.tab{padding:5px 10px;font-size:11px;border:1px solid transparent;border-bottom:none;
+     border-radius:7px 7px 0 0;color:var(--ink2)}
+.tab.sel{background:var(--surface);border-color:var(--grid);color:var(--ink);font-weight:600}
+.tab.dim{opacity:.45}
+
+.panel{border:1px dashed var(--grid);border-radius:7px;padding:9px;margin-bottom:7px;background:var(--surface)}
+.panel .h{color:var(--ink);font-weight:600;font-size:11.5px;margin-bottom:5px}
+.bar{height:6px;border-radius:99px;background:var(--grid);margin:4px 0}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--accent)}
+.trace{height:26px;border-radius:5px;background:linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/22px 100%,var(--surface2);border:1px solid var(--grid)}
+.back{font-size:11px;color:var(--accent)}
+
+.pc{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+.pc h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.pros h4{color:var(--good)} .cons h4{color:var(--warn)}
+.pc ul{margin:0;padding-left:17px;font-size:13px;color:var(--ink2)}
+.pc li{margin-bottom:4px}
+.reco{margin-top:14px;font-size:13.5px;background:var(--surface2);border-radius:8px;padding:11px 13px;color:var(--ink2)}
+.reco b{color:var(--good)}
+@media (max-width:720px){.pc{grid-template-columns:1fr}.tiles{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Coquille de navigation du tableau de bord</h1>
+<p class="sub">Trois structures pour la même donnée. Les maquettes montrent toutes le <b>même instant</b> —
+mode SSVEP en cours de décodage — pour que seule la structure change.</p>
+
+<div class="q">
+  <b>La question :</b> comment on entre dans un mode, et que reste-t-il affiché en permanence ?
+  Sept modes à présenter : <b>Brut</b>, <b>SSVEP</b> et <b>Neuro</b> utilisables aujourd'hui ;
+  <b>MI</b>, <b>c-VEP</b>, <b>P300</b>, <b>ErrP</b> visibles mais pas encore dans le moteur
+  (grisés, avec la mention « appli pygame »).
+</div>
+
+<!-- ================= A ================= -->
+<div class="opt">
+  <div class="opthead">
+    <span class="letter">A</span>
+    <h2>Accueil en grille, puis page du mode</h2>
+    <span class="tag">deux écrans</span>
+  </div>
+  <p class="desc">On arrive sur une grille des sept modes. On clique, on <em>entre</em> dans le mode :
+    la page se consacre entièrement à lui. Un lien « ← Modes » ramène à la grille.
+    C'est la structure de l'appli pygame — même modèle mental des deux côtés.</p>
+
+  <div class="row" style="gap:14px;flex-wrap:wrap">
+    <div class="wf" style="flex:1;min-width:290px">
+      <div class="wf-top"><b>EEG_API_Unicorn</b><span class="pill">casque · 250 Hz</span></div>
+      <div class="wf-body">
+        <div style="margin-bottom:9px;color:var(--muted)">1 — accueil : choisir un mode</div>
+        <div class="tiles">
+          <div class="tile"><span class="n"><i class="dot on"></i>Brut</span><span>8 voies</span></div>
+          <div class="tile"><span class="n"><i class="dot on"></i>SSVEP</span><span>3 cibles</span></div>
+          <div class="tile"><span class="n"><i class="dot on"></i>Neuro</span><span>3 indices</span></div>
+          <div class="tile dim"><span class="n"><i class="dot off"></i>MI</span><span>pygame</span></div>
+          <div class="tile dim"><span class="n"><i class="dot off"></i>c-VEP</span><span>pygame</span></div>
+          <div class="tile dim"><span class="n"><i class="dot off"></i>P300</span><span>pygame</span></div>
+          <div class="tile dim"><span class="n"><i class="dot off"></i>ErrP</span><span>pygame</span></div>
+          <div class="tile dim"><span class="n">＋</span><span>à venir</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="wf" style="flex:1;min-width:290px">
+      <div class="wf-top"><b>← Modes &nbsp;·&nbsp; SSVEP</b><span class="pill">décodage</span></div>
+      <div class="wf-body">
+        <div style="margin-bottom:9px;color:var(--muted)">2 — la page ne parle que du SSVEP</div>
+        <div class="panel"><div class="h">Cible regardée</div>
+          <div class="bar"><i style="width:72%"></i></div>
+          <div class="bar"><i style="width:23%;background:var(--muted)"></i></div>
+          <div class="bar"><i style="width:31%;background:var(--muted)"></i></div>
+        </div>
+        <div class="panel"><div class="h">Fréquences · plancher · flux</div>
+          <div style="color:var(--muted)">15, 20, 8.57 Hz — réglable ici</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pc">
+    <div class="pros"><h4>Pour</h4><ul>
+      <li>Le mode devient <b>le cadre</b>, pas un bouton</li>
+      <li>Zéro hors-sujet : la page ne montre que le mode en cours</li>
+      <li>La grille est une <b>carte du produit</b> — on voit les 7 modes et leur état d'un coup</li>
+      <li>Même structure que l'appli pygame : un seul modèle à apprendre</li>
+    </ul></div>
+    <div class="cons"><h4>Contre</h4><ul>
+      <li>Un clic de plus pour arriver au contenu</li>
+      <li>Changer de mode = repasser par l'accueil</li>
+      <li>La qualité du signal doit rester visible partout (bandeau permanent)</li>
+    </ul></div>
+  </div>
+  <div class="reco"><b>Ma recommandation.</b> C'est la seule des trois qui traite le choix du mode
+    comme la décision structurante qu'il est, et la grille répond directement à ton « il manque des
+    modes » : les sept sont là, avec leur état réel, sans mentir sur ce qui marche.</div>
+</div>
+
+<!-- ================= B ================= -->
+<div class="opt">
+  <div class="opthead">
+    <span class="letter" style="background:var(--muted)">B</span>
+    <h2>Barre latérale permanente</h2>
+    <span class="tag">un seul écran</span>
+  </div>
+  <p class="desc">Les modes restent listés à gauche en permanence ; le contenu change à droite.
+    Pas d'accueil, pas de retour — un clic suffit pour passer d'un mode à l'autre.</p>
+
+  <div class="wf">
+    <div class="wf-top"><b>EEG_API_Unicorn</b><span class="pill">casque · 250 Hz · référence OK</span></div>
+    <div class="wf-body">
+      <div class="row">
+        <div class="side">
+          <div class="it">Brut</div>
+          <div class="it sel">SSVEP</div>
+          <div class="it">Neuro</div>
+          <div class="it dim">MI</div>
+          <div class="it dim">c-VEP</div>
+          <div class="it dim">P300</div>
+          <div class="it dim">ErrP</div>
+        </div>
+        <div class="main">
+          <div class="panel"><div class="h">Cible regardée — 15 Hz</div>
+            <div class="bar"><i style="width:72%"></i></div>
+            <div class="bar"><i style="width:23%;background:var(--muted)"></i></div>
+          </div>
+          <div class="panel"><div class="h">Qualité du signal</div><div class="trace"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pc">
+    <div class="pros"><h4>Pour</h4><ul>
+      <li>Changement de mode <b>instantané</b>, sans écran intermédiaire</li>
+      <li>Les modes restent visibles en permanence</li>
+      <li>Structure familière (tout outil de monitoring)</li>
+    </ul></div>
+    <div class="cons"><h4>Contre</h4><ul>
+      <li>La barre <b>mange la largeur</b> en permanence, pour une action rare : on choisit son mode une fois par séance</li>
+      <li>Sept entrées dont quatre grisées = une liste à moitié morte, tout le temps sous les yeux</li>
+      <li>Pas d'endroit naturel pour présenter un mode avant d'y entrer</li>
+    </ul></div>
+  </div>
+</div>
+
+<!-- ================= C ================= -->
+<div class="opt">
+  <div class="opthead">
+    <span class="letter" style="background:var(--muted)">C</span>
+    <h2>Onglets en haut</h2>
+    <span class="tag">un seul écran</span>
+  </div>
+  <p class="desc">Une ligne d'onglets sous l'en-tête, le contenu du mode dessous.
+    Variante compacte de B, sans perte de largeur.</p>
+
+  <div class="wf">
+    <div class="wf-top"><b>EEG_API_Unicorn</b><span class="pill">casque · 250 Hz</span></div>
+    <div class="wf-body">
+      <div class="tabs">
+        <div class="tab">Brut</div><div class="tab sel">SSVEP</div><div class="tab">Neuro</div>
+        <div class="tab dim">MI</div><div class="tab dim">c-VEP</div>
+        <div class="tab dim">P300</div><div class="tab dim">ErrP</div>
+      </div>
+      <div class="panel"><div class="h">Cible regardée — 15 Hz</div>
+        <div class="bar"><i style="width:72%"></i></div>
+        <div class="bar"><i style="width:23%;background:var(--muted)"></i></div>
+        <div class="bar"><i style="width:31%;background:var(--muted)"></i></div>
+      </div>
+      <div class="panel"><div class="h">Fréquences décodées</div>
+        <div style="color:var(--muted)">15, 20, 8.57 Hz</div></div>
+    </div>
+  </div>
+
+  <div class="pc">
+    <div class="pros"><h4>Pour</h4><ul>
+      <li>Compact, pas de largeur perdue</li>
+      <li>Changement instantané comme B</li>
+    </ul></div>
+    <div class="cons"><h4>Contre</h4><ul>
+      <li>Sept onglets, c'est <b>déjà trop</b> pour une barre d'onglets lisible — et il en viendra d'autres</li>
+      <li>Un onglet grisé se lit comme « cassé », pas comme « pas encore ici »</li>
+      <li>Aucune place pour dire ce que fait un mode avant d'y entrer</li>
+    </ul></div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Ce fichier est créé par le skill `subagent-driven-development`, qui traite son
+# atelier comme du brouillon jetable : `*` seul, tout est ignoré.
+#
+# CE PROJET EN A DÉCIDÉ AUTREMENT (2026-07-31) : les carnets de bord sont SUIVIS.
+# Ils racontent COMMENT un chantier a été mené — les constats de revue, les
+# arbitrages, ce qui a été parké et pourquoi. Les messages de commit disent ce qui
+# a changé ; eux disent ce qu'on a écarté et ce qu'on a failli casser. C'est la
+# seule trace de ce raisonnement, et elle vaut pour les étudiants qui reprendront
+# ce code autant que pour nous.
+#
+# ⚠️ Si le carnet d'un futur chantier redevient invisible, c'est que le skill a
+# réécrit ce fichier avec son `*` d'origine : remettre ce qui suit.
+
+# Tout est ignoré par défaut...
+*
+
+# ...sauf les dossiers, sans quoi git ne descend pas dedans...
+!*/
+
+# ...les carnets, briefs et rapports...
+!*.md
+
+# ...et ce fichier, pour que la règle voyage avec le dépôt.
+!.gitignore
+
+# Les paquets de diff restent dehors : des copies de ce que git contient déjà,
+# régénérables par `git diff BASE..HEAD`. 645 Ko de redondance.
+*.diff

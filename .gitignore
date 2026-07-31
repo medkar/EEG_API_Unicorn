@@ -30,5 +30,22 @@ Thumbs.db
 *.log
 crash.txt
 
-# --- Brainstorming visuel (superpowers) : maquettes de travail --------------
-.superpowers/
+# --- superpowers/ : le carnet de bord des chantiers EST suivi ---------------
+# Les journaux, briefs de tâche et rapports de relecture racontent COMMENT chaque
+# chantier a été mené — les constats de revue, les arbitrages, ce qui a été parké
+# et pourquoi. C'est la seule trace de ce raisonnement : les messages de commit
+# disent ce qui a changé, pas ce qu'on a écarté ni ce qu'on a failli casser.
+#
+# Trois choses restent dehors. ⚠️ Pas de commentaire en FIN de ligne dans un
+# .gitignore : git le prendrait pour une partie du motif.
+#
+# 1. L'état d'un serveur local de maquettes, dont un JETON d'authentification.
+#    Dépôt PUBLIC : rien de tout ça n'y a sa place.
+**/state/
+**/.last-token
+**/.last-port
+**/*.pid
+#
+# 2. Les paquets de diff : une copie de ce que git contient déjà, régénérable
+#    par `git diff BASE..HEAD`. 645 Ko de redondance contre 371 Ko de carnet.
+.superpowers/**/*.diff
