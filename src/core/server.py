@@ -131,8 +131,16 @@ class EngineServer:
         # quel décodeur : le MI enregistre des époques de 4 s là où il en décode 2. Sans ce terme,
         # chaque époque serait tronquée à la longueur du tampon — sans erreur, sans avertissement,
         # avec un tiers des fenêtres d'entraînement attendues. C'est `Calib.epoch_s` qui le déclare.
+        #
+        # `runtime_cls is not None` EN PLUS de `calibration is not None` : une calibration
+        # « native » (c-VEP, P300) n'est JAMAIS jouée par le moteur — c'est `research/app.py` qui
+        # la joue — donc son `epoch_s`, purement documentaire, ne doit dimensionner AUCUN tampon
+        # ici. Sans ce filtre, un `epoch_s` posé sur une calibration native pour la lisibilité
+        # gonflerait `keep` en silence — et, par ricochet, la fenêtre de mesure de la qualité
+        # (`_publish_quality`, cf. son propre avertissement).
         epoque_calib = max([spec.calibration.epoch_s for spec in registry.MODES
-                            if spec.calibration is not None] or [0.0])
+                            if spec.calibration is not None
+                            and spec.calibration.runtime_cls is not None] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
                         int(MI_WINDOW_S * self.acq.fs),
@@ -308,7 +316,19 @@ class EngineServer:
         self._begin_shared_rest([runtime], time.perf_counter())
 
     def _start_calibration(self, mode_id, values):
-        """Construit la calibration. Appelée par la boucle, jamais par le fil d'une interface."""
+        """Construit la calibration. Appelée par la boucle, jamais par le fil d'une interface.
+
+        ⚠️ Même garde que `_set_params`/`_set_published`/`_recalibrate` : `submit()` a déjà
+        refusé une calibration EN COURS au moment où elle a été SOUMISE, mais deux commandes
+        `start_calibration` soumises dans la MÊME fenêtre de sondage (avant que la boucle n'ait
+        drainé la première) ont toutes deux vu `self.calibration` à `None` et ont donc été
+        acceptées toutes les deux. Sans ce second contrôle, ICI, côté boucle, la seconde
+        écraserait SILENCIEUSEMENT la première — un double-clic sur « Commencer » y suffit.
+        """
+        if self.calibration is not None and not self.calibration.terminee:
+            print(f"[server] calibration ignorée : « {self.calibration.spec.label} » est déjà "
+                  f"en cours")
+            return
         spec = registry.get(mode_id)
         self.calibration = spec.calibration.runtime_cls(spec, values, self)
         print(f"[server] {spec.calibration.label or spec.label} : "
@@ -429,11 +449,17 @@ class EngineServer:
                                   f"par `python src/research/app.py`"}
             # ⚠️ Ce mode n'a PAS besoin d'être démarré : c'est même le cas normal. Le mode MI
             # refuse de démarrer sans modèle, or c'est justement la calibration qui en produit un.
-            if self.calibration is not None and not self.calibration.terminee:
-                en_cours = self.calibration.spec.label
+            # Copie LOCALE de `self.calibration`, prise UNE fois : la boucle peut la remettre à
+            # `None` entre deux lectures (arrêt du moteur, cf. le `finally` de `run()`) — `submit`
+            # promet en toutes lettres de ne JAMAIS lever, y compris depuis le fil de l'interface
+            # pendant que la boucle tourne sur le sien. Trois lectures de `self.calibration` de
+            # suite (`is not None`, `.terminee`, `.spec.label`) couraient ce risque ; une seule
+            # variable locale l'élimine par construction, comme le fait déjà `_status_key`.
+            en_cours = self.calibration
+            if en_cours is not None and not en_cours.terminee:
                 return {"accepted": False,
-                        "reason": f"une calibration est déjà en cours ({en_cours}) — abandonne-la "
-                                  f"avant d'en lancer une autre"}
+                        "reason": f"une calibration est déjà en cours ({en_cours.spec.label}) — "
+                                  f"abandonne-la avant d'en lancer une autre"}
             values, reason = contract.validate(calib, params.get("params") or {})
             if values is None:
                 return {"accepted": False, "reason": reason}
@@ -441,11 +467,11 @@ class EngineServer:
             return {"accepted": True, "command": command, "id": spec.id, "params": values}
 
         if command == "cancel_calibration":
-            if self.calibration is None or self.calibration.terminee:
+            en_cours = self.calibration   # même motif que start_calibration juste au-dessus
+            if en_cours is None or en_cours.terminee:
                 return {"accepted": False, "reason": "aucune calibration en cours"}
             self._commands.put(("cancel_calibration", {}))
-            return {"accepted": True, "command": command,
-                    "id": self.calibration.spec.id}
+            return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
         spec, reason = self._one(params.get("id"))
         if spec is None:
@@ -544,20 +570,23 @@ class EngineServer:
     # plutôt que de renommer une valeur du contrat pour un confort interne.
     _PHASES_PUBLIQUES = {"warmup": "warmup", "rest": "baseline", "running": "decoding"}
 
-    def _phase_of(self, active):
-        """La phase publique, calculée sur une COPIE de la table des modes actifs.
+    def _phase_of(self, active, calibration):
+        """La phase publique, calculée sur une COPIE de la table des modes actifs ET une COPIE
+        de `self.calibration` — toutes deux prises par l'APPELANT, jamais relues ici.
 
-        Séparée de la propriété pour que `_state` puisse la calculer sur la MÊME copie que le
-        reste de son payload : deux copies distinctes laisseraient `phase` et `modes` se
-        contredire à l'intérieur d'un seul appel. `active` doit déjà être une copie — cette
+        Séparée de la propriété pour que `_state` puisse la calculer sur les MÊMES copies que le
+        reste de son payload : des copies distinctes, prises à des instants différents,
+        laisseraient `phase`, `modes` et `calibration` se contredire à l'intérieur d'un seul
+        appel — un même `snapshot()` pourrait alors rendre `phase: "calibrating"` ET
+        `calibration: null`, deux valeurs contradictoires dans un seul état publié. Cette
         méthode ne protège rien elle-même, elle fait confiance à l'appelant (voir `phase` et
-        `_state` pour les deux qui en fournissent une).
+        `_state`/`snapshot`, les seuls qui en fournissent).
         """
         # Une calibration en cours prime sur tout : c'est ce que la personne est en train de
         # faire, et les modes qui décodent en même temps sont secondaires. `calibrating` est une
         # valeur PUBLIQUE du flux `status` (spec §6) — un client peut s'en servir pour mettre son
         # application en pause pendant qu'on entraîne.
-        if self.calibration is not None and not self.calibration.terminee:
+        if calibration is not None and not calibration.terminee:
             return "calibrating"
         phases = [r.phase for r in active.values() if r.spec.rest is not None]
         if not phases:
@@ -570,15 +599,15 @@ class EngineServer:
     @property
     def phase(self):
         """La phase la MOINS avancée parmi les modes qui mesurent un repos. Sûre depuis un autre
-        fil : ELLE copie `self.active` avant de le lire — une propriété nue ne peut pas recevoir
-        la copie déjà prise par un appelant, donc c'est ici, et nulle part ailleurs, qu'elle doit
-        se faire. `_smoke_ssvep`/`_smoke_neuro` sondent `server.phase` depuis le fil du test
-        pendant que la boucle du moteur tourne sur le sien : exactement la lecture inter-fils
-        que cette copie protège.
+        fil : ELLE copie `self.active` ET `self.calibration` avant de les lire — une propriété
+        nue ne peut pas recevoir des copies déjà prises par un appelant, donc c'est ici, et nulle
+        part ailleurs, qu'elles doivent se faire. `_smoke_ssvep`/`_smoke_neuro` sondent
+        `server.phase` depuis le fil du test pendant que la boucle du moteur tourne sur le sien :
+        exactement la lecture inter-fils que ces copies protègent.
 
         « streaming » quand aucun mode actif n'a de repos à faire : c'est le cas du brut seul.
         """
-        return self._phase_of(dict(self.active))
+        return self._phase_of(dict(self.active), self.calibration)
 
     def _status_key(self, running):
         """Ce qui constitue un vrai CHANGEMENT d'état — hors compteurs (cf. StatusPublisher.push).
@@ -592,8 +621,16 @@ class EngineServer:
                 tuple((mid, r.phase, r.published) for mid, r in sorted(self.active.items())),
                 None if calib is None else (calib.spec.id, calib.phase, calib.etape, calib.essai))
 
-    def _state(self, running, active=None):
+    def _state(self, running, *, calibration, active=None):
         """État public (`status` / `snapshot`).
+
+        `calibration` : copie déjà prise de `self.calibration`, TOUJOURS EXIGÉE — jamais un
+        défaut à `None` pour dire « pas encore copiée ». Contrairement à `active` (juste en
+        dessous), `None` est ICI aussi la valeur RÉELLE d'« aucune calibration en cours » :
+        confondre les deux ferait relire `self.calibration` en douce et annulerait la copie
+        prise par l'appelant si la boucle a bougé entre-temps — exactement le bug que cette
+        signature existe pour rendre impossible plutôt que discipliné. Chaque appelant en prend
+        UNE et la réutilise PARTOUT dans son propre appel (cf. `snapshot`).
 
         `active` : copie déjà prise de `self.active`, à passer quand l'appelant en a déjà une
         (voir `snapshot`) pour ne pas en reprendre une seconde qui pourrait différer de la
@@ -604,12 +641,15 @@ class EngineServer:
         `snapshot`) — ce qui lève `RuntimeError: dictionary changed size during iteration` chez
         l'appelant. `dict(self.active)` copie en C, sans repasser la main : c'est pour ça que la
         boucle de `run()` fait déjà `list(self.active.items())` avant d'itérer, même depuis SON
-        propre fil.
+        propre fil. `active` PEUT rester optionnelle, à la différence de `calibration` :
+        `self.active` n'est jamais `None` lui-même, donc rien ici ne confond « pas fourni » et
+        « la vraie valeur est vide ».
 
-        Même discipline pour la phase : on appelle `_phase_of(active)` sur CETTE copie, une
-        seule fois, plutôt que de lire la propriété `self.phase` (qui en reprendrait une AUTRE,
-        à un instant différent). Deux copies pourraient se contredire — `modes` listant un mode
-        que `phase` ne voit plus, par exemple — la même copie ne le peut pas.
+        Même discipline pour la phase : on appelle `_phase_of(active, calibration)` sur CES
+        copies, une seule fois, plutôt que de lire la propriété `self.phase` (qui en reprendrait
+        d'AUTRES, à un instant différent). Des copies désaccordées pourraient se contredire —
+        `modes` listant un mode que `phase` ne voit plus, par exemple — les mêmes copies ne le
+        peuvent pas.
         """
         if active is None:
             active = dict(self.active)
@@ -624,7 +664,7 @@ class EngineServer:
         # vérité complète. Le jour où plusieurs modes décodent, `mode` en montre un seul — c'est
         # assumé, et c'est pour ça que `modes` existe.
         decodes = [mid for mid in actifs if mid != "raw"]
-        phase = self._phase_of(active)
+        phase = self._phase_of(active, calibration)
         state = {
             "running": running,
             "board": "synthetic" if self.synthetic else "unicorn",
@@ -645,18 +685,22 @@ class EngineServer:
         """État complet pour un afficheur, en lecture seule. Sûr depuis un autre fil.
 
         La console (tâches 11-15) sonde ceci depuis le fil Qt, à 10 Hz, pendant que la boucle du
-        moteur tourne sur le sien et peut démarrer ou arrêter un mode À TOUT INSTANT. On prend
-        donc UNE SEULE copie atomique de `self.active` (`dict(...)`, copié en C d'un coup — pas
-        de point où l'autre fil pourrait s'intercaler) et on la fait servir PARTOUT dans cet
-        appel : à `_state()` d'abord, à `modes_state` ensuite. Reprendre `self.active` une
-        seconde fois pour `modes_state` referait courir le même risque, ET pourrait rendre un
-        `modes_state` qui ne correspond plus au `modes` déjà écrit dans `state` (un mode présent
-        dans l'un, absent de l'autre) si la boucle a bougé entre les deux lectures. On rend
-        ensuite un dictionnaire déjà construit plutôt que des références vers l'état vivant :
-        l'appelant ne peut donc pas lire une valeur à moitié écrite par la boucle.
+        moteur tourne sur le sien et peut démarrer ou arrêter un mode, ou une calibration, À TOUT
+        INSTANT. On prend donc UNE SEULE copie atomique de `self.active` (`dict(...)`, copié en C
+        d'un coup — pas de point où l'autre fil pourrait s'intercaler) ET UNE SEULE copie de
+        `self.calibration`, et on les fait servir PARTOUT dans cet appel : à `_state()` d'abord,
+        à `modes_state`/`calibration` ensuite. Reprendre `self.active` ou `self.calibration` une
+        seconde fois referait courir le même risque — et pour `calibration` spécifiquement, un
+        même appel pourrait alors rendre `phase: "calibrating"` (calculé sur la PREMIÈRE lecture)
+        ET `calibration: null` (calculé sur une SECONDE lecture, après que la boucle l'a remise à
+        `None` entre les deux) : deux valeurs contradictoires dans un seul état publié, que la
+        docstring de `_state` interdit désormais par sa signature. On rend ensuite un
+        dictionnaire déjà construit plutôt que des références vers l'état vivant : l'appelant ne
+        peut donc pas lire une valeur à moitié écrite par la boucle.
         """
         active = dict(self.active)
-        state = self._state(not self._stop, active=active)
+        calib = self.calibration
+        state = self._state(not self._stop, active=active, calibration=calib)
         state.update({
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
@@ -664,8 +708,8 @@ class EngineServer:
             # `now` est passé pour que le décompte affiché soit celui de MAINTENANT, pas celui du
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
-            "calibration": (None if self.calibration is None
-                            else self.calibration.state(now=time.perf_counter())),
+            "calibration": (None if calib is None
+                            else calib.state(now=time.perf_counter())),
             # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
             # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
             # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
@@ -677,9 +721,20 @@ class EngineServer:
     def recent_window(self, seconds):
         """Copie des `seconds` dernières secondes de signal BRUT (n, 8), ou None.
 
-        Accesseur PUBLIC pour un afficheur. Le tampon est réécrit par le fil d'acquisition : le
-        lire directement depuis le fil Qt donnerait, tôt ou tard, une vue à moitié écrite. On
-        rend donc une copie — c'est quelques centaines de Ko, payés une fois par rafraîchissement.
+        Accesseur PUBLIC pour un afficheur — ET, depuis la moitié B, la source des époques
+        D'ENTRAÎNEMENT du Motor Imagery (`CalibrationRuntime._pas_essai` l'appelle avec
+        `imagery_s`). Elle DOIT rester non filtrée pour cette seconde raison, exactement comme
+        `UnicornAcquisition.motor_window` (qui sert le décodage EN LIGNE, cf. son avertissement) :
+        le modèle applique son propre re-référencement CAR puis son passe-bande 8-30 Hz dans
+        `MIModel._prep`. Filtrer ICI filtrerait deux fois — phase décalée, variances modifiées,
+        or ce sont exactement les variances que le CSP exploite — et entraînerait le MI sur autre
+        chose que ce que le modèle verra en ligne : sans erreur, avec des probabilités
+        parfaitement plausibles. Quelqu'un qui trouverait les tracés live bruyants et filtrerait
+        ici pour les lisser entraînerait donc le MI sur du signal doublement filtré, en silence.
+
+        Le tampon est réécrit par le fil d'acquisition : le lire directement depuis le fil Qt
+        donnerait, tôt ou tard, une vue à moitié écrite. On rend donc une copie — c'est quelques
+        centaines de Ko, payés une fois par rafraîchissement.
         """
         buffer = self.recent
         if buffer is None or len(buffer) == 0:
@@ -697,14 +752,27 @@ class EngineServer:
         Le calcul est délégué à `sigma_from_block` pour partager UNE seule définition du σ
         avec l'écran `signal_check` de l'appli : deux mesures de qualité qui divergeraient
         seraient pires que pas de mesure du tout.
+
+        ⚠️ On ne passe PAS `self.recent` en entier : ce tampon est dimensionné (`self.keep`,
+        cf. `__init__`) pour le plus gourmand de TOUS ses consommateurs — aujourd'hui la
+        calibration MI, qui prélève des époques de 4 s là où cette fenêtre de qualité n'en veut
+        que `QUALITY_WINDOW_S` (2 s). Passer le tampon entier mesurait donc le σ sur `self.keep`
+        (4 s dès que le MI est calibrable), un couplage NON borné : demain un `epoch_s` de
+        calibration plus long élargirait encore la fenêtre de qualité SANS que rien ne le dise
+        — un flux PUBLIC, consommé par n'importe quel client. On borne donc explicitement le
+        bloc à la fenêtre déclarée plus sa marge de filtre, comme le font déjà tous les autres
+        lecteurs du tampon (`recent_window`, `motor_window`, `occipital_window`…) : `_publish_
+        quality` était le seul à consommer le tampon entier.
         """
-        sigmas = self.acq.sigma_from_block(self.recent)
+        n = int(round(QUALITY_WINDOW_S * self.acq.fs)) + self.acq.margin_n
+        bloc = self.recent[-n:]
+        sigmas = self.acq.sigma_from_block(bloc)
         if sigmas is None:
             return
         self.quality_out.push(sigmas, lsl_ts)
         # Référence décrochée : invisible sur les σ, fatale pour la séance. On le dit
         # une fois par changement d'état plutôt qu'à chaque seconde.
-        common = self.acq.common_mode(self.recent)
+        common = self.acq.common_mode(bloc)
         # Sur le board de test il n'y a aucune électrode : un verdict sur la référence y serait
         # un contresens. On publie la mesure (honnête) mais jamais le verdict.
         lost = reference_lost(common) and not self.synthetic
@@ -759,7 +827,8 @@ class EngineServer:
                 # l'incident au moteur SUIVANT du même processus.
                 self._start([s.id for s, _ in self._pending],
                             {s.id: v for s, v in self._pending}, time.perf_counter())
-                self.status_out.push(self._state(True), key=self._status_key(True), force=True)
+                self.status_out.push(self._state(True, calibration=self.calibration),
+                                     key=self._status_key(True), force=True)
 
                 while not self._stop:
                     self._drain_commands()
@@ -788,18 +857,30 @@ class EngineServer:
                     # La calibration tourne à CHAQUE tour, sans période minimale : sa ligne du
                     # temps se compte en dixièmes de seconde et un décompte qui saute serait vu.
                     if self.calibration is not None and not self.calibration.terminee:
-                        self.calibration.tick(self, now)
+                        try:
+                            self.calibration.tick(self, now)
+                        except Exception as e:  # noqa: BLE001 - un tick fautif ne doit tuer NI
+                            # le moteur NI la séance en cours des AUTRES modes : on perd cette
+                            # calibration (potentiellement plusieurs minutes d'imagerie), pas le
+                            # reste. Marquer « annulé » avec sa raison est ce que `_terminer` fait
+                            # déjà pour un entraînement qui lève ; un tick qui lève méritait le
+                            # même traitement, pas un crash du processus entier.
+                            self.calibration.probleme = f"{type(e).__name__} : {e}"
+                            self.calibration.phase = "annule"
+                            print(f"[server] calibration interrompue par une exception : "
+                                  f"{self.calibration.probleme}")
 
                     # Publié quand l'état change, plus un rappel périodique pour les clients qui
                     # se connectent après le démarrage (LSL ne rejoue pas le passé).
                     due = now - last_status >= STATUS_PERIOD_S
-                    if self.status_out.push(self._state(True), key=self._status_key(True),
-                                            force=due) and due:
+                    if self.status_out.push(self._state(True, calibration=self.calibration),
+                                            key=self._status_key(True), force=due) and due:
                         last_status = now
 
                     time.sleep(POLL_S)
 
-                self.status_out.push(self._state(False), key=self._status_key(False), force=True)
+                self.status_out.push(self._state(False, calibration=self.calibration),
+                                     key=self._status_key(False), force=True)
             finally:
                 # DOIT s'exécuter sur TOUTE sortie de la boucle, y compris une EXCEPTION — casque
                 # perdu en séance, erreur BrainFlow : précisément ce que ce produit doit survivre.
@@ -981,6 +1062,7 @@ def _smoke():
           f"{'OK' if integre else 'PROBLÈME'}")
     return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
             and _smoke_ssvep() and _smoke_neuro() and _smoke_mi() and _smoke_calibration()
+            and _smoke_calibration_refus()
             and _smoke_cumul() and _smoke_proposition())
 
 
@@ -1327,7 +1409,11 @@ def _smoke_calibration():
         mi_calib.MICalibration.__init__ = _init_temporaire
 
         server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-calib")
-        thread = threading.Thread(target=server.run, kwargs={"duration_s": 60.0}, daemon=True)
+        # 120 s, pas 60 : la séance mesure ~27 s mais le PAS de boucle (POLL_S, plus la latence
+        # des E/S) ajoute couramment ~8,5 s de plus sur ce poste, et un dépassement de
+        # `duration_s` arrête le moteur EN PLEINE séance — un échec de timing du test, pas de la
+        # calibration elle-même. Large marge plutôt qu'un ajustement fin.
+        thread = threading.Thread(target=server.run, kwargs={"duration_s": 120.0}, daemon=True)
         thread.start()
         try:
             # Laisser le tampon se remplir : sans ça les premières époques seraient trop courtes
@@ -1350,22 +1436,40 @@ def _smoke_calibration():
             # répétés) — la fenêtre d'entraînement n'a alors aucun signal réel à apprendre, contrairement
             # aux autotests de mi_calib.py/mi_decoder.py qui fabriquent une ERD. 18 (3e choix) ramène
             # ça à ~1 tirage sur 6 dans les mêmes conditions, pour un coût en temps encore raisonnable.
-            ack = server.submit("start_calibration", id="mi",
-                                params={"trials_per_class": 18})
-            chk(ack.get("accepted"), f"la calibration est acceptée ({ack})")
+            # Deux `start_calibration` soumis dans la MÊME fenêtre de sondage (avant que la
+            # boucle n'ait drainé le premier) doivent produire UNE SEULE calibration, pas deux
+            # qui se chevauchent. `submit()` ne peut PAS voir venir cette course :
+            # `self.calibration` est encore `None` pour LES DEUX au moment où elles sont
+            # soumises — c'est la garde côté BOUCLE (`_start_calibration`) qui compte. Les deux
+            # commandes partent donc DOS À DOS, sans attendre entre les deux : une version
+            # antérieure de ce test attendait `server.calibration is not None` avant la seconde,
+            # ce qui contournait exactement la fenêtre de course qu'il prétendait couvrir.
+            ack = server.submit("start_calibration", id="mi", params={"trials_per_class": 18})
+            ack_course = server.submit("start_calibration", id="mi", params={"trials_per_class": 10})
+            chk(ack.get("accepted"), f"la première calibration est acceptée ({ack})")
+            chk(ack_course.get("accepted"),
+                f"submit() ne peut pas refuser la seconde : rien n'est encore appliqué à cet "
+                f"instant ({ack_course})")
 
-            # Une seconde calibration doit être refusée tant que la première tourne.
             t0 = time.perf_counter()
             while server.calibration is None and time.perf_counter() - t0 < 5.0:
                 time.sleep(0.05)
+            chk(server.calibration is not None
+                and server.calibration.params.get("trials_per_class") == 18,
+                f"mais côté BOUCLE, la seconde est ignorée : c'est bien la PREMIÈRE (18) qui "
+                f"tourne, pas la seconde (10) "
+                f"({None if server.calibration is None else server.calibration.params})")
+
+            # Une fois la première APPLIQUÉE, cette fois `submit()` lui-même la voit et refuse —
+            # le scénario que l'ancienne version de ce test croyait déjà couvrir.
             refus = server.submit("start_calibration", id="mi", params={})
             chk(not refus.get("accepted") and "déjà en cours" in (refus.get("reason") or ""),
-                f"une seconde calibration est refusée ({refus})")
+                f"une troisième, soumise APRÈS coup, est refusée par submit() lui-même ({refus})")
             chk(server.phase == "calibrating",
                 f"la phase publique du moteur devient « calibrating » ({server.phase})")
             etat = server.snapshot().get("calibration")
             chk(etat is not None and etat["mode_id"] == "mi" and etat["total"] == 54,
-                f"et snapshot() porte l'état complet ({etat})")
+                f"et snapshot() porte l'état complet, celui de la PREMIÈRE (18×3=54) ({etat})")
 
             # Bornes ÉLARGIES par rapport au brief (25 s), pour la même raison que trials_per_class
             # ci-dessus : 18 essais/classe jouent 54 essais au lieu de 18, à ~0,42 s/essai avec les
@@ -1446,8 +1550,15 @@ def _smoke_calibration():
             vrai_disponibles = mi_models.modeles_disponibles
             mi_models.modeles_disponibles = lambda d=dossier: vrai_disponibles(d)
             try:
-                demarrage = server.submit("start_mode", id="mi",
-                                          params={"mi": {"model": produits[0]}})
+                # `if produits else ...` : pas pour éviter un faux vert (un build réellement
+                # cassé échoue de toute façon, `produits` serait déjà vide plus haut) mais pour
+                # la règle que ce fichier s'est donnée pour le `chk` juste au-dessus de `calib`
+                # (cf. son commentaire) : rendre le diagnostic ligne à ligne jusqu'au bout plutôt
+                # qu'une trace Python brute sur un `IndexError` si `produits` est vide ici.
+                demarrage = (server.submit("start_mode", id="mi",
+                                           params={"mi": {"model": produits[0]}})
+                            if produits else
+                            {"accepted": False, "reason": "aucun modèle produit (diagnostic plus haut)"})
             finally:
                 mi_models.modeles_disponibles = vrai_disponibles
             chk(demarrage.get("accepted"),
@@ -1462,6 +1573,101 @@ def _smoke_calibration():
         shutil.rmtree(dossier, ignore_errors=True)
 
     print(f"[smoke-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_calibration_refus():
+    """Les quatre refus de `start_calibration`/`cancel_calibration`, et l'annulation de bout en
+    bout — rien de tout ça n'était exercé, alors que ce sont les quatre premiers messages qu'un
+    étudiant voit s'il se trompe de mode ou clique « Calibrer » sans y penser.
+
+    Coût délibérément bas pour les quatre premiers : `submit` ne dépend pas de la boucle (cf. sa
+    docstring — la validité se vérifie tout de suite, l'application se fait plus tard), donc ils
+    se testent sur un moteur qui n'a JAMAIS tourné — aucune session BrainFlow, aucun fil.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # 1-4. Les quatre refus, sur un moteur JAMAIS démarré.
+    froid = EngineServer(synthetic=True, modes=(), instance="smoke-calib-refus")
+
+    r1 = froid.submit("start_calibration", id="bogus")
+    chk(not r1.get("accepted") and "mode inconnu" in (r1.get("reason") or ""),
+        f"mode inconnu : refusé, en le nommant ({r1.get('reason')})")
+
+    r2 = froid.submit("start_calibration", id="ssvep")
+    chk(not r2.get("accepted") and "n'a pas de calibration" in (r2.get("reason") or ""),
+        f"mode SANS calibration (SSVEP, la CCA n'apprend rien) : refusé ({r2.get('reason')})")
+
+    r3 = froid.submit("start_calibration", id="cvep")
+    chk(not r3.get("accepted") and "src/research/app.py" in (r3.get("reason") or ""),
+        f"calibration NATIVE (c-VEP) : refusée, en disant où aller à la place ({r3.get('reason')})")
+
+    r4 = froid.submit("cancel_calibration")
+    chk(not r4.get("accepted") and "aucune calibration" in (r4.get("reason") or ""),
+        f"annuler sans calibration en cours : refusé ({r4.get('reason')})")
+
+    # 5. L'annulation de bout en bout : commande -> boucle -> retour à « streaming » -> l'état de
+    # la calibration elle-même. Ici il FAUT un moteur qui tourne : `submit` met en file, seule la
+    # boucle applique.
+    import threading
+
+    chaud = EngineServer(synthetic=True, modes=(), instance="smoke-calib-refus-2")
+    thread = threading.Thread(target=chaud.run, kwargs={"duration_s": 30.0}, daemon=True)
+    thread.start()
+    try:
+        ack = chaud.submit("start_calibration", id="mi", params={})
+        chk(ack.get("accepted"), f"la calibration démarre ({ack})")
+
+        t0 = time.perf_counter()
+        while chaud.calibration is None and time.perf_counter() - t0 < 5.0:
+            time.sleep(0.05)
+        chk(chaud.calibration is not None and chaud.phase == "calibrating",
+            f"la boucle l'a appliquée, la phase publique le dit ({chaud.phase})")
+
+        ack_annule = chaud.submit("cancel_calibration")
+        chk(ack_annule.get("accepted"), f"l'annulation est acceptée ({ack_annule})")
+
+        t0 = time.perf_counter()
+        while chaud.phase == "calibrating" and time.perf_counter() - t0 < 5.0:
+            time.sleep(0.05)
+        chk(chaud.phase == "streaming",
+            f"la phase publique revient à « streaming » (aucun autre mode actif) ({chaud.phase})")
+        chk(chaud.calibration is not None and chaud.calibration.phase == "annule",
+            f"la calibration elle-même se souvient qu'elle a été abandonnée "
+            f"({None if chaud.calibration is None else chaud.calibration.phase})")
+        chk(chaud.calibration is not None and chaud.calibration.resultat is None,
+            "et n'a produit aucun résultat")
+    finally:
+        chaud.stop()
+        thread.join(timeout=5.0)
+
+    # 6. Le `finally` de `run()` : arrêter le moteur EN PLEINE calibration, SANS l'annuler
+    # explicitement, doit quand même la couper proprement — c'est lui qui casse le cycle
+    # calibration <-> moteur (cf. son long commentaire), et rien ne vérifiait qu'il s'exécute
+    # vraiment sur ce chemin plutôt que sur le seul chemin `cancel_calibration` testé au-dessus.
+    encore = EngineServer(synthetic=True, modes=(), instance="smoke-calib-refus-3")
+    thread2 = threading.Thread(target=encore.run, kwargs={"duration_s": 30.0}, daemon=True)
+    thread2.start()
+    try:
+        ack = encore.submit("start_calibration", id="mi", params={})
+        chk(ack.get("accepted"), f"seconde calibration démarrée, pour tester l'arrêt sec ({ack})")
+        t0 = time.perf_counter()
+        while encore.calibration is None and time.perf_counter() - t0 < 5.0:
+            time.sleep(0.05)
+        chk(encore.calibration is not None, "elle est bien appliquée avant l'arrêt du moteur")
+    finally:
+        encore.stop()
+        thread2.join(timeout=5.0)
+    chk(encore.calibration is None,
+        "arrêter le moteur EN PLEINE calibration, sans l'annuler explicitement, la coupe quand "
+        "même — c'est le `finally` de run() qui le fait, pas cancel() tout seul")
+
+    print(f"[smoke-calib-refus] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
