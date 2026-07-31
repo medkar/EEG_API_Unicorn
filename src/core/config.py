@@ -235,7 +235,7 @@ def apply_invert(jx, jy):
 # --- Motor Imagery (2e mode : contrôle « par la pensée », main gauche/droite) -
 # CSP+LDA entraîné (voir mi_decoder.py). Voies : les 8 EEG (le CSP fait le tri spatial).
 MI_WINDOW_S = 2.0        # fenêtre de décodage MI (s) — training ET online (doivent coïncider)
-MI_PROB_MIN = 0.60       # proba mini pour émettre une commande (sinon None = stop)
+MI_PROB_MIN = 0.60       # proba mini pour retenir une classe active (sinon None = indécis/repos)
 # "csp" (CSP+LDA) ou "riemann" (covariances + tangent space). Les deux sont installés ; sur les
 # données réelles de la session 1 ils étaient à égalité (~48% par essai) -> défaut CSP. Re-trancher
 # après chaque calibration avec `python src/research/mi_compare.py`.
@@ -251,7 +251,7 @@ MI_METHOD = "csp"
 # au reste) -> on garde le CAR, plus simple. Doit être IDENTIQUE en calibration et en online.
 MI_REREF = "car"
 MI_VOTE_LEN = 5          # vote glissant online (MI plus bruité que SSVEP -> un peu plus de lissage)
-MI_MIN_VOTES = 3         # votes concordants requis pour émettre une commande
+MI_MIN_VOTES = 3         # votes concordants requis pour retenir une classe active
 MI_MODEL_PATH = _os.path.join(DATA_DIR, "mi_model.joblib")   # modèle entraîné (calibration)
 # Voies CLÉS du MI (indices dans CH_NAMES) : cortex moteur C3/Cz/C4. Le CSP utilise les 8 voies,
 # mais ce sont ces trois-là (sous les cheveux, les plus dures à mouiller) qu'il faut vérifier en

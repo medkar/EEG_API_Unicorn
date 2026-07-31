@@ -5,11 +5,11 @@ lisse par vote, et envoie {jx,jy} en UDP à l'actionneur. En 2 classes, ça pilo
   GAUCHE -> tourne à gauche · DROITE -> tourne à droite · REPOS/incertain -> stop.
 L'écran montre la commande décodée + les probabilités (utile pour progresser : tu vois l'effet).
 
-    python src/research/mi_pilot.py                    # feedback seul (pas d'envoi robot) — pour s'entraîner
-    python src/research/mi_pilot.py --send             # + pilote le robot (roues en l'air d'abord !)
-    python src/research/mi_pilot.py --calibrate --send  # calibration PUIS pilotage, d'un coup
-    python src/research/mi_pilot.py --calibrate --session 5min
-    python src/research/mi_pilot.py --smoke            # test headless (CI)
+    python archive/mi_pilot.py                    # feedback seul (pas d'envoi robot) — pour s'entraîner
+    python archive/mi_pilot.py --send             # + pilote le robot (roues en l'air d'abord !)
+    python archive/mi_pilot.py --calibrate --send  # calibration PUIS pilotage, d'un coup
+    python archive/mi_pilot.py --calibrate --session 5min
+    python archive/mi_pilot.py --smoke            # test headless (CI)
 """
 
 import argparse
@@ -21,7 +21,8 @@ from collections import Counter, deque
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))      # -> src/
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (COMMANDS, EXAMPLES_DIR, MI_MIN_VOTES, MI_MODEL_PATH,  # noqa: E402
                     MI_PROB_MIN, MI_VOTE_LEN, MI_WINDOW_S, UDP_HOST, UDP_PORT,
                     apply_invert, use_utf8_console)
@@ -76,7 +77,7 @@ def pilot(calibrate_first=False, session=None, synthetic=False, send=False,
         synthetic = True
 
     if calibrate_first and not smoke:
-        import research.mi_calibrate as mi_calibrate
+        import mi_calibrate
         mi_calibrate.calibrate(session=session, synthetic=synthetic)
 
     # Modèle + source de fenêtres

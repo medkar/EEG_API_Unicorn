@@ -7,7 +7,7 @@ l'inverse est interdit (voir `core/__init__.py`).
 
 Quatre familles, à ne pas confondre en parcourant le dossier :
 
-1. **L'application pygame** — `app.py` (menu, 6 modes), `ui.py`, `ssvep_stimulus.py`,
+1. **L'application pygame** — `app.py` (menu, 5 modes), `ui.py`, `ssvep_stimulus.py`,
    `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
    moteur, le casque n'accepte qu'une connexion.
 2. **Les décodeurs des modes** — `cvep_*`, `p300_decoder`, `errp_decoder`. Ce sont eux qui
@@ -23,4 +23,9 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
 Reste `controller.py` et `live_ssvep.py`, hérités du banc d'essai robot : ils décodent et
 envoient un `{jx,jy}` en UDP. Le produit ne fonctionne plus ainsi (l'API publie une intention
 neutre sur LSL, cf. `docs/robot_testbed.md`), ils survivent comme référence de comparaison.
+
+`mi_calibrate.py` et `mi_pilot.py` ont quitté ce dossier le jour où le moteur a appris à
+calibrer et décoder le Motor Imagery lui-même (`core/modes/mi_calib.py`, `core/modes/mi.py`) :
+ils vivent maintenant dans `archive/`, encore exécutables (`--smoke`), gardés comme référence
+pour vérifier la calibration du moteur — voir `archive/README.md`.
 """

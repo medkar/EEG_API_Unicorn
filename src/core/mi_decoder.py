@@ -1,8 +1,9 @@
-"""Décodeur Motor Imagery (imagerie motrice) : CSP + LDA, 2 commandes (main gauche/droite)
-+ un état REPOS explicite (indispensable pour un « stop » fiable).
+"""Décodeur Motor Imagery (imagerie motrice) : CSP + LDA, deux classes de mouvement imaginé
+(main gauche/droite) + un état REPOS explicite (indispensable pour distinguer un repos réel
+d'une simple absence de décision).
 
 Contrairement au SSVEP (CCA, zéro entraînement), le MI doit être ENTRAÎNÉ :
-  1. calibration  -> essais EEG étiquetés GAUCHE / DROITE / REPOS   [src/research/mi_calibrate.py]
+  1. calibration  -> essais EEG étiquetés GAUCHE / DROITE / REPOS   [src/core/modes/mi_calib.py]
   2. entraînement -> CSP (filtres spatiaux) + LDA                    [MIModel.fit]
   3. online       -> MIModel classe la fenêtre en direct            [MIModel.predict_proba]
 
@@ -36,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import MI_METHOD, MI_REREF, use_utf8_console  # noqa: E402
 
 MI_BAND = (8.0, 30.0)                       # mu (8-12) + beta (13-30) = rythmes sensorimoteurs
-MI_CONTROL = ("GAUCHE", "DROITE")           # commandes réelles
+MI_CONTROL = ("GAUCHE", "DROITE")           # classes actives (hors REPOS)
 MI_LABELS = ("GAUCHE", "DROITE", "REPOS")   # classes du modèle (REPOS = état neutre)
 
 
@@ -227,9 +228,8 @@ class MIDecoder:
             REPOS d'un côté, `-1` de l'autre) ;
           - ici, une seule fenêtre décide ; là-bas, un vote glissant sur `vote_len` fenêtres.
 
-        Cette méthode reste utilisée par l'appli pygame (`research/app.py`, `mi_pilot.py`), qui
-        pilote un affichage local et n'a pas de contrat public à tenir. Elle n'est donc pas
-        morte — mais ne t'en sers pas pour raisonner sur ce que publie le moteur.
+        Cette méthode n'est plus utilisée que par `archive/mi_pilot.py`. Le moteur, lui, passe
+        par `scores()` : voir `core/modes/mi.py`.
         """
         sc = self.scores(window)
         best = max(sc, key=sc.get)

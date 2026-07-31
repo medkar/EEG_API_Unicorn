@@ -52,18 +52,20 @@ python src/core/modes/registry.py    # catalogue des 7 modes, ce qui sort vers l
 python src/core/modes/ssvep.py       # les réglages du mode SSVEP
 python src/core/modes/mi.py          # le mode MI : seuil, vote, appariement p_<classe> ↔ classe
 python src/core/mi_models.py         # les modèles MI sur le disque : lesquels se chargent vraiment
+python src/core/modes/calibration.py # la ligne du temps d'une calibration : chauffe, essais, entraînement, abandon
+python src/core/modes/mi_calib.py    # calibration MI : accuracy HONNÊTE (CV par essai), jamais d'écrasement
 python src/core/acquisition.py --synthetic   # acquisition seule + fenêtre MI NON filtrée
 python src/core/lsl_io.py            # publication LSL, pont d'horloge, verdicts qualité
 python src/core/server.py --smoke    # le moteur : frontière core/, cumul, repos partagé, flux
 python src/console/app.py --smoke    # la console : grille, page de mode, formulaire (Qt offscreen)
-python src/research/app.py --smoke   # l'appli pygame : menu + 6 modes + calibrations (~3 min)
+python src/research/app.py --smoke   # l'appli pygame : menu + 5 modes + calibrations (~3 min)
 ```
 
 Attendu : `VERDICT : OK` pour tous, **sauf `acquisition.py`** qui n'imprime pas de ligne de verdict
 — pour celui-là, lire les `OK` ligne à ligne et le code de sortie (`$LASTEXITCODE` sous PowerShell,
 qui doit valoir 0) — et `smoke OK : menu + SSVEP + c-VEP … câblés (headless)` pour le dernier.
 
-⚠️ **Les trois lignes MI ne sont pas décoratives.** Aucun des trois smokes ne les exécute, et le
+⚠️ **Les cinq lignes MI ne sont pas décoratives.** Aucun des trois smokes ne les exécute, et le
 **non-filtrage de la fenêtre MI** — l'invariant central du mode, un double filtrage décoderait du
 bruit avec des probabilités à 0,99 — n'est vérifié que par `acquisition.py --synthetic`.
 
@@ -82,8 +84,10 @@ Le board synthétique de BrainFlow remplace le casque : signal artificiel, aucun
 
 **Deux choses à savoir avant de commencer, sinon tu vas chercher un bug qui n'existe pas :**
 
-1. **La console ne démarre pas un mode.** Elle affiche, règle et publie ; le choix des modes se
-   fait au lancement, avec `--mode`. C'est conforme à la spec, mais ça surprend devant l'écran.
+1. **La console sait démarrer/arrêter un mode depuis la grille** (bouton **Démarrer**/**Arrêter**
+   par tuile) — ce n'était PAS le cas avant ce chantier, où il fallait la relancer avec `--mode`
+   pour voir quoi que ce soit tourner. `--mode` au lancement reste un raccourci utile : il démarre
+   plusieurs modes d'un coup, ce qu'on exploite au test 1.7 pour le repos partagé.
 2. **« Appliquer » est refusé sur un mode arrêté** — « SSVEP n'est pas démarré ». Le bouton
    « Proposer », lui, répond même arrêté. D'où les **deux lancements** ci-dessous.
 
@@ -248,6 +252,23 @@ Regarder le **terminal** derrière la fenêtre pendant ces deux manipulations :
 - [ ] Appliquer un **rafraîchissement ou un alpha seuls**, sans toucher aux fréquences → aucun repos,
       et le terminal écrit : « (sans effet sur le décodage : ni repos refait, ni flux recréé) ».
 
+### 1.13 — Démarrer / arrêter un mode depuis la grille
+
+Toujours dans la fenêtre du **Lancement B** (SSVEP et Neuro tournent depuis le test 1.7) : c'est la
+capacité que ce chantier a ajoutée à la console — avant, il fallait fermer et relancer avec `--mode`
+pour changer l'ensemble des modes actifs.
+
+- [ ] Revenir à la grille (« ← Modes ») → la tuile **Neuro** affiche « décode » et propose un
+      bouton **Arrêter**.
+- [ ] Cliquer **Arrêter** sur la tuile Neuro → elle repasse à « arrêté », et
+      `EEG_API_Unicorn_decoded_neuro` disparaît du réseau (vérifiable avec
+      `python -u examples/receiver.py --list` dans un troisième terminal).
+- [ ] Cliquer **Démarrer** sur la même tuile → elle repart, chauffe puis repos compris, **sans
+      qu'il ait été nécessaire de fermer la console**.
+- [ ] La tuile **Motor Imagery** porte le même bouton **Démarrer** ; elle n'est grisée nulle part
+      (cf. 1.2). Sans modèle entraîné sur ce poste, cliquer dessus redonne le refus déjà vu en
+      1.2 (« aucun choix disponible »), pas un bouton inactif.
+
 ---
 
 ## Niveau 2 — au casque
@@ -326,45 +347,55 @@ casque**. Il sort des indices, personne n'a confirmé qu'ils veulent dire quelqu
       (yeux fermés, calcul mental, relâchement). Ce n'est **pas** une validation — c'est un premier
       regard, à consigner tel quel.
 
-### 2.6 — Motor Imagery : entraîner un modèle, puis décoder À TRAVERS LE MOTEUR
+### 2.6 — Motor Imagery : calibrer PUIS décoder, dans la MÊME console
 
-C'est le chemin complet du chantier : une calibration écrit un modèle dans `data/`, la console le
-propose, le moteur le charge et publie `decoded_mi`. Chaque bout a été testé séparément ; les trois
-ensemble, sur une tête, jamais.
+C'est le chemin complet du chantier : une calibration écrit un modèle dans `data/`, la même
+console le propose, le charge et publie `decoded_mi`. Chaque bout a été testé séparément ; les
+trois ensemble, sur une tête, jamais.
 
-⚠️ **Un seul programme à la fois.** La calibration est dans l'appli pygame, le décodage dans la
-console : il faut FERMER l'une avant d'ouvrir l'autre. Et la réouverture fait saturer C3/Cz —
-précisément les voies que lit le MI. Prévois donc une pause de stabilisation après la bascule, et
-ne juge rien sur les premières dizaines de secondes.
+Ce que ce chantier a changé : la calibration est maintenant **jouée par le moteur** et affichée
+par la console elle-même, sur sa page Motor Imagery — plus de bascule entre deux programmes pour
+cette étape, donc plus de risque de saturation C3/Cz à la réouverture rien que pour calibrer.
 
 ```bash
-python src/research/mi_calibrate.py     # 5-7 min, fatigant : sujet frais
-# puis fermer, et seulement ensuite :
 python src/console/app.py --mode mi
 ```
 
-- [ ] La calibration va au bout et annonce avoir écrit un modèle. Noter sa CV : ______ %.
-- [ ] Dans la console, ouvrir **Motor Imagery** → le champ « Modèle entraîné » propose le fichier
-      qui vient d'être écrit, en tête de liste (le plus récent d'abord).
-- [ ] Après la chauffe de 15 s, la page affiche une barre par classe et un verdict qui alterne
-      entre « vote non conclu » et « INTENTION … ». La règle affichée au-dessus des barres doit
-      nommer le **vote** (« seuil 0,6 par fenêtre, puis 3 fenêtres d'accord sur les 5 dernières »),
-      pas « la classe gagnante doit dépasser le seuil ».
+- [ ] Ouvrir **Motor Imagery** → bouton **Calibrer**. La page affiche la consigne en cours
+      (GAUCHE / DROITE / REPOS), l'essai en cours et le temps restant — 5 à 7 min par défaut,
+      fatigant : sujet frais.
+- [ ] La calibration va au bout et annonce avoir écrit un modèle horodaté. Noter l'accuracy
+      affichée : ______ %.
+- [ ] **Ce qu'il faut attendre — à lire AVANT de regarder ce chiffre.** Il est désormais
+      **honnête** (validation croisée groupée PAR ESSAI, jamais par fenêtre — l'ancien écran
+      pygame affichait un chiffre gonflé de 10 à 16 points) et porte sur les **trois classes**
+      (GAUCHE/DROITE/REPOS, hasard 33 %). **≈ 40 % est un résultat NORMAL**, pas un échec : c'est
+      le chiffre de référence mesuré honnêtement sur la seule séance archivée du projet
+      (cf. README). Le Motor Imagery ne marche pas également bien chez tout le monde.
+- [ ] Revenir sur la page **Motor Imagery** (rien à relancer, toujours la même console) → le
+      champ « Modèle entraîné » propose le fichier qui vient d'être écrit, en tête de liste (le
+      plus récent d'abord).
+- [ ] Cliquer **Démarrer**. Après la chauffe de 15 s, la page affiche une barre par classe et un
+      verdict qui alterne entre « vote non conclu » et « INTENTION … ». La règle affichée
+      au-dessus des barres doit nommer le **vote** (« seuil 0,6 par fenêtre, puis 3 fenêtres
+      d'accord sur les 5 dernières »), pas « la classe gagnante doit dépasser le seuil ».
 - [ ] Imaginer 10 fois la main gauche, 10 fois la droite, en alternant. Compter les intentions
-      justes : ______ / 20.
-
-**Ce qu'il faut attendre — à lire AVANT de compter.** Le chiffre honnête de ce mode est **63 % à
-deux classes** (validation croisée groupée par essai, 30 essais, une personne). **Une erreur sur
-trois est donc NORMALE**, et 13/20 est un résultat conforme, pas un échec. Le 79 % qui circule
-vient d'une autre séance dont les données brutes ont été perdues (cf. README). Ne conclus rien
-d'un écart sur 20 essais : c'est du bruit à cette taille d'échantillon.
-
+      justes : ______ / 20. Le repère honnête à deux classes est **63 %** (cf. README) — un
+      résultat proche d'une erreur sur trois est donc CONFORME. Ne conclus rien d'un écart sur
+      20 essais : c'est du bruit à cette taille d'échantillon.
 - [ ] En parallèle, sur un autre terminal, vérifier que l'intention sort **vraiment** sur le
       réseau : `python -u examples/receiver.py --stream decoded_mi`. Attendu : `intent_index`,
       `confidence`, puis `p_GAUCHE`, `p_DROITE`, `p_REPOS`.
 - [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REPOS (« la personne se
       repose ») ne veulent **pas** dire la même chose. Le flux donne les deux dans ses
       métadonnées (`no_decision_index`, `rest_index`) : vérifier qu'ils diffèrent.
+
+**Au besoin seulement — l'ancien écran, en comparaison.** `archive/mi_calibrate.py` existe encore,
+justement pour ça : comparer minutage, consignes et époques enregistrées si un doute apparaît un
+jour sur la calibration du moteur. Ne PAS le lancer juste après ce test par curiosité : il écrit
+sous les anciens noms FIXES (`data/mi_model.joblib`, `data/mi_calib_last.npz`), donc il
+**écraserait** un enregistrement, sans toucher aux modèles horodatés que ce test vient de produire
+— et il faut fermer la console avant de l'ouvrir (cf. `archive/README.md`).
 
 ---
 
@@ -431,8 +462,6 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
 - **Le MI n'a jamais été décodé au casque À TRAVERS LE MOTEUR.** Le pont modèle → moteur → flux
   est vérifié sans casque (`server.py --smoke`), et le décodage lui-même l'a été dans l'appli
   pygame. Les deux bouts ensemble, sur une tête, restent à faire : c'est 2.6.
-- **La console ne démarre pas un mode.** Elle affiche, règle et publie ; le choix des modes se fait
-  au lancement avec `--mode`. C'est conforme à la spec, mais ça surprend devant l'écran.
 - **La garde de 1,9 Hz autour de l'alpha repose sur une seule personne.** Elle est encadrée par les
   deux seules mesures du projet : 12 Hz à 1,50 Hz du pic échoue, 8,571 Hz à 1,93 Hz marche. n = 1.
   À réviser dès que plusieurs personnes auront été mesurées — c'est exactement le genre de chiffre

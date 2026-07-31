@@ -25,11 +25,13 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
-- L'**application pygame** (`src/research/app.py`, menu à 6 modes) reste le seul accès aux **3 modes
+- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès aux **3 modes
   que le moteur ne sait pas faire** : c-VEP, P300, ErrP. Le SSVEP, le neuro et le **Motor Imagery**
-  sont publiés par le moteur et pilotés depuis la console. ⚠️ La **calibration** MI, elle, vit encore
-  dans l'appli pygame (`src/research/mi_calibrate.py`) : le moteur consomme un modèle entraîné, il ne
-  sait pas encore l'entraîner. C'est la moitié B du chantier 3.
+  sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
+  « Calibrer » sur sa page joue la séance et affiche un modèle horodaté avec son accuracy honnête.
+  Les anciens écrans pygame du MI (calibration, pilotage) sont **archivés**, pas supprimés, dans
+  [`archive/`](archive/README.md) : ils restent la référence contre laquelle vérifier la calibration
+  du moteur.
 - ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, appli pygame. Le casque
   n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
   sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
@@ -58,7 +60,7 @@ python src/console/app.py --synthetic      # la console sans casque (board de te
 python src/core/server.py --mode ssvep --refresh 60   # le moteur seul (headless) : décode et publie
 python src/core/server.py --mode ssvep,neuro   # deux modes en même temps
 python src/core/server.py --mode mi        # le Motor Imagery sur le réseau (EXIGE un modèle entraîné)
-python src/research/mi_calibrate.py        # entraîner ce modèle (seul chemin aujourd'hui)
+# calibration MI : bouton « Calibrer » sur sa page dans la console — plus de commande séparée
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)
 python src/research/app.py --synthetic     # sans casque (board de test BrainFlow)
@@ -69,15 +71,17 @@ python src/research/app.py --synthetic     # sans casque (board de test BrainFlo
 ```bash
 python src/core/server.py --smoke          # moteur : registre, frontière, repos partagé, cumul, flux
 python src/console/app.py --smoke          # console : grille, page de mode, réglages (Qt offscreen)
-python src/research/app.py --smoke         # appli : menu + les 6 modes + les calibrations
+python src/research/app.py --smoke         # appli : menu + les 5 modes + les calibrations
 ```
 
-Et les trois gardes du Motor Imagery, qu'**aucun des trois smokes ci-dessus n'exécute** :
+Et les cinq gardes du Motor Imagery, qu'**aucun des trois smokes ci-dessus n'exécute** :
 
 ```bash
 python src/core/acquisition.py --synthetic # fenêtre MI NON filtrée (double filtrage = bruit à p=0,99)
 python src/core/modes/mi.py                # seuil, longueur du vote, appariement p_<classe> ↔ classe
 python src/core/mi_models.py               # refus des modèles hérités, tri du plus récent au plus ancien
+python src/core/modes/calibration.py       # la ligne du temps d'une calibration : chauffe, essais, entraînement, abandon
+python src/core/modes/mi_calib.py          # calibration MI : accuracy HONNÊTE (CV par essai), jamais d'écrasement
 ```
 
 Le non-filtrage de la fenêtre MI est l'invariant central du sous-système et il n'est vérifié que

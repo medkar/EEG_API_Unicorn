@@ -1,4 +1,4 @@
-"""Application EEG_API_Unicorn : un menu, six modes de décodage, une seule session casque.
+"""Application EEG_API_Unicorn : un menu, cinq modes de décodage, une seule session casque.
 
     python src/research/app.py                 # plein écran, casque réel
     python src/research/app.py --windowed      # fenêtre (pour garder la console à côté)
@@ -7,19 +7,21 @@
     python src/research/app.py --smoke         # test headless (CI)
 
 Les modes de commande produisent la MÊME chose — une consigne {jx, jy} émise en UDP —
-mais par quatre voies neurophysiologiques différentes :
+mais par trois voies neurophysiologiques différentes :
 
   [1] SSVEP   flèches clignotant à 8.57/15/20 Hz, décodage CCA. Aucune calibration, marche
               tout de suite. C'est le mode de référence, validé sur le robot.
-  [2] MI      Motor Imagery : imaginer serrer le poing gauche/droit. Aucun stimulus visuel,
-              le plus proche d'un « contrôle par la pensée », mais demande une calibration
-              longue (5-7 min) et de l'entraînement.
-  [3] c-VEP   flèches affichant une m-séquence décalée, décodage par template appris.
+  [2] c-VEP   flèches affichant une m-séquence décalée, décodage par template appris.
               Calibration courte (~1 min) ; spectre étalé, donc pas de concurrence avec
               le pic alpha (contrairement au SSVEP).
-  [4] P300    oddball : les cibles clignotent une à une, on fixe+compte celle qu'on veut ;
+  [3] P300    oddball : les cibles clignotent une à une, on fixe+compte celle qu'on veut ;
               son flash évoque un P300 (ligne médiane Fz/Cz/Pz). SÉLECTION DISCRÈTE (pas de
               contrôle continu) décodée par xDAWN+Riemann. Calibration ~3-4 min.
+
+Le Motor Imagery, quatrième voie historique de cette famille, a quitté cette appli : il est
+publié par le moteur et se pilote (calibration comprise) depuis la console — voir
+`src/core/modes/mi.py` et `src/core/modes/mi_calib.py`. Son écran pygame d'origine est archivé,
+encore exécutable, dans `archive/` (voir `archive/README.md`).
 
 L'appli garde UNE session BrainFlow et UN socket ouverts pour toute la durée : passer d'un
 mode à l'autre est instantané (ESC ramène au menu, sans rouvrir le Bluetooth).
@@ -41,8 +43,7 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS
                     CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH,
                     CVEP_VOTE_LEN, ERRP_DEMO_ERROR_RATE, ERRP_EPOCH_S, ERRP_FEEDBACK_S,
                     ERRP_MAX_RUN_STEPS, ERRP_MIDLINE, ERRP_MODEL_PATH, ERRP_PRE_S,
-                    ERRP_TRACK_CELLS, MI_KEY_CHANNELS, MI_MODEL_PATH,
-                    MI_PROB_MIN, MI_WINDOW_S, N_HARMONICS,
+                    ERRP_TRACK_CELLS, N_HARMONICS,
                     NEURO_BASELINE_S, NEURO_KEY_CHANNELS, NEURO_UPDATE_HZ,
                     NEURO_WARMUP_S, NEURO_WINDOW_S, NEURO_Z_SPAN, OCCIPITAL,
                     P300_BURST_S, P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR,
@@ -130,7 +131,7 @@ def _panel(app, order, scores, threshold, cmd, sigma, ready, subtitle, scale=1.0
 
 
 def _arrow_painter(app, plan, polys, on_fn, highlight_target=False):
-    """Peintre « flèches » (SSVEP et MI). Voir l'avertissement sur `highlight_target`."""
+    """Peintre « flèches » (SSVEP). Voir l'avertissement sur `highlight_target`."""
     pg = app.pygame
 
     def paint(frame, cmd):
@@ -147,8 +148,8 @@ def _arrow_painter(app, plan, polys, on_fn, highlight_target=False):
 def _live_loop(app, live, order, threshold, subtitle, paint, scale=1.0):
     """Boucle de rendu commune : `paint(frame, cmd)` dessine les cibles, le reste est partagé.
 
-    Le paramètre `paint` existe parce que les modes n'ont plus la même géométrie : SSVEP et MI
-    utilisent 4 directions de flèche, le c-VEP une couronne de N cibles (c'est justement ce qui
+    Le paramètre `paint` existe parce que les modes n'ont plus la même géométrie : SSVEP
+    utilise 4 directions de flèche, le c-VEP une couronne de N cibles (c'est justement ce qui
     lui permet de dépasser 4 commandes).
 
     ⚠️ Aucun mode à stimulus ne doit surligner la cible détectée : un élément statique lumineux
@@ -410,45 +411,7 @@ def mode_ssvep(app):
         _live_loop(app, live, [c["name"] for c in plan], thr, label, paint, scale=scale)
 
 
-# --- Mode 2 : Motor Imagery ------------------------------------------------
-
-def _mi_decode(app, live, ctrl, hz=2.5):
-    while not live.stop.is_set():
-        w = app.acq.get_epoch(MI_WINDOW_S)
-        if w is not None:
-            cmd, sc = ctrl.step(w)
-            live.publish(cmd, sc, float(np.asarray(w).std(axis=0).mean()))
-        time.sleep(1.0 / hz)
-
-
-def mode_mi(app, model_path=MI_MODEL_PATH):
-    from core.mi_decoder import MIDecoder, MIModel
-    from research.mi_pilot import MIController
-
-    if not os.path.exists(model_path):
-        app.flash("Pas de modèle Motor Imagery",
-                  "lance d'abord « Motor Imagery -> Calibrer »", 3.5)
-        return
-    if not app.signal_check(highlight=MI_KEY_CHANNELS, mode_label="Motor Imagery"):
-        return                    # liaison + voies clés (C3/Cz/C4) ; casque KO ou ESC -> retour
-    model = MIModel.load(model_path)
-    decoder = MIDecoder(model, prob_min=MI_PROB_MIN)
-    label_to_cmd = {c["name"]: c for c in COMMANDS if c["name"] in decoder.labels}
-    ctrl = MIController(decoder, label_to_cmd)
-    plan = [c for c in COMMANDS if c["name"] in label_to_cmd]
-    polys, _ = app.arrows(plan)
-    print(f"[mi] classes={model.labels} méthode={model.method} fenêtre={MI_WINDOW_S}s "
-          f"vote={ctrl.min_votes}/{ctrl.buffer.maxlen}")
-
-    # Surlignage autorisé ici : le MI n'a aucun stimulus visuel à préserver, et le retour
-    # immédiat sur la flèche est justement ce qui fait progresser (neurofeedback).
-    paint = _arrow_painter(app, plan, polys, None, highlight_target=True)
-    with _running(app, _mi_decode, ctrl) as live:
-        _live_loop(app, live, list(model.labels), MI_PROB_MIN,
-                   "Motor Imagery (CSP+LDA)", paint)
-
-
-# --- Mode 3 : c-VEP --------------------------------------------------------
+# --- Mode 2 : c-VEP --------------------------------------------------------
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
     votes = deque(maxlen=CVEP_VOTE_LEN)
@@ -556,7 +519,7 @@ def mode_cvep_rcca(app, model_path=CVEP_RCCA_MODEL_PATH):
                    f"c-VEP rCCA {len(plan)} cibles (calib {cv})", paint)
 
 
-# --- Mode 4 : P300 (oddball, sélection discrète par attention) --------------
+# --- Mode 3 : P300 (oddball, sélection discrète par attention) --------------
 
 def _p300_ready(app, plan, spots, seconds=2.2):
     """Court écran « choisis ta cible » avant chaque sélection (anneau au repos, rien ne clignote)."""
@@ -738,7 +701,7 @@ def mode_p300(app, model_path=P300_MODEL_PATH, dynamic=False):
         return
 
 
-# --- Mode 5 : Neuro-monitoring passif (workload / vigilance / attention) -----
+# --- Mode 4 : Neuro-monitoring passif (workload / vigilance / attention) -----
 # BCI PASSIF : rien n'est envoyé au robot. On mesure des indices spectraux (θ/α/β) et on les
 # affiche en HISTOGRAMME temps réel, normalisés en z contre un repos mesuré à l'entrée du mode.
 # Voir neuro_monitor.py pour les formules et leur limite (indices corrélés, dérivants). Pas de
@@ -905,7 +868,7 @@ def mode_neuro(app):
     _neuro_live(app, decoder)
 
 
-# --- Mode 6 : ErrP — démonstrateur autonome (potentiel d'erreur) -------------
+# --- Mode 5 : ErrP — démonstrateur autonome (potentiel d'erreur) -------------
 # DÉMONSTRATEUR PASSIF (aucun envoi robot). Tâche orientée-BUT curseur-vers-cible (Ferrez & Millán
 # 2008) : un point doit rejoindre une cible (pastille verte) ; ~ERRP_DEMO_ERROR_RATE des pas partent
 # DANS LE MAUVAIS SENS = erreur RESSENTIE. Chaque pas est épocher en MONO-ESSAI et passé au décodeur
@@ -971,7 +934,7 @@ def _errp_scoreboard(tally):
 
 
 def mode_errp(app, model_path=ERRP_MODEL_PATH):
-    """Mode 6 : démonstrateur ErrP AUTONOME (aucun envoi robot).
+    """Mode 5 : démonstrateur ErrP AUTONOME (aucun envoi robot).
 
     Tâche orientée-BUT curseur-vers-cible (Ferrez & Millán 2008) : un point doit rejoindre l'étoile ;
     ~ERRP_DEMO_ERROR_RATE des pas partent DANS LE MAUVAIS SENS -> vraie erreur RESSENTIE (violation
@@ -1063,14 +1026,6 @@ def mode_errp(app, model_path=ERRP_MODEL_PATH):
 
 # --- Calibrations ----------------------------------------------------------
 
-def calib_mi(app):
-    import research.mi_calibrate as mi_calibrate
-    try:
-        mi_calibrate.calibrate(app=app)
-    except Abort:
-        pass
-
-
 def calib_cvep(app):
     import research.cvep_calibrate as cvep_calibrate
     try:
@@ -1106,13 +1061,12 @@ def calib_errp(app):
 # --- Navigation (menus aux FLÈCHES + SOURIS, retour ←/Échap) ----------------
 
 def _status(app):
-    mi = "oui" if os.path.exists(MI_MODEL_PATH) else "absent"
     cv = "oui" if os.path.exists(CVEP_MODEL_PATH) else "absent"
     p3 = "oui" if os.path.exists(P300_MODEL_PATH) else "absent"
     casque = "board SYNTHÉTIQUE" if app.synthetic else "Unicorn"
     robot = f"ON -> {app.host}" if app.send else "OFF (aucun envoi)"
     return [f"casque : {casque}    écran : {app.refresh:.0f} Hz",
-            f"modèles — MI : {mi}    c-VEP : {cv}    P300 : {p3}",
+            f"modèles — c-VEP : {cv}    P300 : {p3}",
             f"envoi robot : {robot}"]
 
 
@@ -1331,9 +1285,8 @@ def page_errp(app):
 
 
 def home(app):
-    """Accueil : les 6 modes. Retourne 'ssvep'|'mi'|'cvep'|'p300'|'neuro'|'errp', ou None pour quitter."""
+    """Accueil : les 5 modes. Retourne 'ssvep'|'cvep'|'p300'|'neuro'|'errp', ou None pour quitter."""
     modes = [("SSVEP", "flèches clignotantes — sans calibration, marche tout de suite"),
-             ("Motor Imagery", "par la pensée (poing gauche/droit) — nécessite une calibration"),
              ("c-VEP", "codes — 2 variantes : classique (eCCA) ou rCCA + codes distincts"),
              ("P300", "oddball — fixe et compte la cible (6 cibles) — nécessite une calibration"),
              ("Neuro-monitoring", "état mental passif (charge / somnolence / engagement) — histogramme, aucun robot"),
@@ -1341,15 +1294,12 @@ def home(app):
     idx = _navigate(app, "EEG_API_Unicorn — choisis un mode", modes, allow_back=False,
                     status_fn=lambda: _status(app),
                     hotkeys={"r": _toggle_robot, "c": _check_signal})
-    return None if idx is None else ("ssvep", "mi", "cvep", "p300", "neuro", "errp")[idx]
+    return None if idx is None else ("ssvep", "cvep", "p300", "neuro", "errp")[idx]
 
 
 PAGES = {
     "ssvep": lambda app: _mode_page(app, "SSVEP", mode_ssvep, None,
                                     "choix des fréquences, puis run en direct"),
-    "mi": lambda app: _mode_page(app, "Motor Imagery", mode_mi, calib_mi,
-                                 "pilotage poing gauche/droit (modèle requis)",
-                                 "5 à 7 min, choix de la durée à l'écran"),
     "cvep": page_cvep,
     "p300": page_p300,
     "neuro": lambda app: _mode_page(app, "Neuro-monitoring passif", mode_neuro, None,
@@ -1382,14 +1332,12 @@ def main(windowed=False, synthetic=False, send=False, smoke=False, host=UDP_HOST
 
 
 def _smoke(app):
-    """Câblage de bout en bout, headless : menu + calibrations + les 3 modes de pilotage.
+    """Câblage de bout en bout, headless : menu + calibrations + les modes de pilotage (c-VEP, P300).
     Les modèles sont écrits à part (suffixe _smoke) pour ne JAMAIS écraser une vraie calibration."""
     import research.cvep_calibrate as cvep_calibrate
-    from research.mi_pilot import _dummy_model
 
     tmp = os.path.dirname(CVEP_MODEL_PATH)
     cvep_path = os.path.join(tmp, "cvep_model_smoke.npz")
-    mi_path = os.path.join(tmp, "mi_model_smoke.joblib")
 
     import research.cvep_rcca as cvep_rcca
     import research.errp_calibrate as errp_calibrate
@@ -1403,27 +1351,25 @@ def _smoke(app):
     page_cvep(app)            # rend l'écran de choix de variante c-VEP
     page_p300(app)            # rend la page P300 (case arrêt dynamique)
     page_errp(app)            # rend la page ErrP (démonstrateur / réglage seuil / calibrer)
-    mode_neuro(app)           # mode 5 : neuro-monitoring passif (baseline + histogramme headless)
+    mode_neuro(app)           # mode 4 : neuro-monitoring passif (baseline + histogramme headless)
     mode_ssvep(app)
     cvep_calibrate.calibrate(app, save_path=cvep_path)
     mode_cvep(app, model_path=cvep_path)
     cvep_rcca.calibrate_rcca(app, save_path=rcca_path)
     mode_cvep_rcca(app, model_path=rcca_path)
-    _dummy_model().save(mi_path)
-    mode_mi(app, model_path=mi_path)
     p300_calibrate.calibrate(app, save_path=p300_path)
     mode_p300(app, model_path=p300_path)                       # chemin fixe
     mode_p300(app, model_path=p300_path, dynamic=True)         # chemin arrêt dynamique
     errp_calibrate.calibrate(app, save_path=errp_path)         # ErrP : calibration (décodeur, sans robot)
     mode_errp(app, model_path=errp_path)                       # ErrP : démonstrateur solo (détection live)
-    for p in (cvep_path, rcca_path, mi_path, p300_path, errp_path):
+    for p in (cvep_path, rcca_path, p300_path, errp_path):
         if os.path.exists(p):
             os.remove(p)
-    print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + MI + P300 + neuro + ErrP(cal+démo) câblés (headless).")
+    print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + P300 + neuro + ErrP(cal+démo) câblés (headless).")
 
 
 def _parse(argv):
-    p = argparse.ArgumentParser(description="Application EEG_API_Unicorn (SSVEP / MI / c-VEP / P300 / neuro / ErrP).")
+    p = argparse.ArgumentParser(description="Application EEG_API_Unicorn (SSVEP / c-VEP / P300 / neuro / ErrP).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
     p.add_argument("--send", action="store_true", help="armer l'envoi UDP dès le lancement")
     p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")

@@ -57,14 +57,21 @@ python src/core/server.py --mode ssvep,neuro  # the engine alone, no interface (
 python src/core/server.py --no-raw --mode neuro   # decode without broadcasting the raw signal
 ```
 
-A grid of every mode — including the ones the engine cannot run, greyed out with the reason. Open one
-and you get what it produces live, its settings, and a Python snippet that consumes its stream, both
-generated from the mode's contract rather than written by hand. Across the top, permanently: channel
-quality and a detached-reference alarm. The raw mode draws the eight channels themselves.
+A grid of every mode — including the ones the engine cannot run, greyed out with the reason. Each
+runnable tile has its own **Start**/**Stop**: launching with `--mode` is a convenience for bringing
+up several modes at once (they then share one rest phase), not a requirement — the console did not
+use to be able to start a mode on its own, and now it can. Open one and you get what it produces
+live, its settings, and a Python snippet that consumes its stream, both generated from the mode's
+contract rather than written by hand. Across the top, permanently: channel quality and a
+detached-reference alarm. The raw mode draws the eight channels themselves.
 
 Settings are **not validated by the interface**. It submits, and shows the engine's refusal in its own
 words — a rule copied into the UI drifts from the engine's eventually, and the day it drifts it lets
 through a setting that decodes nothing, silently.
+
+A mode page that needs training also has a **Calibrate** button. It runs the whole protocol —
+cued trials, training, an honest accuracy figure — **inside the same window**: nothing to launch
+separately, nothing to close and reopen. Motor Imagery is the one mode that uses it today (below).
 
 Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
 (`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
@@ -91,8 +98,10 @@ probability per class (`GAUCHE`, `DROITE`, `REPOS`).
 Unlike SSVEP, this mode **must be trained per person**. It loads a model produced by a calibration
 and **refuses to start without one**, saying so — a mode that started without a model would publish
 probabilities and never decide anything, which is the silent failure this project exists to remove.
-Train one with `python src/research/mi_calibrate.py`; the console then lists the models it finds and
-lets you pick one.
+Train one **from the console itself**: open Motor Imagery and click **Calibrate** — a few minutes of
+cued left/right/rest trials, played by the engine, ending in a timestamped model and an accuracy
+figure that is honestly cross-validated **by trial**, so no window leaks between folds. The mode
+page then lists the models it finds, newest first.
 
 Two values are easy to confuse and mean different things:
 
@@ -121,8 +130,14 @@ A model belongs to the person it was trained on. Someone else's model produces p
 look plausible and are wrong, which is worse than no output at all.
 
 **The pygame app** — the original all-in-one, still the only way to run c-VEP, P300 and ErrP, and
-the only place with a live histogram for neuro-monitoring. It also still owns **MI calibration**,
-until the engine learns to run it. It owns the headset and publishes nothing.
+the only place with a live histogram for neuro-monitoring. Motor Imagery has fully moved out of it,
+calibration included — this app no longer has it at all. It owns the headset and publishes nothing.
+
+Its former Motor Imagery screens (calibration and pilot) are not deleted, kept in
+[`archive/`](archive/README.md) instead: still runnable (`--smoke`), and the reference the engine's
+own calibration was checked against. They write to `data/` under the old, fixed filenames, so
+running one **overwrites** whatever the console last trained — read `archive/README.md` before
+reaching for them.
 
 ```bash
 python src/research/app.py                 # fullscreen, real headset — main menu
@@ -225,11 +240,18 @@ does not publish them yet, so they are not part of what students consume and may
 
 | Family | Modules |
 |---|---|
-| pygame app | [`app.py`](src/research/app.py) (menu, six modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
+| pygame app | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
 | Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `p300_decoder` · `errp_decoder` |
-| Calibrations — long protocols, train a model into `data/` | `mi_calibrate` · `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
+| Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
+
+### [`archive/`](archive/) — retired, but still runs
+
+Code that used to live in `research/` and was fully replaced — not deleted, because it is the
+reference the replacement was checked against. Each file keeps its own `--smoke`. See
+[`archive/README.md`](archive/README.md) for what moved where, and why running one can still
+overwrite `data/mi_model.joblib`.
 
 ## Self-tests (no headset needed)
 

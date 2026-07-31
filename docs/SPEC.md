@@ -88,8 +88,9 @@ Deux règles en découlent, et elles sont ce qui empêche la frontière de s'eff
    été supprimée (`controller.simulate()` couvre déjà ce câblage).
 2. **Aucun pygame dans `core`** : le moteur doit tourner sur une machine sans écran.
 
-`research` ne veut pas dire « brouillon » — le P300 et le MI y sont validés sur casque. Ça veut dire
-que le moteur ne les publie pas encore, donc qu'ils ne font pas partie du contrat rendu aux étudiants.
+`research` ne veut pas dire « brouillon » — le P300 et le c-VEP y sont validés sur casque. Ça veut
+dire que le moteur ne les publie pas encore, donc qu'ils ne font pas partie du contrat rendu aux
+étudiants.
 
 Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
 **centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
@@ -276,8 +277,9 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 - 1 exemple Python + 1 exemple Unity SSVEP (+ l'exemple d'actionneur UDP).
 
 **v1 :** ~~`MI_decoded` (endogène, calibration native)~~ **[fait 2026-07-30 : flux `decoded_mi`
-publié ; la calibration reste native pygame, cf. §14 moitié B]** · `P300` via marqueurs entrants ·
-control plane LSL complet (`control` + `status`) · ~~`neuro_decoded`~~ **[fait 2026-07-27]**.
+publié ; calibration native ajoutée au moteur le 2026-07-31, cf. §14 moitié B]** · `P300` via
+marqueurs entrants · control plane LSL complet (`control` + `status`) · ~~`neuro_decoded`~~
+**[fait 2026-07-27]**.
 
 **v2 :** `ErrP` (marqueurs) · ~~tableau de bord web (§12.2)~~ **[fait 2026-07-27, puis SUPPRIMÉ 2026-07-28]** remplacé par la **console d'expérimentation** `src/console/` (PySide6) · évolutions parkées F1/F2 (§13).
 
@@ -450,9 +452,21 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
      ⚠️ **Les quatre modèles MI d'avant la restructuration sont abandonnés**, par décision : leur
      pickle référence un module disparu. `mi_models.charger` les refuse explicitement, y compris
      quand un accident de chemin d'import les rendrait chargeables.
-     - **[à faire — chantier 3, moitié B]** la calibration jouée par le moteur (la console ne fait
-       que l'afficher), la gestion des modèles, l'accuracy honnête à la fin d'une calibration, et
-       l'archivage des écrans pygame du MI.
+     - **[fait 2026-07-31 — chantier 3, moitié B]** la calibration Motor Imagery est désormais
+       **jouée par le moteur** (`CalibrationRuntime` / `MICalibration` dans `core/modes/`) : la
+       console ne fait plus qu'en lancer une séance, l'afficher et en montrer le résultat — plus
+       besoin d'un second programme. L'accuracy annoncée à la fin est **honnête** (validation
+       croisée groupée PAR ESSAI, jamais par fenêtre) ; ≈ 40 % à 3 classes est un résultat
+       **NORMAL** (hasard 33 %), là où l'écran pygame affichait un chiffre gonflé de 10 à 16
+       points. Modèle et enregistrement sont **horodatés** : une séance n'écrase plus jamais la
+       précédente, contrairement à l'ancien nom fixe (`mi_model.joblib`). Les écrans pygame du MI
+       (`mi_calibrate.py`, `mi_pilot.py`) sont **archivés** (`archive/`, encore exécutables via
+       `--smoke`) plutôt que supprimés : ils restent la référence contre laquelle vérifier la
+       calibration du moteur. **Le chantier 3 est donc TERMINÉ, ses deux moitiés.** Conséquence
+       qui en découle sans être livrée : le moteur sachant désormais jouer une calibration de
+       bout en bout, l'évolution F2 (§13, « calibration pilotée par l'app externe ») devient
+       **atteignable** — mais rien n'expose ce chemin à un client externe aujourd'hui, LSL ne
+       transporte toujours pas d'époques.
      - **[à faire — lot séparé]** un exemple de récepteur pour le MI, à écrire quand on saura pour
        quel client il est le plus utile.
    - **[à faire — séance matérielle]** la console n'a **jamais été ouverte en fenêtre** : tout est

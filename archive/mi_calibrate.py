@@ -8,10 +8,10 @@ pendant l'imagerie. À la fin : entraînement du modèle + **ton accuracy en val
 ⚠️ EN DIRECT dans un terminal (il faut suivre les consignes). Casque bien porté, immobile.
 Imagerie KINESTHÉSIQUE : *sentir* le serrement de la main, pas se le représenter visuellement.
 
-    python src/research/mi_calibrate.py                 # menu de durée puis calibration
-    python src/research/mi_calibrate.py --session 7min   # saute le menu
-    python src/research/mi_calibrate.py --synthetic      # sans casque (board de test) — debug UI
-    python src/research/mi_calibrate.py --smoke          # test headless (CI)
+    python archive/mi_calibrate.py                 # menu de durée puis calibration
+    python archive/mi_calibrate.py --session 7min   # saute le menu
+    python archive/mi_calibrate.py --synthetic      # sans casque (board de test) — debug UI
+    python archive/mi_calibrate.py --smoke          # test headless (CI)
 """
 
 import argparse
@@ -22,7 +22,8 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 from core.config import (FS_UNICORN, MI_KEY_CHANNELS, MI_MODEL_PATH,  # noqa: E402
                     MI_WINDOW_S, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402

@@ -1,11 +1,11 @@
 """La calibration Motor Imagery : le protocole, l'entraînement, la sauvegarde.
 
-Le protocole est celui qui a été validé au casque et qui vit aujourd'hui dans l'écran pygame
-`src/research/mi_calibrate.py` — mêmes durées, mêmes consignes, même découpage. Il est repris ici
+Le protocole est celui qui a été validé au casque, dans l'écran pygame désormais archivé
+(`archive/mi_calibrate.py`) — mêmes durées, mêmes consignes, même découpage. Il est repris ici
 mot pour mot, à trois différences près, toutes voulues :
 
 1. **L'accuracy affichée est HONNÊTE** (validation croisée par essai, cf. `MIModel.fit`). L'écran
-   pygame affiche un chiffre gonflé de 10 à 16 points.
+   pygame archivé affiche un chiffre gonflé de 10 à 16 points.
 2. **Rien n'est jamais écrasé** : le modèle et l'enregistrement sont horodatés. `mi_calib_last.npz`
    avait un nom FIXE, et c'est ce qui a fait perdre les époques d'une séance à 42 essais.
 3. **Une séance abandonnée n'entraîne rien** (cf. `CalibrationRuntime.cancel`).
