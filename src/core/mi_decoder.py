@@ -182,6 +182,14 @@ class MIModel:
             # Essais DISTINCTS par classe : c'est ce qui borne le nombre de plis, pas le nombre de
             # fenêtres (elles se comptent par trois pour un même essai).
             par_classe = [len(np.unique(groups[y == c])) for c in np.unique(y)]
+            # ⚠️ `n_splits >= 2` (donc `cv_groupee_` non None) dépend d'avoir >= 2 essais DISTINCTS
+            # par classe. Le seul appelant aujourd'hui (`mi_calib._entrainer`) exige >= 5 FENÊTRES
+            # par classe avant même d'arriver ici, et un essai en produit 3 (window_s=2s, step_s=1s,
+            # imagery_s=4s) : 5 fenêtres impliquent donc déjà >= 2 essais — une COÏNCIDENCE
+            # ARITHMÉTIQUE entre deux fichiers, pas un lien garanti. Si ces durées changent côté
+            # calibration, ou si des essais sont ignorés en séance (coupure Bluetooth), `n_splits`
+            # peut retomber à 1 alors que le seuil de 5 fenêtres est atteint. Commentaire jumeau
+            # dans `core/modes/mi_calib.py::MICalibration._entrainer`.
             n_splits = min(5, min(par_classe)) if par_classe else 0
             if n_splits >= 2:
                 cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=0)

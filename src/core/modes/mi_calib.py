@@ -62,8 +62,15 @@ VERDICTS = ((0.60, "EXCELLENT"), (0.45, "UTILISABLE"),
 
 
 def horodatage(maintenant=None):
-    """`AAAAMMJJ-HHMMSS`. Le paramètre existe pour que le test soit reproductible."""
-    return _time.strftime("%Y%m%d-%H%M%S", _time.localtime(maintenant or _time.time()))
+    """`AAAAMMJJ-HHMMSS`. Le paramètre existe pour que le test soit reproductible.
+
+    ⚠️ `maintenant or _time.time()` serait faux : `0.0` (l'epoch Unix, un instant valide) est
+    FALSY en Python, donc `or` le remplacerait par l'heure réelle — exactement le piège que le
+    commit frère du même jour documente ailleurs dans ce fichier (cf. `now=0.0` dans
+    `calibration.py`). Inatteignable en séance réelle, mais un piège posé pour le prochain test.
+    """
+    return _time.strftime("%Y%m%d-%H%M%S",
+                          _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
 def _chemins_libres(dossier, n_essais):
@@ -142,6 +149,15 @@ class MICalibration(CalibrationRuntime):
                 groupes.append(indice)     # le GROUPE est l'essai : c'est ce qui rend la CV honnête
 
         comptes = {c: y.count(c) for c in self.classes}
+        # ⚠️ Ce seuil (5 FENÊTRES/classe) et celui de `MIModel.fit` (n_splits >= 2, donc au moins 2
+        # ESSAIS DISTINCTS par classe) sont deux nombres séparés qui COÏNCIDENT aujourd'hui, sans
+        # qu'aucun lien ne les garantisse : à window_s/step_s/imagery_s inchangés, un essai produit
+        # 3 fenêtres, donc 5 fenêtres/classe impliquent déjà >= 2 essais/classe — assez pour que
+        # `fit` calcule `cv_groupee_`. Si l'un des deux seuils bouge, ou si des essais sont IGNORÉS
+        # en cours de séance (coupure Bluetooth, cf. le message « essai IGNORÉ » dans
+        # `CalibrationRuntime._pas_essai`), une classe peut atteindre 5 fenêtres avec un SEUL essai
+        # distinct : `cv_groupee_` redevient alors None (géré juste plus bas, jamais recopié depuis
+        # la naïve). Commentaire jumeau dans `core/mi_decoder.py::MIModel.fit`.
         if not X or min(comptes.values()) < 5:
             raise ValueError(
                 f"pas assez de données pour entraîner : {comptes} fenêtres par classe, il en faut "
@@ -155,17 +171,33 @@ class MICalibration(CalibrationRuntime):
         # `_chemins_libres` (pas `horodatage` appelée seule) : deux séances qui finissent la
         # même seconde ne doivent PAS produire le même couple de fichiers — cf. sa docstring.
         chemin_modele, chemin_npz = _chemins_libres(self.dossier, len(enregistre))
-        modele.save(chemin_modele)
+        # Le `.npz` D'ABORD, le `.joblib` ENSUITE : si `savez` échoue (disque plein, verrou
+        # antivirus), l'exception remonte AVANT que le modèle n'existe — aucun fichier orphelin.
+        # Dans l'ordre inverse, un `.npz` qui échoue après un `.joblib` déjà écrit laissait un
+        # MODÈLE sur le disque, visible dans la liste de la console, sans enregistrement ni
+        # provenance : exactement ce que « l'échec ne produit AUCUN fichier » interdit. Un `.npz`
+        # orphelin, lui, est inoffensif — rien ne le liste, rien ne le propose.
         np.savez(chemin_npz,
                  epochs=np.asarray([e for e, _l in enregistre]),
                  labels=np.asarray([l for _e, l in enregistre]),
                  fs=fs, window_s=self.window_s, step_s=self.step_s,
                  imagery_s=self.imagery_s)
+        modele.save(chemin_modele)
 
-        cv = modele.cv_groupee_ if modele.cv_groupee_ is not None else 0.0
+        # `None` PROPAGÉ, jamais recopié en 0.0 : un 0 % afficherait « FAIBLE — contact des
+        # électrodes, immobilité… », un diagnostic précis et SANS RAPPORT avec la vraie cause (pas
+        # assez d'essais distincts pour former deux plis). `mi_models.decrire()` et
+        # `MIModel.fit` préservent déjà ce None ailleurs dans le chantier ; il doit l'être ICI aussi.
+        cv = modele.cv_groupee_
         hasard = 1.0 / len(self.classes)
-        print(f"[mi-calib] accuracy HONNÊTE (validation croisée par essai) : {cv*100:.1f}% "
-              f"— hasard {hasard*100:.0f}% — {verdict(cv)}")
+        if cv is None:
+            verdict_txt = ("justesse non mesurable : pas assez d'essais distincts par classe "
+                           "pour une validation croisée")
+            print(f"[mi-calib] {verdict_txt}")
+        else:
+            verdict_txt = verdict(cv)
+            print(f"[mi-calib] accuracy HONNÊTE (validation croisée par essai) : {cv*100:.1f}% "
+                  f"— hasard {hasard*100:.0f}% — {verdict_txt}")
         print(f"[mi-calib] (pour mémoire, la CV naïve, fenêtres mélangées : "
               f"{modele.cv_*100:.1f}% — gonflée, ne pas s'y fier)")
         print(f"[mi-calib] modèle : {chemin_modele}")
@@ -180,7 +212,7 @@ class MICalibration(CalibrationRuntime):
             "cv_naive": float(modele.cv_),
             "hasard": hasard,
             "classes": list(self.classes),
-            "verdict": verdict(cv),
+            "verdict": verdict_txt,
         }
 
 
