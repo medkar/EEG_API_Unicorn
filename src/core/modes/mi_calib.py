@@ -275,11 +275,14 @@ def _selftest():
             self.acq = _FausseAcq()
             self.runtime = runtime
             self.rng = rng
+            self.rendus = []      # les époques RENDUES, dans l'ordre des appels — cf. A3 plus bas
 
         def recent_window(self, seconds):
             n = int(round(seconds * self.acq.fs))
             label = self.runtime.classe or "REPOS"
-            return synth_mi_trial(label, n_samp=n, fs=self.acq.fs, rng=self.rng).T
+            epoque = synth_mi_trial(label, n_samp=n, fs=self.acq.fs, rng=self.rng).T
+            self.rendus.append(np.array(epoque, copy=True))
+            return epoque
 
     dossier = tempfile.mkdtemp(prefix="mi_calib_")
     try:
@@ -327,6 +330,14 @@ def _selftest():
             f"({res['cv_groupee']*100:.1f}% contre {res['cv_naive']*100:.1f}%)")
         chk(abs(res.get("hasard", 0) - 1 / 3) < 1e-9,
             f"le niveau du hasard est rapporté à côté ({res.get('hasard')})")
+        # Le verdict doit être RECALCULÉ depuis la CV honnête, jamais recopié depuis la naïve —
+        # sinon l'étudiant lit un verdict optimiste pendant que le chiffre honnête, affiché juste
+        # à côté, est plus bas. Une implémentation qui calculerait verdict(cv_naive) tout en
+        # gardant cv_groupee honnête passait les 19 assertions précédentes (mutant confirmé) :
+        # celle-ci recoupe explicitement les deux au lieu de les vérifier séparément.
+        chk(res["verdict"] == verdict(res["cv_groupee"]),
+            f"le verdict est recalculé depuis la CV HONNÊTE, pas depuis la naïve "
+            f"({res['verdict']!r} == verdict({res['cv_groupee']!r}))")
 
         # Le modèle et l'enregistrement de CETTE séance sont horodatés et visibles dans le
         # catalogue. (« Rien n'est jamais écrasé » — même à la même seconde — est prouvé plus
@@ -346,6 +357,31 @@ def _selftest():
         chk(d["cv_groupee"] is not None and abs(d["cv_groupee"] - res["cv_groupee"]) < 1e-9,
             f"la description du modèle porte la CV HONNÊTE, pas None ({d['cv_groupee']})")
         chk(d["n_essais"] == 18, f"et le nombre d'essais ({d['n_essais']})")
+
+        # --- l'invariant « époques BRUTES », pinné d'un bout à l'autre ----------------------
+        # La garde du projet (`acquisition.py --synthetic`) protège `motor_window`, que la
+        # calibration n'appelle JAMAIS : elle passe par `recent_window`, une SECONDE porte vers
+        # `MIModel.fit`, sans serrure dédiée. Rien ne pinnait qu'aucun filtrage ne s'y glisse —
+        # un `bandpass(reref(...))` inséré avant `decouper` passe les 19 assertions ci-dessus ET
+        # le smoke (mutant confirmé, cf. rapport). Comparaison OCTET POUR OCTET entre ce que le
+        # faux moteur a RENDU et ce que le `.npz` a PERSISTÉ : ça pinne d'un coup le non-filtrage
+        # (les valeurs) ET l'orientation (n_essais, n_samp, n_ch) — une transposition oubliée
+        # romprait aussi cette égalité (les deux tableaux n'auraient plus la même forme). `rendus`
+        # ne contient QUE les essais ENREGISTRÉS — l'échauffement ne prélève rien (phase
+        # "echauffement" != "essais" dans `CalibrationRuntime._pas_essai`) — donc la comparaison
+        # est exacte, sans avoir à exclure quoi que ce soit après coup.
+        attendu_n = int(round(rt.imagery_s * rt.engine.acq.fs))
+        chk(len(rt.engine.rendus) == res["n_essais"],
+            f"le faux moteur a rendu exactement une époque par essai ENREGISTRÉ "
+            f"({len(rt.engine.rendus)} pour {res['n_essais']} essais)")
+        with np.load(res["enregistrement"]) as npz:
+            epochs_disque = np.array(npz["epochs"])
+        chk(epochs_disque.shape == (res["n_essais"], attendu_n, 8),
+            f"le .npz persiste la forme (essais, échantillons, voies), jamais transposée "
+            f"({epochs_disque.shape})")
+        chk(np.array_equal(epochs_disque, np.asarray(rt.engine.rendus)),
+            "et son contenu est OCTET POUR OCTET celui rendu par recent_window — rien ne "
+            "l'a filtré entre la capture et la sauvegarde")
 
         # Une séance trop courte doit REFUSER d'entraîner, avec une raison, plutôt que de
         # produire un modèle que rien ne distingue d'un bon.
@@ -446,6 +482,17 @@ def _selftest():
         chk(hash_npz_avant is not None and bool(res1.get("enregistrement"))
             and _hash_fichier(res1["enregistrement"]) == hash_npz_avant,
             "et son enregistrement aussi")
+
+        # Même recoupement qu'au-dessus (verdict vs CV honnête), sur DEUX séances de PLUS : la
+        # séance principale (`res`) ne suffit pas à elle seule à débusquer un `verdict(cv_naive)`
+        # ici, ses deux CV tombent dans le MÊME palier — ces deux-ci, si : `cv_groupee`/`cv_naive`
+        # encadrent une frontière de `VERDICTS` sur chacune (vérifié sur cette graine).
+        chk(res1.get("verdict") == verdict(res1.get("cv_groupee"))
+            and res2.get("verdict") == verdict(res2.get("cv_groupee")),
+            f"et sur ces deux séances aussi, le verdict recoupe la CV honnête, pas la naïve "
+            f"(séance 1 : {res1.get('verdict')!r} pour honnête {res1.get('cv_groupee')!r}, "
+            f"naïve {res1.get('cv_naive')!r} ; séance 2 : {res2.get('verdict')!r} pour honnête "
+            f"{res2.get('cv_groupee')!r}, naïve {res2.get('cv_naive')!r})")
 
         chk(verdict(0.70) == "EXCELLENT" and verdict(0.50) == "UTILISABLE"
             and verdict(0.40).startswith("FAIBLE"),
