@@ -74,6 +74,7 @@ class Console(QMainWindow):
         self.grid = ModeGrid(registry.catalog())
         self.grid.ouvrir.connect(self.show_mode)
         self.grid.publier.connect(self._publier)
+        self.grid.demarrer.connect(self._demarrer)
         self.stack.addWidget(self.grid)
 
         self.pages = {}
@@ -110,6 +111,21 @@ class Console(QMainWindow):
     def _publier(self, mode_id, on):
         """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
         self.commande("set_published", id=mode_id, on=on)
+
+    def _demarrer(self, mode_id, on):
+        """Démarrer ou arrêter un mode. Le moteur valide et refuse ; on affiche ce qu'il dit.
+
+        Sans ce geste, produire un modèle par calibration puis l'utiliser obligerait à fermer et
+        rouvrir la console (`--mode mi` au lancement) — or **les voies C3/Cz saturent à la
+        réouverture** (redémarrage de l'amplificateur), et ce sont précisément celles que lit le
+        Motor Imagery. Le parcours entier du chantier passait donc par le geste qui abîme le
+        signal qu'il vient de calibrer.
+
+        On n'envoie AUCUN réglage : le moteur applique les défauts du contrat, qui pour le MI
+        désignent le modèle le plus récemment entraîné. Les changer se fait ensuite dans la page
+        du mode, avec les refus en clair — c'est déjà là.
+        """
+        self.commande("start_mode", id=mode_id) if on else self.commande("stop_mode", id=mode_id)
 
     def commande(self, name, **params):
         """Soumet une commande et retient le refus, s'il y en a un, pour l'afficher."""
@@ -254,6 +270,27 @@ def _smoke():
     console.apply_state(state)
     chk(not moteur_faux.commandes,
         f"et afficher l'état ne réémet aucune commande ({moteur_faux.commandes})")
+
+    # Démarrer / arrêter de bout en bout : clic -> signal de la tuile -> signal de la grille ->
+    # commande au moteur. Le bouton est CLIQUÉ, pas contourné : c'est la seule façon de prouver
+    # que le lambda capture le bon identifiant et le bon sens.
+    moteur_faux.commandes.clear()
+    console.grid.tuiles["neuro"].demarrage.click()      # neuro est arrêté dans l'état factice
+    chk(("start_mode", {"id": "neuro"}) in moteur_faux.commandes,
+        f"un mode arrêté se DÉMARRE depuis sa tuile ({moteur_faux.commandes})")
+    chk(console.grid.tuiles["ssvep"].demarrage.text() == "Arrêter",
+        f"et un mode qui décode propose « Arrêter » "
+        f"({console.grid.tuiles['ssvep'].demarrage.text()})")
+
+    moteur_faux.commandes.clear()
+    console.grid.tuiles["ssvep"].demarrage.click()
+    chk(("stop_mode", {"id": "ssvep"}) in moteur_faux.commandes,
+        f"et un mode démarré s'ARRÊTE ({moteur_faux.commandes})")
+
+    # Les modes que le moteur ne sait pas faire n'ont PAS de bouton : il ne mènerait qu'à un refus.
+    chk(all(t.demarrage.isHidden() for t in console.grid.tuiles.values()
+            if t.spec["status"] != "moteur"),
+        "les modes de l'appli pygame n'exposent aucun bouton de démarrage")
 
     # Pendant un repos, la tuile porte la CONSIGNE — sans elle, le plancher est mesuré pendant
     # que l'étudiant fixe une cible, et il est faux pour toute la séance.

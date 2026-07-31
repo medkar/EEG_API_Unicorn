@@ -80,6 +80,7 @@ class ModeTile(QFrame):
 
     ouvrir = Signal(str)
     publier = Signal(str, bool)
+    demarrer = Signal(str, bool)     # (id, on) — on=True pour démarrer, False pour arrêter
 
     def __init__(self, spec):
         super().__init__()
@@ -94,6 +95,10 @@ class ModeTile(QFrame):
         self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.apercu = MiniBars()
         self.publie = QCheckBox("publié")
+        self._arrete = True
+        self.demarrage = QPushButton("Démarrer")
+        self.demarrage.clicked.connect(
+            lambda: self.demarrer.emit(self.spec["id"], self._arrete))
         self.bouton = QPushButton("Ouvrir")
         self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
         self.publie.toggled.connect(lambda on: self.publier.emit(self.spec["id"], on))
@@ -105,6 +110,7 @@ class ModeTile(QFrame):
         bas = QHBoxLayout()
         bas.addWidget(self.publie)
         bas.addStretch(1)
+        bas.addWidget(self.demarrage)
         bas.addWidget(self.bouton)
 
         layout = QVBoxLayout(self)
@@ -119,6 +125,7 @@ class ModeTile(QFrame):
             self.detail.setText(spec["unavailable"])
             self.etat.setText({"appli_pygame": "appli pygame", "prevu": "prévu"}.get(spec["status"], spec["status"]))
             self.publie.hide()
+            self.demarrage.hide()
             self.bouton.hide()
 
     def update_from(self, mode_state):
@@ -126,6 +133,8 @@ class ModeTile(QFrame):
         if self.spec["status"] != "moteur":
             return
         if mode_state is None:
+            self._arrete = True
+            self.demarrage.setText("Démarrer")
             self.etat.setText("arrêté")
             self.publie.setChecked(False)
             self.publie.setEnabled(False)
@@ -139,6 +148,8 @@ class ModeTile(QFrame):
         self.publie.blockSignals(True)     # sinon régler la case RÉÉMET la commande, en boucle
         self.publie.setChecked(bool(mode_state["published"]))
         self.publie.blockSignals(False)
+        self._arrete = False
+        self.demarrage.setText("Arrêter")
 
         if mode_state["instruction"]:
             self.detail.setText(mode_state["instruction"])
@@ -191,6 +202,7 @@ class ModeGrid(QWidget):
 
     ouvrir = Signal(str)
     publier = Signal(str, bool)
+    demarrer = Signal(str, bool)
 
     def __init__(self, catalog):
         super().__init__()
@@ -201,6 +213,7 @@ class ModeGrid(QWidget):
             tuile = ModeTile(spec)
             tuile.ouvrir.connect(self.ouvrir)
             tuile.publier.connect(self.publier)
+            tuile.demarrer.connect(self.demarrer)
             self.tuiles[spec["id"]] = tuile
             layout.addWidget(tuile, i // COLONNES, i % COLONNES)
         layout.setRowStretch(len(catalog) // COLONNES + 1, 1)
