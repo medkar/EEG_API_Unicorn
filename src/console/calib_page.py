@@ -16,12 +16,11 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console.params_form import ParamsForm  # noqa: E402
-
-# Les phases où une séance TOURNE (ni pas-encore-commencée, ni terminée) — le complément de
-# `CalibrationRuntime.terminee` (cf. core/modes/calibration.py), recopié en dur ici plutôt
-# qu'importé : cette page n'a besoin que de ce vocabulaire de deux mots, pas du reste de
-# `core.modes.calibration`. Si le moteur ajoute une phase, ce fichier doit le savoir.
-PHASES_TERMINALES = ("fini", "annule")
+# Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
+# que CLAUDE.md interdit — renommer une phase côté moteur laisserait sinon cette page sans écran
+# de résultat, sans qu'aucun test ne le voie (`PHASES_TERMINALES` local aurait continué à valoir
+# l'ancien nom).
+from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 
 # La phrase d'honnêteté : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un « 40 % »
 # sans elle ne veut rien dire, et le Motor Imagery ne marche pas également bien chez tout le
