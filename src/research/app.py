@@ -849,7 +849,7 @@ def _neuro_live(app, decoder):
 
 
 def mode_neuro(app):
-    """Mode 5 : histogramme temps réel de 3 indices d'état mental. PASSIF (aucune commande robot).
+    """Mode 4 : histogramme temps réel de 3 indices d'état mental. PASSIF (aucune commande robot).
 
     Déroulé : contrôle liaison (Fz/Pz encadrées) -> warm-up jeté -> repos yeux ouverts (cale les
     échelles z du jour) -> histogramme live jusqu'à ESC (z re-calé lentement contre la dérive)."""

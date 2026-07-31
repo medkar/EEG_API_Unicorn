@@ -262,7 +262,8 @@ pour changer l'ensemble des modes actifs.
       bouton **Arrêter**.
 - [ ] Cliquer **Arrêter** sur la tuile Neuro → elle repasse à « arrêté », et
       `EEG_API_Unicorn_decoded_neuro` disparaît du réseau (vérifiable avec
-      `python -u examples/receiver.py --list` dans un troisième terminal).
+      `python -u examples/receiver.py --list` dans un second terminal — le premier fait tourner
+      la console du Lancement B).
 - [ ] Cliquer **Démarrer** sur la même tuile → elle repart, chauffe puis repos compris, **sans
       qu'il ait été nécessaire de fermer la console**.
 - [ ] La tuile **Motor Imagery** porte le même bouton **Démarrer** ; elle n'est grisée nulle part
@@ -370,8 +371,10 @@ python src/console/app.py --mode mi
       **honnête** (validation croisée groupée PAR ESSAI, jamais par fenêtre — l'ancien écran
       pygame affichait un chiffre gonflé de 10 à 16 points) et porte sur les **trois classes**
       (GAUCHE/DROITE/REPOS, hasard 33 %). **≈ 40 % est un résultat NORMAL**, pas un échec : c'est
-      le chiffre de référence mesuré honnêtement sur la seule séance archivée du projet
-      (cf. README). Le Motor Imagery ne marche pas également bien chez tout le monde.
+      le chiffre de référence mesuré honnêtement sur la seule séance archivée du projet —
+      **40,0 %, p = 0,082, PAS significatif**. Un « 40 % » lu à côté d'un hasard à 33 % donne
+      naturellement envie de conclure que c'est mieux que le hasard ; ce n'est **pas** le cas avec
+      cette mesure. Le Motor Imagery ne marche pas également bien chez tout le monde.
 - [ ] Revenir sur la page **Motor Imagery** (rien à relancer, toujours la même console) → le
       champ « Modèle entraîné » propose le fichier qui vient d'être écrit, en tête de liste (le
       plus récent d'abord).

@@ -89,7 +89,7 @@ def pilot(calibrate_first=False, session=None, synthetic=False, send=False,
     else:
         if not os.path.exists(MI_MODEL_PATH):
             print(f"[mi-pilot] pas de modèle ({MI_MODEL_PATH}). Lance d'abord une calibration "
-                  "(mi_calibrate.py) ou ajoute --calibrate.")
+                  "(archive/mi_calibrate.py) ou ajoute --calibrate.")
             return False
         model = MIModel.load(MI_MODEL_PATH)
         acq = UnicornAcquisition(synthetic=synthetic).start()

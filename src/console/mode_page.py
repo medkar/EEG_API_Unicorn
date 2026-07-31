@@ -167,9 +167,11 @@ class ModePage(QWidget):
     def rafraichir_choix(self):
         """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).
 
-        Appelée sur ÉVÉNEMENT — entrée dans la page, retour d'une calibration — jamais dans le
+        Appelée sur ÉVÉNEMENT — à l'entrée dans la page (cf. `Console.show_mode`) — jamais dans le
         rafraîchissement périodique : résoudre ces choix lit le disque, et le faire dix fois par
-        seconde a déjà coûté 30 % d'un cœur à ce projet.
+        seconde a déjà coûté 30 % d'un cœur à ce projet. Revenir d'une calibration ramène sur la
+        GRILLE, pas sur cette page : rouvrir le mode ensuite retombe dans ce même événement, donc
+        un modèle fraîchement entraîné apparaît quand même dès la prochaine entrée.
         """
         spec = registry.get(self.mode_id)
         if spec is None:

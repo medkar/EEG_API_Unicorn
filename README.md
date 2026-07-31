@@ -182,8 +182,10 @@ instant. **Do not close and reopen the app mid-session** — C3/Cz saturate when
 
 ## Decoding modes
 
-All six share one acquisition session and one UI core. Stimulus frequencies and codes adapt
-automatically to the display refresh rate.
+Five of the six share one acquisition session and one UI core, inside the pygame app. Motor
+Imagery is the exception: it has fully moved to the PySide6 console instead, a separate core with
+its own acquisition session. Stimulus frequencies and codes adapt automatically to the display
+refresh rate.
 
 | Mode | How it works | Calibration | Status |
 |---|---|---|---|
@@ -229,9 +231,11 @@ engine's command queue — and no logic lives here that the engine does not alre
 | [`app.py`](src/console/app.py) | The window: reads state, sends commands, and the headless self-test |
 | [`grid.py`](src/console/grid.py) | The mode grid — every mode, runnable or not |
 | [`mode_page.py`](src/console/mode_page.py) | One page per mode: live output · settings · how to consume it |
+| [`calib_page.py`](src/console/calib_page.py) | The **Calibrate** screen: briefing · live trial · honest result — Motor Imagery today |
 | [`params_form.py`](src/console/params_form.py) | The settings form, generated from the contract. Validates nothing |
 | [`live_views.py`](src/console/live_views.py) | Rendering picked by **family** — active, passive, raw traces |
 | [`banner.py`](src/console/banner.py) | Channel quality and the detached-reference alarm, always visible |
+| [`beeps.py`](src/console/beeps.py) | The calibration's lateralised audio cues — left/right ear tones, honest when audio is missing |
 
 ### [`src/research/`](src/research/) — everything not yet in the engine
 
