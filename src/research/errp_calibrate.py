@@ -29,8 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ERRP_CAL_BLOCKS, ERRP_CAL_TRIALS, ERRP_EPOCH_S,  # noqa: E402
                     ERRP_ERROR_RATE, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS, ERRP_MIDLINE,
                     ERRP_MODEL_PATH, ERRP_PRE_S, ERRP_TRACK_CELLS)
+from core.p300_decoder import epoch_from_stream  # noqa: E402
 from research.errp_decoder import CORRECT, ERROR, ErrPModel, rates  # noqa: E402
-from research.p300_decoder import epoch_from_stream  # noqa: E402
 from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR,  # noqa: E402,F401
                 OUTLINE, WARN, Abort)
 

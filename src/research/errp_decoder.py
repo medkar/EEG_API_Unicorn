@@ -7,8 +7,8 @@ et, en ligne, on ANNULE la dernière commande si erreur détectée.
 
 RÉUTILISATION de la pile P300 (revue littérature 2026-07-23, cf. eeg-modes-a-venir) : le décodeur
 xDAWN + covariances riemanniennes + LR est l'ÉTAT DE L'ART de l'ErrP (famille gagnante du Kaggle NER
-2015). On réutilise `p300_decoder` (build_pipe, bandpass, epoch_from_stream, P300Model._prep) via
-composition ; on change 4 choses : bande 1-10 Hz, pre_s=0.2, post_s=0.7, onset = feedback.
+2015). On réutilise `core.p300_decoder` (build_pipe, bandpass, epoch_from_stream, P300Model._prep)
+via composition ; on change 4 choses : bande 1-10 Hz, pre_s=0.2, post_s=0.7, onset = feedback.
 
 DIFFÉRENCES CLÉS avec le P300 (durement établies par la revue) :
 - **MONO-ESSAI** : une action = UNE époque, AUCUN moyennage sur répétitions (ce qui portait le P300
@@ -39,7 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ERRP_BAND, ERRP_EPOCH_S, ERRP_PRE_S, ERRP_TNR_TARGET,  # noqa: E402
                     ERRP_XDAWN_NFILTER, use_utf8_console)
-from research.p300_decoder import (P300Model, bandpass, build_pipe,  # noqa: E402,F401  (réutilisés/ré-exportés)
+from core.p300_decoder import (P300Model, bandpass, build_pipe,  # noqa: E402,F401  (réutilisés/ré-exportés)
                           epoch_from_stream)
 
 ERROR, CORRECT = 1, 0

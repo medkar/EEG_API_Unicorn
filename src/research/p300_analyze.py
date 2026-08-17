@@ -24,7 +24,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import DATA_DIR, P300_MODEL_PATH, p300_targets, use_utf8_console  # noqa: E402
-from research.p300_decoder import P300Model  # noqa: E402
+from core.p300_models import charger  # noqa: E402
 
 RING = [c["name"] for c in p300_targets()]     # ordre horaire depuis le haut (= ordre à viser)
 DATA = os.path.join(DATA_DIR, "p300_live_last.npz")
@@ -48,10 +48,14 @@ def main(path, order):
         print(f"[p300-an] fichier absent : {path}\n"
               "  Lance d'abord un run live P300 (il sauve data/p300_live_last.npz à l'ESC).")
         return
-    if not os.path.exists(P300_MODEL_PATH):
-        print("[p300-an] pas de modèle P300 (data/p300_model.joblib) — calibre d'abord.")
+    # `os.path.exists` ne suffit pas : un modèle antérieur au déménagement du décodeur dans
+    # core/ (2026-08-17) EXISTE toujours sur le disque mais ne se charge plus (pickle sous
+    # l'ancien module nu `p300_decoder`) -> `P300Model.load` lèverait. `charger` ne lève jamais.
+    model, probleme = charger(P300_MODEL_PATH)
+    if model is None:
+        print(f"[p300-an] pas de modèle P300 utilisable ({probleme}) — calibre ou ré-entraîne "
+              "d'abord.")
         return
-    model = P300Model.load(P300_MODEL_PATH)
     epochs, names, sel, fs = _load(path)
     sels = _group(names, sel)
     order_sels = sorted(sels)

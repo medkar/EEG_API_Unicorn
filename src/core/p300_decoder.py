@@ -14,7 +14,7 @@ LR fait un classifieur robuste. Voir Rivet et al. 2009 (xDAWN), Barachant/Conged
   onset flash -> époque [-pre, +post] (via timestamp, cf. acquisition.get_raw) -> correction de
   ligne de base (moyenne pré-stimulus) -> passe-bande ERP (1-12 Hz) -> xDAWN+Riemann.
 
-Validé ici sur P300 SYNTHÉTIQUE (pas de casque).   python src/research/p300_decoder.py
+Validé ici sur P300 SYNTHÉTIQUE (pas de casque).   python src/core/p300_decoder.py
 """
 
 import os
@@ -68,7 +68,8 @@ def build_pipe(nfilter=P300_XDAWN_NFILTER):
 
 
 class P300Model:
-    """Pipeline entraînable (xDAWN+Riemann+LR) + (dé)sérialisation. `cv_auc_` = AUC par manche."""
+    """Pipeline entraînable (xDAWN+Riemann+LR) + (dé)sérialisation. `cv_auc_` = AUC par manche
+    (GroupKFold) ; `n_epoques_` = nombre d'époques d'entraînement (lu par `p300_models.decrire`)."""
 
     def __init__(self, fs=250.0, band=P300_BAND, pre_s=P300_PRE_S, post_s=P300_EPOCH_S,
                  nfilter=P300_XDAWN_NFILTER):
@@ -79,6 +80,7 @@ class P300Model:
         self.nfilter = nfilter
         self.pipe = build_pipe(nfilter)
         self.cv_auc_ = None
+        self.n_epoques_ = None
 
     def _prep(self, epochs):
         """(n_trials, n_samp, n_ch) [ou (n_samp, n_ch)] -> correction de base + passe-bande ->
@@ -95,6 +97,7 @@ class P300Model:
     def fit(self, epochs, y, groups=None, compute_cv=True):
         Xf, y = self._prep(epochs), np.asarray(y).astype(int)
         self.cv_auc_ = None
+        self.n_epoques_ = int(len(y))
         if compute_cv and len(np.unique(y)) == 2 and len(y) >= 10:
             self.cv_auc_ = self._cv_auc(Xf, y, groups)
         self.pipe.fit(Xf, y)
@@ -181,6 +184,25 @@ def _synth_dataset(rounds, n_targets, reps, fs, rng, amp=0.7, noise=1.6):
     return np.asarray(epochs), np.asarray(y), np.asarray(groups), cues
 
 
+def _itr(n_classes, accuracy, seconds_per_decision):
+    """Débit d'information (bits/min, Wolpaw et al. 2002) — réplique MINIMALE de
+    `research.itr.itr`, pour le seul print de `_demo()` ci-dessous.
+
+    Ce n'est pas de la paresse : `core` ne peut PAS importer `research` (frontière vérifiée par
+    `server.py --smoke`, cf. docstring de tête), et cette formule ne sert nulle part ailleurs
+    dans ce module. Dupliquer dix lignes de maths pures coûte moins qu'un import interdit.
+    """
+    import math
+    n, p = int(n_classes), float(accuracy)
+    if n < 2 or seconds_per_decision <= 0:
+        return 0.0
+    p = min(max(p, 1e-9), 1.0 - 1e-9)
+    if p <= 1.0 / n:
+        return 0.0
+    bits = math.log2(n) + p * math.log2(p) + (1 - p) * math.log2((1 - p) / (n - 1))
+    return max(0.0, bits) * 60.0 / seconds_per_decision
+
+
 def _demo():
     fs, rounds, n_targets, reps = 250.0, 12, 6, 12
     rng = np.random.default_rng(0)
@@ -209,7 +231,6 @@ def _demo():
     sel = ok / rounds
     soa = 0.25
     t_sel = reps * n_targets * soa
-    from research.itr import itr as _itr
     print(f"[2] Sélection leave-one-round-out : {ok}/{rounds} = {sel*100:.0f}%  "
           f"(hasard {100/n_targets:.0f}%)")
     print(f"    à {reps} rép × {n_targets} cibles × {soa*1000:.0f} ms = {t_sel:.1f} s/sélection "

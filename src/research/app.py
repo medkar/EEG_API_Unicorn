@@ -628,15 +628,20 @@ def mode_p300(app, model_path=P300_MODEL_PATH, dynamic=False):
     import random as _random
 
     from research.p300_calibrate import _blank_ring, _flash_targets
-    from research.p300_decoder import P300Model, epoch_from_stream
+    from core.p300_decoder import epoch_from_stream
+    from core.p300_models import charger
 
-    if not os.path.exists(model_path):
-        app.flash("Pas de modèle P300",
-                  "lance d'abord « P300 -> Calibrer » (~4-5 min)", 3.5)
+    # `os.path.exists` ne suffit pas : un modèle antérieur au déménagement du décodeur dans
+    # core/ (2026-08-17) EXISTE toujours sur le disque mais ne se charge plus (pickle sous
+    # l'ancien module nu `p300_decoder`) -> `P300Model.load` lèverait en pleine séance, après le
+    # signal_check. `charger` ne lève jamais et dit quoi faire (ré-entraîner depuis une calibration).
+    model, probleme = charger(model_path)
+    if model is None:
+        app.flash("Pas de modèle P300 utilisable",
+                  probleme or "lance d'abord « P300 -> Calibrer » (~4-5 min)", 4.0)
         return
     if not app.signal_check(highlight=P300_MIDLINE, mode_label="P300"):
         return                    # liaison + voies clés (Fz/Cz/Pz) ; casque KO ou ESC -> retour
-    model = P300Model.load(model_path)
     plan = p300_targets()
     n = len(plan)
     spots = app.ring_spots(plan)
@@ -915,7 +920,7 @@ def _errp_intro(app):
 def _errp_epoch(app, onset, fs):
     """Récupère le flux BRUT depuis l'onset du feedback et découpe l'époque mono-essai (ou None si
     l'époque déborde encore du buffer). Même alignement timestampé que le P300 (robuste à la dérive)."""
-    from research.p300_decoder import epoch_from_stream
+    from core.p300_decoder import epoch_from_stream
     eeg, ts = app.acq.get_raw(time.time() - onset + ERRP_PRE_S + 0.5)
     if eeg is None:
         return None

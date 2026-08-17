@@ -4,9 +4,9 @@ Déroulé d'une MANCHE : une cible est cerclée (la « cible attendue »). Tu la
 ses flashs. On fait clignoter les N cibles chacune leur tour, en ordre mélangé, `reps` fois. Le
 flash de la cible attendue est rare (1/N) et compté -> il évoque un P300 ; les autres non. On
 enregistre chaque flash comme une époque étiquetée « cible / non-cible » (via le timestamp du
-flux, cf. p300_decoder.epoch_from_stream). On change de cible attendue à chaque manche.
+flux, cf. core.p300_decoder.epoch_from_stream). On change de cible attendue à chaque manche.
 
-Ensuite : xDAWN + Riemann appris sur cible-vs-non-cible (voir p300_decoder). Deux chiffres de
+Ensuite : xDAWN + Riemann appris sur cible-vs-non-cible (voir core.p300_decoder). Deux chiffres de
 contrôle : l'AUC cible/non-cible (GroupKFold par manche) et surtout la PRÉCISION DE SÉLECTION en
 leave-one-round-out — retrouve-t-on la cible attendue ? — d'où découle l'ITR.
 
@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_FLASH_OFF_FR,  # noqa: E402
                     P300_FLASH_ON_FR, P300_MIDLINE, P300_MODEL_PATH, P300_PRE_S, P300_REPS,
                     p300_targets)
+from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream  # noqa: E402
 from research.itr import itr  # noqa: E402
-from research.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream  # noqa: E402
 from research.ui import ACCENT, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 BRIEF = [
