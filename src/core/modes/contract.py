@@ -179,6 +179,11 @@ class ModeSpec:
     stream: str = None         # suffixe du flux publié, ex. "decoded_ssvep"
     channels: tuple = ()       # voies de ce flux, quand elles sont FIXES
     channels_fn: object = None  # (params) -> voies, quand elles dépendent d'un réglage (SSVEP)
+    marker_epoch_s: float = 0.0   # tranche prélevée autour d'un marqueur (pré + post), 0 = ce
+                                  # mode n'écoute pas les marqueurs. Dimensionne le tampon du
+                                  # moteur : sous-dimensionné, CHAQUE époque serait tronquée en
+                                  # silence — le décodeur recevrait moins de signal que le
+                                  # contrat n'en annonce, sans la moindre erreur.
     runtime_cls: object = None  # la classe ModeRuntime, ou None si le moteur ne sait pas le faire
 
     def defaults(self):

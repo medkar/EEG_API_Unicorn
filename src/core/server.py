@@ -65,9 +65,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MI_WINDOW_S, NEURO_WINDOW_S,  # noqa: E402
-                    TOLERANCE_DIVISEUR, choose_frequencies, json_float, propose_frequencies,
-                    reference_lost, use_utf8_console)
+from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MARKER_LATE_S, MI_WINDOW_S,  # noqa: E402
+                    NEURO_WINDOW_S, TOLERANCE_DIVISEUR, choose_frequencies, json_float,
+                    propose_frequencies, reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
                     StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
                     verdict_from_sigma)
@@ -108,6 +108,10 @@ class EngineServer:
         self.samples = 0
         self.new_block = None       # le bloc lu au tour courant : (eeg, horodatages LSL) ou None
         self.recent = np.zeros((0, len(CH_NAMES)))
+        # Les horodatages des mêmes échantillons, en temps LSL. Sans eux on ne peut pas SITUER
+        # un marqueur dans le tampon — c'est ce qui manquait pour épocher sur un événement
+        # extérieur. Tenus rigoureusement en phase avec `recent` : même longueur, même troncature.
+        self.recent_ts = np.zeros((0,))
         self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
         # AU PLUS UNE calibration à la fois, tous modes confondus : il n'y a qu'un casque et qu'une
         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
@@ -141,10 +145,20 @@ class EngineServer:
         epoque_calib = max([spec.calibration.epoch_s for spec in registry.MODES
                             if spec.calibration is not None
                             and spec.calibration.runtime_cls is not None] or [0.0])
+        # L'époque prélevée autour d'un marqueur, plus le retard qu'on tolère pour ce marqueur.
+        # ⚠️ Ce besoin doit être NOMMÉ ici. Les 2 s qui suffisaient jusqu'ici venaient de
+        # `QUALITY_WINDOW_S` et `MI_WINDOW_S` : personne ne pense à les protéger, et les baisser
+        # un jour tronquerait CHAQUE époque P300 en silence.
+        #
+        # ⚠️ À ne pas confondre avec le filtre juste au-dessus : l'`epoch_s` d'une calibration
+        # NATIVE ne dimensionne rien, parce que le moteur ne joue jamais ces calibrations. Ici
+        # c'est l'époque du RUNTIME, que le moteur prélève lui-même à chaque marqueur.
+        epoque_marqueur = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
                         int(MI_WINDOW_S * self.acq.fs),
                         int(epoque_calib * self.acq.fs),
+                        int(round((epoque_marqueur + MARKER_LATE_S) * self.acq.fs)),
                         self.acq.window_n) + self.acq.margin_n
 
         self._pending = self._prepare(modes or (), params or {})
@@ -850,8 +864,10 @@ class EngineServer:
                     eeg, ts_unix = self.acq.get_new_data()
                     self.new_block = None
                     if eeg is not None and len(eeg):
-                        self.new_block = (eeg, self.clock.to_lsl(ts_unix))
+                        ts_lsl = self.clock.to_lsl(ts_unix)
+                        self.new_block = (eeg, ts_lsl)
                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
+                        self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
 
                     if now - last_quality >= QUALITY_PERIOD_S:
                         self._publish_quality(self.clock.to_lsl(time.time()))
@@ -1061,17 +1077,36 @@ def _smoke():
 
     print(f"[smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     # Le contrat et le registre d'abord : un défaut là-dedans explique tous les suivants, et
-    # c'est instantané. `and` court-circuite, donc l'ordre est aussi celui du diagnostic.
+    # c'est instantané.
     integre, defauts = registry.check()
     for d in defauts:
         print(f"[smoke-registry] ÉCHEC : {d}")
     print(f"[smoke-registry] {len(registry.MODES)} modes, "
           f"dont {len(registry.runnable())} dans le moteur — "
           f"{'OK' if integre else 'PROBLÈME'}")
-    return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
-            and _smoke_ssvep() and _smoke_neuro() and _smoke_mi() and _smoke_calibration()
-            and _smoke_calibration_refus()
-            and _smoke_cumul() and _smoke_proposition())
+    # ⚠️ Chaque sous-test est appelé INCONDITIONNELLEMENT, dans une LISTE — pas dans un `and` en
+    # cascade. Un `and` court-circuite : dès le premier `False`, Python n'appelle même plus les
+    # suivants, qui restent alors muets. Un seul test instable (timing réseau, SSVEP…) masquait
+    # ainsi SILENCIEUSEMENT tous les tests placés après lui dans la chaîne — déjà rencontré sur ce
+    # projet. En construisant la liste d'abord, chaque appel s'exécute et imprime son propre
+    # VERDICT quoi qu'il arrive ; `all()` ne fait que COMBINER des résultats déjà obtenus, donc un
+    # échec en signale un seul, jamais plus.
+    resultats = [
+        ok,
+        integre,
+        _smoke_frontiere(),
+        _smoke_repos_partage(),
+        _smoke_ssvep(),
+        _smoke_neuro(),
+        _smoke_mi(),
+        _smoke_calibration(),
+        _smoke_calibration_refus(),
+        _smoke_cumul(),
+        _smoke_proposition(),
+        _smoke_dimensionnement(),
+        _smoke_tampon_horodate(),
+    ]
+    return all(resultats)
 
 
 def _smoke_neuro():
@@ -2039,6 +2074,59 @@ def _smoke_cumul():
     server.stop()
     thread.join(timeout=5.0)
     print(f"[smoke-cumul] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_dimensionnement():
+    """`keep` couvre-t-il l'époque du mode le plus gourmand EN MARQUEURS, retard compris ?
+
+    ⚠️ Assertion DIRECTE sur `server.keep`, et c'est délibéré. Observer qu'une époque « sort »
+    ne prouve RIEN : un tampon sous-dimensionné rend quand même ce qu'on lui demande, juste
+    plus court. Ce piège a déjà été rencontré au chantier 3B, sur la calibration MI.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    srv = EngineServer(synthetic=True, modes=(), params={})
+    besoin = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
+    attendu = int(round((besoin + MARKER_LATE_S) * srv.acq.fs))
+    chk(srv.keep >= attendu,
+        f"keep={srv.keep} couvre l'époque du marqueur ({besoin:g} s) plus le retard toléré "
+        f"({MARKER_LATE_S:g} s) = {attendu} échantillons")
+    print(f"[smoke-dimensionnement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_tampon_horodate():
+    """Les deux tampons ont-ils toujours la même longueur, et le temps y avance-t-il ?
+
+    Un décalage d'un seul échantillon entre `recent` et `recent_ts` déplace TOUTES les époques
+    sans rien casser de visible : le décodeur reçoit du signal, de la bonne taille, pris au
+    mauvais endroit.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv.run(duration_s=3.0)
+    chk(len(srv.recent) == len(srv.recent_ts),
+        f"les deux tampons ont la même longueur ({len(srv.recent)} et {len(srv.recent_ts)})")
+    chk(len(srv.recent_ts) > 0, "et ils ne sont pas vides après 3 s d'acquisition")
+    diffs = np.diff(srv.recent_ts)
+    chk(bool(np.all(diffs > 0)), "le temps avance strictement, sans doublon ni retour en arrière")
+    attendu = 1.0 / srv.acq.fs
+    chk(bool(np.median(diffs) > 0.5 * attendu and np.median(diffs) < 2.0 * attendu),
+        f"et la cadence médiane vaut ~1/fs ({np.median(diffs) * 1000:.2f} ms attendu "
+        f"{attendu * 1000:.2f} ms)")
+    print(f"[smoke-tampon] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
