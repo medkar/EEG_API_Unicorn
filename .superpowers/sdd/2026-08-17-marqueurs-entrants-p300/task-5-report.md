@@ -100,8 +100,7 @@ autres modes du registre).
 
 Les cinq commandes du brief ont été relancées une DERNIÈRE fois après restauration complète du
 répertoire de travail (post-preuves rouge/vert et post-vérification du finding console/app.py),
-toutes vertes, `git status` ne portant plus que les deux fichiers préexistants non liés
-(voir « Inquiétudes » n°3).
+toutes vertes, `git status` ne portant plus que `progress.md` (voir « Inquiétudes » n°3).
 
 ## Commit
 
@@ -115,6 +114,17 @@ git commit -m "Publish the P300 as the engine's fourth mode, driven by external 
 [main 37dce0c] Publish the P300 as the engine's fourth mode, driven by external markers
  6 files changed, 640 insertions(+), 20 deletions(-)
  create mode 100644 src/core/modes/p300.py
+```
+
+Second commit, séparé, sans rapport avec le code du mode (détail en « Inquiétudes » n°3) :
+
+```
+[main ec70ae7] Recover this chantier's logbook from an untracked .gitignore regression, again
+ 4 files changed, 710 insertions(+)
+ create mode 100644 .superpowers/sdd/2026-08-17-marqueurs-entrants-p300/task-4-brief.md
+ create mode 100644 .superpowers/sdd/2026-08-17-marqueurs-entrants-p300/task-4-report.md
+ create mode 100644 .superpowers/sdd/2026-08-17-marqueurs-entrants-p300/task-5-brief.md
+ create mode 100644 .superpowers/sdd/2026-08-17-marqueurs-entrants-p300/task-5-report.md
 ```
 
 ## Inquiétudes / ce que je laisse dehors
@@ -136,11 +146,17 @@ git commit -m "Publish the P300 as the engine's fourth mode, driven by external 
    l'écoute serait déçu. Rien à corriger dans le périmètre de cette tâche (ce n'est pas un bug de
    CE fichier), juste un point à garder en tête si une tâche future ajoute plusieurs flux de
    marqueurs nommés.
-3. **`.superpowers/sdd/.gitignore` et `progress.md` de ce chantier sont modifiés dans l'arbre de
-   travail depuis avant que je commence** (confirmé : le dernier commit touchant `progress.md` est
-   `1b48a5e`, alors que HEAD était déjà à `2ebf022` — deux commits plus loin — quand j'ai démarré).
-   Non liés à cette tâche, pas touchés, pas inclus dans mon commit (`git add` explicite des 6
-   fichiers seulement, jamais `-A`).
+3. **`.superpowers/sdd/.gitignore` était de nouveau revenu à `*` (tout ignoré) dans l'arbre de
+   travail, non commité, AVANT que je commence** — exactement la régression que le commit `1b48a5e`
+   avait déjà réparée une fois ; le rapport de la tâche 4 la signale déjà comme préexistante sans y
+   toucher (« pas à moi de trancher seul »). Cette fois, elle rendait `task-5-report.md` — CE
+   fichier, explicitement demandé par le brief — invisible pour git (`git check-ignore -v` confirmé),
+   ainsi que `task-4-brief.md`, `task-4-report.md` et `task-5-brief.md`, jamais ajoutés depuis leur
+   création. Restauré via `git checkout HEAD -- .superpowers/sdd/.gitignore` (aucun diff contre
+   HEAD, donc rien à commiter sur ce fichier) puis les quatre `.md` orphelins ajoutés et commités
+   SÉPARÉMENT du code (`ec70ae7`), sur le même principe que `1b48a5e`. `progress.md`, lui, reste
+   modifié et non touché : son contenu non commité est un récit du coordinateur, pas un fichier
+   perdu par accident — même retenue que la tâche 4.
 4. **Message résiduel dans `p300_models.py`** (« lance une calibration P300 depuis la console »)
    déjà signalé et explicitement différé par la tâche 4 (« la console n'a aucune page P300 »).
    Toujours vrai après cette tâche : la calibration P300 reste `kind="natif"`, jouée par l'appli
