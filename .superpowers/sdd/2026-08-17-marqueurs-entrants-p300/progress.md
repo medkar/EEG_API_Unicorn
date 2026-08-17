@@ -115,3 +115,96 @@ machines, c'est-à-dire le cas que ce compteur existe pour diagnostiquer.
 
 Correction transmise dans le dispatch : **contrôler le futur AVANT la maturité**, jamais après.
 
+
+### Task 3 — suite
+
+Correction en 1 tour (`9fd3499`), les 6 constats traités, aucun contesté. Re-relecture
+(`a8acd33ea554912a6`) : **les 6 ADDRESSED**, aucune casse, comptages recomptés indépendamment —
+`resultats` 15→16, `chk(` 81→93, et les 29 lignes supprimées sont exactement le code relocalisé
+dans `_ouvre_marker_inlet`/`_tire_marqueurs`/`_purge_marqueurs`, zéro assertion touchée.
+
+⚠️ **Le critique n°1 était atteignable AUJOURD'HUI par le chemin d'usage normal** : le bouton
+« Démarrer » de la console envoie `start_mode` pendant que la boucle tourne, et l'inlet n'était
+créé qu'une fois AVANT la boucle. Un mode P300 démarré depuis la grille n'aurait jamais reçu un
+seul marqueur, sans log ni compteur.
+
+**Task 3: minor (deferred)** — conditions limites des compteurs testées loin de leur frontière ·
+`marqueurs_perdus`/`marqueurs_futurs`/`marqueurs_inlet_erreurs` comptés mais jamais affichés ·
+pas de reconnexion explicite si l'appli de stimulus est fermée puis relancée · une assertion
+PRÉEXISTANTE de `_smoke_marqueurs_murs` indexe `m[1]["target"]` sans `.get`, donc casse par
+`KeyError` au lieu d'échouer proprement sous mutation.
+
+**Task 3: complete (commits f30be3d..1b48a5e, review clean)**
+
+### Task 4 — le décodeur P300 déménage dans `core/`
+
+- Implémenteur `a2c053c2e14aed276` (sonnet). **DONE** — commit `2ebf022`.
+- Revue (`af9a9145c9f582f2e`) : **spec ✅, 0 critique, 0 important**, 1 mineur.
+
+🎯 **Le résultat qui compte : AUC 0,7145659722 en validation croisée par manche, BIT POUR BIT
+identique** à celle de l'ancien modèle, lue en lecture seule avant le déménagement. 576 époques,
+96 cibles / 480 non-cibles. Le ré-entraînement reproduit exactement l'original — le pari du plan
+(« ré-entraîner plutôt qu'écrire une passerelle ») est validé par la mesure, pas par l'espoir.
+`data/p300_model.joblib` intact ; nouveau modèle `data/p300_model_20260817-135716.joblib`.
+
+**Trois pièges que MON brief n'avait pas vus, trouvés par l'implémenteur :**
+1. `_demo()` importait `research.itr` — la frontière `core/` aurait sauté au premier lancement.
+   Remplacé par une réplique locale de Wolpaw, que le relecteur a vérifiée ligne à ligne contre
+   l'original : identique, mêmes gardes.
+2. `mode_p300` (app.py) et `p300_analyze.py` testaient le modèle par `os.path.exists()`, qui ne
+   détecte pas « existe mais illisible ». Un étudiant choisissant « P300 → Lancer le live » sans
+   recalibrer aurait eu un crash brut EN SÉANCE. Les deux passent maintenant par `charger()`.
+
+⚠️ **Un constat du relecteur ÉCARTÉ après vérification** : il affirmait que `main` avait avancé
+« sur un tout autre chantier — dashboard web ». Faux — `2ebf022` est le sommet, rien au-dessus, et
+`src/core/dashboard.py` n'existe pas (supprimé le 2026-07-28). Il a lu des commits ANCÊTRES de
+juillet. Vérifié avant de transmettre, comme la règle l'impose.
+
+**Task 4: minor (deferred)** — le message de refus d'un chemin vide dans `p300_models.py` dit
+« lance une calibration depuis la console », or la console n'a aucune page P300 (c'est l'appli
+pygame). Copier-coller depuis `mi_models.py`, branche aujourd'hui inatteignable.
+Aussi : `research/__init__.py` et le README listent encore le P300 comme « à migrer » → tâche 7.
+
+**Task 4: complete (commits 1b48a5e..2ebf022, review clean)**
+
+### Task 5 — le mode P300, son runtime et son flux
+
+- Implémenteur `a35c8fc0ee271827e` (sonnet). **DONE** — commit `37dce0c` (+ `ec70ae7`, `7d927a1`).
+- Diff de 46 Ko → **découpé en 2 tranches** relues EN PARALLÈLE (des relecteurs bornés à leur diff
+  n'exécutent rien, donc c'est sûr) : A = le mode (31 Ko), B = le câblage (15 Ko).
+- **Spec ✅ des deux côtés.** Les deux preuves rouge/vert de l'implémenteur ont été relues et
+  jugées solides — celle de l'appariement `score_<i>` ↔ cible `i` en particulier : « n'importe quel
+  tri, inversion ou décalage d'index y produirait une liste différente ».
+
+**Task 5: fix round 1/5** — 1 critique, 3 importants.
+
+⚠️ **CRITIQUE (tranche A) — l'accumulation des époques n'a ni borne ni notion de manche.** Si
+`round_end` n'arrive jamais, les listes croissent sans limite. Et surtout : **les flashs d'une
+NOUVELLE manche s'empilent sur les orphelins d'une manche avortée**. Le garde-fou de couverture ne
+vérifie que « chaque cible a flashé au moins une fois », pas « ces flashs sont de la même
+manche » — une contamination peut donc le satisfaire, atteindre `select()` et publier une cible
+avec une confiance normale, **silencieusement fausse**. Aucune des cinq pannes ne se déclenche.
+Correction demandée : un délai d'abandon (nouvelle constante `P300_ROUND_TIMEOUT_S`) ET un plafond
+dur, les deux abandonnant la manche À VOIX HAUTE.
+
+**IMPORTANT (A)** — la panne « cible hors plage » ne s'affiche qu'**une fois par SESSION**, jamais
+par manche, et le compteur n'a aucune seconde sortie (absent de `state()`).
+
+**IMPORTANT (B)** — le sens de `-1` n'est écrit que dans la docstring, **jamais dans les
+métadonnées LSL**. `DecodedMIPublisher`, juste au-dessus dans le même fichier, pousse pourtant
+`no_decision_index` dans son `desc()` avec le commentaire qui explique pourquoi. La docstring du
+P300 cite cette leçon MOT POUR MOT sans appliquer le correctif concret. Un client Unity ou MATLAB
+qui lit les métadonnées sans ouvrir le `.py` ne peut pas savoir que `-1` est une sentinelle.
+
+**IMPORTANT (B)** — `stream_in` **ne fait rien** (confirmé par grep : `MARKER_STREAM_DEFAULT` en
+dur dans `_ouvre_marker_inlet`, seule lecture du réglage = un `print`), et son texte d'aide
+**surpromet** : « deux applications peuvent tourner sur le réseau sans se mélanger », capacité
+inexistante. Réglage-décor — exactement ce que ce projet combat. Correction : le câbler, et dire
+bruyamment si deux modes actifs déclaraient deux noms différents.
+
+**Task 5: minor (deferred)** — branche `choisi is None` morte tant que `P300_SELECT_MARGIN` vaut 0 ·
+le contrôle structurel de `registry.check()` n'a aucun test dédié (son jumeau `epoch_s`/`imagery_s`
+n'en a pas non plus — **c'est un trou hérité, pas une régression**) · son message unique couvre deux
+cas distincts là où le jumeau en distingue deux · un futur mode consommant des marqueurs sans
+déclarer `pre_s`/`post_s` passerait `check()` sans alerte · le sens de `-1` manque aussi aux
+métadonnées du SSVEP (lacune préexistante).
