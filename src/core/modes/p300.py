@@ -814,6 +814,33 @@ def _selftest():
         position = int(np.argmax(epoque[:, 0]))
         chk(abs(position - n_pre) <= 1,
             f"un marqueur entre deux échantillons reste aligné à ±1 ({position} vs {n_pre})")
+
+        # --- LE MÊME test, mais par le VRAI chemin d'appel (_encaisser_flash, pas un appel direct
+        # à epoch_from_stream) --------------------------------------------------------------------
+        # Le test ci-dessus prouve que `epoch_from_stream` positionne juste QUAND on lui donne les
+        # bons pre_s/post_s — il ne prouve PAS que `_encaisser_flash` les lui TRANSMET dans le bon
+        # ordre. Piège concret, pas théorique : P300_PRE_S (0,15 s -> 38 éch.) et P300_EPOCH_S
+        # (0,80 s -> 200 éch.) ont des tailles différentes, mais 38+200 == 200+38 == 238 — une
+        # INVERSION `pre_s=self.post_s, post_s=self.pre_s` à l'appel réel produirait une époque de
+        # la MÊME FORME (238, 8), invisible à tout contrôle de taille ou de bornes. Seule la
+        # POSITION du signal DANS l'époque que le runtime a RÉELLEMENT construite peut l'attraper —
+        # d'où ce second test, qui repasse par `rt.tick()` (donc par `_encaisser_flash`) au lieu
+        # d'appeler le décodeur en direct comme ci-dessus.
+        rt._vider_manche()
+        moteur_aligne = _FauxMoteur(eeg, ts)
+        moteur_aligne._lots = [[marqueur(instant_du_pic, 0)]]
+        rt.tick(moteur_aligne, lsl_ts=instant_du_pic, now=999.0)
+        chk(len(rt._epoques) == 1,
+            f"le flash a produit UNE époque en passant par _encaisser_flash, le vrai chemin "
+            f"d'appel du runtime ({len(rt._epoques)})")
+        position_reelle = int(np.argmax(rt._epoques[-1][:, 0])) if rt._epoques else -1
+        chk(position_reelle == n_pre,
+            f"⚠️ ALIGNEMENT (chemin réel _encaisser_flash) : le pic se retrouve à l'échantillon "
+            f"{position_reelle}, il devait être à {n_pre} (décalage de "
+            f"{position_reelle - n_pre} échantillons = "
+            f"{(position_reelle - n_pre) / fs * 1000:+.0f} ms) — pre_s/post_s mal transmis par "
+            f"le runtime")
+        rt._vider_manche()
     finally:
         p300_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)

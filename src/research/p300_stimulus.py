@@ -65,16 +65,32 @@ def build_markers(n_targets, reps, rng):
     répéterait `reps` fois d'affilée, un motif prévisible qui nuirait au caractère "oddball" du
     protocole (littérature P300 classique : l'ordre de présentation doit être imprévisible).
 
+    ⚠️ Aucune cible ne flashe deux fois DE SUITE, y compris à la JONCTION entre deux répétitions.
+    Un shuffle indépendant à chaque répétition laisse ~1/n_targets de chances que la dernière
+    cible d'un bloc soit aussi la première du bloc suivant (aux réglages par défaut, 6 cibles ×
+    8 répétitions : ~72 % de chances qu'AU MOINS UNE des 7 jonctions répète). Le P300 est un
+    paradigme ODDBALL : un flash immédiatement répété introduit un effet de réfractarité non
+    maîtrisé (la réponse évoquée au 2e flash consécutif sur la même cible est amoindrie, qu'elle
+    soit ou non la cible attendue) qui abîme l'onde qu'on cherche justement à mesurer — un
+    étudiant qui adapte ce fichier doit garder cette contrainte, pas seulement le mélange lui-même.
+    Sans effet si `n_targets <= 1` : il n'y a alors aucune autre cible à placer en tête.
+
     Fonction PURE — aucun pygame, aucun réseau — donc testable directement par `--smoke` sans le
     moindre écran. `run()` rejoue exactement cette même séquence en y attachant le rendu et
     l'horodatage réels : aucune divergence possible entre ce que `--smoke` vérifie et ce qui part
     vraiment sur le réseau.
     """
     marqueurs = []
+    derniere_cible = None
     for _ in range(int(reps)):
         ordre = list(range(int(n_targets)))
         rng.shuffle(ordre)
+        # Rejoue le mélange tant que la jonction avec le bloc précédent répéterait une cible.
+        # `n_targets > 1` évite une boucle infinie quand il n'y a justement aucune alternative.
+        while int(n_targets) > 1 and derniere_cible is not None and ordre[0] == derniere_cible:
+            rng.shuffle(ordre)
         marqueurs.extend({"mode": "p300", "event": "flash", "target": t} for t in ordre)
+        derniere_cible = ordre[-1]
     marqueurs.append({"mode": "p300", "event": "round_end"})
     return marqueurs
 
@@ -246,6 +262,15 @@ def _smoke(reps, n_targets):
         "tous les marqueurs portent mode=p300")
     chk(all(0 <= m["target"] < n_targets for m in flashs),
         "toutes les cibles flashées sont dans [0, n_targets[ — le contrat public")
+    # Aucune cible ne flashe deux fois DE SUITE, y compris aux jonctions entre répétitions (cf.
+    # la docstring de build_markers : un paradigme oddball ne doit jamais présenter deux fois le
+    # même stimulus d'affilée, sous peine de réfractarité non maîtrisée sur l'onde mesurée).
+    # Vide de sens si une seule cible existe (rien d'autre à placer) : la garde le dit explicitement
+    # plutôt que d'échouer sur une contrainte mathématiquement impossible à tenir.
+    consecutifs = sum(1 for a, b in zip(flashs, flashs[1:]) if a["target"] == b["target"])
+    chk(n_targets <= 1 or consecutifs == 0,
+        f"aucune cible ne flashe deux fois de suite, jonctions comprises "
+        f"({consecutifs} répétition(s) immédiate(s))")
 
     print(f"[p300-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
