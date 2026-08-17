@@ -118,6 +118,8 @@ class EngineServer:
         self._marqueur_curseur = {}    # mode_id -> index du prochain marqueur à examiner
         self.marqueurs_perdus = 0      # arrivés trop tard pour trouver leur EEG
         self.marqueurs_futurs = 0      # horodatés en avance : time_correction() oublié ?
+        self.marqueurs_inlet_erreurs = 0   # incidents réseau/LSL sur l'inlet, comptés plutôt
+                                            # qu'avalés (voir _tire_marqueurs)
         self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
         # AU PLUS UNE calibration à la fois, tous modes confondus : il n'y a qu'un casque et qu'une
         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
@@ -257,6 +259,11 @@ class EngineServer:
             return
         runtime.close()
         self._last_tick.pop(mode_id, None)
+        # Sans ce nettoyage, un curseur FIGÉ à l'index où ce mode s'est arrêté resterait à
+        # traîner dans `_marqueur_curseur` pour le reste du processus — inoffensif tant que
+        # `_purge_marqueurs` ne regarde que les modes encore actifs, mais une entrée morte de
+        # plus à chaque cycle démarrer/arrêter d'une longue séance, pour rien.
+        self._marqueur_curseur.pop(mode_id, None)
         if not any(r.phase in ("warmup", "rest") for r in self.active.values()):
             self.rest_instruction = ""
         print(f"[server] {runtime.spec.label} arrêté — son flux disparaît du réseau")
@@ -770,6 +777,77 @@ class EngineServer:
         n = max(1, int(round(seconds * self.acq.fs)))
         return np.array(buffer[-n:], dtype=float, copy=True)
 
+    def _ouvre_marker_inlet(self):
+        """Crée l'inlet de marqueurs si un mode ACTIF en a besoin et qu'il n'existe pas déjà.
+
+        Appelée à CHAQUE tour de boucle dans `run()`, pas une seule fois avant le `while` :
+        `self.active` n'est pas figé à l'entrée dans la boucle, `_drain_commands` (juste
+        au-dessus dans `run()`) peut y ajouter un mode en cours de route — c'est exactement ce
+        que fait la console au clic « Démarrer » sur une tuile (« start_mode » traité PENDANT
+        que la boucle tourne). Un mode marqueur démarré ainsi doit trouver son inlet lui aussi :
+        l'évaluer une seule fois avant le `while` le laisserait sans, pour toujours, en silence
+        — indiscernable d'un flux calme.
+        """
+        if self.marker_inlet is not None:
+            return
+        if not any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
+            # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
+            # chaque tour pour rien.
+            return
+        nom = MARKER_STREAM_DEFAULT
+        self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
+        if self.marker_inlet.resolve():
+            print(f"[server] marqueurs entrants : connecté à « {nom} »")
+        else:
+            # Pas une erreur : l'application de stimulus démarre souvent APRÈS le moteur. On
+            # réessaiera dans la boucle (voir `_tire_marqueurs`), et le mode dira qu'il attend.
+            print(f"[server] marqueurs entrants : « {nom} » pas encore là — j'attends. Lance "
+                  f"ton application de stimulus, la connexion se fera toute seule.")
+
+    def _tire_marqueurs(self):
+        """Récupère les marqueurs arrivés depuis le tour précédent, puis purge le tampon.
+
+        Protégée par un `try`, comme le tick de calibration juste à côté dans `run()` : l'inlet
+        est une entrée EXTERNE non maîtrisée, sur une machine potentiellement distincte, qui peut
+        disparaître en cours de séance (réseau coupé, application de stimulus fermée). Une
+        exception ici ne doit tuer NI le moteur NI la séance en cours des AUTRES modes — on
+        compte l'incident (`marqueurs_inlet_erreurs`) plutôt que de l'avaler.
+        """
+        if self.marker_inlet is None:
+            return
+        try:
+            if not self.marker_inlet.connecte:
+                self.marker_inlet.resolve()
+            self._marqueurs.extend(self.marker_inlet.pull())
+        except Exception as e:  # noqa: BLE001 - un incident sur CETTE entrée externe ne doit
+            # jamais faire tomber le moteur ni la séance en cours des autres modes (cf. docstring).
+            self.marqueurs_inlet_erreurs += 1
+            print(f"[server] inlet de marqueurs en erreur : {e}")
+        self._purge_marqueurs()
+
+    def _purge_marqueurs(self):
+        """Jette les marqueurs que TOUS les modes qui les écoutent ont dépassés.
+
+        Sans ça, une séance d'une heure garde des dizaines de milliers de marqueurs en mémoire
+        pour rien. La coupe se calcule sur les modes ACTIFS qui écoutent des marqueurs
+        (`marker_epoch_s > 0`) — jamais sur les seules clés déjà présentes dans
+        `_marqueur_curseur` : un mode tout juste démarré (encore en chauffe) n'a pas encore
+        appelé `markers_murs` et n'y a donc AUCUNE entrée. Le compter comme absent plutôt que
+        comme curseur 0 couperait devant lui, perdant en silence tout ce qui lui était adressé —
+        sans jamais passer par `marqueurs_perdus`, que `markers_murs` réserve au SEUL rejet muet
+        qu'elle autorise (et celui-ci n'en fait pas partie).
+        """
+        if len(self._marqueurs) <= 4096:
+            return
+        ecouteurs = [mode_id for mode_id, rt in self.active.items()
+                    if rt.spec.marker_epoch_s > 0.0]
+        if not ecouteurs:
+            return
+        coupe = min(self._marqueur_curseur.get(mode_id, 0) for mode_id in ecouteurs)
+        if coupe > 2048:
+            self._marqueurs = self._marqueurs[coupe:]
+            self._marqueur_curseur = {k: v - coupe for k, v in self._marqueur_curseur.items()}
+
     def markers_murs(self, mode_id, post_s):
         """Les marqueurs de CE mode dont l'époque tient entièrement dans le tampon.
 
@@ -905,27 +983,15 @@ class EngineServer:
                 self.status_out.push(self._state(True, calibration=self.calibration),
                                      key=self._status_key(True), force=True)
 
-                # L'inlet n'existe que si un mode en a besoin : ouvrir un flux entrant qui ne
-                # sert à personne ferait chercher sur le réseau à chaque tour pour rien.
-                besoin_marqueurs = any(rt.spec.marker_epoch_s > 0.0
-                                       for rt in self.active.values())
-                if besoin_marqueurs:
-                    nom = MARKER_STREAM_DEFAULT
-                    self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
-                    if self.marker_inlet.resolve():
-                        print(f"[server] marqueurs entrants : connecté à « {nom} »")
-                    else:
-                        # Pas une erreur : l'application de stimulus démarre souvent APRÈS le
-                        # moteur. On réessaiera dans la boucle, et le mode dira qu'il attend.
-                        print(f"[server] marqueurs entrants : « {nom} » pas encore là — "
-                              f"j'attends. Lance ton application de stimulus, la connexion se "
-                              f"fera toute seule.")
-
                 while not self._stop:
                     self._drain_commands()
                     now = time.perf_counter()
                     if duration_s is not None and now - started >= duration_s:
                         break
+
+                    # Réévalué à CHAQUE tour — voir la docstring de `_ouvre_marker_inlet` pour
+                    # pourquoi une évaluation UNIQUE avant le `while` ne suffit pas.
+                    self._ouvre_marker_inlet()
 
                     # UNE seule lecture par tour, quels que soient les modes actifs :
                     # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
@@ -938,19 +1004,7 @@ class EngineServer:
                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
                         self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
 
-                    if self.marker_inlet is not None:
-                        if not self.marker_inlet.connecte:
-                            self.marker_inlet.resolve()
-                        self._marqueurs.extend(self.marker_inlet.pull())
-                        # Le tampon de marqueurs ne grandit pas indéfiniment : on jette ceux que
-                        # TOUS les curseurs ont dépassés. Sans ça, une séance d'une heure garde
-                        # 24 000 flashs en mémoire pour rien.
-                        if len(self._marqueurs) > 4096 and self._marqueur_curseur:
-                            coupe = min(self._marqueur_curseur.values())
-                            if coupe > 2048:
-                                self._marqueurs = self._marqueurs[coupe:]
-                                self._marqueur_curseur = {
-                                    k: v - coupe for k, v in self._marqueur_curseur.items()}
+                    self._tire_marqueurs()
 
                     if now - last_quality >= QUALITY_PERIOD_S:
                         self._publish_quality(self.clock.to_lsl(time.time()))
@@ -1190,6 +1244,7 @@ def _smoke():
         _smoke_tampon_horodate(),
         _smoke_marqueurs_murs(),
         _smoke_marqueurs_file_coincee(),
+        _smoke_marqueurs_inlet(),
     ]
     return all(resultats)
 
@@ -2268,6 +2323,29 @@ def _smoke_marqueurs_murs():
         f"un marqueur très en avance est compté à part : c'est le piège des deux machines "
         f"({srv.marqueurs_futurs})")
 
+    # L'assertion plus haut (« le marqueur d'un AUTRE mode n'est jamais rendu ») ne teste rien
+    # à l'endroit où elle est posée : à cet instant, le `break` de maturité arrête déjà la
+    # boucle à l'index 1 (le second marqueur p300, pas encore mûr) — le marqueur `errp` d'index 2
+    # n'est donc JAMAIS atteint. Elle passerait à l'identique si le filtre
+    # `if d.get("mode") != mode_id: continue` était purement supprimé.
+    #
+    # Scénario dédié, isolé du reste (tampon et file neufs) : le marqueur d'un AUTRE mode est
+    # placé AVANT un marqueur p300, tous deux mûrs dans ce même tampon — pour qu'il soit
+    # réellement MÛR et EXAMINÉ par la boucle avant qu'un `break` puisse jamais l'atteindre.
+    #
+    # `.get("target")`, pas `["target"]` : un marqueur errp qui échapperait au filtre n'a pas de
+    # clé « target » — s'il se retrouvait dans `murs`, on veut un ÉCHEC propre via `chk`, pas un
+    # `KeyError` qui ferait planter le smoke entier avant même d'imprimer le verdict.
+    srv.recent_ts = np.arange(200.0, 203.0, 1.0 / fs)
+    srv.recent = np.zeros((len(srv.recent_ts), 8))
+    srv._marqueurs = [(201.0, {"mode": "errp", "event": "feedback"}),
+                      (201.9, {"mode": "p300", "event": "flash", "target": 5})]
+    srv._marqueur_curseur = {}
+    murs = srv.markers_murs("p300", post_s=0.80)
+    chk(len(murs) == 1 and murs[0][1].get("target") == 5,
+        f"le marqueur errp, MÛR et EXAMINÉ dans ce même appel, n'empêche pas le p300 valide de "
+        f"sortir mais lui-même n'est jamais rendu à p300 ({murs})")
+
     print(f"[smoke-marqueurs] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -2318,6 +2396,137 @@ def _smoke_marqueurs_file_coincee():
         f"({srv.marqueurs_futurs})")
 
     print(f"[smoke-marqueurs-file] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_marqueurs_inlet():
+    """Le cycle de vie de l'inlet : créé PARESSEUSEMENT, y compris pour un mode démarré tard.
+
+    `_smoke_marqueurs_murs` et `_smoke_marqueurs_file_coincee` fixent `_marqueurs` et
+    `_marqueur_curseur` à la main : ils ne touchent jamais `marker_inlet`, `_ouvre_marker_inlet`,
+    `_tire_marqueurs` ni `_purge_marqueurs`. C'est précisément par ce trou qu'un mode marqueur
+    démarré APRÈS le début de la boucle pouvait ne JAMAIS trouver d'inlet — indiscernable d'un
+    flux calme, sans le moindre message.
+    """
+    import threading
+
+    from core.modes import registry as _registry
+    from core.modes.contract import ModeSpec
+    from core.modes.runtime import ModeRuntime
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # Spec de test, absente du vrai catalogue. `runtime_cls=ModeRuntime` : la classe de BASE,
+    # sûre à instancier telle quelle (déjà fait par `_smoke_repos_partage`) — `_open`/`_close`/
+    # `_run_step` y sont des no-op. `rest=None` : elle démarre directement en "running", sans
+    # séquence chauffe/repos à gérer ici.
+    ecoute = ModeSpec(id="smoke-ecoute", label="Écoute (test)", family="actif", summary="",
+                      status="moteur", stream="decoded_smoke_ecoute", channels=("x",),
+                      marker_epoch_s=0.8, runtime_cls=ModeRuntime)
+
+    # --- A. Le CRITIQUE 1 : un mode marqueur démarré APRÈS le début de la boucle --------------
+    instance = "smoke-marqueurs-inlet"
+    srv = EngineServer(synthetic=True, modes=(), instance=instance)
+    thread = threading.Thread(target=srv.run, kwargs={"duration_s": 5.0}, daemon=True)
+    thread.start()
+
+    time.sleep(0.3)     # plusieurs tours de boucle, encore AUCUN mode marqueur actif
+    chk(srv.marker_inlet is None,
+        "tant qu'aucun mode actif n'écoute les marqueurs, aucun inlet n'est créé")
+
+    # `ecoute` n'est pas dans `registry.MODES` : on l'y ajoute le temps de ce test, pour que
+    # `_start` (appelé par `_drain_commands` → `_apply`, DANS le fil de `run()`) puisse la
+    # trouver. La commande part directement dans la file THREAD-SAFE de `srv` — exactement ce
+    # que fait `submit("start_mode", ...)`, sans sa validation (qui a besoin de `registry.BY_ID`,
+    # pas seulement de `registry.MODES`) : c'est le fil de `run()` qui la traite à son prochain
+    # tour, jamais ce fil-ci — aucune mutation croisée de `srv.active` entre les deux fils.
+    avant_registre = _registry.MODES
+    _registry.MODES = avant_registre + (ecoute,)
+    try:
+        srv._commands.put(
+            ("start_mode", {"ids": ["smoke-ecoute"], "params": {"smoke-ecoute": {}}}))
+
+        echeance = time.time() + 5.0
+        while srv.marker_inlet is None and time.time() < echeance and thread.is_alive():
+            time.sleep(0.05)
+        chk(srv.marker_inlet is not None,
+            "un mode marqueur démarré APRÈS le début de la boucle obtient quand même un inlet — "
+            "le CRITIQUE 1 : évalué hors boucle, ce `marker_inlet` resterait None pour toujours")
+    finally:
+        _registry.MODES = avant_registre
+        srv.stop()
+        thread.join(timeout=5.0)
+
+    # --- B, C, D, E : purge, arrêt, robustesse — sur un moteur qui ne tourne pas ---------------
+    srv2 = EngineServer(synthetic=True, modes=(), params={})
+    a = ModeSpec(id="smoke-marqueur-a", label="A", family="actif", summary="", status="moteur",
+                stream="decoded_smoke_a", channels=("x",), marker_epoch_s=0.8,
+                runtime_cls=ModeRuntime)
+    b = ModeSpec(id="smoke-marqueur-b", label="B", family="actif", summary="", status="moteur",
+                stream="decoded_smoke_b", channels=("x",), marker_epoch_s=0.8,
+                runtime_cls=ModeRuntime)
+    srv2.active["smoke-marqueur-a"] = ModeRuntime(a, {}, srv2)
+    srv2.active["smoke-marqueur-b"] = ModeRuntime(b, {}, srv2)
+
+    # B. Le CRITIQUE 2 : un mode ACTIF qui écoute mais n'a pas encore de curseur compte comme 0.
+    srv2._marqueurs = [(float(i), {"mode": "smoke-marqueur-a", "event": "flash"})
+                       for i in range(5000)]
+    srv2._marqueur_curseur = {"smoke-marqueur-a": 3000}   # "b" encore en chauffe : pas d'entrée
+    srv2._purge_marqueurs()
+    chk(len(srv2._marqueurs) == 5000,
+        f"« b » actif sans curseur compte comme 0 : la purge n'a PAS lieu, rien n'est jeté "
+        f"avant qu'il ait pu consommer ({len(srv2._marqueurs)} marqueurs restants)")
+
+    # Contrôle positif : une fois que LES DEUX ont un curseur, la coupe reprend, à leur MINIMUM.
+    srv2._marqueur_curseur["smoke-marqueur-b"] = 2500
+    srv2._purge_marqueurs()
+    chk(len(srv2._marqueurs) == 2500
+        and srv2._marqueur_curseur == {"smoke-marqueur-a": 500, "smoke-marqueur-b": 0},
+        f"...et une fois que LES DEUX ont un curseur, la coupe reprend à leur MINIMUM "
+        f"({len(srv2._marqueurs)} marqueurs, curseurs {srv2._marqueur_curseur})")
+
+    # C. L'IMPORTANT 3 : _stop_mode nettoie le curseur du mode qu'il arrête.
+    srv2._marqueur_curseur["smoke-marqueur-a"] = 12345
+    srv2._stop_mode("smoke-marqueur-a")
+    chk("smoke-marqueur-a" not in srv2._marqueur_curseur,
+        f"_stop_mode retire le curseur du mode qu'il arrête ({srv2._marqueur_curseur})")
+
+    # D. L'IMPORTANT 4 : une exception de l'inlet est comptée, pas avalée en silence.
+    class _InletExplosif:
+        connecte = True
+
+        def resolve(self):
+            return True
+
+        def pull(self):
+            raise RuntimeError("réseau perdu (simulé)")
+
+    srv2.marker_inlet = _InletExplosif()
+    avant = srv2.marqueurs_inlet_erreurs
+    srv2._tire_marqueurs()
+    chk(srv2.marqueurs_inlet_erreurs == avant + 1,
+        f"une exception de l'inlet est COMPTÉE, pas avalée en silence "
+        f"({srv2.marqueurs_inlet_erreurs})")
+
+    # E. Le chemin nominal : rien ne publie sous ce nom sur ce réseau, resolve() échoue
+    #    proprement, pull() sur un inlet non connecté ne lève pas, et un second appel n'ouvre
+    #    pas un second inlet (pas de nouvelle résolution réseau à chaque tour).
+    srv2.marker_inlet = None
+    srv2._ouvre_marker_inlet()
+    chk(srv2.marker_inlet is not None, "« b », toujours actif, obtient bien un inlet")
+    chk(srv2.marker_inlet.connecte is False,
+        "aucune application de stimulus ne tourne sur ce réseau : l'inlet existe, non connecté")
+    chk(srv2.marker_inlet.pull() == [], "tirer sur un inlet non connecté rend [], sans lever")
+    objet_avant = srv2.marker_inlet
+    srv2._ouvre_marker_inlet()
+    chk(srv2.marker_inlet is objet_avant, "un appel suivant ne recrée pas l'inlet (idempotent)")
+
+    print(f"[smoke-marqueurs-inlet] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
