@@ -208,3 +208,93 @@ n'en a pas non plus — **c'est un trou hérité, pas une régression**) · son 
 cas distincts là où le jumeau en distingue deux · un futur mode consommant des marqueurs sans
 déclarer `pre_s`/`post_s` passerait `check()` sans alerte · le sens de `-1` manque aussi aux
 métadonnées du SSVEP (lacune préexistante).
+
+Correction livrée : `fec9b08`. Re-relecture **en 2 tranches parallèles** (`a340c93680fad331d` sur le
+mode, `aea3f5f5f91a13998` sur le câblage) : **les 4 ADDRESSED**, aucune casse.
+
+Ce que les re-relecteurs ont apporté au-delà de la vérification demandée :
+- l'**indépendance des deux garde-fous** n'est pas seulement affirmée : le plafond se déclenche
+  seul dans un scénario (96 époques en ~2 s, bien sous le délai de 10 s) et le délai se déclenche
+  seul dans l'autre (3 époques, très loin du plafond). Les deux sens sont exercés.
+- le test de contamination porte sur **le nombre d'époques par cible transmis au modèle**
+  (`{0:2, 1:2, 2:2, 3:1, 4:1, 5:1}` sous mutation), recalculé à la main par le relecteur — il
+  prouve la contamination elle-même, pas seulement « ça abandonne ».
+- l'assertion de `stream_in` porte sur `marker_inlet.nom`, c'est-à-dire **le nom réellement passé
+  à `resolve_byprop`**, pas une variable intermédiaire qu'un code fautif remplirait quand même.
+- le choix en cas de conflit de noms est **déterministe** (`self.active` est un vrai `dict`, ordre
+  d'insertion garanti depuis Python 3.7), pas un pari sur l'implémentation.
+
+⚠️ **Limite documentée, assumée** : `stream_in` ne prend effet qu'au redémarrage du MOTEUR, pas du
+mode — `marker_inlet` est mis en cache pour la vie du processus et `_stop_mode` ne le libère
+jamais. Le texte d'aide dit exactement cette version stricte. Le correctif évident (libérer
+l'inlet quand plus aucun mode marqueur n'est actif) est laissé au triage de la revue finale.
+
+**Task 5: complete (commits 2ebf022..fec9b08, review clean)**
+
+### Task 6 — l'émetteur de stimulus et LE test d'alignement
+
+- Implémenteur `aa94d36a4e550cfd0` (sonnet). **DONE** — `d7d8060`, puis correction `47f7137`.
+- Revue : spec ✅, 0 critique, **2 importants**, tous deux corrigés et re-relus ADDRESSED.
+
+🎯 **La preuve d'alignement est le résultat qui compte du chantier entier.** Mutation
+`pre_s=0.0` : le pic planté à l'onset atterrit à l'échantillon 0 au lieu de 38 — **décalage de
+−152 ms** — et **les 46 assertions préexistantes restent TOUTES vertes**. C'est exactement la thèse
+du plan : un désalignement ne se voit nulle part ailleurs.
+
+⚠️ **Le constat le plus fin du chantier**, trouvé en relecture : le premier test d'alignement
+appelle `epoch_from_stream` en direct, donc **ne passe jamais par `_encaisser_flash`**. Or inverser
+les deux mots-clés à l'appel réel (`pre_s=self.post_s, post_s=self.pre_s`) ne change PAS la forme de
+l'époque — `38 + 200 = 200 + 38` — donc tous les contrôles de forme et de bornes restaient verts.
+Un second test passant par un vrai `rt.tick(...)` ferme le trou : à la mutation, le pic atterrit à
+200 au lieu de 38 (+648 ms), exactement `round(P300_EPOCH_S × fs)` comme le relecteur l'avait prédit
+par le calcul avant de le mesurer.
+
+**Sixième erreur de mes briefs**, trouvée par l'implémenteur : je situais la mutation sur un littéral
+`pre_s=P300_PRE_S` qui n'existe pas dans ce fichier (il utilise `self.pre_s`).
+
+**Task 6: minor (deferred)** — la garde anti-répétition ne couvre que la jonction immédiate, pas un
+espacement minimal plus large · les TOTAUX d'assertions annoncés dans les rapports T6 sont décalés
+de 1 (la ligne `def chk(cond, msg):` matche la sous-chaîne) — **les deltas sont justes et rien n'a
+été retiré**, c'est de la comptabilité.
+
+**Task 6: complete (commits fec9b08..47f7137, review clean)**
+
+### Task 7 — documentation (écrite par le coordinateur, sans sous-agent)
+
+**complete** — commit `7358d3b`. `docs/markers.md` (contrat public des marqueurs, en anglais comme
+`network.md`), plus README, SPEC §5 et §14, recette (tests **1.14** et **2.7** ajoutés), CLAUDE.md,
+et la docstring de `src/research/__init__.py`.
+
+---
+
+## ⚠️ REPRENDRE ICI — pause demandée le 2026-08-17 en fin de journée
+
+**Les 7 tâches de code et de doc sont TERMINÉES, relues, corrigées et re-relues.**
+18 commits, `43a9807..47f7137`. Arbre propre. **NON POUSSÉ** (21 commits d'avance sur `origin/main`).
+
+**Ce qui reste, et c'est la seule chose :** la **REVUE FINALE DE BRANCHE**. Elle était lancée en
+7 tranches parallèles quand la pause est arrivée ; les 7 relecteurs ont été **arrêtés en phase de
+lecture, avant tout constat** — donc rien n'est perdu, mais **rien n'est acquis non plus** : il faut
+les relancer entièrement.
+
+**Les 7 tranches sont déjà construites et prêtes**, dans ce dossier :
+
+| Tranche | Fichier | Périmètre |
+|---|---|---|
+| A | `final-A.diff` (13 Ko) | `core/markers.py` + `core/config.py` — l'oreille |
+| B | `final-B.diff` (39 Ko) | `core/server.py` — tampon, file, cycle de vie, smokes |
+| C1 | `final-C1.txt` (25 Ko) | `core/modes/p300.py` lignes 1-375 — le runtime |
+| C2 | `final-C2.txt` (30 Ko) | `core/modes/p300.py` lignes 376-854 — l'autotest |
+| D | `final-D.diff` (24 Ko) | `core/p300_decoder.py` + `core/p300_models.py` |
+| E | `final-E.diff` (17 Ko) | `lsl_io` + `contract` + `external` + `registry` + `runtime` + console |
+| F | `final-F.diff` (36 Ko) | `research/` — stimulus autonome et recâblage |
+
+⚠️ **Toutes sous 40 Ko**, la limite au-delà de laquelle les relecteurs meurent sur ce projet.
+`p300.py` est découpé en deux parce qu'il est ENTIÈREMENT nouveau : le contexte du diff n'aide pas.
+
+**La liste des mineurs reportés à trianger par la revue finale est dans ce journal**, tâche par
+tâche, sous les entrées `minor (deferred)`.
+
+**Après la revue** : UNE seule vague de correction (pas un correcteur par constat), UNE re-relecture
+bornée, puis arbitrage des résidus. Ensuite : pousser, mettre à jour la mémoire projet, et
+**annoncer le périmètre** — ce qui reste DEHORS est écrit dans la spec §2 et dans SPEC §14.

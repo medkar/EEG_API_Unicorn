@@ -1,0 +1,389 @@
+# Review package: f30be3d..a85b105
+
+## Commits
+a85b105 Hold markers until their epoch fits, and never let one jam the queue
+
+## Files changed
+ src/core/modes/runtime.py |   6 ++
+ src/core/server.py        | 197 +++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 200 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/src/core/modes/runtime.py b/src/core/modes/runtime.py
+index 9379a67..80de2eb 100644
+--- a/src/core/modes/runtime.py
++++ b/src/core/modes/runtime.py
+@@ -161,20 +161,26 @@ class ModeRuntime:
+     def _reset_rest(self):
+         """Jeter tout ce qui a été mesuré : échantillons du plancher, décodeur, dernière sortie."""
+ 
+     def _rest_step(self, engine, now):
+         """Un pas de mesure du repos. True quand le plancher tient, False pour prolonger."""
+         return True
+ 
+     def _run_step(self, engine, lsl_ts):
+         """Un pas de décodage : mesurer, décider, publier."""
+ 
++    # Un mode qui écoute des marqueurs déclare `marker_epoch_s` dans son `ModeSpec` et appelle
++    # `engine.markers_murs(self.spec.id, post_s)` depuis son `_run_step`. Le moteur lui rend des
++    # marqueurs SITUÉS (horodatés dans la même horloge que `engine.recent_ts`) et MÛRS (leur
++    # époque tient dans le tampon). Le découpage reste au mode : les bornes ne sont pas les
++    # mêmes d'un paradigme à l'autre.
++
+ 
+ def _selftest():
+     """La machine de phases, sur une horloge FABRIQUÉE. Aucun casque, aucune attente réelle."""
+     ok = True
+ 
+     def chk(cond, msg):
+         nonlocal ok
+         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+         ok = ok and bool(cond)
+ 
+diff --git a/src/core/server.py b/src/core/server.py
+index a3c9b9e..975c9d7 100644
+--- a/src/core/server.py
++++ b/src/core/server.py
+@@ -58,26 +58,27 @@ import math
+ import os
+ import queue
+ import signal
+ import sys
+ import time
+ 
+ import numpy as np
+ 
+ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ from core.acquisition import UnicornAcquisition  # noqa: E402
+-from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MARKER_LATE_S, MI_WINDOW_S,  # noqa: E402
+-                    NEURO_WINDOW_S, TOLERANCE_DIVISEUR, choose_frequencies, json_float,
+-                    propose_frequencies, reference_lost, use_utf8_console)
++from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MARKER_LATE_S, MARKER_STREAM_DEFAULT,  # noqa: E402
++                    MI_WINDOW_S, NEURO_WINDOW_S, TOLERANCE_DIVISEUR, choose_frequencies,
++                    json_float, propose_frequencies, reference_lost, use_utf8_console)
+ from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
+                     StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
+                     verdict_from_sigma)
++from core.markers import MarkerInlet  # noqa: E402
+ from core.modes import contract, registry  # noqa: E402
+ 
+ # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
+ # signal d'un coup. Assez court pour rester très en dessous des fenêtres de décision d'un
+ # mode BCI (1-2 s), assez long pour ne pas réveiller le processus 250 fois par seconde.
+ POLL_S = 0.05
+ QUALITY_PERIOD_S = 1.0    # cadence du flux `quality`
+ STATUS_PERIOD_S = 2.0     # rappel périodique de l'état (pour un client qui arrive en retard)
+ QUALITY_WINDOW_S = 2.0    # longueur de signal sur laquelle on mesure le σ par voie
+ 
+@@ -105,20 +106,25 @@ class EngineServer:
+         self.instance = instance or default_instance_id(serial, synthetic)
+         self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
+         self.status_out = StatusPublisher(instance=self.instance)
+         self.samples = 0
+         self.new_block = None       # le bloc lu au tour courant : (eeg, horodatages LSL) ou None
+         self.recent = np.zeros((0, len(CH_NAMES)))
+         # Les horodatages des mêmes échantillons, en temps LSL. Sans eux on ne peut pas SITUER
+         # un marqueur dans le tampon — c'est ce qui manquait pour épocher sur un événement
+         # extérieur. Tenus rigoureusement en phase avec `recent` : même longueur, même troncature.
+         self.recent_ts = np.zeros((0,))
++        self.marker_inlet = None       # créé au démarrage si un mode écoute des marqueurs
++        self._marqueurs = []           # tous les marqueurs reçus, dans l'ordre d'arrivée
++        self._marqueur_curseur = {}    # mode_id -> index du prochain marqueur à examiner
++        self.marqueurs_perdus = 0      # arrivés trop tard pour trouver leur EEG
++        self.marqueurs_futurs = 0      # horodatés en avance : time_correction() oublié ?
+         self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
+         # AU PLUS UNE calibration à la fois, tous modes confondus : il n'y a qu'un casque et qu'une
+         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
+         # modèle (le MI) rendrait sa propre calibration inatteignable.
+         self.calibration = None
+         self.rest_instruction = ""  # la consigne du repos en cours, partagée s'il l'est
+         self._stop = False
+         self._last_tick = {}
+         self._commands = queue.Queue()
+         self._quality = None
+@@ -757,20 +763,67 @@ class EngineServer:
+         # (`CalibrationRuntime._pas_essai`, `attendu = int(round(self.imagery_s * fs))`) arrondit
+         # déjà, comme le fait tout le reste du fichier pour cette même conversion
+         # (`motor_window`, `occipital_window`, `window_n`, `margin_n`…). Tronquer ICI aurait
+         # rendu `n` strictement INFÉRIEUR à `attendu` dès que `seconds * fs` a une partie
+         # fractionnaire >= 0,5 — et donc TOUS les essais auraient été écartés comme « tampon pas
+         # rempli », jamais un seul. Inatteignable à 4,0 s × 250 Hz (produit entier), mais
+         # `imagery_s` est explicitement conçue pour être raccourcie (cf. les smokes de test).
+         n = max(1, int(round(seconds * self.acq.fs)))
+         return np.array(buffer[-n:], dtype=float, copy=True)
+ 
++    def markers_murs(self, mode_id, post_s):
++        """Les marqueurs de CE mode dont l'époque tient entièrement dans le tampon.
++
++        « Mûr » = le tampon couvre déjà les `post_s` secondes qui SUIVENT le marqueur. Avant,
++        l'époque déborderait et le découpage rendrait None — sans rien dire. Cette attente est
++        générique, donc elle vit ici : chaque mode qui la réimplémenterait la referait un peu
++        différemment.
++
++        Chaque marqueur n'est rendu qu'une fois par mode (curseur par mode). Ceux d'un autre
++        mode sont sautés en silence : c'est le SEUL rejet muet autorisé, parce qu'il est normal.
++        """
++        if not len(self.recent_ts):
++            return []
++        plus_vieux, plus_recent = float(self.recent_ts[0]), float(self.recent_ts[-1])
++        i = self._marqueur_curseur.get(mode_id, 0)
++        murs = []
++        while i < len(self._marqueurs):
++            ts, d = self._marqueurs[i]
++            # Le futur d'ABORD : un marqueur aberrant ne doit jamais pouvoir coincer la file
++            # derrière lui. Un horodatage très en avance est la signature du `time_correction()`
++            # oublié entre deux machines — on le compte, on le saute, et la séance continue.
++            #
++            # ⚠️ L'ordre inverse (maturité d'abord) a deux défauts d'un coup : un marqueur
++            # horodaté loin dans le futur n'est PAR DÉFINITION jamais « mûr », donc il déclenche
++            # le `break` juste en dessous AVANT d'atteindre ce contrôle — `marqueurs_futurs`
++            # devient inatteignable, et pire, le curseur ne le dépasse jamais : ce marqueur reste
++            # indéfiniment le premier examiné, et tout ce qui arrive après lui dans la file
++            # (y compris des marqueurs parfaitement valides) reste bloqué derrière, pour
++            # toujours. Prouvé par mutation dans `_smoke_marqueurs_file_coincee`.
++            if ts > plus_recent + MARKER_LATE_S:
++                self.marqueurs_futurs += 1
++                i += 1
++                continue
++            if ts + post_s > plus_recent:
++                # Pas encore mûr, et les suivants le sont encore moins : on s'arrête ici SANS
++                # avancer le curseur — ce marqueur sera réexaminé au prochain tour.
++                break
++            i += 1
++            if d.get("mode") != mode_id:
++                continue
++            if ts < plus_vieux:
++                self.marqueurs_perdus += 1
++                continue
++            murs.append((ts, d))
++        self._marqueur_curseur[mode_id] = i
++        return murs
++
+     def _publish_quality(self, lsl_ts):
+         """σ par voie sur les dernières secondes, calculé sur du signal FILTRÉ.
+ 
+         Le filtrage est indispensable ICI (contrairement au flux brut) : sur du signal
+         quasi-brut, le σ est dominé par le ronflement secteur 50 Hz et la dérive lente des
+         électrodes sèches, pas par l'EEG — un σ mesuré ainsi ne dit rien de l'état du contact.
+ 
+         Le calcul est délégué à `sigma_from_block` pour partager UNE seule définition du σ
+         avec l'écran `signal_check` de l'appli : deux mesures de qualité qui divergeraient
+         seraient pires que pas de mesure du tout.
+@@ -845,37 +898,67 @@ class EngineServer:
+                 # validation et le démarrage. Or le `finally` plus bas n'est pas un nettoyage
+                 # optionnel : c'est lui qui casse le cycle `active ↔ engine`, sans quoi un
+                 # `BoardShim.__del__` tardif libère la session d'un AUTRE moteur (voir son long
+                 # commentaire). Le sauter parce qu'un mode n'a pas su démarrer ferait payer
+                 # l'incident au moteur SUIVANT du même processus.
+                 self._start([s.id for s, _ in self._pending],
+                             {s.id: v for s, v in self._pending}, time.perf_counter())
+                 self.status_out.push(self._state(True, calibration=self.calibration),
+                                      key=self._status_key(True), force=True)
+ 
++                # L'inlet n'existe que si un mode en a besoin : ouvrir un flux entrant qui ne
++                # sert à personne ferait chercher sur le réseau à chaque tour pour rien.
++                besoin_marqueurs = any(rt.spec.marker_epoch_s > 0.0
++                                       for rt in self.active.values())
++                if besoin_marqueurs:
++                    nom = MARKER_STREAM_DEFAULT
++                    self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
++                    if self.marker_inlet.resolve():
++                        print(f"[server] marqueurs entrants : connecté à « {nom} »")
++                    else:
++                        # Pas une erreur : l'application de stimulus démarre souvent APRÈS le
++                        # moteur. On réessaiera dans la boucle, et le mode dira qu'il attend.
++                        print(f"[server] marqueurs entrants : « {nom} » pas encore là — "
++                              f"j'attends. Lance ton application de stimulus, la connexion se "
++                              f"fera toute seule.")
++
+                 while not self._stop:
+                     self._drain_commands()
+                     now = time.perf_counter()
+                     if duration_s is not None and now - started >= duration_s:
+                         break
+ 
+                     # UNE seule lecture par tour, quels que soient les modes actifs :
+                     # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
+                     # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
+                     eeg, ts_unix = self.acq.get_new_data()
+                     self.new_block = None
+                     if eeg is not None and len(eeg):
+                         ts_lsl = self.clock.to_lsl(ts_unix)
+                         self.new_block = (eeg, ts_lsl)
+                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
+                         self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
+ 
++                    if self.marker_inlet is not None:
++                        if not self.marker_inlet.connecte:
++                            self.marker_inlet.resolve()
++                        self._marqueurs.extend(self.marker_inlet.pull())
++                        # Le tampon de marqueurs ne grandit pas indéfiniment : on jette ceux que
++                        # TOUS les curseurs ont dépassés. Sans ça, une séance d'une heure garde
++                        # 24 000 flashs en mémoire pour rien.
++                        if len(self._marqueurs) > 4096 and self._marqueur_curseur:
++                            coupe = min(self._marqueur_curseur.values())
++                            if coupe > 2048:
++                                self._marqueurs = self._marqueurs[coupe:]
++                                self._marqueur_curseur = {
++                                    k: v - coupe for k, v in self._marqueur_curseur.items()}
++
+                     if now - last_quality >= QUALITY_PERIOD_S:
+                         self._publish_quality(self.clock.to_lsl(time.time()))
+                         last_quality = now
+ 
+                     for mode_id, runtime in list(self.active.items()):
+                         if now - self._last_tick.get(mode_id, 0.0) >= runtime.period_s():
+                             runtime.tick(self, self.clock.to_lsl(time.time()), now)
+                             self._last_tick[mode_id] = now
+ 
+                     # La calibration tourne à CHAQUE tour, sans période minimale : sa ligne du
+@@ -1098,20 +1181,22 @@ def _smoke():
+         _smoke_repos_partage(),
+         _smoke_ssvep(),
+         _smoke_neuro(),
+         _smoke_mi(),
+         _smoke_calibration(),
+         _smoke_calibration_refus(),
+         _smoke_cumul(),
+         _smoke_proposition(),
+         _smoke_dimensionnement(),
+         _smoke_tampon_horodate(),
++        _smoke_marqueurs_murs(),
++        _smoke_marqueurs_file_coincee(),
+     ]
+     return all(resultats)
+ 
+ 
+ def _smoke_neuro():
+     """Le mode neuro câblé de bout en bout, sur board synthétique.
+ 
+     Comme pour le SSVEP, on ne juge PAS le contenu : des sinusoïdes fabriquées n'ont ni charge
+     mentale ni somnolence. On vérifie le CÂBLAGE et le CONTRAT — le flux existe dès le
+     démarrage, il se tait pendant le repos, puis publie 4 voies dans le bon ordre, avec un
+@@ -2123,20 +2208,126 @@ def _smoke_tampon_horodate():
+     diffs = np.diff(srv.recent_ts)
+     chk(bool(np.all(diffs > 0)), "le temps avance strictement, sans doublon ni retour en arrière")
+     attendu = 1.0 / srv.acq.fs
+     chk(bool(np.median(diffs) > 0.5 * attendu and np.median(diffs) < 2.0 * attendu),
+         f"et la cadence médiane vaut ~1/fs ({np.median(diffs) * 1000:.2f} ms attendu "
+         f"{attendu * 1000:.2f} ms)")
+     print(f"[smoke-tampon] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
++def _smoke_marqueurs_murs():
++    """Un marqueur n'est rendu que quand son époque tient ENTIÈREMENT dans le tampon."""
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    fs = srv.acq.fs
++    # Tampon fabriqué : 3 s de temps qui avance, à partir de t=100.
++    srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++
++    srv._marqueurs = [(101.0, {"mode": "p300", "event": "flash", "target": 1}),
++                      (102.9, {"mode": "p300", "event": "flash", "target": 2}),
++                      (101.5, {"mode": "errp", "event": "feedback"})]
++    srv._marqueur_curseur = {}
++
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [1],
++        f"seul le marqueur dont les 0,80 s suivantes sont dans le tampon est rendu ({murs})")
++    chk(all(m[1]["mode"] == "p300" for m in murs),
++        "et le marqueur d'un AUTRE mode n'est jamais rendu à celui-ci")
++
++    # Le curseur avance : un marqueur mûr n'est rendu qu'UNE fois.
++    chk(srv.markers_murs("p300", post_s=0.80) == [],
++        "un marqueur déjà rendu ne l'est pas deux fois")
++
++    # Le tampon avance : le second devient mûr à son tour.
++    srv.recent_ts = np.arange(100.0, 104.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [2],
++        f"le tampon ayant avancé, le suivant mûrit à son tour ({murs})")
++
++    # Un marqueur PLUS VIEUX que le tampon est PERDU, et compté.
++    avant = srv.marqueurs_perdus
++    srv._marqueurs.append((50.0, {"mode": "p300", "event": "flash", "target": 3}))
++    srv.markers_murs("p300", post_s=0.80)
++    chk(srv.marqueurs_perdus == avant + 1,
++        f"un marqueur trop vieux pour le tampon est COMPTÉ perdu, pas ignoré "
++        f"({srv.marqueurs_perdus})")
++
++    # Un marqueur dans le FUTUR est la signature du time_correction() oublié.
++    avant = srv.marqueurs_futurs
++    srv._marqueurs.append((200.0, {"mode": "p300", "event": "flash", "target": 4}))
++    srv.markers_murs("p300", post_s=0.80)
++    chk(srv.marqueurs_futurs == avant + 1,
++        f"un marqueur très en avance est compté à part : c'est le piège des deux machines "
++        f"({srv.marqueurs_futurs})")
++
++    print(f"[smoke-marqueurs] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_marqueurs_file_coincee():
++    """Un marqueur ABERRANT (futur) ne doit jamais coincer ceux qui le suivent dans la file.
++
++    Contrôler la MATURITÉ avant le FUTUR (l'ordre initialement proposé pour `markers_murs`) a
++    deux défauts d'un coup : un marqueur horodaté loin dans le futur n'est par définition jamais
++    « mûr », donc il déclenche le `break` avant même d'atteindre le contrôle du futur —
++    `marqueurs_futurs` devient inatteignable, et surtout le curseur ne le dépasse JAMAIS. Ce
++    marqueur reste indéfiniment le premier examiné, et tout ce qui le suit dans la file — y
++    compris des marqueurs par ailleurs parfaitement valides — reste bloqué derrière lui, pour
++    toujours. C'est exactement ce que produit un `time_correction()` oublié entre deux machines :
++    la panne la plus coûteuse possible, puisqu'elle ne se limite pas à perdre CE marqueur-là, elle
++    fait taire tout le flux qui suit.
++
++    Ce test place volontairement le marqueur futur AVANT un marqueur valide dans la file, pour
++    distinguer cette conséquence (silence permanent) du simple mauvais comptage que
++    `_smoke_marqueurs_murs` détecte déjà de son côté. Sans cette disposition précise, une version
++    fautive et une version correcte de `markers_murs` passent toutes les deux.
++    """
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    fs = srv.acq.fs
++    srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++
++    # Le marqueur futur est placé EN PREMIER dans la file, DEVANT un marqueur par ailleurs mûr,
++    # du bon mode et dans le tampon — c'est la position qui coince tout dans la version fautive.
++    srv._marqueurs = [(9999.0, {"mode": "p300", "event": "flash", "target": 9}),
++                      (101.0, {"mode": "p300", "event": "flash", "target": 1})]
++    srv._marqueur_curseur = {}
++
++    avant = srv.marqueurs_futurs
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [1],
++        f"un marqueur futur placé DEVANT un marqueur valide ne le bloque pas : le valide sort "
++        f"quand même ({murs})")
++    chk(srv.marqueurs_futurs == avant + 1,
++        f"...et le futur est COMPTÉ au passage, pas seulement sauté en silence "
++        f"({srv.marqueurs_futurs})")
++
++    print(f"[smoke-marqueurs-file] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
+ def _parse_args(argv):
+     p = argparse.ArgumentParser(description="EEG_API_Unicorn — moteur headless, sorties LSL.")
+     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
+     p.add_argument("--serial", default=None, help="numéro de série Unicorn (si plusieurs appairés)")
+     p.add_argument("--duration", type=float, default=None, help="durée en s (défaut : jusqu'à Ctrl+C)")
+     p.add_argument("--mode", default=None,
+                    help="décodeurs à démarrer, séparés par des virgules : "
+                         + ", ".join(s.id for s in registry.runnable() if s.id != "raw")
+                         + ". Ils tournent EN MÊME TEMPS et partagent une seule phase de repos. "
+                           "Le brut est diffusé en plus, sauf avec --no-raw")

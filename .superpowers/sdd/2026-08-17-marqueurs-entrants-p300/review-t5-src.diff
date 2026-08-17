@@ -1,0 +1,864 @@
+## Commits
+37dce0c Publish the P300 as the engine's fourth mode, driven by external markers
+
+## Stat
+ src/console/app.py         |   4 +-
+ src/core/lsl_io.py         |  55 +++++
+ src/core/modes/external.py |  28 +--
+ src/core/modes/p300.py     | 552 +++++++++++++++++++++++++++++++++++++++++++++
+ src/core/modes/registry.py |  18 +-
+ src/core/server.py         |   3 +
+ 6 files changed, 640 insertions(+), 20 deletions(-)
+
+## Diff
+diff --git a/src/console/app.py b/src/console/app.py
+index a8c5d21..d94e5f2 100644
+--- a/src/console/app.py
++++ b/src/console/app.py
+@@ -260,22 +260,24 @@ def _smoke():
+     chk("Unicorn" not in console.banner.liaison.text(),
+         f"le bandeau dit que c'est un board de test — « {console.banner.liaison.text()} »")
+     chk("σ" in console.banner.sigmas.text(), f"et les σ — « {console.banner.sigmas.text()} »")
+     chk(console.banner.alarme.text() == "", "aucune alarme sur un montage sain")
+ 
+     console.apply_state(state)
+     chk(len(console.grid.tuiles) == len(registry.MODES),
+         f"une tuile par mode du registre ({len(console.grid.tuiles)})")
+ 
+     # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison.
++    # Le P300 a rejoint le moteur au même titre que le MI : il ne reste plus que 2 modes
++    # « appli pygame » (c-VEP, ErrP) sur les 7 du registre — 3 avant que le P300 ne migre.
+     externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
+-    chk(len(externes) == 3, f"{len(externes)} tuiles pour les modes de l'appli pygame")
++    chk(len(externes) == 2, f"{len(externes)} tuiles pour les modes de l'appli pygame")
+     chk(all(not t.isEnabled() and t.detail.text() for t in externes),
+         "chacune est grisée ET dit pourquoi elle ne démarre pas")
+ 
+     chk(console.grid.tuiles["ssvep"].etat.text() == "décode",
+         f"le SSVEP est annoncé « {console.grid.tuiles['ssvep'].etat.text()} »")
+     chk(console.grid.tuiles["neuro"].etat.text() == "arrêté",
+         "un mode non démarré est annoncé arrêté, pas absent")
+     chk(console.grid.tuiles["ssvep"].publie.isChecked(), "et coché comme publié")
+ 
+     # Le chemin « publier » de bout en bout : case cochée -> signal de la tuile -> signal de la
+diff --git a/src/core/lsl_io.py b/src/core/lsl_io.py
+index 8f69817..efa9b58 100644
+--- a/src/core/lsl_io.py
++++ b/src/core/lsl_io.py
+@@ -342,20 +342,64 @@ class DecodedMIPublisher:
+         desc.append_child_value("rest_index", str(rest_index))
+         self.outlet = StreamOutlet(info)
+ 
+     def push(self, intent_index, confidence, probas, lsl_ts=None):
+         """`probas` : les probabilités dans le MÊME ordre que `classes`."""
+         row = [float(intent_index), float(confidence)] + [float(p) for p in probas]
+         block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+ 
+ 
++def p300_channel_labels(n_targets):
++    """Voies du flux `decoded_p300`. Une seule fonction pour le publieur ET le `ModeSpec`."""
++    return (["target_index", "confidence", "n_flashes"]
++            + [f"score_{i}" for i in range(int(n_targets))])
++
++
++class DecodedP300Publisher:
++    """`<PREFIX>_decoded_p300` : quelle cible l'utilisateur a sélectionnée. Une fois par manche.
++
++    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
++    « repos ». C'est mot pour mot la confusion qu'il a fallu inscrire en garde pour le MI, et
++    elle se reproduira chez le premier client qui lira ce flux sans lire la doc.
++
++    Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
++    Un client qui attend un débit régulier attendrait pour rien.
++    """
++
++    def __init__(self, n_targets, reps, instance=""):
++        self.n_targets = int(n_targets)
++        labels = p300_channel_labels(self.n_targets)
++        info = StreamInfo(stream_name("decoded_p300"), "Decoded", len(labels),
++                          IRREGULAR_RATE, "float32", _source_id("decoded_p300", instance))
++        chans = info.desc().append_child("channels")
++        for label in labels:
++            ch = chans.append_child("channel")
++            ch.append_child_value("label", label)
++        desc = info.desc().append_child("decoding")
++        desc.append_child_value("paradigm", "P300")
++        desc.append_child_value("n_targets", str(self.n_targets))
++        desc.append_child_value("reps", str(int(reps)))
++        # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
++        # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
++        # sans cette indication, un seuil côté client n'aurait aucun sens.
++        desc.append_child_value("decision_scale", "logodds")
++        self.outlet = StreamOutlet(info)
++
++    def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
++        """`scores` : un score par cible, dans l'ordre des indices 0..n_targets-1."""
++        row = ([float(target_index), float(confidence), float(n_flashes)]
++               + [float(s) for s in scores])
++        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
++        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
++
++
+ class StatusPublisher:
+     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
+ 
+     Indispensable parce que LSL est *fire-and-forget* : un client qui envoie une commande ne
+     reçoit aucun accusé de réception (SPEC §4). Il constate l'effet de sa commande ICI. Le
+     moteur republie donc son état à chaque changement, et périodiquement pour qu'un client
+     qui se connecte en cours de route sache où on en est.
+     """
+ 
+     def __init__(self, instance=""):
+@@ -468,18 +512,29 @@ def _autotest():
+     # 5. decoded_mi : voies attendues, et le publieur pousse sans lever (indice ET repos).
+     labels = mi_channel_labels(("GAUCHE", "DROITE", "REPOS"))
+     print(f"  voies decoded_mi : {labels}")
+     assert labels == ["intent_index", "confidence", "p_GAUCHE", "p_DROITE", "p_REPOS"], labels
+     pub = DecodedMIPublisher(("GAUCHE", "DROITE", "REPOS"), prob_min=0.6, votes=(3, 5),
+                              instance="selftest-mi")
+     pub.push(0, 0.81, [0.81, 0.12, 0.07])
+     pub.push(-1, 0.0, [0.34, 0.33, 0.33])
+     print("  [lsl] decoded_mi publie sans lever")
+ 
++    # 6. decoded_p300 : voies attendues (target_index/confidence/n_flashes puis un score par
++    # cible), et le publieur pousse sans lever (une décision ET un refus, -1).
++    labels = p300_channel_labels(6)
++    print(f"  voies decoded_p300 : {labels}")
++    assert labels == ["target_index", "confidence", "n_flashes",
++                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
++    pub = DecodedP300Publisher(6, reps=8, instance="selftest-p300")
++    pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
++    pub.push(-1, 0.0, 12, [0.0] * 6)
++    print("  [lsl] decoded_p300 publie sans lever")
++
+     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
+ if __name__ == "__main__":
+     from core.config import use_utf8_console
+     use_utf8_console()
+     sys.exit(0 if _autotest() else 1)
+diff --git a/src/core/modes/external.py b/src/core/modes/external.py
+index 761111f..5f2ba3c 100644
+--- a/src/core/modes/external.py
++++ b/src/core/modes/external.py
+@@ -1,19 +1,23 @@
+ """Les modes que le MOTEUR ne sait pas faire — décrits quand même.
+ 
+-C'est le point d'honnêteté de l'interface. Sans ces trois entrées, la grille ne montrerait que
+-ce qui est chargé : un étudiant croirait que le produit ne fait que quatre choses (brut, SSVEP,
+-neuro, MI), et ne saurait pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
+-Le MI, lui, a rejoint le moteur (`core/modes/mi.py`) : ce n'est plus une entrée « appli pygame ».
+-
+-Chacun porte la RAISON de son absence, et c'est presque toujours la même famille de raison : le
+-moteur ne reçoit pas de marqueurs entrants, et ne rend pas de stimulus verrouillé à la frame.
++C'est le point d'honnêteté de l'interface. Sans ces deux entrées, la grille ne montrerait que
++ce qui est chargé : un étudiant croirait que le produit ne fait que cinq choses (brut, SSVEP,
++neuro, MI, P300), et ne saurait pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
++Le MI et le P300, eux, ont rejoint le moteur (`core/modes/mi.py`, `core/modes/p300.py`) : ce ne
++sont plus des entrées « appli pygame ».
++
++Chacun porte la RAISON de son absence. Le c-VEP ne peut pas se passer d'un stimulus verrouillé à
++la frame, que le moteur ne rend pas — aucun lien avec les marqueurs. L'ErrP, lui, a besoin d'un
++marqueur entrant (l'instant où le feedback s'affiche) : l'INFRASTRUCTURE existe désormais (le
++P300 s'en sert), mais personne n'a encore écrit son mode dans `core/modes/` — un chantier restant,
++pas une impossibilité.
+ """
+ 
+ import os as _os
+ import sys as _sys
+ 
+ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+ from core.modes.contract import Calib, ModeSpec  # noqa: E402
+ 
+ _PYGAME = "Lance `python src/research/app.py` — jamais en même temps que le moteur, le casque " \
+           "n'accepte qu'une connexion."
+@@ -21,28 +25,18 @@ _PYGAME = "Lance `python src/research/app.py` — jamais en même temps que le m
+ CVEP = ModeSpec(
+     id="cvep", label="c-VEP", family="actif",
+     summary="Cible fixée parmi N, par codes pseudo-aléatoires décalés (le plus rapide).",
+     status="appli_pygame",
+     unavailable="Demande un stimulus verrouillé à la FRAME : une seule frame sautée décale le "
+                 "code et détruit la corrélation. " + _PYGAME,
+     calibration=Calib(kind="natif",
+                       reason="chaque frame doit afficher le bon bit du code"),
+ )
+ 
+-P300 = ModeSpec(
+-    id="p300", label="P300", family="actif",
+-    summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
+-    status="appli_pygame",
+-    unavailable="Demande des MARQUEURS entrants (l'onset de chaque flash), que le moteur ne "
+-                "reçoit pas encore. " + _PYGAME,
+-    calibration=Calib(kind="natif",
+-                      reason="époques calées sur l'onset exact de chaque flash"),
+-)
+-
+ ERRP = ModeSpec(
+     id="errp", label="ErrP", family="passif",
+     summary="Détecte que la machine vient de se tromper (potentiel d'erreur).",
+     status="appli_pygame",
+     unavailable="Demande un MARQUEUR entrant : l'instant exact où le feedback s'affiche. " + _PYGAME,
+     calibration=Calib(kind="natif",
+                       reason="l'onset du feedback écran doit être horodaté à la frame"),
+ )
+diff --git a/src/core/modes/p300.py b/src/core/modes/p300.py
+new file mode 100644
+index 0000000..2e42107
+--- /dev/null
++++ b/src/core/modes/p300.py
+@@ -0,0 +1,552 @@
++"""Mode P300 : quelle cible l'utilisateur a sélectionnée, par onde P300 (oddball attentionnel).
++BCI **active**, pilotée par les MARQUEURS d'une application EXTERNE — ni casque supplémentaire,
++ni stimulus rendu par le moteur.
++
++Le décodage est dans `core/p300_decoder.py` (xDAWN + covariances riemanniennes + régression
++logistique). Ici on décrit le MODE : ce qui se règle, ce qui se publie, et ce qu'il faut avoir
++avant de pouvoir décoder — à savoir un modèle ENTRAÎNÉ. C'est la même contrainte que le Motor
++Imagery (`core/modes/mi.py`, le jumeau le plus proche de ce fichier, à lire avant celui-ci) : sans
++modèle, ce mode ne démarre pas, et il le DIT.
++
++⚠️ Un modèle est propre à UNE personne. Les scores d'un modèle entraîné sur quelqu'un d'autre sont
++plausibles et faux — le pire des deux mondes.
++
++⚠️ Le moteur ne rend AUCUN stimulus : c'est une application EXTERNE qui fait clignoter les cibles
++et publie l'onset de chaque flash sur un flux de marqueurs LSL (`core/markers.py`). Ce mode se
++contente d'ÉCOUTER ce flux (`engine.markers_murs`), d'épocher l'EEG autour de chaque flash
++(`core.p300_decoder.epoch_from_stream`), et de décider à `round_end`.
++
++⚠️ **`target_index = -1` signifie « pas de décision » — jamais « la cible 0 ».** Une manche qui ne
++peut pas conclure (trop peu de flashs valides, ou des cibles qui n'ont pas toutes eu la chance de
++flasher) publie -1 ET dit pourquoi dans le journal, plutôt que de choisir un argmax sur un
++sous-ensemble de cibles. C'est mot pour mot la garde qu'il a fallu inscrire pour le Motor Imagery
++(`DecodedMIPublisher`) — elle se reproduira chez le premier client qui lit ce flux sans lire la doc.
++
++Les cinq pannes bruyantes de ce sous-système (un décodeur qui tourne, publie des scores honnêtes
++et ne déclenche simplement jamais est la panne la plus coûteuse de ce projet) :
++    1. aucun flux de marqueurs trouvé      -> dit par `EngineServer._ouvre_marker_inlet`
++    2. un marqueur plus vieux que le tampon -> compté, `engine.marqueurs_perdus`
++    3. un marqueur dans le futur            -> compté, `engine.marqueurs_futurs`
++    4. une cible hors de la plage déclarée  -> dite une fois, comptée ICI (`_refus_cible`)
++    5. `round_end` avec trop peu de flashs  -> dite ICI, publiée comme -1 (`_decider`)
++Les trois premières vivent une couche plus bas (`core/markers.py`, `core/server.py`) et sont
++prouvées là-bas ; ce fichier ajoute et prouve les deux dernières, propres au protocole P300.
++
++Autotest :
++    python src/core/modes/p300.py
++"""
++
++import os as _os
++import sys as _sys
++
++_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
++from core.config import (MARKER_STREAM_DEFAULT, P300_EPOCH_S, P300_N_TARGETS,  # noqa: E402
++                         P300_PRE_S, P300_REPS, P300_SELECT_MARGIN, SSVEP_WARMUP_S,
++                         use_utf8_console)
++import numpy as np  # noqa: E402
++
++from core import p300_models  # noqa: E402
++from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  # noqa: E402
++from core.p300_decoder import epoch_from_stream  # noqa: E402
++from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
++from core.modes.runtime import ModeRuntime  # noqa: E402
++
++
++class P300Runtime(ModeRuntime):
++    """Écoute les marqueurs d'une application externe, époque l'EEG autour de chaque flash, et
++    décide à `round_end`. Aucune fenêtre glissante à faire tourner : ce mode ne fait RIEN tant
++    qu'aucun marqueur n'arrive, il est entièrement piloté par ce que l'application externe envoie.
++
++    Pourquoi aucun plancher à mesurer, comme le MI : la référence cible/non-cible est APPRISE
++    pendant la calibration, ce n'est pas un niveau de bruit du jour. Seule la CHAUFFE reste :
++    l'offset DC de l'Unicorn dérive après ouverture de session, et Fz/Cz/Pz — la ligne médiane où
++    le P300 est maximal — y est exposée comme n'importe quelle voie.
++
++    `pre_s`/`post_s` sont des ATTRIBUTS DE CLASSE, pas seulement des variables locales : c'est ce
++    qui permet au contrôle structurel de `registry.check()` de comparer `spec.marker_epoch_s` (ce
++    que le moteur DIMENSIONNE) à ce que ce runtime PRÉLÈVE vraiment. Jumeau exact de
++    `Calib.epoch_s` comparé à `MICalibration.imagery_s`.
++    """
++
++    pre_s = P300_PRE_S
++    post_s = P300_EPOCH_S
++
++    def __init__(self, spec, params, engine):
++        super().__init__(spec, params, engine)
++        self._out = None
++        self._decoded = None
++        # La géométrie (6 cibles) est FIXE — alignée sur le c-VEP pour comparer les deux
++        # paradigmes à cibles identiques (cf. `core/config.py`, P300_N_TARGETS) — pas un réglage
++        # du mode : contrairement au MI, dont les classes dépendent du modèle choisi.
++        self.n_targets = P300_N_TARGETS
++        self.model, raison = p300_models.charger(params["model"])
++        if self.model is None:
++            # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
++            # « aucun modèle » ; il reste celui du fichier effacé entre la validation et le
++            # démarrage, que seul le moteur peut voir.
++            raise ValueError(raison)
++        self._epoques = []          # les époques valides de la manche EN COURS
++        self._cibles = []           # la cible flashée pour chaque époque, même index que ci-dessus
++        # Compteurs de SESSION, jamais réinitialisés — le même choix que `engine.marqueurs_perdus`
++        # et consorts : ce sont des diagnostics qui doivent survivre à une manche, pas son état.
++        self._refus_cible = 0       # cibles hors plage reçues (bug de l'émetteur de marqueurs)
++        self._epoques_perdues = 0   # marqueurs mûrs dont l'époque a quand même débordé
++
++    def _open(self):
++        # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
++        # chauffe. Un client qui le cherche au lancement ne doit pas dépendre de l'instant où
++        # arrive le premier flash — `resolve_byprop` a un délai fini.
++        self._out = DecodedP300Publisher(self.n_targets, reps=P300_REPS,
++                                         instance=self.engine.instance)
++
++    def _close(self):
++        self._out = None
++
++    def _reset_rest(self):
++        self._vider_manche()
++        self._decoded = None
++
++    def output(self):
++        return self._decoded
++
++    def _rest_step(self, engine, now):
++        """Rien à mesurer : comme le MI, seule la chauffe compte (cf. docstring de la classe)."""
++        if now < self._rest_until:
++            return False
++        print(f"[p300] modèle « {_os.path.basename(self.params['model'])} » — écoute des "
++              f"marqueurs sur « {self.params['stream_in']} », publication sur "
++              f"{stream_name('decoded_p300')} ({self.n_targets} cibles)")
++        self.rest_report = {"kind": "p300", "model": _os.path.basename(self.params["model"]),
++                            "n_targets": self.n_targets}
++        return True
++
++    def _run_step(self, engine, lsl_ts):
++        """Ramasser les flashs mûrs, les épocher, et décider à `round_end`."""
++        for ts, marqueur in engine.markers_murs(self.spec.id, post_s=self.post_s):
++            event = marqueur.get("event")
++            if event == "flash":
++                self._encaisser_flash(engine, ts, marqueur)
++            elif event == "round_end":
++                self._decider(lsl_ts)
++            # Tout autre événement est ignoré : le protocole s'enrichira, et un mode qui
++            # refuserait ce qu'il ne connaît pas casserait au premier ajout.
++
++    def _encaisser_flash(self, engine, ts, marqueur):
++        cible = marqueur.get("target")
++        if not isinstance(cible, int) or not 0 <= cible < self.n_targets:
++            # Panne bruyante n°4 : une cible hors plage est un bug de l'application cliente.
++            # Le dire une fois suffit ; le répéter à chaque flash noierait le terminal — jusqu'à
++            # 48 par manche (8 répétitions × 6 cibles).
++            self._refus_cible += 1
++            if self._refus_cible == 1:
++                print(f"[p300] cible « {cible} » hors de la plage attendue "
++                      f"[0, {self.n_targets}[ — vérifie l'émetteur de marqueurs")
++            return
++        epoque = epoch_from_stream(engine.recent, engine.recent_ts, ts, engine.acq.fs,
++                                   pre_s=self.pre_s, post_s=self.post_s)
++        if epoque is None:
++            # Le marqueur était mûr mais l'époque déborde quand même : le tampon a été vidé
++            # entre-temps. Compté, jamais tu — comme `engine.marqueurs_perdus` juste en dessous.
++            self._epoques_perdues += 1
++            return
++        self._epoques.append(epoque)
++        self._cibles.append(cible)
++
++    def _decider(self, lsl_ts):
++        """Fin de manche : agréger les scores par cible et publier — ou dire pourquoi non."""
++        if len(self._epoques) < self.n_targets:
++            # Panne bruyante n°5 : une manche trop courte ne peut pas départager les cibles.
++            # On publie quand même, avec -1 ET la raison : un client qui attend un échantillon
++            # par manche ne doit pas rester suspendu.
++            print(f"[p300] manche ignorée : {len(self._epoques)} flashs pour {self.n_targets} "
++                  f"cibles — il en faut au moins un par cible")
++            self._publish(-1, 0.0, len(self._epoques), [0.0] * self.n_targets, lsl_ts)
++            self._vider_manche()
++            return
++
++        par_cible = {}
++        for epoque, cible in zip(self._epoques, self._cibles):
++            par_cible.setdefault(cible, []).append(epoque)
++        if len(par_cible) < self.n_targets:
++            # Une cible qui n'a jamais flashé n'a aucun score : l'argmax porterait sur un
++            # sous-ensemble, et désignerait une cible « gagnante » parmi celles qui ont eu la
++            # chance d'être montrées. Refuser est la seule réponse honnête — sans même consulter
++            # le modèle (prouvé par `_selftest`, avec un modèle-espion qui compte ses appels).
++            print(f"[p300] manche ignorée : {len(par_cible)} cibles ont flashé sur "
++                  f"{self.n_targets} — l'émetteur n'a pas fini sa séquence")
++            self._publish(-1, 0.0, len(self._epoques), [0.0] * self.n_targets, lsl_ts)
++            self._vider_manche()
++            return
++
++        # `select` agrège lui-même les répétitions (moyenne des log-odds) et applique la marge.
++        # On ne ré-agrège rien ici : ce calcul a été validé au casque, le refaire à côté en
++        # créerait une seconde version qui finirait par diverger. `P300_SELECT_MARGIN` vient
++        # directement de `core.config` : c'est une constante de PROTOCOLE, pas un réglage exposé.
++        choisi, moyennes = self.model.select(par_cible, margin=P300_SELECT_MARGIN)
++        # L'appariement score_<i> <-> cible i est le CONTRAT PUBLIC du flux : une inversion ne se
++        # voit ni sur les bornes de l'index, ni sur le nombre de voies — seulement ici. On
++        # construit donc `scores` en parcourant les indices DANS L'ORDRE, jamais `list(moyennes.
++        # values())` (dont l'ordre suit l'insertion dans `par_cible`, pas l'indice de la cible).
++        scores = [float(moyennes.get(i, 0.0)) for i in range(self.n_targets)]
++        if choisi is None:
++            self._publish(-1, 0.0, len(self._epoques), scores, lsl_ts)
++        else:
++            self._publish(int(choisi), float(moyennes[choisi]), len(self._epoques),
++                          scores, lsl_ts)
++        self._vider_manche()
++
++    def _vider_manche(self):
++        """Repart pour la manche suivante : les flashs déjà décidés ne doivent pas fuiter dans
++        la décision d'après."""
++        self._epoques = []
++        self._cibles = []
++
++    def _publish(self, target_index, confidence, n_flashes, scores, lsl_ts):
++        if self._out is not None:
++            self._out.push(target_index, confidence, n_flashes, scores, lsl_ts)
++        self._decoded = {
++            "target_index": int(target_index),
++            "confidence": round(float(confidence), 3),
++            "n_flashes": int(n_flashes),
++            "scores": [round(float(s), 3) for s in scores],
++        }
++        self._log(target_index, n_flashes, scores)
++
++    def _log(self, target_index, n_flashes, scores):
++        """Trace CHAQUE décision, sans limite de fréquence : contrairement au SSVEP/MI (~5 Hz en
++        continu), ce flux est RARE — une manche complète prend plusieurs secondes, aucun risque
++        de noyer le terminal (cf. docstring de `DecodedP300Publisher`)."""
++        detail = "  ".join(f"cible {i}: {s:+.2f}" for i, s in enumerate(scores))
++        verdict = (f"— (manche non conclue, {n_flashes} flash(s) valides)" if target_index < 0
++                  else f"CIBLE {target_index}")
++        print(f"[p300] {verdict:<34} {detail}")
++
++
++def _channels(params):
++    """Les voies du P300 : `n_targets` est une géométrie FIXE (couronne à 6 cibles, alignée sur
++    le c-VEP), pas un réglage du mode — contrairement au MI, dont les voies dépendent du modèle
++    choisi. `params` n'est donc pas lu ; l'argument existe pour respecter le contrat `channels_fn`.
++    """
++    return p300_channel_labels(P300_N_TARGETS)
++
++
++SPEC = ModeSpec(
++    id="p300",
++    label="P300",
++    family="actif",
++    summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
++    status="moteur",
++    params=(
++        Param(key="model", label="Modèle entraîné", kind="choice",
++              choices_fn=lambda: p300_models.modeles_disponibles(),
++              help="Le modèle produit par une calibration P300, propre à TA personne — celui "
++                   "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
++                   "dans la liste ? Lance `python src/research/app.py`, mode P300, et calibre."),
++        Param(key="stream_in", label="Flux de marqueurs", kind="choice",
++              choices=(MARKER_STREAM_DEFAULT,), default=MARKER_STREAM_DEFAULT,
++              affecte_decodage=False,
++              help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
++                   "flash. Le moteur l'écoute par son NOM : deux applications peuvent tourner "
++                   "sur le réseau sans se mélanger."),
++    ),
++    rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
++              instruction="Le casque se stabilise — reste immobile."),
++    calibration=Calib(kind="natif",
++                      reason="époques calées sur l'onset exact de chaque flash, rendu par "
++                             "l'application externe"),
++    stream="decoded_p300",
++    channels_fn=_channels,
++    runtime_cls=P300Runtime,
++    marker_epoch_s=P300_PRE_S + P300_EPOCH_S,   # 0,95 s — dimensionne le tampon du moteur
++)
++
++
++def _selftest():
++    """Le mode de bout en bout : un vrai modèle entraîné sur du P300 synthétique, un faux moteur
++    qui rend des marqueurs SUR COMMANDE.
++
++    La MATURITÉ d'un marqueur (horodatage, curseur par mode, purge) est déjà prouvée dans
++    `server.py` (`_smoke_marqueurs_murs`, `_smoke_marqueurs_file_coincee`) : ce mode ne la
++    réimplémente pas, ce test ne la rejoue donc pas non plus. Il se concentre sur ce que CE mode
++    fait de marqueurs déjà mûrs : épocher, agréger par cible, décider, publier — et sur les deux
++    pannes bruyantes propres au protocole P300 (cible hors plage, manche trop courte).
++    """
++    import io
++    import shutil
++    import tempfile
++    from contextlib import redirect_stdout
++
++    from core.acquisition import UnicornAcquisition
++    from core.p300_decoder import P300Model, synth_p300_epoch
++
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    class _FauxPublieur:
++        def __init__(self):
++            self.lignes = []
++
++        def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
++            self.lignes.append((target_index, confidence, n_flashes, list(scores)))
++
++    class _FauxMoteur:
++        """Juste ce dont le runtime a besoin. `markers_murs` rend les marqueurs un LOT à la
++        fois, dans l'ordre fourni pour CE test : la maturité elle-même (horodatage, curseur,
++        purge) est déjà prouvée côté `server.py` (cf. docstring de `_selftest`)."""
++
++        def __init__(self, recent, recent_ts):
++            self.acq = UnicornAcquisition(synthetic=True)
++            self.instance = "selftest"
++            self.recent = recent
++            self.recent_ts = recent_ts
++            self._lots = []
++
++        def markers_murs(self, mode_id, post_s):
++            return self._lots.pop(0) if self._lots else []
++
++    class _ModeleControle:
++        """Un faux modèle P300 dont `select` renvoie des scores FIXES et CONNUS par cible, pour
++        prouver l'appariement score_<i> <-> cible i sans dépendre d'un vrai décodage (déjà
++        validé dans `p300_decoder.py`)."""
++
++        def __init__(self, scores_par_cible, gagnant):
++            self._scores = dict(scores_par_cible)
++            self._gagnant = gagnant
++            self.appels = 0
++
++        def select(self, epochs_by_target, margin=0.0):
++            self.appels += 1
++            return self._gagnant, dict(self._scores)
++
++    class _ModeleEspion:
++        """Compte ses appels — sert à prouver qu'une manche incomplète ne consulte JAMAIS le
++        modèle plutôt que de lui demander un argmax sur un sous-ensemble de cibles."""
++
++        def __init__(self):
++            self.appels = 0
++
++        def select(self, epochs_by_target, margin=0.0):
++            self.appels += 1
++            return 0, {k: 99.0 for k in epochs_by_target}   # une réponse CERTAINE si jamais appelée
++
++    def marqueur(t, cible):
++        return (t, {"mode": "p300", "event": "flash", "target": cible})
++
++    def fin_manche(t):
++        return (t, {"mode": "p300", "event": "round_end"})
++
++    rng = np.random.default_rng(0)
++    fs = 250.0
++    # 20 s de tampon continu, largement assez de marge pour des flashs entre t=101 et t=118 avec
++    # pre_s=0,15 / post_s=0,80. Du BRUIT, pas des zéros : une covariance nulle sur toutes les
++    # époques rendrait la moyenne riemannienne de xDAWN dégénérée.
++    recent_ts = np.arange(100.0, 120.0, 1.0 / fs)
++    recent = rng.normal(0.0, 5.0, (len(recent_ts), 8))
++
++    vrai_dispo = p300_models.modeles_disponibles
++    dossier = tempfile.mkdtemp(prefix="p300_mode_")
++    try:
++        # Un modèle jetable, entraîné sur du P300 synthétique (même recette que
++        # `p300_decoder._synth_dataset`, en plus court : ce test ne juge pas la justesse du
++        # décodage, seulement le CONTRAT du mode).
++        epochs, y, groups = [], [], []
++        n_rounds, reps = 6, 4
++        for r in range(n_rounds):
++            cue = r % P300_N_TARGETS
++            for _ in range(reps):
++                for tgt in range(P300_N_TARGETS):
++                    epochs.append(synth_p300_epoch(tgt == cue, fs=fs, rng=rng))
++                    y.append(1 if tgt == cue else 0)
++                    groups.append(r)
++        modele = P300Model(fs=fs).fit(np.asarray(epochs), np.asarray(y), groups=np.asarray(groups))
++        chemin = _os.path.join(dossier, "p300_model.joblib")
++        modele.save(chemin)
++
++        # 1. Sans modèle du tout, le mode REFUSE et dit comment en obtenir un.
++        vide = _os.path.join(dossier, "aucun")
++        _os.makedirs(vide, exist_ok=True)
++        p300_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
++        _v, raison = validate(SPEC, {})
++        chk(raison is not None and "aucun choix disponible" in raison
++            and "research/app.py" in raison,
++            f"sans modèle, le mode refuse en disant quoi faire ({raison})")
++
++        # 2. Avec un modèle, les défauts sont valides et c'est lui qui est pris.
++        p300_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
++        values, raison = validate(SPEC, {})
++        chk(values is not None, f"avec un modèle, les défauts passent ({raison})")
++        chk(values["model"] == chemin, f"et c'est le modèle trouvé qui est pris ({values['model']})")
++        chk(values["stream_in"] == MARKER_STREAM_DEFAULT,
++            f"le flux de marqueurs par défaut est celui du protocole ({values['stream_in']})")
++        chk(_channels(values) == list(p300_channel_labels(P300_N_TARGETS)),
++            f"les voies sont celles de la géométrie à {P300_N_TARGETS} cibles ({_channels(values)})")
++        chk({p.key for p in SPEC.params} == {"model", "stream_in"},
++            "P300_SELECT_MARGIN n'est PAS un réglage exposé : une constante de protocole ne "
++            "bouge pas dans ce chantier")
++
++        # 3. `pre_s`/`post_s` sont des ATTRIBUTS DE CLASSE — c'est ce que `registry.check()` lit
++        # pour comparer `marker_epoch_s` (le tampon que le moteur DIMENSIONNE) à ce que ce
++        # runtime PRÉLÈVE vraiment. Jumeau exact : `Calib.epoch_s` contre `MICalibration.imagery_s`.
++        chk(P300Runtime.pre_s == P300_PRE_S and P300Runtime.post_s == P300_EPOCH_S,
++            f"pre_s/post_s sont exposés en attributs de CLASSE ({P300Runtime.pre_s}, "
++            f"{P300Runtime.post_s})")
++        chk(SPEC.marker_epoch_s == P300Runtime.pre_s + P300Runtime.post_s,
++            f"marker_epoch_s du contrat vaut EXACTEMENT pre_s+post_s du runtime "
++            f"({SPEC.marker_epoch_s:g} == {P300Runtime.pre_s + P300Runtime.post_s:g})")
++
++        moteur = _FauxMoteur(recent, recent_ts)
++        rt = P300Runtime(SPEC, values, moteur)
++        rt._out = _FauxPublieur()
++        rt._opened = True
++        chk(rt.phase == "warmup", "le P300 commence par une chauffe")
++
++        # 4. Chauffe puis écoute, sans plancher à mesurer.
++        rt.begin_rest(now=0.0, warmup_s=0.0, duration_s=0.0)
++        rt.tick(moteur, lsl_ts=0.0, now=0.1)
++        rt.tick(moteur, lsl_ts=0.2, now=0.2)
++        chk(rt.phase == "running", f"un repos de durée nulle passe tout de suite ({rt.phase})")
++        chk(rt.rest_report and rt.rest_report["kind"] == "p300",
++            f"et laisse un compte-rendu nommant le modèle ({rt.rest_report})")
++
++        # 5. Une manche COMPLÈTE, sur le VRAI décodeur (chaque cible flashe au moins une fois) :
++        # on ne juge PAS la justesse du décodage (déjà validée dans `p300_decoder.py` sur du vrai
++        # P300 synthétique) — ici le signal est du BRUIT — seulement le CONTRAT : un index dans
++        # les bornes, un score par cible, `n_flashes` qui compte les flashs incorporés.
++        t = 101.0
++        lot = []
++        for tgt in range(P300_N_TARGETS):
++            lot.append(marqueur(t, tgt))
++            t += 0.15
++        lot.append(fin_manche(t))
++        moteur._lots = [lot]
++        rt.tick(moteur, lsl_ts=t, now=1.0)
++        chk(len(rt._out.lignes) == 1,
++            f"une décision publiée pour cette manche complète ({len(rt._out.lignes)})")
++        index, _confiance, n_flashes, scores = rt._out.lignes[-1]
++        chk(-1 <= index < P300_N_TARGETS, f"index de cible dans les bornes ({index})")
++        chk(len(scores) == P300_N_TARGETS, f"un score par cible ({scores})")
++        chk(n_flashes == P300_N_TARGETS,
++            f"n_flashes compte les flashs valides incorporés à la décision ({n_flashes})")
++        chk(rt.output() is not None and rt.output()["target_index"] == index,
++            f"la sortie exposée à l'affichage reprend la même décision ({rt.output()})")
++
++        # --- PREUVE 1/2 : l'appariement score_<i> <-> cible i --------------------------------
++        # Un modèle-CONTRÔLE dont `select` renvoie des scores FIXES, ASYMÉTRIQUES et tous
++        # DISTINCTS : une inversion, un tri, ou un décalage d'index produirait une liste
++        # DIFFÉRENTE de celle attendue — rien ici ne pourrait passer par coïncidence.
++        scores_connus = {0: -3.0, 1: 7.0, 2: -1.5, 3: 0.5, 4: -2.5, 5: 4.0}
++        rt.model = _ModeleControle(scores_connus, gagnant=1)
++        t = 101.0
++        lot = []
++        for tgt in range(P300_N_TARGETS):
++            lot.append(marqueur(t, tgt))
++            t += 0.15
++        lot.append(fin_manche(t))
++        moteur._lots = [lot]
++        rt.tick(moteur, lsl_ts=t, now=2.0)
++        index, confiance, _n, scores = rt._out.lignes[-1]
++        attendu = [scores_connus[i] for i in range(P300_N_TARGETS)]
++        chk(scores == attendu,
++            f"score_<i> correspond EXACTEMENT à la cible i, dans l'ordre des indices "
++            f"({scores} attendu {attendu})")
++        chk(index == 1 and abs(confiance - 7.0) < 1e-9,
++            f"et la cible choisie est celle du meilleur score, avec CE score comme confiance "
++            f"({index}, {confiance})")
++
++        # --- PREUVE 2/2 : une manche INCOMPLÈTE publie -1, sans même consulter le modèle -------
++        # Cas A : moins de flashs valides que de cibles (`len(self._epoques) < n_targets`).
++        espion = _ModeleEspion()
++        rt.model = espion
++        t = 101.0
++        lot = [marqueur(t, 0), marqueur(t + 0.15, 1), marqueur(t + 0.30, 2)]
++        lot.append(fin_manche(t + 0.45))
++        moteur._lots = [lot]
++        rt.tick(moteur, lsl_ts=t + 0.45, now=3.0)
++        index, _c, n_flashes, scores = rt._out.lignes[-1]
++        chk(index == -1 and n_flashes == 3,
++            f"3 flashs pour {P300_N_TARGETS} cibles : la manche est refusée, PAS un argmax sur "
++            f"les 3 cibles vues (index={index}, n_flashes={n_flashes})")
++        chk(scores == [0.0] * P300_N_TARGETS,
++            f"et les scores publiés sont neutres, pas ceux d'un calcul partiel ({scores})")
++        chk(espion.appels == 0,
++            f"le modèle n'est même pas CONSULTÉ — {espion.appels} appel(s) au lieu de 0")
++
++        # Cas B : autant (ou plus) de flashs que de cibles, mais pas TOUTES les cibles vues —
++        # celui que la preuve rouge-puis-vert cible : la brèche ne se voit ni sur le nombre de
++        # flashs ni sur les bornes de l'index, seulement sur la COUVERTURE des cibles.
++        t = 101.0
++        lot = []
++        for _ in range(P300_N_TARGETS):        # 6 flashs, mais seulement 2 cibles distinctes
++            for tgt in (0, 1):
++                lot.append(marqueur(t, tgt))
++                t += 0.15
++        lot.append(fin_manche(t))
++        moteur._lots = [lot]
++        rt.tick(moteur, lsl_ts=t, now=4.0)
++        index, _c, n_flashes, scores = rt._out.lignes[-1]
++        chk(index == -1 and n_flashes == 2 * P300_N_TARGETS,
++            f"{2 * P300_N_TARGETS} flashs mais 2 cibles seulement sur {P300_N_TARGETS} : "
++            f"refusée quand même, pas un argmax sur les 2 cibles vues (index={index}, "
++            f"n_flashes={n_flashes})")
++        chk(scores == [0.0] * P300_N_TARGETS, f"scores neutres, pas partiels ({scores})")
++        chk(espion.appels == 0,
++            f"le modèle n'est TOUJOURS pas consulté — {espion.appels} appel(s) au lieu de 0")
++
++        # --- Panne bruyante n°4 : une cible hors plage --------------------------------------
++        # Trois cibles invalides dans la même manche : COMPTÉES chacune, mais dites UNE SEULE
++        # fois — répéter l'avertissement à chaque flash noierait le terminal.
++        avant = rt._refus_cible
++        t = 101.0
++        lot = [marqueur(t, 99), marqueur(t + 0.15, -1), marqueur(t + 0.30, "deux")]
++        moteur._lots = [lot]
++        capture = io.StringIO()
++        with redirect_stdout(capture):
++            rt.tick(moteur, lsl_ts=t + 0.30, now=5.0)
++        texte = capture.getvalue()
++        print(texte, end="")     # rejoué : la capture ne doit pas rendre ce test muet
++        chk(rt._refus_cible == avant + 3,
++            f"les trois cibles hors plage sont COMPTÉES ({rt._refus_cible - avant})")
++        chk(texte.count("hors de la plage") == 1,
++            f"...mais l'avertissement n'est imprimé qu'UNE fois pour les trois "
++            f"({texte.count('hors de la plage')} occurrence(s))")
++        rt._vider_manche()   # cette manche n'a pas été close par un round_end : on ne la garde pas
++
++        # --- Panne bruyante n°5 (variante) : l'époque déborde malgré un marqueur mûr ---------
++        # Simule un tampon vidé entre la maturité du marqueur et son traitement : un horodatage
++        # hors du tampon fait rendre None à `epoch_from_stream`, sans lever.
++        avant_perdues = rt._epoques_perdues
++        lot = [marqueur(5.0, 0)]           # 5.0 est loin AVANT recent_ts[0]=100.0
++        moteur._lots = [lot]
++        rt.tick(moteur, lsl_ts=5.0, now=6.0)
++        chk(rt._epoques_perdues == avant_perdues + 1,
++            f"une époque qui déborde du tampon est COMPTÉE, pas ignorée en silence "
++            f"({rt._epoques_perdues - avant_perdues})")
++        chk(len(rt._epoques) == 0,
++            "...et ne rejoint PAS la manche en cours (elle n'a rien à décoder)")
++        rt._vider_manche()
++
++        # 6. Le contrat du mode.
++        chk(SPEC.rest.duration_s == 0.0 and SPEC.rest.warmup_s == SSVEP_WARMUP_S,
++            f"chauffe obligatoire, aucun plancher ({SPEC.rest})")
++        chk(SPEC.stream == "decoded_p300" and SPEC.status == "moteur",
++            "le mode publie decoded_p300 et tourne dans le moteur")
++        chk(SPEC.calibration is not None and SPEC.calibration.kind == "natif"
++            and SPEC.calibration.runtime_cls is None,
++            "sa calibration reste NATIVE : le moteur ne la joue pas, l'appli pygame la joue")
++        chk(all(p.affecte_decodage for p in SPEC.params if p.key != "stream_in"),
++            "le modèle affecte le décodage ; le flux de marqueurs (juste le NOM écouté), non")
++    finally:
++        p300_models.modeles_disponibles = vrai_dispo
++        shutil.rmtree(dossier, ignore_errors=True)
++
++    print(f"[p300] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++if __name__ == "__main__":
++    use_utf8_console()
++    _sys.exit(0 if _selftest() else 1)
+diff --git a/src/core/modes/registry.py b/src/core/modes/registry.py
+index ba4b43d..dd0cfc5 100644
+--- a/src/core/modes/registry.py
++++ b/src/core/modes/registry.py
+@@ -7,30 +7,30 @@ consigne affichée. Une règle déterministe vaut mieux qu'un « ça dépend »
+ Autotest :
+     python src/core/modes/registry.py
+ """
+ 
+ import os as _os
+ import sys as _sys
+ from dataclasses import replace
+ 
+ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+ from core.config import use_utf8_console  # noqa: E402
+-from core.modes import external, mi, neuro, raw, ssvep  # noqa: E402
++from core.modes import external, mi, neuro, p300, raw, ssvep  # noqa: E402
+ from core.modes.contract import validate  # noqa: E402
+ 
+ MODES = (
+     raw.SPEC,           # le brut d'abord : c'est ce qui existe même sans décodage
+     ssvep.SPEC,
+     neuro.SPEC,
+     mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
++    p300.SPEC,          # le P300 a rejoint le moteur : il écoute les marqueurs d'une appli externe
+     external.CVEP,      # puis les modes de l'appli pygame, dans l'ordre où ils ont été écrits
+-    external.P300,
+     external.ERRP,
+ )
+ 
+ BY_ID = {spec.id: spec for spec in MODES}
+ 
+ 
+ def get(mode_id):
+     """Le `ModeSpec` de cet identifiant, ou None."""
+     return BY_ID.get(mode_id)
+ 
+@@ -246,20 +246,34 @@ def check():
+             imagery_s = getattr(calib.runtime_cls, "imagery_s", None)
+             if calib.epoch_s <= 0:
+                 defauts.append(f"{spec.id} : sa calibration a un runtime_cls mais "
+                                f"epoch_s={calib.epoch_s:g} — le moteur ne dimensionnerait "
+                                f"aucun tampon pour elle")
+             elif imagery_s is not None and calib.epoch_s < imagery_s:
+                 defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
+                                f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
+                                f"serait tronquée en silence")
+ 
++        # Le même piège que pour la calibration, un cran plus loin : `marker_epoch_s` (ici)
++        # dimensionne le tampon du moteur ; `pre_s`/`post_s` (côté runtime) décident ce qu'on en
++        # PRÉLÈVE. Deux sources de vérité pour le même nombre, et rien ne les lie : un
++        # `marker_epoch_s` trop court tronquerait CHAQUE époque EN SILENCE.
++        pre_s = getattr(spec.runtime_cls, "pre_s", None)
++        post_s = getattr(spec.runtime_cls, "post_s", None)
++        if pre_s is not None and post_s is not None:
++            if spec.marker_epoch_s < pre_s + post_s:
++                defauts.append(f"{spec.id} : marker_epoch_s={spec.marker_epoch_s:g} s est SOUS "
++                               f"pre_s+post_s={pre_s + post_s:g} s de son runtime — chaque "
++                               f"époque serait tronquée en silence")
++        if spec.marker_epoch_s > 0 and spec.runtime_cls is None:
++            defauts.append(f"{spec.id} : déclare marker_epoch_s sans runtime pour les consommer")
++
+     return (not defauts), defauts
+ 
+ 
+ def _selftest():
+     ok, defauts = check()
+ 
+     def chk(cond, msg):
+         nonlocal ok
+         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+         ok = ok and bool(cond)
+diff --git a/src/core/server.py b/src/core/server.py
+index 31b3343..9c6ffea 100644
+--- a/src/core/server.py
++++ b/src/core/server.py
+@@ -2230,20 +2230,23 @@ def _smoke_dimensionnement():
+         nonlocal ok
+         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+         ok = ok and bool(cond)
+ 
+     srv = EngineServer(synthetic=True, modes=(), params={})
+     besoin = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
+     attendu = int(round((besoin + MARKER_LATE_S) * srv.acq.fs))
+     chk(srv.keep >= attendu,
+         f"keep={srv.keep} couvre l'époque du marqueur ({besoin:g} s) plus le retard toléré "
+         f"({MARKER_LATE_S:g} s) = {attendu} échantillons")
++    chk(besoin > 0.0,
++        f"au moins un mode déclare une époque de marqueur ({besoin:g} s) — sans ça l'assertion "
++        f"ci-dessus serait vraie à vide et ne prouverait rien")
+     print(f"[smoke-dimensionnement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
+ def _smoke_tampon_horodate():
+     """Les deux tampons ont-ils toujours la même longueur, et le temps y avance-t-il ?
+ 
+     Un décalage d'un seul échantillon entre `recent` et `recent_ts` déplace TOUTES les époques
+     sans rien casser de visible : le décodeur reçoit du signal, de la bonne taille, pris au
+     mauvais endroit.

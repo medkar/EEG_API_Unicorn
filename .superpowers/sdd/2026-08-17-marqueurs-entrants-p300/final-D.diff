@@ -1,0 +1,507 @@
+# Revue finale — tranche D : le decodeur et les modeles
+
+## Stat
+ src/core/p300_decoder.py | 247 +++++++++++++++++++++++++++++++++++++++++++++++
+ src/core/p300_models.py  | 240 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 487 insertions(+)
+
+## Diff
+diff --git a/src/core/p300_decoder.py b/src/core/p300_decoder.py
+new file mode 100644
+index 0000000..a57a710
+--- /dev/null
++++ b/src/core/p300_decoder.py
+@@ -0,0 +1,247 @@
++"""Décodeur P300 (oddball) : xDAWN + covariances riemanniennes + LR — SÉLECTION discrète.
++
++Le P300 est une onde POSITIVE ~300 ms après un stimulus rare et ATTENDU (compté). On fait
++clignoter les cibles une à une ; l'utilisateur fixe+compte celle qu'il veut ; son flash est
++l'"oddball" -> P300. Le décodeur classe chaque époque de flash « cible / non-cible », puis pour
++une SÉLECTION agrège les scores de chaque cible sur ses répétitions et prend l'argmax.
++
++Pourquoi xDAWN + Riemann (pyriemann) et pas du fait-maison : c'est l'état de l'art du P300 à peu
++de voies / peu d'essais, et c'est déjà installé (rien à recoder). xDAWN apprend des filtres
++spatiaux qui maximisent le rapport (réponse évoquée)/(bruit) ; l'espace tangent riemannien +
++LR fait un classifieur robuste. Voir Rivet et al. 2009 (xDAWN), Barachant/Congedo (Riemann-P300).
++
++Étapes du signal, dans l'ordre :
++  onset flash -> époque [-pre, +post] (via timestamp, cf. acquisition.get_raw) -> correction de
++  ligne de base (moyenne pré-stimulus) -> passe-bande ERP (1-12 Hz) -> xDAWN+Riemann.
++
++Validé ici sur P300 SYNTHÉTIQUE (pas de casque).   python src/core/p300_decoder.py
++"""
++
++import os
++import sys
++
++import joblib
++import numpy as np
++from scipy.signal import butter, filtfilt
++from sklearn.base import clone
++from sklearn.linear_model import LogisticRegression
++from sklearn.pipeline import Pipeline
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++from core.config import (P300_BAND, P300_EPOCH_S, P300_PRE_S, P300_XDAWN_NFILTER,  # noqa: E402
++                    use_utf8_console)
++
++TARGET, NONTARGET = 1, 0
++
++
++def bandpass(x, fs, band=P300_BAND, order=4):
++    """Filtre 0-phase (filtfilt) le long du temps. x : (..., n_samples)."""
++    lo, hi = band
++    b, a = butter(order, [lo / (fs / 2), hi / (fs / 2)], btype="band")
++    return filtfilt(b, a, np.asarray(x, dtype=float), axis=-1)
++
++
++def epoch_from_stream(eeg, ts, flash_ts, fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
++    """Découpe l'époque [flash_ts - pre_s, flash_ts + post_s] dans un flux (eeg (n,ch), ts (n,)).
++
++    `ts` = canal timestamp BrainFlow (temps Unix par échantillon) -> alignement SANS dérive
++    d'horloge, même sur une longue calibration. Retourne (n_pre+n_post, ch) ou None si l'époque
++    déborde du flux enregistré."""
++    n_pre, n_post = int(round(pre_s * fs)), int(round(post_s * fs))
++    idx = int(np.searchsorted(ts, flash_ts))     # 1er échantillon à/après l'onset
++    i0, i1 = idx - n_pre, idx + n_post
++    if i0 < 0 or i1 > len(ts):
++        return None
++    return np.asarray(eeg[i0:i1], dtype=float)
++
++
++def build_pipe(nfilter=P300_XDAWN_NFILTER):
++    """xDAWN (covariances) -> espace tangent -> régression logistique. Import paresseux de
++    pyriemann pour ne pas le charger si le mode P300 n'est pas utilisé."""
++    from pyriemann.estimation import XdawnCovariances
++    from pyriemann.tangentspace import TangentSpace
++    return Pipeline([
++        ("xdawn", XdawnCovariances(nfilter=nfilter, estimator="lwf", xdawn_estimator="scm")),
++        ("ts", TangentSpace()),
++        ("lr", LogisticRegression(max_iter=1000, class_weight="balanced")),
++    ])
++
++
++class P300Model:
++    """Pipeline entraînable (xDAWN+Riemann+LR) + (dé)sérialisation. `cv_auc_` = AUC par manche
++    (GroupKFold) ; `n_epoques_` = nombre d'époques d'entraînement (lu par `p300_models.decrire`)."""
++
++    def __init__(self, fs=250.0, band=P300_BAND, pre_s=P300_PRE_S, post_s=P300_EPOCH_S,
++                 nfilter=P300_XDAWN_NFILTER):
++        self.fs = fs
++        self.band = band
++        self.pre_s = pre_s
++        self.post_s = post_s
++        self.nfilter = nfilter
++        self.pipe = build_pipe(nfilter)
++        self.cv_auc_ = None
++        self.n_epoques_ = None
++
++    def _prep(self, epochs):
++        """(n_trials, n_samp, n_ch) [ou (n_samp, n_ch)] -> correction de base + passe-bande ->
++        (n_trials, n_ch, n_samp) attendu par pyriemann."""
++        X = np.asarray(epochs, dtype=float)
++        if X.ndim == 2:
++            X = X[None]
++        n_pre = int(round(self.pre_s * self.fs))
++        if n_pre > 0:
++            X = X - X[:, :n_pre, :].mean(axis=1, keepdims=True)   # ligne de base pré-stimulus
++        X = np.transpose(X, (0, 2, 1))                            # -> (n_trials, n_ch, n_samp)
++        return bandpass(X, self.fs, self.band)
++
++    def fit(self, epochs, y, groups=None, compute_cv=True):
++        Xf, y = self._prep(epochs), np.asarray(y).astype(int)
++        self.cv_auc_ = None
++        self.n_epoques_ = int(len(y))
++        if compute_cv and len(np.unique(y)) == 2 and len(y) >= 10:
++            self.cv_auc_ = self._cv_auc(Xf, y, groups)
++        self.pipe.fit(Xf, y)
++        return self
++
++    def _cv_auc(self, Xf, y, groups):
++        """AUC honnête : GroupKFold par manche si `groups` fourni (aucune fuite d'époques d'une
++        même manche entre train et test), sinon StratifiedKFold."""
++        from sklearn.model_selection import (GroupKFold, StratifiedKFold,  # noqa: E402
++                                             cross_val_score)
++        try:
++            if groups is not None:
++                k = min(5, len(np.unique(groups)))
++                sc = cross_val_score(clone(self.pipe), Xf, y, groups=groups,
++                                     cv=GroupKFold(k), scoring="roc_auc")
++            else:
++                sc = cross_val_score(clone(self.pipe), Xf, y,
++                                     cv=StratifiedKFold(5, shuffle=True, random_state=0),
++                                     scoring="roc_auc")
++            return float(np.mean(sc))
++        except Exception as e:  # noqa: BLE001 - l'AUC est indicative, ne doit pas bloquer le fit
++            print(f"[p300] AUC CV non calculée : {e}")
++            return None
++
++    def scores(self, epochs):
++        """Score « cible » par époque (log-odds LR = decision_function : additif sur les répétitions)."""
++        return self.pipe.decision_function(self._prep(epochs))
++
++    def select(self, epochs_by_target, margin=0.0):
++        """Agrège les scores de chaque cible sur ses répétitions -> (nom_choisi|None, {nom: score}).
++        margin > 0 : refuse la sélection si l'écart 1er-2e est trop faible (ambiguë -> None)."""
++        means = {nm: float(np.mean(self.scores(np.asarray(eps))))
++                 for nm, eps in epochs_by_target.items()}
++        order = sorted(means, key=means.get, reverse=True)
++        if margin > 0 and len(order) > 1 and means[order[0]] - means[order[1]] < margin:
++            return None, means
++        return order[0], means
++
++    def save(self, path):
++        joblib.dump(self, path)
++
++    @staticmethod
++    def load(path):
++        return joblib.load(path)
++
++
++# --- Validation sur P300 SYNTHÉTIQUE (pas de casque requis) -----------------
++
++def synth_p300_epoch(is_target, fs=250.0, pre_s=P300_PRE_S, post_s=P300_EPOCH_S,
++                     amp=1.6, noise=1.0, rng=None):
++    """Époque synthétique (n_samp, 8). Cible = bosse POSITIVE ~300 ms (P300) + petit N200,
++    pondérée sur la ligne médiane Fz/Cz/Pz (indices 0,2,4). Non-cible = même bruit, sans bosse.
++    Alpha ~10 Hz partagé pour un fond réaliste (le P300 doit émerger malgré lui)."""
++    rng = np.random.default_rng() if rng is None else rng
++    n_pre, n_post = int(round(pre_s * fs)), int(round(post_s * fs))
++    n = n_pre + n_post
++    t = (np.arange(n) - n_pre) / fs                       # temps depuis l'onset (s)
++    X = rng.normal(0.0, noise, (n, 8))
++    X += (0.8 * np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi)))[:, None]  # alpha partagé
++    if is_target:
++        p300 = amp * np.exp(-0.5 * ((t - 0.30) / 0.06) ** 2)     # positivité ~300 ms
++        n200 = -0.4 * amp * np.exp(-0.5 * ((t - 0.20) / 0.03) ** 2)
++        w = np.zeros(8)
++        w[[0, 2, 4]] = [0.7, 1.0, 0.9]                           # Fz, Cz, Pz
++        X += (p300 + n200)[:, None] * w[None, :]
++    return X
++
++
++def _synth_dataset(rounds, n_targets, reps, fs, rng, amp=0.7, noise=1.6):
++    """Simule une calibration : chaque manche cue une cible, on flashe les N cibles reps fois.
++    amp/noise réglés pour un P300 mono-essai FAIBLE (AUC ~90 %, pas trivial) : la sélection ne
++    doit réussir que par MOYENNAGE sur les répétitions — le vrai mécanisme du P300.
++    Retourne epochs (liste), y (0/1), groups (indice de manche), et cues (par manche)."""
++    epochs, y, groups, cues = [], [], [], []
++    for r in range(rounds):
++        cue = r % n_targets                                  # chaque cible cuée ~également
++        cues.append(cue)
++        for _ in range(reps):
++            for tgt in range(n_targets):
++                is_t = (tgt == cue)
++                epochs.append(synth_p300_epoch(is_t, fs=fs, amp=amp, noise=noise, rng=rng))
++                y.append(TARGET if is_t else NONTARGET)
++                groups.append(r)
++    return np.asarray(epochs), np.asarray(y), np.asarray(groups), cues
++
++
++def _itr(n_classes, accuracy, seconds_per_decision):
++    """Débit d'information (bits/min, Wolpaw et al. 2002) — réplique MINIMALE de
++    `research.itr.itr`, pour le seul print de `_demo()` ci-dessous.
++
++    Ce n'est pas de la paresse : `core` ne peut PAS importer `research` (frontière vérifiée par
++    `server.py --smoke`, cf. docstring de tête), et cette formule ne sert nulle part ailleurs
++    dans ce module. Dupliquer dix lignes de maths pures coûte moins qu'un import interdit.
++    """
++    import math
++    n, p = int(n_classes), float(accuracy)
++    if n < 2 or seconds_per_decision <= 0:
++        return 0.0
++    p = min(max(p, 1e-9), 1.0 - 1e-9)
++    if p <= 1.0 / n:
++        return 0.0
++    bits = math.log2(n) + p * math.log2(p) + (1 - p) * math.log2((1 - p) / (n - 1))
++    return max(0.0, bits) * 60.0 / seconds_per_decision
++
++
++def _demo():
++    fs, rounds, n_targets, reps = 250.0, 12, 6, 12
++    rng = np.random.default_rng(0)
++    epochs, y, groups, cues = _synth_dataset(rounds, n_targets, reps, fs, rng)
++    print(f"P300 synthétique : {rounds} manches × {n_targets} cibles × {reps} rép = {len(y)} "
++          f"époques ({int(y.sum())} cibles / {int((1 - y).sum())} non-cibles), fs={fs:g} Hz")
++
++    # 1) AUC cible-vs-non-cible, honnête (GroupKFold par manche)
++    model = P300Model(fs=fs).fit(epochs, y, groups=groups)
++    auc = model.cv_auc_
++    print(f"\n[1] AUC cible-vs-non-cible (GroupKFold par manche) : {auc*100:.1f}%  (hasard 50%)")
++
++    # 2) Précision de SÉLECTION en leave-one-round-out (la vraie métrique : trouve-t-on la cible ?)
++    ok = 0
++    for r in range(rounds):
++        tr = groups != r
++        m = P300Model(fs=fs).fit(epochs[tr], y[tr], compute_cv=False)
++        te = np.where(groups == r)[0]
++        by_target = {}
++        for i in te:
++            # reconstruit l'appartenance cible depuis l'ordre de _synth_dataset
++            tgt = int((i - te[0]) % n_targets)
++            by_target.setdefault(tgt, []).append(epochs[i])
++        pick, _ = m.select(by_target)
++        ok += (pick == cues[r])
++    sel = ok / rounds
++    soa = 0.25
++    t_sel = reps * n_targets * soa
++    print(f"[2] Sélection leave-one-round-out : {ok}/{rounds} = {sel*100:.0f}%  "
++          f"(hasard {100/n_targets:.0f}%)")
++    print(f"    à {reps} rép × {n_targets} cibles × {soa*1000:.0f} ms = {t_sel:.1f} s/sélection "
++          f"-> ITR ~{_itr(n_targets, sel, t_sel):.1f} bits/min")
++
++    good = (auc or 0) > 0.75 and sel >= 0.9
++    print(f"\n[p300] pipeline xDAWN+Riemann " + ("validé sur synthétique." if good
++          else "à ajuster (AUC>75% et sélection>=90% attendus sur ce synthétique)."))
++    return good
++
++
++if __name__ == "__main__":
++    use_utf8_console()
++    _demo()
+diff --git a/src/core/p300_models.py b/src/core/p300_models.py
+new file mode 100644
+index 0000000..9ba0c34
+--- /dev/null
++++ b/src/core/p300_models.py
+@@ -0,0 +1,240 @@
++"""Les modèles P300 sur le disque : lesquels existent, lequel se charge vraiment.
++
++Jumeau de `mi_models.py`, et pour la même raison : un modèle est propre à UNE personne, et le
++mode doit pouvoir dire « aucun choix disponible » plutôt que démarrer muet.
++
++⚠️ **Les modèles antérieurs au 2026-08-17 sont refusés, et c'est une décision.** Ils ont été
++enregistrés quand le décodeur vivait dans `src/research/`, donc leur pickle référence le module
++NU `p300_decoder`, qui n'existe plus sous ce nom. On ne fabrique PAS de passerelle : les époques
++de calibration ayant survécu (`data/p300_calib_*.npz`), un modèle se ré-entraîne depuis le disque
++en quelques secondes. C'est ce qui manquait au MI, dont les époques avaient été écrasées — et ce
++qui a coûté ses 4 modèles.
++
++Autotest :
++    python src/core/p300_models.py
++"""
++
++import os as _os
++import sys as _sys
++
++_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
++from core.config import DATA_DIR, use_utf8_console  # noqa: E402
++
++
++import glob as _glob  # noqa: E402
++import time as _time  # noqa: E402
++
++MOTIF = "p300_model*.joblib"   # tous les modèles P300 ; le ré-entraînement en écrit d'horodatés
++
++
++def charger(chemin):
++    """(modèle, None) si le modèle se charge, (None, raison) sinon. Ne lève jamais.
++
++    La `raison` est destinée à un étudiant : elle dit quoi FAIRE, pas seulement ce qui a raté.
++    """
++    # Un chemin vide n'est pas un incident : c'est l'état d'un formulaire dont la liste de
++    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
++    # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
++    if not chemin:
++        return None, ("aucun modèle désigné — lance une calibration P300 depuis la console pour "
++                      "en produire un")
++    if not _os.path.isfile(chemin):
++        return None, f"modèle introuvable : {chemin}"
++    try:
++        import joblib
++        modele = joblib.load(chemin)
++    except Exception as e:      # noqa: BLE001 - pickle casse de mille façons, toutes équivalentes ici
++        return None, f"modèle illisible ({type(e).__name__}) : {_os.path.basename(chemin)}"
++    if not hasattr(modele, "select") or not hasattr(modele, "scores"):
++        return None, f"ce n'est pas un modèle P300 : {_os.path.basename(chemin)}"
++    # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
++    # hérité (d'avant le déménagement du décodeur dans core/, 2026-08-17) porte "p300_decoder"
++    # (module NU) — et RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`,
++    # le dossier du script rejoint sys.path et rend "p300_decoder" importable comme module de
++    # PREMIER NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la console ou l'appli
++    # pygame, ce chemin n'existe pas et le même fichier est refusé plus haut (ModuleNotFoundError).
++    # Vérifié empiriquement le 2026-08-17 : `data/p300_model.joblib` porte bien "p300_decoder"
++    # (module nu) sous ce sys.path-là. Cette divergence selon la commande de lancement, pour un
++    # modèle abandonné par décision de conception, est exactement le « pire des deux mondes » que
++    # ce module existe pour éliminer : décoder avec les probabilités de quelqu'un d'autre, en
++    # silence. Contrairement au MI, les époques de calibration ont survécu (`p300_calib_*.npz`) :
++    # on ne garde donc PAS ce modèle « en dépannage », on dit de ré-entraîner.
++    module = type(modele).__module__
++    if module != "core.p300_decoder":
++        return None, (f"modèle hérité (module {module!r}, attendu 'core.p300_decoder'), "
++                      f"abandonné délibérément — ré-entraîner depuis les époques de calibration "
++                      f"conservées (data/p300_calib_*.npz) : {_os.path.basename(chemin)}")
++    return modele, None
++
++
++def modeles_disponibles(dossier=DATA_DIR):
++    """Les chemins des modèles P300 RÉELLEMENT chargeables, du PLUS RÉCENT au plus ancien.
++
++    Le plus récent d'abord, parce que c'est le défaut proposé : après une calibration, c'est
++    celui qu'on vient de faire qu'on veut essayer.
++
++    On charge pour lister, au lieu de se fier au nom : un fichier au bon nom mais au mauvais
++    format apparaîtrait dans le formulaire de la console et échouerait au démarrage du mode —
++    exactement le genre de « ça a l'air bon » que ce produit cherche à supprimer. Les fichiers
++    font quelques dizaines de kilo-octets, la liste est construite à l'ouverture du catalogue,
++    pas en boucle.
++    """
++    chemins = sorted(_glob.glob(_os.path.join(dossier, MOTIF)),
++                     key=_os.path.getmtime, reverse=True)
++    return tuple(c for c in chemins if charger(c)[0] is not None)
++
++
++def decrire(chemin):
++    """Une ligne lisible pour la liste de la console : date, nombre d'époques, AUC honnête.
++
++    `cv_auc` est l'AUC cible/non-cible en validation croisée PAR MANCHE (`GroupKFold`), rendue
++    par `P300Model.fit` quand une calibration lui fournit `groups` — c'est la seule mesure
++    honnête ici : sans le groupement par manche, des époques d'une MÊME manche (donc d'un même
++    P300 sous-jacent) se retrouveraient entre train et test, et gonfleraient le chiffre.
++    """
++    modele, raison = charger(chemin)
++    horodatage = _os.path.getmtime(chemin) if _os.path.isfile(chemin) else 0.0
++    infos = {
++        "chemin": chemin,
++        "nom": _os.path.basename(chemin),
++        "date": _time.strftime("%Y-%m-%d %H:%M", _time.localtime(horodatage)) if horodatage else "",
++        "cv_auc": None,
++        "n_epoques": None,
++        "probleme": raison,
++    }
++    if modele is None:
++        return infos
++    cv = getattr(modele, "cv_auc_", None)
++    infos["cv_auc"] = float(cv) if cv is not None else None
++    n = getattr(modele, "n_epoques_", None)
++    infos["n_epoques"] = int(n) if n is not None else None
++    return infos
++
++
++class _ModeleEtranger:
++    """Même interface qu'un `P300Model` (`select` + `scores`), mais TOUJOURS d'un module
++    différent de `core.p300_decoder` — sert `_selftest` à vérifier le refus d'un modèle hérité
++    sans dépendre du répertoire de lancement pour le reproduire. Définie ICI, au niveau du
++    module, et pas dans `_selftest` : `pickle`/`joblib` ne sait pas sérialiser une classe
++    locale à une fonction (elle n'est pas retrouvable par son nom qualifié au chargement).
++    """
++
++    def scores(self, epochs):
++        return [0.0] * len(epochs)
++
++    def select(self, epochs_by_target, margin=0.0):
++        return None, {}
++
++
++def _selftest():
++    """Sur un dossier temporaire : un modèle valide, un fichier corrompu, un dossier vide."""
++    import shutil
++    import tempfile
++
++    import joblib
++    import numpy as np
++
++    from core.p300_decoder import P300Model, synth_p300_epoch
++
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    dossier = tempfile.mkdtemp(prefix="p300_models_")
++    try:
++        chk(modeles_disponibles(dossier) == (),
++            "un dossier sans modèle rend un tuple vide, il ne lève pas")
++
++        # Un petit jeu synthétique, dans la forme d'une vraie calibration (manches cuées, cible
++        # rare) : de quoi obtenir une AUC groupée non triviale (>= 10 époques, 2 classes).
++        rng = np.random.default_rng(0)
++        n_rounds, n_targets, reps = 6, 3, 4
++        epochs, y, groups = [], [], []
++        for r in range(n_rounds):
++            cue = r % n_targets
++            for _ in range(reps):
++                for tgt in range(n_targets):
++                    is_t = (tgt == cue)
++                    epochs.append(synth_p300_epoch(is_t, rng=rng))
++                    y.append(1 if is_t else 0)
++                    groups.append(r)
++        modele = P300Model(fs=250.0).fit(np.asarray(epochs), np.asarray(y),
++                                         groups=np.asarray(groups))
++        bon = _os.path.join(dossier, "p300_model.joblib")
++        modele.save(bon)
++
++        chk(modeles_disponibles(dossier) == (bon,),
++            f"un modèle valide est listé ({modeles_disponibles(dossier)})")
++
++        # Un fichier au bon nom mais illisible : c'est exactement l'état des modèles hérités.
++        casse = _os.path.join(dossier, "p300_model_casse.joblib")
++        with open(casse, "wb") as f:
++            f.write(b"ceci n'est pas un pickle")
++        listes = modeles_disponibles(dossier)
++        chk(casse not in listes,
++            f"un modèle illisible n'apparaît PAS dans la liste ({listes})")
++
++        _m, raison = charger(casse)
++        chk(_m is None and raison,
++            f"et le charger rend une raison au lieu de lever ({raison})")
++
++        _m, raison = charger(_os.path.join(dossier, "absent.joblib"))
++        chk(_m is None and "introuvable" in (raison or ""),
++            f"un chemin inexistant est signalé comme tel ({raison})")
++
++        # `charger` promet dans sa docstring de ne JAMAIS lever. Elle lèverait pourtant sur None
++        # (os.path.isfile(None) lève) — et un formulaire de console peut très bien rendre None ou
++        # "" quand aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt.
++        for entree in (None, "", 0):
++            _m, raison = charger(entree)
++            chk(_m is None and raison and "aucun modèle" in raison,
++                f"charger({entree!r}) rend une raison au lieu de lever ({raison})")
++
++        # 1. Un modèle hérité est refusé EN LE NOMMANT, pas par une exception obscure.
++        etranger = _os.path.join(dossier, "p300_model_etranger.joblib")
++        joblib.dump(_ModeleEtranger(), etranger)
++        _m, raison = charger(etranger)
++        chk(_m is None and "ré-entraîner" in raison and "calibration" in raison,
++            f"un modèle hérité est refusé en disant quoi faire ({raison})")
++        chk(etranger not in modeles_disponibles(dossier),
++            "et il n'apparaît donc pas non plus dans la liste")
++
++        d = decrire(bon)
++        chk(d["nom"] == "p300_model.joblib", f"la description porte le nom du fichier ({d['nom']})")
++        chk(isinstance(d["cv_auc"], float) and 0.0 <= d["cv_auc"] <= 1.0,
++            f"l'AUC honnête (GroupKFold par manche) est une proportion ({d['cv_auc']})")
++        chk(d["n_epoques"] == len(y),
++            f"et le nombre d'époques d'entraînement est retenu ({d['n_epoques']})")
++        chk(d["date"], f"et une date lisible ({d['date']})")
++
++        # 2. Le tri va du plus récent au plus ancien.
++        # On renomme ainsi pour que le tri alphabétique et chronologique divergent : si on oublie
++        # key=_os.path.getmtime, le tri alphabétique réversé donnerait ["p300_model_z",
++        # "p300_model_a"], OPPOSÉ au tri par date qu'on attend.
++        ancien = _os.path.join(dossier, "p300_model_z.joblib")
++        recent = _os.path.join(dossier, "p300_model_a.joblib")
++        _os.rename(bon, ancien)
++        modele.save(recent)
++        _os.utime(ancien, (1_600_000_000, 1_600_000_000))
++        dispo = modeles_disponibles(dossier)
++        chk(dispo == (recent, ancien), f"le plus récent d'abord ({dispo})")
++
++        # 3. Un dossier sans modèle rend un tuple vide, sans lever — l'état normal d'un dépôt cloné.
++        vide = tempfile.mkdtemp(prefix="p300_models_vide_")
++        try:
++            chk(modeles_disponibles(vide) == (), "un dossier vide rend (), sans lever")
++        finally:
++            shutil.rmtree(vide, ignore_errors=True)
++    finally:
++        shutil.rmtree(dossier, ignore_errors=True)
++
++    print(f"[p300-models] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++if __name__ == "__main__":
++    use_utf8_console()
++    _sys.exit(0 if _selftest() else 1)

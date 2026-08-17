@@ -1,0 +1,709 @@
+# Revue finale — tranche B : le moteur : tampon, file de marqueurs, cycle de vie, smokes
+
+## Stat
+ src/core/server.py | 622 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 613 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/src/core/server.py b/src/core/server.py
+index 180ffd4..5b0cb8d 100644
+--- a/src/core/server.py
++++ b/src/core/server.py
+@@ -65,12 +65,13 @@ import numpy as np
+ 
+ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ from core.acquisition import UnicornAcquisition  # noqa: E402
+-from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MI_WINDOW_S, NEURO_WINDOW_S,  # noqa: E402
+-                    TOLERANCE_DIVISEUR, choose_frequencies, json_float, propose_frequencies,
+-                    reference_lost, use_utf8_console)
++from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MARKER_LATE_S, MARKER_STREAM_DEFAULT,  # noqa: E402
++                    MI_WINDOW_S, NEURO_WINDOW_S, TOLERANCE_DIVISEUR, choose_frequencies,
++                    json_float, propose_frequencies, reference_lost, use_utf8_console)
+ from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
+                     StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
+                     verdict_from_sigma)
++from core.markers import MarkerInlet  # noqa: E402
+ from core.modes import contract, registry  # noqa: E402
+ 
+ # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
+@@ -108,6 +109,17 @@ class EngineServer:
+         self.samples = 0
+         self.new_block = None       # le bloc lu au tour courant : (eeg, horodatages LSL) ou None
+         self.recent = np.zeros((0, len(CH_NAMES)))
++        # Les horodatages des mêmes échantillons, en temps LSL. Sans eux on ne peut pas SITUER
++        # un marqueur dans le tampon — c'est ce qui manquait pour épocher sur un événement
++        # extérieur. Tenus rigoureusement en phase avec `recent` : même longueur, même troncature.
++        self.recent_ts = np.zeros((0,))
++        self.marker_inlet = None       # créé au démarrage si un mode écoute des marqueurs
++        self._marqueurs = []           # tous les marqueurs reçus, dans l'ordre d'arrivée
++        self._marqueur_curseur = {}    # mode_id -> index du prochain marqueur à examiner
++        self.marqueurs_perdus = 0      # arrivés trop tard pour trouver leur EEG
++        self.marqueurs_futurs = 0      # horodatés en avance : time_correction() oublié ?
++        self.marqueurs_inlet_erreurs = 0   # incidents réseau/LSL sur l'inlet, comptés plutôt
++                                            # qu'avalés (voir _tire_marqueurs)
+         self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
+         # AU PLUS UNE calibration à la fois, tous modes confondus : il n'y a qu'un casque et qu'une
+         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
+@@ -141,10 +153,20 @@ class EngineServer:
+         epoque_calib = max([spec.calibration.epoch_s for spec in registry.MODES
+                             if spec.calibration is not None
+                             and spec.calibration.runtime_cls is not None] or [0.0])
++        # L'époque prélevée autour d'un marqueur, plus le retard qu'on tolère pour ce marqueur.
++        # ⚠️ Ce besoin doit être NOMMÉ ici. Les 2 s qui suffisaient jusqu'ici venaient de
++        # `QUALITY_WINDOW_S` et `MI_WINDOW_S` : personne ne pense à les protéger, et les baisser
++        # un jour tronquerait CHAQUE époque P300 en silence.
++        #
++        # ⚠️ À ne pas confondre avec le filtre juste au-dessus : l'`epoch_s` d'une calibration
++        # NATIVE ne dimensionne rien, parce que le moteur ne joue jamais ces calibrations. Ici
++        # c'est l'époque du RUNTIME, que le moteur prélève lui-même à chaque marqueur.
++        epoque_marqueur = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
+         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
+                         int(NEURO_WINDOW_S * self.acq.fs),
+                         int(MI_WINDOW_S * self.acq.fs),
+                         int(epoque_calib * self.acq.fs),
++                        int(round((epoque_marqueur + MARKER_LATE_S) * self.acq.fs)),
+                         self.acq.window_n) + self.acq.margin_n
+ 
+         self._pending = self._prepare(modes or (), params or {})
+@@ -237,6 +259,11 @@ class EngineServer:
+             return
+         runtime.close()
+         self._last_tick.pop(mode_id, None)
++        # Sans ce nettoyage, un curseur FIGÉ à l'index où ce mode s'est arrêté resterait à
++        # traîner dans `_marqueur_curseur` pour le reste du processus — inoffensif tant que
++        # `_purge_marqueurs` ne regarde que les modes encore actifs, mais une entrée morte de
++        # plus à chaque cycle démarrer/arrêter d'une longue séance, pour rien.
++        self._marqueur_curseur.pop(mode_id, None)
+         if not any(r.phase in ("warmup", "rest") for r in self.active.values()):
+             self.rest_instruction = ""
+         print(f"[server] {runtime.spec.label} arrêté — son flux disparaît du réseau")
+@@ -750,6 +777,155 @@ class EngineServer:
+         n = max(1, int(round(seconds * self.acq.fs)))
+         return np.array(buffer[-n:], dtype=float, copy=True)
+ 
++    def _nom_flux_marqueurs(self):
++        """Le nom du flux de marqueurs à écouter, d'après les modes ACTIFS qui en consomment.
++
++        Chaque mode marqueur peut déclarer SON `stream_in` dans ses `params` (le P300 le fait) ;
++        un mode qui ne le déclare pas (aucun aujourd'hui, un futur mode pourrait) compte pour
++        `MARKER_STREAM_DEFAULT`. Sans cette lecture, `stream_in` serait un réglage-DÉCOR : affiché
++        dans la console, lu par personne — exactement le genre de piège que ce projet combat.
++
++        ⚠️ Un seul inlet existe pour TOUT le moteur (`self.marker_inlet`, cf. `_ouvre_marker_inlet`) :
++        si deux modes actifs réclament des noms DIFFÉRENTS, aucun choix silencieux n'est correct.
++        On le dit bruyamment et on retient le premier rencontré (ordre de `self.active`, qui suit
++        l'ordre de démarrage) plutôt que de deviner lequel l'utilisateur voulait vraiment.
++        """
++        noms = [rt.params.get("stream_in", MARKER_STREAM_DEFAULT)
++                for rt in self.active.values() if rt.spec.marker_epoch_s > 0.0]
++        if not noms:
++            return MARKER_STREAM_DEFAULT
++        distincts = sorted(set(noms))
++        if len(distincts) > 1:
++            print(f"[server] ⚠️ désaccord sur le flux de marqueurs à écouter : "
++                  f"{', '.join(distincts)} — un seul inlet existe pour tout le moteur, "
++                  f"« {noms[0]} » est retenu (vérifie les réglages « Flux de marqueurs » des "
++                  f"modes actifs)")
++        return noms[0]
++
++    def _ouvre_marker_inlet(self):
++        """Crée l'inlet de marqueurs si un mode ACTIF en a besoin et qu'il n'existe pas déjà.
++
++        Appelée à CHAQUE tour de boucle dans `run()`, pas une seule fois avant le `while` :
++        `self.active` n'est pas figé à l'entrée dans la boucle, `_drain_commands` (juste
++        au-dessus dans `run()`) peut y ajouter un mode en cours de route — c'est exactement ce
++        que fait la console au clic « Démarrer » sur une tuile (« start_mode » traité PENDANT
++        que la boucle tourne). Un mode marqueur démarré ainsi doit trouver son inlet lui aussi :
++        l'évaluer une seule fois avant le `while` le laisserait sans, pour toujours, en silence
++        — indiscernable d'un flux calme.
++
++        ⚠️ Le nom est résolu UNE SEULE fois, à la création de CET inlet (`self.marker_inlet` reste
++        le même objet pour toute la vie du moteur, cf. son commentaire dans `__init__` : rien ne
++        le remet à `None` quand un mode s'arrête). Changer « Flux de marqueurs » sur un mode déjà
++        démarré, ou même redémarrer ce mode, ne rouvre PAS l'inlet sur un nouveau nom — seul un
++        moteur relancé le ferait. C'est écrit dans l'aide du réglage (`p300.py`), pas seulement ici.
++        """
++        if self.marker_inlet is not None:
++            return
++        if not any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
++            # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
++            # chaque tour pour rien.
++            return
++        nom = self._nom_flux_marqueurs()
++        self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
++        if self.marker_inlet.resolve():
++            print(f"[server] marqueurs entrants : connecté à « {nom} »")
++        else:
++            # Pas une erreur : l'application de stimulus démarre souvent APRÈS le moteur. On
++            # réessaiera dans la boucle (voir `_tire_marqueurs`), et le mode dira qu'il attend.
++            print(f"[server] marqueurs entrants : « {nom} » pas encore là — j'attends. Lance "
++                  f"ton application de stimulus, la connexion se fera toute seule.")
++
++    def _tire_marqueurs(self):
++        """Récupère les marqueurs arrivés depuis le tour précédent, puis purge le tampon.
++
++        Protégée par un `try`, comme le tick de calibration juste à côté dans `run()` : l'inlet
++        est une entrée EXTERNE non maîtrisée, sur une machine potentiellement distincte, qui peut
++        disparaître en cours de séance (réseau coupé, application de stimulus fermée). Une
++        exception ici ne doit tuer NI le moteur NI la séance en cours des AUTRES modes — on
++        compte l'incident (`marqueurs_inlet_erreurs`) plutôt que de l'avaler.
++        """
++        if self.marker_inlet is None:
++            return
++        try:
++            if not self.marker_inlet.connecte:
++                self.marker_inlet.resolve()
++            self._marqueurs.extend(self.marker_inlet.pull())
++        except Exception as e:  # noqa: BLE001 - un incident sur CETTE entrée externe ne doit
++            # jamais faire tomber le moteur ni la séance en cours des autres modes (cf. docstring).
++            self.marqueurs_inlet_erreurs += 1
++            print(f"[server] inlet de marqueurs en erreur : {e}")
++        self._purge_marqueurs()
++
++    def _purge_marqueurs(self):
++        """Jette les marqueurs que TOUS les modes qui les écoutent ont dépassés.
++
++        Sans ça, une séance d'une heure garde des dizaines de milliers de marqueurs en mémoire
++        pour rien. La coupe se calcule sur les modes ACTIFS qui écoutent des marqueurs
++        (`marker_epoch_s > 0`) — jamais sur les seules clés déjà présentes dans
++        `_marqueur_curseur` : un mode tout juste démarré (encore en chauffe) n'a pas encore
++        appelé `markers_murs` et n'y a donc AUCUNE entrée. Le compter comme absent plutôt que
++        comme curseur 0 couperait devant lui, perdant en silence tout ce qui lui était adressé —
++        sans jamais passer par `marqueurs_perdus`, que `markers_murs` réserve au SEUL rejet muet
++        qu'elle autorise (et celui-ci n'en fait pas partie).
++        """
++        if len(self._marqueurs) <= 4096:
++            return
++        ecouteurs = [mode_id for mode_id, rt in self.active.items()
++                    if rt.spec.marker_epoch_s > 0.0]
++        if not ecouteurs:
++            return
++        coupe = min(self._marqueur_curseur.get(mode_id, 0) for mode_id in ecouteurs)
++        if coupe > 2048:
++            self._marqueurs = self._marqueurs[coupe:]
++            self._marqueur_curseur = {k: v - coupe for k, v in self._marqueur_curseur.items()}
++
++    def markers_murs(self, mode_id, post_s):
++        """Les marqueurs de CE mode dont l'époque tient entièrement dans le tampon.
++
++        « Mûr » = le tampon couvre déjà les `post_s` secondes qui SUIVENT le marqueur. Avant,
++        l'époque déborderait et le découpage rendrait None — sans rien dire. Cette attente est
++        générique, donc elle vit ici : chaque mode qui la réimplémenterait la referait un peu
++        différemment.
++
++        Chaque marqueur n'est rendu qu'une fois par mode (curseur par mode). Ceux d'un autre
++        mode sont sautés en silence : c'est le SEUL rejet muet autorisé, parce qu'il est normal.
++        """
++        if not len(self.recent_ts):
++            return []
++        plus_vieux, plus_recent = float(self.recent_ts[0]), float(self.recent_ts[-1])
++        i = self._marqueur_curseur.get(mode_id, 0)
++        murs = []
++        while i < len(self._marqueurs):
++            ts, d = self._marqueurs[i]
++            # Le futur d'ABORD : un marqueur aberrant ne doit jamais pouvoir coincer la file
++            # derrière lui. Un horodatage très en avance est la signature du `time_correction()`
++            # oublié entre deux machines — on le compte, on le saute, et la séance continue.
++            #
++            # ⚠️ L'ordre inverse (maturité d'abord) a deux défauts d'un coup : un marqueur
++            # horodaté loin dans le futur n'est PAR DÉFINITION jamais « mûr », donc il déclenche
++            # le `break` juste en dessous AVANT d'atteindre ce contrôle — `marqueurs_futurs`
++            # devient inatteignable, et pire, le curseur ne le dépasse jamais : ce marqueur reste
++            # indéfiniment le premier examiné, et tout ce qui arrive après lui dans la file
++            # (y compris des marqueurs parfaitement valides) reste bloqué derrière, pour
++            # toujours. Prouvé par mutation dans `_smoke_marqueurs_file_coincee`.
++            if ts > plus_recent + MARKER_LATE_S:
++                self.marqueurs_futurs += 1
++                i += 1
++                continue
++            if ts + post_s > plus_recent:
++                # Pas encore mûr, et les suivants le sont encore moins : on s'arrête ici SANS
++                # avancer le curseur — ce marqueur sera réexaminé au prochain tour.
++                break
++            i += 1
++            if d.get("mode") != mode_id:
++                continue
++            if ts < plus_vieux:
++                self.marqueurs_perdus += 1
++                continue
++            murs.append((ts, d))
++        self._marqueur_curseur[mode_id] = i
++        return murs
++
+     def _publish_quality(self, lsl_ts):
+         """σ par voie sur les dernières secondes, calculé sur du signal FILTRÉ.
+ 
+@@ -844,14 +1020,22 @@ class EngineServer:
+                     if duration_s is not None and now - started >= duration_s:
+                         break
+ 
++                    # Réévalué à CHAQUE tour — voir la docstring de `_ouvre_marker_inlet` pour
++                    # pourquoi une évaluation UNIQUE avant le `while` ne suffit pas.
++                    self._ouvre_marker_inlet()
++
+                     # UNE seule lecture par tour, quels que soient les modes actifs :
+                     # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
+                     # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
+                     eeg, ts_unix = self.acq.get_new_data()
+                     self.new_block = None
+                     if eeg is not None and len(eeg):
+-                        self.new_block = (eeg, self.clock.to_lsl(ts_unix))
++                        ts_lsl = self.clock.to_lsl(ts_unix)
++                        self.new_block = (eeg, ts_lsl)
+                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
++                        self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
++
++                    self._tire_marqueurs()
+ 
+                     if now - last_quality >= QUALITY_PERIOD_S:
+                         self._publish_quality(self.clock.to_lsl(time.time()))
+@@ -1061,17 +1245,40 @@ def _smoke():
+ 
+     print(f"[smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     # Le contrat et le registre d'abord : un défaut là-dedans explique tous les suivants, et
+-    # c'est instantané. `and` court-circuite, donc l'ordre est aussi celui du diagnostic.
++    # c'est instantané.
+     integre, defauts = registry.check()
+     for d in defauts:
+         print(f"[smoke-registry] ÉCHEC : {d}")
+     print(f"[smoke-registry] {len(registry.MODES)} modes, "
+           f"dont {len(registry.runnable())} dans le moteur — "
+           f"{'OK' if integre else 'PROBLÈME'}")
+-    return (ok and integre and _smoke_frontiere() and _smoke_repos_partage()
+-            and _smoke_ssvep() and _smoke_neuro() and _smoke_mi() and _smoke_calibration()
+-            and _smoke_calibration_refus()
+-            and _smoke_cumul() and _smoke_proposition())
++    # ⚠️ Chaque sous-test est appelé INCONDITIONNELLEMENT, dans une LISTE — pas dans un `and` en
++    # cascade. Un `and` court-circuite : dès le premier `False`, Python n'appelle même plus les
++    # suivants, qui restent alors muets. Un seul test instable (timing réseau, SSVEP…) masquait
++    # ainsi SILENCIEUSEMENT tous les tests placés après lui dans la chaîne — déjà rencontré sur ce
++    # projet. En construisant la liste d'abord, chaque appel s'exécute et imprime son propre
++    # VERDICT quoi qu'il arrive ; `all()` ne fait que COMBINER des résultats déjà obtenus, donc un
++    # échec en signale un seul, jamais plus.
++    resultats = [
++        ok,
++        integre,
++        _smoke_frontiere(),
++        _smoke_repos_partage(),
++        _smoke_ssvep(),
++        _smoke_neuro(),
++        _smoke_mi(),
++        _smoke_calibration(),
++        _smoke_calibration_refus(),
++        _smoke_cumul(),
++        _smoke_proposition(),
++        _smoke_dimensionnement(),
++        _smoke_tampon_horodate(),
++        _smoke_marqueurs_murs(),
++        _smoke_marqueurs_file_coincee(),
++        _smoke_marqueurs_inlet(),
++        _smoke_marqueurs_stream_in(),
++    ]
++    return all(resultats)
+ 
+ 
+ def _smoke_neuro():
+@@ -2042,6 +2249,403 @@ def _smoke_cumul():
+     return ok
+ 
+ 
++def _smoke_dimensionnement():
++    """`keep` couvre-t-il l'époque du mode le plus gourmand EN MARQUEURS, retard compris ?
++
++    ⚠️ Assertion DIRECTE sur `server.keep`, et c'est délibéré. Observer qu'une époque « sort »
++    ne prouve RIEN : un tampon sous-dimensionné rend quand même ce qu'on lui demande, juste
++    plus court. Ce piège a déjà été rencontré au chantier 3B, sur la calibration MI.
++    """
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    besoin = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
++    attendu = int(round((besoin + MARKER_LATE_S) * srv.acq.fs))
++    chk(srv.keep >= attendu,
++        f"keep={srv.keep} couvre l'époque du marqueur ({besoin:g} s) plus le retard toléré "
++        f"({MARKER_LATE_S:g} s) = {attendu} échantillons")
++    chk(besoin > 0.0,
++        f"au moins un mode déclare une époque de marqueur ({besoin:g} s) — sans ça l'assertion "
++        f"ci-dessus serait vraie à vide et ne prouverait rien")
++    print(f"[smoke-dimensionnement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_tampon_horodate():
++    """Les deux tampons ont-ils toujours la même longueur, et le temps y avance-t-il ?
++
++    Un décalage d'un seul échantillon entre `recent` et `recent_ts` déplace TOUTES les époques
++    sans rien casser de visible : le décodeur reçoit du signal, de la bonne taille, pris au
++    mauvais endroit.
++    """
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    srv.run(duration_s=3.0)
++    chk(len(srv.recent) == len(srv.recent_ts),
++        f"les deux tampons ont la même longueur ({len(srv.recent)} et {len(srv.recent_ts)})")
++    chk(len(srv.recent_ts) > 0, "et ils ne sont pas vides après 3 s d'acquisition")
++    diffs = np.diff(srv.recent_ts)
++    chk(bool(np.all(diffs > 0)), "le temps avance strictement, sans doublon ni retour en arrière")
++    attendu = 1.0 / srv.acq.fs
++    chk(bool(np.median(diffs) > 0.5 * attendu and np.median(diffs) < 2.0 * attendu),
++        f"et la cadence médiane vaut ~1/fs ({np.median(diffs) * 1000:.2f} ms attendu "
++        f"{attendu * 1000:.2f} ms)")
++    print(f"[smoke-tampon] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_marqueurs_murs():
++    """Un marqueur n'est rendu que quand son époque tient ENTIÈREMENT dans le tampon."""
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    fs = srv.acq.fs
++    # Tampon fabriqué : 3 s de temps qui avance, à partir de t=100.
++    srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++
++    srv._marqueurs = [(101.0, {"mode": "p300", "event": "flash", "target": 1}),
++                      (102.9, {"mode": "p300", "event": "flash", "target": 2}),
++                      (101.5, {"mode": "errp", "event": "feedback"})]
++    srv._marqueur_curseur = {}
++
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [1],
++        f"seul le marqueur dont les 0,80 s suivantes sont dans le tampon est rendu ({murs})")
++    chk(all(m[1]["mode"] == "p300" for m in murs),
++        "et le marqueur d'un AUTRE mode n'est jamais rendu à celui-ci")
++
++    # Le curseur avance : un marqueur mûr n'est rendu qu'UNE fois.
++    chk(srv.markers_murs("p300", post_s=0.80) == [],
++        "un marqueur déjà rendu ne l'est pas deux fois")
++
++    # Le tampon avance : le second devient mûr à son tour.
++    srv.recent_ts = np.arange(100.0, 104.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [2],
++        f"le tampon ayant avancé, le suivant mûrit à son tour ({murs})")
++
++    # Un marqueur PLUS VIEUX que le tampon est PERDU, et compté.
++    avant = srv.marqueurs_perdus
++    srv._marqueurs.append((50.0, {"mode": "p300", "event": "flash", "target": 3}))
++    srv.markers_murs("p300", post_s=0.80)
++    chk(srv.marqueurs_perdus == avant + 1,
++        f"un marqueur trop vieux pour le tampon est COMPTÉ perdu, pas ignoré "
++        f"({srv.marqueurs_perdus})")
++
++    # Un marqueur dans le FUTUR est la signature du time_correction() oublié.
++    avant = srv.marqueurs_futurs
++    srv._marqueurs.append((200.0, {"mode": "p300", "event": "flash", "target": 4}))
++    srv.markers_murs("p300", post_s=0.80)
++    chk(srv.marqueurs_futurs == avant + 1,
++        f"un marqueur très en avance est compté à part : c'est le piège des deux machines "
++        f"({srv.marqueurs_futurs})")
++
++    # L'assertion plus haut (« le marqueur d'un AUTRE mode n'est jamais rendu ») ne teste rien
++    # à l'endroit où elle est posée : à cet instant, le `break` de maturité arrête déjà la
++    # boucle à l'index 1 (le second marqueur p300, pas encore mûr) — le marqueur `errp` d'index 2
++    # n'est donc JAMAIS atteint. Elle passerait à l'identique si le filtre
++    # `if d.get("mode") != mode_id: continue` était purement supprimé.
++    #
++    # Scénario dédié, isolé du reste (tampon et file neufs) : le marqueur d'un AUTRE mode est
++    # placé AVANT un marqueur p300, tous deux mûrs dans ce même tampon — pour qu'il soit
++    # réellement MÛR et EXAMINÉ par la boucle avant qu'un `break` puisse jamais l'atteindre.
++    #
++    # `.get("target")`, pas `["target"]` : un marqueur errp qui échapperait au filtre n'a pas de
++    # clé « target » — s'il se retrouvait dans `murs`, on veut un ÉCHEC propre via `chk`, pas un
++    # `KeyError` qui ferait planter le smoke entier avant même d'imprimer le verdict.
++    srv.recent_ts = np.arange(200.0, 203.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++    srv._marqueurs = [(201.0, {"mode": "errp", "event": "feedback"}),
++                      (201.9, {"mode": "p300", "event": "flash", "target": 5})]
++    srv._marqueur_curseur = {}
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk(len(murs) == 1 and murs[0][1].get("target") == 5,
++        f"le marqueur errp, MÛR et EXAMINÉ dans ce même appel, n'empêche pas le p300 valide de "
++        f"sortir mais lui-même n'est jamais rendu à p300 ({murs})")
++
++    print(f"[smoke-marqueurs] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_marqueurs_file_coincee():
++    """Un marqueur ABERRANT (futur) ne doit jamais coincer ceux qui le suivent dans la file.
++
++    Contrôler la MATURITÉ avant le FUTUR (l'ordre initialement proposé pour `markers_murs`) a
++    deux défauts d'un coup : un marqueur horodaté loin dans le futur n'est par définition jamais
++    « mûr », donc il déclenche le `break` avant même d'atteindre le contrôle du futur —
++    `marqueurs_futurs` devient inatteignable, et surtout le curseur ne le dépasse JAMAIS. Ce
++    marqueur reste indéfiniment le premier examiné, et tout ce qui le suit dans la file — y
++    compris des marqueurs par ailleurs parfaitement valides — reste bloqué derrière lui, pour
++    toujours. C'est exactement ce que produit un `time_correction()` oublié entre deux machines :
++    la panne la plus coûteuse possible, puisqu'elle ne se limite pas à perdre CE marqueur-là, elle
++    fait taire tout le flux qui suit.
++
++    Ce test place volontairement le marqueur futur AVANT un marqueur valide dans la file, pour
++    distinguer cette conséquence (silence permanent) du simple mauvais comptage que
++    `_smoke_marqueurs_murs` détecte déjà de son côté. Sans cette disposition précise, une version
++    fautive et une version correcte de `markers_murs` passent toutes les deux.
++    """
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++    fs = srv.acq.fs
++    srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
++    srv.recent = np.zeros((len(srv.recent_ts), 8))
++
++    # Le marqueur futur est placé EN PREMIER dans la file, DEVANT un marqueur par ailleurs mûr,
++    # du bon mode et dans le tampon — c'est la position qui coince tout dans la version fautive.
++    srv._marqueurs = [(9999.0, {"mode": "p300", "event": "flash", "target": 9}),
++                      (101.0, {"mode": "p300", "event": "flash", "target": 1})]
++    srv._marqueur_curseur = {}
++
++    avant = srv.marqueurs_futurs
++    murs = srv.markers_murs("p300", post_s=0.80)
++    chk([m[1]["target"] for m in murs] == [1],
++        f"un marqueur futur placé DEVANT un marqueur valide ne le bloque pas : le valide sort "
++        f"quand même ({murs})")
++    chk(srv.marqueurs_futurs == avant + 1,
++        f"...et le futur est COMPTÉ au passage, pas seulement sauté en silence "
++        f"({srv.marqueurs_futurs})")
++
++    print(f"[smoke-marqueurs-file] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_marqueurs_inlet():
++    """Le cycle de vie de l'inlet : créé PARESSEUSEMENT, y compris pour un mode démarré tard.
++
++    `_smoke_marqueurs_murs` et `_smoke_marqueurs_file_coincee` fixent `_marqueurs` et
++    `_marqueur_curseur` à la main : ils ne touchent jamais `marker_inlet`, `_ouvre_marker_inlet`,
++    `_tire_marqueurs` ni `_purge_marqueurs`. C'est précisément par ce trou qu'un mode marqueur
++    démarré APRÈS le début de la boucle pouvait ne JAMAIS trouver d'inlet — indiscernable d'un
++    flux calme, sans le moindre message.
++    """
++    import threading
++
++    from core.modes import registry as _registry
++    from core.modes.contract import ModeSpec
++    from core.modes.runtime import ModeRuntime
++
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    # Spec de test, absente du vrai catalogue. `runtime_cls=ModeRuntime` : la classe de BASE,
++    # sûre à instancier telle quelle (déjà fait par `_smoke_repos_partage`) — `_open`/`_close`/
++    # `_run_step` y sont des no-op. `rest=None` : elle démarre directement en "running", sans
++    # séquence chauffe/repos à gérer ici.
++    ecoute = ModeSpec(id="smoke-ecoute", label="Écoute (test)", family="actif", summary="",
++                      status="moteur", stream="decoded_smoke_ecoute", channels=("x",),
++                      marker_epoch_s=0.8, runtime_cls=ModeRuntime)
++
++    # --- A. Le CRITIQUE 1 : un mode marqueur démarré APRÈS le début de la boucle --------------
++    instance = "smoke-marqueurs-inlet"
++    srv = EngineServer(synthetic=True, modes=(), instance=instance)
++    thread = threading.Thread(target=srv.run, kwargs={"duration_s": 5.0}, daemon=True)
++    thread.start()
++
++    time.sleep(0.3)     # plusieurs tours de boucle, encore AUCUN mode marqueur actif
++    chk(srv.marker_inlet is None,
++        "tant qu'aucun mode actif n'écoute les marqueurs, aucun inlet n'est créé")
++
++    # `ecoute` n'est pas dans `registry.MODES` : on l'y ajoute le temps de ce test, pour que
++    # `_start` (appelé par `_drain_commands` → `_apply`, DANS le fil de `run()`) puisse la
++    # trouver. La commande part directement dans la file THREAD-SAFE de `srv` — exactement ce
++    # que fait `submit("start_mode", ...)`, sans sa validation (qui a besoin de `registry.BY_ID`,
++    # pas seulement de `registry.MODES`) : c'est le fil de `run()` qui la traite à son prochain
++    # tour, jamais ce fil-ci — aucune mutation croisée de `srv.active` entre les deux fils.
++    avant_registre = _registry.MODES
++    _registry.MODES = avant_registre + (ecoute,)
++    try:
++        srv._commands.put(
++            ("start_mode", {"ids": ["smoke-ecoute"], "params": {"smoke-ecoute": {}}}))
++
++        echeance = time.time() + 5.0
++        while srv.marker_inlet is None and time.time() < echeance and thread.is_alive():
++            time.sleep(0.05)
++        chk(srv.marker_inlet is not None,
++            "un mode marqueur démarré APRÈS le début de la boucle obtient quand même un inlet — "
++            "le CRITIQUE 1 : évalué hors boucle, ce `marker_inlet` resterait None pour toujours")
++    finally:
++        _registry.MODES = avant_registre
++        srv.stop()
++        thread.join(timeout=5.0)
++
++    # --- B, C, D, E : purge, arrêt, robustesse — sur un moteur qui ne tourne pas ---------------
++    srv2 = EngineServer(synthetic=True, modes=(), params={})
++    a = ModeSpec(id="smoke-marqueur-a", label="A", family="actif", summary="", status="moteur",
++                stream="decoded_smoke_a", channels=("x",), marker_epoch_s=0.8,
++                runtime_cls=ModeRuntime)
++    b = ModeSpec(id="smoke-marqueur-b", label="B", family="actif", summary="", status="moteur",
++                stream="decoded_smoke_b", channels=("x",), marker_epoch_s=0.8,
++                runtime_cls=ModeRuntime)
++    srv2.active["smoke-marqueur-a"] = ModeRuntime(a, {}, srv2)
++    srv2.active["smoke-marqueur-b"] = ModeRuntime(b, {}, srv2)
++
++    # B. Le CRITIQUE 2 : un mode ACTIF qui écoute mais n'a pas encore de curseur compte comme 0.
++    srv2._marqueurs = [(float(i), {"mode": "smoke-marqueur-a", "event": "flash"})
++                       for i in range(5000)]
++    srv2._marqueur_curseur = {"smoke-marqueur-a": 3000}   # "b" encore en chauffe : pas d'entrée
++    srv2._purge_marqueurs()
++    chk(len(srv2._marqueurs) == 5000,
++        f"« b » actif sans curseur compte comme 0 : la purge n'a PAS lieu, rien n'est jeté "
++        f"avant qu'il ait pu consommer ({len(srv2._marqueurs)} marqueurs restants)")
++
++    # Contrôle positif : une fois que LES DEUX ont un curseur, la coupe reprend, à leur MINIMUM.
++    srv2._marqueur_curseur["smoke-marqueur-b"] = 2500
++    srv2._purge_marqueurs()
++    chk(len(srv2._marqueurs) == 2500
++        and srv2._marqueur_curseur == {"smoke-marqueur-a": 500, "smoke-marqueur-b": 0},
++        f"...et une fois que LES DEUX ont un curseur, la coupe reprend à leur MINIMUM "
++        f"({len(srv2._marqueurs)} marqueurs, curseurs {srv2._marqueur_curseur})")
++
++    # C. L'IMPORTANT 3 : _stop_mode nettoie le curseur du mode qu'il arrête.
++    srv2._marqueur_curseur["smoke-marqueur-a"] = 12345
++    srv2._stop_mode("smoke-marqueur-a")
++    chk("smoke-marqueur-a" not in srv2._marqueur_curseur,
++        f"_stop_mode retire le curseur du mode qu'il arrête ({srv2._marqueur_curseur})")
++
++    # D. L'IMPORTANT 4 : une exception de l'inlet est comptée, pas avalée en silence.
++    class _InletExplosif:
++        connecte = True
++
++        def resolve(self):
++            return True
++
++        def pull(self):
++            raise RuntimeError("réseau perdu (simulé)")
++
++    srv2.marker_inlet = _InletExplosif()
++    avant = srv2.marqueurs_inlet_erreurs
++    srv2._tire_marqueurs()
++    chk(srv2.marqueurs_inlet_erreurs == avant + 1,
++        f"une exception de l'inlet est COMPTÉE, pas avalée en silence "
++        f"({srv2.marqueurs_inlet_erreurs})")
++
++    # E. Le chemin nominal : rien ne publie sous ce nom sur ce réseau, resolve() échoue
++    #    proprement, pull() sur un inlet non connecté ne lève pas, et un second appel n'ouvre
++    #    pas un second inlet (pas de nouvelle résolution réseau à chaque tour).
++    srv2.marker_inlet = None
++    srv2._ouvre_marker_inlet()
++    chk(srv2.marker_inlet is not None, "« b », toujours actif, obtient bien un inlet")
++    chk(srv2.marker_inlet.connecte is False,
++        "aucune application de stimulus ne tourne sur ce réseau : l'inlet existe, non connecté")
++    chk(srv2.marker_inlet.pull() == [], "tirer sur un inlet non connecté rend [], sans lever")
++    objet_avant = srv2.marker_inlet
++    srv2._ouvre_marker_inlet()
++    chk(srv2.marker_inlet is objet_avant, "un appel suivant ne recrée pas l'inlet (idempotent)")
++
++    print(f"[smoke-marqueurs-inlet] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
++def _smoke_marqueurs_stream_in():
++    """`stream_in` doit vraiment choisir le flux écouté, pas rester un réglage-décor.
++
++    Avant ce correctif, `_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` EN DUR : le réglage
++    « Flux de marqueurs » du P300 s'affichait dans la console, se validait, se sauvegardait — et
++    ne servait à RIEN. `_nom_flux_marqueurs` fait des runtimes FABRIQUÉS (`types.SimpleNamespace`,
++    pas un vrai `P300Runtime` : ça éviterait un modèle entraîné pour rien) pour ne pas dépendre
++    d'un mode marqueur réel — seul le P300 en a un aujourd'hui, un futur mode pourrait s'y ajouter
++    sans que ce test doive changer.
++    """
++    import io
++    import types
++    from contextlib import redirect_stdout
++
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    def faux_runtime(marker_epoch_s, stream_in=None):
++        rt = types.SimpleNamespace()
++        rt.spec = types.SimpleNamespace(marker_epoch_s=marker_epoch_s)
++        rt.params = {"stream_in": stream_in} if stream_in is not None else {}
++        return rt
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++
++    # 1. Aucun mode actif n'écoute les marqueurs -> le défaut.
++    srv.active = {}
++    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
++        f"sans mode marqueur actif, le défaut ({srv._nom_flux_marqueurs()})")
++
++    # 2. Un mode qui écoute, avec un nom personnalisé -> CE nom, pas le défaut en dur.
++    srv.active = {"p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
++    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
++        f"le nom déclaré par le mode actif est repris ({srv._nom_flux_marqueurs()})")
++
++    # 3. Un mode actif qui n'écoute PAS les marqueurs (marker_epoch_s == 0) ne pèse pas sur le
++    # choix, même s'il portait un stream_in par accident (cas hypothétique aujourd'hui : aucun
++    # mode du registre actuel n'est dans ce cas).
++    srv.active = {"ssvep": faux_runtime(0.0, stream_in="ignore_moi"),
++                 "p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
++    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
++        "un mode qui ne consomme pas de marqueurs ne pèse pas sur le choix, même avec stream_in")
++
++    # 4. Un mode marqueur qui NE DÉCLARE PAS `stream_in` (aucun aujourd'hui, un futur mode
++    # pourrait) compte pour le défaut, pas pour une absence.
++    srv.active = {"futur-mode": faux_runtime(0.5)}
++    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
++        f"un mode marqueur sans stream_in déclaré retombe sur le défaut "
++        f"({srv._nom_flux_marqueurs()})")
++
++    # 5. DEUX modes actifs réclament des noms DIFFÉRENTS -> dit BRUYAMMENT, choix déterministe.
++    srv.active = {"p300": faux_runtime(0.95, stream_in="flux_a"),
++                 "smoke-ecoute": faux_runtime(0.8, stream_in="flux_b")}
++    capture = io.StringIO()
++    with redirect_stdout(capture):
++        nom = srv._nom_flux_marqueurs()
++    texte = capture.getvalue()
++    print(texte, end="")
++    chk(nom in ("flux_a", "flux_b"), f"un choix est fait malgré le désaccord ({nom})")
++    chk("flux_a" in texte and "flux_b" in texte and "désaccord" in texte,
++        f"...et il est dit BRUYAMMENT, en nommant les deux flux en désaccord ({texte!r})")
++
++    # 6. Preuve BOUT EN BOUT : `_ouvre_marker_inlet` (pas seulement le helper isolé) crée bien
++    # son inlet sur le nom du mode actif — c'est LA méthode qui portait `MARKER_STREAM_DEFAULT`
++    # en dur avant ce correctif, celle que la preuve rouge/vert du rapport casse et répare.
++    srv2 = EngineServer(synthetic=True, modes=(), params={})
++    srv2.active = {"p300": faux_runtime(0.95, stream_in="flux_bout_en_bout")}
++    srv2._ouvre_marker_inlet()
++    chk(srv2.marker_inlet is not None
++        and srv2.marker_inlet.nom == "flux_bout_en_bout",
++        f"_ouvre_marker_inlet crée son inlet sur le nom du mode actif, pas le défaut en dur "
++        f"({srv2.marker_inlet.nom if srv2.marker_inlet else None})")
++
++    print(f"[smoke-marqueurs-stream-in] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
+ def _parse_args(argv):
+     p = argparse.ArgumentParser(description="EEG_API_Unicorn — moteur headless, sorties LSL.")
+     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")

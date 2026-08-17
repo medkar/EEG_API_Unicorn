@@ -1,0 +1,282 @@
+## Tranche 2 — le CABLAGE : metadonnees du flux, stream_in
+ src/core/lsl_io.py |  12 +++++-
+ src/core/server.py | 115 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 125 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/lsl_io.py b/src/core/lsl_io.py
+index efa9b58..3523bab 100644
+--- a/src/core/lsl_io.py
++++ b/src/core/lsl_io.py
+@@ -353,21 +353,24 @@ def p300_channel_labels(n_targets):
+     """Voies du flux `decoded_p300`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+     return (["target_index", "confidence", "n_flashes"]
+             + [f"score_{i}" for i in range(int(n_targets))])
+ 
+ 
+ class DecodedP300Publisher:
+     """`<PREFIX>_decoded_p300` : quelle cible l'utilisateur a sélectionnée. Une fois par manche.
+ 
+     ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
+     « repos ». C'est mot pour mot la confusion qu'il a fallu inscrire en garde pour le MI, et
+-    elle se reproduira chez le premier client qui lira ce flux sans lire la doc.
++    elle se reproduira chez le premier client qui lira ce flux sans lire la doc — c'est pour ça
++    que `no_decision_index` voyage aussi dans les métadonnées, pas seulement ici : un client
++    Unity ou MATLAB qui lit `inlet.info().desc()` sans jamais ouvrir ce fichier doit pouvoir le
++    découvrir tout seul, exactement comme `DecodedMIPublisher` le fait juste au-dessus.
+ 
+     Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
+     Un client qui attend un débit régulier attendrait pour rien.
+     """
+ 
+     def __init__(self, n_targets, reps, instance=""):
+         self.n_targets = int(n_targets)
+         labels = p300_channel_labels(self.n_targets)
+         info = StreamInfo(stream_name("decoded_p300"), "Decoded", len(labels),
+                           IRREGULAR_RATE, "float32", _source_id("decoded_p300", instance))
+@@ -376,20 +379,21 @@ class DecodedP300Publisher:
+             ch = chans.append_child("channel")
+             ch.append_child_value("label", label)
+         desc = info.desc().append_child("decoding")
+         desc.append_child_value("paradigm", "P300")
+         desc.append_child_value("n_targets", str(self.n_targets))
+         desc.append_child_value("reps", str(int(reps)))
+         # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
+         # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
+         # sans cette indication, un seuil côté client n'aurait aucun sens.
+         desc.append_child_value("decision_scale", "logodds")
++        desc.append_child_value("no_decision_index", "-1")
+         self.outlet = StreamOutlet(info)
+ 
+     def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
+         """`scores` : un score par cible, dans l'ordre des indices 0..n_targets-1."""
+         row = ([float(target_index), float(confidence), float(n_flashes)]
+                + [float(s) for s in scores])
+         block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+ 
+ 
+@@ -522,19 +526,25 @@ def _autotest():
+     # 6. decoded_p300 : voies attendues (target_index/confidence/n_flashes puis un score par
+     # cible), et le publieur pousse sans lever (une décision ET un refus, -1).
+     labels = p300_channel_labels(6)
+     print(f"  voies decoded_p300 : {labels}")
+     assert labels == ["target_index", "confidence", "n_flashes",
+                       "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
+     pub = DecodedP300Publisher(6, reps=8, instance="selftest-p300")
+     pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
+     pub.push(-1, 0.0, 12, [0.0] * 6)
+     print("  [lsl] decoded_p300 publie sans lever")
++    # Le sens de -1 doit être lisible dans les MÉTADONNÉES, pas seulement dans une docstring
++    # qu'un client Unity/MATLAB n'ouvrira jamais — même exigence que `DecodedMIPublisher`
++    # (no_decision_index) juste au-dessus.
++    no_decision = pub.outlet.get_info().desc().child("decoding").child_value("no_decision_index")
++    print(f"  decoded_p300 no_decision_index (métadonnées) : {no_decision!r}")
++    assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
+ 
+     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
+ if __name__ == "__main__":
+     from core.config import use_utf8_console
+     use_utf8_console()
+     sys.exit(0 if _autotest() else 1)
+diff --git a/src/core/server.py b/src/core/server.py
+index 9c6ffea..5b0cb8d 100644
+--- a/src/core/server.py
++++ b/src/core/server.py
+@@ -770,38 +770,69 @@ class EngineServer:
+         # (`CalibrationRuntime._pas_essai`, `attendu = int(round(self.imagery_s * fs))`) arrondit
+         # déjà, comme le fait tout le reste du fichier pour cette même conversion
+         # (`motor_window`, `occipital_window`, `window_n`, `margin_n`…). Tronquer ICI aurait
+         # rendu `n` strictement INFÉRIEUR à `attendu` dès que `seconds * fs` a une partie
+         # fractionnaire >= 0,5 — et donc TOUS les essais auraient été écartés comme « tampon pas
+         # rempli », jamais un seul. Inatteignable à 4,0 s × 250 Hz (produit entier), mais
+         # `imagery_s` est explicitement conçue pour être raccourcie (cf. les smokes de test).
+         n = max(1, int(round(seconds * self.acq.fs)))
+         return np.array(buffer[-n:], dtype=float, copy=True)
+ 
++    def _nom_flux_marqueurs(self):
++        """Le nom du flux de marqueurs à écouter, d'après les modes ACTIFS qui en consomment.
++
++        Chaque mode marqueur peut déclarer SON `stream_in` dans ses `params` (le P300 le fait) ;
++        un mode qui ne le déclare pas (aucun aujourd'hui, un futur mode pourrait) compte pour
++        `MARKER_STREAM_DEFAULT`. Sans cette lecture, `stream_in` serait un réglage-DÉCOR : affiché
++        dans la console, lu par personne — exactement le genre de piège que ce projet combat.
++
++        ⚠️ Un seul inlet existe pour TOUT le moteur (`self.marker_inlet`, cf. `_ouvre_marker_inlet`) :
++        si deux modes actifs réclament des noms DIFFÉRENTS, aucun choix silencieux n'est correct.
++        On le dit bruyamment et on retient le premier rencontré (ordre de `self.active`, qui suit
++        l'ordre de démarrage) plutôt que de deviner lequel l'utilisateur voulait vraiment.
++        """
++        noms = [rt.params.get("stream_in", MARKER_STREAM_DEFAULT)
++                for rt in self.active.values() if rt.spec.marker_epoch_s > 0.0]
++        if not noms:
++            return MARKER_STREAM_DEFAULT
++        distincts = sorted(set(noms))
++        if len(distincts) > 1:
++            print(f"[server] ⚠️ désaccord sur le flux de marqueurs à écouter : "
++                  f"{', '.join(distincts)} — un seul inlet existe pour tout le moteur, "
++                  f"« {noms[0]} » est retenu (vérifie les réglages « Flux de marqueurs » des "
++                  f"modes actifs)")
++        return noms[0]
++
+     def _ouvre_marker_inlet(self):
+         """Crée l'inlet de marqueurs si un mode ACTIF en a besoin et qu'il n'existe pas déjà.
+ 
+         Appelée à CHAQUE tour de boucle dans `run()`, pas une seule fois avant le `while` :
+         `self.active` n'est pas figé à l'entrée dans la boucle, `_drain_commands` (juste
+         au-dessus dans `run()`) peut y ajouter un mode en cours de route — c'est exactement ce
+         que fait la console au clic « Démarrer » sur une tuile (« start_mode » traité PENDANT
+         que la boucle tourne). Un mode marqueur démarré ainsi doit trouver son inlet lui aussi :
+         l'évaluer une seule fois avant le `while` le laisserait sans, pour toujours, en silence
+         — indiscernable d'un flux calme.
++
++        ⚠️ Le nom est résolu UNE SEULE fois, à la création de CET inlet (`self.marker_inlet` reste
++        le même objet pour toute la vie du moteur, cf. son commentaire dans `__init__` : rien ne
++        le remet à `None` quand un mode s'arrête). Changer « Flux de marqueurs » sur un mode déjà
++        démarré, ou même redémarrer ce mode, ne rouvre PAS l'inlet sur un nouveau nom — seul un
++        moteur relancé le ferait. C'est écrit dans l'aide du réglage (`p300.py`), pas seulement ici.
+         """
+         if self.marker_inlet is not None:
+             return
+         if not any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
+             # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
+             # chaque tour pour rien.
+             return
+-        nom = MARKER_STREAM_DEFAULT
++        nom = self._nom_flux_marqueurs()
+         self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
+         if self.marker_inlet.resolve():
+             print(f"[server] marqueurs entrants : connecté à « {nom} »")
+         else:
+             # Pas une erreur : l'application de stimulus démarre souvent APRÈS le moteur. On
+             # réessaiera dans la boucle (voir `_tire_marqueurs`), et le mode dira qu'il attend.
+             print(f"[server] marqueurs entrants : « {nom} » pas encore là — j'attends. Lance "
+                   f"ton application de stimulus, la connexion se fera toute seule.")
+ 
+     def _tire_marqueurs(self):
+@@ -1238,20 +1269,21 @@ def _smoke():
+         _smoke_mi(),
+         _smoke_calibration(),
+         _smoke_calibration_refus(),
+         _smoke_cumul(),
+         _smoke_proposition(),
+         _smoke_dimensionnement(),
+         _smoke_tampon_horodate(),
+         _smoke_marqueurs_murs(),
+         _smoke_marqueurs_file_coincee(),
+         _smoke_marqueurs_inlet(),
++        _smoke_marqueurs_stream_in(),
+     ]
+     return all(resultats)
+ 
+ 
+ def _smoke_neuro():
+     """Le mode neuro câblé de bout en bout, sur board synthétique.
+ 
+     Comme pour le SSVEP, on ne juge PAS le contenu : des sinusoïdes fabriquées n'ont ni charge
+     mentale ni somnolence. On vérifie le CÂBLAGE et le CONTRAT — le flux existe dès le
+     démarrage, il se tait pendant le repos, puis publie 4 voies dans le bon ordre, avec un
+@@ -2526,20 +2558,101 @@ def _smoke_marqueurs_inlet():
+         "aucune application de stimulus ne tourne sur ce réseau : l'inlet existe, non connecté")
+     chk(srv2.marker_inlet.pull() == [], "tirer sur un inlet non connecté rend [], sans lever")
+     objet_avant = srv2.marker_inlet
+     srv2._ouvre_marker_inlet()
+     chk(srv2.marker_inlet is objet_avant, "un appel suivant ne recrée pas l'inlet (idempotent)")
+ 
+     print(f"[smoke-marqueurs-inlet] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
++def _smoke_marqueurs_stream_in():
++    """`stream_in` doit vraiment choisir le flux écouté, pas rester un réglage-décor.
++
++    Avant ce correctif, `_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` EN DUR : le réglage
++    « Flux de marqueurs » du P300 s'affichait dans la console, se validait, se sauvegardait — et
++    ne servait à RIEN. `_nom_flux_marqueurs` fait des runtimes FABRIQUÉS (`types.SimpleNamespace`,
++    pas un vrai `P300Runtime` : ça éviterait un modèle entraîné pour rien) pour ne pas dépendre
++    d'un mode marqueur réel — seul le P300 en a un aujourd'hui, un futur mode pourrait s'y ajouter
++    sans que ce test doive changer.
++    """
++    import io
++    import types
++    from contextlib import redirect_stdout
++
++    ok = True
++
++    def chk(cond, msg):
++        nonlocal ok
++        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
++        ok = ok and bool(cond)
++
++    def faux_runtime(marker_epoch_s, stream_in=None):
++        rt = types.SimpleNamespace()
++        rt.spec = types.SimpleNamespace(marker_epoch_s=marker_epoch_s)
++        rt.params = {"stream_in": stream_in} if stream_in is not None else {}
++        return rt
++
++    srv = EngineServer(synthetic=True, modes=(), params={})
++
++    # 1. Aucun mode actif n'écoute les marqueurs -> le défaut.
++    srv.active = {}
++    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
++        f"sans mode marqueur actif, le défaut ({srv._nom_flux_marqueurs()})")
++
++    # 2. Un mode qui écoute, avec un nom personnalisé -> CE nom, pas le défaut en dur.
++    srv.active = {"p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
++    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
++        f"le nom déclaré par le mode actif est repris ({srv._nom_flux_marqueurs()})")
++
++    # 3. Un mode actif qui n'écoute PAS les marqueurs (marker_epoch_s == 0) ne pèse pas sur le
++    # choix, même s'il portait un stream_in par accident (cas hypothétique aujourd'hui : aucun
++    # mode du registre actuel n'est dans ce cas).
++    srv.active = {"ssvep": faux_runtime(0.0, stream_in="ignore_moi"),
++                 "p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
++    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
++        "un mode qui ne consomme pas de marqueurs ne pèse pas sur le choix, même avec stream_in")
++
++    # 4. Un mode marqueur qui NE DÉCLARE PAS `stream_in` (aucun aujourd'hui, un futur mode
++    # pourrait) compte pour le défaut, pas pour une absence.
++    srv.active = {"futur-mode": faux_runtime(0.5)}
++    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
++        f"un mode marqueur sans stream_in déclaré retombe sur le défaut "
++        f"({srv._nom_flux_marqueurs()})")
++
++    # 5. DEUX modes actifs réclament des noms DIFFÉRENTS -> dit BRUYAMMENT, choix déterministe.
++    srv.active = {"p300": faux_runtime(0.95, stream_in="flux_a"),
++                 "smoke-ecoute": faux_runtime(0.8, stream_in="flux_b")}
++    capture = io.StringIO()
++    with redirect_stdout(capture):
++        nom = srv._nom_flux_marqueurs()
++    texte = capture.getvalue()
++    print(texte, end="")
++    chk(nom in ("flux_a", "flux_b"), f"un choix est fait malgré le désaccord ({nom})")
++    chk("flux_a" in texte and "flux_b" in texte and "désaccord" in texte,
++        f"...et il est dit BRUYAMMENT, en nommant les deux flux en désaccord ({texte!r})")
++
++    # 6. Preuve BOUT EN BOUT : `_ouvre_marker_inlet` (pas seulement le helper isolé) crée bien
++    # son inlet sur le nom du mode actif — c'est LA méthode qui portait `MARKER_STREAM_DEFAULT`
++    # en dur avant ce correctif, celle que la preuve rouge/vert du rapport casse et répare.
++    srv2 = EngineServer(synthetic=True, modes=(), params={})
++    srv2.active = {"p300": faux_runtime(0.95, stream_in="flux_bout_en_bout")}
++    srv2._ouvre_marker_inlet()
++    chk(srv2.marker_inlet is not None
++        and srv2.marker_inlet.nom == "flux_bout_en_bout",
++        f"_ouvre_marker_inlet crée son inlet sur le nom du mode actif, pas le défaut en dur "
++        f"({srv2.marker_inlet.nom if srv2.marker_inlet else None})")
++
++    print(f"[smoke-marqueurs-stream-in] VERDICT : {'OK' if ok else 'PROBLÈME'}")
++    return ok
++
++
+ def _parse_args(argv):
+     p = argparse.ArgumentParser(description="EEG_API_Unicorn — moteur headless, sorties LSL.")
+     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
+     p.add_argument("--serial", default=None, help="numéro de série Unicorn (si plusieurs appairés)")
+     p.add_argument("--duration", type=float, default=None, help="durée en s (défaut : jusqu'à Ctrl+C)")
+     p.add_argument("--mode", default=None,
+                    help="décodeurs à démarrer, séparés par des virgules : "
+                         + ", ".join(s.id for s in registry.runnable() if s.id != "raw")
+                         + ". Ils tournent EN MÊME TEMPS et partagent une seule phase de repos. "
+                           "Le brut est diffusé en plus, sauf avec --no-raw")

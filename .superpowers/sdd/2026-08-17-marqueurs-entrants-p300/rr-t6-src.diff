@@ -1,0 +1,180 @@
+## Commits
+47f7137 Close the alignment blind spot, and stop the emitter repeating a target
+7358d3b Document the marker contract, and say plainly what is still missing
+
+## Stat
+ src/core/modes/p300.py        | 27 +++++++++++++++++++++++++++
+ src/research/__init__.py      | 11 +++++++----
+ src/research/p300_stimulus.py | 25 +++++++++++++++++++++++++
+ 3 files changed, 59 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/src/core/modes/p300.py b/src/core/modes/p300.py
+index 50ea01e..557a050 100644
+--- a/src/core/modes/p300.py
++++ b/src/core/modes/p300.py
+@@ -807,20 +807,47 @@ def _selftest():
+         chk(abs(epoque[n_pre, 0] - 42.0) < 1e-9,
+             f"et c'est bien LA valeur plantée qu'on retrouve ({epoque[n_pre, 0]})")
+ 
+         # Le même test, décalé d'une demi-période d'échantillonnage : un marqueur ne tombe jamais
+         # pile sur un échantillon dans la vraie vie. On accepte 1 échantillon d'écart, pas plus.
+         epoque = epoch_from_stream(eeg, ts, instant_du_pic + 0.002, fs,
+                                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
+         position = int(np.argmax(epoque[:, 0]))
+         chk(abs(position - n_pre) <= 1,
+             f"un marqueur entre deux échantillons reste aligné à ±1 ({position} vs {n_pre})")
++
++        # --- LE MÊME test, mais par le VRAI chemin d'appel (_encaisser_flash, pas un appel direct
++        # à epoch_from_stream) --------------------------------------------------------------------
++        # Le test ci-dessus prouve que `epoch_from_stream` positionne juste QUAND on lui donne les
++        # bons pre_s/post_s — il ne prouve PAS que `_encaisser_flash` les lui TRANSMET dans le bon
++        # ordre. Piège concret, pas théorique : P300_PRE_S (0,15 s -> 38 éch.) et P300_EPOCH_S
++        # (0,80 s -> 200 éch.) ont des tailles différentes, mais 38+200 == 200+38 == 238 — une
++        # INVERSION `pre_s=self.post_s, post_s=self.pre_s` à l'appel réel produirait une époque de
++        # la MÊME FORME (238, 8), invisible à tout contrôle de taille ou de bornes. Seule la
++        # POSITION du signal DANS l'époque que le runtime a RÉELLEMENT construite peut l'attraper —
++        # d'où ce second test, qui repasse par `rt.tick()` (donc par `_encaisser_flash`) au lieu
++        # d'appeler le décodeur en direct comme ci-dessus.
++        rt._vider_manche()
++        moteur_aligne = _FauxMoteur(eeg, ts)
++        moteur_aligne._lots = [[marqueur(instant_du_pic, 0)]]
++        rt.tick(moteur_aligne, lsl_ts=instant_du_pic, now=999.0)
++        chk(len(rt._epoques) == 1,
++            f"le flash a produit UNE époque en passant par _encaisser_flash, le vrai chemin "
++            f"d'appel du runtime ({len(rt._epoques)})")
++        position_reelle = int(np.argmax(rt._epoques[-1][:, 0])) if rt._epoques else -1
++        chk(position_reelle == n_pre,
++            f"⚠️ ALIGNEMENT (chemin réel _encaisser_flash) : le pic se retrouve à l'échantillon "
++            f"{position_reelle}, il devait être à {n_pre} (décalage de "
++            f"{position_reelle - n_pre} échantillons = "
++            f"{(position_reelle - n_pre) / fs * 1000:+.0f} ms) — pre_s/post_s mal transmis par "
++            f"le runtime")
++        rt._vider_manche()
+     finally:
+         p300_models.modeles_disponibles = vrai_dispo
+         shutil.rmtree(dossier, ignore_errors=True)
+ 
+     print(f"[p300] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
+ if __name__ == "__main__":
+     use_utf8_console()
+diff --git a/src/research/__init__.py b/src/research/__init__.py
+index 1a1cb6c..706498f 100644
+--- a/src/research/__init__.py
++++ b/src/research/__init__.py
+@@ -3,24 +3,27 @@
+ Le nom ne dit pas « brouillon » : plusieurs de ces modes sont validés sur casque. Il dit que le
+ moteur ne les publie pas encore sur le réseau, donc qu'ils ne font pas partie du contrat rendu
+ aux étudiants et peuvent changer de forme. Un module d'ici a le droit d'importer `core` ;
+ l'inverse est interdit (voir `core/__init__.py`).
+ 
+ Quatre familles, à ne pas confondre en parcourant le dossier :
+ 
+ 1. **L'application pygame** — `app.py` (menu, 5 modes), `ui.py`, `ssvep_stimulus.py`,
+    `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
+    moteur, le casque n'accepte qu'une connexion.
+-2. **Les décodeurs des modes** — `cvep_*`, `p300_decoder`, `errp_decoder`. Ce sont eux qui
+-   migreront vers `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le
+-   2026-07-27, `mi_decoder` (avec `mi_models`) le 2026-07-29 : tous deux vivent maintenant
+-   dans `core`.
++   ⚠️ `p300_stimulus.py` est l'exception qui confirme la règle : il n'ouvre PAS le casque, il
++   ne fait qu'AFFICHER et publier ses marqueurs. C'est ce qui permet de le lancer en même temps
++   que le moteur, dans deux terminaux — comme `ssvep_stimulus.py`.
++2. **Les décodeurs des modes** — `cvep_*`, `errp_decoder`. Ce sont eux qui migreront vers
++   `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le 2026-07-27,
++   `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
++   2026-08-17 : tous trois vivent maintenant dans `core`.
+ 3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
+    `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
+ 4. **Les analyses hors ligne** — `*_analyze.py`, `ssvep_guided.py`, `mi_compare.py`, `itr.py` :
+    rejouer un enregistrement, comparer, mesurer. C'est ici qu'on décide si une hypothèse tient,
+    et il n'y a rien de honteux à ce qu'une analyse conclue « bruit ».
+ 
+ Reste `controller.py` et `live_ssvep.py`, hérités du banc d'essai robot : ils décodent et
+ envoient un `{jx,jy}` en UDP. Le produit ne fonctionne plus ainsi (l'API publie une intention
+ neutre sur LSL, cf. `docs/robot_testbed.md`), ils survivent comme référence de comparaison.
+ 
+diff --git a/src/research/p300_stimulus.py b/src/research/p300_stimulus.py
+index 01c2ff8..b2b5261 100644
+--- a/src/research/p300_stimulus.py
++++ b/src/research/p300_stimulus.py
+@@ -58,30 +58,46 @@ HUD = (70, 90, 70)
+ # --- Séquence de marqueurs (fonction PURE, testable sans écran ni pygame) --
+ 
+ def build_markers(n_targets, reps, rng):
+     """La séquence COMPLÈTE des marqueurs d'UNE manche : `reps` répétitions de l'ordre mélangé
+     des `n_targets` cibles, puis un `round_end`.
+ 
+     Mélanger À CHAQUE répétition (pas une fois pour toute la manche) : sinon le même ordre se
+     répéterait `reps` fois d'affilée, un motif prévisible qui nuirait au caractère "oddball" du
+     protocole (littérature P300 classique : l'ordre de présentation doit être imprévisible).
+ 
++    ⚠️ Aucune cible ne flashe deux fois DE SUITE, y compris à la JONCTION entre deux répétitions.
++    Un shuffle indépendant à chaque répétition laisse ~1/n_targets de chances que la dernière
++    cible d'un bloc soit aussi la première du bloc suivant (aux réglages par défaut, 6 cibles ×
++    8 répétitions : ~72 % de chances qu'AU MOINS UNE des 7 jonctions répète). Le P300 est un
++    paradigme ODDBALL : un flash immédiatement répété introduit un effet de réfractarité non
++    maîtrisé (la réponse évoquée au 2e flash consécutif sur la même cible est amoindrie, qu'elle
++    soit ou non la cible attendue) qui abîme l'onde qu'on cherche justement à mesurer — un
++    étudiant qui adapte ce fichier doit garder cette contrainte, pas seulement le mélange lui-même.
++    Sans effet si `n_targets <= 1` : il n'y a alors aucune autre cible à placer en tête.
++
+     Fonction PURE — aucun pygame, aucun réseau — donc testable directement par `--smoke` sans le
+     moindre écran. `run()` rejoue exactement cette même séquence en y attachant le rendu et
+     l'horodatage réels : aucune divergence possible entre ce que `--smoke` vérifie et ce qui part
+     vraiment sur le réseau.
+     """
+     marqueurs = []
++    derniere_cible = None
+     for _ in range(int(reps)):
+         ordre = list(range(int(n_targets)))
+         rng.shuffle(ordre)
++        # Rejoue le mélange tant que la jonction avec le bloc précédent répéterait une cible.
++        # `n_targets > 1` évite une boucle infinie quand il n'y a justement aucune alternative.
++        while int(n_targets) > 1 and derniere_cible is not None and ordre[0] == derniere_cible:
++            rng.shuffle(ordre)
+         marqueurs.extend({"mode": "p300", "event": "flash", "target": t} for t in ordre)
++        derniere_cible = ordre[-1]
+     marqueurs.append({"mode": "p300", "event": "round_end"})
+     return marqueurs
+ 
+ 
+ # --- Géométrie (cercle, angle 0 = haut, sens horaire — même convention que research/ui.py) -
+ 
+ def target_positions(n_targets, span):
+     """Centres (dx, dy) des `n_targets` cibles, relatifs au centre de l'écran, réparties sur un
+     cercle de rayon proportionnel à `span` (= min(largeur, hauteur))."""
+     dist = span * 0.31
+@@ -239,20 +255,29 @@ def _smoke(reps, n_targets):
+         f"({len(flashs)} obtenus)")
+     compte = Counter(m["target"] for m in flashs)
+     chk(all(compte.get(t) == reps for t in range(n_targets)),
+         f"chaque cible vue exactement {reps} fois ({dict(sorted(compte.items()))})")
+     chk(marqueurs[-1] == {"mode": "p300", "event": "round_end"},
+         f"la manche se termine par un round_end ({marqueurs[-1]})")
+     chk(all(m.get("mode") == "p300" for m in marqueurs),
+         "tous les marqueurs portent mode=p300")
+     chk(all(0 <= m["target"] < n_targets for m in flashs),
+         "toutes les cibles flashées sont dans [0, n_targets[ — le contrat public")
++    # Aucune cible ne flashe deux fois DE SUITE, y compris aux jonctions entre répétitions (cf.
++    # la docstring de build_markers : un paradigme oddball ne doit jamais présenter deux fois le
++    # même stimulus d'affilée, sous peine de réfractarité non maîtrisée sur l'onde mesurée).
++    # Vide de sens si une seule cible existe (rien d'autre à placer) : la garde le dit explicitement
++    # plutôt que d'échouer sur une contrainte mathématiquement impossible à tenir.
++    consecutifs = sum(1 for a, b in zip(flashs, flashs[1:]) if a["target"] == b["target"])
++    chk(n_targets <= 1 or consecutifs == 0,
++        f"aucune cible ne flashe deux fois de suite, jonctions comprises "
++        f"({consecutifs} répétition(s) immédiate(s))")
+ 
+     print(f"[p300-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+     return ok
+ 
+ 
+ def _parse_args(argv):
+     p = argparse.ArgumentParser(description="Stimulus P300 (EEG_API_Unicorn).")
+     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
+     p.add_argument("--refresh", type=float, default=None, help="forcer le refresh (Hz)")
+     p.add_argument("--reps", type=int, default=P300_REPS,
