@@ -607,6 +607,12 @@ P300_XDAWN_NFILTER = 4        # composantes xDAWN par classe
 P300_MODEL_PATH = _os.path.join(DATA_DIR, "p300_model.joblib")
 P300_MIDLINE = [0, 2, 4]      # Fz, Cz, Pz — indices des voies où le P300 est maximal (info/diagnostic)
 
+# --- Marqueurs ENTRANTS (§12.1 : le moteur écoute une application externe) ------------------
+MARKER_STREAM_DEFAULT = "EEG_API_Unicorn_stim"   # nom du flux de marqueurs qu'on écoute par défaut
+MARKER_LATE_S = 1.0       # retard toléré pour un marqueur (réseau + horloge). Dimensionne le
+                          # tampon du moteur AVEC l'époque du mode : un marqueur arrivé après ce
+                          # délai ne trouve plus son EEG et sera compté comme perdu, jamais ignoré.
+
 
 def p300_targets(n=None):
     """Cibles P300 = la MÊME couronne que le c-VEP (cvep_targets), pour comparer les deux
