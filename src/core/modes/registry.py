@@ -14,7 +14,7 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import external, mi, neuro, raw, ssvep  # noqa: E402
+from core.modes import external, mi, neuro, p300, raw, ssvep  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 MODES = (
@@ -22,8 +22,8 @@ MODES = (
     ssvep.SPEC,
     neuro.SPEC,
     mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
+    p300.SPEC,          # le P300 a rejoint le moteur : il écoute les marqueurs d'une appli externe
     external.CVEP,      # puis les modes de l'appli pygame, dans l'ordre où ils ont été écrits
-    external.P300,
     external.ERRP,
 )
 
@@ -252,6 +252,20 @@ def check():
                 defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
                                f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
                                f"serait tronquée en silence")
+
+        # Le même piège que pour la calibration, un cran plus loin : `marker_epoch_s` (ici)
+        # dimensionne le tampon du moteur ; `pre_s`/`post_s` (côté runtime) décident ce qu'on en
+        # PRÉLÈVE. Deux sources de vérité pour le même nombre, et rien ne les lie : un
+        # `marker_epoch_s` trop court tronquerait CHAQUE époque EN SILENCE.
+        pre_s = getattr(spec.runtime_cls, "pre_s", None)
+        post_s = getattr(spec.runtime_cls, "post_s", None)
+        if pre_s is not None and post_s is not None:
+            if spec.marker_epoch_s < pre_s + post_s:
+                defauts.append(f"{spec.id} : marker_epoch_s={spec.marker_epoch_s:g} s est SOUS "
+                               f"pre_s+post_s={pre_s + post_s:g} s de son runtime — chaque "
+                               f"époque serait tronquée en silence")
+        if spec.marker_epoch_s > 0 and spec.runtime_cls is None:
+            defauts.append(f"{spec.id} : déclare marker_epoch_s sans runtime pour les consommer")
 
     return (not defauts), defauts
 

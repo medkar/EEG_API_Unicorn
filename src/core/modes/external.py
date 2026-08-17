@@ -1,12 +1,16 @@
 """Les modes que le MOTEUR ne sait pas faire — décrits quand même.
 
-C'est le point d'honnêteté de l'interface. Sans ces trois entrées, la grille ne montrerait que
-ce qui est chargé : un étudiant croirait que le produit ne fait que quatre choses (brut, SSVEP,
-neuro, MI), et ne saurait pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
-Le MI, lui, a rejoint le moteur (`core/modes/mi.py`) : ce n'est plus une entrée « appli pygame ».
+C'est le point d'honnêteté de l'interface. Sans ces deux entrées, la grille ne montrerait que
+ce qui est chargé : un étudiant croirait que le produit ne fait que cinq choses (brut, SSVEP,
+neuro, MI, P300), et ne saurait pas qu'un décodeur c-VEP validé existe dans `src/research/app.py`.
+Le MI et le P300, eux, ont rejoint le moteur (`core/modes/mi.py`, `core/modes/p300.py`) : ce ne
+sont plus des entrées « appli pygame ».
 
-Chacun porte la RAISON de son absence, et c'est presque toujours la même famille de raison : le
-moteur ne reçoit pas de marqueurs entrants, et ne rend pas de stimulus verrouillé à la frame.
+Chacun porte la RAISON de son absence. Le c-VEP ne peut pas se passer d'un stimulus verrouillé à
+la frame, que le moteur ne rend pas — aucun lien avec les marqueurs. L'ErrP, lui, a besoin d'un
+marqueur entrant (l'instant où le feedback s'affiche) : l'INFRASTRUCTURE existe désormais (le
+P300 s'en sert), mais personne n'a encore écrit son mode dans `core/modes/` — un chantier restant,
+pas une impossibilité.
 """
 
 import os as _os
@@ -26,16 +30,6 @@ CVEP = ModeSpec(
                 "code et détruit la corrélation. " + _PYGAME,
     calibration=Calib(kind="natif",
                       reason="chaque frame doit afficher le bon bit du code"),
-)
-
-P300 = ModeSpec(
-    id="p300", label="P300", family="actif",
-    summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
-    status="appli_pygame",
-    unavailable="Demande des MARQUEURS entrants (l'onset de chaque flash), que le moteur ne "
-                "reçoit pas encore. " + _PYGAME,
-    calibration=Calib(kind="natif",
-                      reason="époques calées sur l'onset exact de chaque flash"),
 )
 
 ERRP = ModeSpec(

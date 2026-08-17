@@ -2237,6 +2237,9 @@ def _smoke_dimensionnement():
     chk(srv.keep >= attendu,
         f"keep={srv.keep} couvre l'époque du marqueur ({besoin:g} s) plus le retard toléré "
         f"({MARKER_LATE_S:g} s) = {attendu} échantillons")
+    chk(besoin > 0.0,
+        f"au moins un mode déclare une époque de marqueur ({besoin:g} s) — sans ça l'assertion "
+        f"ci-dessus serait vraie à vide et ne prouverait rien")
     print(f"[smoke-dimensionnement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 

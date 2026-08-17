@@ -349,6 +349,50 @@ class DecodedMIPublisher:
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
 
+def p300_channel_labels(n_targets):
+    """Voies du flux `decoded_p300`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+    return (["target_index", "confidence", "n_flashes"]
+            + [f"score_{i}" for i in range(int(n_targets))])
+
+
+class DecodedP300Publisher:
+    """`<PREFIX>_decoded_p300` : quelle cible l'utilisateur a sélectionnée. Une fois par manche.
+
+    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
+    « repos ». C'est mot pour mot la confusion qu'il a fallu inscrire en garde pour le MI, et
+    elle se reproduira chez le premier client qui lira ce flux sans lire la doc.
+
+    Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
+    Un client qui attend un débit régulier attendrait pour rien.
+    """
+
+    def __init__(self, n_targets, reps, instance=""):
+        self.n_targets = int(n_targets)
+        labels = p300_channel_labels(self.n_targets)
+        info = StreamInfo(stream_name("decoded_p300"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_p300", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "P300")
+        desc.append_child_value("n_targets", str(self.n_targets))
+        desc.append_child_value("reps", str(int(reps)))
+        # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
+        # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
+        # sans cette indication, un seuil côté client n'aurait aucun sens.
+        desc.append_child_value("decision_scale", "logodds")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
+        """`scores` : un score par cible, dans l'ordre des indices 0..n_targets-1."""
+        row = ([float(target_index), float(confidence), float(n_flashes)]
+               + [float(s) for s in scores])
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 class StatusPublisher:
     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
 
@@ -474,6 +518,17 @@ def _autotest():
     pub.push(0, 0.81, [0.81, 0.12, 0.07])
     pub.push(-1, 0.0, [0.34, 0.33, 0.33])
     print("  [lsl] decoded_mi publie sans lever")
+
+    # 6. decoded_p300 : voies attendues (target_index/confidence/n_flashes puis un score par
+    # cible), et le publieur pousse sans lever (une décision ET un refus, -1).
+    labels = p300_channel_labels(6)
+    print(f"  voies decoded_p300 : {labels}")
+    assert labels == ["target_index", "confidence", "n_flashes",
+                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
+    pub = DecodedP300Publisher(6, reps=8, instance="selftest-p300")
+    pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
+    pub.push(-1, 0.0, 12, [0.0] * 6)
+    print("  [lsl] decoded_p300 publie sans lever")
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

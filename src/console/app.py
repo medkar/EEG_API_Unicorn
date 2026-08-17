@@ -267,8 +267,10 @@ def _smoke():
         f"une tuile par mode du registre ({len(console.grid.tuiles)})")
 
     # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison.
+    # Le P300 a rejoint le moteur au même titre que le MI : il ne reste plus que 2 modes
+    # « appli pygame » (c-VEP, ErrP) sur les 7 du registre — 3 avant que le P300 ne migre.
     externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
-    chk(len(externes) == 3, f"{len(externes)} tuiles pour les modes de l'appli pygame")
+    chk(len(externes) == 2, f"{len(externes)} tuiles pour les modes de l'appli pygame")
     chk(all(not t.isEnabled() and t.detail.text() for t in externes),
         "chacune est grisée ET dit pourquoi elle ne démarre pas")
 
