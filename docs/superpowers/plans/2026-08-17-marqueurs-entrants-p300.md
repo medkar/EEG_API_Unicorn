@@ -304,8 +304,6 @@ def _smoke_dimensionnement():
     srv = EngineServer(synthetic=True, modes=(), params={})
     besoin = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
     attendu = int(round((besoin + MARKER_LATE_S) * srv.acq.fs))
-    chk(besoin > 0.0,
-        f"au moins un mode déclare une époque de marqueur ({besoin:g} s)")
     chk(srv.keep >= attendu,
         f"keep={srv.keep} couvre l'époque du marqueur ({besoin:g} s) plus le retard toléré "
         f"({MARKER_LATE_S:g} s) = {attendu} échantillons")
@@ -313,13 +311,28 @@ def _smoke_dimensionnement():
     return ok
 ```
 
-- [ ] **Step 3: Lancer le smoke pour voir l'assertion ÉCHOUER**
+⚠️ **L'assertion est une IMPLICATION, volontairement.** Tant qu'aucun mode ne déclare
+`marker_epoch_s`, `besoin` vaut 0 et elle passe — trivialement. Elle devient contraignante à la
+tâche 5, quand le P300 déclare 0,95 s. C'est ce qui permet à la suite de rester **verte de bout en
+bout** : une assertion qui resterait rouge pendant trois tâches apprendrait surtout à ne plus
+regarder les échecs.
+
+La tâche 5 ajoutera l'assertion stricte qui manque ici — « au moins un mode déclare une époque ».
+
+- [ ] **Step 3: Obtenir la preuve ROUGE par une mutation temporaire**
+
+Une implication vacuellement vraie ne prouve rien. Il faut donc la rendre contraignante le temps
+d'un essai. Dans `src/core/modes/raw.py`, ajouter temporairement `marker_epoch_s=3.0` au `SPEC` :
 
 Run: `python src/core/server.py --smoke`
-Expected: ÉCHEC sur `au moins un mode déclare une époque de marqueur (0 s)` — aucun mode ne déclare encore `marker_epoch_s`, et `keep` ne le prend pas en compte.
+Expected: **ÉCHEC** sur `[smoke-dimensionnement]` — `keep` ne couvre pas 3,0 + 1,0 = 4,0 s.
 
-> C'est la preuve rouge : sans elle, on ne saurait pas si le vert final prouve quoi que ce soit.
-> Le second `chk` passera dès la tâche 5, quand le P300 déclarera `marker_epoch_s = 0.95`.
+Puis appliquer l'étape 4, relancer, et vérifier que l'assertion passe **avec la mutation encore en
+place**. Enfin **retirer la mutation** et relancer une dernière fois.
+
+> Coller les trois sorties dans le rapport de tâche. Sans ce rouge, on ne saurait pas si le vert
+> final prouve quoi que ce soit — et une assertion sur un `max()` de liste vide est précisément le
+> genre de test qui passe pour de mauvaises raisons.
 
 - [ ] **Step 4: Dimensionner `keep` nommément**
 
@@ -953,6 +966,15 @@ Sur le modèle **exact** du contrôle `epoch_s`/`imagery_s` déjà présent ([re
                                f"époque serait tronquée en silence")
         if spec.marker_epoch_s > 0 and spec.runtime_cls is None:
             defauts.append(f"{spec.id} : déclare marker_epoch_s sans runtime pour les consommer")
+```
+
+Et dans `src/core/server.py`, ajouter à `_smoke_dimensionnement` l'assertion stricte que la tâche 2
+ne pouvait pas encore écrire — son implication était vraie à vide :
+
+```python
+    chk(besoin > 0.0,
+        f"au moins un mode déclare une époque de marqueur ({besoin:g} s) — sans ça l'assertion "
+        f"ci-dessus serait vraie à vide et ne prouverait rien")
 ```
 
 - [ ] **Step 5: Lancer les autotests**
