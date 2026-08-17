@@ -25,9 +25,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
-- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès aux **3 modes
-  que le moteur ne sait pas faire** : c-VEP, P300, ErrP. Le SSVEP, le neuro et le **Motor Imagery**
-  sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
+- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès aux **2 modes
+  que le moteur ne sait pas faire** : c-VEP et ErrP. Le SSVEP, le neuro, le **Motor Imagery** et
+  le **P300** sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
   « Calibrer » sur sa page joue la séance et affiche un modèle horodaté avec son accuracy honnête.
   Les anciens écrans pygame du MI (calibration, pilotage) sont **archivés**, pas supprimés, dans
   [`archive/`](archive/README.md) : ils restent la référence contre laquelle vérifier la calibration
@@ -60,6 +60,9 @@ python src/console/app.py --synthetic      # la console sans casque (board de te
 python src/core/server.py --mode ssvep --refresh 60   # le moteur seul (headless) : décode et publie
 python src/core/server.py --mode ssvep,neuro   # deux modes en même temps
 python src/core/server.py --mode mi        # le Motor Imagery sur le réseau (EXIGE un modèle entraîné)
+python src/core/server.py --mode p300      # le P300 sur le réseau (EXIGE un modèle ET des marqueurs entrants)
+python src/research/p300_stimulus.py       # l'émetteur de marqueurs P300 — n'ouvre PAS le casque,
+                                           # donc se lance EN MÊME TEMPS que le moteur (2 terminaux)
 # calibration MI : bouton « Calibrer » sur sa page dans la console — plus de commande séparée
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)
@@ -73,6 +76,21 @@ python src/core/server.py --smoke          # moteur : registre, frontière, repo
 python src/console/app.py --smoke          # console : grille, page de mode, réglages (Qt offscreen)
 python src/research/app.py --smoke         # appli : menu + les 5 modes + les calibrations
 ```
+
+Et le sous-système des **marqueurs entrants**, livré le 2026-08-17, qu'aucun smoke ci-dessus ne
+couvre entièrement :
+
+```bash
+python src/core/markers.py                 # l'oreille du moteur : résolution PAR NOM, time_correction
+python src/core/p300_models.py             # les modèles P300 : refus des hérités, tri par date
+python src/core/modes/p300.py              # le mode : ALIGNEMENT des époques, abandon de manche, appariement score↔cible
+python src/research/p300_stimulus.py --smoke  # la séquence de flashs : chaque cible vue `reps` fois
+```
+
+⚠️ **`modes/p300.py` porte LE test qui protège tout ce sous-système** : un décalage de quelques
+échantillons à l'épochage rend tous les autres tests verts et fait décoder du bruit avec une
+confiance de 0,92 — indiscernable d'un succès. Mesuré : la mutation déplace le pic de −38
+échantillons (−152 ms) et les 46 autres assertions restent vertes.
 
 Et les cinq gardes du Motor Imagery, qu'**aucun des trois smokes ci-dessus n'exécute** :
 

@@ -91,6 +91,9 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
 
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
 
+⚠️ **Le test 1.14 est arrivé APRÈS ce passage** (chantier des marqueurs entrants, livré le même
+jour) : il n'a jamais été joué à l'écran. C'est le seul du niveau 1 qui reste à faire.
+
 Le board synthétique de BrainFlow remplace le casque : signal artificiel, aucun matériel.
 
 **Deux choses à savoir avant de commencer, sinon tu vas chercher un bug qui n'existe pas :**
@@ -315,6 +318,34 @@ pour changer l'ensemble des modes actifs.
 > Le refus lancé depuis le formulaire de réglages (test 1.8) s'affiche, lui, en rouge. C'est donc la
 > **grille** qui n'a pas de destination visuelle pour un refus, pas le moteur qui se tait.
 
+### 1.14 — Le P300 : le tuyau des marqueurs, sans casque
+
+C'est le chantier du 2026-08-17, et c'est la première fois que le moteur **écoute** au lieu de
+seulement publier. Le décodage sera du hasard en synthétique — ce n'est pas ce qu'on teste. Ce qu'on
+vérifie, c'est que les marqueurs partent, arrivent, trouvent leur EEG, et qu'une décision sort.
+
+**Deux terminaux**, et c'est le point : le stimulus **n'ouvre pas le casque**, donc les deux
+programmes cohabitent — impossible avec l'appli pygame.
+
+```bash
+# terminal 1
+python src/core/server.py --synthetic --mode p300
+# terminal 2
+python src/research/p300_stimulus.py --windowed
+```
+
+- [ ] Le moteur dit qu'il attend le flux de marqueurs, **puis** qu'il s'y connecte quand le
+      stimulus démarre. S'il reste muet, c'est le défaut que ce test existe pour attraper.
+- [ ] Les 6 cibles clignotent une par une, en ordre mélangé.
+- [ ] À la fin de la manche, **une sélection sort** sur `decoded_p300` — vérifiable dans un
+      troisième terminal avec `python -u examples/receiver.py --stream decoded_p300`.
+- [ ] La cible désignée sera fausse cinq fois sur six : **c'est normal**, le board synthétique ne
+      produit aucun P300. On teste le tuyau, pas le cerveau.
+
+> ⚠️ Sans modèle P300 entraîné sur ce poste, le mode **refuse de démarrer** et dit d'aller calibrer
+> dans l'appli pygame. C'est le comportement attendu sur un dépôt fraîchement cloné (`data/` est
+> gitignoré), pas une panne.
+
 ---
 
 ## Niveau 2 — au casque
@@ -444,6 +475,36 @@ jour sur la calibration du moteur. Ne PAS le lancer juste après ce test par cur
 sous les anciens noms FIXES (`data/mi_model.joblib`, `data/mi_calib_last.npz`), donc il
 **écraserait** un enregistrement, sans toucher aux modèles horodatés que ce test vient de produire
 — et il faut fermer la console avant de l'ouvrir (cf. `archive/README.md`).
+
+### 2.7 — P300 : sélectionner une cible par la pensée, via le réseau
+
+Le mode le plus exigeant du produit, et le seul où **ton application doit parler au moteur**. Il
+demande un modèle entraîné : si tu n'en as pas sur ce poste, calibre d'abord dans l'appli pygame
+(menu → P300 → Calibrer, ~4 min), puis **ferme-la** avant de lancer le moteur.
+
+```bash
+# terminal 1
+python src/core/server.py --mode p300
+# terminal 2
+python src/research/p300_stimulus.py
+# terminal 3
+python -u examples/receiver.py --stream decoded_p300
+```
+
+- [ ] Choisis une cible **avant** que la manche commence, fixe-la, et **compte ses flashs** en
+      silence. Le comptage n'est pas indispensable (mesuré au chantier P300) mais il aide à tenir
+      l'attention.
+- [ ] À la fin de la manche, la cible sortie sur `decoded_p300` est **celle que tu fixais**.
+- [ ] Recommence **six fois, en changeant de cible à chaque fois**. ⚠️ **Une erreur ou deux sur six
+      est attendue** : l'AUC mesurée est de 0,71, pas de 1,0. Un sans-faute serait une bonne
+      surprise, pas la norme — et deux erreurs ne veulent pas dire que quelque chose est cassé.
+- [ ] Regarde le terminal du moteur pendant ce temps : aucun `marqueurs_perdus`, aucun
+      `marqueurs_futurs`. S'ils montent, le problème est dans l'horloge ou le réseau, pas dans ta
+      concentration.
+
+> ⚠️ **Ne conclus rien sur une seule manche.** Six essais, c'est déjà peu ; ce projet a pour règle
+> de ne jamais conclure sur du bruit. Si tu veux un chiffre, il faut un protocole, pas une
+> impression.
 
 ---
 

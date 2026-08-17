@@ -16,9 +16,11 @@ game event, a visualisation, a robot command) is the client application's job.
 > signal quality and decoded SSVEP reach a client on another machine, with millisecond timestamps.
 > SSVEP decoding is measured, not asserted: 100 % accurate whenever it commits, on 36 interleaved
 > trials — but it only commits 44 % of the time. Neuro-monitoring and Motor Imagery are published
-> too, though neither has been hardware-validated *through the engine* yet. c-VEP, P300 and ErrP
-> still live in the pygame app only — see **[docs/SPEC.md](docs/SPEC.md)** for the stream contract
-> and the roadmap.
+> too, though neither has been hardware-validated *through the engine* yet. **P300 joined them on
+> 2026-08-17**: the engine now *receives* markers as well as sending streams, so an external
+> application can flash the targets and let the engine decode — see
+> **[docs/markers.md](docs/markers.md)**. c-VEP and ErrP still live in the pygame app only. See
+> **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
 
 ## Requirements
 
@@ -40,13 +42,17 @@ python src/core/server.py --mode neuro                # passive: no stimulus, no
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
 
-Three published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
+Four published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
 a target, there is a right answer, and your application must render the flickering stimulus. **Motor
 Imagery is active** too, but it decodes an imagined movement — no stimulus to render, and a model
-trained per person (its own section below). **Neuro is passive**: it reports a mental state, there is
-nothing to choose and no stimulus — but its values are z-scores against a rest measured at the start
-of the mode, *for this person, today*. They compare across neither people nor sessions, and mean
-nothing in absolute terms. The stream metadata carries `paradigm` so a client can tell them apart.
+trained per person (its own section below). **P300 is active and the most demanding**: your
+application renders the flashes *and* tells the engine when each one happened, because the whole
+decoding rests on cutting the EEG at that instant — see [docs/markers.md](docs/markers.md). It also
+needs a per-person model, and it answers once per round rather than continuously. **Neuro is
+passive**: it reports a mental state, there is nothing to choose and no stimulus — but its values
+are z-scores against a rest measured at the start of the mode, *for this person, today*. They
+compare across neither people nor sessions, and mean nothing in absolute terms. The stream metadata
+carries `paradigm` so a client can tell them apart.
 
 **The console** — the engine plus a desktop window, one page per mode.
 
@@ -129,7 +135,7 @@ not a fine control. Do not design something that needs a correct answer every se
 A model belongs to the person it was trained on. Someone else's model produces probabilities that
 look plausible and are wrong, which is worse than no output at all.
 
-**The pygame app** — the original all-in-one, still the only way to run c-VEP, P300 and ErrP, and
+**The pygame app** — the original all-in-one, still the only way to run c-VEP and ErrP, and
 the only place with a live histogram for neuro-monitoring. Motor Imagery has fully moved out of it,
 calibration included — this app no longer has it at all. It owns the headset and publishes nothing.
 
@@ -158,6 +164,7 @@ python examples/receiver.py --list                  # what is on the network
 python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
 python examples/receiver.py --stream decoded_neuro  # workload / drowsiness / engagement
 python examples/receiver.py --stream decoded_mi     # imagined left / right hand movement
+python examples/receiver.py --stream decoded_p300   # which of 6 targets was selected
 ```
 
 Any LSL client works — Python, MATLAB, C++, a game engine. Unity happens to have a worked example
@@ -172,6 +179,7 @@ in [`examples/unity/`](examples/unity/), for SSVEP. Two machines: see
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}`, ~5 Hz |
+| `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
 
 The stimulus is **not** rendered by the engine: your application flickers the targets and declares
 their frequencies (`--refresh` or `--freqs`). A mismatch fails silently — the decoder correlates
@@ -191,7 +199,7 @@ refresh rate.
 |---|---|---|---|
 | **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable |
 | **c-VEP** | One m-sequence at circular shifts, learned template (eCCA) | ~1 min | ✅ 6 targets, ~22 bits/min |
-| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min | ✅ validated on hardware |
+| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min | ✅ validated on hardware; ✅ **published as a stream** — your app flashes and sends markers, see [docs/markers.md](docs/markers.md) |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
 | **ErrP** | Error potential: single-trial detection when the machine errs | ~4 min | 🟡 demonstrator, needs real calibration |
@@ -244,8 +252,8 @@ does not publish them yet, so they are not part of what students consume and may
 
 | Family | Modules |
 |---|---|
-| pygame app | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `ssvep_stimulus.py` · `viewing.py` |
-| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `p300_decoder` · `errp_decoder` |
+| pygame app | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `ssvep_stimulus.py` · `p300_stimulus.py` · `viewing.py` |
+| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `errp_decoder` (`p300_decoder` has moved to `core/`) |
 | Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |

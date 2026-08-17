@@ -10,10 +10,13 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
 1. **L'application pygame** — `app.py` (menu, 5 modes), `ui.py`, `ssvep_stimulus.py`,
    `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
    moteur, le casque n'accepte qu'une connexion.
-2. **Les décodeurs des modes** — `cvep_*`, `p300_decoder`, `errp_decoder`. Ce sont eux qui
-   migreront vers `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le
-   2026-07-27, `mi_decoder` (avec `mi_models`) le 2026-07-29 : tous deux vivent maintenant
-   dans `core`.
+   ⚠️ `p300_stimulus.py` est l'exception qui confirme la règle : il n'ouvre PAS le casque, il
+   ne fait qu'AFFICHER et publier ses marqueurs. C'est ce qui permet de le lancer en même temps
+   que le moteur, dans deux terminaux — comme `ssvep_stimulus.py`.
+2. **Les décodeurs des modes** — `cvep_*`, `errp_decoder`. Ce sont eux qui migreront vers
+   `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le 2026-07-27,
+   `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
+   2026-08-17 : tous trois vivent maintenant dans `core`.
 3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
    `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
 4. **Les analyses hors ligne** — `*_analyze.py`, `ssvep_guided.py`, `mi_compare.py`, `itr.py` :
