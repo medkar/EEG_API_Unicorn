@@ -778,6 +778,42 @@ def _selftest():
         chk(_MAX_EPOQUES > P300_N_TARGETS,
             f"le plafond dur dépasse largement une manche normale ({_MAX_EPOQUES} > "
             f"{P300_N_TARGETS})")
+
+        # --- LE test d'alignement ------------------------------------------------
+        # On fabrique un tampon plat, on y plante un pic d'amplitude unique à un instant CONNU, et
+        # on envoie un marqueur à cet instant. L'époque extraite doit contenir ce pic exactement à
+        # l'échantillon `n_pre` — c'est-à-dire à l'onset. Un décalage de 3 échantillons (12 ms) ne
+        # change RIEN d'autre : l'époque a la bonne taille, le décodeur tourne, les scores sortent.
+        fs = 250.0
+        n_pre = int(round(P300_PRE_S * fs))       # 37
+        n_post = int(round(P300_EPOCH_S * fs))    # 200
+        t0 = 1000.0
+        ts = np.arange(t0, t0 + 4.0, 1.0 / fs)
+        eeg = np.zeros((len(ts), 8))
+        instant_du_pic = t0 + 2.0
+        i_pic = int(np.searchsorted(ts, instant_du_pic))
+        eeg[i_pic, :] = 42.0                      # une valeur qu'aucun calcul ne produit par hasard
+
+        epoque = epoch_from_stream(eeg, ts, instant_du_pic, fs,
+                                  pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
+        chk(epoque is not None, "l'époque est extraite")
+        chk(epoque.shape == (n_pre + n_post, 8),
+            f"elle a exactement pré+post échantillons ({epoque.shape})")
+        position = int(np.argmax(epoque[:, 0]))
+        chk(position == n_pre,
+            f"⚠️ ALIGNEMENT : le pic planté à l'onset se retrouve à l'échantillon {position}, "
+            f"il devait être à {n_pre} (décalage de {position - n_pre} échantillons = "
+            f"{(position - n_pre) / fs * 1000:+.0f} ms)")
+        chk(abs(epoque[n_pre, 0] - 42.0) < 1e-9,
+            f"et c'est bien LA valeur plantée qu'on retrouve ({epoque[n_pre, 0]})")
+
+        # Le même test, décalé d'une demi-période d'échantillonnage : un marqueur ne tombe jamais
+        # pile sur un échantillon dans la vraie vie. On accepte 1 échantillon d'écart, pas plus.
+        epoque = epoch_from_stream(eeg, ts, instant_du_pic + 0.002, fs,
+                                  pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
+        position = int(np.argmax(epoque[:, 0]))
+        chk(abs(position - n_pre) <= 1,
+            f"un marqueur entre deux échantillons reste aligné à ±1 ({position} vs {n_pre})")
     finally:
         p300_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)
