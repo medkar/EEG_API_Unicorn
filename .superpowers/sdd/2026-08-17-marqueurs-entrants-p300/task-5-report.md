@@ -161,3 +161,166 @@ Second commit, séparé, sans rapport avec le code du mode (détail en « Inqui�
    déjà signalé et explicitement différé par la tâche 4 (« la console n'a aucune page P300 »).
    Toujours vrai après cette tâche : la calibration P300 reste `kind="natif"`, jouée par l'appli
    pygame, jamais par la console. Fichier hors de ma liste, pas touché.
+
+---
+
+# Tour de correction 1 — rapport
+
+Statut : **DONE**
+Commits : `fec9b08` (le code) et `1f702f9` (récupération du carnet, sans rapport avec le code)
+Base : `37dce0c` (le commit initial de cette tâche)
+
+Deux relecteurs en parallèle, conformité au brief ✅ des deux côtés, quatre constats (un CRITIQUE,
+trois IMPORTANT). Les quatre traités, aucun contesté.
+
+## CRITIQUE — la contamination entre manches
+
+`_epoques`/`_cibles` n'avaient ni borne ni notion de manche. Une application externe qui plante en
+pleine manche (le cas normal d'un plantage) ne renvoie jamais `round_end` : ses flashs restaient
+ORPHELINS pour toujours. Si l'application redémarre et flashe une manche neuve sans avoir renvoyé
+le `round_end` de l'ancienne, les nouveaux flashs s'empilaient sur les orphelins — le garde de
+couverture (`len(par_cible) < n_targets`) ne vérifie que « chaque cible a flashé au moins une
+fois », pas « ces flashs viennent de la même manche ». Une contamination pouvait donc atteindre
+`select()` et publier une cible choisie avec une confiance normale, silencieusement fausse.
+
+**Corrigé par `P300Runtime._verifie_abandon`**, appelée à CHAQUE `_run_step` (pas seulement quand
+un marqueur arrive — c'est `lsl_ts`, qui avance à chaque tour de la boucle du moteur, qui rend le
+plantage détectable même quand plus aucun marqueur n'arrive jamais) :
+- **délai d'abandon** : `P300_ROUND_TIMEOUT_S` (nouvelle constante, `core/config.py`, 10,0 s) sans
+  flash accepté ;
+- **plafond dur** : `P300_N_TARGETS * P300_REPS * 2` = 96 époques accumulées.
+
+Les deux comparent des horodatages de MARQUEURS à `lsl_ts` — jamais `time.time()`, conformément à
+la règle du projet (`ModeRuntime` : un runtime ne lit jamais l'horloge lui-même).
+
+### Preuve rouge-puis-vert (le scénario de contamination, pas juste « ça abandonne »)
+
+Bug injecté dans `_verifie_abandon` : `trop_vieille = False` (retire le délai d'abandon, garde le
+plafond intact). `python src/core/modes/p300.py` :
+
+```
+  OK   les 3 flashs de la manche avortée sont bien en attente, round_end jamais arrivé (3)
+  ÉCHEC la manche avortée est jetée après le délai, sans aucun nouveau marqueur (3 époque(s) restante(s))
+  ÉCHEC l'abandon est COMPTÉ (0)
+  ÉCHEC la manche neuve n'hérite d'AUCUN flash orphelin de l'avortée : une époque par cible, jamais deux ({0: 2, 1: 2, 2: 2, 3: 1, 4: 1, 5: 1})
+  OK   le plafond (96 époques) abandonne aussi, sans attendre le délai (1)
+[p300] VERDICT : PROBLÈME
+```
+
+La ligne qui compte : `{0: 2, 1: 2, 2: 2, 3: 1, 4: 1, 5: 1}` — les cibles 0/1/2 (celles de la
+manche avortée) portent CHACUNE deux époques, contre une pour 3/4/5 : c'est la contamination
+elle-même, mesurée, pas déduite. Le test du plafond (mécanisme indépendant) reste vert, preuve que
+la mutation n'a touché QUE le délai. Remis en état, `python src/core/modes/p300.py` :
+
+```
+[p300] VERDICT : OK
+```
+
+## IMPORTANT — panne n°4 réarmée par session, jamais par manche
+
+`if self._refus_cible == 1` comparait un compteur JAMAIS réinitialisé : toute récidive plus tard
+dans la séance, même dans une manche sans rapport, était comptée mais ne s'imprimait plus jamais.
+**Corrigé** : `_refus_cible` est remis à 0 dans `_vider_manche` (donc à chaque fermeture de
+manche, propre ou abandonnée). Le test d'origine ne pouvait pas l'attraper : il ne jouait qu'UNE
+manche. Réécrit en DEUX manches séparées par un `round_end` : la seconde réimprime
+l'avertissement, preuve que la garde s'est réarmée et non « la première de la session ».
+
+## IMPORTANT — les compteurs n'ont aucun filet hors du terminal
+
+`P300Runtime.state()` (nouveau, appelle `super().state()` puis ajoute) expose désormais
+`refus_cible`, `epoques_perdues`, `manches_abandonnees` — un client qui n'a pas la console ouverte
+au bon instant peut les lire quand même.
+
+## IMPORTANT — `no_decision_index` manquant des métadonnées LSL
+
+Une ligne dans `DecodedP300Publisher.__init__` : `desc.append_child_value("no_decision_index",
+"-1")`, jumeau exact de `DecodedMIPublisher`. Vérifié dans `lsl_io.py` en lisant directement
+`pub.outlet.get_info().desc().child("decoding").child_value("no_decision_index")`.
+
+## IMPORTANT — `stream_in` ne faisait rien
+
+`_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` en dur ; la seule lecture de `stream_in` dans
+tout le moteur était le `print` du mode lui-même. **Corrigé par `EngineServer._nom_flux_marqueurs`**
+(nouvelle méthode) : lit `stream_in` sur les modes ACTIFS qui consomment des marqueurs
+(`marker_epoch_s > 0`), retombe sur `MARKER_STREAM_DEFAULT` pour un mode qui ne le déclare pas, et
+**dit bruyamment** un désaccord entre deux modes actifs plutôt que d'en choisir un en silence.
+`_ouvre_marker_inlet` l'appelle désormais au lieu du nom en dur.
+
+**Constat mesuré en le corrigeant, qui va plus loin que la consigne** : `self.marker_inlet` n'est
+JAMAIS remis à `None` par `_stop_mode` — confirmé par lecture de `server.py` (aucune occurrence
+hors `__init__` et hors code de test). Une fois créé, il vit pour tout le PROCESSUS moteur, jamais
+par mode. Donc changer `stream_in` et **redémarrer le mode** (stop puis start du P300, moteur
+resté vivant) n'a AUCUN effet — contrairement à ce que suggérait la consigne (« redémarrer le
+mode »). Seul un moteur relancé (nouveau processus) reprend un nouveau nom. Le texte d'aide dit
+cette version précise, pas la version suggérée.
+
+### Preuve rouge-puis-vert (bout en bout, pas seulement le helper isolé)
+
+Bug injecté dans `_ouvre_marker_inlet` : `nom = MARKER_STREAM_DEFAULT` (remis en dur, comme avant
+ce tour). `python src/core/server.py --smoke` :
+
+```
+  ÉCHEC _ouvre_marker_inlet crée son inlet sur le nom du mode actif, pas le défaut en dur (EEG_API_Unicorn_stim)
+[smoke-marqueurs-stream-in] VERDICT : PROBLÈME
+```
+
+**Exactement 1 ÉCHEC sur toute la suite** (94 → 102 `chk(` dans `server.py`, comptés avant/après —
+voir plus bas) : les 15 autres sous-verdicts restent verts, la casse est isolée à l'endroit exact
+du correctif. Remis en état, `python src/core/server.py --smoke` : les 16 sous-verdicts (dont
+`[smoke-marqueurs-stream-in]`) repassent au vert, exit 0.
+
+## Comptage des assertions, avant/après ce tour (rien retiré nulle part)
+
+| Fichier | Avant | Après | Détail |
+|---|---|---|---|
+| `src/core/modes/p300.py` (`chk(`) | 33 | 46 | +13, réparties entre la preuve critique (contamination + plafond), la panne n°4 réécrite en deux manches, et l'exposition dans `state()` |
+| `src/core/server.py` (`chk(`) | 94 | 102 | +8, tous dans la nouvelle `_smoke_marqueurs_stream_in` |
+| `src/core/server.py` (`resultats`) | 15 | 16 | + `_smoke_marqueurs_stream_in()` |
+| `src/core/lsl_io.py` (`assert`) | 2 | 3 | + vérification `no_decision_index` |
+
+Compté par diff ENTRE COMMITS, pas par relecture (`git diff 37dce0c fec9b08 -- <fichier> | grep
+'^+' | grep -c 'chk('` contre le même avec `'^-'`) : **13 lignes `chk(` ajoutées, 0 retirée** dans
+`p300.py` ; **8 ajoutées, 0 retirée** dans `server.py`. Le seul texte de message changé est celui
+de tests RESTRUCTURÉS (panne n°4, désormais deux manches au lieu d'une, chacune fermée par son
+propre `round_end`) pour rester exact dans le nouveau contexte — jamais leur condition.
+
+## Tests — relancés un par un, aucun moteur laissé tournant
+
+| Commande | Résultat |
+|---|---|
+| `python src/core/modes/p300.py` | 46 `OK`, `[p300] VERDICT : OK`, exit 0 |
+| `python src/core/lsl_io.py` | `[lsl] VERDICT : OK`, exit 0 |
+| `python src/core/modes/registry.py` | `[registry] VERDICT : OK`, exit 0 |
+| `python src/core/server.py --smoke` | 16 sous-verdicts verts, exit 0 |
+| `python src/console/app.py --smoke` | `[console-smoke] VERDICT : OK`, exit 0 |
+
+Bonus (non demandés ce tour, revérifiés par prudence vu l'ampleur du correctif) :
+`python src/core/modes/contract.py` et `python src/research/app.py --smoke`, tous deux verts.
+
+## Inquiétudes de ce tour
+
+1. **`stream_in` reste sans effet tant que le moteur tourne déjà** — même après ce correctif, un
+   changement de ce réglage n'est repris qu'au PROCHAIN démarrage du moteur (processus), jamais en
+   redémarrant seulement le mode. Écrit dans l'aide du réglage et dans la docstring de
+   `_ouvre_marker_inlet`, mais ça reste une limite RÉELLE, pas seulement documentée — un futur
+   chantier qui voudrait un vrai changement à chaud devrait faire de `marker_inlet` une ressource
+   par NOM plutôt que par moteur (plusieurs inlets simultanés), pas un simple recâblage.
+2. **Le plafond dur (96 époques) n'a pas de constante dédiée dans `core/config.py`** — dérivé en
+   ligne dans `p300.py` (`P300_N_TARGETS * P300_REPS * 2`) sur instruction explicite du tour de
+   correction (« dérivé du protocole », pas « nouvelle constante », contrairement au délai
+   d'abandon qui EN demandait une explicitement). Si `P300_N_TARGETS`/`P300_REPS` changent un
+   jour, ce plafond bouge avec eux automatiquement — voulu, mais à vérifier si un futur chantier
+   veut le régler indépendamment.
+3. **`.superpowers/sdd/.gitignore` est retombé à `*` (tout ignoré) une TROISIÈME fois**, non
+   commité, entre la fin du tour précédent et le début de celui-ci — restauré à nouveau
+   (`git checkout HEAD --`, aucun diff) et le fichier qu'il cachait cette fois
+   (`task-6-brief.md`, déjà écrit et complet, pas un brouillon) récupéré dans un commit séparé
+   (`1f702f9`). Ce n'est plus un incident isolé : quelque chose (probablement le skill
+   `subagent-driven-development`, dont le fichier cite lui-même le comportement par défaut)
+   réécrit ce fichier à CHAQUE invocation. Une réparation mécanique à chaque tâche n'est pas une
+   solution — vaudrait le coup d'un correctif qui empêche la réécriture plutôt que de la
+   constater après coup.
+4. **Reportés tels quels, comme demandé** : branche `choisi is None` morte tant que
+   `P300_SELECT_MARGIN` vaut 0 · contrôle structurel de `registry.check()` sans test dédié · son
+   message unique pour deux cas distincts · un futur mode marqueur sans `pre_s`/`post_s` passerait
+   `check()` sans alerte. Rien touché sur ces quatre points.
