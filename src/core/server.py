@@ -777,6 +777,31 @@ class EngineServer:
         n = max(1, int(round(seconds * self.acq.fs)))
         return np.array(buffer[-n:], dtype=float, copy=True)
 
+    def _nom_flux_marqueurs(self):
+        """Le nom du flux de marqueurs à écouter, d'après les modes ACTIFS qui en consomment.
+
+        Chaque mode marqueur peut déclarer SON `stream_in` dans ses `params` (le P300 le fait) ;
+        un mode qui ne le déclare pas (aucun aujourd'hui, un futur mode pourrait) compte pour
+        `MARKER_STREAM_DEFAULT`. Sans cette lecture, `stream_in` serait un réglage-DÉCOR : affiché
+        dans la console, lu par personne — exactement le genre de piège que ce projet combat.
+
+        ⚠️ Un seul inlet existe pour TOUT le moteur (`self.marker_inlet`, cf. `_ouvre_marker_inlet`) :
+        si deux modes actifs réclament des noms DIFFÉRENTS, aucun choix silencieux n'est correct.
+        On le dit bruyamment et on retient le premier rencontré (ordre de `self.active`, qui suit
+        l'ordre de démarrage) plutôt que de deviner lequel l'utilisateur voulait vraiment.
+        """
+        noms = [rt.params.get("stream_in", MARKER_STREAM_DEFAULT)
+                for rt in self.active.values() if rt.spec.marker_epoch_s > 0.0]
+        if not noms:
+            return MARKER_STREAM_DEFAULT
+        distincts = sorted(set(noms))
+        if len(distincts) > 1:
+            print(f"[server] ⚠️ désaccord sur le flux de marqueurs à écouter : "
+                  f"{', '.join(distincts)} — un seul inlet existe pour tout le moteur, "
+                  f"« {noms[0]} » est retenu (vérifie les réglages « Flux de marqueurs » des "
+                  f"modes actifs)")
+        return noms[0]
+
     def _ouvre_marker_inlet(self):
         """Crée l'inlet de marqueurs si un mode ACTIF en a besoin et qu'il n'existe pas déjà.
 
@@ -787,6 +812,12 @@ class EngineServer:
         que la boucle tourne). Un mode marqueur démarré ainsi doit trouver son inlet lui aussi :
         l'évaluer une seule fois avant le `while` le laisserait sans, pour toujours, en silence
         — indiscernable d'un flux calme.
+
+        ⚠️ Le nom est résolu UNE SEULE fois, à la création de CET inlet (`self.marker_inlet` reste
+        le même objet pour toute la vie du moteur, cf. son commentaire dans `__init__` : rien ne
+        le remet à `None` quand un mode s'arrête). Changer « Flux de marqueurs » sur un mode déjà
+        démarré, ou même redémarrer ce mode, ne rouvre PAS l'inlet sur un nouveau nom — seul un
+        moteur relancé le ferait. C'est écrit dans l'aide du réglage (`p300.py`), pas seulement ici.
         """
         if self.marker_inlet is not None:
             return
@@ -794,7 +825,7 @@ class EngineServer:
             # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
             # chaque tour pour rien.
             return
-        nom = MARKER_STREAM_DEFAULT
+        nom = self._nom_flux_marqueurs()
         self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
         if self.marker_inlet.resolve():
             print(f"[server] marqueurs entrants : connecté à « {nom} »")
@@ -1245,6 +1276,7 @@ def _smoke():
         _smoke_marqueurs_murs(),
         _smoke_marqueurs_file_coincee(),
         _smoke_marqueurs_inlet(),
+        _smoke_marqueurs_stream_in(),
     ]
     return all(resultats)
 
@@ -2530,6 +2562,87 @@ def _smoke_marqueurs_inlet():
     chk(srv2.marker_inlet is objet_avant, "un appel suivant ne recrée pas l'inlet (idempotent)")
 
     print(f"[smoke-marqueurs-inlet] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_marqueurs_stream_in():
+    """`stream_in` doit vraiment choisir le flux écouté, pas rester un réglage-décor.
+
+    Avant ce correctif, `_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` EN DUR : le réglage
+    « Flux de marqueurs » du P300 s'affichait dans la console, se validait, se sauvegardait — et
+    ne servait à RIEN. `_nom_flux_marqueurs` fait des runtimes FABRIQUÉS (`types.SimpleNamespace`,
+    pas un vrai `P300Runtime` : ça éviterait un modèle entraîné pour rien) pour ne pas dépendre
+    d'un mode marqueur réel — seul le P300 en a un aujourd'hui, un futur mode pourrait s'y ajouter
+    sans que ce test doive changer.
+    """
+    import io
+    import types
+    from contextlib import redirect_stdout
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    def faux_runtime(marker_epoch_s, stream_in=None):
+        rt = types.SimpleNamespace()
+        rt.spec = types.SimpleNamespace(marker_epoch_s=marker_epoch_s)
+        rt.params = {"stream_in": stream_in} if stream_in is not None else {}
+        return rt
+
+    srv = EngineServer(synthetic=True, modes=(), params={})
+
+    # 1. Aucun mode actif n'écoute les marqueurs -> le défaut.
+    srv.active = {}
+    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
+        f"sans mode marqueur actif, le défaut ({srv._nom_flux_marqueurs()})")
+
+    # 2. Un mode qui écoute, avec un nom personnalisé -> CE nom, pas le défaut en dur.
+    srv.active = {"p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
+    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
+        f"le nom déclaré par le mode actif est repris ({srv._nom_flux_marqueurs()})")
+
+    # 3. Un mode actif qui n'écoute PAS les marqueurs (marker_epoch_s == 0) ne pèse pas sur le
+    # choix, même s'il portait un stream_in par accident (cas hypothétique aujourd'hui : aucun
+    # mode du registre actuel n'est dans ce cas).
+    srv.active = {"ssvep": faux_runtime(0.0, stream_in="ignore_moi"),
+                 "p300": faux_runtime(0.95, stream_in="mon_flux_perso")}
+    chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
+        "un mode qui ne consomme pas de marqueurs ne pèse pas sur le choix, même avec stream_in")
+
+    # 4. Un mode marqueur qui NE DÉCLARE PAS `stream_in` (aucun aujourd'hui, un futur mode
+    # pourrait) compte pour le défaut, pas pour une absence.
+    srv.active = {"futur-mode": faux_runtime(0.5)}
+    chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
+        f"un mode marqueur sans stream_in déclaré retombe sur le défaut "
+        f"({srv._nom_flux_marqueurs()})")
+
+    # 5. DEUX modes actifs réclament des noms DIFFÉRENTS -> dit BRUYAMMENT, choix déterministe.
+    srv.active = {"p300": faux_runtime(0.95, stream_in="flux_a"),
+                 "smoke-ecoute": faux_runtime(0.8, stream_in="flux_b")}
+    capture = io.StringIO()
+    with redirect_stdout(capture):
+        nom = srv._nom_flux_marqueurs()
+    texte = capture.getvalue()
+    print(texte, end="")
+    chk(nom in ("flux_a", "flux_b"), f"un choix est fait malgré le désaccord ({nom})")
+    chk("flux_a" in texte and "flux_b" in texte and "désaccord" in texte,
+        f"...et il est dit BRUYAMMENT, en nommant les deux flux en désaccord ({texte!r})")
+
+    # 6. Preuve BOUT EN BOUT : `_ouvre_marker_inlet` (pas seulement le helper isolé) crée bien
+    # son inlet sur le nom du mode actif — c'est LA méthode qui portait `MARKER_STREAM_DEFAULT`
+    # en dur avant ce correctif, celle que la preuve rouge/vert du rapport casse et répare.
+    srv2 = EngineServer(synthetic=True, modes=(), params={})
+    srv2.active = {"p300": faux_runtime(0.95, stream_in="flux_bout_en_bout")}
+    srv2._ouvre_marker_inlet()
+    chk(srv2.marker_inlet is not None
+        and srv2.marker_inlet.nom == "flux_bout_en_bout",
+        f"_ouvre_marker_inlet crée son inlet sur le nom du mode actif, pas le défaut en dur "
+        f"({srv2.marker_inlet.nom if srv2.marker_inlet else None})")
+
+    print(f"[smoke-marqueurs-stream-in] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 

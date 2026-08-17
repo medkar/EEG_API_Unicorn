@@ -612,6 +612,11 @@ MARKER_STREAM_DEFAULT = "EEG_API_Unicorn_stim"   # nom du flux de marqueurs qu'o
 MARKER_LATE_S = 1.0       # retard toléré pour un marqueur (réseau + horloge). Dimensionne le
                           # tampon du moteur AVEC l'époque du mode : un marqueur arrivé après ce
                           # délai ne trouve plus son EEG et sera compté comme perdu, jamais ignoré.
+# Délai au-delà duquel une manche P300 sans nouveau flash est ABANDONNÉE plutôt que gardée en
+# attente indéfiniment — le cas normal d'un plantage de l'application de stimulus en pleine
+# manche (jamais de `round_end`). Largement au-dessus d'une manche normale à SOA 150 ms (8 rép ×
+# 6 cibles ≈ 7,2 s) : ne se déclenche pas sur un ralentissement, seulement sur un abandon réel.
+P300_ROUND_TIMEOUT_S = 10.0
 
 
 def p300_targets(n=None):

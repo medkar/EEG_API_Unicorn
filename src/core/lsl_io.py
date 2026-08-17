@@ -360,7 +360,10 @@ class DecodedP300Publisher:
 
     ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
     « repos ». C'est mot pour mot la confusion qu'il a fallu inscrire en garde pour le MI, et
-    elle se reproduira chez le premier client qui lira ce flux sans lire la doc.
+    elle se reproduira chez le premier client qui lira ce flux sans lire la doc — c'est pour ça
+    que `no_decision_index` voyage aussi dans les métadonnées, pas seulement ici : un client
+    Unity ou MATLAB qui lit `inlet.info().desc()` sans jamais ouvrir ce fichier doit pouvoir le
+    découvrir tout seul, exactement comme `DecodedMIPublisher` le fait juste au-dessus.
 
     Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
     Un client qui attend un débit régulier attendrait pour rien.
@@ -383,6 +386,7 @@ class DecodedP300Publisher:
         # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
         # sans cette indication, un seuil côté client n'aurait aucun sens.
         desc.append_child_value("decision_scale", "logodds")
+        desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
 
     def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
@@ -529,6 +533,12 @@ def _autotest():
     pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
     pub.push(-1, 0.0, 12, [0.0] * 6)
     print("  [lsl] decoded_p300 publie sans lever")
+    # Le sens de -1 doit être lisible dans les MÉTADONNÉES, pas seulement dans une docstring
+    # qu'un client Unity/MATLAB n'ouvrira jamais — même exigence que `DecodedMIPublisher`
+    # (no_decision_index) juste au-dessus.
+    no_decision = pub.outlet.get_info().desc().child("decoding").child_value("no_decision_index")
+    print(f"  decoded_p300 no_decision_index (métadonnées) : {no_decision!r}")
+    assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

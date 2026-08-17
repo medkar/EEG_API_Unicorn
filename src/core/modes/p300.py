@@ -22,15 +22,26 @@ flasher) publie -1 ET dit pourquoi dans le journal, plutôt que de choisir un ar
 sous-ensemble de cibles. C'est mot pour mot la garde qu'il a fallu inscrire pour le Motor Imagery
 (`DecodedMIPublisher`) — elle se reproduira chez le premier client qui lit ce flux sans lire la doc.
 
-Les cinq pannes bruyantes de ce sous-système (un décodeur qui tourne, publie des scores honnêtes
-et ne déclenche simplement jamais est la panne la plus coûteuse de ce projet) :
-    1. aucun flux de marqueurs trouvé      -> dit par `EngineServer._ouvre_marker_inlet`
+Six pannes bruyantes de ce sous-système (un décodeur qui tourne, publie des scores honnêtes et
+ne déclenche simplement jamais est la panne la plus coûteuse de ce projet) :
+    1. aucun flux de marqueurs trouvé       -> dit par `EngineServer._ouvre_marker_inlet`
     2. un marqueur plus vieux que le tampon -> compté, `engine.marqueurs_perdus`
     3. un marqueur dans le futur            -> compté, `engine.marqueurs_futurs`
-    4. une cible hors de la plage déclarée  -> dite une fois, comptée ICI (`_refus_cible`)
-    5. `round_end` avec trop peu de flashs  -> dite ICI, publiée comme -1 (`_decider`)
+    4. une cible hors de la plage déclarée  -> dite une fois PAR MANCHE, comptée (`_refus_cible`)
+    5. `round_end` avec trop peu de flashs  -> dite, publiée comme -1 (`_decider`)
+    6. `round_end` qui n'arrive JAMAIS      -> dite, manche ABANDONNÉE (`_verifie_abandon`)
 Les trois premières vivent une couche plus bas (`core/markers.py`, `core/server.py`) et sont
-prouvées là-bas ; ce fichier ajoute et prouve les deux dernières, propres au protocole P300.
+prouvées là-bas ; ce fichier ajoute et prouve les trois dernières, propres au protocole P300.
+
+⚠️ **La 6e (trouvée à la relecture, pas au premier jet) est la plus sournoise des six** : sans
+`_verifie_abandon`, une application externe qui plante EN PLEINE manche (le cas normal d'un
+plantage) laisse `_epoques`/`_cibles` avec des flashs ORPHELINS, pour toujours. Si l'application
+redémarre et flashe une manche NEUVE sans avoir renvoyé le `round_end` de l'ancienne, les nouveaux
+flashs s'EMPILENT sur les orphelins. Le garde de couverture (`len(par_cible) < n_targets`) ne
+vérifie que « chaque cible a flashé au moins une fois » — pas « ces flashs viennent de la MÊME
+manche » : une contamination peut le satisfaire, atteindre `select()`, et publier une cible
+choisie avec une confiance normale — silencieusement fausse. Aucune des cinq autres pannes ne
+s'en aperçoit.
 
 Autotest :
     python src/core/modes/p300.py
@@ -41,8 +52,8 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_EPOCH_S, P300_N_TARGETS,  # noqa: E402
-                         P300_PRE_S, P300_REPS, P300_SELECT_MARGIN, SSVEP_WARMUP_S,
-                         use_utf8_console)
+                         P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S, P300_SELECT_MARGIN,
+                         SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
 from core import p300_models  # noqa: E402
@@ -50,6 +61,14 @@ from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
+
+# Plafond DUR sur une manche : au-delà, elle ne se fermera visiblement JAMAIS (`round_end` perdu
+# ou jamais envoyé) — on l'abandonne en le disant plutôt que de laisser les listes grossir sans
+# borne. ×2 la taille d'une manche normale (P300_N_TARGETS cibles × P300_REPS répétitions) :
+# large marge pour un protocole qui répéterait plus que la référence, sans laisser fuiter une
+# manche qui n'en finit jamais. Dérivé du protocole, pas une constante séparée dans config.py :
+# rien d'autre n'en a besoin.
+_MAX_EPOQUES = P300_N_TARGETS * P300_REPS * 2
 
 
 class P300Runtime(ModeRuntime):
@@ -66,6 +85,11 @@ class P300Runtime(ModeRuntime):
     qui permet au contrôle structurel de `registry.check()` de comparer `spec.marker_epoch_s` (ce
     que le moteur DIMENSIONNE) à ce que ce runtime PRÉLÈVE vraiment. Jumeau exact de
     `Calib.epoch_s` comparé à `MICalibration.imagery_s`.
+
+    ⚠️ Une manche qui n'a jamais reçu son `round_end` (application externe plantée en plein
+    milieu) est ABANDONNÉE — voir `_verifie_abandon`, appelée à chaque `_run_step`. Sans ça, ses
+    flashs restent ORPHELINS indéfiniment, et une manche NEUVE lancée plus tard s'empilerait
+    dessus en silence.
     """
 
     pre_s = P300_PRE_S
@@ -87,10 +111,19 @@ class P300Runtime(ModeRuntime):
             raise ValueError(raison)
         self._epoques = []          # les époques valides de la manche EN COURS
         self._cibles = []           # la cible flashée pour chaque époque, même index que ci-dessus
-        # Compteurs de SESSION, jamais réinitialisés — le même choix que `engine.marqueurs_perdus`
-        # et consorts : ce sont des diagnostics qui doivent survivre à une manche, pas son état.
-        self._refus_cible = 0       # cibles hors plage reçues (bug de l'émetteur de marqueurs)
-        self._epoques_perdues = 0   # marqueurs mûrs dont l'époque a quand même débordé
+        # L'horodatage (temps MARQUEUR, jamais `time.time()` — cf. `_verifie_abandon`) du dernier
+        # flash valide accepté dans la manche en cours. None : aucune manche en cours.
+        self._dernier_flash_ts = None
+        # `_refus_cible` est réarmé À CHAQUE manche (`_vider_manche`) : une cible hors plage est
+        # un défaut de CETTE manche-là, pas seulement de la toute première de la session — sans
+        # le réarmement, une récidive plus tard dans la séance serait comptée mais ne s'imprime
+        # plus jamais. `_epoques_perdues` et `_manches_abandonnees` restent au contraire des
+        # compteurs de SESSION, jamais réinitialisés — le même choix que `engine.marqueurs_perdus`
+        # et consorts : rien ne délimite « une manche » pour un marqueur déjà rejeté avant d'avoir
+        # rejoint une manche, ou pour une manche qui n'a justement jamais pu s'en fermer une.
+        self._refus_cible = 0          # cibles hors plage reçues DANS LA MANCHE EN COURS
+        self._epoques_perdues = 0      # marqueurs mûrs dont l'époque a quand même débordé
+        self._manches_abandonnees = 0  # manches jetées faute de round_end (panne n°6)
 
     def _open(self):
         # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
@@ -109,6 +142,19 @@ class P300Runtime(ModeRuntime):
     def output(self):
         return self._decoded
 
+    def state(self):
+        """Comme `ModeRuntime.state()`, plus les compteurs des pannes bruyantes n°4/5/6.
+
+        Sans cette sortie, `_refus_cible`/`_epoques_perdues`/`_manches_abandonnees` n'ont AUCUN
+        filet en dehors du terminal : un client qui n'a pas la console ouverte au bon instant ne
+        les voit jamais, et `print` n'est lu par personne en dehors d'une séance surveillée.
+        """
+        base = super().state()
+        base["refus_cible"] = self._refus_cible
+        base["epoques_perdues"] = self._epoques_perdues
+        base["manches_abandonnees"] = self._manches_abandonnees
+        return base
+
     def _rest_step(self, engine, now):
         """Rien à mesurer : comme le MI, seule la chauffe compte (cf. docstring de la classe)."""
         if now < self._rest_until:
@@ -121,7 +167,8 @@ class P300Runtime(ModeRuntime):
         return True
 
     def _run_step(self, engine, lsl_ts):
-        """Ramasser les flashs mûrs, les épocher, et décider à `round_end`."""
+        """Ramasser les flashs mûrs, décider à `round_end`, et abandonner une manche qui ne se
+        fermera visiblement jamais (panne n°6)."""
         for ts, marqueur in engine.markers_murs(self.spec.id, post_s=self.post_s):
             event = marqueur.get("event")
             if event == "flash":
@@ -130,13 +177,19 @@ class P300Runtime(ModeRuntime):
                 self._decider(lsl_ts)
             # Tout autre événement est ignoré : le protocole s'enrichira, et un mode qui
             # refuserait ce qu'il ne connaît pas casserait au premier ajout.
+        # APRÈS le lot de ce tour, pas seulement quand un marqueur arrive : c'est précisément le
+        # cas d'une application plantée (plus AUCUN marqueur, jamais) qu'il faut attraper, et lui
+        # seul garantit que `_run_step` continue d'être appelé (`lsl_ts` avance à chaque tour de
+        # la boucle du moteur, marqueurs ou pas).
+        self._verifie_abandon(lsl_ts)
 
     def _encaisser_flash(self, engine, ts, marqueur):
         cible = marqueur.get("target")
         if not isinstance(cible, int) or not 0 <= cible < self.n_targets:
             # Panne bruyante n°4 : une cible hors plage est un bug de l'application cliente.
-            # Le dire une fois suffit ; le répéter à chaque flash noierait le terminal — jusqu'à
-            # 48 par manche (8 répétitions × 6 cibles).
+            # Le dire une fois PAR MANCHE suffit (`_refus_cible` est réarmé dans `_vider_manche`) ;
+            # le répéter à chaque flash noierait le terminal — jusqu'à 48 par manche (8 répétitions
+            # × 6 cibles).
             self._refus_cible += 1
             if self._refus_cible == 1:
                 print(f"[p300] cible « {cible} » hors de la plage attendue "
@@ -151,6 +204,52 @@ class P300Runtime(ModeRuntime):
             return
         self._epoques.append(epoque)
         self._cibles.append(cible)
+        # Horodatage MARQUEUR, jamais `time.time()` (cf. `_verifie_abandon`) : c'est ce qui permet
+        # de dire « cette manche n'a plus donné signe de vie depuis X secondes » sans que le
+        # runtime touche à une horloge lui-même.
+        self._dernier_flash_ts = ts
+
+    def _verifie_abandon(self, lsl_ts):
+        """Abandonne la manche en cours si elle ne se fermera visiblement JAMAIS — panne n°6.
+
+        Deux façons de le détecter, et je veux les deux :
+          1. **Délai d'abandon** : aucun flash accepté depuis plus de `P300_ROUND_TIMEOUT_S`. Ce
+             qui attrape une application externe plantée EN PLEINE manche — le cas normal d'un
+             plantage, et le seul des deux qui ne dépend pas du DÉBIT de flashs.
+          2. **Plafond dur** (`_MAX_EPOQUES`) : bien plus d'époques qu'un protocole normal n'en
+             produit — l'application tourne toujours mais n'envoie plus jamais `round_end`.
+
+        ⚠️ Comparaison entre horodatages de MARQUEURS et `lsl_ts` (celui que `tick()` reçoit du
+        moteur) — jamais `time.time()` : un runtime ne lit jamais l'horloge lui-même dans ce
+        projet (cf. `ModeRuntime`). `lsl_ts` avance à CHAQUE tour de la boucle du moteur, y
+        compris quand `engine.markers_murs` ne rend rien — c'est précisément ce qui rend le
+        délai d'abandon détectable même quand plus AUCUN marqueur n'arrive jamais.
+
+        Sans ce garde-fou : les flashs d'une manche avortée restent ORPHELINS dans `_epoques`/
+        `_cibles`. Si l'application redémarre et flashe une manche NEUVE sans avoir renvoyé le
+        `round_end` de l'ancienne, les nouveaux flashs s'EMPILENT sur les orphelins. Le garde de
+        couverture de `_decider` (`len(par_cible) < n_targets`) ne vérifie que « chaque cible a
+        flashé au moins une fois » — pas « ces flashs viennent de la MÊME manche » : une
+        contamination peut le satisfaire, atteindre `select()`, et publier une cible choisie avec
+        une confiance normale — SILENCIEUSEMENT fausse. Aucune des cinq autres pannes ne s'en
+        aperçoit (prouvé par `_selftest`, scénario dédié).
+        """
+        if not self._epoques:
+            return
+        trop_vieille = (self._dernier_flash_ts is not None
+                        and lsl_ts - self._dernier_flash_ts > P300_ROUND_TIMEOUT_S)
+        trop_pleine = len(self._epoques) > _MAX_EPOQUES
+        if not (trop_vieille or trop_pleine):
+            return
+        if trop_vieille:
+            raison = (f"aucun flash accepté depuis {lsl_ts - self._dernier_flash_ts:.1f} s "
+                      f"(> {P300_ROUND_TIMEOUT_S:g} s)")
+        else:
+            raison = f"{len(self._epoques)} flashs accumulés (plafond {_MAX_EPOQUES})"
+        self._manches_abandonnees += 1
+        print(f"[p300] manche ABANDONNÉE : {raison} — round_end jamais reçu (application externe "
+              f"plantée ?). {len(self._epoques)} flash(s) orphelin(s) jeté(s).")
+        self._vider_manche()
 
     def _decider(self, lsl_ts):
         """Fin de manche : agréger les scores par cible et publier — ou dire pourquoi non."""
@@ -196,10 +295,18 @@ class P300Runtime(ModeRuntime):
         self._vider_manche()
 
     def _vider_manche(self):
-        """Repart pour la manche suivante : les flashs déjà décidés ne doivent pas fuiter dans
-        la décision d'après."""
+        """Repart pour la manche suivante : les flashs déjà décidés (ou orphelins abandonnés) ne
+        doivent pas fuiter dans la décision d'après.
+
+        `_refus_cible` est réarmé ICI, PAS gardé pour toute la session : une cible hors plage est
+        un défaut DE CETTE manche, et une récidive dans une manche sans rapport doit se réimprimer
+        — sinon la garde `== 1` ne se déclenche plus jamais après la toute première de la vie du
+        runtime, silencieusement, pour le reste de la séance.
+        """
         self._epoques = []
         self._cibles = []
+        self._dernier_flash_ts = None
+        self._refus_cible = 0
 
     def _publish(self, target_index, confidence, n_flashes, scores, lsl_ts):
         if self._out is not None:
@@ -246,8 +353,13 @@ SPEC = ModeSpec(
               choices=(MARKER_STREAM_DEFAULT,), default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
               help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
-                   "flash. Le moteur l'écoute par son NOM : deux applications peuvent tourner "
-                   "sur le réseau sans se mélanger."),
+                   "flash. Le moteur l'écoute par son NOM, résolu la PREMIÈRE fois qu'un mode "
+                   "qui consomme des marqueurs démarre dans cette session — un seul inlet existe "
+                   "pour tout le moteur. Le changer plus tard n'a AUCUN effet tant que le moteur "
+                   "lui-même tourne encore, pas même en redémarrant ce mode : il faut relancer le "
+                   "moteur pour qu'un nouveau nom soit repris. Deux modes actifs qui en "
+                   "réclameraient des noms différents ne sont pas mélangés en silence : un "
+                   "désaccord est signalé bruyamment, un seul nom gagne."),
     ),
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
               instruction="Le casque se stabilise — reste immobile."),
@@ -268,8 +380,9 @@ def _selftest():
     La MATURITÉ d'un marqueur (horodatage, curseur par mode, purge) est déjà prouvée dans
     `server.py` (`_smoke_marqueurs_murs`, `_smoke_marqueurs_file_coincee`) : ce mode ne la
     réimplémente pas, ce test ne la rejoue donc pas non plus. Il se concentre sur ce que CE mode
-    fait de marqueurs déjà mûrs : épocher, agréger par cible, décider, publier — et sur les deux
-    pannes bruyantes propres au protocole P300 (cible hors plage, manche trop courte).
+    fait de marqueurs déjà mûrs : épocher, agréger par cible, décider, publier — et sur les trois
+    pannes bruyantes propres au protocole P300 (cible hors plage, manche trop courte, manche qui
+    ne se ferme jamais).
     """
     import io
     import shutil
@@ -332,6 +445,19 @@ def _selftest():
         def select(self, epochs_by_target, margin=0.0):
             self.appels += 1
             return 0, {k: 99.0 for k in epochs_by_target}   # une réponse CERTAINE si jamais appelée
+
+    class _ModeleCapture:
+        """Capture la FORME de `epochs_by_target` (nombre d'époques par cible) sans juger leur
+        contenu — sert à prouver qu'une manche neuve n'hérite d'AUCUN flash orphelin d'une manche
+        avortée. Si une contamination avait lieu, une cible retrouvée dans les deux manches
+        porterait DEUX époques au lieu d'une, et cette capture le montrerait directement."""
+
+        def __init__(self):
+            self.recu = None
+
+        def select(self, epochs_by_target, margin=0.0):
+            self.recu = {k: len(v) for k, v in epochs_by_target.items()}
+            return 0, {k: 0.0 for k in epochs_by_target}
 
     def marqueur(t, cible):
         return (t, {"mode": "p300", "event": "flash", "target": cible})
@@ -496,9 +622,80 @@ def _selftest():
         chk(espion.appels == 0,
             f"le modèle n'est TOUJOURS pas consulté — {espion.appels} appel(s) au lieu de 0")
 
-        # --- Panne bruyante n°4 : une cible hors plage --------------------------------------
-        # Trois cibles invalides dans la même manche : COMPTÉES chacune, mais dites UNE SEULE
-        # fois — répéter l'avertissement à chaque flash noierait le terminal.
+        # --- PREUVE CRITIQUE : une manche AVORTÉE (jamais de round_end) n'en contamine pas une
+        # NEUVE ------------------------------------------------------------------------------
+        # Le garde de couverture de `_decider` (`len(par_cible) < n_targets`) vérifie seulement
+        # « chaque cible a flashé au moins une fois » — pas « ces flashs viennent de la MÊME
+        # manche ». Sans `_verifie_abandon`, une application plantée en pleine manche (le cas
+        # normal d'un plantage) laisse des flashs ORPHELINS ; si elle redémarre et flashe une
+        # manche neuve sans jamais avoir envoyé le round_end de l'ancienne, les nouveaux flashs
+        # s'EMPILENT dessus, silencieusement.
+        capture_modele = _ModeleCapture()
+        rt.model = capture_modele
+
+        # Manche AVORTÉE : seulement 3 des 6 cibles flashent, puis PLUS RIEN — pas de round_end,
+        # exactement ce qu'un plantage produit.
+        t0 = 101.0
+        lot = [marqueur(t0, 0), marqueur(t0 + 0.15, 1), marqueur(t0 + 0.30, 2)]
+        moteur._lots = [lot]
+        rt.tick(moteur, lsl_ts=t0 + 0.30, now=10.0)
+        chk(len(rt._epoques) == 3,
+            f"les 3 flashs de la manche avortée sont bien en attente, round_end jamais arrivé "
+            f"({len(rt._epoques)})")
+
+        # Le temps passe, largement au-delà du délai d'abandon — SANS AUCUN NOUVEAU MARQUEUR :
+        # c'est le simple passage du temps qui doit déclencher l'abandon (`lsl_ts` avance à
+        # chaque tour de la boucle du moteur, marqueurs ou pas), pas un événement particulier.
+        avant_abandons = rt._manches_abandonnees
+        moteur._lots = []
+        lsl_apres_delai = t0 + 0.30 + P300_ROUND_TIMEOUT_S + 1.0
+        rt.tick(moteur, lsl_ts=lsl_apres_delai, now=25.0)
+        chk(len(rt._epoques) == 0,
+            f"la manche avortée est jetée après le délai, sans aucun nouveau marqueur "
+            f"({len(rt._epoques)} époque(s) restante(s))")
+        chk(rt._manches_abandonnees == avant_abandons + 1,
+            f"l'abandon est COMPTÉ ({rt._manches_abandonnees - avant_abandons})")
+
+        # Manche NEUVE et complète : une époque PAR cible. Si les 3 orphelins avaient survécu,
+        # les cibles 0/1/2 porteraient CHACUNE deux époques au lieu d'une — c'est ce que
+        # `_ModeleCapture` révèle, en lisant directement ce que `_decider` lui a transmis.
+        t1 = 115.0
+        lot = []
+        for tgt in range(P300_N_TARGETS):
+            lot.append(marqueur(t1, tgt))
+            t1 += 0.15
+        lot.append(fin_manche(t1))
+        moteur._lots = [lot]
+        rt.tick(moteur, lsl_ts=t1, now=26.0)
+        chk(capture_modele.recu == {i: 1 for i in range(P300_N_TARGETS)},
+            f"la manche neuve n'hérite d'AUCUN flash orphelin de l'avortée : une époque par "
+            f"cible, jamais deux ({capture_modele.recu})")
+
+        # --- Panne bruyante n°6 (variante) : le PLAFOND abandonne aussi, sans attendre le délai.
+        # Débit rapide, `round_end` qui n'arrive jamais : au-delà de `_MAX_EPOQUES`, la manche est
+        # jetée tout de suite — pas besoin d'attendre `P300_ROUND_TIMEOUT_S` d'inactivité.
+        t2 = 101.0
+        lot = []
+        for i in range(_MAX_EPOQUES + 1):
+            lot.append(marqueur(t2, i % P300_N_TARGETS))
+            t2 += 0.02
+        moteur._lots = [lot]
+        avant_abandons = rt._manches_abandonnees
+        rt.tick(moteur, lsl_ts=t2, now=27.0)
+        chk(rt._manches_abandonnees == avant_abandons + 1,
+            f"le plafond ({_MAX_EPOQUES} époques) abandonne aussi, sans attendre le délai "
+            f"({rt._manches_abandonnees - avant_abandons})")
+        chk(len(rt._epoques) == 0, "et la manche est bien vidée après coup")
+
+        # --- Panne bruyante n°4 : une cible hors plage, réarmée à CHAQUE manche --------------
+        # Manche A : trois cibles invalides dans la MÊME manche. COMPTÉES chacune, mais dites
+        # UNE SEULE fois — répéter l'avertissement à chaque flash noierait le terminal.
+        #
+        # ⚠️ Le round_end est envoyé dans un tick SÉPARÉ, PAS dans le même lot que les trois
+        # flashs invalides : `_decider` (déclenché par round_end) appelle `_vider_manche()`, qui
+        # réarme `_refus_cible` à 0 dans la FOULÉE — si les deux partageaient un tick, le compte
+        # serait déjà retombé à 0 avant que ce test ait pu le lire, pour la mauvaise raison (la
+        # remise à zéro fonctionnerait, mais on croirait à tort que rien n'a été compté).
         avant = rt._refus_cible
         t = 101.0
         lot = [marqueur(t, 99), marqueur(t + 0.15, -1), marqueur(t + 0.30, "deux")]
@@ -509,11 +706,36 @@ def _selftest():
         texte = capture.getvalue()
         print(texte, end="")     # rejoué : la capture ne doit pas rendre ce test muet
         chk(rt._refus_cible == avant + 3,
-            f"les trois cibles hors plage sont COMPTÉES ({rt._refus_cible - avant})")
+            f"les trois cibles hors plage de la manche A sont COMPTÉES ({rt._refus_cible - avant})")
         chk(texte.count("hors de la plage") == 1,
             f"...mais l'avertissement n'est imprimé qu'UNE fois pour les trois "
             f"({texte.count('hors de la plage')} occurrence(s))")
-        rt._vider_manche()   # cette manche n'a pas été close par un round_end : on ne la garde pas
+
+        # Referme la manche A PROPREMENT (aucune époque valide dedans -> publie -1), DANS UN TICK
+        # À PART : c'est CE round_end qui doit réarmer `_refus_cible`, prouvé juste après.
+        moteur._lots = [[fin_manche(t + 0.45)]]
+        rt.tick(moteur, lsl_ts=t + 0.45, now=5.5)
+        chk(rt._refus_cible == 0,
+            f"la fermeture de la manche A réarme le compteur à 0 ({rt._refus_cible})")
+
+        # Manche B, séparée de A par ce round_end : une SEULE cible invalide doit de nouveau
+        # s'imprimer — la garde s'est RÉARMÉE à la fermeture de la manche A, ce n'est PAS « la
+        # première de la session » (sans quoi toute récidive plus tard serait comptée mais ne
+        # s'imprimerait plus jamais, sans le moindre filet en dehors du terminal).
+        t = 110.0
+        lot = [marqueur(t, 99)]
+        moteur._lots = [lot]
+        capture2 = io.StringIO()
+        with redirect_stdout(capture2):
+            rt.tick(moteur, lsl_ts=t, now=6.0)
+        texte2 = capture2.getvalue()
+        print(texte2, end="")
+        chk(texte2.count("hors de la plage") == 1,
+            f"une manche B, neuve, réimprime l'avertissement : la garde n'est pas « une fois "
+            f"par session » ({texte2.count('hors de la plage')} occurrence(s))")
+        chk(rt._refus_cible == 1, f"et son propre compteur repart bien de 1, pas de 4 ({rt._refus_cible})")
+        moteur._lots = [[fin_manche(t + 0.15)]]
+        rt.tick(moteur, lsl_ts=t + 0.15, now=6.5)   # referme B proprement avant la suite du test
 
         # --- Panne bruyante n°5 (variante) : l'époque déborde malgré un marqueur mûr ---------
         # Simule un tampon vidé entre la maturité du marqueur et son traitement : un horodatage
@@ -529,6 +751,18 @@ def _selftest():
             "...et ne rejoint PAS la manche en cours (elle n'a rien à décoder)")
         rt._vider_manche()
 
+        # Les compteurs de pannes ont une sortie AUTRE que le terminal : `state()`, lu par la
+        # console (ou n'importe quel autre client du moteur qui n'a pas les yeux sur les logs).
+        etat = rt.state()
+        chk({"refus_cible", "epoques_perdues", "manches_abandonnees"} <= set(etat),
+            f"les trois compteurs de pannes bruyantes sont exposés dans state() ({sorted(etat)})")
+        chk(etat["refus_cible"] == rt._refus_cible
+            and etat["epoques_perdues"] == rt._epoques_perdues
+            and etat["manches_abandonnees"] == rt._manches_abandonnees,
+            f"...et reflètent les compteurs RÉELS du runtime, pas une copie figée "
+            f"(state={etat['refus_cible'], etat['epoques_perdues'], etat['manches_abandonnees']}, "
+            f"réel={rt._refus_cible, rt._epoques_perdues, rt._manches_abandonnees})")
+
         # 6. Le contrat du mode.
         chk(SPEC.rest.duration_s == 0.0 and SPEC.rest.warmup_s == SSVEP_WARMUP_S,
             f"chauffe obligatoire, aucun plancher ({SPEC.rest})")
@@ -539,6 +773,11 @@ def _selftest():
             "sa calibration reste NATIVE : le moteur ne la joue pas, l'appli pygame la joue")
         chk(all(p.affecte_decodage for p in SPEC.params if p.key != "stream_in"),
             "le modèle affecte le décodage ; le flux de marqueurs (juste le NOM écouté), non")
+        chk(P300_ROUND_TIMEOUT_S > 0.0,
+            f"un délai d'abandon strictement positif est déclaré ({P300_ROUND_TIMEOUT_S:g} s)")
+        chk(_MAX_EPOQUES > P300_N_TARGETS,
+            f"le plafond dur dépasse largement une manche normale ({_MAX_EPOQUES} > "
+            f"{P300_N_TARGETS})")
     finally:
         p300_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)
