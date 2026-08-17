@@ -168,6 +168,12 @@ class ModeRuntime:
     def _run_step(self, engine, lsl_ts):
         """Un pas de décodage : mesurer, décider, publier."""
 
+    # Un mode qui écoute des marqueurs déclare `marker_epoch_s` dans son `ModeSpec` et appelle
+    # `engine.markers_murs(self.spec.id, post_s)` depuis son `_run_step`. Le moteur lui rend des
+    # marqueurs SITUÉS (horodatés dans la même horloge que `engine.recent_ts`) et MÛRS (leur
+    # époque tient dans le tampon). Le découpage reste au mode : les bornes ne sont pas les
+    # mêmes d'un paradigme à l'autre.
+
 
 def _selftest():
     """La machine de phases, sur une horloge FABRIQUÉE. Aucun casque, aucune attente réelle."""
