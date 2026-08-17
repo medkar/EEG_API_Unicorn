@@ -123,6 +123,13 @@ def _selftest():
         "un marqueur sans « mode » est refusé : on ne devine pas à qui il s'adresse")
     chk(parse_marqueur('{"mode":"p300"}') is None,
         "un marqueur sans « event » est refusé : il n'y a rien à en faire")
+    # Un « mode »/« event » PRÉSENT mais du mauvais TYPE doit être refusé comme s'il était
+    # absent : sinon un entier ou une liste remonterait jusqu'aux modes, qui attendent une
+    # chaîne (comparaisons `mode == "p300"`, etc.).
+    chk(parse_marqueur('{"mode":1,"event":"flash"}') is None,
+        "un « mode » PRÉSENT mais qui n'est pas une chaîne est refusé, pas seulement un « mode » absent")
+    chk(parse_marqueur('{"mode":"p300","event":2}') is None,
+        "un « event » PRÉSENT mais qui n'est pas une chaîne est refusé, pareillement")
     # Les champs inconnus sont GARDÉS, pas refusés : c'est ce qui permettra d'enrichir le
     # protocole sans casser les émetteurs déjà écrits par les étudiants.
     d = parse_marqueur('{"mode":"p300","event":"flash","target":1,"inconnu":42}')
@@ -141,6 +148,21 @@ def _selftest():
     try:
         inlet = MarkerInlet(nom, timeout_s=5.0)
         chk(inlet.resolve() is True, "un flux publié est trouvé PAR SON NOM")
+        # resolve() est IDEMPOTENT : un second appel sur un inlet déjà connecté ne doit RIEN
+        # re-mesurer. Sans la garde `if self.inlet is not None: return True`, un second appel
+        # remplacerait l'inlet ET re-mesurerait time_correction() — le SAUT d'horodatage que la
+        # docstring du module écarte explicitement. On le prouve avec une sentinelle : si le
+        # second appel touchait à l'offset, il ne resterait pas à 999.0 par hasard.
+        offset_reel = inlet.offset
+        objet_avant = inlet.inlet
+        inlet.offset = 999.0  # sentinelle : aucune mesure réelle ne tombe dessus par hasard
+        chk(inlet.resolve() is True, "un second resolve() sur un inlet déjà connecté rend True aussi")
+        chk(inlet.offset == 999.0,
+            f"...sans RE-MESURER time_correction() (offset={inlet.offset}, "
+            f"sentinelle 999.0 censée rester intacte)")
+        chk(inlet.inlet is objet_avant,
+            "...ni recréer l'inlet sous-jacent (identité de l'objet StreamInlet inchangée)")
+        inlet.offset = offset_reel  # restauré : le vrai offset sert au test d'horodatage qui suit
         t0 = local_clock()
         outlet.push_sample(['{"mode":"p300","event":"flash","target":2}'], timestamp=t0)
         outlet.push_sample(['{"mode":"p300","event":"round_end"}'], timestamp=t0 + 0.1)
@@ -163,6 +185,24 @@ def _selftest():
             f"(écart {recus[0][0] - t0:+.3f} s)")
         chk(recus[1][0] > recus[0][0], "et l'ordre chronologique est conservé")
         chk(inlet.illisibles == 1, f"le marqueur illisible est COMPTÉ ({inlet.illisibles})")
+
+        # L'offset d'horloge doit être APPLIQUÉ aux horodatages rendus par pull(), pas
+        # seulement mesuré puis ignoré. Émetteur et récepteur tournent ici dans le MÊME
+        # processus : l'offset RÉEL vaut ~0, ce qui ne distingue pas un offset appliqué d'un
+        # offset ignoré (`abs(recus[0][0] - t0) < 0.5` passe dans les deux cas). On en INJECTE
+        # un invraisemblable comme vraie correction, et on vérifie qu'il ressort tel quel.
+        inlet.offset = 12345.678
+        t1 = local_clock()
+        outlet.push_sample(['{"mode":"p300","event":"flash","target":9}'], timestamp=t1)
+        marqueurs, echeance = [], time.time() + 5.0
+        while not marqueurs and time.time() < echeance:
+            marqueurs.extend(inlet.pull())
+            if not marqueurs:
+                time.sleep(0.02)
+        chk(len(marqueurs) == 1, f"le marqueur du test d'offset arrive ({len(marqueurs)})")
+        chk(abs(marqueurs[0][0] - (t1 + 12345.678)) < 1e-3,
+            f"l'offset d'horloge est bien APPLIQUÉ aux horodatages rendus "
+            f"(écart mesuré {marqueurs[0][0] - t1:+.3f} s, +12345.678 attendu)")
     finally:
         del outlet
 
