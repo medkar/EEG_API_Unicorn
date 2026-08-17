@@ -11,7 +11,7 @@ chacun se suffit à lui-même.
 | Niveau | Ce qu'il faut | Durée | Ce qu'il prouve |
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
-| 1 | un écran | ~30 min | la console marche pour un humain |
+| 1 | un écran | ~30 min | la console marche pour un humain — **déjà passé le 2026-08-17** |
 | 2 | le casque | ~60 min | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
 
@@ -77,8 +77,19 @@ de 60 Hz qu'il fabrique. D'où le niveau 1.
 
 ## Niveau 1 — la console à l'écran, sans casque
 
-⚠️ **La console n'a jamais été ouverte dans une fenêtre.** Tout ce qui suit est vérifié
-mécaniquement mais n'a jamais été *vu*. C'est le niveau le plus rentable des trois.
+**✅ Passé le 2026-08-17, les 13 tests.** C'était le niveau le plus rentable des trois et il l'a
+prouvé : jusque-là la console n'avait jamais été ouverte dans une fenêtre, donc tout était vérifié
+mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont **aucun** ne pouvait
+être attrapé par les autotests du niveau 0.
+
+- **1.13 — le seul défaut fonctionnel.** Démarrer depuis une tuile de la grille un mode qui va être
+  refusé est **silencieux** : le moteur produit bien son refus, la console l'écrit dans le terminal,
+  et rien n'apparaît dans la fenêtre. Depuis le formulaire de réglages (test 1.8) le même refus
+  s'affiche en rouge — c'est la grille qui n'a pas de destination visuelle.
+- **1.3** — les 8 tracés du brut sont trop resserrés et se chevauchent.
+- **1.10** — le texte d'aide gris est tronqué en bas, et trop verbeux pour un étudiant.
+
+Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
 
 Le board synthétique de BrainFlow remplace le casque : signal artificiel, aucun matériel.
 
@@ -135,6 +146,9 @@ C'est le point qui t'a fait croire que le produit était cassé. Une tuile gris�
       (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8).
 - [ ] « ← Modes » revient à la grille.
 
+> 🐛 **2026-08-17** : les 8 tracés sont là et correctement étiquetés, mais **trop resserrés — ils se
+> chevauchent**. Rangé dans le lot d'affichage.
+
 ### 1.4 — Le bandeau vit
 
 - [ ] Les σ se mettent à jour (~1 Hz), une valeur par voie.
@@ -147,6 +161,18 @@ C'est le point qui t'a fait croire que le produit était cassé. Une tuile gris�
 - [ ] Décocher « publié » sur la tuile Brut → le tracé continue de défiler, mais le flux
       n'est plus sur le réseau.
 - [ ] Recocher → il repart.
+
+> ⚠️ **Angle mort de ce test, découvert le 2026-08-17** : la moitié qui compte — « le flux n'est
+> plus sur le réseau », puis « il repart » — **ne se voit pas depuis la fenêtre**. On peut cocher ce
+> test en n'ayant regardé que le tracé, et laisser la case décochée sans s'en apercevoir (c'est
+> arrivé, et le test 1.6 a échoué juste après pour cette raison). Vérifier des deux côtés :
+>
+> ```bash
+> python -u examples/receiver.py --list
+> ```
+>
+> Attendu : `EEG_API_Unicorn_raw` **absent** quand la case est décochée, **présent** quand elle
+> est cochée. `_quality` et `_status` restent là dans les deux cas.
 
 ### 1.6 — « Brancher un client » : l'extrait marche vraiment
 
@@ -162,6 +188,10 @@ C'est ce qu'un étudiant va copier. S'il ne tourne pas, tout le reste ne sert à
   ```
 
   Attendu : des valeurs qui défilent. Pas une exception, pas un blocage muet.
+
+> ✅ **2026-08-17** : **2931 échantillons en 11,7 s = 250,1 Hz**, les 8 voies nommées. L'extrait
+> tourne tel quel, sans retouche. Il appelle `open_stream()` avant le premier `pull`, ce qui est le
+> détail qui faisait perdre la première seconde en silence dans les premières versions.
 
 **Lancement B** — fermer la console, puis la rouvrir avec les modes démarrés. Le test 1.7 s'observe
 **dès le lancement**, alors garde un œil sur la fenêtre tout de suite.
@@ -227,6 +257,10 @@ porte de sortie.
 - [ ] Attendu : **12 · 14,4 · 18**.
 - [ ] Cliquer **Appliquer** → accepté, sans avoir eu à toucher aux fréquences d'abord.
 
+> 🐛 **2026-08-17** : le contenu est juste — l'aide annonce bien le rafraîchissement réel de la
+> fenêtre (60,0028 Hz sur le poste de dev) et renvoie vers l'écran des cibles. C'est le rendu qui
+> pèche : **texte tronqué en bas**, et trop verbeux pour un étudiant. Lot d'affichage.
+
 ### 1.11 — Un avertissement n'est pas un refus
 
 - [ ] Taper **4** fréquences dans le champ (n'importe lesquelles, par exemple `12, 15, 20, 30`),
@@ -269,6 +303,17 @@ pour changer l'ensemble des modes actifs.
 - [ ] La tuile **Motor Imagery** porte le même bouton **Démarrer** ; elle n'est grisée nulle part
       (cf. 1.2). Sans modèle entraîné sur ce poste, cliquer dessus redonne le refus déjà vu en
       1.2 (« aucun choix disponible »), pas un bouton inactif.
+
+> 🐛 **2026-08-17 — LE défaut du niveau 1, et le seul qui ne soit pas cosmétique.** Ce dernier point
+> échoue : le clic est **silencieux**. Le moteur refuse correctement, avec le message complet —
+> `refusé : « Modèle entraîné » : aucun choix disponible … bouton « Calibrer » sur cette page` —
+> mais la console l'écrit **dans le terminal**, pas dans la fenêtre. Rien n'apparaît à l'écran.
+>
+> Signature relevée dans le journal : **cinq clics d'affilée**, cinq refus identiques. C'est ce que
+> fait quelqu'un devant un bouton qui ne répond pas.
+>
+> Le refus lancé depuis le formulaire de réglages (test 1.8) s'affiche, lui, en rouge. C'est donc la
+> **grille** qui n'a pas de destination visuelle pour un refus, pas le moteur qui se tait.
 
 ---
 
