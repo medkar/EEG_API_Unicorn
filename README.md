@@ -252,7 +252,8 @@ does not publish them yet, so they are not part of what students consume and may
 
 | Family | Modules |
 |---|---|
-| pygame app | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `ssvep_stimulus.py` · `p300_stimulus.py` · `viewing.py` |
+| pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `viewing.py` |
+| Stimulus emitters — **open no headset**, meant to run *beside* the engine in a second terminal | `ssvep_stimulus.py` · [`p300_stimulus.py`](src/research/p300_stimulus.py) (publishes markers, see [`docs/markers.md`](docs/markers.md)) |
 | Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `errp_decoder` (`p300_decoder` has moved to `core/`) |
 | Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |

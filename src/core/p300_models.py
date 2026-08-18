@@ -36,8 +36,12 @@ def charger(chemin):
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
     # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
     if not chemin:
-        return None, ("aucun modèle désigné — lance une calibration P300 depuis la console pour "
-                      "en produire un")
+        # ⚠️ « depuis la console » était FAUX : la console n'a pas de page de calibration P300
+        # (son stimulus doit être verrouillé à la frame, cf. `Calib(kind="natif")` du mode). Ce
+        # texte est celui du `help` du réglage « Modèle entraîné » — le même geste dit du même
+        # mot aux deux endroits où un étudiant peut le lire.
+        return None, ("aucun modèle désigné — lance `python src/research/app.py`, mode P300, et "
+                      "calibre : c'est l'appli pygame qui rend ce stimulus, pas la console")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:
@@ -70,6 +74,10 @@ def charger(chemin):
 def modeles_disponibles(dossier=DATA_DIR):
     """Les chemins des modèles P300 RÉELLEMENT chargeables, du PLUS RÉCENT au plus ancien.
 
+    Rend une **liste**, comme son jumeau `mi_models.modeles_disponibles` : les deux alimentent le
+    même `Param(kind="choice", choices_fn=…)`, et deux types différents pour la même fonction
+    finissent par produire un `+` ou un `==` qui marche d'un côté et pas de l'autre.
+
     Le plus récent d'abord, parce que c'est le défaut proposé : après une calibration, c'est
     celui qu'on vient de faire qu'on veut essayer.
 
@@ -81,11 +89,13 @@ def modeles_disponibles(dossier=DATA_DIR):
     """
     chemins = sorted(_glob.glob(_os.path.join(dossier, MOTIF)),
                      key=_os.path.getmtime, reverse=True)
-    return tuple(c for c in chemins if charger(c)[0] is not None)
+    return [c for c in chemins if charger(c)[0] is not None]
 
 
 def decrire(chemin):
     """Une ligne lisible pour la liste de la console : date, nombre d'époques, AUC honnête.
+    Ne lève jamais, exactement comme `charger` — c'est sa fonction sœur, et la console appelle
+    les deux depuis le même formulaire.
 
     `cv_auc` est l'AUC cible/non-cible en validation croisée PAR MANCHE (`GroupKFold`), rendue
     par `P300Model.fit` quand une calibration lui fournit `groups` — c'est la seule mesure
@@ -93,10 +103,15 @@ def decrire(chemin):
     P300 sous-jacent) se retrouveraient entre train et test, et gonfleraient le chiffre.
     """
     modele, raison = charger(chemin)
-    horodatage = _os.path.getmtime(chemin) if _os.path.isfile(chemin) else 0.0
+    # ⚠️ `charger` avait été durcie contre le chemin vide (« une exception ici remonterait
+    # jusqu'au fil Qt »), mais le durcissement s'était arrêté une fonction trop tôt : ici
+    # `os.path.isfile(None)` et `os.path.basename(None)` lèvent tous les deux un TypeError, sur
+    # la fonction PUBLIQUE qui remplit la liste de modèles. Le `chemin and` court-circuite aussi
+    # l'entier 0, que `os.path.isfile` prendrait pour un descripteur de fichier (stdin).
+    horodatage = _os.path.getmtime(chemin) if chemin and _os.path.isfile(chemin) else 0.0
     infos = {
         "chemin": chemin,
-        "nom": _os.path.basename(chemin),
+        "nom": _os.path.basename(chemin) if chemin else "",
         "date": _time.strftime("%Y-%m-%d %H:%M", _time.localtime(horodatage)) if horodatage else "",
         "cv_auc": None,
         "n_epoques": None,
@@ -126,6 +141,32 @@ class _ModeleEtranger:
         return None, {}
 
 
+class _ModeleHerite:
+    """Le VRAI cas hérité : une classe dont le pickle porte le module NU `p300_decoder`.
+
+    ⚠️ C'est la seule forme qui protège la décision de conception de ce module. `_ModeleEtranger`
+    ci-dessus porte `__module__ == "__main__"` (ou `"core.p300_models"` à l'import) — **jamais
+    `"p300_decoder"`**. Donc l'assouplissement qu'un contributeur écrira un jour pour « juste
+    faire marcher les vieux modèles » — `module.endswith("p300_decoder")`, la petite passerelle
+    de compatibilité que ce chantier a explicitement refusé d'écrire — laissait toutes les
+    assertions vertes pendant que `data/p300_model.joblib` redevenait acceptable, et que le
+    moteur se remettait à décoder avec les probabilités de quelqu'un d'autre.
+
+    `__module__` est posé en dur : c'est ce que `pickle` enregistre. `_selftest` inscrit un
+    `types.ModuleType("p300_decoder")` dans `sys.modules` le temps du dump ET du chargement (le
+    retirer entre les deux ferait retrouver le VRAI `src/core/p300_decoder.py`, importable au
+    premier niveau selon la commande de lancement — la divergence même que `charger` documente).
+    """
+
+    __module__ = "p300_decoder"
+
+    def scores(self, epochs):
+        return [0.0] * len(epochs)
+
+    def select(self, epochs_by_target, margin=0.0):
+        return None, {}
+
+
 def _selftest():
     """Sur un dossier temporaire : un modèle valide, un fichier corrompu, un dossier vide."""
     import shutil
@@ -145,8 +186,8 @@ def _selftest():
 
     dossier = tempfile.mkdtemp(prefix="p300_models_")
     try:
-        chk(modeles_disponibles(dossier) == (),
-            "un dossier sans modèle rend un tuple vide, il ne lève pas")
+        chk(modeles_disponibles(dossier) == [],
+            "un dossier sans modèle rend une liste vide, il ne lève pas")
 
         # Un petit jeu synthétique, dans la forme d'une vraie calibration (manches cuées, cible
         # rare) : de quoi obtenir une AUC groupée non triviale (>= 10 époques, 2 classes).
@@ -166,7 +207,7 @@ def _selftest():
         bon = _os.path.join(dossier, "p300_model.joblib")
         modele.save(bon)
 
-        chk(modeles_disponibles(dossier) == (bon,),
+        chk(modeles_disponibles(dossier) == [bon],
             f"un modèle valide est listé ({modeles_disponibles(dossier)})")
 
         # Un fichier au bon nom mais illisible : c'est exactement l'état des modèles hérités.
@@ -193,7 +234,7 @@ def _selftest():
             chk(_m is None and raison and "aucun modèle" in raison,
                 f"charger({entree!r}) rend une raison au lieu de lever ({raison})")
 
-        # 1. Un modèle hérité est refusé EN LE NOMMANT, pas par une exception obscure.
+        # 1. Un modèle d'un module ÉTRANGER est refusé EN LE NOMMANT, pas par une exception obscure.
         etranger = _os.path.join(dossier, "p300_model_etranger.joblib")
         joblib.dump(_ModeleEtranger(), etranger)
         _m, raison = charger(etranger)
@@ -202,6 +243,42 @@ def _selftest():
         chk(etranger not in modeles_disponibles(dossier),
             "et il n'apparaît donc pas non plus dans la liste")
 
+        # 1 bis. Le VRAI cas hérité : le pickle porte le module NU `p300_decoder`.
+        #
+        # ⚠️ L'assertion ci-dessus ne pouvait PAS attraper l'assouplissement de la règle, parce
+        # que `_ModeleEtranger.__module__` vaut "__main__" et jamais "p300_decoder" : la mutation
+        # `module.endswith("p300_decoder")` — la passerelle de compatibilité que ce chantier a
+        # refusé d'écrire — la laissait verte tout en rendant `data/p300_model.joblib` à nouveau
+        # acceptable. Celle-ci rougit dessus, parce que le module refusé est EXACTEMENT celui que
+        # la mutation ré-autoriserait.
+        #
+        # Le faux module reste dans `sys.modules` pendant le dump ET le chargement : l'en
+        # retirer entre les deux ferait résoudre `p300_decoder` vers le vrai
+        # `src/core/p300_decoder.py` (importable au premier niveau sous `python src/core/…`), et
+        # on testerait alors un tout autre refus.
+        import types
+
+        herite = _os.path.join(dossier, "p300_model_herite.joblib")
+        faux_module = types.ModuleType("p300_decoder")
+        faux_module._ModeleHerite = _ModeleHerite
+        _sys.modules["p300_decoder"] = faux_module
+        try:
+            joblib.dump(_ModeleHerite(), herite)
+            _m, raison = charger(herite)
+            liste_avec_herite = modeles_disponibles(dossier)
+        finally:
+            _sys.modules.pop("p300_decoder", None)
+
+        # Les quotes autour du nom sont voulues : elles distinguent « module 'p300_decoder' » de
+        # « attendu 'core.p300_decoder' », qui contient lui aussi la sous-chaîne p300_decoder.
+        chk(_m is None and "'p300_decoder'" in (raison or ""),
+            f"un modèle dont le pickle porte le module NU 'p300_decoder' est refusé, et la "
+            f"raison NOMME ce module — c'est ce qui interdit la passerelle endswith() ({raison})")
+        chk(_m is None and "ré-entraîner" in (raison or ""),
+            f"...en disant quoi faire à la place ({raison})")
+        chk(herite not in liste_avec_herite,
+            f"...et il ne se glisse pas non plus dans la liste ({liste_avec_herite})")
+
         d = decrire(bon)
         chk(d["nom"] == "p300_model.joblib", f"la description porte le nom du fichier ({d['nom']})")
         chk(isinstance(d["cv_auc"], float) and 0.0 <= d["cv_auc"] <= 1.0,
@@ -209,6 +286,14 @@ def _selftest():
         chk(d["n_epoques"] == len(y),
             f"et le nombre d'époques d'entraînement est retenu ({d['n_epoques']})")
         chk(d["date"], f"et une date lisible ({d['date']})")
+
+        # `decrire` est la fonction SŒUR de `charger`, publique, et c'est elle qui remplit la
+        # liste de modèles de la console. Elle levait un TypeError sur les mêmes entrées contre
+        # lesquelles `charger` avait été durcie (`os.path.isfile(None)`), à un fil Qt de distance.
+        for entree in (None, "", 0):
+            d_vide = decrire(entree)
+            chk(d_vide["probleme"] and d_vide["cv_auc"] is None and d_vide["nom"] == "",
+                f"decrire({entree!r}) décrit un problème au lieu de lever ({d_vide['probleme']})")
 
         # 2. Le tri va du plus récent au plus ancien.
         # On renomme ainsi pour que le tri alphabétique et chronologique divergent : si on oublie
@@ -220,12 +305,12 @@ def _selftest():
         modele.save(recent)
         _os.utime(ancien, (1_600_000_000, 1_600_000_000))
         dispo = modeles_disponibles(dossier)
-        chk(dispo == (recent, ancien), f"le plus récent d'abord ({dispo})")
+        chk(dispo == [recent, ancien], f"le plus récent d'abord ({dispo})")
 
-        # 3. Un dossier sans modèle rend un tuple vide, sans lever — l'état normal d'un dépôt cloné.
+        # 3. Un dossier sans modèle rend une liste vide, sans lever — l'état normal d'un dépôt cloné.
         vide = tempfile.mkdtemp(prefix="p300_models_vide_")
         try:
-            chk(modeles_disponibles(vide) == (), "un dossier vide rend (), sans lever")
+            chk(modeles_disponibles(vide) == [], "un dossier vide rend [], sans lever")
         finally:
             shutil.rmtree(vide, ignore_errors=True)
     finally:

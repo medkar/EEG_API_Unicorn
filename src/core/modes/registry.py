@@ -29,6 +29,16 @@ MODES = (
 
 BY_ID = {spec.id: spec for spec in MODES}
 
+# Tolérance des comparaisons de DURÉES de `check()`. Mesuré le 2026-08-18 : `0.15 + 0.80` vaut
+# 0.9500000000000001 en flottant, donc `0.95 < 0.15 + 0.80` est VRAI. Un auteur de mode qui écrit
+# `marker_epoch_s=0.95` en clair — la valeur exacte et juste — s'entendait dire « est SOUS
+# pre_s+post_s=0.95 s […] chaque époque serait tronquée en silence ». Un garde-fou qui accuse une
+# déclaration correcte est pire qu'absent : on apprend à ignorer ce qu'il dit. Le vrai P300 y
+# échappait par hasard, en réécrivant la MÊME expression (`P300_PRE_S + P300_EPOCH_S`).
+# 1e-9 s = 1 nanoseconde : sans commune mesure avec un échantillon (4 ms à 250 Hz), donc aucune
+# vraie troncature ne peut se glisser dessous.
+_EPS_S = 1e-9
+
 
 def get(mode_id):
     """Le `ModeSpec` de cet identifiant, ou None."""
@@ -248,7 +258,7 @@ def check():
                 defauts.append(f"{spec.id} : sa calibration a un runtime_cls mais "
                                f"epoch_s={calib.epoch_s:g} — le moteur ne dimensionnerait "
                                f"aucun tampon pour elle")
-            elif imagery_s is not None and calib.epoch_s < imagery_s:
+            elif imagery_s is not None and calib.epoch_s + _EPS_S < imagery_s:
                 defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
                                f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
                                f"serait tronquée en silence")
@@ -257,10 +267,24 @@ def check():
         # dimensionne le tampon du moteur ; `pre_s`/`post_s` (côté runtime) décident ce qu'on en
         # PRÉLÈVE. Deux sources de vérité pour le même nombre, et rien ne les lie : un
         # `marker_epoch_s` trop court tronquerait CHAQUE époque EN SILENCE.
+        #
+        # DEUX cas, deux messages — comme le contrôle jumeau d'`epoch_s` juste au-dessus. Le
+        # champ vaut 0.0 par défaut, donc l'OUBLI est le cas par défaut du prochain auteur de
+        # mode (l'ErrP est nommément le premier concerné) ; lui servir « marker_epoch_s=0 s est
+        # SOUS pre_s+post_s=0,95 s » l'envoie vérifier une arithmétique alors qu'il lui manque un
+        # CHAMP. Et l'oubli est le plus grave des deux : sans `marker_epoch_s > 0` le moteur
+        # n'ouvre jamais d'inlet, `markers_murs` rend [] pour toujours, et le mode tourne sans
+        # jamais rien publier.
         pre_s = getattr(spec.runtime_cls, "pre_s", None)
         post_s = getattr(spec.runtime_cls, "post_s", None)
         if pre_s is not None and post_s is not None:
-            if spec.marker_epoch_s < pre_s + post_s:
+            if spec.marker_epoch_s <= 0:
+                defauts.append(f"{spec.id} : son runtime découpe des époques de "
+                               f"pre_s+post_s={pre_s + post_s:g} s mais le mode ne déclare AUCUN "
+                               f"marker_epoch_s — le moteur n'ouvrirait aucun inlet de marqueurs "
+                               f"et le mode tournerait sans jamais rien publier. Ajouter "
+                               f"marker_epoch_s={pre_s + post_s:g} à son ModeSpec")
+            elif spec.marker_epoch_s + _EPS_S < pre_s + post_s:
                 defauts.append(f"{spec.id} : marker_epoch_s={spec.marker_epoch_s:g} s est SOUS "
                                f"pre_s+post_s={pre_s + post_s:g} s de son runtime — chaque "
                                f"époque serait tronquée en silence")
@@ -301,13 +325,17 @@ def _selftest():
     # vrais modes — leur état dépend du poste — donc on remplace le registre le temps du test.
     from core.modes.contract import ModeSpec, Param
 
-    def defauts_de(*params):
-        """Les défauts que `check()` signale sur un registre fabriqué d'un seul mode."""
+    def defauts_de(*params, **extra):
+        """Les défauts que `check()` signale sur un registre fabriqué d'un seul mode.
+
+        `extra` passe tel quel au `ModeSpec` : c'est ce qui permet de piéger aussi des champs qui
+        ne sont pas des paramètres (`runtime_cls`, `marker_epoch_s`…).
+        """
         global MODES
         vrais = MODES
         MODES = (ModeSpec(id="piege", label="Piégé", family="actif", summary="",
                           status="moteur", params=params, stream="decoded_piege",
-                          channels=("x",)),)
+                          channels=("x",), **extra),)
         try:
             return check()[1]
         finally:
@@ -332,6 +360,33 @@ def _selftest():
                          choices_fn=lambda: 1 / 0, help="source cassée"))
     chk(any("a levé" in x and "ZeroDivisionError" in x for x in d),
         f"une source de choix qui LÈVE est un défaut, pas une situation normale ({d})")
+
+    # --- `marker_epoch_s` : ABSENT et SOUS-DIMENSIONNÉ ne sont pas le même défaut ---
+    # Le champ vaut 0.0 par défaut : l'OUBLI est donc l'état par défaut du prochain auteur de
+    # mode à marqueurs. Un message unique lui ferait relire une soustraction (« 0 s est SOUS
+    # 0,95 s ») au lieu de lui dire qu'il manque un champ. Les deux cas sont vérifiés sur un
+    # registre fabriqué, parce qu'aucun vrai mode ne peut être laissé fautif pour le test.
+    class _RuntimeQuiDecoupe:
+        """Juste les deux attributs que `check()` lit sur un runtime à marqueurs."""
+
+        pre_s, post_s = 0.15, 0.80
+
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe)         # marker_epoch_s laissé à son défaut
+    chk(any("AUCUN marker_epoch_s" in x and "0.95" in x.replace(",", ".") for x in d),
+        f"un mode à marqueurs qui OUBLIE marker_epoch_s s'entend dire ce qui manque, et la "
+        f"valeur à écrire ({d})")
+
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe, marker_epoch_s=0.5)
+    chk(any("est SOUS" in x for x in d) and not any("AUCUN" in x for x in d),
+        f"...et un marker_epoch_s TROP COURT reçoit l'autre message, celui de la troncature ({d})")
+
+    # 0.95 ÉCRIT EN CLAIR, et pas `0.15 + 0.80` : c'est la seule forme qui attrape le défaut
+    # mesuré ci-dessus (`_EPS_S`). Réécrire la même somme des deux côtés ferait passer ce test
+    # même sans tolérance, exactement comme le vrai P300 y échappait par hasard.
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe, marker_epoch_s=0.95)
+    chk(not any("marker_epoch_s" in x for x in d),
+        f"...et pile la bonne valeur, ÉCRITE EN CLAIR, ne signale rien — le flottant "
+        f"0.15+0.80 = {0.15 + 0.80!r} ne doit accuser personne ({d})")
 
     print(f"[registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

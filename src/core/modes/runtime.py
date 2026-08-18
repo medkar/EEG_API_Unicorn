@@ -170,9 +170,21 @@ class ModeRuntime:
 
     # Un mode qui écoute des marqueurs déclare `marker_epoch_s` dans son `ModeSpec` et appelle
     # `engine.markers_murs(self.spec.id, post_s)` depuis son `_run_step`. Le moteur lui rend des
-    # marqueurs SITUÉS (horodatés dans la même horloge que `engine.recent_ts`) et MÛRS (leur
-    # époque tient dans le tampon). Le découpage reste au mode : les bornes ne sont pas les
-    # mêmes d'un paradigme à l'autre.
+    # marqueurs SITUÉS (horodatés dans la même horloge que `engine.recent_ts`) et MÛRS. Le
+    # découpage reste au mode : les bornes ne sont pas les mêmes d'un paradigme à l'autre.
+    #
+    # ⚠️ « MÛR » NE VEUT DIRE QUE : le POST est arrivé. `markers_murs` compare l'instant du
+    # marqueur + `post_s` au dernier échantillon du tampon — elle ne regarde PAS le côté PRÉ.
+    # Un marqueur peut donc être mûr et son époque déjà TRONQUÉE par la tête : le tampon est
+    # glissant, et une manche qui a pris du retard (un tour de boucle long, une purge) laisse
+    # sortir les plus vieux échantillons. Découper rend alors `None`.
+    #
+    # Conséquence pour qui écrit le prochain mode à marqueurs (l'ErrP est le premier concerné) :
+    # **garder la garde `if epoque is None: continue` et COMPTER ce qu'elle jette** — c'est ce
+    # que fait `_epoques_perdues` dans `modes/p300.py`. La retirer en croyant la maturité
+    # suffisante ne lèverait rien : le mode perdrait des époques en silence, exactement la panne
+    # muette que ce produit combat. `marker_epoch_s` dimensionne le tampon pour que ce cas soit
+    # RARE, il ne le rend pas impossible.
 
 
 def _selftest():

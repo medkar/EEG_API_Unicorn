@@ -27,6 +27,9 @@ from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_FLASH_OFF_FR,  # no
                     p300_targets)
 from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream  # noqa: E402
 from research.itr import itr  # noqa: E402
+# `blocs_melanges` vit dans l'émetteur : c'est lui qui documente l'invariant oddball, et
+# `p300_stimulus` n'importe pygame qu'à l'intérieur de `run()` — l'importer ici ne coûte rien.
+from research.p300_stimulus import blocs_melanges  # noqa: E402
 from research.ui import ACCENT, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 BRIEF = [
@@ -123,14 +126,22 @@ def _flash_targets(app, plan, spots, cue_name, order, on_fr, off_fr):
 
 def _run_round(app, plan, spots, cue_name, reps, on_fr, off_fr, rng):
     """Une manche de calibration = `reps` répétitions, chacune = les N cibles flashées une fois
-    dans un ordre mélangé. Retourne (flashes, t_start)."""
+    dans un ordre mélangé. Retourne (flashes, t_start).
+
+    ⚠️ L'ordre vient de `blocs_melanges` (research/p300_stimulus.py) et n'est plus remélangé
+    ici : l'invariant « aucune cible deux fois de suite, jonctions comprises » était affirmé et
+    testé dans l'ÉMETTEUR seul, alors que cette calibration est le SEUL chemin vers un modèle.
+    Mesuré sur 20 000 manches avec l'ancien mélange local : 72,0 % des manches de calibration
+    contenaient au moins une répétition immédiate, 1,17 par manche (2,44 % des époques). Ce n'est
+    pas l'ampleur qui pose problème, c'est qu'un invariant tenu à un endroit sur trois n'en est
+    pas un — et que celui-ci est violé là où il compte le plus, dans les données d'entraînement.
+    """
     n = len(plan)
     t_start = time.time()
     flashes = []
-    for _ in range(1 if app.smoke else reps):   # headless : 1 rép (6 flashs) suffit au câblage
-        order = list(range(n))
-        rng.shuffle(order)
-        flashes += _flash_targets(app, plan, spots, cue_name, order, on_fr, off_fr)
+    eff_reps = 1 if app.smoke else reps          # headless : 1 rép (6 flashs) suffit au câblage
+    for bloc in blocs_melanges(n, eff_reps, rng):
+        flashes += _flash_targets(app, plan, spots, cue_name, bloc, on_fr, off_fr)
     return flashes, t_start
 
 
@@ -224,11 +235,32 @@ def _archive(save_path, epochs, labels, flashed, groups, cues, fs):
     return last
 
 
+def chemin_modele_horodate(dossier=None):
+    """`data/p300_model_AAAAMMJJ_HHMMSS.joblib` — un fichier NEUF, jamais un écrasement.
+
+    ⚠️ La calibration écrivait dans `P300_MODEL_PATH` (`data/p300_model.joblib`), un nom FIXE :
+    la calibration suivante effaçait donc la précédente. Or `data/p300_model.joblib` est la
+    trace de juillet que ce chantier a explicitement choisi de préserver — c'est le seul modèle
+    P300 enregistré au casque, et le MI a déjà perdu ses quatre modèles de cette façon. Rien
+    n'appliquait cet invariant : seule une prose l'affirmait.
+
+    Horodater est aussi ce que fait la calibration MI du moteur (`core/modes/mi_calib.py`), et
+    `p300_models.MOTIF` (`p300_model*.joblib`) liste déjà ces fichiers, du plus récent au plus
+    ancien. Le mode P300 du moteur et l'appli pygame prennent donc automatiquement le dernier.
+    """
+    dossier = os.path.dirname(P300_MODEL_PATH) if dossier is None else dossier
+    return os.path.join(dossier, f"p300_model_{time.strftime('%Y%m%d_%H%M%S')}.joblib")
+
+
 def calibrate(app, rounds=P300_CAL_ROUNDS, reps=P300_REPS, save_path=None):
     """Calibration complète. En smoke : 2 manches × quelques flashs, fit léger, sauvegarde
     dans save_path (le _smoke de app.py passe un chemin _smoke). Retourne True si un modèle a
-    été entraîné et sauvegardé."""
-    save_path = save_path or P300_MODEL_PATH
+    été entraîné et sauvegardé.
+
+    `save_path=None` -> un fichier HORODATÉ, jamais `data/p300_model.joblib` : voir
+    `chemin_modele_horodate`.
+    """
+    save_path = save_path or chemin_modele_horodate()
     plan = p300_targets()
     n = len(plan)
     on_fr, off_fr = P300_FLASH_ON_FR, P300_FLASH_OFF_FR

@@ -480,27 +480,45 @@ sous les anciens noms FIXES (`data/mi_model.joblib`, `data/mi_calib_last.npz`), 
 
 Le mode le plus exigeant du produit, et le seul où **ton application doit parler au moteur**. Il
 demande un modèle entraîné : si tu n'en as pas sur ce poste, calibre d'abord dans l'appli pygame
-(menu → P300 → Calibrer, ~4 min), puis **ferme-la** avant de lancer le moteur.
+(menu → P300 → Calibrer, ~4 min), puis **ferme-la** avant de lancer le moteur. La calibration
+écrit un fichier **horodaté** (`data/p300_model_AAAAMMJJ_HHMMSS.joblib`) : elle n'écrase jamais la
+précédente, et le moteur propose la plus récente par défaut.
 
 ```bash
 # terminal 1
 python src/core/server.py --mode p300
-# terminal 2
+# terminal 2 — n'ouvre PAS le casque, d'où les deux terminaux
 python src/research/p300_stimulus.py
 # terminal 3
 python -u examples/receiver.py --stream decoded_p300
 ```
 
-- [ ] Choisis une cible **avant** que la manche commence, fixe-la, et **compte ses flashs** en
-      silence. Le comptage n'est pas indispensable (mesuré au chantier P300) mais il aide à tenir
-      l'attention.
+- [ ] Au lancement, le terminal 2 dit **« le moteur écoute — on peut commencer »**. S'il dit
+      « PERSONNE n'écoute », arrête tout : le moteur n'est pas là, ou le nom du flux diffère.
+      L'écran garde cet indicateur en haut, en direct, pendant toute la séance.
+- [ ] Entre deux manches, l'écran affiche **« choisis ta cible et fixe-la »** pendant 2,5 s, rien
+      ne clignote. C'est **le seul moment** où déplacer le regard : le faire pendant les flashs met
+      la transition dans les époques, et le moteur publie quand même une cible plausible.
+- [ ] Choisis une cible **pendant cette pause**, fixe-la, et **compte ses flashs** en silence. Le
+      comptage n'est pas indispensable (mesuré au chantier P300) mais il aide à tenir l'attention.
 - [ ] À la fin de la manche, la cible sortie sur `decoded_p300` est **celle que tu fixais**.
-- [ ] Recommence **six fois, en changeant de cible à chaque fois**. ⚠️ **Une erreur ou deux sur six
+- [ ] Recommence **six fois, en changeant de cible à chaque pause**. ⚠️ **Une erreur ou deux sur six
       est attendue** : l'AUC mesurée est de 0,71, pas de 1,0. Un sans-faute serait une bonne
       surprise, pas la norme — et deux erreurs ne veulent pas dire que quelque chose est cassé.
-- [ ] Regarde le terminal du moteur pendant ce temps : aucun `marqueurs_perdus`, aucun
-      `marqueurs_futurs`. S'ils montent, le problème est dans l'horloge ou le réseau, pas dans ta
-      concentration.
+- [ ] Regarde le terminal du moteur pendant ce temps. Les compteurs s'annoncent tout seuls au
+      franchissement de 1, 10, 100… : aucun `marqueurs_perdus`, aucun `marqueurs_futurs`, aucune
+      `manche ABANDONNÉE`. S'ils montent, le problème est dans l'horloge ou le réseau, pas dans ta
+      concentration. Les mêmes chiffres sont sur le flux `status` (`marqueurs.*`) si tu préfères
+      les lire depuis un client.
+- [ ] Si tu ouvres la console sur la page P300 (⚠️ **pas en même temps que le moteur en terminal
+      1** — un seul programme à la fois), l'écran doit annoncer des **log-odds** et « AUCUN
+      seuil », jamais « échelle z ». Six barres étiquetées `cible 0 … cible 5`, et la cible retenue
+      avec le nombre de flashs sur lequel elle repose.
+
+> ⚠️ **`--reps` et `--targets` ne sont pas libres.** Le moteur code 6 cibles en dur et applique
+> `P300_REPS` comme plafond par cible : à `--reps 12`, il abandonnerait **toutes** les manches.
+> L'émetteur refuse maintenant ces valeurs au lancement, en nommant la constante — si tu vois
+> « REFUSÉ », c'est ça.
 
 > ⚠️ **Ne conclus rien sur une seule manche.** Six essais, c'est déjà peu ; ce projet a pour règle
 > de ne jamais conclure sur du bruit. Si tu veux un chiffre, il faut un protocole, pas une

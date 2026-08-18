@@ -266,11 +266,19 @@ def _smoke():
     chk(len(console.grid.tuiles) == len(registry.MODES),
         f"une tuile par mode du registre ({len(console.grid.tuiles)})")
 
-    # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison.
-    # Le P300 a rejoint le moteur au même titre que le MI : il ne reste plus que 2 modes
-    # « appli pygame » (c-VEP, ErrP) sur les 7 du registre — 3 avant que le P300 ne migre.
+    # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison. Le
+    # compte attendu est LU DANS LE REGISTRE, pas écrit ici : ce qui est vérifié est que la
+    # grille ressort exactement ce que le moteur déclare, pas qu'il y en a deux aujourd'hui —
+    # un chiffre en dur redeviendrait faux au premier mode qui migre (c'est arrivé au MI, puis
+    # au P300).
+    attendu_externes = sorted(s["id"] for s in registry.catalog() if s["status"] != "moteur")
     externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
-    chk(len(externes) == 2, f"{len(externes)} tuiles pour les modes de l'appli pygame")
+    # Les IDENTITÉS, pas seulement le compte : « deux tuiles » resterait vrai si la grille
+    # montrait le c-VEP deux fois. C'est donc plus strict que le `== 2` qu'elle remplace, en
+    # plus de ne plus vieillir.
+    chk(sorted(t.spec["id"] for t in externes) == attendu_externes,
+        f"exactement les modes que le moteur ne fait pas ont une tuile grisée "
+        f"({sorted(t.spec['id'] for t in externes)} pour {attendu_externes})")
     chk(all(not t.isEnabled() and t.detail.text() for t in externes),
         "chacune est grisée ET dit pourquoi elle ne démarre pas")
 
@@ -470,15 +478,80 @@ def _smoke():
     mi_page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et le MI ramène aussi sur la grille")
 
+    # --- P300 : la TROISIÈME forme de sortie de la famille « actif » -------------
+    # Elle n'a ni `probas` (ce n'est pas un vote de classes) ni `threshold` (le moteur prend
+    # l'argmax, il ne compare ces scores à rien). C'est exactement cette absence de `threshold`
+    # qui la faisait tomber dans le rendu du SSVEP : `params["freqs"]` absent -> six barres SANS
+    # ÉTIQUETTE, `threshold` absent -> repli sur `Z_MIN`, et l'écran annonçait « échelle z ·
+    # seuil 3 — un score au-dessus déclenche » AU-DESSUS de log-odds (négatifs, donc toutes les
+    # barres à zéro), puis « CIBLE 3 · 0 Hz ». Quatre affirmations fausses, aucun message.
+    # C'est la panne du MI recommencée un mode plus tard : d'où des assertions sur ce que
+    # l'écran DIT, pas seulement sur la classe de vue instanciée.
+    from core.config import Z_MIN
+    p300_state = {**state, "modes_state": {**state["modes_state"], "p300": {
+        "id": "p300", "label": "P300", "family": "actif", "phase": "running", "published": True,
+        "params": {"model": "p300_model_20260818_101500.joblib",
+                   "stream_in": "EEG_API_Unicorn_stim"},
+        "instruction": "", "stream": "decoded_p300",
+        "channels": ["target_index", "confidence", "n_flashes"] + [f"score_{i}" for i in range(6)],
+        "rest_report": {"kind": "p300", "model": "p300_model_20260818_101500.joblib",
+                        "n_targets": 6},
+        # Des log-odds RÉALISTES : tous négatifs, gagnant en 3. Des scores positifs cacheraient
+        # la moitié du défaut (avec `Z_MIN` en seuil, des valeurs négatives donnent SIX barres à
+        # zéro — un écran parfaitement muet).
+        "output": {"target_index": 3, "confidence": -0.42, "n_flashes": 48,
+                   "scores": [-1.9, -2.4, -1.2, -0.42, -2.0, -1.5]}}}}
+    console.show_mode("p300")
+    console.apply_state(p300_state)
+    p3 = console.pages["p300"].vue
+    chk(isinstance(p3, live_views.ActiveView),
+        "le P300 a le rendu ACTIF, comme le SSVEP et le MI — même famille")
+    chk(f"seuil {Z_MIN:g}" not in p3.seuil.text() and "échelle z" not in p3.seuil.text(),
+        f"mais il n'annonce NI le z NI le seuil du SSVEP, qu'il n'a pas ({p3.seuil.text()})")
+    chk("log-odds" in p3.seuil.text() and "AUCUN seuil" in p3.seuil.text(),
+        f"il nomme son échelle et dit qu'il n'y a pas de seuil ({p3.seuil.text()})")
+    chk(len(p3._barres) == 6 and all(e.text() for e, _b in p3._barres),
+        f"six barres, et chacune porte une ÉTIQUETTE — pas six barres muettes "
+        f"({[e.text() for e, _b in p3._barres]})")
+    chk("CIBLE 3" in p3.verdict.text() and "Hz" not in p3.verdict.text(),
+        f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence "
+        f"({p3.verdict.text()})")
+    chk("48" in p3.verdict.text(),
+        f"et dit sur combien de flashs elle repose — 48 et 12 ne se valent pas "
+        f"({p3.verdict.text()})")
+    # Les barres sont RELATIVES entre elles : la meilleure pleine, la pire vide. C'est le
+    # classement qui décide, pas une position sur une règle graduée qui n'existe pas.
+    valeurs = [b.value() for _e, b in p3._barres]
+    chk(valeurs[3] == 100 and valeurs[1] == 0,
+        f"la cible qui domine remplit sa barre, la plus faible est vide ({valeurs})")
+
+    # Manche non conclue : jamais le « aucune cible (rien au-dessus de z=...) » du SSVEP, et
+    # surtout -1 n'est pas la cible 0 (cf. `no_decision_index` dans les métadonnées du flux).
+    p300_indecis = {**p300_state, "modes_state": {**p300_state["modes_state"], "p300": {
+        **p300_state["modes_state"]["p300"],
+        "output": {**p300_state["modes_state"]["p300"]["output"], "target_index": -1}}}}
+    console.apply_state(p300_indecis)
+    chk("z=" not in p3.verdict.text() and "CIBLE" not in p3.verdict.text(),
+        f"une manche non conclue le dit sans parler ni de z ni d'une cible retenue "
+        f"({p3.verdict.text()})")
+
+    console.pages["p300"].bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le P300 ramène aussi sur la grille")
+
     # --- la page de calibration -------------------------------------------------
     # Elle est éprouvée sur des états FABRIQUÉS, phase par phase : c'est le seul moyen de
     # vérifier chaque écran sans jouer sept minutes de séance.
     console.show_calibration("mi")
     cal = console.stack.currentWidget()
     chk(cal is console.calib_pages["mi"], "« Calibrer » ouvre la page de calibration du MI")
-    chk(len(console.calib_pages) == 1,
-        f"et seul le MI en a une — le c-VEP et le P300 ont un stimulus natif "
-        f"({sorted(console.calib_pages)})")
+    # Là encore le compte vient du CONTRAT : une page de calibration existe pour les modes du
+    # moteur dont la calibration est de genre « console ». Les autres (c-VEP, P300) ont un
+    # stimulus NATIF, verrouillé à la frame, que la console ne rend pas.
+    attendu_calib = [s["id"] for s in registry.catalog()
+                     if s["status"] == "moteur" and (s.get("calibration") or {}).get("kind") == "console"]
+    chk(sorted(console.calib_pages) == sorted(attendu_calib),
+        f"et exactement les modes dont le CONTRAT dit « calibration console » en ont une "
+        f"({sorted(console.calib_pages)} pour {sorted(attendu_calib)})")
 
     # 1. Avant : le briefing du CONTRAT, pas un texte recopié dans l'interface.
     console.apply_state({**mi_state, "calibration": None})

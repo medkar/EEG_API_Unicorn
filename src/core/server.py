@@ -18,6 +18,10 @@ Ce qu'il publie aujourd'hui (SPEC §4) :
     EEG_API_Unicorn_decoded_ssvep  cible regardée, ~5 Hz (mode "ssvep")
     EEG_API_Unicorn_decoded_neuro  charge / somnolence / engagement, ~5 Hz (mode "neuro")
     EEG_API_Unicorn_decoded_mi     intention gauche/droite/repos, ~5 Hz (mode "mi")
+    EEG_API_Unicorn_decoded_p300   cible sélectionnée, UN échantillon par manche (mode "p300")
+
+Et ce qu'il ÉCOUTE (SPEC §4, docs/markers.md) :
+    EEG_API_Unicorn_stim           marqueurs entrants d'une application externe (mode "p300")
 
 SSVEP et neuro illustrent les deux familles de la BCI, et un client ne doit pas les traiter
 pareil : le SSVEP est **actif** (l'utilisateur choisit, il y a une bonne réponse, un stimulus est
@@ -25,10 +29,14 @@ requis côté client), le neuro est **passif** (on observe un état, il n'y a ri
 aucun stimulus). Le MI est actif lui aussi, mais SANS stimulus (il est endogène) — en échange, il
 exige un modèle ENTRAÎNÉ propre à la personne, là où le SSVEP décode sans calibration : sans
 modèle, le mode refuse de démarrer plutôt que de publier des probabilités qui ne veulent rien dire.
+Le P300 est actif ET évoqué : il exige un modèle entraîné (comme le MI) **et** que l'application
+cliente dise au moteur QUAND chaque cible s'est allumée — c'est à ça que sert le flux entrant.
 
-Pas encore dans le moteur : c-VEP, P300, ErrP — voir `src/core/modes/registry.py` pour le
-catalogue complet ; ils restent l'affaire de `src/research/app.py`. Pas encore non plus : le
-control plane entrant, les marqueurs.
+Pas encore dans le moteur : c-VEP et ErrP — voir `src/core/modes/registry.py` pour le catalogue
+complet ; ils restent l'affaire de `src/research/app.py`. Pas encore non plus : le control plane
+entrant (démarrer un mode depuis le réseau). Les MARQUEURS entrants, eux, existent depuis le
+2026-08-17 : le moteur ouvre un inlet LSL dès qu'un mode qui en consomme démarre (`core/markers.py`),
+et le contrat public de ces marqueurs est dans `docs/markers.md`.
 
 ⚠️ Le moteur ne rend AUCUN stimulus. Pour le SSVEP, c'est l'application cliente qui fait
 clignoter les cibles ; elle déclare simplement leurs fréquences au moteur (`--freqs`). Le
@@ -42,6 +50,7 @@ Lancer :
     python src/core/server.py --mode ssvep --refresh 60 # cibles accordées à un écran 60 Hz
     python src/core/server.py --mode ssvep --freqs 15,20,8.571
     python src/core/server.py --mode ssvep,neuro        # plusieurs modes EN MÊME TEMPS
+    python src/core/server.py --mode p300               # écoute les marqueurs d'une appli externe
     python src/core/server.py --mode neuro --no-raw     # sans le flux brut
     python src/core/server.py --duration 60             # s'arrête tout seul au bout de 60 s
     python src/core/server.py --smoke                   # test headless de bout en bout (CI)
@@ -51,6 +60,11 @@ Essai sur casque, en deux terminaux (le stimulus n'ouvre PAS le casque, aucun co
     python src/core/server.py --mode ssvep --refresh 60         # décode et trace en console
 Un troisième terminal montre ce que reçoit un vrai client :
     python -u examples/receiver.py --stream decoded_ssvep
+
+Même montage pour le P300, à ceci près que le stimulus PARLE au moteur (il publie l'onset de
+chaque flash sur `EEG_API_Unicorn_stim`) et qu'un modèle entraîné est exigé :
+    python src/research/p300_stimulus.py --windowed  # affiche et MARQUE (n'ouvre pas le casque)
+    python src/core/server.py --mode p300            # découpe sur les marqueurs et décide
 """
 
 import argparse

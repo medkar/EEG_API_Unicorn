@@ -624,12 +624,21 @@ def _p300_save_debug(debug, fs):
         print(f"[p300] (sauvegarde debug live échouée : {e})")
 
 
-def mode_p300(app, model_path=P300_MODEL_PATH, dynamic=False):
+def mode_p300(app, model_path=None, dynamic=False):
     import random as _random
 
     from research.p300_calibrate import _blank_ring, _flash_targets
+    from research.p300_stimulus import blocs_melanges
     from core.p300_decoder import epoch_from_stream
-    from core.p300_models import charger
+    from core.p300_models import charger, modeles_disponibles
+
+    # `model_path=None` -> le PLUS RÉCENT des modèles réellement chargeables. Le défaut était
+    # `P300_MODEL_PATH`, un nom fixe que la calibration n'écrit plus (elle horodate désormais,
+    # cf. `p300_calibrate.chemin_modele_horodate`) : garder ce défaut aurait fait pointer le
+    # mode sur la trace de juillet, précisément le modèle que `charger` refuse.
+    if model_path is None:
+        dispo = modeles_disponibles()
+        model_path = dispo[0] if dispo else P300_MODEL_PATH
 
     # `os.path.exists` ne suffit pas : un modèle antérieur au déménagement du décodeur dans
     # core/ (2026-08-17) EXISTE toujours sur le disque mais ne se charge plus (pickle sous
@@ -676,10 +685,12 @@ def mode_p300(app, model_path=P300_MODEL_PATH, dynamic=False):
             all_flashes, extracted = [], set()
             t_start = time.time()
             used = P300_REPS
-            for rep in range(P300_REPS):
-                order = list(range(n))
-                rng.shuffle(order)
-                all_flashes += _flash_targets(app, plan, spots, None, order, on_fr, off_fr)
+            # Même invariant oddball qu'à la calibration et qu'à l'émetteur, et depuis la MÊME
+            # fonction : aucune cible deux fois de suite, jonctions entre répétitions comprises.
+            # Les blocs sont tirés d'avance pour toute la manche — l'arrêt dynamique peut sortir
+            # de la boucle plus tôt, ce qui ne change rien à la contrainte de jonction.
+            for rep, bloc in enumerate(blocs_melanges(n, P300_REPS, rng)):
+                all_flashes += _flash_targets(app, plan, spots, None, bloc, on_fr, off_fr)
                 if dynamic:      # accumule au fil de l'eau et stoppe si la cible se détache
                     extract(all_flashes, extracted, by, t_start)
                     if rep + 1 >= P300_MIN_REPS and all(len(v) >= P300_MIN_REPS
@@ -1065,9 +1076,23 @@ def calib_errp(app):
 
 # --- Navigation (menus aux FLÈCHES + SOURIS, retour ←/Échap) ----------------
 
+def _p300_status(dispo):
+    """Le texte « modèles P300 » de l'accueil, à partir des modèles RÉELLEMENT chargeables.
+
+    ⚠️ Fonction séparée pour être testable sans toucher à `data/`. L'accueil disait
+    « P300 : oui » sur un simple `os.path.exists` — 3e site du même défaut, et le plus visible :
+    c'est l'écran MÊME depuis lequel on lance le mode, alors que `mode_p300` (comme le moteur)
+    passe par `charger()`, qui REFUSE tout modèle antérieur au 2026-08-17. L'indicateur du menu
+    contredisait le décodeur, à un clic de distance. Il compte maintenant ce qui se charge.
+    """
+    return f"{len(dispo)} ({os.path.basename(dispo[0])})" if dispo else "aucun utilisable"
+
+
 def _status(app):
+    from core.p300_models import modeles_disponibles
+
     cv = "oui" if os.path.exists(CVEP_MODEL_PATH) else "absent"
-    p3 = "oui" if os.path.exists(P300_MODEL_PATH) else "absent"
+    p3 = _p300_status(modeles_disponibles())
     casque = "board SYNTHÉTIQUE" if app.synthetic else "Unicorn"
     robot = f"ON -> {app.host}" if app.send else "OFF (aucun envoi)"
     return [f"casque : {casque}    écran : {app.refresh:.0f} Hz",
@@ -1370,6 +1395,57 @@ def _smoke(app):
     for p in (cvep_path, rcca_path, p300_path, errp_path):
         if os.path.exists(p):
             os.remove(p)
+
+    # --- les trois invariants P300 de research/ corrigés le 2026-08-18 -----------------
+    # Des `assert` et non un `chk` : ce smoke n'a pas de compteur, il signale par exception.
+    # Chacun échoue avec un message qui dit ce qui est cassé, et le processus sort en erreur.
+    import fnmatch
+    import inspect
+
+    from core.p300_models import MOTIF, modeles_disponibles
+    from research.p300_calibrate import chemin_modele_horodate
+
+    # 1. Une calibration n'écrase JAMAIS `data/p300_model.joblib` — la trace de juillet, seul
+    #    modèle P300 enregistré au casque. Le MI a déjà perdu ses quatre modèles ainsi.
+    horodate = chemin_modele_horodate()
+    assert horodate != P300_MODEL_PATH, (
+        "une calibration P300 écrirait dans data/p300_model.joblib et écraserait la trace de "
+        f"juillet ({horodate})")
+    # ...et le nom horodaté doit rester VU par le moteur, sinon on préserve un fichier que
+    # personne ne peut plus choisir.
+    assert fnmatch.fnmatch(os.path.basename(horodate), MOTIF), (
+        f"le modèle horodaté {os.path.basename(horodate)} ne correspond pas à "
+        f"p300_models.MOTIF ({MOTIF}) : il n'apparaîtrait dans aucune liste de modèles")
+
+    # 2. L'accueil compte les modèles RÉELLEMENT chargeables, pas les fichiers présents. C'était
+    #    le 3e site du bug `os.path.exists` : « P300 : oui » sur l'écran même depuis lequel on
+    #    lance un mode que `charger()` refusera.
+    #
+    #    Le texte est vérifié sur des listes FABRIQUÉES, puis on prouve que l'accueil passe bien
+    #    par là. Comparer directement la ligne à l'état de `data/` ne prouverait rien sur un
+    #    poste qui a un modèle valide : « oui » et « 1 modèle » y seraient tous deux cohérents.
+    assert _p300_status([]) == "aucun utilisable", (
+        "sans modèle CHARGEABLE, l'accueil doit le dire — un fichier présent mais hérité ne "
+        f"vaut pas « oui » ({_p300_status([])})")
+    assert "2" in _p300_status(["/d/p300_model_b.joblib", "/d/p300_model_a.joblib"]) and \
+        "p300_model_b.joblib" in _p300_status(["/d/p300_model_b.joblib", "/d/p300_model_a.joblib"]), \
+        "avec des modèles, l'accueil dit combien et lequel serait pris (le plus récent d'abord)"
+    ligne = next(l for l in _status(app) if "P300" in l)
+    assert _p300_status(modeles_disponibles()) in ligne, (
+        f"...et l'accueil affiche RÉELLEMENT ce texte, pas un os.path.exists ({ligne})")
+
+    # 3. L'invariant oddball (aucune cible deux fois de suite, jonctions comprises) s'écrit à UN
+    #    seul endroit — `p300_stimulus.blocs_melanges` — et les trois sites qui présentent ce
+    #    stimulus y puisent. Vérifié sur le SOURCE, parce que c'est précisément la propriété
+    #    « une seule source » qu'on veut tenir : un `rng.shuffle` local réapparu ici passerait
+    #    tous les tests de séquence, qui ne regardent que l'émetteur. Mesuré : sans garde de
+    #    jonction, 72,0 % des manches de calibration contiennent une répétition immédiate.
+    for fonction in (p300_calibrate._run_round, mode_p300):
+        src = inspect.getsource(fonction)
+        assert "blocs_melanges" in src and "shuffle" not in src, (
+            f"{fonction.__name__} doit tirer son ordre de blocs_melanges et ne pas remélanger "
+            f"localement — l'invariant oddball ne vaut que s'il est tenu aux TROIS endroits")
+
     print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + P300 + neuro + ErrP(cal+démo) câblés (headless).")
 
 

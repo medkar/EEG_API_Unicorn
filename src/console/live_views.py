@@ -80,15 +80,35 @@ class ActiveView(QWidget):
     de dire si une non-détection vient d'un signal absent ou d'un seuil trop haut. Sans ça, une
     séance muette n'a qu'une explication apparente — « l'utilisateur fixe mal ».
 
-    ⚠️ **Deux modes « actif » du moteur, deux formes de sortie.** Le SSVEP publie un score PAR
-    CIBLE sur l'échelle z (`scores`, `target_index`, `freq_hz`) ; le Motor Imagery publie une
-    PROBABILITÉ par classe (`probas`, `intent_index`, `label`, `confidence`) — il n'a ni cible
-    ni z, la référence y est APPRISE, pas mesurée au repos du jour. Confondre les deux
-    afficherait « aucune cible » en PERMANENCE pour le MI, puisque `target_index` n'existe
-    simplement pas dans sa sortie : silencieusement faux, le genre de panne que ce produit
-    existe pour éliminer. D'où les deux rendus ci-dessous, choisis sur la CLÉ présente dans la
-    sortie plutôt que sur l'identifiant du mode — cohérent avec le principe du fichier (rendre
-    par famille), affiné ici parce que la famille « actif » recouvre déjà deux formes.
+    ⚠️ **La famille « actif » recouvre TROIS formes de sortie, pas une.** Chacune a sa propre
+    échelle, et les confondre produit un écran qui a l'air de marcher :
+
+    | mode | ce que la sortie porte | échelle |
+    |---|---|---|
+    | SSVEP | `scores`, `target_index`, `freq_hz`, **`threshold`** | z contre le repos du jour |
+    | Motor Imagery | **`probas`**, `intent_index`, `label`, `threshold` | probabilité, bornée à 1 |
+    | P300 | `scores`, `target_index`, `confidence`, **`n_flashes`** | log-odds moyens, SANS seuil |
+
+    Le rendu est choisi sur une **CLÉ PRÉSENTE DANS LA SORTIE**, jamais sur l'identifiant du
+    mode : la console est un client du moteur, et recopier ici une liste de modes ferait deux
+    catalogues qui divergeraient au prochain mode ajouté. La question posée à la sortie est donc
+    « qu'est-ce que tu déclares ? » — `probas` pour un vote de classes, `threshold` pour une
+    échelle absolue avec un déclenchement, et à défaut une accumulation de preuves dont seul le
+    CLASSEMENT a un sens.
+
+    Deux pannes réelles, dans cet ordre, sont la raison d'être de cet aiguillage :
+
+    1. **le MI** afficherait « aucune cible » en PERMANENCE, `target_index` n'existant pas dans
+       sa sortie ;
+    2. **le P300** tombait dans le rendu du SSVEP : `params["freqs"]` absent donnait six barres
+       SANS ÉTIQUETTE, `threshold` absent retombait sur `Z_MIN`, et l'écran annonçait
+       « échelle z · seuil 3 — un score au-dessus déclenche » AU-DESSUS de log-odds (qui sont
+       normalement NÉGATIFS, donc toutes les barres à zéro), puis « CIBLE 3 · 0 Hz ». Aucune de
+       ces quatre affirmations n'était vraie, et rien ne le disait.
+
+    La panne n°2 est la n°1 recommencée un mode plus tard. C'est pourquoi le troisième rendu
+    n'est pas branché sur `"p300"` : la prochaine sortie d'une forme inconnue doit tomber dans le
+    rendu le plus PRUDENT (celui qui n'invente ni seuil ni unité), pas dans celui du SSVEP.
     """
 
     def __init__(self):
@@ -128,10 +148,15 @@ class ActiveView(QWidget):
         if not sortie:
             self.verdict.setText(mode_state["instruction"] if mode_state else "en attente")
             return
+        # L'ordre compte, et il va du plus SPÉCIFIQUE au plus prudent. `threshold` est la clé qui
+        # autorise à parler de seuil : sans elle, aucun repli sur une constante — c'est
+        # exactement ce repli (`Z_MIN`) qui faisait annoncer « seuil 3 » au-dessus de log-odds.
         if "probas" in sortie:
             self._update_probas(mode_state, sortie)
-        else:
+        elif "threshold" in sortie:
             self._update_scores(mode_state, sortie)
+        else:
+            self._update_selection(mode_state, sortie)
 
     def _update_scores(self, mode_state, sortie):
         """SSVEP (et tout futur mode à score continu) : un score par cible, sur l'échelle z."""
@@ -198,6 +223,56 @@ class ActiveView(QWidget):
             # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
             self.verdict.setText(f"INTENTION {sortie.get('label', '')} "
                                  f"· confiance du vote {sortie.get('confidence', 0.0):.2f}")
+
+    def _update_selection(self, mode_state, sortie):
+        """P300 (et tout futur mode qui ACCUMULE des preuves) : un score par cible, sans seuil.
+
+        Trois choses distinguent ce rendu de celui du SSVEP, et toutes les trois viennent de la
+        sortie elle-même :
+
+        1. **Aucun seuil.** Le moteur ne compare ces scores à rien : il prend l'argmax (la marge
+           `P300_SELECT_MARGIN` porte sur l'ÉCART 1er-2e, pas sur une valeur absolue). Afficher
+           un seuil ici — a fortiori le `Z_MIN` du SSVEP — inventerait une règle de décision qui
+           n'existe pas.
+        2. **Aucune échelle absolue.** Ce sont des log-odds moyens : non bornés, **négatifs le
+           plus souvent** (une cible flashe une fois sur six, le classifieur dit « non-cible »
+           presque toujours), et non comparables entre personnes ni entre manches. Une barre
+           remplie « à 40 % d'un maximum » n'aurait donc aucun sens. Les barres sont **relatives
+           entre elles** : la plus faible vide, la plus forte pleine — ce qui montre ce qui
+           décide vraiment, l'écart entre la 1re et la 2e. La valeur chiffrée est à côté du nom,
+           parce que la barre seule ne dit plus rien d'absolu.
+        3. **Un échantillon par MANCHE**, pas 5 Hz. L'écran reste figé sur la dernière sélection
+           entre deux manches ; c'est normal, et `n_flashes` dit sur combien d'époques elle
+           repose — 48 pour une manche complète, 12 pour le plancher.
+        """
+        scores = list(sortie.get("scores") or [])
+        n_flashes = sortie.get("n_flashes")
+        index = sortie.get("target_index", -1)
+
+        # Échelle RELATIVE, recalculée à chaque manche : c'est le classement qu'on montre, pas
+        # une position sur une règle graduée. `etendue <= 0` (scores tous égaux, ou une seule
+        # cible) laisse tout à mi-hauteur plutôt que de diviser par zéro ou de désigner un
+        # gagnant qui n'en est pas un.
+        bas, haut = (min(scores), max(scores)) if scores else (0.0, 0.0)
+        etendue = haut - bas
+        self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
+        for i, (_e, barre) in enumerate(self._barres):
+            part = 0.5 if etendue <= 0 else (scores[i] - bas) / etendue
+            barre.setValue(int(max(0.0, min(part, 1.0)) * 100))
+
+        sur = "" if n_flashes is None else f" sur {n_flashes} flash(s)"
+        self.seuil.setText(f"log-odds moyens par cible{sur} · AUCUN seuil : le moteur prend "
+                           f"celle qui domine. Barres relatives entre elles, pas une échelle "
+                           f"absolue")
+
+        if index < 0:
+            # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et
+            # surtout -1 n'est pas la cible 0. Cf. `no_decision_index` dans les métadonnées du
+            # flux, que ce texte ne fait que rendre lisible.
+            self.verdict.setText(f"— (manche non conclue{sur} : aucune cible ne s'est détachée)")
+        else:
+            self.verdict.setText(f"CIBLE {index}{sur} · log-odds moyens "
+                                 f"{sortie.get('confidence', 0.0):+.2f}")
 
 
 class PassiveView(QWidget):
