@@ -27,7 +27,7 @@ AFFINEMENTS post-revue (2026-07-23), tous à petit N donc anti-surapprentissage/
 - **BASELINE sLDA** : comparateur honnête (features temporelles fenêtrées + LDA à shrinkage), la
   méthode la plus robuste du survey Yasemin 2023 — on ne « croit » le riemannien que s'il la dépasse.
 
-Validé ici sur ErrP SYNTHÉTIQUE (pas de casque).   python src/research/errp_decoder.py
+Validé ici sur ErrP SYNTHÉTIQUE (pas de casque).   python src/core/errp_decoder.py
 """
 
 import os

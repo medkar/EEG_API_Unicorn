@@ -960,7 +960,7 @@ def mode_errp(app, model_path=ERRP_MODEL_PATH):
     import random as _random
 
     from research.errp_calibrate import _decide_step, _new_goal, _step, _track_hold, adjust_threshold
-    from research.errp_decoder import ERROR, ErrPModel
+    from core.errp_decoder import ERROR, ErrPModel
 
     if not os.path.exists(model_path):
         app.flash("Pas de modèle ErrP",
@@ -1288,7 +1288,7 @@ def page_errp(app):
     """Page ErrP : Lancer le démonstrateur / Régler le seuil (TPR/TNR) / Calibrer. Le réglage et le
     live nécessitent un modèle calibré ; le réglage sur la page sauve le seuil sur disque."""
     from research.errp_calibrate import adjust_threshold
-    from research.errp_decoder import ErrPModel
+    from core.errp_decoder import ErrPModel
 
     while True:
         opts = [("Lancer le démonstrateur", "la machine se trompe, ton cerveau est lu en direct"),
