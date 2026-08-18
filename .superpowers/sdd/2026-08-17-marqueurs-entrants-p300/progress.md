@@ -298,3 +298,316 @@ tâche, sous les entrées `minor (deferred)`.
 **Après la revue** : UNE seule vague de correction (pas un correcteur par constat), UNE re-relecture
 bornée, puis arbitrage des résidus. Ensuite : pousser, mettre à jour la mémoire projet, et
 **annoncer le périmètre** — ce qui reste DEHORS est écrit dans la spec §2 et dans SPEC §14.
+
+## REVUE FINALE DE BRANCHE (relancée le 2026-08-18) — constats au fil de l'eau
+
+### Tranche E — contrat et câblage : 0 critique, 5 importants, 7 mineurs
+
+1. ⚠️ **`server.py:29-31`** : la docstring d'en-tête du MOTEUR dit encore que le P300 n'y est pas ET
+   que les marqueurs entrants n'existent pas. Les deux moitiés fausses. Aucun des 7 diffs ne touche
+   cette ligne ; l'inventaire des flux publiés (l. 18-20) omet aussi `decoded_p300`.
+2. ⚠️ **`external.py:39`** : le champ `unavailable` de l'ErrP contredit la docstring corrigée 3
+   lignes plus haut. Et c'est le CHAMP que l'étudiant lit (`grid.py:129` le pose sur la tuile,
+   `server.py:547` le ressort comme refus). Le fichier « point d'honnêteté » se contredit.
+3. ⚠️ **`runtime.py:173-174`** : le commentaire d'orientation promet des marqueurs « MÛRS (leur
+   époque tient dans le tampon) », or `markers_murs` ne vérifie que le côté POST. La fenêtre PRÉ
+   peut être sortie — d'où `_epoques_perdues` dans p300. C'est le seul cahier des charges qu'aura
+   l'auteur de l'ErrP : s'il le croit, il retire la garde et perd des époques en silence.
+4. **`lsl_io.py:384`** : `reps` est la seule métadonnée qui décrive une chose que le moteur ne
+   contrôle pas — c'est l'appli EXTERNE qui décide (`--reps`). À `--reps 12` les métadonnées
+   annoncent 8. Soit la retirer, soit la publier comme un plafond.
+5. **`console/app.py:479-481`** : compte en dur jumeau de celui déjà corrigé, et son message oublie
+   déjà l'ErrP.
+
+Mineurs : comptes en dur en prose (`external.py:3-4`, `console/app.py:271`, `app.py:91-93`) ·
+`lsl_io.py:8-11` « trois flux au MVP » pour 7 publieurs · le P300 est le seul `decoded_*` sans
+seuil/marge dans ses métadonnées · `"decoded_p300"` écrit DEUX fois (spec + littéral du publieur),
+rien ne les lie.
+
+**Triage des 4 reportés** : (1) test rouge du contrôle → 6 lignes, à faire · (2) message unique pour
+2 cas → **à corriger**, le champ vaut 0.0 par défaut donc l'oubli EST le cas par défaut · (3) un
+runtime à marqueurs sans `pre_s`/`post_s` passe `check()` muet → le plus grave, **le vrai correctif
+est de DÉRIVER `marker_epoch_s` du runtime** au lieu de le redéclarer ; dette assumée · (4) `-1`
+absent des métadonnées SSVEP → une ligne, à faire.
+
+### Tranche D — décodeur et modèles : 0 critique, 3 importants, 6 mineurs
+
+1. ⚠️ **`p300_decoder.py:245-247`** : `__main__` jette le verdict de `_demo()` — **sort TOUJOURS en
+   0**. Le « exit 0 » du rapport de la tâche 4 ne prouve rien. Ses deux voisins dans `core/` font
+   `sys.exit(0 if … else 1)`.
+2. ⚠️ **`p300_models.py:196-201`** : **l'assertion sur laquelle repose TOUTE la décision de
+   conception ne peut pas attraper son assouplissement.** `_ModeleEtranger.__module__` vaut
+   `"__main__"`, jamais `"p300_decoder"` : la mutation vers `endswith("p300_decoder")` — la
+   passerelle qu'un contributeur écrira — laisse les 16 assertions vertes pendant que le modèle
+   abandonné redevient acceptable. Correctif : enregistrer un `types.ModuleType("p300_decoder")`
+   dans `sys.modules` avant le dump, et asserter que la raison cite `p300_decoder`.
+3. **`p300_models.py:96`** : `decrire(None)` LÈVE, alors que `charger` a été durcie pour ça avec
+   une boucle dédiée et un commentaire « une exception ici remonterait jusqu'au fil Qt ». Le
+   durcissement s'est arrêté une fonction trop tôt.
+
+**Vérifié et solide** : frontière `core/` propre (regex du smoke rejouée) · **réplique de Wolpaw
+identique bit pour bit sur 910 combinaisons, écart max 0.0** · tri sur `getmtime` · tests hors
+`data/` · le disque conforme (juillet intact, nouveau modèle à côté) · aucune contamination ErrP
+possible (composition, pas héritage ; motif de nom disjoint).
+
+**Conséquences HORS tranche, à router :**
+- ⚠️ **`research/p300_calibrate.py:231`** : la prochaine calibration **ÉCRASE
+  `data/p300_model.joblib`**, la trace de juillet que mon message de commit affirme préserver.
+  Rien n'applique l'invariant.
+- **`research/app.py:1070`** : l'écran d'état annonce un modèle P300 présent alors que le seul
+  fichier à cette adresse est l'abandonné — le reliquat exact du correctif appliqué à `mode_p300`
+  et `p300_analyze`, oublié ici.
+- `P300_MODEL_PATH` pointe sur un modèle définitivement refusé, alors qu'un valide est à côté.
+
+**Triage du reporté** : **à corriger** — la phrase fautive est IMPRIMÉE trois fois par
+`python src/core/p300_models.py`, commande prescrite par CLAUDE.md. Et le dépôt se contredit déjà
+(le `help` du paramètre dit la bonne chose).
+
+### Tranche C2 — l'autotest du mode P300 : 4 critiques, 6 importants
+
+🔬 **LE constat du chantier, et il justifie à lui seul la revue finale :**
+**`p300.py:833-842` — le test d'alignement « chemin réel » ne compare que la POSITION de l'argmax,
+jamais le CONTENU.** `filtfilt` est à phase nulle, sa réponse impulsionnelle équivalente est une
+autocorrélation maximale au lag 0 : **ajouter un `bandpass()` dans `_encaisser_flash` laisse le pic
+exactement à l'échantillon 38**. Or `P300Model._prep` filtre déjà — donc **le DOUBLE FILTRAGE passe
+cet autotest sans un mot**, c'est-à-dire la panne exacte contre laquelle ce projet a écrit un garde
+dédié pour le MI (« double filtrage = bruit à p=0,99 »). Idem pour une correction de ligne de base
+ou une conversion d'unité ajoutées là.
+→ **Correctif d'UNE assertion qui en remplace trois** :
+`chk(np.array_equal(rt._epoques[-1], eeg[i_pic - n_pre:i_pic + n_post]))` — épingle d'un coup
+position, forme, ordre des voies et absence de traitement.
+
+Trois autres critiques, tous « une assertion qui regarde la bonne chose UNE CASE TROP LOIN » :
+- **`_cibles` n'est lu NULLE PART** dans les 478 lignes de test. Remonter son `append` au-dessus de
+  la garde `if epoque is None` (édition d'une ligne) décale les deux listes et classe chaque flash
+  sous la cible du précédent — cible fausse, confiance normale.
+- **`_ModeleCapture` ne capture que des COMPTES** : une permutation pure des cibles survit,
+  l'égalité de dict ignorant l'ordre. L'appariement est prouvé en SORTIE, jamais en ENTRÉE.
+- **La branche `choisi is None` n'est exercée par aucun test** (`P300_SELECT_MARGIN=0` la rend
+  structurellement inatteignable avec le vrai `select`) : la mutation `self._publish(0, ...)` est
+  littéralement la confusion « -1 = la cible 0 » que toute la docstring combat.
+
+**Une assertion que rien ne peut faire échouer** : `etat["refus_cible"] == rt._refus_cible` vaut
+`0 == 0` à cet instant. Lire `state()` 20 lignes plus haut, où le compteur vaut 1.
+
+Importants : `gagnant=1` est aussi l'argmax (2 mutations passent — prendre `gagnant=3`) · le test
+« chemin réel » n'assert pas la FORME (une troncature passe, et explose 280 lignes plus loin en
+traceback) · ⚠️ **la non-contamination n'est prouvée que pour un redémarrage PLUS LENT que le délai
+de 10 s** — une appli qui repart dans les 10 s rafraîchit `_dernier_flash_ts`, les orphelins
+s'empilent, et une cible fausse sort avec une confiance normale · `margin=P300_SELECT_MARGIN` n'est
+vérifié nulle part · `-1 <= index` accepte la non-décision dans le seul test qui fait tourner le
+VRAI décodeur.
+
+**Solide, et le relecteur insiste** : les deux garde-fous d'abandon sont réellement indépendants et
+chacun éprouvé SEUL (vérifié par le calcul) · le scénario `_refus_cible` est construit juste · cas
+A/B distincts avec `_ModeleEspion` · appariement en sortie exemplaire · hygiène irréprochable —
+**cet autotest ne peut ni publier sur LSL ni ouvrir de session BrainFlow**, donc aucun conflit
+possible avec un moteur oublié.
+
+### Tranche C1 — le runtime P300 : 3 critiques, 7 importants
+
+1. ⚠️⚠️ **`p300.py:241` + `:71` — le plafond vaut EXACTEMENT deux manches, et la comparaison est
+   stricte.** Manche normale = 48 époques, `_MAX_EPOQUES = 6×8×2 = 96`, et **`96 > 96` est FAUX**.
+   Un seul `round_end` manquant colle deux manches complètes, **les deux garde-fous se taisent**,
+   `select()` reçoit 96 époques dont la moitié porte l'intention précédente → cible plausible,
+   confiance normale, silencieusement fausse. Trois manches (144) déclenchent bien : le garde
+   attrape l'invraisemblable et rate le seul cas crédible.
+   ⚠️ **Ce n'est PAS un `>=` à corriger** : un compteur GLOBAL ne peut pas à la fois tolérer un
+   protocole à plus de 8 répétitions (mon intention écrite l. 68) et détecter deux manches soudées.
+   Discriminant à prendre : **PAR CIBLE** (une cible vue plus de `P300_REPS` fois) ou **l'ÉCART**
+   entre flashs consécutifs (SOA 150 ms contre une frontière de manche).
+2. ⚠️ **`p300.py:169-184` — pendant les 15 s de CHAUFFE, personne ne consomme les marqueurs.**
+   `markers_murs` n'est appelée que depuis `_run_step`. Le curseur ne bouge pas, puis le premier
+   `_run_step` avale l'arriéré — tout ce qui dépasse le tampon (~4 s) part en `marqueurs_perdus`,
+   **`round_end` compris**. L'émetteur flashe 2 s après son lancement et `markers.md` dit de le
+   lancer à côté du moteur : **c'est le comportement PAR DÉFAUT de la première manche de chaque
+   séance.** Idem à chaque « Refaire le repos ».
+3. **`p300.py:256` — le plancher de manche vaut UNE répétition** (6 flashs) alors que le flux
+   annonce `reps=8` et que la config situe le genou à 7-8. Et `_log` n'imprime `n_flashes` que sur
+   les `-1` : une décision sur 6 flashs s'affiche EXACTEMENT comme une sur 48.
+
+Importants : le modèle chargé n'est jamais confronté à `fs`/`pre_s`/`post_s` du runtime (jumeau du
+contrôle structurel déjà rendu obligatoire ailleurs) · la décision est horodatée « maintenant »
+alors que l'instant du `round_end` est dans la variable d'à côté (~1 s de retard, tombe dans la
+manche suivante) · les `tick` de modes ne sont pas protégés alors que le tick de calibration l'est
+· ⚠️ **deux des « pannes bruyantes » ne le sont pas** : `marqueurs_perdus`/`marqueurs_futurs` ne
+sortent NULLE PART, et **`docs/markers.md` dit pourtant à l'étudiant « si ce nombre grimpe »** —
+ma doc promet une observation impossible · une manche 100 % invalide est inabandonnable et la garde
+anti-bruit redevient « une fois par session » · le refus par marge est le seul `-1` sans motif, et
+`_log` lui en invente un FAUX · ⚠️ **`live_views.py` rend le P300 comme un SSVEP** (aiguillage sur
+`"probas"`), donc 6 barres sans étiquette et « échelle z · seuil 3 » affiché AU-DESSUS de log-odds
+— mot pour mot la panne que la docstring de cet écran dit avoir été écrite pour éliminer.
+
+### Tranche F — research/ : 1 critique, 5 importants, 8 mineurs
+
+1. ⚠️ **`p300_stimulus.py:192-227` — aucune pause ni signal visuel entre deux manches.** La
+   frontière est visuellement identique à un intervalle inter-flash (83 ms). Or **ma recette §2.7
+   demande « recommence six fois en changeant de cible »** : physiquement impossible — dès la 2e
+   sélection les époques contiennent la transition du regard. **Les DEUX implémentations validées
+   au casque ont cet écran** (`app.py:524` 2,2 s ; `p300_calibrate.py:65` 2,5 s) ; l'émetteur est
+   le seul à l'avoir perdu.
+
+Importants : **l'invariant anti-répétition n'existe QUE dans l'émetteur** — la calibration, seul
+chemin vers un modèle, ne l'a pas (mesuré : **72,0 % des manches de calibration ont au moins une
+répétition, 2,44 % des époques**) · ⚠️ **`app.py:1070` : 3e site du bug `os.path.exists`, non
+recâblé** — le menu dit « P300 : oui » quand le moteur refuse (**convergence avec la tranche D**)
+· **le `--smoke` n'exécute jamais `run()`** : les 90 lignes contenant le geste flip→horodatage que
+ce fichier existe pour enseigner n'ont AUCUNE couverture (le patron `ssvep_stimulus` fait l'inverse
+avec SDL dummy) · rien n'indique si le moteur écoute (`have_consumers()` existe et n'est pas
+utilisé) · `--targets` accepté sans validation alors que le moteur code 6 en dur : `--targets 4`
+tourne sans un mot et fait passer l'oddball de 1/6 à 1/4.
+
+Mineurs notables : `--targets 0` → `IndexError` nu · `--targets 2` rend une séquence **parfaitement
+alternée donc 100 % prévisible**, et le smoke dit OK · **le rayon du point de fixation est 3 contre
+`FIX_DOT_R = 2`** — 2,25× la surface sous laquelle les données d'entraînement ont été enregistrées
+· ESC en pleine manche n'émet pas de `round_end`.
+
+**Vérifié SAIN par cette tranche** : l'horodatage est pris après `flip()` sur TOUS les chemins · les
+deux fenêtres sont en `vsync=1` donc pas de biais d'une frame entre entraînement et runtime · le
+SOA est compté en FRAMES des deux côtés avec la MÊME fonction de mesure · frontière propre, aucun
+importeur de l'ancien chemin · séquence nominale correcte, pas de boucle infinie (max 21
+re-mélanges sur 200 000 tirages du pire cas).
+
+### Tranche B — le moteur : 1 critique, 5 importants
+
+⚠️⚠️ **B-C1 — fermer puis RELANCER l'application de stimulus rend le moteur MUET pour le reste du
+processus, en silence. MESURÉ.** Chaîne : l'inlet n'est re-résolu que `if not connecte` ; `connecte`
+reste `True` à vie (rien ne remet `marker_inlet` à `None`) ; `StreamInlet` a `recover=True` donc
+liblsl retente indéfiniment l'ANCIEN `source_id` ; et l'émetteur déclare son `source_id` PAR PID,
+donc l'ancien ne revient jamais. Aucune exception (recover les avale), `marqueurs_inlet_erreurs`
+reste 0, **et redémarrer le MODE n'y change rien**.
+```
+[B] emetteur #1 vivant : 13 marqueurs | [C] ferme : 1 | [D] #2 RELANCE : 0 -> MUET POUR TOUJOURS
+[E] un inlet NEUF : 13  -> le flux #2 est bien present sur le reseau
+```
+🎯 **Invisible depuis une seule tâche** : il faut le `source_id` par PID (tranche émetteur) +
+l'idempotence de `resolve()` (tranche A) + le cache d'inlet (tranche B). **C'est la justification
+de la méthode.** Correctif : libérer `marker_inlet = None` dans `_stop_mode` quand plus aucun mode
+n'écoute ; côté émetteur, un `source_id` STABLE (hostname) ferait marcher la reprise native de LSL.
+
+Importants : `_marqueurs` croît sans borne dès que le dernier écouteur s'arrête (la garde est
+l'inverse de sa propre docstring) · ⚠️ **l'ALIGNEMENT `recent`/`recent_ts` n'est prouvé NULLE PART**
+— le seul contrôle est une égalité de LONGUEURS, qui ne détecte aucun décalage temporel et devient
+vide dès que les tampons saturent (toujours, en séance) ; le test P300 travaille sur des tableaux
+FABRIQUÉS. Mutation qui passe tout : `ts_lsl + 1.0/fs`. Correctif : asserter que la QUEUE des deux
+tampons est exactement `srv.new_block` · **`_smoke_dimensionnement` ne peut PAS échouer** (488 vs
+1250) — correctif : patcher `registry.MODES` avec `marker_epoch_s=30.0` · un cycle
+`EngineServer ↔ ModeRuntime` reste vivant → le destructeur zombie du 2026-07-28 · **7 des 8 nouveaux
+`EngineServer` sans `instance=`**, et `_smoke_tampon_horodate` FAIT TOURNER un moteur 3 s publiant
+sous le même nom qu'une vraie console synthétique.
+
+Requalifié : `m[1]["target"]` sans `.get` **n'est pas cosmétique** — la liste `resultats` est
+construite EN AMONT, donc une exception fait sauter TOUS les sous-tests suivants, exactement le
+court-circuit que le passage à `all()` venait de supprimer.
+
+### Tranche A — l'oreille : 3 critiques, 3 importants — TOUT EST MESURÉ
+
+⚠️⚠️ **A-C1 — `time_correction()` est appelé SANS timeout depuis la boucle du moteur.** Mesuré :
+émetteur tué dans la fenêtre, avec `source_id` (ce que publie l'émetteur du projet) → **appel
+TOUJOURS bloqué au bout de 26 s**, sans exception. `resolve()` étant appelé depuis `run()`, **le
+moteur ENTIER se fige** : plus de `get_new_data()` (le tampon BrainFlow déborde), plus un seul flux,
+y compris pour le SSVEP/neuro/MI qui tournaient à côté — et Ctrl-C ne peut pas interrompre un appel
+C bloquant. Contredit la docstring de la classe : « Ne bloque jamais la boucle du moteur ».
+
+⚠️⚠️ **A-C2 — `resolve()` n'est pas atomique** : `self.inlet` est affecté AVANT `open_stream()` et
+`time_correction()`. Mesuré : émetteur SANS `source_id` (le défaut de LSL, donc l'émetteur d'un
+étudiant) mourant dans la fenêtre → `LostError` en ~4 s. Deux issues, toutes deux mauvaises :
+(a) au PREMIER appel, `server.py:830` appelle `resolve()` hors de tout `try` et `run()` n'a **aucun
+`except`** → l'exception TUE la boucle ; en console le fil meurt et la fenêtre Qt reste gelée.
+L'invariant « une appli cliente mal écrite ne doit jamais tuer le moteur » tombe. (b) en re-tentative,
+l'objet reste `connecte=True` avec `offset=0.0` → **le moteur se croit connecté et n'applique PLUS
+AUCUNE correction d'horloge** : la catastrophe des 45 jours, en silence total.
+
+⚠️ **A-C3 — deux émetteurs du même nom : `minimum=1` puis `flux[0]`, sans un mot.** Mesuré : rend
+l'un des deux (pas même le premier lancé) et ne lit que celui-là. Or les étudiants utilisent tous le
+nom par défaut et LSL porte sur tout le réseau → un moteur peut épocher sur les flashs du VOISIN et
+publier des sélections confiantes et fausses. **Le projet a déjà le motif inverse côté sortant**
+(`minimum=32` puis filtre `source_id`) : l'oreille est le seul endroit qui ne l'applique pas.
+Mesuré : `minimum=32, timeout=0.2` révèle les deux en 0,2 s.
+
+Importants : `illisibles` compté et lu par PERSONNE (**convergence A + B + C1** sur les compteurs
+jamais exposés) · **le message « connecté » est sur le chemin qui n'aboutit presque jamais** —
+mesuré, `resolve_byprop(timeout=0.0)` échoue aux premiers appels d'un processus neuf (0/5), puis
+marche ; or la re-tentative qui connecte réellement **n'imprime rien** · un inlet perdu ne redevient
+jamais « non connecté » : 310 exceptions en 20 s, une ligne imprimée 20×/s sans limitation, et
+surdité définitive même après redémarrage de l'appli.
+
+Mineurs : **l'autotest est intermittent sur son propre invariant** (attend 2 marqueurs puis vérifie
+`illisibles == 1`, alimenté par un 3e encore en vol) — exactement ce que son propre commentaire
+interdit · `UnicodeDecodeError` hors de la garde · `MARKER_LATE_S` documenté comme tolérance de
+RETARD mais utilisé comme tolérance de FUTUR.
+
+## VAGUE DE CORRECTION (2026-08-18) — 3 lots, puis re-relecture
+
+**3 lots séquentiels** (ils lancent des smokes) : `b48bceb` l'oreille et le moteur · `f68e657` le mode
+P300 et son autotest · `e530b8c` la vérité affichée et l'émetteur.
+
+**Assertions** : 123→166 (lot 1), 52→87 (lot 2), 133→159 + 6 `assert` neufs (lot 3). **Aucune
+retirée**, vérifié par AST à chaque lot et recompté indépendamment par les re-relecteurs.
+
+**19 autotests relancés par le coordinateur : 0 échec, aucun processus résiduel.**
+
+### Deux défauts trouvés par les CORRECTEURS, que la revue avait manqués
+
+1. ⚠️ **`open_stream()` était non borné lui aussi** — la revue n'avait vu que `time_correction`.
+   Mesuré : émetteur résolu puis tué, l'ancien code bloque **plus de 400 s** (mesure interrompue),
+   là où la revue citait 26 s. Et borner à 0,2 s **aurait cassé la connexion** : le premier appel
+   coûte 0,44-0,64 s sur un émetteur vivant. D'où 2,0 s.
+2. ⚠️ **`0.15 + 0.80` vaut `0.9500000000000001`** : `registry.check()` déclarait donc en défaut un
+   `marker_epoch_s=0.95`, **la valeur juste**. Le P300 y échappait PAR HASARD en réécrivant la même
+   expression des deux côtés. Tolérance de 1 ns posée sur les DEUX comparaisons de durées.
+
+### Re-relecture — 6 tranches sur 9 rendues, 3 tuées par la limite de session
+
+**Rendues, toutes ADDRESSED, aucune casse** : l'oreille · le moteur · le code de production du P300
+· la 1re moitié de son autotest · le cœur et les métadonnées · la console.
+
+Points notables des re-relecteurs :
+- l'oreille : les 22 assertions d'avant se retrouvent **verbatim** dans les 40, vérifié ligne à ligne.
+- le moteur : les 25 appels `EngineServer(` portent désormais `instance=` ; les 3 `m[1]["target"]`
+  sont tous en `.get`, et les 3 lignes retirées sont exactement celles-là, réécrites.
+- la console : **plus aucun identifiant de mode dans le code exécutable de l'affichage** — diverger
+  du moteur devient structurellement impossible. Les deux comptes en dur comparent maintenant des
+  IDENTITÉS au registre.
+- le cœur : le faux module doit être dans `sys.modules` **au dump ET au chargement** (`pickle`
+  résout via `__module__`) — précision qui a changé le correctif.
+
+**Non re-relues par un agent** (limite de session) : l'émetteur, la documentation, la 2e moitié de
+l'autotest P300. ⚠️ **Le coordinateur a vérifié lui-même les points clés** et les donne pour ce
+qu'ils sont — une vérification par lecture, pas une relecture indépendante :
+pause de **2,5 s** calée sur les deux écrans validés au casque, avec visuel dédié · anti-répétition
+passée dans la calibration ET le live pygame · `os.path.exists` remplacé au 3e site · l'invariant du
+modèle de juillet tenu par une **assertion** · le smoke exécute `run()` sur `SDL_VIDEODRIVER=dummy`
+· `wait_for_consumers` + « PERSONNE n'écoute » dans le HUD · `--targets`/`--reps` refusés en nommant
+la constante · la doc donne TROIS endroits où lire les compteurs.
+
+### RÉSIDUS PARKÉS, avec leur arbitrage
+
+Aucun n'est porteur : rien en aval ne construit dessus, et aucun ne casse à l'exécution.
+
+1. ⚠️ **Le message d'abandon du P300 accuse « round_end jamais reçu (application externe
+   plantée ?) » même quand la cause est un `--reps` légitimement > 8.** Le nom de la constante est
+   là, mais le diagnostic pointe la mauvaise piste, à chaque manche. **Ruling : réel, une ligne de
+   texte, à corriger — mais la règle du dispositif est UNE seule vague de correction, et ce n'est
+   pas porteur.** Le plus rentable des cinq résidus.
+2. **La limite connue de la contamination (redémarrage sous 10 s + manche courte) est honnête dans
+   le rapport mais ABSENTE du code** : la docstring du garde-fou se lit comme une garantie
+   complète. Ruling : réel, trompeur pour le prochain lecteur, non porteur.
+3. **Le compromis de `_dernier_flash_ts` n'est pas écrit non plus** : un émetteur qui n'envoie que
+   des cibles hors plage repousse indéfiniment l'horloge d'abandon. Ruling : idem.
+4. **L'échelle des barres P300 de la console est RELATIVE** : la plus faible est toujours vide, la
+   plus forte toujours pleine, même quand l'écart réel est de 0,01. Un étudiant pressé y lirait une
+   certitude qui n'existe pas. Ruling : réel, à traiter avec le lot d'affichage déjà reporté.
+5. **Le pire cas des timeouts est ~4 s, pas 2 s** (`open_stream` puis `time_correction`, séquentiels
+   sous le même `try`). Borné, sans commune mesure avec les 400 s d'avant. Ruling : acceptable, à
+   ne pas présenter comme « 2 s » dans un futur rapport.
+6. Mineur : une assertion auto-référentielle sur `_channels` (la fonction testée est un passe-plat
+   d'une ligne, surface de mutation minuscule).
+
+### DETTE DE CONCEPTION, écrite et assumée
+
+**`marker_epoch_s` reste une seconde source de vérité.** Un futur mode à marqueurs qui oublierait
+le champ passerait `registry.check()` sans un mot, et le moteur n'ouvrirait jamais d'inlet — le mode
+tournerait sans rien publier. Le vrai correctif est de **DÉRIVER `marker_epoch_s` de
+`runtime_cls.pre_s + runtime_cls.post_s`** au lieu de le redéclarer. C'est un changement de contrat,
+donc un chantier, pas une fin de revue. Le premier exposé est nommé : **l'ErrP**.
