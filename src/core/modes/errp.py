@@ -39,7 +39,7 @@ publient `error = -1` (« pas de verdict »), **jamais `0`** : publier 0 affirme
 alors qu'on n'a rien vu. Un clignement au moment précis où la machine se trompe est le cas
 FRÉQUENT, pas l'exception — c'est justement l'instant où l'utilisateur sursaute.
 
-Quatre pannes bruyantes propres à ce mode (les trois premières — flux introuvable, marqueur trop
+Cinq pannes bruyantes propres à ce mode (les trois premières — flux introuvable, marqueur trop
 vieux, marqueur dans le futur — vivent une couche plus bas, `core/markers.py` et `core/server.py`,
 déjà prouvées là-bas) :
     4. un modèle entraîné sur une AUTRE géométrie d'époque (fs, pré/post) -> refusé au démarrage,
@@ -58,6 +58,27 @@ déjà prouvées là-bas) :
        cette fenêtre, `markers_murs` ne serait jamais appelé, et le premier pas de décodage
        avalerait l'arriéré d'un coup, dont tout ce qui a déjà quitté le tampon EEG part en
        `engine.marqueurs_perdus`, sans que personne puisse dire pourquoi.
+    8. un taux de rejet d'artefact ANORMALEMENT élevé (seuil mal calé, mauvais contact, casque
+       qui dérive encore) -> rien ne le distinguait d'un clignement occasionnel : compté
+       (`_epoques_vues`, `_artefacts`), exposé dans `state()`, et dit UNE fois en franchissant un
+       palier déraisonnable (`_verifie_taux_rejet`) — sans quoi un mode qui écarte 9 époques sur
+       10 tourne en silence : le flux ne se tait jamais (chaque feedback publie -1), mais rien ne
+       dit si CE -1 est un clignement isolé ou le signe d'un réglage structurellement mauvais.
+
+⚠️ **σ du repos et σ de l'époque doivent être mesurés sur la MÊME représentation — trouvé en
+revue, pas au premier jet.** `engine.acq.sigma_from_block` FILTRE (passe-bande ACQUISITION
+5-40 Hz, cf. `core/acquisition.py`) ; l'époque que `_est_artefact` juge est BRUTE, sans aucun
+traitement (cf. panne n°6). Un filtre ne peut que RETIRER de la puissance : à état électrique
+identique, σ_brut ≥ σ_filtré, TOUJOURS — comparer les deux gonfle tout ratio d'un biais
+SYSTÉMATIQUE, dans un seul sens (le SUR-rejet), pas d'un hasard de tirage. Mesuré (script jetable,
+avec le vrai filtre d'acquisition) : sur du bruit blanc seul déjà ×1,9 (= la perte de bande,
+√(125/35)) ; avec ne serait-ce que 10 µV de dérive ORDINAIRE sous 5 Hz — rien d'anormal sur ce
+casque, cf. `core/acquisition.py` sur la dérive DC — le rapport grimpe à ~×9 et REJETTE 30 ÉPOQUES
+SAINES SUR 30 en répétition. `_rest_step` mesure donc son σ sur le BRUT, comme l'époque (0 rejet à
+tort sur les mêmes 30 tirages, un vrai clignement de 60 µV toujours détecté) — au prix assumé de
+ne plus filtrer le 50 Hz ni la dérive du repos lui-même, sans conséquence ici : ce σ ne sert qu'à
+un RATIO contre une autre mesure BRUTE, jamais affiché en valeur absolue comme une mesure de
+qualité (ça, c'est le rôle du flux `quality`, qui compare bien du filtré à du filtré).
 
 Autotest :
     python src/core/modes/errp.py
@@ -75,6 +96,15 @@ from core import errp_models  # noqa: E402
 from core.errp_decoder import epoch_from_stream  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
+
+# Palier d'alarme du taux de rejet (panne n°8) : au-delà, ce n'est plus « un clignement
+# occasionnel », c'est le signe d'un seuil mal calé, d'un mauvais contact, ou d'un casque qui
+# dérive encore. 0,5 (pas 0,9) : le but est d'alerter TÔT, pas d'attendre l'extrême — un
+# détecteur qui fonctionne correctement rejette une minorité des feedbacks, pas la moitié.
+_TAUX_REJET_ALARME = 0.5
+# Sous ce nombre d'époques VUES (perdues exclues), un taux est du bruit d'échantillonnage, pas un
+# diagnostic : 1 artefact sur 2 essais ne dit rien sur le réglage, seulement sur le hasard.
+_TAUX_REJET_MIN_ECHANTILLONS = 10
 
 
 class ErrPRuntime(ModeRuntime):
@@ -115,9 +145,15 @@ class ErrPRuntime(ModeRuntime):
         self._sigmas_repos = None    # σ par voie mesuré au repos — la référence du rejet d'artefact
         self._echantillons = []      # les σ successifs mesurés PENDANT le repos, avant médiane
         self._epoques_perdues = 0    # marqueurs mûrs dont l'époque a quand même débordé du tampon
+        self._epoques_vues = 0       # feedbacks dont l'époque a pu être EXTRAITE (perdues
+                                      # exclues) — le DÉNOMINATEUR du taux de rejet (panne n°8)
         self._artefacts = 0          # époques écartées : σ trop grand par rapport au repos
         self._marqueurs_chauffe = 0  # feedbacks jetés, reçus pendant la chauffe OU le repos
         self._chauffe_dite = False   # l'avertissement de chauffe/repos, une fois par repos
+        # Compteurs de SESSION, comme `_artefacts`/`_epoques_perdues`/`_marqueurs_chauffe` ci-
+        # dessus : jamais réinitialisés par `_reset_rest` (« Refaire le repos » ne doit pas
+        # effacer l'historique de ce que ce mode a déjà rejeté dans la séance).
+        self._rejet_eleve_dit = False   # l'alarme de sur-rejet (panne n°8), au plus UNE fois
 
     def _desaccord_geometrie(self, engine):
         """La phrase à dire si le MODÈLE n'a pas été entraîné sur la géométrie que ce runtime
@@ -162,25 +198,52 @@ class ErrPRuntime(ModeRuntime):
         return self._decoded
 
     def state(self):
-        """Comme `ModeRuntime.state()`, plus les compteurs de ce que ce mode JETTE — le même
-        filet que `P300Runtime.state()` : sans cette sortie, un client qui n'a pas la console
-        ouverte au bon instant ne voit jamais combien d'époques ont été perdues ou écartées."""
+        """Comme `ModeRuntime.state()`, plus les compteurs de ce que ce mode JETTE, ET le taux de
+        rejet qui en découle (panne n°8) — le même filet que `P300Runtime.state()` : sans cette
+        sortie, un client qui n'a pas la console ouverte au bon instant ne voit jamais combien
+        d'époques ont été perdues ou écartées, ni si ce chiffre est en train de dériver."""
         base = super().state()
         base["epoques_perdues"] = self._epoques_perdues
+        base["epoques_vues"] = self._epoques_vues
         base["artefacts"] = self._artefacts
+        # None tant qu'aucune époque n'a pu être jugée : un taux de 0/0 mentirait en affichant 0.
+        base["taux_rejet"] = (round(self._artefacts / self._epoques_vues, 3)
+                              if self._epoques_vues else None)
         base["marqueurs_chauffe"] = self._marqueurs_chauffe
         return base
 
     def _rest_step(self, engine, now):
+        """σ du repos, mesuré sur le BRUT — PAS `engine.acq.sigma_from_block()`.
+
+        ⚠️ Correction de revue (tour 1) : `sigma_from_block` FILTRE (passe-bande ACQUISITION
+        5-40 Hz), alors que `_est_artefact` juge une époque BRUTE (`_traiter_feedback`, aucun
+        traitement). Un filtre ne peut que RETIRER de la puissance : σ_brut ≥ σ_filtré,
+        TOUJOURS — comparer les deux gonflait tout ratio d'un biais SYSTÉMATIQUE, dans le seul
+        sens du SUR-rejet. Mesuré (avec le vrai filtre d'acquisition) : rien que la perte de
+        bande donne déjà ×1,9 (=√(125/35)) sur du bruit blanc ; avec 10 µV de dérive ORDINAIRE
+        sous 5 Hz (rien d'anormal sur ce casque) le rapport grimpait à ~×9 et rejetait 30
+        époques SAINES sur 30 en répétition. Mesurer le repos sur le BRUT, comme l'époque,
+        ramène ce même scénario à 0 rejet à tort sur 30 — et continue de détecter un vrai
+        clignement (ratio ~×10, toujours loin au-dessus du seuil ×4).
+        La chauffe de 15 s existe déjà pour laisser la rampe DC se tasser AVANT toute mesure :
+        c'est elle qui rend un repos brut exploitable, pas un filtrage a posteriori — qui
+        rendrait en prime le détecteur aveugle à un clignement (déflexion LENTE, sous 5 Hz :
+        filtrer l'ÉPOQUE aussi effacerait le signal même que ce rejet vise, mesuré ratio ~×2,2
+        au lieu de ~×10 sur le même clignement, repassant sous le seuil).
+
+        `len(bloc) < engine.acq.margin_n` : pas une histoire de transitoire de filtre ici (rien
+        n'est filtré), juste un plancher pour ne pas juger un σ sur une poignée d'échantillons —
+        `margin_n` est réutilisé comme ordre de grandeur commode, pas pour sa raison d'être.
+        """
         bloc = engine.recent
-        sig = engine.acq.sigma_from_block(bloc)
-        if sig is None:
+        if bloc is None or len(bloc) < engine.acq.margin_n:
             return False
+        sig = np.asarray(bloc, dtype=float).std(axis=0)
         self._echantillons.append(sig)
         if now < self._rest_until:
             return False
         self._sigmas_repos = np.median(np.asarray(self._echantillons), axis=0)
-        print(f"[errp] repos mesuré ({len(self._echantillons)} fenêtres) — σ par voie : "
+        print(f"[errp] repos mesuré ({len(self._echantillons)} fenêtres) — σ par voie (brut) : "
               f"{np.array2string(self._sigmas_repos, precision=1)}")
         self.rest_report = {"kind": "errp", "fenetres": len(self._echantillons),
                             "sigma": [round(float(s), 2) for s in self._sigmas_repos]}
@@ -232,8 +295,10 @@ class ErrPRuntime(ModeRuntime):
             self._epoques_perdues += 1
             self._publish(-1, 0.0, artefact=0, lsl_ts=lsl_ts)
             return
+        self._epoques_vues += 1
         if self._est_artefact(epoque):
             self._artefacts += 1
+            self._verifie_taux_rejet()
             self._publish(-1, 0.0, artefact=1, lsl_ts=lsl_ts)
             return
         score = float(np.ravel(self.model.score(epoque[None, ...]))[0])
@@ -252,6 +317,30 @@ class ErrPRuntime(ModeRuntime):
             return False
         sig = np.asarray(epoque, dtype=float).std(axis=0)
         return bool(np.any(sig > ERRP_ARTIFACT_RATIO * self._sigmas_repos))
+
+    def _verifie_taux_rejet(self):
+        """Panne bruyante n°8 : dit UNE fois, quand le taux de rejet franchit un palier
+        déraisonnable, ce que rien d'autre ne distinguait — « un clignement occasionnel » d'« un
+        seuil structurellement mal calé pour ce casque ou cette séance ».
+
+        Sans ce compteur, un mode qui écarte 9 époques sur 10 tourne en silence : chaque
+        feedback publie -1 (le flux ne se tait jamais, cf. docstring du module), mais AUCUN de
+        ces -1 ne dit s'il est isolé ou systématique. C'est la panne canonique de ce projet — un
+        décodeur qui publie des scores honnêtes et ne déclenche jamais — sous un autre visage :
+        ici, un rejet honnête qui ne laisse plus jamais rien passer.
+
+        `_TAUX_REJET_MIN_ECHANTILLONS` avant de juger : un taux sur un tout petit effectif est
+        du bruit d'échantillonnage, pas un diagnostic (1 artefact sur 2 essais ne prouve rien).
+        """
+        if self._rejet_eleve_dit or self._epoques_vues < _TAUX_REJET_MIN_ECHANTILLONS:
+            return
+        taux = self._artefacts / self._epoques_vues
+        if taux < _TAUX_REJET_ALARME:
+            return
+        self._rejet_eleve_dit = True
+        print(f"[errp] ⚠️ taux de rejet artefact élevé : {self._artefacts}/{self._epoques_vues} "
+              f"({taux:.0%}) des époques écartées — au-delà d'un clignement occasionnel. "
+              f"Vérifie le contact des électrodes, ou « Refaire le repos ».")
 
     def _publish(self, error, score, artefact, lsl_ts):
         if self._out is not None:
@@ -611,6 +700,121 @@ def _selftest():
             f"...et reflètent les compteurs RÉELS du runtime, pas une copie figée "
             f"(state={etat['epoques_perdues'], etat['artefacts'], etat['marqueurs_chauffe']}, "
             f"réel={rt._epoques_perdues, rt._artefacts, rt._marqueurs_chauffe})")
+
+        # --- ⚠️ PREUVE ROUGE-PUIS-VERT (tour de correction 1) : repos et époque doivent être
+        # mesurés sur la MÊME représentation ---------------------------------------------------
+        # AVANT ce correctif, `_rest_step` filtrait (`engine.acq.sigma_from_block`) alors que
+        # l'époque jugée par `_est_artefact` est BRUTE : un biais SYSTÉMATIQUE, dans le seul sens
+        # du sur-rejet (un filtre ne peut que RETIRER de la puissance, jamais en ajouter).
+        # Reproduit ici avec 10 µV de dérive ORDINAIRE sous 5 Hz — rien d'anormal sur ce casque,
+        # cf. `core/acquisition.py` — ajoutée À LA FOIS au repos et à une époque SAINE tirée
+        # indépendamment : rien de spécial ne s'est produit entre les deux, c'est la même séance,
+        # le même casque. Rejoué en ROUGE (`_rest_step` remis temporairement en
+        # `engine.acq.sigma_from_block`, comme avant ce tour de correction) : cette assertion
+        # échoue, et pas de justesse — mesuré hors dépôt, 30 tirages sur 30 rejetés à tort.
+        from scipy.signal import butter, filtfilt
+
+        def sous_5hz(n, fs, rng, amp_uv):
+            """Dérive lente ORDINAIRE (PAS un clignement) : marche aléatoire lissée sous
+            ~0,5 Hz — exactement ce qu'un passe-bande 5-40 Hz retire, artefact ou pas."""
+            marche = np.cumsum(rng.normal(0.0, 1.0, n))
+            b, a = butter(2, 0.5 / (fs / 2.0), btype="low")
+            lisse = filtfilt(b, a, marche)
+            lisse -= lisse.mean()
+            return lisse * (amp_uv / (lisse.std() + 1e-9))
+
+        def bruit_avec_derive(n, fs, rng, drift_uv=10.0):
+            t = np.arange(n) / fs
+            X = rng.normal(0.0, 2.0, (n, 8))
+            X += (0.7 * np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi)))[:, None]
+            for c in range(8):
+                X[:, c] += sous_5hz(n, fs, rng, drift_uv)
+            return X
+
+        # ⚠️ La dérive est RESCALÉE sur la longueur du tampon qu'on lui donne (`sous_5hz`) : lui
+        # donner tout de suite un grand tampon de 20 s DILUE la dérive dans chaque tranche de
+        # 0,9 s qu'on en extraira ensuite — et ferait disparaître l'effet à démontrer. Le repos
+        # (8 s) et l'époque (0,9 s) reçoivent donc chacun un tampon taillé à LEUR PROPRE échelle,
+        # comme mesuré dans le script jetable qui a produit les chiffres ci-dessus.
+        rng_derive = np.random.default_rng(7)
+        n_rest_derive = int(8.0 * fs) + moteur.acq.margin_n
+        rest_ts_derive = np.arange(n_rest_derive) / fs
+        moteur_derive = _FauxMoteur(bruit_avec_derive(n_rest_derive, fs, rng_derive),
+                                    rest_ts_derive)
+        rt2 = ErrPRuntime(SPEC, values, moteur_derive)
+        rt2._out = _FauxPublieur()
+        rt2._opened = True
+        rt2.begin_rest(now=0.0, warmup_s=0.0, duration_s=0.5)
+        for t_pas in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6):
+            rt2.tick(moteur_derive, lsl_ts=rest_ts_derive[-1], now=t_pas)
+        chk(rt2.phase == "running",
+            f"repos conclu (dérive ordinaire comprise) pour la preuve rouge-puis-vert ({rt2.phase})")
+
+        # Bascule vers un tampon DÉDIÉ à l'époque, à SA propre échelle (0,9 s + marge) — un
+        # NOUVEAU tirage, la MÊME amplitude de dérive : « juste un autre instant de la même
+        # séance », rien de spécial ne s'est produit entre les deux mesures.
+        pad = 20
+        n_epoch_derive = int(round(ERRP_PRE_S * fs)) + int(round(ERRP_EPOCH_S * fs)) + 2 * pad
+        t_saine = 1000.0
+        epoch_ts_derive = t_saine - ERRP_PRE_S - pad / fs + np.arange(n_epoch_derive) / fs
+        moteur_derive.recent = bruit_avec_derive(n_epoch_derive, fs, rng_derive)
+        moteur_derive.recent_ts = epoch_ts_derive
+        moteur_derive._lots = [[marqueur(t_saine)]]
+        rt2.tick(moteur_derive, lsl_ts=t_saine, now=1.0)
+        e_derive, _s_derive, art_derive, _t_derive = rt2._out.lignes[-1]
+        chk(art_derive == 0,
+            f"⚠️ une époque SAINE (dérive ORDINAIRE ~10 µV, rien d'anormal) n'est PAS rejetée à "
+            f"tort — AVANT ce correctif (brut contre filtré), le même scénario rejetait à tort "
+            f"30 fois sur 30 en répétition (artefact publié={art_derive})")
+        chk(e_derive in (0, 1),
+            f"...et un VRAI verdict sort (score comparé au seuil), pas un -1 déguisé ({e_derive})")
+
+        # --- Le sur-rejet doit être DÉTECTABLE (panne n°8) : compteur exposé, avertissement dit
+        # UNE fois, jamais avant le plancher d'échantillons -------------------------------------
+        rt3 = ErrPRuntime(SPEC, values, moteur)
+
+        rt3._epoques_vues = rt3._artefacts = _TAUX_REJET_MIN_ECHANTILLONS - 1   # 100 % de rejet…
+        capture_bas = io.StringIO()
+        with redirect_stdout(capture_bas):
+            rt3._verifie_taux_rejet()
+        chk(not rt3._rejet_eleve_dit and capture_bas.getvalue() == "",
+            f"...mais SOUS le plancher de {_TAUX_REJET_MIN_ECHANTILLONS} échantillons, même à "
+            f"100 % de rejet : PAS d'alarme, un si petit effectif est du bruit, pas un diagnostic")
+
+        rt3._epoques_vues, rt3._artefacts = 20, 3   # 15 % : un clignement occasionnel, plausible
+        rt3._verifie_taux_rejet()
+        chk(not rt3._rejet_eleve_dit,
+            f"un taux de 15 % ne déclenche RIEN ({rt3._artefacts}/{rt3._epoques_vues})")
+
+        rt3._epoques_vues, rt3._artefacts = 20, 12   # 60 % : au-delà du palier (0,5)
+        capture_haut = io.StringIO()
+        with redirect_stdout(capture_haut):
+            rt3._verifie_taux_rejet()
+        texte_haut = capture_haut.getvalue()
+        print(texte_haut, end="")
+        chk(rt3._rejet_eleve_dit and "taux de rejet" in texte_haut and "12/20" in texte_haut,
+            f"un taux de 60 % déclenche l'alarme, avec le compte EXACT dans le message "
+            f"({texte_haut.strip()!r})")
+
+        rt3._epoques_vues, rt3._artefacts = 40, 30   # encore pire : l'alarme ne doit PAS se répéter
+        capture_repete = io.StringIO()
+        with redirect_stdout(capture_repete):
+            rt3._verifie_taux_rejet()
+        chk(capture_repete.getvalue() == "",
+            "...mais elle ne se répète pas : dite UNE fois par session, pas à chaque nouvel "
+            "artefact, sans quoi elle noierait le terminal exactement comme le mode qu'elle "
+            "dénonce noie le flux de -1")
+
+        etat3 = rt3.state()
+        chk(etat3["epoques_vues"] == 40 and etat3["artefacts"] == 30
+            and etat3["taux_rejet"] == 0.75,
+            f"state() expose le taux de rejet CALCULÉ, pas seulement les deux compteurs bruts "
+            f"({etat3['epoques_vues']}, {etat3['artefacts']}, {etat3['taux_rejet']})")
+
+        etat_vide = ErrPRuntime(SPEC, values, moteur).state()
+        chk(etat_vide["taux_rejet"] is None,
+            f"...et un mode qui n'a encore rien vu affiche None, pas 0 (qui affirmerait « aucun "
+            f"rejet » au lieu de « rien mesuré ») ({etat_vide['taux_rejet']})")
     finally:
         errp_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)
