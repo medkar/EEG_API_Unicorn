@@ -82,6 +82,15 @@ QUALITY_PERIOD_S = 1.0    # cadence du flux `quality`
 STATUS_PERIOD_S = 2.0     # rappel périodique de l'état (pour un client qui arrive en retard)
 QUALITY_WINDOW_S = 2.0    # longueur de signal sur laquelle on mesure le σ par voie
 
+# Cadence maximale du message « inlet de marqueurs en erreur ». Mesuré sur un inlet perdu : 310
+# exceptions en 20 s. Sans cette limite, la boucle imprime 20 lignes par seconde et noie tout le
+# reste du journal — y compris les messages des modes qui tournent à côté et vont très bien.
+_MARQUEUR_ERREUR_PERIODE_S = 10.0
+# Seuils auxquels un compteur de marqueurs s'annonce tout seul (cf. `_dit_compteurs_marqueurs`).
+# Le premier vaut 1 : le tout premier incident doit se voir, c'est celui qui explique tous les
+# suivants.
+_SEUILS_MARQUEURS = (1, 10, 100, 1000, 10000)
+
 
 class EngineServer:
     """Boucle acquisition -> publication. Un objet, une session casque, N modes actifs.
@@ -120,6 +129,15 @@ class EngineServer:
         self.marqueurs_futurs = 0      # horodatés en avance : time_correction() oublié ?
         self.marqueurs_inlet_erreurs = 0   # incidents réseau/LSL sur l'inlet, comptés plutôt
                                             # qu'avalés (voir _tire_marqueurs)
+        # `illisibles` est porté par l'inlet, qui peut être LÂCHÉ et refait (émetteur relancé,
+        # mode arrêté) : sans ce report, le compteur repartirait de zéro à chaque incident et le
+        # total affiché mentirait par le bas — exactement le genre de chiffre rassurant et faux
+        # que ce projet refuse. On cumule donc ce qu'emportent les inlets fermés.
+        self._marqueurs_illisibles_clos = 0
+        self._marqueur_attente_dite = False    # « pas encore là » : dit une fois, pas à 20 Hz
+        self._marqueur_erreur_dite_a = 0.0     # dernier message d'erreur d'inlet (perf_counter)
+        self._marqueur_erreurs_tues = 0        # erreurs tues depuis, dites au prochain message
+        self._marqueurs_seuils_dits = {}       # compteur -> dernier seuil déjà annoncé
         self.active = {}            # {mode_id: ModeRuntime}, dans l'ordre du registre
         # AU PLUS UNE calibration à la fois, tous modes confondus : il n'y a qu'un casque et qu'une
         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
@@ -264,6 +282,13 @@ class EngineServer:
         # `_purge_marqueurs` ne regarde que les modes encore actifs, mais une entrée morte de
         # plus à chaque cycle démarrer/arrêter d'une longue séance, pour rien.
         self._marqueur_curseur.pop(mode_id, None)
+        # ⚠️ Et l'INLET lui-même, dès qu'il ne reste plus un seul mode actif pour l'écouter.
+        # Sans ça, `self.marker_inlet` vivait pour toute la durée du processus : `_ouvre_marker_
+        # inlet` ne recrée rien tant qu'il est non-None, donc redémarrer le mode ne rouvrait PAS
+        # l'inlet — et un étudiant qui ferme puis relance son application de stimulus (le geste
+        # de routine en TP) restait MUET pour toujours, sans exception, sans compteur qui bouge.
+        # Lâcher ici, c'est rendre au tour suivant sa chance de re-résoudre.
+        self._libere_marker_inlet("plus aucun mode actif n'écoute les marqueurs")
         if not any(r.phase in ("warmup", "rest") for r in self.active.values()):
             self.rest_instruction = ""
         print(f"[server] {runtime.spec.label} arrêté — son flux disparaît du réseau")
@@ -703,6 +728,23 @@ class EngineServer:
             "phase": phase,
             "samples_published": self.samples,
             "streams": [stream_name(s) for s in streams],
+            # ⚠️ Les quatre compteurs de marqueurs SORTENT ici, et c'est le point : ils étaient
+            # incrémentés avec soin et lus par personne. `modes/p300.py` les annonce comme le
+            # moyen par lequel trois de ses six pannes sont dites, et `docs/markers.md` dit à
+            # l'étudiant « si ce nombre grimpe » — sans ce champ, la chaîne ne menait nulle part
+            # et un P300 qui ne déclenche jamais restait indiscernable d'un sujet distrait.
+            #
+            # Ils n'entrent PAS dans `_status_key` : un compteur qui bouge ne doit pas compter
+            # comme un changement d'état, sinon la déduplication du flux `status` tombe (mesuré
+            # une fois à 19,6 Hz au lieu de 0,5 Hz). Ils voyagent donc avec le rappel périodique,
+            # ce qui suffit largement pour un indicateur de santé.
+            "marqueurs": {
+                "perdus": self.marqueurs_perdus,
+                "futurs": self.marqueurs_futurs,
+                "illisibles": self.marqueurs_illisibles,
+                "inlet_erreurs": self.marqueurs_inlet_erreurs,
+                "connecte": self.marker_inlet is not None and self.marker_inlet.connecte,
+            },
         }
         if self.rest_instruction and phase in ("warmup", "baseline"):
             state["instruction"] = self.rest_instruction
@@ -813,11 +855,10 @@ class EngineServer:
         l'évaluer une seule fois avant le `while` le laisserait sans, pour toujours, en silence
         — indiscernable d'un flux calme.
 
-        ⚠️ Le nom est résolu UNE SEULE fois, à la création de CET inlet (`self.marker_inlet` reste
-        le même objet pour toute la vie du moteur, cf. son commentaire dans `__init__` : rien ne
-        le remet à `None` quand un mode s'arrête). Changer « Flux de marqueurs » sur un mode déjà
-        démarré, ou même redémarrer ce mode, ne rouvre PAS l'inlet sur un nouveau nom — seul un
-        moteur relancé le ferait. C'est écrit dans l'aide du réglage (`p300.py`), pas seulement ici.
+        ⚠️ Le nom est résolu à la création de CET inlet. Changer « Flux de marqueurs » sur un mode
+        déjà démarré ne rouvre PAS l'inlet sur un nouveau nom : il faut ARRÊTER le mode (ce qui
+        libère l'inlet, cf. `_stop_mode`) puis le redémarrer. C'est écrit dans l'aide du réglage
+        (`p300.py`), pas seulement ici.
         """
         if self.marker_inlet is not None:
             return
@@ -825,15 +866,72 @@ class EngineServer:
             # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
             # chaque tour pour rien.
             return
-        nom = self._nom_flux_marqueurs()
-        self.marker_inlet = MarkerInlet(nom, timeout_s=0.0)
-        if self.marker_inlet.resolve():
-            print(f"[server] marqueurs entrants : connecté à « {nom} »")
-        else:
-            # Pas une erreur : l'application de stimulus démarre souvent APRÈS le moteur. On
-            # réessaiera dans la boucle (voir `_tire_marqueurs`), et le mode dira qu'il attend.
-            print(f"[server] marqueurs entrants : « {nom} » pas encore là — j'attends. Lance "
-                  f"ton application de stimulus, la connexion se fera toute seule.")
+        self.marker_inlet = MarkerInlet(self._nom_flux_marqueurs(), timeout_s=0.0)
+        self._marqueur_attente_dite = False
+        self._resout_marker_inlet()
+
+    def _resout_marker_inlet(self):
+        """Tente la résolution si besoin, et DIT la transition — une seule fois par transition.
+
+        ⚠️ Le message « connecté » était sur le chemin qui n'aboutit presque jamais. Mesuré :
+        `resolve_byprop(timeout=0.0)` échoue aux tout premiers appels d'un processus neuf (0 sur
+        5 en rafale, le temps que le résolveur de liblsl remplisse son cache), puis marche. Or
+        `_ouvre_marker_inlet` ne donnait qu'UNE chance puis imprimait « pas encore là », tandis
+        que la re-tentative de `_tire_marqueurs` — celle qui connecte réellement — n'imprimait
+        RIEN. L'étudiant qui lance le moteur avec son stimulus déjà en route lisait donc « pas
+        encore là » et n'avait jamais la moindre confirmation. Les deux chemins passent
+        maintenant ICI, donc le message suit l'ÉVÉNEMENT et non le chemin.
+        """
+        inlet = self.marker_inlet
+        if inlet is None or inlet.connecte:
+            return
+        if inlet.resolve():
+            self._marqueur_attente_dite = False
+            print(f"[server] marqueurs entrants : connecté à « {inlet.nom} ».")
+            return
+        if not self._marqueur_attente_dite:
+            # Pas une erreur : l'application de stimulus démarre souvent APRÈS le moteur. Dit UNE
+            # fois — la boucle repasse ici 20 fois par seconde.
+            self._marqueur_attente_dite = True
+            print(f"[server] marqueurs entrants : « {inlet.nom} » pas encore là — j'attends "
+                  f"({inlet.refus}). Lance ton application de stimulus, la connexion se fera "
+                  f"toute seule.")
+
+    def _libere_marker_inlet(self, raison):
+        """Lâche l'inlet s'il ne sert plus à aucun mode actif. True s'il y avait quelque chose.
+
+        Appelée depuis `_stop_mode` : garder un inlet ouvert pour personne empêche la
+        re-résolution (`_ouvre_marker_inlet` ne recrée rien tant qu'il est non-None) et fait
+        grossir `_marqueurs` sans personne pour le consommer.
+        """
+        if self.marker_inlet is None:
+            return False
+        if any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
+            return False
+        self._marqueurs_illisibles_clos += self.marker_inlet.illisibles
+        self.marker_inlet.lache(raison)
+        self.marker_inlet = None
+        # Le tampon part avec l'inlet : plus aucun mode ne peut les consommer, donc les garder
+        # ne ferait que gonfler la mémoire d'une longue séance. On le DIT quand il y avait
+        # quelque chose dedans — une perte silencieuse, même inoffensive, reste une perte tue.
+        if self._marqueurs:
+            print(f"[server] marqueurs entrants : flux relâché ({raison}) — "
+                  f"{len(self._marqueurs)} marqueur(s) en attente jetés, plus personne pour les "
+                  f"lire.")
+        self._marqueurs = []
+        self._marqueur_curseur = {}
+        return True
+
+    @property
+    def marqueurs_illisibles(self):
+        """Marqueurs reçus mais indécodables, inlets déjà fermés COMPRIS.
+
+        `docs/markers.md` promet à l'étudiant qu'il verra ce nombre grimper si son émetteur
+        publie autre chose que le JSON attendu. Le lire sur le seul inlet vivant le remettrait à
+        zéro à chaque relance d'émetteur, c'est-à-dire précisément quand il devient intéressant.
+        """
+        vivant = self.marker_inlet.illisibles if self.marker_inlet is not None else 0
+        return self._marqueurs_illisibles_clos + vivant
 
     def _tire_marqueurs(self):
         """Récupère les marqueurs arrivés depuis le tour précédent, puis purge le tampon.
@@ -843,18 +941,66 @@ class EngineServer:
         disparaître en cours de séance (réseau coupé, application de stimulus fermée). Une
         exception ici ne doit tuer NI le moteur NI la séance en cours des AUTRES modes — on
         compte l'incident (`marqueurs_inlet_erreurs`) plutôt que de l'avaler.
+
+        ⚠️ Le message est LIMITÉ EN CADENCE. Mesuré sur un inlet perdu : 310 exceptions en 20 s,
+        soit 20 lignes par seconde, qui noient tout le reste du journal — dont les messages du
+        SSVEP et du neuro qui tournent à côté. On dit la première tout de suite, puis au plus une
+        toutes les `_MARQUEUR_ERREUR_PERIODE_S`, en annonçant combien ont été tues entre-temps :
+        limiter la cadence n'autorise pas à cacher le nombre.
         """
         if self.marker_inlet is None:
             return
         try:
-            if not self.marker_inlet.connecte:
-                self.marker_inlet.resolve()
+            self._resout_marker_inlet()
             self._marqueurs.extend(self.marker_inlet.pull())
         except Exception as e:  # noqa: BLE001 - un incident sur CETTE entrée externe ne doit
             # jamais faire tomber le moteur ni la séance en cours des autres modes (cf. docstring).
+            # L'inlet, lui, s'est déjà LÂCHÉ tout seul si le flux a disparu (`MarkerInlet.pull`) :
+            # le tour suivant re-résoudra, y compris sur un émetteur RELANCÉ.
             self.marqueurs_inlet_erreurs += 1
-            print(f"[server] inlet de marqueurs en erreur : {e}")
+            maintenant = time.perf_counter()
+            if maintenant - self._marqueur_erreur_dite_a >= _MARQUEUR_ERREUR_PERIODE_S:
+                tues = self._marqueur_erreurs_tues
+                suite = f" ({tues} autre(s) incident(s) tu(s) depuis)" if tues else ""
+                print(f"[server] inlet de marqueurs en erreur : {e}{suite} — je réessaie de me "
+                      f"connecter à chaque tour.")
+                self._marqueur_erreur_dite_a = maintenant
+                self._marqueur_erreurs_tues = 0
+            else:
+                self._marqueur_erreurs_tues += 1
+        self._dit_compteurs_marqueurs()
         self._purge_marqueurs()
+
+    def _dit_compteurs_marqueurs(self):
+        """Annonce un compteur de marqueurs quand il franchit un seuil. Une fois par seuil.
+
+        ⚠️ Ces quatre compteurs étaient comptés et lus par PERSONNE : ni `_state`, ni `snapshot`,
+        ni le flux `status`, ni un `print`. Or `modes/p300.py` les ANNONCE comme le moyen par
+        lequel trois de ses six pannes sont dites, et `docs/markers.md` dit à l'étudiant « si ce
+        nombre grimpe ». La chaîne ne menait nulle part. Le cas le plus probable en vrai — un
+        `time_correction()` oublié côté émetteur, donc TOUT qui part dans `marqueurs_futurs` —
+        produisait un P300 qui tourne, ne déclenche jamais, et ne dit rien.
+
+        Par SEUILS (1, 10, 100…) et non à chaque incrément : à 6,7 flashs par seconde, un
+        message par marqueur perdu serait aussi illisible que pas de message du tout.
+        """
+        for cle, valeur, quoi in (
+            ("perdus", self.marqueurs_perdus,
+             "arrivés trop tard pour trouver leur EEG (émetteur en retard, ou tampon trop court)"),
+            ("futurs", self.marqueurs_futurs,
+             "horodatés dans le futur du moteur : `time_correction()` oublié côté émetteur ?"),
+            ("illisibles", self.marqueurs_illisibles,
+             "reçus mais indécodables (JSON invalide, ou « mode »/« event » manquant)"),
+            ("inlet_erreurs", self.marqueurs_inlet_erreurs,
+             "incidents réseau sur le flux entrant"),
+        ):
+            seuil = 0
+            for candidat in _SEUILS_MARQUEURS:
+                if valeur >= candidat:
+                    seuil = candidat
+            if seuil and seuil > self._marqueurs_seuils_dits.get(cle, 0):
+                self._marqueurs_seuils_dits[cle] = seuil
+                print(f"[server] ⚠️ marqueurs {cle} : {valeur} — {quoi}")
 
     def _purge_marqueurs(self):
         """Jette les marqueurs que TOUS les modes qui les écoutent ont dépassés.
@@ -867,17 +1013,34 @@ class EngineServer:
         comme curseur 0 couperait devant lui, perdant en silence tout ce qui lui était adressé —
         sans jamais passer par `marqueurs_perdus`, que `markers_murs` réserve au SEUL rejet muet
         qu'elle autorise (et celui-ci n'en fait pas partie).
+
+        ⚠️ SANS écouteur, en revanche, « ce que TOUS les écouteurs ont dépassé » est TOUT : la
+        version précédente rendait la main (`if not ecouteurs: return`), soit l'inverse exact de
+        cette phrase, et le tampon croissait alors sans borne — mesuré ~5 Mo en 30 min, sans un
+        compteur ni un message. Ce chemin ne devrait plus être atteignable depuis que `_stop_mode`
+        libère l'inlet dès le dernier écouteur arrêté ; il reste écrit juste, parce qu'un garde
+        qui ne tient que par un autre garde ne tient pas.
         """
         if len(self._marqueurs) <= 4096:
             return
         ecouteurs = [mode_id for mode_id, rt in self.active.items()
                     if rt.spec.marker_epoch_s > 0.0]
         if not ecouteurs:
+            print(f"[server] marqueurs entrants : {len(self._marqueurs)} marqueur(s) jetés — "
+                  f"aucun mode actif ne les écoute plus.")
+            self._marqueurs = []
+            self._marqueur_curseur = {}
             return
         coupe = min(self._marqueur_curseur.get(mode_id, 0) for mode_id in ecouteurs)
         if coupe > 2048:
             self._marqueurs = self._marqueurs[coupe:]
-            self._marqueur_curseur = {k: v - coupe for k, v in self._marqueur_curseur.items()}
+            # `max(0, ...)` : les curseurs des modes NON écouteurs (un mode arrêté dont l'entrée
+            # traînerait, un mode dont le `marker_epoch_s` serait passé à 0) n'entrent pas dans
+            # le calcul de `coupe` et peuvent donc être plus PETITS qu'elle. Un index négatif ne
+            # lève pas en Python : il repart de la FIN de la liste, et ce mode relirait alors la
+            # queue du tampon comme si elle était neuve.
+            self._marqueur_curseur = {k: max(0, v - coupe)
+                                      for k, v in self._marqueur_curseur.items()}
 
     def markers_murs(self, mode_id, post_s):
         """Les marqueurs de CE mode dont l'époque tient entièrement dans le tampon.
@@ -1125,6 +1288,11 @@ class EngineServer:
                     self.calibration.cancel()
                     self.calibration = None
                 self.active = {}
+                # APRÈS `self.active = {}`, jamais avant : `_libere_marker_inlet` ne lâche que
+                # s'il ne reste plus un seul écouteur, et c'est cette ligne-là qui le garantit.
+                # Un moteur arrêté n'a plus rien à écouter — garder un inlet LSL ouvert après la
+                # boucle, c'est exactement l'habitude que ce chantier corrige partout ailleurs.
+                self._libere_marker_inlet("le moteur s'arrête")
 
         elapsed = time.perf_counter() - started
         print(f"[server] arrêt : {self.samples} échantillons publiés en {elapsed:.1f} s "
@@ -1276,6 +1444,7 @@ def _smoke():
         _smoke_marqueurs_murs(),
         _smoke_marqueurs_file_coincee(),
         _smoke_marqueurs_inlet(),
+        _smoke_marqueurs_relance(),
         _smoke_marqueurs_stream_in(),
     ]
     return all(resultats)
@@ -2255,6 +2424,14 @@ def _smoke_dimensionnement():
     ⚠️ Assertion DIRECTE sur `server.keep`, et c'est délibéré. Observer qu'une époque « sort »
     ne prouve RIEN : un tampon sous-dimensionné rend quand même ce qu'on lui demande, juste
     plus court. Ce piège a déjà été rencontré au chantier 3B, sur la calibration MI.
+
+    ⚠️ Et surtout : les deux premières assertions ne peuvent PAS ÉCHOUER telles quelles. Le seul
+    mode marqueur du catalogue demande 0,95 s, donc `attendu` vaut 488 échantillons contre un
+    `keep` de 1250 imposé par d'AUTRES consommateurs (la calibration MI et ses époques de 4 s).
+    Elles sont vraies par construction — et elles resteraient vraies si le terme `marker_epoch_s`
+    disparaissait entièrement du `max()` de `__init__`. Un test qui ne peut pas rougir ne protège
+    rien. Le troisième bloc ci-dessous existe pour ça : il déclare un mode marqueur PLUS GOURMAND
+    que tous les autres consommateurs réunis, ce qui rend le terme, et lui seul, décisif.
     """
     ok = True
 
@@ -2263,7 +2440,7 @@ def _smoke_dimensionnement():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-dimensionnement")
     besoin = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
     attendu = int(round((besoin + MARKER_LATE_S) * srv.acq.fs))
     chk(srv.keep >= attendu,
@@ -2272,6 +2449,30 @@ def _smoke_dimensionnement():
     chk(besoin > 0.0,
         f"au moins un mode déclare une époque de marqueur ({besoin:g} s) — sans ça l'assertion "
         f"ci-dessus serait vraie à vide et ne prouverait rien")
+
+    # Le mode marqueur le plus gourmand du catalogue est DOMINÉ par les autres consommateurs du
+    # tampon : on en déclare donc un qui les domine tous, le temps de ce test. 30 s d'époque
+    # contre 4 s pour la calibration MI, la plus gourmande aujourd'hui — aucune ambiguïté sur
+    # quel terme décide. Le motif (patcher `registry.MODES` puis restaurer) est celui de
+    # `_smoke_marqueurs_inlet`.
+    from core.modes import registry as _registry
+    from core.modes.contract import ModeSpec
+    from core.modes.runtime import ModeRuntime
+
+    gourmand = ModeSpec(id="smoke-gourmand", label="Gourmand (test)", family="actif", summary="",
+                        status="moteur", stream="decoded_smoke_gourmand", channels=("x",),
+                        marker_epoch_s=30.0, runtime_cls=ModeRuntime)
+    avant_registre = _registry.MODES
+    _registry.MODES = avant_registre + (gourmand,)
+    try:
+        gros = EngineServer(synthetic=True, modes=(), params={},
+                            instance="smoke-dimensionnement-2")
+        exige = int(round((30.0 + MARKER_LATE_S) * gros.acq.fs))
+        chk(gros.keep >= exige,
+            f"un mode déclarant une époque de 30 s force keep={gros.keep} >= {exige} — c'est "
+            f"CETTE assertion qui tombe si le terme `marker_epoch_s` quitte le max() de __init__")
+    finally:
+        _registry.MODES = avant_registre
     print(f"[smoke-dimensionnement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -2282,6 +2483,18 @@ def _smoke_tampon_horodate():
     Un décalage d'un seul échantillon entre `recent` et `recent_ts` déplace TOUTES les époques
     sans rien casser de visible : le décodeur reçoit du signal, de la bonne taille, pris au
     mauvais endroit.
+
+    ⚠️ Une égalité de LONGUEURS ne prouve pas l'ALIGNEMENT, et c'était le seul contrôle existant.
+    Elle ne voit aucun décalage TEMPOREL à longueur égale, et elle devient vide dès que les deux
+    tampons saturent à `keep` — c'est-à-dire toujours, en séance réelle. La mutation
+    `np.concatenate([self.recent_ts, ts_lsl + 1.0 / self.acq.fs])` (un échantillon d'écart, la
+    faute la plus plausible) passait TOUTE la suite de tests, y compris le test d'alignement du
+    P300, qui travaille sur des tableaux fabriqués.
+
+    L'assertion qui ferme le trou est la dernière : `srv.new_block` porte `(eeg, ts_lsl)` du
+    DERNIER bloc lu par la boucle, celui-là même qui vient d'être empilé. La QUEUE des deux
+    tampons doit donc être exactement ce bloc — valeurs ET horodatages, à l'identique. Ça
+    épingle d'un coup la longueur, l'ordre, le décalage et toute transformation glissée en route.
     """
     ok = True
 
@@ -2290,7 +2503,7 @@ def _smoke_tampon_horodate():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-tampon")
     srv.run(duration_s=3.0)
     chk(len(srv.recent) == len(srv.recent_ts),
         f"les deux tampons ont la même longueur ({len(srv.recent)} et {len(srv.recent_ts)})")
@@ -2301,6 +2514,24 @@ def _smoke_tampon_horodate():
     chk(bool(np.median(diffs) > 0.5 * attendu and np.median(diffs) < 2.0 * attendu),
         f"et la cadence médiane vaut ~1/fs ({np.median(diffs) * 1000:.2f} ms attendu "
         f"{attendu * 1000:.2f} ms)")
+
+    # L'ALIGNEMENT lui-même, contre le dernier bloc réellement lu.
+    bloc = srv.new_block
+    chk(bloc is not None,
+        "le dernier tour de boucle a bien lu un bloc (sans quoi l'alignement ne serait pas "
+        "vérifiable ici)")
+    if bloc is not None:
+        eeg, ts_lsl = bloc
+        n = len(eeg)
+        chk(n > 0 and n <= len(srv.recent),
+            f"ce bloc ({n} échantillons) tient dans le tampon ({len(srv.recent)})")
+        chk(bool(np.array_equal(srv.recent[-n:], eeg)),
+            f"la QUEUE de `recent` est exactement le dernier bloc lu, valeur pour valeur "
+            f"({n} échantillons)")
+        chk(bool(np.array_equal(srv.recent_ts[-n:], ts_lsl)),
+            f"...et la queue de `recent_ts` est exactement les horodatages de CE bloc — c'est "
+            f"l'assertion qui rougit sur un décalage d'un seul échantillon "
+            f"(écart max {float(np.max(np.abs(srv.recent_ts[-n:] - ts_lsl))) * 1000:.4f} ms)")
     print(f"[smoke-tampon] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -2314,7 +2545,7 @@ def _smoke_marqueurs_murs():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs")
     fs = srv.acq.fs
     # Tampon fabriqué : 3 s de temps qui avance, à partir de t=100.
     srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
@@ -2325,8 +2556,13 @@ def _smoke_marqueurs_murs():
                       (101.5, {"mode": "errp", "event": "feedback"})]
     srv._marqueur_curseur = {}
 
+    # `.get("target")` partout, jamais `["target"]` : la liste `resultats` de `_smoke()` est
+    # construite EN AMONT, donc une exception levée ICI ferait sauter TOUS les sous-tests
+    # suivants — exactement le court-circuit que le passage de `and` à `all()` venait de
+    # supprimer, et sans même imprimer un verdict. Un marqueur qui échapperait au filtre n'a pas
+    # forcément de clé « target » : on veut un ÉCHEC propre via `chk`, pas un `KeyError`.
     murs = srv.markers_murs("p300", post_s=0.80)
-    chk([m[1]["target"] for m in murs] == [1],
+    chk([m[1].get("target") for m in murs] == [1],
         f"seul le marqueur dont les 0,80 s suivantes sont dans le tampon est rendu ({murs})")
     chk(all(m[1]["mode"] == "p300" for m in murs),
         "et le marqueur d'un AUTRE mode n'est jamais rendu à celui-ci")
@@ -2339,7 +2575,7 @@ def _smoke_marqueurs_murs():
     srv.recent_ts = np.arange(100.0, 104.0, 1.0 / fs)
     srv.recent = np.zeros((len(srv.recent_ts), 8))
     murs = srv.markers_murs("p300", post_s=0.80)
-    chk([m[1]["target"] for m in murs] == [2],
+    chk([m[1].get("target") for m in murs] == [2],
         f"le tampon ayant avancé, le suivant mûrit à son tour ({murs})")
 
     # Un marqueur PLUS VIEUX que le tampon est PERDU, et compté.
@@ -2381,6 +2617,57 @@ def _smoke_marqueurs_murs():
         f"le marqueur errp, MÛR et EXAMINÉ dans ce même appel, n'empêche pas le p300 valide de "
         f"sortir mais lui-même n'est jamais rendu à p300 ({murs})")
 
+    # Les FRONTIÈRES EXACTES des trois comparaisons. Elles n'étaient testées nulle part : chaque
+    # test tombait franchement d'un côté ou de l'autre, donc passer un `>` en `>=` (ou l'inverse)
+    # ne faisait rougir aucune assertion. Ce sont pourtant les trois seules décisions de
+    # `markers_murs`, et un marqueur pile à la limite est le cas NORMAL d'un émetteur régulier.
+    srv.recent_ts = np.arange(300.0, 303.0, 1.0 / fs)
+    srv.recent = np.zeros((len(srv.recent_ts), 8))
+    vieux, recent = float(srv.recent_ts[0]), float(srv.recent_ts[-1])
+    srv._marqueurs = [(recent + MARKER_LATE_S, {"mode": "p300", "event": "flash", "target": 6})]
+    srv._marqueur_curseur = {}
+    avant_f = srv.marqueurs_futurs
+    srv.markers_murs("p300", post_s=0.80)
+    chk(srv.marqueurs_futurs == avant_f,
+        f"un marqueur PILE à la tolérance de futur n'est pas compté futur : la comparaison est "
+        f"strictement > (futurs={srv.marqueurs_futurs}, attendu {avant_f})")
+
+    srv._marqueurs = [(vieux, {"mode": "p300", "event": "flash", "target": 7})]
+    srv._marqueur_curseur = {}
+    avant_p = srv.marqueurs_perdus
+    murs = srv.markers_murs("p300", post_s=0.80)
+    chk(srv.marqueurs_perdus == avant_p and [m[1].get("target") for m in murs] == [7],
+        f"un marqueur PILE sur le plus vieil échantillon du tampon n'est pas perdu, il sort "
+        f"(perdus={srv.marqueurs_perdus}, rendus={[m[1].get('target') for m in murs]})")
+
+    srv._marqueurs = [(recent - 0.80, {"mode": "p300", "event": "flash", "target": 8})]
+    srv._marqueur_curseur = {}
+    murs = srv.markers_murs("p300", post_s=0.80)
+    chk([m[1].get("target") for m in murs] == [8],
+        f"un marqueur dont l'époque finit PILE sur le dernier échantillon est MÛR, pas retenu "
+        f"un tour de plus ({murs})")
+
+    # Et les compteurs SORTENT : ils étaient incrémentés avec soin et lus par personne, alors que
+    # `modes/p300.py` les annonce comme le moyen par lequel trois de ses six pannes sont dites et
+    # que `docs/markers.md` promet à l'étudiant qu'il les verra grimper. Ils valent 1 et 1 ici
+    # (pas 0), donc un `_state()` qui écrirait des zéros en dur ne passerait pas.
+    etat = srv._state(True, calibration=None)
+    chk(etat.get("marqueurs", {}).get("perdus") == srv.marqueurs_perdus == 1,
+        f"l'état publié porte le compte des marqueurs PERDUS ({etat.get('marqueurs')})")
+    chk(etat.get("marqueurs", {}).get("futurs") == srv.marqueurs_futurs == 1,
+        f"...et celui des marqueurs FUTURS ({etat.get('marqueurs')})")
+    chk(etat.get("marqueurs", {}).get("illisibles") == 0
+        and etat.get("marqueurs", {}).get("inlet_erreurs") == 0,
+        f"...et les deux autres, à zéro tant que rien n'a mal tourné ({etat.get('marqueurs')})")
+    chk(etat.get("marqueurs", {}).get("connecte") is False,
+        f"...et l'état dit aussi si l'oreille est CONNECTÉE ({etat.get('marqueurs')})")
+    # Un compteur ne doit PAS compter comme un changement d'état : sans ça la déduplication du
+    # flux `status` tombe et le moteur émet à 20 Hz au lieu de 0,5 Hz (mesuré une fois à 19,6 Hz).
+    cle_avant = srv._status_key(True)
+    srv.marqueurs_perdus += 100
+    chk(srv._status_key(True) == cle_avant,
+        "un compteur qui bouge ne déclenche PAS une republication d'état (déduplication)")
+
     print(f"[smoke-marqueurs] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -2410,7 +2697,7 @@ def _smoke_marqueurs_file_coincee():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-file")
     fs = srv.acq.fs
     srv.recent_ts = np.arange(100.0, 103.0, 1.0 / fs)
     srv.recent = np.zeros((len(srv.recent_ts), 8))
@@ -2423,7 +2710,7 @@ def _smoke_marqueurs_file_coincee():
 
     avant = srv.marqueurs_futurs
     murs = srv.markers_murs("p300", post_s=0.80)
-    chk([m[1]["target"] for m in murs] == [1],
+    chk([m[1].get("target") for m in murs] == [1],
         f"un marqueur futur placé DEVANT un marqueur valide ne le bloque pas : le valide sort "
         f"quand même ({murs})")
     chk(srv.marqueurs_futurs == avant + 1,
@@ -2498,7 +2785,7 @@ def _smoke_marqueurs_inlet():
         thread.join(timeout=5.0)
 
     # --- B, C, D, E : purge, arrêt, robustesse — sur un moteur qui ne tourne pas ---------------
-    srv2 = EngineServer(synthetic=True, modes=(), params={})
+    srv2 = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-inlet-2")
     a = ModeSpec(id="smoke-marqueur-a", label="A", family="actif", summary="", status="moteur",
                 stream="decoded_smoke_a", channels=("x",), marker_epoch_s=0.8,
                 runtime_cls=ModeRuntime)
@@ -2532,11 +2819,20 @@ def _smoke_marqueurs_inlet():
         f"_stop_mode retire le curseur du mode qu'il arrête ({srv2._marqueur_curseur})")
 
     # D. L'IMPORTANT 4 : une exception de l'inlet est comptée, pas avalée en silence.
+    # Le faux inlet porte les MÊMES attributs que le vrai (`illisibles`, `lache`) : un double de
+    # test qui n'expose qu'une partie de l'interface finit par diverger d'elle en silence, et
+    # c'est alors le test qui casse au lieu du code.
     class _InletExplosif:
         connecte = True
+        illisibles = 0
+        nom = "inlet-explosif"
+        refus = ""
 
         def resolve(self):
             return True
+
+        def lache(self, raison=""):
+            return False
 
         def pull(self):
             raise RuntimeError("réseau perdu (simulé)")
@@ -2561,7 +2857,176 @@ def _smoke_marqueurs_inlet():
     srv2._ouvre_marker_inlet()
     chk(srv2.marker_inlet is objet_avant, "un appel suivant ne recrée pas l'inlet (idempotent)")
 
+    # `srv2` n'est jamais passé par `run()`, or c'est le `finally` de `run()` qui casse le cycle
+    # `EngineServer ↔ ModeRuntime` (un runtime garde `self.engine`). Laissé vivant, ce cycle
+    # retarde le nettoyage du `BoardShim` jusqu'à un passage du ramasse-miettes cyclique, et son
+    # `__del__` tardif peut alors libérer la session d'un AUTRE moteur du même processus — le
+    # destructeur zombie documenté le 2026-07-28 (`BOARD_NOT_CREATED_ERROR`). Inoffensif ici
+    # seulement parce qu'aucun sous-test ne démarre de board APRÈS celui-ci ; ça ne se remarque
+    # pas quand ça cesse d'être vrai, donc on casse le cycle explicitement.
+    srv2.active = {}
+
     print(f"[smoke-marqueurs-inlet] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_marqueurs_relance():
+    """L'émetteur meurt, puis REVIENT. Le moteur doit le réentendre tout seul.
+
+    « Je ferme le stimulus et je le relance » est un geste de routine en TP, et c'était la panne
+    la plus coûteuse du sous-système : l'inlet n'était re-résolu que `if not connecte`, `connecte`
+    restait `True` à vie, et le `recover=True` par défaut faisait attendre indéfiniment le retour
+    de l'ANCIEN `source_id` — que l'émetteur de référence déclare par PID, donc qui ne revient
+    jamais. Mesuré, deux processus, avant correctif :
+
+        [B] émetteur #1 vivant : 13 marqueurs | [C] fermé : 1 | [D] #2 RELANCÉ : 0 -> MUET
+        [E] un inlet NEUF : 13 -> le flux #2 est pourtant bien là
+
+    Aucune exception, `marqueurs_inlet_erreurs` immobile à 0, et redémarrer le mode n'y changeait
+    rien. Avec `recover=False`, la disparition lève `LostError`, `MarkerInlet.pull` lâche l'inlet,
+    et la boucle re-résout : mesuré 51 marqueurs après relance, contre 0.
+
+    ⚠️ Ce test ne lance PAS deux processus : détruire le `StreamOutlet` côté Python suffit à
+    produire exactement le même `LostError` côté inlet (vérifié en sonde avant d'écrire ce test —
+    même enchaînement B/C/D/E/F que la mesure à deux processus ci-dessus). Ce qu'il ne couvre
+    donc PAS, et qu'il faut savoir : la mort BRUTALE d'un processus émetteur (Ctrl-C, plantage),
+    où c'est le système qui ferme les sockets. La sonde à deux processus a montré le même
+    comportement dans ce cas, mais elle n'est pas rejouée ici.
+    """
+    import io
+    import types
+    from contextlib import redirect_stdout
+
+    from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    nom = "EEG_API_Unicorn_smoke_relance"
+
+    def faux_runtime():
+        """Un écouteur minimal : `_stop_mode` et `_nom_flux_marqueurs` n'en demandent pas plus.
+
+        Un vrai `P300Runtime` exigerait un modèle entraîné, que ce test n'a aucune raison d'avoir.
+        """
+        rt = types.SimpleNamespace()
+        rt.spec = types.SimpleNamespace(marker_epoch_s=0.8, label="Écoute (test)")
+        rt.params = {"stream_in": nom}
+        rt.phase = "running"
+        rt.close = lambda: None
+        return rt
+
+    def tourne(srv, secondes, condition):
+        """Fait tourner `_tire_marqueurs` comme la boucle du moteur, jusqu'à `condition`."""
+        echeance = time.time() + secondes
+        while time.time() < echeance:
+            srv._tire_marqueurs()
+            if condition():
+                return True
+            time.sleep(0.05)
+        return False
+
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-relance")
+    srv.active = {"smoke-ecoute": faux_runtime()}
+
+    # --- A. Un premier émetteur : le moteur se connecte et reçoit. -----------------------------
+    o1 = StreamOutlet(StreamInfo(nom, "Markers", 1, IRREGULAR_RATE, "string", "smoke-emetteur-1"))
+    try:
+        srv._ouvre_marker_inlet()
+        tourne(srv, 10.0, lambda: srv.marker_inlet is not None and srv.marker_inlet.connecte)
+        chk(srv.marker_inlet is not None and srv.marker_inlet.connecte,
+            "le moteur se connecte au premier émetteur")
+        o1.push_sample(['{"mode":"p300","event":"flash","target":1}'], timestamp=local_clock())
+        tourne(srv, 5.0, lambda: bool(srv._marqueurs))
+        chk(len(srv._marqueurs) == 1 and srv._marqueurs[0][1].get("target") == 1,
+            f"...et ses marqueurs arrivent ({srv._marqueurs})")
+    finally:
+        del o1
+
+    # --- B. L'émetteur DISPARAÎT : l'inlet doit redevenir « non connecté ». (IMPORTANT 1.5) ----
+    avant_erreurs = srv.marqueurs_inlet_erreurs
+    vu = tourne(srv, 20.0, lambda: not srv.marker_inlet.connecte)
+    chk(vu and not srv.marker_inlet.connecte,
+        "l'émetteur disparu, l'inlet redevient NON CONNECTÉ — sans quoi le moteur se croit "
+        "connecté pour toujours et ne re-résout jamais")
+    chk(srv.marqueurs_inlet_erreurs > avant_erreurs,
+        f"...et l'incident est COMPTÉ, pas avalé ({srv.marqueurs_inlet_erreurs})")
+
+    # --- C. Un émetteur NEUF (source_id différent, comme un vrai relancement). (CRITIQUE 1.4) --
+    o2 = StreamOutlet(StreamInfo(nom, "Markers", 1, IRREGULAR_RATE, "string", "smoke-emetteur-2"))
+    try:
+        srv._marqueurs = []
+        srv._marqueur_curseur = {}
+        tourne(srv, 15.0, lambda: srv.marker_inlet.connecte)
+        chk(srv.marker_inlet.connecte,
+            "le moteur se RECONNECTE tout seul à l'émetteur relancé : c'est le CRITIQUE 1.4, "
+            "où il restait muet pour toujours sans qu'aucun compteur ne bouge")
+        o2.push_sample(['{"mode":"p300","event":"flash","target":2}'], timestamp=local_clock())
+        tourne(srv, 5.0, lambda: bool(srv._marqueurs))
+        chk(len(srv._marqueurs) >= 1 and srv._marqueurs[-1][1].get("target") == 2,
+            f"...et les marqueurs du NOUVEL émetteur arrivent vraiment ({srv._marqueurs})")
+    finally:
+        del o2
+
+    # --- D. Le message d'erreur est LIMITÉ EN CADENCE. ----------------------------------------
+    # Mesuré avant correctif : 310 exceptions en 20 s, soit 20 lignes par seconde, qui noient le
+    # journal des modes qui tournent à côté. On martèle 50 tours sur un inlet qui échoue toujours
+    # et on COMPTE les lignes imprimées, plutôt que de faire confiance à la relecture.
+    class _InletMort:
+        connecte = True
+        illisibles = 0
+        nom = "inlet-mort"
+        refus = ""
+
+        def resolve(self):
+            return True
+
+        def lache(self, raison=""):
+            return False
+
+        def pull(self):
+            raise RuntimeError("réseau perdu (simulé)")
+
+    srv.marker_inlet = _InletMort()
+    srv._marqueur_erreur_dite_a = 0.0
+    srv._marqueur_erreurs_tues = 0
+    avant_erreurs = srv.marqueurs_inlet_erreurs
+    capture = io.StringIO()
+    with redirect_stdout(capture):
+        for _ in range(50):
+            srv._tire_marqueurs()
+    lignes = [ligne for ligne in capture.getvalue().splitlines()
+              if "inlet de marqueurs en erreur" in ligne]
+    chk(len(lignes) == 1,
+        f"50 tours en erreur = UN seul message, pas 50 ({len(lignes)}) : {lignes[:2]}")
+    chk(srv.marqueurs_inlet_erreurs == avant_erreurs + 50,
+        f"...mais les 50 incidents sont TOUS comptés — limiter la cadence n'autorise pas à "
+        f"cacher le nombre ({srv.marqueurs_inlet_erreurs - avant_erreurs})")
+
+    # --- E. Le dernier écouteur s'arrête : l'inlet est LÂCHÉ, le tampon aussi. -----------------
+    srv.marker_inlet = None
+    srv._ouvre_marker_inlet()
+    chk(srv.marker_inlet is not None, "un écouteur actif : un inlet existe")
+    srv._marqueurs = [(1.0, {"mode": "p300", "event": "flash", "target": 0})]
+    srv._stop_mode("smoke-ecoute")
+    chk(srv.marker_inlet is None,
+        "arrêter le DERNIER écouteur libère l'inlet — sans ça, `_ouvre_marker_inlet` ne recrée "
+        "jamais rien et redémarrer le mode ne répare pas")
+    chk(srv._marqueurs == [] and srv._marqueur_curseur == {},
+        f"...et le tampon de marqueurs part avec lui, plutôt que de croître sans personne pour "
+        f"le lire ({srv._marqueurs})")
+    srv.active = {"smoke-ecoute": faux_runtime()}
+    srv._ouvre_marker_inlet()
+    chk(srv.marker_inlet is not None,
+        "...et redémarrer un mode marqueur en ouvre un NEUF, qui peut donc trouver le nouvel "
+        "émetteur")
+    srv.active = {}
+
+    print(f"[smoke-marqueurs-relance] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
@@ -2592,7 +3057,7 @@ def _smoke_marqueurs_stream_in():
         rt.params = {"stream_in": stream_in} if stream_in is not None else {}
         return rt
 
-    srv = EngineServer(synthetic=True, modes=(), params={})
+    srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-stream-in")
 
     # 1. Aucun mode actif n'écoute les marqueurs -> le défaut.
     srv.active = {}
@@ -2634,7 +3099,7 @@ def _smoke_marqueurs_stream_in():
     # 6. Preuve BOUT EN BOUT : `_ouvre_marker_inlet` (pas seulement le helper isolé) crée bien
     # son inlet sur le nom du mode actif — c'est LA méthode qui portait `MARKER_STREAM_DEFAULT`
     # en dur avant ce correctif, celle que la preuve rouge/vert du rapport casse et répare.
-    srv2 = EngineServer(synthetic=True, modes=(), params={})
+    srv2 = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-stream-in-2")
     srv2.active = {"p300": faux_runtime(0.95, stream_in="flux_bout_en_bout")}
     srv2._ouvre_marker_inlet()
     chk(srv2.marker_inlet is not None

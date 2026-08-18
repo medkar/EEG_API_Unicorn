@@ -609,9 +609,19 @@ P300_MIDLINE = [0, 2, 4]      # Fz, Cz, Pz — indices des voies où le P300 est
 
 # --- Marqueurs ENTRANTS (§12.1 : le moteur écoute une application externe) ------------------
 MARKER_STREAM_DEFAULT = "EEG_API_Unicorn_stim"   # nom du flux de marqueurs qu'on écoute par défaut
-MARKER_LATE_S = 1.0       # retard toléré pour un marqueur (réseau + horloge). Dimensionne le
-                          # tampon du moteur AVEC l'époque du mode : un marqueur arrivé après ce
-                          # délai ne trouve plus son EEG et sera compté comme perdu, jamais ignoré.
+MARKER_LATE_S = 1.0       # DÉSACCORD toléré entre l'horloge de l'émetteur et celle du moteur,
+                          # dans les DEUX sens — c'est une seule constante pour deux emplois, et
+                          # les confondre a déjà trompé une relecture :
+                          #   • vers le PASSÉ (le retard) : elle dimensionne le tampon du moteur
+                          #     AVEC l'époque du mode (`EngineServer.__init__`), pour qu'un
+                          #     marqueur arrivé en retard trouve encore son EEG. Au-delà il est
+                          #     compté comme perdu (`marqueurs_perdus`), jamais ignoré.
+                          #   • vers le FUTUR : `markers_murs` compte à part (`marqueurs_futurs`)
+                          #     tout marqueur horodaté plus de MARKER_LATE_S APRÈS le dernier
+                          #     échantillon acquis. C'est la signature du `time_correction()`
+                          #     oublié entre deux machines — le projet a mesuré 45 jours d'écart.
+                          # La symétrie est volontaire : une horloge qui dérive ne choisit pas
+                          # son sens, et deux constantes finiraient par diverger.
 # Délai au-delà duquel une manche P300 sans nouveau flash est ABANDONNÉE plutôt que gardée en
 # attente indéfiniment — le cas normal d'un plantage de l'application de stimulus en pleine
 # manche (jamais de `round_end`). Largement au-dessus d'une manche normale à SOA 150 ms (8 rép ×
