@@ -5,10 +5,15 @@ leurs unités. Tout ce qui est publié ici est donc du **contrat public** — le
 code des étudiants. C'est aussi pour ça que chaque flux porte ses métadonnées (noms de voies,
 unité, seuils) : un client peut se décrire l'API tout seul, sans documentation externe.
 
-Trois flux au MVP :
-    <PREFIX>_raw       8 voies µV @ 250 Hz     — le signal brut
-    <PREFIX>_quality   8 σ par voie, ~1 Hz     — la santé des électrodes
-    <PREFIX>_status    JSON, événementiel      — l'état du moteur
+Les flux publiés, dans l'ordre où ce fichier les définit :
+    <PREFIX>_raw            8 voies µV @ 250 Hz    — le signal brut
+    <PREFIX>_quality        8 σ par voie, ~1 Hz    — la santé des électrodes
+    <PREFIX>_decoded_ssvep  ~5 Hz                  — quelle cible l'utilisateur regarde
+    <PREFIX>_decoded_neuro  ~5 Hz                  — trois indices d'état mental (BCI passive)
+    <PREFIX>_decoded_mi     ~5 Hz                  — quelle imagerie motrice
+    <PREFIX>_decoded_p300   une fois par manche    — quelle cible a été sélectionnée
+    <PREFIX>_status         JSON, événementiel     — l'état du moteur
+Les trois premiers du MVP sont devenus sept : un flux `decoded_*` par mode publié par le moteur.
 
 Autotest (sans casque, sans LSL entrant) :
     python src/core/lsl_io.py
@@ -222,6 +227,9 @@ class DecodedSSVEPPublisher:
         desc.append_child_value("decision_scale", decision_scale)
         desc.append_child_value("threshold", str(thresholds[0]))
         desc.append_child_value("margin", str(thresholds[1]))
+        # Le sens de -1 voyage dans les MÉTADONNÉES ici aussi, comme pour le MI et le P300 : la
+        # docstring le dit depuis toujours, mais un client Unity ou MATLAB ne lit que `desc()`.
+        desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
 
     def push(self, target_index, freq_hz, confidence, scores, lsl_ts=None):
@@ -367,13 +375,22 @@ class DecodedP300Publisher:
 
     Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
     Un client qui attend un débit régulier attendrait pour rien.
+
+    ⚠️ **Quand `target_index` vaut -1, ni `confidence` ni les `score_*` ne sont des mesures.**
+    Ils valent 0 — et 0 n'est PAS une valeur basse sur une échelle de log-odds : un gagnant P300
+    a couramment un score négatif. Ne les lis que lorsque `target_index >= 0` ; le journal du
+    moteur, lui, imprime la raison du refus.
     """
 
-    def __init__(self, n_targets, reps, instance=""):
+    # Le nom du flux, écrit UNE fois : `modes/p300.py` le reprend pour son `ModeSpec` au lieu de
+    # réécrire le littéral. Deux sources pour un contrat public finissent par diverger.
+    SUFFIXE = "decoded_p300"
+
+    def __init__(self, n_targets, max_reps, margin=0.0, instance=""):
         self.n_targets = int(n_targets)
         labels = p300_channel_labels(self.n_targets)
-        info = StreamInfo(stream_name("decoded_p300"), "Decoded", len(labels),
-                          IRREGULAR_RATE, "float32", _source_id("decoded_p300", instance))
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
         chans = info.desc().append_child("channels")
         for label in labels:
             ch = chans.append_child("channel")
@@ -381,11 +398,21 @@ class DecodedP300Publisher:
         desc = info.desc().append_child("decoding")
         desc.append_child_value("paradigm", "P300")
         desc.append_child_value("n_targets", str(self.n_targets))
-        desc.append_child_value("reps", str(int(reps)))
+        # ⚠️ Un PLAFOND, pas le nombre de répétitions de la manche : c'est l'application EXTERNE
+        # qui décide combien de fois elle fait flasher chaque cible, et le moteur ne le sait pas.
+        # Ce champ annonçait `P300_REPS` comme si c'était un fait ; à `--reps 12` il mentait. Ce
+        # qu'il dit maintenant est vrai parce que le moteur l'APPLIQUE : au-delà de ce nombre de
+        # flashs pour une même cible, la manche est abandonnée (cf. `_MAX_PAR_CIBLE`).
+        desc.append_child_value("max_reps_per_target", str(int(max_reps)))
         # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
         # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
         # sans cette indication, un seuil côté client n'aurait aucun sens.
         desc.append_child_value("decision_scale", "logodds")
+        # L'écart 1er-2e exigé pour émettre autre chose que -1. Le SSVEP publie `threshold` et
+        # `margin`, le MI `threshold`/`min_votes`/`vote_len` ; le P300 était le seul publieur
+        # `decoded_*` à appliquer une règle de décision sans la dire. Il n'a pas de seuil absolu
+        # (les log-odds ne sont pas comparables d'une personne à l'autre), donc `margin` seule.
+        desc.append_child_value("margin", str(margin))
         desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
 
@@ -529,16 +556,37 @@ def _autotest():
     print(f"  voies decoded_p300 : {labels}")
     assert labels == ["target_index", "confidence", "n_flashes",
                       "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
-    pub = DecodedP300Publisher(6, reps=8, instance="selftest-p300")
+    pub = DecodedP300Publisher(6, max_reps=8, margin=0.75, instance="selftest-p300")
     pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
     pub.push(-1, 0.0, 12, [0.0] * 6)
     print("  [lsl] decoded_p300 publie sans lever")
     # Le sens de -1 doit être lisible dans les MÉTADONNÉES, pas seulement dans une docstring
     # qu'un client Unity/MATLAB n'ouvrira jamais — même exigence que `DecodedMIPublisher`
     # (no_decision_index) juste au-dessus.
-    no_decision = pub.outlet.get_info().desc().child("decoding").child_value("no_decision_index")
+    deco = pub.outlet.get_info().desc().child("decoding")
+    no_decision = deco.child_value("no_decision_index")
     print(f"  decoded_p300 no_decision_index (métadonnées) : {no_decision!r}")
     assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
+    # La RÈGLE DE DÉCISION doit voyager comme celle du SSVEP et du MI : sans la marge, un client
+    # ne peut pas savoir pourquoi une manche complète a rendu -1.
+    marge = deco.child_value("margin")
+    print(f"  decoded_p300 margin (métadonnées) : {marge!r}")
+    assert marge == "0.75", f"margin attendue '0.75', reçue {marge!r}"
+    # Et `reps` est devenu `max_reps_per_target` : un PLAFOND que le moteur applique, pas une
+    # affirmation sur une application externe qu'il ne contrôle pas.
+    plafond = deco.child_value("max_reps_per_target")
+    ancien = deco.child_value("reps")
+    print(f"  decoded_p300 max_reps_per_target : {plafond!r} (ancien champ `reps` : {ancien!r})")
+    assert plafond == "8", f"max_reps_per_target attendu '8', reçu {plafond!r}"
+    assert ancien == "", "le champ `reps` (le nombre de l'appli externe) ne doit plus être publié"
+
+    # 7. Le sens de -1 manquait aussi au SSVEP, le plus ancien des publieurs `decoded_*`.
+    pub_ssvep = DecodedSSVEPPublisher((15.0, 20.0), decision_scale="z", thresholds=(3.0, 0.5),
+                                      instance="selftest-ssvep")
+    ssvep_deco = pub_ssvep.outlet.get_info().desc().child("decoding")
+    print(f"  decoded_ssvep no_decision_index : "
+          f"{ssvep_deco.child_value('no_decision_index')!r}")
+    assert ssvep_deco.child_value("no_decision_index") == "-1", "no_decision_index manquant (SSVEP)"
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
