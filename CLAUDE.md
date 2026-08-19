@@ -26,7 +26,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
 - L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès au **dernier
-  mode que le moteur ne sait pas faire** : le c-VEP. Le SSVEP, le neuro, le **Motor Imagery**, l'**ErrP** et
+  mode que le moteur ne sait pas faire** (le c-VEP) **et le seul endroit où calibrer le P300 et
+  l'ErrP** — leur stimulus doit être verrouillé à la frame, d'où `Calib(kind="natif")` dans leurs
+  deux `ModeSpec`. C'est le geste que le moteur lui-même prescrit quand il refuse de démarrer. Le SSVEP, le neuro, le **Motor Imagery**, l'**ErrP** et
   le **P300** sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
   « Calibrer » sur sa page joue la séance et affiche un modèle horodaté avec son accuracy honnête.
   Les anciens écrans pygame du MI (calibration, pilotage) sont **archivés**, pas supprimés, dans

@@ -358,13 +358,13 @@ python src/research/p300_stimulus.py --windowed
 Le décodage sera du hasard en synthétique — ce qu'on vérifie, c'est que le tuyau porte le second
 paradigme sans qu'on ait rien redécouvert.
 
-⚠️ **La console, pas le moteur nu.** Trois des cinq points ci-dessous demandent une page et un
-réglage, qui n'existent que dans la console ; et `server.py` est *headless*, il n'a ni page ErrP ni
-option `tnr_target`. La console crée son propre moteur, donc **lancer les deux publierait `decoded_errp`
-deux fois sous le même nom** — exactement le piège que CLAUDE.md interdit.
+⚠️ **La console, pas le moteur nu.** Le **dernier** point ci-dessous, et les deux encadrés ⚠️,
+demandent une page et un réglage qui n'existent que dans la console ; `server.py` est *headless*, il
+n'a ni page ErrP ni option `tnr_target`. La console crée son propre moteur, donc **lancer les deux
+publierait `decoded_errp` deux fois sous le même nom** — exactement le piège que CLAUDE.md interdit.
 
 ```bash
-# terminal 1 — la console (coche « publié » sur la page ErrP)
+# terminal 1 — la console (le mode démarre déjà « publié » ; la case est sur la TUILE, pas sur la page)
 python src/console/app.py --synthetic --mode errp
 # terminal 2
 python src/research/errp_stimulus.py --windowed
@@ -374,8 +374,12 @@ python -u examples/receiver.py --stream decoded_errp
 
 - [ ] Le moteur passe par **15 s de chauffe puis 8 s de repos** avant de décoder, et annonce le σ
       par voie qu'il a mesuré. C'est sa référence de rejet d'artefact — sans elle, pas de décodage.
-- [ ] Il dit avoir **jeté** les marqueurs reçus pendant cette attente, en les comptant. C'est voulu :
-      l'offset du casque dérive encore, ces époques ne valent rien.
+- [ ] **L'émetteur**, lui, annonce qu'il attend : le moteur écoute, mais il **jette tout pendant sa
+      chauffe et son repos (~23 s)** — et la piste reste **immobile** jusque-là. Le moteur ne dit
+      donc **rien** sur des marqueurs jetés : ce silence est le succès, pas une panne.
+- [ ] Pour voir l'autre moitié du garde-fou, relance l'émetteur avec `--no-wait` : il démarre tout de
+      suite, et le moteur écrit alors « N feedback(s) reçus pendant la CHAUFFE/le REPOS : jetés ».
+      C'est voulu : l'offset du casque dérive encore, ces époques ne valent rien.
 - [ ] Un point avance sur une piste, se trompe délibérément **environ une fois sur quatre** (28 %,
       le chiffre est affiché à l'écran), et montre son résultat une seconde.
 - [ ] À chaque résultat affiché, **un échantillon sort** sur `decoded_errp`, visible dans le
@@ -579,6 +583,12 @@ python -u examples/receiver.py --stream decoded_p300
 Ce détecteur, au réglage par défaut, **attrape une erreur sur deux** et annule une bonne commande
 sur sept. Ce n'est pas un défaut de réglage : c'est ce que vaut un ERP mono-essai sur ce matériel,
 mesuré honnêtement (AUC 0,776, p = 0,0099 sur 100 permutations, 200 essais, une personne).
+
+⚠️ **Et ces deux taux-là sont eux-mêmes optimistes.** L'AUC est honnête — elle vient de scores
+hors-pli. Mais le **seuil** qui produit « une sur deux / une sur sept » a été choisi en regardant ces
+mêmes scores, donc le TNR obtenu dépasse la cible *par construction* sur les 200 essais du 24
+juillet, et sur eux seuls. En séance, attends-toi à annuler **plus** d'une bonne commande sur sept,
+pas moins. Le moteur le dit lui-même dans le champ `measured_on` de son flux.
 
 **Donc : ne conclus rien d'un essai, ni de dix.** Sur dix erreurs délibérées, en attraper cinq est
 le résultat *attendu*. En attraper huit ou deux tient dans le bruit.

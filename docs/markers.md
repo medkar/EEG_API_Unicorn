@@ -34,11 +34,13 @@ shared inlet for every such mode. Changing the name while the mode runs has no e
 **stopping and restarting the mode is enough** to pick up the new one: the inlet is released as
 soon as no running mode is listening any more. You do not have to restart the engine.
 
-⚠️ **Today that setting offers exactly one name**, the default `EEG_API_Unicorn_stim`. The plumbing
-that reads it is in place on both modes, so a program driving the engine directly can set another
-name — but the console's dropdown has a single entry, so from the interface you cannot yet rename
-it. If you need two pairs in one room to stop hearing each other, that is the piece to add, and it
-is a change to the setting's type, not to the marker pipe.
+⚠️ **Today the setting accepts exactly one name**, the default `EEG_API_Unicorn_stim` — and that is
+enforced by the engine, not by the interface. It is declared
+`Param(kind="choice", choices=(MARKER_STREAM_DEFAULT,))` in `src/core/modes/p300.py` and
+`src/core/modes/errp.py`, so `contract.validate` refuses any other value: from the console, from a
+script, and from a client driving the engine, all three. The pipe that *reads* the setting is
+already in place on both modes; opening it up is a change to that one tuple, not to the marker
+protocol. If two pairs in one room need to stop hearing each other, that is the piece to add.
 
 If two emitters publish under the same name, the engine says so and names the one it kept. Since
 everyone uses the default name and LSL reaches across the whole network, this is worth reading in
@@ -283,9 +285,12 @@ Three places, so that "watch whether this number climbs" is something you can re
    `marqueurs: {perdus, futurs, illisibles, inlet_erreurs, connecte}` at the engine level;
    `refus_cible`, `epoques_perdues`, `manches_abandonnees`, `marqueurs_chauffe` inside the P300
    mode's own state; and `epoques_perdues`, `epoques_vues`, `artefacts`, `taux_rejet`,
-   `marqueurs_chauffe`, `point_de_fonctionnement` inside the ErrP mode's own state. `taux_rejet` is
-   the ErrP one to watch: it is the share of epochs thrown away as artifacts, and a session that
-   sits above 50 % is telling you about the electrodes, not about the brain.
+   `marqueurs_chauffe`, `point_de_fonctionnement` inside the ErrP mode's own state — **those three
+   counts are scoped to the current rest baseline and reset when you redo the rest**, so the session
+   totals live separately, under `epoques_vues_session` and `artefacts_session`, which never reset.
+   `taux_rejet` is the ErrP one to watch: above 50 % it is telling you about the electrodes, not
+   about the brain. Log it as a session figure and you will see it drop to `null` and restart from
+   zero with nothing to explain why.
 3. **The console**, which reads the same snapshot.
 
 `connecte` is the one to look at first. If it is `false` while your emitter is running, nothing
@@ -329,9 +334,20 @@ on the ErrP page. You ask for a rate, not a threshold — the engine derives the
 own calibration, and announces the rate it actually reached at start-up.
 
 The middle column is not padding. The engine picks the lowest threshold whose measured rate is *at
-least* what you asked for, so what you get is always a little more conservative than what you
-requested. Asking for 95 % does not put you at the 24 % row by rounding — it puts you at or above
-it. Read the number the engine prints, not the number you typed.
+least* what you asked for, so on the calibration data what you get is at or above what you asked
+for. Asking for 95 % does not put you at the 24 % row by rounding. Read the number the engine
+prints, not the number you typed.
+
+⚠️ **But those two numbers are themselves optimistic, and the stream says so.** Its `measured_on`
+field reads *"threshold picked on these same out-of-fold scores, so tpr/tnr are optimistic"*. The
+scores are out-of-fold — that part is honest, and it is why the AUC of 0.776 means something — but
+the **threshold** was chosen by looking at them. So `tnr_measured ≥ tnr_target` holds *by
+construction* on the 200 trials of the reference session, and not on yours. On live data the middle
+column is an estimate, not a floor: expect to cancel **more** good commands than it says, not fewer.
+
+This is the one number in this page you should distrust, and it is worth saying why it is published
+anyway: a client that knows the operating point is roughly one-in-two and roughly one-in-seven can
+design around it. A client that knows nothing treats `error = 1` as a verdict.
 
 ## Before any of this works: a trained model
 
@@ -352,7 +368,7 @@ within the same second, which a 5-minute protocol makes hard.
 Until then the engine refuses to start the mode, and says why.
 
 ⚠️ Close the pygame app before starting the engine. It opens the headset itself, and the Unicorn
-accepts exactly one connection. (`p300_stimulus.py` is the exception — it draws only.)
+accepts exactly one connection. (`p300_stimulus.py` and `errp_stimulus.py` are the exceptions — they draw only.)
 
 ## Two machines
 
