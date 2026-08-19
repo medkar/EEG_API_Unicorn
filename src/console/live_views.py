@@ -275,13 +275,32 @@ class ActiveView(QWidget):
                                  f"{sortie.get('confidence', 0.0):+.2f}")
 
 
+# Les deux textes d'échelle de la famille « passif ». Ils sont posés par la BRANCHE qui a
+# mesuré la valeur affichée, jamais par le constructeur — et c'est tout leur intérêt.
+#
+# ⚠️ Correction de revue (tour 2) : `AVERTISSEMENT_Z` était le texte PAR DÉFAUT du label. Il
+# s'affichait donc au-dessus de n'importe quelle sortie passive tant qu'aucune n'était encore
+# arrivée — dont l'ErrP, qui n'a JAMAIS de z : entre le démarrage du mode et le tout premier
+# feedback décodé (chauffe + repos = 23 s, plus le temps d'aller lancer le stimulus dans un
+# second terminal), la page de l'ErrP affirmait en toutes lettres que son score est « un z
+# contre TON repos du jour ». C'est un log-odds comparé au seuil d'une calibration. Une phrase
+# fausse sur l'unité est pire qu'un silence : c'est la catégorie de défaut que ce fichier
+# combat (cf. le P300 rendu comme un SSVEP dans `ActiveView`).
+AVERTISSEMENT_Z = ("z contre TON repos du jour, mesuré au démarrage du mode. Ni comparable entre "
+                   "personnes, ni entre séances, ni absolu. À lire en TENDANCE.")
+AVERTISSEMENT_ATTENTE = ("aucune sortie décodée pour l'instant : l'unité et l'échelle de ce mode "
+                         "s'affichent avec le premier échantillon, jamais avant.")
+
+
 class PassiveView(QWidget):
     """Un indice par ligne, en ÉCART au repos. Aucune sélection, aucune bonne réponse.
 
-    ⚠️ L'échelle est un z contre le repos du jour de CET utilisateur. `+1` veut dire « au-dessus
-    de mon propre repos », pas « chargé ». Les trois indices dérivent du même calcul spectral et
-    restent corrélés. C'est écrit sous les barres, pas dans une documentation que personne
-    n'ouvrira : un affichage qui présenterait ça comme une mesure de fatigue mentirait.
+    ⚠️ **Deux formes de sortie, deux UNITÉS.** Le neuro rend des `z` contre le repos du jour de
+    CET utilisateur : `+1` veut dire « au-dessus de mon propre repos », pas « chargé », les trois
+    indices dérivent du même calcul spectral et restent corrélés. L'ErrP, lui, rend un log-odds
+    comparé au seuil de SA calibration — rien à voir. C'est écrit sous les barres, pas dans une
+    documentation que personne n'ouvrira : un affichage qui présenterait l'un comme l'autre
+    mentirait. D'où deux textes séparés, posés par la branche qui a produit la valeur.
     """
 
     # Au-delà de ±NEURO_Z_SPAN, la barre est pleine. La constante vient de `core/config.py`,
@@ -293,9 +312,8 @@ class PassiveView(QWidget):
         super().__init__()
         self.etat = QLabel("en attente")
         self.barres = QFormLayout()
-        self.avertissement = QLabel(
-            "z contre TON repos du jour, mesuré au démarrage du mode. Ni comparable entre "
-            "personnes, ni entre séances, ni absolu. À lire en TENDANCE.")
+        # Vide au départ : voir le commentaire d'`AVERTISSEMENT_Z` ci-dessus.
+        self.avertissement = QLabel("")
         self.avertissement.setWordWrap(True)
         self.avertissement.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         layout = QVBoxLayout(self)
@@ -319,8 +337,16 @@ class PassiveView(QWidget):
             return
         z = sortie.get("z") or {}
         if not z:
+            # Mode démarré mais rien de décodé encore (chauffe, repos, ou en attente d'un
+            # marqueur). On dit qu'on attend — et surtout on n'affirme AUCUNE unité, puisqu'on
+            # ne sait pas encore laquelle des deux formes de sortie ce mode va rendre.
             self.etat.setText(mode_state["instruction"] if mode_state else "en attente")
+            self.avertissement.setText(AVERTISSEMENT_ATTENTE)
             return
+
+        # Le texte d'échelle est posé ICI, dans la branche qui rend des z — pas dans le
+        # constructeur, où il s'appliquait aussi à l'ErrP (cf. AVERTISSEMENT_Z).
+        self.avertissement.setText(AVERTISSEMENT_Z)
 
         # Un indice qui cesse d'être rapporté perd sa barre. Sans ça elle resterait à l'écran,
         # figée sur sa dernière valeur, sans rien pour dire qu'elle ne mesure plus rien.
@@ -369,10 +395,11 @@ class PassiveView(QWidget):
         else:
             self.etat.setText("correct (score sous le seuil)")
 
+        sante = self._sante(mode_state)
         if error < 0:
             self.avertissement.setText(
                 "aucune mesure sur ce feedback : époque perdue ou rejetée, score et seuil ne "
-                "comptent pas ici.")
+                "comptent pas ici." + sante)
             return
         score = float(sortie.get("score", 0.0))
         seuil = float(sortie.get("threshold", 0.0))
@@ -382,9 +409,35 @@ class PassiveView(QWidget):
                 f"score {score:+.3f} contre seuil {seuil:+.3f} · détecteur IMPARFAIT : garde "
                 f"{pdf.get('tnr', 0.0):.0%} des bonnes commandes, attrape "
                 f"{pdf.get('tpr', 0.0):.0%} des erreurs (visé {pdf.get('tnr_target', 0.0):.0%}) "
-                f"— un verdict « erreur » est une pièce biaisée, pas une certitude.")
+                f"— un verdict « erreur » est une pièce biaisée, pas une certitude." + sante)
         else:
-            self.avertissement.setText(f"score {score:+.3f} contre seuil {seuil:+.3f}")
+            self.avertissement.setText(f"score {score:+.3f} contre seuil {seuil:+.3f}{sante}")
+
+    @staticmethod
+    def _sante(mode_state):
+        """Le taux de rejet pour artefact, en queue de l'avertissement. "" s'il n'y a rien vu.
+
+        ⚠️ `ErrPRuntime.state()` calcule `epoques_vues`/`artefacts`/`taux_rejet` EXPRÈS pour ça,
+        et la console est le SEUL client qui lit `state()` (le flux `status` ne transporte pas
+        `modes_state`). Sans cette ligne, ces trois compteurs étaient reçus dix fois par seconde
+        et JETÉS : une séance où 36 feedbacks sur 40 partent en artefact publie 36 × `error=-1`
+        — honnêtes, et indiscernables de 36 clignements isolés. L'étudiant, casque sur la tête et
+        console en plein écran, conclut « ça ne marche pas » et refait sa séance ; le diagnostic
+        (contact des électrodes) l'attendait sur le stdout du terminal de lancement, qu'il ne
+        regarde pas.
+
+        La FRACTION est affichée à côté du pourcentage, et pas seulement le pourcentage : elle
+        dit toute seule ce qu'un taux vaut. « 100 % » sur une époque alarmerait pour rien ;
+        « 100 % (1/1) » se lit pour ce que c'est. Aucun plancher n'est donc recopié ici — celui
+        du moteur (`_TAUX_REJET_MIN_ECHANTILLONS`) sert à décider quand ALARMER, ce qui n'est pas
+        la même question qu'informer.
+        """
+        taux = mode_state.get("taux_rejet")
+        vues = mode_state.get("epoques_vues") or 0
+        if taux is None or not vues:
+            return ""
+        return (f" · rejet artefact {taux:.0%} "
+                f"({mode_state.get('artefacts', 0)}/{vues} époques de ce repos)")
 
 
 def build(family, ch_names=()):

@@ -19,7 +19,10 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import PHASES_FR  # noqa: E402
-from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
+# `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
+# repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
+# réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
+from core.config import NEURO_Z_SPAN  # noqa: E402
 
 COLONNES = 4
 BLEU, GRIS = QColor("#4c8dff"), QColor("#8a8f9c")
@@ -162,9 +165,7 @@ class ModeTile(QFrame):
 
         sortie = mode_state.get("output") or {}
         if "scores" in sortie:
-            self.apercu.set_values(sortie["scores"],
-                                   span=max(sortie.get("threshold", Z_MIN), 1.0),
-                                   retenue=sortie.get("target_index", -1))
+            self._apercu_scores(sortie)
         elif "probas" in sortie:
             # Motor Imagery : une probabilité par classe, déjà bornée à 1 — pas de seuil à
             # dépasser pour l'échelle du dessin, contrairement au z du SSVEP.
@@ -190,6 +191,41 @@ class ModeTile(QFrame):
                                        span=max(abs(score), abs(seuil), 1.0), centre=True)
         else:
             self.apercu.set_values([])
+
+    def _apercu_scores(self, sortie):
+        """Un score par cible. DEUX échelles, choisies sur ce que la sortie DÉCLARE.
+
+        ⚠️ Correction de revue (tour 2) : cette branche appliquait `max(sortie.get("threshold",
+        Z_MIN), 1.0)` à tout le monde. Or la sortie du P300 n'a PAS de clé `threshold`, et c'est
+        délibéré — le moteur prend l'argmax, il ne compare ces scores à rien (cf.
+        `live_views.ActiveView._update_selection`). Le repli `Z_MIN` (le seuil du SSVEP, 2,5)
+        s'appliquait donc systématiquement à des LOG-ODDS, et `centre=False` écrase à zéro tout
+        ce qui est négatif : sur une manche P300 ordinaire (les scores sont négatifs le plus
+        souvent — une cible flashe une fois sur six), la tuile montrait SIX MOIGNONS DE 2 PX,
+        dont un bleu. L'étudiant y lisait « la sélection n'a aucune preuve derrière elle », ce
+        qui est faux : c'est l'ÉCART 1er-2e qui décide, et il peut être franc. La même tuile,
+        ouverte sur sa page, montrait un classement lisible : la tuile et la page se
+        contredisaient sur les mêmes données.
+
+        C'est exactement le défaut que le chantier précédent a corrigé SUR LA PAGE, jamais sur la
+        tuile. Il est corrigé ici de la même façon, et pour la même raison : sans `threshold`,
+        aucune échelle absolue n'existe, donc on montre le CLASSEMENT.
+        """
+        scores = [float(s) for s in (sortie.get("scores") or [])]
+        seuil = sortie.get("threshold")
+        retenue = sortie.get("target_index", -1)
+        if seuil is not None:
+            # SSVEP : un z, comparé à un seuil publié. L'échelle absolue a un sens.
+            self.apercu.set_values(scores, span=max(float(seuil), 1.0), retenue=retenue)
+            return
+        # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
+        # recalculée à chaque manche, comme `_update_selection` le fait sur la page. `etendue
+        # <= 0` (scores tous égaux, ou une seule cible) laisse tout à mi-hauteur plutôt que de
+        # désigner un gagnant qui n'en est pas un.
+        bas, haut = (min(scores), max(scores)) if scores else (0.0, 0.0)
+        etendue = haut - bas
+        valeurs = [0.5 if etendue <= 0 else (s - bas) / etendue for s in scores]
+        self.apercu.set_values(valeurs, span=1.0, retenue=retenue)
 
 
 def _resume(mode_state):
@@ -223,7 +259,11 @@ def _resume(mode_state):
             return "pas de verdict (époque hors tampon)"
         pdf = mode_state.get("point_de_fonctionnement") or {}
         verdict = "ERREUR détectée" if error == 1 else "correct"
-        taux = f" · attrape {pdf['tpr']:.0%} des erreurs" if pdf else ""
+        # `.get` ici aussi, comme vingt-cinq lignes plus haut : `if pdf` protège du dict VIDE,
+        # pas du dict INCOMPLET. Un `point_de_fonctionnement` qui évoluerait (une clé `auc`
+        # ajoutée, `tpr` renommé `tpr_oof`) ferait tomber `ModeGrid.update_from` sur un
+        # KeyError — donc TOUTE la grille, pas seulement cette tuile, en pleine séance.
+        taux = f" · attrape {pdf.get('tpr', 0.0):.0%} des erreurs" if pdf else ""
         return f"{verdict} · score {sortie.get('score', 0.0):+.2f}{taux}"
     params = mode_state.get("params") or {}
     if "freqs" in params:

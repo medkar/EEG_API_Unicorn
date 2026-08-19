@@ -525,6 +525,32 @@ def _smoke():
     chk(valeurs[3] == 100 and valeurs[1] == 0,
         f"la cible qui domine remplit sa barre, la plus faible est vide ({valeurs})")
 
+    # L'APERÇU DE LA TUILE, sur les MÊMES données : il ne doit pas contredire la page.
+    # ⚠️ Rien ne le touchait — les seules tuiles dont l'aperçu était lu sont `ssvep`, `neuro` et
+    # `errp` — et c'est ce qui a laissé passer, dans du code DÉJÀ POUSSÉ, le repli sur `Z_MIN` :
+    # le seuil du SSVEP (2,5) appliqué à des log-odds, avec `centre=False`, donc tout score
+    # négatif écrasé à zéro. Or les scores P300 sont négatifs le plus souvent (une cible flashe
+    # une fois sur six) : la tuile montrait SIX MOIGNONS DE 2 PX pendant que sa propre page
+    # montrait un classement lisible. Deux écrans, mêmes données, verdicts opposés.
+    apercu_p3 = console.grid.tuiles["p300"].apercu
+    chk(apercu_p3._span != Z_MIN,
+        f"la tuile P300 n'emprunte PAS le seuil du SSVEP pour mettre des log-odds à l'échelle "
+        f"(span={apercu_p3._span}, Z_MIN={Z_MIN})")
+    chk(apercu_p3._values and max(apercu_p3._values) == 1.0 and min(apercu_p3._values) == 0.0
+        and apercu_p3._values.index(1.0) == 3,
+        f"...elle montre le CLASSEMENT, comme la page : la cible qui domine pleine, la plus "
+        f"faible vide — et AUCUNE écrasée à zéro parce qu'elle est négative ({apercu_p3._values})")
+    chk(apercu_p3._retenue == 3,
+        f"...et met en avant la cible que le MOTEUR a retenue, pas un maximum recalculé "
+        f"({apercu_p3._retenue})")
+
+    # Le SSVEP, lui, a bien un `threshold` publié : son échelle reste ABSOLUE, contre ce
+    # seuil-là. Sans cette assertion, « ne plus jamais utiliser de seuil » passerait aussi.
+    chk(console.grid.tuiles["ssvep"].apercu._span
+        == state["modes_state"]["ssvep"]["output"]["threshold"],
+        f"et la tuile SSVEP garde son échelle absolue, contre le seuil qu'elle PUBLIE "
+        f"({console.grid.tuiles['ssvep'].apercu._span})")
+
     # Manche non conclue : jamais le « aucune cible (rien au-dessus de z=...) » du SSVEP, et
     # surtout -1 n'est pas la cible 0 (cf. `no_decision_index` dans les métadonnées du flux).
     p300_indecis = {**p300_state, "modes_state": {**p300_state["modes_state"], "p300": {
@@ -543,21 +569,47 @@ def _smoke():
     # ne routaient que sur la clé "z", que la sortie de l'ErrP n'a jamais — la page restait
     # muette (texte vide), la tuile aussi, et rien ne rougissait puisqu'aucune valeur FABRIQUÉE
     # n'était montrée (le défaut symétrique au P300-rendu-en-SSVEP : là un SILENCE, pas un
-    # mensonge). Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs (mesuré :
-    # TPR ~46 %, TNR ~93 %) : l'écran ne doit donc JAMAIS afficher « ERREUR détectée » seul,
-    # comme un verdict fiable — le score ET le point de fonctionnement doivent être lisibles
-    # ensemble, et `error=-1` (pas de verdict) doit se lire différemment de `error=0` (correct).
+    # mensonge). Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs :
+    # l'écran ne doit donc JAMAIS afficher « ERREUR détectée » seul, comme un verdict fiable —
+    # le score ET le point de fonctionnement doivent être lisibles ensemble, et `error=-1` (pas
+    # de verdict) doit se lire différemment de `error=0` (correct).
+    #
+    # ⚠️ Le point de fonctionnement de ce fixture est CALQUÉ sur la seule séance réellement
+    # mesurée du projet (docs/SPEC.md : à `tnr_target = 0.85`, TPR 0,500 / TNR 0,855). Il portait
+    # 0,4615 / 0,9259 — 6/13 et 25/27, des ratios de très petit effectif — sous le mot
+    # « mesuré ». Un contributeur qui ouvre ce fichier pour savoir ce que vaut l'ErrP y lisait
+    # donc un troisième chiffre, contradictoire avec la doc, le contrat et l'autotest de
+    # `lsl_io.py`. « Un chiffre recopié dans une prose finit toujours par mentir »
+    # (core/modes/external.py) : ce n'en est pas une, mais un fixture ment aussi bien.
     errp_state = {**state, "modes_state": {**state["modes_state"], "errp": {
         "id": "errp", "label": "ErrP", "family": "passif", "phase": "running", "published": True,
         "params": {"model": "errp_model_20260818_150000.joblib", "tnr_target": 0.85},
         "instruction": "", "stream": "decoded_errp",
         "channels": ["error", "score", "threshold", "artifact"], "rest_report": None,
-        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "tpr": 0.4615,
-                                    "tnr": 0.9259},
+        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "tpr": 0.500,
+                                    "tnr": 0.855},
         "output": {"error": 1, "score": 5.044, "artifact": 0, "threshold": 0.044}}}}
     console.show_mode("errp")
-    console.apply_state(errp_state)
     errp_page = console.pages["errp"]
+
+    # DÉMARRÉ, MAIS AUCUN FEEDBACK ENCORE (`output: None`) — l'état dans lequel la page vit ses
+    # 23 premières secondes (chauffe + repos), plus le temps d'aller lancer `errp_stimulus.py`
+    # dans un second terminal. Aucun état de ce smoke ne le construisait, et c'est le SEUL dans
+    # lequel le défaut existait : `PassiveView` initialisait son avertissement avec le texte du
+    # NEURO, et seule l'arrivée d'un feedback l'écrasait. La page de l'ErrP affirmait donc, en
+    # toutes lettres et pendant tout ce temps, que son score est « un z contre TON repos du
+    # jour ». C'est un log-odds contre le seuil d'une calibration. Une phrase FAUSSE sur l'unité
+    # est pire qu'un silence — c'est la catégorie que ce chantier a lui-même classée comme la
+    # pire (cf. le P300 rendu comme un SSVEP).
+    errp_demarre = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"], "output": None}}}
+    console.apply_state(errp_demarre)
+    avant = errp_page.vue.avertissement.text()
+    chk("z contre" not in avant and "TENDANCE" not in avant,
+        f"avant le premier feedback, la page ErrP ne parle JAMAIS d'un z contre le repos du "
+        f"jour — c'est l'unité d'un AUTRE mode ({avant!r})")
+
+    console.apply_state(errp_state)
     chk(isinstance(errp_page.vue, live_views.PassiveView),
         "l'ErrP a le rendu PASSIF, comme le neuro — une réaction observée, pas un choix fait")
     chk("ERREUR" in errp_page.vue.etat.text(),
@@ -566,10 +618,33 @@ def _smoke():
         and "0.044" in errp_page.vue.avertissement.text(),
         f"...le score ET le seuil, CHIFFRÉS, côte à côte, jamais l'un sans l'autre "
         f"({errp_page.vue.avertissement.text()!r})")
-    chk("46%" in errp_page.vue.avertissement.text() and "93%" in errp_page.vue.avertissement.text(),
-        f"...ET le point de fonctionnement MESURÉ (pas seulement visé) : ce détecteur garde 93 % "
-        f"des bonnes commandes et attrape 46 % des erreurs — un étudiant qui regarde doit "
-        f"comprendre qu'il lit une pièce biaisée, pas un verdict ({errp_page.vue.avertissement.text()!r})")
+    # ⚠️ Chaque taux ANCRÉ À SON LIBELLÉ, jamais « "50%" in texte ». Avec deux `in` indépendants,
+    # échanger `tpr` et `tnr` dans `live_views._update_errp` — une ligne — laissait le test VERT
+    # pendant que l'écran annonçait l'inverse exact de la vérité, sur le seul écran dont la
+    # raison d'être est d'empêcher qu'on prenne ce verdict pour fiable.
+    texte_errp = errp_page.vue.avertissement.text()
+    chk("garde 86%" in texte_errp and "attrape 50%" in texte_errp,
+        f"...ET le point de fonctionnement MESURÉ (pas seulement visé), chaque taux CÔTÉ SON "
+        f"LIBELLÉ : « garde 86% des bonnes commandes » / « attrape 50% des erreurs » — un "
+        f"échange tpr↔tnr doit rougir ICI ({texte_errp!r})")
+    chk("visé 85%" in texte_errp,
+        f"...et le taux VISÉ reste distinct des deux mesurés ({texte_errp!r})")
+
+    # LE TAUX DE REJET ARTEFACT, que `ErrPRuntime.state()` calcule EXPRÈS pour cet écran. Il
+    # arrivait dix fois par seconde dans `apply_state` et repartait à la poubelle : la console
+    # est pourtant le SEUL client qui lit `state()` (le flux `status` ne porte pas `modes_state`).
+    # Une séance à 36 rejets sur 40 publie 36 × `error=-1` — honnêtes, et indiscernables de 36
+    # clignements. L'étudiant refait sa séance ; le « vérifie le contact des électrodes »
+    # l'attendait sur le stdout du terminal de lancement.
+    errp_rejet = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "taux_rejet": 0.9, "epoques_vues": 40, "artefacts": 36,
+        "output": {"error": -1, "score": 0.0, "artifact": 1, "threshold": 0.044}}}}
+    console.apply_state(errp_rejet)
+    texte_rejet = errp_page.vue.avertissement.text()
+    chk("90%" in texte_rejet and "36/40" in texte_rejet,
+        f"un sur-rejet d'artefact se VOIT sur la page, taux ET effectif — sans quoi 36 refus de "
+        f"suite ressemblent à 36 clignements ({texte_rejet!r})")
 
     # `error = 0` (correct) ne doit plus jamais parler d'erreur.
     errp_correct = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
@@ -613,6 +688,14 @@ def _smoke():
         and console.grid.tuiles["errp"].apercu._retenue == -1,
         f"la tuile montre score ET seuil, signés, sans rien mettre en avant "
         f"({console.grid.tuiles['errp'].apercu._values})")
+    # ⚠️ `_span` — la valeur que le commentaire de `grid.py` présente comme le point important, et
+    # que RIEN ne lisait : remplacer `max(abs(score), abs(seuil), 1.0)` par `NEURO_Z_SPAN`
+    # laissait les trois assertions ci-dessus vertes et remettait la tuile ErrP dans le piège
+    # exact que sa branche existe pour éviter (un log-odds rendu sur une échelle de z).
+    chk(console.grid.tuiles["errp"].apercu._span == 5.044,
+        f"...sur SA PROPRE amplitude, jamais l'échelle de z du neuro ni un axe fixe inventé "
+        f"(span={console.grid.tuiles['errp'].apercu._span}, "
+        f"NEURO_Z_SPAN={live_views.PassiveView.SPAN:g})")
     console.apply_state(errp_perdu)
     chk(console.grid.tuiles["errp"].apercu._values == [],
         f"...et rien quand il n'y a rien à montrer, pas un 0.0 fabriqué "
@@ -622,9 +705,23 @@ def _smoke():
     # verdict ET le taux d'erreurs attrapées — jamais le texte statique du mode.
     console.apply_state(errp_state)
     resume_errp = console.grid.tuiles["errp"].detail.text()
-    chk("ERREUR" in resume_errp and "46%" in resume_errp,
+    chk("ERREUR" in resume_errp and "attrape 50%" in resume_errp,
         f"le résumé de la tuile porte le verdict ET le point de fonctionnement "
         f"({resume_errp!r})")
+
+    # ...et il l'encaisse INCOMPLET. `if pdf` protège du dict vide, pas du dict amputé : `_resume`
+    # lisait `pdf['tpr']` en accès direct dans la fonction même qui explique, vingt-cinq lignes
+    # plus haut, pourquoi il faut `.get` — « cette ligne tourne 10 fois par seconde […] un
+    # KeyError y ferait tomber TOUTE l'interface, pas seulement sa propre tuile ». Faire évoluer
+    # `point_de_fonctionnement` (ajouter `auc`, renommer `tpr` en `tpr_oof`) figeait donc la
+    # grille entière en pleine séance.
+    errp_pdf_partiel = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "auc": 0.71}}}}
+    console.apply_state(errp_pdf_partiel)
+    chk("ERREUR" in console.grid.tuiles["errp"].detail.text(),
+        f"un point de fonctionnement INCOMPLET ne fait tomber NI la tuile NI la grille entière "
+        f"({console.grid.tuiles['errp'].detail.text()!r})")
 
     errp_page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et l'ErrP ramène aussi sur la grille")

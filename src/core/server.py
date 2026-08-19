@@ -2070,17 +2070,33 @@ def _smoke_calibration_refus():
 
 
 def _smoke_frontiere():
-    """`core` n'importe ni `research`, ni `console`, ni pygame.
+    """`core` n'importe ni `research`, ni `console`, ni pygame, NI QT.
 
     La règle est vérifiable, c'est tout son intérêt : un module est dans `core` si et seulement
     si `server.py` en a besoin pour tourner, et le moteur doit tourner sur une machine sans
     écran. Le jour où un import de `research` devient nécessaire, ce n'est pas ce test qu'il
     faut assouplir — c'est le module visé qui doit DÉMÉNAGER dans `core`.
+
+    ⚠️ Correction de revue (tour 2) : le motif interdisait `research|console|pygame`, alors que
+    CLAUDE.md (« ni pygame **ni Qt** dans core »), `core/__init__.py` et cette docstring même
+    promettent aussi Qt. Or Qt n'arrive PAS dans `core` par le paquet `console` : il arrive par
+    son propre nom. Un `from PySide6.QtCore import QTimer` glissé dans un utilitaire du moteur
+    passait donc en silence — et `python src/core/server.py --mode ssvep` mourait sur un
+    `ImportError` au démarrage, sur toute machine sans Qt (installation minimale, poste de TP,
+    CI sans libGL), pour un moteur dont le contrat est justement de tourner sans écran. La règle
+    VÉRIFIÉE était plus étroite d'un cran que la règle ÉCRITE, et c'était le cran qui compte.
+
+    Compromis assumé d'un test par expression régulière, à connaître avant de s'y fier : un
+    import DYNAMIQUE (`importlib.import_module("console.grid")`) ou RELATIF
+    (`from ...research import x`) lui échappe. Il attrape la faute plausible — celle qu'on écrit
+    sans y penser — pas celle qu'on cherche à cacher.
     """
     import re
 
     racine = os.path.dirname(os.path.abspath(__file__))
-    interdits = re.compile(r"^\s*(?:from|import)\s+(research|console|pygame)\b", re.MULTILINE)
+    interdits = re.compile(
+        r"^\s*(?:from|import)\s+(research|console|pygame|PySide\d|PyQt\d|qtpy|pyqtgraph)\b",
+        re.MULTILINE)
     fautes = []
     for dossier, _sous, fichiers in os.walk(racine):
         if "__pycache__" in dossier:
@@ -2491,6 +2507,46 @@ def _smoke_dimensionnement():
     return ok
 
 
+class _AcqDeterministe:
+    """Un producteur d'échantillons PRÉVISIBLE, à la place du thread interne de BrainFlow.
+
+    Tout est DÉLÉGUÉ à la vraie `UnicornAcquisition` (`fs`, `window_n`, `margin_n`, `board_id`,
+    `sigma_from_block`, `common_mode`…) : seules l'ouverture de session et la lecture des
+    échantillons sont remplacées — c'est-à-dire exactement les deux choses qui rendaient
+    `_smoke_tampon_horodate` dépendant de l'ordonnanceur du système.
+
+    Les horodatages rendus sont CONTIGUS d'un appel au suivant, espacés de 1/fs pile. Ce que le
+    test compare ensuite n'est donc plus « le board a-t-il tenu la cadence pendant ces 3
+    secondes de temps mural » (une question sur BrainFlow, sur laquelle `server.py` n'a aucune
+    prise) mais « `server.py` a-t-il recopié fidèlement ce qu'on lui a donné » — une question
+    sur ce fichier, et à laquelle une préemption ne peut pas répondre non.
+    """
+
+    def __init__(self, vraie, par_tour=13):
+        self._vraie = vraie          # posé EN PREMIER : c'est ce que `__getattr__` va lire
+        self.par_tour = int(par_tour)
+        self.t0 = 1_700_000_000.0    # une date Unix quelconque, mais FIXE
+        self.produits = 0
+        self._rng = np.random.default_rng(20260819)
+
+    def __getattr__(self, nom):
+        return getattr(self._vraie, nom)
+
+    def __enter__(self):
+        return self                  # aucune session BrainFlow : rien à ouvrir, rien à perdre
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_new_data(self):
+        """(eeg (n, 8), horodatages UNIX). Même contrat que `UnicornAcquisition.get_new_data`."""
+        n, fs = self.par_tour, self._vraie.fs
+        eeg = self._rng.normal(0.0, 20.0, (n, len(CH_NAMES)))
+        ts = self.t0 + (self.produits + np.arange(n)) / fs
+        self.produits += n
+        return eeg, ts
+
+
 def _smoke_tampon_horodate():
     """Les deux tampons ont-ils toujours la même longueur, et le temps y avance-t-il ?
 
@@ -2509,6 +2565,32 @@ def _smoke_tampon_horodate():
     DERNIER bloc lu par la boucle, celui-là même qui vient d'être empilé. La QUEUE des deux
     tampons doit donc être exactement ce bloc — valeurs ET horodatages, à l'identique. Ça
     épingle d'un coup la longueur, l'ordre, le décalage et toute transformation glissée en route.
+
+    ⚠️ **Correction de revue (tour 2) : ce test jugeait le mauvais objet, et il était instable
+    depuis cinq tâches.** Il faisait tourner un vrai board pendant 3 s de temps MURAL, puis
+    jugeait les horodatages produits par le thread interne de BrainFlow — que `server.py` se
+    contente de RECOPIER (`clock.to_lsl(ts_unix)` du canal TIMESTAMP). Une préemption suivie
+    d'un rattrapage en rafale effondrait la médiane des écarts et faisait rougir un test dont
+    aucune ligne de ce fichier n'était la cause : échec journalisé « cadence médiane 0.02 ms
+    attendu 4.00 ms », précédé dans le log de `data_receiver.cpp ERR| Stream transmission broke
+    off`, et jusqu'à quatre fois de suite pendant qu'une autre charge tournait. Trois
+    implémenteurs y ont dépensé du temps à prouver que ce n'était pas eux.
+
+    La réponse n'est PAS d'élargir la tolérance : un test qui juge la mauvaise chose ne devient
+    pas bon en devenant permissif, il devient un test qu'on relance jusqu'au vert — donc un test
+    qu'on a appris à ignorer. Le producteur est donc remplacé par `_AcqDeterministe`, et chaque
+    assertion redevient une question sur `server.py` :
+
+    - la cadence médiane vaut EXACTEMENT 1/fs parce qu'on l'a fournie ainsi : ce qui est vérifié
+      est que le moteur TRANSMET les horodatages du producteur au lieu d'en régénérer ;
+    - `new_block` est toujours peuplé (chaque tour rend des échantillons), donc l'alignement est
+      jugé à chaque exécution au lieu de dépendre du hasard d'un tour à vide ;
+    - plus aucune seconde de temps mural n'entre dans un verdict.
+
+    Ce que ce test ne couvre PLUS, et qui est couvert ailleurs : l'intégration avec le vrai board
+    BrainFlow (`_smoke`, `_smoke_ssvep`, `_smoke_mi`… font tourner de vrais `EngineServer`
+    synthétiques) et le contrat de `get_new_data` lui-même (`python src/core/acquisition.py
+    --synthetic`).
     """
     ok = True
 
@@ -2518,22 +2600,39 @@ def _smoke_tampon_horodate():
         ok = ok and bool(cond)
 
     srv = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-tampon")
-    srv.run(duration_s=3.0)
+    srv.acq = _AcqDeterministe(srv.acq)
+    fs = srv.acq.fs
+    print(f"[smoke-tampon] producteur DÉTERMINISTE ({srv.acq.par_tour} échantillons par tour, "
+          f"1/fs = {1000.0 / fs:.2f} ms) — aucune session BrainFlow n'est ouverte ici")
+    srv.run(duration_s=0.4)
+
     chk(len(srv.recent) == len(srv.recent_ts),
         f"les deux tampons ont la même longueur ({len(srv.recent)} et {len(srv.recent_ts)})")
-    chk(len(srv.recent_ts) > 0, "et ils ne sont pas vides après 3 s d'acquisition")
+    # `min(produits, keep)` — c'est l'invariant exact du `[-self.keep:]` : tout ce qui a été
+    # produit tant que le tampon n'est pas plein, sa taille ensuite. Écrit ainsi, il vérifie
+    # AUSSI la troncature, et il ne vieillira pas si POLL_S ou la durée du test changent.
+    chk(len(srv.recent_ts) == min(srv.acq.produits, srv.keep) > 0,
+        f"et ils portent tout ce que le producteur a rendu, borné à `keep` "
+        f"({len(srv.recent_ts)} pour {srv.acq.produits} produits, keep={srv.keep})")
     diffs = np.diff(srv.recent_ts)
-    chk(bool(np.all(diffs > 0)), "le temps avance strictement, sans doublon ni retour en arrière")
-    attendu = 1.0 / srv.acq.fs
-    chk(bool(np.median(diffs) > 0.5 * attendu and np.median(diffs) < 2.0 * attendu),
-        f"et la cadence médiane vaut ~1/fs ({np.median(diffs) * 1000:.2f} ms attendu "
-        f"{attendu * 1000:.2f} ms)")
+    chk(bool(np.all(diffs > 0)),
+        "le temps avance strictement, sans doublon ni retour en arrière — la concaténation "
+        "empile bien la queue APRÈS la tête")
+    attendu = 1.0 / fs
+    # Tolérance de 10 µs : quatre ordres de grandeur sous la période d'échantillon (4 ms), et
+    # trois au-dessus du bruit du flottant sur des dates Unix (~0,24 µs). Aucun ordonnanceur
+    # n'entre dans cette fenêtre — seule une transformation des horodatages par `server.py` peut
+    # l'en faire sortir, et c'est tout ce qu'on veut savoir.
+    ecart = float(abs(np.median(diffs) - attendu))
+    chk(ecart < 1e-5,
+        f"et la cadence RECOPIÉE vaut exactement celle du producteur, à {ecart * 1e6:.3f} µs "
+        f"près ({np.median(diffs) * 1000:.4f} ms pour {attendu * 1000:.4f} ms fournis)")
 
     # L'ALIGNEMENT lui-même, contre le dernier bloc réellement lu.
     bloc = srv.new_block
     chk(bloc is not None,
-        "le dernier tour de boucle a bien lu un bloc (sans quoi l'alignement ne serait pas "
-        "vérifiable ici)")
+        "le dernier tour de boucle a bien lu un bloc — désormais GARANTI, le producteur en rend "
+        "à chaque tour (avant, un tour à vide emportait les trois assertions suivantes)")
     if bloc is not None:
         eeg, ts_lsl = bloc
         n = len(eeg)

@@ -443,10 +443,18 @@ class DecodedErrPPublisher:
     pièce légèrement biaisée, pas un verdict — sinon elle traitera le flux comme fiable.
     """
 
+    # Le nom du flux, écrit UNE fois — même raison que `DecodedP300Publisher.SUFFIXE` : deux
+    # sources pour un contrat public finissent par diverger. `modes/errp.py` porte encore son
+    # propre littéral (`stream="decoded_errp"`) ; en attendant qu'il reprenne cette constante,
+    # c'est l'autotest §8 plus bas qui LIE les deux — il compare le nom que l'outlet publie
+    # RÉELLEMENT à `registry.get("errp").stream`, ce qui est plus fort qu'une égalité de
+    # constantes : un renommage d'un seul côté rougit, quel que soit le côté.
+    SUFFIXE = "decoded_errp"
+
     def __init__(self, point, n_calib, instance=""):
         labels = errp_channel_labels()
-        info = StreamInfo(stream_name("decoded_errp"), "Decoded", len(labels),
-                          IRREGULAR_RATE, "float32", _source_id("decoded_errp", instance))
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
         chans = info.desc().append_child("channels")
         for label in labels:
             ch = chans.append_child("channel")
@@ -460,7 +468,25 @@ class DecodedErrPPublisher:
         desc.append_child_value("tpr_measured", f"{point['tpr']:.4f}")
         desc.append_child_value("tnr_measured", f"{point['tnr']:.4f}")
         desc.append_child_value("calibration_epochs", str(int(n_calib)))
-        desc.append_child_value("measured_on", "1 person, 1 session")
+        # ⚠️ Ce champ dit d'où viennent `tpr_measured`/`tnr_measured`, et il doit dire aussi ce
+        # qui les rend OPTIMISTES. `pick_threshold` (core/errp_decoder.py) balaie tous les seuils
+        # candidats et retient, parmi ceux qui atteignent la cible, celui qui MAXIMISE la TPR —
+        # puis rend la TPR et la TNR de ce seuil-là, sur les mêmes scores. Les scores sont bien
+        # hors-pli (`cross_val_predict`), donc honnêtes ; le SEUIL, lui, est choisi en regardant
+        # la réponse. `tnr_measured >= tnr_target` est donc vrai PAR CONSTRUCTION, et `tpr_
+        # measured` est un maximum sur N candidats. Une application qui règle sa politique
+        # d'annulation sur ces deux nombres observera en usage un taux de faux vetos plus élevé,
+        # sans que rien n'ait changé : le suffixe `_measured` promet des performances constatées.
+        # Il faut donc que le contrat publié dise à quoi il engage vraiment.
+        #
+        # « 1 session » a disparu du texte : c'était un LITTÉRAL, seul champ du point de
+        # fonctionnement à ne dériver de rien. Un modèle entraîné sur deux séances (les blocs de
+        # calibration sont déjà dans `groups`) aurait publié « 1 session » sans que rien ne s'en
+        # aperçoive. Le rendre honnête pour de bon demande que le modèle expose son nombre de
+        # blocs — c'est `core/errp_models.py`, hors du périmètre de ce correctif.
+        desc.append_child_value("measured_on",
+                                "1 person; threshold picked on these same out-of-fold scores, "
+                                "so tpr/tnr are optimistic")
         self.outlet = StreamOutlet(info)
 
     def push(self, error, score, threshold, artifact, lsl_ts=None):
@@ -661,6 +687,33 @@ def _autotest():
     assert tpr_pub == f"{point['tpr']:.4f}", f"tpr_measured inattendu : {tpr_pub!r}"
     assert tnr_pub == f"{point['tnr']:.4f}", f"tnr_measured inattendu : {tnr_pub!r}"
     assert n_pub == "112", f"calibration_epochs attendu '112', reçu {n_pub!r}"
+    # `tpr_measured`/`tnr_measured` sont OPTIMISTES : le seuil qui les produit a été choisi sur
+    # ces mêmes scores hors-pli (cf. le commentaire du champ). Le dire est le contrat, pas un
+    # ornement — une application qui règle sa politique d'annulation dessus doit pouvoir
+    # découvrir la réserve dans les métadonnées, comme elle y découvre `no_decision_index`.
+    mesure_sur = errp_deco.child_value("measured_on")
+    print(f"  decoded_errp measured_on (métadonnées) : {mesure_sur!r}")
+    assert "threshold" in mesure_sur and "optimistic" in mesure_sur, \
+        f"measured_on doit dire que le seuil est choisi sur ces mêmes scores : {mesure_sur!r}"
+
+    # 8bis. LE NOM DU FLUX est un contrat PUBLIC, et il est écrit à deux endroits : ici
+    # (`DecodedErrPPublisher.SUFFIXE`) et dans le `ModeSpec` de `core/modes/errp.py`. Rien ne les
+    # liait — l'autotest du mode compare un littéral à un littéral, celui-ci vérifiait les voies
+    # et le point de fonctionnement mais jamais le NOM. Un renommage d'un seul côté laissait donc
+    # les QUATRE autotests verts, et le seul symptôme arrivait en séance : la page ErrP affiche
+    # un nom, l'extrait « Brancher un client » que l'étudiant COPIE demande ce nom-là, et son
+    # `resolve_byprop` ne trouve rien — un `SystemExit` qui accuse l'étudiant.
+    #
+    # On compare le nom que l'outlet publie RÉELLEMENT à celui que le contrat du mode annonce :
+    # plus fort qu'une égalité de constantes, puisque n'importe lequel des deux côtés fait rougir.
+    from core.modes import registry as _registry
+    spec_errp = _registry.get("errp")
+    nom_publie = pub_errp.outlet.get_info().name()
+    nom_annonce = stream_name(spec_errp.stream)
+    print(f"  decoded_errp nom publié={nom_publie!r} · annoncé par le ModeSpec={nom_annonce!r}")
+    assert nom_publie == nom_annonce, (
+        f"le flux publié ({nom_publie!r}) et celui que le contrat du mode annonce "
+        f"({nom_annonce!r}) ont divergé — un client s'abonnerait dans le vide")
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
