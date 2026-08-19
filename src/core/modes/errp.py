@@ -145,6 +145,9 @@ class ErrPRuntime(ModeRuntime):
         desaccord = self._desaccord_geometrie(engine)
         if desaccord is not None:
             raise ValueError(desaccord)
+        sans_scores = self._sans_scores_oof()
+        if sans_scores is not None:
+            raise ValueError(sans_scores)
         # Le SEUL réglage de ce mode : l'étudiant choisit un TAUX (« quelle part des bonnes
         # commandes je garde »), jamais un seuil en log-odds. `pick_threshold` est la MÊME fonction
         # que `ErrPModel.fit` utilise déjà pour poser `threshold_` (cf. `core/errp_decoder.py`) —
@@ -196,6 +199,29 @@ class ErrPRuntime(ModeRuntime):
         return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
                 f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Recalibre "
                 f"(`python src/research/app.py`, mode ErrP) plutôt que de le forcer.")
+
+    def _sans_scores_oof(self):
+        """La phrase à dire si le modèle n'a pas de scores hors-pli — None si tout va bien.
+
+        ⚠️ Correction de revue (tâche 3) : SECOND filet, indépendant du premier
+        (`errp_models.charger`, qui refuse déjà ce cas À LA SOURCE — cf. `errp_models.py`). Même
+        raisonnement que `self.model is None` plus haut : `validate` a déjà écarté ce cas via la
+        liste que `charger` filtre, il reste la course entre la validation et le démarrage (un
+        fichier remplacé entre-temps), que seul le moteur peut voir.
+
+        `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la calibration a au moins 10 essais,
+        2 classes, et une classe minoritaire d'au moins 2 membres (sa garde, `errp_decoder.py`) —
+        en dessous, ces deux attributs restent `None`. Sans ce filet, `pick_threshold(None, None,
+        ...)` plus bas lève une exception numpy BRUTE — mesuré, pas supposé :
+        `ValueError: zero-dimensional arrays cannot be concatenated`, sans aucun rapport avec ce
+        qu'il faut faire.
+        """
+        if self.model.oof_scores_ is None or self.model.oof_y_ is None:
+            return (f"ce modèle n'a pas de scores hors-pli (calibration trop courte : moins de "
+                    f"10 essais, une seule classe, ou une classe à moins de 2 membres) — "
+                    f"impossible d'y régler un seuil. Recalibre (`python src/research/app.py`, "
+                    f"mode ErrP) plutôt que de le forcer.")
+        return None
 
     def _open(self):
         # Le vrai `DecodedErrPPublisher` arrive à la tâche 4 : `core/lsl_io.py` ne le porte pas
@@ -570,7 +596,13 @@ def _selftest():
         # nommant l'écart — le même contrôle que `P300Runtime`, pour la même raison : une matrice
         # de la même taille avec l'onset ailleurs rend des scores plausibles et faux.
         autre_geo = _os.path.join(dossier, "geometrie_etrangere.joblib")
-        ErrPModel(fs=125.0).save(autre_geo)
+        # ⚠️ Doit être ENTRAÎNÉ, pas seulement construit — depuis la correction de revue de la
+        # tâche 3 (fix 1 ci-dessous) : `errp_models.charger` refuse désormais tout modèle SANS
+        # scores hors-pli, et un `ErrPModel` jamais `.fit()` en est un. Sans cet entraînement, ce
+        # fixture serait arrêté par le PREMIER filet (pas de scores hors-pli) avant d'atteindre le
+        # SECOND (la géométrie) que ce test précis vise — trouvé en relançant, pas supposé.
+        ErrPModel(fs=125.0).fit(np.asarray(epochs), np.asarray(y), groups=np.asarray(groups),
+                                n_perm=0).save(autre_geo)
         essai = dict(values, model=autre_geo)
         try:
             ErrPRuntime(SPEC, essai, moteur)
@@ -580,6 +612,41 @@ def _selftest():
         chk(refus_geo is not None and "fs" in refus_geo and "125" in refus_geo,
             f"un modèle entraîné sur une AUTRE géométrie d'époque est refusé au démarrage, en "
             f"nommant l'écart ({refus_geo})")
+
+        # 3ter. ⚠️ Correction de revue (tâche 3) : un modèle sans scores hors-pli (calibration
+        # trop courte : moins de 10 essais, une seule classe, ou une classe à moins de 2 membres)
+        # est refusé au DÉMARRAGE, EN LE NOMMANT — le SECOND filet, indépendant du premier
+        # (`errp_models.charger`, déjà testé dans `errp_models.py`) pour la même course que
+        # « aucun modèle » ci-dessus : un fichier remplacé entre la validation et le démarrage
+        # reste possible, et seul le moteur peut le voir. `errp_models.charger` est monkeypatché
+        # ICI pour isoler ce SECOND filet : sans le court-circuiter, son propre refus (le premier
+        # filet) masquerait qu'`__init__` a — ou n'a pas — le sien.
+        #
+        # AVANT ce correctif, ce même scénario faisait tomber `pick_threshold` sur une exception
+        # numpy BRUTE — mesuré, pas supposé : `ValueError: zero-dimensional arrays cannot be
+        # concatenated`, à des lignes de tout message nommé, l'inverse du standard de ce fichier
+        # (cf. `_desaccord_geometrie` juste au-dessus).
+        degenere = _os.path.join(dossier, "geometrie_degeneree.joblib")
+        modele_degenere = ErrPModel(fs=fs).fit(np.asarray(epochs[:5]), np.asarray(y[:5]), n_perm=0)
+        chk(modele_degenere.oof_scores_ is None and modele_degenere.oof_y_ is None,
+            f"fixture : 5 essais (< 10) ne posent PAS de scores hors-pli, la dégénérescence est "
+            f"réelle, pas simulée ({modele_degenere.oof_scores_})")
+        modele_degenere.save(degenere)
+        vrai_charger = errp_models.charger
+        errp_models.charger = lambda chemin: (modele_degenere, None)  # court-circuite le 1er filet
+        try:
+            essai_degenere = dict(values, model=degenere)
+            try:
+                ErrPRuntime(SPEC, essai_degenere, moteur)
+                refus_scores = None
+            except ValueError as e:
+                refus_scores = str(e)
+        finally:
+            errp_models.charger = vrai_charger
+        chk(refus_scores is not None and "hors-pli" in refus_scores
+            and "recalibre" in refus_scores.lower(),
+            f"un modèle sans scores hors-pli est refusé au démarrage, EN LE NOMMANT, plutôt que "
+            f"de laisser pick_threshold lever une exception numpy brute ({refus_scores})")
 
         # ⚠️ Capturé : c'est ICI que se dit le point de fonctionnement (tâche 3). Sans ce message,
         # l'étudiant croirait avoir obtenu exactement le TNR qu'il a demandé — cf. plus bas, le

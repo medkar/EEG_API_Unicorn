@@ -70,6 +70,20 @@ def charger(chemin):
         return None, (f"modèle hérité (module {module!r}, attendu {_MODULE_ATTENDU!r}), "
                       f"illisible depuis le déménagement du décodeur — à ré-entraîner depuis "
                       f"les époques conservées : data/errp_calib_*.npz")
+    # ⚠️ Correction de revue (tâche 3) : `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la
+    # calibration a au moins 10 essais, 2 classes, et une classe minoritaire d'au moins 2 membres
+    # (cf. sa garde, `errp_decoder.py`) — en dessous, ces deux attributs restent `None`. Rien
+    # ci-dessus ne le voit : `hasattr(modele, "score"/"is_error")` est vrai même pour un modèle
+    # jamais entraîné sur assez de données. Sans ce refus, un tel modèle apparaissait normalement
+    # dans la liste proposée à l'étudiant, et `core/modes/errp.py` finissait par appeler
+    # `pick_threshold(None, None, ...)` — mesuré, pas supposé : lève
+    # `ValueError: zero-dimensional arrays cannot be concatenated`, une exception numpy BRUTE,
+    # sans aucun rapport avec ce qu'il faut faire.
+    if getattr(modele, "oof_scores_", None) is None or getattr(modele, "oof_y_", None) is None:
+        return None, (f"calibration trop courte pour régler un seuil (moins de 10 essais, une "
+                      f"seule classe, ou une classe à moins de 2 membres — pas de scores "
+                      f"hors-pli) : recalibre avec plus d'essais (`python src/research/app.py`, "
+                      f"mode ErrP) : {_os.path.basename(chemin)}")
     return modele, None
 
 
@@ -296,6 +310,29 @@ def _selftest():
             f"...en disant quoi faire à la place ({raison})")
         chk(herite not in liste_avec_herite,
             f"...et il ne se glisse pas non plus dans la liste ({liste_avec_herite})")
+
+        # 1 ter. ⚠️ Correction de revue (tâche 3) : un modèle dont la calibration était trop
+        # courte pour avoir des scores hors-pli (`ErrPModel.fit` ne pose `oof_scores_`/`oof_y_`
+        # que si len(y)>=10, 2 classes, et chaque classe >=2 membres — cf. `errp_decoder.py`) est
+        # refusé ICI, EN LE NOMMANT. Sans ce refus, un tel modèle apparaissait normalement dans la
+        # liste proposée à l'étudiant (`hasattr(modele, "score"/"is_error")` ne dit rien de
+        # `oof_scores_`), et `core/modes/errp.py` finissait par appeler
+        # `pick_threshold(None, None, ...)` — mesuré, pas supposé : lève
+        # `ValueError: zero-dimensional arrays cannot be concatenated`, une exception numpy BRUTE
+        # sans aucun rapport avec ce qu'il faut faire.
+        degenere = _os.path.join(dossier, "errp_model_degenere.joblib")
+        modele_degenere = ErrPModel(fs=fs).fit(np.asarray(epochs[:5]), np.asarray(y[:5]), n_perm=0)
+        chk(modele_degenere.oof_scores_ is None and modele_degenere.oof_y_ is None,
+            f"fixture : 5 essais (< 10) ne posent PAS de scores hors-pli, la dégénérescence est "
+            f"réelle, pas simulée ({modele_degenere.oof_scores_})")
+        modele_degenere.save(degenere)
+        _m, raison = charger(degenere)
+        chk(_m is None and "hors-pli" in (raison or "")
+            and "recalibre" in (raison or "").lower(),
+            f"un modèle sans scores hors-pli est refusé EN LE NOMMANT, avec quoi faire ({raison})")
+        chk(degenere not in modeles_disponibles(dossier),
+            f"...et il n'apparaît donc pas dans la liste proposée à l'étudiant "
+            f"({modeles_disponibles(dossier)})")
 
         d = decrire(bon)
         chk(d["nom"] == "errp_model.joblib", f"la description porte le nom du fichier ({d['nom']})")
