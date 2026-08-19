@@ -949,7 +949,38 @@ def _errp_scoreboard(tally):
     return tpr, tnr, tp + fp + tn + fn
 
 
-def mode_errp(app, model_path=ERRP_MODEL_PATH):
+def _errp_charger(model_path=None):
+    """(modèle, raison, chemin) — le modèle ErrP à charger, ou une phrase qui dit quoi FAIRE.
+
+    ⚠️ Les deux entrées ErrP de l'appli faisaient `os.path.exists(...)` puis `ErrPModel.load(...)`,
+    c'est-à-dire un `joblib.load` nu. Or `data/errp_model.joblib` EXISTE — c'est le modèle du
+    24 juillet — et ne se charge plus depuis que le décodeur a déménagé dans `core/` : son pickle
+    référence le module NU `errp_decoder`. Mesuré, pas supposé :
+    `ModuleNotFoundError: No module named 'errp_decoder'`, que personne n'attrape (`page_errp` et
+    la boucle de `main` n'attrapent qu'`Abort`) — l'appli mourait sur un traceback EN PLEINE
+    SÉANCE, après avoir fait mettre le casque et saliner les électrodes. `errp_models.charger` ne
+    lève jamais et dit quoi faire ; c'est déjà par elle que passent le moteur (`core/modes/errp.py`)
+    et le mode P300 de cette appli. Même défaut, même correctif, troisième et quatrième site.
+    """
+    from core.errp_models import charger, modeles_disponibles
+
+    if model_path is None:
+        dispo = modeles_disponibles()
+        model_path = dispo[0] if dispo else ERRP_MODEL_PATH
+    modele, probleme = charger(model_path)
+    return modele, probleme, model_path
+
+
+def _errp_status(dispo):
+    """Le texte « modèles ErrP » de l'accueil, à partir des modèles RÉELLEMENT chargeables.
+
+    Jumeau de `_p300_status`, et séparé pour la même raison : testable sans toucher à `data/`.
+    L'accueil n'avait AUCUNE ligne ErrP — un étudiant lançait le mode pour découvrir sur place
+    qu'aucun modèle n'était utilisable."""
+    return f"{len(dispo)} ({os.path.basename(dispo[0])})" if dispo else "aucun utilisable"
+
+
+def mode_errp(app, model_path=None):
     """Mode 5 : démonstrateur ErrP AUTONOME (aucun envoi robot).
 
     Tâche orientée-BUT curseur-vers-cible (Ferrez & Millán 2008) : un point doit rejoindre l'étoile ;
@@ -960,15 +991,19 @@ def mode_errp(app, model_path=ERRP_MODEL_PATH):
     import random as _random
 
     from research.errp_calibrate import _decide_step, _new_goal, _step, _track_hold, adjust_threshold
-    from core.errp_decoder import ERROR, ErrPModel
+    from core.errp_decoder import ERROR
 
-    if not os.path.exists(model_path):
-        app.flash("Pas de modèle ErrP",
-                  "lance d'abord « ErrP -> Calibrer » (~4-5 min)", 3.5)
+    # `model_path=None` -> le PLUS RÉCENT des modèles réellement chargeables, comme `mode_p300`.
+    # Le défaut était `ERRP_MODEL_PATH`, un nom fixe que la calibration n'écrit plus (elle
+    # horodate, cf. `errp_calibrate.chemin_modele_horodate`) : garder ce défaut aurait fait
+    # pointer le mode droit sur la trace du 24 juillet, précisément le modèle refusé.
+    model, probleme, model_path = _errp_charger(model_path)
+    if model is None:
+        app.flash("Pas de modèle ErrP utilisable",
+                  probleme or "lance d'abord « ErrP -> Calibrer » (~4-5 min)", 4.0)
         return
     if not app.signal_check(highlight=ERRP_MIDLINE, mode_label="ErrP"):
         return                    # liaison + voies clés (Fz/Cz/Pz) ; casque KO ou ESC -> retour
-    model = ErrPModel.load(model_path)
     n_cells = ERRP_TRACK_CELLS
     fs = app.acq.fs
     rng = _random.Random(0) if app.smoke else _random.Random()
@@ -1089,14 +1124,16 @@ def _p300_status(dispo):
 
 
 def _status(app):
+    from core.errp_models import modeles_disponibles as errp_dispo
     from core.p300_models import modeles_disponibles
 
     cv = "oui" if os.path.exists(CVEP_MODEL_PATH) else "absent"
     p3 = _p300_status(modeles_disponibles())
+    er = _errp_status(errp_dispo())
     casque = "board SYNTHÉTIQUE" if app.synthetic else "Unicorn"
     robot = f"ON -> {app.host}" if app.send else "OFF (aucun envoi)"
     return [f"casque : {casque}    écran : {app.refresh:.0f} Hz",
-            f"modèles — c-VEP : {cv}    P300 : {p3}",
+            f"modèles — c-VEP : {cv}    P300 : {p3}    ErrP : {er}",
             f"envoi robot : {robot}"]
 
 
@@ -1288,7 +1325,6 @@ def page_errp(app):
     """Page ErrP : Lancer le démonstrateur / Régler le seuil (TPR/TNR) / Calibrer. Le réglage et le
     live nécessitent un modèle calibré ; le réglage sur la page sauve le seuil sur disque."""
     from research.errp_calibrate import adjust_threshold
-    from core.errp_decoder import ErrPModel
 
     while True:
         opts = [("Lancer le démonstrateur", "la machine se trompe, ton cerveau est lu en direct"),
@@ -1302,10 +1338,17 @@ def page_errp(app):
             if idx == 0:
                 mode_errp(app)
             elif idx == 1:
-                if os.path.exists(ERRP_MODEL_PATH):
-                    adjust_threshold(app, ErrPModel.load(ERRP_MODEL_PATH), save_path=ERRP_MODEL_PATH)
+                # 2e site du même défaut que `mode_errp` : un `os.path.exists` suivi d'un
+                # `joblib.load` nu, sur un fichier qui existe et ne se charge plus.
+                # Le seuil se règle sur le modèle qui SERVIRA, donc le même que le démonstrateur
+                # choisit — le plus récent réellement chargeable — et il est ré-enregistré là où
+                # il a été lu, jamais sous un nom fixe.
+                modele, probleme, chemin = _errp_charger()
+                if modele is None:
+                    app.flash("Pas de modèle ErrP utilisable",
+                              probleme or "calibre d'abord (ErrP -> Calibrer)", 4.0)
                 else:
-                    app.flash("Pas de modèle ErrP", "calibre d'abord (ErrP -> Calibrer)", 3.0)
+                    adjust_threshold(app, modele, save_path=chemin)
             elif idx == 2:
                 calib_errp(app)
         except Abort:
@@ -1445,6 +1488,54 @@ def _smoke(app):
         assert "blocs_melanges" in src and "shuffle" not in src, (
             f"{fonction.__name__} doit tirer son ordre de blocs_melanges et ne pas remélanger "
             f"localement — l'invariant oddball ne vaut que s'il est tenu aux TROIS endroits")
+
+    # --- les deux mêmes invariants, côté ErrP (corrigés le 2026-08-19) ------------------
+    import core.errp_models as errp_models
+    from research.errp_calibrate import chemin_modele_horodate as errp_horodate
+
+    # 4. Une calibration ErrP n'écrase JAMAIS `data/errp_model.joblib` — la trace du 24 juillet,
+    #    seul modèle ErrP enregistré au casque (AUC 0,7763, p=0,0099 sur 200 essais / 5 blocs).
+    #    Les époques survivent, mais AUCUN code de ce dépôt ne sait ré-entraîner depuis elles :
+    #    l'écraser coûtait une séance casque entière.
+    horodate = errp_horodate()
+    assert horodate != ERRP_MODEL_PATH, (
+        "une calibration ErrP écrirait dans data/errp_model.joblib et écraserait la trace du "
+        f"24 juillet ({horodate})")
+    assert fnmatch.fnmatch(os.path.basename(horodate), errp_models.MOTIF), (
+        f"le modèle horodaté {os.path.basename(horodate)} ne correspond pas à "
+        f"errp_models.MOTIF ({errp_models.MOTIF}) : il n'apparaîtrait dans aucune liste de modèles")
+    #    ...et c'est bien `calibrate` qui s'en sert quand personne ne lui donne de chemin. Vérifié
+    #    sur le TEXTE SOURCE et pas en l'exécutant : appeler `calibrate(app)` sans `save_path`
+    #    pour voir où il écrit, c'est exactement l'accident qu'on veut interdire. Aucun test de ce
+    #    dépôt n'écrit dans le vrai `data/`.
+    src_cal = inspect.getsource(errp_calibrate.calibrate)
+    assert "chemin_modele_horodate()" in src_cal and "or ERRP_MODEL_PATH" not in src_cal, (
+        "calibrate() doit retomber sur chemin_modele_horodate() quand save_path est None : un "
+        "défaut à ERRP_MODEL_PATH écrase la trace du 24 juillet dès la première calibration "
+        "de démonstration")
+
+    # 5. Les deux entrées ErrP passent par `errp_models.charger`, pas par un `joblib.load` nu.
+    #    Vérifié sur le TEXTE SOURCE parce que c'est la propriété qu'on veut tenir : un chargement
+    #    direct réapparu ici passerait tous les tests de décodage, et ferait mourir l'appli sur un
+    #    `ModuleNotFoundError` la première fois qu'un modèle hérité traîne dans `data/` — ce qui
+    #    est le cas aujourd'hui sur ce poste. ⚠️ C'est une recherche de texte : ne pas écrire le
+    #    nom interdit dans un commentaire de ces deux fonctions, même pour dire de ne pas s'en
+    #    servir (l'assertion l'a attrapé à la première écriture, elle mord).
+    interdit = "ErrPModel" + ".load"
+    for fonction in (mode_errp, page_errp):
+        src = inspect.getsource(fonction)
+        assert "_errp_charger" in src and interdit not in src, (
+            f"{fonction.__name__} doit charger par `_errp_charger` (donc `errp_models.charger`, "
+            f"qui NOMME le problème) et jamais par {interdit}, un joblib.load nu")
+    assert _errp_status([]) == "aucun utilisable", (
+        "sans modèle ErrP CHARGEABLE, l'accueil doit le dire — un fichier présent mais hérité ne "
+        f"vaut pas « oui » ({_errp_status([])})")
+    lignes_errp = [l for l in _status(app) if "ErrP" in l]
+    assert lignes_errp, (
+        f"l'accueil doit porter une ligne « ErrP : … » : sans elle, un étudiant lance le mode "
+        f"pour découvrir sur place qu'aucun modèle n'est utilisable ({_status(app)})")
+    assert _errp_status(errp_models.modeles_disponibles()) in lignes_errp[0], (
+        f"...et l'accueil affiche RÉELLEMENT ce texte, pas un os.path.exists ({lignes_errp[0]})")
 
     print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + P300 + neuro + ErrP(cal+démo) câblés (headless).")
 

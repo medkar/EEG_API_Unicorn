@@ -13,8 +13,9 @@ réponse visuelle qui dépendrait de la position de la cible — et c'est aussi 
 ligne (on affichera la commande décodée au centre, puis on l'annule si ErrP). ⚠️ onset = la FRAME
 écran, JAMAIS le mouvement du robot (jitter UDP/ROS2 qui étalerait l'ErrP en mono-essai).
 
-Sortie : `data/errp_model.joblib` (ErrPModel : xDAWN+Riemann+LR, seuil asymétrique) + un .npz des
-époques brutes. Métriques honnêtes : AUC (GroupKFold par bloc) + TPR/TNR séparés (pas l'accuracy
+Sortie : `data/errp_model_AAAAMMJJ_HHMMSS.joblib` (ErrPModel : xDAWN+Riemann+LR, seuil asymétrique)
++ un .npz des époques brutes. Le nom est HORODATÉ, jamais fixe : `data/errp_model.joblib` est la
+trace casque du 24 juillet, et une calibration ne doit rien écraser (cf. `chemin_modele_horodate`). Métriques honnêtes : AUC (GroupKFold par bloc) + TPR/TNR séparés (pas l'accuracy
 brute, trompeuse sous déséquilibre). Se lance depuis l'appli (mode ErrP -> Calibrer) ou en smoke.
 """
 
@@ -321,6 +322,28 @@ def _archive(save_path, epochs, labels, groups, fs):
     return last
 
 
+def chemin_modele_horodate(dossier=None):
+    """`data/errp_model_AAAAMMJJ_HHMMSS.joblib` — un fichier NEUF, jamais un écrasement.
+
+    ⚠️ La calibration écrivait dans `ERRP_MODEL_PATH` (`data/errp_model.joblib`), un nom FIXE :
+    la calibration suivante effaçait donc la précédente. Or `data/errp_model.joblib` est la trace
+    du 24 juillet que ce chantier a explicitement choisi de préserver — le seul modèle ErrP
+    enregistré au casque, celui dont viennent l'AUC 0,7763 (validation croisée groupée par bloc,
+    200 essais, 5 blocs) et le p = 0,0099 sur 100 permutations. Une calibration de démonstration
+    par un étudiant le détruisait sans un mot. Les époques survivaient (`_archive` horodate les
+    `.npz`), mais aucun code de ce dépôt ne sait ré-entraîner depuis elles : le remède aurait été
+    une séance casque complète. Le MI a déjà perdu ses quatre modèles de cette façon, faute
+    d'époques ; le P300 a corrigé exactement ceci la veille (`p300_calibrate`, même fonction).
+    Rien n'appliquait cet invariant : seule une prose l'affirmait.
+
+    `errp_models.MOTIF` (`errp_model*.joblib`) liste déjà ces fichiers, du plus récent au plus
+    ancien : le mode ErrP du moteur et l'appli pygame prennent donc automatiquement le dernier,
+    sans qu'un nom fixe soit nécessaire nulle part.
+    """
+    dossier = os.path.dirname(ERRP_MODEL_PATH) if dossier is None else dossier
+    return os.path.join(dossier, f"errp_model_{time.strftime('%Y%m%d_%H%M%S')}.joblib")
+
+
 def _results(app, model, n_err, n_tot, save_path=None):
     """Écran de résultat (attend une touche) — AUC + significativité (permutation) + TPR/TNR + sLDA.
     'R' ouvre le réglage MANUEL du seuil (TPR/TNR) ; les chiffres se rafraîchissent au retour."""
@@ -370,8 +393,12 @@ def _results(app, model, n_err, n_tot, save_path=None):
 def calibrate(app, trials=ERRP_CAL_TRIALS, blocks=ERRP_CAL_BLOCKS,
               error_rate=ERRP_ERROR_RATE, save_path=None):
     """Calibration complète. En smoke : 2 blocs × quelques feedbacks (erreur/correct alternés),
-    fit léger, sauvegarde dans save_path. Retourne True si un modèle a été entraîné."""
-    save_path = save_path or ERRP_MODEL_PATH
+    fit léger, sauvegarde dans save_path. Retourne True si un modèle a été entraîné.
+
+    `save_path=None` -> un fichier HORODATÉ, jamais `data/errp_model.joblib` : voir
+    `chemin_modele_horodate`.
+    """
+    save_path = save_path or chemin_modele_horodate()
     n_cells = ERRP_TRACK_CELLS
 
     # câble/électrodes AVANT d'enregistrer ; voies clés ErrP (Fz/Cz/Pz) encadrées. ⚠️ Cz sature à la
