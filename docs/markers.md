@@ -28,11 +28,17 @@ One LSL stream, discovered by the engine **by name**:
 | format | `string` |
 | sampling rate | irregular |
 
-The name is a setting on the engine side (`Marker stream` on the P300 page), so you may use your
-own. The engine resolves it when the first marker-driven mode starts, and holds one shared inlet
-for every such mode. Changing the name while the mode runs has no effect — but **stopping and
-restarting the mode is enough** to pick up the new one: the inlet is released as soon as no
-running mode is listening any more. You do not have to restart the engine.
+The name is a setting on the engine side — **Flux de marqueurs**, on the P300 page and on the ErrP
+page, one each. The engine resolves it when the first marker-driven mode starts, and holds one
+shared inlet for every such mode. Changing the name while the mode runs has no effect — but
+**stopping and restarting the mode is enough** to pick up the new one: the inlet is released as
+soon as no running mode is listening any more. You do not have to restart the engine.
+
+⚠️ **Today that setting offers exactly one name**, the default `EEG_API_Unicorn_stim`. The plumbing
+that reads it is in place on both modes, so a program driving the engine directly can set another
+name — but the console's dropdown has a single entry, so from the interface you cannot yet rename
+it. If you need two pairs in one room to stop hearing each other, that is the piece to add, and it
+is a change to the setting's type, not to the marker pipe.
 
 If two emitters publish under the same name, the engine says so and names the one it kept. Since
 everyone uses the default name and LSL reaches across the whole network, this is worth reading in
@@ -257,7 +263,7 @@ simply never fire. So each of these is announced, in the engine's terminal:
 | A marker arrived too late to find its EEG | counted in `marqueurs_perdus` |
 | A marker is stamped in the future | counted in `marqueurs_futurs` — see the clock section below |
 | A marker was not readable JSON | counted in `marqueurs_illisibles` |
-| Markers arrived during the 15 s warm-up | counted in `marqueurs_chauffe`, said once — they are dropped on purpose |
+| Markers arrived during the warm-up (**15 s for P300; 15 s + 8 s of rest = 23 s for ErrP**) | counted in `marqueurs_chauffe`, said once — they are dropped on purpose |
 | `target` outside `[0, 6[` | named, with the expected range, counted in `refus_cible` |
 | An epoch fell out of the buffer | counted in `epoques_perdues` |
 | `round_end` with too few flashes | `target_index = -1` **and** the reason |
@@ -274,9 +280,12 @@ Three places, so that "watch whether this number climbs" is something you can re
    `100`, `1000`… — the first incident is the one that explains all the others, and printing every
    one of them at 6.7 flashes per second would be as unreadable as printing none.
 2. **The `EEG_API_Unicorn_status` stream**, as JSON, which any client can subscribe to:
-   `marqueurs: {perdus, futurs, illisibles, inlet_erreurs, connecte}` at the engine level, and
+   `marqueurs: {perdus, futurs, illisibles, inlet_erreurs, connecte}` at the engine level;
    `refus_cible`, `epoques_perdues`, `manches_abandonnees`, `marqueurs_chauffe` inside the P300
-   mode's own state.
+   mode's own state; and `epoques_perdues`, `epoques_vues`, `artefacts`, `taux_rejet`,
+   `marqueurs_chauffe`, `point_de_fonctionnement` inside the ErrP mode's own state. `taux_rejet` is
+   the ErrP one to watch: it is the share of epochs thrown away as artifacts, and a session that
+   sits above 50 % is telling you about the electrodes, not about the brain.
 3. **The console**, which reads the same snapshot.
 
 `connecte` is the one to look at first. If it is `false` while your emitter is running, nothing
@@ -307,16 +316,22 @@ terrible verdict. Design accordingly.
 The trade-off is real and there is no free lunch anywhere on it — measured on the reference
 session, 200 trials, one person:
 
-| you keep this share of good commands | you catch this share of errors |
-|---|---|
-| 96 % | 24 % |
-| 91 % | 40 % |
-| **85 %** *(default)* | **50 %** |
-| 81 % | 60 % |
-| 70 % | 71 % |
+| you ask for this | you actually keep this share of good commands | you catch this share of errors |
+|---|---|---|
+| 95 % | 95.7 % | 24 % |
+| 90 % | 91.3 % | 40 % |
+| **85 %** *(default)* | **85.5 %** | **50 %** |
+| 80 % | 81.2 % | 60 % |
+| 70 % | 70.3 % | 71 % |
 
-You choose where to sit with the **Bonnes commandes gardées** setting on the ErrP page. You ask for
-a rate, not a threshold — the engine derives the threshold from your own calibration.
+You choose where to sit with the **Bonnes commandes gardées** setting (share of good commands kept)
+on the ErrP page. You ask for a rate, not a threshold — the engine derives the threshold from your
+own calibration, and announces the rate it actually reached at start-up.
+
+The middle column is not padding. The engine picks the lowest threshold whose measured rate is *at
+least* what you asked for, so what you get is always a little more conservative than what you
+requested. Asking for 95 % does not put you at the 24 % row by rounding — it puts you at or above
+it. Read the number the engine prints, not the number you typed.
 
 ## Before any of this works: a trained model
 
@@ -328,9 +343,11 @@ python src/research/app.py     # menu -> P300 -> Calibrer
 python src/research/app.py     # menu -> ErrP  -> Calibrer
 ```
 
-Each calibration writes a **new, timestamped** file (`data/p300_model_20260818_101500.joblib`); it
-never overwrites the previous one. The engine offers the most recent loadable model as its default,
-and the P300 page lists the others.
+Each calibration writes a **new, timestamped** file — `data/p300_model_20260818_101500.joblib`,
+`data/errp_model_20260819_142230.joblib` — and **never overwrites the previous one**. The engine
+offers the most recent loadable model as its default, and each mode's page lists the others. The
+timestamp goes down to the second, so the only way to lose a model is to finish two calibrations
+within the same second, which a 5-minute protocol makes hard.
 
 Until then the engine refuses to start the mode, and says why.
 

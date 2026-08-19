@@ -348,32 +348,51 @@ python src/research/p300_stimulus.py --windowed
 
 ### 1.15 — L'ErrP : le 5e mode, sans casque
 
-Même montage qu'au 1.14, autre mode. Le décodage sera du hasard en synthétique — ce qu'on vérifie,
-c'est que le tuyau porte le second paradigme sans qu'on ait rien redécouvert.
+> ⚠️ **Sans modèle ErrP entraîné sur ce poste, le mode refuse de démarrer** et dit d'aller calibrer
+> (`python src/research/app.py`, menu → ErrP → Calibrer). C'est le comportement attendu sur un dépôt
+> fraîchement cloné (`data/` est gitignoré), pas une panne. ⚠️ **Mais cette calibration-là exige le
+> casque** : ~200 essais, il n'existe aucun moyen d'en fabriquer un sans. Si tu n'en as jamais fait,
+> ce test du niveau 1 n'est jouable **qu'après le 2.8** — c'est la seule entorse à la règle « le
+> niveau 1 ne demande pas de matériel », et elle est dans la nature du mode, pas dans son code.
+
+Le décodage sera du hasard en synthétique — ce qu'on vérifie, c'est que le tuyau porte le second
+paradigme sans qu'on ait rien redécouvert.
+
+⚠️ **La console, pas le moteur nu.** Trois des cinq points ci-dessous demandent une page et un
+réglage, qui n'existent que dans la console ; et `server.py` est *headless*, il n'a ni page ErrP ni
+option `tnr_target`. La console crée son propre moteur, donc **lancer les deux publierait `decoded_errp`
+deux fois sous le même nom** — exactement le piège que CLAUDE.md interdit.
 
 ```bash
-# terminal 1
-python src/core/server.py --synthetic --mode errp
+# terminal 1 — la console (coche « publié » sur la page ErrP)
+python src/console/app.py --synthetic --mode errp
 # terminal 2
 python src/research/errp_stimulus.py --windowed
+# terminal 3
+python -u examples/receiver.py --stream decoded_errp
 ```
 
 - [ ] Le moteur passe par **15 s de chauffe puis 8 s de repos** avant de décoder, et annonce le σ
       par voie qu'il a mesuré. C'est sa référence de rejet d'artefact — sans elle, pas de décodage.
 - [ ] Il dit avoir **jeté** les marqueurs reçus pendant cette attente, en les comptant. C'est voulu :
       l'offset du casque dérive encore, ces époques ne valent rien.
-- [ ] Un point avance sur une piste, se trompe délibérément environ une fois sur trois, et affiche
-      son résultat une seconde.
-- [ ] À chaque résultat affiché, **un échantillon sort** sur `decoded_errp` — vérifiable avec
-      `python -u examples/receiver.py --stream decoded_errp`. Y compris quand le moteur ne peut pas
-      juger : il publie alors `error = -1`, jamais `0`.
-- [ ] Sur la page ErrP de la console, le verdict s'affiche **avec le score et le point de
-      fonctionnement**, pas comme une sentence. Et « pas de verdict » se distingue visuellement de
-      « pas d'erreur ».
+- [ ] Un point avance sur une piste, se trompe délibérément **environ une fois sur quatre** (28 %,
+      le chiffre est affiché à l'écran), et montre son résultat une seconde.
+- [ ] À chaque résultat affiché, **un échantillon sort** sur `decoded_errp`, visible dans le
+      terminal 3. Y compris quand le moteur ne peut pas juger : il publie alors `error = -1`,
+      jamais `0`.
+- [ ] Sur la page ErrP, le verdict s'affiche **avec le score et le point de fonctionnement**, pas
+      comme une sentence. Et « pas de verdict » se distingue visuellement de « pas d'erreur ».
 
 > ⚠️ **Le réglage « Bonnes commandes gardées » n'est pas décoratif.** Mets-le à 0,95 puis à 0,70 et
-> regarde le seuil changer dans le terminal : c'est le compromis, et il est raide — garder 95 % des
-> bonnes commandes ne laisse attraper qu'une erreur sur quatre.
+> regarde le seuil changer : c'est le compromis, et il est raide — garder 95 % des bonnes commandes
+> ne laisse attraper qu'une erreur sur quatre.
+>
+> ⚠️ **Mais ce réglage recrée le flux.** Le moteur écrit lui-même « RECRÉÉ (réabonnez-vous) », et le
+> mode **refait chauffe + repos, ~23 s**, avant de décoder à nouveau. Ton `receiver.py` du terminal 3
+> est abonné à l'ancien flux : **il devient muet définitivement**. Relance-le après chaque changement
+> et attends la fin du repos avant de compter quoi que ce soit — sinon tu mesureras un flux mort et
+> tu concluras que baisser le réglage a cassé le détecteur, ce qui est l'inverse de la vérité.
 
 ---
 
@@ -582,10 +601,17 @@ python -u examples/receiver.py --stream decoded_errp
 - [ ] Compte tes erreurs délibérées et les `error = 1` publiés. **Vise l'ordre de grandeur, pas le
       score.**
 - [ ] Regarde le taux de rejet d'artefact dans l'état du moteur. **S'il dépasse 50 %, le moteur le
-      dit** — et ça veut dire que le contact s'est dégradé ou que tu bouges, pas que le décodeur est
-      cassé.
+      dit — une seule fois, et pas avant 10 époques jugées.** Ne guette donc pas un message
+      récurrent : son silence ne veut pas dire que le taux est redescendu. Pour le suivre en continu,
+      lis `taux_rejet` dans l'état du moteur (flux `status`, ou la console). Un taux haut veut dire
+      que le contact s'est dégradé ou que tu bouges, pas que le décodeur est cassé.
 - [ ] Change « Bonnes commandes gardées » de 0,85 à 0,70 et refais une série : tu devrais attraper
       plus d'erreurs, et annuler plus de bonnes commandes. C'est le compromis, en vrai.
+      ⚠️ **Ce point demande la console** — `python src/console/app.py --mode errp` **à la place** du
+      terminal 1, jamais les deux en même temps : `server.py` n'a pas ce réglage. Et changer le
+      réglage **recrée le flux** (« RECRÉÉ (réabonnez-vous) ») puis **refait les 23 s de chauffe et de
+      repos** : relance ton `receiver.py` et attends la fin du repos, sinon tu comptes sur un flux
+      mort.
 
 > ⚠️ **Un point ouvert que ce test peut trancher** : la référence de rejet d'artefact est mesurée
 > sur du signal BRUT après 15 s de chauffe, et ce délai n'a jamais été vérifié pour cet usage

@@ -44,7 +44,9 @@ Casque **Unicorn Hybrid Black** : 8 voies EEG sèches, 250 Hz, Bluetooth. Montag
 
 ## Façon de travailler (préférences de l'utilisateur)
 
-- Répondre en **français** ; README, doc et messages de commit **en anglais** pour GitHub.
+- Répondre en **français** ; README, doc et messages de commit **en anglais** pour GitHub. Deux
+  exceptions assumées, parce qu'elles ne s'adressent pas à GitHub : `docs/SPEC.md` (document de
+  travail interne) et `docs/recette.md` (procédure exécutée ici) restent en français.
 - Avancer par **petits pas testés sur le matériel** : éditer → lancer → coller les logs.
 - **Vérifier la doc** (SDK Unicorn, LSL, littérature BCI) avant d'affirmer ; citer les sources sur les
   points incertains.
@@ -63,6 +65,9 @@ python src/core/server.py --mode mi        # le Motor Imagery sur le réseau (EX
 python src/core/server.py --mode p300      # le P300 sur le réseau (EXIGE un modèle ET des marqueurs entrants)
 python src/research/p300_stimulus.py       # l'émetteur de marqueurs P300 — n'ouvre PAS le casque,
                                            # donc se lance EN MÊME TEMPS que le moteur (2 terminaux)
+python src/core/server.py --mode errp      # l'ErrP sur le réseau (EXIGE un modèle ET des marqueurs)
+python src/research/errp_stimulus.py       # l'émetteur de marqueurs ErrP — n'ouvre PAS le casque non
+                                           # plus, même montage à 2 terminaux que le P300
 # calibration MI : bouton « Calibrer » sur sa page dans la console — plus de commande séparée
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)

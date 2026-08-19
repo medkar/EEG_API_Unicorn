@@ -19,7 +19,8 @@ game event, a visualisation, a robot command) is the client application's job.
 > too, though neither has been hardware-validated *through the engine* yet. **P300 joined them on
 > 2026-08-17**: the engine now *receives* markers as well as sending streams, so an external
 > application can flash the targets and let the engine decode — see
-> **[docs/markers.md](docs/markers.md)**. c-VEP and ErrP still live in the pygame app only. See
+> **[docs/markers.md](docs/markers.md)**. **ErrP followed on 2026-08-19**, through the same marker
+> pipe. c-VEP still lives in the pygame app only. See
 > **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
 
 ## Requirements
@@ -42,14 +43,6 @@ python src/core/server.py --mode neuro                # passive: no stimulus, no
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
 
-**ErrP is passive and the most easily misread**: it does not answer a question you asked, it reports
-that the user's brain reacted the way brains react when a machine gets something wrong. Your
-application tells the engine when it showed a result; the engine answers per result. ⚠️ At the
-default setting it **catches one error in two and cancels one good command in seven** — the stream
-publishes that operating point in its own metadata precisely so a client cannot mistake it for a
-verdict. It is the best-validated decoder here on honest cross-validation (AUC 0.776, permutation
-p = 0.0099) and still only that good, which is what a single-trial ERP costs.
-
 Five published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
 a target, there is a right answer, and your application must render the flickering stimulus. **Motor
 Imagery is active** too, but it decodes an imagined movement — no stimulus to render, and a model
@@ -59,8 +52,19 @@ decoding rests on cutting the EEG at that instant — see [docs/markers.md](docs
 needs a per-person model, and it answers once per round rather than continuously. **Neuro is
 passive**: it reports a mental state, there is nothing to choose and no stimulus — but its values
 are z-scores against a rest measured at the start of the mode, *for this person, today*. They
-compare across neither people nor sessions, and mean nothing in absolute terms. The stream metadata
-carries `paradigm` so a client can tell them apart.
+compare across neither people nor sessions, and mean nothing in absolute terms. **ErrP is passive
+and the most easily misread**: it does not answer a question you asked, it reports that the user's
+brain reacted the way brains react when a machine gets something wrong. Like P300 it needs your
+markers — you tell the engine when you showed a result, and it answers per result.
+
+The stream metadata carries `paradigm` so a client can tell them apart.
+
+⚠️ **Read the ErrP operating point before you act on it.** At the default setting it **catches one
+error in two and cancels one good command in seven**; the stream publishes that in its own metadata
+precisely so a client cannot mistake it for a verdict. It is the best-validated decoder here *by
+AUC on grouped cross-validation* (0.776, permutation p = 0.0099) and still only that good, which is
+what a single-trial ERP costs. Best-validated is not the same claim as most reliable — that one is
+SSVEP, on a different axis.
 
 **The console** — the engine plus a desktop window, one page per mode.
 
@@ -143,9 +147,10 @@ not a fine control. Do not design something that needs a correct answer every se
 A model belongs to the person it was trained on. Someone else's model produces probabilities that
 look plausible and are wrong, which is worse than no output at all.
 
-**The pygame app** — the original all-in-one, still the only way to run c-VEP and ErrP, and
-the only place with a live histogram for neuro-monitoring. Motor Imagery has fully moved out of it,
-calibration included — this app no longer has it at all. It owns the headset and publishes nothing.
+**The pygame app** — the original all-in-one, still the only way to run c-VEP, the only place to
+calibrate P300 and ErrP, and the only place with a live histogram for neuro-monitoring. Motor
+Imagery has fully moved out of it, calibration included — this app no longer has it at all. It owns
+the headset and publishes nothing.
 
 Its former Motor Imagery screens (calibration and pilot) are not deleted, kept in
 [`archive/`](archive/README.md) instead: still runnable (`--smoke`), and the reference the engine's
@@ -211,7 +216,7 @@ refresh rate.
 | **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min | ✅ validated on hardware; ✅ **published as a stream** — your app flashes and sends markers, see [docs/markers.md](docs/markers.md) |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
-| **ErrP** | Error potential: single-trial detection when the machine errs | ~4 min | 🟡 demonstrator, needs real calibration |
+| **ErrP** | Error potential: single-trial detection when the machine errs | ~7 min (200 trials) | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
 
 ## Layout
 
@@ -263,7 +268,7 @@ does not publish them yet, so they are not part of what students consume and may
 |---|---|
 | pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `viewing.py` |
 | Stimulus emitters — **open no headset**, meant to run *beside* the engine in a second terminal | `ssvep_stimulus.py` · [`p300_stimulus.py`](src/research/p300_stimulus.py) (publishes markers, see [`docs/markers.md`](docs/markers.md)) |
-| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` · `errp_decoder` (`p300_decoder` has moved to `core/`) |
+| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` (`p300_decoder` and `errp_decoder` have moved to `core/`) |
 | Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
@@ -284,11 +289,14 @@ python src/core/lsl_io.py                # stream contract: channel names, round
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board
 python src/core/neuro_monitor.py         # spectral indices on synthetic EEG
+python src/core/errp_decoder.py          # ErrP pipeline on synthetic error potentials
+python src/core/errp_models.py           # ErrP models: legacy refused, degenerate refused, newest first
+python src/core/modes/errp.py            # the ErrP mode: epoch alignment, artifact rejection, threshold monotonicity
 
 python src/research/app.py --smoke       # whole app headless: menu + every mode + calibrations
 python src/research/cvep_code.py         # m-sequence properties (balance, autocorrelation, lags)
 python src/research/cvep_decoder.py      # c-VEP accuracy vs SNR on synthetic responses
-python src/research/errp_decoder.py      # ErrP pipeline on synthetic error potentials
+python src/research/errp_stimulus.py --smoke  # ErrP marker emitter: track, deliberate errors, stamped at flip
 python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
 python src/research/itr.py               # information transfer rate — common yardstick
 ```
