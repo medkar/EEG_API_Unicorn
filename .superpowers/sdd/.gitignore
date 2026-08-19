@@ -26,3 +26,11 @@
 # Les paquets de diff restent dehors : des copies de ce que git contient déjà,
 # régénérables par `git diff BASE..HEAD`. 645 Ko de redondance.
 *.diff
+
+# ⚠️ Le chantier ErrP (2026-08-19) a nommé ses paquets de diff en `.md`, donc la
+# règle ci-dessus les laissait passer : 437 Ko de plus. Le suffixe d'UNE lettre les
+# distingue des rapports, qui eux restent suivis :
+#   dehors  `final-A.md`, `re-B.md`      = un diff, régénérable par `git diff`
+#   dedans  `final-A-findings.md`, `re-B-verdict.md`, `fix-C-report.md` = du raisonnement
+final-?.md
+re-?.md
