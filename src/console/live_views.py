@@ -13,6 +13,7 @@ import numpy as np
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import SSVEP_SPAN_SEUILS, classement_relatif  # noqa: E402
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 
@@ -166,11 +167,13 @@ class ActiveView(QWidget):
         self._assure(len(scores), [f"{f:g} Hz" for f in freqs])
         self.seuil.setText(f"échelle z · seuil {seuil:g} — un score au-dessus déclenche")
 
-        # L'échelle du remplissage va jusqu'à 2× le seuil : une barre pleine à ras le seuil
-        # laisserait croire qu'on est au maximum alors qu'on vient à peine de déclencher.
+        # L'échelle du remplissage va jusqu'à `SSVEP_SPAN_SEUILS` (2×) fois le seuil : une barre
+        # pleine à ras le seuil laisserait croire qu'on est au maximum alors qu'on vient à peine
+        # de déclencher. Le facteur vit dans `console/__init__.py` — la TUILE l'applique aussi, et
+        # elle s'en était écartée (cf. `grid.ModeTile._apercu_scores`).
         for i, (_e, barre) in enumerate(self._barres):
             valeur = scores[i] if i < len(scores) else 0.0
-            barre.setValue(int(max(0.0, min(valeur / (2 * seuil), 1.0)) * 100))
+            barre.setValue(int(max(0.0, min(valeur / (SSVEP_SPAN_SEUILS * seuil), 1.0)) * 100))
 
         index = sortie.get("target_index", -1)
         if sortie.get("artifact"):
@@ -249,16 +252,14 @@ class ActiveView(QWidget):
         n_flashes = sortie.get("n_flashes")
         index = sortie.get("target_index", -1)
 
-        # Échelle RELATIVE, recalculée à chaque manche : c'est le classement qu'on montre, pas
-        # une position sur une règle graduée. `etendue <= 0` (scores tous égaux, ou une seule
-        # cible) laisse tout à mi-hauteur plutôt que de diviser par zéro ou de désigner un
-        # gagnant qui n'en est pas un.
-        bas, haut = (min(scores), max(scores)) if scores else (0.0, 0.0)
-        etendue = haut - bas
+        # Échelle RELATIVE, recalculée à chaque manche : c'est le classement qu'on montre, pas une
+        # position sur une règle graduée. La règle vit dans `console.classement_relatif` — la MÊME
+        # fonction que la tuile de la grille appelle (cf. sa docstring : écrite deux fois, elle a
+        # déjà divergé une fois, et c'est ce chantier-ci qui a dû les remettre d'accord).
+        parts = classement_relatif(scores)
         self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
         for i, (_e, barre) in enumerate(self._barres):
-            part = 0.5 if etendue <= 0 else (scores[i] - bas) / etendue
-            barre.setValue(int(max(0.0, min(part, 1.0)) * 100))
+            barre.setValue(int(parts[i] * 100))
 
         sur = "" if n_flashes is None else f" sur {n_flashes} flash(s)"
         self.seuil.setText(f"log-odds moyens par cible{sur} · AUCUN seuil : le moteur prend "
@@ -340,7 +341,15 @@ class PassiveView(QWidget):
             # Mode démarré mais rien de décodé encore (chauffe, repos, ou en attente d'un
             # marqueur). On dit qu'on attend — et surtout on n'affirme AUCUNE unité, puisqu'on
             # ne sait pas encore laquelle des deux formes de sortie ce mode va rendre.
-            self.etat.setText(mode_state["instruction"] if mode_state else "en attente")
+            #
+            # ⚠️ `or` et pas seulement `[...]` : après son repos, `ErrPRuntime.instruction()` rend
+            # une chaîne VIDE (il n'y a plus de consigne à donner à l'utilisateur — c'est au
+            # stimulus de jouer). Ce label est le texte principal de la page : le laisser vide,
+            # c'est un écran blanc pendant tout le temps où l'étudiant cherche pourquoi rien ne
+            # vient. Un écran vide se lit « ça ne marche pas ». On ne route PAS sur l'identifiant
+            # du mode pour autant : la phrase est vraie pour n'importe quel mode qui attend.
+            self.etat.setText((mode_state or {}).get("instruction")
+                              or "en attente du premier échantillon décodé")
             self.avertissement.setText(AVERTISSEMENT_ATTENTE)
             return
 

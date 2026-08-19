@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import PHASES_FR  # noqa: E402
+from console import PHASES_FR, SSVEP_SPAN_SEUILS, classement_relatif  # noqa: E402
 # `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
@@ -216,16 +216,19 @@ class ModeTile(QFrame):
         retenue = sortie.get("target_index", -1)
         if seuil is not None:
             # SSVEP : un z, comparé à un seuil publié. L'échelle absolue a un sens.
-            self.apercu.set_values(scores, span=max(float(seuil), 1.0), retenue=retenue)
+            # ⚠️ `SSVEP_SPAN_SEUILS × seuil`, pas `seuil` : c'est l'échelle de la PAGE
+            # (`live_views._update_scores`). La tuile s'arrêtait à 1× — donc sur le fixture du
+            # smoke (score 3,1, seuil 2,5) elle montrait une barre PLEINE là où la page affiche
+            # 62 %. L'étudiant lisait « c'est au maximum » sur la grille, puis « 62 % » en
+            # ouvrant la page : mêmes données, deux lectures — le défaut même que la branche
+            # d'à côté a été écrite pour supprimer.
+            self.apercu.set_values(scores, span=max(SSVEP_SPAN_SEUILS * float(seuil), 1.0),
+                                   retenue=retenue)
             return
         # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
-        # recalculée à chaque manche, comme `_update_selection` le fait sur la page. `etendue
-        # <= 0` (scores tous égaux, ou une seule cible) laisse tout à mi-hauteur plutôt que de
-        # désigner un gagnant qui n'en est pas un.
-        bas, haut = (min(scores), max(scores)) if scores else (0.0, 0.0)
-        etendue = haut - bas
-        valeurs = [0.5 if etendue <= 0 else (s - bas) / etendue for s in scores]
-        self.apercu.set_values(valeurs, span=1.0, retenue=retenue)
+        # recalculée à chaque manche. La règle vit dans `console.classement_relatif` — la MÊME
+        # fonction que la page appelle, parce qu'écrite deux fois elle a déjà divergé une fois.
+        self.apercu.set_values(classement_relatif(scores), span=1.0, retenue=retenue)
 
 
 def _resume(mode_state):

@@ -487,6 +487,7 @@ def _smoke():
     # barres à zéro), puis « CIBLE 3 · 0 Hz ». Quatre affirmations fausses, aucun message.
     # C'est la panne du MI recommencée un mode plus tard : d'où des assertions sur ce que
     # l'écran DIT, pas seulement sur la classe de vue instanciée.
+    from console import SSVEP_SPAN_SEUILS
     from core.config import Z_MIN
     p300_state = {**state, "modes_state": {**state["modes_state"], "p300": {
         "id": "p300", "label": "P300", "family": "actif", "phase": "running", "published": True,
@@ -543,13 +544,39 @@ def _smoke():
     chk(apercu_p3._retenue == 3,
         f"...et met en avant la cible que le MOTEUR a retenue, pas un maximum recalculé "
         f"({apercu_p3._retenue})")
+    # ⚠️ L'assertion qui LIE les deux, et qui aurait attrapé le défaut ci-dessus le jour où il est
+    # né : les deux précédentes lisent la page et la tuile SÉPARÉMENT, donc rien n'interdisait
+    # qu'elles se contredisent (c'est arrivé, dans du code poussé). Elles appellent maintenant la
+    # MÊME fonction, `console.classement_relatif` — cette ligne le vérifie sur les mêmes données.
+    # `int()` et pas `round()` : c'est la conversion que la page applique (`QProgressBar` prend un
+    # entier). Comparer deux arrondis différents ferait rougir sur 60,61 % contre 61 % — mesuré.
+    chk([int(v * 100) for v in apercu_p3._values] == [b.value() for _e, b in p3._barres],
+        f"la tuile et la page rendent le MÊME classement sur les mêmes données "
+        f"({[int(v * 100) for v in apercu_p3._values]} contre "
+        f"{[b.value() for _e, b in p3._barres]})")
 
     # Le SSVEP, lui, a bien un `threshold` publié : son échelle reste ABSOLUE, contre ce
     # seuil-là. Sans cette assertion, « ne plus jamais utiliser de seuil » passerait aussi.
-    chk(console.grid.tuiles["ssvep"].apercu._span
-        == state["modes_state"]["ssvep"]["output"]["threshold"],
-        f"et la tuile SSVEP garde son échelle absolue, contre le seuil qu'elle PUBLIE "
-        f"({console.grid.tuiles['ssvep'].apercu._span})")
+    # ⚠️ `SSVEP_SPAN_SEUILS ×` le seuil, pas le seuil nu : la tuile s'arrêtait à 1× quand la page
+    # va à 2×, donc sur ce fixture (score 3,1, seuil 2,5) la grille affichait une barre PLEINE et
+    # la page 62 %. L'assertion figeait l'écart au lieu de l'interdire.
+    seuil_ssvep = state["modes_state"]["ssvep"]["output"]["threshold"]
+    chk(console.grid.tuiles["ssvep"].apercu._span == SSVEP_SPAN_SEUILS * seuil_ssvep,
+        f"et la tuile SSVEP garde son échelle absolue, contre le seuil qu'elle PUBLIE, à la MÊME "
+        f"échelle que sa page ({console.grid.tuiles['ssvep'].apercu._span} pour un seuil de "
+        f"{seuil_ssvep})")
+    # ...et on le VÉRIFIE sur le RENDU, pas seulement sur le réglage. Les deux côtés sont lus sur
+    # les objets eux-mêmes (`_values`/`_span` pour la tuile, `value()` pour la page) : rien n'est
+    # recalculé ici avec la formule de production, sans quoi le test ne prouverait que sa propre
+    # arithmétique. `max(0, min(v/span, 1))` est la règle de dessin de `MiniBars.paintEvent`.
+    console.apply_state(state)
+    apercu_ssvep = console.grid.tuiles["ssvep"].apercu
+    parts_tuile = [int(max(0.0, min(v / apercu_ssvep._span, 1.0)) * 100)
+                   for v in apercu_ssvep._values]
+    parts_page = [b.value() for _e, b in console.pages["ssvep"].vue._barres]
+    chk(bool(parts_page) and parts_page == parts_tuile,
+        f"la page SSVEP et sa tuile remplissent leurs barres à la MÊME hauteur "
+        f"({parts_page} contre {parts_tuile}) — mêmes données, une seule lecture")
 
     # Manche non conclue : jamais le « aucune cible (rien au-dessus de z=...) » du SSVEP, et
     # surtout -1 n'est pas la cible 0 (cf. `no_decision_index` dans les métadonnées du flux).
@@ -608,6 +635,14 @@ def _smoke():
     chk("z contre" not in avant and "TENDANCE" not in avant,
         f"avant le premier feedback, la page ErrP ne parle JAMAIS d'un z contre le repos du "
         f"jour — c'est l'unité d'un AUTRE mode ({avant!r})")
+    # ...et elle ne reste pas MUETTE pour autant. `ErrPRuntime.instruction()` rend "" une fois le
+    # repos fini (il n'y a plus de consigne : c'est au stimulus de jouer), donc le label principal
+    # de la page devenait VIDE. Un écran vide se lit « ça ne marche pas » — la panne canonique de
+    # ce projet, sous une autre forme : l'étudiant traverse chauffe et repos, l'écran se vide, et
+    # rien ne lui dit qu'il lui reste à lancer `errp_stimulus.py` dans un second terminal.
+    chk(errp_page.vue.etat.text().strip() != "",
+        f"...et elle dit tout de même quelque chose plutôt que de rester vide "
+        f"({errp_page.vue.etat.text()!r})")
 
     console.apply_state(errp_state)
     chk(isinstance(errp_page.vue, live_views.PassiveView),

@@ -2069,6 +2069,64 @@ def _smoke_calibration_refus():
     return ok
 
 
+# Les paquets que `core` n'a pas le droit d'importer : les deux autres paquets du dépôt, et les
+# deux bibliothèques d'écran. Le nom n'est écrit QU'ICI — jamais dans une prose voisine, jamais
+# sous la forme d'un import complet dans un commentaire : voir `_imports_interdits`.
+_FRONTIERE_INTERDITS = ("research", "console", "pygame", "qtpy", "pyqtgraph")
+_FRONTIERE_INTERDITS_RE = r"PySide\d+|PyQt\d+"
+
+
+def _imports_interdits(source, nom_fichier="<extrait>"):
+    """Les paquets interdits que CE CODE importe. Retourne [(ligne, paquet), ...].
+
+    ⚠️ **Juge le CODE, pas le texte** (correction de revue, 2026-08-19). La version précédente
+    passait le fichier à une expression régulière `^\\s*(?:from|import)\\s+(…)` : elle voyait donc
+    aussi les docstrings et les chaînes. Sa propre documentation contenait l'exemple
+    « un import de PySide6 » écrit sous forme d'import complet, une ligne plus bas que le début
+    de phrase — **un simple reflow du paragraphe** (ou un mot ajouté à la phrase précédente)
+    aurait suffi à faire échouer `--smoke` sur de la PROSE, avec le message « core/server.py
+    importe PySide6 » et un contributeur envoyé chercher un import qui n'existe pas. Une garde
+    qui se déclenche sur sa propre documentation est une garde qu'on finit par désactiver.
+
+    Ici c'est `ast` qui répond : seuls les vrais nœuds `Import`/`ImportFrom` sont examinés, donc
+    ni les docstrings, ni les commentaires, ni les chaînes ne peuvent produire de verdict. En
+    prime, l'arbre attrape des formes que la regex laissait passer : import indenté dans une
+    fonction, import multi-lignes entre parenthèses, et import RELATIF (`from ...research import
+    x`), qui n'a plus besoin d'être listé comme angle mort.
+
+    Ce qui échappe ENCORE, à connaître avant de s'y fier :
+
+    - l'import DYNAMIQUE (`importlib.import_module("console.grid")`) — une chaîne reste une
+      chaîne ;
+    - l'import TRANSITIF (`import matplotlib.backends.backend_qt5agg`, ou tout paquet tiers qui
+      tire Qt derrière lui) : la frontière porte sur ce que `core` ÉCRIT, pas sur ce que ses
+      dépendances chargent.
+
+    Ce test attrape la faute plausible — celle qu'on écrit sans y penser — pas celle qu'on
+    cherche à cacher.
+    """
+    import ast
+    import re
+
+    motif = re.compile(rf"^(?:{'|'.join(_FRONTIERE_INTERDITS)}|{_FRONTIERE_INTERDITS_RE})$")
+    fautes = []
+    for noeud in ast.walk(ast.parse(source, filename=nom_fichier)):
+        if isinstance(noeud, ast.Import):
+            cibles = [alias.name for alias in noeud.names]
+        elif isinstance(noeud, ast.ImportFrom):
+            # `node.module` vaut None pour `from . import x` ; `level > 0` est un import relatif,
+            # examiné lui aussi : `core` n'a aucun sous-module portant l'un de ces noms, donc un
+            # match ne peut désigner qu'une remontée hors de `core`.
+            cibles = [noeud.module or ""]
+        else:
+            continue
+        for cible in cibles:
+            paquet = cible.split(".")[0]
+            if motif.match(paquet):
+                fautes.append((noeud.lineno, paquet))
+    return fautes
+
+
 def _smoke_frontiere():
     """`core` n'importe ni `research`, ni `console`, ni pygame, NI QT.
 
@@ -2077,27 +2135,54 @@ def _smoke_frontiere():
     écran. Le jour où un import de `research` devient nécessaire, ce n'est pas ce test qu'il
     faut assouplir — c'est le module visé qui doit DÉMÉNAGER dans `core`.
 
-    ⚠️ Correction de revue (tour 2) : le motif interdisait `research|console|pygame`, alors que
-    CLAUDE.md (« ni pygame **ni Qt** dans core »), `core/__init__.py` et cette docstring même
-    promettent aussi Qt. Or Qt n'arrive PAS dans `core` par le paquet `console` : il arrive par
-    son propre nom. Un `from PySide6.QtCore import QTimer` glissé dans un utilitaire du moteur
-    passait donc en silence — et `python src/core/server.py --mode ssvep` mourait sur un
-    `ImportError` au démarrage, sur toute machine sans Qt (installation minimale, poste de TP,
-    CI sans libGL), pour un moteur dont le contrat est justement de tourner sans écran. La règle
-    VÉRIFIÉE était plus étroite d'un cran que la règle ÉCRITE, et c'était le cran qui compte.
+    ⚠️ Correction de revue (tour 2) : la règle vérifiée ne couvrait que `research|console|pygame`,
+    alors que CLAUDE.md (« ni pygame **ni Qt** dans core »), `core/__init__.py` et cette docstring
+    même promettent aussi Qt. Or Qt n'arrive PAS dans `core` par le paquet `console` : il arrive
+    par son propre nom. Un import de PySide6 glissé dans un utilitaire du moteur passait donc en
+    silence — et `python src/core/server.py --mode ssvep` mourait sur un `ImportError` au
+    démarrage, sur toute machine sans Qt (installation minimale, poste de TP, CI sans libGL), pour
+    un moteur dont le contrat est justement de tourner sans écran. La règle VÉRIFIÉE était plus
+    étroite d'un cran que la règle ÉCRITE, et c'était le cran qui compte.
 
-    Compromis assumé d'un test par expression régulière, à connaître avant de s'y fier : un
-    import DYNAMIQUE (`importlib.import_module("console.grid")`) ou RELATIF
-    (`from ...research import x`) lui échappe. Il attrape la faute plausible — celle qu'on écrit
-    sans y penser — pas celle qu'on cherche à cacher.
+    La détection elle-même vit dans `_imports_interdits` (voir sa docstring pour ce qui lui
+    échappe). Ce test l'applique à tout `src/core/**/*.py`, ET la met à l'épreuve sur des extraits
+    fabriqués — sans quoi une garde muette (motif vidé, parcours cassé) rendrait « 0 violation »
+    et passerait pour un succès.
     """
-    import re
+    ok = True
 
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # 1. La garde attrape-t-elle encore un VRAI import — et se tait-elle sur la prose ?
+    #    ⚠️ Les formes interdites sont écrites ICI, dans des chaînes, et nulle part ailleurs dans
+    #    `src/core/` : c'est précisément ce que la partie 2 va scanner.
+    fabrique = [
+        ("from PySide6.QtCore import QTimer\n", ["PySide6"]),
+        ("import PySide6.QtCore as qtc\n", ["PySide6"]),
+        ("from PyQt5 import QtCore\n", ["PyQt5"]),
+        ("import pygame\n", ["pygame"]),
+        ("from research.ui import App\n", ["research"]),
+        ("import qtpy, pyqtgraph as pg\n", ["qtpy", "pyqtgraph"]),
+        ("def f():\n    from console.grid import Grille\n", ["console"]),      # indenté
+        ("from research.ui import (App,\n                          Abort)\n", ["research"]),
+        ("from ...research import x\n", ["research"]),                          # relatif
+        ('"""from PySide6.QtCore import QTimer en docstring."""\n', []),        # PROSE
+        ("# from PySide6.QtCore import QTimer\n", []),                          # commentaire
+        ("x = 'import pygame'\n", []),                                          # chaîne
+        ("import numpy\nfrom core.config import DATA_DIR\n", []),               # légitime
+    ]
+    for source, attendu in fabrique:
+        trouve = [paquet for _ligne, paquet in _imports_interdits(source)]
+        chk(trouve == attendu,
+            f"« {source.strip().splitlines()[0][:52]} » -> {trouve or 'rien'} "
+            f"(attendu {attendu or 'rien'})")
+
+    # 2. Et maintenant le vrai `src/core/`.
     racine = os.path.dirname(os.path.abspath(__file__))
-    interdits = re.compile(
-        r"^\s*(?:from|import)\s+(research|console|pygame|PySide\d|PyQt\d|qtpy|pyqtgraph)\b",
-        re.MULTILINE)
-    fautes = []
+    fautes, fichiers_vus = [], 0
     for dossier, _sous, fichiers in os.walk(racine):
         if "__pycache__" in dossier:
             continue
@@ -2105,16 +2190,19 @@ def _smoke_frontiere():
             if not nom.endswith(".py"):
                 continue
             chemin = os.path.join(dossier, nom)
+            rel = os.path.relpath(chemin, racine)
+            fichiers_vus += 1
             with open(chemin, encoding="utf-8") as f:
-                for m in interdits.finditer(f.read()):
-                    rel = os.path.relpath(chemin, racine)
-                    fautes.append(f"core/{rel} importe {m.group(1)}")
+                for ligne, paquet in _imports_interdits(f.read(), rel):
+                    fautes.append(f"core/{rel}:{ligne} importe {paquet}")
 
     for faute in fautes:
         print(f"[smoke-frontiere] ÉCHEC : {faute}")
-    print(f"[smoke-frontiere] {len(fautes)} violation(s) de frontière")
-    print(f"[smoke-frontiere] VERDICT : {'OK' if not fautes else 'PROBLÈME'}")
-    return not fautes
+    print(f"[smoke-frontiere] {fichiers_vus} fichiers scannés, "
+          f"{len(fautes)} violation(s) de frontière")
+    ok = ok and not fautes
+    print(f"[smoke-frontiere] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
 
 
 def _smoke_repos_partage():
@@ -2609,8 +2697,12 @@ def _smoke_tampon_horodate():
     chk(len(srv.recent) == len(srv.recent_ts),
         f"les deux tampons ont la même longueur ({len(srv.recent)} et {len(srv.recent_ts)})")
     # `min(produits, keep)` — c'est l'invariant exact du `[-self.keep:]` : tout ce qui a été
-    # produit tant que le tampon n'est pas plein, sa taille ensuite. Écrit ainsi, il vérifie
-    # AUSSI la troncature, et il ne vieillira pas si POLL_S ou la durée du test changent.
+    # produit tant que le tampon n'est pas plein, sa taille ensuite.
+    #
+    # ⚠️ Ici, et ICI SEULEMENT, le `min()` est INERTE : 0,4 s à POLL_S = 0,05 s font 8 tours de
+    # 13 échantillons, soit 104 pour un `keep` de 1250 — le tampon ne sature jamais, donc cette
+    # ligne ne dit rien de la troncature (elle l'a longtemps prétendu ; correction de revue
+    # 2026-08-19). Le régime plein est exercé plus bas, sur un SECOND moteur.
     chk(len(srv.recent_ts) == min(srv.acq.produits, srv.keep) > 0,
         f"et ils portent tout ce que le producteur a rendu, borné à `keep` "
         f"({len(srv.recent_ts)} pour {srv.acq.produits} produits, keep={srv.keep})")
@@ -2645,6 +2737,37 @@ def _smoke_tampon_horodate():
             f"...et la queue de `recent_ts` est exactement les horodatages de CE bloc — c'est "
             f"l'assertion qui rougit sur un décalage d'un seul échantillon "
             f"(écart max {float(np.max(np.abs(srv.recent_ts[-n:] - ts_lsl))) * 1000:.4f} ms)")
+
+    # --- LE RÉGIME PLEIN : le tampon SATURE et la troncature s'exerce -----------------------
+    #
+    # Le moteur passe sa vie dans ce régime (`keep` = 5 s de signal, une séance en dure des
+    # milliers) et aucun test ne l'atteignait : retirer les deux `[-self.keep:]` de la boucle
+    # laissait TOUT le fichier vert. Le moteur se mettait alors à `vstack` un tableau qui grandit
+    # sans borne, dix fois par seconde — ça ne casse pas, ça ralentit puis ça sature la mémoire,
+    # la panne la plus difficile à imputer.
+    #
+    # `keep` est réduit à la main et le producteur rend PLUS que `keep` en UN SEUL tour : le
+    # régime est donc atteint dès le premier passage, et le verdict ne dépend ni de POLL_S, ni de
+    # la durée demandée, ni de la machine. Après n'importe quel nombre de tours ≥ 1, le tampon
+    # doit être exactement la FIN du dernier bloc lu.
+    plein = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-tampon-plein")
+    plein.keep = 20
+    plein.acq = _AcqDeterministe(plein.acq, par_tour=plein.keep + 17)
+    plein.run(duration_s=0.2)
+    chk(plein.acq.produits > plein.keep,
+        f"le producteur a bien débordé le tampon ({plein.acq.produits} échantillons pour "
+        f"keep={plein.keep}) — sans ce régime, les deux assertions suivantes ne prouvent rien")
+    chk(len(plein.recent) == len(plein.recent_ts) == plein.keep,
+        f"le tampon SATURE à `keep` au lieu de grandir ({len(plein.recent)} lignes et "
+        f"{len(plein.recent_ts)} dates pour keep={plein.keep}) — c'est l'assertion qui rougit "
+        f"quand un `[-self.keep:]` disparaît de la boucle")
+    bloc_plein = plein.new_block
+    if bloc_plein is not None:
+        eeg_p, ts_p = bloc_plein
+        chk(bool(np.array_equal(plein.recent, eeg_p[-plein.keep:])
+                 and np.array_equal(plein.recent_ts, ts_p[-plein.keep:])),
+            "et ce qui reste est la FIN du dernier bloc, pas son début — une troncature écrite "
+            "`[:keep]` garderait les échantillons les plus VIEUX et le moteur décoderait du passé")
     print(f"[smoke-tampon] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 

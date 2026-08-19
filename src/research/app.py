@@ -30,7 +30,9 @@ mode à l'autre est instantané (ESC ramène au menu, sans rouvrir le Bluetooth)
 import argparse
 import contextlib
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections import Counter, deque
@@ -39,7 +41,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS,  # noqa: E402
-                    CVEP_CHANNELS, CVEP_CORR_MIN, CVEP_DECISION_CYCLES,
+                    CVEP_CHANNELS, CVEP_CORR_MIN, CVEP_DECISION_CYCLES, DATA_DIR,
                     CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH,
                     CVEP_VOTE_LEN, ERRP_DEMO_ERROR_RATE, ERRP_EPOCH_S, ERRP_FEEDBACK_S,
                     ERRP_MAX_RUN_STEPS, ERRP_MIDLINE, ERRP_MODEL_PATH, ERRP_PRE_S,
@@ -1404,20 +1406,50 @@ def main(windowed=False, synthetic=False, send=False, smoke=False, host=UDP_HOST
     return True
 
 
+def _empreinte_data():
+    """`{nom: (taille, mtime)}` de `data/` — ce qu'un test ne doit JAMAIS faire bouger.
+
+    `data/` porte les enregistrements EEG d'une personne identifiable, sur un dépôt public (le
+    dossier est gitignoré). Il porte aussi les modèles du casque, dont le plus récent CHARGEABLE
+    est le défaut proposé par le moteur, par la console et par l'accueil de cette appli : un
+    fichier de test oublié là ne se contente pas d'encombrer, il se fait ÉLIRE.
+
+    Rendre le dossier absent comme un dictionnaire vide, et non lever : un dépôt fraîchement cloné
+    n'a pas de `data/`, et le smoke doit y tourner.
+    """
+    if not os.path.isdir(DATA_DIR):
+        return {}
+    return {nom: (os.path.getsize(os.path.join(DATA_DIR, nom)),
+                  os.path.getmtime(os.path.join(DATA_DIR, nom)))
+            for nom in sorted(os.listdir(DATA_DIR))}
+
+
 def _smoke(app):
     """Câblage de bout en bout, headless : menu + calibrations + les modes de pilotage (c-VEP, P300).
-    Les modèles sont écrits à part (suffixe _smoke) pour ne JAMAIS écraser une vraie calibration."""
+
+    ⚠️ **Les quatre modèles du smoke sont écrits dans un dossier TEMPORAIRE, jamais dans `data/`**
+    (correction de revue, 2026-08-19). Ils y vivaient sous des noms en `_smoke` — dont
+    `errp_model_smoke.joblib` et `p300_model_smoke.joblib`, qui correspondent aux MOTIFS de
+    `core.errp_models` / `core.p300_models` — et le ménage se faisait hors de tout `finally`. Deux
+    conséquences, l'une grave : `data/` porte des enregistrements EEG d'une personne identifiable
+    (dépôt public, dossier gitignoré) et aucun test n'a rien à y faire ; et depuis que les modèles
+    sont HORODATÉS, le plus récent chargeable est le DÉFAUT proposé par le moteur, la console et
+    l'accueil de cette appli — un smoke interrompu (exception, Ctrl-C) laissait donc derrière lui un
+    modèle entraîné sur 12 époques de bruit synthétique, prêt à décoder une séance réelle sans qu'un
+    seul message ne le signale.
+    """
+    import core.errp_models as errp_models
     import research.cvep_calibrate as cvep_calibrate
-
-    tmp = os.path.dirname(CVEP_MODEL_PATH)
-    cvep_path = os.path.join(tmp, "cvep_model_smoke.npz")
-
     import research.cvep_rcca as cvep_rcca
     import research.errp_calibrate as errp_calibrate
     import research.p300_calibrate as p300_calibrate
+
+    tmp = tempfile.mkdtemp(prefix="app_smoke_")
+    cvep_path = os.path.join(tmp, "cvep_model_smoke.npz")
     rcca_path = os.path.join(tmp, "cvep_rcca_model_smoke.npz")
     p300_path = os.path.join(tmp, "p300_model_smoke.joblib")
     errp_path = os.path.join(tmp, "errp_model_smoke.joblib")
+    empreinte_data_avant = _empreinte_data()
 
     home(app)                 # accueil (rend + retour immédiat en smoke)
     _mode_page(app, "SSVEP", mode_ssvep, None)    # rend une page de mode (retour immédiat)
@@ -1426,18 +1458,30 @@ def _smoke(app):
     page_errp(app)            # rend la page ErrP (démonstrateur / réglage seuil / calibrer)
     mode_neuro(app)           # mode 4 : neuro-monitoring passif (baseline + histogramme headless)
     mode_ssvep(app)
-    cvep_calibrate.calibrate(app, save_path=cvep_path)
-    mode_cvep(app, model_path=cvep_path)
-    cvep_rcca.calibrate_rcca(app, save_path=rcca_path)
-    mode_cvep_rcca(app, model_path=rcca_path)
-    p300_calibrate.calibrate(app, save_path=p300_path)
-    mode_p300(app, model_path=p300_path)                       # chemin fixe
-    mode_p300(app, model_path=p300_path, dynamic=True)         # chemin arrêt dynamique
-    errp_calibrate.calibrate(app, save_path=errp_path)         # ErrP : calibration (décodeur, sans robot)
-    mode_errp(app, model_path=errp_path)                       # ErrP : démonstrateur solo (détection live)
-    for p in (cvep_path, rcca_path, p300_path, errp_path):
-        if os.path.exists(p):
-            os.remove(p)
+    try:
+        cvep_calibrate.calibrate(app, save_path=cvep_path)
+        mode_cvep(app, model_path=cvep_path)
+        cvep_rcca.calibrate_rcca(app, save_path=rcca_path)
+        mode_cvep_rcca(app, model_path=rcca_path)
+        p300_calibrate.calibrate(app, save_path=p300_path)
+        mode_p300(app, model_path=p300_path)                   # chemin fixe
+        mode_p300(app, model_path=p300_path, dynamic=True)     # chemin arrêt dynamique
+        errp_calibrate.calibrate(app, save_path=errp_path)     # ErrP : calibration (sans robot)
+        # ⚠️ `mode_errp` charge désormais par `errp_models.charger`, qui EXIGE des scores hors-pli :
+        # si le modèle du smoke (12 époques, board synthétique) venait à être refusé — une autre
+        # version de pyriemann, une graine malheureuse — `mode_errp` se contenterait d'un `flash`
+        # et sortirait AVANT sa boucle live, sans que rien ne rougisse. Le démonstrateur ErrP
+        # (~120 lignes) ne serait plus exercé par aucun test, et personne ne le saurait.
+        assert errp_models.charger(errp_path)[0] is not None, (
+            "le modèle du smoke doit être ACCEPTÉ par errp_models.charger(), sinon mode_errp sort "
+            "avant sa boucle et le démonstrateur ErrP n'est plus testé du tout : "
+            f"{errp_models.charger(errp_path)[1]}")
+        mode_errp(app, model_path=errp_path)                   # ErrP : démonstrateur solo (live)
+    finally:
+        # Dans un `finally` : une exception au milieu de la séquence ci-dessus ne doit pas laisser
+        # un modèle de test sur le disque. Ici il ne serait de toute façon plus visible de
+        # personne (dossier temporaire) — mais c'est la ceinture qui rend la bretelle inutile.
+        shutil.rmtree(tmp, ignore_errors=True)
 
     # --- les trois invariants P300 de research/ corrigés le 2026-08-18 -----------------
     # Des `assert` et non un `chk` : ce smoke n'a pas de compteur, il signale par exception.
@@ -1490,7 +1534,6 @@ def _smoke(app):
             f"localement — l'invariant oddball ne vaut que s'il est tenu aux TROIS endroits")
 
     # --- les deux mêmes invariants, côté ErrP (corrigés le 2026-08-19) ------------------
-    import core.errp_models as errp_models
     from research.errp_calibrate import chemin_modele_horodate as errp_horodate
 
     # 4. Une calibration ErrP n'écrase JAMAIS `data/errp_model.joblib` — la trace du 24 juillet,
@@ -1522,11 +1565,20 @@ def _smoke(app):
     #    nom interdit dans un commentaire de ces deux fonctions, même pour dire de ne pas s'en
     #    servir (l'assertion l'a attrapé à la première écriture, elle mord).
     interdit = "ErrPModel" + ".load"
+    # ...et le décodeur ErrP a DÉMÉNAGÉ dans `core` : `research/errp_decoder.py` n'existe plus.
+    # Le ressusciter depuis l'historique « pour tester une variante » et remettre l'import local
+    # ici donnerait deux piles de décodage — le démonstrateur pygame sur l'une, le moteur sur
+    # l'autre — affichant toutes deux des scores plausibles, sans qu'un test du dépôt bronche.
+    decodeur_local = ("research" + ".errp_decoder", "research import " + "errp_decoder")
     for fonction in (mode_errp, page_errp):
         src = inspect.getsource(fonction)
         assert "_errp_charger" in src and interdit not in src, (
             f"{fonction.__name__} doit charger par `_errp_charger` (donc `errp_models.charger`, "
             f"qui NOMME le problème) et jamais par {interdit}, un joblib.load nu")
+        assert not any(forme in src for forme in decodeur_local), (
+            f"{fonction.__name__} doit décoder par `core.errp_decoder` : le décodeur ErrP vit "
+            f"dans `core` depuis le chantier, et un import de {decodeur_local[0]} remis ici ferait "
+            f"diverger le démonstrateur du moteur en silence")
     assert _errp_status([]) == "aucun utilisable", (
         "sans modèle ErrP CHARGEABLE, l'accueil doit le dire — un fichier présent mais hérité ne "
         f"vaut pas « oui » ({_errp_status([])})")
@@ -1536,6 +1588,20 @@ def _smoke(app):
         f"pour découvrir sur place qu'aucun modèle n'est utilisable ({_status(app)})")
     assert _errp_status(errp_models.modeles_disponibles()) in lignes_errp[0], (
         f"...et l'accueil affiche RÉELLEMENT ce texte, pas un os.path.exists ({lignes_errp[0]})")
+
+    # 6. `data/` est RESSORTI INTACT de tout ce qui précède. Ce n'est pas une précaution de style :
+    #    c'est la contrainte la plus dure du dépôt (enregistrements EEG d'une personne
+    #    identifiable, dépôt public) et le smoke est le seul test qui exécute de vraies
+    #    calibrations. L'assertion compare les tailles ET les mtimes : un fichier ajouté, retiré,
+    #    réécrit ou seulement retouché la fait rougir, quel que soit son nom.
+    empreinte_apres = _empreinte_data()
+    bouges = sorted(set(empreinte_data_avant) ^ set(empreinte_apres)) + \
+        sorted(n for n in set(empreinte_data_avant) & set(empreinte_apres)
+               if empreinte_data_avant[n] != empreinte_apres[n])
+    assert not bouges, (
+        f"le smoke a touché data/ : {bouges}. Aucun test ne doit y écrire — les modèles de test "
+        f"vont dans un tempfile.mkdtemp() (et le plus récent modèle CHARGEABLE de data/ est le "
+        f"défaut proposé par le moteur, donc un modèle de test oublié là se fait élire)")
 
     print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + P300 + neuro + ErrP(cal+démo) câblés (headless).")
 
