@@ -268,20 +268,29 @@ class ErrPRuntime(ModeRuntime):
         qu'il faut faire.
         """
         if self.model.oof_scores_ is None or self.model.oof_y_ is None:
-            return (f"ce modèle n'a pas de scores hors-pli (calibration trop courte : moins de "
-                    f"10 essais, une seule classe, ou une classe à moins de 2 membres) — "
-                    f"impossible d'y régler un seuil. Recalibre (`python src/research/app.py`, "
-                    f"mode ErrP) plutôt que de le forcer.")
+            # ⚠️ La cause se LIT sur le modèle (`echec_oof_`, posé par `ErrPModel.fit` au moment où
+            # sa garde a mordu), elle ne se récite pas. Réciter la liste des trois causes possibles
+            # obligeait l'étudiant à deviner laquelle est la sienne, et cette liste devenait fausse
+            # en silence à la première garde ajoutée. `getattr` parce qu'un modèle entraîné avant
+            # que cet attribut existe n'en a pas : on retombe alors sur la formulation générale.
+            cause = getattr(self.model, "echec_oof_", None)
+            return (f"ce modèle n'a pas de scores hors-pli "
+                    f"({cause or 'calibration trop courte ou dégénérée'}) — impossible d'y régler "
+                    f"un seuil. Recalibre (`python src/research/app.py`, mode ErrP) plutôt que de "
+                    f"le forcer.")
         return None
 
     def _open(self):
         # Comme le SSVEP, le MI et le P300 : le flux existe TOUT DE SUITE, avant même la fin de la
         # chauffe/du repos — un client qui le cherche au lancement ne doit pas dépendre de
         # l'instant où arrive le premier feedback (`resolve_byprop` a un délai fini).
-        # `n_calib` = l'effectif de `self.model.oof_y_` : le même nombre d'essais que
-        # `pick_threshold` a déjà utilisé plus haut pour choisir `self.seuil`, donc la mesure
-        # honnête de ce sur quoi ce point de fonctionnement repose (`ErrPModel` ne pose pas
-        # d'attribut `n_epoques_` dédié, contrairement à `P300Model` — cf. `errp_models.py`).
+        # `n_calib` = l'effectif de `self.model.oof_y_`, PAS `self.model.n_epoques_` — bien que ce
+        # dernier existe désormais (ajouté par la revue finale, parité avec `P300Model`). Les deux
+        # nombres sont égaux aujourd'hui mais ne répondent pas à la même question : `n_epoques_`
+        # dit combien d'époques ont entraîné le modèle, `len(oof_y_)` dit sur combien d'essais le
+        # POINT DE FONCTIONNEMENT publié ici a été mesuré. C'est le second que le client a besoin
+        # de lire à côté de `tpr_measured`, et il se mettrait à diverger le jour où un essai serait
+        # écarté du calcul hors-pli sans l'être de l'entraînement.
         self._out = DecodedErrPPublisher(self.point_de_fonctionnement,
                                          n_calib=len(self.model.oof_y_),
                                          instance=self.engine.instance)
