@@ -89,11 +89,11 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (ERRP_ARTIFACT_RATIO, ERRP_EPOCH_S, ERRP_PRE_S,  # noqa: E402
-                         SSVEP_WARMUP_S, use_utf8_console)
+                         ERRP_TNR_TARGET, SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
 from core import errp_models  # noqa: E402
-from core.errp_decoder import epoch_from_stream  # noqa: E402
+from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
@@ -120,6 +120,13 @@ class ErrPRuntime(ModeRuntime):
     `pre_s`/`post_s` sont des ATTRIBUTS DE CLASSE, pas seulement des variables d'instance : c'est
     ce qui permet à `registry.check()` de comparer `spec.marker_epoch_s` (ce que le moteur
     DIMENSIONNE) à ce que ce runtime PRÉLÈVE vraiment — le même contrôle que pour `P300Runtime`.
+
+    Le SEUL réglage de ce mode est `tnr_target` : « quelle part des BONNES commandes garder »,
+    jamais un seuil en log-odds — un nombre qui ne veut rien dire pour un étudiant. `__init__`
+    traduit ce taux en seuil via `pick_threshold` (`core/errp_decoder.py`), sur les scores hors-pli
+    de SA PROPRE calibration (`self.model.oof_y_`/`oof_scores_`). Le résultat est gardé dans
+    `self.point_de_fonctionnement` (`tnr_target`, `seuil`, `tpr`, `tnr`) — c'est CE dict que
+    `DecodedErrPPublisher` (tâche 4) publiera dans les métadonnées du flux.
     """
 
     pre_s = ERRP_PRE_S      # attributs de CLASSE : `registry.check()` les compare à
@@ -138,10 +145,22 @@ class ErrPRuntime(ModeRuntime):
         desaccord = self._desaccord_geometrie(engine)
         if desaccord is not None:
             raise ValueError(desaccord)
-        # Tâche 3 remplace cette ligne par un recalcul (`pick_threshold` sur un réglage
-        # `tnr_target` exposé à l'étudiant) ; pour l'instant, le seuil APPRIS pendant la
-        # calibration — celui que `ErrPModel.fit` a réglé pour une TNR par défaut.
-        self.seuil = float(self.model.threshold_)
+        # Le SEUL réglage de ce mode : l'étudiant choisit un TAUX (« quelle part des bonnes
+        # commandes je garde »), jamais un seuil en log-odds. `pick_threshold` est la MÊME fonction
+        # que `ErrPModel.fit` utilise déjà pour poser `threshold_` (cf. `core/errp_decoder.py`) —
+        # on ne réinvente rien, on la rappelle avec la cible de CET étudiant sur les scores hors-
+        # pli de SA PROPRE calibration (`oof_y_`/`oof_scores_`, gardés par `ErrPModel` pour
+        # exactement cet usage, cf. son commentaire « pour régler le seuil a posteriori »).
+        cible = float(params["tnr_target"])
+        self.seuil, mesures = pick_threshold(self.model.oof_y_, self.model.oof_scores_,
+                                             tnr_target=cible)
+        self.point_de_fonctionnement = {"tnr_target": cible, "seuil": self.seuil,
+                                        "tpr": mesures["tpr"], "tnr": mesures["tnr"]}
+        # ⚠️ Le TNR obtenu n'est pas toujours celui visé : `pick_threshold` retombe sur le seuil qui
+        # MAXIMISE le TNR quand la cible est inatteignable. Sans ce message, l'étudiant croirait
+        # avoir obtenu ce qu'il a demandé.
+        print(f"[errp] point de fonctionnement : garde {mesures['tnr']:.1%} des bonnes commandes "
+              f"(visé {cible:.0%}), attrape {mesures['tpr']:.1%} des erreurs — seuil {self.seuil:.3f}")
         self._sigmas_repos = None    # σ par voie mesuré au repos — la référence du rejet d'artefact
         self._echantillons = []      # les σ successifs mesurés PENDANT le repos, avant médiane
         self._epoques_perdues = 0    # marqueurs mûrs dont l'époque a quand même débordé du tampon
@@ -378,6 +397,18 @@ SPEC = ModeSpec(
               help="Le modèle produit par une calibration ErrP, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des verdicts plausibles et faux. Aucun modèle "
                    "dans la liste ? Lance `python src/research/app.py`, mode ErrP, et calibre."),
+        Param(
+            key="tnr_target",
+            label="Bonnes commandes gardées",
+            kind="float",
+            default=ERRP_TNR_TARGET,
+            min=0.50, max=0.99,
+            help="La part des BONNES commandes que tu veux garder. Le moteur en déduit son seuil "
+                 "sur les données de TA calibration. Monter cette valeur annule moins de bonnes "
+                 "commandes mais attrape moins d'erreurs — mesuré sur la séance de référence : "
+                 "garder 95 % n'attrape que 24 % des erreurs, garder 85 % en attrape 50 %, "
+                 "garder 70 % en attrape 71 %. Il n'y a pas de repas gratuit.",
+        ),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture
@@ -505,8 +536,11 @@ def _selftest():
         values, raison = validate(SPEC, {})
         chk(values is not None, f"avec un modèle, les défauts passent ({raison})")
         chk(values["model"] == chemin, f"et c'est le modèle trouvé qui est pris ({values['model']})")
-        chk({p.key for p in SPEC.params} == {"model"},
-            "seul le modèle se règle pour l'instant — tnr_target arrive à la tâche 3")
+        chk(values["tnr_target"] == ERRP_TNR_TARGET,
+            f"...et le taux de bonnes commandes à garder prend le défaut du protocole "
+            f"({values['tnr_target']})")
+        chk({p.key for p in SPEC.params} == {"model", "tnr_target"},
+            "le modèle ET le taux de bonnes commandes à garder se règlent (tâche 3)")
 
         # 3. Le contrat du mode.
         chk(SPEC.id == "errp" and SPEC.family == "passif",
@@ -547,13 +581,66 @@ def _selftest():
             f"un modèle entraîné sur une AUTRE géométrie d'époque est refusé au démarrage, en "
             f"nommant l'écart ({refus_geo})")
 
-        rt = ErrPRuntime(SPEC, values, moteur)
+        # ⚠️ Capturé : c'est ICI que se dit le point de fonctionnement (tâche 3). Sans ce message,
+        # l'étudiant croirait avoir obtenu exactement le TNR qu'il a demandé — cf. plus bas, le
+        # cas où `pick_threshold` retombe sur le seuil qui MAXIMISE le TNR.
+        capture_recalcul = io.StringIO()
+        with redirect_stdout(capture_recalcul):
+            rt = ErrPRuntime(SPEC, values, moteur)
+        texte_recalcul = capture_recalcul.getvalue()
+        print(texte_recalcul, end="")   # rejoué : la capture ne doit pas rendre ce test muet
         rt._out = _FauxPublieur()
         rt._opened = True
         chk(rt.phase == "warmup", "l'ErrP commence par une chauffe")
         seuil_reel = rt.seuil
         chk(seuil_reel == float(modele.threshold_),
-            f"le seuil de départ est celui APPRIS par la calibration ({seuil_reel})")
+            f"avec le réglage par défaut (tnr_target={ERRP_TNR_TARGET:g}, identique à celui de "
+            f"la calibration), le seuil RECALCULÉ retombe exactement sur celui qu'avait appris "
+            f"ErrPModel.fit ({seuil_reel})")
+        chk("point de fonctionnement" in texte_recalcul and "visé" in texte_recalcul,
+            f"...et ce recalcul se DIT au démarrage, avec le TNR visé ET celui obtenu — sans quoi "
+            f"l'étudiant croirait avoir eu exactement ce qu'il a demandé ({texte_recalcul.strip()!r})")
+        chk(rt.point_de_fonctionnement is not None
+            and set(rt.point_de_fonctionnement) == {"tnr_target", "seuil", "tpr", "tnr"},
+            f"point_de_fonctionnement expose EXACTEMENT les 4 clés promises à la tâche 4 (le "
+            f"futur DecodedErrPPublisher) ({rt.point_de_fonctionnement})")
+        chk(rt.point_de_fonctionnement["tnr_target"] == values["tnr_target"]
+            and rt.point_de_fonctionnement["seuil"] == seuil_reel,
+            f"...avec la cible demandée et le seuil qu'elle a produit ({rt.point_de_fonctionnement})")
+
+        # --- ⚠️ TEST DE MONOTONIE (tâche 3) : LE test qui protège le SEUL réglage de ce mode -----
+        # Demander à garder PLUS de bonnes commandes doit donner un seuil PLUS HAUT et attraper
+        # MOINS d'erreurs. C'est une MONOTONIE : une implémentation cassée (seuil constant, cible
+        # ignorée, sens inversé) ne peut pas la simuler.
+        #
+        # ⚠️ Passe par un VRAI `ErrPRuntime`, reconstruit à CHAQUE cible — pas seulement par un
+        # appel direct à `pick_threshold` : ce que ce test protège, c'est que LE MODE lise
+        # `params["tnr_target"]`, pas que `pick_threshold` soit monotone (déjà de la responsabilité
+        # de `errp_decoder.py`). C'est exactement le défaut trouvé en revue du P300 : `stream_in`
+        # déclaré dans le contrat, jamais lu par le runtime. Un test qui n'appellerait que
+        # `pick_threshold` en direct resterait VERT même si `ErrPRuntime.__init__` ignorait `cible`
+        # (la preuve rouge-puis-vert de cette tâche, dans le rapport, mute précisément CE recalcul).
+        points = []
+        for cible in (0.70, 0.85, 0.95):
+            essai_cible = dict(values, tnr_target=cible)
+            rt_cible = ErrPRuntime(SPEC, essai_cible, moteur)
+            seuil_direct, m_direct = pick_threshold(modele.oof_y_, modele.oof_scores_,
+                                                    tnr_target=cible)
+            pdf = rt_cible.point_de_fonctionnement
+            chk(rt_cible.seuil == seuil_direct and pdf["tpr"] == m_direct["tpr"]
+                and pdf["tnr"] == m_direct["tnr"],
+                f"à tnr_target={cible:g}, le runtime recalcule EXACTEMENT ce que rend "
+                f"pick_threshold sur les scores de SA calibration (seuil={rt_cible.seuil} vs "
+                f"{seuil_direct})")
+            points.append((cible, pdf["seuil"], pdf["tpr"], pdf["tnr"]))
+        seuils = [p[1] for p in points]
+        tprs = [p[2] for p in points]
+        chk(seuils[0] < seuils[1] < seuils[2],
+            f"viser plus de bonnes commandes MONTE le seuil ({[round(s, 3) for s in seuils]})")
+        chk(tprs[0] > tprs[1] > tprs[2],
+            f"...et fait attraper MOINS d'erreurs ({[round(t, 3) for t in tprs]})")
+        chk(all(p[3] >= p[0] - 1e-9 for p in points),
+            f"et chaque point atteint la cible demandée ({[(p[0], round(p[3], 3)) for p in points]})")
 
         # 4. La CHAUFFE *et* le REPOS consomment les marqueurs au lieu de les laisser s'empiler
         # (panne n°7). C'est l'appel à `markers_murs` qui fait avancer le curseur du moteur.
