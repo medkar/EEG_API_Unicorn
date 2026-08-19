@@ -226,6 +226,21 @@ def _run_block(app, n_cells, per, rng, error_rate, r, rounds, fs, epochs, labels
                         note="atteinte" if pos == goal else "on recommence",
                         note_col=GO if pos == goal else DIM)
             pos, goal, steps = start, _new_goal(rng, n_cells), 0
+            # ⚠️ DEUX écrans statiques par fin de course, pas un — et le second est celui qui
+            # compte. Le premier montre l'état FINAL (point sur la cible) ; celui-ci montre l'état
+            # NEUF, point revenu au centre et cible déplacée. Sans lui, cette remise à zéro — le
+            # point saute de 2 à 4 cases ET la cible change d'extrémité une fois sur deux — tombait
+            # dans la frame horodatée du pas SUIVANT : l'époque commençait sur un transitoire
+            # visuel plein écran qui n'est pas le feedback qu'elle prétend mesurer.
+            # Mesuré sur 200 séances simulées : **14,9 % des époques** partaient ainsi.
+            # Corrélation avec l'étiquette : +1,2 point (z = 1,84), et elle ne vient pas du saut
+            # mais du rebond de bord — après une transition le point repart du CENTRE, où aucun
+            # rebond ne peut retourner l'étiquette. Trop petit pour fabriquer une AUC, donc le
+            # modèle du 2026-07-24 (0,7763) reste valide ; c'était du bruit ajouté, pas un biais.
+            # C'est le MÊME écran qu'en tête de bloc, aux mêmes 0,9 s, et le même que joue
+            # `research/errp_stimulus.py` : les deux protocoles ne divergent plus.
+            _track_hold(app, n_cells, pos, goal, 0.9, title=title,
+                        note="nouvelle cible", note_col=DIM)
         else:
             _track_hold(app, n_cells, pos, goal, 0.45, title=title)     # pause inter-pas / settle
     return added

@@ -69,33 +69,31 @@ horodatée du feedback suivant : ~1 époque sur 7 commençait sur un transitoire
 Le même écran sert au tout premier pas, sans quoi l'utilisateur ne voit jamais d'où le point part
 et ne peut former aucune attente à violer.
 
-⚠️ **Et c'est LE point où cet émetteur DIVERGE de la calibration.** Écrit ici parce que c'est la
-troisième fois que ce fichier s'est cru identique à `errp_calibrate` sans l'être (le taux d'erreur,
-corrigé au tour 1 ; la cadence, corrigée au tour 2 ; la découpe des fins de course, celle-ci) —
-et parce que ce fichier est la référence que lira quelqu'un qui écrit son émetteur en Unity.
+⚠️ **Cet émetteur et la calibration jouent le MÊME protocole, et il a fallu trois tours pour y
+arriver.** Écrit ici parce que ce fichier s'est cru identique à `errp_calibrate` trois fois sans
+l'être — le taux d'erreur (corrigé au tour 1), la cadence (tour 2), la découpe des fins de course
+(tour 3) — et parce que c'est la référence que lira quelqu'un qui écrit son émetteur en Unity. Une
+affirmation d'identité dans ce fichier doit être VÉRIFIÉE dans l'autre, jamais supposée.
 
-`errp_calibrate._run_block` ne tient l'écran « nouvelle cible » (0,9 s) qu'**UNE FOIS PAR BLOC**,
-avant sa boucle (`:212`). En COURS de bloc, une fin de course ne tient que 0,7 s à la position
-finale (`:225`), puis TÉLÉPORTE le point au centre avec une nouvelle cible (`:228`) — dans la frame
-horodatée du pas suivant. Autrement dit la calibration a, aujourd'hui encore, le défaut que cet
-émetteur vient de corriger chez lui. Mesuré, en secondes entre deux onsets :
+État aligné, en secondes entre deux onsets :
 
     SOA de TRANSITION (dernier pas d'une course -> premier pas de la suivante)
-        errp_calibrate._run_block : 1,0 + 0,7        = 1,7 s   AVEC un transitoire à t = 0
+        errp_calibrate._run_block : 1,0 + 0,7 + 0,9  = 2,6 s   sans transitoire
         cet émetteur              : 1,0 + 0,7 + 0,9  = 2,6 s   sans transitoire
 
-    SOA INTRA-course (deux pas de la même course) — celui-là, oui, est identique
+    SOA INTRA-course (deux pas de la même course)
         errp_calibrate._run_block : 1,0 + 0,45       = 1,45 s
         cet émetteur              : 1,0 + 0,45       = 1,45 s
 
-Conséquence à connaître avant de comparer une séance à l'AUC annoncée : ~1 époque sur 7 du jeu
-d'entraînement (le modèle du 24 juillet, AUC 0,7763) porte ce transitoire plein écran à t = 0, et
-AUCUNE de celles que produit cet émetteur n'en porte. Le seuil du mode est réglé sur les scores
-hors-pli de cette calibration-là ; en ligne, cette sous-population n'existe plus, donc la
-distribution des scores publiés est décalée dans un sens qu'aucun test ne mesure. **L'écart n'est
-pas corrigé ici, à dessein** : aligner `_run_block` changerait le protocole sous lequel le seul
-modèle ErrP du dépôt a été entraîné, et invaliderait tous les chiffres du mode. À trancher hors de
-ce fichier — ne pas « harmoniser » l'un sur l'autre sans le décider explicitement.
+⚠️ **Ce que ça change pour le modèle du 2026-07-24 (AUC 0,7763) : rien, et c'est mesuré.** Ce modèle
+a été entraîné AVANT l'alignement, donc **14,9 % de ses époques** commençaient sur le transitoire
+(mesuré sur 200 séances simulées, pas estimé). Cette sous-population n'existe plus dans ce que
+produit l'émetteur, ce qui pourrait décaler la distribution des scores publiés — sauf que la
+contamination n'était **pas corrélée à l'étiquette** : +1,2 point d'écart seulement (z = 1,84), et
+il vient du rebond de bord, pas du saut (après une transition le point repart du CENTRE, où aucun
+rebond ne peut retourner l'étiquette). Du bruit ajouté, donc, pas un biais appris : trop petit pour
+fabriquer une AUC, et la mesure est au pire un peu pessimiste. Une future calibration produira des
+époques plus propres que celles-là, pas différentes.
 
 (Le troisième site, `app.mode_errp`, n'est une référence de cadence NI pour l'un NI pour l'autre :
 il tient `ERRP_EPOCH_S + 0,2` entre les pas — `app.py:1036` — et ajoute 2,4 s d'écran de verdict à
@@ -167,14 +165,16 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 # distribution que le modèle n'a jamais apprise — sans qu'aucune exception ne soit levée. Un test
 # de `--smoke` les arrime au SOURCE de `_run_block` (cf. `_smoke`, section « les durées »).
 #
-# ⚠️ Même valeur ne veut pas dire même PLACE : `_run_block` ne joue son écran « nouvelle cible »
-# qu'en tête de bloc, alors qu'ici il est joué à chaque fin de course. C'est l'écart assumé
-# détaillé dans la docstring du module (SOA de transition : 1,7 s là-bas, 2,6 s ici).
+# ⚠️ Même valeur ne suffit pas : il faut la même PLACE. `_run_block` n'a longtemps joué son écran
+# « nouvelle cible » qu'en tête de bloc, ce qui donnait la même constante à un SOA de transition
+# différent (1,7 s là-bas, 2,6 s ici). Aligné depuis — les deux jouent les deux écrans à chaque fin
+# de course. Un test arrime les VALEURS ; la PLACE, elle, ne se vérifie qu'en lisant les deux
+# boucles, alors relire `_run_block` avant d'affirmer quoi que ce soit ici.
 
-PAUSE_INTER_PAS_S = 0.45        # `_run_block:230` « pause inter-pas / settle » -> SOA intra 1,45 s
-PAUSE_FIN_COURSE_S = 0.7        # `_run_block:225` « atteinte » / « on recommence »
-PAUSE_NOUVELLE_COURSE_S = 0.9   # `_run_block:212` « nouvelle cible » — là-bas UNE FOIS PAR BLOC,
-                                # ici après CHAQUE course (cf. le ⚠️ ci-dessus)
+PAUSE_INTER_PAS_S = 0.45        # `_run_block` « pause inter-pas / settle » -> SOA intra 1,45 s
+PAUSE_FIN_COURSE_S = 0.7        # `_run_block` « atteinte » / « on recommence », état FINAL
+PAUSE_NOUVELLE_COURSE_S = 0.9   # `_run_block` « nouvelle cible », état NEUF — en tête de bloc ET
+                                # après chaque course, des deux côtés
 
 # Ce que le moteur JETTE avant d'écouter pour de bon : sa chauffe (l'offset DC de l'Unicorn dérive
 # après ouverture) puis son repos (il y mesure la référence du rejet d'artefact). Valeurs lues dans
@@ -442,11 +442,10 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             # ⚠️ LES DEUX ÉCRANS QUI MANQUAIENT. La remise à zéro déplace le point de 2 à 4 cases
             # ET fait changer la cible d'extrémité une fois sur deux : sans eux, ce transitoire
             # plein écran tombe DANS la frame horodatée du feedback suivant, et le moteur décode
-            # une époque hors protocole (~1 sur 7) en publiant un verdict parfaitement confiant.
-            # ⚠️ `errp_calibrate._run_block` ne fait PAS cela : il tient 0,7 s (`:225`) puis
-            # téléporte (`:228`), et son écran « nouvelle cible » (0,9 s, `:212`) n'est joué qu'en
-            # tête de BLOC. SOA de transition : 1,7 s là-bas, 2,6 s ici. Écart ASSUMÉ, détaillé
-            # dans la docstring du module — ne pas aligner l'un sur l'autre à la volée.
+            # une époque hors protocole (14,9 % d'entre elles, mesuré) en publiant un verdict
+            # parfaitement confiant. Le premier écran montre l'état FINAL, le second l'état NEUF —
+            # c'est le second qui fait le travail. `errp_calibrate._run_block` joue désormais les
+            # deux au même endroit, avec les mêmes durées : les deux protocoles sont alignés.
             tenir(pos, cible, PAUSE_FIN_COURSE_S,
                   note="cible atteinte" if atteinte else "on recommence")
             pos = n_cells // 2
