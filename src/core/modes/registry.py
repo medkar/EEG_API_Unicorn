@@ -14,7 +14,7 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import external, mi, neuro, p300, raw, ssvep  # noqa: E402
+from core.modes import errp, external, mi, neuro, p300, raw, ssvep  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 MODES = (
@@ -23,8 +23,8 @@ MODES = (
     neuro.SPEC,
     mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
     p300.SPEC,          # le P300 a rejoint le moteur : il écoute les marqueurs d'une appli externe
-    external.CVEP,      # puis les modes de l'appli pygame, dans l'ordre où ils ont été écrits
-    external.ERRP,
+    errp.SPEC,          # l'ErrP a rejoint le moteur : 2e client du tuyau des marqueurs
+    external.CVEP,      # il ne reste qu'UN mode que le moteur ne sait pas faire
 )
 
 BY_ID = {spec.id: spec for spec in MODES}

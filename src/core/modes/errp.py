@@ -94,6 +94,7 @@ import numpy as np  # noqa: E402
 
 from core import errp_models  # noqa: E402
 from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
+from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
@@ -126,7 +127,7 @@ class ErrPRuntime(ModeRuntime):
     traduit ce taux en seuil via `pick_threshold` (`core/errp_decoder.py`), sur les scores hors-pli
     de SA PROPRE calibration (`self.model.oof_y_`/`oof_scores_`). Le résultat est gardé dans
     `self.point_de_fonctionnement` (`tnr_target`, `seuil`, `tpr`, `tnr`) — c'est CE dict que
-    `DecodedErrPPublisher` (tâche 4) publiera dans les métadonnées du flux.
+    `DecodedErrPPublisher` publie dans les métadonnées du flux (branché à la tâche 4).
     """
 
     pre_s = ERRP_PRE_S      # attributs de CLASSE : `registry.check()` les compare à
@@ -224,11 +225,16 @@ class ErrPRuntime(ModeRuntime):
         return None
 
     def _open(self):
-        # Le vrai `DecodedErrPPublisher` arrive à la tâche 4 : `core/lsl_io.py` ne le porte pas
-        # encore, et ce mode n'est pas non plus dans `registry.MODES`. Ce runtime décode déjà de
-        # bout en bout ; il ne publie nulle part tant qu'il n'est pas branché. `_selftest`
-        # bouchonne `_out` directement, comme `p300.py` le fait déjà pour ses propres tests.
-        self._out = None
+        # Comme le SSVEP, le MI et le P300 : le flux existe TOUT DE SUITE, avant même la fin de la
+        # chauffe/du repos — un client qui le cherche au lancement ne doit pas dépendre de
+        # l'instant où arrive le premier feedback (`resolve_byprop` a un délai fini).
+        # `n_calib` = l'effectif de `self.model.oof_y_` : le même nombre d'essais que
+        # `pick_threshold` a déjà utilisé plus haut pour choisir `self.seuil`, donc la mesure
+        # honnête de ce sur quoi ce point de fonctionnement repose (`ErrPModel` ne pose pas
+        # d'attribut `n_epoques_` dédié, contrairement à `P300Model` — cf. `errp_models.py`).
+        self._out = DecodedErrPPublisher(self.point_de_fonctionnement,
+                                         n_calib=len(self.model.oof_y_),
+                                         instance=self.engine.instance)
 
     def _close(self):
         self._out = None
@@ -389,11 +395,17 @@ class ErrPRuntime(ModeRuntime):
 
     def _publish(self, error, score, artefact, lsl_ts):
         if self._out is not None:
-            self._out.push(error, score, artefact, lsl_ts)
+            # `self.seuil` est CONSTANT pour toute la durée de vie de ce runtime (posé une fois en
+            # __init__) : le publier à CHAQUE échantillon, plutôt que dans les seules métadonnées,
+            # permet à un client qui n'a capturé que le flux de données (un enregistrement XDF, par
+            # exemple, sans sa description LSL) de savoir quand même contre quoi `score` a été
+            # comparé — cf. la docstring de `DecodedErrPPublisher`.
+            self._out.push(error, score, self.seuil, artefact, lsl_ts)
         self._decoded = {
             "error": int(error),
             "score": round(float(score), 3),
             "artefact": int(artefact),
+            "threshold": float(self.seuil),
         }
         self._log(error, score, artefact)
 
@@ -443,11 +455,13 @@ SPEC = ModeSpec(
     ),
     calibration=Calib(kind="natif",
                       reason="l'onset du feedback écran doit être horodaté à la frame"),
-    # `stream`/`channels` restent VIDES à dessein : `DecodedErrPPublisher` (tâche 4) n'existe pas
-    # encore dans `core/lsl_io.py`, et ce mode n'est pas non plus dans `registry.MODES` — brancher
-    # les deux est le travail de la tâche 4 (qui modifie CE fichier à nouveau, cf. le plan du
-    # chantier). `status="moteur"` reflète déjà ce que ce mode EST : un runtime qui décode de bout
-    # en bout, pas encore un flux qu'un étudiant peut lire sur le réseau.
+    # Le suffixe est le même littéral que celui que `DecodedErrPPublisher` construit lui-même via
+    # `stream_name("decoded_errp")` (core/lsl_io.py) — la même convention que le MI (`decoded_mi`).
+    # Les VOIES, elles, viennent de `errp_channel_labels()` : LA seule fonction qui les nomme, pour
+    # le publieur ET pour ce contrat — deux façons de les construire finiraient par diverger d'un
+    # espace ou d'une décimale (cf. sa docstring dans lsl_io.py).
+    stream="decoded_errp",
+    channels=tuple(errp_channel_labels()),
     runtime_cls=ErrPRuntime,
     marker_epoch_s=ERRP_PRE_S + ERRP_EPOCH_S,   # 0,9 s — dimensionne le tampon du moteur
 )
@@ -490,8 +504,8 @@ def _selftest():
         def __init__(self):
             self.lignes = []
 
-        def push(self, error, score, artefact, lsl_ts=None):
-            self.lignes.append((error, score, artefact, lsl_ts))
+        def push(self, error, score, seuil, artefact, lsl_ts=None):
+            self.lignes.append((error, score, seuil, artefact, lsl_ts))
 
     class _FauxMoteur:
         """Juste ce dont le runtime a besoin. `markers_murs` rend les marqueurs un LOT à la fois,
@@ -581,9 +595,11 @@ def _selftest():
         chk(SPEC.calibration is not None and SPEC.calibration.kind == "natif"
             and SPEC.calibration.runtime_cls is None,
             "sa calibration reste NATIVE : l'appli pygame la joue, pas le moteur")
-        chk(SPEC.status == "moteur" and SPEC.stream is None,
-            "le mode est déjà « moteur » ; son flux et ses voies restent à brancher à la tâche 4 "
-            "(DecodedErrPPublisher, core/lsl_io.py, registry.py)")
+        chk(SPEC.status == "moteur" and SPEC.stream == "decoded_errp",
+            f"le mode est publié sur decoded_errp (status={SPEC.status!r}, stream={SPEC.stream!r})")
+        chk(list(SPEC.channels_for(values)) == errp_channel_labels(),
+            f"...avec les voies construites par LA seule fonction qui les nomme, pour le "
+            f"publieur ET pour ce contrat ({SPEC.channels_for(values)})")
 
         # 20 s de tampon continu, largement assez de marge pour des feedbacks entre t=105 et
         # t=110 avec pre_s=0,2 / post_s=0,7. Du BRUIT à l'échelle de l'EEG (pas des zéros) : le
@@ -669,8 +685,8 @@ def _selftest():
             f"l'étudiant croirait avoir eu exactement ce qu'il a demandé ({texte_recalcul.strip()!r})")
         chk(rt.point_de_fonctionnement is not None
             and set(rt.point_de_fonctionnement) == {"tnr_target", "seuil", "tpr", "tnr"},
-            f"point_de_fonctionnement expose EXACTEMENT les 4 clés promises à la tâche 4 (le "
-            f"futur DecodedErrPPublisher) ({rt.point_de_fonctionnement})")
+            f"point_de_fonctionnement expose EXACTEMENT les 4 clés que `DecodedErrPPublisher` "
+            f"publie dans les métadonnées (tâche 4) ({rt.point_de_fonctionnement})")
         chk(rt.point_de_fonctionnement["tnr_target"] == values["tnr_target"]
             and rt.point_de_fonctionnement["seuil"] == seuil_reel,
             f"...avec la cible demandée et le seuil qu'elle a produit ({rt.point_de_fonctionnement})")
@@ -757,13 +773,19 @@ def _selftest():
         moteur._lots = [[marqueur(t_reel)]]
         rt.tick(moteur, lsl_ts=t_reel, now=4.0)
         chk(len(rt._out.lignes) == 1, f"le vrai modèle produit une ligne ({len(rt._out.lignes)})")
-        err_reel, score_reel, art_reel, ts_reel = rt._out.lignes[-1]
+        err_reel, score_reel, seuil_pub, art_reel, ts_reel = rt._out.lignes[-1]
         chk(err_reel in (-1, 0, 1), f"un index dans le contrat ({err_reel})")
         chk(art_reel == 0 and np.isfinite(score_reel),
             f"un feedback banal (bruit à l'échelle du repos) n'est PAS un artefact, et le score "
             f"est un nombre fini ({art_reel}, {score_reel})")
         chk(ts_reel == t_reel, f"l'horodatage publié est celui du FEEDBACK ({ts_reel})")
-        chk(rt.output() == {"error": err_reel, "score": round(score_reel, 3), "artefact": 0},
+        # ⚠️ Le POINT DE FONCTIONNEMENT (tâche 4) : le seuil publié à CHAQUE échantillon, pas
+        # seulement dans les métadonnées — cf. le commentaire de `_publish`.
+        chk(seuil_pub == rt.seuil,
+            f"le seuil publié EST celui contre lequel `score` a été comparé, pas une constante "
+            f"({seuil_pub} vs rt.seuil={rt.seuil})")
+        chk(rt.output() == {"error": err_reel, "score": round(score_reel, 3), "artefact": 0,
+                            "threshold": rt.seuil},
             f"la sortie exposée à l'affichage reprend la même décision ({rt.output()})")
 
         # --- La logique score/seuil, sur un modèle à score CONNU -----------------------------
@@ -772,9 +794,9 @@ def _selftest():
         t = 106.0
         moteur._lots = [[marqueur(t)]]
         rt.tick(moteur, lsl_ts=t, now=4.5)
-        chk(rt._out.lignes[-1] == (1, seuil_reel + 5.0, 0, t),
-            f"score >= seuil -> error=1, avec le VRAI score et l'horodatage du feedback "
-            f"({rt._out.lignes[-1]})")
+        chk(rt._out.lignes[-1] == (1, seuil_reel + 5.0, seuil_reel, 0, t),
+            f"score >= seuil -> error=1, avec le VRAI score, le seuil publié et l'horodatage du "
+            f"feedback ({rt._out.lignes[-1]})")
         chk(espion.appels == 1, f"le modèle a bien été consulté une fois ({espion.appels})")
 
         espion2 = _ModeleScore(seuil_reel - 5.0)    # nettement SOUS le seuil
@@ -782,7 +804,7 @@ def _selftest():
         t = 107.0
         moteur._lots = [[marqueur(t)]]
         rt.tick(moteur, lsl_ts=t, now=5.0)
-        chk(rt._out.lignes[-1] == (0, seuil_reel - 5.0, 0, t),
+        chk(rt._out.lignes[-1] == (0, seuil_reel - 5.0, seuil_reel, 0, t),
             f"score < seuil -> error=0, jamais -1 : « correct » est une réponse à part entière, "
             f"pas une absence de verdict ({rt._out.lignes[-1]})")
 
@@ -795,7 +817,7 @@ def _selftest():
         moteur._lots = [[marqueur(t_perdu)]]
         rt.tick(moteur, lsl_ts=t_perdu, now=5.5)
         ligne = rt._out.lignes[-1]
-        chk(ligne == (-1, 0.0, 0, t_perdu),
+        chk(ligne == (-1, 0.0, seuil_reel, 0, t_perdu),
             f"une époque perdue publie -1, score neutre, artefact=0 — JAMAIS 0 ({ligne})")
         chk(rt._epoques_perdues == avant_perdues + 1,
             f"...et c'est COMPTÉ, pas ignoré en silence ({rt._epoques_perdues})")
@@ -813,7 +835,7 @@ def _selftest():
         moteur._lots = [[marqueur(t_art)]]
         rt.tick(moteur, lsl_ts=t_art, now=6.0)
         ligne = rt._out.lignes[-1]
-        chk(ligne == (-1, 0.0, 1, t_art),
+        chk(ligne == (-1, 0.0, seuil_reel, 1, t_art),
             f"une époque artefact publie -1, score neutre, artefact=1 — JAMAIS 0 ({ligne})")
         chk(rt._artefacts == avant_artefacts + 1,
             f"...et c'est COMPTÉ séparément des époques perdues ({rt._artefacts})")
@@ -915,7 +937,7 @@ def _selftest():
         moteur_derive.recent_ts = epoch_ts_derive
         moteur_derive._lots = [[marqueur(t_saine)]]
         rt2.tick(moteur_derive, lsl_ts=t_saine, now=1.0)
-        e_derive, _s_derive, art_derive, _t_derive = rt2._out.lignes[-1]
+        e_derive, _s_derive, _seuil_derive, art_derive, _t_derive = rt2._out.lignes[-1]
         chk(art_derive == 0,
             f"⚠️ une époque SAINE (dérive ORDINAIRE ~10 µV, rien d'anormal) n'est PAS rejetée à "
             f"tort — AVANT ce correctif (brut contre filtré), le même scénario rejetait à tort "

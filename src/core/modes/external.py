@@ -1,22 +1,21 @@
 """Les modes que le MOTEUR ne sait pas faire — décrits quand même.
 
-C'est le point d'honnêteté de l'interface. Sans ces entrées, la grille ne montrerait que ce qui
+C'est le point d'honnêteté de l'interface. Sans cette entrée, la grille ne montrerait que ce qui
 est chargé : un étudiant croirait que le produit se limite aux modes du moteur, et ne saurait pas
-qu'un décodeur c-VEP validé existe dans `src/research/app.py`. Le MI et le P300, eux, ont rejoint
-le moteur (`core/modes/mi.py`, `core/modes/p300.py`) : ce ne sont plus des entrées « appli
-pygame ». (Aucun compte n'est écrit ici : `registry.MODES` est la seule source, et un chiffre
-recopié dans une prose finit toujours par mentir d'un mode.)
+qu'un décodeur c-VEP validé existe dans `src/research/app.py`. Le MI, le P300 et l'ErrP, eux, ont
+tour à tour rejoint le moteur (`core/modes/mi.py`, `core/modes/p300.py`, `core/modes/errp.py`) :
+ce ne sont plus des entrées « appli pygame », et il ne reste donc plus qu'UNE entrée ici. (Aucun
+compte n'est écrit en dur : `registry.MODES` est la seule source, et un chiffre recopié dans une
+prose finit toujours par mentir d'un mode.)
 
-Chacun porte la RAISON de son absence — et c'est le champ `unavailable` que l'étudiant lit
+Elle porte la RAISON de son absence — et c'est le champ `unavailable` que l'étudiant lit
 réellement : `console/grid.py` le pose sur la tuile grisée, `server.py` le ressort comme motif de
 refus de `--mode <id>`. Il doit donc dire la MÊME chose que cette docstring, pas sa version
 d'avant.
 
 Le c-VEP ne peut pas se passer d'un stimulus verrouillé à la frame, que le moteur ne rend pas —
-aucun lien avec les marqueurs. L'ErrP, lui, a besoin d'un marqueur entrant (l'instant où le
-feedback s'affiche) : l'INFRASTRUCTURE existe désormais et le P300 s'en sert (`core/markers.py`,
-contrat public dans `docs/markers.md`) ; ce qui manque est le mode lui-même dans `core/modes/` —
-un chantier restant, pas une impossibilité.
+aucun lien avec les marqueurs entrants : c'est ce qui le distingue du P300 et de l'ErrP, tous deux
+pilotés par le tuyau de marqueurs d'une application externe (`core/markers.py`).
 """
 
 import os as _os
@@ -36,16 +35,4 @@ CVEP = ModeSpec(
                 "code et détruit la corrélation. " + _PYGAME,
     calibration=Calib(kind="natif",
                       reason="chaque frame doit afficher le bon bit du code"),
-)
-
-ERRP = ModeSpec(
-    id="errp", label="ErrP", family="passif",
-    summary="Détecte que la machine vient de se tromper (potentiel d'erreur).",
-    status="appli_pygame",
-    unavailable="Personne n'a encore écrit son décodeur dans core/modes/. Le marqueur entrant "
-                "dont il a besoin (l'instant où le feedback s'affiche) est déjà transporté par le "
-                "moteur — c'est ce que le P300 utilise, cf. docs/markers.md — donc c'est du "
-                "travail restant, pas un blocage. " + _PYGAME,
-    calibration=Calib(kind="natif",
-                      reason="l'onset du feedback écran doit être horodaté à la frame"),
 )

@@ -12,8 +12,9 @@ Les flux publiés, dans l'ordre où ce fichier les définit :
     <PREFIX>_decoded_neuro  ~5 Hz                  — trois indices d'état mental (BCI passive)
     <PREFIX>_decoded_mi     ~5 Hz                  — quelle imagerie motrice
     <PREFIX>_decoded_p300   une fois par manche    — quelle cible a été sélectionnée
+    <PREFIX>_decoded_errp   un échantillon/feedback — la machine vient-elle de se tromper
     <PREFIX>_status         JSON, événementiel     — l'état du moteur
-Les trois premiers du MVP sont devenus sept : un flux `decoded_*` par mode publié par le moteur.
+Les trois premiers du MVP sont devenus huit : un flux `decoded_*` par mode publié par le moteur.
 
 Autotest (sans casque, sans LSL entrant) :
     python src/core/lsl_io.py
@@ -424,6 +425,50 @@ class DecodedP300Publisher:
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
 
+def errp_channel_labels():
+    """Voies du flux `decoded_errp`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+    return ["error", "score", "threshold", "artifact"]
+
+
+class DecodedErrPPublisher:
+    """`<PREFIX>_decoded_errp` : la machine vient-elle de se tromper. Un échantillon par feedback.
+
+    ⚠️ `error = -1` signifie **« pas de verdict »** — époque perdue ou rejetée pour artefact — et
+    jamais « pas d'erreur ». Un clignement au moment où la machine se trompe est le cas FRÉQUENT :
+    publier 0 affirmerait qu'il n'y a pas eu d'erreur alors qu'on n'a rien vu.
+
+    ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré**, et c'est une exigence, pas un
+    ornement. Au réglage par défaut ce détecteur attrape UNE ERREUR SUR DEUX et annule une bonne
+    commande sur sept. Une application qui lit `error = 1` doit pouvoir savoir qu'elle tient une
+    pièce légèrement biaisée, pas un verdict — sinon elle traitera le flux comme fiable.
+    """
+
+    def __init__(self, point, n_calib, instance=""):
+        labels = errp_channel_labels()
+        info = StreamInfo(stream_name("decoded_errp"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_errp", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "ErrP")
+        desc.append_child_value("decision_scale", "logodds")
+        desc.append_child_value("no_decision_index", "-1")
+        desc.append_child_value("threshold", f"{point['seuil']:.6f}")
+        desc.append_child_value("tnr_target", f"{point['tnr_target']:.4f}")
+        desc.append_child_value("tpr_measured", f"{point['tpr']:.4f}")
+        desc.append_child_value("tnr_measured", f"{point['tnr']:.4f}")
+        desc.append_child_value("calibration_epochs", str(int(n_calib)))
+        desc.append_child_value("measured_on", "1 person, 1 session")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, error, score, threshold, artifact, lsl_ts=None):
+        row = [float(error), float(score), float(threshold), float(artifact)]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 class StatusPublisher:
     """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
 
@@ -587,6 +632,35 @@ def _autotest():
     print(f"  decoded_ssvep no_decision_index : "
           f"{ssvep_deco.child_value('no_decision_index')!r}")
     assert ssvep_deco.child_value("no_decision_index") == "-1", "no_decision_index manquant (SSVEP)"
+
+    # 8. decoded_errp : voies attendues, le sens de -1, et le POINT DE FONCTIONNEMENT mesuré dans
+    # les métadonnées — l'exigence qui donne son sens à ce flux (cf. la docstring de
+    # `DecodedErrPPublisher`) : au réglage par défaut ce détecteur attrape une erreur sur deux et
+    # annule une bonne commande sur sept, une application qui lit `error = 1` doit pouvoir le savoir.
+    labels = errp_channel_labels()
+    print(f"  voies decoded_errp : {labels}")
+    assert labels == ["error", "score", "threshold", "artifact"], labels
+    point = {"tnr_target": 0.85, "seuil": 0.42, "tpr": 0.50, "tnr": 0.855}
+    pub_errp = DecodedErrPPublisher(point, n_calib=112, instance="selftest-errp")
+    pub_errp.push(1, 0.91, point["seuil"], 0)     # un verdict
+    pub_errp.push(-1, 0.0, point["seuil"], 1)     # un refus (artefact) : jamais 0
+    print("  [lsl] decoded_errp publie sans lever")
+    errp_deco = pub_errp.outlet.get_info().desc().child("decoding")
+    no_decision = errp_deco.child_value("no_decision_index")
+    print(f"  decoded_errp no_decision_index (métadonnées) : {no_decision!r}")
+    assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
+    seuil_pub = errp_deco.child_value("threshold")
+    cible_pub = errp_deco.child_value("tnr_target")
+    tpr_pub = errp_deco.child_value("tpr_measured")
+    tnr_pub = errp_deco.child_value("tnr_measured")
+    n_pub = errp_deco.child_value("calibration_epochs")
+    print(f"  decoded_errp point de fonctionnement (métadonnées) : seuil={seuil_pub!r} "
+          f"tnr_target={cible_pub!r} tpr={tpr_pub!r} tnr={tnr_pub!r} calibration_epochs={n_pub!r}")
+    assert seuil_pub == f"{point['seuil']:.6f}", f"threshold attendu {point['seuil']:.6f}, reçu {seuil_pub!r}"
+    assert cible_pub == f"{point['tnr_target']:.4f}", f"tnr_target inattendu : {cible_pub!r}"
+    assert tpr_pub == f"{point['tpr']:.4f}", f"tpr_measured inattendu : {tpr_pub!r}"
+    assert tnr_pub == f"{point['tnr']:.4f}", f"tnr_measured inattendu : {tnr_pub!r}"
+    assert n_pub == "112", f"calibration_epochs attendu '112', reçu {n_pub!r}"
 
     print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
