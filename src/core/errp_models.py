@@ -6,10 +6,16 @@ mode doit pouvoir dire « aucun choix disponible » plutôt que démarrer muet.
 ⚠️ **Les modèles antérieurs au 2026-08-18 sont refusés, et c'est une décision.** Ils ont été
 enregistrés quand le décodeur vivait dans `src/research/`, donc leur pickle référence le module NU
 `errp_decoder`, qui n'existe plus sous ce nom (le décodeur P300 a fait le même trajet la veille, et
-l'ErrP le suit aujourd'hui). On ne fabrique PAS de passerelle : les époques de calibration ayant
-survécu (`data/errp_calib_last.npz`, plus des horodatées), un modèle se ré-entraîne depuis le
-disque en quelques secondes. C'est la TROISIÈME fois que ce projet rencontre ce piège précis — la
-première fois (Motor Imagery), les époques avaient été écrasées, et ça a coûté 4 modèles.
+l'ErrP le suit aujourd'hui). On ne fabrique PAS de passerelle. C'est la TROISIÈME fois que ce projet
+rencontre ce piège précis — la première fois (Motor Imagery), les époques avaient été écrasées, et
+ça a coûté 4 modèles.
+
+⚠️ **Et le remède qu'on aimerait donner n'existe pas encore.** Les époques de calibration ont bien
+survécu (`data/errp_calib_last.npz`, plus des horodatées), mais **aucun code de ce dépôt ne les
+lit** : le ré-entraînement du 2026-08-18 a été fait par un script jetable, non versionné. Prescrire
+« ré-entraîne depuis les .npz » enverrait donc l'étudiant vers une porte fermée. Le seul remède
+livré aujourd'hui est une nouvelle calibration au casque, et c'est ce que disent les messages de
+refus, plus bas. Écrire ce lecteur de `.npz` reste la bonne idée ; elle n'est simplement pas faite.
 
 Autotest :
     python src/core/errp_models.py

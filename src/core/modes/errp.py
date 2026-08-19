@@ -39,9 +39,9 @@ publient `error = -1` (« pas de verdict »), **jamais `0`** : publier 0 affirme
 alors qu'on n'a rien vu. Un clignement au moment précis où la machine se trompe est le cas
 FRÉQUENT, pas l'exception — c'est justement l'instant où l'utilisateur sursaute.
 
-Cinq pannes bruyantes propres à ce mode (les trois premières — flux introuvable, marqueur trop
-vieux, marqueur dans le futur — vivent une couche plus bas, `core/markers.py` et `core/server.py`,
-déjà prouvées là-bas) :
+Six pannes bruyantes propres à ce mode, numérotées 4 à 9 — les trois premières (flux introuvable,
+marqueur trop vieux, marqueur dans le futur) vivent une couche plus bas, `core/markers.py` et
+`core/server.py`, et sont déjà prouvées là-bas :
     4. un modèle entraîné sur une AUTRE géométrie d'époque (fs, pré/post) -> refusé au démarrage,
        en nommant l'écart (`_desaccord_geometrie`) — le même contrôle que le P300, pour la même
        raison : une matrice de la même taille avec l'onset ailleurs rend des scores plausibles et
@@ -399,9 +399,9 @@ class ErrPRuntime(ModeRuntime):
         fenêtres — soit la MAJORITÉ, donc la médiane elle-même, donc le seuil de TOUTE la
         séance ; il n'en pollue plus que ~5, et la médiane fait enfin ce que son nom promet.
 
-        Le plancher est `n_epoque` lui-même, plus `engine.acq.margin_n` : ce dernier était
-        emprunté « comme ordre de grandeur commode », alors que le bon plancher est précisément
-        la longueur qu'on s'apprête à mesurer.
+        Le plancher est `n_epoque` lui-même, et RIEN d'autre : `engine.acq.margin_n` servait
+        avant, emprunté « comme ordre de grandeur commode », alors que le bon plancher est
+        précisément la longueur qu'on s'apprête à mesurer. Il a donc été retiré, pas ajouté.
 
         La chauffe de 15 s existe déjà pour laisser la rampe DC se tasser AVANT toute mesure :
         c'est elle qui rend un repos brut exploitable, pas un filtrage a posteriori — qui
@@ -653,13 +653,20 @@ SPEC = ModeSpec(
         # ⚠️ Le MÊME `Param` que `p300.py`, et il ne peut pas manquer ici (correction de revue) :
         # ce mode déclare `marker_epoch_s > 0`, donc le moteur le compte parmi ceux qui écoutent
         # des marqueurs (`server._nom_flux_marqueurs`). Sans ce réglage, `contract.validate`
-        # REFUSE la clé (« réglage inconnu pour « ErrP » ») et le flux entrant reste gelé sur
-        # `MARKER_STREAM_DEFAULT` — deux binômes dans la même salle ne peuvent plus se séparer,
-        # et le moteur du binôme B épocherait l'EEG de B autour des feedbacks affichés chez A,
-        # en publiant des verdicts parfaitement plausibles. Pire, l'omission cassait la voie de
-        # secours que l'aide du P300 PROMET : `_libere_marker_inlet` ne lâche l'inlet que si
-        # AUCUN mode actif n'écoute des marqueurs, donc en `--mode errp,p300` l'ErrP le
-        # maintenait ouvert sur l'ancien nom et redémarrer le P300 ne reprenait rien.
+        # REFUSAIT la clé (« réglage inconnu pour « ErrP » »), ce qui cassait la voie de secours
+        # que l'aide du P300 PROMET : `_libere_marker_inlet` ne lâche l'inlet que si AUCUN mode
+        # actif n'écoute des marqueurs, donc en `--mode errp,p300` l'ErrP le maintenait ouvert sur
+        # l'ancien nom et redémarrer le P300 ne reprenait rien. C'est CE trou que le réglage
+        # referme, et c'est tout ce qu'il referme.
+        #
+        # ⚠️ Il ne débloque PAS deux binômes dans la même salle, malgré ce qu'on aimerait lire
+        # ici : `choices` n'a qu'UNE entrée, et `contract._coerce` refuse toute valeur hors liste
+        # sur les trois chemins d'entrée (constructeur, `start_mode`, `set_params`). Le flux
+        # entrant reste donc gelé sur `MARKER_STREAM_DEFAULT` pour tout le monde — console,
+        # script, ou client pilotant le moteur. Ouvrir ça se fait en changeant ce seul tuple (ou
+        # le `kind`), ici ET dans `p300.py` ; c'est une décision à prendre, pas un oubli. Tant
+        # qu'elle n'est pas prise, le moteur du binôme B épocherait l'EEG de B autour des
+        # feedbacks affichés chez A, en publiant des verdicts parfaitement plausibles.
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
               choices=(MARKER_STREAM_DEFAULT,), default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
