@@ -538,6 +538,97 @@ def _smoke():
     console.pages["p300"].bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et le P300 ramène aussi sur la grille")
 
+    # --- ErrP : la famille « passif » a une DEUXIÈME forme de sortie, différente du neuro -------
+    # Round de correction 1 (tâche 4) : `PassiveView` et `grid.py` (aperçu de la tuile + résumé)
+    # ne routaient que sur la clé "z", que la sortie de l'ErrP n'a jamais — la page restait
+    # muette (texte vide), la tuile aussi, et rien ne rougissait puisqu'aucune valeur FABRIQUÉE
+    # n'était montrée (le défaut symétrique au P300-rendu-en-SSVEP : là un SILENCE, pas un
+    # mensonge). Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs (mesuré :
+    # TPR ~46 %, TNR ~93 %) : l'écran ne doit donc JAMAIS afficher « ERREUR détectée » seul,
+    # comme un verdict fiable — le score ET le point de fonctionnement doivent être lisibles
+    # ensemble, et `error=-1` (pas de verdict) doit se lire différemment de `error=0` (correct).
+    errp_state = {**state, "modes_state": {**state["modes_state"], "errp": {
+        "id": "errp", "label": "ErrP", "family": "passif", "phase": "running", "published": True,
+        "params": {"model": "errp_model_20260818_150000.joblib", "tnr_target": 0.85},
+        "instruction": "", "stream": "decoded_errp",
+        "channels": ["error", "score", "threshold", "artifact"], "rest_report": None,
+        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "tpr": 0.4615,
+                                    "tnr": 0.9259},
+        "output": {"error": 1, "score": 5.044, "artifact": 0, "threshold": 0.044}}}}
+    console.show_mode("errp")
+    console.apply_state(errp_state)
+    errp_page = console.pages["errp"]
+    chk(isinstance(errp_page.vue, live_views.PassiveView),
+        "l'ErrP a le rendu PASSIF, comme le neuro — une réaction observée, pas un choix fait")
+    chk("ERREUR" in errp_page.vue.etat.text(),
+        f"un score au-dessus du seuil se lit comme une détection ({errp_page.vue.etat.text()!r})")
+    chk("5.044" in errp_page.vue.avertissement.text()
+        and "0.044" in errp_page.vue.avertissement.text(),
+        f"...le score ET le seuil, CHIFFRÉS, côte à côte, jamais l'un sans l'autre "
+        f"({errp_page.vue.avertissement.text()!r})")
+    chk("46%" in errp_page.vue.avertissement.text() and "93%" in errp_page.vue.avertissement.text(),
+        f"...ET le point de fonctionnement MESURÉ (pas seulement visé) : ce détecteur garde 93 % "
+        f"des bonnes commandes et attrape 46 % des erreurs — un étudiant qui regarde doit "
+        f"comprendre qu'il lit une pièce biaisée, pas un verdict ({errp_page.vue.avertissement.text()!r})")
+
+    # `error = 0` (correct) ne doit plus jamais parler d'erreur.
+    errp_correct = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": 0, "score": -4.956, "artifact": 0, "threshold": 0.044}}}}
+    console.apply_state(errp_correct)
+    texte_correct = errp_page.vue.etat.text()
+    chk("ERREUR" not in texte_correct,
+        f"un score sous le seuil ne parle plus d'erreur ({texte_correct!r})")
+
+    # `error = -1` (pas de verdict, ÉPOQUE PERDUE) : un troisième texte, distinct des deux autres
+    # — le confondre avec « correct » affirmerait un « pas d'erreur » qu'on n'a pas observé.
+    errp_perdu = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": -1, "score": 0.0, "artifact": 0, "threshold": 0.044}}}}
+    console.apply_state(errp_perdu)
+    texte_perdu = errp_page.vue.etat.text()
+    chk(texte_perdu != texte_correct and "ERREUR" not in texte_perdu,
+        f"« pas de verdict » (-1, époque perdue) est un texte DIFFÉRENT de « correct » (0), et "
+        f"ne parle jamais d'erreur ({texte_perdu!r} vs correct={texte_correct!r})")
+
+    # `error = -1` mais ARTEFACT : un QUATRIÈME texte, distinct des trois autres — un rejet
+    # d'artefact et une époque simplement hors du tampon ne sont pas la même panne.
+    errp_artefact = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": -1, "score": 0.0, "artifact": 1, "threshold": 0.044}}}}
+    console.apply_state(errp_artefact)
+    texte_artefact = errp_page.vue.etat.text()
+    chk("artefact" in texte_artefact.lower() and texte_artefact != texte_perdu,
+        f"...et un refus pour ARTEFACT se distingue lui aussi d'une époque simplement perdue "
+        f"({texte_artefact!r} vs perdu={texte_perdu!r})")
+
+    # L'APERÇU DE LA TUILE : deux valeurs signées (score, seuil), sur une échelle qui s'adapte à
+    # LEUR PROPRE amplitude — jamais un axe fixe inventé (le même piège que le P300 rendu comme
+    # un SSVEP, cf. `live_views.ActiveView`). Vide quand `error < 0` : `score`/`threshold` valent
+    # alors 0.0 par CONVENTION, jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — les
+    # montrer fabriquerait un chiffre.
+    console.apply_state(errp_state)      # retour au verdict "erreur" : score=5.044, seuil=0.044
+    chk(console.grid.tuiles["errp"].apercu._values == [5.044, 0.044]
+        and console.grid.tuiles["errp"].apercu._centre
+        and console.grid.tuiles["errp"].apercu._retenue == -1,
+        f"la tuile montre score ET seuil, signés, sans rien mettre en avant "
+        f"({console.grid.tuiles['errp'].apercu._values})")
+    console.apply_state(errp_perdu)
+    chk(console.grid.tuiles["errp"].apercu._values == [],
+        f"...et rien quand il n'y a rien à montrer, pas un 0.0 fabriqué "
+        f"({console.grid.tuiles['errp'].apercu._values})")
+
+    # LE RÉSUMÉ de la tuile (`_resume`, affiché hors instruction active) porte lui aussi le
+    # verdict ET le taux d'erreurs attrapées — jamais le texte statique du mode.
+    console.apply_state(errp_state)
+    resume_errp = console.grid.tuiles["errp"].detail.text()
+    chk("ERREUR" in resume_errp and "46%" in resume_errp,
+        f"le résumé de la tuile porte le verdict ET le point de fonctionnement "
+        f"({resume_errp!r})")
+
+    errp_page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et l'ErrP ramène aussi sur la grille")
+
     # --- la page de calibration -------------------------------------------------
     # Elle est éprouvée sur des états FABRIQUÉS, phase par phase : c'est le seul moyen de
     # vérifier chaque écran sans jouer sept minutes de séance.

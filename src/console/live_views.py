@@ -307,6 +307,16 @@ class PassiveView(QWidget):
 
     def update_from(self, mode_state):
         sortie = (mode_state or {}).get("output") or {}
+        # ⚠️ Correction de revue (tour 1, tâche 4) : la famille « passif » a une DEUXIÈME forme de
+        # sortie, celle de l'ErrP — `{"error", "score", "threshold", "artifact"}` — qui n'a JAMAIS
+        # de clé "z". Router uniquement sur "z" (comme avant ce correctif) laissait cette page
+        # perpétuellement muette pour l'ErrP : ni crash ni mensonge, un SILENCE (le défaut
+        # symétrique du P300 rendu comme un SSVEP dans `ActiveView`, qui LUI affirmait du faux).
+        # On aiguille donc ICI AUSSI sur ce que la sortie DÉCLARE, jamais sur l'identifiant du
+        # mode — même principe que `ActiveView.update_from` juste au-dessus.
+        if "error" in sortie:
+            self._update_errp(mode_state, sortie)
+            return
         z = sortie.get("z") or {}
         if not z:
             self.etat.setText(mode_state["instruction"] if mode_state else "en attente")
@@ -333,6 +343,48 @@ class PassiveView(QWidget):
                               f"les derniers z valides sont maintenus")
         else:
             self.etat.setText(f"{artefacts} fenêtre(s) rejetée(s) depuis le début du mode")
+
+    def _update_errp(self, mode_state, sortie):
+        """ErrP : un verdict par feedback, jamais montré comme un interrupteur propre.
+
+        ⚠️ Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs et annule une
+        part des bonnes commandes — `error=1` seul affirmerait un verdict fiable. Le score ET le
+        POINT DE FONCTIONNEMENT (`tpr`/`tnr` MESURÉS, pas seulement `tnr_target` VISÉ) voyagent
+        donc CÔTE À CÔTE, dans le même texte. `point_de_fonctionnement` vit dans `mode_state`
+        (posé par `ErrPRuntime.state()`) et pas dans `sortie` : c'est une mesure de SESSION,
+        constante d'un échantillon à l'autre, contrairement à `threshold` qui EST sur le flux.
+
+        ⚠️ `error = -1` (pas de verdict : époque perdue ou artefact) est un texte VISUELLEMENT
+        DISTINCT de `error = 0` (verdict « correct ») : les confondre affirmerait un « pas
+        d'erreur » qu'on n'a pas observé. `score`/`threshold` valent alors 0.0 par CONVENTION,
+        jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — on ne les affiche donc pas.
+        """
+        error = sortie.get("error", -1)
+        if sortie.get("artifact"):
+            self.etat.setText("— PAS DE VERDICT : fenêtre rejetée (artefact, σ au-dessus du repos)")
+        elif error < 0:
+            self.etat.setText("— PAS DE VERDICT : époque hors du tampon")
+        elif error == 1:
+            self.etat.setText("ERREUR détectée (score au-dessus du seuil)")
+        else:
+            self.etat.setText("correct (score sous le seuil)")
+
+        if error < 0:
+            self.avertissement.setText(
+                "aucune mesure sur ce feedback : époque perdue ou rejetée, score et seuil ne "
+                "comptent pas ici.")
+            return
+        score = float(sortie.get("score", 0.0))
+        seuil = float(sortie.get("threshold", 0.0))
+        pdf = mode_state.get("point_de_fonctionnement") or {}
+        if pdf:
+            self.avertissement.setText(
+                f"score {score:+.3f} contre seuil {seuil:+.3f} · détecteur IMPARFAIT : garde "
+                f"{pdf.get('tnr', 0.0):.0%} des bonnes commandes, attrape "
+                f"{pdf.get('tpr', 0.0):.0%} des erreurs (visé {pdf.get('tnr_target', 0.0):.0%}) "
+                f"— un verdict « erreur » est une pièce biaisée, pas une certitude.")
+        else:
+            self.avertissement.setText(f"score {score:+.3f} contre seuil {seuil:+.3f}")
 
 
 def build(family, ch_names=()):

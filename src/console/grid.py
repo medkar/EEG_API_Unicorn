@@ -172,6 +172,22 @@ class ModeTile(QFrame):
                                    retenue=sortie.get("intent_index", -1))
         elif "z" in sortie:
             self.apercu.set_values(list(sortie["z"].values()), span=NEURO_Z_SPAN, centre=True)
+        elif "error" in sortie:
+            # ⚠️ Correction de revue (tour 1, tâche 4) : cette clé n'existait dans AUCUNE des
+            # branches ci-dessus, donc l'ErrP tombait toujours dans le `else` — l'aperçu vivant
+            # restait vide en permanence. `error < 0` (pas de verdict) : `score`/`threshold`
+            # valent 0.0 par CONVENTION, jamais une mesure (cf. `ErrPRuntime._traiter_feedback`)
+            # — les montrer fabriquerait un chiffre, donc rien plutôt qu'un faux zéro.
+            if sortie.get("error", -1) < 0:
+                self.apercu.set_values([])
+            else:
+                score = sortie.get("score", 0.0)
+                seuil = sortie.get("threshold", 0.0)
+                # Échelle qui s'adapte à SA PROPRE amplitude, jamais NEURO_Z_SPAN (un z n'a rien
+                # à voir avec un log-odds) ni un axe fixe inventé — le même piège que le P300
+                # rendu comme un SSVEP (cf. `live_views.ActiveView`).
+                self.apercu.set_values([score, seuil],
+                                       span=max(abs(score), abs(seuil), 1.0), centre=True)
         else:
             self.apercu.set_values([])
 
@@ -195,6 +211,20 @@ def _resume(mode_state):
                 else f"intention {sortie.get('label', '')} · {sortie.get('confidence', 0):.2f}")
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
+    if "error" in sortie:
+        # ⚠️ Correction de revue (tour 1, tâche 4) : sans cette branche, le résumé retombait sur
+        # `params`/`""`, donc sur `spec["summary"]` (le texte STATIQUE du mode) — jamais ce que ce
+        # feedback précis vient de décider. Le verdict ne se montre JAMAIS seul : ce détecteur
+        # n'attrape qu'une partie des erreurs, `pdf['tpr']` le rappelle à chaque ligne.
+        error = sortie.get("error", -1)
+        if sortie.get("artifact"):
+            return "artefact — fenêtre rejetée"
+        if error < 0:
+            return "pas de verdict (époque hors tampon)"
+        pdf = mode_state.get("point_de_fonctionnement") or {}
+        verdict = "ERREUR détectée" if error == 1 else "correct"
+        taux = f" · attrape {pdf['tpr']:.0%} des erreurs" if pdf else ""
+        return f"{verdict} · score {sortie.get('score', 0.0):+.2f}{taux}"
     params = mode_state.get("params") or {}
     if "freqs" in params:
         return " · ".join(f"{f:g} Hz" for f in params["freqs"])

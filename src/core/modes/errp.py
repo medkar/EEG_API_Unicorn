@@ -252,7 +252,15 @@ class ErrPRuntime(ModeRuntime):
         """Comme `ModeRuntime.state()`, plus les compteurs de ce que ce mode JETTE, ET le taux de
         rejet qui en découle (panne n°8) — le même filet que `P300Runtime.state()` : sans cette
         sortie, un client qui n'a pas la console ouverte au bon instant ne voit jamais combien
-        d'époques ont été perdues ou écartées, ni si ce chiffre est en train de dériver."""
+        d'époques ont été perdues ou écartées, ni si ce chiffre est en train de dériver.
+
+        ⚠️ Correction de revue (tour 1, tâche 4) : `point_de_fonctionnement` (tnr_target/seuil/
+        tpr/tnr) voyage ICI, pas dans `output()` — c'est une mesure de SESSION, posée une fois en
+        `__init__`, pas un champ publié à chaque échantillon (contrairement à `threshold`, qui
+        EST sur le flux). Sans lui, aucun client de la console ne peut savoir que ce détecteur
+        n'attrape qu'une partie des erreurs : la console est un CLIENT du moteur, elle ne peut
+        montrer que ce que `state()` lui donne.
+        """
         base = super().state()
         base["epoques_perdues"] = self._epoques_perdues
         base["epoques_vues"] = self._epoques_vues
@@ -261,6 +269,7 @@ class ErrPRuntime(ModeRuntime):
         base["taux_rejet"] = (round(self._artefacts / self._epoques_vues, 3)
                               if self._epoques_vues else None)
         base["marqueurs_chauffe"] = self._marqueurs_chauffe
+        base["point_de_fonctionnement"] = self.point_de_fonctionnement
         return base
 
     def _rest_step(self, engine, now):
@@ -401,10 +410,15 @@ class ErrPRuntime(ModeRuntime):
             # exemple, sans sa description LSL) de savoir quand même contre quoi `score` a été
             # comparé — cf. la docstring de `DecodedErrPPublisher`.
             self._out.push(error, score, self.seuil, artefact, lsl_ts)
+        # ⚠️ Correction de revue (tour 1, tâche 4) : la clé était `"artefact"` (français), alors
+        # que `ssvep.py`/`neuro.py` écrivent `"artifact"` (anglais), aligné sur le libellé de voie
+        # LSL (`errp_channel_labels()` -> "artifact"). Masqué tant que rien ne lisait `output()`
+        # côté console — un piège prêt à mordre le premier rendu écrit sur le motif des modes
+        # voisins (`sortie.get("artifact")`), qui aurait lu `None` en silence.
         self._decoded = {
             "error": int(error),
             "score": round(float(score), 3),
-            "artefact": int(artefact),
+            "artifact": int(artefact),
             "threshold": float(self.seuil),
         }
         self._log(error, score, artefact)
@@ -784,9 +798,11 @@ def _selftest():
         chk(seuil_pub == rt.seuil,
             f"le seuil publié EST celui contre lequel `score` a été comparé, pas une constante "
             f"({seuil_pub} vs rt.seuil={rt.seuil})")
-        chk(rt.output() == {"error": err_reel, "score": round(score_reel, 3), "artefact": 0,
+        chk(rt.output() == {"error": err_reel, "score": round(score_reel, 3), "artifact": 0,
                             "threshold": rt.seuil},
-            f"la sortie exposée à l'affichage reprend la même décision ({rt.output()})")
+            f"la sortie exposée à l'affichage reprend la même décision, avec la clé "
+            f"« artifact » (anglais, alignée sur ssvep.py/neuro.py et le libellé de voie LSL) "
+            f"({rt.output()})")
 
         # --- La logique score/seuil, sur un modèle à score CONNU -----------------------------
         espion = _ModeleScore(seuil_reel + 5.0)     # nettement AU-DESSUS du seuil
