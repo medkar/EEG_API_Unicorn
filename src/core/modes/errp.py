@@ -137,6 +137,10 @@ class ErrPRuntime(ModeRuntime):
         super().__init__(spec, params, engine)
         self._out = None
         self._decoded = None
+        # La dernière époque envoyée au modèle, TELLE QUELLE (tâche 5) — pas pour l'affichage,
+        # pour `_selftest` : LE TEST D'ALIGNEMENT compare son CONTENU, échantillon par échantillon,
+        # à la tranche brute du tampon (cf. `_traiter_feedback`, et la docstring du module).
+        self._derniere_epoque = None
         self.model, raison = errp_models.charger(params["model"])
         if self.model is None:
             # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
@@ -361,6 +365,12 @@ class ErrPRuntime(ModeRuntime):
             self._verifie_taux_rejet()
             self._publish(-1, 0.0, artefact=1, lsl_ts=lsl_ts)
             return
+        # ⚠️ Capturée ICI — au tout dernier moment avant l'appel au modèle, rien après — c'est ce
+        # qui permet à la preuve rouge-puis-vert (tâche 5) de fonctionner : un traitement inséré
+        # par erreur entre l'extraction et le scorage (un `bandpass()` de trop, par exemple) se
+        # refléterait DANS cette valeur, alors qu'une assertion de simple POSITION resterait
+        # aveugle (`filtfilt` est à phase nulle : le pic reste au même échantillon).
+        self._derniere_epoque = epoque
         score = float(np.ravel(self.model.score(epoque[None, ...]))[0])
         self._publish(1 if score >= self.seuil else 0, score, artefact=0, lsl_ts=lsl_ts)
 
@@ -892,6 +902,35 @@ def _selftest():
             f"...et reflètent les compteurs RÉELS du runtime, pas une copie figée "
             f"(state={etat['epoques_perdues'], etat['artefacts'], etat['marqueurs_chauffe']}, "
             f"réel={rt._epoques_perdues, rt._artefacts, rt._marqueurs_chauffe})")
+
+        # --- ⚠️ 6. LE TEST D'ALIGNEMENT (tâche 5), par le CONTENU — pas par la position ---------
+        # La revue du P300 a établi qu'une assertion de POSITION laisse passer un double
+        # filtrage : `filtfilt` est à phase nulle, sa réponse impulsionnelle équivalente est une
+        # autocorrélation maximale au lag 0 — un `bandpass()` ajouté par erreur entre l'extraction
+        # et le scorage laisse donc le PIC exactement au même échantillon. Or `ErrPModel` filtre
+        # déjà en interne (composition sur `core.p300_decoder.build_pipe`). La SEULE assertion qui
+        # ferme ce trou compare `rt._derniere_epoque` — ce que le runtime a RÉELLEMENT envoyé au
+        # modèle — au CONTENU de la tranche brute du tampon, échantillon par échantillon.
+        #
+        # Un pic d'amplitude unique planté à un instant CONNU, dans un tampon par ailleurs nul.
+        fs = 250.0
+        n_pre, n_post = int(round(ERRP_PRE_S * fs)), int(round(ERRP_EPOCH_S * fs))
+        t0 = 1000.0
+        ts = np.arange(t0, t0 + 4.0, 1.0 / fs)
+        eeg = np.zeros((len(ts), 8))
+        instant = t0 + 2.0
+        i_pic = int(np.searchsorted(ts, instant))
+        eeg[i_pic, :] = 42.0          # une valeur qu'aucun calcul ne produit par hasard
+
+        moteur.recent, moteur.recent_ts = eeg, ts
+        rt._traiter_feedback(moteur, instant, lsl_ts=instant)
+
+        # UNE assertion qui épingle position, forme, ordre des voies ET absence de traitement.
+        chk(np.array_equal(rt._derniere_epoque, eeg[i_pic - n_pre:i_pic + n_post]),
+            "⚠️ ALIGNEMENT : l'époque constituée par le runtime est EXACTEMENT la tranche brute du "
+            "tampon — même position, même forme, même ordre de voies, et AUCUN traitement appliqué "
+            "en chemin (un filtrage ajouté ici laisserait le pic au même échantillon et passerait "
+            "une assertion de position)")
 
         # --- ⚠️ PREUVE ROUGE-PUIS-VERT (tour de correction 1) : repos et époque doivent être
         # mesurés sur la MÊME représentation ---------------------------------------------------
