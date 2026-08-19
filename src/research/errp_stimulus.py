@@ -22,16 +22,29 @@ depuis l'EEG (BCI **passive**). Publier la vérité-terrain sur le réseau revie
 réponse.
 
 La tâche est le curseur-vers-cible (Ferrez & Millán 2008, Chavarriaga 2010), reprise TELLE QUELLE
-du démonstrateur (`research/app.py`, mode ErrP) et de la calibration (`research/errp_calibrate.py`)
-— va les lire, ce protocole ne s'invente pas ici, il se reproduit : un point sur une piste de
-`ERRP_TRACK_CELLS` cases part du CENTRE vers une cible tirée à l'une des DEUX EXTRÉMITÉS (50/50 —
-le sens du mouvement reste décorrélé de l'étiquette erreur/correct, cf. `nouvelle_cible`) ; à chaque
-pas il avance d'une case, sauf dans ~`ERRP_ERROR_RATE` des pas où la machine se trompe
-DÉLIBÉRÉMENT et l'éloigne (rebond aux bords, cf. `decide_pas`). Le feedback (la nouvelle position)
-reste affiché `ERRP_FEEDBACK_S` = 1 s — la fenêtre pendant laquelle l'utilisateur perçoit l'ERP
-d'erreur si le pas s'est éloigné. Cible atteinte, ou `ERRP_MAX_RUN_STEPS` dépassés -> nouvelle
-course, sans aucune pause : contrairement au P300, il n'y a pas de « manche » à protéger d'une
-contamination (`core/modes/errp.py` : chaque feedback se décode SEUL, cf. sa docstring).
+des DEUX endroits qui la jouent déjà — le démonstrateur (`research/app.py`, mode ErrP) et la
+calibration (`research/errp_calibrate.py`) — va les lire, ce protocole ne s'invente pas ici, il se
+reproduit : un point sur une piste de `ERRP_TRACK_CELLS` cases part du CENTRE vers une cible tirée
+à l'une des DEUX EXTRÉMITÉS (50/50 — le sens du mouvement reste décorrélé de l'étiquette
+erreur/correct, cf. `nouvelle_cible`) ; à chaque pas il avance d'une case, sauf en cas d'erreur
+DÉLIBÉRÉE qui l'éloigne (rebond aux bords, cf. `decide_pas`).
+
+⚠️ **Correction de revue (tour 1) : leur TAUX d'erreur, lui, DIFFÈRE — l'attribution d'origine ici
+était fausse.** La calibration vise `ERRP_ERROR_RATE` (~28 %, la valeur de littérature,
+Chavarriaga/Yasemin) ; le démonstrateur vise `ERRP_DEMO_ERROR_RATE` (35 %, choisie plus haute pour
+que l'expérience solo reste vivante malgré une dérive nette vers la cible — cf. son commentaire
+dans `core/config.py`) : deux réglages distincts pour deux usages distincts, pas une divergence
+accidentelle. Cet émetteur prend `ERRP_ERROR_RATE` par défaut, PAS la valeur du démonstrateur : il
+se veut la référence RÉSEAU du protocole (cf. plus haut, l'exemple pour Unity), donc la valeur
+ancrée dans la littérature plutôt que celle réglée pour l'agrément d'une démo solo —
+`--error-rate` reste libre d'en changer, pour qui voudrait l'un ou l'autre.
+
+Le feedback (la nouvelle position) reste affiché `ERRP_FEEDBACK_S` = 1 s — la fenêtre pendant
+laquelle l'utilisateur perçoit l'ERP d'erreur si le pas s'est éloigné (ce réglage-là, contrairement
+au taux d'erreur, EST identique aux deux sources). Cible atteinte, ou `ERRP_MAX_RUN_STEPS`
+dépassés -> nouvelle course, sans aucune pause : contrairement au P300, il n'y a pas de « manche » à
+protéger d'une contamination (`core/modes/errp.py` : chaque feedback se décode SEUL, cf. sa
+docstring).
 
 Le geste critique, identique au P300 :
 

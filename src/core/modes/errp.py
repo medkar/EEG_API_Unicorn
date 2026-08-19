@@ -137,10 +137,13 @@ class ErrPRuntime(ModeRuntime):
         super().__init__(spec, params, engine)
         self._out = None
         self._decoded = None
-        # La dernière époque envoyée au modèle, TELLE QUELLE (tâche 5) — pas pour l'affichage,
-        # pour `_selftest` : LE TEST D'ALIGNEMENT compare son CONTENU, échantillon par échantillon,
-        # à la tranche brute du tampon (cf. `_traiter_feedback`, et la docstring du module).
-        self._derniere_epoque = None
+        # La dernière époque SCORÉE — uniquement le chemin de succès, cf. `_traiter_feedback` : une
+        # époque perdue ou rejetée pour artefact la laisse INTACTE, elle ne se vide jamais toute
+        # seule. Le nom le dit exprès (correction de revue, tâche 5 tour 1) : « dernière reçue »
+        # aurait suggéré à tort qu'elle bouge à CHAQUE feedback. Pas pour l'affichage, pour
+        # `_selftest` : LE TEST D'ALIGNEMENT compare son CONTENU, échantillon par échantillon, à la
+        # tranche brute du tampon (cf. la docstring du module).
+        self._derniere_epoque_scoree = None
         self.model, raison = errp_models.charger(params["model"])
         if self.model is None:
             # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
@@ -369,8 +372,10 @@ class ErrPRuntime(ModeRuntime):
         # qui permet à la preuve rouge-puis-vert (tâche 5) de fonctionner : un traitement inséré
         # par erreur entre l'extraction et le scorage (un `bandpass()` de trop, par exemple) se
         # refléterait DANS cette valeur, alors qu'une assertion de simple POSITION resterait
-        # aveugle (`filtfilt` est à phase nulle : le pic reste au même échantillon).
-        self._derniere_epoque = epoque
+        # aveugle (`filtfilt` est à phase nulle : le pic reste au même échantillon). Seul CE
+        # chemin l'écrit — l'époque perdue et l'artefact sont déjà sortis par un `return`, plus
+        # haut, sans y toucher.
+        self._derniere_epoque_scoree = epoque
         score = float(np.ravel(self.model.score(epoque[None, ...]))[0])
         self._publish(1 if score >= self.seuil else 0, score, artefact=0, lsl_ts=lsl_ts)
 
@@ -909,10 +914,19 @@ def _selftest():
         # autocorrélation maximale au lag 0 — un `bandpass()` ajouté par erreur entre l'extraction
         # et le scorage laisse donc le PIC exactement au même échantillon. Or `ErrPModel` filtre
         # déjà en interne (composition sur `core.p300_decoder.build_pipe`). La SEULE assertion qui
-        # ferme ce trou compare `rt._derniere_epoque` — ce que le runtime a RÉELLEMENT envoyé au
-        # modèle — au CONTENU de la tranche brute du tampon, échantillon par échantillon.
+        # ferme ce trou compare `rt._derniere_epoque_scoree` — ce que le runtime a RÉELLEMENT
+        # envoyé au modèle — au CONTENU de la tranche brute du tampon, échantillon par échantillon.
         #
-        # Un pic d'amplitude unique planté à un instant CONNU, dans un tampon par ailleurs nul.
+        # ⚠️ Correction de revue (tâche 5, tour 1) : la fixture d'origine plantait 42.0 IDENTIQUE
+        # sur les 8 voies. Une valeur RÉPÉTÉE rend `np.array_equal` aveugle à un échange de deux
+        # colonnes (deux voies interverties restent, valeur pour valeur, la tranche attendue) —
+        # le test tenait sa promesse sur la position, la forme et l'absence de traitement, PAS sur
+        # l'ordre des voies, malgré ce que son propre message affirmait déjà. Une valeur DISTINCTE
+        # par voie referme ce trou (preuve rouge-puis-vert : rapport de tâche 5, tour de
+        # correction 1).
+        #
+        # Un pic planté à un instant CONNU, une valeur DISTINCTE par voie (pas un scalaire répété,
+        # cf. ⚠️ ci-dessus) dans un tampon par ailleurs nul.
         fs = 250.0
         n_pre, n_post = int(round(ERRP_PRE_S * fs)), int(round(ERRP_EPOCH_S * fs))
         t0 = 1000.0
@@ -920,17 +934,21 @@ def _selftest():
         eeg = np.zeros((len(ts), 8))
         instant = t0 + 2.0
         i_pic = int(np.searchsorted(ts, instant))
-        eeg[i_pic, :] = 42.0          # une valeur qu'aucun calcul ne produit par hasard
+        eeg[i_pic, :] = np.arange(1, 9) * 10.0   # 10, 20, ..., 80 : une valeur PAR VOIE, qu'aucun
+        #                                           calcul ne produit ni par hasard ni par permutation
 
         moteur.recent, moteur.recent_ts = eeg, ts
         rt._traiter_feedback(moteur, instant, lsl_ts=instant)
 
-        # UNE assertion qui épingle position, forme, ordre des voies ET absence de traitement.
-        chk(np.array_equal(rt._derniere_epoque, eeg[i_pic - n_pre:i_pic + n_post]),
+        # UNE assertion qui épingle position, forme, ordre des voies ET absence de traitement — les
+        # QUATRE, désormais que la fixture est distincte par voie (cf. ⚠️ ci-dessus) : un échange de
+        # deux colonnes changerait le contenu comparé, `np.array_equal` deviendrait faux.
+        chk(np.array_equal(rt._derniere_epoque_scoree, eeg[i_pic - n_pre:i_pic + n_post]),
             "⚠️ ALIGNEMENT : l'époque constituée par le runtime est EXACTEMENT la tranche brute du "
             "tampon — même position, même forme, même ordre de voies, et AUCUN traitement appliqué "
-            "en chemin (un filtrage ajouté ici laisserait le pic au même échantillon et passerait "
-            "une assertion de position)")
+            "en chemin (un filtrage ajouté ici laisserait le pic au même échantillon, un échange de "
+            "deux voies laisserait passer une fixture à valeur unique répétée — ni l'un ni l'autre "
+            "ne passe celle-ci, à valeur distincte par voie)")
 
         # --- ⚠️ PREUVE ROUGE-PUIS-VERT (tour de correction 1) : repos et époque doivent être
         # mesurés sur la MÊME représentation ---------------------------------------------------

@@ -1250,7 +1250,10 @@ def _selftest():
         eeg = np.zeros((len(ts), 8))
         instant_du_pic = t0 + 2.0
         i_pic = int(np.searchsorted(ts, instant_du_pic))
-        eeg[i_pic, :] = 42.0                      # une valeur qu'aucun calcul ne produit par hasard
+        eeg[i_pic, :] = np.arange(1, 9) * 10.0    # une valeur DISTINCTE par voie (10, 20, ..., 80) —
+        # PAS un scalaire répété : une valeur unique sur les 8 voies laisserait passer un échange de
+        # deux voies (`np.array_equal` resterait vrai), cf. le commentaire plus bas (correction de
+        # revue, tâche 5 ErrP, tour 1 — même fixture trop généreuse trouvée ici et dans errp.py)
 
         epoque = epoch_from_stream(eeg, ts, instant_du_pic, fs,
                                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
@@ -1262,7 +1265,7 @@ def _selftest():
             f"⚠️ ALIGNEMENT : le pic planté à l'onset se retrouve à l'échantillon {position}, "
             f"il devait être à {n_pre} (décalage de {position - n_pre} échantillons = "
             f"{(position - n_pre) / fs * 1000:+.0f} ms)")
-        chk(abs(epoque[n_pre, 0] - 42.0) < 1e-9,
+        chk(abs(epoque[n_pre, 0] - 10.0) < 1e-9,   # voie 0 = 1 * 10.0, cf. la fixture par voie ci-dessus
             f"et c'est bien LA valeur plantée qu'on retrouve ({epoque[n_pre, 0]})")
 
         # Le même test, décalé d'une demi-période d'échantillonnage : un marqueur ne tombe jamais
@@ -1307,8 +1310,10 @@ def _selftest():
         # donc cet autotest sans un mot, la panne exacte contre laquelle ce projet a écrit un
         # garde dédié pour le Motor Imagery (« bruit à p=0,99 »). Une correction de ligne de base
         # ou une conversion d'unité passaient de même. Comparer à la TRANCHE BRUTE attendue
-        # épingle d'un coup la position, la forme, l'ordre des voies ET l'absence de tout
-        # traitement : ce que le runtime empile doit être l'EEG, tel quel.
+        # épingle d'un coup la position, la forme, ET l'absence de tout traitement — et, la fixture
+        # plantant une valeur DISTINCTE par voie (pas un scalaire répété, cf. plus haut, trouvé en
+        # revue tâche 5 ErrP tour 1), l'ORDRE des voies aussi : ce que le runtime empile doit être
+        # l'EEG, tel quel.
         attendue = eeg[i_pic - n_pre:i_pic + n_post]
         chk(rt._epoques and rt._epoques[-1].shape == (n_pre + n_post, 8),
             f"l'époque construite par le runtime a exactement la FORME attendue "
