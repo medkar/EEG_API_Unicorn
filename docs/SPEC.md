@@ -194,7 +194,7 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 | **Motor Imagery** | endogène | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}` — **implémenté** (2026-07-30). ⚠️ `intent_index = -1` (« le vote glissant n'a pas conclu ») et l'indice de **REPOS** (« le modèle a décidé que la personne se repose ») sont **deux choses différentes** : pour une application, c'est la différence entre « attends » et « arrête ». Les voies sont dérivées des **classes du modèle chargé**, pas d'une liste figée. Métadonnées : `decision_scale = "proba"`, plus le seuil et les paramètres du vote. ⚠️ Exige un **modèle entraîné par personne** ; le mode refuse de démarrer sans, en le disant. Mesuré honnêtement (validation croisée groupée par essai, 1 personne, 1 séance) : **63 % en gauche-vs-droite** (hasard 50 %, p = 0,038), 40 % à trois classes (hasard 33 %, non significatif). Démonstrateur, pas pilotage fin. |
 | **P300** | évoqué | `{target_index, confidence, n_flashes, score_0…score_5}` — **implémenté** (2026-08-17). Événementiel : **un échantillon par manche**, pas un débit régulier — un client qui attend 5 Hz attend pour rien. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** ; les métadonnées portent `no_decision_index` pour qu'un client non-Python puisse le lire sans ouvrir le code. `confidence` = log-odds moyens du gagnant : non bornés, non comparables entre personnes, d'où `decision_scale = "logodds"` dans les métadonnées. ⚠️ **Seul mode qui exige des MARQUEURS ENTRANTS** : l'application externe affiche les flashs et déclare l'onset de chacun — contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration dans l'appli pygame ; AUC mesurée 0,71 en validation croisée par manche, 1 personne, 1 séance). |
 | **Neuro-monitoring** | passif | `{charge, somnolence, engagement, artifact}` — **implémenté** (2026-07-27). z relatifs à un repos mesuré **en début de mode, pour cet utilisateur, ce jour-là** : les valeurs ne se comparent ni entre personnes, ni entre séances, et n'ont aucun sens absolu. `artifact = 1` republie les derniers z valides plutôt que des indices calculés sur un clignement — ceux-ci seraient plausibles, donc indétectables en aval. ⚠️ Plomberie testée, **contenu jamais validé sur casque**. |
-| **ErrP** | évoqué | `{error: bool, score}` (événementiel, sur marqueur « feedback ») |
+| **ErrP** | passif | `{error, score, threshold, artifact}` — **implémenté** (2026-08-19). Un échantillon par marqueur `feedback`, cadence irrégulière. ⚠️ `error = -1` signifie « pas de verdict » (époque hors tampon, ou rejetée pour artefact — un clignement au moment où la machine se trompe est le cas FRÉQUENT), **jamais** « pas d'erreur ». ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré** (`tnr_target`, `tpr_measured`, `tnr_measured`) : au réglage par défaut ce détecteur attrape **une erreur sur deux** et annule une bonne commande sur sept — une application qui lit `error = 1` doit pouvoir le savoir sans lire le code. Le seul réglage est un **taux** (« quelle part des bonnes commandes garder »), dont le moteur déduit le seuil sur les scores hors-pli de la calibration de la personne. ⚠️ **Le moteur PUBLIE, il n'annule rien** : la période réfractaire et la décision d'annuler appartiennent au client. Mesuré honnêtement (CV groupée par bloc, 200 essais, 1 personne, 1 séance) : **AUC 0,776, p = 0,0099 sur 100 permutations** — le mieux validé des modes, devant le P300 (0,714). |
 | **c-VEP** | évoqué | `{target_index, confidence}` — **stimulus natif au MVP** |
 
 Chaque mode publie **une intention neutre** (quelle cible / quelle classe / quel état), jamais une commande
@@ -481,8 +481,24 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
      **identique bit pour bit** à celle de juillet. Conception :
      [docs/superpowers/specs/2026-08-17-marqueurs-entrants-p300-design.md](superpowers/specs/2026-08-17-marqueurs-entrants-p300-design.md).
      Contrat public des marqueurs : [docs/markers.md](markers.md).
-     - **[à faire]** l'**ErrP** réutilisera ce tuyau sans rien redécouvrir, mais il traîne une dette
-       propre : sa calibration réelle n'a jamais été faite, donc ses verdicts ne sont pas fiables.
+     - **[fait 2026-08-19 — chantier « l'ErrP sur le réseau »]** l'**ErrP est publié**
+       (`--mode errp` → `decoded_errp`), **5e mode sur 6**. Le tuyau des marqueurs a été réutilisé
+       sans rien redécouvrir : il a suffi d'ajouter un événement au contrat public.
+       ⚠️ **La dette qu'on croyait ouverte ne l'était pas** : la calibration réelle DATAIT du
+       2026-07-24 et son résultat n'avait jamais été lu. Ré-entraîné depuis les époques conservées :
+       **AUC 0,776 en validation croisée groupée par bloc, p = 0,0099 sur 100 permutations** — le
+       mieux validé de tous les décodeurs du projet. ⚠️ Mais le point de fonctionnement est
+       **modeste** : une erreur sur deux attrapée pour une bonne commande sur sept annulée, et il
+       n'y a pas de repas gratuit sur la courbe. C'est pourquoi **le flux publie son propre point de
+       fonctionnement** dans ses métadonnées : sans ça une application lirait `error = 1` comme un
+       verdict. Conception :
+       [docs/superpowers/specs/2026-08-18-errp-moteur-design.md](superpowers/specs/2026-08-18-errp-moteur-design.md).
+       - **[à faire]** la **calibration ErrP jouée par le moteur** : elle reste dans l'appli pygame,
+         donc un étudiant doit y passer avant que le moteur puisse décoder. Même décision que pour
+         le P300.
+       - **[à faire]** une **seconde personne mesurée**. Tous les chiffres de ce mode viennent d'une
+         personne et d'une séance ; le jour où une deuxième est mesurée, ils deviendront une moyenne
+         au lieu d'un point.
      - **[à faire]** la **calibration P300 jouée par le moteur** (évolution F2, §13) : elle reste
        dans l'appli pygame, donc un étudiant doit y passer avant que le moteur puisse décoder.
      - **[à faire]** le **control plane** (commandes JSON entrantes, §12.1) reste entier : ce

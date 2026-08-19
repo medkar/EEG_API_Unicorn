@@ -346,6 +346,35 @@ python src/research/p300_stimulus.py --windowed
 > dans l'appli pygame. C'est le comportement attendu sur un dépôt fraîchement cloné (`data/` est
 > gitignoré), pas une panne.
 
+### 1.15 — L'ErrP : le 5e mode, sans casque
+
+Même montage qu'au 1.14, autre mode. Le décodage sera du hasard en synthétique — ce qu'on vérifie,
+c'est que le tuyau porte le second paradigme sans qu'on ait rien redécouvert.
+
+```bash
+# terminal 1
+python src/core/server.py --synthetic --mode errp
+# terminal 2
+python src/research/errp_stimulus.py --windowed
+```
+
+- [ ] Le moteur passe par **15 s de chauffe puis 8 s de repos** avant de décoder, et annonce le σ
+      par voie qu'il a mesuré. C'est sa référence de rejet d'artefact — sans elle, pas de décodage.
+- [ ] Il dit avoir **jeté** les marqueurs reçus pendant cette attente, en les comptant. C'est voulu :
+      l'offset du casque dérive encore, ces époques ne valent rien.
+- [ ] Un point avance sur une piste, se trompe délibérément environ une fois sur trois, et affiche
+      son résultat une seconde.
+- [ ] À chaque résultat affiché, **un échantillon sort** sur `decoded_errp` — vérifiable avec
+      `python -u examples/receiver.py --stream decoded_errp`. Y compris quand le moteur ne peut pas
+      juger : il publie alors `error = -1`, jamais `0`.
+- [ ] Sur la page ErrP de la console, le verdict s'affiche **avec le score et le point de
+      fonctionnement**, pas comme une sentence. Et « pas de verdict » se distingue visuellement de
+      « pas d'erreur ».
+
+> ⚠️ **Le réglage « Bonnes commandes gardées » n'est pas décoratif.** Mets-le à 0,95 puis à 0,70 et
+> regarde le seuil changer dans le terminal : c'est le compromis, et il est raide — garder 95 % des
+> bonnes commandes ne laisse attraper qu'une erreur sur quatre.
+
 ---
 
 ## Niveau 2 — au casque
@@ -523,6 +552,45 @@ python -u examples/receiver.py --stream decoded_p300
 > ⚠️ **Ne conclus rien sur une seule manche.** Six essais, c'est déjà peu ; ce projet a pour règle
 > de ne jamais conclure sur du bruit. Si tu veux un chiffre, il faut un protocole, pas une
 > impression.
+
+### 2.8 — ErrP : le moteur voit-il que la machine s'est trompée ?
+
+⚠️ **Lis ceci avant de commencer, sinon tu vas mal interpréter ce que tu vois.**
+
+Ce détecteur, au réglage par défaut, **attrape une erreur sur deux** et annule une bonne commande
+sur sept. Ce n'est pas un défaut de réglage : c'est ce que vaut un ERP mono-essai sur ce matériel,
+mesuré honnêtement (AUC 0,776, p = 0,0099 sur 100 permutations, 200 essais, une personne).
+
+**Donc : ne conclus rien d'un essai, ni de dix.** Sur dix erreurs délibérées, en attraper cinq est
+le résultat *attendu*. En attraper huit ou deux tient dans le bruit.
+
+Il faut un modèle entraîné. Si tu n'en as pas sur ce poste, calibre d'abord dans l'appli pygame
+(menu → ErrP → Calibrer, ~200 essais), puis **ferme-la** avant de lancer le moteur.
+
+```bash
+# terminal 1
+python src/core/server.py --mode errp
+# terminal 2
+python src/research/errp_stimulus.py
+# terminal 3
+python -u examples/receiver.py --stream decoded_errp
+```
+
+- [ ] Regarde la piste et laisse-toi surprendre par les erreurs — **ne les anticipe pas**. L'ErrP
+      est une réaction à une surprise ; si tu sais que la machine va se tromper, il n'y a plus rien
+      à détecter.
+- [ ] Compte tes erreurs délibérées et les `error = 1` publiés. **Vise l'ordre de grandeur, pas le
+      score.**
+- [ ] Regarde le taux de rejet d'artefact dans l'état du moteur. **S'il dépasse 50 %, le moteur le
+      dit** — et ça veut dire que le contact s'est dégradé ou que tu bouges, pas que le décodeur est
+      cassé.
+- [ ] Change « Bonnes commandes gardées » de 0,85 à 0,70 et refais une série : tu devrais attraper
+      plus d'erreurs, et annuler plus de bonnes commandes. C'est le compromis, en vrai.
+
+> ⚠️ **Un point ouvert que ce test peut trancher** : la référence de rejet d'artefact est mesurée
+> sur du signal BRUT après 15 s de chauffe, et ce délai n'a jamais été vérifié pour cet usage
+> précis — il est hérité du SSVEP. Si le taux de rejet est anormalement haut dès le début de séance
+> et redescend ensuite, c'est que la chauffe est trop courte. **Note-le, c'est une mesure utile.**
 
 ---
 

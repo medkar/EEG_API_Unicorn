@@ -25,8 +25,8 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
-- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès aux **2 modes
-  que le moteur ne sait pas faire** : c-VEP et ErrP. Le SSVEP, le neuro, le **Motor Imagery** et
+- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès au **dernier
+  mode que le moteur ne sait pas faire** : le c-VEP. Le SSVEP, le neuro, le **Motor Imagery**, l'**ErrP** et
   le **P300** sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
   « Calibrer » sur sa page joue la séance et affiche un modèle horodaté avec son accuracy honnête.
   Les anciens écrans pygame du MI (calibration, pilotage) sont **archivés**, pas supprimés, dans
@@ -84,6 +84,9 @@ couvre entièrement :
 python src/core/markers.py                 # l'oreille du moteur : résolution PAR NOM, time_correction
 python src/core/p300_models.py             # les modèles P300 : refus des hérités, tri par date
 python src/core/modes/p300.py              # le mode : ALIGNEMENT des époques, abandon de manche, appariement score↔cible
+python src/core/errp_models.py             # les modèles ErrP : refus des hérités ET des calibrations dégénérées
+python src/core/modes/errp.py              # le mode ErrP : ALIGNEMENT, rejet d'artefact, MONOTONIE du réglage
+python src/research/errp_stimulus.py --smoke  # l'émetteur ErrP : piste, erreurs délibérées, horodatage au flip
 python src/research/p300_stimulus.py --smoke  # la séquence de flashs : chaque cible vue `reps` fois
 ```
 

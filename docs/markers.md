@@ -9,7 +9,12 @@ This page is the contract for telling it. It is public: once your code sends the
 will not change their shape under you.
 
 > **You do not need this page for SSVEP, neuro, or Motor Imagery.** Those decode continuously and
-> need nothing from you. This is for the paradigms locked to a stimulus — P300 today, ErrP later.
+> need nothing from you. This is for the paradigms locked to a stimulus — **P300 and ErrP**.
+
+**Two decoders read this stream, and they are not alike.** P300 answers *which of six targets you
+chose*, once per round of flashes. ErrP answers *did the machine just get it wrong*, once per
+feedback you display. They share the transport and nothing else: different events, different
+streams, different guarantees. Read the section for the one you need.
 
 ## The stream you publish
 
@@ -33,7 +38,7 @@ If two emitters publish under the same name, the engine says so and names the on
 everyone uses the default name and LSL reaches across the whole network, this is worth reading in
 a classroom: your engine can otherwise epoch on your neighbour's flashes.
 
-## The two events
+## P300 — the two events
 
 Each sample is one JSON object. Verbose on purpose: you should be able to read the stream in a
 terminal and understand it without this page.
@@ -67,6 +72,29 @@ the engine still publishes a confident, plausible target.
 `mode` says which decoder the marker is for. A marker addressed to another mode is ignored in
 silence — that is the only silent rejection in the whole pipeline, and it is normal. Unknown fields
 are kept, not refused, so the protocol can grow without breaking emitters that already exist.
+
+## ErrP — one event
+
+Simpler than the P300: no target, no round. One marker each time you **show the user a result**.
+
+```json
+{"mode": "errp", "event": "feedback"}
+```
+
+The engine cuts an epoch from −200 ms to +700 ms around it and answers: did the brain react as it
+does when a machine gets something wrong.
+
+**Send it for every feedback, not only the ones you think are wrong.** You are not labelling —
+you are asking. The engine has no idea which of your commands was correct, and that is the point.
+
+⚠️ **Two feedbacks closer together than 0.9 s produce overlapping epochs**, so the same ErrP can be
+scored twice. That is a property of the signal, not a bug we hide: the engine publishes both
+verdicts and lets you decide. If your protocol can display results that fast, space them or expect
+the duplication.
+
+**The refractory period is yours, not ours.** After a detected error you probably want to ignore
+the next second or so — that decision belongs to your application, which knows its own command
+cadence. The engine publishes what it sees and never cancels anything.
 
 ## Where you take the timestamp — the one thing that matters
 
@@ -183,6 +211,8 @@ public class P300MarkerSender : MonoBehaviour
 
 ## What you get back
 
+### From the P300
+
 The engine publishes one sample per `round_end`, on `EEG_API_Unicorn_decoded_p300`:
 
 | channel | meaning |
@@ -252,13 +282,50 @@ Three places, so that "watch whether this number climbs" is something you can re
 `connecte` is the one to look at first. If it is `false` while your emitter is running, nothing
 else in this table will ever move — the engine is not hearing you at all.
 
+### From the ErrP
+
+One sample per `feedback`, on `EEG_API_Unicorn_decoded_errp`:
+
+| channel | meaning |
+|---|---|
+| `error` | `1` an error was detected · `0` nothing · **`-1` no verdict** |
+| `score` | log-odds of "error" — unbounded, not comparable between people |
+| `threshold` | the current decision threshold |
+| `artifact` | `1` if the epoch was rejected |
+
+⚠️ **`-1` is not `0`.** It means the engine could not judge — the epoch fell outside the buffer, or
+was rejected because the signal moved too much. A blink at the exact moment a machine gets
+something wrong is the *common* case, not the rare one, so this happens. Publishing `0` there would
+claim there was no error when nothing was seen.
+
+⚠️ **Read the operating point before you trust `error = 1`.** The stream carries it, under
+`decoding/`: `tnr_target` (what was asked), `tpr_measured` and `tnr_measured` (what it actually
+achieves), plus `calibration_epochs` and `measured_on`. At the default setting this detector
+**catches one error in two, and cancels one good command in seven**. That is a useful hint and a
+terrible verdict. Design accordingly.
+
+The trade-off is real and there is no free lunch anywhere on it — measured on the reference
+session, 200 trials, one person:
+
+| you keep this share of good commands | you catch this share of errors |
+|---|---|
+| 96 % | 24 % |
+| 91 % | 40 % |
+| **85 %** *(default)* | **50 %** |
+| 81 % | 60 % |
+| 70 % | 71 % |
+
+You choose where to sit with the **Bonnes commandes gardées** setting on the ErrP page. You ask for
+a rate, not a threshold — the engine derives the threshold from your own calibration.
+
 ## Before any of this works: a trained model
 
-P300 is not SSVEP. It needs a model **of your own brain** — someone else's gives plausible, wrong
-answers, which is the worst of both worlds. Record one with:
+Neither of these is SSVEP. Both need a model **of your own brain** — someone else's gives
+plausible, wrong answers, which is the worst of both worlds. Record one with:
 
 ```bash
 python src/research/app.py     # menu -> P300 -> Calibrer
+python src/research/app.py     # menu -> ErrP  -> Calibrer
 ```
 
 Each calibration writes a **new, timestamped** file (`data/p300_model_20260818_101500.joblib`); it

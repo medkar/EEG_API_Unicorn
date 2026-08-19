@@ -42,7 +42,15 @@ python src/core/server.py --mode neuro                # passive: no stimulus, no
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
 
-Four published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
+**ErrP is passive and the most easily misread**: it does not answer a question you asked, it reports
+that the user's brain reacted the way brains react when a machine gets something wrong. Your
+application tells the engine when it showed a result; the engine answers per result. ⚠️ At the
+default setting it **catches one error in two and cancels one good command in seven** — the stream
+publishes that operating point in its own metadata precisely so a client cannot mistake it for a
+verdict. It is the best-validated decoder here on honest cross-validation (AUC 0.776, permutation
+p = 0.0099) and still only that good, which is what a single-trial ERP costs.
+
+Five published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
 a target, there is a right answer, and your application must render the flickering stimulus. **Motor
 Imagery is active** too, but it decodes an imagined movement — no stimulus to render, and a model
 trained per person (its own section below). **P300 is active and the most demanding**: your
@@ -180,6 +188,7 @@ in [`examples/unity/`](examples/unity/), for SSVEP. Two machines: see
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
+| `EEG_API_Unicorn_decoded_errp` | `{error, score, threshold, artifact}`, one sample per feedback |
 
 The stimulus is **not** rendered by the engine: your application flickers the targets and declares
 their frequencies (`--refresh` or `--freqs`). A mismatch fails silently — the decoder correlates

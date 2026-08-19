@@ -13,7 +13,7 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    ⚠️ `p300_stimulus.py` est l'exception qui confirme la règle : il n'ouvre PAS le casque, il
    ne fait qu'AFFICHER et publier ses marqueurs. C'est ce qui permet de le lancer en même temps
    que le moteur, dans deux terminaux — comme `ssvep_stimulus.py`.
-2. **Les décodeurs des modes** — `cvep_*`, `errp_decoder`. Ce sont eux qui migreront vers
+2. **Les décodeurs des modes** — `cvep_*` seulement, désormais. Ce sont eux qui migreront vers
    `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le 2026-07-27,
    `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
    2026-08-17 : tous trois vivent maintenant dans `core`.
