@@ -22,8 +22,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CH_NAMES, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E402
                     CVEP_CHANNELS, CVEP_LAG_ROTATION, CVEP_MODEL_PATH, cvep_lag_gap_ms)
-from research.cvep_code import build_targets, is_on  # noqa: E402
-from research.cvep_decoder import CVEPModel  # noqa: E402
+from core.cvep_code import build_targets, is_on  # noqa: E402
+from core.cvep_decoder import CVEPModel  # noqa: E402
 from research.itr import itr  # noqa: E402
 from research.ui import BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 

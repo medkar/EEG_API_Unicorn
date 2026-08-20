@@ -19,7 +19,7 @@ donc la réponse au code à partir de l'indice `p + lag`.
 elle est présente à la calibration comme en ligne, donc elle s'annule. C'est pour ça que la
 calibration et le pilotage DOIVENT utiliser la même chaîne d'alignement.
 
-    python src/research/cvep_decoder.py     # validation sur c-VEP synthétique (aucun casque)
+    python src/core/cvep_decoder.py     # validation sur c-VEP synthétique (aucun casque)
 """
 
 import os
@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
                     CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MODEL_PATH, FS_UNICORN,
                     use_utf8_console)
-from research.cvep_code import build_targets, m_sequence  # noqa: E402
+from core.cvep_code import build_targets, m_sequence  # noqa: E402
 
 
 def bandpass(x, fs, band=CVEP_BAND, order=4):
@@ -296,6 +296,55 @@ def _demo(n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=10, n_test=40, seed=0):
     return True
 
 
+def _selftest():
+    """Le modèle SURVIT au déménagement dans `core/` — LE test de cette tâche.
+
+    Le P300 et l'ErrP ont perdu leur modèle à ce même déménagement : leur `.joblib` est un
+    pickle qui référence le module `research.p300_decoder` / `research.errp_decoder`, disparu
+    une fois le fichier déplacé — il a fallu ré-entraîner deux fois. `CVEPModel.save` écrit du
+    `np.savez` de tableaux purs, sans nom de classe : il DEVRAIT survivre. Ce test transforme ce
+    « devrait » en fait mesuré, avant que le fichier ne bouge.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # Le modèle SURVIT au déménagement — la question qui a coûté deux ré-entraînements.
+    # On écrit un modèle, on le relit, et on vérifie que les tableaux sont identiques BIT
+    # POUR BIT. Pas de pickle ici (np.savez de tableaux purs), donc aucun nom de module
+    # n'est gravé dans le fichier : c'est ce qui rend `core.cvep_decoder` capable de relire
+    # ce que `research.cvep_decoder` avait écrit.
+    import os as _os
+    import tempfile as _tf, shutil as _sh
+    tmp = _tf.mkdtemp(prefix="cvep_selftest_")
+    try:
+        m = CVEPModel(fs=250.0, refresh=60.0, code_len=63, band=CVEP_BAND, channels=[4, 5, 6, 7])
+        m.w = np.arange(4, dtype=float) * 1.5
+        m.template = np.arange(63, dtype=float) / 7.0
+        m.cv_ = 0.87
+        chemin = m.save(_os.path.join(tmp, "cvep_model.npz"), n_targets=6)
+        relu = CVEPModel.load(chemin)
+        chk(np.array_equal(relu.w, m.w) and np.array_equal(relu.template, m.template),
+            "un modèle écrit puis relu rend les MÊMES tableaux, bit pour bit")
+        chk(relu.channels == [4, 5, 6, 7] and relu.code_len == 63 and relu.n_targets == 6,
+            f"...et ses métadonnées ({relu.channels}, {relu.code_len}, {relu.n_targets})")
+        chk("cvep_decoder" not in open(chemin, "rb").read(2048).decode("latin-1"),
+            "le fichier ne contient AUCUN nom de module — c'est ce qui le rend déplaçable")
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    print(f"[cvep-decoder] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
 if __name__ == "__main__":
     use_utf8_console()
     _demo()
+    # `sys.exit(0 si … sinon 1)`, comme `p300_decoder.py` et `errp_decoder.py` : avant ce test,
+    # `_demo()` s'exécutait sans que son résultat ne soit vérifié, donc ce fichier sortait
+    # TOUJOURS en 0 — un décodeur cassé aurait quand même passé pour vert. `_selftest()` est ce
+    # qui rend cette sortie honnête.
+    sys.exit(0 if _selftest() else 1)

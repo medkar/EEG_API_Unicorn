@@ -16,7 +16,7 @@ Coût : il faut une calibration (le SSVEP par CCA, lui, n'en demande aucune).
 Référence : Bin et al. 2011, "A high-speed BCI based on code modulation VEP",
 J. Neural Eng. 8(2):025015. https://doi.org/10.1088/1741-2560/8/2/025015
 
-    python src/research/cvep_code.py        # autotest des propriétés du code (aucun écran requis)
+    python src/core/cvep_code.py            # autotest des propriétés du code (aucun écran requis)
 """
 
 import os

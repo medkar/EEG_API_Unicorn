@@ -29,7 +29,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import CVEP_BAND, DATA_DIR, use_utf8_console  # noqa: E402
-from research.cvep_decoder import CVEPModel, bandpass  # noqa: E402
+from core.cvep_decoder import CVEPModel, bandpass  # noqa: E402
 from research.itr import itr as _itr  # noqa: E402
 
 DEFAULT_FILE = os.path.join(DATA_DIR, "cvep_calib_last.npz")

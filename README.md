@@ -268,7 +268,7 @@ does not publish them yet, so they are not part of what students consume and may
 |---|---|
 | pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five modes) · `ui.py` · `viewing.py` |
 | Stimulus emitters — **open no headset**, meant to run *beside* the engine in a second terminal | `ssvep_stimulus.py` · [`p300_stimulus.py`](src/research/p300_stimulus.py) (publishes markers, see [`docs/markers.md`](docs/markers.md)) |
-| Mode decoders — the migration candidates | `cvep_decoder` · `cvep_code` (`p300_decoder` and `errp_decoder` have moved to `core/`) |
+| Mode decoders — the migration candidates | `cvep_rcca` (`cvep_decoder`, `cvep_code`, `p300_decoder` and `errp_decoder` have moved to `core/`) |
 | Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
@@ -292,10 +292,10 @@ python src/core/neuro_monitor.py         # spectral indices on synthetic EEG
 python src/core/errp_decoder.py          # ErrP pipeline on synthetic error potentials
 python src/core/errp_models.py           # ErrP models: legacy refused, degenerate refused, newest first
 python src/core/modes/errp.py            # the ErrP mode: epoch alignment, artifact rejection, threshold monotonicity
+python src/core/cvep_code.py             # m-sequence properties (balance, autocorrelation, lags)
+python src/core/cvep_decoder.py          # c-VEP accuracy vs SNR on synthetic responses, model round-trip
 
 python src/research/app.py --smoke       # whole app headless: menu + every mode + calibrations
-python src/research/cvep_code.py         # m-sequence properties (balance, autocorrelation, lags)
-python src/research/cvep_decoder.py      # c-VEP accuracy vs SNR on synthetic responses
 python src/research/errp_stimulus.py --smoke  # ErrP marker emitter: track, deliberate errors, stamped at flip
 python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
 python src/research/itr.py               # information transfer rate — common yardstick

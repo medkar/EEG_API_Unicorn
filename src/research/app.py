@@ -430,8 +430,8 @@ def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz
 
 
 def mode_cvep(app, model_path=CVEP_MODEL_PATH):
-    from research.cvep_code import build_targets, is_on as cvep_on
-    from research.cvep_decoder import CVEPDecoder, CVEPModel
+    from core.cvep_code import build_targets, is_on as cvep_on
+    from core.cvep_decoder import CVEPDecoder, CVEPModel
 
     if not os.path.exists(model_path):
         app.flash("Pas de modèle c-VEP",
@@ -482,7 +482,7 @@ def mode_cvep(app, model_path=CVEP_MODEL_PATH):
 def mode_cvep_rcca(app, model_path=CVEP_RCCA_MODEL_PATH):
     """2e variante c-VEP : CODES DISTINCTS (Gold) décodés par reconvolution (rCCA, pyntbci).
     Réutilise _cvep_decode (interface classify(window, phase) identique à l'eCCA)."""
-    from research.cvep_code import is_on as cvep_on
+    from core.cvep_code import is_on as cvep_on
     from research.cvep_rcca import RCCADecoder, RCCAModel, build_targets_rcca
 
     if not os.path.exists(model_path):

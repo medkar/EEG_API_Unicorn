@@ -14,11 +14,12 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    ils n'ouvrent PAS le casque, ils ne font qu'AFFICHER et publier leurs marqueurs. C'est ce
    qui permet de les lancer en même temps que le moteur, dans deux terminaux — comme
    `ssvep_stimulus.py`.
-2. **Les décodeurs des modes** — `cvep_*` seulement, désormais. Ce sont eux qui migreront vers
-   `core` quand leur mode sera publié — `neuro_monitor` a fait le trajet le 2026-07-27,
+2. **Les décodeurs des modes** — `cvep_rcca` seulement, désormais. `cvep_code` et `cvep_decoder`
+   ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le 2026-07-27,
    `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
-   2026-08-17, `errp_decoder` (avec `errp_models`) le 2026-08-18 : tous quatre vivent
-   maintenant dans `core`.
+   2026-08-17, `errp_decoder` (avec `errp_models`) le 2026-08-18 : cinq décodeurs vivent
+   maintenant dans `core`. `cvep_rcca` reste ici — c'est la variante à CODES DISTINCTS (rCCA),
+   jamais publiée, gardée en exploration (voir sa docstring : réfutée face à l'eCCA).
 3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
    `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
 4. **Les analyses hors ligne** — `*_analyze.py`, `ssvep_guided.py`, `mi_compare.py`, `itr.py` :

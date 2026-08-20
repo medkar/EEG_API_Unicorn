@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_RCCA_CORR_MIN,  # noqa: E402
                     CVEP_RCCA_ENC, CVEP_RCCA_EVENT, CVEP_RCCA_MARGIN,
                     CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
-from research.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
+from core.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
 
 
 def make_distinct_codes(n, seed_offset=0):
