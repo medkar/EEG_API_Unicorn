@@ -262,12 +262,16 @@ def seuils_hors_pli(oof_scores, oof_y, garde=0.95, n_min=SEUILS_N_MIN):
     en **garde `garde`** (95 % par défaut), `margin` le quantile qui garde la même proportion de
     leurs écarts gagnant-second.
 
-    ⚠️ **Ce que ce réglage fait, et ce qu'il ne fait pas.** Il cale sur « ne pas rater ce qui est
-    bon » — le c-VEP n'a pas de coût asymétrique comme l'ErrP, où manquer une erreur et en inventer
-    une n'ont pas le même prix. Il ne sépare PAS les essais corrects des incorrects : mesuré sur le
-    seul jeu réel disponible, les deux distributions se recouvrent presque entièrement. Ce qui
-    protège contre « personne ne fixe » est le vote glissant, pas ce plancher. Les chiffres et
-    leurs conséquences mesurées sont dans `core/config.py`, à côté des constantes.
+    ⚠️ **C'est un critère de SENSIBILITÉ, et ce n'est PAS lui qui a fixé les seuils livrés.** Il
+    répond à « quel plancher ne me fait rater aucun bon essai ? » — pas à « quel plancher rejette le
+    bruit ? », qui est le travail réel d'un seuil de décision ici. Mesuré sur le seul jeu réel
+    disponible, les deux questions donnent des réponses très différentes, et celle-ci donne un
+    plancher SOUS le niveau du bruit (cf. `core/config.py`, où le choix est tranché et expliqué).
+    Cette fonction reste livrée et testée parce qu'elle chiffre une borne utile — le plus bas qu'on
+    puisse descendre sans perdre de bons essais — et parce que `--seuils` l'affiche à côté de
+    l'autre couple, pour que la comparaison n'ait pas à être refaite à la main.
+
+    Pour savoir ce qu'un couple de seuils FAIT réellement, c'est `point_de_fonctionnement`.
     """
     scores = np.asarray(oof_scores, dtype=float)
     y = np.asarray(oof_y, dtype=int)
@@ -283,19 +287,77 @@ def seuils_hors_pli(oof_scores, oof_y, garde=0.95, n_min=SEUILS_N_MIN):
     return (float(np.quantile(gagnant[bons], q)), float(np.quantile(ecart[bons], q)), n)
 
 
+def point_de_fonctionnement(oof_scores, oof_y, corr_min, margin):
+    """Ce qu'un couple de seuils FAIT, mesuré sur des scores hors-pli. Ne choisit rien, décrit.
+
+    Rend un dict de proportions dans [0, 1] :
+      `corrects_gardes`  — part des essais BIEN classés que les seuils laissent passer (sensibilité) ;
+      `emission`         — part de TOUS les essais sur lesquels le décodeur émettrait ;
+      `justesse_si_emis` — part d'essais justes PARMI ceux émis (None si rien n'est émis) ;
+      `n`, `n_corrects`  — de quoi juger si ces proportions veulent dire quelque chose.
+
+    ⚠️ Un seuil ne se choisit pas sur `corrects_gardes` seul — c'est l'erreur que ce chantier a
+    faite puis corrigée. Les trois chiffres se lisent ENSEMBLE : un seuil qui garde 88 % des bons
+    essais mais fait émettre sur 89 % du total avec 48 % de justesse ne filtre rien. Et il manque
+    ici le chiffre décisif, que des scores de calibration ne peuvent pas donner : la part de
+    fenêtres « personne ne fixe » qui passeraient. `--seuils` la mesure sur du bruit blanc ; seul
+    un enregistrement casque de repos yeux-ouverts la donnerait pour de vrai.
+    """
+    scores = np.asarray(oof_scores, dtype=float)
+    y = np.asarray(oof_y, dtype=int)
+    if scores.ndim != 2 or scores.shape[1] < 2 or len(y) != len(scores):
+        raise ValueError(f"scores hors-pli mal formés : {scores.shape} pour {len(y)} étiquettes")
+    ordre = np.sort(scores, axis=1)[:, ::-1]
+    gagnant, ecart = ordre[:, 0], ordre[:, 0] - ordre[:, 1]
+    bons = scores.argmax(axis=1) == y
+    # Exactement le test de `RCCADecoder.classify` — s'il divergeait, ce tableau décrirait un
+    # décodeur qui n'existe pas.
+    emis = (gagnant >= float(corr_min)) & (ecart >= float(margin))
+    return {
+        "corrects_gardes": float(emis[bons].mean()) if bons.any() else None,
+        "emission": float(emis.mean()),
+        "justesse_si_emis": float(bons[emis].mean()) if emis.any() else None,
+        "n": int(len(y)),
+        "n_corrects": int(bons.sum()),
+    }
+
+
 # --- Rejouer une calibration réelle (LECTURE SEULE) -------------------------
 
+def _part_de_bruit(modele, corr_min, margin, sigma, n=300, seed=0):
+    """Part des fenêtres de BRUIT PUR que ces seuils laisseraient passer — le chiffre décisif.
+
+    « Bruit pur » = du bruit blanc de même écart-type que les époques filtrées, la convention que
+    `cvep_decoder._demo` utilise déjà pour « regard nulle part ». ⚠️ C'est une APPROXIMATION du
+    vrai cas à rejeter (un EEG de repos yeux ouverts porte de l'alpha, pas du bruit blanc) : elle
+    donne un ordre de grandeur, pas une vérité. Le trancher pour de bon demande un enregistrement
+    casque de « la personne ne fixe rien », qui n'existe dans aucun fichier de ce dépôt.
+    """
+    rng = np.random.default_rng(seed)
+    passe = 0
+    for _ in range(n):
+        sc = np.sort(modele.scores(rng.normal(0.0, sigma, (modele.n_cyc, len(modele.channels))),
+                                   0, 1))[::-1]
+        passe += int(sc[0] >= corr_min and (sc[0] - sc[1]) >= margin)
+    return passe / float(n)
+
+
 def _rejouer(chemin):
-    """Rejoue un `cvep_calib_*.npz` à travers le rCCA et imprime les seuils qu'il implique.
+    """Rejoue un `cvep_calib_*.npz` à travers le rCCA et imprime CE QUE VALENT deux couples de
+    seuils : celui du quantile à 5 % (sensibilité) et celui qui est livré dans `config.py`.
 
     ⚠️ **Ce fichier n'est jamais modifié** : `data/` contient des enregistrements EEG d'une
     personne identifiable, sur un dépôt public. On lit, on calcule, on imprime.
 
     Cette commande existe parce que le projet s'est déjà fait avoir : les seuils de l'ErrP ont été
     posés par un script jetable et non versionné, et `errp_models.py` porte encore le regret de ne
-    pas pouvoir dire à un étudiant comment les refaire. Ici, la commande est la trace.
+    pas pouvoir dire à un étudiant comment les refaire. Ici, la commande est la trace — et elle
+    affiche les DEUX couples, pour que le prochain qui voudra rediscuter le choix n'ait pas à
+    refaire l'analyse pour savoir de quoi il parle.
     """
     from core.cvep_code import build_targets
+    from core.config import CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN
+    from core.cvep_decoder import bandpass as _bp
 
     d = np.load(chemin, allow_pickle=True)
     plan, _code = build_targets()
@@ -311,13 +373,23 @@ def _rejouer(chemin):
     print(f"[rcca] {os.path.basename(chemin)} : {len(y)} époques, {m.n_targets} cibles, "
           f"voies {voies}")
     print(f"[rcca] leave-one-out : {m.cv_*100:.1f} %  ({int(round(m.cv_*len(y)))}/{len(y)}, "
-          f"hasard {100/m.n_targets:.1f} %)")
+          f"hasard {100/m.n_targets:.1f} %)  —  {n_bons} essais corrects")
     if corr_min is None:
-        print(f"[rcca] seuils NON posés : {n_bons} essais corrects, moins que le plancher de "
-              f"{SEUILS_N_MIN} — un quantile à 5 % y vaudrait le minimum de l'échantillon.")
-        return True
-    print(f"[rcca] seuils sur {n_bons} essais corrects : CVEP_RCCA_CORR_MIN = {corr_min:.3f}  "
-          f"CVEP_RCCA_MARGIN = {margin:.3f}")
+        print(f"[rcca] quantile 5 % NON posé : {n_bons} essais corrects, moins que le plancher de "
+              f"{SEUILS_N_MIN} — il y vaudrait le minimum de l'échantillon.")
+
+    sigma = float(np.std([_bp(e, m.fs, m.band) for e in epochs]))
+    candidats = [(CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN, "LIVRÉS (config.py)")]
+    if corr_min is not None:
+        candidats.append((corr_min, margin, "quantile 5 % (sensibilité)"))
+    print(f"[rcca] {'seuils':>15s} | corrects gardés | émission | justesse si émis | bruit passé")
+    for c, mg, nom in candidats:
+        pf = point_de_fonctionnement(m.oof_scores_, m.oof_y_, c, mg)
+        just = "  —  " if pf["justesse_si_emis"] is None else f"{pf['justesse_si_emis']*100:4.0f} %"
+        print(f"[rcca] {c:6.3f} /{mg:6.3f} |{pf['corrects_gardes']*100:12.0f} % |"
+              f"{pf['emission']*100:7.0f} % |{just:>17s} |"
+              f"{_part_de_bruit(m, c, mg, sigma)*100:9.0f} %   ({nom})")
+    print("[rcca] ⚠️ une personne, une séance : ces chiffres ne valent que pour CE fichier.")
     return True
 
 
@@ -507,6 +579,56 @@ def _selftest():
     chk(_c is None and _m is None and n_court == 10,
         f"sous le plancher d'essais, AUCUN seuil n'est rendu — un quantile à 5 % sur 10 points "
         f"vaut son minimum ({_c}, {_m}, {n_court})")
+
+    # --- 4 bis. Ce qu'un couple de seuils FAIT. --------------------------------------------
+    # C'est CETTE fonction qui a fait changer d'avis sur les seuils livrés : le quantile à 5 %
+    # gardait 88 % des bons essais tout en faisant émettre sur 89 % du total, donc en ne filtrant
+    # rien. Un seuil ne se juge pas sur la sensibilité seule, et les trois chiffres doivent être
+    # calculés séparément — les confondre est exactement l'erreur qu'on vient de corriger.
+    #
+    # Jeu fabriqué pour que les trois proportions soient DEUX À DEUX DIFFÉRENTES (sinon une
+    # mutation qui rend l'une à la place de l'autre resterait verte) : 13 essais, 10 bien classés,
+    # et 3 mal classés qui passent TOUS — le cas dangereux, un seuil que le faux franchit mieux
+    # que le juste. ⚠️ Les deux essais `[0.50, 0.45]` sont là POUR la marge : ils ont un gagnant
+    # très au-dessus de `corr_min` et un écart en dessous de `margin`, donc seule la marge peut
+    # les refuser. Trouvé par analyse de mutation — sans eux, comparer `margin` au GAGNANT au lieu
+    # de l'ÉCART laissait tout vert.
+    pf_scores = np.zeros((13, 2))
+    pf_y = np.zeros(13, dtype=int)
+    pf_scores[:6] = [0.40, 0.10]          # corrects, au-dessus des deux seuils (écart 0.30)
+    pf_scores[6:8] = [0.20, 0.15]         # corrects, refusés par corr_min      (écart 0.05)
+    pf_scores[8:10] = [0.50, 0.45]        # corrects, refusés par la MARGE SEULE (écart 0.05)
+    pf_scores[10:] = [0.05, 0.45]         # MAL classés, et ils passent         (écart 0.40)
+    pf = point_de_fonctionnement(pf_scores, pf_y, corr_min=0.30, margin=0.10)
+    chk(pf["n"] == 13 and pf["n_corrects"] == 10,
+        f"le décompte des essais et des essais corrects ({pf['n']}, {pf['n_corrects']})")
+    chk(abs(pf["corrects_gardes"] - 6 / 10) < 1e-12,
+        f"« corrects gardés » se compte sur les essais BIEN CLASSÉS seulement "
+        f"({pf['corrects_gardes']} pour 6/10)")
+    chk(abs(pf["emission"] - 9 / 13) < 1e-12,
+        f"« émission » se compte sur TOUS les essais ({pf['emission']} pour 9/13)")
+    chk(abs(pf["justesse_si_emis"] - 6 / 9) < 1e-12,
+        f"« justesse si émis » se compte sur les essais ÉMIS ({pf['justesse_si_emis']} pour 6/9)")
+    chk(len({round(pf["corrects_gardes"], 9), round(pf["emission"], 9),
+             round(pf["justesse_si_emis"], 9)}) == 3,
+        f"...et les trois chiffres sont deux à deux DIFFÉRENTS sur cette fixture — c'est ce qui "
+        f"interdit d'en rendre un à la place d'un autre ({pf})")
+    # Des seuils que personne ne franchit ne font pas diviser par zéro — l'état d'un mode muet.
+    pf_muet = point_de_fonctionnement(pf_scores, pf_y, corr_min=9.0, margin=0.0)
+    chk(pf_muet["emission"] == 0.0 and pf_muet["justesse_si_emis"] is None
+        and pf_muet["corrects_gardes"] == 0.0,
+        f"des seuils infranchissables rendent « aucune émission » sans lever ({pf_muet})")
+    # ...et le test appliqué est EXACTEMENT celui de `RCCADecoder.classify`, sinon ce tableau
+    # décrirait un décodeur qui n'existe pas. Vérifié en le rejouant sur le vrai décodeur.
+    sc_reel = modele.scores(fenetre, 0, 1)
+    ordre_reel = np.sort(sc_reel)[::-1]
+    dec_strict = RCCADecoder(modele, plan, corr_min=float(ordre_reel[0]),
+                             margin=float(ordre_reel[0] - ordre_reel[1]), n_cycles=1)
+    pf_reel = point_de_fonctionnement(sc_reel[None], np.array([int(np.argmax(sc_reel))]),
+                                      dec_strict.corr_min, dec_strict.margin)
+    chk((dec_strict.classify(fenetre, 0)[0] is not None) == (pf_reel["emission"] == 1.0),
+        f"au seuil EXACT du score, la description et le décodeur décident pareil — les deux "
+        f"comparent avec un >= ({pf_reel['emission']})")
 
     # --- 5. Persistance : tableaux purs, décodeur DÉCLARÉ, aucun nom de classe gravé. ----------
     tmp = tempfile.mkdtemp(prefix="cvep_rcca_selftest_")
