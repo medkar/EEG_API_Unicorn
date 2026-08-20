@@ -13,7 +13,7 @@ import numpy as np
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import SSVEP_SPAN_SEUILS, classement_relatif  # noqa: E402
+from console import SPAN_SEUILS, classement_relatif  # noqa: E402
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 
@@ -81,7 +81,7 @@ class ActiveView(QWidget):
     de dire si une non-détection vient d'un signal absent ou d'un seuil trop haut. Sans ça, une
     séance muette n'a qu'une explication apparente — « l'utilisateur fixe mal ».
 
-    ⚠️ **La famille « actif » recouvre TROIS formes de sortie, pas une.** Chacune a sa propre
+    ⚠️ **La famille « actif » recouvre QUATRE formes de sortie, pas une.** Chacune a sa propre
     échelle, et les confondre produit un écran qui a l'air de marcher :
 
     | mode | ce que la sortie porte | échelle |
@@ -89,13 +89,14 @@ class ActiveView(QWidget):
     | SSVEP | `scores`, `target_index`, `freq_hz`, **`threshold`** | z contre le repos du jour |
     | Motor Imagery | **`probas`**, `intent_index`, `label`, `threshold` | probabilité, bornée à 1 |
     | P300 | `scores`, `target_index`, `confidence`, **`n_flashes`** | log-odds moyens, SANS seuil |
+    | c-VEP | `scores`, `target_index`, **`corr_min`**, `margin`, `motif` | corrélation, dans [-1, 1] |
 
     Le rendu est choisi sur une **CLÉ PRÉSENTE DANS LA SORTIE**, jamais sur l'identifiant du
     mode : la console est un client du moteur, et recopier ici une liste de modes ferait deux
     catalogues qui divergeraient au prochain mode ajouté. La question posée à la sortie est donc
     « qu'est-ce que tu déclares ? » — `probas` pour un vote de classes, `threshold` pour une
-    échelle absolue avec un déclenchement, et à défaut une accumulation de preuves dont seul le
-    CLASSEMENT a un sens.
+    échelle en z avec un déclenchement, `corr_min` pour une corrélation bornée avec son seuil,
+    et à défaut une accumulation de preuves dont seul le CLASSEMENT a un sens.
 
     Deux pannes réelles, dans cet ordre, sont la raison d'être de cet aiguillage :
 
@@ -109,7 +110,11 @@ class ActiveView(QWidget):
 
     La panne n°2 est la n°1 recommencée un mode plus tard. C'est pourquoi le troisième rendu
     n'est pas branché sur `"p300"` : la prochaine sortie d'une forme inconnue doit tomber dans le
-    rendu le plus PRUDENT (celui qui n'invente ni seuil ni unité), pas dans celui du SSVEP.
+    rendu le plus PRUDENT (celui qui n'invente ni seuil ni unité), pas dans celui du SSVEP. Le
+    c-VEP est venu confirmer que cette précaution valait : sans clé à lui, il serait tombé dans
+    ce rendu prudent, qui montre un CLASSEMENT — or ses corrélations ont une échelle absolue, et
+    « tout le monde à 0,05 » (rien de fixé) y aurait la même tête que « les deux premières à
+    0,45 » (une hésitation entre deux cibles). Deux diagnostics opposés, une seule image.
     """
 
     def __init__(self):
@@ -156,6 +161,8 @@ class ActiveView(QWidget):
             self._update_probas(mode_state, sortie)
         elif "threshold" in sortie:
             self._update_scores(mode_state, sortie)
+        elif "corr_min" in sortie:
+            self._update_correlations(mode_state, sortie)
         else:
             self._update_selection(mode_state, sortie)
 
@@ -167,13 +174,13 @@ class ActiveView(QWidget):
         self._assure(len(scores), [f"{f:g} Hz" for f in freqs])
         self.seuil.setText(f"échelle z · seuil {seuil:g} — un score au-dessus déclenche")
 
-        # L'échelle du remplissage va jusqu'à `SSVEP_SPAN_SEUILS` (2×) fois le seuil : une barre
+        # L'échelle du remplissage va jusqu'à `SPAN_SEUILS` (2×) fois le seuil : une barre
         # pleine à ras le seuil laisserait croire qu'on est au maximum alors qu'on vient à peine
         # de déclencher. Le facteur vit dans `console/__init__.py` — la TUILE l'applique aussi, et
         # elle s'en était écartée (cf. `grid.ModeTile._apercu_scores`).
         for i, (_e, barre) in enumerate(self._barres):
             valeur = scores[i] if i < len(scores) else 0.0
-            barre.setValue(int(max(0.0, min(valeur / (SSVEP_SPAN_SEUILS * seuil), 1.0)) * 100))
+            barre.setValue(int(max(0.0, min(valeur / (SPAN_SEUILS * seuil), 1.0)) * 100))
 
         index = sortie.get("target_index", -1)
         if sortie.get("artifact"):
@@ -226,6 +233,45 @@ class ActiveView(QWidget):
             # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
             self.verdict.setText(f"INTENTION {sortie.get('label', '')} "
                                  f"· confiance du vote {sortie.get('confidence', 0.0):.2f}")
+
+    def _update_correlations(self, mode_state, sortie):
+        """c-VEP : une corrélation par cible, sur une échelle ABSOLUE bornée à 1.
+
+        Ce que ce rendu a de particulier, et qu'aucun des trois autres n'a :
+
+        1. **Une échelle absolue ET un plafond.** Une corrélation de Pearson vit dans [-1, 1] :
+           `SPAN_SEUILS × corr_min` est donc PLAFONNÉ à 1 (le SSVEP, dont le z n'a pas de
+           plafond, applique la même formule avec un PLANCHER à 1 — le contraire).
+        2. **Deux seuils, pas un.** Un gagnant doit dépasser `corr_min` ET devancer le deuxième
+           de `margin`. Afficher le premier seul ferait lire « 0,40 > 0,26, ça aurait dû
+           déclencher » sur une fenêtre où la deuxième cible était à 0,38.
+        3. **Un motif quand rien n'est décidé.** Le moteur distingue trois causes de -1 (horloge
+           jamais reçue, horloge périmée, corrélations trop serrées) et les compte séparément :
+           elles appellent trois gestes OPPOSÉS. Le texte vient de lui, en clair — la console ne
+           traduit rien, sans quoi le terminal et l'écran finiraient par ne plus dire pareil.
+        """
+        scores = list(sortie.get("scores") or [])
+        corr_min = float(sortie.get("corr_min", 0.0))
+        marge = float(sortie.get("margin", 0.0))
+        index = sortie.get("target_index", -1)
+
+        self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
+        self.seuil.setText(f"échelle corrélation (bornée à 1) · un gagnant doit dépasser "
+                           f"{corr_min:g} ET devancer le 2e de {marge:g}")
+
+        span = min(SPAN_SEUILS * corr_min, 1.0) or 1.0
+        for i, (_e, barre) in enumerate(self._barres):
+            valeur = scores[i] if i < len(scores) else 0.0
+            barre.setValue(int(max(0.0, min(valeur / span, 1.0)) * 100))
+
+        if index < 0:
+            # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et -1
+            # n'est pas la cible 0. Le motif est le seul contenu utile de cette ligne — c'est lui
+            # qui dit s'il faut relancer l'émetteur, vérifier le nom du flux, ou saliner.
+            self.verdict.setText(f"— ({sortie.get('motif') or 'pas de décision'})")
+        else:
+            self.verdict.setText(f"CIBLE {index} · corrélation "
+                                 f"{sortie.get('confidence', 0.0):+.2f}")
 
     def _update_selection(self, mode_state, sortie):
         """P300 (et tout futur mode qui ACCUMULE des preuves) : un score par cible, sans seuil.

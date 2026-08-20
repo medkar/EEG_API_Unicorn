@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import PHASES_FR, SSVEP_SPAN_SEUILS, classement_relatif  # noqa: E402
+from console import PHASES_FR, SPAN_SEUILS, classement_relatif  # noqa: E402
 # `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
@@ -193,7 +193,7 @@ class ModeTile(QFrame):
             self.apercu.set_values([])
 
     def _apercu_scores(self, sortie):
-        """Un score par cible. DEUX échelles, choisies sur ce que la sortie DÉCLARE.
+        """Un score par cible. TROIS échelles, choisies sur ce que la sortie DÉCLARE.
 
         ⚠️ Correction de revue (tour 2) : cette branche appliquait `max(sortie.get("threshold",
         Z_MIN), 1.0)` à tout le monde. Or la sortie du P300 n'a PAS de clé `threshold`, et c'est
@@ -213,16 +213,31 @@ class ModeTile(QFrame):
         """
         scores = [float(s) for s in (sortie.get("scores") or [])]
         seuil = sortie.get("threshold")
+        corr_min = sortie.get("corr_min")
         retenue = sortie.get("target_index", -1)
         if seuil is not None:
             # SSVEP : un z, comparé à un seuil publié. L'échelle absolue a un sens.
-            # ⚠️ `SSVEP_SPAN_SEUILS × seuil`, pas `seuil` : c'est l'échelle de la PAGE
+            # ⚠️ `SPAN_SEUILS × seuil`, pas `seuil` : c'est l'échelle de la PAGE
             # (`live_views._update_scores`). La tuile s'arrêtait à 1× — donc sur le fixture du
             # smoke (score 3,1, seuil 2,5) elle montrait une barre PLEINE là où la page affiche
             # 62 %. L'étudiant lisait « c'est au maximum » sur la grille, puis « 62 % » en
             # ouvrant la page : mêmes données, deux lectures — le défaut même que la branche
             # d'à côté a été écrite pour supprimer.
-            self.apercu.set_values(scores, span=max(SSVEP_SPAN_SEUILS * float(seuil), 1.0),
+            # `max(..., 1.0)` est un PLANCHER : un z n'a pas de plafond naturel, et un seuil
+            # minuscule ferait déborder toutes les barres.
+            self.apercu.set_values(scores, span=max(SPAN_SEUILS * float(seuil), 1.0),
+                                   retenue=retenue)
+            return
+        if corr_min is not None:
+            # c-VEP : une corrélation de Pearson, bornée dans [-1, 1], comparée au seuil que le
+            # mode PUBLIE (`corr_min`). Échelle absolue, donc — mais surtout PAS celle du SSVEP :
+            # `max(2 × 0,26, 1.0)` vaudrait 1,0, et les corrélations réelles de ce mode (0,33
+            # quand c'est juste, 0,21 quand c'est faux — les deux chiffres de la seule séance
+            # mesurée) s'écraseraient dans le tiers bas de la barre, visuellement identiques.
+            # C'est mot pour mot le « six moignons de 2 px » de la tuile P300, avec une cause
+            # différente. On PLAFONNE donc à 1 au lieu de plancher à 1 : la barre va jusqu'à
+            # `SPAN_SEUILS × corr_min` (0,52 par défaut), et le seuil tombe à mi-hauteur.
+            self.apercu.set_values(scores, span=min(SPAN_SEUILS * float(corr_min), 1.0),
                                    retenue=retenue)
             return
         # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
@@ -234,6 +249,18 @@ class ModeTile(QFrame):
 def _resume(mode_state):
     """Une ligne : ce que le mode produit en ce moment. "" si rien de parlant."""
     sortie = mode_state.get("output") or {}
+    if "corr_min" in sortie:
+        # c-VEP : AVANT la branche `scores` juste en dessous, qui lui inventerait une fréquence.
+        # ⚠️ C'est littéralement le « CIBLE 3 · 0 Hz » du P300 rendu en SSVEP : `freq_hz` n'existe
+        # pas dans cette sortie, `.get(..., 0)` en fabrique un, et l'étudiant lit une grandeur que
+        # personne n'a mesurée. Ce mode ne cherche pas une fréquence mais une PHASE.
+        index = sortie.get("target_index", -1)
+        if index < 0:
+            # Le motif vient du MOTEUR, en clair (`core/modes/cvep.py::_MOTIFS_FR`). La console ne
+            # le traduit pas : trois causes appellent trois gestes opposés, et un second
+            # vocabulaire côté interface finirait par ne plus dire la même chose que le terminal.
+            return sortie.get("motif") or "aucune cible"
+        return f"cible {index} · corrélation {sortie.get('confidence', 0.0):.2f}"
     if "scores" in sortie:
         # `.get` et pas `[...]` : cette ligne tourne 10 fois par seconde dans le rafraîchissement
         # de la grille. Un mode actif qui publierait des scores sans cible nommée y ferait tomber

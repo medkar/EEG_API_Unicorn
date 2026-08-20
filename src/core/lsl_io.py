@@ -13,8 +13,9 @@ Les flux publiés, dans l'ordre où ce fichier les définit :
     <PREFIX>_decoded_mi     ~5 Hz                  — quelle imagerie motrice
     <PREFIX>_decoded_p300   une fois par manche    — quelle cible a été sélectionnée
     <PREFIX>_decoded_errp   un échantillon/feedback — la machine vient-elle de se tromper
+    <PREFIX>_decoded_cvep   ~5 Hz                  — quelle cible fixée, lue dans la PHASE d'un code
     <PREFIX>_status         JSON, événementiel     — l'état du moteur
-Les trois premiers du MVP sont devenus huit : un flux `decoded_*` par mode publié par le moteur.
+Les trois premiers du MVP sont devenus neuf : un flux `decoded_*` par mode publié par le moteur.
 
 Autotest (sans casque, sans LSL entrant) :
     python src/core/lsl_io.py
@@ -425,6 +426,83 @@ class DecodedP300Publisher:
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
 
+def cvep_channel_labels(n_targets):
+    """Voies du flux `decoded_cvep`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+    return ["target_index", "confidence"] + [f"score_{i}" for i in range(int(n_targets))]
+
+
+class DecodedCVEPPublisher:
+    """`<PREFIX>_decoded_cvep` : quelle cible l'utilisateur fixe, ~5 Hz. BCI **active**.
+
+    Même intention neutre que le SSVEP — quelle cible, avec quelle confiance — et jamais une
+    commande d'actionneur. Ce qui change est l'ÉCHELLE : `decision_scale = "correlation"`, une
+    corrélation de Pearson entre la fenêtre filtrée et le template appris, bornée dans [-1, 1].
+    Ce n'est ni le z du SSVEP (pas de plancher de repos ici), ni les log-odds du P300 (pas de
+    classifieur), et un client qui poserait le seuil de l'un sur l'échelle de l'autre se
+    tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` VOYAGENT dans
+    les métadonnées, à côté de l'échelle qui leur donne un sens.
+
+    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 ». TROIS causes
+    différentes le produisent, et elles n'appellent pas la même réaction : le moteur ne sait pas
+    où en est le code (aucun marqueur d'horloge reçu), sa référence est PÉRIMÉE (l'émetteur s'est
+    tu), ou les corrélations ne tranchent pas (`corr_min`/`margin`). Le flux ne porte que le -1 ;
+    les trois compteurs qui les séparent sont dans l'état du moteur (`CVEPRuntime.state`), parce
+    qu'une séance casque ne se répète pas et que « ça ne détecte pas » sans la cause envoie
+    chercher au mauvais endroit.
+
+    ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à UNE personne, et un stimulus verrouillé à la
+    frame qui publie un marqueur de cycle. `decoder` dit lequel des deux décodeurs du produit
+    (`eCCA` | `rCCA`) a produit ces scores : ils sont mesurés à jeu égal mais leurs seuils de
+    rejet DIFFÈRENT, donc un client qui journalise des scores doit savoir lequel il regarde.
+    """
+
+    # Le nom du flux, écrit UNE fois — même raison que `DecodedP300Publisher.SUFFIXE` : deux
+    # sources pour un contrat public finissent par diverger. `modes/cvep.py` le reprend pour son
+    # `ModeSpec` au lieu de réécrire le littéral.
+    SUFFIXE = "decoded_cvep"
+
+    def __init__(self, n_targets, decoder, refresh, code_len, corr_min, margin, cv,
+                 instance=""):
+        self.n_targets = int(n_targets)
+        labels = cvep_channel_labels(self.n_targets)
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "c-VEP")
+        desc.append_child_value("n_targets", str(self.n_targets))
+        # Quel décodeur a produit ces scores. Le c-VEP est le seul mode du produit à en avoir
+        # DEUX sur le même stimulus (eCCA et rCCA) : c'est le FICHIER de modèle qui déclare le
+        # sien (cf. `core/cvep_models.py`), donc le moteur ne peut pas le deviner d'ici.
+        desc.append_child_value("decoder", str(decoder))
+        desc.append_child_value("decision_scale", "correlation")
+        # La règle de décision COMPLÈTE : un gagnant doit dépasser `corr_min` ET devancer le
+        # deuxième de `margin`. Publier l'une sans l'autre laisserait un client conclure qu'une
+        # corrélation de 0,40 aurait dû déclencher alors que la deuxième était à 0,38.
+        desc.append_child_value("corr_min", f"{float(corr_min):g}")
+        desc.append_child_value("margin", f"{float(margin):g}")
+        # La géométrie du stimulus, pour qu'un client puisse vérifier qu'il affiche bien ce que
+        # le moteur décode : un modèle calibré à 60 Hz sur un code de 63 frames ne décode pas ce
+        # qu'un écran 144 Hz affiche.
+        desc.append_child_value("code_len", str(int(code_len)))
+        desc.append_child_value("refresh", f"{float(refresh):g}")
+        # La justesse leave-one-out de la calibration, à lire contre le hasard à `n_targets`
+        # cibles (16,7 % à 6), jamais contre 50 %. VIDE — pas « -1 », qui se lirait comme une
+        # mesure — quand le modèle n'en porte pas.
+        desc.append_child_value("cv", "" if cv is None else f"{float(cv):.4f}")
+        desc.append_child_value("no_decision_index", "-1")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, confidence, scores, lsl_ts=None):
+        """`scores` : une corrélation par cible, dans l'ordre des indices 0..n_targets-1."""
+        row = [float(target_index), float(confidence)] + [float(s) for s in scores]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
 def errp_channel_labels():
     """Voies du flux `decoded_errp`. Une seule fonction pour le publieur ET le `ModeSpec`."""
     return ["error", "score", "threshold", "artifact"]
@@ -711,6 +789,57 @@ def _autotest():
     nom_publie = pub_errp.outlet.get_info().name()
     nom_annonce = stream_name(spec_errp.stream)
     print(f"  decoded_errp nom publié={nom_publie!r} · annoncé par le ModeSpec={nom_annonce!r}")
+    assert nom_publie == nom_annonce, (
+        f"le flux publié ({nom_publie!r}) et celui que le contrat du mode annonce "
+        f"({nom_annonce!r}) ont divergé — un client s'abonnerait dans le vide")
+
+    # 9. decoded_cvep : voies attendues, et surtout l'ÉCHELLE. C'est le troisième mode « actif » à
+    # cibles, et le troisième à décider sur une grandeur DIFFÉRENTE (z pour le SSVEP, log-odds
+    # pour le P300, corrélation ici). Un client qui poserait le seuil de l'un sur l'échelle de
+    # l'autre se tromperait d'un ordre de grandeur — d'où `decision_scale` ET les deux seuils.
+    labels = cvep_channel_labels(6)
+    print(f"  voies decoded_cvep : {labels}")
+    assert labels == ["target_index", "confidence",
+                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
+    pub_cvep = DecodedCVEPPublisher(6, decoder="eCCA", refresh=60.0, code_len=63,
+                                    corr_min=0.26, margin=0.09, cv=0.4778,
+                                    instance="selftest-cvep")
+    pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12])
+    pub_cvep.push(-1, 0.0, [0.05] * 6)      # pas de décision : jamais « la cible 0 »
+    print("  [lsl] decoded_cvep publie sans lever")
+    cvep_deco = pub_cvep.outlet.get_info().desc().child("decoding")
+    lu = {k: cvep_deco.child_value(k) for k in
+          ("paradigm", "decision_scale", "no_decision_index", "corr_min", "margin",
+           "code_len", "refresh", "n_targets", "decoder", "cv")}
+    print(f"  decoded_cvep métadonnées : {lu}")
+    assert lu["paradigm"] == "c-VEP", lu
+    # ⚠️ « correlation », JAMAIS « z » ni « rho » : ces scores ne sont normalisés contre aucun
+    # plancher de repos (le c-VEP n'en mesure pas), et `corr_min`=0,26 lu sur l'échelle z du
+    # SSVEP passerait pour du bruit. C'est l'unique champ qui donne son sens aux deux seuils.
+    assert lu["decision_scale"] == "correlation", lu
+    assert lu["no_decision_index"] == "-1", lu
+    assert lu["corr_min"] == "0.26" and lu["margin"] == "0.09", lu
+    assert lu["code_len"] == "63" and lu["refresh"] == "60" and lu["n_targets"] == "6", lu
+    # Le c-VEP est le seul mode à DEUX décodeurs sur le même stimulus : c'est le fichier de
+    # modèle qui déclare le sien, donc un client qui journalise des scores doit pouvoir savoir
+    # lequel il regarde — leurs seuils de rejet ne sont pas les mêmes.
+    assert lu["decoder"] == "eCCA", lu
+    assert lu["cv"] == "0.4778", lu
+    # `cv` VIDE quand le modèle n'en porte pas — pas « -1 », qui se lirait comme une justesse.
+    sans_cv = DecodedCVEPPublisher(6, decoder="rCCA", refresh=60.0, code_len=63,
+                                   corr_min=0.24, margin=0.08, cv=None,
+                                   instance="selftest-cvep-sanscv")
+    assert sans_cv.outlet.get_info().desc().child("decoding").child_value("cv") == "", \
+        "un modèle sans justesse mesurée doit publier un champ VIDE, pas un nombre"
+
+    # 9bis. Le NOM du flux, lié au contrat du mode — même assertion que 8bis pour l'ErrP, et pour
+    # la même raison : l'extrait « Brancher un client » que l'étudiant COPIE vient du `ModeSpec`,
+    # tandis que le flux réel vient d'ici. Un renommage d'un seul côté laisse tout vert et ne se
+    # voit qu'en séance, sous la forme d'un `resolve_byprop` qui ne trouve rien.
+    spec_cvep = _registry.get("cvep")
+    nom_publie = pub_cvep.outlet.get_info().name()
+    nom_annonce = stream_name(spec_cvep.stream)
+    print(f"  decoded_cvep nom publié={nom_publie!r} · annoncé par le ModeSpec={nom_annonce!r}")
     assert nom_publie == nom_annonce, (
         f"le flux publié ({nom_publie!r}) et celui que le contrat du mode annonce "
         f"({nom_annonce!r}) ont divergé — un client s'abonnerait dans le vide")

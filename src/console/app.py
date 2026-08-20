@@ -288,6 +288,15 @@ def _smoke():
         f"({sorted(t.spec['id'] for t in externes)} pour {attendu_externes})")
     chk(all(not t.isEnabled() and t.detail.text() for t in externes),
         "chacune est grisée ET dit pourquoi elle ne démarre pas")
+    # ⚠️ Les DEUX assertions ci-dessus sont VIDES depuis que le c-VEP a rejoint le moteur : plus
+    # aucun mode n'a un statut autre que « moteur ». Elles restent — elles ne vieillissent pas, et
+    # le prochain mode décrit avant d'être fait les réveillera — mais elles ne prouvent plus rien
+    # aujourd'hui. Celle-ci prend le relais, dans l'autre sens : un mode du moteur doit être
+    # CLIQUABLE. C'est le seul contrôle qui rougirait si un `ModeSpec` repassait « appli_pygame »,
+    # ou si `status` cessait d'être ce qui dégrise la tuile.
+    chk(all(t.isEnabled() for t in console.grid.tuiles.values()),
+        f"...et toutes les autres sont dégrisées, c-VEP compris — 7 modes, 7 dans le moteur "
+        f"({sorted(i for i, t in console.grid.tuiles.items() if not t.isEnabled())} grisée(s))")
 
     chk(console.grid.tuiles["ssvep"].etat.text() == "décode",
         f"le SSVEP est annoncé « {console.grid.tuiles['ssvep'].etat.text()} »")
@@ -494,7 +503,7 @@ def _smoke():
     # barres à zéro), puis « CIBLE 3 · 0 Hz ». Quatre affirmations fausses, aucun message.
     # C'est la panne du MI recommencée un mode plus tard : d'où des assertions sur ce que
     # l'écran DIT, pas seulement sur la classe de vue instanciée.
-    from console import SSVEP_SPAN_SEUILS
+    from console import SPAN_SEUILS
     from core.config import Z_MIN
     p300_state = {**state, "modes_state": {**state["modes_state"], "p300": {
         "id": "p300", "label": "P300", "family": "actif", "phase": "running", "published": True,
@@ -564,11 +573,11 @@ def _smoke():
 
     # Le SSVEP, lui, a bien un `threshold` publié : son échelle reste ABSOLUE, contre ce
     # seuil-là. Sans cette assertion, « ne plus jamais utiliser de seuil » passerait aussi.
-    # ⚠️ `SSVEP_SPAN_SEUILS ×` le seuil, pas le seuil nu : la tuile s'arrêtait à 1× quand la page
+    # ⚠️ `SPAN_SEUILS ×` le seuil, pas le seuil nu : la tuile s'arrêtait à 1× quand la page
     # va à 2×, donc sur ce fixture (score 3,1, seuil 2,5) la grille affichait une barre PLEINE et
     # la page 62 %. L'assertion figeait l'écart au lieu de l'interdire.
     seuil_ssvep = state["modes_state"]["ssvep"]["output"]["threshold"]
-    chk(console.grid.tuiles["ssvep"].apercu._span == SSVEP_SPAN_SEUILS * seuil_ssvep,
+    chk(console.grid.tuiles["ssvep"].apercu._span == SPAN_SEUILS * seuil_ssvep,
         f"et la tuile SSVEP garde son échelle absolue, contre le seuil qu'elle PUBLIE, à la MÊME "
         f"échelle que sa page ({console.grid.tuiles['ssvep'].apercu._span} pour un seuil de "
         f"{seuil_ssvep})")
@@ -613,8 +622,8 @@ def _smoke():
     # 0,4615 / 0,9259 — 6/13 et 25/27, des ratios de très petit effectif — sous le mot
     # « mesuré ». Un contributeur qui ouvre ce fichier pour savoir ce que vaut l'ErrP y lisait
     # donc un troisième chiffre, contradictoire avec la doc, le contrat et l'autotest de
-    # `lsl_io.py`. « Un chiffre recopié dans une prose finit toujours par mentir »
-    # (core/modes/external.py) : ce n'en est pas une, mais un fixture ment aussi bien.
+    # `lsl_io.py`. « Un chiffre recopié dans une prose finit toujours par mentir » : ce fixture n'en est
+    # pas une, mais il ment aussi bien.
     errp_state = {**state, "modes_state": {**state["modes_state"], "errp": {
         "id": "errp", "label": "ErrP", "family": "passif", "phase": "running", "published": True,
         "params": {"model": "errp_model_20260818_150000.joblib", "tnr_target": 0.85},
@@ -767,6 +776,86 @@ def _smoke():
 
     errp_page.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid, "et l'ErrP ramène aussi sur la grille")
+
+    # --- c-VEP : la QUATRIÈME forme de sortie de la famille « actif » ---------------------------
+    # Des corrélations de Pearson, bornées dans [-1, 1], avec un seuil PUBLIÉ (`corr_min`) et une
+    # marge. Ni le z du SSVEP (aucun plancher de repos n'est mesuré ici), ni les log-odds du P300
+    # (aucun classifieur). Les valeurs du fixture sont celles de la seule séance réellement
+    # mesurée du projet : ρ ≈ 0,33 quand la décision est juste, ≈ 0,21 quand elle est fausse
+    # (cf. `core/config.py`, CVEP_CORR_MIN) — pas des chiffres ronds inventés, parce que c'est
+    # justement à cette hauteur-là que l'échelle se joue.
+    cvep_state = {**state, "modes_state": {**state["modes_state"], "cvep": {
+        "id": "cvep", "label": "c-VEP", "family": "actif", "phase": "running", "published": True,
+        "params": {"model": "cvep_model.npz", "stream_in": "EEG_API_Unicorn_stim"},
+        "instruction": "", "stream": "decoded_cvep",
+        "channels": ["target_index", "confidence"] + [f"score_{i}" for i in range(6)],
+        "rest_report": None,
+        "decodages": 12, "sans_reference": 0, "reference_perimee": 0, "vote_non_conclu": 5,
+        "age_reference_s": 0.42, "corr_gagnant": 0.33, "corr_second": 0.21,
+        "output": {"target_index": 2, "confidence": 0.33,
+                   "scores": [0.11, 0.19, 0.33, 0.08, 0.21, 0.12],
+                   "corr_min": 0.26, "margin": 0.09, "motif": ""}}}}
+    console.show_mode("cvep")
+    console.apply_state(cvep_state)
+    cv = console.pages["cvep"].vue
+    chk(isinstance(cv, live_views.ActiveView),
+        "le c-VEP a le rendu ACTIF, comme le SSVEP, le MI et le P300 — même famille")
+    chk("corrélation" in cv.seuil.text() and "échelle z" not in cv.seuil.text()
+        and "log-odds" not in cv.seuil.text(),
+        f"et il nomme SON échelle, ni celle du SSVEP ni celle du P300 ({cv.seuil.text()})")
+    chk("0.26" in cv.seuil.text() and "0.09" in cv.seuil.text(),
+        f"...avec SES DEUX seuils : `corr_min` seul ferait lire « 0,40 > 0,26, ça aurait dû "
+        f"déclencher » sur une fenêtre où la 2e était à 0,38 ({cv.seuil.text()})")
+    chk("CIBLE 2" in cv.verdict.text() and "Hz" not in cv.verdict.text(),
+        f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence — le c-VEP "
+        f"cherche une PHASE ({cv.verdict.text()})")
+
+    # ⚠️⚠️ L'APERÇU DE LA TUILE, sur les mêmes données. C'EST L'ASSERTION QUI MANQUAIT au P300 et
+    # qui a laissé le repli sur `Z_MIN` survivre deux chantiers dans du code poussé. Ici le piège
+    # est le SYMÉTRIQUE : le c-VEP publie bien un seuil, donc rien n'empêchait de lui appliquer
+    # la formule du SSVEP — `max(2 × 0,26, 1.0)` = 1,0, sur des corrélations qui valent 0,21 à
+    # 0,33. Toutes les barres s'écraseraient dans le tiers bas, visuellement identiques, alors
+    # que 0,33 et 0,21 sont exactement ce qui sépare une décision juste d'une fausse.
+    from console import SPAN_SEUILS
+    apercu_cv = console.grid.tuiles["cvep"].apercu
+    corr_min = cvep_state["modes_state"]["cvep"]["output"]["corr_min"]
+    chk(apercu_cv._span == SPAN_SEUILS * corr_min,
+        f"la tuile c-VEP met ses corrélations à l'échelle de SON `corr_min` publié "
+        f"(span={apercu_cv._span} pour corr_min={corr_min})")
+    chk(apercu_cv._span != Z_MIN and apercu_cv._span < 1.0,
+        f"...donc NI le seuil du SSVEP, NI le plafond 1,0 de la formule du SSVEP, qui écraserait "
+        f"0,21 et 0,33 dans le tiers bas de la barre (span={apercu_cv._span}, Z_MIN={Z_MIN})")
+    chk(apercu_cv._values == cvep_state["modes_state"]["cvep"]["output"]["scores"]
+        and apercu_cv._retenue == 2 and not apercu_cv._centre,
+        f"...elle montre les corrélations TELLES QUELLES (échelle absolue, pas un classement) et "
+        f"met en avant la cible que le MOTEUR a retenue ({apercu_cv._values}, {apercu_cv._retenue})")
+    # L'assertion qui LIE la tuile et la page : les deux précédentes les lisent séparément, donc
+    # rien ne leur interdirait de se contredire — c'est arrivé, dans du code poussé (cf. le bloc
+    # P300 ci-dessus). `max(0, min(v/span, 1))` est la règle de dessin de `MiniBars.paintEvent`.
+    parts_tuile = [int(max(0.0, min(v / apercu_cv._span, 1.0)) * 100) for v in apercu_cv._values]
+    chk(parts_tuile == [b.value() for _e, b in cv._barres],
+        f"la tuile et la page remplissent leurs barres à la MÊME hauteur "
+        f"({parts_tuile} contre {[b.value() for _e, b in cv._barres]})")
+
+    # Pas de décision : le MOTIF est ce que l'écran doit montrer, pas « aucune cible ». Les trois
+    # causes appellent trois gestes OPPOSÉS (relancer l'émetteur · vérifier le nom du flux ·
+    # saliner), et la console ne les traduit pas — la phrase vient du moteur.
+    cvep_muet = {**cvep_state, "modes_state": {**cvep_state["modes_state"], "cvep": {
+        **cvep_state["modes_state"]["cvep"],
+        "output": {**cvep_state["modes_state"]["cvep"]["output"], "target_index": -1,
+                   "scores": [0.0] * 6, "confidence": 0.0,
+                   "motif": "horloge PÉRIMÉE — l'émetteur s'est tu (planté ? fenêtre fermée ?)"}}}}
+    console.apply_state(cvep_muet)
+    chk("PÉRIMÉE" in cv.verdict.text() and "CIBLE" not in cv.verdict.text()
+        and "z=" not in cv.verdict.text(),
+        f"sans décision, l'écran dit LAQUELLE des trois causes — jamais « aucune cible » nu, "
+        f"jamais le « rien au-dessus de z » du SSVEP ({cv.verdict.text()})")
+    resume_cvep = console.grid.tuiles["cvep"].detail.text()
+    chk("PÉRIMÉE" in resume_cvep and "Hz" not in resume_cvep,
+        f"...et le résumé de la tuile aussi, sans inventer de fréquence ({resume_cvep!r})")
+
+    console.pages["cvep"].bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le c-VEP ramène aussi sur la grille")
 
     # --- la page de calibration -------------------------------------------------
     # Elle est éprouvée sur des états FABRIQUÉS, phase par phase : c'est le seul moyen de

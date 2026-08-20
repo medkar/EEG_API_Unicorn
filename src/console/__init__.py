@@ -31,12 +31,19 @@ if "--smoke" in _sys.argv:
 # contredire — un mode annoncé « repos » ici et « rest » là.
 PHASES_FR = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
 
-# Le SSVEP : jusqu'où va la barre. Une barre pleine à ras le seuil laisserait croire qu'on est au
-# maximum alors qu'on vient à peine de déclencher — d'où 2× le seuil. Ici et pas dans chaque
-# écran : la tuile et la page ont divergé sur ce facteur (tuile 1×, page 2×), au point qu'un même
-# score de 3,1 pour un seuil de 2,5 s'affichait « barre PLEINE » sur la grille et « 62 % » sur la
-# page. Deux écrans, mêmes données, deux lectures.
-SSVEP_SPAN_SEUILS = 2.0
+# Jusqu'où va la barre d'un mode qui PUBLIE UN SEUIL. Une barre pleine à ras le seuil laisserait
+# croire qu'on est au maximum alors qu'on vient à peine de déclencher — d'où 2× le seuil, ce qui
+# place le déclenchement à mi-hauteur, un repère visuel immédiat. Ici et pas dans chaque écran :
+# la tuile et la page ont divergé sur ce facteur (tuile 1×, page 2×), au point qu'un même score
+# de 3,1 pour un seuil de 2,5 s'affichait « barre PLEINE » sur la grille et « 62 % » sur la page.
+# Deux écrans, mêmes données, deux lectures.
+#
+# ⚠️ Il s'appelait `SSVEP_SPAN_SEUILS`, et ce nom devenait faux : le c-VEP publie lui aussi un
+# seuil absolu (`corr_min`), et l'écran s'en sert de la même façon. Un nom de mode sur une
+# convention d'AFFICHAGE finit par faire croire qu'une constante du SSVEP met à l'échelle la
+# sortie d'un autre mode — c'est exactement le défaut qui a survécu deux chantiers sur la tuile
+# P300 (le repli sur `Z_MIN`). Le facteur, lui, n'appartient à aucun mode.
+SPAN_SEUILS = 2.0
 
 
 def classement_relatif(scores):

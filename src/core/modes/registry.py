@@ -14,9 +14,16 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import errp, external, mi, neuro, p300, raw, ssvep  # noqa: E402
+from core.modes import cvep, errp, mi, neuro, p300, raw, ssvep  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
+# ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
+# porté aussi des entrées « appli pygame » (`core/modes/external.py`), des `ModeSpec` sans runtime,
+# décrits pour que la grille de la console ne laisse pas croire que le produit se limite à ce qui
+# est chargé. Le MI, le P300, l'ErrP puis le c-VEP les ont vidées une par une ; le fichier a donc
+# été SUPPRIMÉ avec sa dernière entrée, plutôt que gardé vide. Les statuts « appli_pygame » et
+# « prevu » restent pourtant vérifiés par `check()` ci-dessous : le prochain mode décrit avant
+# d'être fait n'aura qu'à déclarer son `ModeSpec` et sa raison d'`unavailable`.
 MODES = (
     raw.SPEC,           # le brut d'abord : c'est ce qui existe même sans décodage
     ssvep.SPEC,
@@ -24,7 +31,7 @@ MODES = (
     mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
     p300.SPEC,          # le P300 a rejoint le moteur : il écoute les marqueurs d'une appli externe
     errp.SPEC,          # l'ErrP a rejoint le moteur : 2e client du tuyau des marqueurs
-    external.CVEP,      # il ne reste qu'UN mode que le moteur ne sait pas faire
+    cvep.SPEC,          # le c-VEP ferme la marche : 3e client, mais ses marqueurs sont une HORLOGE
 )
 
 BY_ID = {spec.id: spec for spec in MODES}
