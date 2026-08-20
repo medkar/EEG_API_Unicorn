@@ -246,12 +246,24 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
         hits += int(np.argmax(model.scores(w, p, 1)) == c)
     print(f"\nPhase glissante : {hits}/{len(list(phases))} correct (recalage OK si ≈ tout)")
 
-    # persistance : save + reload + re-décode
-    path = model.save(os.path.join(os.path.dirname(CVEP_RCCA_MODEL_PATH), "cvep_rcca_smoke.npz"))
-    back = RCCAModel.load(path)
-    os.remove(path)
-    same = np.array_equal(back.codes, model.codes) and back.n_targets == model.n_targets
-    print(f"Save/reload : codes identiques={same}, LOO rechargé={back.cv_*100:.0f}%")
+    # Persistance : save + reload + re-décode.
+    #
+    # ⚠️ Dans un dossier TEMPORAIRE, nettoyé dans un `finally`. Cette ligne écrivait
+    # `data/cvep_rcca_smoke.npz` puis l'effaçait — sauf si l'autotest était interrompu, auquel cas
+    # le fichier restait. `data/` porte les enregistrements EEG d'une personne identifiable sur un
+    # dépôt PUBLIC : aucun test n'y écrit, même une seconde, même en promettant d'effacer. (Et
+    # `git status` ne l'aurait jamais signalé : `data/` est entièrement gitignoré.)
+    import shutil
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="cvep_rcca_demo_")
+    try:
+        path = model.save(os.path.join(tmp, "cvep_rcca_smoke.npz"))
+        back = RCCAModel.load(path)
+        same = np.array_equal(back.codes, model.codes) and back.n_targets == model.n_targets
+        print(f"Save/reload : codes identiques={same}, LOO rechargé={back.cv_*100:.0f}%")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return True
 
 

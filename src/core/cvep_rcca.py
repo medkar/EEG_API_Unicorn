@@ -47,9 +47,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_RCCA_CORR_MIN,  # noqa: E402
-                         CVEP_RCCA_ENC, CVEP_RCCA_EVENT, CVEP_RCCA_MARGIN,
-                         CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
+from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_DECISION_CYCLES,  # noqa: E402
+                         CVEP_RCCA_CORR_MIN, CVEP_RCCA_ENC, CVEP_RCCA_EVENT,
+                         CVEP_RCCA_MARGIN, CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
 from core.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
 
 
@@ -131,25 +131,59 @@ class RCCAModel:
             self.cv_ = self._loo(X, self._labels)
         return self
 
+    def _hors_pli(self, X, y, groupes):
+        """(scores, y_par_groupe) : pour chaque groupe, on ré-ajuste SANS aucun de ses cycles et
+        on note la moyenne du groupe. `X` est déjà filtré, en (n_essais, n_ch, n_cyc).
+
+        Sans effet de bord : c'est `_loo` (k=1, pour `fit`) et `hors_pli` (k quelconque, pour la
+        mesure des seuils) qui l'appellent. Une seule boucle de ré-ajustement dans ce fichier, donc
+        aucun risque que la géométrie de mesure et celle de la calibration divergent en silence.
+        """
+        scores = np.zeros((len(groupes), self.n_targets), dtype=float)
+        yg = np.zeros(len(groupes), dtype=int)
+        for j, g in enumerate(groupes):
+            dehors = set(g)
+            tr = [i for i in range(len(X)) if i not in dehors]
+            clf = self._fit_clf(X[tr], y[tr])
+            moyen = np.mean(X[list(g)], axis=0)[None]      # (1, n_ch, n_cyc)
+            scores[j] = np.ravel(clf.decision_function(moyen))
+            yg[j] = int(y[g[0]])
+        return scores, yg
+
     def _loo(self, X, y):
-        """Justesse leave-one-out, ET les scores hors-pli qui la produisent.
+        """Justesse leave-one-out (un cycle par décision), ET les scores hors-pli qui la produisent.
 
         On garde les SCORES et pas seulement le compte de bons coups : c'est la même boucle, et
         sans eux il faudrait la refaire ailleurs pour poser un seuil (N ré-ajustements pyntbci,
         soit ~8 s pour 90 essais sur ce poste). `cv_` reste la moyenne de `argmax == y`, donc
         les deux chiffres ne peuvent pas diverger.
+
+        ⚠️ C'est un chiffre à **k=1**, la géométrie d'une ÉPOQUE de calibration — pas celle où le
+        moteur décide (`CVEP_DECISION_CYCLES`). Pour mesurer à la géométrie de décision, c'est
+        `hors_pli(..., n_cycles=…)`.
         """
         if len(X) < 3 or len(set(y.tolist())) < 2:
             self.oof_scores_, self.oof_y_ = None, None
             return None
-        scores = np.zeros((len(X), self.n_targets), dtype=float)
-        for i in range(len(X)):
-            tr = [j for j in range(len(X)) if j != i]
-            clf = self._fit_clf(X[tr], y[tr])
-            scores[i] = np.ravel(clf.decision_function(X[i:i + 1]))
-        self.oof_scores_ = scores
-        self.oof_y_ = np.asarray(y, dtype=int)
-        return float((scores.argmax(axis=1) == self.oof_y_).mean())
+        scores, yg = self._hors_pli(X, y, [(i,) for i in range(len(X))])
+        self.oof_scores_, self.oof_y_ = scores, yg
+        return float((scores.argmax(axis=1) == yg).mean())
+
+    def hors_pli(self, epochs, labels, n_cycles=1):
+        """(scores, y) — les scores de validation croisée à la géométrie `n_cycles`.
+
+        Jumelle de `CVEPModel.hors_pli`, même contrat, pour que les deux décodeurs se comparent
+        sur les mêmes époques ET la même géométrie. `epochs` : cycles BRUTS déjà réduits aux voies.
+
+        ⚠️ Le modèle s'ajuste toujours sur des cycles SIMPLES (c'est ce que la calibration
+        enregistre) et ne note que le groupe moyenné — exactement ce que fait le moteur, qui charge
+        un modèle appris sur des cycles et lui présente une fenêtre repliée.
+        """
+        from core.cvep_decoder import groupes_de_cycles
+
+        X = np.stack([bandpass(np.asarray(e, float), self.fs, self.band).T for e in epochs])
+        y = np.asarray(labels, dtype=int)
+        return self._hors_pli(X, y, groupes_de_cycles(y, n_cycles))
 
     # --- décodage en ligne ----------------------------------------------
     def _fold(self, window, n_cycles):
@@ -204,7 +238,11 @@ class RCCAModel:
 
     @classmethod
     def load(cls, path=CVEP_RCCA_MODEL_PATH):
-        d = np.load(path, allow_pickle=True)
+        # ⚠️ PAS d'`allow_pickle=True`. Ce format ne contient que des tableaux de types simples
+        # (`fit` normalise les époques en float, donc jamais de tableau d'objets ragged), et le
+        # drapeau autoriserait un `.npz` fabriqué à exécuter du code au chargement. Vérifié sur le
+        # seul fichier réel du dépôt : `data/cvep_rcca_model.npz` se relit sans lui.
+        d = np.load(path)
         m = cls(codes=d["codes"], fs=float(d["fs"]), refresh=float(d["refresh"]),
                 band=tuple(d["band"]), channels=[int(c) for c in d["channels"]],
                 event=str(d["event"]), enc=float(d["enc"]))
@@ -222,8 +260,13 @@ class RCCADecoder:
     trouvé sur son propre mode.
     """
 
+    # ⚠️ `n_cycles` vaut `CVEP_DECISION_CYCLES`, comme chez `CVEPDecoder`. Il valait 1 ici, sans
+    # commentaire, et cette asymétrie n'était pas anodine : c'est la géométrie à laquelle le
+    # décodeur décide, donc celle à laquelle ses seuils doivent être mesurés. Un décodeur réglé
+    # sur des cycles simples et branché sur des fenêtres de deux cycles applique des seuils qui ne
+    # décrivent pas ce qu'il fait — sans que rien ne le signale.
     def __init__(self, model, plan, corr_min=CVEP_RCCA_CORR_MIN, margin=CVEP_RCCA_MARGIN,
-                 n_cycles=1):
+                 n_cycles=CVEP_DECISION_CYCLES):
         self.model = model
         self.plan = plan                                  # cibles, dans l'ordre des codes
         self.corr_min = corr_min
@@ -324,72 +367,123 @@ def point_de_fonctionnement(oof_scores, oof_y, corr_min, margin):
 
 # --- Rejouer une calibration réelle (LECTURE SEULE) -------------------------
 
-def _part_de_bruit(modele, corr_min, margin, sigma, n=300, seed=0):
-    """Part des fenêtres de BRUIT PUR que ces seuils laisseraient passer — le chiffre décisif.
+def _bruit_gagnant_ecart(scoreur, n_cyc, n_ch, k, sigma, n=300, seed=0):
+    """(gagnant, écart) sur `n` fenêtres de BRUIT PUR — le chiffre qui décide d'un seuil.
+
+    `scoreur(fenêtre, phase, k)` note une fenêtre : `RCCAModel.scores` ou une petite enveloppe
+    autour de `CVEPModel.scores`, pour que les deux décodeurs soient mesurés du même geste.
 
     « Bruit pur » = du bruit blanc de même écart-type que les époques filtrées, la convention que
-    `cvep_decoder._demo` utilise déjà pour « regard nulle part ». ⚠️ C'est une APPROXIMATION du
-    vrai cas à rejeter (un EEG de repos yeux ouverts porte de l'alpha, pas du bruit blanc) : elle
-    donne un ordre de grandeur, pas une vérité. Le trancher pour de bon demande un enregistrement
-    casque de « la personne ne fixe rien », qui n'existe dans aucun fichier de ce dépôt.
+    `cvep_decoder._demo` utilise déjà pour « regard nulle part ». On rend les DEUX tableaux plutôt
+    qu'un taux : tous les couples de seuils s'évaluent alors sur le MÊME échantillon de bruit, ce
+    qui rend leurs colonnes comparables entre elles (et fait une seule passe au lieu d'une par
+    couple).
+
+    ⚠️ C'est une APPROXIMATION du vrai cas à rejeter — un EEG de repos yeux ouverts porte de
+    l'alpha, pas du bruit blanc. Elle donne un ordre de grandeur. Trancher pour de bon demande un
+    enregistrement casque de « la personne ne fixe rien », qui n'existe dans aucun fichier du dépôt.
     """
     rng = np.random.default_rng(seed)
-    passe = 0
-    for _ in range(n):
-        sc = np.sort(modele.scores(rng.normal(0.0, sigma, (modele.n_cyc, len(modele.channels))),
-                                   0, 1))[::-1]
-        passe += int(sc[0] >= corr_min and (sc[0] - sc[1]) >= margin)
-    return passe / float(n)
+    gagnant, ecart = np.zeros(n), np.zeros(n)
+    for i in range(n):
+        sc = np.sort(np.ravel(scoreur(rng.normal(0.0, sigma, (k * n_cyc, n_ch)), 0, k)))[::-1]
+        gagnant[i], ecart[i] = sc[0], sc[0] - sc[1]
+    return gagnant, ecart
 
 
-def _rejouer(chemin):
-    """Rejoue un `cvep_calib_*.npz` à travers le rCCA et imprime CE QUE VALENT deux couples de
-    seuils : celui du quantile à 5 % (sensibilité) et celui qui est livré dans `config.py`.
+def _rejouer(chemin, n_bruit=300):
+    """Rejoue un `cvep_calib_*.npz` à travers **les deux décodeurs** et **les deux géométries**, et
+    imprime ce que valent plusieurs couples de seuils.
 
     ⚠️ **Ce fichier n'est jamais modifié** : `data/` contient des enregistrements EEG d'une
-    personne identifiable, sur un dépôt public. On lit, on calcule, on imprime.
+    personne identifiable, sur un dépôt public. On lit, on calcule, on imprime. (`data/` est
+    entièrement gitignoré : `git status` ne prouve donc RIEN sur ce point — se vérifie par
+    l'horodatage.)
 
-    Cette commande existe parce que le projet s'est déjà fait avoir : les seuils de l'ErrP ont été
-    posés par un script jetable et non versionné, et `errp_models.py` porte encore le regret de ne
-    pas pouvoir dire à un étudiant comment les refaire. Ici, la commande est la trace — et elle
-    affiche les DEUX couples, pour que le prochain qui voudra rediscuter le choix n'ait pas à
-    refaire l'analyse pour savoir de quoi il parle.
+    Trois choses que cette commande rend vérifiables au lieu d'être à croire :
+
+    1. **le jeu égal eCCA/rCCA**, l'affirmation qui justifie de réintégrer le rCCA. Les deux
+       décodeurs, les mêmes époques, la même validation croisée, le même affichage ;
+    2. **l'effet de la GÉOMÉTRIE**. Une calibration enregistre un cycle par époque, le moteur
+       décide sur `CVEP_DECISION_CYCLES`. Des seuils mesurés à k=1 ne décrivent pas le décodeur
+       qui tourne — la ligne « k=2 » est celle qui compte pour `config.py` ;
+    3. **le point de fonctionnement** de chaque couple, au lieu du seul seuil.
+
+    Le projet s'est déjà fait avoir : les seuils de l'ErrP ont été posés par un script jetable et
+    non versionné, et `errp_models.py` porte encore le regret de ne pas pouvoir dire à un étudiant
+    comment les refaire. Ici, la commande est la trace.
     """
     from core.cvep_code import build_targets
-    from core.config import CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN
-    from core.cvep_decoder import bandpass as _bp
+    from core.config import (CVEP_CORR_MIN, CVEP_MARGIN, CVEP_RCCA_CORR_MIN,
+                             CVEP_RCCA_MARGIN)
+    from core.cvep_decoder import CVEPModel, bandpass as _bp, groupes_de_cycles
 
-    d = np.load(chemin, allow_pickle=True)
-    plan, _code = build_targets()
+    d = np.load(chemin)
+    plan, code = build_targets()
     codes = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
     lag_de_cible = [c["lag"] for c in plan]
+    lags = [int(l) for l in d["lags"]]
     voies = [int(c) for c in d["channels"]]
+    fs, refresh = float(d["fs"]), float(d["refresh"])
     epochs = [d["epochs"][i][:, voies] for i in range(len(d["epochs"]))]
-    y = np.asarray([lag_de_cible.index(int(l)) for l in d["lags"]])
+    y = np.asarray([lag_de_cible.index(l) for l in lags])
 
-    m = RCCAModel(codes, fs=float(d["fs"]), refresh=float(d["refresh"]),
-                  channels=list(range(len(voies)))).fit(epochs, y, compute_cv=True)
-    corr_min, margin, n_bons = seuils_hors_pli(m.oof_scores_, m.oof_y_)
-    print(f"[rcca] {os.path.basename(chemin)} : {len(y)} époques, {m.n_targets} cibles, "
-          f"voies {voies}")
-    print(f"[rcca] leave-one-out : {m.cv_*100:.1f} %  ({int(round(m.cv_*len(y)))}/{len(y)}, "
-          f"hasard {100/m.n_targets:.1f} %)  —  {n_bons} essais corrects")
-    if corr_min is None:
-        print(f"[rcca] quantile 5 % NON posé : {n_bons} essais corrects, moins que le plancher de "
-              f"{SEUILS_N_MIN} — il y vaudrait le minimum de l'échantillon.")
+    rcca = RCCAModel(codes, fs=fs, refresh=refresh,
+                     channels=list(range(len(voies)))).fit(epochs, y, compute_cv=False)
+    ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code),
+                     channels=list(range(len(voies))))
+    ecca.fit(epochs, lags)
+    uniq = sorted(set(lags))
+    sigma = float(np.std([_bp(e, fs, rcca.band) for e in epochs]))
 
-    sigma = float(np.std([_bp(e, m.fs, m.band) for e in epochs]))
-    candidats = [(CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN, "LIVRÉS (config.py)")]
-    if corr_min is not None:
-        candidats.append((corr_min, margin, "quantile 5 % (sensibilité)"))
-    print(f"[rcca] {'seuils':>15s} | corrects gardés | émission | justesse si émis | bruit passé")
-    for c, mg, nom in candidats:
-        pf = point_de_fonctionnement(m.oof_scores_, m.oof_y_, c, mg)
-        just = "  —  " if pf["justesse_si_emis"] is None else f"{pf['justesse_si_emis']*100:4.0f} %"
-        print(f"[rcca] {c:6.3f} /{mg:6.3f} |{pf['corrects_gardes']*100:12.0f} % |"
-              f"{pf['emission']*100:7.0f} % |{just:>17s} |"
-              f"{_part_de_bruit(m, c, mg, sigma)*100:9.0f} %   ({nom})")
-    print("[rcca] ⚠️ une personne, une séance : ces chiffres ne valent que pour CE fichier.")
+    print(f"[seuils] {os.path.basename(chemin)} : {len(y)} cycles, {rcca.n_targets} cibles, "
+          f"voies {voies}, {fs:.0f} Hz / {refresh:.0f} Hz")
+    print(f"[seuils] ⚠️ UNE personne, UNE séance : ces chiffres ne valent que pour CE fichier, et "
+          f"les justesses portent sur peu de décisions — lire les écarts avec prudence.")
+
+    for k in (1, CVEP_DECISION_CYCLES):
+        n_dec = len(groupes_de_cycles(y, k))
+        titre = "géométrie d'une ÉPOQUE de calibration" if k == 1 else \
+                "géométrie de DÉCISION DU MOTEUR (CVEP_DECISION_CYCLES)"
+        print(f"\n[seuils] === k = {k} cycle(s) par décision — {titre} : {n_dec} décisions ===")
+
+        sc_r, y_r = rcca.hors_pli(epochs, y, n_cycles=k)
+        sc_e, y_e, _ = ecca.hors_pli(epochs, lags, n_cycles=k)
+        loo_r = float((sc_r.argmax(axis=1) == y_r).mean())
+        loo_e = float((sc_e.argmax(axis=1) == y_e).mean())
+        print(f"[seuils]   leave-one-out   rCCA {loo_r*100:5.1f} % "
+              f"({int(round(loo_r*n_dec))}/{n_dec})   "
+              f"eCCA {loo_e*100:5.1f} % ({int(round(loo_e*n_dec))}/{n_dec})   "
+              f"hasard {100/rcca.n_targets:.1f} %")
+
+        bruit = {
+            "rCCA": _bruit_gagnant_ecart(rcca.scores, rcca.n_cyc, len(voies), k, sigma, n_bruit),
+            "eCCA": _bruit_gagnant_ecart(
+                lambda w, p, kk: list(ecca.scores(w, p, uniq, n_cycles=kk).values()),
+                ecca.n_cyc, len(voies), k, sigma, n_bruit),
+        }
+
+        q05 = seuils_hors_pli(sc_r, y_r)
+        candidats = [(CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN, "LIVRÉS pour le rCCA (config.py)")]
+        if (CVEP_CORR_MIN, CVEP_MARGIN) != (CVEP_RCCA_CORR_MIN, CVEP_RCCA_MARGIN):
+            candidats.append((CVEP_CORR_MIN, CVEP_MARGIN,
+                              "seuils eCCA livrés (CVEP_CORR_MIN/MARGIN)"))
+        if q05[0] is not None:
+            candidats.append((q05[0], q05[1], f"quantile 5 % rCCA — SENSIBILITÉ, pas rejet "
+                                              f"({q05[2]} essais corrects)"))
+        print(f"[seuils]     seuils      | déc. | corrects gardés | émission | justesse si émis "
+              f"| bruit passé")
+        for c, mg, nom in candidats:
+            for nom_dec, sc, yy in (("rCCA", sc_r, y_r), ("eCCA", sc_e, y_e)):
+                pf = point_de_fonctionnement(sc, yy, c, mg)
+                just = "   —  " if pf["justesse_si_emis"] is None \
+                    else f"{pf['justesse_si_emis']*100:5.0f} %"
+                g, e = bruit[nom_dec]
+                br = float(((g >= c) & (e >= mg)).mean())
+                print(f"[seuils]  {c:6.3f} /{mg:6.3f} | {nom_dec} |"
+                      f"{pf['corrects_gardes']*100:12.0f} % |{pf['emission']*100:7.0f} % |"
+                      f"{just:>16s} |{br*100:9.0f} %"
+                      + (f"   <- {nom}" if nom_dec == "rCCA" else ""))
     return True
 
 
@@ -533,6 +627,19 @@ def _selftest():
     # elle désigne toujours la voisine, sans que rien ne lève.
     cible = 3
     fenetre = synth_cvep(code, plan[cible]["lag"], n_ch, fs, refresh, -6.0, rng)
+
+    # ⚠️ Le DÉFAUT de `n_cycles` doit être celui de son jumeau `CVEPDecoder`. Il valait 1 ici, sans
+    # commentaire : le décodeur décidait alors sur un cycle là où l'eCCA en prend deux, donc ses
+    # seuils — mesurés à deux cycles — ne décrivaient pas ce qu'il faisait. Une asymétrie de
+    # défaut entre deux classes jumelles ne se voit dans aucun test qui passe ses paramètres.
+    from core.cvep_decoder import CVEPDecoder
+    import inspect
+    defaut_rcca = inspect.signature(RCCADecoder.__init__).parameters["n_cycles"].default
+    defaut_ecca = inspect.signature(CVEPDecoder.__init__).parameters["n_cycles"].default
+    chk(defaut_rcca == defaut_ecca == CVEP_DECISION_CYCLES,
+        f"les deux décodeurs décident sur le MÊME nombre de cycles par défaut "
+        f"(rCCA {defaut_rcca}, eCCA {defaut_ecca}, CVEP_DECISION_CYCLES {CVEP_DECISION_CYCLES})")
+
     dec = RCCADecoder(modele, plan, corr_min=-1e9, margin=0.0, n_cycles=1)
     choisi, nommes = dec.classify(fenetre, 0)
     chk(choisi is not None and choisi["name"] == plan[cible]["name"],
@@ -579,6 +686,60 @@ def _selftest():
     chk(_c is None and _m is None and n_court == 10,
         f"sous le plancher d'essais, AUCUN seuil n'est rendu — un quantile à 5 % sur 10 points "
         f"vaut son minimum ({_c}, {_m}, {n_court})")
+
+    # --- 3 ter. La GÉOMÉTRIE de mesure, et le fait qu'elle change les chiffres. ----------------
+    # Un seuil se mesure à la géométrie où il servira. La calibration enregistre UN cycle par
+    # époque, le moteur décide sur `CVEP_DECISION_CYCLES` : mesurer à k=1 et poser le seuil pour
+    # un décodeur qui tourne à k=2 décrit un décodeur qui n'existe pas. `groupes_de_cycles` est
+    # la pièce qui rend la mesure à k possible, et son piège est la FRONTIÈRE entre deux cibles.
+    from core.cvep_decoder import groupes_de_cycles
+    # Trois cibles, trois cycles chacune : à k=2, le 3e cycle de chaque cible n'a pas de voisin de
+    # la même cible, donc les groupes (2,3) et (5,6) sont écartés — 3 décisions au lieu de 4.
+    etiquettes = [0, 0, 0, 1, 1, 1, 2, 2, 2]
+    chk(groupes_de_cycles(etiquettes, 1) == [(i,) for i in range(9)],
+        f"à k=1, chaque cycle est son propre groupe ({groupes_de_cycles(etiquettes, 1)})")
+    chk(groupes_de_cycles(etiquettes, 2) == [(0, 1), (3, 4), (6, 7)],
+        f"à k=2, on groupe des cycles CONSÉCUTIFS de la MÊME cible, et un groupe à cheval sur "
+        f"une frontière est ÉCARTÉ, pas rogné ({groupes_de_cycles(etiquettes, 2)})")
+    chk(all(len({etiquettes[i] for i in g}) == 1 for g in groupes_de_cycles(etiquettes, 3)),
+        "...à k=3 aussi : jamais deux cibles dans le même groupe, sinon on moyennerait deux "
+        "réponses différentes et on fabriquerait une époque que le moteur ne verra jamais")
+    chk(len(groupes_de_cycles(etiquettes, 2)) < len(etiquettes) // 2,
+        f"...et il y a donc MOINS de décisions que de cycles/k : c'est ce qui fait 37 décisions "
+        f"et non 45 sur les 90 cycles réels ({len(groupes_de_cycles(etiquettes, 2))})")
+
+    # ...et la géométrie remonte jusqu'aux scores hors-pli : moins de décisions, et des scores
+    # calculés sur des cycles MOYENNÉS. Sans ça, `--seuils` mesurerait toujours à k=1 en croyant
+    # mesurer à k=2 — l'erreur exacte que ce tour de revue a corrigée.
+    sc1, y1 = modele.hors_pli(epochs, labels, n_cycles=1)
+    sc2, y2 = modele.hors_pli(epochs, labels, n_cycles=2)
+    chk(sc1.shape == (len(labels), len(plan)) and len(y1) == len(labels),
+        f"à k=1, un score hors-pli par cycle ({sc1.shape})")
+    chk(sc2.shape[0] == len(groupes_de_cycles(labels, 2)) and sc2.shape[0] < sc1.shape[0],
+        f"à k=2, un score par GROUPE, et il y en a moins ({sc2.shape} contre {sc1.shape})")
+    chk(np.allclose(sc1, modele.oof_scores_) and np.array_equal(y1, modele.oof_y_),
+        "à k=1, `hors_pli` rend EXACTEMENT ce que `fit(compute_cv=True)` avait déjà mesuré — une "
+        "seule boucle de ré-ajustement dans ce fichier, donc pas deux géométries qui divergent")
+    chk(float((sc2.argmax(axis=1) == y2).mean()) >= float((sc1.argmax(axis=1) == y1).mean()),
+        f"...et moyenner deux cycles ne DÉGRADE pas la justesse ({(sc2.argmax(axis=1)==y2).mean():.2f} "
+        f"contre {(sc1.argmax(axis=1)==y1).mean():.2f}) — c'est tout l'intérêt du repli")
+
+    # ⚠️ HORS-PLI VEUT DIRE HORS-PLI, et c'est CE test qui le prouve — jumeau exact de celui de
+    # `cvep_decoder._selftest`. Si le groupe noté restait dans le jeu d'ajustement, rien ne
+    # lèverait : les chiffres monteraient, ils auraient l'air meilleurs, et TOUS les seuils posés
+    # par `--seuils` seraient optimistes. On le rend visible en donnant du BRUIT PUR étiqueté au
+    # hasard : il n'y a rien à décoder, donc la seule justesse honnête est le hasard (1/6).
+    # MESURÉ sur ce jeu : 8,3 % hors-pli — et **75 % si l'exclusion saute**.
+    rng_b = np.random.default_rng(5)
+    bruit = [rng_b.normal(0.0, 1.0, (modele.n_cyc, n_ch)) for _ in range(12)]
+    y_bruit = np.asarray([i for i in range(len(plan)) for _ in range(2)])
+    sc_b, y_b = RCCAModel(codes, fs=fs, refresh=refresh,
+                          channels=list(range(n_ch))).hors_pli(bruit, y_bruit, n_cycles=1)
+    just_bruit = float((sc_b.argmax(axis=1) == y_b).mean())
+    chk(just_bruit <= 0.35,
+        f"sur du BRUIT PUR, la validation croisée reste au niveau du hasard "
+        f"({just_bruit*100:.1f} % pour {100/len(plan):.1f} %) — si le groupe noté restait dans "
+        f"l'ajustement, ce même jeu monterait à 75 %, mesuré")
 
     # --- 4 bis. Ce qu'un couple de seuils FAIT. --------------------------------------------
     # C'est CETTE fonction qui a fait changer d'avis sur les seuils livrés : le quantile à 5 %
@@ -641,10 +802,17 @@ def _selftest():
         chk(relu.cv_ == modele.cv_ and relu.channels == modele.channels
             and relu.event == modele.event and relu.enc == modele.enc,
             f"...et ses métadonnées ({relu.cv_}, {relu.channels}, {relu.event}, {relu.enc})")
-        with np.load(chemin, allow_pickle=True) as d:
-            chk(str(d["decoder"]) == "rCCA",
+        # ⚠️ `d["decoder"] if "decoder" in d.files` et pas `d["decoder"]` tout court : sans la
+        # garde, une `save` qui cesserait d'écrire le champ ferait sortir un `KeyError` et un
+        # traceback au lieu d'un ÉCHEC nommé — c'est-à-dire que la panne la plus probable de cette
+        # ligne serait la moins lisible. Même durcissement que dans `cvep_models.charger`.
+        # `allow_pickle` n'est PAS demandé : ce format n'a que des tableaux de types simples,
+        # et c'est vérifié plus bas (aucun nom de classe dans le fichier).
+        with np.load(chemin) as d:
+            declare = str(d["decoder"]) if "decoder" in d.files else None
+            chk(declare == "rCCA",
                 f"le fichier DÉCLARE son décodeur — c'est ce que `cvep_models` lit pour choisir "
-                f"la classe ({d['decoder']})")
+                f"la classe ({declare})")
         chk("RCCAModel" not in open(chemin, "rb").read(4096).decode("latin-1"),
             "le fichier ne contient AUCUN nom de classe : c'est ce qui l'a rendu déplaçable, là "
             "où le P300 et l'ErrP ont perdu leurs modèles")

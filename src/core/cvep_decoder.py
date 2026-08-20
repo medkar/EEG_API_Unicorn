@@ -64,6 +64,33 @@ def cca_weights(X, Y, reg=1e-6):
     return wx / (nx or 1.0), wy / (ny or 1.0), rho
 
 
+def groupes_de_cycles(labels, k=1):
+    """Indices des groupes de `k` cycles CONSÉCUTIFS portant la MÊME cible.
+
+    Une calibration enregistre un cycle par époque ; le moteur, lui, décide sur `n_cycles`
+    cycles moyennés (`CVEP_DECISION_CYCLES`). Pour mesurer un décodeur **à la géométrie où il
+    servira**, il faut donc rejouer la calibration par groupes de `k` cycles voisins — et voisins
+    de la MÊME cible, sinon on moyennerait deux réponses différentes.
+
+    ⚠️ Un groupe à cheval sur un changement de cible est **écarté**, pas rogné : les blocs de
+    calibration sont entrelacés, donc ces frontières existent réellement, et un groupe mélangé
+    fabriquerait une époque que le moteur ne verra jamais. Conséquence à connaître en lisant les
+    chiffres : à k=2 sur 90 cycles, il reste 37 décisions et non 45.
+
+    Rend une liste de tuples d'indices. `k=1` rend simplement tous les cycles, un par groupe.
+    """
+    labels = [int(l) for l in labels]
+    k = max(1, int(k))
+    groupes, i = [], 0
+    while i + k <= len(labels):
+        if len(set(labels[i:i + k])) == 1:
+            groupes.append(tuple(range(i, i + k)))
+            i += k
+        else:
+            i += 1                      # frontière de cible : on avance d'un cran, on ne mélange pas
+    return groupes
+
+
 def _corr(a, b):
     """Corrélation de Pearson, robuste aux signaux plats."""
     a = a - a.mean()
@@ -147,6 +174,34 @@ class CVEPModel:
             sc = self._scores_filtered(filt_epochs[i], 0, uniq, w, tmpl)
             ok += (max(sc, key=sc.get) == lags[i])
         return ok / len(filt_epochs)
+
+    def hors_pli(self, epochs, lags, n_cycles=1):
+        """(scores, y, lags_triés) — les scores de validation croisée à la géométrie `n_cycles`.
+
+        Leave-one-GROUPE-out : pour chaque groupe de `n_cycles` cycles consécutifs d'une même
+        cible, on ré-apprend le template SANS aucun de ses cycles, puis on note la moyenne du
+        groupe. `scores[j, i]` est la corrélation du groupe j au lag `lags_triés[i]` ; `y[j]` est
+        l'index du vrai lag dans cette même liste.
+
+        ⚠️ Cette fonction existe pour que **la moitié eCCA de la comparaison soit reproductible**.
+        Le « jeu égal entre les deux décodeurs » est l'affirmation qui justifie de réintégrer le
+        rCCA : un chiffre qu'aucune commande du dépôt n'imprime est un chiffre qu'il faut croire.
+        `python src/core/cvep_rcca.py --seuils <calib.npz>` l'imprime, pour les deux décodeurs et
+        les deux géométries.
+        """
+        filt = [bandpass(e, self.fs, self.band) for e in epochs]
+        lags = [int(l) for l in lags]
+        uniq = sorted(set(lags))
+        scores, y = [], []
+        for g in groupes_de_cycles(lags, n_cycles):
+            dehors = set(g)
+            reste = [(e, l) for i, (e, l) in enumerate(zip(filt, lags)) if i not in dehors]
+            w, tmpl = self._solve([self._align(e, l) for e, l in reste])
+            moyen = np.mean([filt[i] for i in g], axis=0)
+            sc = self._scores_filtered(moyen, 0, uniq, w, tmpl)
+            scores.append([sc[l] for l in uniq])
+            y.append(uniq.index(lags[g[0]]))
+        return np.asarray(scores, dtype=float), np.asarray(y, dtype=int), uniq
 
     # --- décodage --------------------------------------------------------
     def _scores_filtered(self, window, phase, lags, w=None, tmpl=None):
@@ -346,6 +401,47 @@ def _selftest():
             "le fichier ne contient AUCUN nom de module — c'est ce qui le rend déplaçable")
     finally:
         _sh.rmtree(tmp, ignore_errors=True)
+
+    # La MOITIÉ eCCA de la comparaison entre décodeurs. C'est le « 43/90 de l'eCCA » qui justifie
+    # de réintégrer le rCCA : sans une fonction du dépôt qui l'imprime, c'est un chiffre à croire
+    # — exactement le reproche « un chiffre sans provenance » qu'on applique aux seuils.
+    # `hors_pli` la rend reproductible ; `cvep_rcca.py --seuils` l'appelle.
+    plan, code = build_targets()
+    lags = [c["lag"] for c in plan]
+    rng = np.random.default_rng(3)
+    epochs = [synth_cvep(code, l, 4, 250.0, 60.0, -6.0, rng) for l in lags for _ in range(4)]
+    etiquettes = [l for l in lags for _ in range(4)]
+    m = CVEPModel(fs=250.0, refresh=60.0, code_len=len(code), channels=[0, 1, 2, 3])
+    sc1, y1, uniq1 = m.hors_pli(epochs, etiquettes, n_cycles=1)
+    sc2, y2, uniq2 = m.hors_pli(epochs, etiquettes, n_cycles=2)
+    chk(uniq1 == sorted(set(lags)) and sc1.shape == (len(epochs), len(lags)),
+        f"un score hors-pli par cycle et par lag, les lags TRIÉS ({sc1.shape}, {uniq1})")
+    chk(sc2.shape[0] == len(groupes_de_cycles(etiquettes, 2)) and sc2.shape[0] < sc1.shape[0],
+        f"à k=2 (la géométrie de décision du moteur), un score par GROUPE de deux cycles, et il "
+        f"y en a moins ({sc2.shape} contre {sc1.shape})")
+    chk(float((sc1.argmax(axis=1) == y1).mean()) > 1.5 / len(lags),
+        f"...et ces scores DÉCODENT, très au-dessus du hasard "
+        f"({(sc1.argmax(axis=1) == y1).mean()*100:.0f} % pour {100/len(lags):.0f} % de hasard)")
+    # ⚠️ HORS-PLI VEUT DIRE HORS-PLI, et c'est CE test qui le prouve. Le template qui note un
+    # groupe ne doit pas avoir vu ses cycles ; si l'exclusion saute, le template contient une part
+    # de l'époque qu'il note, et la corrélation devient une auto-corrélation. Rien dans le
+    # résultat ne le dirait : les chiffres montent, ils ont l'air meilleurs.
+    #
+    # On le rend visible en donnant à `hors_pli` du BRUIT PUR étiqueté au hasard. Il n'y a rien à
+    # décoder, donc la seule justesse honnête est le hasard (1/6). MESURÉ sur ce jeu : 16,7 %
+    # hors-pli — et **91,7 % si l'exclusion saute**. Une fuite d'un douzième d'époque suffit à
+    # faire décoder du bruit à 92 %, exactement la panne muette que ce dépôt existe pour éliminer.
+    rng_b = np.random.default_rng(5)
+    bruit = [rng_b.normal(0.0, 1.0, (m.n_cyc, 4)) for _ in lags for _ in range(2)]
+    et_bruit = [l for l in lags for _ in range(2)]
+    m2 = CVEPModel(fs=250.0, refresh=60.0, code_len=len(code), channels=[0, 1, 2, 3])
+    sc_b, y_b, _u = m2.hors_pli(bruit, et_bruit, n_cycles=1)
+    just_bruit = float((sc_b.argmax(axis=1) == y_b).mean())
+    chk(sc_b.shape[0] == len(bruit), f"un groupe par cycle ({sc_b.shape[0]} pour {len(bruit)})")
+    chk(just_bruit <= 0.35,
+        f"sur du BRUIT PUR, la validation croisée reste au niveau du hasard "
+        f"({just_bruit*100:.1f} % pour {100/len(lags):.1f} %) — si l'exclusion du pli sautait, "
+        f"ce même jeu monterait à 91,7 %, mesuré")
 
     print(f"[cvep-decoder] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

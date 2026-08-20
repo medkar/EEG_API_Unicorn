@@ -116,7 +116,16 @@ def charger(chemin):
         return None, f"modèle introuvable : {chemin}"
     nom = _os.path.basename(chemin)
     try:
-        with _np.load(chemin, allow_pickle=True) as d:
+        # ⚠️ PAS d'`allow_pickle=True`, et c'est mesuré, pas une précaution en l'air : les trois
+        # fichiers réels du dépôt (`cvep_model.npz`, `cvep_rcca_model.npz`, `cvep_calib_last.npz`)
+        # se relisent tous sans lui — le format c-VEP n'a que des tableaux de types simples. Le
+        # drapeau n'apportait donc rien, et il coûtait : `np.load(..., allow_pickle=True)` DÉPICKLE
+        # au premier accès, c'est-à-dire exécute du code contenu dans le fichier. Or cette fonction
+        # est exactement celle qui ouvre des fichiers dont on ne sait rien (`modeles_disponibles`
+        # charge tout ce qui traîne dans `data/`), dans le module dont la docstring vante l'absence
+        # de nom de classe à ressusciter. Sans le drapeau, un `.npz` piégé lève, et le refus dit
+        # « modèle illisible » au lieu de l'exécuter.
+        with _np.load(chemin) as d:
             presentes = set(d.files)
             # Le champ d'aiguillage. Absent = modèle d'avant ce chantier, donc eCCA.
             decodeur = str(d["decoder"]) if "decoder" in presentes else DECODEUR_HERITE
@@ -393,6 +402,37 @@ def _selftest():
             and "cvep_model_calib.npz" in (raison or ""),
             f"un fichier d'époques rangé sous un nom de modèle est refusé POUR CE QU'IL EST "
             f"({raison})")
+
+        # Un `.npz` dont les tableaux sont de dtype OBJET, c'est-à-dire du pickle. `np.load(...,
+        # allow_pickle=True)` DÉPICKLE au premier accès — donc exécute du code contenu dans le
+        # fichier — et `charger` est précisément la fonction qui ouvre tout ce qui traîne dans
+        # `data/`. Sans le drapeau, numpy refuse et l'étudiant lit « modèle illisible ».
+        #
+        # ⚠️ Ce que cette assertion protège EXACTEMENT, mesuré par analyse de mutation : « aucun
+        # pickle n'est dépickle NULLE PART dans le chemin de chargement ». Il y a deux `np.load`
+        # sur ce chemin — celui de `charger` et celui de `RCCAModel.load` — et remettre
+        # `allow_pickle=True` sur UN SEUL laisse le test vert, parce que l'autre refuse encore.
+        # C'est de la défense en profondeur, pas un trou : remettre le drapeau sur les DEUX rougit
+        # 3 assertions (le fichier est alors ACCEPTÉ et apparaît dans la liste). La fixture vise la
+        # clé `codes` parce que c'est la seule que `charger` lit elle-même, et son contenu est
+        # celui des VRAIS codes, pour que le contrôle de stimulus ne masque pas le résultat.
+        pickle_piege = _os.path.join(dossier, "cvep_rcca_model_pickle.npz")
+        rcca_ok = _rcca(codes_du_jour)
+        _np.savez(pickle_piege, codes=_np.asarray(codes_du_jour, dtype=object),
+                  epochs=_np.asarray(rcca_ok._epochs), labels=rcca_ok._labels,
+                  fs=250.0, refresh=60.0, band=_np.asarray([2.0, 45.0]),
+                  channels=_np.asarray(rcca_ok.channels, dtype=int), event="refe", enc=0.30,
+                  cv=0.5, decoder="rCCA")
+        with _np.load(pickle_piege, allow_pickle=True) as d:
+            chk(d["codes"].dtype == object,
+                f"fixture : le fichier contient VRAIMENT un tableau d'objets ({d['codes'].dtype})")
+        _m, raison = charger(pickle_piege)
+        chk(_m is None and "illisible" in (raison or "")
+            and "cvep_rcca_model_pickle.npz" in (raison or ""),
+            f"un .npz qui contient du PICKLE est refusé, pas dépickle — `charger` ouvre tout ce "
+            f"qui traîne dans data/ ({raison})")
+        chk(pickle_piege not in modeles_disponibles(dossier),
+            "...et il n'apparaît donc pas dans la liste proposée à l'étudiant")
 
         # Un décodeur déclaré que ce produit ne connaît pas : fichier venu d'une version plus
         # récente, ou bricolé. On le NOMME plutôt que de retomber en silence sur l'eCCA.

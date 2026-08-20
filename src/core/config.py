@@ -353,10 +353,26 @@ CVEP_RCCA_ENC = 0.30          # durée (s) de la réponse transitoire apprise (~
 # existent ; ce n'est pas une vérité générale, et ça vaut jusqu'à ce qu'une seconde personne soit
 # mesurée — exactement la même réserve que pour l'eCCA au-dessus.
 #
-# POINT DE FONCTIONNEMENT DES VALEURS LIVRÉES (0,26 / 0,09), mesuré :
-#     71 % de justesse quand le décodeur émet   (contre 47,8 % sans aucun seuil)
-#     27 % de taux d'émission
-#     10 % des fenêtres de bruit pur passent    (40 % des essais corrects sont gardés)
+# ⚠️ **MESURÉS À LA GÉOMÉTRIE DE DÉCISION DU MOTEUR** (k = CVEP_DECISION_CYCLES = 2 cycles
+# moyennés par décision), et pas à celle d'une époque de calibration (k = 1). Ce n'est pas un
+# détail : la géométrie déplace tout. Aux mêmes seuils 0,26/0,09, le rCCA passe de 71 % de justesse
+# à k=1 à 64 % à k=2, et le bruit passé de 10 % à 7 %. Des seuils mesurés à k=1 décriraient un
+# décodeur qui n'existe pas — celui du moteur décide sur deux cycles.
+# À k=2 il reste **37 décisions** sur les 90 cycles (24 correctes) : les groupes à cheval sur un
+# changement de cible sont écartés, pas rognés (cf. `cvep_decoder.groupes_de_cycles`).
+#
+# POINT DE FONCTIONNEMENT DES VALEURS LIVRÉES (0,24 / 0,08) à k=2, mesuré :
+#     69 % de justesse quand le décodeur émet   (contre 64,9 % sans aucun seuil)
+#     35 % de taux d'émission                   (13 décisions sur 37)
+#     10 % des fenêtres de bruit pur passent    (38 % des décisions correctes sont gardées)
+#
+# ⚠️ **Pourquoi 0,24/0,08 et pas 0,26/0,09** (les seuils de l'eCCA, retenus au tour précédent quand
+# la mesure était faite à k=1) : à k=2, les deux tiennent le bruit au même ordre (10 % contre 7 %),
+# mais 0,24/0,08 émet sur 35 % des décisions au lieu de 30 % — plus de décisions utilisables pour
+# le même budget de bruit. ⚠️ En revanche, l'écart de JUSTESSE entre les deux (69 % contre 64 %)
+# porte sur **2 décisions sur 37** : il n'est pas interprétable, et personne ne doit s'en servir
+# pour affirmer que l'un décode mieux que l'autre. Ce qui tranche ici est le taux de bruit, estimé
+# lui sur 300 fenêtres.
 #
 # ⚠️ **POURQUOI CES VALEURS ET PAS LE QUANTILE À 5 %** — à lire avant de « corriger » ceci.
 # Une première procédure visait « le quantile qui garde 95 % des essais corrects », et donnait
@@ -374,16 +390,20 @@ CVEP_RCCA_ENC = 0.30          # durée (s) de la réponse transitoire apprise (~
 # `core.cvep_rcca.seuils_hors_pli` reste livrée et testée : elle chiffre la borne basse (le plus
 # bas qu'on puisse descendre sans perdre de bons essais), et `--seuils` l'affiche à côté.
 #
-# ⚠️ Ce n'est PAS une différence d'ÉCHELLE avec l'eCCA — les deux valeurs sont identiques aux
-# siennes, et ce n'est pas un copier-coller : mesurées, leurs corrélations vivent au même endroit
-# (gagnant médian 0,262 pour le rCCA, 0,296 pour l'eCCA), et 0,26/0,09 tombe au même point de
-# fonctionnement chez les deux (eCCA sur ses propres scores : 63 % de corrects gardés, 40 %
-# d'émission, 75 % de justesse, 10 % de bruit). L'ancien commentaire de ces deux constantes —
-# « scores rCCA sur une autre échelle » — était faux ; il est corrigé ici. Ce qui trancherait
-# vraiment : enregistrer une fois, au casque, ce que valent ces scores quand la personne ne fixe
-# RIEN. Ce fichier n'existe pas, et le bruit blanc n'en est qu'une approximation.
-CVEP_RCCA_CORR_MIN = 0.26     # corrélation mini du gagnant  (71 % de justesse à l'émission)
-CVEP_RCCA_MARGIN = 0.09       # écart mini 1er - 2e          (27 % d'émission, 10 % de bruit passé)
+# ⚠️ Ce n'est PAS une différence d'ÉCHELLE avec l'eCCA : mesurées, les corrélations des deux
+# décodeurs vivent au même endroit (gagnant médian, essais corrects, k=2 : 0,261 pour le rCCA,
+# 0,323 pour l'eCCA), et les mêmes seuils y donnent des points de fonctionnement voisins. L'ancien
+# commentaire de ces deux constantes — « scores rCCA sur une autre échelle » — était faux ; il est
+# corrigé ici. Ce qui trancherait vraiment : enregistrer une fois, au casque, ce que valent ces
+# scores quand la personne ne fixe RIEN. Ce fichier n'existe pas, et le bruit blanc n'en est
+# qu'une approximation (un EEG de repos yeux ouverts porte de l'alpha, pas du bruit blanc).
+#
+# ⚠️ Les seuils eCCA au-dessus (CVEP_CORR_MIN/CVEP_MARGIN = 0,26/0,09) N'ONT PAS été retouchés :
+# ils sont validés au casque, et ce chantier n'a pas mandat de les rejuger. `--seuils` imprime
+# leur point de fonctionnement à côté (k=2 : 55 % gardés, 46 % d'émission, 71 % de justesse, 10 %
+# de bruit) — c'est une donnée pour la séance qui viendra, pas une proposition de les changer.
+CVEP_RCCA_CORR_MIN = 0.24     # corrélation mini du gagnant  (69 % de justesse à l'émission, k=2)
+CVEP_RCCA_MARGIN = 0.08       # écart mini 1er - 2e          (35 % d'émission, 10 % de bruit passé)
 
 
 # Nombre de cibles c-VEP. C'EST le paramètre d'exploration : le SSVEP est plafonné par les
