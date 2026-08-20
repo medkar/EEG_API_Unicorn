@@ -306,9 +306,9 @@ class CVEPRuntime(ModeRuntime):
         arithmétiques à garder d'accord, sur exactement le genre de comparaison flottante qui a
         déjà coûté une frame entière à ce fichier (cf. `_EPS_FRAME`).
 
-        Deux causes seulement là où la docstring du module en compte trois : la troisième
-        (`vote_non_conclu`) n'a rien à voir avec l'horloge, elle se décide plus loin, sur des
-        corrélations. Et le cas `age < 0` — un instant antérieur au dernier marqueur — est rangé
+        Deux causes seulement là où la docstring du module en compte quatre : les deux autres
+        (`sous_les_seuils`, `vote_non_conclu`) n'ont rien à voir avec l'horloge — elles se
+        décident plus loin, sur des corrélations puis sur le vote glissant. Et le cas `age < 0` — un instant antérieur au dernier marqueur — est rangé
         sous `reference_perimee` plutôt que sous une quatrième cause : par le chemin du moteur il
         est INATTEIGNABLE (`markers_murs` ne rend jamais un marqueur postérieur au dernier
         échantillon acquis, et le moteur compte à part ceux qui viennent du futur, cf.
@@ -364,8 +364,10 @@ class CVEPRuntime(ModeRuntime):
         """Comme `ModeRuntime.state()`, plus les compteurs qui disent POURQUOI il ne décide pas.
 
         Sans eux, une séance muette n'a qu'une lecture possible — « l'étudiant fixe mal » — et
-        c'est le mode de panne le plus coûteux de ce projet. Les quatre premiers se somment au
-        nombre de fenêtres traitées ; les trois derniers décrivent la dernière fenêtre seule.
+        c'est le mode de panne le plus coûteux de ce projet. Les CINQ premiers PARTITIONNENT les
+        fenêtres traitées (chacune en incrémente exactement un, cf. `_raz_compteurs`) ;
+        `marqueurs_refuses` compte des MARQUEURS et non des fenêtres, il n'entre pas dans cette
+        somme ; les trois derniers décrivent la dernière fenêtre seule.
         """
         base = super().state()
         base["decodages"] = self._decodages
@@ -1136,6 +1138,30 @@ def _selftest():
         f"horloge périmée ({rt_w._ref_ts})")
     chk(rt_w.state()["sans_reference"] == 0 and rt_w.state()["decodages"] == 0,
         f"...et les compteurs repartent de zéro avec elle ({rt_w.state()})")
+
+    # ⚠️ Et la FILE DE VOTES part avec, ce qui est le même défaut que celui juste au-dessus, sur
+    # l'état que le vote glissant vient d'ajouter. Le scénario tient en trois lignes : une fenêtre
+    # franche AVANT le repos laisse un vote dans la file ; si « refaire le repos » ne la vide pas,
+    # UNE SEULE fenêtre neuve suffit ensuite à atteindre `min_votes` — le mode émet une cible en
+    # s'appuyant sur des votes qui décrivent un montage qu'on vient de démonter, avec une
+    # confiance parfaitement normale.
+    #
+    # L'assertion porte sur le COMPORTEMENT (« une fenêtre seule n'émet toujours pas »), pas sur
+    # `len(rt._votes)` : une file vidée par un autre chemin, ou un vote qui cesserait de lire sa
+    # file, laisserait passer un test écrit sur l'attribut.
+    rt_p = _runtime_de_test(modele=modele_appris)
+    rt_p._out = _FauxPublieur()
+    rt_p._opened = True
+    rt_p._run_step(_moteur_sur(lag_vrai), lsl_ts=float(ts_e[-1]))   # 1er vote, avant le repos
+    chk(rt_p.output()["target_index"] == -1 and len(rt_p._votes) == 1,
+        f"fixture : la fenêtre d'avant le repos a bien laissé UN vote dans la file "
+        f"({len(rt_p._votes)})")
+    rt_p.begin_rest(now=0.0, warmup_s=0.0, duration_s=0.0)
+    rt_p._run_step(_moteur_sur(lag_vrai), lsl_ts=float(ts_e[-1]))   # 1re fenêtre d'APRÈS
+    chk(rt_p.output()["target_index"] == -1
+        and rt_p.state()["vote_non_conclu"] == 1 and rt_p.state()["decodages"] == 0,
+        f"...et « refaire le repos » VIDE la file de votes : la première fenêtre d'après ne peut "
+        f"pas émettre en s'appuyant sur des votes d'avant ({rt_p.output()}, {rt_p.state()})")
 
     print(f"[cvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
