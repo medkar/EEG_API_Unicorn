@@ -217,28 +217,68 @@ Autour de lui, quatre gardes :
 Et pour les deux décodeurs : **la comparaison de calibration ne doit pas mentir**. Validation croisée
 groupée sur les mêmes époques, jamais deux protocoles différents comparés entre eux.
 
-## 10. La séance casque — la dette la plus vieille du projet
+## 10. Préparer la séance casque — sans la faire
 
-Trois chantiers ont été livrés sans qu'un casque soit branché : marqueurs+P300, ErrP, et celui-ci.
-Le chantier se termine par une **séance qui couvre les trois** — les tests 2.7 et 2.8 existent déjà,
-le 2.9 est à écrire.
+**Le chantier se termine AVANT la séance**, et il se termine fermé : tests verts, poussé, rien en
+suspens. La séance est un travail à part, qui couvrira d'un coup les trois modes jamais vérifiés au
+casque — P300, ErrP, c-VEP.
 
-Le c-VEP en a plus besoin que les autres, pour la raison donnée en §9 : sa panne caractéristique est
-un décodage **dégradé mais plausible**, que le synthétique ne montre pas.
+Mais une séance casque est **chère et non répétable** : la qualité de contact varie d'un facteur 9
+d'une séance à l'autre dans ce projet, la fatigue dégrade le signal en fin de séance, et **rouvrir
+l'appli sature C3/Cz**. On ne peut donc pas compter sur « on ajustera et on refera ». Ce que le
+chantier doit livrer, c'est de quoi **tirer le maximum d'UNE séance**, en trois points.
 
-Le 2.9 doit inclure la **comparaison contre l'écran pygame archivé**, sur la même personne, dans la
-même séance. C'est la raison pour laquelle on archive au lieu de supprimer.
+### 10.1 Ce qu'on voudra régler doit être un RÉGLAGE, pas une constante
+
+Les valeurs qu'une séance ajuste sont connues d'avance : `CVEP_CORR_MIN = 0,26` et
+`CVEP_MARGIN = 0,09` (le seuil de décision), et les seuils rCCA qui n'ont jamais été posés. Elles
+deviennent des paramètres du mode, réglables depuis la console.
+
+⚠️ **Et elles doivent être réglables SANS recréer le flux.** L'ErrP a exactement ce défaut : changer
+son `tnr_target` reconstruit le runtime, détruit et recrée `decoded_cvep`, et relance 23 s de chauffe
+— le récepteur ouvert devient muet, et l'opérateur conclut à une panne. En pleine séance, ce serait
+payé en minutes de casque à chaque essai de réglage.
+
+**Conséquence de conception** : le runtime lit `corr_min` et `margin` **à chaque décision**, au lieu
+de les figer dans son `__init__`. C'est ce qui permet de les déclarer sans reconstruction, donc de
+tourner le bouton et de voir l'effet immédiatement, sans réabonner personne ni refaire la chauffe.
+
+### 10.2 Ce qu'on voudra diagnostiquer doit être VISIBLE
+
+Une séance décevante ne vaut rien si elle ne dit pas **pourquoi**. L'état du mode expose donc, en
+plus des décisions : le nombre de fenêtres décodées, la répartition des `-1` **par cause** (vote non
+conclu / pas de référence de phase / référence périmée), l'**âge de la référence de phase**, et la
+corrélation du gagnant et du second sur la dernière fenêtre.
+
+Sans ça, « ça ne détecte pas » ne permet pas de distinguer une phase fausse d'un contact médiocre
+d'un étudiant qui ne fixe pas — trois causes qui appellent trois gestes opposés.
+
+### 10.3 La procédure et la référence doivent être prêtes
+
+Les tests **1.16** (sans casque) et **2.9** (au casque) s'écrivent DANS le chantier : ils sont le
+script de la séance, pas son compte rendu. Le 2.9 inclut la **comparaison contre l'écran pygame
+archivé**, sur la même personne et dans la même séance — c'est la seule mesure qui sépare « le
+décodage réseau est moins bon » de « la séance est moins bonne », et c'est la raison pour laquelle
+on archive au lieu de supprimer.
+
+⚠️ Le 2.9 doit dire d'avance **ce qui est un résultat normal**, comme le 2.8 a dû le faire pour
+l'ErrP. Sans ce garde-fou, un opérateur qui voit une cible sur six mal désignée conclut à la panne
+alors qu'il regarde le comportement attendu.
 
 ## 11. Découpage indicatif
 
 1. Déménager `cvep_decoder.py` + `cvep_code.py` dans `core/` ; **prouver que le modèle se charge**.
 2. `core/modes/cvep.py` : le mode, la phase, les trois états muets, le refus sans modèle.
 3. Le réglage `model` à deux décodeurs + `pyntbci` déclaré + les seuils rCCA posés.
-4. `DecodedCVEPPublisher` + enregistrement au registre + la tuile console.
+4. `DecodedCVEPPublisher` + registre + tuile console + **les compteurs de diagnostic** (§10.2).
 5. `research/cvep_stimulus.py` : l'émetteur + **le test de phase**.
 6. La calibration entraîne les deux et affiche les deux chiffres.
-7. Documentation (`markers.md`, SPEC §5 et §14, recette 1.16 et 2.9, README, CLAUDE.md).
-8. La séance casque : 2.7, 2.8, 2.9.
+7. Les **seuils réglables à chaud** (§10.1), avec le test qui prouve qu'un changement ne recrée pas
+   le flux — la garde qui manque à l'ErrP.
+8. Documentation (`markers.md`, SPEC §5 et §14, recette **1.16 et 2.9**, README, CLAUDE.md).
+
+**Le chantier est fini à la tâche 8.** La séance casque suit, comme travail distinct, et pourra
+ajuster les seuils sans rouvrir une ligne de code.
 
 ## 12. Ce qui reste DEHORS
 
@@ -250,6 +290,13 @@ même séance. C'est la raison pour laquelle on archive au lieu de supprimer.
 - **La calibration jouée par le moteur** — comme le P300 et l'ErrP, elle reste dans l'appli pygame :
   son stimulus doit être verrouillé à la frame.
 - **Une seconde personne mesurée** — tous les chiffres du c-VEP viennent d'une personne.
+- **La séance casque elle-même** — travail distinct, immédiatement après (§10). Le chantier livre de
+  quoi la réussir en une fois ; il ne la fait pas.
+
+⚠️ **Ce que ce chantier NE prouve donc pas, et qu'il faut dire en l'annonçant** : que le c-VEP décode
+un vrai cerveau à travers le réseau. La chaîne sera vérifiée de bout en bout en synthétique, la phase
+sera gardée au niveau de la frame — mais le premier signal réel passera après. C'est le troisième
+chantier de suite dans ce cas, et la séance qui suit les couvre tous les trois.
 
 ## 13. Contraintes qui lient tout le chantier
 
