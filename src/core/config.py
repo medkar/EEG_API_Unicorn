@@ -315,6 +315,16 @@ CVEP_VOTE_LEN = 3             # vote glissant (décodage ~5 Hz)
 CVEP_MIN_VOTES = 2
 CVEP_MODEL_PATH = _os.path.join(DATA_DIR, "cvep_model.npz")
 
+# Au-delà de CVEP_PEREMPTION_CYCLES cycles sans nouveau marqueur de cycle, la référence de phase
+# (le dernier `{"mode":"cvep","event":"cycle"}` reçu) est PÉRIMÉE : le moteur cesse de décoder
+# plutôt que de dériver en silence. Continuer en « roue libre » (extrapoler indéfiniment depuis le
+# dernier marqueur) est l'approche que la spec écarte : à 59,94 Hz réels affichés contre 60 Hz
+# supposés — un écran ordinaire, pas un cas extrême — l'erreur atteint déjà 3,6 frames au bout
+# d'une minute, sur un code qui n'en fait que 63. 3 cycles = 3,15 s à 60 Hz : assez pour absorber
+# une frame sautée ou un marqueur en retard, trop court pour laisser la dérive d'horloge dépasser
+# une fraction de frame.
+CVEP_PEREMPTION_CYCLES = 3
+
 # --- c-VEP variante rCCA + CODES DISTINCTS (2e mode c-VEP, séparé) -----------
 # Le c-VEP « classique » ci-dessus utilise UNE m-séquence décalée circulairement : c'est le cas
 # où notre eCCA (template partagé) est déjà maximalement efficace, et où la reconvolution rCCA
