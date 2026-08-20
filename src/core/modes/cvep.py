@@ -52,17 +52,28 @@ rafraîchissement, et c'est l'ÉMETTEUR qui tient l'écran — le moteur ne peut
 recevoir un marqueur. Sans cette garde : le décodage tourne, les scores restent honnêtes, et RIEN
 ne se déclenche jamais — c'est la panne qui a coûté une séance au SSVEP (cf. `SSVEP_WARMUP_S`).
 
-⚠️ **TROIS façons de ne pas décider, et elles sont COMPTÉES SÉPARÉMENT** (`state()`). Le flux, lui,
+⚠️ **QUATRE façons de ne pas décider, et elles sont COMPTÉES SÉPARÉMENT** (`state()`). Le flux, lui,
 ne porte qu'un `-1` : c'est le contrat public, et il ne dit pas pourquoi. Or une séance casque coûte
 cher et ne se répète pas — « ça ne détecte pas » sans la cause ne permet pas de distinguer
     1. `sans_reference`     — aucun marqueur d'horloge n'est jamais arrivé : l'émetteur n'est pas
                               lancé, ou il publie sous un autre nom de flux (`stream_in`) ;
     2. `reference_perimee`  — l'horloge s'est TUE : l'émetteur a planté, ou l'écran a été fermé ;
-    3. `vote_non_conclu`    — le décodage a bien tourné, les corrélations ne tranchent pas :
-                              contact médiocre, ou personne qui ne fixe rien.
-Trois causes, trois gestes OPPOSÉS (relancer l'émetteur · vérifier le nom du flux · saliner et
-refaire fixer). `age_reference_s`, `corr_gagnant` et `corr_second` complètent le tableau : ils
-disent, en une ligne, si l'horloge est vivante et à quelle hauteur les corrélations passent.
+    3. `sous_les_seuils`    — le décodage a bien tourné, les corrélations ne passent pas
+                              `corr_min`/`margin` : contact médiocre, ou personne qui ne fixe rien ;
+    4. `vote_non_conclu`    — elles passent, mais les fenêtres récentes ne s'accordent pas : le
+                              regard se promène d'une cible à l'autre.
+Quatre causes, quatre gestes OPPOSÉS (relancer l'émetteur · vérifier le nom du flux · saliner ·
+fixer UNE cible sans bouger les yeux). Les cinq compteurs — ces quatre plus `decodages` —
+PARTITIONNENT les fenêtres traitées : chacune en incrémente exactement un. `age_reference_s`,
+`corr_gagnant` et `corr_second` complètent le tableau : ils disent, en une ligne, si l'horloge est
+vivante et à quelle hauteur les corrélations passent.
+
+⚠️ **Le VOTE GLISSANT (spec §5) est dans le mode, pas dans le publieur.** Passer les deux seuils ne
+suffit pas : il faut que `min_votes` des `vote_len` dernières fenêtres désignent la MÊME cible.
+`core/lsl_io.py` est un transport sans état — y mettre une décision créerait une seconde logique de
+décodage hors du mode. Ce vote n'est pas un raffinement : sans lui, le moteur décoderait à la même
+cadence et sur la même géométrie que l'écran pygame que ce chantier archive, MOINS son 2-sur-3 —
+donc strictement plus permissif que la référence à laquelle la séance casque doit le comparer.
 
 ⚠️ **Ce fichier ne rend AUCUN stimulus.** Comme le P300 et l'ErrP, c'est une application EXTERNE
 (`research/cvep_stimulus.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
@@ -80,8 +91,11 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (CVEP_BITS, CVEP_CHANNELS, CVEP_DECISION_CYCLES,  # noqa: E402
-                         CVEP_MODEL_PATH, CVEP_N_TARGETS, CVEP_PEREMPTION_CYCLES,
-                         MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S, use_utf8_console)
+                         CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_N_TARGETS,
+                         CVEP_PEREMPTION_CYCLES, CVEP_VOTE_LEN, MARKER_STREAM_DEFAULT,
+                         SSVEP_WARMUP_S, use_utf8_console)
+
+from collections import Counter, deque  # noqa: E402
 
 import numpy as np  # noqa: E402
 
@@ -116,7 +130,10 @@ _MOTIFS_FR = {
     "sans_reference": "aucun marqueur d'horloge reçu — lance l'émetteur c-VEP, et vérifie qu'il "
                       "publie sur le flux réglé",
     "reference_perimee": "horloge PÉRIMÉE — l'émetteur s'est tu (planté ? fenêtre fermée ?)",
-    "vote_non_conclu": "corrélations trop faibles ou trop serrées — saline, et fixe UNE cible",
+    "sous_les_seuils": "corrélations trop faibles ou trop serrées — vérifie le contact, saline, "
+                      "et fixe UNE cible",
+    "vote_non_conclu": "les fenêtres récentes ne s'accordent pas — fixe UNE cible sans bouger "
+                       "les yeux",
 }
 
 # Tolérance flottante sur `age * refresh`, juste avant de tronquer en frame entière dans
@@ -190,6 +207,13 @@ class CVEPRuntime(ModeRuntime):
         self._out = None
         self._decoded = None
         self._last_log = 0.0
+        # Le VOTE GLISSANT (spec §5), sur le patron de `core/modes/mi.py`. Sans lui, le moteur
+        # décoderait à la même cadence et sur la même géométrie que l'écran pygame que ce
+        # chantier archive, MOINS son 2-sur-3 : strictement plus permissif que la référence à
+        # laquelle la séance casque doit le comparer. On garde `(nom, corrélation)` et non le seul
+        # nom, parce que c'est la MOYENNE des corrélations des fenêtres VOTANTES qui devient la
+        # confiance publiée — cf. `_run_step`.
+        self._votes = deque(maxlen=int(params["vote_len"]))
         self._raz_compteurs()
 
     def _raz_compteurs(self):
@@ -205,7 +229,18 @@ class CVEPRuntime(ModeRuntime):
         self._decodages = 0            # fenêtres qui ont DÉSIGNÉ une cible
         self._sans_reference = 0       # ...aucun marqueur d'horloge jamais reçu
         self._reference_perimee = 0    # ...l'horloge s'est tue depuis trop longtemps
-        self._vote_non_conclu = 0      # ...corrélations sous corr_min, ou écart sous margin
+        # ⚠️ `sous_les_seuils` et `vote_non_conclu` sont DEUX refus distincts, et c'est la
+        # correction la plus utile de ce fichier. Le brief n'en prévoyait qu'un, nommé
+        # « vote_non_conclu », qui comptait en réalité les fenêtres sous `corr_min`/`margin` —
+        # un vote qui n'existait pas encore. Maintenant qu'il existe :
+        #   • `sous_les_seuils`  = cette fenêtre n'avait AUCUN candidat -> regarder le SIGNAL
+        #                          (contact, saline, la personne fixe-t-elle quelque chose ?) ;
+        #   • `vote_non_conclu`  = elle en avait un, mais les fenêtres récentes ne s'accordent
+        #                          pas -> regarder la STABILITÉ du regard.
+        # Deux gestes opposés. Les cinq compteurs PARTITIONNENT les fenêtres traitées : chaque
+        # fenêtre en incrémente exactement un.
+        self._sous_les_seuils = 0
+        self._vote_non_conclu = 0
         self._marqueurs_refuses = 0    # marqueurs de cycle inutilisables (refresh manquant/faux)
         self._age_reference_s = None
         self._corr_gagnant = None
@@ -297,6 +332,7 @@ class CVEPRuntime(ModeRuntime):
             len(self.plan), decoder=self.model.decoder, refresh=self.model.refresh,
             code_len=self.code_len, corr_min=self.decodeur.corr_min,
             margin=self.decodeur.margin, cv=getattr(self.model, "cv_", None),
+            votes=(int(self.params["min_votes"]), int(self.params["vote_len"])),
             instance=self.engine.instance)
 
     def _close(self):
@@ -311,6 +347,9 @@ class CVEPRuntime(ModeRuntime):
         # corrélations d'apparence normale — la panne muette que ce mode existe pour éliminer.
         self._ref_ts = None
         self._ref_refresh = None
+        # ...et le vote glissant avec elle : ses fenêtres décrivent un montage qu'on vient de
+        # toucher, elles ne doivent pas peser sur la première décision d'après.
+        self._votes.clear()
 
     def output(self):
         return self._decoded
@@ -332,6 +371,7 @@ class CVEPRuntime(ModeRuntime):
         base["decodages"] = self._decodages
         base["sans_reference"] = self._sans_reference
         base["reference_perimee"] = self._reference_perimee
+        base["sous_les_seuils"] = self._sous_les_seuils
         base["vote_non_conclu"] = self._vote_non_conclu
         base["marqueurs_refuses"] = self._marqueurs_refuses
         base["age_reference_s"] = self._age_reference_s
@@ -378,13 +418,18 @@ class CVEPRuntime(ModeRuntime):
     def _encaisser_marqueurs(self, engine):
         """Avance l'horloge sur tous les marqueurs de cycle mûrs. Ne lève jamais.
 
-        ⚠️ `post_s=0.0`, et c'est un choix, pas un oubli : `markers_murs` attend que le tampon
+        ⚠️ `post_s=0.0`, et c'est un choix, pas un oubli. `markers_murs` attend que le tampon
         couvre les `post_s` secondes SUIVANT le marqueur. Pour une époque (P300, ErrP) c'est
-        indispensable — il faut le signal d'après. Pour une HORLOGE, il n'y a rien à attendre :
-        le marqueur dit où en était le code à `ts`, point. Réclamer `marker_epoch_s` (2,1 s)
-        retarderait chaque référence d'autant, sur des références qui ne valent que
-        `CVEP_PEREMPTION_CYCLES` × 1,05 = 3,15 s — le mode passerait le plus clair de son temps
-        en `reference_perimee`, sans qu'aucune ligne ne soit fausse.
+        indispensable — il faut le signal d'après pour la découper. Pour une HORLOGE il n'y a
+        rien à attendre : le marqueur dit où en était le code à `ts`, et c'est tout.
+
+        Le second argument, celui de la MARGE, mérite d'être écrit avec ses chiffres parce qu'il
+        est plus serré qu'il n'en a l'air. Avec `post_s = marker_epoch_s` (2,1 s), la référence
+        la plus fraîche que le mode puisse tenir aurait toujours entre 2,1 s et 3,15 s d'âge, et
+        la péremption tombe à `> 3,15` s : le mode ne serait donc PAS cassé avec un émetteur
+        parfait — il fonctionnerait avec **zéro marge**. Le premier marqueur sauté (une frame
+        perdue, un tour de boucle long) ferait basculer la référence en `reference_perimee`, et
+        le mode cesserait de décoder pour une raison que personne ne rattacherait à ce réglage.
         """
         for ts, marqueur in engine.markers_murs(self.spec.id, post_s=0.0):
             if marqueur.get("event") != "cycle":
@@ -482,13 +527,43 @@ class CVEPRuntime(ModeRuntime):
         ordonnes = sorted(scores, reverse=True)
         self._corr_gagnant = round(ordonnes[0], 3)
         self._corr_second = round(ordonnes[1], 3) if len(ordonnes) > 1 else None
-        if cible is None:
-            self._vote_non_conclu += 1
-            self._publish(-1, 0.0, scores, t_fin, motif="vote_non_conclu")
+
+        # Le VOTE GLISSANT. La fenêtre vote pour la cible que le décodeur a retenue, ou pour
+        # personne (`None`) si elle n'a pas passé `corr_min`/`margin`. ⚠️ On empile AVANT de
+        # consulter, et on consulte MÊME quand la fenêtre courante n'a rien retenu : c'est tout
+        # l'intérêt d'un vote que d'absorber une mauvaise fenêtre au milieu de bonnes. Court-
+        # circuiter sur `cible is None` rendrait le vote inutile — une fenêtre bruitée suffirait
+        # à casser une fixation stable, ce qui est précisément ce qu'il existe pour éviter.
+        # (Même mécanique que `MIRuntime._run_step`, jusqu'au `None` comptabilisé dans le
+        # `Counter` : « aucune fenêtre récente n'était assez sûre » EST une réponse.)
+        nom = None if cible is None else cible["name"]
+        self._votes.append((nom, 0.0 if nom is None else scores[self._indice[nom]]))
+
+        gagnant, compte = Counter(n for n, _c in self._votes).most_common(1)[0]
+        if gagnant is None or compte < int(self.params["min_votes"]):
+            # Deux refus, deux GESTES. La fenêtre courante n'avait aucun candidat -> c'est le
+            # SIGNAL qu'il faut regarder (contact, saline, fixation). Elle en avait un mais les
+            # fenêtres récentes ne s'accordent pas -> c'est la STABILITÉ du regard. Les fondre
+            # en un seul compteur, comme le nom `vote_non_conclu` du brief le faisait, envoie
+            # chercher au mauvais endroit — et une séance casque ne se répète pas.
+            if nom is None:
+                self._sous_les_seuils += 1
+                motif = "sous_les_seuils"
+            else:
+                self._vote_non_conclu += 1
+                motif = "vote_non_conclu"
+            self._publish(-1, 0.0, scores, t_fin, motif=motif)
             return
-        index = self._indice[cible["name"]]
+        # La confiance décrit le VOTE, comme l'indice qu'elle accompagne : la moyenne des
+        # corrélations des fenêtres qui ont voté pour la cible retenue. Publier celle de la SEULE
+        # dernière fenêtre mélangerait deux instants — un même échantillon dirait « CIBLE 2 » avec
+        # une corrélation SOUS le `corr_min` que le flux annonce dans ses propres métadonnées, et
+        # un client qui refiltre sur ce seuil (le geste naturel) jetterait les fixations stables.
+        # Chacune de ces corrélations valant au moins `corr_min` par construction (sinon la
+        # fenêtre aurait voté None), leur moyenne aussi : l'invariant est tenu par CONSTRUCTION.
+        votantes = [c for n, c in self._votes if n == gagnant]
         self._decodages += 1
-        self._publish(index, scores[index], scores, t_fin)
+        self._publish(self._indice[gagnant], sum(votantes) / len(votantes), scores, t_fin)
 
     def _publish(self, target_index, confidence, scores, lsl_ts, motif=None):
         if self._out is not None:
@@ -569,6 +644,19 @@ SPEC = ModeSpec(
                    "reprendre le nouveau. Un seul inlet existe pour tout le moteur, partagé par "
                    "tous les modes à marqueurs : deux modes actifs qui en réclameraient des noms "
                    "différents sont signalés bruyamment, un seul nom gagne."),
+        Param(key="vote_len", label="Fenêtres du vote", kind="int",
+              default=CVEP_VOTE_LEN, min=1, max=15,
+              help="Sur combien de fenêtres récentes on vote avant d'émettre une cible. Le "
+                   "décodage tourne à ~5 Hz, donc 3 fenêtres = 0,6 s de latence ajoutée. "
+                   "Le mettre à 1 supprime le vote : chaque fenêtre décide seule, le mode "
+                   "devient plus réactif ET nettement plus bruyant."),
+        Param(key="min_votes", label="Votes concordants", kind="int",
+              default=CVEP_MIN_VOTES, min=1, max=15,
+              constraints=("votes_atteignables",),
+              help="Combien de ces fenêtres doivent désigner la MÊME cible pour l'émettre. En "
+                   "demander plus retarde la décision et la rend plus sûre. Ne peut pas dépasser "
+                   "« Fenêtres du vote » : au-delà, aucun vote ne peut plus jamais aboutir et le "
+                   "mode ne décide plus rien — en silence."),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture
@@ -769,14 +857,33 @@ def _selftest():
     # l'inlet que si plus aucun mode actif n'écoute — casserait la voie de secours que l'aide du
     # P300 promet (« arrêter puis redémarrer ce mode suffit »). Mesuré au chantier ErrP.
     rt_flux = _runtime_de_test(code_len=63, refresh=60.0)
-    chk({p.key for p in SPEC.params} == {"model", "stream_in"},
-        f"le modèle ET le flux de marqueurs se règlent ({sorted(p.key for p in SPEC.params)})")
+    chk({p.key for p in SPEC.params} == {"model", "stream_in", "vote_len", "min_votes"},
+        f"le modèle, le flux de marqueurs ET le vote glissant se règlent "
+        f"({sorted(p.key for p in SPEC.params)})")
     chk(rt_flux.params.get("stream_in") == MARKER_STREAM_DEFAULT,
         f"le RUNTIME porte le nom du flux entrant, là où le moteur va le chercher "
         f"({rt_flux.params.get('stream_in')})")
     chk(SPEC.marker_epoch_s > 0.0,
         f"ce mode CONSOMME des marqueurs, donc le moteur lit son stream_in — c'est ce qui rend "
         f"ce réglage obligatoire et non décoratif ({SPEC.marker_epoch_s})")
+
+    # --- 5ter. Le VOTE GLISSANT : les deux constantes de la spec §5 sont enfin LUES ------------
+    # ⚠️ `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` existent depuis toujours dans `core/config.py` et
+    # n'étaient lues que par l'écran pygame (`research/app.py`), que ce chantier archive. Sans
+    # elles ici, le moteur décoderait à la MÊME cadence sur la MÊME géométrie que la référence
+    # qu'il remplace, MOINS son 2-sur-3 : strictement plus bruyant par construction. Or la séance
+    # casque doit comparer les deux sur la même personne — une version moteur plus permissive
+    # fausserait la seule comparaison chiffrée que ce chantier prévoit.
+    chk(rt_flux.params["vote_len"] == CVEP_VOTE_LEN
+        and rt_flux.params["min_votes"] == CVEP_MIN_VOTES,
+        f"le vote prend les défauts du protocole ({rt_flux.params['vote_len']}, "
+        f"{rt_flux.params['min_votes']})")
+    # La contrainte croisée de `contract.py` : exiger plus d'accords qu'il n'y a de fenêtres pour
+    # les compter ne peut JAMAIS être satisfait — le mode ne publierait plus que -1, en silence.
+    _v, raison_vote = validate(SPEC, {"vote_len": 2, "min_votes": 5})
+    chk(raison_vote is not None and "jamais atteignable" in raison_vote,
+        f"...et exiger plus de votes que de fenêtres est refusé, pas accepté en silence "
+        f"({raison_vote})")
 
     # =========================================================================================
     # Ce qui suit fait TOURNER le mode : un faux moteur, un tampon EEG horodaté, des marqueurs
@@ -815,15 +922,19 @@ def _selftest():
             return self._lots.pop(0) if self._lots else []
 
     fs = 250.0
-    n_cyc = int(round(63 * fs / 60.0))        # 263 échantillons EEG par cycle de code
+    # ⚠️ 262, pas 263 : 63 frames à 60 Hz font 262,5 échantillons à 250 Hz, et `round` en Python
+    # arrondit au PAIR. Le modèle SOUS-compte donc d'un demi-échantillon par cycle — c'est la même
+    # expression que `CVEPModel.n_cyc`, écrite ici pour que le tampon de test et le repliement du
+    # décodeur tombent sur la même grille.
+    n_cyc = int(round(63 * fs / 60.0))
 
     def _horloge(t0, k, refresh=60.0):
         """Le marqueur que l'émetteur publie au k-ième redémarrage du code.
 
         ⚠️ Placé sur l'horloge VRAIE (`k * code_len / refresh`), pas sur un multiple de `n_cyc`
-        échantillons : un cycle dure 63/60 = 1,05 s = 262,5 échantillons, et `n_cyc` (263) n'en
-        est que l'arrondi que le modèle utilise pour replier. Confondre les deux introduit une
-        demi-frame de dérive par cycle.
+        échantillons : un cycle dure 63/60 = 1,05 s = 262,5 échantillons, et `n_cyc` (262) n'en
+        est que l'arrondi que le modèle utilise pour replier. Confondre les deux introduit un
+        demi-échantillon de dérive par cycle.
         """
         return (float(t0) + k * 63.0 / refresh,
                 {"mode": "cvep", "event": "cycle", "refresh": refresh})
@@ -853,13 +964,22 @@ def _selftest():
         rt_c._run_step(moteur_c, lsl_ts=t_fin_c)
 
     st = rt_c.state()
-    chk(set(st) >= {"decodages", "sans_reference", "reference_perimee", "vote_non_conclu",
-                    "age_reference_s", "corr_gagnant", "corr_second"},
-        f"l'état sépare les trois causes de -1 et expose l'âge de la référence ({sorted(st)})")
-    chk(st["sans_reference"] == 2 and st["reference_perimee"] == 1 and st["vote_non_conclu"] == 3,
+    chk(set(st) >= {"decodages", "sans_reference", "reference_perimee", "sous_les_seuils",
+                    "vote_non_conclu", "age_reference_s", "corr_gagnant", "corr_second"},
+        f"l'état sépare les causes de -1 et expose l'âge de la référence ({sorted(st)})")
+    chk(st["sans_reference"] == 2 and st["reference_perimee"] == 1
+        and st["sous_les_seuils"] == 3,
         f"...et chaque compteur compte SA cause, pas le total ({st})")
     chk(st["decodages"] == 0,
         f"aucune de ces six fenêtres n'a désigné de cible ({st['decodages']})")
+    # ⚠️ `sous_les_seuils` et `vote_non_conclu` ne sont PAS le même refus, et c'est tout l'intérêt
+    # de les avoir séparés : ici les corrélations elles-mêmes sont sous `corr_min`, donc aucune
+    # fenêtre n'a jamais eu de candidat à soumettre au vote. Un `vote_non_conclu` non nul dirait
+    # l'inverse — « le décodage passe les seuils mais les fenêtres se contredisent » — et
+    # enverrait chercher un problème de stabilité de fixation là où il y a un problème de signal.
+    chk(st["vote_non_conclu"] == 0,
+        f"...et le VOTE n'est pas mis en cause : aucune fenêtre n'a passé les seuils, il n'a "
+        f"jamais eu de candidat ({st['vote_non_conclu']})")
     # Chaque refus est PUBLIÉ, avec -1 : un client qui attend un échantillon par fenêtre ne doit
     # pas rester suspendu parce que le moteur ne sait pas où en est le code.
     chk(len(rt_c._out.lignes) == 6 and all(l[0] == -1 for l in rt_c._out.lignes),
@@ -904,15 +1024,27 @@ def _selftest():
         return bloc
 
     n_cycles_buf = 6
-    eeg = _tampon_synthetique(lag_vrai, n_cycles_buf, snr_db=0.0)
-    ts_e = 500.0 + np.arange(len(eeg)) / fs
-    moteur_e = _FauxMoteur(eeg, ts_e)
-    moteur_e._lots = [[_horloge(ts_e[0], k) for k in range(n_cycles_buf)]]
 
+    def _moteur_sur(lag):
+        """Un faux moteur dont le tampon porte `n_cycles_buf` cycles du c-VEP de CE lag, et dont
+        la file rend les marqueurs d'horloge correspondants."""
+        eeg = _tampon_synthetique(lag, n_cycles_buf, snr_db=0.0)
+        ts = 500.0 + np.arange(len(eeg)) / fs
+        m = _FauxMoteur(eeg, ts)
+        m._lots = [[_horloge(ts[0], k) for k in range(n_cycles_buf)]]
+        return m
+
+    moteur_e = _moteur_sur(lag_vrai)
+    ts_e = moteur_e.recent_ts
     rt_e = _runtime_de_test(modele=modele_appris)
     rt_e._out = _FauxPublieur()
     rt_e._opened = True
-    rt_e._run_step(moteur_e, lsl_ts=float(ts_e[-1]))
+
+    # ⚠️ `CVEP_MIN_VOTES` fenêtres, pas une : le vote glissant est DANS la chaîne, et le tester
+    # avec une seule fenêtre prouverait le décodage sans jamais prouver le vote. La boucle décode
+    # la même fenêtre glissante à ~5 Hz, exactement ce que la boucle du moteur fait en séance.
+    for _ in range(CVEP_MIN_VOTES):
+        rt_e._run_step(moteur_e, lsl_ts=float(ts_e[-1]))
     publie = rt_e.output()
 
     chk(publie is not None and publie["target_index"] == cible,
@@ -930,8 +1062,80 @@ def _selftest():
         and [round(s, 3) for s in rt_e._out.lignes[-1][2]] == publie["scores"],
         f"...et c'est CE que le flux publie, pas seulement ce que l'écran montre "
         f"({rt_e._out.lignes[-1] if rt_e._out.lignes else None})")
-    chk(rt_e.state()["decodages"] == 1 and rt_e.state()["vote_non_conclu"] == 0,
-        f"la fenêtre est comptée comme un décodage, pas comme un refus ({rt_e.state()})")
+    st_e = rt_e.state()
+    chk(st_e["decodages"] == 1 and st_e["sous_les_seuils"] == 0,
+        f"la dernière fenêtre est comptée comme un décodage, pas comme un refus ({st_e})")
+    # Les fenêtres qui ont précédé la conclusion du vote sont comptées comme telles, et publiées
+    # en -1 : ce n'est PAS un défaut de signal, c'est le vote qui remplit sa file.
+    chk(st_e["vote_non_conclu"] == CVEP_MIN_VOTES - 1
+        and [l[0] for l in rt_e._out.lignes] == [-1] * (CVEP_MIN_VOTES - 1) + [cible],
+        f"...et les {CVEP_MIN_VOTES - 1} qui l'ont précédée sont des « vote non conclu », "
+        f"publiées en -1 ({st_e['vote_non_conclu']}, {[l[0] for l in rt_e._out.lignes]})")
+
+    # --- 8. LE VOTE : une seule fenêtre ne décide pas, et deux qui se contredisent non plus ----
+    # C'est ce que `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` achètent, et c'est exactement ce que l'écran
+    # pygame que ce chantier archive faisait déjà. Sans ce test, le vote pourrait être câblé à
+    # `min_votes=1` sans que rien ne rougisse — le moteur serait alors plus permissif que la
+    # référence à laquelle la séance casque doit le comparer.
+    rt_v = _runtime_de_test(modele=modele_appris)
+    rt_v._out = _FauxPublieur()
+    rt_v._opened = True
+    rt_v._run_step(_moteur_sur(lag_vrai), lsl_ts=float(ts_e[-1]))
+    chk(rt_v.output()["target_index"] == -1 and rt_v.state()["vote_non_conclu"] == 1,
+        f"une SEULE fenêtre, même franche, ne suffit pas à émettre ({rt_v.output()}) ")
+    chk(rt_v.state()["corr_gagnant"] is not None and rt_v.state()["corr_gagnant"] >= 0.26,
+        f"...et pourtant elle a bien passé les seuils : c'est le VOTE qui retient, pas le signal "
+        f"({rt_v.state()['corr_gagnant']})")
+
+    # `CVEP_MIN_VOTES` fenêtres FRANCHES mais qui désignent des cibles DIFFÉRENTES : le vote ne
+    # conclut pas davantage. C'est ce qui distingue un vote à MAJORITÉ d'un simple compte : un
+    # `compte` calculé sur la LONGUEUR de la file plutôt que sur la cible la plus représentée
+    # (`len(self._votes) >= min_votes`, la simplification qu'on écrit sans y penser) publierait
+    # ici une cible — dont une seule des deux serait la bonne, avec une confiance normale.
+    rt_d = _runtime_de_test(modele=modele_appris)
+    rt_d._out = _FauxPublieur()
+    rt_d._opened = True
+    lags_contradictoires = [plan[(cible + k) % len(plan)]["lag"] for k in range(CVEP_MIN_VOTES)]
+    chk(len(set(lags_contradictoires)) == CVEP_MIN_VOTES,
+        f"fixture : ces {CVEP_MIN_VOTES} fenêtres désignent VRAIMENT des cibles distinctes")
+    for lag in lags_contradictoires:
+        rt_d._run_step(_moteur_sur(lag), lsl_ts=float(ts_e[-1]))
+    chk(all(l[0] == -1 for l in rt_d._out.lignes) and rt_d.state()["decodages"] == 0
+        and rt_d.state()["sous_les_seuils"] == 0,
+        f"des fenêtres franches qui se CONTREDISENT n'émettent rien non plus, et ce n'est pas "
+        f"le SIGNAL qui est mis en cause ({[l[0] for l in rt_d._out.lignes]}, {rt_d.state()})")
+    chk(rt_d.state()["vote_non_conclu"] == CVEP_MIN_VOTES,
+        f"...c'est bien le VOTE, et il le dit ({rt_d.state()['vote_non_conclu']})")
+
+    # --- 9. L'horloge tourne PENDANT LA CHAUFFE, et « refaire le repos » l'oublie --------------
+    # Deux comportements qu'aucune assertion ne couvrait, et deux pannes différentes.
+    rt_w = _runtime_de_test(modele=modele_appris)
+    rt_w._out = _FauxPublieur()
+    rt_w._opened = True
+    moteur_w = _moteur_sur(lag_vrai)
+    rt_w.begin_rest(now=0.0, warmup_s=10.0, duration_s=0.0)
+    chk(rt_w.phase == "warmup", f"le mode commence par la chauffe ({rt_w.phase})")
+    rt_w.tick(moteur_w, lsl_ts=float(moteur_w.recent_ts[-1]), now=1.0)
+    # ⚠️ Sans le `tick` redéfini, `markers_murs` n'est PAS appelée de toute la chauffe : le
+    # curseur du moteur ne bouge pas, puis le premier `_run_step` avale l'arriéré — dont tous les
+    # marqueurs déjà sortis du tampon EEG, comptés en `engine.marqueurs_perdus`, un compteur qui
+    # signale une VRAIE perte de données. Une alarme fausse à chaque démarrage apprend à ignorer
+    # l'alarme.
+    chk(moteur_w.post_s_recus and rt_w._ref_ts is not None,
+        f"pendant la CHAUFFE, l'horloge est encaissée : le curseur du moteur avance et la phase "
+        f"est déjà fraîche quand le décodage commence ({moteur_w.post_s_recus}, {rt_w._ref_ts})")
+    chk(rt_w.phase == "warmup",
+        f"...sans que la chauffe soit écourtée pour autant ({rt_w.phase})")
+
+    # « Refaire le repos » se fait en touchant les électrodes : l'émetteur a eu tout le temps
+    # d'être relancé, ou d'avoir dérivé. Garder l'ancienne référence ferait décoder sur une
+    # horloge qui n'a plus cours, en publiant des corrélations d'apparence normale.
+    rt_w.begin_rest(now=100.0, warmup_s=0.0, duration_s=0.0)
+    chk(rt_w._ref_ts is None and rt_w.phase_a(float(moteur_w.recent_ts[-1])) is None,
+        f"« refaire le repos » OUBLIE la référence de phase — sinon le mode déciderait sur une "
+        f"horloge périmée ({rt_w._ref_ts})")
+    chk(rt_w.state()["sans_reference"] == 0 and rt_w.state()["decodages"] == 0,
+        f"...et les compteurs repartent de zéro avec elle ({rt_w.state()})")
 
     print(f"[cvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

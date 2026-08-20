@@ -442,13 +442,20 @@ class DecodedCVEPPublisher:
     tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` VOYAGENT dans
     les métadonnées, à côté de l'échelle qui leur donne un sens.
 
-    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 ». TROIS causes
+    ⚠️ **`confidence` décrit le VOTE, pas la dernière fenêtre.** Une cible n'est émise que si
+    `min_votes` des `vote_len` dernières fenêtres l'ont désignée ; `confidence` est la moyenne
+    des corrélations de CES fenêtres-là, donc toujours `>= corr_min` quand `target_index >= 0`.
+    Les `score_*`, eux, décrivent la **dernière fenêtre seule** — il est donc normal, pendant un
+    changement de cible, de lire un `score_i` élevé à côté d'un autre `target_index` : le vote
+    n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`, jamais des `score_*`.
+
+    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 ». QUATRE causes
     différentes le produisent, et elles n'appellent pas la même réaction : le moteur ne sait pas
     où en est le code (aucun marqueur d'horloge reçu), sa référence est PÉRIMÉE (l'émetteur s'est
-    tu), ou les corrélations ne tranchent pas (`corr_min`/`margin`). Le flux ne porte que le -1 ;
-    les trois compteurs qui les séparent sont dans l'état du moteur (`CVEPRuntime.state`), parce
-    qu'une séance casque ne se répète pas et que « ça ne détecte pas » sans la cause envoie
-    chercher au mauvais endroit.
+    tu), les corrélations ne passent pas `corr_min`/`margin`, ou elles passent mais les fenêtres
+    récentes ne s'accordent pas. Le flux ne porte que le -1 ; les quatre compteurs qui les
+    séparent sont dans l'état du moteur (`CVEPRuntime.state`), parce qu'une séance casque ne se
+    répète pas et que « ça ne détecte pas » sans la cause envoie chercher au mauvais endroit.
 
     ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à UNE personne, et un stimulus verrouillé à la
     frame qui publie un marqueur de cycle. `decoder` dit lequel des deux décodeurs du produit
@@ -462,7 +469,7 @@ class DecodedCVEPPublisher:
     SUFFIXE = "decoded_cvep"
 
     def __init__(self, n_targets, decoder, refresh, code_len, corr_min, margin, cv,
-                 instance=""):
+                 votes=(0, 0), instance=""):
         self.n_targets = int(n_targets)
         labels = cvep_channel_labels(self.n_targets)
         info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
@@ -484,6 +491,12 @@ class DecodedCVEPPublisher:
         # corrélation de 0,40 aurait dû déclencher alors que la deuxième était à 0,38.
         desc.append_child_value("corr_min", f"{float(corr_min):g}")
         desc.append_child_value("margin", f"{float(margin):g}")
+        # ...et le VOTE GLISSANT, qui fait partie de la même règle : passer les deux seuils ne
+        # suffit pas, il faut encore que `min_votes` des `vote_len` dernières fenêtres désignent
+        # la même cible. Sans ces deux champs, un client mesurerait une latence de décision de
+        # `vote_len / 5 Hz` sans pouvoir l'expliquer, et croirait le décodage lent.
+        desc.append_child_value("min_votes", str(int(votes[0])))
+        desc.append_child_value("vote_len", str(int(votes[1])))
         # La géométrie du stimulus, pour qu'un client puisse vérifier qu'il affiche bien ce que
         # le moteur décode : un modèle calibré à 60 Hz sur un code de 63 frames ne décode pas ce
         # qu'un écran 144 Hz affiche.
@@ -802,7 +815,7 @@ def _autotest():
     assert labels == ["target_index", "confidence",
                       "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
     pub_cvep = DecodedCVEPPublisher(6, decoder="eCCA", refresh=60.0, code_len=63,
-                                    corr_min=0.26, margin=0.09, cv=0.4778,
+                                    corr_min=0.26, margin=0.09, cv=0.4778, votes=(2, 3),
                                     instance="selftest-cvep")
     pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12])
     pub_cvep.push(-1, 0.0, [0.05] * 6)      # pas de décision : jamais « la cible 0 »
@@ -810,7 +823,7 @@ def _autotest():
     cvep_deco = pub_cvep.outlet.get_info().desc().child("decoding")
     lu = {k: cvep_deco.child_value(k) for k in
           ("paradigm", "decision_scale", "no_decision_index", "corr_min", "margin",
-           "code_len", "refresh", "n_targets", "decoder", "cv")}
+           "min_votes", "vote_len", "code_len", "refresh", "n_targets", "decoder", "cv")}
     print(f"  decoded_cvep métadonnées : {lu}")
     assert lu["paradigm"] == "c-VEP", lu
     # ⚠️ « correlation », JAMAIS « z » ni « rho » : ces scores ne sont normalisés contre aucun
@@ -819,6 +832,11 @@ def _autotest():
     assert lu["decision_scale"] == "correlation", lu
     assert lu["no_decision_index"] == "-1", lu
     assert lu["corr_min"] == "0.26" and lu["margin"] == "0.09", lu
+    # La règle de décision est en TROIS morceaux, et le troisième est le vote glissant. Sans lui
+    # dans les métadonnées, un client mesure une latence de `vote_len / 5 Hz` sans pouvoir
+    # l'expliquer, et conclut que le décodage est lent — le même reproche que le P300 publiant
+    # une marge qu'il appliquait sans la dire.
+    assert lu["min_votes"] == "2" and lu["vote_len"] == "3", lu
     assert lu["code_len"] == "63" and lu["refresh"] == "60" and lu["n_targets"] == "6", lu
     # Le c-VEP est le seul mode à DEUX décodeurs sur le même stimulus : c'est le fichier de
     # modèle qui déclare le sien, donc un client qui journalise des scores doit pouvoir savoir

@@ -298,6 +298,44 @@ def _smoke():
         f"...et toutes les autres sont dégrisées, c-VEP compris — 7 modes, 7 dans le moteur "
         f"({sorted(i for i, t in console.grid.tuiles.items() if not t.isEnabled())} grisée(s))")
 
+    # ⚠️ ...et la branche INVERSE, sur un mode FABRIQUÉ. Depuis que le c-VEP a rejoint le moteur,
+    # plus aucun `ModeSpec` du registre n'a `status != "moteur"` : le grisage, le message
+    # `unavailable` et le masquage des boutons sont devenus du code à ZÉRO couverture, et c'est
+    # MESURÉ — retirer `self.setEnabled(False)` de `grid.ModeTile.__init__` laissait ce smoke à
+    # EXIT=0. C'est pourtant le « point d'honnêteté de l'interface » du projet : ce qui montre à
+    # l'étudiant les modes que le produit décrit mais que le moteur ne sait pas faire, ET
+    # pourquoi. On fabrique donc le `ModeSpec` que le registre n'a plus — même geste que
+    # `core/modes/contract.py`, qui fabrique déjà des specs pour ses propres tests — plutôt que
+    # de laisser un vrai mode fautif pour un test.
+    from console.grid import ModeTile
+    from core.modes.contract import ModeSpec as _ModeSpec
+
+    def _tuile_fabriquee(**champs):
+        return ModeTile(registry.serialize(_ModeSpec(
+            id="pasfait", label="Pas fait", family="actif",
+            summary="le résumé statique du mode", **champs)))
+
+    grisee = _tuile_fabriquee(status="prevu",
+                              unavailable="Demande un stimulus que le moteur ne rend pas.")
+    chk(not grisee.isEnabled(), "une tuile de mode HORS moteur est grisée")
+    chk(grisee.detail.text() == "Demande un stimulus que le moteur ne rend pas.",
+        f"...et elle dit POURQUOI, à la place du résumé statique ({grisee.detail.text()!r})")
+    chk(grisee.etat.text() == "prévu",
+        f"...son statut est rendu en français, pas laissé en clé ({grisee.etat.text()!r})")
+    chk(grisee.demarrage.isHidden() and grisee.bouton.isHidden() and grisee.publie.isHidden(),
+        "...et ses trois boutons sont MASQUÉS : rien à cliquer sur un mode qui ne démarre pas")
+    # Le CONTRASTE, sans quoi les quatre assertions ci-dessus passeraient sur une tuile qui
+    # masquerait ses boutons pour tout le monde.
+    active = _tuile_fabriquee(status="moteur", stream="decoded_pasfait", channels=("x",))
+    chk(active.isEnabled() and not active.demarrage.isHidden()
+        and active.detail.text() == "le résumé statique du mode",
+        "...alors qu'un mode du MOTEUR reste cliquable et garde son résumé")
+    # Un état reçu ne réanime pas la tuile grisée : `update_from` rend la main tout de suite.
+    grisee.update_from({"phase": "running", "published": True, "output": None, "params": {}})
+    chk(not grisee.isEnabled()
+        and grisee.detail.text() == "Demande un stimulus que le moteur ne rend pas.",
+        f"...et un état qui lui arriverait par erreur ne la réanime pas ({grisee.detail.text()!r})")
+
     chk(console.grid.tuiles["ssvep"].etat.text() == "décode",
         f"le SSVEP est annoncé « {console.grid.tuiles['ssvep'].etat.text()} »")
     chk(console.grid.tuiles["neuro"].etat.text() == "arrêté",
@@ -786,11 +824,13 @@ def _smoke():
     # justement à cette hauteur-là que l'échelle se joue.
     cvep_state = {**state, "modes_state": {**state["modes_state"], "cvep": {
         "id": "cvep", "label": "c-VEP", "family": "actif", "phase": "running", "published": True,
-        "params": {"model": "cvep_model.npz", "stream_in": "EEG_API_Unicorn_stim"},
+        "params": {"model": "cvep_model.npz", "stream_in": "EEG_API_Unicorn_stim",
+                   "vote_len": 3, "min_votes": 2},
         "instruction": "", "stream": "decoded_cvep",
         "channels": ["target_index", "confidence"] + [f"score_{i}" for i in range(6)],
         "rest_report": None,
-        "decodages": 12, "sans_reference": 0, "reference_perimee": 0, "vote_non_conclu": 5,
+        "decodages": 12, "sans_reference": 0, "reference_perimee": 0,
+        "sous_les_seuils": 5, "vote_non_conclu": 2,
         "age_reference_s": 0.42, "corr_gagnant": 0.33, "corr_second": 0.21,
         "output": {"target_index": 2, "confidence": 0.33,
                    "scores": [0.11, 0.19, 0.33, 0.08, 0.21, 0.12],
@@ -806,6 +846,10 @@ def _smoke():
     chk("0.26" in cv.seuil.text() and "0.09" in cv.seuil.text(),
         f"...avec SES DEUX seuils : `corr_min` seul ferait lire « 0,40 > 0,26, ça aurait dû "
         f"déclencher » sur une fenêtre où la 2e était à 0,38 ({cv.seuil.text()})")
+    # ...ET le vote, qui fait partie de la même règle : sans lui, un étudiant qui voit une barre
+    # franche sans verdict croit à un bug. La latence de `vote_len / 5 Hz` s'explique ici.
+    chk("2 fenêtres d'accord sur les 3" in cv.seuil.text(),
+        f"...et le VOTE, troisième moitié de la règle de décision ({cv.seuil.text()})")
     chk("CIBLE 2" in cv.verdict.text() and "Hz" not in cv.verdict.text(),
         f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence — le c-VEP "
         f"cherche une PHASE ({cv.verdict.text()})")

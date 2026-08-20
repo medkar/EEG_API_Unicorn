@@ -242,22 +242,34 @@ class ActiveView(QWidget):
         1. **Une échelle absolue ET un plafond.** Une corrélation de Pearson vit dans [-1, 1] :
            `SPAN_SEUILS × corr_min` est donc PLAFONNÉ à 1 (le SSVEP, dont le z n'a pas de
            plafond, applique la même formule avec un PLANCHER à 1 — le contraire).
-        2. **Deux seuils, pas un.** Un gagnant doit dépasser `corr_min` ET devancer le deuxième
-           de `margin`. Afficher le premier seul ferait lire « 0,40 > 0,26, ça aurait dû
-           déclencher » sur une fenêtre où la deuxième cible était à 0,38.
-        3. **Un motif quand rien n'est décidé.** Le moteur distingue trois causes de -1 (horloge
-           jamais reçue, horloge périmée, corrélations trop serrées) et les compte séparément :
-           elles appellent trois gestes OPPOSÉS. Le texte vient de lui, en clair — la console ne
-           traduit rien, sans quoi le terminal et l'écran finiraient par ne plus dire pareil.
+        2. **Deux seuils ET un vote, pas un seuil.** Un gagnant doit dépasser `corr_min`,
+           devancer le deuxième de `margin`, **et** être désigné par `min_votes` des `vote_len`
+           dernières fenêtres. Afficher le premier seuil seul ferait lire « 0,40 > 0,26, ça
+           aurait dû déclencher » sur une fenêtre où la deuxième cible était à 0,38 — ou sur une
+           fenêtre franche que le vote n'a pas encore confirmée.
+        3. **Un motif quand rien n'est décidé.** Le moteur distingue quatre causes de -1 (horloge
+           jamais reçue, horloge périmée, corrélations trop serrées, fenêtres qui se
+           contredisent) et les compte séparément : elles appellent des gestes OPPOSÉS. Le texte
+           vient de lui, en clair — la console ne traduit rien, sans quoi le terminal et l'écran
+           finiraient par ne plus dire pareil.
+
+        ⚠️ Comme chez le MI, **les barres et le verdict ne décrivent pas le même instant** : les
+        barres montrent la dernière fenêtre, le verdict sort du VOTE sur les `vote_len`
+        dernières. Il est donc normal de les voir se contredire pendant un changement de cible.
         """
+        params = (mode_state or {}).get("params") or {}
         scores = list(sortie.get("scores") or [])
         corr_min = float(sortie.get("corr_min", 0.0))
         marge = float(sortie.get("margin", 0.0))
         index = sortie.get("target_index", -1)
+        min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
+        vote_connu = min_votes is not None and vote_len is not None
 
         self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
+        regle = (f", puis {min_votes} fenêtres d'accord sur les {vote_len} dernières"
+                 if vote_connu else ", puis un vote sur les fenêtres récentes")
         self.seuil.setText(f"échelle corrélation (bornée à 1) · un gagnant doit dépasser "
-                           f"{corr_min:g} ET devancer le 2e de {marge:g}")
+                           f"{corr_min:g} ET devancer le 2e de {marge:g}{regle}")
 
         span = min(SPAN_SEUILS * corr_min, 1.0) or 1.0
         for i, (_e, barre) in enumerate(self._barres):
