@@ -123,6 +123,7 @@ import numpy as np  # noqa: E402
 from core import errp_models  # noqa: E402
 from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
 from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
+from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
@@ -659,26 +660,29 @@ SPEC = ModeSpec(
         # l'ancien nom et redémarrer le P300 ne reprenait rien. C'est CE trou que le réglage
         # referme, et c'est tout ce qu'il referme.
         #
-        # ⚠️ Il ne débloque PAS deux binômes dans la même salle, malgré ce qu'on aimerait lire
-        # ici : `choices` n'a qu'UNE entrée, et `contract._coerce` refuse toute valeur hors liste
-        # sur les trois chemins d'entrée (constructeur, `start_mode`, `set_params`). Le flux
-        # entrant reste donc gelé sur `MARKER_STREAM_DEFAULT` pour tout le monde — console,
-        # script, ou client pilotant le moteur. Ouvrir ça se fait en changeant ce seul tuple (ou
-        # le `kind`), ici ET dans `p300.py` ; c'est une décision à prendre, pas un oubli. Tant
-        # qu'elle n'est pas prise, le moteur du binôme B épocherait l'EEG de B autour des
-        # feedbacks affichés chez A, en publiant des verdicts parfaitement plausibles.
+        # ⚠️ `choices_fn`, pas `choices` : la liste est DÉCOUVERTE sur le réseau à chaque appel
+        # (`markers.flux_de_marqueurs_visibles`), et `contract._coerce` valide contre
+        # `choices_now()` — donc un nom qui existe vraiment est accepté, sur les trois chemins
+        # d'entrée. C'est ce qui permet à deux binômes de la même salle de se séparer : sans ça,
+        # le moteur de B épochait l'EEG de B autour des feedbacks affichés chez A, en publiant
+        # des verdicts parfaitement plausibles et faux. Le défaut reste toujours en tête de liste,
+        # parce qu'on lance le moteur AVANT l'émetteur et qu'une liste vide serait refusée.
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
-              choices=(MARKER_STREAM_DEFAULT,), default=MARKER_STREAM_DEFAULT,
+              choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
               help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
-                   "feedback affiché. Le moteur l'écoute par son NOM, résolu quand un mode qui "
-                   "consomme des marqueurs démarre — un seul inlet existe pour tout le moteur, "
-                   "partagé par tous ces modes. Le changer pendant que le mode tourne n'a AUCUN "
-                   "effet : l'inlet ouvert reste sur l'ancien nom. ARRÊTER puis redémarrer ce "
-                   "mode suffit en revanche à reprendre le nouveau — l'inlet est lâché dès que "
-                   "plus aucun mode actif ne l'écoute. Deux modes actifs qui en réclameraient "
-                   "des noms différents ne sont pas mélangés en silence : un désaccord est "
-                   "signalé bruyamment, un seul nom gagne."),
+                   "feedback affiché. La liste montre les flux de marqueurs VISIBLES sur le "
+                   "réseau au moment où tu ouvres cette page, plus le nom par défaut, toujours "
+                   "proposé même quand rien ne publie encore — c'est le cas normal, puisqu'on "
+                   "lance le moteur avant l'émetteur. Ton émetteur n'y est pas ? Ressors de la "
+                   "page et reviens : la liste se refait à chaque entrée. Le moteur écoute par son "
+                   "NOM, résolu quand un mode qui consomme des marqueurs démarre — un seul inlet "
+                   "existe pour tout le moteur, partagé par tous ces modes. Le changer pendant que "
+                   "le mode tourne n'a AUCUN effet : l'inlet ouvert reste sur l'ancien nom. "
+                   "ARRÊTER puis redémarrer ce mode suffit en revanche à reprendre le nouveau — "
+                   "l'inlet est lâché dès que plus aucun mode actif ne l'écoute. Deux modes "
+                   "actifs qui en réclameraient des noms différents ne sont pas mélangés en "
+                   "silence : un désaccord est signalé bruyamment, un seul nom gagne."),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture

@@ -68,6 +68,7 @@ import numpy as np  # noqa: E402
 
 from core import p300_models  # noqa: E402
 from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  # noqa: E402
+from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
@@ -532,17 +533,21 @@ SPEC = ModeSpec(
                    "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
                    "dans la liste ? Lance `python src/research/app.py`, mode P300, et calibre."),
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
-              choices=(MARKER_STREAM_DEFAULT,), default=MARKER_STREAM_DEFAULT,
+              choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
               help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
-                   "flash. Le moteur l'écoute par son NOM, résolu quand un mode qui consomme des "
-                   "marqueurs démarre — un seul inlet existe pour tout le moteur, partagé par "
-                   "tous ces modes. Le changer pendant que le mode tourne n'a AUCUN effet : "
-                   "l'inlet ouvert reste sur l'ancien nom. ARRÊTER puis redémarrer ce mode suffit "
-                   "en revanche à reprendre le nouveau — l'inlet est lâché dès que plus aucun "
-                   "mode actif ne l'écoute, il n'y a plus besoin de relancer le moteur. Deux "
-                   "modes actifs qui en réclameraient des noms différents ne sont pas mélangés en "
-                   "silence : un désaccord est signalé bruyamment, un seul nom gagne."),
+                   "flash. La liste montre les flux de marqueurs VISIBLES sur le réseau au moment "
+                   "où tu ouvres cette page, plus le nom par défaut, toujours proposé même quand "
+                   "rien ne publie encore — c'est le cas normal, puisqu'on lance le moteur avant "
+                   "l'émetteur. Ton émetteur n'y est pas ? Ressors de la page et reviens : la "
+                   "liste se refait à chaque entrée. Le moteur écoute par son NOM, résolu quand un "
+                   "mode qui consomme des marqueurs démarre — un seul inlet existe pour tout le "
+                   "moteur, partagé par tous ces modes. Le changer pendant que le mode tourne n'a "
+                   "AUCUN effet : l'inlet ouvert reste sur l'ancien nom. ARRÊTER puis redémarrer "
+                   "ce mode suffit en revanche à reprendre le nouveau — l'inlet est lâché dès que "
+                   "plus aucun mode actif ne l'écoute, il n'y a plus besoin de relancer le moteur. "
+                   "Deux modes actifs qui en réclameraient des noms différents ne sont pas "
+                   "mélangés en silence : un désaccord est signalé bruyamment, un seul nom gagne."),
     ),
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
               instruction="Le casque se stabilise — reste immobile."),

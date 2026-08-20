@@ -73,14 +73,21 @@ class Console(QMainWindow):
 
         self.banner = Banner()
         self.stack = QStackedWidget()
-        self.grid = ModeGrid(registry.catalog())
+        # ⚠️ UN SEUL appel, réutilisé par les trois boucles ci-dessous. Ce n'est pas de
+        # l'élégance : depuis que le « Flux de marqueurs » du P300 et de l'ErrP se remplit en
+        # DÉCOUVRANT les émetteurs du réseau (`markers.flux_de_marqueurs_visibles`), sérialiser le
+        # catalogue coûte une résolution LSL bornée par mode marqueur. Mesuré sur ce poste :
+        # 1,03 s l'appel, donc 1,9 s de fenêtre gelée au démarrage quand on en fait trois. Le
+        # catalogue est une DÉCLARATION — il ne change pas entre deux lignes de ce constructeur.
+        catalogue = registry.catalog()
+        self.grid = ModeGrid(catalogue)
         self.grid.ouvrir.connect(self.show_mode)
         self.grid.publier.connect(self._publier)
         self.grid.demarrer.connect(self._demarrer)
         self.stack.addWidget(self.grid)
 
         self.pages = {}
-        for spec in registry.catalog():
+        for spec in catalogue:
             if spec["status"] != "moteur":
                 continue          # pas de page pour un mode que le moteur ne sait pas faire
             page = ModePage(spec, self)
@@ -93,7 +100,7 @@ class Console(QMainWindow):
         # refuserait la commande de toute façon.
         self.beeps = Beeps()
         self.calib_pages = {}
-        for spec in registry.catalog():
+        for spec in catalogue:
             calib = spec.get("calibration") or {}
             if calib.get("kind") != "console" or spec["status"] != "moteur":
                 continue

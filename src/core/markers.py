@@ -8,9 +8,14 @@ s'affiche. Ce module est ce chaînon.
 Il ne connaît AUCUN mode : il reçoit des objets JSON horodatés et les rend tels quels. Le sens
 des événements appartient aux modes.
 
-⚠️ **Résolution par le NOM, jamais par le type.** Le flux `EEG_API_Unicorn_status` que le moteur
+⚠️ **On ÉCOUTE par le NOM, jamais par le type.** Le flux `EEG_API_Unicorn_status` que le moteur
 publie lui-même est de type `Markers` : une résolution par type ferait écouter le moteur à
 lui-même — il se répondrait, et rien ne le signalerait.
+
+Une seule fonction de ce module résout par TYPE, et jamais pour écouter : `flux_de_marqueurs_
+visibles()`, qui remplit la liste déroulante « Flux de marqueurs » de la console. Elle EXCLUT le
+flux `status` explicitement, et c'est la ligne la plus importante de cette fonction — sans elle,
+le premier choix qu'un étudiant verrait dans la liste serait le moteur lui-même.
 
 ⚠️ **`time_correction()` n'est pas une précaution théorique.** `local_clock()` compte depuis le
 démarrage de CHAQUE machine : le projet a mesuré 45 JOURS d'écart entre deux postes. Sans
@@ -44,7 +49,8 @@ except ImportError:                      # pragma: no cover - dépend de la vers
     LostError = RuntimeError
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from core.config import use_utf8_console  # noqa: E402
+from core.config import MARKER_STREAM_DEFAULT, use_utf8_console  # noqa: E402
+from core.lsl_io import stream_name  # noqa: E402
 
 # Borne du `time_correction()`, en secondes. MESURÉE, pas choisie au doigt mouillé : sur un
 # émetteur VIVANT, le PREMIER appel d'un inlet neuf coûte 0,44 à 0,64 s (l'échange de
@@ -58,6 +64,97 @@ TIME_CORRECTION_TIMEOUT_S = 2.0
 # (on ne trouvera jamais 32 flux), donc on avance par passes COURTES répétées plutôt que par une
 # seule attente longue — le motif de `server._resolve_own`, pour la même raison.
 RESOLVE_PASSE_S = 0.2
+
+# Borne de `flux_de_marqueurs_visibles()`, en secondes. MESURÉE le 2026-08-19 sur ce poste, et
+# la mesure dit d'abord ceci : avec `minimum=32`, **la borne EST le coût**, pas le pire cas.
+# Chronométré à 0 / 1 / 2 flux publiés, le résultat ne bouge pas d'un cheveu — 0,05 s -> 51 ms,
+# 0,1 s -> 101 ms, 0,2 s -> 201 ms, 0,3 s -> 302 ms, 0,5 s -> 502 ms, 1,0 s -> 1002 ms. On ne
+# trouvera jamais 32 flux, donc liblsl attend toujours jusqu'au bout : allonger la borne, c'est
+# allonger le gel, à coup sûr et pas « au pire ».
+#
+# Ce qu'il faut vraiment pour VOIR les flux, mesuré dans un processus NEUF (le cas de la console
+# qui s'ouvre, celui où `server._resolve_own` documente que les tout premiers appels d'un
+# processus échouent) : la PREMIÈRE passe voit déjà les deux flux locaux en 50 ms. 0,3 s laisse
+# donc 6× la marge mesurée, pour un réseau qu'on ne peut pas mesurer depuis un poste seul.
+#
+# Pourquoi pas plus long « pour être sûr » : cette fonction est sur un chemin d'INTERFACE
+# (entrée dans une page de mode, ouverture de la console, clic « Démarrer »). Une borne d'une
+# seconde y serait une seconde de fenêtre gelée à chaque fois, garantie. Et rater un flux n'est
+# pas définitif : la liste se re-résout à chaque entrée dans la page, donc un émetteur manqué
+# revient en ressortant puis rentrant — 0,3 s de plus, pas une séance perdue.
+DECOUVERTE_TIMEOUT_S = 0.3
+
+# Le flux que le moteur publie LUI-MÊME et qui est de type `Markers` (`lsl_io.StatusPublisher`).
+# Dérivé du publieur, jamais réécrit en littéral : deux façons de nommer la même chose finissent
+# toujours par diverger, et celle-ci se paierait par un moteur proposé comme source de marqueurs.
+NOM_FLUX_STATUS = stream_name("status")
+
+
+def flux_de_marqueurs_visibles(timeout_s=DECOUVERTE_TIMEOUT_S):
+    """Les noms de flux de marqueurs proposables. Le défaut EN PREMIER, toujours. Ne lève JAMAIS.
+
+    C'est la source de la liste déroulante « Flux de marqueurs » du P300 et de l'ErrP
+    (`Param.choices_fn`). Elle existe pour UN problème concret : LSL porte sur tout le réseau, et
+    deux binômes de la même salle publient sous le même nom par défaut. Sans liste, le moteur de B
+    épochait l'EEG de B autour des feedbacks affichés chez A — sans lever quoi que ce soit, en
+    publiant des verdicts parfaitement plausibles et faux.
+
+    Quatre règles, et chacune répare quelque chose de précis :
+
+    1. **Le défaut est TOUJOURS là, en tête.** L'ordre que la doc enseigne lance le moteur AVANT
+       l'émetteur : au moment où l'étudiant ouvre la page, aucun émetteur n'existe encore. Une
+       liste vide rendrait le réglage inutilisable dans le seul ordre qu'on lui apprend — et
+       `contract._coerce` refuse tout `choice` dont la liste est vide.
+
+    2. **Le flux `status` du moteur est EXCLU.** Il est de type `Markers` lui aussi
+       (`lsl_io.StatusPublisher`), donc une découverte par type le propose comme source de
+       marqueurs. C'est le piège central de cette fonction : le moteur s'offrirait à lui-même en
+       premier choix alphabétique, et l'étudiant qui le retient n'obtiendrait jamais un seul
+       marqueur exploitable.
+
+    3. **Les doublons sont fondus.** LSL répond UNE FOIS PAR INTERFACE RÉSEAU : le même flux
+       revient deux ou trois fois, avec le même `source_id`. Le projet s'est déjà fait prendre
+       (`examples/receiver.py` annonçait « 3 moteurs » sur une installation normale). On rend des
+       NOMS, donc l'ensemble fond les doublons naturellement — et deux émetteurs réellement
+       distincts qui portent le même nom donnent bien UNE entrée, puisqu'il n'y a qu'un nom à
+       désigner. C'est `MarkerInlet._arbitre` qui dira ensuite qu'ils sont deux.
+
+    4. **Elle ne lève JAMAIS.** `registry.check()` traite un `choices_fn` qui lève comme un DÉFAUT
+       DE DÉCLARATION du mode (`contract.choices_status`) — une liste vide est normale, une
+       exception est un bug à corriger. Or le réseau casse de mille façons qui n'ont rien à voir
+       avec la déclaration d'un mode. En cas d'échec on retombe donc sur le seul défaut, en le
+       DISANT.
+
+    ⚠️ Coût : `timeout_s` en entier, à chaque appel, sans cache (cf. `DECOUVERTE_TIMEOUT_S`).
+    L'appeler dix fois par seconde gèlerait l'interface — c'est pourquoi `mode_page.
+    rafraichir_choix` est branchée sur l'ENTRÉE dans la page et jamais sur le rafraîchissement
+    périodique. Les autres appelants (`registry.catalog`, `contract.validate`) sont eux aussi sur
+    des événements : ouverture de la console, clic « Démarrer », soumission de réglages.
+    """
+    try:
+        # Par TYPE, la seule résolution de ce module qui ne serve pas à écouter — cf. l'en-tête.
+        # `minimum=32` : le motif de la maison (`_cherche`, `lsl_io._autotest`,
+        # `server._resolve_own`). `minimum=1` rendrait la main dès le PREMIER flux vu, donc on
+        # listerait un émetteur sur deux dans la salle — exactement ce qu'on cherche à éviter.
+        vus = resolve_byprop("type", "Markers", minimum=32, timeout=float(timeout_s))
+        noms = {info.name() for info in vus}
+    except Exception as e:  # noqa: BLE001 - cf. règle 4 : le réseau casse de mille façons, et
+        # aucune n'est un défaut de déclaration du mode. On dit, on retombe sur le défaut.
+        try:
+            # ASCII : cette fonction peut être appelée avant `use_utf8_console()` (même règle
+            # que `contract.choices_now`). En français quand même : c'est un étudiant qui lit.
+            print(f"ATTENTION : impossible de lister les flux de marqueurs du reseau "
+                  f"({type(e).__name__} : {e}) - seul « {MARKER_STREAM_DEFAULT} » est proposable")
+        except Exception:  # noqa: BLE001 - un affichage impossible (pipe fermé, encodage) ne
+            pass           # doit pas faire tomber ce qui l'entoure
+        return (MARKER_STREAM_DEFAULT,)
+
+    noms.discard(NOM_FLUX_STATUS)   # ⚠️ règle 2 : le moteur n'est pas une source de marqueurs
+    noms.discard(MARKER_STREAM_DEFAULT)   # remis en tête juste en dessous, jamais en double
+    noms.discard("")                # un flux sans nom ne peut pas être DÉSIGNÉ par un nom
+    # Trié : la liste doit être STABLE d'une ouverture à l'autre. L'ordre d'un ensemble ne l'est
+    # pas, et une liste déroulante qui rebat ses lignes à chaque entrée fait cliquer à côté.
+    return (MARKER_STREAM_DEFAULT,) + tuple(sorted(noms))
 
 
 def parse_marqueur(txt):
@@ -493,6 +590,64 @@ def _selftest():
     finally:
         globals()["StreamInlet"] = vrai_stream_inlet
         del o_c
+
+    # 6. La LISTE proposée à l'étudiant — `flux_de_marqueurs_visibles`.
+    #
+    # ⚠️ Le test qui porte cette section est l'EXCLUSION du flux `status`. Il est de type
+    # `Markers` comme les émetteurs, donc une découverte par TYPE le propose comme source de
+    # marqueurs : le moteur s'offrirait à lui-même, en tête alphabétique, et l'étudiant qui le
+    # retiendrait n'obtiendrait jamais un marqueur exploitable — sans qu'une seule exception soit
+    # levée. Retirer `noms.discard(NOM_FLUX_STATUS)` doit rendre CE test rouge, et il est le seul
+    # à le voir.
+    faux_stim = "EEG_API_Unicorn_selftest_stim_binome_B"
+    o_s1 = StreamOutlet(StreamInfo(faux_stim, "Markers", 1, IRREGULAR_RATE, "string", "sel-st-1"))
+    o_s2 = StreamOutlet(StreamInfo(faux_stim, "Markers", 1, IRREGULAR_RATE, "string", "sel-st-2"))
+    o_st = StreamOutlet(StreamInfo(NOM_FLUX_STATUS, "Markers", 1, IRREGULAR_RATE, "string",
+                                   "sel-st-3"))
+    try:
+        # La découverte LSL n'est pas instantanée. On RÉESSAIE trois fois plutôt que de dormir
+        # une durée arbitraire : ça absorbe la latence sans rien masquer — une fonction cassée
+        # échouerait aux trois tentatives, seule une découverte lente est rattrapée.
+        for _ in range(3):
+            liste = flux_de_marqueurs_visibles()
+            if faux_stim in liste:
+                break
+        chk(liste[0] == MARKER_STREAM_DEFAULT,
+            f"le défaut est TOUJOURS en tête : on lance le moteur AVANT l'émetteur, donc la "
+            f"liste est vide au moment où l'étudiant ouvre la page ({liste[:1]})")
+        chk(faux_stim in liste,
+            f"un émetteur visible sur le réseau est proposé ({liste})")
+        chk(NOM_FLUX_STATUS not in liste,
+            f"⚠️ le flux « status » du MOTEUR est EXCLU : il est de type Markers, donc une "
+            f"découverte par type le proposerait et le moteur s'écouterait lui-même ({liste})")
+        chk(tuple(liste).count(faux_stim) == 1,
+            f"deux émetteurs homonymes — ou la réponse une fois PAR INTERFACE réseau — ne font "
+            f"qu'UNE entrée : on désigne un NOM, pas une instance ({liste})")
+        chk(len(liste) == len(set(liste)), f"et aucun doublon nulle part ({liste})")
+    finally:
+        del o_s1, o_s2, o_st
+
+    # ...et elle ne LÈVE jamais. `registry.check()` compte un `choices_fn` qui lève comme un
+    # DÉFAUT DE DÉCLARATION du mode (`contract.choices_status`), alors que le réseau casse pour
+    # mille raisons qui n'en sont pas. Un réseau tombé rendrait le P300 et l'ErrP « défectueux »
+    # dans le contrôle structurel du registre.
+    vrai_resolve = resolve_byprop
+
+    def _resolve_qui_casse(*a, **k):
+        raise RuntimeError("réseau tombé")
+
+    globals()["resolve_byprop"] = _resolve_qui_casse
+    try:
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            secours = flux_de_marqueurs_visibles()
+        chk(secours == (MARKER_STREAM_DEFAULT,),
+            f"réseau en panne : on retombe sur le seul défaut, sans lever ({secours})")
+        chk("ATTENTION" in capture.getvalue(),
+            f"...et on le DIT — sinon l'étudiant voit une liste courte sans savoir pourquoi "
+            f"({capture.getvalue()!r})")
+    finally:
+        globals()["resolve_byprop"] = vrai_resolve
 
     print(f"[markers] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

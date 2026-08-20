@@ -34,13 +34,18 @@ shared inlet for every such mode. Changing the name while the mode runs has no e
 **stopping and restarting the mode is enough** to pick up the new one: the inlet is released as
 soon as no running mode is listening any more. You do not have to restart the engine.
 
-⚠️ **Today the setting accepts exactly one name**, the default `EEG_API_Unicorn_stim` — and that is
-enforced by the engine, not by the interface. It is declared
-`Param(kind="choice", choices=(MARKER_STREAM_DEFAULT,))` in `src/core/modes/p300.py` and
-`src/core/modes/errp.py`, so `contract.validate` refuses any other value: from the console, from a
-script, and from a client driving the engine, all three. The pipe that *reads* the setting is
-already in place on both modes; opening it up is a change to that one tuple, not to the marker
-protocol. If two pairs in one room need to stop hearing each other, that is the piece to add.
+The dropdown lists the marker streams **visible on the network** when you open the page, plus the
+default name, which is always offered. That last part matters: the documented order starts the
+engine *before* the emitter, so when you first open the page nothing is publishing yet. If your
+emitter is not in the list, leave the page and come back — the list is rebuilt on every entry.
+
+Two details worth knowing, because both are traps the engine already handles for you. The engine's
+own `EEG_API_Unicorn_status` stream is *also* of type `Markers`, and it is filtered out — otherwise
+the engine would offer itself as a marker source and you would never receive a single usable
+marker. And LSL answers once per network interface, so the same emitter arrives two or three times;
+the list shows one entry per **name**, because a name is what you select. Two genuinely different
+emitters sharing one name still collapse to one entry — the engine says so at resolve time and
+tells you which one it kept.
 
 If two emitters publish under the same name, the engine says so and names the one it kept. Since
 everyone uses the default name and LSL reaches across the whole network, this is worth reading in
