@@ -78,6 +78,13 @@ class CVEPModel:
     `template` est indexé par la POSITION DANS LE CODE (0..n_cyc-1, phase 0).
     """
 
+    # ⚠️ Ce que ce modèle EST, et ce que `cvep_models.charger` lit pour choisir le décodeur (voir
+    # son jumeau `cvep_rcca.RCCAModel.decoder`). Posé au niveau de la CLASSE, pas relu du fichier :
+    # un objet ne peut alors pas mentir sur lui-même. Le champ `decoder` ÉCRIT dans le fichier sert
+    # à l'AIGUILLAGE, et à rien d'autre — un fichier qui ne le porte pas est un modèle d'avant le
+    # chantier c-VEP-moteur, donc un eCCA : c'était le seul décodeur qui existait sous ce nom.
+    decoder = "eCCA"
+
     def __init__(self, fs=FS_UNICORN, refresh=60.0, code_len=63, band=CVEP_BAND,
                  channels=None):
         self.fs = float(fs)
@@ -185,6 +192,10 @@ class CVEPModel:
         np.savez(path, w=self.w, template=self.template, fs=self.fs, refresh=self.refresh,
                  code_len=self.code_len, band=np.asarray(self.band), n_targets=int(n_targets),
                  channels=np.asarray(self.channels, dtype=int),
+                 # Le fichier DÉCLARE son décodeur : `cvep_models.charger` lit ce champ pour
+                 # savoir quelle classe instancier. Un fichier SANS le champ est un eCCA d'avant
+                 # ce chantier — cf. le commentaire de `CVEPModel.decoder`.
+                 decoder=self.decoder,
                  cv=(-1.0 if self.cv_ is None else self.cv_))
         return path
 

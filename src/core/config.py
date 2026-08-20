@@ -325,19 +325,67 @@ CVEP_MODEL_PATH = _os.path.join(DATA_DIR, "cvep_model.npz")
 # une fraction de frame.
 CVEP_PEREMPTION_CYCLES = 3
 
-# --- c-VEP variante rCCA + CODES DISTINCTS (2e mode c-VEP, séparé) -----------
-# Le c-VEP « classique » ci-dessus utilise UNE m-séquence décalée circulairement : c'est le cas
-# où notre eCCA (template partagé) est déjà maximalement efficace, et où la reconvolution rCCA
-# (pyntbci) n'apporte RIEN (mesuré le 2026-07-21, cf. eeg-cvep en mémoire). rCCA ne paie que si
-# CHAQUE cible a un CODE DIFFÉRENT : le transitoire appris se transfère alors d'un code à l'autre.
-# Ce mode génère des CODES GOLD distincts (pyntbci.stimulus.make_gold_codes, longueur 63 comme la
-# m-séquence -> cycle inchangé 1,05 s) et décode avec rCCA. C'est un mode d'EXPLORATION séparé :
-# on compare, on ne remplace pas le c-VEP classique validé.
+# --- c-VEP, 2e décodeur : rCCA (reconvolution) sur LE MÊME stimulus ----------
+# Le c-VEP utilise UNE m-séquence décalée circulairement (un lag par cible). Longtemps ce dépôt a
+# écrit que « la reconvolution n'apporte rien » — c'était mesuré de « rCCA + CODES GOLD DISTINCTS »,
+# les deux moitiés de l'hypothèse n'ayant jamais été testées séparément. Or `RCCAModel` prend ses
+# codes en PARAMÈTRE. Rebranché sur le stimulus décalé (2026-08-20, mêmes époques que l'eCCA,
+# data/cvep_calib_last.npz) : eCCA 43/90 = 47,8 %, rCCA 43/90 = 47,8 %, hasard 16,7 %. Les deux
+# décodeurs sont indiscernables ; les codes Gold, eux, restent réfutés et hors du produit.
 CVEP_RCCA_MODEL_PATH = _os.path.join(DATA_DIR, "cvep_rcca_model.npz")
 CVEP_RCCA_EVENT = "refe"      # évènements du modèle rCCA : "refe" = fronts montants+descendants
 CVEP_RCCA_ENC = 0.30          # durée (s) de la réponse transitoire apprise (~1 réponse VEP)
-CVEP_RCCA_CORR_MIN = 0.0      # placeholder : scores rCCA sur une autre échelle -> le vote filtre
-CVEP_RCCA_MARGIN = 0.0        # (à régler sur données réelles ; ne pas se fier au seuil, cf. eeg-cvep)
+
+# Seuils de rejet du rCCA — MESURÉS, et voici exactement comment, parce qu'un seuil sans
+# provenance est un seuil que personne n'osera changer :
+#
+#   python src/core/cvep_rcca.py --seuils data/cvep_calib_last.npz
+#
+#   fichier data/cvep_calib_last.npz — séance du 2026-07-21, UNE personne, 6 cibles, 90 cycles
+#   (15 par cible, parfaitement équilibré), stimulus décalé, voies [4,5,6,7] = Pz/PO7/Oz/PO8.
+#   Leave-one-out : 43/90 = 47,8 % (hasard 16,7 % ; p = 0,0005 par permutation, 2000 tirages).
+#   Les seuils sont les quantiles à 5 % — donc « on garde 95 % des essais corrects » — pris sur
+#   les scores HORS-PLI de cette validation croisée, sur les 43 essais qu'elle classe bien.
+#   Le c-VEP n'a pas de coût asymétrique comme l'ErrP : on cale sur « ne pas rater ce qui est bon ».
+#
+# ⚠️ UNE personne, UNE séance, 43 essais corrects. Ce sont les seuls chiffres qui existent ; ce
+# n'est pas une vérité générale, et ça vaut jusqu'à ce qu'une seconde personne soit mesurée —
+# exactement la même réserve que pour l'eCCA au-dessus.
+#
+# ⚠️ ET IL FAUT SAVOIR CE QUE CE PLANCHER NE FAIT PAS — c'est mesuré, sur les mêmes données, et
+# ça décide de la façon dont on doit s'en servir. Il garde 88 % des essais corrects, mais laisse
+# aussi passer 89 % des essais FAUX : les deux distributions se recouvrent presque entièrement
+# (gagnant médian 0,262 quand c'est juste, 0,215 quand c'est faux). Sur 300 fenêtres de bruit pur
+# — « personne ne fixe », le geste de mesure que `cvep_decoder._demo` utilise déjà — le gagnant a
+# une médiane de 0,163, soit AU-DESSUS de ce plancher, et 83 % de ces fenêtres passeraient.
+# Conséquence chiffrée : avec ces seuils le décodeur émet sur 89 % des essais et se trompe une
+# fois sur deux (48 % de justesse quand il émet, contre 47,8 % sans aucun seuil). Ce réglage
+# n'est donc PAS un filtre de justesse ; c'est un plancher, et ce qui protège contre « personne
+# ne fixe » est le vote glissant (CVEP_VOTE_LEN/CVEP_MIN_VOTES), pas lui.
+#
+# ⚠️ Les deux décodeurs ne sont donc PAS au même point de fonctionnement, et il faut savoir
+# pourquoi avant de comparer leurs sorties. Les seuils eCCA livrés plus haut (0,26/0,09) ne
+# sortent PAS de cette procédure-ci : mesurés sur les mêmes 90 époques, ils gardent 63 % des
+# essais corrects, font émettre sur 40 % d'entre eux avec 75 % de justesse, et ne laissent passer
+# que 10 % du bruit pur. La même procédure de quantile appliquée à l'eCCA aurait donné
+# 0,158/0,038 — nettement plus permissif (86 % de corrects gardés, 58 % de justesse, 47 % du
+# bruit). Autrement dit, l'eCCA a été réglé « rejeter le bruit », le rCCA est réglé ici « ne rien
+# rater de bon », et le second n'améliore pas la justesse. Appliqués aux scores rCCA, les seuils
+# stricts de l'eCCA (0,26/0,09) donnent d'ailleurs 71 % de justesse pour 27 % d'émission et 10 %
+# de bruit : c'est le réglage à essayer en séance si le mode se révèle trop bavard — et il est
+# réglable à chaud, précisément pour ça.
+#
+# ⚠️ Ce n'est PAS une différence d'ÉCHELLE entre les deux décodeurs : mesurées, leurs corrélations
+# vivent au même endroit (gagnant médian 0,262 pour le rCCA, 0,296 pour l'eCCA). L'ancien
+# commentaire de ces deux constantes — « scores rCCA sur une autre échelle » — était faux ; il est
+# corrigé ici. Ce qui trancherait vraiment le choix du plancher : enregistrer une fois, au casque,
+# ce que valent ces scores quand la personne ne fixe RIEN. Ce fichier n'existe pas. Tant qu'il
+# n'existe pas, la valeur ci-dessous est ce que les données réelles permettent d'affirmer sous la
+# procédure choisie, et rien de plus — et on préfère un défaut permissif qu'on RESSERRE en séance
+# à un défaut strict sous lequel rien ne se déclenche jamais, la panne qui a déjà coûté une
+# séance au SSVEP.
+CVEP_RCCA_CORR_MIN = 0.080    # corrélation mini du gagnant (quantile 5 % des essais corrects)
+CVEP_RCCA_MARGIN = 0.011      # écart mini 1er - 2e   (idem, sur l'écart gagnant-second)
 
 
 # Nombre de cibles c-VEP. C'EST le paramètre d'exploration : le SSVEP est plafonné par les

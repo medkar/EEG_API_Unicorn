@@ -6,6 +6,9 @@ numpy>=1.24
 scipy>=1.10            # filtres du c-VEP et du Motor Imagery (filtfilt)
 scikit-learn>=1.3      # classifieurs MI / P300 / ErrP
 pyriemann>=0.5         # xDAWN + géométrie riemannienne (P300, ErrP)
+# Décodeur c-VEP par reconvolution (rCCA). Le MOTEUR en dépend : RCCAModel ne sérialise pas
+# l'objet pyntbci, il stocke les époques et ré-ajuste au chargement.
+pyntbci>=1.9           # rCCA (2e décodeur c-VEP) — mesuré avec la 1.9.0 sur ce poste
 joblib>=1.3            # sauvegarde des modèles calibrés
 pygame>=2.5            # stimulus natif : clignotement verrouillé à la frame (vsync)
 pylsl>=1.16            # diffusion réseau (Lab Streaming Layer) — le contrat d'API

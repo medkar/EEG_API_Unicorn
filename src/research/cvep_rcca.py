@@ -1,15 +1,28 @@
-"""c-VEP variante rCCA + CODES DISTINCTS (2e mode c-VEP, exploration).
+"""c-VEP variante CODES GOLD DISTINCTS — l'hypothèse RÉFUTÉE, gardée lisible.
 
-Différence avec le c-VEP classique (`cvep_decoder.py`) :
-  - classique : UNE m-séquence, décalée circulairement (lags). Notre eCCA apprend un template
-    partagé -> déjà maximalement efficace en données ; rCCA n'y gagne rien (mesuré 2026-07-21).
-  - ICI : chaque cible a un CODE GOLD DIFFÉRENT (intercorrélation basse), et on décode par
-    RECONVOLUTION (rCCA de pyntbci) : on apprend une courte réponse transitoire, commune à tous
-    les codes, qui se transfère de l'un à l'autre. C'est LE cas où la reconvolution peut payer.
+⚠️ **Ce fichier ne contient plus le décodeur.** `RCCAModel` et `RCCADecoder` sont partis dans
+`src/core/cvep_rcca.py` : le moteur en a besoin, donc ils suivent la règle du déménagement. Ce qui
+reste ici, c'est la **fabrique de codes Gold** et le plan de cibles qui va avec — c'est-à-dire la
+moitié de l'hypothèse qui a été mesurée et **réfutée**.
 
-pyntbci (BSD-3) est isolé dans CE fichier : le reste de l'appli ne le voit pas. Le modèle stocke
-les époques de calibration et RÉ-ENTRAÎNE rCCA au chargement (fit < 1 s), ce qui évite de
-sérialiser un objet pyntbci et garde les données pour ré-analyse.
+Ce qui a été testé, et ce qui a été conclu :
+  - stimulus classique : UNE m-séquence, décalée circulairement (un lag par cible). C'est le
+    stimulus que le produit garde.
+  - stimulus d'ICI : chaque cible affiche un CODE GOLD DIFFÉRENT (intercorrélation basse), décodé
+    par RECONVOLUTION (rCCA de pyntbci) — on apprend une courte réponse transitoire commune à tous
+    les codes, qui se transfère de l'un à l'autre. C'était LE cas où la reconvolution pouvait payer.
+
+Verdict : **codes Gold = non**. Mais les deux moitiés de l'hypothèse (« rCCA » et « codes
+distincts ») ont toujours été mesurées ENSEMBLE, et `RCCAModel` prend ses codes en paramètre — il
+n'a jamais su d'où ils venaient. Rebranché sur le stimulus décalé, le rCCA fait jeu égal avec
+l'eCCA (43/90 chacun, cf. `core/cvep_rcca.py`). C'est la moitié « codes Gold » qui était mauvaise.
+
+⚠️ **Une hypothèse réfutée se garde LISIBLE, pas BRANCHÉE.** Après ce découpage, les seuls
+appelants de `make_distinct_codes` / `build_targets_rcca` sont les écrans Gold de
+`research/app.py`, qui partent dans `archive/`. C'est voulu : `cvep_models.charger` refuse
+d'ailleurs tout modèle rCCA dont les codes ne sont pas ceux du stimulus affiché aujourd'hui, ce
+qui met `data/cvep_rcca_model.npz` (calibré sur des codes Gold) définitivement hors de la liste
+proposée à un étudiant.
 
     python src/research/cvep_rcca.py     # autotest sur c-VEP synthétique à codes distincts (aucun casque)
 """
@@ -20,151 +33,26 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_RCCA_CORR_MIN,  # noqa: E402
-                    CVEP_RCCA_ENC, CVEP_RCCA_EVENT, CVEP_RCCA_MARGIN,
-                    CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
-from core.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
+from core.config import (CVEP_CHANNELS, CVEP_RCCA_MODEL_PATH,  # noqa: E402
+                    FS_UNICORN, use_utf8_console)
+# Le décodeur vit maintenant dans `core/`. Ré-exporté ici pour que les écrans Gold de
+# `research/app.py` continuent de tourner jusqu'à leur archivage — un import qui casse ne rend
+# personne plus savant sur une hypothèse réfutée.
+from core.cvep_rcca import RCCADecoder, RCCAModel  # noqa: E402,F401  (ré-export)
 
 
 def make_distinct_codes(n, seed_offset=0):
     """`n` codes Gold DISTINCTS de longueur 63 (pyntbci). Intercorrélation bornée -> séparables.
 
     Les codes Gold forment une famille où toutes les paires ont une intercorrélation basse, ce
-    qui est exactement la propriété voulue pour des cibles à codes différents.
+    qui est exactement la propriété voulue pour des cibles à codes différents. ⚠️ Le produit ne
+    les affiche plus : cf. la docstring du module.
     """
     import pyntbci.stimulus as st
     gold = np.asarray(st.make_gold_codes())          # (63, 63), valeurs 0/1
     if n > gold.shape[0]:
         raise ValueError(f"{n} codes demandés, {gold.shape[0]} disponibles")
     return gold[seed_offset:seed_offset + n].astype(int)
-
-
-class RCCAModel:
-    """Modèle rCCA (reconvolution) sur codes distincts. Interface calquée sur CVEPModel."""
-
-    def __init__(self, codes, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAND,
-                 channels=None, event=CVEP_RCCA_EVENT, enc=CVEP_RCCA_ENC):
-        self.codes = np.asarray(codes, dtype=int)         # (n_targets, code_len)
-        self.fs = float(fs)
-        self.refresh = float(refresh)
-        self.code_len = int(self.codes.shape[1])
-        self.band = tuple(band)
-        self.channels = list(CVEP_CHANNELS if channels is None else channels)
-        self.event = event
-        self.enc = float(enc)
-        self.clf = None          # classifieur pyntbci rCCA (ré-entraîné au besoin)
-        self.cv_ = None
-        self._epochs = None      # époques de calibration conservées (pour save/refit)
-        self._labels = None
-
-    @property
-    def n_targets(self):
-        return int(self.codes.shape[0])
-
-    @property
-    def n_cyc(self):
-        """Longueur d'un cycle en échantillons EEG (63 frames @60Hz -> 262 éch.)."""
-        return int(round(self.code_len * self.fs / self.refresh))
-
-    def _shift(self, frames):
-        return int(round(frames * self.fs / self.refresh)) % self.n_cyc
-
-    def _stimulus(self):
-        """(n_targets, n_cyc) : chaque code suréchantillonné du refresh à fs, sur un cycle."""
-        frame = (np.arange(self.n_cyc) * self.refresh / self.fs).astype(int) % self.code_len
-        return self.codes[:, frame].astype(float)
-
-    def _fit_clf(self, X, y):
-        from pyntbci.classifiers import rCCA
-        clf = rCCA(stimulus=self._stimulus(), fs=self.fs, event=self.event,
-                   encoding_length=self.enc, onset_event=True)
-        clf.fit(X, y)
-        return clf
-
-    def fit(self, epochs, labels, compute_cv=True):
-        """epochs : liste de (n_cyc x n_ch) BRUTES, DÉJÀ réduites aux voies (comme CVEPModel :
-        c'est l'appelant qui sélectionne `channels`). labels : index de cible (0..n_targets-1).
-
-        `compute_cv=False` saute le leave-one-out interne (N ré-entraînements) : indispensable
-        au CHARGEMENT (cv_ est déjà stocké) et quand un appelant fait lui-même sa validation
-        croisée — sinon chaque fit relance un LOO complet et l'entrée du mode traîne plusieurs s.
-        """
-        self._epochs = [np.asarray(e, float) for e in epochs]
-        self._labels = np.asarray(labels, dtype=int)
-        X = np.stack([bandpass(e, self.fs, self.band).T
-                      for e in self._epochs])           # (n_trials, n_ch, n_cyc)
-        self.clf = self._fit_clf(X, self._labels)
-        if compute_cv:
-            self.cv_ = self._loo(X, self._labels)
-        return self
-
-    def _loo(self, X, y):
-        if len(X) < 3 or len(set(y.tolist())) < 2:
-            return None
-        ok = 0
-        for i in range(len(X)):
-            tr = [j for j in range(len(X)) if j != i]
-            clf = self._fit_clf(X[tr], y[tr])
-            ok += int(np.ravel(clf.predict(X[i:i + 1]))[0] == y[i])
-        return ok / len(X)
-
-    # --- décodage en ligne ----------------------------------------------
-    def _fold(self, window, n_cycles):
-        w = np.asarray(window, float)
-        k = max(1, min(int(n_cycles), len(w) // self.n_cyc))
-        return w[-k * self.n_cyc:].reshape(k, self.n_cyc, -1).mean(axis=0)
-
-    def scores(self, window, phase, n_cycles=1):
-        """Scores par cible (n_targets,) pour une fenêtre BRUTE se terminant « maintenant ».
-
-        On filtre, on moyenne les `n_cycles` derniers cycles, on RECALE sur la phase 0 du code
-        (les codes distincts démarrent tous ensemble à la frame 0), puis rCCA note chaque cible.
-        """
-        avg = self._fold(bandpass(window, self.fs, self.band), n_cycles)   # (n_cyc x n_ch) déjà réduit
-        aligned = np.roll(avg, -self._shift(phase), axis=0)
-        X = aligned.T[None]                               # (1, n_ch, n_cyc)
-        return np.ravel(self.clf.decision_function(X))    # (n_targets,)
-
-    # --- persistance : on stocke les données et on ré-entraîne au chargement ---
-    def save(self, path=CVEP_RCCA_MODEL_PATH):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez(path, codes=self.codes, epochs=np.asarray(self._epochs),
-                 labels=self._labels, fs=self.fs, refresh=self.refresh,
-                 band=np.asarray(self.band), channels=np.asarray(self.channels, dtype=int),
-                 event=self.event, enc=self.enc,
-                 cv=(-1.0 if self.cv_ is None else self.cv_))
-        return path
-
-    @classmethod
-    def load(cls, path=CVEP_RCCA_MODEL_PATH):
-        d = np.load(path, allow_pickle=True)
-        m = cls(codes=d["codes"], fs=float(d["fs"]), refresh=float(d["refresh"]),
-                band=tuple(d["band"]), channels=[int(c) for c in d["channels"]],
-                event=str(d["event"]), enc=float(d["enc"]))
-        m.fit([e for e in d["epochs"]], d["labels"], compute_cv=False)   # refit rapide (pas de LOO)
-        m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])           # cv_ déjà mesuré à la calib
-        return m
-
-
-class RCCADecoder:
-    """Applique RCCAModel au plan de cibles + rejet (« rien fixé » -> None). Calqué sur CVEPDecoder."""
-
-    def __init__(self, model, plan, corr_min=CVEP_RCCA_CORR_MIN, margin=CVEP_RCCA_MARGIN,
-                 n_cycles=1):
-        self.model = model
-        self.plan = plan                                  # cibles, dans l'ordre des codes
-        self.corr_min = corr_min
-        self.margin = margin
-        self.n_cycles = n_cycles
-
-    def classify(self, window, phase):
-        sc = self.model.scores(window, phase, self.n_cycles)
-        named = {self.plan[i]["name"]: float(sc[i]) for i in range(len(self.plan))}
-        order = np.argsort(sc)[::-1]
-        best, second = float(sc[order[0]]), float(sc[order[1]]) if len(sc) > 1 else 0.0
-        if best >= self.corr_min and (best - second) >= self.margin:
-            return self.plan[int(order[0])], named
-        return None, named
 
 
 def build_targets_rcca(n=None):
@@ -338,14 +226,23 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
         print(f"SNR {snr:+5.1f} dB | LOO {model.cv_*100:5.1f}% | argmax {ok/n_test*100:5.1f}% "
               f"(hasard {100/n_targets:.0f}%)")
 
-    # phase glissante : décodage hors frontière de cycle (le recalage doit compenser)
+    # Phase glissante : décodage hors frontière de cycle (le recalage doit compenser).
+    #
+    # ⚠️ Le `-` du `np.roll` ci-dessous était un `+`, et il CACHAIT un vrai défaut : le `scores`
+    # d'origine recalait dans le mauvais sens, et cette ligne fabriquait sa fenêtre dans le
+    # mauvais sens aussi — les deux erreurs s'annulaient ici, et seulement ici. Le pilotage en
+    # ligne (`research/app.py::_cvep_decode`), lui, note à des phases quelconques avec la
+    # convention de l'eCCA, donc à travers un alignement retourné. Le défaut a survécu parce que
+    # cette ligne IMPRIME son résultat sans jamais l'affirmer. La convention, désormais commune
+    # aux deux décodeurs : une fenêtre « à la phase p » est le signal AVANCÉ de p frames, donc
+    # `np.roll(..., -shift(p))` (cf. `cvep_decoder._demo`, même geste).
     ep = [_synth(stim[c], n_ch, fs, -8.0, rng) for c in range(n_targets) for _ in range(n_cal)]
     model = RCCAModel(codes, fs=fs, refresh=refresh, channels=list(range(n_ch))).fit(
         ep, [c for c in range(n_targets) for _ in range(n_cal)])
     hits, phases = 0, range(0, model.code_len, 9)
     for p in phases:
         c = int(rng.integers(n_targets))
-        w = np.roll(_synth(stim[c], n_ch, fs, -8.0, rng), model._shift(p), axis=0)
+        w = np.roll(_synth(stim[c], n_ch, fs, -8.0, rng), -model._shift(p), axis=0)
         hits += int(np.argmax(model.scores(w, p, 1)) == c)
     print(f"\nPhase glissante : {hits}/{len(list(phases))} correct (recalage OK si ≈ tout)")
 
