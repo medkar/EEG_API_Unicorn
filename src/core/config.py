@@ -98,6 +98,16 @@ def empreinte_dossier(dossier=DATA_DIR):
 
     Rendre le dossier absent comme un dictionnaire vide, et non lever : un dépôt fraîchement cloné
     n'a pas de `data/`, et un smoke doit y tourner quand même.
+
+    ⚠️ **CE GARDE EST AVEUGLE À UN CRÉER-PUIS-EFFACER DANS LA MÊME FENÊTRE DE MESURE.** Mesuré
+    (revue de tâche 6, tour 2) : `server.py --smoke` crée puis efface `data/mi_model_smoke.joblib`
+    dans le VRAI `data/` — l'empreinte avant et après sont IDENTIQUES, parce que le fichier n'existe
+    déjà plus au second appel. Une comparaison `{nom: (taille, mtime)}` avant/après ne voit QUE ce
+    qui reste sur le disque au moment des deux instantanés ; elle ne voit pas ce qui est passé
+    entre les deux. Elle protège contre l'accident mesuré ce tour-ci (un fichier de test qui SURVIT
+    et se fait élire comme le plus récent modèle chargeable) — pas contre toute écriture, aussi
+    brève soit-elle. Un garde étanche demanderait de surveiller le dossier PENDANT l'exécution
+    (`watchdog`, ou un stub qui intercepte les appels d'écriture), pas seulement avant/après.
     """
     if not _os.path.isdir(dossier):
         return {}

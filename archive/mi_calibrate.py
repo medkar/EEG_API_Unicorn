@@ -24,8 +24,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
-from core.config import (FS_UNICORN, MI_KEY_CHANNELS, MI_MODEL_PATH,  # noqa: E402
-                    MI_WINDOW_S, use_utf8_console)
+from core.config import (DATA_DIR, empreinte_dossier, FS_UNICORN,  # noqa: E402
+                    MI_KEY_CHANNELS, MI_MODEL_PATH, MI_WINDOW_S, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
 
@@ -392,4 +392,17 @@ def _parse(argv):
 if __name__ == "__main__":
     use_utf8_console()
     a = _parse(sys.argv[1:])
-    calibrate(session=a.session, synthetic=a.synthetic, smoke=a.smoke)
+    # ⚠️ Garde ajouté par la revue de tâche 6, tour 2 : « le couple qui a déjà coûté quatre
+    # modèles par ce mécanisme exact ». `_train_and_save` saute SA sauvegarde en `--smoke`
+    # (`if smoke: return True` avant tout `model.save(...)`) — donc rien n'écrit aujourd'hui —
+    # mais rien ne le PROUVAIT non plus, et c'est exactement le genre de garantie implicite qui a
+    # cédé une fois. `empreinte_dossier` (limite documentée dans sa docstring : aveugle à un
+    # créer-puis-effacer DANS la fenêtre de mesure) referme ce trou pour tout ce qui SURVIT.
+    empreinte_avant = empreinte_dossier(DATA_DIR) if a.smoke else None
+    ok = calibrate(session=a.session, synthetic=a.synthetic, smoke=a.smoke)
+    if a.smoke:
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"ce smoke a touché data/ : "
+            f"{set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
+    sys.exit(0 if ok else 1)

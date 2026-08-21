@@ -57,18 +57,28 @@ def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz
         time.sleep(1.0 / hz)
 
 
-def calibrate_rcca(app, cycles=None, save_path=CVEP_RCCA_MODEL_PATH):
-    """Copie EXACTE de `research.cvep_rcca.calibrate_rcca` (avant son retrait, tâche 6). Calibration
-    du mode rCCA + CODES DISTINCTS. Reprend le protocole c-VEP classique (fixer chaque cible en
-    blocs entrelacés) mais chaque cible affiche SON code Gold, et on ajuste un rCCA.
+def calibrate_rcca(app, cycles=None, save_path=None):
+    """Copie de `research.cvep_rcca.calibrate_rcca` (avant son retrait, tâche 6), avec UN écart
+    volontaire signalé ci-dessous. Calibration du mode rCCA + CODES DISTINCTS. Reprend le
+    protocole c-VEP classique (fixer chaque cible en blocs entrelacés) mais chaque cible affiche
+    SON code Gold, et on ajuste un rCCA.
+
+    ⚠️ **`save_path=None` -> un chemin HORODATÉ (`chemin_modele_horodate("rCCA")`), jamais
+    `CVEP_RCCA_MODEL_PATH` en dur.** Réserve du tour 2 de la revue de tâche 6 : ce fichier gardait
+    le défaut fixe alors même que `CVEP_RCCA_MODEL_PATH` (`data/cvep_rcca_model.npz`) est
+    EXACTEMENT le fichier qu'un smoke mal câblé a déjà écrasé une fois (tour 1, incident
+    documenté dans le rapport de tâche 6) — un `python archive/cvep_rcca_pilot.py --calibrate`
+    sans `--model` explicite écrivait DROIT dessus. Même patron que
+    `research.cvep_calibrate.calibrate`, adopté ici pour la même raison.
 
     Réutilise les helpers éprouvés de cvep_calibrate (briefing, blocs mélangés, rendu, garde-fous)
     pour ne pas diverger du protocole validé. Retourne (ok, cv_loo|None).
     """
     from core.config import CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES
     from research.cvep_calibrate import (_briefing, _draw, _make_blocks, _wilson_hi,  # noqa: E402
-                                EARLY_ITR_MIN, SETTLE_CYCLES)
+                                chemin_modele_horodate, EARLY_ITR_MIN, SETTLE_CYCLES)
 
+    save_path = save_path or chemin_modele_horodate("rCCA")
     cycles = CVEP_CAL_CYCLES if cycles is None else cycles
     plan, codes = build_targets_rcca()
     L = int(codes.shape[1])
@@ -222,7 +232,13 @@ def mode_cvep_rcca(app, model_path=CVEP_RCCA_MODEL_PATH):
 def _parse(argv):
     p = argparse.ArgumentParser(
         description="c-VEP rCCA + codes Gold distincts (ARCHIVÉ — hypothèse réfutée).")
-    p.add_argument("--model", default=CVEP_RCCA_MODEL_PATH, help="chemin du modèle rCCA (Gold)")
+    # ⚠️ PAS `default=CVEP_RCCA_MODEL_PATH` : réserve du tour 2 de la revue de tâche 6, ce défaut
+    # faisait de `--calibrate` sans `--model` un chemin de production qui écrit DROIT sur le
+    # fichier qu'un smoke a déjà écrasé une fois. Résolu explicitement dans `main()` : horodaté en
+    # calibrant, `CVEP_RCCA_MODEL_PATH` seulement pour PILOTER un modèle déjà là.
+    p.add_argument("--model", default=None,
+                   help="chemin du modèle rCCA (Gold) — pilotage seul : CVEP_RCCA_MODEL_PATH par "
+                        "défaut ; avec --calibrate : horodaté par défaut, jamais écrasé")
     p.add_argument("--calibrate", action="store_true", help="calibrer AVANT de piloter")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
     p.add_argument("--send", action="store_true", help="armer l'envoi UDP dès le lancement")
@@ -251,10 +267,21 @@ def main(argv=None):
             model_path = os.path.join(tmp, "cvep_rcca_model_smoke.npz")
             calibrate_rcca(app, save_path=model_path)
         elif a.calibrate:
+            # ⚠️ Résolu ICI, et pas seulement laissé au défaut interne de `calibrate_rcca` : on a
+            # besoin du chemin RÉEL pour piloter ensuite le modèle qu'on vient de produire — un
+            # `save_path=None` transmis tel quel calibrerait correctement (le défaut de
+            # `calibrate_rcca` est déjà sûr) mais `main()` ne saurait alors plus QUEL fichier
+            # piloter juste après.
+            if model_path is None:
+                from research.cvep_calibrate import chemin_modele_horodate
+                model_path = chemin_modele_horodate("rCCA")
             try:
                 calibrate_rcca(app, save_path=model_path)
             except Abort:
                 pass
+        if model_path is None:
+            model_path = CVEP_RCCA_MODEL_PATH   # pilotage SEUL (pas de calibration) : nom fixe,
+                                                # lecture d'un modèle déjà calibré — pas un danger
         # ⚠️ `mode_cvep_rcca` sort AVANT sa boucle live (sans exception, juste un `app.flash(...)`
         # puis `return`) si le modèle est absent ou incompatible. La revue de tâche 6 a mesuré
         # qu'un smoke qui se contente d'appeler la fonction et de constater l'absence d'exception

@@ -23,9 +23,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
-from core.config import (COMMANDS, EXAMPLES_DIR, MI_MIN_VOTES, MI_MODEL_PATH,  # noqa: E402
-                    MI_PROB_MIN, MI_VOTE_LEN, MI_WINDOW_S, UDP_HOST, UDP_PORT,
-                    apply_invert, use_utf8_console)
+from core.config import (COMMANDS, DATA_DIR, empreinte_dossier, EXAMPLES_DIR,  # noqa: E402
+                    MI_MIN_VOTES, MI_MODEL_PATH, MI_PROB_MIN, MI_VOTE_LEN, MI_WINDOW_S,
+                    UDP_HOST, UDP_PORT, apply_invert, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.mi_decoder import MI_LABELS, MIDecoder, MIModel  # noqa: E402
 from research.ssvep_stimulus import arrow_polygon  # noqa: E402
@@ -215,5 +215,18 @@ def _parse(argv):
 if __name__ == "__main__":
     use_utf8_console()
     a = _parse(sys.argv[1:])
-    pilot(calibrate_first=a.calibrate, session=a.session, synthetic=a.synthetic,
-          send=a.send, windowed=not a.fullscreen, smoke=a.smoke)
+    # ⚠️ Garde ajouté par la revue de tâche 6, tour 2 : « le couple qui a déjà coûté quatre
+    # modèles par ce mécanisme exact ». `pilot(calibrate_first=True)` saute la calibration en
+    # smoke (`if calibrate_first and not smoke:`) et le reste de la boucle ne sauvegarde rien —
+    # mais rien ne le PROUVAIT, et c'est exactement le genre de garantie implicite qui a cédé une
+    # fois. `empreinte_dossier` (limite documentée dans sa docstring : aveugle à un
+    # créer-puis-effacer DANS la fenêtre de mesure) referme ce trou pour tout ce qui SURVIT.
+    empreinte_avant = empreinte_dossier(DATA_DIR) if a.smoke else None
+    ok = pilot(calibrate_first=a.calibrate, session=a.session, synthetic=a.synthetic,
+              send=a.send, windowed=not a.fullscreen, smoke=a.smoke)
+    if a.smoke:
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"ce smoke a touché data/ : "
+            f"{set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
+    sys.exit(0 if ok else 1)

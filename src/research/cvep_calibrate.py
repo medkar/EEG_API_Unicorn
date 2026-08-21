@@ -12,6 +12,7 @@ Chaque époque est prélevée EXACTEMENT à une frontière de cycle (frame % L =
 fenêtre couvre alors le cycle qui vient de s'écouler, donc démarre à la phase 0 du code.
 """
 
+import math
 import os
 import random
 import sys
@@ -211,7 +212,16 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
                       SA matrice de scores hors-pli, `sc.shape[1]`) : c'est CE nombre qui fixe le
                       hasard contre lequel lire `justesse`. DOIT être égal pour les deux, sinon
                       l'un a été jugé sur un jeu de cibles plus facile que l'autre (le Critical 1
-                      de la revue de tâche 6).
+                      de la revue de tâche 6). `None` si `n_decisions == 0` (rien à mesurer à
+                      cette géométrie) — jamais une valeur d'apparence normale sur du vide (tour 2
+                      de la revue) ;
+      `corrects`    — tableau booléen, une valeur par DÉCISION, dans le MÊME ordre que l'autre
+                      décodeur (les deux `hors_pli` parcourent `groupes_de_cycles` sur des
+                      étiquettes en bijection — même frontières, donc même ordre de groupes,
+                      quelle que soit l'encodage). C'est ce qui rend les décisions eCCA et rCCA
+                      APPARIÉES, condition nécessaire pour un test de McNemar (`_gagnant`) — les
+                      comparer comme deux échantillons INDÉPENDANTS serait le mauvais test.
+                      `None` si `n_decisions == 0`.
     """
     plan, code = build_targets()
     codes = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
@@ -249,31 +259,103 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
     ecca.cv_ = float((sc_e.argmax(axis=1) == y_e).mean()) if len(y_e) else None
     rcca.cv_ = float((sc_r.argmax(axis=1) == y_r).mean()) if len(y_r) else None
     # ⚠️ `groupes_de_cycles` peut rendre AUCUN groupe à la géométrie `n_cycles` (une séance trop
-    # courte, ou — mesuré — le protocole `--smoke` d'origine, dont les blocs interrompaient
-    # systématiquement toute paire de cycles consécutifs). `hors_pli` rend alors un tableau de
-    # score VIDE en 1 dimension (`shape == (0,)`), et `.shape[1]` lèverait un `IndexError` au lieu
-    # de dire proprement « rien à mesurer à cette géométrie ». `len(presentes)` reste le nombre
-    # d'alternatives VISÉES par la comparaison (identique pour les deux, par construction) même
-    # quand aucune décision n'a pu être notée.
-    n_cibles_e = int(sc_e.shape[1]) if sc_e.ndim > 1 else len(presentes)
-    n_cibles_r = int(sc_r.shape[1]) if sc_r.ndim > 1 else len(presentes)
+    # courte, ou — mesuré au tour 1 de la revue — le protocole `--smoke` d'origine, dont les blocs
+    # interrompaient systématiquement toute paire de cycles consécutifs). Au tour 1, `n_cibles`
+    # retombait sur `len(presentes)` pour éviter un `IndexError` sur `.shape[1]` — mais un chiffre
+    # qui a l'air d'une vraie mesure sur du VIDE est exactement le genre de panne muette que ce
+    # dépôt existe pour éliminer (tour 2 de la revue) : `calibrate()` plantait un cran plus loin,
+    # sur `cv_e*100` avec `cv_e is None`, parce que rien ne disait explicitement « il n'y a rien
+    # à afficher ». `n_cibles` et `corrects` sont donc `None` quand `n_decisions == 0`, au même
+    # titre que `justesse` — l'appelant DOIT fermer ce chemin avant tout calcul, pas le deviner.
+    #
+    # ⚠️ **Le test qui décide « rien à mesurer » DOIT être `len(sc) == 0` (le nombre de LIGNES),
+    # jamais `sc.ndim`** — trouvé en écrivant le test du cas vide (tour 2) : sur un tableau vide,
+    # `CVEPModel.hors_pli` rend `(0,)` (1 dimension, `np.asarray([])`) mais `RCCAModel.hors_pli`
+    # rend `(0, n_targets)` (2 dimensions : `_hors_pli` PRÉ-ALLOUE `np.zeros((len(groupes),
+    # n_targets))` avant sa boucle, donc la largeur survit même à zéro ligne). Un test sur `.ndim`
+    # aurait donc laissé passer un `n_cibles` rCCA d'apparence normale — 6, le compte du plan —
+    # sur un tableau qui ne contient VRAIMENT rien. `len(sc)` vaut 0 dans les deux cas, sans cette
+    # divergence d'implémentation entre les deux jumeaux.
+    n_cibles_e = int(sc_e.shape[1]) if len(sc_e) > 0 else None
+    n_cibles_r = int(sc_r.shape[1]) if len(sc_r) > 0 else None
+    corrects_e = (sc_e.argmax(axis=1) == y_e) if len(sc_e) > 0 else None
+    corrects_r = (sc_r.argmax(axis=1) == y_r) if len(sc_r) > 0 else None
 
     return {
         "eCCA": {"modele": ecca, "justesse": ecca.cv_, "n_epoques": n_epoques_ecca,
-                 "groupes": groupes, "n_decisions": len(sc_e), "n_cibles": n_cibles_e},
+                 "groupes": groupes, "n_decisions": len(sc_e), "n_cibles": n_cibles_e,
+                 "corrects": corrects_e},
         "rCCA": {"modele": rcca, "justesse": rcca.cv_, "n_epoques": n_epoques_rcca,
-                 "groupes": groupes, "n_decisions": len(sc_r), "n_cibles": n_cibles_r},
+                 "groupes": groupes, "n_decisions": len(sc_r), "n_cibles": n_cibles_r,
+                 "corrects": corrects_r},
     }
 
 
-def _gagnant(res):
-    """Le nom du décodeur qui gagne sur la justesse hors-pli, ou `None` en cas d'ÉGALITÉ EXACTE
-    — le cas réellement mesuré sur la seule séance disponible (43/90 chacun, cf.
-    `core/cvep_rcca.py`). Pure, sans effet de bord : testable sans casque ni pygame."""
-    e, r = res["eCCA"]["justesse"], res["rCCA"]["justesse"]
-    if e is None or r is None or e == r:
-        return None
-    return "eCCA" if e > r else "rCCA"
+def _mcnemar_p(b, c):
+    """p-value BILATÉRALE EXACTE du test de McNemar, sur des décisions APPARIÉES.
+
+    ⚠️ **C'est le test qui convient ici, et un test de deux proportions indépendantes serait le
+    MAUVAIS test** (tour 2 de la revue de tâche 6) : eCCA et rCCA sont notés sur les MÊMES groupes
+    de cycles (`entraine_les_deux.corrects`, même ordre) — même hasard du moment, même bruit,
+    mêmes essais faciles ou difficiles. Comparer leurs deux justesses comme deux échantillons
+    indépendants jetterait cette information et gonflerait la confiance dans un écart qui n'en a
+    pas — exactement le péché cardinal que ce dépôt s'interdit (`CLAUDE.md`, « rigueur
+    statistique »), déjà commis une fois pour le Motor Imagery.
+
+    `b` = décisions où SEUL eCCA est correct, `c` = décisions où SEUL rCCA l'est. Sous H0 (les
+    deux décodeurs se valent), `b` suit Binomial(b+c, 1/2) ; la p-value est la somme des
+    probabilités de tous les résultats AU MOINS aussi improbables que celui observé — la
+    définition standard du test binomial exact bilatéral (`scipy.stats.binomtest`, `R
+    binom.test`). Sans dépendance à `scipy.stats` : `math.comb` suffit, et le calcul se relit
+    entièrement dans ces quelques lignes.
+
+    Vérifié contre la seule séance réelle disponible (tâche 6) : b=3, c=5 -> p=0,7265625,
+    IDENTIQUE (à l'arrondi) au p=0,727 mesuré indépendamment par la revue.
+    """
+    n = b + c
+    if n == 0:
+        return 1.0
+    probs = [math.comb(n, i) * (0.5 ** n) for i in range(n + 1)]
+    p_obs = probs[min(b, c)]
+    return min(1.0, sum(p for p in probs if p <= p_obs + 1e-12))
+
+
+# Seuil de significativité usuel (5 %) — pas ajusté sur les données de ce dépôt : un seuil qui
+# aurait été choisi POUR faire ressortir tel ou tel gagnant ne prouverait plus rien.
+SEUIL_MCNEMAR = 0.05
+
+
+def _gagnant(res, seuil=SEUIL_MCNEMAR):
+    """Le décodeur qui gagne, ou `None` si l'écart n'est PAS DÉFENDABLE — test de McNemar exact
+    bilatéral (`_mcnemar_p`) sur les décisions APPARIÉES, PAS une comparaison de deux justesses
+    comme si elles venaient d'échantillons indépendants. Pure, sans effet de bord.
+
+    ⚠️ **Ne JAMAIS nommer de gagnant sur un écart qui n'est pas défendable.** C'est précisément
+    parce que ce chantier a mesuré les deux décodeurs À ÉGALITÉ sur la seule séance réelle
+    disponible (43/90 chacun à k=1, tâche 3 ; 24/37 contre 22/37 à k=2, p=0,73, tour 2 de cette
+    tâche) qu'il rouvre le rCCA au lieu de le jeter — un « gagnant » affiché sur un écart de deux
+    décisions dirait le contraire de ce que la mesure montre, à un étudiant qui n'a aucun moyen de
+    le savoir.
+
+    Rend un dict, jamais un simple nom : l'écran a besoin de la p-value et du nombre de décisions
+    discordantes pour être honnête, pas seulement des deux pourcentages qui ne portent pas
+    l'incertitude à eux seuls.
+        `gagnant`        — "eCCA" | "rCCA" | None (indiscernables, ou rien à mesurer) ;
+        `p`               — la p-value de McNemar, ou None si rien n'a pu être mesuré ;
+        `b`, `c`          — décisions où SEUL eCCA (b) / SEUL rCCA (c) est correct ;
+        `n_discordantes`  — `b + c` : c'est CE nombre qui porte l'information, pas les deux
+                             pourcentages de justesse pris isolément (tour 2 de la revue).
+    """
+    corrects_e, corrects_r = res["eCCA"]["corrects"], res["rCCA"]["corrects"]
+    if corrects_e is None or corrects_r is None:
+        return {"gagnant": None, "p": None, "b": None, "c": None, "n_discordantes": None}
+    b = int(np.sum(corrects_e & ~corrects_r))      # eCCA SEUL correct
+    c = int(np.sum(~corrects_e & corrects_r))      # rCCA SEUL correct
+    p = _mcnemar_p(b, c)
+    gagnant = None
+    if p < seuil and b != c:
+        gagnant = "eCCA" if b > c else "rCCA"
+    return {"gagnant": gagnant, "p": p, "b": b, "c": c, "n_discordantes": b + c}
 
 
 def _draw(app, plan, spots, frame, target, done, total, b_idx, n_blocks):
@@ -454,26 +536,67 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
         np.savez(os.path.join(folder, "cvep_calib_last.npz"), **data)   # raccourci d'analyse
         print(f"[cvep-cal] données archivées : {os.path.basename(archive)}")
 
+    # ⚠️ À la géométrie de DÉCISION DU MOTEUR (CVEP_DECISION_CYCLES cycles), une séance trop
+    # courte ou trop fragmentée peut ne fournir AUCUNE décision : `entraine_les_deux` le dit
+    # explicitement (`justesse`/`n_cibles`/`corrects` à `None`), plutôt que de rendre un chiffre
+    # d'apparence normale sur du vide. Fermer ce chemin ICI, avant tout calcul : c'est le
+    # `TypeError` (`cv_e*100` sur un `None`) que le tour 2 de la revue a trouvé un cran plus loin.
+    cv_e, cv_r = res["eCCA"]["justesse"], res["rCCA"]["justesse"]
+    n_cibles = res["eCCA"]["n_cibles"]      # == res["rCCA"]["n_cibles"], garanti par construction
+    if cv_e is None or cv_r is None or not n_cibles:
+        print(f"[cvep-cal] {len(epochs)} cycles enregistrés, mais AUCUNE décision à la géométrie "
+              f"du moteur ({CVEP_DECISION_CYCLES} cycles) — trop peu de cycles consécutifs de la "
+              f"même cible pour en former une seule. Les modèles sont sauvegardés (le filtre "
+              f"spatial et le classifieur existent), mais aucune justesse fiable ne les "
+              f"accompagne : recalibre, avec davantage de cycles par cible si possible.")
+        print(f"[cvep-cal] modèles sauvegardés : {save_path} (eCCA)  ·  {rcca_save_path} (rCCA)")
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < (0.1 if app.smoke else 5.0):
+            try:
+                app.drain(on_key=lambda e: None)
+            except Abort:
+                break
+            app.win.fill(BG)
+            h = app.win.get_height()
+            app.center(app.big, "Pas assez de décisions", WARN, int(h * 0.40))
+            app.center(app.mid, f"{len(epochs)} cycles enregistrés, aucune paire consécutive à "
+                       f"la géométrie du moteur", DIM, int(h * 0.50))
+            app.center(app.small, "modèles sauvegardés, mais sans justesse fiable — recalibre",
+                       DIM, int(h * 0.58))
+            app.pygame.display.flip()
+            app.clock.tick(60)
+        return False, res
+
     # Avec N cibles variable, l'accuracy brute n'est plus comparable d'une config à l'autre
     # (70% sur 6 cibles vaut bien plus que 70% sur 3). On rapporte donc l'ITR, l'échelle qui
     # combine nombre de choix, justesse et vitesse — cf. itr.py. Un ITR par décodeur : ils n'ont
     # aucune raison de dégrader à la même vitesse.
+    # ⚠️ `n_cibles` (ce que les DEUX décodeurs ont RÉELLEMENT jugé), jamais `len(plan)` : sur une
+    # séance INTERROMPUE (Critical 1), les deux ne jugent plus que parmi un sous-ensemble, et un
+    # hasard/ITR calculés à `len(plan)` restaient gonflés dans exactement ce cas-là (réserve du
+    # tour 2 de la revue) — un « DÉPASSE LE SSVEP » qui ne mesure pas ce qu'il prétend mesurer.
     from research.itr import itr as _itr
-    cv_e, cv_r = res["eCCA"]["justesse"], res["rCCA"]["justesse"]
-    chance = 100.0 / len(plan)
+    chance = 100.0 / n_cibles
     cycle_s = L / app.refresh
-    bits_e = _itr(len(plan), cv_e or 0.0, cycle_s)
-    bits_r = _itr(len(plan), cv_r or 0.0, cycle_s)
+    bits_e = _itr(n_cibles, cv_e, cycle_s)
+    bits_r = _itr(n_cibles, cv_r, cycle_s)
     meilleur = max(bits_e, bits_r)
     ref = _itr(3, 0.95, 1.5)   # SSVEP actuel = la barre à battre
-    nom_gagnant = _gagnant(res) or "égalité"
+    # ⚠️ McNemar, PAS une comparaison de deux pourcentages : voir `_gagnant`, tour 2 de la revue.
+    # « indiscernables » est la réponse honnête ET la réponse attendue — c'est précisément parce
+    # que les deux décodeurs se valent que ce chantier a rouvert le rCCA (cf. core/cvep_rcca.py).
+    mn = _gagnant(res)
     verdict = ("DÉPASSE LE SSVEP" if meilleur >= ref else
                "PROMETTEUR" if meilleur >= ref / 2 else
                "FAIBLE (contact électrodes ? regard qui décroche ? refais un essai)")
-    print(f"[cvep-cal] {len(epochs)} cycles sur {len(plan)} cibles (hasard {chance:.0f}%) :")
+    print(f"[cvep-cal] {len(epochs)} cycles sur {n_cibles} cibles jugées (hasard {chance:.0f}%) :")
     print(f"[cvep-cal]   eCCA  leave-one-out {cv_e*100:5.1f}%  -> {bits_e:5.1f} bits/min")
     print(f"[cvep-cal]   rCCA  leave-one-out {cv_r*100:5.1f}%  -> {bits_r:5.1f} bits/min")
-    print(f"[cvep-cal] gagnant : {nom_gagnant}   —   SSVEP de référence {ref:.1f} -> {verdict}")
+    ligne_gagnant = (f"indiscernables sur cette séance (McNemar p={mn['p']:.3f})" if mn["gagnant"]
+                     is None else f"gagnant : {mn['gagnant']} (McNemar p={mn['p']:.3f})")
+    print(f"[cvep-cal] {ligne_gagnant} — {mn['n_discordantes']} décisions discordantes sur "
+          f"{res['eCCA']['n_decisions']} (eCCA seul {mn['b']}, rCCA seul {mn['c']})")
+    print(f"[cvep-cal]   —   SSVEP de référence {ref:.1f} -> {verdict}")
     print(f"[cvep-cal] `python src/research/cvep_analyze.py` pour le gain en moyennant plusieurs cycles.")
     print(f"[cvep-cal] modèles sauvegardés : {save_path} (eCCA)  ·  {rcca_save_path} (rCCA)")
 
@@ -485,13 +608,16 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
             break
         app.win.fill(BG)
         h = app.win.get_height()
-        app.center(app.big, f"eCCA {cv_e*100:.0f}%   ·   rCCA {cv_r*100:.0f}%", FG, int(h * 0.34))
-        app.center(app.mid, f"gagnant : {nom_gagnant}", GO, int(h * 0.44))
+        app.center(app.big, f"eCCA {cv_e*100:.0f}%   ·   rCCA {cv_r*100:.0f}%", FG, int(h * 0.28))
+        app.center(app.mid, ligne_gagnant, DIM if mn["gagnant"] is None else GO, int(h * 0.38))
+        app.center(app.small, f"{mn['n_discordantes']} décisions discordantes sur "
+                   f"{res['eCCA']['n_decisions']}  ({mn['b']} eCCA seul, {mn['c']} rCCA seul)",
+                   DIM, int(h * 0.46))
         app.center(app.mid, f"{meilleur:.0f} bits/min (meilleur des deux)   —   SSVEP réf. {ref:.0f}",
-                   GO if meilleur >= ref / 2 else WARN, int(h * 0.53))
-        app.center(app.small, verdict, DIM, int(h * 0.62))
+                   GO if meilleur >= ref / 2 else WARN, int(h * 0.56))
+        app.center(app.small, verdict, DIM, int(h * 0.65))
         app.center(app.small, "modèles sauvegardés (eCCA et rCCA) — ESC pour continuer",
-                   DIM, int(h * 0.70))
+                   DIM, int(h * 0.73))
         app.pygame.display.flip()
         app.clock.tick(60)
     return meilleur >= ref / 2, res
@@ -614,14 +740,83 @@ def _selftest():
         f"...et le modèle rCCA sauvegardé porte VRAIMENT 3 codes, pas les 6 du plan complet "
         f"({res3['rCCA']['modele'].n_targets})")
 
-    # --- Le gagnant nommé, et l'ÉGALITÉ EXACTE — le cas mesuré sur la seule séance réelle. -----
-    chk(_gagnant({"eCCA": {"justesse": 0.7}, "rCCA": {"justesse": 0.3}}) == "eCCA",
-        "le décodeur le plus juste est nommé gagnant")
-    chk(_gagnant({"eCCA": {"justesse": 0.3}, "rCCA": {"justesse": 0.7}}) == "rCCA",
-        "...dans les deux sens")
-    chk(_gagnant({"eCCA": {"justesse": 0.478}, "rCCA": {"justesse": 0.478}}) is None,
-        "...et une ÉGALITÉ EXACTE (43/90 chacun, le cas réellement mesuré, cf. core/cvep_rcca.py) "
-        "ne nomme PERSONNE plutôt que de trancher arbitrairement")
+    # --- Le gagnant nommé, PAR MCNEMAR — pas par une comparaison de deux pourcentages. ---------
+    # ⚠️ Tour 2 de la revue : `_gagnant` comparait deux justesses comme si elles venaient de deux
+    # échantillons INDÉPENDANTS, et nommait un gagnant sur un écart qui n'avait rien de défendable
+    # (64,9 % contre 59,5 % sur la vraie séance — McNemar p=0,73, DU BRUIT). Les fixtures portent
+    # des décisions APPARIÉES (mêmes essais, corrects ou non pour chaque décodeur), la seule forme
+    # que `_gagnant` accepte maintenant.
+    def _corrects_fabrique(n_concordants, b, c):
+        """(corrects_e, corrects_r) : `n_concordants` décisions où les deux sont D'ACCORD (ici,
+        toutes deux correctes), `b` où SEUL eCCA est correct, `c` où SEUL rCCA l'est."""
+        e = np.array([True] * n_concordants + [True] * b + [False] * c, dtype=bool)
+        r = np.array([True] * n_concordants + [False] * b + [True] * c, dtype=bool)
+        return e, r
+
+    e_fort, r_faible = _corrects_fabrique(0, 15, 0)      # eCCA correct partout, rCCA nulle part
+    mn_fort = _gagnant({"eCCA": {"justesse": 1.0, "corrects": e_fort},
+                        "rCCA": {"justesse": 0.0, "corrects": r_faible}})
+    chk(mn_fort["gagnant"] == "eCCA" and mn_fort["p"] < 0.001,
+        f"un écart DÉFENDABLE (15 décisions discordantes, toutes en faveur d'eCCA) nomme eCCA "
+        f"gagnant ({mn_fort})")
+    mn_inverse = _gagnant({"eCCA": {"justesse": 0.0, "corrects": r_faible},
+                           "rCCA": {"justesse": 1.0, "corrects": e_fort}})
+    chk(mn_inverse["gagnant"] == "rCCA", f"...dans les deux sens ({mn_inverse})")
+
+    # Le cas RÉEL, celui qui a motivé ce tour de revue : 37 décisions, 3 discordances pour eCCA
+    # seul, 5 pour rCCA seul (mesuré sur data/cvep_calib_last.npz à k=2, lecture seule). 64,9 %
+    # contre 59,5 % — un écart qui A L'AIR réel — et pourtant McNemar p=0,7265625 : DU BRUIT.
+    e_reel, r_reel = _corrects_fabrique(29, 3, 5)
+    mn_reel = _gagnant({"eCCA": {"justesse": 22 / 37, "corrects": e_reel},
+                        "rCCA": {"justesse": 24 / 37, "corrects": r_reel}})
+    chk(mn_reel["gagnant"] is None and abs(mn_reel["p"] - 0.7265625) < 1e-9,
+        f"...et un écart de POURCENTAGE réel (64,9 % contre 59,5 %) mais NON DÉFENDABLE (McNemar "
+        f"p=0,73, le cas mesuré sur la vraie séance) ne nomme PERSONNE — c'est le défaut central "
+        f"trouvé au tour 2 de la revue ({mn_reel})")
+    chk(mn_reel["n_discordantes"] == 8 and mn_reel["b"] == 3 and mn_reel["c"] == 5,
+        f"...et le nombre de décisions DISCORDANTES est juste — c'est LUI qui porte "
+        f"l'information, pas les deux pourcentages pris isolément ({mn_reel})")
+
+    # Rien à mesurer (séance sans aucune décision à cette géométrie) -> rien à nommer, sans lever.
+    mn_vide = _gagnant({"eCCA": {"justesse": None, "corrects": None},
+                        "rCCA": {"justesse": None, "corrects": None}})
+    chk(mn_vide["gagnant"] is None and mn_vide["p"] is None,
+        f"...et l'absence de mesure ne nomme personne non plus, sans lever ({mn_vide})")
+
+    # --- Important 4bis (revue, tour 2) : _mcnemar_p reproduit EXACTEMENT le calcul indépendant
+    # du relecteur (b=3, c=5 -> p=0,727), et ce n'est pas un hasard de fixture : c'est le test
+    # binomial exact bilatéral standard (identique à scipy.stats.binomtest / R binom.test).
+    chk(abs(_mcnemar_p(3, 5) - 0.7265625) < 1e-9 and abs(_mcnemar_p(5, 3) - 0.7265625) < 1e-9,
+        f"_mcnemar_p(3, 5) = _mcnemar_p(5, 3) = 0,7265625 ({_mcnemar_p(3, 5)}, {_mcnemar_p(5, 3)})")
+    chk(_mcnemar_p(0, 0) == 1.0, "aucune décision discordante -> p=1 (rien ne distingue les deux)")
+    chk(_mcnemar_p(10, 10) == 1.0, "un partage parfait -> p=1 aussi (symétrie totale)")
+
+    # --- La casse trouvée au tour 2 : ZÉRO décision à la géométrie de mesure. -------------------
+    # Aucune paire de cycles consécutifs de la même cible : chaque cible n'apparaît qu'UNE fois,
+    # dans un ordre qui alterne systématiquement (jamais deux d'affilée). `groupes_de_cycles`
+    # rend alors [] à k=2, et `hors_pli` un tableau de scores VIDE. Le tour 1 évitait le crash en
+    # laissant `n_cibles` retomber sur `len(presentes)` — un chiffre D'APPARENCE NORMALE sur du
+    # VIDE — et `calibrate()` plantait un cran plus loin (`cv_e*100` avec `cv_e is None`, un
+    # `TypeError`, DANS LE CHEMIN DE PRODUCTION). `n_cibles` et `corrects` doivent dire eux-mêmes
+    # qu'il n'y a rien, pour que l'appelant ferme le chemin AVANT tout calcul.
+    epochs_alt, labels_alt = [], []
+    for _ in range(2):                          # 2 tours, chaque cible vue 1 fois par tour
+        for c in plan:
+            epochs_alt.append(synth_cvep(code, c["lag"], n_raw, fs, refresh, -6.0, rng))
+            labels_alt.append(c["lag"])
+    from core.cvep_decoder import groupes_de_cycles as _gdc
+    chk(_gdc(labels_alt, CVEP_DECISION_CYCLES) == [],
+        f"fixture : AUCUNE paire de cycles consécutifs de la même cible à k="
+        f"{CVEP_DECISION_CYCLES} ({_gdc(labels_alt, CVEP_DECISION_CYCLES)})")
+    res_vide = entraine_les_deux(epochs_alt, labels_alt, fs=fs, refresh=refresh, channels=voies)
+    for nom in ("eCCA", "rCCA"):
+        r = res_vide[nom]
+        chk(r["n_decisions"] == 0, f"{nom} : zéro décision à cette géométrie ({r['n_decisions']})")
+        chk(r["justesse"] is None, f"{nom} : ...donc AUCUNE justesse ({r['justesse']})")
+        chk(r["n_cibles"] is None,
+            f"{nom} : ...et `n_cibles` le dit AUSSI, plutôt qu'un chiffre d'apparence normale "
+            f"sur du vide — c'est ce qui manquait au tour 1 ({r['n_cibles']})")
+        chk(r["corrects"] is None, f"{nom} : ...et `corrects`, pour la même raison ({r['corrects']})")
 
     # --- Important 6 (revue) : « les mêmes époques » n'était vérifié que par un compte tautologique.
     # `_fit_et_compte` est le mécanisme qui rend `n_epoques` non-décoratif : il DOIT compter

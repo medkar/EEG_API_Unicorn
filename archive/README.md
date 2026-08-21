@@ -25,13 +25,20 @@ python archive/cvep_pilot.py --smoke
 python archive/cvep_rcca_pilot.py --smoke
 ```
 
-`mi_calibrate.py` / `mi_pilot.py` write to `data/` under the **old, fixed** names
-(`mi_model.joblib`, `mi_calib_last.npz`) — so an archived calibration **overwrites** the previous
-one. That is one of the two defects the engine's calibration fixed; it is left here on purpose, so
-the archive stays what it was.
+Outside `--smoke`, `mi_calibrate.py` / `mi_pilot.py` write to `data/` under the **old, fixed**
+names (`mi_model.joblib`, `mi_calib_last.npz`) — so a real, hands-on run of an archived calibration
+**overwrites** the previous one. That is one of the two defects the engine's calibration fixed; it
+is left here on purpose, so the archive stays what it was.
 
-`cvep_pilot.py` / `cvep_rcca_pilot.py` are more careful about it: their `--smoke` always writes to
-a temporary directory, never to `data/` — a real `--calibrate` run of `cvep_rcca_pilot.py` (outside
-`--smoke`) still writes to the real, fixed `data/cvep_rcca_model.npz` by default, same convention
-as the MI pair, for the same reason (an archived calibration is meant to be re-run by hand, not by
-a test).
+`cvep_rcca_pilot.py --calibrate` does **not** follow that convention: its default `save_path` is
+**timestamped**, same pattern as the live calibration (`chemin_modele_horodate`) — changed after a
+review round found the old fixed default pointed straight at `data/cvep_rcca_model.npz`, the file a
+miswired smoke run had *already* destroyed once earlier the same day. Pass `--model` explicitly if
+you want the old fixed-name behavior back.
+
+All four files' `--smoke` are now guarded by `core.config.empreinte_dossier`: it snapshots `data/`
+(size + mtime per file) before and after, and fails loudly if anything changed — `mi_calibrate.py`
+and `mi_pilot.py` skip their save when `smoke=True` and always have, but nothing used to *check*
+that, and this is exactly the mechanism that has cost this project four Motor Imagery models
+before. ⚠️ The guard is blind to a write-then-delete that happens **within** one run — see the
+docstring of `empreinte_dossier` for what it does and does not catch.
