@@ -10,10 +10,15 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
 1. **L'application pygame** — `app.py` (menu, 5 modes), `ui.py`, `ssvep_stimulus.py`,
    `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
    moteur, le casque n'accepte qu'une connexion.
-   ⚠️ `p300_stimulus.py` et `errp_stimulus.py` sont les exceptions qui confirment la règle :
-   ils n'ouvrent PAS le casque, ils ne font qu'AFFICHER et publier leurs marqueurs. C'est ce
-   qui permet de les lancer en même temps que le moteur, dans deux terminaux — comme
-   `ssvep_stimulus.py`.
+   ⚠️ `p300_stimulus.py`, `errp_stimulus.py` et `cvep_stimulus.py` sont les exceptions qui
+   confirment la règle : ils n'ouvrent PAS le casque, ils ne font qu'AFFICHER et publier leurs
+   marqueurs. C'est ce qui permet de les lancer en même temps que le moteur, dans deux
+   terminaux — comme `ssvep_stimulus.py`.
+   ⚠️ Le troisième, `cvep_stimulus.py`, ne publie pas le même GENRE de marqueur que les deux
+   autres, et c'est ce qu'il faut avoir en tête avant de le recopier : ceux du P300 et de l'ErrP
+   délimitent une époque à découper, les siens tiennent une HORLOGE (un par redémarrage de la
+   m-séquence, ~1/s). Le moteur n'en épochera rien ; il s'en sert pour savoir où en est le code
+   affiché — sans quoi il ne décode rien du tout.
 2. **Les décodeurs des modes** — `cvep_rcca` seulement, désormais. `cvep_code` et `cvep_decoder`
    ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le 2026-07-27,
    `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
