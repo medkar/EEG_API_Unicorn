@@ -7,21 +7,22 @@
     python src/research/app.py --smoke         # test headless (CI)
 
 Les modes de commande produisent la MÊME chose — une consigne {jx, jy} émise en UDP —
-mais par trois voies neurophysiologiques différentes :
+mais par deux voies neurophysiologiques différentes :
 
   [1] SSVEP   flèches clignotant à 8.57/15/20 Hz, décodage CCA. Aucune calibration, marche
               tout de suite. C'est le mode de référence, validé sur le robot.
-  [2] c-VEP   flèches affichant une m-séquence décalée, décodage par template appris.
-              Calibration courte (~1 min) ; spectre étalé, donc pas de concurrence avec
-              le pic alpha (contrairement au SSVEP).
-  [3] P300    oddball : les cibles clignotent une à une, on fixe+compte celle qu'on veut ;
+  [2] P300    oddball : les cibles clignotent une à une, on fixe+compte celle qu'on veut ;
               son flash évoque un P300 (ligne médiane Fz/Cz/Pz). SÉLECTION DISCRÈTE (pas de
               contrôle continu) décodée par xDAWN+Riemann. Calibration ~3-4 min.
 
-Le Motor Imagery, quatrième voie historique de cette famille, a quitté cette appli : il est
-publié par le moteur et se pilote (calibration comprise) depuis la console — voir
-`src/core/modes/mi.py` et `src/core/modes/mi_calib.py`. Son écran pygame d'origine est archivé,
-encore exécutable, dans `archive/` (voir `archive/README.md`).
+Le c-VEP et le Motor Imagery ont tous deux quitté le PILOTAGE de cette appli : ils sont publiés
+par le moteur (`decoded_cvep`, `decoded_mi`) et se pilotent depuis la console — voir
+`src/core/modes/cvep.py` et `src/core/modes/mi.py` / `mi_calib.py`. Le c-VEP garde ici sa seule
+CALIBRATION (page « c-VEP », seul moyen d'obtenir un modèle : elle entraîne eCCA ET rCCA sur les
+mêmes époques et affiche les deux justesses). Les écrans pygame de PILOTAGE d'origine — les deux
+du c-VEP, celui du MI — sont archivés, encore exécutables, dans `archive/` (voir
+`archive/README.md`) : ils restent la référence contre laquelle une séance casque compare le
+décodage réseau.
 
 L'appli garde UNE session BrainFlow et UN socket ouverts pour toute la durée : passer d'un
 mode à l'autre est instantané (ESC ramène au menu, sans rouvrir le Bluetooth).
@@ -35,15 +36,14 @@ import sys
 import tempfile
 import threading
 import time
-from collections import Counter, deque
+from collections import Counter
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS,  # noqa: E402
-                    CVEP_CHANNELS, CVEP_CORR_MIN, CVEP_DECISION_CYCLES, DATA_DIR,
-                    CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH,
-                    CVEP_VOTE_LEN, ERRP_DEMO_ERROR_RATE, ERRP_EPOCH_S, ERRP_FEEDBACK_S,
+                    CVEP_MODEL_PATH, DATA_DIR,
+                    ERRP_DEMO_ERROR_RATE, ERRP_EPOCH_S, ERRP_FEEDBACK_S,
                     ERRP_MAX_RUN_STEPS, ERRP_MIDLINE, ERRP_MODEL_PATH, ERRP_PRE_S,
                     ERRP_TRACK_CELLS, N_HARMONICS,
                     NEURO_BASELINE_S, NEURO_KEY_CHANNELS, NEURO_UPDATE_HZ,
@@ -55,7 +55,6 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS
                     available_frequencies, choose_frequencies, use_utf8_console)
 from core.neuro_monitor import IndexNormalizer, NeuroDecoder  # noqa: E402
 from research.controller import SSVEPController  # noqa: E402
-from research.itr import itr as _itr  # noqa: E402
 from research.ssvep_stimulus import is_on as ssvep_on  # noqa: E402
 from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN, Abort, App)  # noqa: E402
 
@@ -413,112 +412,13 @@ def mode_ssvep(app):
         _live_loop(app, live, [c["name"] for c in plan], thr, label, paint, scale=scale)
 
 
-# --- Mode 2 : c-VEP --------------------------------------------------------
-
-def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
-    votes = deque(maxlen=CVEP_VOTE_LEN)
-    chans = dec.model.channels          # mêmes voies qu'à l'apprentissage du filtre spatial
-    while not live.stop.is_set():
-        ep = app.acq.get_epoch(epoch_s, rows=rows, filtered=False)
-        phase = live.phase(app.refresh, code_len)   # lu juste après la fenêtre = même instant
-        if ep is not None and len(ep) >= n_win:
-            cmd, sc = dec.classify(ep[-n_win:, chans], phase)
-            votes.append(cmd["name"] if cmd else None)
-            live.publish(_vote(votes, CVEP_MIN_VOTES, name_to_cmd), sc,
-                         float(ep.std(axis=0).mean()))
-        time.sleep(1.0 / hz)
-
-
-def mode_cvep(app, model_path=CVEP_MODEL_PATH):
-    from core.cvep_code import build_targets, is_on as cvep_on
-    from core.cvep_decoder import CVEPDecoder, CVEPModel
-
-    if not os.path.exists(model_path):
-        app.flash("Pas de modèle c-VEP",
-                  "lance d'abord « c-VEP -> classique -> Calibrer » (~1 min)", 3.5)
-        return
-    plan, code = build_targets()
-    model = CVEPModel.load(model_path)
-    if abs(model.refresh - app.refresh) > 1.0:
-        app.flash("Modèle c-VEP incompatible",
-                  f"calibré à {model.refresh:.0f}Hz, écran à {app.refresh:.0f}Hz — recalibre", 4.0)
-        return
-    if not app.signal_check(highlight=CVEP_CHANNELS, mode_label="c-VEP"):
-        return                    # liaison + voies clés (occipitales) ; casque KO ou ESC -> retour
-    dec = CVEPDecoder(model, plan)
-    spots = app.ring_spots(plan)
-    rows = app.acq.eeg_rows          # on lit les 8, le modèle sélectionne ses voies
-    name_to_cmd = {c["name"]: c for c in plan}
-    cv = "?" if model.cv_ is None else f"{model.cv_*100:.0f}%"
-    n_win = CVEP_DECISION_CYCLES * model.n_cyc          # fenêtre = k cycles, moyennés au décodage
-    decision_s = CVEP_DECISION_CYCLES * len(code) / app.refresh
-    # Le template est commun à tous les lags : un modèle à 3 cibles « fonctionne » à 6 sans
-    # erreur, mais les 3 lags supplémentaires n'ont jamais été validés -> résultats trompeurs.
-    n_saved = model.n_targets or 3   # modèles antérieurs au multi-cibles : tous à 3 cibles
-    if n_saved != len(plan):
-        app.flash(f"Modèle calibré pour {n_saved} cibles",
-                  f"l'affichage en compte {len(plan)} — recalibre (c-VEP -> Calibrer)", 4.0)
-        return
-    if model.w is None or len(model.w) != len(model.channels):
-        app.flash("Modèle c-VEP incohérent",
-                  f"filtre spatial sur {0 if model.w is None else len(model.w)} voies pour "
-                  f"{len(model.channels)} sélectionnées — recalibre (c-VEP -> Calibrer)", 4.0)
-        return
-    print(f"[cvep] {len(plan)} cibles  code L={len(code)} cycle={len(code)/app.refresh:.2f}s  "
-          f"lags={[c['lag'] for c in plan]}  calib LOO={cv}")
-    print(f"[cvep] décision sur {CVEP_DECISION_CYCLES} cycles ({decision_s:.2f}s)  "
-          f"vote={CVEP_MIN_VOTES}/{CVEP_VOTE_LEN}  "
-          f"ITR potentiel {_itr(len(plan), model.cv_ or 0.0, decision_s):.1f} bits/min")
-
-    def paint(frame, cmd):
-        app.draw_ring(plan, spots, lambda c, f: cvep_on(f, c["code"]), frame)
-
-    with _running(app, _cvep_decode, dec, rows, n_win / app.acq.fs, n_win,
-                  len(code), name_to_cmd) as live:
-        _live_loop(app, live, [c["name"] for c in plan], CVEP_CORR_MIN,
-                   f"c-VEP {len(plan)} cibles (calib {cv})", paint)
-
-
-def mode_cvep_rcca(app, model_path=CVEP_RCCA_MODEL_PATH):
-    """2e variante c-VEP : CODES DISTINCTS (Gold) décodés par reconvolution (rCCA, pyntbci).
-    Réutilise _cvep_decode (interface classify(window, phase) identique à l'eCCA)."""
-    from core.cvep_code import is_on as cvep_on
-    from research.cvep_rcca import RCCADecoder, RCCAModel, build_targets_rcca
-
-    if not os.path.exists(model_path):
-        app.flash("Pas de modèle c-VEP rCCA",
-                  "calibre d'abord « c-VEP -> rCCA + codes distincts -> Calibrer »", 3.5)
-        return
-    model = RCCAModel.load(model_path)
-    if abs(model.refresh - app.refresh) > 1.0:
-        app.flash("Modèle rCCA incompatible",
-                  f"calibré à {model.refresh:.0f}Hz, écran à {app.refresh:.0f}Hz — recalibre", 4.0)
-        return
-    if not app.signal_check(highlight=CVEP_CHANNELS, mode_label="c-VEP rCCA"):
-        return                    # liaison + voies clés (occipitales) ; casque KO ou ESC -> retour
-    plan, _ = build_targets_rcca(model.n_targets)
-    for i, c in enumerate(plan):
-        c["code"] = model.codes[i].tolist()          # afficher EXACTEMENT les codes du modèle
-    dec = RCCADecoder(model, plan, n_cycles=CVEP_DECISION_CYCLES)
-    spots = app.ring_spots(plan)
-    rows = app.acq.eeg_rows
-    name_to_cmd = {c["name"]: c for c in plan}
-    n_win = CVEP_DECISION_CYCLES * model.n_cyc
-    cv = "?" if model.cv_ is None else f"{model.cv_*100:.0f}%"
-    decision_s = CVEP_DECISION_CYCLES * model.code_len / app.refresh
-    print(f"[rcca] {len(plan)} cibles à CODES DISTINCTS  cycle={model.code_len/app.refresh:.2f}s  "
-          f"calib LOO={cv}")
-    print(f"[rcca] décision sur {CVEP_DECISION_CYCLES} cycles ({decision_s:.2f}s)  "
-          f"vote={CVEP_MIN_VOTES}/{CVEP_VOTE_LEN}  "
-          f"ITR potentiel {_itr(len(plan), model.cv_ or 0.0, decision_s):.1f} bits/min")
-
-    def paint(frame, cmd):
-        app.draw_ring(plan, spots, lambda c, f: cvep_on(f, c["code"]), frame)
-
-    with _running(app, _cvep_decode, dec, rows, n_win / app.acq.fs, n_win,
-                  model.code_len, name_to_cmd) as live:
-        _live_loop(app, live, [c["name"] for c in plan], CVEP_RCCA_CORR_MIN,
-                   f"c-VEP rCCA {len(plan)} cibles (calib {cv})", paint)
+# --- c-VEP : PLUS de mode de pilotage ici (tâche 6 du chantier c-VEP-moteur) -----------------
+# Le c-VEP est décodé par le MOTEUR (`python src/core/server.py --mode cvep` -> `decoded_cvep`),
+# piloté depuis la console. `mode_cvep` (eCCA) et `mode_cvep_rcca` (Gold, rCCA) sont archivés,
+# ENCORE EXÉCUTABLES, dans `archive/cvep_pilot.py` et `archive/cvep_rcca_pilot.py` : ce sont eux
+# qui servent de référence contre laquelle une séance casque compare le décodage réseau. La
+# calibration, elle, reste ci-dessous (`calib_cvep`) et à la page « c-VEP » du menu — c'est le
+# SEUL moyen d'obtenir un modèle.
 
 
 # --- Mode 3 : P300 (oddball, sélection discrète par attention) --------------
@@ -1080,17 +980,11 @@ def mode_errp(app, model_path=None):
 # --- Calibrations ----------------------------------------------------------
 
 def calib_cvep(app):
+    """SEUL point d'entrée restant du c-VEP dans cette appli (tâche 6) : entraîne eCCA ET rCCA
+    sur les mêmes époques (`cvep_calibrate.entraine_les_deux`) et affiche les deux justesses."""
     import research.cvep_calibrate as cvep_calibrate
     try:
         cvep_calibrate.calibrate(app)
-    except Abort:
-        pass
-
-
-def calib_cvep_rcca(app):
-    import research.cvep_rcca as cvep_rcca
-    try:
-        cvep_rcca.calibrate_rcca(app)
     except Abort:
         pass
 
@@ -1273,22 +1167,21 @@ def _mode_page(app, title, live_fn, calib_fn=None, live_desc="", calib_desc=""):
 
 
 def page_cvep(app):
-    """c-VEP : d'abord le choix de variante (eCCA / rCCA), puis la page du mode choisi."""
+    """c-VEP : SEULE la calibration vit encore ici (tâche 6). Le décodage est publié par le
+    moteur (`--mode cvep`) et se pilote depuis la console — plus depuis pygame. Cette page reste
+    le SEUL moyen d'obtenir un modèle : elle entraîne eCCA ET rCCA sur les mêmes époques et
+    affiche les deux justesses, en nommant le gagnant."""
     while True:
-        v = _navigate(app, "c-VEP — quelle variante ?",
-                      [("classique (eCCA, 1 m-séquence décalée)", "mode validé, template partagé"),
-                       ("rCCA + codes distincts (Gold)",
-                        "exploration : reconvolution, 1 code par cible")])
-        if v is None:
+        idx = _navigate(app, "c-VEP",
+                        [("Calibrer", "~1 min, fixer chaque cible — entraîne eCCA ET rCCA, "
+                                     "affiche les deux justesses")],
+                        subtitle="décodage : moteur + console (`server.py --mode cvep`)")
+        if idx is None:
             return
-        if v == 0:
-            _mode_page(app, "c-VEP classique (eCCA)", mode_cvep, calib_cvep,
-                       "fixe une cible, décodage par template appris",
-                       "~1 min, fixer chaque cible (blocs entrelacés)")
-        else:
-            _mode_page(app, "c-VEP rCCA + codes distincts", mode_cvep_rcca, calib_cvep_rcca,
-                       "codes Gold distincts, décodage par reconvolution",
-                       "reconvolution, un code Gold par cible")
+        try:
+            calib_cvep(app)
+        except Abort:
+            pass
         if app.smoke:
             return
 
@@ -1362,7 +1255,7 @@ def page_errp(app):
 def home(app):
     """Accueil : les 5 modes. Retourne 'ssvep'|'cvep'|'p300'|'neuro'|'errp', ou None pour quitter."""
     modes = [("SSVEP", "flèches clignotantes — sans calibration, marche tout de suite"),
-             ("c-VEP", "codes — 2 variantes : classique (eCCA) ou rCCA + codes distincts"),
+             ("c-VEP", "codes — calibration ici (eCCA + rCCA) ; décodage publié par le moteur"),
              ("P300", "oddball — fixe et compte la cible (6 cibles) — nécessite une calibration"),
              ("Neuro-monitoring", "état mental passif (charge / somnolence / engagement) — histogramme, aucun robot"),
              ("ErrP", "la machine se trompe exprès, ton cerveau réagit — démonstrateur, aucun robot")]
@@ -1425,9 +1318,13 @@ def _empreinte_data():
 
 
 def _smoke(app):
-    """Câblage de bout en bout, headless : menu + calibrations + les modes de pilotage (c-VEP, P300).
+    """Câblage de bout en bout, headless : menu + calibrations + le mode de pilotage restant (P300).
 
-    ⚠️ **Les quatre modèles du smoke sont écrits dans un dossier TEMPORAIRE, jamais dans `data/`**
+    Le c-VEP n'a plus de mode de PILOTAGE dans cette appli (tâche 6) : sa calibration seule est
+    exercée ici (`cvep_calibrate.calibrate`, qui entraîne eCCA ET rCCA) ; `mode_cvep` et
+    `mode_cvep_rcca` sont exercés par leur PROPRE `--smoke`, dans `archive/`.
+
+    ⚠️ **Les modèles du smoke sont écrits dans un dossier TEMPORAIRE, jamais dans `data/`**
     (correction de revue, 2026-08-19). Ils y vivaient sous des noms en `_smoke` — dont
     `errp_model_smoke.joblib` et `p300_model_smoke.joblib`, qui correspondent aux MOTIFS de
     `core.errp_models` / `core.p300_models` — et le ménage se faisait hors de tout `finally`. Deux
@@ -1440,7 +1337,6 @@ def _smoke(app):
     """
     import core.errp_models as errp_models
     import research.cvep_calibrate as cvep_calibrate
-    import research.cvep_rcca as cvep_rcca
     import research.errp_calibrate as errp_calibrate
     import research.p300_calibrate as p300_calibrate
 
@@ -1453,16 +1349,16 @@ def _smoke(app):
 
     home(app)                 # accueil (rend + retour immédiat en smoke)
     _mode_page(app, "SSVEP", mode_ssvep, None)    # rend une page de mode (retour immédiat)
-    page_cvep(app)            # rend l'écran de choix de variante c-VEP
+    page_cvep(app)            # rend la page c-VEP (calibration seule, tâche 6)
     page_p300(app)            # rend la page P300 (case arrêt dynamique)
     page_errp(app)            # rend la page ErrP (démonstrateur / réglage seuil / calibrer)
     mode_neuro(app)           # mode 4 : neuro-monitoring passif (baseline + histogramme headless)
     mode_ssvep(app)
     try:
-        cvep_calibrate.calibrate(app, save_path=cvep_path)
-        mode_cvep(app, model_path=cvep_path)
-        cvep_rcca.calibrate_rcca(app, save_path=rcca_path)
-        mode_cvep_rcca(app, model_path=rcca_path)
+        # `calibrate` entraîne LES DEUX décodeurs (`entraine_les_deux`) et sauvegarde les deux
+        # fichiers : `rcca_save_path` DOIT être détourné aussi, sinon son défaut
+        # (`CVEP_RCCA_MODEL_PATH`) écrirait dans le VRAI `data/cvep_rcca_model.npz`.
+        cvep_calibrate.calibrate(app, save_path=cvep_path, rcca_save_path=rcca_path)
         p300_calibrate.calibrate(app, save_path=p300_path)
         mode_p300(app, model_path=p300_path)                   # chemin fixe
         mode_p300(app, model_path=p300_path, dynamic=True)     # chemin arrêt dynamique
@@ -1603,7 +1499,8 @@ def _smoke(app):
         f"vont dans un tempfile.mkdtemp() (et le plus récent modèle CHARGEABLE de data/ est le "
         f"défaut proposé par le moteur, donc un modèle de test oublié là se fait élire)")
 
-    print("[app] smoke OK : menu + SSVEP + c-VEP (eCCA & rCCA) + P300 + neuro + ErrP(cal+démo) câblés (headless).")
+    print("[app] smoke OK : menu + SSVEP + c-VEP (calibration eCCA+rCCA) + P300 + neuro + "
+          "ErrP(cal+démo) câblés (headless).")
 
 
 def _parse(argv):

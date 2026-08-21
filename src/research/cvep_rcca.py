@@ -1,9 +1,13 @@
 """c-VEP variante CODES GOLD DISTINCTS — l'hypothèse RÉFUTÉE, gardée lisible.
 
-⚠️ **Ce fichier ne contient plus le décodeur.** `RCCAModel` et `RCCADecoder` sont partis dans
-`src/core/cvep_rcca.py` : le moteur en a besoin, donc ils suivent la règle du déménagement. Ce qui
-reste ici, c'est la **fabrique de codes Gold** et le plan de cibles qui va avec — c'est-à-dire la
-moitié de l'hypothèse qui a été mesurée et **réfutée**.
+⚠️ **Ce fichier ne contient plus le décodeur, ni la calibration.** `RCCAModel` et `RCCADecoder`
+sont partis dans `src/core/cvep_rcca.py` : le moteur en a besoin, donc ils suivent la règle du
+déménagement. `calibrate_rcca` (l'écran pygame qui calibrait CETTE variante) est parti dans
+`archive/cvep_rcca_pilot.py` (tâche 6) : la calibration au menu de `research/app.py` entraîne
+désormais le rCCA sur le stimulus DÉCALÉ que le produit garde, ce qui rend cet écran-là redondant
+— voir `archive/README.md` pour pourquoi il reste exécutable malgré tout. Ce qui reste ici, c'est
+la **fabrique de codes Gold** et le plan de cibles qui va avec — c'est-à-dire la moitié de
+l'hypothèse qui a été mesurée et **réfutée**.
 
 Ce qui a été testé, et ce qui a été conclu :
   - stimulus classique : UNE m-séquence, décalée circulairement (un lag par cible). C'est le
@@ -17,9 +21,9 @@ distincts ») ont toujours été mesurées ENSEMBLE, et `RCCAModel` prend ses co
 n'a jamais su d'où ils venaient. Rebranché sur le stimulus décalé, le rCCA fait jeu égal avec
 l'eCCA (43/90 chacun, cf. `core/cvep_rcca.py`). C'est la moitié « codes Gold » qui était mauvaise.
 
-⚠️ **Une hypothèse réfutée se garde LISIBLE, pas BRANCHÉE.** Après ce découpage, les seuls
-appelants de `make_distinct_codes` / `build_targets_rcca` sont les écrans Gold de
-`research/app.py`, qui partent dans `archive/`. C'est voulu : `cvep_models.charger` refuse
+⚠️ **Une hypothèse réfutée se garde LISIBLE, pas BRANCHÉE.** Depuis la tâche 6, le seul appelant de
+`make_distinct_codes` / `build_targets_rcca` est `archive/cvep_rcca_pilot.py` — écran de calibration
+ET de pilotage, archivé mais encore exécutable. C'est voulu : `cvep_models.charger` refuse
 d'ailleurs tout modèle rCCA dont les codes ne sont pas ceux du stimulus affiché aujourd'hui, ce
 qui met `data/cvep_rcca_model.npz` (calibré sur des codes Gold) définitivement hors de la liste
 proposée à un étudiant.
@@ -33,11 +37,10 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (CVEP_CHANNELS, CVEP_RCCA_MODEL_PATH,  # noqa: E402
-                    FS_UNICORN, use_utf8_console)
-# Le décodeur vit maintenant dans `core/`. Ré-exporté ici pour que les écrans Gold de
-# `research/app.py` continuent de tourner jusqu'à leur archivage — un import qui casse ne rend
-# personne plus savant sur une hypothèse réfutée.
+from core.config import FS_UNICORN, use_utf8_console  # noqa: E402
+# Le décodeur vit maintenant dans `core/`. Ré-exporté ici pour que `archive/cvep_rcca_pilot.py`
+# continue de tourner sans dépendre directement de `core/` — un import qui casse ne rend personne
+# plus savant sur une hypothèse réfutée.
 from core.cvep_rcca import RCCADecoder, RCCAModel  # noqa: E402,F401  (ré-export)
 
 
@@ -64,127 +67,6 @@ def build_targets_rcca(n=None):
     codes = make_distinct_codes(n)
     plan = [{**g, "code": codes[i].tolist(), "idx": i} for i, g in enumerate(geom)]
     return plan, codes
-
-
-def calibrate_rcca(app, cycles=None, save_path=CVEP_RCCA_MODEL_PATH):
-    """Calibration du mode rCCA + codes distincts. Reprend le protocole c-VEP classique (fixer
-    chaque cible en blocs entrelacés) mais chaque cible affiche SON code, et on ajuste un rCCA.
-
-    Réutilise les helpers éprouvés de cvep_calibrate (briefing, blocs mélangés, rendu, garde-fous)
-    pour ne pas diverger du protocole validé. Retourne (ok, cv_loo|None).
-    """
-    import time
-    from core.config import CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES
-    from research.cvep_calibrate import (_briefing, _draw, _make_blocks, _wilson_hi,  # noqa: E402
-                                EARLY_ITR_MIN, SETTLE_CYCLES)
-    from research.itr import itr as _itr
-    from research.ui import Abort
-
-    cycles = CVEP_CAL_CYCLES if cycles is None else cycles
-    plan, codes = build_targets_rcca()
-    L = int(codes.shape[1])
-    spots = app.ring_spots(plan)
-    acq = app.acq
-    model = RCCAModel(codes, fs=acq.fs, refresh=app.refresh)
-    rows = acq.eeg_rows                          # on enregistre les 8 voies
-    epoch_s = model.n_cyc / acq.fs
-    if app.smoke:
-        cycles = 2
-
-    blocks = _make_blocks(plan, cycles, CVEP_CAL_BLOCKS)
-    n_blk = len(blocks)
-    est = (len(plan) * cycles + n_blk * SETTLE_CYCLES) * L / app.refresh / 60.0 + n_blk * 1.8 / 60.0
-    print(f"[rcca-cal] {len(plan)} cibles à CODES DISTINCTS (Gold L={L}), ajustement sur "
-          f"{model.channels}")
-    print(f"[rcca-cal] {cycles} cycles/cible, {n_blk} blocs entrelacés  ≈ {est:.1f} min")
-    if not _briefing(app):
-        return False, None
-    if not app.signal_check(highlight=CVEP_CHANNELS, mode_label="c-VEP rCCA"):
-        return False, None
-
-    epochs, labels = [], []
-    got_by_idx = {c["idx"]: 0 for c in plan}
-    check_at = max(1, int(round(n_blk * 0.4)))
-    frame, prev_phase = 0, -1
-    settle = 0 if app.smoke else SETTLE_CYCLES
-    try:
-        for b_idx, (target, n_cyc) in enumerate(blocks, start=1):
-            if not app.smoke:
-                _, qrows, _ = app.signal_ok(0.5)
-                dead = [nm for nm, _, v in qrows if v == "morte"]
-                if dead:
-                    print(f"[rcca-cal] ⛔ LIAISON PERDUE (voies plates : {', '.join(dead)}) "
-                          f"au bloc {b_idx}/{n_blk} — arrêt, rien n'est entraîné.")
-                    app.flash("Liaison casque perdue",
-                              f"voies plates : {', '.join(dead)} — vérifie le câble", 4.0)
-                    return False, None
-            got, skip, start = 0, settle, frame
-            while got < n_cyc:
-                app.drain()
-                phase = frame % L
-                if phase == 0 and prev_phase != 0:
-                    if skip > 0:
-                        skip -= 1
-                    else:
-                        ep = acq.get_epoch(epoch_s, rows=rows, filtered=False)
-                        if ep is not None and len(ep) >= model.n_cyc:
-                            epochs.append(ep[:model.n_cyc])
-                            labels.append(target["idx"])
-                            got += 1
-                            got_by_idx[target["idx"]] += 1
-                prev_phase = phase
-                _draw(app, plan, spots, frame, target, got, n_cyc, b_idx, n_blk)
-                app.clock.tick(int(app.refresh) + 5)
-                frame += 1
-                if app.smoke and (frame - start) > (n_cyc + settle + 2) * L:
-                    break
-            print(f"[rcca-cal] bloc {b_idx}/{n_blk} {target['name']:<10} "
-                  f"code#{target['idx']} : {got} cycles", flush=True)
-            if b_idx == check_at and not app.smoke and len(set(labels)) == len(plan):
-                probe = RCCAModel(codes, fs=acq.fs, refresh=app.refresh)
-                probe.fit([e[:, probe.channels] for e in epochs], labels)
-                if probe.cv_ is not None:
-                    hi = _itr(len(plan), _wilson_hi(probe.cv_, len(epochs)), model.n_cyc / acq.fs)
-                    bad = hi < EARLY_ITR_MIN
-                    print(f"[rcca-cal] contrôle mi-parcours ({len(epochs)} cycles) : LOO "
-                          f"{probe.cv_*100:.0f}% -> au mieux {hi:.1f} bits/min"
-                          + ("  ⚠️ SOUS LE PLANCHER" if bad else "  -> on continue"), flush=True)
-                    if bad:
-                        app.flash("Séance mal engagée",
-                                  f"au mieux {hi:.0f} bits/min — ESC pour arrêter", 6.0)
-            if b_idx < n_blk:
-                app.flash("Change de cible",   # inter-bloc = point de PAUSE sûr (ESPACE)
-                          f"prépare-toi à fixer {blocks[b_idx][0]['name']}   ·   Espace = pause",
-                          1.8, skippable=False, pausable=True)
-    except Abort:
-        print("[rcca-cal] interrompu — entraînement sur ce qui est déjà enregistré.")
-    print("[rcca-cal] cycles par cible : "
-          + "  ".join(f"{c['name']}={got_by_idx[c['idx']]}" for c in plan))
-
-    if len(set(labels)) < 2 or len(epochs) < 4:
-        print("[rcca-cal] pas assez de données pour entraîner.")
-        return False, None
-
-    model.fit([e[:, model.channels] for e in epochs], labels)
-    model.save(save_path)
-    if not app.smoke:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        archive = os.path.join(os.path.dirname(save_path),
-                               f"cvep_rcca_calib_{stamp}_n{len(plan)}.npz")
-        np.savez(archive, epochs=np.asarray(epochs), labels=np.asarray(labels), codes=codes,
-                 fs=acq.fs, refresh=app.refresh, channels=np.asarray(model.channels, dtype=int),
-                 sigma=float(np.asarray(epochs).std()))
-        print(f"[rcca-cal] données archivées : {os.path.basename(archive)}")
-
-    cv = model.cv_ or 0.0
-    decision_s = model.n_cyc / acq.fs
-    bits = _itr(len(plan), cv, decision_s)
-    print(f"[rcca-cal] {len(epochs)} cycles sur {len(plan)} cibles -> LOO {cv*100:.1f}%  "
-          f"ITR ≈ {bits:.1f} bits/min (1 cycle) — SSVEP réf. 49.9")
-    if not app.smoke:
-        app.flash("Calibration rCCA terminée",
-                  f"LOO {cv*100:.0f}%   {bits:.0f} bits/min", 3.5)
-    return True, model.cv_
 
 
 # --- Autotest sur c-VEP synthétique à codes distincts (aucun casque) ---------

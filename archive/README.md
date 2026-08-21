@@ -12,6 +12,8 @@ know exists.
 |---|---|
 | `mi_calibrate.py` | The pygame Motor Imagery calibration. Replaced by the engine's own (`src/core/modes/mi_calib.py`), which measures a **honest** accuracy and never overwrites a recording. ⚠️ The accuracy this screen prints is inflated by 10 to 16 points. |
 | `mi_pilot.py` | The pygame MI pilot: sliding vote over decoded windows, feedback screen, robot output. Its vote is now `MIRuntime` in `src/core/modes/mi.py`. |
+| `cvep_pilot.py` | The pygame c-VEP pilot for the eCCA decoder (template matching), formerly `mode_cvep` in `src/research/app.py`. Decoding is now published by the engine (`--mode cvep` -> `decoded_cvep`) and driven from the console. Kept here, still running against a real model, as the **reference** a headset session checks the network decoding against — both must name the same target on the same fixation. Calibration is unaffected: it still lives at `src/research/app.py`, page "c-VEP". |
+| `cvep_rcca_pilot.py` | The pygame c-VEP pilot AND calibration for the rCCA decoder on DISTINCT GOLD CODES, formerly `mode_cvep_rcca` and `calibrate_rcca` (`src/research/cvep_rcca.py`). This is a **refuted hypothesis**, not a removed feature: measured against the eCCA on the same conditions, Gold codes topped out at 35.6% (`data/cvep_rcca_model.npz`) against ~48% for both decoders on the shared, shifted stimulus the product keeps (see `src/core/cvep_rcca.py`). The live calibration (`src/research/cvep_calibrate.py`) now trains rCCA on that shared stimulus instead, which is what made this screen redundant. Kept runnable so the refutation stays checkable, not just asserted. |
 
 Each file keeps its `--smoke`, which is how you check by hand that it still runs, the day you need
 it:
@@ -19,9 +21,17 @@ it:
 ```bash
 python archive/mi_calibrate.py --smoke
 python archive/mi_pilot.py --smoke
+python archive/cvep_pilot.py --smoke
+python archive/cvep_rcca_pilot.py --smoke
 ```
 
-They write to `data/` under the **old, fixed** names (`mi_model.joblib`,
-`mi_calib_last.npz`) — so an archived calibration **overwrites** the previous one. That is one of
-the two defects the engine's calibration fixed; it is left here on purpose, so the archive stays
-what it was.
+`mi_calibrate.py` / `mi_pilot.py` write to `data/` under the **old, fixed** names
+(`mi_model.joblib`, `mi_calib_last.npz`) — so an archived calibration **overwrites** the previous
+one. That is one of the two defects the engine's calibration fixed; it is left here on purpose, so
+the archive stays what it was.
+
+`cvep_pilot.py` / `cvep_rcca_pilot.py` are more careful about it: their `--smoke` always writes to
+a temporary directory, never to `data/` — a real `--calibrate` run of `cvep_rcca_pilot.py` (outside
+`--smoke`) still writes to the real, fixed `data/cvep_rcca_model.npz` by default, same convention
+as the MI pair, for the same reason (an archived calibration is meant to be re-run by hand, not by
+a test).
