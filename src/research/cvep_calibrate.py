@@ -276,6 +276,14 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
     # aurait donc laissé passer un `n_cibles` rCCA d'apparence normale — 6, le compte du plan —
     # sur un tableau qui ne contient VRAIMENT rien. `len(sc)` vaut 0 dans les deux cas, sans cette
     # divergence d'implémentation entre les deux jumeaux.
+    #
+    # ⚠️ **Cette divergence est TOUJOURS VRAIE aujourd'hui, pas un accident corrigé ailleurs** :
+    # `core/cvep_decoder.py::CVEPModel.hors_pli` et `core/cvep_rcca.py::RCCAModel._hors_pli`
+    # n'ont PAS été touchés (tâche 6, ni ce tour ni les précédents — hors du périmètre demandé,
+    # ce sont les fichiers de la tâche 3). Le contournement vit ICI, côté appelant, et DOIT y
+    # rester tant que les deux `hors_pli` ne rendent pas la même forme sur une entrée vide. Que
+    # les deux s'alignent un jour est une décision à prendre à la revue finale de branche, pas
+    # ici — ce commentaire est la trace qui le lui rappelle.
     n_cibles_e = int(sc_e.shape[1]) if len(sc_e) > 0 else None
     n_cibles_r = int(sc_r.shape[1]) if len(sc_r) > 0 else None
     corrects_e = (sc_e.argmax(axis=1) == y_e) if len(sc_e) > 0 else None
@@ -879,6 +887,77 @@ def _selftest():
             f"ligne de code resterait invisible à la seule justesse hors-pli")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- Tour 3 de la revue : PROTÉGER calibrate() lui-même, pas seulement ce qui l'alimente. ----
+    # Mesuré par le re-relecteur : muter `n_cibles` en `len(plan)` (réserve C1) OU désactiver le
+    # garde à zéro décision (la casse TypeError du tour 2) laissait CE FICHIER **et** `app.py
+    # --smoke` VERTS TOUS LES DEUX — aucun test n'exerçait `calibrate()` lui-même sur une séance
+    # TRONQUÉE ni sur une séance SANS AUCUNE paire de cycles consécutifs ; seule la donnée en amont
+    # (`entraine_les_deux`) était protégée. On exerce donc le VRAI `calibrate()`, via une VRAIE
+    # `App(smoke=True)`, en détournant `_make_blocks` (la fabrique de blocs d'enregistrement) pour
+    # forcer les deux scénarios qu'un smoke normal n'atteint jamais.
+    import contextlib
+    import io
+    import re as _re
+
+    from research.ui import App
+
+    _ce_module = sys.modules[__name__]
+    _make_blocks_original = _ce_module._make_blocks
+
+    @contextlib.contextmanager
+    def _blocs_detournes(fabrique):
+        """Remplace `_make_blocks` par `fabrique` le temps du bloc, la restaure après — y compris
+        si `calibrate()` lève, pour qu'un test qui rougit ne laisse rien de patché derrière lui."""
+        _ce_module._make_blocks = fabrique
+        try:
+            yield
+        finally:
+            _ce_module._make_blocks = _make_blocks_original
+
+    app_int = App(smoke=True)
+    try:
+        # --- Réserve C1 : le hasard et l'ITR affichés DOIVENT suivre n_cibles, pas len(plan). ---
+        tmp1 = tempfile.mkdtemp(prefix="cvep_calibrate_c1_selftest_")
+        try:
+            with _blocs_detournes(lambda p, c, n: _make_blocks_original(p[:3], c, n)):
+                capture = io.StringIO()
+                with contextlib.redirect_stdout(capture):
+                    ok1, res1 = calibrate(app_int, save_path=os.path.join(tmp1, "e.npz"),
+                                          rcca_save_path=os.path.join(tmp1, "r.npz"))
+            sortie1 = capture.getvalue()
+        finally:
+            shutil.rmtree(tmp1, ignore_errors=True)
+        chk(res1["eCCA"]["n_cibles"] == 3,
+            f"calibrate() sur une séance tronquée à 3 cibles sur 6 en juge bien 3 "
+            f"({res1['eCCA']['n_cibles']})")
+        m_hasard = _re.search(r"hasard (\d+)%", sortie1)
+        chk(m_hasard is not None and m_hasard.group(1) == "33",
+            f"...et le HASARD IMPRIMÉ par calibrate() suit n_cibles=3 (33 %), jamais len(plan)=6 "
+            f"(17 %) — sinon l'ITR et le verdict affichés à l'étudiant resteraient gonflés sur "
+            f"EXACTEMENT la séance que Critical 1 visait "
+            f"({m_hasard.group(0) if m_hasard else sortie1!r})")
+
+        # --- La casse TypeError (tour 2) : calibrate() ne doit PAS planter à zéro décision. -----
+        tmp2 = tempfile.mkdtemp(prefix="cvep_calibrate_td_selftest_")
+        try:
+            with _blocs_detournes(lambda p, c, n: [(cible, 1) for _ in range(2) for cible in p]):
+                ok2, res2 = calibrate(app_int, save_path=os.path.join(tmp2, "e.npz"),
+                                      rcca_save_path=os.path.join(tmp2, "r.npz"))
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+        # Arriver ici EST une partie de la preuve : un `TypeError` (celui du tour 2, `chance =
+        # 100.0 / n_cibles` avec `n_cibles=None`) aurait fait sortir `_selftest()` en exception
+        # avant cette ligne, sans que `chk` n'ait la main pour le dire proprement.
+        chk(ok2 is False,
+            f"calibrate() sur une séance SANS AUCUNE paire de cycles consécutifs rend "
+            f"(False, ...), jamais un TypeError ({ok2})")
+        chk(res2["eCCA"]["justesse"] is None and res2["eCCA"]["n_cibles"] is None,
+            f"...et le résultat dit bien qu'il n'y a rien à mesurer, ce qui est CE QUI PERMET à "
+            f"calibrate() de fermer le chemin AVANT tout calcul ({res2['eCCA']['justesse']}, "
+            f"{res2['eCCA']['n_cibles']})")
+    finally:
+        app_int.close()
 
     print(f"[cvep-calibrate] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

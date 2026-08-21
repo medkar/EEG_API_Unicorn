@@ -266,6 +266,47 @@ def main(argv=None):
             tmp = tempfile.mkdtemp(prefix="cvep_rcca_pilot_smoke_")
             model_path = os.path.join(tmp, "cvep_rcca_model_smoke.npz")
             calibrate_rcca(app, save_path=model_path)
+
+            # ⚠️ Tour 3 de la revue : l'appel ci-dessus passe TOUJOURS un `save_path` explicite,
+            # donc il n'exerce JAMAIS le REPLI de `calibrate_rcca` (`save_path=None ->
+            # chemin_modele_horodate("rCCA")`) — précisément le chemin qui, avant la réserve C2 du
+            # tour 2, écrivait sur `CVEP_RCCA_MODEL_PATH`, le fichier déjà détruit une fois ce
+            # jour-là. Remettre `save_path=None or CVEP_RCCA_MODEL_PATH` en dur laisserait CE
+            # smoke vert : mesuré par le re-relecteur. On éprouve donc le REPLI LUI-MÊME — un
+            # appel SANS `save_path` — avec les chemins fixes détournés vers CE MÊME dossier
+            # temporaire (jamais le vrai `data/`), et on vérifie que le fichier écrit porte un nom
+            # HORODATÉ, pas le nom fixe.
+            #
+            # ⚠️ **Détourné aux DEUX endroits, pas un seul — vécu, pas anticipé.** `CVEP_RCCA_
+            # MODEL_PATH` est importé indépendamment ICI (`from core.config import ...`, en tête
+            # de CE fichier) ET dans `research.cvep_calibrate` (que lit `chemin_modele_horodate`) :
+            # deux liaisons de nom SÉPARÉES vers la même valeur d'origine, et patcher une seule ne
+            # protège que le code qui la lit, PAS un futur correctif qui lirait l'autre. Une
+            # mutation de preuve rouge écrite pour cette tâche a lu CETTE copie-ci, non patchée à
+            # l'époque, et a réellement écrasé `data/cvep_rcca_model.npz` une DEUXIÈME fois avant
+            # d'être repérée et corrigée. Les deux sont maintenant détournées.
+            import research.cvep_calibrate as _cal_mod
+            _ce_module_rcca = sys.modules[__name__]
+            avant_repli = set(os.listdir(tmp))
+            _cvep_model_path_reel = _cal_mod.CVEP_MODEL_PATH
+            _cvep_rcca_model_path_reel_cal = _cal_mod.CVEP_RCCA_MODEL_PATH
+            _cvep_rcca_model_path_reel_ici = _ce_module_rcca.CVEP_RCCA_MODEL_PATH
+            _cal_mod.CVEP_MODEL_PATH = os.path.join(tmp, "cvep_model.npz")
+            _cal_mod.CVEP_RCCA_MODEL_PATH = os.path.join(tmp, "cvep_rcca_model.npz")
+            _ce_module_rcca.CVEP_RCCA_MODEL_PATH = os.path.join(tmp, "cvep_rcca_model.npz")
+            try:
+                calibrate_rcca(app, save_path=None)   # <- LE REPLI, jamais explicite
+            finally:
+                _cal_mod.CVEP_MODEL_PATH = _cvep_model_path_reel
+                _cal_mod.CVEP_RCCA_MODEL_PATH = _cvep_rcca_model_path_reel_cal
+                _ce_module_rcca.CVEP_RCCA_MODEL_PATH = _cvep_rcca_model_path_reel_ici
+            nouveaux_repli = set(os.listdir(tmp)) - avant_repli
+            assert "cvep_rcca_model.npz" not in nouveaux_repli, (
+                f"calibrate_rcca(save_path=None) a écrit sur le nom FIXE — le repli n'est plus "
+                f"horodaté ({nouveaux_repli})")
+            assert any(f.startswith("cvep_rcca_model_") for f in nouveaux_repli), (
+                f"...et aucun fichier HORODATÉ n'a été produit par le repli non plus "
+                f"({nouveaux_repli})")
         elif a.calibrate:
             # ⚠️ Résolu ICI, et pas seulement laissé au défaut interne de `calibrate_rcca` : on a
             # besoin du chemin RÉEL pour piloter ensuite le modèle qu'on vient de produire — un
