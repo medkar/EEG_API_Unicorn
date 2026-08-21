@@ -427,8 +427,19 @@ class DecodedP300Publisher:
 
 
 def cvep_channel_labels(n_targets):
-    """Voies du flux `decoded_cvep`. Une seule fonction pour le publieur ET le `ModeSpec`."""
-    return ["target_index", "confidence"] + [f"score_{i}" for i in range(int(n_targets))]
+    """Voies du flux `decoded_cvep`. Une seule fonction pour le publieur ET le `ModeSpec`.
+
+    ⚠️ `corr_min`/`margin` EN DERNIER (tâche 7, tour de correction 1) : ce mode est le premier du
+    produit dont les seuils de décision se règlent SANS reconstruire le runtime
+    (`affecte_decodage=False`, cf. `contract.py`) — donc sans recréer le flux ni ses métadonnées.
+    Les métadonnées LSL (`desc()`, figées à l'ouverture) restent alors correctes seulement au
+    moment où elles ont été écrites ; sans ces deux voies, un client qui dépouille un
+    enregistrement plus tard n'aurait AUCUN moyen de savoir contre quel seuil chaque décision a
+    été prise. Même geste que `threshold` chez l'ErrP (`errp_channel_labels`), pour la même
+    raison. Ajoutées à la FIN parce que `score_i` est un bloc de longueur VARIABLE (une par
+    cible) : rien ne peut s'intercaler dedans sans casser l'indexation `score_<i>`."""
+    return (["target_index", "confidence"] + [f"score_{i}" for i in range(int(n_targets))]
+            + ["corr_min", "margin"])
 
 
 class DecodedCVEPPublisher:
@@ -439,8 +450,20 @@ class DecodedCVEPPublisher:
     corrélation de Pearson entre la fenêtre filtrée et le template appris, bornée dans [-1, 1].
     Ce n'est ni le z du SSVEP (pas de plancher de repos ici), ni les log-odds du P300 (pas de
     classifieur), et un client qui poserait le seuil de l'un sur l'échelle de l'autre se
-    tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` VOYAGENT dans
-    les métadonnées, à côté de l'échelle qui leur donne un sens.
+    tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` voyagent à côté
+    de l'échelle qui leur donne un sens — et qu'ils voyagent à DEUX ENDROITS À LA FOIS.
+
+    ⚠️ **`corr_min`/`margin` voyagent aux DEUX endroits, et ils NE DISENT PAS la même chose**
+    (tâche 7, tour de correction 1). Ceux des MÉTADONNÉES (`desc()`, juste en dessous) sont
+    figés à l'OUVERTURE du flux : ce mode rend ces deux seuils réglables en pleine séance SANS
+    reconstruire le runtime (`affecte_decodage=False` dans `contract.py`), donc SANS recréer ce
+    flux — les métadonnées ne bougent alors plus, elles décrivent le seuil qui était en vigueur
+    à l'ouverture, pas une promesse de rester à jour. Ceux des DEUX DERNIÈRES VOIES
+    (`cvep_channel_labels` : `corr_min`, `margin`, après les `score_*`) sont ceux réellement EN
+    VIGUEUR pour CETTE décision, à CHAQUE échantillon — c'est sur elles qu'il faut lire un
+    enregistrement dépouillé de sa description LSL. Même dispositif que `threshold` chez l'ErrP
+    (`errp_channel_labels`), pour la même raison : une métadonnée figée ne suffit pas dès que le
+    réglage qu'elle décrit peut changer sans reconstruire le flux qui la porte.
 
     ⚠️ **`confidence` décrit le VOTE, pas la dernière fenêtre.** Une cible n'est émise que si
     `min_votes` des `vote_len` dernières fenêtres l'ont désignée ; `confidence` est la moyenne
@@ -489,6 +512,10 @@ class DecodedCVEPPublisher:
         # La règle de décision COMPLÈTE : un gagnant doit dépasser `corr_min` ET devancer le
         # deuxième de `margin`. Publier l'une sans l'autre laisserait un client conclure qu'une
         # corrélation de 0,40 aurait dû déclencher alors que la deuxième était à 0,38.
+        # ⚠️ Valeur À L'OUVERTURE du flux, PAS forcément celle de la décision en cours : ces deux
+        # seuils se règlent en pleine séance sans recréer ce flux (cf. la docstring de la
+        # classe). Les deux VOIES de même nom, à la fin de chaque échantillon, portent la valeur
+        # VIVANTE.
         desc.append_child_value("corr_min", f"{float(corr_min):g}")
         desc.append_child_value("margin", f"{float(margin):g}")
         # ...et le VOTE GLISSANT, qui fait partie de la même règle : passer les deux seuils ne
@@ -509,9 +536,18 @@ class DecodedCVEPPublisher:
         desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
 
-    def push(self, target_index, confidence, scores, lsl_ts=None):
-        """`scores` : une corrélation par cible, dans l'ordre des indices 0..n_targets-1."""
-        row = [float(target_index), float(confidence)] + [float(s) for s in scores]
+    def push(self, target_index, confidence, scores, corr_min, margin, lsl_ts=None):
+        """`scores` : une corrélation par cible, dans l'ordre des indices 0..n_targets-1.
+
+        `corr_min`/`margin` : les seuils réellement EN VIGUEUR pour CETTE décision — PAS de
+        défaut, comme `threshold` chez `DecodedErrPPublisher.push` : un appelant qui les
+        oublierait doit lever, pas publier une valeur plausible et fausse en silence. C'est ce
+        qui rend un enregistrement interprétable même sans sa description LSL (cf. la docstring
+        de la classe), maintenant que ces deux réglages peuvent changer SANS que ce flux soit
+        recréé.
+        """
+        row = ([float(target_index), float(confidence)] + [float(s) for s in scores]
+               + [float(corr_min), float(margin)])
         block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
         self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
 
@@ -810,15 +846,24 @@ def _autotest():
     # cibles, et le troisième à décider sur une grandeur DIFFÉRENTE (z pour le SSVEP, log-odds
     # pour le P300, corrélation ici). Un client qui poserait le seuil de l'un sur l'échelle de
     # l'autre se tromperait d'un ordre de grandeur — d'où `decision_scale` ET les deux seuils.
+    # ⚠️ `corr_min`/`margin` EN DERNIER (tâche 7, tour de correction 1) : les deux seuils du
+    # c-VEP se règlent en pleine séance SANS recréer ce flux, donc les métadonnées seules
+    # (ci-dessous) ne suffisent plus à dire contre quel seuil une décision a été prise — cf. la
+    # docstring de `DecodedCVEPPublisher` et `errp_channel_labels` pour le même geste chez l'ErrP.
     labels = cvep_channel_labels(6)
     print(f"  voies decoded_cvep : {labels}")
     assert labels == ["target_index", "confidence",
-                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
+                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5",
+                      "corr_min", "margin"], labels
     pub_cvep = DecodedCVEPPublisher(6, decoder="eCCA", refresh=60.0, code_len=63,
                                     corr_min=0.26, margin=0.09, cv=0.4778, votes=(2, 3),
                                     instance="selftest-cvep")
-    pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12])
-    pub_cvep.push(-1, 0.0, [0.05] * 6)      # pas de décision : jamais « la cible 0 »
+    # `push` exige `corr_min`/`margin` À CHAQUE appel (pas de défaut, comme `threshold` chez
+    # l'ErrP) — ICI volontairement DIFFÉRENTS de ceux passés au constructeur ci-dessus, pour
+    # bien montrer que ce sont deux choses distinctes : la voie porte la valeur VIVANTE de CETTE
+    # décision, les métadonnées celle figée à l'ouverture du flux.
+    pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12], corr_min=0.30, margin=0.11)
+    pub_cvep.push(-1, 0.0, [0.05] * 6, corr_min=0.26, margin=0.09)  # pas de décision : jamais « la cible 0 »
     print("  [lsl] decoded_cvep publie sans lever")
     cvep_deco = pub_cvep.outlet.get_info().desc().child("decoding")
     lu = {k: cvep_deco.child_value(k) for k in

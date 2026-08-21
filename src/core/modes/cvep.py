@@ -604,8 +604,21 @@ class CVEPRuntime(ModeRuntime):
         self._publish(self._indice[gagnant], sum(votantes) / len(votantes), scores, t_fin)
 
     def _publish(self, target_index, confidence, scores, lsl_ts, motif=None):
+        # ⚠️ Lus ICI, UNE SEULE FOIS, dans `self.params` — jamais dans `self.decodeur` (cf.
+        # `decide`) : c'est ce qui rend cette ligne exacte MÊME quand la fenêtre en cours n'a pas
+        # appelé `decide` (le cas `phase is None`, plus haut dans `_run_step`) —
+        # `self.decodeur.corr_min`/`.margin` ne dateraient alors que du dernier appel réussi,
+        # potentiellement un réglage déjà périmé. Calculés une seule fois pour que le flux et
+        # l'écran ne puissent PAS diverger en lisant `self.params` à deux instants différents.
+        corr_min = float(self.params["corr_min"])
+        margin = float(self.params["margin"])
         if self._out is not None:
-            self._out.push(target_index, confidence, scores, lsl_ts)
+            # ⚠️ Transportés PAR ÉCHANTILLON (tâche 7, tour de correction 1), pas seulement dans
+            # les métadonnées figées à l'ouverture du flux : ces deux seuils se règlent en pleine
+            # séance SANS recréer ce flux, donc les métadonnées seules ne suffisent plus à dire
+            # contre quel seuil UNE décision précise a été prise. Même geste que `threshold` chez
+            # l'ErrP. Cf. `cvep_channel_labels`/`DecodedCVEPPublisher.push` dans `core/lsl_io.py`.
+            self._out.push(target_index, confidence, scores, corr_min, margin, lsl_ts)
         self._decoded = {
             "target_index": int(target_index),
             "confidence": round(float(confidence), 3),
@@ -616,12 +629,8 @@ class CVEPRuntime(ModeRuntime):
             # une échelle en z et le texte « échelle z · seuil … » — appliqués à des corrélations
             # bornées dans [-1, 1], ils mentent d'un ordre de grandeur. Une clé propre force le
             # rendu propre, et le fait rougir s'il manque.
-            # Lus dans `self.params`, pas dans `self.decodeur` : c'est ce qui rend cette ligne
-            # exacte MÊME quand la fenêtre en cours n'a pas appelé `decide` (le cas `phase is
-            # None`, quelques lignes plus haut) — `self.decodeur.corr_min`/`.margin` ne datent
-            # alors que du dernier appel réussi, potentiellement un réglage déjà périmé.
-            "corr_min": float(self.params["corr_min"]),
-            "margin": float(self.params["margin"]),
+            "corr_min": corr_min,
+            "margin": margin,
             # Le motif EN CLAIR, pas la clé du compteur : c'est le moteur qui possède ce
             # vocabulaire, et la console se contente de l'afficher. Le traduire côté interface
             # ferait deux tables à garder d'accord, et l'écran finirait par ne plus dire la même
@@ -786,7 +795,8 @@ def _selftest():
             CVEP_MODEL_PATH = avant
             shutil.rmtree(dossier, ignore_errors=True)
 
-    def _runtime_de_test(code_len=63, refresh=60.0, n_targets=CVEP_N_TARGETS, modele=None):
+    def _runtime_de_test(code_len=63, refresh=60.0, n_targets=CVEP_N_TARGETS, modele=None,
+                         overrides=None, engine=None):
         """Fabrique minimale, sans moteur ni casque : un `CVEPModel` de la forme voulue (voies =
         CVEP_CHANNELS, `code_len`/`refresh` donnés), sauvegardé puis rechargé par le chemin RÉEL
         de `CVEPRuntime.__init__` (`validate` puis construction) — pas de raccourci qui
@@ -796,6 +806,13 @@ def _selftest():
         exactement ce qu'il faut aux tests de contrat et de compteurs (aucune décision ne peut
         sortir). Passer `modele=` fournit à la place un modèle RÉELLEMENT entraîné — c'est ce
         dont le test de bout en bout a besoin.
+
+        `overrides` : réglages soumis à `validate` EN PLUS des défauts — ce qui permet de
+        fabriquer un runtime démarré avec un `corr_min`/`margin` NON défaut, comme le ferait la
+        commande initiale d'un client (tour de correction 1, revue de la tâche 7 : `_open` et
+        `_rest_step` s'étaient avérés non protégés contre ce cas précis). `engine` : `None` par
+        défaut (la plupart des tests ne décodent jamais assez pour en avoir besoin) — passer un
+        objet portant `.instance` pour les tests qui appellent `_open()`, qui le lit.
         """
         if modele is None:
             modele = CVEPModel(fs=250.0, refresh=refresh, code_len=code_len,
@@ -804,10 +821,10 @@ def _selftest():
             modele.template = np.zeros(code_len)
             modele.cv_ = 0.5
         with _modele_temporaire(modele, n_targets=n_targets):
-            valeurs, raison = validate(SPEC, {})
+            valeurs, raison = validate(SPEC, overrides or {})
             if raison is not None:
                 raise RuntimeError(f"fabrique de test cassée : {raison}")
-            rt = CVEPRuntime(SPEC, valeurs, engine=None)
+            rt = CVEPRuntime(SPEC, valeurs, engine=engine)
         return rt
 
     # --- 1. Sans modèle du tout : le mode REFUSE et dit comment en obtenir un. ----------------
@@ -943,6 +960,44 @@ def _selftest():
         f"...et exiger plus de votes que de fenêtres est refusé, pas accepté en silence "
         f"({raison_vote})")
 
+    # --- 5quater. `_open`/`_rest_step` honorent un seuil NON DÉFAUT DÈS LA CONSTRUCTION ---------
+    # ⚠️ Revue de la tâche 7, tour de correction 1 : ni `_open` ni `_rest_step` ne sont exercés
+    # par la section 7bis ci-dessous (elle pose `rt._opened = True` À LA MAIN, sans jamais
+    # appeler `_open`), et partout où `decide()` tourne, `self.decodeur.corr_min` vaut DÉJÀ
+    # `self.params["corr_min"]` par construction — donc revenir à une lecture sur `self.decodeur`
+    # dans `_open`/`_rest_step` laissait `modes/cvep.py`, `server.py --smoke` et
+    # `console/app.py --smoke` tous verts. Scénario réel : un client démarre le mode avec un
+    # `corr_min` NON défaut dès sa commande initiale (avant tout `decide()`) — les métadonnées et
+    # le compte-rendu de repos doivent porter CE réglage, pas le défaut de construction du
+    # décodeur (`CVEP_CORR_MIN`/`CVEP_MARGIN`, qui vaut ici par coïncidence le même défaut que
+    # `SPEC.params` : sans un `overrides` explicitement DIFFÉRENT, ce test ne prouverait rien).
+    from types import SimpleNamespace
+
+    rt_ouv = _runtime_de_test(overrides={"corr_min": 0.501, "margin": 0.222},
+                              engine=SimpleNamespace(instance="selftest-open"))
+    chk(rt_ouv.params["corr_min"] == 0.501 and rt_ouv.params["margin"] == 0.222,
+        f"fixture : le runtime démarre avec un seuil NON défaut, comme une commande initiale "
+        f"({rt_ouv.params['corr_min']}, {rt_ouv.params['margin']})")
+
+    rt_ouv.open()
+    try:
+        deco = rt_ouv._out.outlet.get_info().desc().child("decoding")
+        corr_min_pub, margin_pub = deco.child_value("corr_min"), deco.child_value("margin")
+        chk(corr_min_pub == "0.501" and margin_pub == "0.222",
+            f"`_open` écrit dans les métadonnées LSL le seuil SOUMIS à la construction, pas le "
+            f"défaut du décodeur ({corr_min_pub!r}, {margin_pub!r})")
+    finally:
+        rt_ouv.close()
+
+    chk(rt_ouv._rest_until is None, "fixture : le repos n'a pas encore démarré")
+    rt_ouv._rest_until = 0.0    # comme `tick` l'aurait posé — SPEC.rest.duration_s vaut 0 ici
+    conclu = rt_ouv._rest_step(engine=None, now=0.0)
+    chk(conclu and rt_ouv.rest_report is not None,
+        f"fixture : ce repos NUL (cf. SPEC.rest.duration_s) conclut dès le premier pas ({conclu})")
+    chk(rt_ouv.rest_report["corr_min"] == 0.501 and rt_ouv.rest_report["margin"] == 0.222,
+        f"`_rest_step` rapporte le seuil SOUMIS à la construction, pas le défaut du décodeur "
+        f"({rt_ouv.rest_report})")
+
     # =========================================================================================
     # Ce qui suit fait TOURNER le mode : un faux moteur, un tampon EEG horodaté, des marqueurs
     # d'horloge sur commande. Aucun casque, aucun flux LSL — `_out` est un faux publieur.
@@ -951,11 +1006,16 @@ def _selftest():
     from core.cvep_decoder import synth_cvep
 
     class _FauxPublieur:
+        """Même signature que `DecodedCVEPPublisher.push` (tâche 7, tour de correction 1 : les
+        deux derniers arguments sont `corr_min`/`margin`, EXIGÉS comme chez le vrai publieur —
+        un appel qui les omettrait doit lever ici aussi, pas être accepté en silence avec un
+        défaut que le vrai publieur n'a pas."""
+
         def __init__(self):
             self.lignes = []
 
-        def push(self, target_index, confidence, scores, lsl_ts=None):
-            self.lignes.append((target_index, confidence, list(scores), lsl_ts))
+        def push(self, target_index, confidence, scores, corr_min, margin, lsl_ts=None):
+            self.lignes.append((target_index, confidence, list(scores), corr_min, margin, lsl_ts))
 
     class _FauxMoteur:
         """Juste ce dont le runtime a besoin : un tampon EEG horodaté et une file de marqueurs.
@@ -1010,6 +1070,17 @@ def _selftest():
     rt_c = _runtime_de_test(code_len=63, refresh=60.0)    # template PLAT : corrélations nulles
     rt_c._out = _FauxPublieur()
     rt_c._opened = True
+    # ⚠️ Changé ICI, APRÈS la construction et AVANT le premier `_run_step` — donc AVANT que
+    # `decide()` n'ait jamais tourné une seule fois (revue de la tâche 7, tour de correction 1) :
+    # les trois premiers appels ci-dessous tombent tous sur le chemin `phase is None`
+    # (`sans_reference`/`reference_perimee`), qui publie SANS jamais passer par `decide`. Un
+    # opérateur qui tourne le seuil PENDANT que l'horloge est perdue est un scénario réaliste en
+    # séance ; si `_publish` relisait `self.decodeur.corr_min`/`.margin` au lieu de
+    # `self.params[...]`, il publierait le défaut de CONSTRUCTION du décodeur (0.26/0.09,
+    # identique par coïncidence au défaut de `SPEC.params` — d'où des valeurs volontairement
+    # DIFFÉRENTES ici) plutôt que ce changement, en silence.
+    rt_c.params["corr_min"] = 0.501
+    rt_c.params["margin"] = 0.222
 
     rt_c._run_step(moteur_c, lsl_ts=t_fin_c)              # (a) aucun marqueur jamais reçu
     rt_c._run_step(moteur_c, lsl_ts=t_fin_c)
@@ -1042,6 +1113,18 @@ def _selftest():
     # pas rester suspendu parce que le moteur ne sait pas où en est le code.
     chk(len(rt_c._out.lignes) == 6 and all(l[0] == -1 for l in rt_c._out.lignes),
         f"les six refus partent quand même sur le flux, en -1 ({rt_c._out.lignes})")
+    # `lignes[0]` : le tout premier refus, publié AVANT que `decide()` n'ait jamais tourné (cf.
+    # le commentaire à la construction de `rt_c` plus haut) — LA preuve que `_publish` lit
+    # `self.params`, pas un `self.decodeur` qui n'aurait encore rien synchronisé.
+    premiere = rt_c._out.lignes[0]
+    chk(premiere[-3] == 0.501 and premiere[-2] == 0.222,
+        f"`_publish` transporte le seuil VIVANT même sur une fenêtre qui n'est JAMAIS passée par "
+        f"`decide` ({premiere})")
+    # Et l'état affiché à la console (`output()`, écrasé à chaque publication) dit encore la même
+    # chose à la FIN des six fenêtres — y compris après les trois qui, elles, ont bien traversé
+    # `decide` : les deux sources ne doivent jamais pouvoir diverger.
+    chk(rt_c.output()["corr_min"] == 0.501 and rt_c.output()["margin"] == 0.222,
+        f"...et l'état affiché à la console dit la même chose ({rt_c.output()})")
     chk(abs(st["age_reference_s"] - 0.5) < 0.01,
         f"l'âge de la référence est celui de la DERNIÈRE fenêtre décidée ({st['age_reference_s']})")
     # `post_s = 0` : une horloge est utilisable dès que le tampon EEG a atteint son horodatage.
