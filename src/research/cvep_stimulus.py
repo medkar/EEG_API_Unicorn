@@ -313,7 +313,8 @@ def tirage_cible(rng, n_cibles, precedente=None):
 
 def run(windowed=False, refresh=None, seconds=None, smoke=False,
         stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
-        seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None):
+        seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
+        max_frames=None):
     """La boucle du stimulus. `journal`, s'il est fourni, reçoit `(marqueur, horodatage, frame,
     consigne)` pour CHAQUE marqueur de cycle réellement poussé ; `bilan`, s'il est fourni, reçoit
     le dictionnaire de `bilan_de_seance` — c'est ce qui permet à `--smoke` d'ASSERTER sur le
@@ -327,6 +328,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     `seed` graine le tirage des consignes : deux exécutions rejouent alors la MÊME séquence de
     cibles, ce qui est la seule façon de refaire une séance à l'identique. `attente_moteur_s`
     n'existe que pour que `--smoke` puisse EXERCER le bandeau de chauffe sans attendre 15 s.
+
+    `max_frames` borne la séance en IMAGES au lieu de secondes. C'est ce qui rend le rejeu
+    DÉTERMINISTE : à graine ET compte d'images égaux, deux exécutions produisent exactement la même
+    séquence de consignes, quelle que soit la charge de la machine (cf. le ⚠️ de `poll`). Pas
+    d'option de ligne de commande : une séance réelle se règle en secondes, c'est `--smoke` qui a
+    besoin de reproductibilité à l'image près — même statut que `max_run_steps` chez
+    `errp_stimulus.py`.
     """
     if smoke:
         return _smoke()
@@ -456,16 +464,28 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         return ts
 
     def poll():
-        """Événements + la limite `--seconds`, vérifiés à CHAQUE frame. Le c-VEP n'a pas d'unité
+        """Événements + les deux limites d'arrêt, vérifiés à CHAQUE frame. Le c-VEP n'a pas d'unité
         plus grosse qu'une frame à protéger : contrairement au P300 et à l'ErrP, aucun marqueur
         déjà parti n'attend une fenêtre de signal derrière lui (les siens tiennent une horloge, ils
-        ne délimitent pas d'époque) — on peut donc couper net, à la frame près."""
+        ne délimitent pas d'époque) — on peut donc couper net, à la frame près.
+
+        ⚠️ `max_frames` compte des IMAGES là où `--seconds` compte des secondes, et ce n'est pas un
+        doublon : une durée dépend de l'ordonnanceur, un compte d'images non. C'est ce qui rend une
+        séance REJOUABLE À L'IDENTIQUE — le tirage des consignes est graine par graine, mais deux
+        exécutions bornées par le temps ne s'arrêtent pas forcément sur la même image, donc la
+        seconde peut avoir une consigne de plus. Mesuré par la revue : 1 exécution sur ~8 rendait
+        des journaux de longueurs différentes (4 consignes contre 5, préfixe identique). C'est la
+        borne en temps qui était en cause, jamais la graine. Un stimulus verrouillé à la frame se
+        borne donc en frames.
+        """
         nonlocal running
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 running = False
             elif e.type == pygame.KEYDOWN and e.key in (pygame.K_ESCAPE, pygame.K_q):
                 running = False
+        if max_frames is not None and frame >= int(max_frames):
+            running = False
         if seconds is not None and t_start is not None and (time.perf_counter() - t_start) >= seconds:
             running = False
 
@@ -538,8 +558,6 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             t_start = time.perf_counter()   # LA STIMULATION DÉCODABLE commence ici
         clock.tick(int(refresh) + 5)
 
-    # Un BILAN, toujours : « 0 cycle joué » doit se lire, pas se deviner. Et surtout la CADENCE
-    # RÉELLE — c'est le seul chiffre de cette séance qui dise si le moteur a pu suivre l'horloge.
     # Un BILAN, toujours : « 0 cycle joué » doit se lire, pas se deviner. Et surtout la CADENCE
     # RÉELLE — c'est le seul chiffre de cette séance qui dise si le moteur a pu suivre l'horloge.
     # ⚠️ Il vit dans `bilan_de_seance`, PAS ici : un bilan écrit à même la boucle n'est qu'une
@@ -906,12 +924,21 @@ def _smoke():
             stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
             seed=0, bilan=bilan3)
         trace.clear()
-        # C4/C5 : la MÊME graine doit rejouer la MÊME séquence de consignes. À 120 Hz un cycle
-        # dure 0,52 s et `cycles_par_cible=1` donne une consigne par cycle : ~4 consignes en 2,6 s,
-        # assez pour qu'une coïncidence soit invraisemblable (1/6 x (1/5)^3 ≈ 0,13 %).
+        # C4/C5 : la MÊME graine doit rejouer la MÊME séquence de consignes.
+        #
+        # ⚠️ **Bornés en IMAGES, jamais en secondes, et c'est la correction du tour 2.** Deux
+        # `run()` bornés par `seconds` ne s'arrêtent pas forcément sur la même image : la revue a
+        # mesuré 1 exécution sur ~8 où le second passage rendait UNE consigne de plus (préfixes
+        # identiques). Le mécanisme de graine n'y était pour rien — c'était l'ordonnanceur. Un test
+        # instable qu'on relance jusqu'au vert est un test qu'on a appris à ignorer, et ce dépôt
+        # vient justement d'en enterrer un ; on supprime donc la CAUSE au lieu de comparer des
+        # préfixes. `max_frames` rend les deux courses identiques à l'image près.
+        #
+        # 6 cycles de 63 frames à `cycles_par_cible=1` = 6 consignes : une coïncidence entre deux
+        # graines différentes y vaudrait 1/6 x (1/5)^5 ≈ 0,005 %.
         journal4, journal5 = [], []
         for jn in (journal4, journal5):
-            run(windowed=True, refresh=120.0, seconds=2.6, cycles_par_cible=1,
+            run(windowed=True, refresh=120.0, max_frames=6 * L, cycles_par_cible=1,
                 stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
                 journal=jn, seed=20260821)
     finally:
@@ -1067,16 +1094,22 @@ def _smoke():
     # livrable de ce chantier : une séance qu'on ne peut pas rejouer ne se dépouille pas deux fois.
     consignes4 = [c for _m, _ts, _f, c in journal4]
     consignes5 = [c for _m, _ts, _f, c in journal5]
-    chk(len(consignes4) >= 4 and consignes4 == consignes5,
-        f"deux séances à la MÊME graine rejouent EXACTEMENT les mêmes consignes "
-        f"({consignes4} vs {consignes5})")
+    # ⚠️ On exige la MÊME LONGUEUR autant que le même contenu, et c'est le fond de la correction du
+    # tour 2 : comparer des listes de longueurs différentes est exactement ce qui rendait ce
+    # contrôle instable. Bornées en frames, les deux courses en ont forcément 6.
+    chk(len(consignes4) == 6 and len(consignes5) == 6 and consignes4 == consignes5,
+        f"deux séances à la MÊME graine ET au MÊME compte d'images rejouent EXACTEMENT les mêmes "
+        f"consignes, en même nombre ({consignes4} vs {consignes5})")
+    chk(len(journal4) == len(journal5) == 6,
+        f"...et le compte de marqueurs est le même à l'image près, parce que la borne est un "
+        f"nombre d'IMAGES et non une durée ({len(journal4)} vs {len(journal5)})")
     chk(len(set(consignes4)) >= 2,
         f"...et cette séquence n'est pas une cible unique répétée, ce qui la rendrait "
         f"indistinguable d'un tirage cassé ({consignes4})")
     chk(bilan3.get("graine") == 0,
         f"la graine DONNÉE est celle qui a servi, et le bilan la rend ({bilan3.get('graine')})")
     bilan_sans_graine = {}
-    run(windowed=True, refresh=120.0, seconds=0.6, cycles_par_cible=1,
+    run(windowed=True, refresh=120.0, max_frames=L, cycles_par_cible=1,
         stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
         seed=None, bilan=bilan_sans_graine)
     chk(isinstance(bilan_sans_graine.get("graine"), int),
