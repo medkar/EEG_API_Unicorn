@@ -30,7 +30,8 @@ from collections import deque
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_MIN_VOTES,  # noqa: E402
-                    CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH, CVEP_VOTE_LEN, use_utf8_console)
+                    CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH, CVEP_VOTE_LEN, DATA_DIR,
+                    empreinte_dossier, use_utf8_console)
 from research.app import Live, _live_loop, _running, _vote  # noqa: E402  (machinerie PARTAGÉE avec
                                                              # le SSVEP, resté dans app.py : Live,
                                                              # le fil de décodage/émission, le rendu)
@@ -235,6 +236,11 @@ def main(argv=None):
     app = App(windowed=a.windowed, synthetic=a.synthetic, smoke=a.smoke, send=a.send)
     tmp = None
     model_path = a.model
+    # ⚠️ Le garde qui manquait le 2026-08-21 : `cvep_pilot.py` a RÉELLEMENT écrit dans le vrai
+    # `data/cvep_rcca_model.npz` un jour où son détournement était oublié, et RIEN dans son smoke
+    # ne s'en serait aperçu. `empreinte_dossier` rend cette classe d'accident impossible à
+    # manquer ICI AUSSI, même le jour où le détournement ci-dessous est oublié ou mal fait.
+    empreinte_avant = empreinte_dossier(DATA_DIR) if a.smoke else None
     try:
         if a.smoke:
             # ⚠️ `save_path` DOIT être détourné vers un dossier temporaire : le défaut
@@ -249,15 +255,41 @@ def main(argv=None):
                 calibrate_rcca(app, save_path=model_path)
             except Abort:
                 pass
+        # ⚠️ `mode_cvep_rcca` sort AVANT sa boucle live (sans exception, juste un `app.flash(...)`
+        # puis `return`) si le modèle est absent ou incompatible. La revue de tâche 6 a mesuré
+        # qu'un smoke qui se contente d'appeler la fonction et de constater l'absence d'exception
+        # ne prouve rien : « smoke OK », `exit=0`, boucle live jamais exercée. On espionne donc
+        # `app.flash` PENDANT l'appel — même parade que `cvep_pilot.py`.
+        avortements = []
+        flash_reel = app.flash
+
+        def _flash_espion(titre, *a2, **kw2):
+            if titre.startswith(("Pas de modèle", "Modèle")):
+                avortements.append(titre)
+            return flash_reel(titre, *a2, **kw2)
+
+        app.flash = _flash_espion
         try:
             mode_cvep_rcca(app, model_path=model_path)
         except Abort:
             pass
+        finally:
+            app.flash = flash_reel
+        if a.smoke:
+            assert not avortements, (
+                f"mode_cvep_rcca a été refusé SILENCIEUSEMENT ({avortements}) — il serait sorti "
+                f"AVANT sa boucle live, et rien d'autre que cette assertion ne l'aurait remarqué")
     finally:
         app.close()
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
     if a.smoke:
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"ce smoke a touché data/ — la calibration doit écrire UNIQUEMENT dans le dossier "
+            f"temporaire ci-dessus, jamais dans data/ (dossier gitignoré, mais qui porte des "
+            f"enregistrements EEG d'une personne identifiable) : "
+            f"{set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
         print("[rcca-pilot] smoke OK : calibration Gold + décodage + affichage câblés (headless).")
     return True
 

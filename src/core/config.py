@@ -80,6 +80,31 @@ def use_utf8_console():
         except Exception:  # flux déjà redirigé / non reconfigurable
             pass
 
+
+def empreinte_dossier(dossier=DATA_DIR):
+    """`{nom: (taille, mtime)}` d'un dossier — ce qu'un test ne doit JAMAIS faire bouger.
+
+    Vit ICI (`core/`, pas `research/app.py`) pour être appelable depuis N'IMPORTE QUEL smoke du
+    dépôt, `archive/` compris — c'est précisément ce qui manquait le 2026-08-21 : les deux smokes
+    c-VEP archivés n'avaient AUCUN moyen de se garder eux-mêmes contre une écriture dans le vrai
+    `data/`, parce que la seule fonction qui le vérifiait vivait dans `research/app.py` et n'était
+    appelée que par SON PROPRE smoke. Un dossier gitignoré ne se protège pas fichier par fichier :
+    un garde-fou qui ne couvre qu'UN appelant sur plusieurs n'en couvre aucun avec certitude.
+
+    `data/` porte des enregistrements EEG d'une personne identifiable, sur un dépôt public. Il
+    porte aussi les modèles du casque, dont le plus récent CHARGEABLE est le défaut proposé par le
+    moteur, la console et les applis pygame : un fichier de test oublié là ne se contente pas
+    d'encombrer, il se fait ÉLIRE.
+
+    Rendre le dossier absent comme un dictionnaire vide, et non lever : un dépôt fraîchement cloné
+    n'a pas de `data/`, et un smoke doit y tourner quand même.
+    """
+    if not _os.path.isdir(dossier):
+        return {}
+    return {nom: (_os.path.getsize(_os.path.join(dossier, nom)),
+                  _os.path.getmtime(_os.path.join(dossier, nom)))
+            for nom in sorted(_os.listdir(dossier))}
+
 # Ordre des 8 voies de l'Unicorn Hybrid Black (montage standard g.tec).
 CH_NAMES = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
 # Voies occipitales = les plus réactives au SSVEP. Indices dans CH_NAMES.

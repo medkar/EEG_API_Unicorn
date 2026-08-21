@@ -42,7 +42,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS,  # noqa: E402
-                    CVEP_MODEL_PATH, DATA_DIR,
+                    CVEP_MODEL_PATH, CVEP_RCCA_MODEL_PATH, DATA_DIR, empreinte_dossier,
                     ERRP_DEMO_ERROR_RATE, ERRP_EPOCH_S, ERRP_FEEDBACK_S,
                     ERRP_MAX_RUN_STEPS, ERRP_MIDLINE, ERRP_MODEL_PATH, ERRP_PRE_S,
                     ERRP_TRACK_CELLS, N_HARMONICS,
@@ -1299,22 +1299,12 @@ def main(windowed=False, synthetic=False, send=False, smoke=False, host=UDP_HOST
     return True
 
 
+# `_empreinte_data` a DÉMÉNAGÉ dans `core.config.empreinte_dossier` (revue tâche 6, 2026-08-21) :
+# vivre ici la rendait invisible depuis `archive/`, donc les deux smokes c-VEP archivés n'avaient
+# aucun moyen de se garder eux-mêmes contre une écriture dans le vrai `data/` — exactement ce qui
+# a cassé. `_empreinte_data()` reste comme un ALIAS, pour ne pas casser le reste de ce fichier.
 def _empreinte_data():
-    """`{nom: (taille, mtime)}` de `data/` — ce qu'un test ne doit JAMAIS faire bouger.
-
-    `data/` porte les enregistrements EEG d'une personne identifiable, sur un dépôt public (le
-    dossier est gitignoré). Il porte aussi les modèles du casque, dont le plus récent CHARGEABLE
-    est le défaut proposé par le moteur, par la console et par l'accueil de cette appli : un
-    fichier de test oublié là ne se contente pas d'encombrer, il se fait ÉLIRE.
-
-    Rendre le dossier absent comme un dictionnaire vide, et non lever : un dépôt fraîchement cloné
-    n'a pas de `data/`, et le smoke doit y tourner.
-    """
-    if not os.path.isdir(DATA_DIR):
-        return {}
-    return {nom: (os.path.getsize(os.path.join(DATA_DIR, nom)),
-                  os.path.getmtime(os.path.join(DATA_DIR, nom)))
-            for nom in sorted(os.listdir(DATA_DIR))}
+    return empreinte_dossier(DATA_DIR)
 
 
 def _smoke(app):
@@ -1359,6 +1349,20 @@ def _smoke(app):
         # fichiers : `rcca_save_path` DOIT être détourné aussi, sinon son défaut
         # (`CVEP_RCCA_MODEL_PATH`) écrirait dans le VRAI `data/cvep_rcca_model.npz`.
         cvep_calibrate.calibrate(app, save_path=cvep_path, rcca_save_path=rcca_path)
+        # ⚠️ Rien, avant la revue de tâche 6, n'exerçait `calibrate()` elle-même pour SA sauvegarde
+        # des deux modèles : le selftest de `cvep_calibrate.py` sauvegarde des modèles qu'IL a
+        # construits, jamais ceux que `calibrate()` produit. Supprimer le `rcca.save(...)` de
+        # `calibrate()` laissait ce smoke vert. On vérifie ici que les DEUX fichiers existent
+        # VRAIMENT et se rechargent, décodeur compris — par le chemin RÉEL, `cvep_models.charger`.
+        from core.cvep_models import charger as _charger_cvep
+        modele_e, pb_e = _charger_cvep(cvep_path)
+        modele_r, pb_r = _charger_cvep(rcca_path)
+        assert modele_e is not None and modele_e.decoder == "eCCA", (
+            f"calibrate() doit sauvegarder un modèle eCCA CHARGEABLE à save_path, sinon la "
+            f"calibration produit un fichier inutilisable sans qu'aucun test ne le voie : {pb_e}")
+        assert modele_r is not None and modele_r.decoder == "rCCA", (
+            f"...et un modèle rCCA CHARGEABLE à rcca_save_path — supprimer `rcca.save(...)` dans "
+            f"`calibrate()` laisserait ce smoke vert sans ce contrôle : {pb_r}")
         p300_calibrate.calibrate(app, save_path=p300_path)
         mode_p300(app, model_path=p300_path)                   # chemin fixe
         mode_p300(app, model_path=p300_path, dynamic=True)     # chemin arrêt dynamique
@@ -1387,6 +1391,23 @@ def _smoke(app):
 
     from core.p300_models import MOTIF, modeles_disponibles
     from research.p300_calibrate import chemin_modele_horodate
+
+    # 0. L'invariant c-VEP jumeau, ajouté par la revue de tâche 6 (2026-08-21) : `calibrate()`
+    #    n'écrase JAMAIS `CVEP_MODEL_PATH` / `CVEP_RCCA_MODEL_PATH` par défaut — `CVEP_RCCA_MODEL_PATH`
+    #    est la trace du 21 juillet (35,6 %, codes Gold) que ce chantier cite comme preuve du jeu
+    #    égal eCCA/rCCA (`core/cvep_rcca.py`), et une revue a mesuré qu'un smoke mal câblé
+    #    suffisait à l'écraser. Vérifié sur le TEXTE SOURCE, comme pour le P300 et l'ErrP plus
+    #    bas : appeler `cvep_calibrate.calibrate(app)` sans chemin pour voir où il écrit serait
+    #    exactement l'accident qu'on veut interdire.
+    src_cvep_cal = inspect.getsource(cvep_calibrate.calibrate)
+    assert "save_path=CVEP_MODEL_PATH" not in src_cvep_cal, (
+        "calibrate() ne doit JAMAIS avoir CVEP_MODEL_PATH comme défaut de save_path — un "
+        "défaut fixe écraserait le modèle eCCA à chaque calibration de démonstration")
+    assert "rcca_save_path=CVEP_RCCA_MODEL_PATH" not in src_cvep_cal, (
+        "...et rcca_save_path non plus : CVEP_RCCA_MODEL_PATH est la trace du 21 juillet "
+        "(35,6 %, codes Gold) que ce dépôt cite comme preuve mesurée du jeu égal eCCA/rCCA")
+    assert "chemin_modele_horodate(" in src_cvep_cal, (
+        "calibrate() doit retomber sur des chemins HORODATÉS quand on ne lui en donne pas")
 
     # 1. Une calibration n'écrase JAMAIS `data/p300_model.joblib` — la trace de juillet, seul
     #    modèle P300 enregistré au casque. Le MI a déjà perdu ses quatre modèles ainsi.

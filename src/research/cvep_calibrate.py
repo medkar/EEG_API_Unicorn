@@ -21,8 +21,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CH_NAMES, CVEP_BAND, CVEP_CAL_BLOCKS,  # noqa: E402
-                    CVEP_CAL_CYCLES, CVEP_CHANNELS, CVEP_LAG_ROTATION, CVEP_MODEL_PATH,
-                    CVEP_RCCA_MODEL_PATH, FS_UNICORN, cvep_lag_gap_ms, use_utf8_console)
+                    CVEP_CAL_CYCLES, CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_LAG_ROTATION,
+                    CVEP_MODEL_PATH, CVEP_RCCA_MODEL_PATH, FS_UNICORN, cvep_lag_gap_ms,
+                    use_utf8_console)
 from core.cvep_code import build_targets, is_on  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 from core.cvep_rcca import RCCAModel  # noqa: E402
@@ -147,60 +148,121 @@ def _early_check(model, epochs, lags, n_targets):
     return (hi_itr < EARLY_ITR_MIN), acc, hi_itr
 
 
+def _fit_et_compte(modele, epochs, labels, **kw):
+    """Ajuste `modele` sur EXACTEMENT `epochs`/`labels`, et rend `len(epochs)` — capturé ICI, au
+    point d'appel, pour qu'un futur tronquage de l'ARGUMENT (`epochs[:-6]`) se voie dans le
+    compte rendu, et pas seulement dans le modèle ajusté. Un `len(labels)` recalculé ailleurs,
+    lui, ne bougerait pas si un seul des deux appels était tronqué — c'est exactement le trou que
+    la revue de tâche 6 a trouvé dans `n_epoques`."""
+    modele.fit(epochs, labels, **kw)
+    return len(epochs)
+
+
 def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAND,
-                      channels=None, n_cycles=1):
-    """Entraîne eCCA ET rCCA sur les MÊMES époques de calibration, les note HORS-PLI sur les
-    MÊMES groupes de validation croisée, et rend `{"eCCA": {...}, "rCCA": {...}}`.
+                      channels=None, n_cycles=CVEP_DECISION_CYCLES):
+    """Entraîne eCCA ET rCCA sur les MÊMES époques de calibration, PARMI LE MÊME JEU DE CIBLES,
+    les note HORS-PLI sur les MÊMES groupes de validation croisée, et rend
+    `{"eCCA": {...}, "rCCA": {...}}`.
 
     ⚠️ Ce n'est PAS une nouvelle analyse : `CVEPModel.hors_pli` et `RCCAModel.hors_pli` existent
     depuis la tâche 3 (jumeaux, même contrat `(epochs, labels, n_cycles) -> scores`) et sont déjà
     éprouvés — `python src/core/cvep_rcca.py --seuils <calib.npz>` les fait déjà tourner côte à
-    côte sur une calibration réelle (43/90 chacun). Cette fonction se contente de les appeler
-    tous les deux sur les mêmes entrées et de porter le résultat jusqu'à l'écran de calibration.
+    côte sur une calibration réelle (43/90 chacun, à k=1). Cette fonction se contente de les
+    appeler tous les deux sur les mêmes entrées et de porter le résultat jusqu'à l'écran.
+
+    `n_cycles` vaut `CVEP_DECISION_CYCLES` par défaut : c'est la géométrie où le MOTEUR décide,
+    pas celle d'une époque de calibration seule — `groupes_de_cycles` prescrit littéralement de
+    « mesurer un décodeur à la géométrie où il servira » (tâche 3). Mesuré sur
+    `data/cvep_calib_last.npz` (lecture seule) : à k=1 les deux décodeurs sont à ÉGALITÉ EXACTE
+    (43/90 chacun) ; à k=2 (la géométrie réelle), ils ne le sont plus.
+
+    ⚠️ **Une séance INTERROMPUE (ESC pendant l'enregistrement, cf. `Abort` dans `calibrate()`) peut
+    n'avoir vu qu'un SOUS-ENSEMBLE des cibles du plan.** `CVEPModel.hors_pli` ne juge alors que
+    parmi les lags RÉELLEMENT VUS (son `uniq = sorted(set(lags))` rétrécit avec eux, et son hasard
+    aussi) — mais un `RCCAModel` construit avec TOUS les codes du plan resterait jugé sur 1/6,
+    quel que soit ce qui a été enregistré. Comparer les deux tels quels offre alors des points
+    gratuits à celui jugé sur le plus petit jeu : MESURÉ sur `cvep_calib_last.npz` tronqué à 3
+    cibles, eCCA 71,1 % (hasard 33,3 %) contre rCCA 51,1 % (hasard 16,7 %) — un « gagnant »
+    entièrement fabriqué par l'écart de hasard, pas par le signal. On réduit donc les codes du
+    rCCA aux SEULES cibles présentes dans `labels`, exactement comme `hors_pli` réduit `uniq` :
+    les deux décodeurs jugent alors sur le MÊME nombre d'alternatives, quoi qu'il arrive à la
+    séance.
 
     `epochs` : cycles BRUTS (n_cyc x n_voies enregistrées, ex. 8 pour l'Unicorn) — la réduction
     aux voies AJUSTÉES (`channels`, `CVEP_CHANNELS` par défaut) se fait ICI, la MÊME pour les deux
-    décodeurs : sans ça, un montage différent d'un décodeur à l'autre biaiserait la comparaison.
+    décodeurs : sans ça, un montage différent d'un décodeur à l'autre biaiserait la comparaison
+    (vérifié par un garde qui REFUSE plutôt que de comparer si jamais ça divergeait).
     `labels` : le LAG (frames) fixé à chaque époque, comme les stocke `calibrate()`.
 
     Chaque valeur du dict rendu porte :
       `modele`      — l'objet entraîné (CVEPModel ou RCCAModel), prêt pour `.save(...)` ;
       `justesse`    — accuracy HORS-PLI (jamais celle, optimiste, d'un modèle qui a vu l'essai
                       qu'il note — le piège qui a gonflé le premier écran de calibration MI) ;
-      `n_epoques`   — le nombre d'époques REÇUES par ce décodeur ; DOIT être `len(labels)` pour
-                      les deux, sinon ils n'ont pas vu le même protocole ;
+      `n_epoques`   — le nombre d'époques RÉELLEMENT données à `.fit()` pour CE décodeur (lu sur
+                      l'appel lui-même, `_fit_et_compte`) ; DOIT être `len(labels)` pour les deux,
+                      sinon ils n'ont pas vu le même protocole ;
       `groupes`     — les groupes de validation croisée (`core.cvep_decoder.groupes_de_cycles`,
                       à la géométrie `n_cycles`) — LES MÊMES pour les deux, par construction ;
       `n_decisions` — le nombre de groupes RÉELLEMENT notés par ce décodeur (la longueur de ce
                       que SON `hors_pli` a rendu). Comparé à `len(groupes)` par l'appelant : s'il
                       diffère, ce décodeur a été noté à une AUTRE géométrie que celle annoncée
-                      dans `groupes` — la comparaison ne serait plus honnête, silencieusement.
+                      dans `groupes` — la comparaison ne serait plus honnête, silencieusement ;
+      `n_cibles`    — le nombre d'alternatives RÉELLEMENT notées par ce décodeur (la largeur de
+                      SA matrice de scores hors-pli, `sc.shape[1]`) : c'est CE nombre qui fixe le
+                      hasard contre lequel lire `justesse`. DOIT être égal pour les deux, sinon
+                      l'un a été jugé sur un jeu de cibles plus facile que l'autre (le Critical 1
+                      de la revue de tâche 6).
     """
     plan, code = build_targets()
     codes = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
     lag_a_idx = {c["lag"]: i for i, c in enumerate(plan)}
 
     labels = [int(l) for l in labels]
-    idx = [lag_a_idx[l] for l in labels]     # RCCAModel indexe ses cibles 0..n-1, pas par lag
+    # Les cibles RÉELLEMENT présentes dans cette séance — un sous-ensemble du plan complet si la
+    # calibration a été interrompue. `RCCAModel` DOIT être construit sur CES codes-là (voir le
+    # ⚠️ ci-dessus), pas sur les `CVEP_N_TARGETS` du plan complet.
+    presentes = sorted(set(labels))
+    codes_vus = np.stack([codes[lag_a_idx[l]] for l in presentes])
+    idx_local = {l: i for i, l in enumerate(presentes)}
+    idx = [idx_local[l] for l in labels]     # RCCAModel indexe ses cibles 0..n-1, pas par lag
 
     ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code), band=band, channels=channels)
-    rcca = RCCAModel(codes, fs=fs, refresh=refresh, band=band, channels=list(ecca.channels))
-    reduits = [np.asarray(e, dtype=float)[:, ecca.channels] for e in epochs]
+    rcca = RCCAModel(codes_vus, fs=fs, refresh=refresh, band=band, channels=list(ecca.channels))
 
-    ecca.fit(reduits, labels)
-    rcca.fit(reduits, idx, compute_cv=False)     # cv_ recalculé plus bas, à LA MÊME géométrie
+    # Réduits UNE fois, puis donnés aux DEUX décodeurs — c'est cette identité qui garantit
+    # « les mêmes époques », pas une conviction qu'elles seront construites pareil deux fois.
+    epochs_ecca = [np.asarray(e, dtype=float)[:, ecca.channels] for e in epochs]
+    epochs_rcca = epochs_ecca
+    for nom, mdl, ep in (("eCCA", ecca, epochs_ecca), ("rCCA", rcca, epochs_rcca)):
+        largeur = int(np.asarray(ep[0]).shape[1]) if len(ep) else None
+        if largeur != len(mdl.channels):
+            raise ValueError(
+                f"{nom} : {len(ep)} époques à {largeur} voies pour {len(mdl.channels)} voies "
+                f"déclarées ({mdl.channels}) — la comparaison ne serait pas honnête")
+
+    n_epoques_ecca = _fit_et_compte(ecca, epochs_ecca, labels)
+    n_epoques_rcca = _fit_et_compte(rcca, epochs_rcca, idx, compute_cv=False)   # cv_ ci-dessous
 
     groupes = groupes_de_cycles(labels, n_cycles)
-    sc_e, y_e, _ = ecca.hors_pli(reduits, labels, n_cycles=n_cycles)
-    sc_r, y_r = rcca.hors_pli(reduits, idx, n_cycles=n_cycles)
+    sc_e, y_e, _ = ecca.hors_pli(epochs_ecca, labels, n_cycles=n_cycles)
+    sc_r, y_r = rcca.hors_pli(epochs_rcca, idx, n_cycles=n_cycles)
     ecca.cv_ = float((sc_e.argmax(axis=1) == y_e).mean()) if len(y_e) else None
     rcca.cv_ = float((sc_r.argmax(axis=1) == y_r).mean()) if len(y_r) else None
+    # ⚠️ `groupes_de_cycles` peut rendre AUCUN groupe à la géométrie `n_cycles` (une séance trop
+    # courte, ou — mesuré — le protocole `--smoke` d'origine, dont les blocs interrompaient
+    # systématiquement toute paire de cycles consécutifs). `hors_pli` rend alors un tableau de
+    # score VIDE en 1 dimension (`shape == (0,)`), et `.shape[1]` lèverait un `IndexError` au lieu
+    # de dire proprement « rien à mesurer à cette géométrie ». `len(presentes)` reste le nombre
+    # d'alternatives VISÉES par la comparaison (identique pour les deux, par construction) même
+    # quand aucune décision n'a pu être notée.
+    n_cibles_e = int(sc_e.shape[1]) if sc_e.ndim > 1 else len(presentes)
+    n_cibles_r = int(sc_r.shape[1]) if sc_r.ndim > 1 else len(presentes)
 
     return {
-        "eCCA": {"modele": ecca, "justesse": ecca.cv_, "n_epoques": len(labels),
-                 "groupes": groupes, "n_decisions": len(sc_e)},
-        "rCCA": {"modele": rcca, "justesse": rcca.cv_, "n_epoques": len(labels),
-                 "groupes": groupes, "n_decisions": len(sc_r)},
+        "eCCA": {"modele": ecca, "justesse": ecca.cv_, "n_epoques": n_epoques_ecca,
+                 "groupes": groupes, "n_decisions": len(sc_e), "n_cibles": n_cibles_e},
+        "rCCA": {"modele": rcca, "justesse": rcca.cv_, "n_epoques": n_epoques_rcca,
+                 "groupes": groupes, "n_decisions": len(sc_r), "n_cibles": n_cibles_r},
     }
 
 
@@ -225,11 +287,39 @@ def _draw(app, plan, spots, frame, target, done, total, b_idx, n_blocks):
     app.pygame.display.flip()
 
 
-def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=CVEP_MODEL_PATH,
-              rcca_save_path=CVEP_RCCA_MODEL_PATH):
+def chemin_modele_horodate(decodeur, dossier=None):
+    """`cvep_model_AAAAMMJJ-HHMMSS.npz` (eCCA) ou `cvep_rcca_model_AAAAMMJJ-HHMMSS.npz` (rCCA) —
+    un fichier NEUF, jamais un écrasement.
+
+    ⚠️ **`calibrate()` écrivait par défaut dans `CVEP_MODEL_PATH` / `CVEP_RCCA_MODEL_PATH`, des
+    noms FIXES : la calibration suivante EFFAÇAIT donc la précédente.** `data/cvep_rcca_model.npz`
+    est la trace du 2026-07-21 (35,6 %, codes Gold) que ce chantier cite comme preuve du jeu égal
+    eCCA/rCCA (`core/cvep_rcca.py`) — et une revue a mesuré qu'une exécution de smoke mal câblée
+    suffisait à l'écraser (incident documenté dans le rapport de tâche 6). Le P300 et l'ErrP
+    avaient déjà cette parade (`research.p300_calibrate.chemin_modele_horodate`,
+    `research.errp_calibrate.chemin_modele_horodate`) ; le c-VEP ne l'avait pas reprise.
+
+    `core.cvep_models.MOTIFS` liste déjà les fichiers `cvep_model*.npz` / `cvep_rcca_model*.npz`
+    du plus récent au plus ancien : le moteur, la console et les applis pygame prennent donc
+    automatiquement le dernier calibré, sans rien à changer côté lecture.
+    """
+    if decodeur not in ("eCCA", "rCCA"):
+        raise ValueError(f"décodeur inconnu : {decodeur!r} (attendu 'eCCA' ou 'rCCA')")
+    dossier = os.path.dirname(CVEP_MODEL_PATH) if dossier is None else dossier
+    prefixe = "cvep_model" if decodeur == "eCCA" else "cvep_rcca_model"
+    return os.path.join(dossier, f"{prefixe}_{time.strftime('%Y%m%d-%H%M%S')}.npz")
+
+
+def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     """Enregistre, entraîne les DEUX décodeurs (eCCA et rCCA, `entraine_les_deux`), sauvegarde
     les deux modèles, affiche les deux justesses et NOMME le gagnant. Retourne (ok, res|None) où
-    `res` est le dict rendu par `entraine_les_deux`."""
+    `res` est le dict rendu par `entraine_les_deux`.
+
+    `save_path=None` / `rcca_save_path=None` -> des fichiers HORODATÉS, jamais `CVEP_MODEL_PATH` /
+    `CVEP_RCCA_MODEL_PATH` : voir `chemin_modele_horodate`.
+    """
+    save_path = save_path or chemin_modele_horodate("eCCA")
+    rcca_save_path = rcca_save_path or chemin_modele_horodate("rCCA")
     plan, code = build_targets()
     L = len(code)
     spots = app.ring_spots(plan)
@@ -241,7 +331,14 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=CVEP_MODEL_PATH,
     rows = acq.eeg_rows
     epoch_s = model.n_cyc / acq.fs
     if app.smoke:
-        cycles = 2
+        # ⚠️ PAS `cycles = 2` : avec `CVEP_CAL_BLOCKS = 3` blocs, `_make_blocks` aurait alors donné
+        # à CHAQUE bloc UN SEUL cycle (`per = max(1, 2 // 3) = 1`), jamais deux CONSÉCUTIFS — donc
+        # `groupes_de_cycles(labels, k=2)`, la géométrie de DÉCISION DU MOTEUR (tâche 6), ne
+        # trouvait de paire que si le mélange des blocs en plaçait deux du MÊME bloc côte à côte
+        # par CHANCE. Mesuré : 3 échecs sur 5 lancements (`IndexError`, un tableau de scores VIDE
+        # n'a qu'UNE dimension). `cycles = 6` fait que CHAQUE bloc porte 2 cycles consécutifs
+        # (`per = max(1, 6 // 3) = 2`), donc au moins une paire par bloc, quel que soit le mélange.
+        cycles = 6
 
     blocks = _make_blocks(plan, cycles, CVEP_CAL_BLOCKS)
     gap = cvep_lag_gap_ms(len(plan), L, app.refresh)
@@ -415,20 +512,24 @@ def _selftest():
 
     from core.cvep_decoder import synth_cvep
 
-    fs, refresh, n_ch = 250.0, 60.0, 4
+    # 8 voies BRUTES (comme l'Unicorn), réduites à 4 AJUSTÉES (comme CVEP_CHANNELS) : la
+    # distinction compte pour le garde de largeur de voies (Important 6 de la revue) — un
+    # fixture qui générerait directement des époques à 4 voies ne pourrait jamais faire diverger
+    # « brut » et « réduit », et le garde resterait invérifiable.
+    fs, refresh, n_raw, voies = 250.0, 60.0, 8, [4, 5, 6, 7]
     rng = np.random.default_rng(0)
     plan, code = build_targets()
     epochs, labels = [], []
     for c in plan:
         for _ in range(8):
-            epochs.append(synth_cvep(code, c["lag"], n_ch, fs, refresh, -6.0, rng))
+            epochs.append(synth_cvep(code, c["lag"], n_raw, fs, refresh, -6.0, rng))
             labels.append(c["lag"])
 
     # --- LE test de cette tâche : la comparaison est honnête. ---------------------------------
     # Les deux décodeurs s'ajustent sur les MÊMES époques, en validation croisée groupée. Comparer
     # deux protocoles différents ne dirait rien ; c'est tout l'intérêt d'avoir gardé le stimulus
     # identique (cf. `core/cvep_rcca.py`, docstring du module).
-    res = entraine_les_deux(epochs, labels, fs=fs, refresh=refresh, channels=list(range(n_ch)))
+    res = entraine_les_deux(epochs, labels, fs=fs, refresh=refresh, channels=voies)
     chk(set(res) == {"eCCA", "rCCA"}, f"les deux décodeurs sont entraînés ({sorted(res)})")
     chk(res["eCCA"]["n_epoques"] == res["rCCA"]["n_epoques"] == len(labels),
         f"...sur le MÊME nombre d'époques — sinon la comparaison ne veut rien dire "
@@ -447,11 +548,71 @@ def _selftest():
         f"géométries différentes se compareraient sans qu'aucun message ne le dise "
         f"({res['eCCA']['n_decisions']}, {res['rCCA']['n_decisions']}, "
         f"{len(res['eCCA']['groupes'])})")
+    chk(res["eCCA"]["n_cibles"] == res["rCCA"]["n_cibles"] == len(plan),
+        f"...et les deux décodeurs jugent parmi le MÊME nombre d'alternatives — ici les "
+        f"{len(plan)} du plan complet ({res['eCCA']['n_cibles']}, {res['rCCA']['n_cibles']})")
     chk(0.0 <= res["eCCA"]["justesse"] <= 1.0 and 0.0 <= res["rCCA"]["justesse"] <= 1.0,
         f"...et chacun rend une justesse HORS-PLI, dans [0, 1] ({res['eCCA']['justesse']}, "
         f"{res['rCCA']['justesse']})")
     chk(res["eCCA"]["modele"].decoder == "eCCA" and res["rCCA"]["modele"].decoder == "rCCA",
         "...et chaque modèle SAIT quel décodeur il est (le champ que `save` écrit)")
+
+    # --- Important 4 (revue) : la géométrie de MESURE est celle où le moteur DÉCIDE. ----------
+    import inspect
+    defaut_k = inspect.signature(entraine_les_deux).parameters["n_cycles"].default
+    chk(defaut_k == CVEP_DECISION_CYCLES,
+        f"la comparaison mesure par défaut à la géométrie de DÉCISION DU MOTEUR "
+        f"(CVEP_DECISION_CYCLES={CVEP_DECISION_CYCLES}), pas à celle d'une époque de calibration "
+        f"seule où k=1 masquerait un écart réel entre les deux décodeurs ({defaut_k})")
+
+    # --- Critical 2 (revue) : la calibration du menu n'écrit plus JAMAIS le nom FIXE par défaut.
+    # Vérifié sur le TEXTE SOURCE et pas en l'exécutant : appeler `calibrate(app)` sans chemin
+    # pour voir où il écrit, c'est exactement l'accident qu'on veut interdire (celui qui a détruit
+    # le modèle Gold du 21 juillet lors d'un smoke mal câblé — cf. le rapport de tâche 6).
+    src_cal = inspect.getsource(calibrate)
+    chk('chemin_modele_horodate("eCCA")' in src_cal and 'chemin_modele_horodate("rCCA")' in src_cal
+        and "save_path=CVEP_MODEL_PATH" not in src_cal
+        and "rcca_save_path=CVEP_RCCA_MODEL_PATH" not in src_cal,
+        "calibrate() retombe sur des chemins HORODATÉS quand on ne lui en donne pas — jamais sur "
+        "CVEP_MODEL_PATH / CVEP_RCCA_MODEL_PATH en dur dans sa signature")
+    chemin_e_h = chemin_modele_horodate("eCCA")
+    chemin_r_h = chemin_modele_horodate("rCCA")
+    chk(chemin_e_h != CVEP_MODEL_PATH and chemin_r_h != CVEP_RCCA_MODEL_PATH,
+        f"...et ces chemins horodatés ne sont VRAIMENT jamais les noms fixes ({chemin_e_h}, "
+        f"{chemin_r_h})")
+    import fnmatch
+
+    from core.cvep_models import MOTIFS
+    chk(fnmatch.fnmatch(os.path.basename(chemin_e_h), MOTIFS[0])
+        and fnmatch.fnmatch(os.path.basename(chemin_r_h), MOTIFS[1])
+        and not fnmatch.fnmatch(os.path.basename(chemin_r_h), MOTIFS[0]),
+        f"...et ils restent VUS par cvep_models (motifs {MOTIFS}), chacun sous SON motif "
+        f"({os.path.basename(chemin_e_h)}, {os.path.basename(chemin_r_h)})")
+    chk(os.path.dirname(chemin_modele_horodate("eCCA", dossier="/tmp/xyz_cvep_test")) ==
+        "/tmp/xyz_cvep_test",
+        "...et un `dossier` explicite est respecté, pas toujours celui de CVEP_MODEL_PATH — "
+        "c'est ce détour qu'un test ou un smoke doit prendre pour ne jamais écrire dans data/")
+
+    # --- Critical 1 (revue) : une séance INTERROMPUE ne doit PAS fausser le hasard. -----------
+    # Tronquée à 3 cibles sur 6 (le cas d'un ESC en cours d'enregistrement, cf. `Abort` dans
+    # `calibrate()`) : SANS restreindre les codes du rCCA aux cibles VUES, il resterait jugé sur
+    # 1/6 (hasard 16,7 %) quand eCCA rétrécit correctement à 1/3 (33,3 %) — c'est EXACTEMENT ce
+    # qui a produit « gagnant : eCCA » sur des points offerts par le hasard, pas par le signal
+    # (mesuré par la revue sur une séance réelle tronquée : 71,1 % contre 51,1 %).
+    trois = plan[:3]
+    epochs3, labels3 = [], []
+    for c in trois:
+        for _ in range(8):
+            epochs3.append(synth_cvep(code, c["lag"], n_raw, fs, refresh, -6.0, rng))
+            labels3.append(c["lag"])
+    res3 = entraine_les_deux(epochs3, labels3, fs=fs, refresh=refresh, channels=voies)
+    chk(res3["eCCA"]["n_cibles"] == res3["rCCA"]["n_cibles"] == 3,
+        f"une séance tronquée à 3 cibles sur 6 juge les DEUX décodeurs parmi 3 alternatives, "
+        f"jamais 6 pour l'un et 3 pour l'autre ({res3['eCCA']['n_cibles']}, "
+        f"{res3['rCCA']['n_cibles']})")
+    chk(res3["rCCA"]["modele"].n_targets == 3,
+        f"...et le modèle rCCA sauvegardé porte VRAIMENT 3 codes, pas les 6 du plan complet "
+        f"({res3['rCCA']['modele'].n_targets})")
 
     # --- Le gagnant nommé, et l'ÉGALITÉ EXACTE — le cas mesuré sur la seule séance réelle. -----
     chk(_gagnant({"eCCA": {"justesse": 0.7}, "rCCA": {"justesse": 0.3}}) == "eCCA",
@@ -462,11 +623,32 @@ def _selftest():
         "...et une ÉGALITÉ EXACTE (43/90 chacun, le cas réellement mesuré, cf. core/cvep_rcca.py) "
         "ne nomme PERSONNE plutôt que de trancher arbitrairement")
 
+    # --- Important 6 (revue) : « les mêmes époques » n'était vérifié que par un compte tautologique.
+    # `_fit_et_compte` est le mécanisme qui rend `n_epoques` non-décoratif : il DOIT compter
+    # l'ARGUMENT réellement passé à `.fit()`, jamais une longueur recalculée à côté (qui, elle,
+    # ne verrait PAS un futur tronquage inline comme `epochs[:-6]`).
+    class _ModeleFactice:
+        def __init__(self):
+            self.vu = None
+
+        def fit(self, epochs, labels, **kw):
+            self.vu = (list(epochs), list(labels), kw)
+
+    mf = _ModeleFactice()
+    n_a = _fit_et_compte(mf, [1, 2, 3], ["a", "b", "c"], compute_cv=False)
+    chk(n_a == 3 and mf.vu == ([1, 2, 3], ["a", "b", "c"], {"compute_cv": False}),
+        f"_fit_et_compte ajuste EXACTEMENT ce qu'on lui donne, mots-clés compris ({n_a}, {mf.vu})")
+    n_b = _fit_et_compte(mf, [1, 2, 3], ["a", "b"])
+    chk(n_b == 3,
+        f"...et il compte les ÉPOQUES qu'il a reçues, pas les étiquettes — sinon un tronquage "
+        f"appliqué à un seul des deux côtés (epochs OU labels) pourrait passer inaperçu ({n_b})")
+
     # --- Les deux chiffres ET le champ `decoder` partent dans le fichier de modèle. ------------
     import shutil
     import tempfile
 
     from core.cvep_models import charger
+    from core.cvep_rcca import RCCADecoder
 
     tmp = tempfile.mkdtemp(prefix="cvep_calibrate_selftest_")
     try:
@@ -481,6 +663,25 @@ def _selftest():
         chk(relu_r is not None and pb_r is None and relu_r.decoder == "rCCA"
             and abs(relu_r.cv_ - res["rCCA"]["justesse"]) < 1e-12,
             f"...et le modèle rCCA aussi ({pb_r})")
+
+        # --- Critical 3 (revue) : l'appariement lag -> ligne de code n'était vérifié par RIEN. -
+        # La JUSTESSE seule ne suffit pas : un décalage SYSTÉMATIQUE (chaque époque appariée à
+        # la cible VOISINE) reste interne cohérent — le classifieur apprend « code[i+1] pour la
+        # réponse à la cible i » et `hors_pli` le note avec le MÊME décalage, donc juste EN
+        # AVEUGLE (mesuré par la revue : +1 % len(plan) -> justesse 1,0/1,0, VERDICT OK). Seul un
+        # contrôle EXTERNE — quelle cible le modèle sauvegardé désigne-t-il RÉELLEMENT ? — le voit.
+        cible_connue = 4
+        # DÉJÀ réduite aux voies AJUSTÉES (comme le fait `_cvep_decode` en ligne, avant d'appeler
+        # `classify` : `dec.model.channels` sélectionne, `RCCAModel.scores` ne réduit rien lui-même).
+        fenetre_connue = synth_cvep(code, plan[cible_connue]["lag"], len(voies), fs, refresh,
+                                    -6.0, rng)
+        dec = RCCADecoder(relu_r, plan, corr_min=-1e9, margin=0.0, n_cycles=1)
+        choisi, _ = dec.classify(fenetre_connue, 0)
+        chk(choisi is not None and choisi["name"] == plan[cible_connue]["name"],
+            f"le modèle rCCA sauvegardé-puis-relu désigne la cible RÉELLEMENT affichée, pas sa "
+            f"voisine ({None if choisi is None else choisi['name']} au lieu de "
+            f"{plan[cible_connue]['name']}) — un décalage systématique de l'appariement lag -> "
+            f"ligne de code resterait invisible à la seule justesse hors-pli")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

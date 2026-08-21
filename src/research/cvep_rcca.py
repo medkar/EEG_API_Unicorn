@@ -87,6 +87,18 @@ def _synth(code_up, n_ch, fs, snr_db, rng, latency_s=0.06):
 
 
 def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48, seed=0):
+    """⚠️ Rendait TOUJOURS `True`, quoi qu'il se passe dans la boucle — repéré par la revue de
+    tâche 6 : ce fichier ne pouvait donc JAMAIS sortir en 1, et un rapport de tâche l'avait quand
+    même cité comme un test vert. Les impressions deviennent des `chk()`, sur le patron de tous
+    les autres autotests du dépôt (`core/cvep_rcca.py` compris) — un chiffre affiché n'est un
+    test que si quelque chose peut l'y faire échouer."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
     rng = np.random.default_rng(seed)
     codes = make_distinct_codes(n_targets)
     plan = [{"name": f"C{i+1}"} for i in range(n_targets)]
@@ -95,18 +107,26 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
     print(f"rCCA + codes distincts : {n_targets} codes Gold L={model.code_len} "
           f"cycle={model.code_len/refresh:.2f}s voies={n_ch}")
 
+    chance = 1.0 / n_targets
     for snr in (-6.0, -10.0, -14.0):
         ep = [_synth(stim[c], n_ch, fs, snr, rng) for c in range(n_targets) for _ in range(n_cal)]
         y = [c for c in range(n_targets) for _ in range(n_cal)]
         model = RCCAModel(codes, fs=fs, refresh=refresh, channels=list(range(n_ch))).fit(ep, y)
         dec = RCCADecoder(model, plan, n_cycles=1)
-        ok = 0
+        ok_test = 0
         for _ in range(n_test):
             c = int(rng.integers(n_targets))
             w = _synth(stim[c], n_ch, fs, snr, rng)
-            ok += int(np.argmax(model.scores(w, 0, 1)) == c)
-        print(f"SNR {snr:+5.1f} dB | LOO {model.cv_*100:5.1f}% | argmax {ok/n_test*100:5.1f}% "
-              f"(hasard {100/n_targets:.0f}%)")
+            ok_test += int(np.argmax(model.scores(w, 0, 1)) == c)
+        argmax_acc = ok_test / n_test
+        print(f"SNR {snr:+5.1f} dB | LOO {model.cv_*100:5.1f}% | argmax {argmax_acc*100:5.1f}% "
+              f"(hasard {chance*100:.0f}%)")
+        chk(model.cv_ is not None and model.cv_ > 2 * chance,
+            f"...SNR {snr:+.1f} dB : le rCCA décode LARGEMENT au-dessus du hasard, hors-pli "
+            f"({None if model.cv_ is None else f'{model.cv_*100:.0f}%'} pour {chance*100:.0f}%)")
+        chk(argmax_acc > 2 * chance,
+            f"...et en ligne aussi, sur des essais neufs ({argmax_acc*100:.0f}% pour "
+            f"{chance*100:.0f}%)")
 
     # Phase glissante : décodage hors frontière de cycle (le recalage doit compenser).
     #
@@ -115,18 +135,22 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
     # mauvais sens aussi — les deux erreurs s'annulaient ici, et seulement ici. Le pilotage en
     # ligne (`research/app.py::_cvep_decode`), lui, note à des phases quelconques avec la
     # convention de l'eCCA, donc à travers un alignement retourné. Le défaut a survécu parce que
-    # cette ligne IMPRIME son résultat sans jamais l'affirmer. La convention, désormais commune
-    # aux deux décodeurs : une fenêtre « à la phase p » est le signal AVANCÉ de p frames, donc
-    # `np.roll(..., -shift(p))` (cf. `cvep_decoder._demo`, même geste).
+    # cette ligne IMPRIMAIT son résultat sans jamais l'AFFIRMER — exactement le défaut que cette
+    # fonction reproduisait un cran plus haut, pour le VERDICT entier. La convention, désormais
+    # commune aux deux décodeurs : une fenêtre « à la phase p » est le signal AVANCÉ de p frames,
+    # donc `np.roll(..., -shift(p))` (cf. `cvep_decoder._demo`, même geste).
     ep = [_synth(stim[c], n_ch, fs, -8.0, rng) for c in range(n_targets) for _ in range(n_cal)]
     model = RCCAModel(codes, fs=fs, refresh=refresh, channels=list(range(n_ch))).fit(
         ep, [c for c in range(n_targets) for _ in range(n_cal)])
-    hits, phases = 0, range(0, model.code_len, 9)
+    hits, phases = 0, list(range(0, model.code_len, 9))
     for p in phases:
         c = int(rng.integers(n_targets))
         w = np.roll(_synth(stim[c], n_ch, fs, -8.0, rng), -model._shift(p), axis=0)
         hits += int(np.argmax(model.scores(w, p, 1)) == c)
-    print(f"\nPhase glissante : {hits}/{len(list(phases))} correct (recalage OK si ≈ tout)")
+    print(f"\nPhase glissante : {hits}/{len(phases)} correct (recalage OK si ≈ tout)")
+    chk(hits >= len(phases) - 1,
+        f"le recalage de phase décode hors frontière de cycle, sur (presque) toutes les phases "
+        f"testées ({hits}/{len(phases)})")
 
     # Persistance : save + reload + re-décode.
     #
@@ -144,9 +168,15 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
         back = RCCAModel.load(path)
         same = np.array_equal(back.codes, model.codes) and back.n_targets == model.n_targets
         print(f"Save/reload : codes identiques={same}, LOO rechargé={back.cv_*100:.0f}%")
+        chk(same, "un modèle rCCA écrit puis relu rend les MÊMES codes et le même n_targets")
+        chk(back.cv_ is not None and abs(back.cv_ - model.cv_) < 1e-9,
+            f"...et la MÊME justesse hors-pli, pas recalculée différemment au rechargement "
+            f"({back.cv_}, {model.cv_})")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return True
+
+    print(f"[cvep-rcca-demo] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
 
 
 if __name__ == "__main__":

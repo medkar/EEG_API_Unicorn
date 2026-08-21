@@ -29,7 +29,8 @@ from collections import deque
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (CVEP_CHANNELS, CVEP_CORR_MIN, CVEP_DECISION_CYCLES,  # noqa: E402
-                    CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_VOTE_LEN, use_utf8_console)
+                    CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_VOTE_LEN, DATA_DIR,
+                    empreinte_dossier, use_utf8_console)
 from research.app import Live, _live_loop, _running, _vote  # noqa: E402  (machinerie PARTAGÉE avec
                                                              # le SSVEP, resté dans app.py : Live,
                                                              # le fil de décodage/émission, le rendu)
@@ -120,6 +121,12 @@ def main(argv=None):
     app = App(windowed=a.windowed, synthetic=a.synthetic, smoke=a.smoke, send=a.send)
     tmp = None
     model_path = a.model
+    # ⚠️ Le garde qui manquait le 2026-08-21 : ce fichier a RÉELLEMENT écrit dans le vrai
+    # `data/cvep_rcca_model.npz` un jour où `rcca_save_path` n'était pas détourné — et RIEN, dans
+    # ce fichier, ne s'en serait aperçu. `empreinte_dossier` (déménagée dans `core/config.py`
+    # exactement pour être appelable ICI) rend cette classe d'accident impossible à manquer,
+    # même le jour où le détournement ci-dessous est oublié ou mal fait.
+    empreinte_avant = empreinte_dossier(DATA_DIR) if a.smoke else None
     try:
         if a.smoke:
             # Un modèle par défaut n'existe pas forcément (dépôt fraîchement cloné) : on en
@@ -133,15 +140,44 @@ def main(argv=None):
             model_path = os.path.join(tmp, "cvep_model_smoke.npz")
             cvep_calibrate.calibrate(app, save_path=model_path,
                                      rcca_save_path=os.path.join(tmp, "cvep_rcca_model_smoke.npz"))
+        # ⚠️ `mode_cvep` sort AVANT sa boucle live sur plusieurs conditions (pas de modèle,
+        # refresh incompatible, nombre de cibles incohérent, filtre spatial incohérent) — chacune
+        # via un simple `return` après un `app.flash(...)`, donc SANS exception. Un smoke qui se
+        # contente d'appeler `mode_cvep` et de constater qu'il n'a pas levé ne prouve RIEN : la
+        # revue de tâche 6 a mesuré qu'un modèle mal calibré (n_targets faux) fait sortir
+        # `mode_cvep` en silence, avec `exit=0` et « smoke OK » imprimé quand même. On espionne
+        # donc `app.flash` PENDANT l'appel : si l'un de ces titres apparaît, la boucle live n'a
+        # jamais tourné, et ce smoke doit le dire au lieu de le cacher.
+        avortements = []
+        flash_reel = app.flash
+
+        def _flash_espion(titre, *a2, **kw2):
+            if titre.startswith(("Pas de modèle", "Modèle")):
+                avortements.append(titre)
+            return flash_reel(titre, *a2, **kw2)
+
+        app.flash = _flash_espion
         try:
             mode_cvep(app, model_path=model_path)
         except Abort:
             pass
+        finally:
+            app.flash = flash_reel
+        if a.smoke:
+            assert not avortements, (
+                f"mode_cvep a été refusé SILENCIEUSEMENT ({avortements}) — il serait sorti AVANT "
+                f"sa boucle live, et rien d'autre que cette assertion ne l'aurait remarqué")
     finally:
         app.close()
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
     if a.smoke:
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"ce smoke a touché data/ — la calibration doit écrire UNIQUEMENT dans le dossier "
+            f"temporaire ci-dessus, jamais dans data/ (dossier gitignoré, mais qui porte des "
+            f"enregistrements EEG d'une personne identifiable) : "
+            f"{set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
         print("[cvep-pilot] smoke OK : calibration + décodage + affichage câblés (headless).")
     return True
 
