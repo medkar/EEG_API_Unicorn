@@ -44,7 +44,14 @@ class Param:
     choices_fn: object = None  # () -> choix, quand ils sont DÉCOUVERTS à l'exécution (modèles MI)
     constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
     proposes: str = ""        # ce paramètre en PROPOSE un autre (chantier 2 ; cf. spec §3.1)
-    affecte_decodage: bool = True   # False = le décodeur ne le lit jamais (cf. _set_params)
+    affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
+                                    # runtime (donc pas de flux recréé, pas de chauffe refaite).
+                                    # ⚠️ Ce n'est PAS « le décodeur ne le lit jamais » : le c-VEP
+                                    # lit `corr_min`/`margin` à CHAQUE décision, et c'est
+                                    # justement ce qui rend `False` vrai chez lui. La condition à
+                                    # respecter est donc : un réglage `False` ne doit jamais être
+                                    # mis en cache dans `__init__`, sans quoi le changer n'aurait
+                                    # plus aucun effet — en silence.
     help: str = ""
 
     def choices_status(self):

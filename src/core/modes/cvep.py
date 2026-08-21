@@ -90,10 +90,11 @@ import sys as _sys
 import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import (CVEP_BITS, CVEP_CHANNELS, CVEP_DECISION_CYCLES,  # noqa: E402
-                         CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_N_TARGETS,
-                         CVEP_PEREMPTION_CYCLES, CVEP_VOTE_LEN, MARKER_STREAM_DEFAULT,
-                         SSVEP_WARMUP_S, use_utf8_console)
+from core.config import (CVEP_BITS, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
+                         CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
+                         CVEP_MODEL_PATH, CVEP_N_TARGETS, CVEP_PEREMPTION_CYCLES,
+                         CVEP_VOTE_LEN, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
+                         use_utf8_console)
 
 from collections import Counter, deque  # noqa: E402
 
@@ -112,9 +113,13 @@ from core.modes.runtime import ModeRuntime  # noqa: E402
 # un objet dont l'attribut de classe `decoder` ne peut pas mentir) : l'étudiant choisit un modèle,
 # jamais un algorithme. Les deux classes partagent EXACTEMENT le même contrat en ligne —
 # `classify(fenêtre, phase) -> (cible|None, {nom: corrélation})` — et chacune apporte ses propres
-# seuils par défaut, mesurés sur ses propres scores (`CVEP_CORR_MIN`/`CVEP_MARGIN` pour l'eCCA,
-# `CVEP_RCCA_*` pour le rCCA). ⚠️ Ne PAS leur imposer un couple commun : leurs scores ne sont pas
-# sur la même échelle empirique, et un seuil déplacé d'un décodeur à l'autre ne veut plus rien dire.
+# seuils DE CONSTRUCTION (`CVEP_CORR_MIN`/`CVEP_MARGIN` pour l'eCCA, `CVEP_RCCA_*` pour le rCCA),
+# qui ne servent plus que de repli : `CVEPRuntime.decide` (tâche 7) leur impose ENSUITE un couple
+# commun, relu dans `SPEC.params["corr_min"/"margin"]`. ⚠️ Il fut un temps où ce fichier écrivait
+# ICI « ne pas partager un seuil entre les deux, leurs scores ne sont pas à la même échelle » —
+# affirmation depuis RÉFUTÉE et corrigée dans `core/config.py` : mesurés, les deux décodeurs
+# vivent à la MÊME échelle empirique (gagnant médian, essais corrects, k=2 : 0,323 pour l'eCCA,
+# 0,261 pour le rCCA). Un couple commun n'est donc plus une approximation.
 _DECODEURS = {"eCCA": CVEPDecoder, "rCCA": RCCADecoder}
 
 # Paliers auxquels un marqueur de cycle refusé se DIT. Même motif que `p300._PALIERS_REFUS` et que
@@ -328,10 +333,16 @@ class CVEPRuntime(ModeRuntime):
         # Le flux existe TOUT DE SUITE, avant même la fin de la chauffe, comme chez le SSVEP et
         # le P300 : un client qui le cherche au lancement ne doit pas dépendre de l'instant où
         # arrive le premier marqueur d'horloge (`resolve_byprop` a un délai fini).
+        # ⚠️ `self.params["corr_min"/"margin"]`, PAS `self.decodeur.corr_min`/`.margin` : ces deux
+        # réglages sont TOURNABLES en pleine séance (cf. `decide`), mais les métadonnées LSL sont
+        # figées à l'ouverture du flux, qui elle N'EST PAS refaite quand on les change
+        # (`affecte_decodage=False`). Elles décrivent donc le seuil EN VIGUEUR à l'ouverture, pas
+        # une promesse de rester à jour — la sortie live (`_publish`) est la source qui reste
+        # exacte après coup.
         self._out = DecodedCVEPPublisher(
             len(self.plan), decoder=self.model.decoder, refresh=self.model.refresh,
-            code_len=self.code_len, corr_min=self.decodeur.corr_min,
-            margin=self.decodeur.margin, cv=getattr(self.model, "cv_", None),
+            code_len=self.code_len, corr_min=float(self.params["corr_min"]),
+            margin=float(self.params["margin"]), cv=getattr(self.model, "cv_", None),
             votes=(int(self.params["min_votes"]), int(self.params["vote_len"])),
             instance=self.engine.instance)
 
@@ -389,14 +400,18 @@ class CVEPRuntime(ModeRuntime):
         """
         if now < self._rest_until:
             return False
+        # Lus dans `self.params`, pas dans `self.decodeur` : ce sont eux qui font foi (cf.
+        # `decide`), et le repos peut suivre un changement de réglage fait avant même le premier
+        # décodage.
+        corr_min = float(self.params["corr_min"])
+        margin = float(self.params["margin"])
         print(f"[cvep] modèle « {_os.path.basename(self.params['model'])} » ({self.model.decoder}, "
-              f"seuils {self.decodeur.corr_min:g}/{self.decodeur.margin:g}) — horloge attendue "
+              f"seuils {corr_min:g}/{margin:g}) — horloge attendue "
               f"sur « {self.params['stream_in']} », publication sur "
               f"{stream_name(self.spec.stream)} ({len(self.plan)} cibles)")
         self.rest_report = {"kind": "cvep", "model": _os.path.basename(self.params["model"]),
                             "decodeur": self.model.decoder, "n_targets": len(self.plan),
-                            "corr_min": float(self.decodeur.corr_min),
-                            "margin": float(self.decodeur.margin)}
+                            "corr_min": corr_min, "margin": margin}
         return True
 
     def tick(self, engine, lsl_ts, now):
@@ -485,6 +500,27 @@ class CVEPRuntime(ModeRuntime):
             return None
         return np.asarray(bloc[-besoin:], dtype=float)[:, self.model.channels]
 
+    def decide(self, fenetre, phase):
+        """(cible|None, {nom: corrélation}) — même contrat que `self.decodeur.classify`.
+
+        ⚠️ `corr_min`/`margin` sont relus ICI, dans `self.params`, à CHAQUE décision — jamais mis
+        en cache dans `__init__`. C'est la SEULE raison pour laquelle `affecte_decodage=False` sur
+        ces deux réglages (cf. `SPEC.params` et le commentaire du drapeau dans `contract.py`) n'est
+        pas un mensonge : le contrat promet que les changer n'exige pas de reconstruire le runtime,
+        et ce n'est vrai que tant qu'aucune valeur figée ne traîne. C'est aussi ce qui rend une
+        séance casque réglable SANS l'interrompre : ni flux recréé, ni chauffe refaite (cf.
+        `server._set_params`) — la garde que l'ErrP n'a pas sur son propre seuil (`tnr_target`).
+
+        On les pose sur le DÉCODEUR juste avant de l'appeler, plutôt que de recopier ici son
+        classement des corrélations : une seconde formule de décision à garder d'accord avec la
+        sienne serait exactement le genre de vérité double que ce fichier évite ailleurs (cf.
+        `self._indice`, et le défaut d'appariement que la revue du P300 avait trouvé sur son
+        propre mode).
+        """
+        self.decodeur.corr_min = float(self.params["corr_min"])
+        self.decodeur.margin = float(self.params["margin"])
+        return self.decodeur.classify(fenetre, phase)
+
     def _run_step(self, engine, lsl_ts):
         """Encaisser l'horloge, décoder la fenêtre courante, publier — ou dire pourquoi non."""
         self._encaisser_marqueurs(engine)
@@ -519,7 +555,7 @@ class CVEPRuntime(ModeRuntime):
             self._publish(-1, 0.0, [0.0] * len(self.plan), t_fin, motif=cause)
             return
 
-        cible, nommes = self.decodeur.classify(fenetre, phase)
+        cible, nommes = self.decide(fenetre, phase)
         # L'appariement score_<i> <-> cible i est le CONTRAT PUBLIC du flux. On le construit en
         # parcourant le plan DANS L'ORDRE et en relisant le nom que le décodeur a attaché à
         # chaque corrélation : c'est la SEULE lecture qui rougisse si la table d'appariement du
@@ -580,8 +616,12 @@ class CVEPRuntime(ModeRuntime):
             # une échelle en z et le texte « échelle z · seuil … » — appliqués à des corrélations
             # bornées dans [-1, 1], ils mentent d'un ordre de grandeur. Une clé propre force le
             # rendu propre, et le fait rougir s'il manque.
-            "corr_min": float(self.decodeur.corr_min),
-            "margin": float(self.decodeur.margin),
+            # Lus dans `self.params`, pas dans `self.decodeur` : c'est ce qui rend cette ligne
+            # exacte MÊME quand la fenêtre en cours n'a pas appelé `decide` (le cas `phase is
+            # None`, quelques lignes plus haut) — `self.decodeur.corr_min`/`.margin` ne datent
+            # alors que du dernier appel réussi, potentiellement un réglage déjà périmé.
+            "corr_min": float(self.params["corr_min"]),
+            "margin": float(self.params["margin"]),
             # Le motif EN CLAIR, pas la clé du compteur : c'est le moteur qui possède ce
             # vocabulaire, et la console se contente de l'afficher. Le traduire côté interface
             # ferait deux tables à garder d'accord, et l'écran finirait par ne plus dire la même
@@ -630,6 +670,21 @@ SPEC = ModeSpec(
                    "fichier qui déclare le sien, la question posée ici est « quel modèle », pas "
                    "« quel algorithme ». Aucun modèle dans la liste ? Lance "
                    "`python src/research/app.py`, mode c-VEP, et calibre."),
+        Param(key="corr_min", label="Corrélation minimale", kind="float",
+              default=CVEP_CORR_MIN, min=0.0, max=1.0, affecte_decodage=False,
+              help="Le gagnant doit dépasser cette corrélation pour être retenu — en dessous, la "
+                   "fenêtre compte en « sous_les_seuils » plutôt que d'émettre. Le produit part "
+                   "STRICT par défaut : un seuil trop permissif est la panne la plus coûteuse de "
+                   "ce projet, un décodage qui affiche avec assurance des corrélations "
+                   "d'apparence normale sur du bruit. DESCENDS cette valeur en séance si le mode "
+                   "reste muet malgré un bon contact — SANS risque : ce réglage est relu à CHAQUE "
+                   "décision, il ne recrée ni le flux ni la chauffe."),
+        Param(key="margin", label="Marge sur le second", kind="float",
+              default=CVEP_MARGIN, min=0.0, max=1.0, affecte_decodage=False,
+              help="Le gagnant doit en plus devancer le deuxième candidat de cette marge, sinon "
+                   "la fenêtre compte en « sous_les_seuils » comme pour « Corrélation minimale » "
+                   "— les deux seuils forment UNE règle, desserrer l'un sans l'autre laisse "
+                   "l'autre trancher seul. TOURNABLE en pleine séance, comme lui."),
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
@@ -859,8 +914,9 @@ def _selftest():
     # l'inlet que si plus aucun mode actif n'écoute — casserait la voie de secours que l'aide du
     # P300 promet (« arrêter puis redémarrer ce mode suffit »). Mesuré au chantier ErrP.
     rt_flux = _runtime_de_test(code_len=63, refresh=60.0)
-    chk({p.key for p in SPEC.params} == {"model", "stream_in", "vote_len", "min_votes"},
-        f"le modèle, le flux de marqueurs ET le vote glissant se règlent "
+    chk({p.key for p in SPEC.params} == {"model", "stream_in", "vote_len", "min_votes",
+                                         "corr_min", "margin"},
+        f"le modèle, le flux de marqueurs, le vote glissant ET les deux seuils se règlent "
         f"({sorted(p.key for p in SPEC.params)})")
     chk(rt_flux.params.get("stream_in") == MARKER_STREAM_DEFAULT,
         f"le RUNTIME porte le nom du flux entrant, là où le moteur va le chercher "
@@ -1073,6 +1129,31 @@ def _selftest():
         and [l[0] for l in rt_e._out.lignes] == [-1] * (CVEP_MIN_VOTES - 1) + [cible],
         f"...et les {CVEP_MIN_VOTES - 1} qui l'ont précédée sont des « vote non conclu », "
         f"publiées en -1 ({st_e['vote_non_conclu']}, {[l[0] for l in rt_e._out.lignes]})")
+
+    # --- 7bis. Les SEUILS se règlent EN PLEINE SÉANCE (LE test de cette tâche, brief étape 1) ---
+    # ⚠️ C'est la garde que l'ErrP N'A PAS : chez lui, changer `tnr_target` reconstruit le
+    # runtime, détruit et recrée le flux, et relance 23 s de chauffe (mesuré). Le récepteur ouvert
+    # devient muet, et l'opérateur lit ça comme une panne — en séance, ça se paie en minutes de
+    # casque à chaque essai de réglage. Ici, `corr_min` et `margin` sont relus DANS `self.params`
+    # à CHAQUE décision — jamais mis en cache dans `__init__` — ce qui permet de les tourner sans
+    # réabonner personne ni refaire la chauffe. `decide` est la méthode qui porte cette garantie
+    # (`_run_step` s'y ramène, cf. plus bas).
+    p = {p.key for p in SPEC.params if not p.affecte_decodage}
+    chk({"corr_min", "margin"} <= p,
+        f"les deux seuils sont déclarés SANS reconstruction du runtime ({sorted(p)})")
+
+    # Le template PLAT de `_runtime_de_test()` par défaut ne conviendrait pas ici (corrélations
+    # nulles quel que soit le seuil) : on reprend `modele_appris` et une fenêtre synthétique de
+    # la MÊME forme que celle du bout en bout, sur `rt_e` déjà construit avec ce modèle.
+    # `[:, model.channels]` : comme `_fenetre(engine)` en production, `decide` attend une fenêtre
+    # DÉJÀ réduite aux voies du modèle (4 ici), pas le tampon complet à 8 voies du faux moteur.
+    fenetre_seuils = _tampon_synthetique(lag_vrai, n_cycles_buf, snr_db=0.0)[:, modele_appris.channels]
+    rt_e.params["corr_min"] = 0.99          # personne ne passe ce seuil
+    cmd_a, _ = rt_e.decide(fenetre_seuils, 0)
+    rt_e.params["corr_min"] = 0.01          # tout le monde le passe
+    cmd_b, _ = rt_e.decide(fenetre_seuils, 0)
+    chk(cmd_a is None and cmd_b is not None,
+        "changer le seuil change la décision SUR LA MÊME fenêtre, sans rien reconstruire")
 
     # --- 8. LE VOTE : une seule fenêtre ne décide pas, et deux qui se contredisent non plus ----
     # C'est ce que `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` achètent, et c'est exactement ce que l'écran
