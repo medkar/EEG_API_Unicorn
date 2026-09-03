@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import PHASES_FR, SPAN_SEUILS, classement_relatif  # noqa: E402
+from console import PHASES_FR, SPAN_SEUILS, classement_relatif, span_correlation  # noqa: E402
 # `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
@@ -237,8 +237,11 @@ class ModeTile(QFrame):
             # C'est mot pour mot le « six moignons de 2 px » de la tuile P300, avec une cause
             # différente. On PLAFONNE donc à 1 au lieu de plancher à 1 : la barre va jusqu'à
             # `SPAN_SEUILS × corr_min` (0,52 par défaut), et le seuil tombe à mi-hauteur.
-            self.apercu.set_values(scores, span=min(SPAN_SEUILS * float(corr_min), 1.0),
-                                   retenue=retenue)
+            # ⚠️ La formule vit dans `console/__init__.py`, PAS ici : écrite des deux côtés, elle
+            # avait déjà divergé d'un repli dans le commit qui l'introduisait (à `corr_min = 0`,
+            # réglage légal, la tuile montrait tout PLEIN et la page 33 %). Même leçon que
+            # `classement_relatif` : les garder d'accord demande qu'elles appellent le MÊME code.
+            self.apercu.set_values(scores, span=span_correlation(corr_min), retenue=retenue)
             return
         # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
         # recalculée à chaque manche. La règle vit dans `console.classement_relatif` — la MÊME

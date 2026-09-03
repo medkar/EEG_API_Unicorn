@@ -13,7 +13,7 @@ import numpy as np
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import SPAN_SEUILS, classement_relatif  # noqa: E402
+from console import SPAN_SEUILS, classement_relatif, span_correlation  # noqa: E402
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 
 
@@ -271,7 +271,11 @@ class ActiveView(QWidget):
         self.seuil.setText(f"échelle corrélation (bornée à 1) · un gagnant doit dépasser "
                            f"{corr_min:g} ET devancer le 2e de {marge:g}{regle}")
 
-        span = min(SPAN_SEUILS * corr_min, 1.0) or 1.0
+        # ⚠️ L'échelle vit dans `console/__init__.py`, PAS ici : la TUILE l'appliquait de son côté
+        # (`grid.ModeTile._apercu_scores`) et les deux copies différaient déjà d'un repli dans le
+        # commit qui les écrivait — à `corr_min = 0` (réglage légal et encouragé en séance) la
+        # page montrait 33 % là où la tuile montrait tout PLEIN.
+        span = span_correlation(corr_min)
         for i, (_e, barre) in enumerate(self._barres):
             valeur = scores[i] if i < len(scores) else 0.0
             barre.setValue(int(max(0.0, min(valeur / span, 1.0)) * 100))

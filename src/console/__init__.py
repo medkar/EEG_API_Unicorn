@@ -46,6 +46,30 @@ PHASES_FR = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
 SPAN_SEUILS = 2.0
 
 
+def span_correlation(corr_min):
+    """L'échelle absolue d'un score BORNÉ (le c-VEP), contre le seuil que le mode PUBLIE.
+
+    PLAFOND à 1 et non plancher, contrairement au z du SSVEP : une corrélation de Pearson vit
+    dans [-1, 1], et `2 x 0,26 = 0,52` est justement l'échelle qui sépare 0,21 (décision fausse)
+    de 0,33 (décision juste) — les deux seuls chiffres que ce projet ait mesurés. La formule du
+    SSVEP (`max(..., 1.0)`) écraserait les deux dans le tiers bas de la barre, visuellement
+    identiques.
+
+    ⚠️ **Cette fonction existe parce que la règle a divergé DÈS le commit qui l'écrivait**, comme
+    `classement_relatif` avant elle : la tuile (`grid.ModeTile._apercu_scores`) et la page
+    (`live_views.ActiveView._update_correlations`) l'appliquaient chacune de leur côté et
+    différaient déjà d'un repli. À `corr_min = 0` — une valeur LÉGALE (`min=0.0` sur le réglage)
+    et ENCOURAGÉE en séance (son `help` : « DESCENDS cette valeur… SANS risque », et la recette
+    2.9 la fait descendre à 0,05 comme geste de routine) — la page affichait 33 % là où la tuile
+    montrait TOUTES les barres pleines. Mêmes données, deux lectures, deux diagnostics opposés.
+
+    `corr_min = 0` veut dire « aucun seuil ne borne l'échelle » : on retombe alors sur l'échelle
+    absolue complète d'une corrélation, 1,0. Jamais 0 — une échelle nulle rend toute barre pleine.
+    """
+    span = min(SPAN_SEUILS * float(corr_min), 1.0)
+    return span if span > 0.0 else 1.0
+
+
 def classement_relatif(scores):
     """Des scores SANS échelle absolue -> une part de 0 à 1 par cible. UNE seule écriture.
 

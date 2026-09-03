@@ -691,7 +691,20 @@ def _autotest():
         print("[lsl] ÉCHEC : flux 'raw' introuvable")
         return False
     inlet = StreamInlet(found[0])
-    desc = inlet.info().desc()
+    # ⚠️ **UN `XMLElement` NE POSSÈDE RIEN.** `StreamInfo.desc()` rend un `XMLElement` qui ne garde
+    # qu'un pointeur NU vers l'arbre pugixml (`pylsl/info.py`), sans aucune référence vers le
+    # `StreamInfo` propriétaire — et `inlet.info()` / `outlet.get_info()` rendent chacun une COPIE
+    # possédée par l'appelant, que `StreamInfo.__del__` DÉTRUIT inconditionnellement. Écrit
+    # `desc = inlet.info().desc()`, le `StreamInfo` temporaire meurt à la fin de la ligne, liblsl
+    # libère le document, et toute lecture d'après lit un bloc de tas déjà rendu à l'allocateur :
+    # le plus souvent les octets y sont encore intacts, de temps en temps le bloc a été réutilisé
+    # et `child_value` rend `""`. Mesuré : avec 8 Mo alloués entre la lecture et l'assertion, elle
+    # échoue à TOUS LES COUPS. Ce n'est donc pas un test instable, c'est un use-after-free — et le
+    # comportement est indéfini, le même code pouvant aussi faire tomber le processus.
+    # La règle, ici et partout : **le `StreamInfo` doit rester référencé tant qu'on lit dedans.**
+    # (`examples/receiver.py` est le seul endroit du dépôt qui l'a toujours fait correctement.)
+    info_in = inlet.info()
+    desc = info_in.desc()
     labels, node = [], desc.child("channels").child("channel")
     for _ in range(inlet.info().channel_count()):
         labels.append(node.child_value("label"))
@@ -761,7 +774,8 @@ def _autotest():
     # Le sens de -1 doit être lisible dans les MÉTADONNÉES, pas seulement dans une docstring
     # qu'un client Unity/MATLAB n'ouvrira jamais — même exigence que `DecodedMIPublisher`
     # (no_decision_index) juste au-dessus.
-    deco = pub.outlet.get_info().desc().child("decoding")
+    info_p300 = pub.outlet.get_info()     # ⚠️ la référence DOIT vivre plus longtemps que
+    deco = info_p300.desc().child("decoding")   # l'XMLElement (cf. le ⚠️ du point 1)
     no_decision = deco.child_value("no_decision_index")
     print(f"  decoded_p300 no_decision_index (métadonnées) : {no_decision!r}")
     assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
@@ -781,7 +795,8 @@ def _autotest():
     # 7. Le sens de -1 manquait aussi au SSVEP, le plus ancien des publieurs `decoded_*`.
     pub_ssvep = DecodedSSVEPPublisher((15.0, 20.0), decision_scale="z", thresholds=(3.0, 0.5),
                                       instance="selftest-ssvep")
-    ssvep_deco = pub_ssvep.outlet.get_info().desc().child("decoding")
+    info_ssvep = pub_ssvep.outlet.get_info()    # ⚠️ idem — c'est CE site qui échouait ~1 fois
+    ssvep_deco = info_ssvep.desc().child("decoding")   # sur 6, et systématiquement sous charge
     print(f"  decoded_ssvep no_decision_index : "
           f"{ssvep_deco.child_value('no_decision_index')!r}")
     assert ssvep_deco.child_value("no_decision_index") == "-1", "no_decision_index manquant (SSVEP)"
@@ -798,7 +813,8 @@ def _autotest():
     pub_errp.push(1, 0.91, point["seuil"], 0)     # un verdict
     pub_errp.push(-1, 0.0, point["seuil"], 1)     # un refus (artefact) : jamais 0
     print("  [lsl] decoded_errp publie sans lever")
-    errp_deco = pub_errp.outlet.get_info().desc().child("decoding")
+    info_errp = pub_errp.outlet.get_info()      # ⚠️ idem (7 lectures derrière)
+    errp_deco = info_errp.desc().child("decoding")
     no_decision = errp_deco.child_value("no_decision_index")
     print(f"  decoded_errp no_decision_index (métadonnées) : {no_decision!r}")
     assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
@@ -865,7 +881,8 @@ def _autotest():
     pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12], corr_min=0.30, margin=0.11)
     pub_cvep.push(-1, 0.0, [0.05] * 6, corr_min=0.26, margin=0.09)  # pas de décision : jamais « la cible 0 »
     print("  [lsl] decoded_cvep publie sans lever")
-    cvep_deco = pub_cvep.outlet.get_info().desc().child("decoding")
+    info_cvep = pub_cvep.outlet.get_info()      # ⚠️ idem, et c'est l'exposition la plus large du
+    cvep_deco = info_cvep.desc().child("decoding")   # fichier : 12 lectures dans la compréhension
     lu = {k: cvep_deco.child_value(k) for k in
           ("paradigm", "decision_scale", "no_decision_index", "corr_min", "margin",
            "min_votes", "vote_len", "code_len", "refresh", "n_targets", "decoder", "cv")}

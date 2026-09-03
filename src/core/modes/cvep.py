@@ -219,6 +219,14 @@ class CVEPRuntime(ModeRuntime):
         # nom, parce que c'est la MOYENNE des corrélations des fenêtres VOTANTES qui devient la
         # confiance publiée — cf. `_run_step`.
         self._votes = deque(maxlen=int(params["vote_len"]))
+        # Le couple (corr_min, margin) sous lequel les votes ACTUELLEMENT empilés ont été jugés,
+        # et celui que la dernière décision a réellement appliqué. Les deux existent parce que ces
+        # deux seuils se règlent EN PLEINE SÉANCE sans reconstruire le runtime : sans eux, un
+        # échantillon publié pouvait annoncer `corr_min = 0,40` à côté d'une `confidence` de 0,35
+        # moyennée sur des fenêtres jugées à 0,26 — auto-contradictoire sur ses propres voies.
+        # Cf. `decide` (qui capture) et `_publish` (qui publie le couple capturé).
+        self._seuils_du_vote = None
+        self._seuils_decision = None
         self._raz_compteurs()
 
     def _raz_compteurs(self):
@@ -269,6 +277,21 @@ class CVEPRuntime(ModeRuntime):
                     f"config actuelle (CVEP_BITS={CVEP_BITS}) en construit un de "
                     f"{len(self.code)} — recalibre (`python src/research/app.py`, mode c-VEP), "
                     f"ou restaure CVEP_BITS à sa valeur de calibration.")
+        # ...et le NOMBRE DE CIBLES sur lequel il a été calibré. `CVEPModel.save` enregistre ce
+        # champ « pour pouvoir prévenir » (sa propre docstring) : jusqu'ici personne ne prévenait.
+        # Le template eCCA est COMMUN à tous les lags, donc un modèle calibré sur 3 cibles
+        # « marche » techniquement à 6 — il publie six corrélations d'apparence normale, dont
+        # trois sortent de lags que la calibration n'a JAMAIS présentés. C'est la panne INVISIBLE
+        # que ce fichier existe pour éliminer, et le comportement que l'appli pygame avait avant
+        # ce chantier. `0` = modèle antérieur au champ : on ne peut alors rien en dire, et refuser
+        # jetterait `data/cvep_model.npz`, le seul modèle réel du dépôt.
+        cibles = int(getattr(self.model, "n_targets", 0) or 0)
+        if cibles and cibles != len(self.plan):
+            return (f"ce modèle a été calibré sur {cibles} cible(s), le stimulus actuel en "
+                    f"affiche {len(self.plan)} (CVEP_N_TARGETS) — le template vaut pour tous les "
+                    f"lags, mais les cibles supplémentaires n'ont JAMAIS été validées et leurs "
+                    f"corrélations sont plausibles. Recalibre (`python src/research/app.py`, "
+                    f"mode c-VEP) sans interrompre, ou remets CVEP_N_TARGETS à {cibles}.")
         return None
 
     def maj_reference(self, ts, refresh):
@@ -517,8 +540,13 @@ class CVEPRuntime(ModeRuntime):
         `self._indice`, et le défaut d'appariement que la revue du P300 avait trouvé sur son
         propre mode).
         """
-        self.decodeur.corr_min = float(self.params["corr_min"])
-        self.decodeur.margin = float(self.params["margin"])
+        seuils = (float(self.params["corr_min"]), float(self.params["margin"]))
+        self.decodeur.corr_min, self.decodeur.margin = seuils
+        # ⚠️ Le couple RÉELLEMENT appliqué à CETTE fenêtre est retenu, parce que c'est lui qui
+        # sera publié avec la décision qui en sort (cf. `_publish`) : un échantillon doit être
+        # AUTO-COHÉRENT — les seuils qu'il annonce sont ceux contre lesquels il a été jugé, pas
+        # ceux que l'opérateur a peut-être tournés depuis.
+        self._seuils_decision = seuils
         return self.decodeur.classify(fenetre, phase)
 
     def _run_step(self, engine, lsl_ts):
@@ -548,6 +576,16 @@ class CVEPRuntime(ModeRuntime):
             # 0 — aucune corrélation n'a été calculée, et `no_decision_index` dit dans les
             # métadonnées qu'ils ne sont pas à lire.
             self._corr_gagnant = self._corr_second = None
+            # ⚠️ ...et LA FILE DE VOTES avec, pour la raison même qui la vide dans `_reset_rest` :
+            # ces votes décrivent un instant où l'horloge tenait ENCORE. Une référence périmée
+            # rend ses votes périmés par construction — rien ne borne dans le temps une coupure
+            # d'émetteur, elle peut durer dix minutes. Sans ce `clear`, la toute première fenêtre
+            # d'après le retour de l'émetteur atteint `min_votes` sur des votes arbitrairement
+            # vieux et publie une cible franche, avec une confiance parfaitement normale — la
+            # panne muette que ce fichier existe pour éliminer, sur le chemin le PLUS fréquent
+            # des deux (on relance l'émetteur plusieurs fois par séance, on « refait le repos »
+            # une ou deux fois).
+            self._votes.clear()
             if cause == "sans_reference":
                 self._sans_reference += 1
             else:
@@ -574,6 +612,17 @@ class CVEPRuntime(ModeRuntime):
         # à casser une fixation stable, ce qui est précisément ce qu'il existe pour éviter.
         # (Même mécanique que `MIRuntime._run_step`, jusqu'au `None` comptabilisé dans le
         # `Counter` : « aucune fenêtre récente n'était assez sûre » EST une réponse.)
+        # ⚠️ Avant d'empiler : si le couple de seuils a bougé depuis que la file a été constituée,
+        # elle part. Ces deux réglages se tournent EN PLEINE SÉANCE (`affecte_decodage=False`), et
+        # chaque vote déjà empilé a été jugé contre le couple en vigueur AU MOMENT où il l'a été.
+        # Les garder ferait publier une `confidence` — la moyenne de leurs corrélations — SOUS le
+        # `corr_min` que le même échantillon annonce sur ses propres voies : un client qui refiltre
+        # sur `confidence >= corr_min` (le geste que `cvep_channel_labels` l'invite explicitement à
+        # faire) jetterait alors une fixation stable et valide. Coût du vidage : `vote_len - 1`
+        # fenêtres, soit 0,4 s aux défauts — le prix d'un échantillon qui ne se contredit pas.
+        if self._seuils_du_vote != self._seuils_decision:
+            self._votes.clear()
+            self._seuils_du_vote = self._seuils_decision
         nom = None if cible is None else cible["name"]
         self._votes.append((nom, 0.0 if nom is None else scores[self._indice[nom]]))
 
@@ -599,19 +648,35 @@ class CVEPRuntime(ModeRuntime):
         # un client qui refiltre sur ce seuil (le geste naturel) jetterait les fixations stables.
         # Chacune de ces corrélations valant au moins `corr_min` par construction (sinon la
         # fenêtre aurait voté None), leur moyenne aussi : l'invariant est tenu par CONSTRUCTION.
+        # ⚠️ « par construction » ne tient que parce que la file a été VIDÉE au moindre changement
+        # de seuil juste au-dessus — sans ça, les votes de la file et le `corr_min` publié ne
+        # seraient plus le même nombre pendant `vote_len - 1` fenêtres après chaque réglage.
         votantes = [c for n, c in self._votes if n == gagnant]
         self._decodages += 1
-        self._publish(self._indice[gagnant], sum(votantes) / len(votantes), scores, t_fin)
+        self._publish(self._indice[gagnant], sum(votantes) / len(votantes), scores, t_fin,
+                      seuils=self._seuils_du_vote)
 
-    def _publish(self, target_index, confidence, scores, lsl_ts, motif=None):
-        # ⚠️ Lus ICI, UNE SEULE FOIS, dans `self.params` — jamais dans `self.decodeur` (cf.
-        # `decide`) : c'est ce qui rend cette ligne exacte MÊME quand la fenêtre en cours n'a pas
-        # appelé `decide` (le cas `phase is None`, plus haut dans `_run_step`) —
-        # `self.decodeur.corr_min`/`.margin` ne dateraient alors que du dernier appel réussi,
-        # potentiellement un réglage déjà périmé. Calculés une seule fois pour que le flux et
-        # l'écran ne puissent PAS diverger en lisant `self.params` à deux instants différents.
-        corr_min = float(self.params["corr_min"])
-        margin = float(self.params["margin"])
+    def _publish(self, target_index, confidence, scores, lsl_ts, motif=None, seuils=None):
+        """`seuils` : le couple (corr_min, margin) contre lequel CETTE décision a été prise.
+
+        ⚠️ Chaque échantillon doit être AUTO-COHÉRENT, et c'est toute la question ici, parce que
+        ces deux seuils se règlent en pleine séance sans reconstruire le runtime :
+
+        * un échantillon DÉCIDÉ (`target_index >= 0`) porte les seuils que la décision a
+          réellement appliqués — ceux capturés par `decide`, sous lesquels toute la file de votes
+          a été jugée. C'est ce qui rend vraie la promesse de `DecodedCVEPPublisher`
+          (« `confidence` est toujours `>= corr_min` quand `target_index >= 0` ») ;
+        * une fenêtre `-1` porte les seuils VIVANTS : rien n'a été décidé contre eux, et ce que
+          l'opérateur veut lire là est le réglage en cours. C'est aussi le seul choix possible sur
+          le chemin `phase is None`, qui ne passe jamais par `decide`.
+
+        Lus dans `self.params` et jamais dans `self.decodeur` (cf. `decide`), et calculés une
+        seule fois pour que le flux et l'écran ne puissent PAS diverger en lisant `self.params` à
+        deux instants différents.
+        """
+        if seuils is None:
+            seuils = (float(self.params["corr_min"]), float(self.params["margin"]))
+        corr_min, margin = float(seuils[0]), float(seuils[1])
         if self._out is not None:
             # ⚠️ Transportés PAR ÉCHANTILLON (tâche 7, tour de correction 1), pas seulement dans
             # les métadonnées figées à l'ouverture du flux : ces deux seuils se règlent en pleine
@@ -787,6 +852,11 @@ def _selftest():
         try:
             if modele is None:
                 CVEP_MODEL_PATH = _os.path.join(dossier, "aucun_modele.npz")
+            elif modele.decoder == "rCCA":
+                # `RCCAModel.save` ne prend PAS de `n_targets` : il le DÉDUIT de ses codes (c'est
+                # une propriété), là où l'eCCA doit l'enregistrer parce que son template est
+                # commun à tous les lags. Deux signatures, une seule fabrique.
+                CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model.npz"))
             else:
                 CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model.npz"),
                                               n_targets=n_targets)
@@ -905,6 +975,37 @@ def _selftest():
     chk(refus_code is not None and "31" in refus_code and "63" in refus_code,
         f"...mais la CONSTRUCTION refuse un modèle calibré pour un AUTRE code que celui que la "
         f"config actuelle construit, en nommant les deux longueurs ({refus_code})")
+
+    # --- 4bis. Le refus de NOMBRE DE CIBLES : `n_targets` PRÉVIENT enfin -----------------------
+    # ⚠️ `CVEPModel.save` enregistre ce champ « pour pouvoir prévenir » (sa docstring) et personne
+    # ne prévenait. Cas concret, et il n'a rien d'une hypothèse d'école : une calibration
+    # interrompue à l'ESC après deux cibles sur six, ou un `CVEP_N_TARGETS` remis à 6 après une
+    # calibration rapide à 3 (`core/config.py` documente des allers-retours 4 -> 6 -> 8 -> 6). Le
+    # template eCCA étant COMMUN à tous les lags, le modèle « marche » : six corrélations
+    # d'apparence normale, dont quatre issues de lags jamais validés.
+    modele_partiel = CVEPModel(fs=250.0, refresh=60.0, code_len=63, channels=CVEP_CHANNELS)
+    modele_partiel.w = np.ones(len(CVEP_CHANNELS))
+    modele_partiel.template = np.zeros(63)
+    modele_partiel.cv_ = 0.5
+    with _modele_temporaire(modele_partiel, n_targets=2):
+        valeurs, raison = validate(SPEC, {})
+        chk(valeurs is not None, f"un modèle à 2 cibles passe la validation du CHOIX ({raison})")
+        try:
+            CVEPRuntime(SPEC, valeurs, engine=None)
+            refus_cibles = None
+        except ValueError as e:
+            refus_cibles = str(e)
+    chk(refus_cibles is not None and "2 cible" in refus_cibles
+        and str(CVEP_N_TARGETS) in refus_cibles and "recalibre" in refus_cibles.lower(),
+        f"...et un modèle calibré sur MOINS de cibles que le stimulus n'en affiche est refusé, en "
+        f"nommant les deux nombres — sinon les cibles jamais validées publient des corrélations "
+        f"plausibles ({refus_cibles})")
+    # ...mais un modèle ANTÉRIEUR au champ (`n_targets = 0`) reste accepté : on ne peut rien en
+    # dire, et refuser jetterait `data/cvep_model.npz`, le seul modèle c-VEP réel du dépôt.
+    rt_ancien = _runtime_de_test(n_targets=0)
+    chk(rt_ancien.model.n_targets == 0 and rt_ancien._desaccord_code() is None,
+        f"un modèle antérieur au champ (n_targets = 0) n'est PAS refusé : 0 veut dire « inconnu », "
+        f"pas « zéro cible » ({rt_ancien.model.n_targets})")
 
     # --- 5. Le contrat du mode -----------------------------------------------------------------
     chk(SPEC.id == "cvep" and SPEC.family == "actif" and SPEC.status == "moteur",
@@ -1166,10 +1267,15 @@ def _selftest():
 
     n_cycles_buf = 6
 
-    def _moteur_sur(lag):
+    def _moteur_sur(lag, snr_db=0.0):
         """Un faux moteur dont le tampon porte `n_cycles_buf` cycles du c-VEP de CE lag, et dont
-        la file rend les marqueurs d'horloge correspondants."""
-        eeg = _tampon_synthetique(lag, n_cycles_buf, snr_db=0.0)
+        la file rend les marqueurs d'horloge correspondants.
+
+        `snr_db` est réglable pour la section 8ter, qui a besoin de fenêtres FRANCHES et de
+        fenêtres FAIBLES de la même cible : c'est le seul moyen d'encadrer un seuil par deux
+        corrélations réelles, plutôt que d'en écrire une à la main dans la file de votes.
+        """
+        eeg = _tampon_synthetique(lag, n_cycles_buf, snr_db=snr_db)
         ts = 500.0 + np.arange(len(eeg)) / fs
         m = _FauxMoteur(eeg, ts)
         m._lots = [[_horloge(ts[0], k) for k in range(n_cycles_buf)]]
@@ -1238,6 +1344,41 @@ def _selftest():
     chk(cmd_a is None and cmd_b is not None,
         "changer le seuil change la décision SUR LA MÊME fenêtre, sans rien reconstruire")
 
+    # --- 7ter. La MÊME chaîne, avec l'AUTRE décodeur ------------------------------------------
+    # ⚠️ `_DECODEURS["rCCA"]` est devenu un chemin de PRODUCTION pendant ce chantier :
+    # `cvep_calibrate.calibrate()` écrit un `cvep_rcca_model_<horodatage>.npz` à CHAQUE
+    # calibration, `cvep_models.charger` l'accepte dès que ses codes sont ceux du stimulus du
+    # jour, et la liste étant triée par date, c'est le défaut proposé juste après une calibration
+    # — une chance sur deux, selon lequel des deux `save()` a la mtime la plus haute. Or aucun
+    # test du dépôt ne construisait de `CVEPRuntime` sur un `RCCAModel` : la colle de niveau MODE
+    # (`.corr_min`/`.margin`/`.n_cycles` posés sur `RCCADecoder`, `model.n_cyc`, `model.channels`,
+    # `model.code_len`, `model.refresh`, `cv_`) n'avait JAMAIS tourné, ni ici ni au casque, sur le
+    # chemin qu'un étudiant prend par défaut. Ce bloc la fait tourner une fois, de bout en bout.
+    from core.cvep_rcca import RCCAModel
+
+    codes_du_plan = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
+    rcca = RCCAModel(codes_du_plan, fs=fs, refresh=60.0, channels=list(CVEP_CHANNELS))
+    rcca.fit([synth_cvep(code, l, len(CVEP_CHANNELS), fs, 60.0, -6.0, rng_e)
+              for l in lags for _ in range(6)],
+             [i for i in range(len(plan)) for _ in range(6)], compute_cv=False)
+    rcca.cv_ = 0.5
+    rt_r = _runtime_de_test(modele=rcca)
+    chk(rt_r.model.decoder == "rCCA" and type(rt_r.decodeur).__name__ == "RCCADecoder",
+        f"le décodeur suit le MODÈLE, pas un réglage — et le chemin rCCA traverse `charger` "
+        f"comme en production ({rt_r.model.decoder}, {type(rt_r.decodeur).__name__})")
+    rt_r._out, rt_r._opened = _FauxPublieur(), True
+    moteur_r = _moteur_sur(lag_vrai)
+    for _ in range(CVEP_MIN_VOTES):
+        rt_r._run_step(moteur_r, lsl_ts=float(moteur_r.recent_ts[-1]))
+    sortie_r = rt_r.output()
+    chk(sortie_r is not None and len(sortie_r["scores"]) == len(plan)
+        and sortie_r["scores"][cible] == max(sortie_r["scores"]),
+        f"...et la chaîne entière tourne avec lui : phase, fenêtre réduite aux voies du modèle, "
+        f"seuils, appariement score↔cible ({sortie_r})")
+    chk(sortie_r["target_index"] == cible and rt_r.state()["decodages"] == 1,
+        f"...jusqu'à la décision publiée, aux seuils RÉGLÉS du mode (pas ceux de construction du "
+        f"RCCADecoder, cf. `decide`) ({sortie_r['target_index']}, {rt_r.state()})")
+
     # --- 8. LE VOTE : une seule fenêtre ne décide pas, et deux qui se contredisent non plus ----
     # C'est ce que `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` achètent, et c'est exactement ce que l'écran
     # pygame que ce chantier archive faisait déjà. Sans ce test, le vote pourrait être câblé à
@@ -1272,6 +1413,57 @@ def _selftest():
         f"le SIGNAL qui est mis en cause ({[l[0] for l in rt_d._out.lignes]}, {rt_d.state()})")
     chk(rt_d.state()["vote_non_conclu"] == CVEP_MIN_VOTES,
         f"...c'est bien le VOTE, et il le dit ({rt_d.state()['vote_non_conclu']})")
+
+    # --- 8ter. Tourner un seuil EN SÉANCE ne peut pas produire un échantillon qui SE CONTREDIT --
+    # ⚠️ `DecodedCVEPPublisher` promet, sur ses propres voies, que « `confidence` est toujours
+    # `>= corr_min` quand `target_index >= 0` », et `cvep_channel_labels` invite explicitement le
+    # client à refiltrer là-dessus. Or `confidence` est la MOYENNE des corrélations des fenêtres
+    # votantes, chacune jugée contre le seuil en vigueur AU MOMENT où elle a voté — et ce mode
+    # est le premier du produit dont le seuil se tourne sans reconstruire le runtime. Sans le
+    # vidage de la file au changement de couple (`_run_step`), un échantillon annonce donc une
+    # confiance SOUS le `corr_min` qu'il porte lui-même : le client jette une fixation stable, et
+    # un enregistrement dépouillé plus tard porte une ligne auto-contradictoire.
+    #
+    # Le seuil n'est pas choisi à la main : il est posé ENTRE deux corrélations RÉELLES — celle
+    # que produirait le mélange (votes faibles + fenêtre franche) et celle de la fenêtre franche
+    # seule. C'est exactement la plage où l'échantillon se contredirait.
+    rt_s = _runtime_de_test(modele=modele_appris, overrides={"corr_min": 0.02, "margin": 0.0})
+    rt_s._out, rt_s._opened = _FauxPublieur(), True
+    for _ in range(CVEP_MIN_VOTES - 1):
+        rt_s._run_step(_moteur_sur(lag_vrai, snr_db=-6.0), lsl_ts=float(ts_e[-1]))
+    faibles = [c for _n, c in rt_s._votes]
+    chk(len(faibles) == CVEP_MIN_VOTES - 1
+        and all(n == plan[cible]["name"] for n, _c in rt_s._votes),
+        f"fixture : {CVEP_MIN_VOTES - 1} fenêtres FAIBLES ont voté pour la bonne cible sous un "
+        f"seuil permissif ({[(n, round(c, 3)) for n, c in rt_s._votes]})")
+
+    moteur_franc = _moteur_sur(lag_vrai, snr_db=12.0)
+    t_franc = float(moteur_franc.recent_ts[-1])
+    rt_s._encaisser_marqueurs(moteur_franc)          # l'horloge d'abord, comme `_run_step`
+    _c, nommes_franc = rt_s.decide(rt_s._fenetre(moteur_franc), rt_s.phase_a(t_franc))
+    rho_franc = float(nommes_franc[plan[cible]["name"]])
+    melange = (sum(faibles) + rho_franc) / (len(faibles) + 1)
+    seuil_chaud = (melange + rho_franc) / 2.0
+    chk(melange < seuil_chaud < rho_franc,
+        f"fixture : le nouveau seuil sépare VRAIMENT la moyenne mélangée ({melange:.3f}) de la "
+        f"corrélation de la fenêtre franche ({rho_franc:.3f}) — {seuil_chaud:.3f}")
+
+    rt_s.params["corr_min"] = seuil_chaud            # l'opérateur resserre EN PLEINE SÉANCE
+    rt_s._run_step(moteur_franc, lsl_ts=t_franc)
+    # `l = (target_index, confidence, scores, corr_min, margin, lsl_ts)` — cf. `_FauxPublieur`.
+    fautives = [l for l in rt_s._out.lignes if l[0] >= 0 and l[1] < l[3]]
+    chk(not fautives,
+        f"AUCUN échantillon décidé ne porte une confiance SOUS le `corr_min` qu'il annonce "
+        f"lui-même, même après un réglage à chaud ({fautives})")
+
+    # ...et le mode n'est pas pour autant coincé : la file se remplit à nouveau au NOUVEAU couple,
+    # et la décision qui en sort porte ce couple-là. Le vidage coûte `vote_len - 1` fenêtres.
+    for _ in range(CVEP_MIN_VOTES):
+        rt_s._run_step(_moteur_sur(lag_vrai, snr_db=12.0), lsl_ts=float(ts_e[-1]))
+    derniere = rt_s._out.lignes[-1]
+    chk(derniere[0] == cible and derniere[3] == seuil_chaud and derniere[1] >= derniere[3],
+        f"...et la décision d'après porte le couple sous lequel elle a été prise, avec une "
+        f"confiance au-dessus ({derniere})")
 
     # --- 9. L'horloge tourne PENDANT LA CHAUFFE, et « refaire le repos » l'oublie --------------
     # Deux comportements qu'aucune assertion ne couvrait, et deux pannes différentes.
@@ -1326,6 +1518,40 @@ def _selftest():
         and rt_p.state()["vote_non_conclu"] == 1 and rt_p.state()["decodages"] == 0,
         f"...et « refaire le repos » VIDE la file de votes : la première fenêtre d'après ne peut "
         f"pas émettre en s'appuyant sur des votes d'avant ({rt_p.output()}, {rt_p.state()})")
+
+    # --- 9bis. La PERTE D'HORLOGE vide la file EXACTEMENT DE MÊME ------------------------------
+    # ⚠️ Le raisonnement de « refaire le repos » s'applique mot pour mot ici, et ce chemin-là est
+    # le PLUS FRÉQUENT des deux : on relance l'émetteur plusieurs fois par séance (fenêtre pygame
+    # fermée, second terminal coupé, plantage), on refait le repos une ou deux fois. Rien ne borne
+    # la coupure dans le temps — une seconde ou dix minutes — et la file, elle, était GELÉE
+    # pendant toute sa durée. Une référence périmée rend ses votes périmés par construction : la
+    # première fenêtre d'après le retour de l'émetteur atteignait `min_votes` sur des votes
+    # arbitrairement vieux et publiait une cible franche, indiscernable sur le flux d'une
+    # sélection stable (indice valide, confiance au-dessus de `corr_min`, scores plausibles).
+    rt_h = _runtime_de_test(modele=modele_appris)
+    rt_h._out = _FauxPublieur()
+    rt_h._opened = True
+    moteur_h = _moteur_sur(lag_vrai)
+    t_h = float(moteur_h.recent_ts[-1])
+    rt_h._run_step(moteur_h, lsl_ts=t_h)          # (1) horloge vivante : un vote est empilé
+    chk(rt_h.output()["target_index"] == -1 and len(rt_h._votes) == 1,
+        f"fixture : la fenêtre d'avant la coupure a laissé UN vote dans la file "
+        f"({len(rt_h._votes)})")
+    # (2) l'émetteur SE TAIT : plus aucun marqueur (le lot a été consommé au pas précédent) et la
+    #     référence vieillit au-delà de la péremption.
+    rt_h._ref_ts = t_h - CVEP_PEREMPTION_CYCLES * 63 / 60.0 - 1.0
+    rt_h._run_step(moteur_h, lsl_ts=t_h)
+    chk(rt_h.state()["reference_perimee"] == 1,
+        f"fixture : cette fenêtre-là est bien refusée pour cause d'HORLOGE "
+        f"({rt_h.state()['reference_perimee']})")
+    # (3) l'émetteur revient. UNE seule fenêtre franche ne peut pas suffire.
+    moteur_h._lots = [[_horloge(float(moteur_h.recent_ts[0]), k) for k in range(n_cycles_buf)]]
+    rt_h._run_step(moteur_h, lsl_ts=t_h)
+    chk(rt_h.output()["target_index"] == -1 and rt_h.state()["decodages"] == 0
+        and rt_h.state()["vote_non_conclu"] == 2,
+        f"...une fenêtre non décodable pour raison d'HORLOGE vide la file : la première fenêtre "
+        f"d'après le retour de l'émetteur ne peut pas conclure sur des votes d'avant la coupure "
+        f"({rt_h.output()}, {rt_h.state()})")
 
     print(f"[cvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

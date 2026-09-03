@@ -397,9 +397,19 @@ CVEP_RCCA_ENC = 0.30          # durée (s) de la réponse transitoire apprise (~
 # changement de cible sont écartés, pas rognés (cf. `cvep_decoder.groupes_de_cycles`).
 #
 # POINT DE FONCTIONNEMENT DES VALEURS LIVRÉES (0,24 / 0,08) à k=2, mesuré :
-#     69 % de justesse quand le décodeur émet   (contre 64,9 % sans aucun seuil)
+#     69 % de justesse quand le décodeur émet   (9 décisions justes sur 13 émises)
 #     35 % de taux d'émission                   (13 décisions sur 37)
 #     10 % des fenêtres de bruit pur passent    (38 % des décisions correctes sont gardées)
+#
+# ⚠️ **LE 69 % EST OPTIMISTE PAR CONSTRUCTION, et c'est la réserve qui manquait ici.** Il se lit
+# contre 64,9 % sans aucun seuil (24/37) — soit 4 points adossés à **13 décisions**, quand la
+# comparaison entre les deux couples de seuils, déclarée non interprétable dix lignes plus bas,
+# en a 37. Les deux échantillons ne sont même pas indépendants : les 13 émissions SONT un
+# sous-ensemble des 37. Et les seuils ont été choisis SUR ces 37 décisions, donc sur les mêmes
+# scores qui mesurent leur point de fonctionnement : c'est la même famille de réserve que le
+# `measured_on` de l'ErrP (« threshold chosen on these same out-of-fold scores, optimistic »,
+# cf. `lsl_io.DecodedErrPPublisher`). Aucun de ces deux chiffres ne dit que le seuil décode mieux.
+# Ce qui justifie ces seuils est le TAUX DE BRUIT, estimé lui sur 300 fenêtres — pas la justesse.
 #
 # ⚠️ **Pourquoi 0,24/0,08 et pas 0,26/0,09** (les seuils de l'eCCA, retenus au tour précédent quand
 # la mesure était faite à k=1) : à k=2, les deux tiennent le bruit au même ordre (10 % contre 7 %),
@@ -437,6 +447,19 @@ CVEP_RCCA_ENC = 0.30          # durée (s) de la réponse transitoire apprise (~
 # ils sont validés au casque, et ce chantier n'a pas mandat de les rejuger. `--seuils` imprime
 # leur point de fonctionnement à côté (k=2 : 55 % gardés, 46 % d'émission, 71 % de justesse, 10 %
 # de bruit) — c'est une donnée pour la séance qui viendra, pas une proposition de les changer.
+# ⚠️ **CES DEUX CONSTANTES NE SONT PAS LUES PAR LE MOTEUR**, et il faut le dire ici parce que tout
+# ce qui précède laisse croire l'inverse. `CVEPRuntime.decide` (`core/modes/cvep.py`) impose à
+# CHAQUE décision le couple réglé du mode — `SPEC.params["corr_min"/"margin"]`, dont les défauts
+# sont ceux de l'eCCA (`CVEP_CORR_MIN`/`CVEP_MARGIN`, 0,26/0,09) — et l'écrase donc sur le
+# `RCCADecoder` quel que soit son défaut de construction. Ce n'est pas un oubli mais un choix :
+# mesurés, les deux décodeurs vivent à la même échelle empirique (cf. le ⚠️ juste au-dessus), et
+# un couple commun réglable à chaud vaut mieux que deux couples figés que l'étudiant ne peut pas
+# tourner en séance. Où elles servent VRAIMENT, aujourd'hui :
+#   • `python src/core/cvep_rcca.py --seuils <calib.npz>`, qui imprime leur point de fonctionnement
+#     à côté de celui de l'eCCA — c'est LA commande de provenance de ces chiffres ;
+#   • les constructions directes de `RCCADecoder(model, plan)` hors du mode (analyses hors ligne).
+# Les changer ne change donc RIEN au décodage du moteur. Pour cela, c'est le réglage
+# « Corrélation minimale » de la page c-VEP, ou `CVEP_CORR_MIN`/`CVEP_MARGIN` plus haut.
 CVEP_RCCA_CORR_MIN = 0.24     # corrélation mini du gagnant  (69 % de justesse à l'émission, k=2)
 CVEP_RCCA_MARGIN = 0.08       # écart mini 1er - 2e          (35 % d'émission, 10 % de bruit passé)
 
@@ -828,13 +851,79 @@ ERRP_MIDLINE = [0, 2, 4]     # Fz, Cz, Pz — voies clés (surlignage contrôle 
 
 
 def _selftest():
-    """La proposition de fréquences : les invariants, la non-régression, et la tenue en charge."""
+    """La proposition de fréquences, et le GARDE de `data/` (`empreinte_dossier`)."""
     ok = True
 
     def chk(cond, msg):
         nonlocal ok
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
+
+    # 0. `empreinte_dossier` est le seul garde-fou automatique contre une écriture dans le VRAI
+    # `data/` — la contrainte la plus dure du dépôt (enregistrements EEG d'une personne
+    # identifiable sur un dépôt public, et deux modèles réellement écrasés en août 2026). Cinq
+    # programmes l'appellent (les quatre `archive/*.py` et `research/app.py`) et tous font la même
+    # chose : comparer l'empreinte avant et après. **Personne ne vérifiait qu'il DÉTECTE quoi que
+    # ce soit** — `return {}` en tête de la fonction laissait les cinq appelants verts, et sa
+    # docstring de trente lignes le rendait plus crédible qu'il ne l'était.
+    #
+    # ⚠️ UNE ASSERTION PAR COMPOSANTE, sinon chaque mutation survit séparément : avec le seul
+    # « ça change quand j'ajoute un fichier », retirer `getmtime` du couple resterait vert et un
+    # fichier RÉÉCRIT à taille égale ne serait plus vu — exactement le geste qui a coûté les deux
+    # modèles. Le diff est calculé comme chez l'appelant réel (`research/app.py::_smoke`) :
+    # symétrique sur les noms, puis les valeurs des noms communs.
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    def _bouges(avant, apres):
+        return sorted(set(avant) ^ set(apres)) + \
+            sorted(n for n in set(avant) & set(apres) if avant[n] != apres[n])
+
+    d = _tempfile.mkdtemp(prefix="empreinte_")
+    try:
+        chk(empreinte_dossier(_os.path.join(d, "absent")) == {},
+            "un dossier ABSENT rend {} sans lever — un dépôt fraîchement cloné n'a pas de data/")
+        vide = empreinte_dossier(d)
+        chk(_bouges(vide, empreinte_dossier(d)) == [],
+            f"un dossier INCHANGÉ ne bouge pas : c'est le cas normal, et le rendre faux ferait "
+            f"rougir tous les smokes du dépôt ({_bouges(vide, empreinte_dossier(d))})")
+
+        f = _os.path.join(d, "x.npz")
+        with open(f, "wb") as fh:
+            fh.write(b"aa")
+        cree = empreinte_dossier(d)
+        chk(_bouges(vide, cree) == ["x.npz"],
+            f"un fichier AJOUTÉ est vu, et NOMMÉ — c'est l'accident mesuré : un modèle de test "
+            f"oublié dans data/ s'y fait ÉLIRE comme le plus récent chargeable ({_bouges(vide, cree)})")
+
+        with open(f, "wb") as fh:
+            fh.write(b"aaaa")
+        grossi = empreinte_dossier(d)
+        chk(_bouges(cree, grossi) == ["x.npz"],
+            f"un fichier GROSSI aussi : la TAILLE est dans le couple ({_bouges(cree, grossi)})")
+
+        # Le cas SOURNOIS, et celui qui a réellement coûté deux modèles : un fichier ÉCRASÉ par un
+        # autre de même taille. Sans `getmtime` dans le couple, il passe sans un mot.
+        with open(f, "wb") as fh:
+            fh.write(b"bbbb")
+        _os.utime(f, (1_600_000_000, 1_600_000_000))
+        chk(_bouges(grossi, empreinte_dossier(d)) == ["x.npz"],
+            f"un fichier RÉÉCRIT À TAILLE ÉGALE aussi : le MTIME est dans le couple — c'est LA "
+            f"forme de l'accident d'août 2026 ({_bouges(grossi, empreinte_dossier(d))})")
+
+        # ...et TOUS les fichiers sont surveillés, pas seulement le premier trié.
+        with open(_os.path.join(d, "y.npz"), "wb") as fh:
+            fh.write(b"b")
+        avec_deux = empreinte_dossier(d)
+        chk(len(avec_deux) == 2 and set(avec_deux) == {"x.npz", "y.npz"},
+            f"le dossier est listé EN ENTIER ({sorted(avec_deux)})")
+
+        _os.remove(f)
+        chk(_bouges(avec_deux, empreinte_dossier(d)) == ["x.npz"],
+            f"un fichier SUPPRIMÉ est vu aussi : un test qui efface un modèle réel doit rougir "
+            f"autant qu'un test qui en ajoute un ({_bouges(avec_deux, empreinte_dossier(d))})")
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
 
     # 1. LE test de non-régression : la règle doit régénérer le trio validé sur casque réel.
     # Les deux constantes viennent d'ailleurs (mesures pour la garde, pratique pour la plage) ;

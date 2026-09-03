@@ -822,12 +822,19 @@ def _smoke():
     # mesurée du projet : ρ ≈ 0,33 quand la décision est juste, ≈ 0,21 quand elle est fausse
     # (cf. `core/config.py`, CVEP_CORR_MIN) — pas des chiffres ronds inventés, parce que c'est
     # justement à cette hauteur-là que l'échelle se joue.
+    from core.lsl_io import cvep_channel_labels
+
     cvep_state = {**state, "modes_state": {**state["modes_state"], "cvep": {
         "id": "cvep", "label": "c-VEP", "family": "actif", "phase": "running", "published": True,
         "params": {"model": "cvep_model.npz", "stream_in": "EEG_API_Unicorn_stim",
                    "vote_len": 3, "min_votes": 2},
         "instruction": "", "stream": "decoded_cvep",
-        "channels": ["target_index", "confidence"] + [f"score_{i}" for i in range(6)],
+        # ⚠️ DÉRIVÉE, pas recopiée : cette ligne décrivait l'ANCIENNE forme du flux (8 voies, sans
+        # `corr_min`/`margin`) et rien ne la reliait à sa source. Elle est inerte pour la console
+        # (`mode_page` construit la vue avec `spec["channels"]` du registre), mais
+        # `modes_state[*]["channels"]` part sur le flux `status` et un client le lit — et le
+        # prochain test qui recopierait ce fixture hériterait de l'erreur.
+        "channels": cvep_channel_labels(6),
         "rest_report": None,
         "decodages": 12, "sans_reference": 0, "reference_perimee": 0,
         "sous_les_seuils": 5, "vote_non_conclu": 2,
@@ -880,6 +887,27 @@ def _smoke():
     chk(parts_tuile == [b.value() for _e, b in cv._barres],
         f"la tuile et la page remplissent leurs barres à la MÊME hauteur "
         f"({parts_tuile} contre {[b.value() for _e, b in cv._barres]})")
+
+    # ⚠️ ...ET À `corr_min = 0`, LE SEUL CAS QUI SÉPARE LES DEUX ÉCRITURES. C'est une valeur
+    # LÉGALE (`min=0.0` sur le réglage) et ENCOURAGÉE en séance — l'aide dit « DESCENDS cette
+    # valeur… SANS risque » et `docs/recette.md` 2.9 descend le seuil comme geste de routine. La
+    # formule était écrite deux fois et différait déjà d'un `or 1.0` dans le commit qui
+    # l'introduisait : la page affichait 33 %, la tuile TOUTES LES BARRES PLEINES (span 0 rattrapé
+    # à 1e-6 par `MiniBars.set_values`). Mêmes données, deux diagnostics opposés — « rien n'est
+    # fixé » d'un côté, « tout sature » de l'autre. L'assertion ci-dessus ne l'attrapait pas :
+    # elle ne tournait que sur 0,26.
+    cvep_zero = {**cvep_state, "modes_state": {**cvep_state["modes_state"], "cvep": {
+        **cvep_state["modes_state"]["cvep"],
+        "output": {**cvep_state["modes_state"]["cvep"]["output"], "corr_min": 0.0}}}}
+    console.apply_state(cvep_zero)
+    chk(apercu_cv._span == 1.0,
+        f"à `corr_min = 0` l'échelle retombe sur celle d'une corrélation entière (1,0), jamais "
+        f"sur 0 — une échelle nulle rendrait TOUTE barre pleine ({apercu_cv._span})")
+    parts_zero = [int(max(0.0, min(v / apercu_cv._span, 1.0)) * 100) for v in apercu_cv._values]
+    chk(parts_zero == [b.value() for _e, b in cv._barres] and max(parts_zero) < 100,
+        f"...et la tuile et la page restent d'accord — c'est le cas où elles divergeaient "
+        f"({parts_zero} contre {[b.value() for _e, b in cv._barres]})")
+    console.apply_state(cvep_state)      # on rend l'état attendu par la suite du bloc
 
     # Pas de décision : le MOTIF est ce que l'écran doit montrer, pas « aucune cible ». Les trois
     # causes appellent trois gestes OPPOSÉS (relancer l'émetteur · vérifier le nom du flux ·

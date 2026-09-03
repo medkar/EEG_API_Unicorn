@@ -27,10 +27,18 @@ champ ajouté ; un champ explicite se lit et se teste.
    moteur décoderait un stimulus que personne n'affiche, avec des scores d'apparence normale.
    Le contrôle vit **ici** et pas dans le mode, précisément pour que le fichier ne soit jamais
    *proposé* — un refus au démarrage du mode l'aurait laissé dans la liste.
-   ⚠️ Le contrôle jumeau côté eCCA (longueur du code) reste, lui, dans `core/modes/cvep.py`
-   (`_desaccord_code`) : un modèle eCCA ne porte pas de codes, seulement un `code_len`, et ce
-   désaccord-là se répare en restaurant `CVEP_BITS` — le mode le dit en nommant les deux
-   longueurs, ce qu'une disparition de la liste ne dirait pas.
+   ⚠️ Le contrôle jumeau côté eCCA reste, lui, dans `core/modes/cvep.py` (`_desaccord_code`) : un
+   modèle eCCA ne porte pas de codes, seulement un `code_len` et un `n_targets`, et ces
+   désaccords-là se réparent en restaurant `CVEP_BITS`/`CVEP_N_TARGETS` — le mode le dit en
+   nommant les deux nombres, ce qu'une disparition de la liste ne dirait pas.
+   ⚠️ **Et il ne couvre PAS `CVEP_TAPS`, contrairement au refus rCCA ci-dessus.** Le dire, parce
+   que la symétrie apparente laisse croire l'inverse : `CVEPModel.save` n'enregistre pas les taps,
+   donc `_desaccord_code` ne compare que la LONGUEUR du code. Passer `CVEP_TAPS` de `(6, 5)` à
+   `(6, 1)` — l'autre polynôme primitif de degré 6, celui-là même dont ce fichier se sert pour
+   fabriquer ses « codes étrangers » — laisse `code_len = 63` inchangé : le modèle eCCA est
+   accepté, et son template est corrélé à une m-séquence que plus aucun écran n'affiche. Un
+   modèle rCCA de la même séance serait refusé, lui, parce qu'il porte ses codes. C'est un champ
+   qui manque à `CVEPModel.save`, pas une couverture assumée.
 3. **`decrire` rend `cv_loo`, pas `cv_auc`.** Le chiffre honnête du c-VEP est une **justesse
    leave-one-out à 6 cibles** (hasard 16,7 %), pas une AUC à deux classes. Les nommer pareil serait
    un mensonge d'étiquette — `mi_models.decrire` diverge déjà de la même façon (`cv_groupee`). Les
@@ -50,7 +58,7 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from core.config import DATA_DIR, use_utf8_console  # noqa: E402
+from core.config import CVEP_LAG_ROTATION, DATA_DIR, use_utf8_console  # noqa: E402
 
 
 import glob as _glob  # noqa: E402
@@ -165,10 +173,25 @@ def charger(chemin):
                         f"{'x'.join(str(n) for n in attendus.shape)} — la config a changé depuis "
                         f"la calibration (CVEP_BITS, CVEP_TAPS, CVEP_N_TARGETS)")
             else:
-                quoi = ("mêmes dimensions, mais pas les mêmes codes ni le même ordre — soit des "
+                # ⚠️ Ne PAS accuser « un CVEP_LAG_ROTATION changé » : à rotation non nulle, ce
+                # désaccord se produit alors que RIEN n'a changé depuis la calibration.
+                # `build_targets` fait tourner l'ordre des lags dans le plan, tandis que
+                # `research/cvep_calibrate.py` empile les codes vus par lag CROISSANT — les deux
+                # ordres divergent par construction, sur un modèle qui vient d'être calibré. Un
+                # message qui envoie chercher un changement de config ferait perdre une séance.
+                quoi = ("mêmes dimensions, mais pas les mêmes codes ni le même ordre. Soit des "
                         "codes Gold distincts (hypothèse mesurée, réfutée et retirée du produit : "
-                        "plus aucun émetteur ne les affiche), soit un CVEP_LAG_ROTATION changé, "
-                        "qui permute les lignes et ferait nommer la cible voisine")
+                        "plus aucun émetteur ne les affiche) ; soit un ORDRE DE LIGNES différent, "
+                        f"et à CVEP_LAG_ROTATION = {CVEP_LAG_ROTATION} (non nul) c'est le cas "
+                        "ATTENDU même sans rien avoir changé — la calibration écrit ses codes par "
+                        "lag croissant, le plan les fait tourner. Un ordre permuté ferait nommer "
+                        "la cible voisine, d'où le refus"
+                        if CVEP_LAG_ROTATION else
+                        "mêmes dimensions, mais pas les mêmes codes ni le même ordre — soit des "
+                        "codes Gold distincts (hypothèse mesurée, réfutée et retirée du produit : "
+                        "plus aucun émetteur ne les affiche), soit un CVEP_LAG_ROTATION changé "
+                        "depuis la calibration, qui permute les lignes et ferait nommer la cible "
+                        "voisine")
             return None, (f"ce modèle rCCA a été calibré sur d'AUTRES codes que ceux affichés "
                           f"aujourd'hui : {quoi}. Recalibre (`python src/research/app.py`, mode "
                           f"c-VEP) : {nom}")
@@ -409,13 +432,18 @@ def _selftest():
         # `data/`. Sans le drapeau, numpy refuse et l'étudiant lit « modèle illisible ».
         #
         # ⚠️ Ce que cette assertion protège EXACTEMENT, mesuré par analyse de mutation : « aucun
-        # pickle n'est dépickle NULLE PART dans le chemin de chargement ». Il y a deux `np.load`
-        # sur ce chemin — celui de `charger` et celui de `RCCAModel.load` — et remettre
-        # `allow_pickle=True` sur UN SEUL laisse le test vert, parce que l'autre refuse encore.
-        # C'est de la défense en profondeur, pas un trou : remettre le drapeau sur les DEUX rougit
-        # 3 assertions (le fichier est alors ACCEPTÉ et apparaît dans la liste). La fixture vise la
-        # clé `codes` parce que c'est la seule que `charger` lit elle-même, et son contenu est
-        # celui des VRAIS codes, pour que le contrôle de stimulus ne masque pas le résultat.
+        # pickle n'est dépickle NULLE PART dans le chemin de chargement ». **Et la profondeur des
+        # deux couches n'existe QUE sur le chemin rCCA** — c'est le piège que ce commentaire
+        # affirmait à tort pour les deux décodeurs. Sur un fichier rCCA il y a bien deux `np.load`
+        # (celui de `charger`, qui lit `codes`, et celui de `RCCAModel.load`), donc remettre
+        # `allow_pickle=True` sur UN SEUL laisse cette assertion-ci verte. Sur un fichier eCCA,
+        # `charger` ne lit qu'UN champ du fichier — `decoder`, une chaîne, qu'un `.npz` piégé
+        # garde évidemment en chaîne pour franchir l'aiguillage : sa propre `np.load` ne peut donc
+        # PAS voir le piège, et `CVEPModel.load` est la seule et unique couche. D'où la fixture
+        # eCCA juste en dessous, sans laquelle y remettre le drapeau ne rougissait RIEN du dépôt.
+        # La fixture rCCA vise la clé `codes` parce que c'est la seule que `charger` lit
+        # elle-même, et son contenu est celui des VRAIS codes, pour que le contrôle de stimulus ne
+        # masque pas le résultat.
         pickle_piege = _os.path.join(dossier, "cvep_rcca_model_pickle.npz")
         rcca_ok = _rcca(codes_du_jour)
         _np.savez(pickle_piege, codes=_np.asarray(codes_du_jour, dtype=object),
@@ -433,6 +461,31 @@ def _selftest():
             f"qui traîne dans data/ ({raison})")
         chk(pickle_piege not in modeles_disponibles(dossier),
             "...et il n'apparaît donc pas dans la liste proposée à l'étudiant")
+
+        # Le JUMEAU eCCA du piège ci-dessus, et il n'est PAS redondant (cf. le ⚠️) : sur ce
+        # chemin-là, `CVEPModel.load` est la SEULE couche. Scénario concret : un
+        # `cvep_model_dupote.npz` reçu d'un camarade ou produit par un script tiers, sans champ
+        # `decoder` (donc « eCCA hérité », le chemin le plus permissif) et avec `w` en dtype
+        # objet. `modeles_disponibles` ouvre tout ce qui traîne dans `data/` : si le drapeau
+        # revenait, le pickle s'exécuterait à l'OUVERTURE DU CATALOGUE de la console, avant tout
+        # choix de l'étudiant.
+        piege_ecca = _os.path.join(dossier, "cvep_model_pickle.npz")
+        me = _ecca()
+        _np.savez(piege_ecca, w=_np.asarray([me.w], dtype=object), template=me.template,
+                  fs=me.fs, refresh=me.refresh, code_len=me.code_len,
+                  band=_np.asarray(me.band), n_targets=6,
+                  channels=_np.asarray(me.channels, dtype=int), cv=me.cv_)
+        with _np.load(piege_ecca, allow_pickle=True) as d:
+            chk(d["w"].dtype == object and "decoder" not in d.files,
+                f"fixture : ce fichier eCCA contient VRAIMENT un tableau d'objets, et pas de "
+                f"champ `decoder` — le chemin le plus permissif ({d['w'].dtype})")
+        _m, raison = charger(piege_ecca)
+        chk(_m is None and "illisible" in (raison or "")
+            and "cvep_model_pickle.npz" in (raison or ""),
+            f"un .npz eCCA qui contient du PICKLE est refusé, pas dépickle ({raison})")
+        chk(piege_ecca not in modeles_disponibles(dossier),
+            "...et il n'apparaît donc pas dans la liste proposée à l'étudiant")
+        _os.remove(piege_ecca)   # la section 5 compte la liste EXACTE du dossier
 
         # Un décodeur déclaré que ce produit ne connaît pas : fichier venu d'une version plus
         # récente, ou bricolé. On le NOMME plutôt que de retomber en silence sur l'eCCA.

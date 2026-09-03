@@ -1618,16 +1618,25 @@ def _smoke_ssvep():
 def _smoke_mi():
     """Le mode MI de bout en bout, sans casque : un modèle entraîné à la volée, puis le flux.
 
-    Le modèle est écrit dans `data/` sous un nom réservé, puis retiré : le mode découvre ses
-    choix dans ce dossier, donc un modèle ailleurs ne serait pas proposable. Le `finally` est
-    obligatoire — un `mi_model_smoke.joblib` oublié se retrouverait proposé à l'étudiant — et il
-    doit couvrir l'ÉCRITURE du fichier ET la construction du serveur : `EngineServer.__init__`
-    lève PAR CONCEPTION dès qu'un réglage est invalide (« lève ici, au démarrage — bruyamment et
-    tout de suite », cf. sa docstring), et peut aussi lever si la session BrainFlow refuse de
-    s'ouvrir. Sans cette couverture, une levée à cet endroit laisserait le fichier orphelin —
-    exactement ce que ce `finally` existe pour empêcher. `server`/`thread` sont donc initialisés
-    à `None` AVANT le `try`, pour que le `finally` puisse s'exécuter même si `EngineServer(...)`
-    n'a jamais rendu la main, sans jamais lire une variable non assignée.
+    **Tout est écrit dans un dossier temporaire. Le vrai `data/` n'est jamais approché** — comme
+    son voisin `_smoke_calibration`, et c'était le dernier smoke du dépôt à faire autrement. Il
+    écrivait `data/mi_model_smoke.joblib` puis l'effaçait dans un `finally` : le fichier ne
+    survivait qu'à un arrêt DUR (Ctrl+Break, taskkill, coupure), mais `empreinte_dossier` est
+    AVEUGLE à un créer-puis-effacer dans la même fenêtre de mesure (cf. sa docstring), donc rien
+    ne pouvait le voir. Le remède ne réduit pas la fenêtre d'exposition : il la supprime.
+
+    Le levier est déjà en place, et délibérément : `modes/mi.py` déclare
+    `choices_fn=lambda: mi_models.modeles_disponibles()` — un lambda qui résout la fonction À
+    L'APPEL, précisément pour qu'un autotest puisse rediriger la recherche ailleurs. Le chemin du
+    modèle, lui, est déjà passé explicitement ; `data/` ne servait qu'à faire passer le contrôle
+    d'appartenance de `validate` sur un `kind="choice"`.
+
+    Le `finally` reste obligatoire, et il doit couvrir l'ÉCRITURE du fichier ET la construction du
+    serveur : `EngineServer.__init__` lève PAR CONCEPTION dès qu'un réglage est invalide (« lève
+    ici, au démarrage — bruyamment et tout de suite », cf. sa docstring), et peut aussi lever si
+    la session BrainFlow refuse de s'ouvrir. `server`/`thread` sont donc initialisés à `None`
+    AVANT le `try`, pour que le `finally` puisse s'exécuter même si `EngineServer(...)` n'a jamais
+    rendu la main, sans jamais lire une variable non assignée.
 
     Comme pour le SSVEP et le neuro (cf. leurs docstrings), on ne juge PAS la justesse du
     décodage : le board synthétique n'émet aucune vraie imagerie motrice. On vérifie le
@@ -1635,9 +1644,11 @@ def _smoke_mi():
     restent finies et somment à 1, et le décodeur LIT vraiment la fenêtre qu'on lui passe (les
     probabilités varient d'un échantillon à l'autre) plutôt que de republier une valeur figée.
     """
+    import shutil
+    import tempfile
     import threading
 
-    from core.config import DATA_DIR
+    from core import mi_models
     from core.mi_decoder import MI_LABELS, MIModel, synth_mi_trial
 
     ok = True
@@ -1647,8 +1658,10 @@ def _smoke_mi():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    chemin = os.path.join(DATA_DIR, "mi_model_smoke.joblib")
-    os.makedirs(DATA_DIR, exist_ok=True)
+    dossier = tempfile.mkdtemp(prefix="smoke_mi_")
+    chemin = os.path.join(dossier, "mi_model_smoke.joblib")
+    vrai_dispo = mi_models.modeles_disponibles
+    mi_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
     server = None
     thread = None
     try:
@@ -1730,13 +1743,13 @@ def _smoke_mi():
                 f"lit la fenêtre, pas qu'il republie une valeur figée ({len(probas_vues)} "
                 f"jeu(x) distinct(s) sur {recus} échantillons)")
     finally:
-        # Le retrait du fichier PASSE EN PREMIER, et le `join` ne s'exécute que sur un fil
-        # réellement démarré. `thread.join()` sur un fil jamais démarré lève `RuntimeError` :
-        # dans l'ordre inverse, un `thread.start()` en échec sautait le `os.remove` et laissait
-        # `mi_model_smoke.joblib` dans le VRAI `data/`, donc proposé à l'étudiant au prochain
-        # lancement de la console — précisément ce que ce `finally` existe pour empêcher.
-        if os.path.exists(chemin):
-            os.remove(chemin)
+        # La RESTAURATION du catalogue passe en premier : la laisser après un `join` qui peut
+        # lever rendrait `mi_models.modeles_disponibles` définitivement pointé sur un dossier
+        # temporaire effacé, pour tout le reste du processus (donc pour les smokes suivants).
+        # Le `join` ne s'exécute que sur un fil réellement démarré — `thread.join()` sur un fil
+        # jamais démarré lève `RuntimeError`.
+        mi_models.modeles_disponibles = vrai_dispo
+        shutil.rmtree(dossier, ignore_errors=True)
         if server is not None:
             server.stop()
         if thread is not None and thread.is_alive():

@@ -46,12 +46,26 @@ class Param:
     proposes: str = ""        # ce paramètre en PROPOSE un autre (chantier 2 ; cf. spec §3.1)
     affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
                                     # runtime (donc pas de flux recréé, pas de chauffe refaite).
-                                    # ⚠️ Ce n'est PAS « le décodeur ne le lit jamais » : le c-VEP
-                                    # lit `corr_min`/`margin` à CHAQUE décision, et c'est
-                                    # justement ce qui rend `False` vrai chez lui. La condition à
-                                    # respecter est donc : un réglage `False` ne doit jamais être
-                                    # mis en cache dans `__init__`, sans quoi le changer n'aurait
-                                    # plus aucun effet — en silence.
+                                    # ⚠️ C'est TOUT ce que ce drapeau promet — pas « le changement
+                                    # prend effet tout de suite ». Ce n'est pas non plus « le
+                                    # décodeur ne le lit jamais » : le c-VEP lit `corr_min` et
+                                    # `margin` à CHAQUE décision, et c'est justement ce qui les
+                                    # rend réglables À CHAUD. Pour qu'un réglage `False` prenne
+                                    # effet sans reconstruction, sa valeur ne doit être FIGÉE
+                                    # NULLE PART : ni dans le `__init__` du runtime, ni dans un
+                                    # objet du MOTEUR construit à partir d'elle.
+                                    # ⚠️ `stream_in` (cvep/errp/p300) est `False` pour une AUTRE
+                                    # raison, et il ne prend PAS effet à chaud : il sert à ouvrir
+                                    # l'inlet de marqueurs UNIQUE du moteur, dont le nom est
+                                    # résolu une fois pour toutes (`server._ouvre_marker_inlet`,
+                                    # qui refuse de recréer un inlet existant et le dit en ⚠️).
+                                    # Le changer pendant que le mode tourne ne fait rien : il faut
+                                    # ARRÊTER puis redémarrer le mode. Il est `False` seulement
+                                    # pour éviter de refaire 23 s de chauffe pour rien, et son
+                                    # `help` le dit à l'étudiant — c'est le seul endroit où il
+                                    # l'apprend. Un contributeur qui n'appliquerait que la
+                                    # première condition livrerait un no-op silencieux en croyant
+                                    # respecter le contrat.
     help: str = ""
 
     def choices_status(self):
