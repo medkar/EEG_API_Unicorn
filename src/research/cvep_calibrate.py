@@ -12,7 +12,6 @@ Chaque époque est prélevée EXACTEMENT à une frontière de cycle (frame % L =
 fenêtre couvre alors le cycle qui vient de s'écouler, donc démarre à la phase 0 du code.
 """
 
-import math
 import os
 import random
 import sys
@@ -27,7 +26,12 @@ from core.config import (CH_NAMES, CVEP_BAND, CVEP_CAL_BLOCKS,  # noqa: E402
                     use_utf8_console)
 from core.cvep_code import build_targets, is_on  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
-from core.cvep_rcca import RCCAModel  # noqa: E402
+# ⚠️ `_mcnemar_p` et `SEUIL_MCNEMAR` sont NÉS ici (commit `bd3b588`) et ont DÉMÉNAGÉ dans `core/` :
+# `core/cvep_rcca.py::_rejouer` (la commande `--seuils`) en a besoin lui aussi, et `core/`
+# n'importe JAMAIS `research/`. La règle du dépôt dit exactement quoi faire dans ce cas — le module
+# visé déménage. Importés ici pour que `_gagnant` et l'écran continuent d'appeler LE MÊME objet,
+# pas une seconde copie qui divergerait un jour.
+from core.cvep_rcca import SEUIL_MCNEMAR, RCCAModel, _mcnemar_p  # noqa: E402
 from research.itr import itr  # noqa: E402
 from research.ui import BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
@@ -202,6 +206,14 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
       `n_epoques`   — le nombre d'époques RÉELLEMENT données à `.fit()` pour CE décodeur (lu sur
                       l'appel lui-même, `_fit_et_compte`) ; DOIT être `len(labels)` pour les deux,
                       sinon ils n'ont pas vu le même protocole ;
+      `n_cycles`    — la GÉOMÉTRIE à laquelle `justesse` a été mesurée : le nombre de cycles
+                      moyennés par décision. C'est de CE champ que l'appelant doit tirer la DURÉE
+                      d'une décision pour calculer un ITR — jamais d'une constante recopiée à
+                      côté. La constante `CVEP_DECISION_CYCLES` a déjà été migrée ici sans l'être
+                      dans `calibrate()`, et l'ITR affiché à l'étudiant s'est retrouvé DOUBLÉ
+                      (48 bits/min « PROMETTEUR » là où la séance de référence en vaut 24,
+                      « FAIBLE ») sans qu'aucune des 47 assertions du fichier ne s'en aperçoive.
+                      Justesse et durée sortent maintenant du même dict, donc de la même mesure ;
       `groupes`     — les groupes de validation croisée (`core.cvep_decoder.groupes_de_cycles`,
                       à la géométrie `n_cycles`) — LES MÊMES pour les deux, par construction ;
       `n_decisions` — le nombre de groupes RÉELLEMENT notés par ce décodeur (la longueur de ce
@@ -231,7 +243,21 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
     # Les cibles RÉELLEMENT présentes dans cette séance — un sous-ensemble du plan complet si la
     # calibration a été interrompue. `RCCAModel` DOIT être construit sur CES codes-là (voir le
     # ⚠️ ci-dessus), pas sur les `CVEP_N_TARGETS` du plan complet.
-    presentes = sorted(set(labels))
+    #
+    # ⚠️ **Trié par POSITION DANS LE PLAN (`lag_a_idx`), surtout pas par valeur de lag.** Le
+    # contrat d'appariement du rCCA est POSITIONNEL et il est écrit deux fois dans `core/` :
+    # `cvep_rcca.RCCADecoder` (« `plan[i]` doit décrire la cible dont `model.codes[i]` est le
+    # code : c'est le SEUL appariement qui existe entre un score et un nom de cible ») et
+    # `cvep_models._codes_affiches` (« lignes comprises dans le même ORDRE »). Or `build_targets`
+    # fait TOURNER l'affectation lag↔position quand `CVEP_LAG_ROTATION != 0` : `sorted(set(labels))`
+    # et l'ordre du plan ne coïncident qu'à rotation nulle. Un `sorted()` nu — c'est ce qu'il y
+    # avait ici — produisait donc, hors rotation zéro, un modèle rCCA dont les lignes sont une
+    # PERMUTATION de celles du stimulus : `cvep_models.charger` le refuse (à juste titre : permuté,
+    # il nommerait systématiquement la cible voisine), APRÈS que la calibration a annoncé
+    # « modèles sauvegardés » et l'a peut-être nommé gagnant. Recalibrer reproduisait le même
+    # fichier refusé — une impasse permanente, invisible parce que le seul cas testé était
+    # rotation = 0.
+    presentes = sorted(set(labels), key=lambda l: lag_a_idx[l])
     codes_vus = np.stack([codes[lag_a_idx[l]] for l in presentes])
     idx_local = {l: i for i, l in enumerate(presentes)}
     idx = [idx_local[l] for l in labels]     # RCCAModel indexe ses cibles 0..n-1, pas par lag
@@ -278,12 +304,14 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
     # divergence d'implémentation entre les deux jumeaux.
     #
     # ⚠️ **Cette divergence est TOUJOURS VRAIE aujourd'hui, pas un accident corrigé ailleurs** :
-    # `core/cvep_decoder.py::CVEPModel.hors_pli` et `core/cvep_rcca.py::RCCAModel._hors_pli`
-    # n'ont PAS été touchés (tâche 6, ni ce tour ni les précédents — hors du périmètre demandé,
-    # ce sont les fichiers de la tâche 3). Le contournement vit ICI, côté appelant, et DOIT y
-    # rester tant que les deux `hors_pli` ne rendent pas la même forme sur une entrée vide. Que
-    # les deux s'alignent un jour est une décision à prendre à la revue finale de branche, pas
-    # ici — ce commentaire est la trace qui le lui rappelle.
+    # `cvep_decoder.py::CVEPModel.hors_pli` rend `(0,)`, `cvep_rcca.py::RCCAModel._hors_pli` rend
+    # `(0, n_targets)`. **TRANCHÉ à la revue finale de branche : on ne les aligne PAS.** Le
+    # contournement `len(sc) == 0` est correct pour les DEUX formes, il est documenté avec sa
+    # preuve, et il est testé — aligner les deux toucherait deux fichiers de la tâche 3 déjà
+    # validés pour ne supprimer qu'un commentaire. La règle qui en découle, et qui vaut pour tout
+    # futur appelant : **c'est l'APPELANT qui ferme le chemin vide, avant tout calcul.** Le second
+    # appelant, `core/cvep_rcca.py::_rejouer`, le fait maintenant lui aussi (il mourait sur trois
+    # tracebacks différents pour cette seule et même cause).
     n_cibles_e = int(sc_e.shape[1]) if len(sc_e) > 0 else None
     n_cibles_r = int(sc_r.shape[1]) if len(sc_r) > 0 else None
     corrects_e = (sc_e.argmax(axis=1) == y_e) if len(sc_e) > 0 else None
@@ -291,46 +319,12 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAN
 
     return {
         "eCCA": {"modele": ecca, "justesse": ecca.cv_, "n_epoques": n_epoques_ecca,
-                 "groupes": groupes, "n_decisions": len(sc_e), "n_cibles": n_cibles_e,
-                 "corrects": corrects_e},
+                 "n_cycles": int(n_cycles), "groupes": groupes, "n_decisions": len(sc_e),
+                 "n_cibles": n_cibles_e, "corrects": corrects_e},
         "rCCA": {"modele": rcca, "justesse": rcca.cv_, "n_epoques": n_epoques_rcca,
-                 "groupes": groupes, "n_decisions": len(sc_r), "n_cibles": n_cibles_r,
-                 "corrects": corrects_r},
+                 "n_cycles": int(n_cycles), "groupes": groupes, "n_decisions": len(sc_r),
+                 "n_cibles": n_cibles_r, "corrects": corrects_r},
     }
-
-
-def _mcnemar_p(b, c):
-    """p-value BILATÉRALE EXACTE du test de McNemar, sur des décisions APPARIÉES.
-
-    ⚠️ **C'est le test qui convient ici, et un test de deux proportions indépendantes serait le
-    MAUVAIS test** (tour 2 de la revue de tâche 6) : eCCA et rCCA sont notés sur les MÊMES groupes
-    de cycles (`entraine_les_deux.corrects`, même ordre) — même hasard du moment, même bruit,
-    mêmes essais faciles ou difficiles. Comparer leurs deux justesses comme deux échantillons
-    indépendants jetterait cette information et gonflerait la confiance dans un écart qui n'en a
-    pas — exactement le péché cardinal que ce dépôt s'interdit (`CLAUDE.md`, « rigueur
-    statistique »), déjà commis une fois pour le Motor Imagery.
-
-    `b` = décisions où SEUL eCCA est correct, `c` = décisions où SEUL rCCA l'est. Sous H0 (les
-    deux décodeurs se valent), `b` suit Binomial(b+c, 1/2) ; la p-value est la somme des
-    probabilités de tous les résultats AU MOINS aussi improbables que celui observé — la
-    définition standard du test binomial exact bilatéral (`scipy.stats.binomtest`, `R
-    binom.test`). Sans dépendance à `scipy.stats` : `math.comb` suffit, et le calcul se relit
-    entièrement dans ces quelques lignes.
-
-    Vérifié contre la seule séance réelle disponible (tâche 6) : b=3, c=5 -> p=0,7265625,
-    IDENTIQUE (à l'arrondi) au p=0,727 mesuré indépendamment par la revue.
-    """
-    n = b + c
-    if n == 0:
-        return 1.0
-    probs = [math.comb(n, i) * (0.5 ** n) for i in range(n + 1)]
-    p_obs = probs[min(b, c)]
-    return min(1.0, sum(p for p in probs if p <= p_obs + 1e-12))
-
-
-# Seuil de significativité usuel (5 %) — pas ajusté sur les données de ce dépôt : un seuil qui
-# aurait été choisi POUR faire ressortir tel ou tel gagnant ne prouverait plus rien.
-SEUIL_MCNEMAR = 0.05
 
 
 def _gagnant(res, seuil=SEUIL_MCNEMAR):
@@ -339,11 +333,17 @@ def _gagnant(res, seuil=SEUIL_MCNEMAR):
     comme si elles venaient d'échantillons indépendants. Pure, sans effet de bord.
 
     ⚠️ **Ne JAMAIS nommer de gagnant sur un écart qui n'est pas défendable.** C'est précisément
-    parce que ce chantier a mesuré les deux décodeurs À ÉGALITÉ sur la seule séance réelle
-    disponible (43/90 chacun à k=1, tâche 3 ; 24/37 contre 22/37 à k=2, p=0,73, tour 2 de cette
-    tâche) qu'il rouvre le rCCA au lieu de le jeter — un « gagnant » affiché sur un écart de deux
+    parce que ce chantier n'a mesuré AUCUNE différence détectable entre les deux décodeurs sur la
+    seule séance réelle disponible (k=1 : eCCA 43/90 contre rCCA 43/90, tâche 3 ; k=2, la
+    géométrie du moteur : **eCCA 22/37 = 59,5 % contre rCCA 24/37 = 64,9 %**, McNemar p=0,73)
+    qu'il rouvre le rCCA au lieu de le jeter — un « gagnant » affiché sur un écart de deux
     décisions dirait le contraire de ce que la mesure montre, à un étudiant qui n'a aucun moyen de
     le savoir.
+
+    ⚠️ Écrire **`<décodeur> <valeur>`, jamais une valeur nue** : ce fichier nomme systématiquement
+    eCCA en premier, et « 24/37 contre 22/37 » — deux fractions nues dans l'ordre INVERSE de cette
+    convention — attribuait silencieusement le meilleur chiffre au mauvais décodeur, à trois lignes
+    d'une fixture qui disait l'inverse.
 
     Rend un dict, jamais un simple nom : l'écran a besoin de la p-value et du nombre de décisions
     discordantes pour être honnête, pas seulement des deux pourcentages qui ne portent pas
@@ -495,7 +495,13 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
                 verdict = _early_check(model, epochs, lags, len(plan))
                 if verdict is not None:
                     bad, acc, hi_itr = verdict
-                    print(f"[cvep-cal] contrôle à mi-parcours ({len(epochs)} cycles) : "
+                    # ⚠️ « à 1 cycle » n'est pas décoratif : ce contrôle mesure et convertit à la
+                    # géométrie d'UNE époque, alors que le chiffre final de la calibration est à
+                    # `CVEP_DECISION_CYCLES`. Les deux ITR ne sont donc PAS sur la même échelle,
+                    # et le plancher `EARLY_ITR_MIN` s'applique à celle-ci. Le dire ici, parce que
+                    # c'est là que les deux chiffres se croisent sous les yeux de l'étudiant.
+                    print(f"[cvep-cal] contrôle à mi-parcours ({len(epochs)} cycles, à 1 cycle "
+                          f"par décision — PAS la géométrie du chiffre final) : "
                           f"LOO {acc*100:.0f}% (hasard {100.0/len(plan):.0f}%)  ->  au MIEUX "
                           f"{hi_itr:.1f} bits/min"
                           + (f"  ⚠️ SOUS LE PLANCHER D'UTILITÉ ({EARLY_ITR_MIN:.0f})" if bad
@@ -520,12 +526,31 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
         return False, None
 
     # Les DEUX décodeurs, sur les MÊMES époques : « lequel est meilleur pour CETTE personne ? »
-    # ne se répond que si la calibration entraîne les deux (cf. la docstring d'entraine_les_deux
-    # et celle de core/cvep_rcca.py — mesuré une fois, 43/90 chacun : un jeu parfaitement égal).
+    # ne se répond que si la calibration entraîne les deux (cf. la docstring d'entraine_les_deux et
+    # celle de core/cvep_rcca.py — mesuré une fois, aucune différence DÉTECTABLE entre les deux,
+    # McNemar p=0,73 sur 37 décisions ; ce qui n'est pas « ils se valent »).
     res = entraine_les_deux(epochs, lags, fs=acq.fs, refresh=app.refresh)
     ecca, rcca = res["eCCA"]["modele"], res["rCCA"]["modele"]
     ecca.save(save_path, n_targets=len(plan))
-    rcca.save(rcca_save_path)
+    # ⚠️ **Une séance INTERROMPUE ne produit PAS de fichier rCCA, et le dire.** Le modèle rCCA
+    # d'une séance à 3 cibles sur 6 porte 3 codes ; `core.cvep_models.charger` exige les codes du
+    # stimulus AFFICHÉ (les 6, dans l'ordre du plan) et le refuse — donc le fichier n'apparaîtrait
+    # jamais dans la liste de la console ni dans `modeles_disponibles`. Le sauvegarder quand même
+    # annonçait « modèles sauvegardés : … (rCCA) » à l'étudiant, et pouvait même le nommer
+    # gagnant : un succès affiché pour un artefact que rien ne peut charger. La COMPARAISON,
+    # elle, reste valable (les deux décodeurs jugent parmi les mêmes cibles) et s'affiche.
+    n_cibles_vues = len(set(lags))
+    if n_cibles_vues == len(plan):
+        rcca.save(rcca_save_path)
+        ligne_sauvegarde = (f"modèles sauvegardés : {save_path} (eCCA)  ·  "
+                            f"{rcca_save_path} (rCCA)")
+    else:
+        ligne_sauvegarde = (
+            f"séance interrompue ({n_cibles_vues} cibles sur {len(plan)}) : modèle eCCA "
+            f"sauvegardé ({save_path}), modèle rCCA NON sauvegardé — il porterait "
+            f"{n_cibles_vues} codes quand le stimulus en affiche {len(plan)}, et "
+            f"`core.cvep_models.charger` le refuserait. La comparaison ci-dessous reste valable ; "
+            f"recalibre en entier pour obtenir un modèle rCCA utilisable.")
     if not app.smoke:
         # ⚠️ ARCHIVER, ne jamais écraser : dans un projet d'exploration les jeux de données SONT
         # le résultat. Une version antérieure n'écrivait que « cvep_calib_last.npz » et la
@@ -557,7 +582,7 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
               f"même cible pour en former une seule. Les modèles sont sauvegardés (le filtre "
               f"spatial et le classifieur existent), mais aucune justesse fiable ne les "
               f"accompagne : recalibre, avec davantage de cycles par cible si possible.")
-        print(f"[cvep-cal] modèles sauvegardés : {save_path} (eCCA)  ·  {rcca_save_path} (rCCA)")
+        print(f"[cvep-cal] {ligne_sauvegarde}")
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < (0.1 if app.smoke else 5.0):
             try:
@@ -583,11 +608,21 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     # séance INTERROMPUE (Critical 1), les deux ne jugent plus que parmi un sous-ensemble, et un
     # hasard/ITR calculés à `len(plan)` restaient gonflés dans exactement ce cas-là (réserve du
     # tour 2 de la revue) — un « DÉPASSE LE SSVEP » qui ne mesure pas ce qu'il prétend mesurer.
+    # ⚠️ **La DURÉE d'une décision se lit sur le MÊME dict que la justesse, jamais sur une
+    # constante recopiée à côté.** `cycle_s = L / app.refresh` (UN cycle) est resté ici quand
+    # `entraine_les_deux` a migré sa mesure à `CVEP_DECISION_CYCLES` : les justesses venaient de
+    # k=2 et la durée de k=1, donc l'ITR affiché était EXACTEMENT DOUBLÉ. Sur la séance de
+    # référence (6 cibles, eCCA 59,5 %, rCCA 64,9 %), l'écran annonçait « 48 bits/min —
+    # PROMETTEUR » là où la mesure vaut 24 et où le README annonce 22 — et le verdict basculait
+    # d'un cran complet (seuil `ref/2` = 25,0). Aucune des 47 assertions du fichier ne s'en
+    # apercevait : aucune ne lisait une valeur d'ITR. Faire dériver la durée de `res` supprime la
+    # classe entière — changer `n_cycles` déplace maintenant les deux chiffres ensemble.
     from research.itr import itr as _itr
     chance = 100.0 / n_cibles
-    cycle_s = L / app.refresh
-    bits_e = _itr(n_cibles, cv_e, cycle_s)
-    bits_r = _itr(n_cibles, cv_r, cycle_s)
+    k_decision = res["eCCA"]["n_cycles"]      # la géométrie où cv_e/cv_r ont ÉTÉ MESURÉES
+    decision_s = k_decision * L / app.refresh
+    bits_e = _itr(n_cibles, cv_e, decision_s)
+    bits_r = _itr(n_cibles, cv_r, decision_s)
     meilleur = max(bits_e, bits_r)
     ref = _itr(3, 0.95, 1.5)   # SSVEP actuel = la barre à battre
     # ⚠️ McNemar, PAS une comparaison de deux pourcentages : voir `_gagnant`, tour 2 de la revue.
@@ -597,7 +632,8 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     verdict = ("DÉPASSE LE SSVEP" if meilleur >= ref else
                "PROMETTEUR" if meilleur >= ref / 2 else
                "FAIBLE (contact électrodes ? regard qui décroche ? refais un essai)")
-    print(f"[cvep-cal] {len(epochs)} cycles sur {n_cibles} cibles jugées (hasard {chance:.0f}%) :")
+    print(f"[cvep-cal] {len(epochs)} cycles sur {n_cibles} cibles jugées (hasard {chance:.0f}%), "
+          f"décision = {k_decision} cycle(s) ({decision_s:.2f}s) :")
     print(f"[cvep-cal]   eCCA  leave-one-out {cv_e*100:5.1f}%  -> {bits_e:5.1f} bits/min")
     print(f"[cvep-cal]   rCCA  leave-one-out {cv_r*100:5.1f}%  -> {bits_r:5.1f} bits/min")
     ligne_gagnant = (f"indiscernables sur cette séance (McNemar p={mn['p']:.3f})" if mn["gagnant"]
@@ -606,7 +642,7 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
           f"{res['eCCA']['n_decisions']} (eCCA seul {mn['b']}, rCCA seul {mn['c']})")
     print(f"[cvep-cal]   —   SSVEP de référence {ref:.1f} -> {verdict}")
     print(f"[cvep-cal] `python src/research/cvep_analyze.py` pour le gain en moyennant plusieurs cycles.")
-    print(f"[cvep-cal] modèles sauvegardés : {save_path} (eCCA)  ·  {rcca_save_path} (rCCA)")
+    print(f"[cvep-cal] {ligne_sauvegarde}")
 
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < (0.1 if app.smoke else 5.0):
@@ -621,10 +657,15 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
         app.center(app.small, f"{mn['n_discordantes']} décisions discordantes sur "
                    f"{res['eCCA']['n_decisions']}  ({mn['b']} eCCA seul, {mn['c']} rCCA seul)",
                    DIM, int(h * 0.46))
-        app.center(app.mid, f"{meilleur:.0f} bits/min (meilleur des deux)   —   SSVEP réf. {ref:.0f}",
+        app.center(app.mid, f"{meilleur:.0f} bits/min (meilleur des deux, décision "
+                   f"{k_decision} cycles)   —   SSVEP réf. {ref:.0f}",
                    GO if meilleur >= ref / 2 else WARN, int(h * 0.56))
         app.center(app.small, verdict, DIM, int(h * 0.65))
-        app.center(app.small, "modèles sauvegardés (eCCA et rCCA) — ESC pour continuer",
+        app.center(app.small,
+                   "modèles sauvegardés (eCCA et rCCA) — ESC pour continuer"
+                   if n_cibles_vues == len(plan) else
+                   f"séance interrompue : eCCA sauvegardé, rCCA NON ({n_cibles_vues}/{len(plan)} "
+                   f"cibles) — ESC pour continuer",
                    DIM, int(h * 0.73))
         app.pygame.display.flip()
         app.clock.tick(60)
@@ -637,6 +678,9 @@ def _selftest():
     """La comparaison honnête eCCA/rCCA (tâche 6) : mêmes époques, mêmes groupes de validation
     croisée, un gagnant nommé — et les deux chiffres survivent à un aller-retour sur disque.
     Aucun casque, aucune donnée réelle."""
+    import shutil
+    import tempfile
+
     ok = True
 
     def chk(cond, msg):
@@ -745,20 +789,44 @@ def _selftest():
         f"jamais 6 pour l'un et 3 pour l'autre ({res3['eCCA']['n_cibles']}, "
         f"{res3['rCCA']['n_cibles']})")
     chk(res3["rCCA"]["modele"].n_targets == 3,
-        f"...et le modèle rCCA sauvegardé porte VRAIMENT 3 codes, pas les 6 du plan complet "
+        f"...et le modèle rCCA entraîné porte VRAIMENT 3 codes, pas les 6 du plan complet "
         f"({res3['rCCA']['modele'].n_targets})")
+    # ⚠️ Cette propriété est juste POUR LA COMPARAISON et fatale POUR UN FICHIER : un modèle rCCA
+    # à 3 codes est refusé par `core.cvep_models.charger`, qui exige les 6 codes du stimulus
+    # affiché. `calibrate()` ne le sauvegarde donc PAS (vérifié plus bas, tour 3) — la phrase
+    # « modèle rCCA sauvegardé » ici serait un contresens.
+    from core.cvep_models import charger as _charger_c2
+    _tmp_c2 = tempfile.mkdtemp(prefix="cvep_calibrate_c2_tronq_")
+    try:
+        _ch_c2 = res3["rCCA"]["modele"].save(os.path.join(_tmp_c2, "cvep_rcca_model.npz"))
+        _m_c2, _pb_c2 = _charger_c2(_ch_c2)
+        chk(_m_c2 is None and _pb_c2 is not None,
+            f"...et un tel fichier serait REFUSÉ au chargement — d'où le refus de l'écrire "
+            f"({_pb_c2})")
+    finally:
+        shutil.rmtree(_tmp_c2, ignore_errors=True)
 
     # --- Le gagnant nommé, PAR MCNEMAR — pas par une comparaison de deux pourcentages. ---------
     # ⚠️ Tour 2 de la revue : `_gagnant` comparait deux justesses comme si elles venaient de deux
     # échantillons INDÉPENDANTS, et nommait un gagnant sur un écart qui n'avait rien de défendable
-    # (64,9 % contre 59,5 % sur la vraie séance — McNemar p=0,73, DU BRUIT). Les fixtures portent
-    # des décisions APPARIÉES (mêmes essais, corrects ou non pour chaque décodeur), la seule forme
-    # que `_gagnant` accepte maintenant.
-    def _corrects_fabrique(n_concordants, b, c):
-        """(corrects_e, corrects_r) : `n_concordants` décisions où les deux sont D'ACCORD (ici,
-        toutes deux correctes), `b` où SEUL eCCA est correct, `c` où SEUL rCCA l'est."""
-        e = np.array([True] * n_concordants + [True] * b + [False] * c, dtype=bool)
-        r = np.array([True] * n_concordants + [False] * b + [True] * c, dtype=bool)
+    # (eCCA 59,5 % contre rCCA 64,9 % sur la vraie séance — McNemar p=0,73, DU BRUIT). Les
+    # fixtures portent des décisions APPARIÉES (mêmes essais, corrects ou non pour chaque
+    # décodeur), la seule forme que `_gagnant` accepte maintenant.
+    def _corrects_fabrique(n_concordants, b, c, n_faux=0):
+        """(corrects_e, corrects_r) : `n_concordants` décisions où les deux sont D'ACCORD ET
+        CORRECTS, `b` où SEUL eCCA est correct, `c` où SEUL rCCA l'est, `n_faux` où les deux se
+        trompent ENSEMBLE.
+
+        ⚠️ `n_faux` n'est pas décoratif : sans lui, une fixture ne pouvait porter QUE des
+        concordances correctes, donc ses justesses réelles (32/37 et 34/37) contredisaient les
+        pourcentages qu'elle annonçait dans son propre commentaire (59,5 % et 64,9 %) et les
+        `justesse` passées dans le même dict. `_gagnant` n'utilise que `corrects`, donc
+        l'assertion restait juste — mais le test le plus lu du fichier mentait sur ses chiffres,
+        et le prochain lecteur l'aurait cru."""
+        e = np.array([True] * n_concordants + [True] * b + [False] * c + [False] * n_faux,
+                     dtype=bool)
+        r = np.array([True] * n_concordants + [False] * b + [True] * c + [False] * n_faux,
+                     dtype=bool)
         return e, r
 
     e_fort, r_faible = _corrects_fabrique(0, 15, 0)      # eCCA correct partout, rCCA nulle part
@@ -772,15 +840,22 @@ def _selftest():
     chk(mn_inverse["gagnant"] == "rCCA", f"...dans les deux sens ({mn_inverse})")
 
     # Le cas RÉEL, celui qui a motivé ce tour de revue : 37 décisions, 3 discordances pour eCCA
-    # seul, 5 pour rCCA seul (mesuré sur data/cvep_calib_last.npz à k=2, lecture seule). 64,9 %
-    # contre 59,5 % — un écart qui A L'AIR réel — et pourtant McNemar p=0,7265625 : DU BRUIT.
-    e_reel, r_reel = _corrects_fabrique(29, 3, 5)
-    mn_reel = _gagnant({"eCCA": {"justesse": 22 / 37, "corrects": e_reel},
-                        "rCCA": {"justesse": 24 / 37, "corrects": r_reel}})
+    # seul, 5 pour rCCA seul (mesuré sur data/cvep_calib_last.npz à k=2, lecture seule), soit
+    # eCCA 22/37 = 59,5 % contre rCCA 24/37 = 64,9 % — un écart qui A L'AIR réel — et pourtant
+    # McNemar p=0,7265625 : DU BRUIT. La vraie séance demande 19 concordances CORRECTES et 10
+    # concordances FAUSSES : c'est la seule combinaison qui reproduit les deux pourcentages.
+    e_reel, r_reel = _corrects_fabrique(19, 3, 5, n_faux=10)
+    chk(len(e_reel) == len(r_reel) == 37 and int(e_reel.sum()) == 22 and int(r_reel.sum()) == 24,
+        f"la fixture « cas réel » reproduit VRAIMENT les chiffres qu'elle annonce : 37 décisions, "
+        f"eCCA {int(e_reel.sum())}/37 = {e_reel.mean()*100:.1f} %, rCCA {int(r_reel.sum())}/37 = "
+        f"{r_reel.mean()*100:.1f} % — une fixture qui ment sur ses propres chiffres est crue par "
+        f"le lecteur suivant")
+    mn_reel = _gagnant({"eCCA": {"justesse": float(e_reel.mean()), "corrects": e_reel},
+                        "rCCA": {"justesse": float(r_reel.mean()), "corrects": r_reel}})
     chk(mn_reel["gagnant"] is None and abs(mn_reel["p"] - 0.7265625) < 1e-9,
-        f"...et un écart de POURCENTAGE réel (64,9 % contre 59,5 %) mais NON DÉFENDABLE (McNemar "
-        f"p=0,73, le cas mesuré sur la vraie séance) ne nomme PERSONNE — c'est le défaut central "
-        f"trouvé au tour 2 de la revue ({mn_reel})")
+        f"...et un écart de POURCENTAGE réel (eCCA 59,5 % contre rCCA 64,9 %) mais NON DÉFENDABLE "
+        f"(McNemar p=0,73, le cas mesuré sur la vraie séance) ne nomme PERSONNE — c'est le défaut "
+        f"central trouvé au tour 2 de la revue ({mn_reel})")
     chk(mn_reel["n_discordantes"] == 8 and mn_reel["b"] == 3 and mn_reel["c"] == 5,
         f"...et le nombre de décisions DISCORDANTES est juste — c'est LUI qui porte "
         f"l'information, pas les deux pourcentages pris isolément ({mn_reel})")
@@ -798,6 +873,15 @@ def _selftest():
         f"_mcnemar_p(3, 5) = _mcnemar_p(5, 3) = 0,7265625 ({_mcnemar_p(3, 5)}, {_mcnemar_p(5, 3)})")
     chk(_mcnemar_p(0, 0) == 1.0, "aucune décision discordante -> p=1 (rien ne distingue les deux)")
     chk(_mcnemar_p(10, 10) == 1.0, "un partage parfait -> p=1 aussi (symétrie totale)")
+    # ...et c'est LE MÊME objet que celui de `--seuils`, pas une seconde copie. `_mcnemar_p` est né
+    # ici puis a DÉMÉNAGÉ dans `core/` (`core/cvep_rcca.py::_rejouer` en a besoin, et `core/`
+    # n'importe jamais `research/`). Deux implémentations du même test, chacune avec ses propres
+    # tests, finissent par diverger sans que rien ne le dise — c'est exactement ce que la règle du
+    # déménagement existe pour empêcher. Vérifiable seulement de CE côté de la frontière.
+    import core.cvep_rcca as _core_rcca
+    chk(_mcnemar_p is _core_rcca._mcnemar_p and SEUIL_MCNEMAR == _core_rcca.SEUIL_MCNEMAR,
+        "l'écran de calibration et `--seuils` appellent LE MÊME `_mcnemar_p`, au même seuil — une "
+        "seule implémentation du test dans le dépôt")
 
     # --- La casse trouvée au tour 2 : ZÉRO décision à la géométrie de mesure. -------------------
     # Aucune paire de cycles consécutifs de la même cible : chaque cible n'apparaît qu'UNE fois,
@@ -847,9 +931,6 @@ def _selftest():
         f"appliqué à un seul des deux côtés (epochs OU labels) pourrait passer inaperçu ({n_b})")
 
     # --- Les deux chiffres ET le champ `decoder` partent dans le fichier de modèle. ------------
-    import shutil
-    import tempfile
-
     from core.cvep_models import charger
     from core.cvep_rcca import RCCADecoder
 
@@ -888,6 +969,61 @@ def _selftest():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # --- Revue finale, Critical 2 : LE MÊME contrôle À ROTATION NON NULLE. ---------------------
+    # Le contrôle ci-dessus tourne à `CVEP_LAG_ROTATION = 0` — le SEUL point où « trié par valeur
+    # de lag » et « ordre du plan » coïncident. C'est cette coïncidence qui a rendu invisible le
+    # défaut créé par le correctif Critical 1 : `codes_vus` empilé par lag croissant, quand le
+    # rCCA et `cvep_models._codes_affiches` apparient PAR POSITION dans le plan. Hors rotation
+    # zéro, les lignes du modèle sont donc une PERMUTATION de celles du stimulus, `charger` refuse
+    # tout modèle fraîchement calibré, et recalibrer reproduit le même fichier refusé.
+    # `config.py` dit explicitement que ce paramètre « reste disponible » : ce cas doit être testé.
+    import core.cvep_code as _cc
+    _rot_reelle = _cc.CVEP_LAG_ROTATION
+    _cc.CVEP_LAG_ROTATION = 2
+    try:
+        plan_rot, code_rot = build_targets()
+        lags_rot = [c["lag"] for c in plan_rot]
+        chk(lags_rot != sorted(lags_rot),
+            f"fixture : à CVEP_LAG_ROTATION = 2, l'ordre du plan n'est VRAIMENT plus l'ordre des "
+            f"valeurs de lag — les deux tris divergent ({lags_rot})")
+        epochs_rot, labels_rot = [], []
+        for c in plan_rot:
+            for _ in range(8):
+                epochs_rot.append(synth_cvep(code_rot, c["lag"], n_raw, fs, refresh, -6.0, rng))
+                labels_rot.append(c["lag"])
+        res_rot = entraine_les_deux(epochs_rot, labels_rot, fs=fs, refresh=refresh, channels=voies)
+        codes_plan_rot = np.stack([np.asarray(c["code"], dtype=int) for c in plan_rot])
+        chk(np.array_equal(res_rot["rCCA"]["modele"].codes, codes_plan_rot),
+            "le modèle rCCA calibré à rotation 2 porte les codes du plan DANS L'ORDRE DU PLAN, "
+            "pas triés par valeur de lag — c'est l'ordre, et lui seul, qui apparie un score à un "
+            "nom de cible")
+        tmp_rot = tempfile.mkdtemp(prefix="cvep_calibrate_rot_")
+        try:
+            chemin_rot = res_rot["rCCA"]["modele"].save(
+                os.path.join(tmp_rot, "cvep_rcca_model.npz"))
+            relu_rot, pb_rot = charger(chemin_rot)
+            chk(relu_rot is not None and pb_rot is None,
+                f"...donc `cvep_models.charger` l'ACCEPTE — un modèle qu'on vient de calibrer "
+                f"sans rien avoir changé ne doit pas être refusé ({pb_rot})")
+            if relu_rot is not None:
+                cible_rot = 4
+                fenetre_rot = synth_cvep(code_rot, plan_rot[cible_rot]["lag"], len(voies),
+                                         fs, refresh, -6.0, rng)
+                choisi_rot, _ = RCCADecoder(relu_rot, plan_rot, corr_min=-1e9, margin=0.0,
+                                            n_cycles=1).classify(fenetre_rot, 0)
+                chk(choisi_rot is not None
+                    and choisi_rot["name"] == plan_rot[cible_rot]["name"],
+                    f"...et il désigne la cible RÉELLEMENT AFFICHÉE, pas sa voisine "
+                    f"({None if choisi_rot is None else choisi_rot['name']} au lieu de "
+                    f"{plan_rot[cible_rot]['name']})")
+        finally:
+            shutil.rmtree(tmp_rot, ignore_errors=True)
+    finally:
+        _cc.CVEP_LAG_ROTATION = _rot_reelle
+    chk(_cc.CVEP_LAG_ROTATION == _rot_reelle,
+        f"...et la rotation réelle est restaurée, même si le bloc ci-dessus avait levé "
+        f"({_cc.CVEP_LAG_ROTATION})")
+
     # --- Tour 3 de la revue : PROTÉGER calibrate() lui-même, pas seulement ce qui l'alimente. ----
     # Mesuré par le re-relecteur : muter `n_cibles` en `len(plan)` (réserve C1) OU désactiver le
     # garde à zéro décision (la casse TypeError du tour 2) laissait CE FICHIER **et** `app.py
@@ -900,6 +1036,7 @@ def _selftest():
     import io
     import re as _re
 
+    from research.itr import itr as _itr_ref
     from research.ui import App
 
     _ce_module = sys.modules[__name__]
@@ -926,6 +1063,7 @@ def _selftest():
                     ok1, res1 = calibrate(app_int, save_path=os.path.join(tmp1, "e.npz"),
                                           rcca_save_path=os.path.join(tmp1, "r.npz"))
             sortie1 = capture.getvalue()
+            fichiers1 = set(os.listdir(tmp1))
         finally:
             shutil.rmtree(tmp1, ignore_errors=True)
         chk(res1["eCCA"]["n_cibles"] == 3,
@@ -937,6 +1075,67 @@ def _selftest():
             f"(17 %) — sinon l'ITR et le verdict affichés à l'étudiant resteraient gonflés sur "
             f"EXACTEMENT la séance que Critical 1 visait "
             f"({m_hasard.group(0) if m_hasard else sortie1!r})")
+        # --- Revue finale, Critical 2 (b) : la séance tronquée n'écrit PAS de fichier rCCA. -----
+        # Il porterait 3 codes pour un stimulus qui en affiche 6 : `cvep_models.charger` le
+        # refuse (vérifié plus haut sur `res3`), donc il n'apparaîtrait jamais dans la liste de la
+        # console. L'écrire quand même, en annonçant « modèles sauvegardés : … (rCCA) », donne un
+        # succès pour un artefact que rien ne peut charger — et le gagnant nommé peut être lui.
+        chk("e.npz" in fichiers1 and "r.npz" not in fichiers1,
+            f"une séance tronquée sauvegarde l'eCCA et PAS le rCCA ({sorted(fichiers1)})")
+        chk("rCCA NON sauvegardé" in sortie1 and "séance interrompue" in sortie1,
+            f"...et calibrate() le DIT, au lieu d'annoncer « modèles sauvegardés » pour les deux "
+            f"({[l for l in sortie1.splitlines() if 'sauvegard' in l]})")
+
+        # --- Revue finale, Critical 1 : l'ITR IMPRIMÉ est calculé à la géométrie où la justesse
+        # a été MESURÉE. `cycle_s = L / app.refresh` (un cycle) est resté ici quand la mesure est
+        # passée à `CVEP_DECISION_CYCLES` : l'ITR affiché était EXACTEMENT DOUBLÉ, et le verdict
+        # basculait d'un cran (« PROMETTEUR » au lieu de « FAIBLE » sur la séance de référence).
+        # Aucune des 47 assertions du fichier ne lisait une valeur d'ITR — celle-ci le fait, sur
+        # la sortie du VRAI `calibrate()`, et elle ne dépend pas de la justesse obtenue (qui, sur
+        # un board de test, peut tomber sous le hasard et rendre tous les ITR nuls).
+        L_test = len(build_targets()[1])
+        m_geo = _re.search(r"décision = (\d+) cycle\(s\) \(([\d.]+)s\)", sortie1)
+        chk(m_geo is not None and int(m_geo.group(1)) == res1["eCCA"]["n_cycles"]
+            and abs(float(m_geo.group(2))
+                    - res1["eCCA"]["n_cycles"] * L_test / app_int.refresh) < 0.01,
+            f"la DURÉE de décision imprimée est celle où la justesse a été mesurée "
+            f"({res1['eCCA']['n_cycles']} cycles = "
+            f"{res1['eCCA']['n_cycles'] * L_test / app_int.refresh:.2f}s), pas un cycle "
+            f"({L_test / app_int.refresh:.2f}s) — le facteur 2 exact "
+            f"({m_geo.group(0) if m_geo else sortie1!r})")
+        # ...et l'ITR imprimé se relit à partir de la DURÉE IMPRIMÉE, pas d'une autre : les deux
+        # chiffres de la même ligne doivent décrire le même décodeur. (Cette assertion-ci ne
+        # suffit pas à elle seule — sur un board de test, la justesse peut tomber sous le hasard
+        # et les deux géométries rendent alors 0,0 bits/min : c'est l'assertion sur la DURÉE
+        # ci-dessus qui porte la preuve.)
+        m_bits = _re.search(r"eCCA\s+leave-one-out\s+([\d.]+)%\s+->\s+([\d.]+) bits/min", sortie1)
+        chk(m_bits is not None and m_geo is not None and abs(
+            float(m_bits.group(2))
+            - _itr_ref(res1["eCCA"]["n_cibles"], res1["eCCA"]["justesse"],
+                       float(m_geo.group(2)))) < 0.05,
+            f"...et l'ITR imprimé est bien celui de la durée IMPRIMÉE à côté de lui "
+            f"({m_bits.group(0) if m_bits else sortie1!r})")
+        # ...et la géométrie annoncée n'est pas une constante recopiée : elle sort du dict que
+        # `entraine_les_deux` rend, donc de la mesure elle-même.
+        chk(res1["eCCA"]["n_cycles"] == res1["rCCA"]["n_cycles"] == CVEP_DECISION_CYCLES,
+            f"la géométrie rendue par entraine_les_deux est celle du moteur "
+            f"({res1['eCCA']['n_cycles']}, {res1['rCCA']['n_cycles']}, {CVEP_DECISION_CYCLES})")
+        # Le chiffre CONCRET, sur la séance de référence que le dépôt documente partout (6 cibles,
+        # eCCA 22/37 = 59,5 %, rCCA 24/37 = 64,9 %, code L=63 à 60 Hz) : c'est le chiffre-vedette
+        # du chantier, et c'est lui qui était doublé. Il se lit contre les 22 bits/min du README.
+        ref_ssvep = _itr_ref(3, 0.95, 1.5)
+        bits_ref_e = _itr_ref(6, 22 / 37, CVEP_DECISION_CYCLES * 63 / 60.0)
+        bits_ref_r = _itr_ref(6, 24 / 37, CVEP_DECISION_CYCLES * 63 / 60.0)
+        chk(21.0 < max(bits_ref_e, bits_ref_r) < 26.0
+            and max(bits_ref_e, bits_ref_r) < ref_ssvep / 2,
+            f"séance de RÉFÉRENCE : eCCA {bits_ref_e:.1f} et rCCA {bits_ref_r:.1f} bits/min à "
+            f"{CVEP_DECISION_CYCLES} cycles — cohérent avec les 22 bits/min annoncés par le "
+            f"README, et SOUS la moitié du SSVEP ({ref_ssvep/2:.1f}) donc verdict « FAIBLE »")
+        chk(abs(_itr_ref(6, 24 / 37, 63 / 60.0) - 2 * bits_ref_r) < 1e-9
+            and _itr_ref(6, 24 / 37, 63 / 60.0) >= ref_ssvep / 2,
+            f"...et le calcul à UN cycle rendait exactement le DOUBLE "
+            f"({_itr_ref(6, 24/37, 63/60.0):.1f}), donc « PROMETTEUR » : un cran de verdict "
+            f"complet, sur un chiffre faux d'un facteur 2 exact")
 
         # --- La casse TypeError (tour 2) : calibrate() ne doit PAS planter à zéro décision. -----
         tmp2 = tempfile.mkdtemp(prefix="cvep_calibrate_td_selftest_")

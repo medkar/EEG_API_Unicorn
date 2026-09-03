@@ -13,14 +13,26 @@ Rebranché sur le stimulus qu'on garde (UNE m-séquence, six **décalages**), il
 simplement jamais été mesuré. Il l'est maintenant :
 
     fichier data/cvep_calib_last.npz (2026-07-21, 1 personne, 90 cycles, 6 cibles, stimulus décalé)
-      eCCA  leave-one-out 43/90 = 47,8 %       (hasard 16,7 %)
-      rCCA  leave-one-out 43/90 = 47,8 %       (hasard 16,7 %, p = 0,0005 par permutation)
+      k=1 (géométrie d'une ÉPOQUE de calib.)   eCCA 43/90 = 47,8 %   rCCA 43/90 = 47,8 %
+      k=2 (géométrie DU MOTEUR)                eCCA 22/37 = 59,5 %   rCCA 24/37 = 64,9 %
+      McNemar apparié à k=2 : 8 décisions discordantes sur 37 (3 eCCA seul, 5 rCCA seul), p = 0,727
+      (hasard 16,7 % ; le rCCA contre le hasard : p = 0,0005 par permutation, 2000 tirages)
 
-Les deux décodeurs sont **indiscernables** sur ces données ; le rCCA sur codes Gold, lui, plafonnait
-à 35,6 % (`data/cvep_rcca_model.npz`, autre séance). C'est la moitié « codes Gold » de l'hypothèse
-qui était mauvaise, pas la reconvolution. ⚠️ **Une personne, une séance** : ça n'établit pas que les
-deux décodeurs se valent en général, seulement que rien ne justifie de jeter celui-ci. C'est
-exactement pour ça que la calibration entraîne les DEUX et affiche les deux chiffres.
+**Aucune différence n'est DÉTECTABLE entre les deux décodeurs sur ces données**, et c'est le
+McNemar apparié qui le dit — pas l'égalité 43/90. Celle-là est une coïncidence de totaux, à une
+géométrie que `core/config.py` déclare elle-même non représentative (le moteur décide sur
+`CVEP_DECISION_CYCLES` cycles, pas un) ; à la géométrie du moteur les deux totaux ne sont plus
+égaux, et c'est le test apparié, pas l'écart de pourcentage, qui autorise le mot. Reproductible :
+`python src/core/cvep_rcca.py --seuils data/cvep_calib_last.npz` imprime les deux lignes.
+
+⚠️ **« Pas de différence détectable » n'est PAS « équivalents ».** À 37 décisions, McNemar ne
+verrait qu'un écart énorme. Ajouté à **une personne, une séance**, ça n'établit pas que les deux
+décodeurs se valent en général : c'est une raison de ne pas JETER le rCCA, pas une preuve qu'il
+vaut l'eCCA. C'est exactement pour ça que la calibration entraîne les DEUX, affiche les deux
+chiffres, et ne nomme un gagnant que quand McNemar le défend.
+
+Le rCCA sur codes Gold, lui, plafonnait à 35,6 % (`data/cvep_rcca_model.npz`, autre séance) : c'est
+la moitié « codes Gold » de l'hypothèse qui était mauvaise, pas la reconvolution.
 
 ⚠️ **Les codes Gold distincts, eux, restent réfutés et restent DEHORS.** `make_distinct_codes` et
 `build_targets_rcca` sont restés dans `src/research/cvep_rcca.py` : une hypothèse réfutée se garde
@@ -41,6 +53,7 @@ Rejouer une calibration réelle pour en tirer des seuils (LECTURE SEULE du fichi
     python src/core/cvep_rcca.py --seuils data/cvep_calib_last.npz
 """
 
+import math
 import os
 import sys
 
@@ -51,6 +64,30 @@ from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_DECISION_CYCLES,  # noqa
                          CVEP_RCCA_CORR_MIN, CVEP_RCCA_ENC, CVEP_RCCA_EVENT,
                          CVEP_RCCA_MARGIN, CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
 from core.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
+
+
+MSG_PYNTBCI = ("le décodeur c-VEP rCCA exige `pyntbci`, qui n'est pas installé : "
+               "`pip install -r requirements.txt` (ou `pip install \"pyntbci>=1.9\"`). "
+               "L'eCCA, lui, n'en dépend pas — les modèles eCCA restent utilisables.")
+
+
+class PyntbciManquant(ImportError):
+    """`pyntbci` absent — levée à la place d'un `ModuleNotFoundError` nu. Voir `MSG_PYNTBCI`.
+
+    ⚠️ **Le NOM de cette classe fait partie du message**, et c'est délibéré :
+    `core.cvep_models.charger` attrape toute exception et n'en garde que le TYPE
+    (`f"modèle illisible ({type(e).__name__}) : {nom}"`). Avec un `ModuleNotFoundError` nu,
+    l'étudiant lisait « modèle illisible (ModuleNotFoundError) : cvep_rcca_model.npz » et partait
+    chercher un fichier corrompu là où il manque un `pip install`. Le message complet, lui, reste
+    lisible partout où l'exception remonte : le moteur, `--seuils`, les autotests.
+
+    ⚠️ **Ce qui reste à faire, HORS de ce fichier** (`core/cvep_models.py`, autre lot) : nommer ce
+    cas explicitement (`except PyntbciManquant as e: return None, str(e)`) et surtout arrêter la
+    disparition SILENCIEUSE — `modeles_disponibles` filtre sur `charger(c)[0] is not None`, donc
+    sans la dépendance TOUS les modèles rCCA s'évaporent de la liste de la console sans un mot.
+    Un fichier parfaitement bon qui disparaît est exactement la panne muette que ce module-là
+    existe pour supprimer, retournée.
+    """
 
 
 class RCCAModel:
@@ -108,7 +145,10 @@ class RCCAModel:
         return self.codes[:, frame].astype(float)
 
     def _fit_clf(self, X, y):
-        from pyntbci.classifiers import rCCA
+        try:
+            from pyntbci.classifiers import rCCA
+        except ImportError as e:      # dépendance du MOTEUR : le dire, pas laisser deviner
+            raise PyntbciManquant(MSG_PYNTBCI) from e
         clf = rCCA(stimulus=self._stimulus(), fs=self.fs, event=self.event,
                    encoding_length=self.enc, onset_event=True)
         clf.fit(X, y)
@@ -333,6 +373,16 @@ def seuils_hors_pli(oof_scores, oof_y, garde=0.95, n_min=SEUILS_N_MIN):
 def point_de_fonctionnement(oof_scores, oof_y, corr_min, margin):
     """Ce qu'un couple de seuils FAIT, mesuré sur des scores hors-pli. Ne choisit rien, décrit.
 
+    ⚠️ **Décrit — mais si vous CHOISISSEZ un couple en lisant ce tableau, le chiffre de la ligne
+    retenue n'est plus une mesure : il est OPTIMISTE, parce qu'il a été sélectionné sur les mêmes
+    décisions qui le produisent.** C'est exactement le cas des 0,24/0,08 livrés dans
+    `core/config.py` : leur « 69 % de justesse quand le décodeur émet » a été lu sur les 37
+    décisions de `data/cvep_calib_last.npz`, celles-là mêmes qui le mesurent. C'est un optimisme de
+    SÉLECTION, distinct des deux réserves déjà écrites (généralisation « une personne, une séance »
+    et petit n) — même famille que le `measured_on` de l'ErrP (« threshold chosen on these same
+    out-of-fold scores, optimistic »). Le seul chiffre non biaisé se mesurerait sur une SECONDE
+    séance, qui n'existe pas.
+
     Rend un dict de proportions dans [0, 1] :
       `corrects_gardes`  — part des essais BIEN classés que les seuils laissent passer (sensibilité) ;
       `emission`         — part de TOUS les essais sur lesquels le décodeur émettrait ;
@@ -350,6 +400,14 @@ def point_de_fonctionnement(oof_scores, oof_y, corr_min, margin):
     y = np.asarray(oof_y, dtype=int)
     if scores.ndim != 2 or scores.shape[1] < 2 or len(y) != len(scores):
         raise ValueError(f"scores hors-pli mal formés : {scores.shape} pour {len(y)} étiquettes")
+    # ⚠️ ZÉRO décision : `RCCAModel._hors_pli` PRÉ-ALLOUE `(0, n_targets)`, donc la garde de forme
+    # ci-dessus laisse passer un tableau parfaitement bien formé qui ne contient RIEN. `np.mean`
+    # d'un booléen vide rend `nan` — un `nan` là où cette docstring promet une proportion dans
+    # [0, 1], puis un `ValueError: cannot convert float NaN to integer` plus loin chez l'appelant.
+    # `None` partout, comme `entraine_les_deux` le fait déjà pour `justesse`/`n_cibles`.
+    if len(y) == 0:
+        return {"corrects_gardes": None, "emission": None, "justesse_si_emis": None,
+                "n": 0, "n_corrects": 0}
     ordre = np.sort(scores, axis=1)[:, ::-1]
     gagnant, ecart = ordre[:, 0], ordre[:, 0] - ordre[:, 1]
     bons = scores.argmax(axis=1) == y
@@ -363,6 +421,48 @@ def point_de_fonctionnement(oof_scores, oof_y, corr_min, margin):
         "n": int(len(y)),
         "n_corrects": int(bons.sum()),
     }
+
+
+# --- Comparer DEUX décodeurs sur des décisions APPARIÉES (McNemar) ----------
+
+def _mcnemar_p(b, c):
+    """p-value BILATÉRALE EXACTE du test de McNemar, sur des décisions APPARIÉES.
+
+    ⚠️ **C'est le test qui convient ici, et un test de deux proportions indépendantes serait le
+    MAUVAIS test.** eCCA et rCCA sont notés sur les MÊMES groupes de cycles — même hasard du
+    moment, même bruit, mêmes essais faciles ou difficiles. Comparer leurs deux justesses comme
+    deux échantillons indépendants jetterait cette information et gonflerait la confiance dans un
+    écart qui n'en a pas — exactement le péché cardinal que ce dépôt s'interdit (`CLAUDE.md`,
+    « rigueur statistique »), déjà commis une fois pour le Motor Imagery. Deux pourcentages ÉGAUX
+    ne sont pas plus un test que deux pourcentages différents : rien ne dit que ce sont les MÊMES
+    décisions.
+
+    `b` = décisions où SEUL eCCA est correct, `c` = décisions où SEUL rCCA l'est. Sous H0 (les
+    deux décodeurs se valent), `b` suit Binomial(b+c, 1/2) ; la p-value est la somme des
+    probabilités de tous les résultats AU MOINS aussi improbables que celui observé — la
+    définition standard du test binomial exact bilatéral (`scipy.stats.binomtest`, `R
+    binom.test`). Sans dépendance à `scipy.stats` : `math.comb` suffit, et le calcul se relit
+    entièrement dans ces quelques lignes.
+
+    ⚠️ **Vit dans `core/` et pas dans `research/cvep_calibrate.py`, où il est né** (commit
+    `bd3b588`) : `core/cvep_rcca.py::_rejouer` en a besoin aussi, et `core/` n'importe JAMAIS
+    `research/`. C'est la règle du dépôt appliquée telle quelle — « si l'envie s'en présente, c'est
+    que le module visé doit DÉMÉNAGER dans `core` ». `cvep_calibrate` le ré-importe d'ici.
+
+    Vérifié contre la seule séance réelle disponible : b=3, c=5 -> p=0,7265625, IDENTIQUE (à
+    l'arrondi) au p=0,727 mesuré indépendamment par la revue.
+    """
+    n = b + c
+    if n == 0:
+        return 1.0
+    probs = [math.comb(n, i) * (0.5 ** n) for i in range(n + 1)]
+    p_obs = probs[min(b, c)]
+    return min(1.0, sum(p for p in probs if p <= p_obs + 1e-12))
+
+
+# Seuil de significativité usuel (5 %) — pas ajusté sur les données de ce dépôt : un seuil qui
+# aurait été choisi POUR faire ressortir tel ou tel gagnant ne prouverait plus rien.
+SEUIL_MCNEMAR = 0.05
 
 
 # --- Rejouer une calibration réelle (LECTURE SEULE) -------------------------
@@ -402,8 +502,11 @@ def _rejouer(chemin, n_bruit=300):
 
     Trois choses que cette commande rend vérifiables au lieu d'être à croire :
 
-    1. **le jeu égal eCCA/rCCA**, l'affirmation qui justifie de réintégrer le rCCA. Les deux
-       décodeurs, les mêmes époques, la même validation croisée, le même affichage ;
+    1. **l'absence de différence DÉTECTABLE entre eCCA et rCCA**, l'affirmation qui justifie de
+       réintégrer le rCCA — testée par **McNemar apparié sur les MÊMES groupes de cycles**, pas par
+       deux pourcentages côte à côte (`bd3b588` a banni cette comparaison de l'écran de
+       calibration ; elle n'a pas plus de valeur ici, et deux pourcentages ÉGAUX n'en ont pas
+       davantage : rien ne dit que ce sont les mêmes décisions) ;
     2. **l'effet de la GÉOMÉTRIE**. Une calibration enregistre un cycle par époque, le moteur
        décide sur `CVEP_DECISION_CYCLES`. Des seuils mesurés à k=1 ne décrivent pas le décodeur
        qui tourne — la ligne « k=2 » est celle qui compte pour `config.py` ;
@@ -412,21 +515,42 @@ def _rejouer(chemin, n_bruit=300):
     Le projet s'est déjà fait avoir : les seuils de l'ErrP ont été posés par un script jetable et
     non versionné, et `errp_models.py` porte encore le regret de ne pas pouvoir dire à un étudiant
     comment les refaire. Ici, la commande est la trace.
+
+    Rend **True si au moins une géométrie a produit une décision**, False sinon (fichier refusé,
+    ou aucune paire de cycles consécutifs nulle part) : `sys.exit(0 if _rejouer(...) else 1)`
+    n'avait aucun sens tant que cette fonction rendait `True` en dur — le défaut exact que la
+    tâche 3 venait de corriger dans le jumeau `research/cvep_rcca.py::_demo`.
     """
     from core.cvep_code import build_targets
     from core.config import (CVEP_CORR_MIN, CVEP_MARGIN, CVEP_RCCA_CORR_MIN,
                              CVEP_RCCA_MARGIN)
     from core.cvep_decoder import CVEPModel, bandpass as _bp, groupes_de_cycles
 
-    d = np.load(chemin)
     plan, code = build_targets()
     codes = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
     lag_de_cible = [c["lag"] for c in plan]
-    lags = [int(l) for l in d["lags"]]
-    voies = [int(c) for c in d["channels"]]
-    fs, refresh = float(d["fs"]), float(d["refresh"])
-    epochs = [d["epochs"][i][:, voies] for i in range(len(d["epochs"]))]
-    y = np.asarray([lag_de_cible.index(l) for l in lags])
+    # ⚠️ UN refus nommé, AVANT tout calcul, pour toute la famille « ce fichier ne décrit pas le
+    # stimulus affiché aujourd'hui ». Sans lui : `d["lags"]` sur un `.npz` qui n'est pas une
+    # calibration -> `KeyError` ; `lag_de_cible.index(l)` sur une séance enregistrée à un autre
+    # `CVEP_LAG_ROTATION` / `CVEP_N_TARGETS` / `CVEP_BITS` -> `ValueError: 21 is not in list`.
+    # Trois tracebacks pour une seule cause, sur une commande qui accepte n'importe quel chemin
+    # tapé par un étudiant. `core.cvep_models.charger` nomme déjà ce cas ; on dit la même chose.
+    try:
+        d = np.load(chemin)
+        lags = [int(l) for l in d["lags"]]
+        voies = [int(c) for c in d["channels"]]
+        fs, refresh = float(d["fs"]), float(d["refresh"])
+        epochs = [d["epochs"][i][:, voies] for i in range(len(d["epochs"]))]
+        y = np.asarray([lag_de_cible.index(l) for l in lags])
+    except Exception as e:      # noqa: BLE001 - un .npz étranger casse de mille façons équivalentes
+        print(f"[seuils] ⛔ {os.path.basename(chemin)} n'est pas une calibration du stimulus "
+              f"AFFICHÉ AUJOURD'HUI ({type(e).__name__}: {e}).")
+        print(f"[seuils]    Soit ce n'est pas un `cvep_calib_*.npz` (il lui manque `lags`, "
+              f"`epochs`, `channels`, `fs` ou `refresh`) ; soit il a été enregistré sur d'AUTRES "
+              f"cibles — le plan d'aujourd'hui affiche les lags {lag_de_cible}, et un fichier "
+              f"calibré à un autre CVEP_BITS / CVEP_TAPS / CVEP_N_TARGETS / CVEP_LAG_ROTATION en "
+              f"porte d'autres. Rien à rejouer : même refus que `core.cvep_models.charger`.")
+        return False
 
     rcca = RCCAModel(codes, fs=fs, refresh=refresh,
                      channels=list(range(len(voies)))).fit(epochs, y, compute_cv=False)
@@ -440,12 +564,31 @@ def _rejouer(chemin, n_bruit=300):
           f"voies {voies}, {fs:.0f} Hz / {refresh:.0f} Hz")
     print(f"[seuils] ⚠️ UNE personne, UNE séance : ces chiffres ne valent que pour CE fichier, et "
           f"les justesses portent sur peu de décisions — lire les écarts avec prudence.")
+    print(f"[seuils] ⚠️ Et le couple de seuils que vous retiendrez EN LISANT le tableau ci-dessous "
+          f"aura un point de fonctionnement OPTIMISTE : il aura été choisi sur ces décisions-là, "
+          f"celles-là mêmes qui le mesurent. C'est le cas des 0,24/0,08 livrés dans config.py. "
+          f"Un chiffre non biaisé demanderait une SECONDE séance.")
 
+    mesuree = False           # au moins une géométrie a-t-elle produit quelque chose ?
     for k in (1, CVEP_DECISION_CYCLES):
         n_dec = len(groupes_de_cycles(y, k))
         titre = "géométrie d'une ÉPOQUE de calibration" if k == 1 else \
                 "géométrie de DÉCISION DU MOTEUR (CVEP_DECISION_CYCLES)"
         print(f"\n[seuils] === k = {k} cycle(s) par décision — {titre} : {n_dec} décisions ===")
+        # ⚠️ Fermer ce chemin ICI, avant tout calcul, et pas le deviner en aval : à zéro groupe,
+        # `CVEPModel.hors_pli` rend `(0,)` (AxisError sur `.argmax(axis=1)`) tandis que
+        # `RCCAModel.hors_pli` rend `(0, n_cibles)`, qui passe les gardes de forme et fabrique un
+        # `nan` — trois tracebacks différents pour une seule et même cause. Ce n'est pas
+        # théorique : le protocole `--smoke` d'origine coupait systématiquement toute paire de
+        # cycles consécutifs (mesuré, cf. `research/cvep_calibrate.calibrate`).
+        if n_dec == 0:
+            print(f"[seuils]   ⛔ AUCUN groupe de {k} cycles CONSÉCUTIFS de la même cible dans ce "
+                  f"fichier — rien à mesurer à cette géométrie, et ce n'est pas une panne : "
+                  f"`groupes_de_cycles` ÉCARTE (sans les rogner) les groupes à cheval sur un "
+                  f"changement de cible, donc une séance courte ou très fragmentée n'en laisse "
+                  f"aucun. Recalibrer avec plus de cycles consécutifs par cible.")
+            continue
+        mesuree = True
 
         sc_r, y_r = rcca.hors_pli(epochs, y, n_cycles=k)
         sc_e, y_e, _ = ecca.hors_pli(epochs, lags, n_cycles=k)
@@ -455,6 +598,23 @@ def _rejouer(chemin, n_bruit=300):
               f"({int(round(loo_r*n_dec))}/{n_dec})   "
               f"eCCA {loo_e*100:5.1f} % ({int(round(loo_e*n_dec))}/{n_dec})   "
               f"hasard {100/rcca.n_targets:.1f} %")
+        # ⚠️ Les deux lignes ci-dessus sont deux POURCENTAGES BRUTS : elles décrivent, elles ne
+        # comparent pas. Ce qui compare, c'est la ligne suivante. `groupes_de_cycles(y, k)` et
+        # `groupes_de_cycles(lags, k)` parcourent des étiquettes en BIJECTION (`y[i] =
+        # lag_de_cible.index(lags[i])`), donc rendent la MÊME liste de groupes dans le MÊME
+        # ordre : `sc_r[j]` et `sc_e[j]` notent le même groupe de cycles, et les décisions sont
+        # APPARIÉES — la condition qui rend McNemar applicable et un test de deux proportions
+        # indépendantes faux.
+        ok_r, ok_e = sc_r.argmax(axis=1) == y_r, sc_e.argmax(axis=1) == y_e
+        # `b` / `c` de McNemar, nommés en toutes lettres : plus bas, `c` est le `corr_min` de la
+        # boucle des candidats, et deux `c` dans la même fonction se relisent très mal.
+        b_ecca_seul, c_rcca_seul = int((ok_e & ~ok_r).sum()), int((ok_r & ~ok_e).sum())
+        p_mcnemar = _mcnemar_p(b_ecca_seul, c_rcca_seul)
+        print(f"[seuils]   McNemar apparié (MÊMES groupes) : eCCA seul {b_ecca_seul}, rCCA seul "
+              f"{c_rcca_seul} -> {b_ecca_seul + c_rcca_seul} décisions discordantes sur {n_dec}, "
+              f"p={p_mcnemar:.3f} — "
+              + ("aucune différence détectable entre les deux décodeurs (ce qui n'est PAS "
+                 "« ils se valent »)" if p_mcnemar >= SEUIL_MCNEMAR else "écart DÉFENDABLE"))
 
         bruit = {
             "rCCA": _bruit_gagnant_ecart(rcca.scores, rcca.n_cyc, len(voies), k, sigma, n_bruit),
@@ -471,20 +631,34 @@ def _rejouer(chemin, n_bruit=300):
         if q05[0] is not None:
             candidats.append((q05[0], q05[1], f"quantile 5 % rCCA — SENSIBILITÉ, pas rejet "
                                               f"({q05[2]} essais corrects)"))
+        def _pct(v, largeur):
+            """« — » plutôt qu'un plantage. `corrects_gardes`, `emission` et `justesse_si_emis`
+            valent `None` quand il n'y a rien à décrire : aucun essai correct dans la validation
+            croisée, aucune émission, aucune décision. `None * 100` était le TROISIÈME traceback
+            de la famille « rien à mesurer » (seul `justesse_si_emis` était protégé), et le plus
+            probable des trois sur une séance médiocre — 6 cibles, 12 décisions, zéro correcte
+            arrive une fois sur neuf par pur hasard."""
+            return f"{v*100:{largeur}.0f} %" if v is not None else f"{'—':>{largeur}}  "
+
         print(f"[seuils]     seuils      | déc. | corrects gardés | émission | justesse si émis "
               f"| bruit passé")
         for c, mg, nom in candidats:
             for nom_dec, sc, yy in (("rCCA", sc_r, y_r), ("eCCA", sc_e, y_e)):
                 pf = point_de_fonctionnement(sc, yy, c, mg)
-                just = "   —  " if pf["justesse_si_emis"] is None \
-                    else f"{pf['justesse_si_emis']*100:5.0f} %"
                 g, e = bruit[nom_dec]
                 br = float(((g >= c) & (e >= mg)).mean())
                 print(f"[seuils]  {c:6.3f} /{mg:6.3f} | {nom_dec} |"
-                      f"{pf['corrects_gardes']*100:12.0f} % |{pf['emission']*100:7.0f} % |"
-                      f"{just:>16s} |{br*100:9.0f} %"
+                      f"{_pct(pf['corrects_gardes'], 12)} |{_pct(pf['emission'], 7)} |"
+                      f"{_pct(pf['justesse_si_emis'], 14)} |{br*100:9.0f} %"
                       + (f"   <- {nom}" if nom_dec == "rCCA" else ""))
-    return True
+    if not mesuree:
+        print(f"\n[seuils] ⛔ AUCUNE géométrie n'a produit la moindre décision sur ce fichier — "
+              f"il n'y a rien à en tirer. (Sortie en 1 : c'est un échec, pas un rapport vide.)")
+    # ⚠️ `mesuree` et non `True` en dur : `sys.exit(0 if _rejouer(...) else 1)` avait une branche
+    # MORTE. Ce qui la rend vivante aujourd'hui, et ce qui est testé, c'est le `return False` du
+    # refus de fichier ci-dessus ; cette ligne-ci reste défensive (k=1 ne rend `[]` que sur un
+    # fichier à ZÉRO époque, que `fit` refuserait avant d'arriver ici).
+    return mesuree
 
 
 # --- Autotest sur c-VEP synthétique, sur le stimulus DÉCALÉ (aucun casque) --
@@ -574,6 +748,18 @@ def _selftest():
     # décodeurs. L'eCCA est le décodeur validé au casque (22 bits/min) : c'est LUI la référence,
     # et deux conventions opposées se seraient annulées dans n'importe quel test écrit pour le
     # seul rCCA — c'est exactement comme ça que le défaut de signe ci-dessus avait survécu.
+    #
+    # ⚠️ **Ce n'est PAS un test d'accord, c'est un test de JUSTESSE doublé, et c'est CE qui le rend
+    # robuste.** Les deux membres du `and` ci-dessous comparent chacun à la VÉRITÉ TERRAIN
+    # (`plan[cible]["lag"]`, `cible`), jamais l'un à l'autre. La raison est mesurable : sous une
+    # inversion SIMULTANÉE des deux conventions de phase, les deux décodeurs désignent la MÊME
+    # cible fausse (celle de lag `lag_vrai + 2p`) — un test d'accord pur resterait donc vert, sur
+    # 8 des 9 phases parcourues (la 9e est p=0, où `2p ≡ 0 mod 63` puisque 63 est impair). Exiger
+    # la cible RÉELLEMENT AFFICHÉE, elle, rougit. C'est aussi la SEULE assertion du dépôt qui
+    # épingle la convention de phase de l'eCCA : `cvep_decoder._demo` fait le même geste mais
+    # IMPRIME sans affirmer, et `_loo`/`hors_pli` n'époquent qu'à la phase 0.
+    # ⛔ Ne pas « simplifier » en comparant les deux sorties entre elles : c'est la seule voie par
+    # laquelle ce garde peut être détruit sans que rien ne le signale.
     from core.cvep_decoder import CVEPModel
     ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code),
                      channels=list(range(n_ch))).fit(epochs, [plan[i]["lag"] for i in labels])
@@ -587,8 +773,10 @@ def _selftest():
         accord += int(max(sc_e, key=sc_e.get) == plan[cible]["lag"]
                       and int(np.argmax(modele.scores(w, p, 1))) == cible)
     chk(accord >= essais - 1,
-        f"les DEUX décodeurs désignent la même cible sur la même fenêtre à la même phase : la "
-        f"convention de phase est commune ({accord}/{essais})")
+        f"les DEUX décodeurs désignent la cible RÉELLEMENT AFFICHÉE, sur la même fenêtre à la "
+        f"même phase : la convention de phase est commune ({accord}/{essais}). ⚠️ JUSTESSE et non "
+        f"ACCORD, délibérément — deux conventions inversées ENSEMBLE se mettraient d'accord sur "
+        f"la cible de lag `lag_vrai + 2p` et un test d'accord resterait vert")
 
     # 2 ter. `_fold` moyenne les DERNIERS cycles, pas les premiers. Le moteur décode sur une
     # fenêtre glissante DÉLIBÉRÉMENT plus longue que sa décision : le surplus en tête sert de
@@ -822,6 +1010,96 @@ def _selftest():
             "...et le modèle rechargé décode encore : le classifieur pyntbci a bien été ré-ajusté")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- 6. `--seuils` REFUSE au lieu de mourir, et sort en 1 quand il n'a rien mesuré. --------
+    # `_rejouer` accepte n'importe quel chemin tapé par un étudiant, et rendait `True` EN DUR :
+    # `sys.exit(0 if _rejouer(...) else 1)` avait donc une branche morte, et les trois pannes
+    # ci-dessous sortaient en traceback avec un code 0. Les fixtures sont écrites dans un dossier
+    # TEMPORAIRE : `data/` n'est jamais lu ni écrit par cet autotest.
+    import contextlib
+    import io
+
+    def _rejoue_capture(chemin):
+        """(rendu, texte imprimé) — on juge sur les DEUX : un refus qui ne dit rien ne vaut pas
+        mieux qu'un traceback, et un message parfait qui sort en 0 non plus."""
+        cap = io.StringIO()
+        with contextlib.redirect_stdout(cap):
+            rendu = _rejouer(chemin, n_bruit=3)
+        return rendu, cap.getvalue()
+
+    tmp6 = tempfile.mkdtemp(prefix="cvep_rcca_seuils_")
+    try:
+        n_cyc = modele.n_cyc
+        voies_f = list(range(n_ch))
+
+        def _ecrire_calib(nom, lags_fixture, **extra):
+            ch = os.path.join(tmp6, nom)
+            n = len(lags_fixture)
+            np.savez(ch, epochs=rng.normal(0.0, 1.0, (n, n_cyc, n_ch)),
+                     lags=np.asarray(lags_fixture, dtype=int),
+                     channels=np.asarray(voies_f, dtype=int), fs=fs, refresh=refresh, **extra)
+            return ch
+
+        # (a) m8 — le fichier a été calibré sur d'AUTRES cibles : `lag_de_cible.index(l)` levait
+        #     `ValueError: 21 is not in list`, un traceback pour une cause parfaitement nommable.
+        lag_etranger = max(lags) + 1
+        chk(lag_etranger not in lags, f"fixture : {lag_etranger} n'est VRAIMENT pas un lag du plan")
+        perime = _ecrire_calib("cvep_calib_perime.npz", [lag_etranger] * 4 + [lags[0]] * 4)
+        rendu_a, txt_a = _rejoue_capture(perime)
+        chk(rendu_a is False and "⛔" in txt_a and "AUTRES cibles" in txt_a
+            and "cvep_calib_perime.npz" in txt_a,
+            f"--seuils sur un fichier aux lags PÉRIMÉS refuse en le nommant et sort en 1, au lieu "
+            f"d'un `ValueError: {lag_etranger} is not in list` ({rendu_a}, {txt_a.strip()[:90]!r})")
+
+        # (b) m8 bis — ce n'est pas une calibration du tout (un `.npz` sans `lags`) : `KeyError`.
+        pas_calib = os.path.join(tmp6, "pas_une_calib.npz")
+        np.savez(pas_calib, quelque_chose=np.zeros(3))
+        rendu_b, txt_b = _rejoue_capture(pas_calib)
+        chk(rendu_b is False and "⛔" in txt_b and "pas une calibration" in txt_b.lower(),
+            f"...et un `.npz` qui n'est pas une calibration est refusé POUR CE QU'IL EST, pas par "
+            f"KeyError ({rendu_b}, {txt_b.strip()[:90]!r})")
+
+        # (c) I1 — la géométrie k=2 ne rend AUCUN groupe. Chaque cible n'apparaît qu'une fois par
+        #     tour, donc jamais deux cycles consécutifs de la même : `groupes_de_cycles(y, 2)` rend
+        #     []. Les deux `hors_pli` divergent alors de forme — `(0,)` côté eCCA (AxisError sur
+        #     `.argmax(axis=1)`), `(0, n_cibles)` côté rCCA (qui passe les gardes et fabrique un
+        #     `nan`, puis un `ValueError: cannot convert float NaN to integer`) : trois tracebacks
+        #     pour une seule cause. k=1, lui, doit continuer de mesurer normalement.
+        alternes = [l for _ in range(2) for l in lags]
+        from core.cvep_decoder import groupes_de_cycles as _gdc6
+        chk(_gdc6([lags.index(l) for l in alternes], CVEP_DECISION_CYCLES) == []
+            and len(_gdc6([lags.index(l) for l in alternes], 1)) == len(alternes),
+            f"fixture : AUCUNE paire de cycles consécutifs à k={CVEP_DECISION_CYCLES}, mais des "
+            f"décisions à k=1 ({len(_gdc6([lags.index(l) for l in alternes], 1))})")
+        sans_paire = _ecrire_calib("cvep_calib_sans_paire.npz", alternes)
+        rendu_c, txt_c = _rejoue_capture(sans_paire)
+        chk(rendu_c is True and f"AUCUN groupe de {CVEP_DECISION_CYCLES} cycles" in txt_c,
+            f"--seuils sur une séance SANS aucune paire consécutive nomme le refus À CETTE "
+            f"GÉOMÉTRIE, une seule fois, sans traceback ({rendu_c}, "
+            f"{[l for l in txt_c.splitlines() if '⛔' in l]})")
+        chk("k = 1" in txt_c and "leave-one-out" in txt_c,
+            "...et la géométrie k=1, elle, est mesurée normalement — le refus est LOCAL à la "
+            "géométrie vide, il n'avale pas tout le rapport")
+        chk("McNemar apparié" in txt_c,
+            f"...et la comparaison des deux décodeurs passe par McNemar APPARIÉ, pas par les deux "
+            f"pourcentages côte à côte que `bd3b588` a bannis de l'écran de calibration "
+            f"({[l.strip() for l in txt_c.splitlines() if 'McNemar' in l]})")
+        chk("OPTIMISTE" in txt_c and "choisi sur ces décisions" in txt_c,
+            "...et le tableau dit, LÀ OÙ IL EST LU, que le couple qu'on y choisira aura un point "
+            "de fonctionnement optimiste — sélectionné sur les décisions qui le mesurent")
+    finally:
+        shutil.rmtree(tmp6, ignore_errors=True)
+
+    # ...et le McNemar que `--seuils` applique est celui de l'écran de calibration, à l'identique.
+    # ⚠️ Il vit ICI et pas dans `research/cvep_calibrate.py` où il est né : `core/` n'importe
+    # JAMAIS `research/` (vérifié par `server.py --smoke`), donc c'est le module visé qui a
+    # DÉMÉNAGÉ. Que les deux appelants partagent bien le MÊME objet est vérifié de l'autre côté de
+    # la frontière, par `python src/research/cvep_calibrate.py` — le sens d'import autorisé.
+    chk(abs(_mcnemar_p(3, 5) - 0.7265625) < 1e-9 and abs(_mcnemar_p(5, 3) - 0.7265625) < 1e-9,
+        f"_mcnemar_p(3, 5) = _mcnemar_p(5, 3) = 0,7265625 — le cas mesuré sur la vraie séance "
+        f"({_mcnemar_p(3, 5)})")
+    chk(_mcnemar_p(0, 0) == 1.0 and _mcnemar_p(10, 10) == 1.0,
+        "...et les deux dégénérescences rendent p=1 (aucune discordance, partage parfait)")
 
     print(f"[cvep-rcca] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

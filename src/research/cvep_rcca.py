@@ -18,8 +18,13 @@ Ce qui a été testé, et ce qui a été conclu :
 
 Verdict : **codes Gold = non**. Mais les deux moitiés de l'hypothèse (« rCCA » et « codes
 distincts ») ont toujours été mesurées ENSEMBLE, et `RCCAModel` prend ses codes en paramètre — il
-n'a jamais su d'où ils venaient. Rebranché sur le stimulus décalé, le rCCA fait jeu égal avec
-l'eCCA (43/90 chacun, cf. `core/cvep_rcca.py`). C'est la moitié « codes Gold » qui était mauvaise.
+n'a jamais su d'où ils venaient. Rebranché sur le stimulus décalé, **le rCCA n'est pas
+DISTINGUABLE de l'eCCA sur la seule séance mesurée** : à la géométrie du moteur (k=2), rCCA 24/37
+contre eCCA 22/37, McNemar apparié p = 0,727 — **une personne, une séance**, et à 37 décisions ce
+test ne verrait qu'un écart énorme. Ce n'est donc pas « il fait jeu égal » (une équivalence
+établie), c'est « rien ne justifie de le jeter ». Détail et provenance : `core/cvep_rcca.py`, et
+`python src/core/cvep_rcca.py --seuils data/cvep_calib_last.npz` pour le rejouer. C'est la moitié
+« codes Gold » qui était mauvaise, pas la reconvolution.
 
 ⚠️ **Une hypothèse réfutée se garde LISIBLE, pas BRANCHÉE.** Depuis la tâche 6, le seul appelant de
 `make_distinct_codes` / `build_targets_rcca` est `archive/cvep_rcca_pilot.py` — écran de calibration

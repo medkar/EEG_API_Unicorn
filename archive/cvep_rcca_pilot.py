@@ -3,7 +3,9 @@
 Ce module vivait comme `calib_cvep_rcca` (via `research.cvep_rcca.calibrate_rcca`) et `mode_cvep_rcca`
 dans `src/research/app.py`. Codes Gold distincts + reconvolution ont été mesurés et RÉFUTÉS : voir
 `src/core/cvep_rcca.py` (docstring du module) — le rCCA lui-même n'est PAS réfuté (rebranché sur le
-stimulus décalé que le produit garde, il fait jeu égal avec l'eCCA), c'est la moitié « codes Gold »
+stimulus décalé que le produit garde, il n'est pas DISTINGUABLE de l'eCCA sur la seule séance
+mesurée : k=2, rCCA 24/37 contre eCCA 22/37, McNemar p = 0,727, UNE personne UNE séance — ce qui
+n'est pas la même chose que « il fait jeu égal »), c'est la moitié « codes Gold »
 de l'hypothèse qui l'était. La calibration DÉSORMAIS au menu (`python src/research/app.py`, page
 c-VEP) entraîne le rCCA sur le stimulus décalé, pas sur des codes Gold — elle REMPLACE celle-ci.
 
