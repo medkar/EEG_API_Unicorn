@@ -88,9 +88,12 @@ Deux règles en découlent, et elles sont ce qui empêche la frontière de s'eff
    été supprimée (`controller.simulate()` couvre déjà ce câblage).
 2. **Aucun pygame dans `core`** : le moteur doit tourner sur une machine sans écran.
 
-`research` ne veut pas dire « brouillon » — le P300 et le c-VEP y sont validés sur casque. Ça veut
-dire que le moteur ne les publie pas encore, donc qu'ils ne font pas partie du contrat rendu aux
-étudiants.
+`research` ne veut pas dire « brouillon ». Ça veut dire que le moteur ne le publie pas, donc que ça
+ne fait pas partie du contrat rendu aux étudiants. La règle a été appliquée jusqu'au bout : **les six
+décodeurs ont déménagé dans `core/` à mesure que le moteur les publiait**, le c-VEP en dernier le
+2026-08-21. Ce qui reste dans `research/` aujourd'hui n'est plus un décodeur en attente mais ce qui
+n'a rien à faire dans un moteur sans écran : l'appli pygame, les calibrations, les émetteurs de
+stimulus et les analyses hors ligne.
 
 Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
 **centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
@@ -195,7 +198,7 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 | **P300** | évoqué | `{target_index, confidence, n_flashes, score_0…score_5}` — **implémenté** (2026-08-17). Événementiel : **un échantillon par manche**, pas un débit régulier — un client qui attend 5 Hz attend pour rien. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** ; les métadonnées portent `no_decision_index` pour qu'un client non-Python puisse le lire sans ouvrir le code. `confidence` = log-odds moyens du gagnant : non bornés, non comparables entre personnes, d'où `decision_scale = "logodds"` dans les métadonnées. ⚠️ **Exige des MARQUEURS ENTRANTS** — avec l'ErrP, les deux seuls : l'application externe affiche les flashs et déclare l'onset de chacun — contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration dans l'appli pygame ; AUC mesurée 0,71 en validation croisée par manche, 1 personne, 1 séance). |
 | **Neuro-monitoring** | passif | `{charge, somnolence, engagement, artifact}` — **implémenté** (2026-07-27). z relatifs à un repos mesuré **en début de mode, pour cet utilisateur, ce jour-là** : les valeurs ne se comparent ni entre personnes, ni entre séances, et n'ont aucun sens absolu. `artifact = 1` republie les derniers z valides plutôt que des indices calculés sur un clignement — ceux-ci seraient plausibles, donc indétectables en aval. ⚠️ Plomberie testée, **contenu jamais validé sur casque**. |
 | **ErrP** | passif | `{error, score, threshold, artifact}` — **implémenté** (2026-08-19). Un échantillon par marqueur `feedback`, cadence irrégulière. ⚠️ `error = -1` signifie « pas de verdict » (époque hors tampon, ou rejetée pour artefact — un clignement au moment où la machine se trompe est le cas FRÉQUENT), **jamais** « pas d'erreur ». ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré** (`tnr_target`, `tpr_measured`, `tnr_measured`) : au réglage par défaut ce détecteur attrape **une erreur sur deux** et annule une bonne commande sur sept — une application qui lit `error = 1` doit pouvoir le savoir sans lire le code. Le seul réglage est un **taux** (« quelle part des bonnes commandes garder »), dont le moteur déduit le seuil sur les scores hors-pli de la calibration de la personne. ⚠️ **Le moteur PUBLIE, il n'annule rien** : la période réfractaire et la décision d'annuler appartiennent au client. Mesuré honnêtement (CV groupée par bloc, 200 essais, 1 personne, 1 séance) : **AUC 0,776, p = 0,0099 sur 100 permutations** — le mieux validé des modes, devant le P300 (0,714). ⚠️ **Mais `tpr_measured`/`tnr_measured` sont OPTIMISTES et le flux le dit** (`measured_on`) : l'AUC vient de scores hors-pli, le **seuil** est choisi en les regardant, donc `tnr_measured ≥ tnr_target` est vrai *par construction* sur la calibration et pas en séance. Un client qui règle sa politique d'annulation sur ces deux nombres observera **plus** de faux vetos que promis. ⚠️ Exige lui aussi un **modèle entraîné par personne** (calibration dans l'appli pygame) ; le mode refuse de démarrer sans, en le disant. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et par le même tuyau — un seul événement, `feedback`. |
-| **c-VEP** | évoqué | `{target_index, confidence}` — **stimulus natif au MVP** |
+| **c-VEP** | évoqué | `{target_index, confidence, score_0…score_5, corr_min, margin}` — **implémenté** (2026-08-21), **6e et dernier mode**. Continu, ~5 Hz. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** — et il a **QUATRE causes** que le flux ne distingue pas (`sans_reference`, `reference_perimee`, `sous_les_seuils`, `vote_non_conclu`), séparées par des compteurs dans l'état du moteur : quatre gestes opposés (relancer l'émetteur · vérifier le nom du flux · saliner · fixer UNE cible). ⚠️ **`corr_min`/`margin` voyagent DEUX fois et ne disent pas la même chose** : dans les métadonnées, la valeur **figée à l'ouverture** du flux ; dans les deux dernières **voies**, celle réellement en vigueur pour CET échantillon — ces deux seuils se règlent en pleine séance sans recréer le flux, donc seules les voies restent exactes pour dépouiller un enregistrement plus tard. `decision_scale = "correlation"` (Pearson dans [-1, 1]) : ni le z du SSVEP, ni les log-odds du P300. `confidence` décrit le **vote** (moyenne des fenêtres concordantes), les `score_*` la **dernière fenêtre seule**. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et l'ErrP — mais les siens ne délimitent aucune époque : ils tiennent une **HORLOGE** (`{"mode":"cvep","event":"cycle","refresh":…}`, un par redémarrage du code), contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration dans l'appli pygame). Seul mode du produit à avoir **deux décodeurs sur le même stimulus** (`eCCA`, `rCCA`) : c'est le FICHIER de modèle qui déclare le sien, et les métadonnées le publient sous `decoder`. Mesurés à jeu égal sur la séance de référence (37 décisions appariées, k=2) : **indiscernables — McNemar p = 0,727**, 8 décisions discordantes. ⚠️ **Jamais vérifié au casque à travers le moteur** (recette 2.9). |
 
 Chaque mode publie **une intention neutre** (quelle cible / quelle classe / quel état), jamais une commande
 d'actionneur. La conversion en action appartient à l'application avale : c'est ce qui rend le même flux
@@ -213,9 +216,16 @@ n'a rien à juger. Il ne rentre proprement dans aucune des deux moitiés, et c'e
 utile pour un client n'est pas « actif/passif » mais « dois-je afficher quelque chose et le déclarer ? ».
 Réponse oui pour SSVEP, c-VEP, P300 et ErrP ; non pour le MI et le neuro.
 
-C'est pourquoi les métadonnées portent `paradigm`, et il en existe **cinq** valeurs, pas deux :
-`SSVEP`, `neuro-passive`, `motor-imagery`, `P300`, `ErrP`. Un client qui filtre sur ce champ doit les
-connaître toutes, sans quoi il ignorera en silence un flux qu'il croit écouter.
+C'est pourquoi les métadonnées portent `paradigm`, et il en existe **six** valeurs, pas deux :
+`SSVEP`, `neuro-passive`, `motor-imagery`, `P300`, `ErrP`, `c-VEP`. Un client qui filtre sur ce champ
+doit les connaître toutes, sans quoi il ignorera en silence un flux qu'il croit écouter.
+
+**Trois échelles de décision, et les confondre se paie d'un ordre de grandeur.** `decision_scale`
+vaut `z` ou `rho` pour le SSVEP (normalisé contre un plancher de repos), `proba` pour le MI,
+`logodds` pour le P300 et l'ErrP (non bornés, négatifs en usage normal), `correlation` pour le c-VEP
+(Pearson dans [-1, 1], aucun plancher de repos mesuré). Un `corr_min` de 0,26 lu sur l'échelle z du
+SSVEP passerait pour du bruit ; un `confidence > 0` posé sur du log-odds P300 jetterait toutes les
+bonnes réponses. C'est ce champ, et lui seul, qui donne leur sens aux seuils publiés à côté.
 
 **Le réglage SSVEP dépend de la personne, pas seulement de l'écran.** Les fréquences des cibles
 doivent être des **diviseurs entiers du rafraîchissement de l'écran qui affiche le stimulus** (à
@@ -255,10 +265,17 @@ l'appli externe** (ex. Unity). La faisabilité dépend du couplage temporel du m
 | **MI / neuro** | sans objet (endogène) | rien |
 | **SSVEP** | oui, facile | déclare le **set de fréquences** une fois (couplage lâche, pas de sync frame) |
 | **P300 / ErrP** | oui, moyen | un **marqueur horodaté par événement** (flash / feedback) via `EEG_API_Unicorn_stim` |
-| **c-VEP** | non (MVP) | sync frame-par-frame trop serrée → **rendu natif** par l'API |
+| **c-VEP** | oui, difficile | un **marqueur d'HORLOGE par cycle** du code (`event: "cycle"`, avec le `refresh`), horodaté après le flip qui affiche la frame 0 — et un rendu verrouillé à la frame, vsync compris |
 
 **Mécanisme clé = le marqueur** : un message horodaté « événement X à l'instant T » que l'appli publie ;
 grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au ms près, épocher, décoder.
+
+⚠️ **Le c-VEP a renversé la ligne « non (MVP) » ci-dessus le 2026-08-21, et la contrainte qui la
+justifiait n'a pas disparu pour autant.** Elle a seulement changé de camp : le moteur ne demande plus
+un stimulus rendu chez lui, il demande que le stimulus lui donne l'heure. Une frame sautée décale le
+code jusqu'au marqueur suivant, et une frame d'avance à l'horodatage décale TOUT, définitivement,
+sans lever la moindre exception. C'est pourquoi la **calibration** c-VEP reste native
+(`Calib(kind="natif")`) : le pilotage tolère un émetteur externe, l'enregistrement des époques non.
 
 ## 8. Dépendances et installation
 
@@ -432,8 +449,10 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
 
 ## 13. Évolutions futures parkées (hors MVP)
 
-- **F1 — c-VEP externalisé** : rendre le stimulus c-VEP dans l'appli externe. Bloqué par le couplage
-  frame-par-frame (le décodeur a besoin de la phase exacte du code). À explorer si besoin réel.
+- ~~**F1 — c-VEP externalisé**~~ : **FAIT le 2026-08-21** (§14). Le blocage supposé — « le décodeur a
+  besoin de la phase exacte du code » — était réel mais mal formulé : il n'exigeait pas que l'API
+  rende le stimulus, seulement qu'elle sache **où en est le code**. Un marqueur par cycle suffit. Ce
+  qui reste vrai et qui n'a pas été levé : la **calibration** c-VEP demande toujours un rendu natif.
 - **F2 — calibration externalisée (pilotée par l'app)** : l'appli externe joue le protocole et envoie
   les époques + labels à l'API pour entraîner. Avantage : stimulus calib == runtime (précision max,
   tout dans le jeu). Coût : le dev implémente le protocole → fournir un template/SDK.
@@ -509,6 +528,54 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        - **[à faire]** une **seconde personne mesurée**. Tous les chiffres de ce mode viennent d'une
          personne et d'une séance ; le jour où une deuxième est mesurée, ils deviendront une moyenne
          au lieu d'un point.
+     - **[fait 2026-08-21 — chantier « le c-VEP dans le moteur »]** le **c-VEP est publié**
+       (`--mode cvep` → `decoded_cvep`), **6e mode sur 6 : le moteur publie tout ce que le produit
+       sait décoder.** Le tuyau des marqueurs a servi une troisième fois, mais pour un usage
+       différent des deux premiers, et c'est l'apport de conception du chantier : **ces
+       marqueurs-là ne délimitent aucune époque, ils tiennent une HORLOGE**
+       (`{"mode":"cvep","event":"cycle","refresh":…}`, un par redémarrage du code, ~1 Hz). Le mode
+       décode en CONTINU sur une fenêtre glissante comme le SSVEP, et reconstruit à tout instant la
+       **phase** du code à partir du dernier marqueur. Le décodeur, la m-séquence et le catalogue de
+       modèles ont **déménagé** dans `core/` (`cvep_decoder`, `cvep_code`, `cvep_rcca`,
+       `cvep_models`) ; l'émetteur de référence est `research/cvep_stimulus.py`, qui **n'ouvre pas
+       le casque** et se lance donc à côté du moteur. Contrat public des marqueurs :
+       [docs/markers.md](markers.md).
+       ⚠️ **La panne caractéristique de ce mode ne casse rien**, et c'est ce que le chantier a
+       principalement outillé : une phase fausse de quelques frames ne lève aucune exception, les
+       corrélations baissent juste assez pour que la détection ne se déclenche presque jamais, et
+       c'est **indiscernable d'un étudiant qui ne fixe pas sa cible**. D'où la garde au niveau de la
+       frame (`cvep_stimulus.py --smoke` compare, image par image, la phase que le moteur
+       reconstruirait à celle réellement affichée, lue dans les PIXELS) et le refus bruyant de tout
+       marqueur dont le `refresh` s'écarte de plus de 1 Hz de celui du modèle. ⚠️ **Ce refus porte
+       sur les MARQUEURS, pas sur le démarrage du mode** : le moteur continue de tourner et publie
+       `-1`, il n'y a pas de crash à attendre.
+       ⚠️ **Deux décodeurs, un seul stimulus.** eCCA et rCCA sont entraînés par la MÊME calibration,
+       sur les MÊMES époques, et comparés par **McNemar apparié** — pas par deux pourcentages mis
+       côte à côte. Sur la séance de référence (37 décisions, k=2) : 8 discordances, **p = 0,727,
+       indiscernables**. C'est le fichier de modèle qui déclare son décodeur ; l'étudiant choisit un
+       modèle, jamais un algorithme.
+       ⚠️ **Les deux seuils de décision (`corr_min`, `margin`) se règlent EN PLEINE SÉANCE**, sans
+       recréer le flux ni refaire la chauffe (`affecte_decodage=False`) — une première dans le
+       produit, et la raison pour laquelle ils voyagent aussi **par échantillon** : les métadonnées
+       LSL, figées à l'ouverture, ne suffiraient plus à dire contre quel seuil une décision a été
+       prise.
+       - **[à faire — LE point ouvert]** la **séance casque**. Rien de ce mode n'a été vu sur un
+         vrai cerveau à travers le moteur : la chaîne est vérifiée de bout en bout en synthétique et
+         la phase gardée à la frame, mais le premier signal réel passera après. C'est la
+         **recette 2.9**, qui porte la comparaison contre l'écran archivé (`archive/cvep_pilot.py`)
+         — la seule mesure qui sépare « le décodage réseau est moins bon » de « la séance est moins
+         bonne ».
+       - **[à faire]** les **codes Gold** restent **RÉFUTÉS et hors du produit** (35,6 % contre
+         ~48 % pour les deux décodeurs sur le stimulus décalé partagé). Ce n'est pas une dette,
+         c'est une hypothèse close ; `archive/cvep_rcca_pilot.py` la garde vérifiable.
+       - **[à faire]** le **rendu par une application cliente** : aucun client externe n'affiche
+         encore un stimulus c-VEP. `cvep_stimulus.py` est un émetteur de référence, pas une preuve
+         qu'un moteur de jeu tient la frame.
+       - **[à faire]** la **calibration c-VEP jouée par le moteur** : elle reste dans l'appli
+         pygame, comme celles du P300 et de l'ErrP, et pour une raison plus forte qu'elles — son
+         stimulus doit être verrouillé à la frame (§7).
+       - **[à faire]** une **seconde personne mesurée**. Comme pour l'ErrP, tous les chiffres du
+         c-VEP viennent d'une personne et d'une séance.
      - **[à faire]** la **calibration P300 jouée par le moteur** (évolution F2, §13) : elle reste
        dans l'appli pygame, donc un étudiant doit y passer avant que le moteur puisse décoder.
      - **[à faire]** le **control plane** (commandes JSON entrantes, §12.1) reste entier : ce

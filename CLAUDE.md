@@ -25,18 +25,31 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
-- L'**application pygame** (`src/research/app.py`, menu à 5 modes) reste le seul accès au **dernier
-  mode que le moteur ne sait pas faire** (le c-VEP) **et le seul endroit où calibrer le P300 et
-  l'ErrP** — leur stimulus doit être verrouillé à la frame, d'où `Calib(kind="natif")` dans leurs
-  deux `ModeSpec`. C'est le geste que le moteur lui-même prescrit quand il refuse de démarrer. Le SSVEP, le neuro, le **Motor Imagery**, l'**ErrP** et
-  le **P300** sont publiés par le moteur et pilotés depuis la console — **la calibration MI aussi** : un bouton
-  « Calibrer » sur sa page joue la séance et affiche un modèle horodaté avec son accuracy honnête.
-  Les anciens écrans pygame du MI (calibration, pilotage) sont **archivés**, pas supprimés, dans
-  [`archive/`](archive/README.md) : ils restent la référence contre laquelle vérifier la calibration
-  du moteur.
-- ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, appli pygame. Le casque
-  n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
-  sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
+- **Le moteur publie les SIX modes** depuis le 2026-08-21 : SSVEP, neuro, Motor Imagery, P300, ErrP
+  et **c-VEP**. Ils se pilotent tous depuis la console. ⚠️ **Publié ≠ validé** : seul le SSVEP a été
+  décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300, ErrP, c-VEP)
+  attendent une séance casque — c'est la recette, tests 2.6 à 2.9.
+- L'**application pygame** (`src/research/app.py`, menu à 5 pages) n'est plus le seul accès à aucun
+  mode. Il ne lui reste que **les calibrations que le moteur ne sait pas jouer** — c-VEP, P300,
+  ErrP, dont le stimulus doit être verrouillé à la frame, d'où `Calib(kind="natif")` dans leurs
+  trois `ModeSpec` — et l'histogramme neuro. C'est le geste que le moteur lui-même prescrit quand il
+  refuse de démarrer. **La calibration MI, elle, est jouée par le moteur** : un bouton « Calibrer »
+  sur sa page de la console joue la séance et écrit un modèle horodaté avec son accuracy honnête.
+  Les anciens écrans pygame de **pilotage** (MI, c-VEP) sont **archivés**, pas supprimés, dans
+  [`archive/`](archive/README.md) : ils restent la référence contre laquelle comparer le moteur.
+  `archive/cvep_pilot.py` est le plus utile des quatre — même modèle, même vote 2-sur-3, décodage
+  LOCAL : c'est lui qui, en séance, sépare « le décodage réseau est moins bon » de « la séance est
+  moins bonne » (recette 2.9).
+- ⚠️ **Le c-VEP est le seul mode dont les marqueurs ne délimitent RIEN.** Ceux du P300 et de l'ErrP
+  disent « un événement a eu lieu, découpe autour » ; celui du c-VEP dit « à cet instant, le code
+  affiché était à sa frame 0 » — c'est une **HORLOGE**, et le mode décode en continu sur une fenêtre
+  glissante comme le SSVEP. Sans elle il ne décode pas mal : il ne décode **rien**.
+- ⚠️ **Un seul de ces quatre programmes à la fois** — console, moteur, appli pygame, écran archivé.
+  Le casque n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances
+  publient sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
+  **Les trois émetteurs de stimulus sont l'exception** (`p300_stimulus.py`, `errp_stimulus.py`,
+  `cvep_stimulus.py`) : ils n'ouvrent PAS le casque, ils dessinent et publient des marqueurs — c'est
+  exactement pour ça qu'ils se lancent dans un second terminal, à côté du moteur.
 - Public visé = **des étudiants qui vont lire et modifier ce code**. Écrire en conséquence.
 
 ## Matériel
@@ -70,8 +83,17 @@ python src/research/p300_stimulus.py       # l'émetteur de marqueurs P300 — n
 python src/core/server.py --mode errp      # l'ErrP sur le réseau (EXIGE un modèle ET des marqueurs)
 python src/research/errp_stimulus.py       # l'émetteur de marqueurs ErrP — n'ouvre PAS le casque non
                                            # plus, même montage à 2 terminaux que le P300
+python src/core/server.py --mode cvep      # le c-VEP sur le réseau (EXIGE un modèle ET une HORLOGE)
+python src/research/cvep_stimulus.py       # l'émetteur c-VEP : fait clignoter ET publie un marqueur
+                                           # de CYCLE (~1/s). N'ouvre PAS le casque -> 2 terminaux.
+                                           # --seed rejoue les consignes, --windowed pour le dev
+python archive/cvep_pilot.py --model data/cvep_model_….npz   # l'écran archivé : décodage LOCAL, la
+                                           # RÉFÉRENCE à comparer au réseau en séance (recette 2.9).
+                                           # ⚠️ --model explicite : son défaut pointe l'ancien nom fixe
 # calibration MI : bouton « Calibrer » sur sa page dans la console — plus de commande séparée
 python src/research/app.py                 # l'appli pygame, plein écran, casque réel
+                                           # -> menu c-VEP / P300 / ErrP : « Calibrer », les seules
+                                           #    calibrations que le moteur ne sait pas jouer
 python src/research/app.py --windowed      # en fenêtre (console visible à côté)
 python src/research/app.py --synthetic     # sans casque (board de test BrainFlow)
 ```
@@ -114,6 +136,30 @@ python src/core/modes/mi_calib.py          # calibration MI : accuracy HONNÊTE 
 
 Le non-filtrage de la fenêtre MI est l'invariant central du sous-système et il n'est vérifié que
 par le premier : un double filtrage réintroduit demain passerait les trois smokes sans un mot.
+
+Et les cinq gardes du **c-VEP**, livré le 2026-08-21, qu'aucun des trois smokes n'exécute :
+
+```bash
+python src/core/cvep_code.py               # la m-séquence : équilibre, autocorrélation, lags distincts
+python src/core/cvep_decoder.py            # l'eCCA : justesse vs SNR, aller-retour du modèle
+python src/core/cvep_rcca.py               # le rCCA : le 2e décodeur, sur le MÊME stimulus décalé
+python src/core/cvep_models.py             # les modèles : refus des hérités, QUEL décodeur, tri par date
+python src/core/modes/cvep.py              # le mode : la PHASE, les 4 causes de -1, le vote glissant
+python src/research/cvep_stimulus.py --smoke  # l'émetteur : la phase lue dans les PIXELS, frame par frame
+```
+
+⚠️ **`cvep_stimulus.py --smoke` porte LE test qui protège ce sous-système**, et il est de la même
+famille que celui de `modes/p300.py` : il rejoue une course de rendu image par image et compare la
+phase que le moteur reconstruirait à celle réellement AFFICHÉE, lue dans les pixels de l'écran —
+pas dans le compteur de l'émetteur, qui ne peut que se donner raison. L'assertion exige **zéro**
+frame d'écart tant qu'aucune image n'est sautée : une tolérance à ±1 laisserait passer un décalage
+systématique d'une frame, c'est-à-dire la panne. Remonter le `push_sample` au-dessus du
+`display.flip()` la fait rougir — et ne fait rougir qu'elle.
+
+⚠️ **La panne caractéristique du c-VEP ne casse rien** : une phase fausse de quelques frames ne lève
+aucune exception, les corrélations baissent juste assez pour que rien ne se déclenche, et c'est
+indiscernable d'un étudiant qui fixe mal. Deux gestes la produisent, à une ligne l'un de l'autre :
+horodater AVANT le flip, ou annoncer un `refresh` que l'écran ne tient pas.
 
 ⚠️ **Ne laisser tourner AUCUN moteur pendant un test.** Les noms de flux sont un contrat public,
 donc identiques pour toutes les instances : un serveur oublié répond à la place de celui qu'on teste

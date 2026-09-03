@@ -11,9 +11,13 @@ chacun se suffit à lui-même.
 | Niveau | Ce qu'il faut | Durée | Ce qu'il prouve |
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
-| 1 | un écran | ~30 min | la console marche pour un humain — **déjà passé le 2026-08-17** |
-| 2 | le casque | ~60 min | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min) |
+| 1 | un écran | ~45 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.16** |
+| 2 | le casque | ~90 min | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
+
+⚠️ **Les quatre derniers tests du niveau 2 (2.6 à 2.9) n'ont JAMAIS été joués**, et ce sont eux qui
+portent tout ce que le produit affirme sur les quatre modes à modèle. Une seule séance casque les
+couvre — c'est le travail qui reste.
 
 ## Avant toute séance — trois pièges qui ont déjà coûté des heures
 
@@ -56,10 +60,19 @@ python src/core/modes/calibration.py # la ligne du temps d'une calibration : cha
 python src/core/modes/mi_calib.py    # calibration MI : accuracy HONNÊTE (CV par essai), jamais d'écrasement
 python src/core/acquisition.py --synthetic   # acquisition seule + fenêtre MI NON filtrée
 python src/core/lsl_io.py            # publication LSL, pont d'horloge, verdicts qualité
+python src/core/modes/cvep.py        # le mode c-VEP : la PHASE, les 4 causes de -1, le vote
+python src/core/cvep_models.py       # les modèles c-VEP : refus des hérités, quel décodeur, tri par date
+python src/research/cvep_stimulus.py --smoke  # l'émetteur c-VEP : la phase lue dans les PIXELS
 python src/core/server.py --smoke    # le moteur : frontière core/, cumul, repos partagé, flux
 python src/console/app.py --smoke    # la console : grille, page de mode, formulaire (Qt offscreen)
 python src/research/app.py --smoke   # l'appli pygame : menu + 5 modes + calibrations (~3 min)
 ```
+
+⚠️ **Les trois lignes c-VEP ne sont pas décoratives non plus**, et la troisième moins que les
+autres : `cvep_stimulus.py --smoke` est le **seul** test du dépôt qui compare, image par image, la
+phase que le moteur reconstruirait à celle réellement affichée — lue dans les **pixels**, pas dans le
+compteur de l'émetteur. C'est la panne caractéristique de ce mode, celle qui ne lève aucune
+exception et ressemble à un étudiant qui fixe mal. La liste complète est dans `CLAUDE.md`.
 
 Attendu : `VERDICT : OK` pour tous, **sauf `acquisition.py`** qui n'imprime pas de ligne de verdict
 — pour celui-là, lire les `OK` ligne à ligne et le code de sortie (`$LASTEXITCODE` sous PowerShell,
@@ -116,32 +129,34 @@ python src/console/app.py --synthetic
 - [ ] La fenêtre s'ouvre, titre « EEG_API_Unicorn — console d'expérimentation », 1100×720.
 - [ ] En haut, un **bandeau permanent** : liaison casque, fréquence d'échantillonnage, et σ par voie.
 - [ ] En dessous, une **grille de 7 tuiles** dans cet ordre : Brut, SSVEP, Neuro, Motor
-      Imagery, c-VEP, P300, ErrP.
-- [ ] La tuile « Brut » est **en marche** (le brut démarre par défaut) ; SSVEP, Neuro et Motor
-      Imagery affichent « arrêté ».
+      Imagery, P300, ErrP, c-VEP. *(L'ordre suit `registry.MODES` : les modes sont rangés dans
+      l'ordre où ils ont rejoint le moteur, le c-VEP ferme la marche depuis le 2026-08-21.)*
+- [ ] La tuile « Brut » est **en marche** (le brut démarre par défaut) ; les six autres affichent
+      « arrêté ».
 
 > Rien ne peut être lu ? Le bandeau et les tuiles sont dimensionnés pour 1100 px de large. Note la
 > taille de police du système si c'est illisible : c'est un vrai défaut, pas un détail.
 
-### 1.2 — Les 3 tuiles grisées disent *pourquoi*
+### 1.2 — Plus AUCUNE tuile grisée
 
-C'est le point qui t'a fait croire que le produit était cassé. Une tuile grisée doit être grisée
-**et lisible**, et donner sa raison, jamais rester muette.
+⚠️ **Ce test a changé de sens le 2026-08-21, et il faut le lire avant de conclure à une
+régression.** Il vérifiait autrefois que les trois tuiles grisées (c-VEP, P300, ErrP) disaient
+*pourquoi* elles l'étaient. Elles ne le sont plus : les trois ont rejoint le moteur, le c-VEP en
+dernier. **Le moteur publie les six modes.** Le module qui portait les entrées « appli pygame »
+(`core/modes/external.py`) a été supprimé avec sa dernière entrée.
 
-- [ ] c-VEP, P300, ErrP sont grisées, marquées « appli pygame », **sans** case « publié » ni
-      bouton « Ouvrir ».
-- [ ] Chacune affiche sa raison propre, pas un texte générique. Attendu :
-  - **c-VEP** — « Demande un stimulus verrouillé à la FRAME… »
-  - **P300** — « Demande des MARQUEURS entrants (l'onset de chaque flash)… »
-  - **ErrP** — « Demande un MARQUEUR entrant : l'instant exact où le feedback s'affiche. »
-- [ ] **Motor Imagery n'est PLUS grisé** : il a rejoint le moteur. Sa tuile est active, avec sa
-      case « publié » et son bouton « Ouvrir », comme SSVEP et Neuro. Si tu la vois grise, c'est
-      une régression.
+- [ ] **Aucune des 7 tuiles n'est grisée.** Chacune porte sa case « publié » et son bouton
+      « Ouvrir ». Si tu en vois une grise, c'est une régression — et la console le tient du
+      contrat, pas d'une liste écrite à la main (`spec["status"] != "moteur"`).
+- [ ] Le bouton **Calibrer** n'apparaît que sur la page **Motor Imagery**. C'est voulu, et ce
+      n'est pas un oubli : `Calib(kind="natif")` dans les `ModeSpec` du c-VEP, du P300 et de
+      l'ErrP dit que leur protocole a besoin d'un stimulus verrouillé à la frame, que Qt ne sait
+      pas rendre. On calibre ces trois-là dans l'appli pygame.
 
-> **Sans modèle MI entraîné sur ce poste, c'est normal** : la tuile reste active, mais lancer le
-> mode sera refusé avec « aucun choix disponible » et l'aide qui dit de calibrer. `data/` est
-> gitignoré, donc un dépôt fraîchement cloné est toujours dans cet état. Le modèle s'obtient au
-> niveau 2 (test 2.6).
+> **Sans modèle entraîné sur ce poste, c'est normal** : la tuile reste active, mais lancer le mode
+> sera refusé avec « aucun choix disponible » et l'aide qui dit de calibrer. Ça vaut pour les
+> **quatre** modes à modèle : MI, P300, ErrP et c-VEP. `data/` est gitignoré, donc un dépôt
+> fraîchement cloné est toujours dans cet état.
 
 ### 1.3 — Le mode brut montre vraiment le signal
 
@@ -398,6 +413,77 @@ python -u examples/receiver.py --stream decoded_errp
 > et attends la fin du repos avant de compter quoi que ce soit — sinon tu mesureras un flux mort et
 > tu concluras que baisser le réglage a cassé le détecteur, ce qui est l'inverse de la vérité.
 
+### 1.16 — Le c-VEP : une HORLOGE dans le tuyau, sans casque
+
+C'est le chantier du 2026-08-21, le **6e et dernier mode**. Même montage à trois terminaux que le
+1.15, et pourtant ce test ne vérifie pas la même chose — parce que **ces marqueurs-là ne délimitent
+aucune époque : ils tiennent une horloge**. Le P300 et l'ErrP demandent au moteur de découper autour
+d'un instant ; le c-VEP décode en continu, comme le SSVEP, et ses marqueurs lui disent seulement
+**où en est le code affiché**. Sans eux il ne décode rien du tout — pas « mal », *rien*.
+
+> ⚠️ **Il faut un modèle c-VEP sur ce poste**, sinon le mode refuse de démarrer et dit d'aller
+> calibrer (`python src/research/app.py`, menu → c-VEP → Calibrer). Contrairement à l'ErrP (1.15),
+> cette calibration-là **se joue en synthétique** : `python src/research/app.py --synthetic`, page
+> c-VEP → Calibrer, ~1 min. Le modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu
+> aucun cerveau. Il suffit pour ce test, qui vérifie le tuyau et pas le décodage. Elle écrit **deux**
+> fichiers horodatés (`data/cvep_model_*.npz` pour l'eCCA, `data/cvep_rcca_model_*.npz` pour le
+> rCCA) et n'écrase jamais rien.
+
+**La console plutôt que le moteur nu**, comme au 1.15 : les deux seuils qu'on manipule au dernier
+point n'existent que là, et les compteurs qui font tout l'intérêt de ce test s'y lisent d'un coup
+d'œil. Jamais les deux à la fois — ils publieraient `decoded_cvep` deux fois sous le même nom.
+
+```bash
+# terminal 1 — la console
+python src/console/app.py --synthetic --mode cvep
+# terminal 2 — l'émetteur : n'ouvre PAS le casque, donc il cohabite
+python src/research/cvep_stimulus.py --windowed
+# terminal 3
+python -u examples/receiver.py --stream decoded_cvep
+```
+
+- [ ] Le moteur annonce qu'il attend le flux de marqueurs, **puis** qu'il s'y connecte quand
+      l'émetteur démarre.
+- [ ] Il annonce aussi, en une ligne, **quel modèle, quel décodeur et sur quel flux il écoute
+      l'horloge** — par exemple `[cvep] modèle « cvep_model_….npz » (eCCA, seuils 0.26/0.09) —
+      horloge attendue sur « EEG_API_Unicorn_stim »`. C'est le réglage le plus facile à se tromper.
+- [ ] Six disques clignotent, **un cercle vert** entoure la cible consignée, et elle change toutes
+      les ~8,4 s. Le bandeau du haut dit en direct `moteur À L'ÉCOUTE` ou `PERSONNE n'écoute`.
+- [ ] ⚠️ **Le clignotement démarre TOUT DE SUITE, pendant la chauffe de 15 s du moteur** — un
+      bandeau vert le dit. C'est l'inverse de l'ErrP, qui fige son écran. Le c-VEP **encaisse** ses
+      marqueurs de chauffe : une horloge n'a pas besoin d'être bonne pour être à l'heure. Si tu vois
+      l'écran s'immobiliser, c'est une régression.
+- [ ] L'émetteur imprime sa **graine** (`--seed N` rejoue la séance à l'identique) et, pour chaque
+      consigne, **deux** horodatages : `t=` et « compter à partir de t=… (+2,7 s de transition) ».
+      Le second est celui qui sert à dépouiller — voir le 2.9.
+- [ ] Sur `decoded_cvep`, terminal 3 : **10 voies**, nommées
+      `target_index`, `confidence`, `score_0`…`score_5`, puis `corr_min` et `margin`, à ~5 Hz.
+- [ ] `target_index` vaut **-1** en permanence : **c'est le résultat attendu**, le board synthétique
+      ne produit aucune réponse c-VEP. On teste le tuyau, pas le cerveau.
+- [ ] **LE point de ce test.** Ouvrir la page c-VEP et regarder POURQUOI c'est -1 : c'est
+      `sous_les_seuils` qui doit monter (le décodage tourne, les corrélations sont trop faibles).
+      Si c'est `sans_reference` qui monte, **l'horloge n'arrive pas** — l'émetteur publie sous un
+      autre nom, ou il n'est pas lancé. Les deux ressemblent à « ça ne détecte pas » et appellent
+      des gestes opposés ; c'est exactement ce que ces compteurs existent pour séparer.
+- [ ] Fermer l'émetteur (ESC) sans arrêter le mode. Après ~3 s, `reference_perimee` se met à monter
+      à la place : l'horloge s'est tue et le moteur cesse de décoder plutôt que de continuer en roue
+      libre. Relancer l'émetteur → ça repart tout seul.
+- [ ] Relancer l'émetteur avec **`--refresh 75`**. Attendu : le moteur **refuse tous les marqueurs**,
+      le dit en nommant les deux rafraîchissements, et `marqueurs_refuses` monte (annoncé à 1, 10,
+      100…). ⚠️ **Le mode ne s'arrête pas pour autant** : il continue de tourner et de publier -1,
+      sous `sans_reference`. C'est délibéré — un moteur qui s'arrêterait emmènerait les autres modes
+      avec lui. Ne guette pas un plantage : lis les premières lignes du terminal.
+- [ ] Sur la page c-VEP, changer **« Corrélation minimale »** de 0,26 à 0,05 puis **Appliquer**.
+      Attendu, et c'est la différence avec le réglage ErrP du 1.15 : le terminal écrit « sans effet
+      sur le décodage : ni repos refait, ni flux recréé », **le flux n'est PAS recréé** et ton
+      `receiver.py` du terminal 3 continue de recevoir sans rien relancer. Le seuil bas fait sortir
+      des cibles au hasard : c'est normal, et c'est le but — on vérifie que le réglage mord.
+- [ ] Toujours dans le terminal 3, les deux dernières voies **`corr_min` et `margin` ont suivi**
+      (0,05 sur la première), alors que les métadonnées du flux, elles, portent encore 0,26. Les
+      deux disent bien deux choses différentes : la métadonnée décrit le réglage **à l'ouverture**
+      du flux, la voie celui **en vigueur pour cet échantillon**. C'est ce qui permet de dépouiller
+      un enregistrement six mois plus tard sans sa description LSL. Remettre 0,26 avant de partir.
+
 ---
 
 ## Niveau 2 — au casque
@@ -628,6 +714,203 @@ python -u examples/receiver.py --stream decoded_errp
 > précis — il est hérité du SSVEP. Si le taux de rejet est anormalement haut dès le début de séance
 > et redescend ensuite, c'est que la chauffe est trop courte. **Note-le, c'est une mesure utile.**
 
+### 2.9 — c-VEP : le moteur lit-il la phase d'un vrai cerveau ?
+
+⚠️⚠️ **Lis les trois encadrés qui suivent AVANT de lancer quoi que ce soit.** Ce mode est le seul du
+produit dont la panne caractéristique **ne casse rien** : une phase fausse de quelques frames ne
+lève aucune exception, les corrélations baissent juste assez pour que la détection ne se déclenche
+presque jamais, et à l'écran c'est **indiscernable de quelqu'un qui fixe mal**. Sans ces trois
+lectures, un opérateur conclut à la panne en regardant le comportement attendu — ou à la réussite en
+regardant une horloge décalée.
+
+#### ⚠️ 1. Ce qu'est un résultat NORMAL
+
+À **6 cibles, le hasard est à 16,7 %**. Jamais 50 %.
+
+La seule mesure qui existe pour ce décodeur vient de la **séance de référence du 2026-07-21**,
+dépouillée hors ligne : sur **37 décisions appariées** à la géométrie du moteur (k = 2 cycles),
+**eCCA 59,5 %, rCCA 64,9 %** — soit **8 décisions discordantes** entre les deux, et **McNemar
+p = 0,727**. Traduction : les deux décodeurs sont **indiscernables**, et l'écart de 5 points entre
+les deux pourcentages est du bruit. Ne choisis pas ton décodeur là-dessus.
+
+**Donc : environ UNE désignation sur TROIS est fausse, et c'est le comportement attendu.** Une cible
+sur six mal désignée n'est pas une panne — c'est la moitié d'une erreur de moins que la référence.
+Un sans-faute sur six essais serait une bonne surprise, pas la norme.
+
+⚠️ **Et ce 60-65 % est un chiffre HORS LIGNE, mesuré en validation croisée sur les époques d'une
+calibration.** Ce n'est pas une justesse en direct, encore moins à travers le réseau : **le c-VEP
+n'a jamais été décodé au casque par le moteur**, c'est précisément ce que ce test fait pour la
+première fois. Attends-toi à **moins**, pas à plus.
+
+⚠️ **Le moteur va se taire souvent, et ce n'est pas une panne non plus.** Il n'émet une cible que si
+elle passe deux seuils (`corr_min` **et** `margin`) puis remporte **2 des 3 dernières fenêtres**.
+Le repère du projet est le SSVEP : **100 % de justesse quand il émet, mais il n'émet que 44 % du
+temps**. Un long silence entre deux verdicts justes est un régime normal ici.
+
+**Ne conclus rien de six essais, ni de dix.** Si tu veux un chiffre, il faut un protocole — c'est
+`--seed` et le dépouillement ci-dessous, pas une impression.
+
+#### ⚠️ 2. La période à JETER après chaque changement de consigne
+
+C'est le générateur de faux verdict de ce test, et il est purement arithmétique.
+
+L'émetteur tient chaque consigne **8 cycles de code, soit 8,4 s** à 60 Hz. Mais le moteur a **deux
+mémoires** en amont de chaque échantillon publié :
+
+| | durée |
+|---|---|
+| la fenêtre de décision — 2 cycles de code repliés | 2,10 s |
+| le vote glissant — 3 fenêtres espacées de 0,2 s | 0,60 s |
+| **total : la TRANSITION** | **2,70 s** |
+
+Pendant ces **2,70 s**, chaque échantillon publié est calculé sur du signal **à cheval sur DEUX
+cibles**. Rien dans le flux ne le dit. Ça fait **32 % des échantillons de chaque consigne**, et les
+compter tire mécaniquement la justesse mesurée vers le hasard.
+
+> **Ce n'est pas une précaution théorique.** À l'ancien réglage (4 cycles, 4,2 s par consigne) la
+> transition couvrait **64 %** de l'intervalle : quelqu'un qui notait tous les verdicts mesurait
+> **~40 %** quel que soit le décodeur, et concluait que le c-VEP ne marche pas — en regardant une
+> transition. La consigne a été rallongée à 8 cycles pour cette raison, et il en reste 32 % à jeter.
+
+**Chaque ligne du terminal de l'émetteur imprime l'instant exact à partir duquel les échantillons
+comptent** :
+
+```text
+[cvep-stim] t=12345.678  cycle 9 : fixe « DROITE » (cible 2)  —  compter à partir de t=12348.378 (+2.7 s de transition)
+```
+
+- [ ] **Ne note QUE les `decoded_cvep` postérieurs à ce second horodatage.** C'est la seule règle de
+      dépouillement de ce test, et l'ignorer suffit à fabriquer un échec.
+
+#### ⚠️ 3. Il faut un modèle, et il est propre à TA personne
+
+Le modèle de quelqu'un d'autre donne des corrélations plausibles et fausses — le pire des deux
+mondes. Si tu n'en as pas :
+
+```bash
+python src/research/app.py     # menu → c-VEP → Calibrer, ~1 min, fixer chaque cible
+```
+
+Elle entraîne **eCCA ET rCCA sur les mêmes époques**, affiche les deux justesses et nomme le gagnant
+par McNemar — « indiscernables » est la réponse attendue. Elle écrit **deux** fichiers horodatés
+(`data/cvep_model_AAAAMMJJ-HHMMSS.npz` et `data/cvep_rcca_model_*.npz`) et n'écrase jamais rien.
+
+- [ ] **Note le nom exact du fichier eCCA** : ______________________ . Tu en auras besoin pour la
+      comparaison, qui n'a de sens que sur le **même modèle**.
+- [ ] **Ferme l'appli pygame** avant de lancer le moteur. Elle ouvre le casque, et l'Unicorn
+      n'accepte qu'une connexion.
+
+#### La séance
+
+⚠️ **Ne retire pas le casque, ne resaline pas, ne referme pas la session entre les deux moitiés de
+ce test.** La comparaison du dernier point ne vaut que si les deux décodages voient le même montage
+sur la même tête.
+
+```bash
+# terminal 1 — le moteur (15 s de chauffe, PAS de repos : le c-VEP ne mesure aucun plancher)
+python src/core/server.py --mode cvep
+# terminal 2 — l'émetteur : n'ouvre PAS le casque, d'où les deux terminaux
+python src/research/cvep_stimulus.py
+# terminal 3
+python -u examples/receiver.py --stream decoded_cvep
+```
+
+- [ ] Le terminal 2 dit **« le moteur écoute. »**. S'il dit « PERSONNE n'écoute », arrête tout : le
+      moteur n'est pas là, ou le nom du flux diffère. Le bandeau du haut de l'écran garde cet
+      indicateur en direct pendant toute la séance.
+- [ ] Il imprime aussi sa **graine** (`graine 1234567 — REJOUE cette séance à l'identique avec
+      --seed 1234567`). **Note-la** : ______________ . Une séance casque ne se répète pas ; sans la
+      graine, elle ne se dépouille pas deux fois.
+- [ ] Le terminal 1 annonce en une ligne le **modèle, le décodeur, les seuils et le flux d'horloge**.
+      Vérifie que c'est bien le modèle que tu viens de calibrer.
+- [ ] Le clignotement **démarre tout de suite**, pendant la chauffe, avec un bandeau qui le dit.
+      C'est voulu : le moteur encaisse l'horloge pendant ce temps. Fixe déjà la cible entourée.
+- [ ] **En fin de séance, lis la ligne de cadence** de l'émetteur : `cadence : … ms par cycle mesuré
+      contre 1050,0 ms annoncés`. Si un avertissement apparaît (« l'écran ne tient PAS les 60 Hz
+      publiés »), **la séance est à refaire** : le moteur a extrapolé la phase à la mauvaise vitesse
+      et tout ce que tu viens de mesurer est faux, sans que rien d'autre ne l'ait signalé. Regarde
+      aussi le compte de frames sautées — quelques-unes sont sans gravité, chacune est résorbée au
+      marqueur suivant.
+- [ ] Fixe la cible entourée, **sans bouger les yeux**, et laisse tourner ~5 min. Le terminal 1
+      imprime une ligne par seconde : le verdict et les six corrélations à côté.
+- [ ] Dépouille : pour chaque consigne, compte les `decoded_cvep` **postérieurs au « compter à
+      partir de »**, et sépare-les en trois — cible juste, cible fausse, `-1`.
+      Justes : ______ · fausses : ______ · silences : ______ .
+- [ ] **Compare au repère de l'encadré 1** : ~2 justes sur 3 parmi les verdicts émis, et beaucoup de
+      silences. En dessous, va lire les compteurs avant de conclure.
+
+#### Quand ça ne détecte pas : LIS LA CAUSE, elle est comptée
+
+⚠️ **`target_index = -1` a quatre causes, et elles appellent quatre gestes OPPOSÉS.** Le flux ne
+porte que le `-1` ; les compteurs qui les séparent sont dans l'état du moteur (flux `status`, ou la
+console), et le motif en clair est imprimé à côté de chaque ligne du terminal 1. Une séance casque
+ne se répète pas : « ça ne détecte pas » sans la cause envoie chercher au mauvais endroit.
+
+| Ce qui monte | Ce que ça veut dire | Ce qu'il faut faire |
+|---|---|---|
+| `sans_reference` | aucun marqueur d'horloge n'est jamais arrivé | relancer l'émetteur · vérifier le nom du flux |
+| `reference_perimee` | l'horloge s'est tue (émetteur planté, fenêtre fermée) | relancer l'émetteur |
+| `sous_les_seuils` | ça décode, les corrélations ne passent pas | **saliner**, vérifier le contact, fixer UNE cible |
+| `vote_non_conclu` | elles passent, les fenêtres récentes ne s'accordent pas | tenir le regard immobile |
+
+- [ ] Relever lequel domine : ____________________ . Ces quatre-là plus `decodages`
+      **partitionnent** les fenêtres traitées — chacune en incrémente exactement un, donc la somme
+      doit couvrir toute la séance. `marqueurs_refuses`, lui, compte des **marqueurs** : s'il monte,
+      c'est l'émetteur qui est mal réglé, pas le cerveau.
+- [ ] Regarder aussi `age_reference_s`, `corr_gagnant` et `corr_second` : ils disent en une ligne si
+      l'horloge est vivante et à quelle hauteur les corrélations passent réellement.
+
+> **Si `sous_les_seuils` domine avec des `corr_gagnant` proches de 0,26**, tu peux **descendre le
+> seuil sans interrompre la séance** — c'est le seul réglage du produit qui le permette. Il faut la
+> console à la place du terminal 1 (`python src/console/app.py --mode cvep`, **jamais les deux**),
+> page c-VEP, champ « Corrélation minimale ». Le flux n'est **pas** recréé et la chauffe n'est
+> **pas** refaite : ton `receiver.py` continue de recevoir, et les deux dernières voies
+> (`corr_min`, `margin`) portent la nouvelle valeur dès l'échantillon suivant. **Note la valeur
+> retenue dans ton relevé** — les métadonnées du flux, elles, garderont l'ancienne, puisqu'elles
+> sont figées à l'ouverture.
+
+#### LA mesure de ce test : comparer à l'écran archivé, même personne, même séance
+
+C'est **le seul point de 2.9 qui produise une conclusion**, et il ne coûte que trois minutes de
+plus. Tout le reste dit « ça marche » ou « ça ne marche pas » sans pouvoir dire *par rapport à
+quoi*.
+
+`archive/cvep_pilot.py` est l'écran pygame que ce chantier a retiré : **même modèle, mêmes cibles,
+même vote 2-sur-3**, mais il décode en local, dans le programme qui affiche. Deux chemins
+indépendants qui doivent désigner la **même cible sur la même fixation**. Sans cette comparaison, un
+mauvais résultat a deux explications qu'on ne peut pas séparer : *« le décodage réseau est moins
+bon »* et *« la séance est moins bonne »* (contact qui s'est dégradé, fatigue, saline qui a séché).
+
+**Fais-le en A-B-A**, dans cet ordre, sans retirer le casque :
+
+```bash
+# A  — déjà fait ci-dessus : moteur + émetteur, ~3 min, noter la justesse
+# B  — fermer les trois terminaux, PUIS :
+python archive/cvep_pilot.py --model data/cvep_model_AAAAMMJJ-HHMMSS.npz    # ~3 min
+# A' — refermer, relancer le montage A, ~3 min
+```
+
+- [ ] **`--model` explicite, obligatoire.** Le défaut de ce fichier archivé pointe sur l'ancien nom
+      FIXE `data/cvep_model.npz`, que la calibration n'écrit plus. Sans cet argument tu comparerais
+      deux modèles différents et l'écart mesuré ne voudrait rien dire.
+- [ ] A : ______ % · B (écran archivé) : ______ % · A' : ______ % .
+- [ ] **Comment lire ces trois nombres**, et c'est tout l'intérêt du A' :
+      - A ≈ A' ≈ B → le décodage réseau vaut l'écran local. **C'est le résultat attendu.**
+      - A ≈ A' **et** nettement < B → le décodage **réseau** est en cause. C'est un vrai défaut,
+        à rapporter avec les compteurs de la section précédente.
+      - A > A' → **la séance s'est dégradée** en cours de route. L'écart A-vs-B ne conclut rien :
+        resaline et refais, ou note-le comme non concluant. Ne blâme pas le moteur.
+- [ ] ⚠️ **Le seul biais connu de ce protocole** : passer de A à B ferme et rouvre la session
+      BrainFlow, et l'amplificateur redémarre — le piège documenté qui fait **saturer C3/Cz**. Le
+      c-VEP décode sur **Pz, PO7, Oz, PO8** (`CVEP_CHANNELS`), donc il devrait y échapper, mais ça
+      n'a **jamais été mesuré**. C'est justement ce que le retour en A' contrôle. Note l'ordre réel
+      dans lequel tu as joué les trois blocs.
+
+> ⚠️ **Ne conclus rien sur une seule fixation, ni sur six.** À 6 cibles et ~60 % de justesse, six
+> essais donnent un intervalle de confiance qui couvre à peu près tout ce qui est plausible. Ce
+> projet a pour règle de ne jamais conclure sur du bruit ; la règle vaut aussi quand le résultat
+> fait plaisir.
+
 ---
 
 ## Niveau 3 — le réseau
@@ -684,24 +967,27 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
 
 À lire avant de conclure que « tout marche ».
 
-- **3 modes de décodage sur 6 ne sont pas sur le réseau.** c-VEP, P300 et ErrP sont décodés par
-  l'appli pygame, pour elle-même, à l'écran. **Rien dans `src/research/` ne publie sur LSL** —
-  aucun `StreamOutlet`. Aucun test ci-dessus ne peut donc les couvrir côté API. Les trois
-  attendent des **marqueurs entrants** ou un stimulus verrouillé à la frame, que le moteur ne
-  sait pas encore faire. Le Motor Imagery, lui, a fait le trajet le 2026-07-29 : le moteur charge
-  un modèle entraîné et publie `decoded_mi` (test 2.6).
-- **Le MI n'a jamais été décodé au casque À TRAVERS LE MOTEUR.** Le pont modèle → moteur → flux
-  est vérifié sans casque (`server.py --smoke`), et le décodage lui-même l'a été dans l'appli
-  pygame. Les deux bouts ensemble, sur une tête, restent à faire : c'est 2.6.
+- **QUATRE des six modes n'ont jamais été décodés au casque À TRAVERS LE MOTEUR.** Le moteur publie
+  maintenant les six — le c-VEP a fermé la marche le 2026-08-21 — mais publier n'est pas décoder un
+  cerveau. Le pont modèle → moteur → flux est vérifié sans casque pour tous ; les deux bouts
+  ensemble, sur une tête, restent à faire pour le **MI (2.6)**, le **P300 (2.7)**, l'**ErrP (2.8)**
+  et le **c-VEP (2.9)**. Ces quatre tests sont l'essentiel de ce qui reste, et une seule séance les
+  couvre.
 - **La garde de 1,9 Hz autour de l'alpha repose sur une seule personne.** Elle est encadrée par les
   deux seules mesures du projet : 12 Hz à 1,50 Hz du pic échoue, 8,571 Hz à 1,93 Hz marche. n = 1.
   À réviser dès que plusieurs personnes auront été mesurées — c'est exactement le genre de chiffre
   qu'on croit acquis parce qu'il est écrit.
+- **Tous les chiffres de ce projet viennent d'UNE personne.** SSVEP, MI, P300, ErrP, c-VEP : une
+  tête, souvent une séance. Ce ne sont pas des moyennes, ce sont des points.
 - **Le contenu du mode neuro n'a jamais été validé.** Cf. 2.5.
-- **Les marqueurs entrants n'existent pas.** Ils débloqueraient P300 et ErrP d'un coup.
-- **L'appli pygame n'est couverte que par son smoke.** Les trois modes qu'elle seule sait faire se
-  testent avec `python src/research/app.py`, mode par mode, au casque. C'est une autre séance —
-  celle-ci vérifie l'API, pas l'appli d'expérimentation.
+- **Aucune application CLIENTE n'affiche encore un stimulus.** Les trois émetteurs
+  (`p300_stimulus.py`, `errp_stimulus.py`, `cvep_stimulus.py`) sont des références écrites ici, dans
+  ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
+  vérifié nulle part — c'est le 3.3, et il n'a jamais été joué.
+- **L'appli pygame n'est couverte que par son smoke.** Elle n'est plus le seul accès à aucun mode :
+  il ne lui reste que les **calibrations** que le moteur ne sait pas jouer (c-VEP, P300, ErrP) et
+  l'histogramme neuro. Les tester au casque est une autre séance — celle-ci vérifie l'API, pas
+  l'appli d'expérimentation.
 
 ---
 

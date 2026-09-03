@@ -9,12 +9,20 @@ This page is the contract for telling it. It is public: once your code sends the
 will not change their shape under you.
 
 > **You do not need this page for SSVEP, neuro, or Motor Imagery.** Those decode continuously and
-> need nothing from you. This is for the paradigms locked to a stimulus — **P300 and ErrP**.
+> need nothing from you. This is for the paradigms locked to a stimulus — **P300, ErrP and c-VEP**.
 
-**Two decoders read this stream, and they are not alike.** P300 answers *which of six targets you
+**Three decoders read this stream, and they are not alike.** P300 answers *which of six targets you
 chose*, once per round of flashes. ErrP answers *did the machine just get it wrong*, once per
-feedback you display. They share the transport and nothing else: different events, different
-streams, different guarantees. Read the section for the one you need.
+feedback you display. c-VEP answers *which target are you fixating right now*, continuously, five
+times a second. They share the transport and nothing else: different events, different streams,
+different guarantees. Read the section for the one you need.
+
+⚠️ **c-VEP is the odd one out, and it is the distinction to get right before reading further.** A
+P300 or ErrP marker says *"an event happened, cut an epoch around it"* — it delimits a slice of EEG.
+A c-VEP marker delimits **nothing**. It says *"at this instant the code on screen was back at its
+first frame"*, and the engine uses it as a **clock**: it decodes on a sliding window like SSVEP, and
+your markers are the only thing telling it where in the code that window sits. Everything else on
+this page — the epoch lengths, the pauses, the refractory advice — is about the first two.
 
 ## The stream you publish
 
@@ -28,8 +36,8 @@ One LSL stream, discovered by the engine **by name**:
 | format | `string` |
 | sampling rate | irregular |
 
-The name is a setting on the engine side — **Flux de marqueurs**, on the P300 page and on the ErrP
-page, one each. The engine resolves it when the first marker-driven mode starts, and holds one
+The name is a setting on the engine side — **Flux de marqueurs**, on the P300, ErrP and c-VEP
+pages, one each. The engine resolves it when the first marker-driven mode starts, and holds one
 shared inlet for every such mode. Changing the name while the mode runs has no effect — but
 **stopping and restarting the mode is enough** to pick up the new one: the inlet is released as
 soon as no running mode is listening any more. You do not have to restart the engine.
@@ -109,6 +117,54 @@ the duplication.
 the next second or so — that decision belongs to your application, which knows its own command
 cadence. The engine publishes what it sees and never cancels anything.
 
+## c-VEP — one event, and it is a clock
+
+```json
+{"mode": "cvep", "event": "cycle", "refresh": 60.0}
+```
+
+Send it **every time the code restarts** — every 63 frames, so roughly once per second (1.05 s at
+60 Hz). Nothing is epoched around it. It tells the engine one thing: *at this instant, the displayed
+code was back at frame 0*. From there the engine extrapolates, at `refresh` Hz, where the code is at
+any later moment. That position is the **phase**, and without it there is nothing to correlate
+against — the mode publishes `-1` forever and counts it under `sans_reference`.
+
+**`refresh` is mandatory, and it must be a number.** Not a string, not `true` — `true` would pass
+for 1 Hz in most languages, so the engine checks the type explicitly. A marker without a usable
+`refresh` is refused, counted in `marqueurs_refuses`, and announced in the engine's terminal at
+1, 10, 100, 1000 refusals. It is announced by tiers rather than every time because these arrive at
+~1 Hz, and a misconfigured emitter gets *all* of them refused.
+
+⚠️ **A `refresh` that disagrees with the model by more than 1 Hz is refused too — and the mode does
+not stop.** This one is deliberate and it is worth understanding, because the failure it prevents is
+invisible. A model is calibrated at one refresh rate; the emitter is the side that owns the screen,
+so the engine cannot know the rate until a marker arrives. Without the check, a 144 Hz screen
+announcing 60 would be accepted, the phase would drift inside every cycle, correlations would sag,
+and **nothing would ever fire** — indistinguishable from a student who is not fixating. So: markers
+refused, reason printed, mode still running and still publishing `-1`. Do not wait for a crash; read
+the engine's first lines.
+
+The engine's own message names the fix — recalibrate, or relaunch the emitter with the model's
+refresh rate.
+
+**Stop sending, and the clock goes stale.** After **3 cycles** without a new marker (3.15 s at
+60 Hz, 63 frames per cycle) the engine declares its phase reference expired and stops decoding,
+counting `reference_perimee`. It does not coast: on a code only 63 frames long, a small clock drift
+between screen and engine eats a frame fast, and a wrong phase produces perfectly normal-looking
+correlations. Send one marker per cycle and this never comes up.
+
+**Unlike P300 and ErrP, c-VEP markers sent during the warm-up are *kept*.** Those two drop
+everything until the engine has settled, because an epoch cut while the DC offset is still drifting
+is worthless. A clock does not need to be good to be on time, so the c-VEP mode banks them: its
+marker cursor keeps up (otherwise the backlog would count as genuinely lost markers at every start),
+and the first decoded window gets a fresh phase instead of waiting up to 1.05 s for the next one.
+Keep flickering through the 15 s warm-up.
+
+**One target must be fixated, and the engine never learns which.** The marker carries `{mode, event,
+refresh}` and nothing else — no target field, deliberately. If you are running a session you intend
+to score, your emitter has to log which target it asked for, with the LSL timestamp, on its own
+side. `src/research/cvep_stimulus.py` prints exactly that.
+
 ## Where you take the timestamp — the one thing that matters
 
 Everything else on this page is bookkeeping. This is the part that decides whether the decoding
@@ -129,10 +185,27 @@ At 60 Hz one frame is 16.7 ms. A payload that is perfectly correct but stamped 4
 happened yet. Nothing errors. Scores keep coming out. They are just noise, and they look exactly
 like a subject who is not concentrating.
 
-`src/research/p300_stimulus.py` is the reference implementation of this gesture — read it before
-writing your own. **It opens no headset**: it only draws and publishes markers, which is why you
-can run it in a second terminal while the engine holds the one Bluetooth connection the Unicorn
-allows. Anything you write yourself must keep that property.
+**For c-VEP the same line is stricter still**, because the marker is a clock rather than an event:
+the flip you stamp must be the one that showed **frame 0 of the code**, not frame 62 and not frame 1.
+One frame early shifts every phase the engine reconstructs, and it never recovers — each new marker
+re-establishes the same wrong offset.
+
+```python
+        pygame.display.flip()
+        if frame % len(code) == 0:
+            outlet.push_sample([json.dumps({"mode": "cvep", "event": "cycle",
+                                            "refresh": refresh})], local_clock())
+```
+
+Lock the flicker to vsync while you are at it. The engine extrapolates the phase at `refresh` Hz
+between two markers; without vsync the screen draws at whatever rate the CPU allows, and the
+reconstructed phase is wrong from the second frame on, with no exception to tell you.
+
+`src/research/p300_stimulus.py` and `src/research/cvep_stimulus.py` are the reference
+implementations of this gesture — read one before writing your own. **They open no headset**: they
+only draw and publish markers, which is why you can run one in a second terminal while the engine
+holds the one Bluetooth connection the Unicorn allows. Anything you write yourself must keep that
+property.
 
 ## A complete emitter, in Python
 
@@ -270,11 +343,13 @@ simply never fire. So each of these is announced, in the engine's terminal:
 | A marker arrived too late to find its EEG | counted in `marqueurs_perdus` |
 | A marker is stamped in the future | counted in `marqueurs_futurs` — see the clock section below |
 | A marker was not readable JSON | counted in `marqueurs_illisibles` |
-| Markers arrived during the warm-up (**15 s for P300; 15 s + 8 s of rest = 23 s for ErrP**) | counted in `marqueurs_chauffe`, said once — they are dropped on purpose |
+| Markers arrived during the warm-up (**15 s for P300; 15 s + 8 s of rest = 23 s for ErrP**) | counted in `marqueurs_chauffe`, said once — they are dropped on purpose. **c-VEP is the exception: it keeps them** |
 | `target` outside `[0, 6[` | named, with the expected range, counted in `refus_cible` |
 | An epoch fell out of the buffer | counted in `epoques_perdues` |
 | `round_end` with too few flashes | `target_index = -1` **and** the reason |
 | No `round_end` for 10 s, or a target past its ceiling | `manche ABANDONNÉE`, counted in `manches_abandonnees` |
+| A c-VEP `cycle` marker has no usable `refresh`, or one the model was not calibrated at | refused and named, counted in `marqueurs_refuses`, printed at 1/10/100/1000 |
+| No c-VEP clock for 3 cycles (3.15 s at 60 Hz) | the phase reference expires, counted in `reference_perimee` |
 
 That last one matters if your application crashes mid-round: the engine throws the orphans away
 instead of stacking your next round on top of them, which would produce a confident, wrong answer.
@@ -295,7 +370,9 @@ Three places, so that "watch whether this number climbs" is something you can re
    totals live separately, under `epoques_vues_session` and `artefacts_session`, which never reset.
    `taux_rejet` is the ErrP one to watch: above 50 % it is telling you about the electrodes, not
    about the brain. Log it as a session figure and you will see it drop to `null` and restart from
-   zero with nothing to explain why.
+   zero with nothing to explain why. The c-VEP mode's own state carries the five counters that
+   partition its windows plus `marqueurs_refuses` and three live gauges — see
+   [From the c-VEP](#from-the-c-vep) for what each one means and what to do about it.
 3. **The console**, which reads the same snapshot.
 
 `connecte` is the one to look at first. If it is `false` while your emitter is running, nothing
@@ -354,26 +431,92 @@ This is the one number in this page you should distrust, and it is worth saying 
 anyway: a client that knows the operating point is roughly one-in-two and roughly one-in-seven can
 design around it. A client that knows nothing treats `error = 1` as a verdict.
 
+### From the c-VEP
+
+Continuous, about **5 samples per second** — one per decoded window, not one per marker — on
+`EEG_API_Unicorn_decoded_cvep`. Ten channels at the repository's six targets:
+
+| channel | meaning |
+|---|---|
+| `target_index` | the fixated target, **or `-1`** |
+| `confidence` | mean correlation of the windows that voted for the winner |
+| `score_0` … `score_5` | one correlation per target, in index order, **for the last window alone** |
+| `corr_min`, `margin` | the two thresholds actually in force **for this decision** |
+
+And in the stream's metadata, under `decoding/`:
+
+| field | meaning |
+|---|---|
+| `paradigm`, `n_targets` | `c-VEP`, `6` |
+| `decoder` | `eCCA` or `rCCA` — the model file declares it, the engine does not choose |
+| `decision_scale` | `correlation` — a Pearson r in `[-1, 1]`. **Not** the SSVEP z, **not** the P300 log-odds |
+| `corr_min`, `margin` | the winner must clear `corr_min` **and** beat the runner-up by `margin` |
+| `min_votes`, `vote_len` | and `min_votes` of the last `vote_len` windows must agree |
+| `code_len`, `refresh` | the stimulus geometry the model was trained on — 63 frames at 60 Hz |
+| `cv` | leave-one-out accuracy of the calibration, or **empty** if the model carries none |
+| `no_decision_index` | `-1` |
+
+⚠️ **`corr_min` and `margin` appear twice on purpose, and the two do not say the same thing.** LSL
+freezes stream metadata when the stream opens, and these two thresholds can be retuned *mid-session*
+without rebuilding the stream. So the metadata copy describes what was in force **when the stream
+opened**; the two **channels** of the same name carry what was in force **for that individual
+sample**. Read the metadata to know how the session was set up. Read the channels when you are
+scoring a recording six months later without its LSL description — that is the case this exists for.
+ErrP does the same thing with its `threshold` channel, for the same reason.
+
+⚠️ **`confidence` and `score_*` describe different instants.** `confidence` describes the *vote*:
+the mean correlation of the windows that agreed. The `score_*` describe the *last window alone*. So
+while your gaze moves from one target to the next, it is normal to read a high `score_4` beside a
+`target_index` of 2 — the vote has not swung yet. Filter on `confidence`, never on `score_*`.
+
+⚠️ **`target_index = -1` here has four distinct causes, and they call for opposite actions.** The
+stream carries only the `-1`; the counters that separate them are in the engine's state (the
+`status` stream, or the console):
+
+| counter | what happened | what to do |
+|---|---|---|
+| `sans_reference` | no clock marker has ever arrived | start the emitter; check the stream name |
+| `reference_perimee` | the clock went silent — emitter crashed, window closed | restart the emitter |
+| `sous_les_seuils` | it decoded, but nothing cleared `corr_min`/`margin` | check contact, add saline, fixate *one* target |
+| `vote_non_conclu` | something cleared them, but recent windows disagree | hold the gaze still |
+
+Those four plus `decodages` (windows that did name a target) **partition** every window processed:
+each window increments exactly one. `marqueurs_refuses` counts *markers*, not windows, so it is not
+part of that sum. Three more gauges describe the last window only: `age_reference_s` (is the clock
+alive?), `corr_gagnant` and `corr_second` (how high are the correlations actually landing?).
+
+"It is not detecting" without the cause sends you looking in the wrong place, and a headset session
+does not repeat. Read the counters first.
+
 ## Before any of this works: a trained model
 
-Neither of these is SSVEP. Both need a model **of your own brain** — someone else's gives
+None of these three is SSVEP. All need a model **of your own brain** — someone else's gives
 plausible, wrong answers, which is the worst of both worlds. Record one with:
 
 ```bash
-python src/research/app.py     # menu -> P300 -> Calibrer
+python src/research/app.py     # menu -> P300  -> Calibrer
 python src/research/app.py     # menu -> ErrP  -> Calibrer
+python src/research/app.py     # menu -> c-VEP -> Calibrer   (~1 min)
 ```
 
-Each calibration writes a **new, timestamped** file — `data/p300_model_20260818_101500.joblib`,
-`data/errp_model_20260819_142230.joblib` — and **never overwrites the previous one**. The engine
-offers the most recent loadable model as its default, and each mode's page lists the others. The
-timestamp goes down to the second, so the only way to lose a model is to finish two calibrations
-within the same second, which a 5-minute protocol makes hard.
+Each calibration writes a **new, timestamped** file — `data/p300_model_20260818-101500.joblib`,
+`data/errp_model_20260819-142230.joblib`, `data/cvep_model_20260821-093000.npz` — and **never
+overwrites the previous one**. The engine offers the most recent loadable model as its default, and
+each mode's page lists the others. The timestamp goes down to the second, so the only way to lose a
+model is to finish two calibrations within the same second, which a multi-minute protocol makes hard.
+
+The c-VEP calibration is the one that writes **two** models from a single recording: it trains both
+decoders on the same epochs and saves each (`cvep_model_*.npz` for eCCA, `cvep_rcca_model_*.npz` for
+rCCA). Both show up in the mode's model list; the file itself declares which decoder it is, so
+picking a model is picking an algorithm without having to think about it. On the reference session
+the two were **indistinguishable** — 37 paired decisions, 8 of them discordant, McNemar p = 0.727 —
+so there is no default worth arguing about yet.
 
 Until then the engine refuses to start the mode, and says why.
 
 ⚠️ Close the pygame app before starting the engine. It opens the headset itself, and the Unicorn
-accepts exactly one connection. (`p300_stimulus.py` and `errp_stimulus.py` are the exceptions — they draw only.)
+accepts exactly one connection. (`p300_stimulus.py`, `errp_stimulus.py` and `cvep_stimulus.py` are
+the exceptions — they draw only.)
 
 ## Two machines
 
