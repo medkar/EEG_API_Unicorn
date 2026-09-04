@@ -50,6 +50,13 @@ l'objet pyntbci, il **ré-ajuste** depuis les époques stockées. Mesuré sur ce
 catalogue, pas en boucle — mais si un jour `data/` contient dix modèles rCCA, c'est ici qu'il
 faudra regarder.
 
+⚠️ **Corollaire : `pyntbci` est une dépendance du MOTEUR, pas d'un outil d'analyse.** Ré-ajuster au
+chargement veut dire que sans elle, aucun modèle rCCA ne se charge — et comme `modeles_disponibles`
+ne garde que ce qui se charge, ils **disparaissaient tous de la liste de la console sans un mot**.
+Les deux moitiés du remède vivent ici : `charger` NOMME le cas (`PyntbciManquant`, message
+actionnable) au lieu d'annoncer « modèle illisible », et `modeles_disponibles` compte les retirés et
+le dit. Les modèles eCCA, eux, ne dépendent de rien de tout ça et restent utilisables.
+
 Autotest :
     python src/core/cvep_models.py
 """
@@ -68,7 +75,7 @@ import numpy as _np  # noqa: E402
 
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel  # noqa: E402
-from core.cvep_rcca import RCCAModel  # noqa: E402
+from core.cvep_rcca import MSG_PYNTBCI, PyntbciManquant, RCCAModel  # noqa: E402
 
 # Deux familles de noms, une par décodeur — d'où un TUPLE là où les trois jumeaux ont une seule
 # chaîne. Un motif unique élargi (`cvep*model*.npz`) attraperait la même chose aujourd'hui, mais
@@ -173,31 +180,38 @@ def charger(chemin):
                         f"{'x'.join(str(n) for n in attendus.shape)} — la config a changé depuis "
                         f"la calibration (CVEP_BITS, CVEP_TAPS, CVEP_N_TARGETS)")
             else:
-                # ⚠️ Ne PAS accuser « un CVEP_LAG_ROTATION changé » : à rotation non nulle, ce
-                # désaccord se produit alors que RIEN n'a changé depuis la calibration.
-                # `build_targets` fait tourner l'ordre des lags dans le plan, tandis que
-                # `research/cvep_calibrate.py` empile les codes vus par lag CROISSANT — les deux
-                # ordres divergent par construction, sur un modèle qui vient d'être calibré. Un
-                # message qui envoie chercher un changement de config ferait perdre une séance.
-                quoi = ("mêmes dimensions, mais pas les mêmes codes ni le même ordre. Soit des "
-                        "codes Gold distincts (hypothèse mesurée, réfutée et retirée du produit : "
-                        "plus aucun émetteur ne les affiche) ; soit un ORDRE DE LIGNES différent, "
-                        f"et à CVEP_LAG_ROTATION = {CVEP_LAG_ROTATION} (non nul) c'est le cas "
-                        "ATTENDU même sans rien avoir changé — la calibration écrit ses codes par "
-                        "lag croissant, le plan les fait tourner. Un ordre permuté ferait nommer "
-                        "la cible voisine, d'où le refus"
-                        if CVEP_LAG_ROTATION else
-                        "mêmes dimensions, mais pas les mêmes codes ni le même ordre — soit des "
-                        "codes Gold distincts (hypothèse mesurée, réfutée et retirée du produit : "
-                        "plus aucun émetteur ne les affiche), soit un CVEP_LAG_ROTATION changé "
-                        "depuis la calibration, qui permute les lignes et ferait nommer la cible "
-                        "voisine")
+                # ⚠️ **Ce refus signale un VRAI défaut, à TOUTE rotation — et ce message a dit
+                # l'inverse.** Il expliquait qu'à `CVEP_LAG_ROTATION` non nul le désaccord était
+                # « le cas ATTENDU même sans rien avoir changé », parce que la calibration
+                # empilait ses codes par lag CROISSANT quand le plan, lui, les fait TOURNER.
+                # C'était vrai, et ça ne l'est plus : depuis le 2026-08-21,
+                # `research/cvep_calibrate.py` écrit ses codes DANS L'ORDRE DU PLAN, et son
+                # autotest le vérifie à rotation = 2 (un modèle qu'on vient de calibrer est
+                # ACCEPTÉ, quelle que soit la rotation). Laisser la phrase revenait à apprendre à
+                # l'étudiant qu'un vrai défaut est normal — la pire des deux erreurs possibles
+                # ici. On NOMME donc les trois causes réelles, sans en excuser aucune.
+                quoi = ("mêmes dimensions, mais pas les mêmes codes ni le même ordre. Trois "
+                        "causes, toutes réelles : des codes Gold distincts (hypothèse mesurée, "
+                        "réfutée et retirée du produit — plus aucun émetteur ne les affiche) ; "
+                        f"un CVEP_LAG_ROTATION changé depuis la calibration (il vaut "
+                        f"{CVEP_LAG_ROTATION} aujourd'hui), qui PERMUTE les lignes ; ou un modèle "
+                        "calibré AVANT le 2026-08-21, quand la calibration empilait encore ses "
+                        "codes par lag croissant au lieu de l'ordre du plan. Un ordre permuté "
+                        "ferait nommer la cible voisine, d'où le refus")
             return None, (f"ce modèle rCCA a été calibré sur d'AUTRES codes que ceux affichés "
                           f"aujourd'hui : {quoi}. Recalibre (`python src/research/app.py`, mode "
                           f"c-VEP) : {nom}")
 
     try:
         modele = classe.load(chemin)
+    except PyntbciManquant as e:
+        # ⚠️ NOMMÉ avant le `except Exception` d'à côté, et c'est tout l'intérêt : celui-ci ne
+        # garde que `type(e).__name__`, donc ce cas se lisait « modèle illisible
+        # (PyntbciManquant) » — un fichier parfaitement sain annoncé comme corrompu, et un
+        # étudiant qui part chercher une corruption là où il manque un `pip install`. Le message
+        # complet dit quoi FAIRE (`pip install -r requirements.txt`) et que l'eCCA, lui, n'en
+        # dépend pas : les modèles eCCA restent utilisables sans cette dépendance.
+        return None, f"{e} (fichier : {nom})"
     except Exception as e:      # noqa: BLE001 - un modèle sur disque casse de mille façons
         return None, f"modèle illisible ({type(e).__name__}) : {nom}"
     return modele, None
@@ -230,7 +244,23 @@ def modeles_disponibles(dossier=DATA_DIR):
     chemins = sorted(candidats,
                      key=lambda c: _os.path.getmtime(c) if _os.path.isfile(c) else 0.0,
                      reverse=True)
-    return [c for c in chemins if charger(c)[0] is not None]
+    # ⚠️ **Une dépendance manquante ne doit pas faire DISPARAÎTRE des modèles en silence.** Ce
+    # filtre écarte tout ce qui ne se charge pas, ce qui est juste — sauf pour `pyntbci` : sans
+    # lui, `RCCAModel.load` échoue et TOUS les modèles rCCA s'évaporent de la liste de la console,
+    # sans un mot. Un fichier parfaitement bon qui disparaît est exactement la panne muette que ce
+    # module existe pour supprimer, retournée. On les compte donc, et on le DIT une fois — la
+    # liste, elle, reste honnête : ces fichiers ne sont réellement pas chargeables ici.
+    utilisables, sans_pyntbci = [], []
+    for c in chemins:
+        modele, raison = charger(c)
+        if modele is not None:
+            utilisables.append(c)
+        elif raison and MSG_PYNTBCI in raison:
+            sans_pyntbci.append(_os.path.basename(c))
+    if sans_pyntbci:
+        print(f"[cvep-models] ⚠️ {len(sans_pyntbci)} modèle(s) rCCA RETIRÉ(S) de la liste "
+              f"({', '.join(sans_pyntbci)}) — {MSG_PYNTBCI}")
+    return utilisables
 
 
 def decrire(chemin):
@@ -282,6 +312,8 @@ def _selftest():
     c-VEP existant. Toutes les fixtures sont fabriquées dans un dossier temporaire, nettoyé dans
     un `finally`.
     """
+    import contextlib as _contextlib
+    import io as _io
     import shutil
     import tempfile
 
@@ -394,6 +426,56 @@ def _selftest():
         chk(_m is None and "codes" in (raison or ""),
             f"...et les MÊMES codes dans un autre ORDRE sont refusés aussi : l'appariement "
             f"score↔cible en dépend ({raison})")
+        # 2 ter. Le message ne doit pas EXCUSER ce refus — et il l'a fait, mais SEULEMENT à
+        # `CVEP_LAG_ROTATION` non nul : il annonçait alors « le cas ATTENDU même sans rien avoir
+        # changé ». C'était vrai tant que la calibration empilait ses codes par lag croissant, et
+        # faux depuis qu'elle écrit dans l'ordre du plan (2026-08-21 ; `cvep_calibrate` le vérifie
+        # à rotation 2). ⚠️ **La rotation du dépôt vaut 0, donc ce test DOIT la détourner** :
+        # relu à 0, le message n'a jamais contenu la phrase et l'assertion serait creuse.
+        # Assertion sur le TEXTE parce que c'est le texte qui était le défaut : il apprenait à
+        # l'étudiant qu'un vrai désaccord de codes est normal, donc à passer outre.
+        global CVEP_LAG_ROTATION
+        _rot_avant = CVEP_LAG_ROTATION
+        CVEP_LAG_ROTATION = 2
+        try:
+            _m, raison_rot = charger(chemin_permute)
+        finally:
+            CVEP_LAG_ROTATION = _rot_avant
+        chk("ATTENDU" not in (raison_rot or "") and "recalibre" in (raison_rot or "").lower()
+            and "CVEP_LAG_ROTATION" in (raison_rot or ""),
+            f"...et à CVEP_LAG_ROTATION NON NUL ce refus reste présenté comme un VRAI défaut à "
+            f"réparer, jamais comme un cas attendu : la calibration écrit ses codes dans l'ordre "
+            f"du plan depuis le 2026-08-21, donc un modèle frais est ACCEPTÉ à toute rotation "
+            f"({raison_rot})")
+
+        # 2 quater. `pyntbci` ABSENT : le cas est NOMMÉ, et les modèles rCCA ne s'évaporent pas
+        # de la liste en silence. On simule la dépendance manquante à l'endroit exact où elle
+        # manquerait — `_fit_clf`, le seul `import pyntbci` du produit, appelé par `load`.
+        vrai_fit_clf = RCCAModel._fit_clf
+
+        def _sans_pyntbci(self, X, y):
+            raise PyntbciManquant(MSG_PYNTBCI)
+
+        RCCAModel._fit_clf = _sans_pyntbci
+        try:
+            _m, raison = charger(chemin_rcca)
+            capture = _io.StringIO()
+            with _contextlib.redirect_stdout(capture):
+                liste_sans = modeles_disponibles(dossier)
+            dit = capture.getvalue()
+        finally:
+            RCCAModel._fit_clf = vrai_fit_clf
+        chk(_m is None and "pyntbci" in (raison or "") and "pip install" in (raison or "")
+            and "illisible" not in (raison or ""),
+            f"sans `pyntbci`, un modèle rCCA est refusé en disant QUOI FAIRE, pas annoncé "
+            f"« illisible » — le fichier est sain, c'est la dépendance qui manque ({raison})")
+        chk(chemin_rcca not in liste_sans and "cvep_rcca_model.npz" in dit
+            and "pip install" in dit,
+            f"...et son retrait de la liste est DIT, au lieu de le faire disparaître en silence "
+            f"du catalogue de la console ({dit.strip()!r})")
+        chk(chemin_ecca in liste_sans,
+            f"...tandis que les modèles eCCA restent listés : eux ne dépendent pas de `pyntbci` "
+            f"({[_os.path.basename(c) for c in liste_sans]})")
 
         # --- 3. Les refus qui ne dépendent pas du décodeur. -----------------------------------
         casse = _os.path.join(dossier, "cvep_model_casse.npz")

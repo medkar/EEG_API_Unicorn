@@ -496,11 +496,11 @@ plausible, wrong answers, which is the worst of both worlds. Record one with:
 ```bash
 python src/research/app.py     # menu -> P300  -> Calibrer
 python src/research/app.py     # menu -> ErrP  -> Calibrer
-python src/research/app.py     # menu -> c-VEP -> Calibrer   (~1 min)
+python src/research/app.py     # menu -> c-VEP -> Calibrer   (~3 min)
 ```
 
-Each calibration writes a **new, timestamped** file — `data/p300_model_20260818-101500.joblib`,
-`data/errp_model_20260819-142230.joblib`, `data/cvep_model_20260821-093000.npz` — and **never
+Each calibration writes a **new, timestamped** file — `data/p300_model_20260818_101500.joblib`,
+`data/errp_model_20260819_142230.joblib`, `data/cvep_model_20260821-093000.npz` — and **never
 overwrites the previous one**. The engine offers the most recent loadable model as its default, and
 each mode's page lists the others. The timestamp goes down to the second, so the only way to lose a
 model is to finish two calibrations within the same second, which a multi-minute protocol makes hard.

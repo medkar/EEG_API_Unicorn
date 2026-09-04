@@ -72,11 +72,35 @@ ni ITR, rien qui ne soit du bruit. La consigne est donc AFFICHÉE (l'utilisateur
 IMPRIMÉE au terminal avec son horodatage LSL exact (`t=…`), comme `errp_stimulus.py` imprime ses
 pas : il suffit à raccrocher chaque ligne à l'échantillon `decoded_cvep` correspondant. Le marqueur,
 lui, ne porte que `{mode, event, refresh}` — rien d'autre, le moteur n'en lit pas plus. `--seed`
-rejoue la séquence de consignes à l'identique, et la graine est IMPRIMÉE même quand on ne la donne
-pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se dépouille
-pas deux fois. Le cercle est tracé à 1,7× le rayon du disque, LOIN à l'extérieur : posé dessus, un
+rejoue la même SÉQUENCE de consignes (sa LONGUEUR, elle, peut différer d'une consigne quand la
+séance est bornée en secondes : cf. le ⚠️ de `poll`), et la graine est IMPRIMÉE même quand on ne la
+donne pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se
+dépouille pas deux fois. Le cercle est tracé à 1,7× le rayon du disque, LOIN à l'extérieur : posé dessus, un
 contour lumineux statique écraserait la modulation de contraste du stimulus (même choix, et même
 raison, que `research/ui.py:draw_ring`).
+
+⚠️ **`--log CHEMIN` écrit cette vérité-terrain dans un FICHIER, et sans lui la séance 2.9 n'est pas
+dépouillable.** Le terminal ne suffit pas : c'est le seul exemplaire de la consigne, un `Ctrl+C`
+malheureux ou un tampon de console dépassé l'efface, et une séance casque ne se répète pas. Le
+format est du **JSONL** — une ligne JSON par événement, écrite puis vidée (`flush`) tout de suite —
+pour que le fichier reste complet jusqu'à la dernière ligne même si le programme est tué. Trois
+genres de ligne, et rien d'autre :
+
+    {"kind":"header","t":…,"seed":…,"refresh":60.0,"code_len":63,"cibles":[…], …}
+    {"kind":"consigne","t":…,"compter_a_partir_de":…,"cible":2,"nom":"AR-DROITE","cycle":9,"frame":504}
+    {"kind":"bilan","cycles":286,"frames":18018,"sautees":3,"cadence_s":1.0501, …}
+
+⚠️ **`t` et `compter_a_partir_de` sont des `local_clock()`** : EXACTEMENT le domaine des horodatages
+que porte `decoded_cvep`, et que `examples/receiver.py` imprime en tête de chaque ligne (`t=…`).
+Le dépouillement devient alors une comparaison de nombres — « cet échantillon est-il postérieur au
+`compter_a_partir_de` de sa consigne ? » — au lieu d'un rapprochement à l'œil entre deux fenêtres de
+terminal, qui est faux la première fois. La ligne `bilan` recopie VERBATIM le dictionnaire de
+`bilan_de_seance` : une seule source pour ce qui s'imprime et ce qui s'écrit.
+
+⚠️ L'option est **opt-in et sans valeur par défaut**, pour trois raisons : `--smoke` ne doit jamais
+pouvoir écrire quoi que ce soit hors d'un dossier temporaire, `data/` ne doit rien recevoir d'ici, et
+l'opérateur nomme son journal comme il nomme sa séance. Le fichier est ouvert en AJOUT : relancer
+l'émetteur sur le même chemin empile les séances au lieu d'en effacer une.
 
 ⚠️⚠️ **COMMENT DÉPOUILLER, et le piège qui fabrique un faux verdict.** Le moteur ne publie pas un
 verdict par consigne : il décode en continu à 5 Hz. Après un changement de consigne, il lui faut
@@ -108,7 +132,9 @@ Lancer :
     python src/research/cvep_stimulus.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
     python src/research/cvep_stimulus.py --seconds 20     # 20 s de STIMULATION DÉCODABLE (la
                                                           # chauffe du moteur ne compte pas)
-    python src/research/cvep_stimulus.py --seed 1         # rejouer EXACTEMENT les mêmes consignes
+    python src/research/cvep_stimulus.py --seed 1         # rejouer la même SÉQUENCE de consignes
+    python src/research/cvep_stimulus.py --log seance.jsonl  # la VÉRITÉ-TERRAIN dans un fichier :
+                                                          # sans elle, la séance ne se dépouille pas
     python src/research/cvep_stimulus.py --no-wait        # ne pas attendre le moteur (émetteur seul)
     python src/research/cvep_stimulus.py --smoke          # test sans écran (CI) : phase ET rendu
 """
@@ -314,11 +340,15 @@ def tirage_cible(rng, n_cibles, precedente=None):
 def run(windowed=False, refresh=None, seconds=None, smoke=False,
         stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
-        max_frames=None):
+        max_frames=None, log_path=None):
     """La boucle du stimulus. `journal`, s'il est fourni, reçoit `(marqueur, horodatage, frame,
     consigne)` pour CHAQUE marqueur de cycle réellement poussé ; `bilan`, s'il est fourni, reçoit
     le dictionnaire de `bilan_de_seance` — c'est ce qui permet à `--smoke` d'ASSERTER sur le
     diagnostic de fin au lieu de le laisser en simples `print` que rien ne garde.
+
+    `log_path` (l'option `--log`) écrit la VÉRITÉ-TERRAIN en JSONL, cf. le ⚠️ de la docstring du
+    module. C'est l'équivalent PERSISTANT de ce que `journal` donne à `--smoke` : un fichier, donc
+    dépouillable après la séance, alors que `journal` vit en mémoire et que le terminal s'efface.
 
     `frame` (le compteur de l'émetteur) et `consigne` (le NOM de la cible à fixer) ne partent
     JAMAIS sur le réseau — le marqueur ne porte que `{mode, event, refresh}`, cf. le ⚠️ de la
@@ -347,6 +377,29 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
               f"frames par seconde, donc strictement positif. Laisse l'option de côté pour qu'il "
               f"soit mesuré à l'écran.")
         return False
+
+    # Le journal s'ouvre AVANT la fenêtre, pour la même raison que le refus ci-dessus : un dossier
+    # qui n'existe pas, un disque plein ou un fichier verrouillé doivent se dire au terminal, pas
+    # sous un plein écran qu'on ne peut plus quitter. Ouvert en AJOUT ("a") : deux séances sur le
+    # même chemin s'empilent, aucune ne s'efface.
+    fichier_log = None
+    if log_path:
+        try:
+            fichier_log = open(log_path, "a", encoding="utf-8")
+        except OSError as e:
+            print(f"[cvep-stim] REFUSÉ — --log {log_path} : impossible d'écrire ici ({e}). "
+                  f"Sans journal, la séance ne se dépouille pas : choisis un chemin valide.")
+            return False
+        print(f"[cvep-stim] journal (vérité-terrain, JSONL) : {log_path}")
+
+    def note_json(objet):
+        """Une ligne JSON, écrite ET VIDÉE tout de suite. Le `flush` est le point de l'exercice :
+        un émetteur tué au milieu d'une séance laisse alors un fichier complet jusqu'à sa dernière
+        ligne, ce qu'un JSON global écrit à la fin ne permettrait pas."""
+        if fichier_log is None:
+            return
+        fichier_log.write(json.dumps(objet, ensure_ascii=False) + "\n")
+        fichier_log.flush()
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
@@ -409,6 +462,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
           f"cheval sur la cible précédente. Chaque ligne « cycle » ci-dessous donne l'instant "
           f"« compter à partir de » : ne note les `decoded_cvep` qu'À PARTIR DE LÀ, sinon tu "
           f"mesures une justesse plafonnée par la transition, pas par le décodeur.")
+    note_json({"kind": "header", "t": local_clock(), "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "seed": int(seed), "refresh": float(refresh), "code_len": int(L),
+               "n_targets": len(plan), "cycles_par_cible": int(cycles_par_cible),
+               "transition_s": round(float(transition_s), 4), "stream": stream_name,
+               "cibles": [c["name"] for c in plan]})
 
     # ⚠️ Attendre le moteur AVANT de compter la stimulation — même raisonnement que les deux autres
     # émetteurs : sans ça, un étudiant qui a oublié de lancer le moteur regarde un écran
@@ -548,6 +606,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                 print(f"[cvep-stim] t={ts:.3f}  cycle {cycles} : fixe « {plan[i_cible]['name']} » "
                       f"(cible {i_cible})  —  compter à partir de t={ts + transition_s:.3f} "
                       f"(+{transition_s:.1f} s de transition)")
+                # La MÊME ligne, dans le fichier : c'est celle-ci qui survit à la séance. Une
+                # entrée par CONSIGNE (~36 pour 5 min), pas par cycle — c'est toute la
+                # vérité-terrain, et le reste se recalcule.
+                note_json({"kind": "consigne", "t": round(ts, 6),
+                           "compter_a_partir_de": round(ts + transition_s, 6),
+                           "cible": int(i_cible), "nom": plan[i_cible]["name"],
+                           "cycle": int(cycles), "frame": int(frame)})
         t_flip = time.perf_counter()
         if t_flip_precedent is not None and (t_flip - t_flip_precedent) > SEUIL_SAUT / refresh:
             sautees += 1
@@ -567,6 +632,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     resume["graine"] = seed
     if bilan is not None:
         bilan.update(resume)
+    # ⚠️ Le dictionnaire est recopié VERBATIM, jamais reconstruit : `bilan_de_seance` reste
+    # l'unique source de ce qui s'imprime, de ce que `--smoke` relit et de ce qui s'écrit.
+    note_json(dict(kind="bilan", **resume))
+    if fichier_log is not None:
+        fichier_log.close()   # chaque ligne est déjà vidée : ce `close` ne protège aucune donnée
     pygame.quit()
     return True
 
@@ -864,6 +934,9 @@ def _smoke():
     # Un flux au nom DISTINCT du contrat public : les noms de flux sont partagés par toutes les
     # instances du projet, et un smoke ne doit jamais pouvoir répondre à la place d'un vrai
     # émetteur. `attente_consommateur_s=0` en C1 parce que personne n'écoute, par construction.
+    import shutil
+    import tempfile
+
     import pygame
 
     import pylsl
@@ -941,6 +1014,22 @@ def _smoke():
             run(windowed=True, refresh=120.0, max_frames=6 * L, cycles_par_cible=1,
                 stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
                 journal=jn, seed=20260821)
+        # C6 : le JOURNAL DE FICHIER (`--log`), la moitié de la vérité-terrain qui SURVIT à la
+        # séance. Le terminal n'en est pas une copie : la recette 2.9 demande de fermer les
+        # terminaux entre ses blocs, et un scrollback dépassé efface la seule consigne écrite.
+        # ⚠️ Un fichier temporaire, JAMAIS `data/` — et une SENTINELLE écrite avant l'appel, pour
+        # que le mode d'ouverture soit vérifié et pas seulement supposé : en `"w"`, elle disparaît.
+        dossier_log = tempfile.mkdtemp(prefix="cvep_stim_log_")
+        chemin_log = os.path.join(dossier_log, "seance.jsonl")
+        with open(chemin_log, "w", encoding="utf-8") as f:
+            f.write('{"kind": "sentinelle"}\n')
+        journal6, bilan6 = [], {}
+        run(windowed=True, refresh=120.0, max_frames=6 * L, cycles_par_cible=2,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            journal=journal6, bilan=bilan6, seed=7, log_path=chemin_log)
+        with open(chemin_log, encoding="utf-8") as f:
+            lignes_log = [json.loads(l) for l in f if l.strip()]
+        shutil.rmtree(dossier_log, ignore_errors=True)
     finally:
         pygame.display.flip = vrai_flip
         pylsl.StreamOutlet.push_sample = vrai_push
@@ -1116,6 +1205,52 @@ def _smoke():
         f"...et SANS `--seed`, une graine est TIRÉE puis annoncée, au lieu de laisser une séance "
         f"irrejouable sans le dire ({bilan_sans_graine.get('graine')})")
 
+    # --- [C6] `--log` : la VÉRITÉ-TERRAIN dans un fichier ------------------------------------
+    # ⚠️ **C'est la clé de jointure du dépouillement, et sans elle le test 2.9 de la recette n'est
+    # exécutable avec AUCUN outil du dépôt.** Le moteur publie un indice de cible ; la cible
+    # CONSIGNÉE ne part jamais sur le réseau. Les deux ne se rejoignent que par l'horodatage
+    # `local_clock()` — celui que ces lignes portent, et que `examples/receiver.py` imprime en tête
+    # de chaque échantillon. Un journal qui vivrait sur stdout ne survit ni à un Ctrl+C, ni à la
+    # fermeture des terminaux que la recette demande ENTRE ses blocs A / B / A'.
+    entetes = [l for l in lignes_log if l.get("kind") == "header"]
+    consignes_log = [l for l in lignes_log if l.get("kind") == "consigne"]
+    bilans_log = [l for l in lignes_log if l.get("kind") == "bilan"]
+    # Les changements de consigne du déroulé RÉEL : `run` en imprime un par bord de
+    # `L * cycles_par_cible`, et c'est exactement là qu'il doit écrire une ligne.
+    changements = [(ts, c) for _m, ts, f, c in journal6 if f % (L * 2) == 0]
+    chk(len(consignes_log) == len(changements) and len(changements) >= 2,
+        f"[C6] une ligne `consigne` par CHANGEMENT de consigne, pas une de plus ni de moins "
+        f"({len(consignes_log)} lignes pour {len(changements)} changements)")
+    chk([(round(ts, 6), c) for ts, c in changements]
+        == [(l["t"], l["nom"]) for l in consignes_log],
+        f"[C6] ...et chaque ligne porte l'horodatage LSL EXACT du marqueur et le nom de la cible "
+        f"consignée — c'est la SEULE clé qui rejoigne `decoded_cvep` "
+        f"({[(l['t'], l['nom']) for l in consignes_log]})")
+    transition_120 = CVEP_DECISION_CYCLES * L / 120.0 + CVEP_VOTE_LEN * PERIODE_MOTEUR_S
+    chk(bool(consignes_log)
+        and all(abs(l["compter_a_partir_de"] - l["t"] - transition_120) < 1e-3
+                for l in consignes_log),
+        f"[C6] ...et le second horodatage est bien `t` + la transition ({transition_120:.2f} s à "
+        f"120 Hz) : le fichier porte l'instant À PARTIR DUQUEL un échantillon compte, pas seulement "
+        f"celui où la consigne est apparue")
+    chk(len(entetes) == 1 and entetes[0]["seed"] == 7 and entetes[0]["code_len"] == L
+        and entetes[0]["cibles"] == [c["name"] for c in plan],
+        f"[C6] un en-tête, et il contient de quoi REJOUER la séance : graine, refresh, longueur du "
+        f"code, noms des cibles ({entetes[0] if entetes else entetes})")
+    # ⚠️ VERBATIM : la ligne `bilan` est le dictionnaire de `bilan_de_seance`, pas une seconde
+    # rédaction. Reconstruire les mêmes champs à la main ferait diverger le fichier de l'écran le
+    # jour où l'un des deux change — c'est l'argument que `bilan_de_seance` fait déjà valoir.
+    chk(len(bilans_log) == 1 and bilans_log[0] == dict(kind="bilan", **bilan6),
+        f"[C6] ...et un bilan, RECOPIÉ du dictionnaire de `bilan_de_seance` sans le réécrire "
+        f"({bilans_log[0] if bilans_log else bilans_log})")
+    chk(bool(lignes_log) and lignes_log[0].get("kind") == "sentinelle",
+        f"[C6] le fichier est ouvert en AJOUT : la ligne écrite AVANT la séance est toujours là "
+        f"(premier enregistrement : {lignes_log[0] if lignes_log else '—'}) — en `\"w\"`, relancer "
+        f"l'émetteur sur le même chemin effacerait la séance précédente")
+    chk(_parse_args([]).log is None,
+        f"[C6] `--log` n'a AUCUN défaut : sans l'option, rien n'est écrit nulle part — c'est ce "
+        f"qui interdit à `--smoke` de toucher `data/` ({_parse_args([]).log!r})")
+
     n_cycles = len(journal)
     print(f"[cvep-stim] --smoke : {n_cycles} cycles RÉELS poussés (écran factice), consignes "
           f"{consignes[:6]}{'…' if len(consignes) > 6 else ''}")
@@ -1141,8 +1276,19 @@ def _parse_args(argv):
                    help="auto-quit après N secondes de stimulation DÉCODABLE (le décompte démarre "
                         "après la chauffe du moteur, pas pendant)")
     p.add_argument("--seed", type=int, default=None,
-                   help="graine du tirage des CONSIGNES : rejoue exactement la même séquence de "
-                        "cibles à fixer (pour dépouiller une séance hors ligne)")
+                   help="graine du tirage des CONSIGNES : rejoue la même SÉQUENCE de cibles à "
+                        "fixer (pour dépouiller une séance hors ligne). ⚠️ Sa LONGUEUR, elle, "
+                        "peut différer d'une consigne : une séance bornée en SECONDES ne s'arrête "
+                        "pas forcément sur la même image (mesuré : 1 exécution sur ~8). Le préfixe "
+                        "est identique, et chaque consigne est horodatée — c'est ce qui compte "
+                        "pour dépouiller. Seule une borne en IMAGES (`max_frames`, réservé à "
+                        "`--smoke`) donne l'égalité stricte")
+    p.add_argument("--log", default=None, metavar="CHEMIN",
+                   help="écrit la VÉRITÉ-TERRAIN en JSONL (une ligne par consigne, horodatée en "
+                        "`local_clock()`, plus un en-tête et le bilan). SANS DÉFAUT : rien n'est "
+                        "écrit tant que l'option n'est pas donnée. ⚠️ La séance 2.9 de la recette "
+                        "ne se dépouille pas sans ce fichier — le terminal est le seul autre "
+                        "exemplaire, et une séance casque ne se répète pas")
     p.add_argument("--no-wait", action="store_true",
                    help=f"ne pas attendre le moteur (ni son bandeau de chauffe de "
                         f"~{ATTENTE_MOTEUR_S:g} s) : émetteur seul")
@@ -1155,6 +1301,6 @@ if __name__ == "__main__":
     use_utf8_console()
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
-             smoke=args.smoke, seed=args.seed,
+             smoke=args.smoke, seed=args.seed, log_path=args.log,
              attente_consommateur_s=0.0 if args.no_wait else 5.0)
     sys.exit(0 if ok else 1)

@@ -8,7 +8,15 @@ scikit-learn>=1.3      # classifieurs MI / P300 / ErrP
 pyriemann>=0.5         # xDAWN + géométrie riemannienne (P300, ErrP)
 # Décodeur c-VEP par reconvolution (rCCA). Le MOTEUR en dépend : RCCAModel ne sérialise pas
 # l'objet pyntbci, il stocke les époques et ré-ajuste au chargement.
-pyntbci>=1.9           # rCCA (2e décodeur c-VEP) — mesuré avec la 1.9.0 sur ce poste
+# ⚠️ Sans elle, AUCUN modèle rCCA ne se charge — et comme la liste de modèles ne garde que ce qui
+# se charge, ils disparaissaient TOUS du catalogue de la console sans un mot. Le produit le dit
+# maintenant (`core/cvep_models.py` : `PyntbciManquant` nommé + les retirés comptés), mais le vrai
+# remède est cette ligne. Les modèles eCCA, eux, n'en dépendent pas.
+# La borne haute est délibérée : `RCCAModel._fit_clf` appelle directement
+# `pyntbci.classifiers.rCCA(stimulus=…, event=…, encoding_length=…, onset_event=True)` — une API
+# publique, mais pas un contrat de compatibilité. Mesuré avec la 1.9.0 sur ce poste, et rien
+# au-delà : relever la borne demande de rejouer `python src/core/cvep_rcca.py`.
+pyntbci>=1.9,<2        # rCCA (2e décodeur c-VEP) — mesuré avec la 1.9.0 sur ce poste
 joblib>=1.3            # sauvegarde des modèles calibrés
 pygame>=2.5            # stimulus natif : clignotement verrouillé à la frame (vsync)
 pylsl>=1.16            # diffusion réseau (Lab Streaming Layer) — le contrat d'API

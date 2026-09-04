@@ -93,7 +93,9 @@ ne fait pas partie du contrat rendu aux étudiants. La règle a été appliquée
 décodeurs ont déménagé dans `core/` à mesure que le moteur les publiait**, le c-VEP en dernier le
 2026-08-21. Ce qui reste dans `research/` aujourd'hui n'est plus un décodeur en attente mais ce qui
 n'a rien à faire dans un moteur sans écran : l'appli pygame, les calibrations, les émetteurs de
-stimulus et les analyses hors ligne.
+stimulus, les analyses hors ligne — et les **hypothèses réfutées gardées lisibles**
+(`research/cvep_rcca.py`, la fabrique de codes Gold ; ce n'est PAS un décodeur, celui du rCCA vit
+dans `core/` et est publié).
 
 Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
 **centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
@@ -554,6 +556,17 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        côte à côte. Sur la séance de référence (37 décisions, k=2) : 8 discordances, **p = 0,727,
        indiscernables**. C'est le fichier de modèle qui déclare son décodeur ; l'étudiant choisit un
        modèle, jamais un algorithme.
+       ⚠️ **Ce que ça VAUT, avec sa provenance.** Séance de référence du 2026-07-21, hors ligne,
+       6 cibles : **eCCA 59,5 % → 19,1 bits/min**, **rCCA 64,9 % → 23,8**, à la géométrie du moteur
+       (k = 2 cycles, une décision toutes les 2,10 s). Verdict de l'écran de calibration :
+       **FAIBLE** — sous la moitié des 25,0 bits/min du SSVEP. (Recalculable par `research/itr.py`,
+       et **asserté** dans `research/cvep_calibrate.py`. Le « ~22 bits/min » qui traînait dans le
+       README n'avait aucune provenance, et l'écran a imprimé exactement le DOUBLE jusqu'au
+       2026-08-21.) ⚠️ Ces bits/min supposent **une décision publiée par fenêtre** ; le moteur
+       n'émet qu'après seuils + vote — 46 % des fenêtres hors ligne à 0,26/0,09
+       (`core/config.py`) — donc l'ITR réellement délivré par `decoded_cvep` est de l'ordre de la
+       moitié. ⚠️ La calibration dure **≈ 2,7 min** (calculé et imprimé au lancement), pas la
+       « ~1 min » héritée d'un ancien réglage.
        ⚠️ **Les deux seuils de décision (`corr_min`, `margin`) se règlent EN PLEINE SÉANCE**, sans
        recréer le flux ni refaire la chauffe (`affecte_decodage=False`) — une première dans le
        produit, et la raison pour laquelle ils voyagent aussi **par échantillon** : les métadonnées

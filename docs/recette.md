@@ -12,7 +12,7 @@ chacun se suffit à lui-même.
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
 | 1 | un écran | ~45 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.16** |
-| 2 | le casque | ~90 min | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min) |
+| 2 | le casque | ~2 h | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min ; et 2.9 : calibration c-VEP ~3 min + A 5 + B 5 + A' 5, montages compris) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
 
 ⚠️ **Les quatre derniers tests du niveau 2 (2.6 à 2.9) n'ont JAMAIS été joués**, et ce sont eux qui
@@ -424,7 +424,8 @@ d'un instant ; le c-VEP décode en continu, comme le SSVEP, et ses marqueurs lui
 > ⚠️ **Il faut un modèle c-VEP sur ce poste**, sinon le mode refuse de démarrer et dit d'aller
 > calibrer (`python src/research/app.py`, menu → c-VEP → Calibrer). Contrairement à l'ErrP (1.15),
 > cette calibration-là **se joue en synthétique** : `python src/research/app.py --synthetic`, page
-> c-VEP → Calibrer, ~1 min. Le modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu
+> c-VEP → Calibrer, **~3 min** (la durée exacte est calculée et imprimée au lancement : ≈ 2,7 min
+> aux réglages du dépôt). Le modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu
 > aucun cerveau. Il suffit pour ce test, qui vérifie le tuyau et pas le décodage. Elle écrit **deux**
 > fichiers horodatés (`data/cvep_model_*.npz` pour l'eCCA, `data/cvep_rcca_model_*.npz` pour le
 > rCCA) et n'écrase jamais rien.
@@ -461,18 +462,27 @@ python -u examples/receiver.py --stream decoded_cvep
 - [ ] `target_index` vaut **-1** en permanence : **c'est le résultat attendu**, le board synthétique
       ne produit aucune réponse c-VEP. On teste le tuyau, pas le cerveau.
 - [ ] **LE point de ce test.** Ouvrir la page c-VEP et regarder POURQUOI c'est -1 : c'est
-      `sous_les_seuils` qui doit monter (le décodage tourne, les corrélations sont trop faibles).
-      Si c'est `sans_reference` qui monte, **l'horloge n'arrive pas** — l'émetteur publie sous un
-      autre nom, ou il n'est pas lancé. Les deux ressemblent à « ça ne détecte pas » et appellent
-      des gestes opposés ; c'est exactement ce que ces compteurs existent pour séparer.
+      `sous_les_seuils` qui doit **dominer** (le décodage tourne, les corrélations sont trop
+      faibles). Quelques `vote_non_conclu` ne sont pas une panne : sur le board synthétique une
+      fenêtre peut franchir 0,26/0,09 par hasard et échouer ensuite au vote. Si c'est
+      `sans_reference` qui monte, **l'horloge n'arrive pas** — l'émetteur publie sous un autre nom,
+      ou il n'est pas lancé. Les deux ressemblent à « ça ne détecte pas » et appellent des gestes
+      opposés ; c'est exactement ce que ces compteurs existent pour séparer. (Les quatre causes et
+      les quatre gestes sont tabulés une seule fois, au **2.9** — ce sont les mêmes compteurs.)
 - [ ] Fermer l'émetteur (ESC) sans arrêter le mode. Après ~3 s, `reference_perimee` se met à monter
       à la place : l'horloge s'est tue et le moteur cesse de décoder plutôt que de continuer en roue
       libre. Relancer l'émetteur → ça repart tout seul.
 - [ ] Relancer l'émetteur avec **`--refresh 75`**. Attendu : le moteur **refuse tous les marqueurs**,
-      le dit en nommant les deux rafraîchissements, et `marqueurs_refuses` monte (annoncé à 1, 10,
-      100…). ⚠️ **Le mode ne s'arrête pas pour autant** : il continue de tourner et de publier -1,
-      sous `sans_reference`. C'est délibéré — un moteur qui s'arrêterait emmènerait les autres modes
-      avec lui. Ne guette pas un plantage : lis les premières lignes du terminal.
+      le dit en nommant les deux rafraîchissements, et **`marqueurs_refuses` monte** (annoncé à 1,
+      10, 100…). ⚠️ **C'est ce compteur-là, et lui seul, qui identifie ce cas.** ⚠️ **Le mode ne
+      s'arrête pas pour autant** : il continue de tourner et de publier -1, sous
+      **`reference_perimee`** — pas `sans_reference`. L'horloge valide du point précédent est
+      encore en mémoire (un marqueur refusé ne l'efface pas) ; elle expire au bout de 3,15 s et
+      c'est `reference_perimee` qui monte ensuite, indéfiniment. Ce serait `sans_reference`
+      seulement si le mode venait d'être redémarré. Ne suis pas le geste que la table du 2.9
+      associe à `reference_perimee` (« relance l'émetteur ») : ici il est déjà lancé, et c'est son
+      `--refresh` qui est en cause. Le refus est délibéré — un moteur qui s'arrêterait emmènerait
+      les autres modes avec lui. Ne guette pas un plantage : lis les premières lignes du terminal.
 - [ ] Sur la page c-VEP, changer **« Corrélation minimale »** de 0,26 à 0,05 puis **Appliquer**.
       Attendu, et c'est la différence avec le réglage ErrP du 1.15 : le terminal écrit « sans effet
       sur le décodage : ni repos refait, ni flux recréé », **le flux n'est PAS recréé** et ton
@@ -742,10 +752,27 @@ calibration.** Ce n'est pas une justesse en direct, encore moins à travers le r
 n'a jamais été décodé au casque par le moteur**, c'est précisément ce que ce test fait pour la
 première fois. Attends-toi à **moins**, pas à plus.
 
-⚠️ **Le moteur va se taire souvent, et ce n'est pas une panne non plus.** Il n'émet une cible que si
-elle passe deux seuils (`corr_min` **et** `margin`) puis remporte **2 des 3 dernières fenêtres**.
-Le repère du projet est le SSVEP : **100 % de justesse quand il émet, mais il n'émet que 44 % du
-temps**. Un long silence entre deux verdicts justes est un régime normal ici.
+⚠️⚠️ **CE 59,5 / 64,9 % N'EST PAS LE CHIFFRE QUE TU VAS COMPTER, et confondre les deux fabrique un
+verdict faux.** C'est l'`argmax` hors-pli sur **TOUTES** les décisions — **sans les deux seuils ni
+le vote** que le moteur ajoute. Le moteur, lui, n'émet une cible qu'après `corr_min` **et**
+`margin`, puis **2 des 3 dernières fenêtres** ; tout le reste devient un `-1`, que tu comptes à
+part en « silences ». Le repère qui correspond à ce que tu vas relever existe, mesuré, dans
+`core/config.py` :
+
+| à k=2, seuils 0,26/0,09 (les défauts) | valeur |
+|---|---|
+| **taux d'ÉMISSION** (fenêtres où une cible sort) | **46 %** |
+| **justesse PARMI LES VERDICTS ÉMIS** | **71 %** (donc 29 % de faux) |
+| bruit qui franchit quand même les seuils | 10 % |
+
+**C'est ce couple-là — ~46 % d'émission, ~71 % de justesse à l'émission — qu'il faut comparer à
+ton relevé**, pas le 59,5/64,9. Avec le mauvais dénominateur, 70 % de justesse sur 45 % d'émission
+(c'est-à-dire le comportement attendu) se lit « mieux que prévu », et 60 % sur 90 % d'émission se
+lit « conforme » alors que ça signalerait des seuils qui ne mordent plus.
+
+⚠️ **Le moteur va donc se taire plus d'une fois sur deux, et ce n'est pas une panne.** Le repère du
+projet est le SSVEP : **100 % de justesse quand il émet, mais il n'émet que 44 % du temps**. Un
+long silence entre deux verdicts justes est un régime normal ici.
 
 **Ne conclus rien de six essais, ni de dix.** Si tu veux un chiffre, il faut un protocole — c'est
 `--seed` et le dépouillement ci-dessous, pas une impression.
@@ -776,11 +803,27 @@ compter tire mécaniquement la justesse mesurée vers le hasard.
 comptent** :
 
 ```text
-[cvep-stim] t=12345.678  cycle 9 : fixe « DROITE » (cible 2)  —  compter à partir de t=12348.378 (+2.7 s de transition)
+[cvep-stim] t=12345.678  cycle 9 : fixe « AR-DROITE » (cible 2)  —  compter à partir de t=12348.378 (+2.7 s de transition)
 ```
 
 - [ ] **Ne note QUE les `decoded_cvep` postérieurs à ce second horodatage.** C'est la seule règle de
       dépouillement de ce test, et l'ignorer suffit à fabriquer un échec.
+
+⚠️ **Cette règle ne s'applique QUE si tu écris les deux côtés dans des fichiers.** Le dépouillement
+se fait **après** la séance, sur un journal — jamais en direct, et jamais en comparant deux fenêtres
+de terminal à l'œil (~1 500 lignes à 5 Hz pour 5 min, contre ~35 consignes). Les deux moitiés
+existent, et elles portent le **même horodatage `local_clock()`**, ce qui rend la jointure purement
+numérique :
+
+| côté | quoi | comment |
+|---|---|---|
+| vérité-terrain | une ligne JSON par consigne, avec `t` et `compter_a_partir_de` | `cvep_stimulus.py --log seance_stim.jsonl` |
+| verdicts | une ligne par échantillon, préfixée `t=…` | `python -u examples/receiver.py --stream decoded_cvep > seance_recv.txt` |
+
+- [ ] **Lance l'émetteur avec `--log` et redirige le terminal 3 dans un fichier.** Sans ces deux
+      fichiers, la séance n'est **pas dépouillable** : le scrollback est le seul autre exemplaire,
+      le 2.9 demande plus bas de fermer les trois terminaux entre ses blocs, et une séance casque ne
+      se répète pas.
 
 #### ⚠️ 3. Il faut un modèle, et il est propre à TA personne
 
@@ -788,8 +831,13 @@ Le modèle de quelqu'un d'autre donne des corrélations plausibles et fausses �
 mondes. Si tu n'en as pas :
 
 ```bash
-python src/research/app.py     # menu → c-VEP → Calibrer, ~1 min, fixer chaque cible
+python src/research/app.py     # menu → c-VEP → Calibrer, ~3 min, fixer chaque cible
 ```
+
+La durée exacte est **calculée et imprimée au lancement** (`[cvep-cal] … ≈ 2.7 min`) : 6 cibles ×
+15 cycles en 18 blocs entrelacés, hors briefing et hors contrôle de liaison. Budgète-la comme telle
+— la « ~1 min » qui traînait dans cette recette datait d'un ancien réglage, et un facteur 3 sur un
+préalable de séance se paie en fatigue et en électrodes qui sèchent.
 
 Elle entraîne **eCCA ET rCCA sur les mêmes époques**, affiche les deux justesses et nomme le gagnant
 par McNemar — « indiscernables » est la réponse attendue. Elle écrit **deux** fichiers horodatés
@@ -809,11 +857,15 @@ sur la même tête.
 ```bash
 # terminal 1 — le moteur (15 s de chauffe, PAS de repos : le c-VEP ne mesure aucun plancher)
 python src/core/server.py --mode cvep
-# terminal 2 — l'émetteur : n'ouvre PAS le casque, d'où les deux terminaux
-python src/research/cvep_stimulus.py
-# terminal 3
-python -u examples/receiver.py --stream decoded_cvep
+# terminal 2 — l'émetteur : n'ouvre PAS le casque, d'où les deux terminaux.
+#              --log est OBLIGATOIRE ici : c'est la vérité-terrain, et rien d'autre ne la porte.
+python src/research/cvep_stimulus.py --log seance_A_stim.jsonl
+# terminal 3 — redirigé dans un fichier, pour la même raison
+python -u examples/receiver.py --stream decoded_cvep > seance_A_recv.txt
 ```
+
+⚠️ Le terminal 3 **n'affiche donc plus rien** : c'est voulu, il écrit. Pour surveiller en direct,
+regarde le terminal 1 (une ligne par seconde, verdict + corrélations) et le bandeau de l'émetteur.
 
 - [ ] Le terminal 2 dit **« le moteur écoute. »**. S'il dit « PERSONNE n'écoute », arrête tout : le
       moteur n'est pas là, ou le nom du flux diffère. Le bandeau du haut de l'écran garde cet
@@ -825,19 +877,37 @@ python -u examples/receiver.py --stream decoded_cvep
       Vérifie que c'est bien le modèle que tu viens de calibrer.
 - [ ] Le clignotement **démarre tout de suite**, pendant la chauffe, avec un bandeau qui le dit.
       C'est voulu : le moteur encaisse l'horloge pendant ce temps. Fixe déjà la cible entourée.
-- [ ] **En fin de séance, lis la ligne de cadence** de l'émetteur : `cadence : … ms par cycle mesuré
-      contre 1050,0 ms annoncés`. Si un avertissement apparaît (« l'écran ne tient PAS les 60 Hz
-      publiés »), **la séance est à refaire** : le moteur a extrapolé la phase à la mauvaise vitesse
-      et tout ce que tu viens de mesurer est faux, sans que rien d'autre ne l'ait signalé. Regarde
-      aussi le compte de frames sautées — quelques-unes sont sans gravité, chacune est résorbée au
-      marqueur suivant.
-- [ ] Fixe la cible entourée, **sans bouger les yeux**, et laisse tourner ~5 min. Le terminal 1
-      imprime une ligne par seconde : le verdict et les six corrélations à côté.
-- [ ] Dépouille : pour chaque consigne, compte les `decoded_cvep` **postérieurs au « compter à
-      partir de »**, et sépare-les en trois — cible juste, cible fausse, `-1`.
+- [ ] Fixe la cible entourée, **sans bouger les yeux**, et laisse tourner **~5 min** (c'est le
+      bloc A ; note la durée réelle, tu la rejoueras à l'identique en A'). Le terminal 1 imprime une
+      ligne par seconde : le verdict et les six corrélations à côté.
+- [ ] ⚠️ **Quitte l'émetteur par ESC, jamais par Ctrl+C.** La ligne de cadence et le bilan ne
+      s'impriment qu'à la sortie propre — et c'est le seul verdict de validité de la séance.
+- [ ] **Lis la ligne de cadence** de l'émetteur : `cadence : … ms par cycle mesuré contre 1050,0 ms
+      annoncés`. Si un avertissement apparaît (« l'écran ne tient PAS les 60 Hz publiés »), **la
+      séance est à refaire** : le moteur a extrapolé la phase à la mauvaise vitesse et tout ce que
+      tu viens de mesurer est faux, sans que rien d'autre ne l'ait signalé. Regarde aussi le compte
+      de frames sautées — quelques-unes sont sans gravité, chacune est résorbée au marqueur suivant.
+      (Le même bilan est aussi la dernière ligne de `seance_A_stim.jsonl`, `"kind":"bilan"`.)
+- [ ] **Dépouille, après la séance, sur les deux fichiers.** Pour chaque ligne `"kind":"consigne"`
+      de `seance_A_stim.jsonl`, prends les lignes de `seance_A_recv.txt` dont le `t=` est **≥ son
+      `compter_a_partir_de`** et **< le `t` de la consigne suivante** ; compare leur `target_index`
+      au champ `cible`. Trois colonnes : cible juste, cible fausse, `-1`.
       Justes : ______ · fausses : ______ · silences : ______ .
-- [ ] **Compare au repère de l'encadré 1** : ~2 justes sur 3 parmi les verdicts émis, et beaucoup de
-      silences. En dessous, va lire les compteurs avant de conclure.
+      ⚠️ Les deux `t` sont dans le **même domaine** (`local_clock()`) : c'est une comparaison de
+      nombres, pas un rapprochement à l'œil. Si tu n'as qu'un seul des deux fichiers, ce point n'est
+      pas faisable — reprends la séance avec `--log` et la redirection.
+- [ ] **Compare au repère chiffré de l'encadré 1** : `émis / total` proche de **46 %**, et
+      `justes / émis` proche de **71 %**. Ce sont ces deux ratios-là, pas le 59,5/64,9 %.
+      Émission mesurée : ______ % · justesse à l'émission : ______ % .
+      En dessous, va lire les compteurs avant de conclure.
+
+> **La méthode de secours, à l'œil, quand il n'y a pas de journal** (c'est le cas du bloc B
+> ci-dessous : l'écran archivé n'écrit rien). Le **terminal 1** imprime **une ligne par seconde**.
+> Après chaque changement de consigne, **jette les 3 premières lignes** (2,70 s de transition) et
+> compte les **~5 suivantes** : une consigne de 8,4 s en donne ~8, dont ~5 comptables. C'est
+> grossier — les lignes ne sont pas horodatées et le comptage se fait au fil de l'eau — mais c'est
+> exécutable sans rien d'autre, et ça donne les mêmes deux ratios. Ne mélange pas les deux méthodes
+> dans un même relevé.
 
 #### Quand ça ne détecte pas : LIS LA CAUSE, elle est comptée
 
@@ -868,32 +938,59 @@ ne se répète pas : « ça ne détecte pas » sans la cause envoie chercher au 
 > (`corr_min`, `margin`) portent la nouvelle valeur dès l'échantillon suivant. **Note la valeur
 > retenue dans ton relevé** — les métadonnées du flux, elles, garderont l'ancienne, puisqu'elles
 > sont figées à l'ouverture.
+>
+> ⚠️⚠️ **Mais fais l'A-B-A du point suivant D'ABORD, aux seuils par DÉFAUT.** `archive/cvep_pilot.py`
+> décode toujours à **0,26/0,09** et n'expose aucun réglage : une séance où A tourne à 0,15 et B à
+> 0,26 compare deux **règles de décision**, pas deux **chemins de décodage** — exactement la
+> confusion que l'A-B-A existe pour éliminer. Ne desserre le seuil qu'après, et note-le comme un
+> **bloc séparé**, jamais comme une amélioration de A.
 
 #### LA mesure de ce test : comparer à l'écran archivé, même personne, même séance
 
-C'est **le seul point de 2.9 qui produise une conclusion**, et il ne coûte que trois minutes de
-plus. Tout le reste dit « ça marche » ou « ça ne marche pas » sans pouvoir dire *par rapport à
+C'est **le seul point de 2.9 qui produise une conclusion**, et il coûte deux blocs de plus (~10 min
+de casque). Tout le reste dit « ça marche » ou « ça ne marche pas » sans pouvoir dire *par rapport à
 quoi*.
 
 `archive/cvep_pilot.py` est l'écran pygame que ce chantier a retiré : **même modèle, mêmes cibles,
-même vote 2-sur-3**, mais il décode en local, dans le programme qui affiche. Deux chemins
-indépendants qui doivent désigner la **même cible sur la même fixation**. Sans cette comparaison, un
-mauvais résultat a deux explications qu'on ne peut pas séparer : *« le décodage réseau est moins
-bon »* et *« la séance est moins bonne »* (contact qui s'est dégradé, fatigue, saline qui a séché).
+même vote 2-sur-3** — la géométrie de décision est identique (2 cycles repliés, 2 votes sur 3, à
+5 Hz) —, mais il décode en local, dans le programme qui affiche. Deux chemins indépendants qui
+doivent désigner la **même cible sur la même fixation**. Sans cette comparaison, un mauvais résultat
+a deux explications qu'on ne peut pas séparer : *« le décodage réseau est moins bon »* et *« la
+séance est moins bonne »* (contact qui s'est dégradé, fatigue, saline qui a séché).
 
-**Fais-le en A-B-A**, dans cet ordre, sans retirer le casque :
+⚠️⚠️ **Même modèle, mêmes cibles, même vote — mais PAS le même protocole, et c'est à toi de le
+compenser.** A est **cerclé et à l'aveugle** : une consigne tirée au sort t'impose la cible, tu ne
+vois jamais la réponse du décodeur. B est **libre et en boucle fermée** : l'écran archivé n'affiche
+**aucune consigne**, ne tire rien, n'horodate rien, n'écrit aucun journal — et il montre la réponse
+du décodeur **en direct**, dans un panneau de scores. Sans protocole écrit d'avance, B n'a **aucune
+vérité-terrain** et son « ____ % » ne repose sur rien. D'où les trois règles ci-dessous, à lire
+avant de lancer B.
+
+**Fais-le en A-B-A**, dans cet ordre, sans retirer le casque, **et aux seuils par défaut
+(0,26/0,09) pour les trois blocs** :
 
 ```bash
-# A  — déjà fait ci-dessus : moteur + émetteur, ~3 min, noter la justesse
+# A  — déjà fait ci-dessus : moteur + émetteur, ~5 min, avec --log, noter les deux ratios
 # B  — fermer les trois terminaux, PUIS :
-python archive/cvep_pilot.py --model data/cvep_model_AAAAMMJJ-HHMMSS.npz    # ~3 min
-# A' — refermer, relancer le montage A, ~3 min
+python archive/cvep_pilot.py --model data/cvep_model_AAAAMMJJ-HHMMSS.npz    # ~5 min
+# A' — refermer, relancer EXACTEMENT le montage A (même durée, --log seance_Ap_stim.jsonl), ~5 min
 ```
 
 - [ ] **`--model` explicite, obligatoire.** Le défaut de ce fichier archivé pointe sur l'ancien nom
       FIXE `data/cvep_model.npz`, que la calibration n'écrit plus. Sans cet argument tu comparerais
       deux modèles différents et l'écart mesuré ne voudrait rien dire.
-- [ ] A : ______ % · B (écran archivé) : ______ % · A' : ______ % .
+- [ ] **Le protocole de B, à préparer AVANT de le lancer** (il n'en fournit aucun) :
+      1. **Écris ta liste de fixations sur papier d'avance** — 6 cibles × 3 passages, dans un ordre
+         mélangé, jamais deux fois la même de suite. C'est ta seule vérité-terrain pour B.
+      2. **Fixe chaque cible 10 s**, et **ignore les 3 premières secondes** : la même transition
+         qu'en A s'applique ici (2,10 s de fenêtre + 0,60 s de vote), pour la même raison.
+      3. ⚠️ **Ne regarde le panneau de scores qu'à la FIN de chaque fixation**, et note ce qu'il
+         affiche à cet instant. Le regarder pendant te dit la réponse et biaise ta fixation — c'est
+         la différence de protocole avec A, et la seule que tu puisses réduire.
+      Le comptage de B suit alors la **méthode de secours** décrite plus haut (jeter le début,
+      compter la fin), avec les mêmes deux ratios qu'en A.
+- [ ] A : ______ % émis / ______ % justes · B (écran archivé) : ______ % / ______ %
+      · A' : ______ % / ______ % .
 - [ ] **Comment lire ces trois nombres**, et c'est tout l'intérêt du A' :
       - A ≈ A' ≈ B → le décodage réseau vaut l'écran local. **C'est le résultat attendu.**
       - A ≈ A' **et** nettement < B → le décodage **réseau** est en cause. C'est un vrai défaut,
@@ -935,8 +1032,12 @@ python -u examples/receiver.py --stream decoded_ssvep  # terminal 2
   Connected: 6 channels  ['target_index', 'freq_hz', 'confidence',
                           'score_15Hz', 'score_20Hz', 'score_8.57143Hz']
   Clock offset: -0.014 ms
-  [83.0 ms old] target_index=-1.00  freq_hz=0.00  confidence=1.23  score_15Hz=-0.61 …
+  [t=3303867.957   83.0 ms old] target_index=-1.00  freq_hz=0.00  confidence=1.23  score_15Hz=-0.61 …
   ```
+
+  Le `t=` est l'horodatage LSL de l'échantillon, corrigé sur l'horloge de cette machine. C'est lui
+  qui rend une séance dépouillable après coup : les émetteurs de stimulus horodatent leurs consignes
+  sur la MÊME horloge, donc les deux fichiers se joignent dessus (cf. 2.9).
 
   `target_index=-1` signifie « aucune cible » : normal en synthétique, personne ne regarde rien.
   Les noms de voies **portent les fréquences réglées** — c'est pour ça que les changer recrée le
@@ -985,9 +1086,12 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
   ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
   vérifié nulle part — c'est le 3.3, et il n'a jamais été joué.
 - **L'appli pygame n'est couverte que par son smoke.** Elle n'est plus le seul accès à aucun mode :
-  il ne lui reste que les **calibrations** que le moteur ne sait pas jouer (c-VEP, P300, ErrP) et
-  l'histogramme neuro. Les tester au casque est une autre séance — celle-ci vérifie l'API, pas
-  l'appli d'expérimentation.
+  il lui reste les **calibrations** que le moteur ne sait pas jouer (c-VEP, P300, ErrP),
+  l'histogramme neuro, **et trois écrans de PILOTAGE que ce chantier n'a pas retirés — SSVEP,
+  sélection P300, démonstrateur ErrP**. Ces trois-là font double emploi avec le moteur et ne
+  doivent jamais tourner en même temps que lui ; seuls le c-VEP et le MI y ont perdu leur pilotage.
+  Les tester au casque est une autre séance — celle-ci vérifie l'API, pas l'appli
+  d'expérimentation.
 
 ---
 

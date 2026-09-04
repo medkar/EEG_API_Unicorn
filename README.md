@@ -192,22 +192,36 @@ disagreed. The stream carries only the `-1`; the engine's state counts the four 
 "it is not detecting" without the cause sends you looking in the wrong place.
 
 Like MI, P300 and ErrP it needs a **model trained on you** — one calibration in the pygame app,
-about a minute. That calibration trains **both** decoders the product has for this stimulus (eCCA
-and rCCA) on the same epochs and compares them with a **paired McNemar test** rather than two
-percentages side by side. On the reference session they were **indistinguishable** (37 paired
-decisions, 8 discordant, p = 0.727), so the model file declares its own decoder and you pick a
-model, never an algorithm.
+about three minutes. (The exact length is computed and printed when it starts; at the repository's
+settings it is 2.7 min, not counting the briefing and the link check.) That calibration trains
+**both** decoders the product has for this stimulus (eCCA and rCCA) on the same epochs and compares
+them with a **paired McNemar test** rather than two percentages side by side. On the reference
+session they were **indistinguishable** (37 paired decisions, 8 discordant, p = 0.727), so the model
+file declares its own decoder and you pick a model, never an algorithm.
 
 **What it is worth.** At 6 targets chance is 16.7 %. The only figure that exists is offline,
-leave-one-out on the reference session: **59.5 % (eCCA) and 64.9 % (rCCA)**, an ITR around
-22 bits/min with saline. So expect roughly **one designation in three to be wrong** — and expect
-worse than that live, because no c-VEP has ever been decoded from a real brain *through the engine*.
+leave-one-out on the reference session of 2026-07-21: **59.5 % (eCCA) and 64.9 % (rCCA)** over 37
+paired decisions. At the engine's own geometry — 2 code cycles, so one decision every 2.10 s — that
+is **19.1 bits/min for eCCA and 23.8 for rCCA**, which the calibration screen itself calls
+**WEAK**: under half of the 25.0 bits/min the SSVEP already delivers. (Recomputable:
+`research/itr.py`, and asserted in `src/research/cvep_calibrate.py`. An earlier "~22 bits/min" had
+no traceable source, and the screen printed exactly twice the truth until 2026-09-03.)
+
+⚠️ Those bits/min assume **one decision published per window**. The engine publishes far fewer: it
+emits only past two thresholds *and* a 2-of-3 vote, which offline fires on **46 % of windows** at
+the default 0.26/0.09 (`core/config.py`). Expect roughly **half** that rate out of `decoded_cvep` —
+and expect worse still live, because no c-VEP has ever been decoded from a real brain *through the
+engine*. Roughly one designation in three is wrong even offline.
 
 **The pygame app** — the original all-in-one. It is no longer the only way to run any mode: with
 c-VEP published on 2026-08-21, all six decode in the engine. What is left here is what the engine
 cannot do — the **calibrations** for c-VEP, P300 and ErrP, whose protocols need a frame-locked
 stimulus that a Qt window cannot render — plus the live histogram for neuro-monitoring. Motor
 Imagery has fully moved out, calibration included. It owns the headset and publishes nothing.
+
+⚠️ It also still carries **three piloting screens this work did not remove**: live SSVEP decoding,
+live P300 selection and the single-trial ErrP demonstrator. They duplicate what the engine does and
+must never run alongside it. Only c-VEP and Motor Imagery lost their piloting screens here.
 
 Its former Motor Imagery and c-VEP **piloting** screens are not deleted, kept in
 [`archive/`](archive/README.md) instead: still runnable (`--smoke`), and the reference the engine's
@@ -283,15 +297,17 @@ display refresh rate.
 | Mode | How it works | Calibration | Status |
 |---|---|---|---|
 | **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable; the only one validated on hardware **through the engine** |
-| **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~1 min, in the pygame app | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~22 bits/min, ~60-65 % offline |
+| **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~3 min, in the pygame app | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~60-65 % offline → 19.1 (eCCA) / 23.8 (rCCA) bits/min, **WEAK** vs the SSVEP's 25.0 |
 | **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min, in the pygame app | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min, **from the console** | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
 | **ErrP** | Error potential: single-trial detection when the machine errs | ~7 min (200 trials), in the pygame app | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
 
 ⚠️ **"Published" is not "validated".** Only SSVEP has been decoded from a real brain *through the
-engine*. The other five were validated in the pygame app, and their engine path is verified without
-a headset. Every accuracy figure on this page comes from **one person**, usually one session.
+engine*. Four of the others — MI, P300, ErrP, c-VEP — were validated in the pygame app, and their
+engine path is verified without a headset. **Neuro-monitoring has never been validated at all**:
+its plumbing is tested, its content is not, anywhere. Every accuracy figure on this page comes from
+**one person**, usually one session.
 
 ## Layout
 
@@ -347,10 +363,11 @@ does not publish them yet, so they are not part of what students consume and may
 
 | Family | Modules |
 |---|---|
-| pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five pages; calibrations and the neuro histogram) · `ui.py` · `viewing.py` |
+| pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five pages: the calibrations, the neuro histogram, and three piloting screens the engine now duplicates — SSVEP, P300, ErrP) · `ui.py` · `viewing.py` |
 | Stimulus emitters — **open no headset**, meant to run *beside* the engine in a second terminal | `ssvep_stimulus.py` · [`p300_stimulus.py`](src/research/p300_stimulus.py) · `errp_stimulus.py` · [`cvep_stimulus.py`](src/research/cvep_stimulus.py) — the last three publish markers, see [`docs/markers.md`](docs/markers.md) |
 | Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
 | Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
+| Refuted hypotheses, kept readable | `cvep_rcca.py` — the **Gold code factory**, not a decoder (the rCCA *decoder* is published, in `core/`); only `archive/cvep_rcca_pilot.py` still calls it |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
 
 ### [`archive/`](archive/) — retired, but still runs

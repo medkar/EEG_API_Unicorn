@@ -19,6 +19,12 @@ then run this in another:
 The decoded stream only appears once the engine finishes its short rest measurement, so
 start the engine with --mode ssvep and give it a few seconds before looking for it.
 
+Every line starts with `t=`, the sample's LSL timestamp corrected to this machine's clock. That
+number is what makes a session scorable afterwards: the stimulus programs stamp their cues on the
+same clock, so `python -u examples/receiver.py --stream decoded_cvep > seance.txt` and the
+emitter's `--log` file join on it. Without it you only know how OLD a sample is, which cannot be
+compared to anything.
+
 The only dependency is `pylsl`. The same three steps (resolve, open, pull) work identically
 in Unity (LSL4Unity), MATLAB and C++ — that is the whole point of using LSL.
 """
@@ -108,12 +114,18 @@ def main(argv):
             if sample is None:
                 print("(no data for 5 s — is the engine still running?)")
                 continue
-            age_ms = (local_clock() - (ts + offset)) * 1000.0
+            # `ts + offset` is this sample's timestamp in THIS machine's `local_clock()` domain —
+            # the same clock a stimulus program stamps its markers with. Print it, do not just use
+            # it to compute an age: the age alone cannot be matched against anything. Scoring a
+            # c-VEP session means answering "was this sample after the cue at t=12348.378?", and
+            # that question needs the absolute number (docs/recette.md 2.9).
+            t_abs = ts + offset
+            age_ms = (local_clock() - t_abs) * 1000.0
             if args.stream == "status":
                 print(f"{sample[0]}")
             else:
                 values = "  ".join(f"{n}={v:7.2f}" for n, v in zip(labels, sample))
-                print(f"[{age_ms:5.1f} ms old] {values}")
+                print(f"[t={t_abs:.3f}  {age_ms:5.1f} ms old] {values}")
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0

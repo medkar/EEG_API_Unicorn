@@ -19,17 +19,22 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    délimitent une époque à découper, les siens tiennent une HORLOGE (un par redémarrage de la
    m-séquence, ~1/s). Le moteur n'en épochera rien ; il s'en sert pour savoir où en est le code
    affiché — sans quoi il ne décode rien du tout.
-2. **Les décodeurs des modes** — `cvep_rcca` seulement, désormais. `cvep_code` et `cvep_decoder`
-   ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le 2026-07-27,
-   `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec `p300_models`) le
-   2026-08-17, `errp_decoder` (avec `errp_models`) le 2026-08-18 : cinq décodeurs vivent
-   maintenant dans `core`. `cvep_rcca` reste ici — c'est la variante à CODES DISTINCTS (rCCA),
-   jamais publiée, gardée en exploration (voir sa docstring : réfutée face à l'eCCA).
+2. **Les décodeurs des modes** — **plus aucun, désormais.** `cvep_code`, `cvep_decoder` ET
+   `cvep_rcca` ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le
+   2026-07-27, `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec
+   `p300_models`) le 2026-08-17, `errp_decoder` (avec `errp_models`) le 2026-08-18 : les **six**
+   décodeurs du produit vivent maintenant dans `core`, et cette famille-ci est VIDE.
+   ⚠️ **Le fichier `cvep_rcca.py` qui subsiste ICI n'est pas un décodeur** — c'est la fabrique de
+   codes GOLD, la moitié RÉFUTÉE de l'hypothèse rCCA (voir sa docstring), donc de la famille 4.
+   Le décodeur rCCA, lui, EST publié : `core/modes/cvep.py` instancie `RCCADecoder` quand le
+   fichier de modèle déclare ce décodeur, et la calibration en écrit un à chaque séance.
 3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
    `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
-4. **Les analyses hors ligne** — `*_analyze.py`, `ssvep_guided.py`, `mi_compare.py`, `itr.py` :
-   rejouer un enregistrement, comparer, mesurer. C'est ici qu'on décide si une hypothèse tient,
-   et il n'y a rien de honteux à ce qu'une analyse conclue « bruit ».
+4. **Les analyses hors ligne et les hypothèses RÉFUTÉES gardées lisibles** — `*_analyze.py`,
+   `ssvep_guided.py`, `mi_compare.py`, `itr.py`, et `cvep_rcca.py` (la fabrique de codes Gold,
+   seule appelée par `archive/cvep_rcca_pilot.py`) : rejouer un enregistrement, comparer,
+   mesurer. C'est ici qu'on décide si une hypothèse tient, et il n'y a rien de honteux à ce
+   qu'une analyse conclue « bruit ».
 
 Reste `controller.py` et `live_ssvep.py`, hérités du banc d'essai robot : ils décodent et
 envoient un `{jx,jy}` en UDP. Le produit ne fonctionne plus ainsi (l'API publie une intention

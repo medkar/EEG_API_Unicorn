@@ -30,10 +30,14 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300, ErrP, c-VEP)
   attendent une séance casque — c'est la recette, tests 2.6 à 2.9.
 - L'**application pygame** (`src/research/app.py`, menu à 5 pages) n'est plus le seul accès à aucun
-  mode. Il ne lui reste que **les calibrations que le moteur ne sait pas jouer** — c-VEP, P300,
-  ErrP, dont le stimulus doit être verrouillé à la frame, d'où `Calib(kind="natif")` dans leurs
-  trois `ModeSpec` — et l'histogramme neuro. C'est le geste que le moteur lui-même prescrit quand il
-  refuse de démarrer. **La calibration MI, elle, est jouée par le moteur** : un bouton « Calibrer »
+  mode. Il lui reste **les calibrations que le moteur ne sait pas jouer** — c-VEP, P300, ErrP, dont
+  le stimulus doit être verrouillé à la frame, d'où `Calib(kind="natif")` dans leurs trois
+  `ModeSpec` —, l'histogramme neuro, **et trois écrans de PILOTAGE que ce chantier n'a pas
+  retirés : SSVEP (`mode_ssvep`), sélection P300 (`mode_p300`) et démonstrateur ErrP
+  (`mode_errp`)**. Ces trois-là font double emploi avec le moteur et ne doivent jamais tourner en
+  même temps que lui. Seuls le c-VEP et le MI y ont perdu leur pilotage. La calibration, elle, est
+  le geste que le moteur lui-même prescrit quand il refuse de démarrer.
+  **La calibration MI, elle, est jouée par le moteur** : un bouton « Calibrer »
   sur sa page de la console joue la séance et écrit un modèle horodaté avec son accuracy honnête.
   Les anciens écrans pygame de **pilotage** (MI, c-VEP) sont **archivés**, pas supprimés, dans
   [`archive/`](archive/README.md) : ils restent la référence contre laquelle comparer le moteur.
@@ -87,6 +91,10 @@ python src/core/server.py --mode cvep      # le c-VEP sur le réseau (EXIGE un m
 python src/research/cvep_stimulus.py       # l'émetteur c-VEP : fait clignoter ET publie un marqueur
                                            # de CYCLE (~1/s). N'ouvre PAS le casque -> 2 terminaux.
                                            # --seed rejoue les consignes, --windowed pour le dev
+python src/research/cvep_stimulus.py --log seance.jsonl   # ⚠️ EN SÉANCE : la vérité-terrain dans un
+                                           # FICHIER (une ligne par consigne, horodatée en
+                                           # local_clock()). Sans elle la séance ne se dépouille
+                                           # pas : le terminal en est le seul autre exemplaire
 python archive/cvep_pilot.py --model data/cvep_model_….npz   # l'écran archivé : décodage LOCAL, la
                                            # RÉFÉRENCE à comparer au réseau en séance (recette 2.9).
                                            # ⚠️ --model explicite : son défaut pointe l'ancien nom fixe
@@ -137,7 +145,7 @@ python src/core/modes/mi_calib.py          # calibration MI : accuracy HONNÊTE 
 Le non-filtrage de la fenêtre MI est l'invariant central du sous-système et il n'est vérifié que
 par le premier : un double filtrage réintroduit demain passerait les trois smokes sans un mot.
 
-Et les cinq gardes du **c-VEP**, livré le 2026-08-21, qu'aucun des trois smokes n'exécute :
+Et les six gardes du **c-VEP**, livré le 2026-08-21, qu'aucun des trois smokes n'exécute :
 
 ```bash
 python src/core/cvep_code.py               # la m-séquence : équilibre, autocorrélation, lags distincts

@@ -1,7 +1,11 @@
 """Calibration c-VEP : fixer chaque cible quelques secondes -> template + filtre spatial.
 
-Beaucoup plus courte que la calibration Motor Imagery (~1 min contre 5-7 min) parce qu'on
-n'apprend pas une intention mentale, seulement la **forme de ta réponse visuelle** au code.
+Plus courte que la calibration Motor Imagery (~3 min contre 5-7 min) parce qu'on n'apprend pas
+une intention mentale, seulement la **forme de ta réponse visuelle** au code. ⚠️ La durée exacte
+est CALCULÉE et imprimée au lancement (`≈ X.X min`, cf. `calibrate`) : aux réglages du dépôt
+(6 cibles × `CVEP_CAL_CYCLES`=15 cycles, `CVEP_CAL_BLOCKS`=3 → 18 blocs entrelacés) elle vaut
+**≈ 2,7 min**, hors briefing et hors contrôle de liaison. Le « ~1 min » qui traînait dans la doc
+datait d'un réglage antérieur.
 
 Déroulé : les 3 cibles clignotent en permanence avec le même code décalé ; on te demande
 d'en fixer une, et on enregistre `CVEP_CAL_CYCLES` cycles complets. On recommence pour
@@ -442,7 +446,8 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
           f" ≈ {est:.1f} min")
     if not _briefing(app):
         return False, None
-    # liaison casque vérifiée AVANT d'investir 3,4 min ; voies clés (occipitales) encadrées
+    # liaison casque vérifiée AVANT d'investir les `est` minutes annoncées juste au-dessus (≈ 2,7
+    # aux réglages du dépôt) ; voies clés (occipitales) encadrées
     if not app.signal_check(highlight=CVEP_CHANNELS, mode_label="c-VEP"):
         return False, None
 
@@ -531,7 +536,16 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     # McNemar p=0,73 sur 37 décisions ; ce qui n'est pas « ils se valent »).
     res = entraine_les_deux(epochs, lags, fs=acq.fs, refresh=app.refresh)
     ecca, rcca = res["eCCA"]["modele"], res["rCCA"]["modele"]
-    ecca.save(save_path, n_targets=len(plan))
+    n_cibles_vues = len(set(lags))
+    # ⚠️ **`n_targets` = ce que la séance a RÉELLEMENT présenté, jamais `len(plan)`.** Le template
+    # eCCA est COMMUN à tous les lags : un modèle entraîné sur 3 cibles « marche » techniquement à
+    # 6 et publie six corrélations d'apparence normale, dont trois sortent de lags qu'aucun cerveau
+    # n'a jamais vus. C'est exactement la panne invisible que `CVEPRuntime._desaccord_code` refuse
+    # (« ce modèle a été calibré sur N cible(s), le stimulus actuel en affiche M ») — mais ce refus
+    # ne peut mordre que si le fichier dit la VÉRITÉ sur lui-même. Écrire `len(plan)` ici rendait le
+    # contrôle du moteur inopérant sur le seul cas qu'il vise, et l'asymétrie s'était creusée : le
+    # rCCA d'une séance tronquée n'est plus écrit du tout, l'eCCA l'était en se déclarant complet.
+    ecca.save(save_path, n_targets=n_cibles_vues)
     # ⚠️ **Une séance INTERROMPUE ne produit PAS de fichier rCCA, et le dire.** Le modèle rCCA
     # d'une séance à 3 cibles sur 6 porte 3 codes ; `core.cvep_models.charger` exige les codes du
     # stimulus AFFICHÉ (les 6, dans l'ordre du plan) et le refuse — donc le fichier n'apparaîtrait
@@ -539,7 +553,6 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     # annonçait « modèles sauvegardés : … (rCCA) » à l'étudiant, et pouvait même le nommer
     # gagnant : un succès affiché pour un artefact que rien ne peut charger. La COMPARAISON,
     # elle, reste valable (les deux décodeurs jugent parmi les mêmes cibles) et s'affiche.
-    n_cibles_vues = len(set(lags))
     if n_cibles_vues == len(plan):
         rcca.save(rcca_save_path)
         ligne_sauvegarde = (f"modèles sauvegardés : {save_path} (eCCA)  ·  "
@@ -547,10 +560,11 @@ def calibrate(app, cycles=CVEP_CAL_CYCLES, save_path=None, rcca_save_path=None):
     else:
         ligne_sauvegarde = (
             f"séance interrompue ({n_cibles_vues} cibles sur {len(plan)}) : modèle eCCA "
-            f"sauvegardé ({save_path}), modèle rCCA NON sauvegardé — il porterait "
-            f"{n_cibles_vues} codes quand le stimulus en affiche {len(plan)}, et "
-            f"`core.cvep_models.charger` le refuserait. La comparaison ci-dessous reste valable ; "
-            f"recalibre en entier pour obtenir un modèle rCCA utilisable.")
+            f"sauvegardé ({save_path}) mais DÉCLARÉ à {n_cibles_vues} cibles — le moteur le "
+            f"REFUSERA tant que le stimulus en affiche {len(plan)}, et il dira pourquoi. Modèle "
+            f"rCCA NON sauvegardé : il porterait {n_cibles_vues} codes quand le stimulus en "
+            f"affiche {len(plan)}, et `core.cvep_models.charger` le refuserait. La comparaison "
+            f"ci-dessous reste valable ; recalibre en entier pour obtenir des modèles utilisables.")
     if not app.smoke:
         # ⚠️ ARCHIVER, ne jamais écraser : dans un projet d'exploration les jeux de données SONT
         # le résultat. Une version antérieure n'écrivait que « cvep_calib_last.npz » et la
@@ -1064,6 +1078,9 @@ def _selftest():
                                           rcca_save_path=os.path.join(tmp1, "r.npz"))
             sortie1 = capture.getvalue()
             fichiers1 = set(os.listdir(tmp1))
+            # Relu par le chemin RÉEL du moteur (`CVEPModel.load`), pas depuis l'objet en mémoire :
+            # c'est le FICHIER qui voyage jusqu'au moteur, et c'est lui qui doit dire la vérité.
+            ecca1 = CVEPModel.load(os.path.join(tmp1, "e.npz"))
         finally:
             shutil.rmtree(tmp1, ignore_errors=True)
         chk(res1["eCCA"]["n_cibles"] == 3,
@@ -1084,6 +1101,21 @@ def _selftest():
             f"une séance tronquée sauvegarde l'eCCA et PAS le rCCA ({sorted(fichiers1)})")
         chk("rCCA NON sauvegardé" in sortie1 and "séance interrompue" in sortie1,
             f"...et calibrate() le DIT, au lieu d'annoncer « modèles sauvegardés » pour les deux "
+            f"({[l for l in sortie1.splitlines() if 'sauvegard' in l]})")
+        # --- Revue finale, E-I3 : le fichier eCCA DÉCLARE ce que la séance a présenté. ----------
+        # ⚠️ Le template eCCA est commun à tous les lags : un modèle à 3 cibles « marche » à 6 et
+        # publie six corrélations d'apparence normale, dont trois issues de lags jamais montrés.
+        # `CVEPRuntime._desaccord_code` refuse précisément ce cas — mais seulement si le fichier
+        # ne ment pas sur lui-même. Avec `n_targets=len(plan)`, la calibration rendait ce refus
+        # INOPÉRANT sur la seule séance qu'il vise, et l'asymétrie s'était creusée : le rCCA d'une
+        # séance tronquée n'est plus écrit du tout, l'eCCA l'était en se déclarant complet.
+        chk(ecca1.n_targets == 3,
+            f"le modèle eCCA d'une séance tronquée se déclare à 3 cibles — celles qu'il a "
+            f"réellement vues —, jamais aux {len(build_targets()[0])} du plan : c'est ce champ, et "
+            f"lui seul, qui permet au moteur de le refuser ({ecca1.n_targets})")
+        chk("REFUSERA" in sortie1,
+            f"...et calibrate() prévient que le moteur le refusera tant que le stimulus affichera "
+            f"plus de cibles, au lieu d'annoncer une sauvegarde sans réserve "
             f"({[l for l in sortie1.splitlines() if 'sauvegard' in l]})")
 
         # --- Revue finale, Critical 1 : l'ITR IMPRIMÉ est calculé à la géométrie où la justesse
@@ -1122,15 +1154,17 @@ def _selftest():
             f"({res1['eCCA']['n_cycles']}, {res1['rCCA']['n_cycles']}, {CVEP_DECISION_CYCLES})")
         # Le chiffre CONCRET, sur la séance de référence que le dépôt documente partout (6 cibles,
         # eCCA 22/37 = 59,5 %, rCCA 24/37 = 64,9 %, code L=63 à 60 Hz) : c'est le chiffre-vedette
-        # du chantier, et c'est lui qui était doublé. Il se lit contre les 22 bits/min du README.
+        # du chantier, et c'est lui qui était doublé. ⚠️ C'est CETTE assertion qui fait autorité
+        # sur les 19,1 / 23,8 bits/min que README.md et docs/SPEC.md annoncent désormais — ils
+        # citent la mesure d'ici, plus un « ~22 » sans provenance.
         ref_ssvep = _itr_ref(3, 0.95, 1.5)
         bits_ref_e = _itr_ref(6, 22 / 37, CVEP_DECISION_CYCLES * 63 / 60.0)
         bits_ref_r = _itr_ref(6, 24 / 37, CVEP_DECISION_CYCLES * 63 / 60.0)
-        chk(21.0 < max(bits_ref_e, bits_ref_r) < 26.0
+        chk(abs(bits_ref_e - 19.1) < 0.1 and abs(bits_ref_r - 23.8) < 0.1
             and max(bits_ref_e, bits_ref_r) < ref_ssvep / 2,
             f"séance de RÉFÉRENCE : eCCA {bits_ref_e:.1f} et rCCA {bits_ref_r:.1f} bits/min à "
-            f"{CVEP_DECISION_CYCLES} cycles — cohérent avec les 22 bits/min annoncés par le "
-            f"README, et SOUS la moitié du SSVEP ({ref_ssvep/2:.1f}) donc verdict « FAIBLE »")
+            f"{CVEP_DECISION_CYCLES} cycles — EXACTEMENT les 19,1 et 23,8 que la doc annonce, et "
+            f"SOUS la moitié du SSVEP ({ref_ssvep/2:.1f}) donc verdict « FAIBLE »")
         chk(abs(_itr_ref(6, 24 / 37, 63 / 60.0) - 2 * bits_ref_r) < 1e-9
             and _itr_ref(6, 24 / 37, 63 / 60.0) >= ref_ssvep / 2,
             f"...et le calcul à UN cycle rendait exactement le DOUBLE "
