@@ -603,7 +603,27 @@ git commit -m "Train both decoders on the same epochs, and name the winner"
 ## Task 7 : les seuils réglables à chaud — la garde qui manque à l'ErrP
 
 **Files:**
-- Modify: `src/core/modes/cvep.py`
+- Modify: `src/core/modes/cvep.py`, `src/core/modes/contract.py` (le commentaire du drapeau)
+
+⚠️ **À FAIRE EN PREMIER, sinon cette tâche se contredit elle-même.** `contract.py` documente
+aujourd'hui `affecte_decodage` par « **False = le décodeur ne le lit jamais** ». Or `corr_min` et
+`margin` SONT lus par le décodeur, à chaque décision. Poser `False` dessus sans toucher au
+commentaire écrirait un mensonge dans le contrat — et tout relecteur aurait raison de le signaler.
+
+Le drapeau ne décrit pas *qui lit* le réglage, il décrit **si le changer exige de reconstruire le
+runtime** (c'est ce que `server._set_params` en fait). Corriger le commentaire pour dire l'invariant
+réel, et nommer la condition qui le rend vrai :
+
+```python
+    affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
+                                    # runtime (donc pas de flux recréé, pas de chauffe refaite).
+                                    # ⚠️ Ce n'est PAS « le décodeur ne le lit jamais » : le c-VEP
+                                    # lit `corr_min`/`margin` à CHAQUE décision, et c'est
+                                    # justement ce qui rend `False` vrai chez lui. La condition à
+                                    # respecter est donc : un réglage `False` ne doit jamais être
+                                    # mis en cache dans `__init__`, sans quoi le changer n'aurait
+                                    # plus aucun effet — en silence.
+```
 
 - [ ] **Étape 1 : écrire le test qui prouve qu'on ne recrée pas le flux**
 
