@@ -128,9 +128,13 @@ python src/console/app.py --synthetic
 
 - [ ] La fenêtre s'ouvre, titre « EEG_API_Unicorn — console d'expérimentation », 1100×720.
 - [ ] En haut, un **bandeau permanent** : liaison casque, fréquence d'échantillonnage, et σ par voie.
-- [ ] En dessous, une **grille de 7 tuiles** dans cet ordre : Brut, SSVEP, Neuro, Motor
-      Imagery, P300, ErrP, c-VEP. *(L'ordre suit `registry.MODES` : les modes sont rangés dans
-      l'ordre où ils ont rejoint le moteur, le c-VEP ferme la marche depuis le 2026-08-21.)*
+- [ ] En dessous, une **grille de 7 tuiles** sur deux rangées de 4 : **Brut, SSVEP, c-VEP, Neuro**
+      puis **Motor Imagery, P300, ErrP**. *(L'ordre suit `registry.MODES`, et il se lit : la
+      première rangée est ce qu'on peut lancer sans rien avoir appris du sujet, la seconde ce qui
+      exige un modèle entraîné par personne. SSVEP et c-VEP sont côte à côte parce que ce sont les
+      deux seuls modes où l'on fixe une cible qui clignote — c'est la paire que le test 2.9 compare.
+      ⚠️ Le c-VEP est en première rangée pour cette comparaison, pas parce qu'il serait immédiat :
+      lui aussi exige un modèle, et en plus une horloge.)*
 - [ ] La tuile « Brut » est **en marche** (le brut démarre par défaut) ; les six autres affichent
       « arrêté ».
 

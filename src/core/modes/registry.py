@@ -24,14 +24,23 @@ from core.modes.contract import validate  # noqa: E402
 # été SUPPRIMÉ avec sa dernière entrée, plutôt que gardé vide. Les statuts « appli_pygame » et
 # « prevu » restent pourtant vérifiés par `check()` ci-dessous : le prochain mode décrit avant
 # d'être fait n'aura qu'à déclarer son `ModeSpec` et sa raison d'`unavailable`.
+# ⚠️ Cet ordre est celui de la GRILLE de la console (4 colonnes) : il se lit, il n'est pas
+# arbitraire. Il rangeait les modes par date d'arrivée dans le moteur ; il les range désormais par
+# GESTE DEMANDÉ À L'UTILISATEUR, ce qui est ce qu'un étudiant compare vraiment.
+#
+#   rangée 1  Brut · SSVEP · c-VEP · Neuro     ce qu'on peut lancer sans rien apprendre du sujet
+#   rangée 2  MI · P300 · ErrP                 ce qui exige un modèle entraîné par personne
 MODES = (
     raw.SPEC,           # le brut d'abord : c'est ce qui existe même sans décodage
-    ssvep.SPEC,
-    neuro.SPEC,
-    mi.SPEC,            # le MI a rejoint le moteur : il n'est plus une entrée « appli pygame »
-    p300.SPEC,          # le P300 a rejoint le moteur : il écoute les marqueurs d'une appli externe
-    errp.SPEC,          # l'ErrP a rejoint le moteur : 2e client du tuyau des marqueurs
-    cvep.SPEC,          # le c-VEP ferme la marche : 3e client, mais ses marqueurs sont une HORLOGE
+    ssvep.SPEC,         # SSVEP et c-VEP CÔTE À CÔTE : les deux seuls modes où l'on fixe une cible
+    cvep.SPEC,          # qui clignote. C'est la paire qu'on compare — la recette 2.9 mesure
+                        # justement l'ITR du c-VEP contre la référence SSVEP. ⚠️ Le c-VEP exige un
+                        # modèle ET une HORLOGE (ses marqueurs ne délimitent rien) ; il est ici
+                        # pour la comparaison, pas parce qu'il serait aussi immédiat.
+    neuro.SPEC,         # passif : on observe un état, il n'y a rien à choisir
+    mi.SPEC,            # à partir d'ici : un modèle entraîné par personne est indispensable
+    p300.SPEC,          # 1er client du tuyau des marqueurs (un flash déclaré = une époque)
+    errp.SPEC,          # 2e client, même tuyau, un seul événement : le feedback affiché
 )
 
 BY_ID = {spec.id: spec for spec in MODES}
