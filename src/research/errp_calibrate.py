@@ -32,6 +32,8 @@ from core.config import (ERRP_CAL_BLOCKS, ERRP_CAL_TRIALS, ERRP_EPOCH_S,  # noqa
                     ERRP_MODEL_PATH, ERRP_PRE_S, ERRP_TRACK_CELLS)
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 from core.errp_decoder import CORRECT, ERROR, ErrPModel, rates  # noqa: E402
+from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
+                            PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR,  # noqa: E402,F401
                 OUTLINE, WARN, Abort)
 
@@ -68,26 +70,25 @@ def _briefing(app):
             return True
 
 
+# ⚠️ La RÈGLE de la piste — où va le point, quand la machine se trompe, combien de temps on
+# attend — a déménagé dans `core/errp_track.py` le 2026-09-07. Elle était écrite ICI **et** dans
+# l'émetteur, et un test rejouait 500 pas à graine égale pour vérifier que les deux copies ne
+# divergeaient pas. C'est le module qui entraîne le modèle et celui qui le joue : ils ne peuvent
+# pas se permettre deux écritures. Ce qui suit n'est plus qu'une ADAPTATION de signature — l'ordre
+# des arguments et l'étiquette ERROR/CORRECT attendus par le reste de ce fichier et par le
+# démonstrateur de `research/app.py`.
+
 def _new_goal(rng, n_cells):
-    """Cible à l'UNE des deux extrémités (tirage 50/50). Choix voulu : sur l'ensemble, les erreurs
-    (pas qui éloignent) sont autant à gauche qu'à droite -> le SENS du mouvement est décorrélé de
-    l'étiquette erreur/correct, donc xDAWN ne peut pas tricher sur la direction, il doit apprendre
-    l'ErrP temporel (Chavarriaga 2010 équilibre ainsi)."""
-    return rng.choice([0, n_cells - 1])
+    """Cible à l'une des deux extrémités. Cf. `core.errp_track.nouvelle_cible` pour le pourquoi."""
+    return nouvelle_cible(n_cells, rng)
 
 
 def _decide_step(rng, pos, goal, n_cells, error_rate, force=None):
-    """Un pas du point (avance d'une case). `force` (smoke) impose erreur=True/correct=False ; sinon
-    tirage à `error_rate`. Erreur = pas qui ÉLOIGNE de la cible. Rebond au bord (renvoie dans l'autre
-    sens). Retourne (new_pos, label) ; l'étiquette suit l'EFFET RÉEL du pas (après rebond éventuel)."""
-    toward = 1 if goal > pos else -1
-    is_err = (rng.random() < error_rate) if force is None else force
-    move = -toward if is_err else toward
-    new_pos = pos + move
-    if new_pos < 0 or new_pos >= n_cells:            # bord -> rebond dans l'autre sens
-        new_pos = pos - move
-    label = ERROR if abs(new_pos - goal) > abs(pos - goal) else CORRECT
-    return new_pos, label
+    """Un pas du point. Rend `(new_pos, label)` — cf. `core.errp_track.decide_pas`, qui rend un
+    booléen ; la traduction en `ERROR`/`CORRECT` est faite ici parce que c'est le vocabulaire du
+    décodeur, pas celui de la piste."""
+    new_pos, erreur = decide_pas(rng, pos, goal, n_cells, error_rate, force=force)
+    return new_pos, (ERROR if erreur else CORRECT)
 
 
 def _draw_track(app, n_cells, pos, goal, title=None):
@@ -209,7 +210,8 @@ def _run_block(app, n_cells, per, rng, error_rate, r, rounds, fs, epochs, labels
     title = f"Bloc {r + 1}/{rounds}"
     start = n_cells // 2
     pos, goal, steps, added, tries = start, _new_goal(rng, n_cells), 0, 0, 0
-    _track_hold(app, n_cells, pos, goal, 0.9, title=title, note="nouvelle cible", note_col=DIM)
+    _track_hold(app, n_cells, pos, goal, PAUSE_NOUVELLE_COURSE_S, title=title,
+                note="nouvelle cible", note_col=DIM)
     while added < per and tries < per * 3 + 20:            # garde-fou anti-boucle si le board cale
         tries += 1
         force = (added % 2 == 0) if app.smoke else None    # smoke : garantir les 2 classes
@@ -222,7 +224,7 @@ def _run_block(app, n_cells, per, rng, error_rate, r, rounds, fs, epochs, labels
             epochs.append(ep); labels.append(label); groups.append(r); added += 1
         pos, steps = new_pos, steps + 1
         if pos == goal or steps >= ERRP_MAX_RUN_STEPS:
-            _track_hold(app, n_cells, pos, goal, 0.7, title=title,
+            _track_hold(app, n_cells, pos, goal, PAUSE_FIN_COURSE_S, title=title,
                         note="atteinte" if pos == goal else "on recommence",
                         note_col=GO if pos == goal else DIM)
             pos, goal, steps = start, _new_goal(rng, n_cells), 0
@@ -238,11 +240,11 @@ def _run_block(app, n_cells, per, rng, error_rate, r, rounds, fs, epochs, labels
             # rebond ne peut retourner l'étiquette. Trop petit pour fabriquer une AUC, donc le
             # modèle du 2026-07-24 (0,7763) reste valide ; c'était du bruit ajouté, pas un biais.
             # C'est le MÊME écran qu'en tête de bloc, aux mêmes 0,9 s, et le même que joue
-            # `research/errp_stimulus.py` : les deux protocoles ne divergent plus.
-            _track_hold(app, n_cells, pos, goal, 0.9, title=title,
+            # `stimulus/errp.py` : les deux protocoles ne divergent plus.
+            _track_hold(app, n_cells, pos, goal, PAUSE_NOUVELLE_COURSE_S, title=title,
                         note="nouvelle cible", note_col=DIM)
         else:
-            _track_hold(app, n_cells, pos, goal, 0.45, title=title)     # pause inter-pas / settle
+            _track_hold(app, n_cells, pos, goal, PAUSE_INTER_PAS_S, title=title)   # inter-pas
     return added
 
 

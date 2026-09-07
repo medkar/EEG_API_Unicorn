@@ -29,7 +29,7 @@ from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream  #
 from research.itr import itr  # noqa: E402
 # `blocs_melanges` vit dans l'émetteur : c'est lui qui documente l'invariant oddball, et
 # `p300_stimulus` n'importe pygame qu'à l'intérieur de `run()` — l'importer ici ne coûte rien.
-from research.p300_stimulus import blocs_melanges  # noqa: E402
+from stimulus.p300 import blocs_melanges  # noqa: E402
 from research.ui import ACCENT, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 BRIEF = [
@@ -128,7 +128,7 @@ def _run_round(app, plan, spots, cue_name, reps, on_fr, off_fr, rng):
     """Une manche de calibration = `reps` répétitions, chacune = les N cibles flashées une fois
     dans un ordre mélangé. Retourne (flashes, t_start).
 
-    ⚠️ L'ordre vient de `blocs_melanges` (research/p300_stimulus.py) et n'est plus remélangé
+    ⚠️ L'ordre vient de `blocs_melanges` (stimulus/p300.py) et n'est plus remélangé
     ici : l'invariant « aucune cible deux fois de suite, jonctions comprises » était affirmé et
     testé dans l'ÉMETTEUR seul, alors que cette calibration est le SEUL chemin vers un modèle.
     Mesuré sur 20 000 manches avec l'ancien mélange local : 72,0 % des manches de calibration

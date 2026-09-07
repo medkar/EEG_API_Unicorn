@@ -90,21 +90,12 @@ def arrow_polygon(cx, cy, size, direction):
 
 # --- Mesure du refresh écran ----------------------------------------------
 
-def measure_refresh(pygame, surface, frames=90):
-    """Estime le refresh en chronométrant des flips (vsync). Snappe sur une valeur usuelle."""
-    surface.fill(BG)
-    pygame.display.flip()
-    pygame.event.pump()
-    t0 = time.perf_counter()
-    for _ in range(frames):
-        surface.fill(BG)
-        pygame.display.flip()
-        pygame.event.pump()
-    dt = time.perf_counter() - t0
-    if dt <= 0:
-        return 60.0
-    fps = frames / dt
-    return float(min(COMMON_REFRESH, key=lambda r: abs(r - fps)))
+# `measure_refresh` a DÉMÉNAGÉ dans `stimulus/refresh.py` le 2026-09-07, avec les trois fenêtres
+# qui l'importaient d'ici. La laisser dans `research/` aurait créé l'arête `stimulus -> research`,
+# que la frontière de `server.py --smoke` interdit : la console importe `stimulus`, donc tout
+# `research` serait entré dans la console par la bande. `research -> stimulus` est, lui, autorisé.
+# Réexporté sous son nom d'origine pour ne rien casser de ce qui l'importe encore d'ici.
+from stimulus.refresh import measure_refresh  # noqa: E402,F401
 
 
 # --- Boucle principale ----------------------------------------------------

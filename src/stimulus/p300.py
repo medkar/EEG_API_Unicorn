@@ -4,7 +4,7 @@
 moteur, dans deux terminaux — le même montage que pour le SSVEP :
 
     python src/core/server.py --mode p300          # terminal 1 : acquiert et décode
-    python src/research/p300_stimulus.py           # terminal 2 : affiche et marque
+    python src/stimulus/p300.py           # terminal 2 : affiche et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
 et surtout l'endroit exact où prendre l'horodatage.
@@ -30,13 +30,13 @@ flashs — celui qui fermerait complètement la contamination entre manches, cf.
 est donc ce qui rend ce garde-fou possible.
 
 Lancer :
-    python src/research/p300_stimulus.py                  # plein écran, ESC pour quitter
-    python src/research/p300_stimulus.py --windowed       # fenêtre 1000x700 (dev)
-    python src/research/p300_stimulus.py --reps 8         # répétitions par manche (défaut P300_REPS)
-    python src/research/p300_stimulus.py --targets 6      # nombre de cibles (défaut P300_N_TARGETS)
-    python src/research/p300_stimulus.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
-    python src/research/p300_stimulus.py --seconds 20     # auto-quit après 20 s
-    python src/research/p300_stimulus.py --smoke          # test sans écran (CI) : séquence ET rendu
+    python src/stimulus/p300.py                  # plein écran, ESC pour quitter
+    python src/stimulus/p300.py --windowed       # fenêtre 1000x700 (dev)
+    python src/stimulus/p300.py --reps 8         # répétitions par manche (défaut P300_REPS)
+    python src/stimulus/p300.py --targets 6      # nombre de cibles (défaut P300_N_TARGETS)
+    python src/stimulus/p300.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
+    python src/stimulus/p300.py --seconds 20     # auto-quit après 20 s
+    python src/stimulus/p300.py --smoke          # test sans écran (CI) : séquence ET rendu
 
 ⚠️ `--reps` et `--targets` ne sont pas libres : le moteur code `P300_N_TARGETS` en dur et APPLIQUE
 `P300_REPS` comme plafond par cible (il abandonne toute manche qui le dépasse). Une valeur hors
@@ -53,7 +53,7 @@ import sys
 import time
 from collections import Counter
 
-# Permet `from config import ...` que le module soit lancé via `python src/research/p300_stimulus.py`
+# Permet `from config import ...` que le module soit lancé via `python src/stimulus/p300.py`
 # ou importé comme `src.p300_stimulus`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_FLASH_OFF_FR, P300_FLASH_ON_FR,  # noqa: E402
@@ -207,7 +207,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
-    from research.ssvep_stimulus import measure_refresh  # même mesure que le SSVEP, pas réinventée
+    from stimulus.refresh import measure_refresh  # même mesure que le SSVEP, pas réinventée
 
     pygame.init()
     pygame.font.init()

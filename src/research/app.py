@@ -530,7 +530,7 @@ def mode_p300(app, model_path=None, dynamic=False):
     import random as _random
 
     from research.p300_calibrate import _blank_ring, _flash_targets
-    from research.p300_stimulus import blocs_melanges
+    from stimulus.p300 import blocs_melanges
     from core.p300_decoder import epoch_from_stream
     from core.p300_models import charger, modeles_disponibles
 

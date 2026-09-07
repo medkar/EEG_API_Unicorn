@@ -5,7 +5,7 @@ moteur, dans deux terminaux — le même montage que pour le P300 et le SSVEP :
 
     python src/core/server.py --mode errp           # terminal 1 : acquiert et décode (EXIGE un
                                                       # modèle entraîné, cf. research/app.py -> ErrP)
-    python src/research/errp_stimulus.py             # terminal 2 : affiche la piste et marque
+    python src/stimulus/errp.py             # terminal 2 : affiche la piste et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
 et surtout l'endroit exact où prendre l'horodatage.
@@ -123,16 +123,16 @@ pas du moteur : à 1 case le point sort de la piste, à 2 cases le centre EST un
 point démarre parfois sur sa cible et chaque pas « correct » est étiqueté erreur.
 
 Lancer :
-    python src/research/errp_stimulus.py                  # plein écran, ESC pour quitter
-    python src/research/errp_stimulus.py --windowed       # fenêtre 1000x700 (dev)
-    python src/research/errp_stimulus.py --cells 9        # cases de la piste (défaut ERRP_TRACK_CELLS)
-    python src/research/errp_stimulus.py --error-rate 0.3 # taux d'erreurs délibérées (défaut ERRP_ERROR_RATE)
-    python src/research/errp_stimulus.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
-    python src/research/errp_stimulus.py --seconds 20     # 20 s de STIMULATION (l'attente du
+    python src/stimulus/errp.py                  # plein écran, ESC pour quitter
+    python src/stimulus/errp.py --windowed       # fenêtre 1000x700 (dev)
+    python src/stimulus/errp.py --cells 9        # cases de la piste (défaut ERRP_TRACK_CELLS)
+    python src/stimulus/errp.py --error-rate 0.3 # taux d'erreurs délibérées (défaut ERRP_ERROR_RATE)
+    python src/stimulus/errp.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
+    python src/stimulus/errp.py --seconds 20     # 20 s de STIMULATION (l'attente du
                                                           # moteur ne compte pas dans le décompte)
-    python src/research/errp_stimulus.py --seed 1         # rejouer EXACTEMENT la même séquence
-    python src/research/errp_stimulus.py --no-wait        # ne pas attendre le moteur (émetteur seul)
-    python src/research/errp_stimulus.py --smoke          # test sans écran (CI) : protocole ET rendu
+    python src/stimulus/errp.py --seed 1         # rejouer EXACTEMENT la même séquence
+    python src/stimulus/errp.py --no-wait        # ne pas attendre le moteur (émetteur seul)
+    python src/stimulus/errp.py --smoke          # test sans écran (CI) : protocole ET rendu
 """
 
 import argparse
@@ -142,7 +142,7 @@ import random
 import sys
 import time
 
-# Permet `from config import ...` que le module soit lancé via `python src/research/errp_stimulus.py`
+# Permet `from config import ...` que le module soit lancé via `python src/stimulus/errp.py`
 # ou importé comme `src.errp_stimulus`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ERRP_ERROR_RATE, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS,  # noqa: E402
@@ -160,21 +160,19 @@ HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurrence pas le point
 
 # --- Le TEMPS du protocole : ces trois durées ne sont PAS du confort ---------
-# Les VALEURS sont celles de `research/errp_calibrate.py:_run_block`, c'est-à-dire des conditions
-# sous lesquelles les époques du modèle ont été enregistrées. Les changer ici, c'est décoder une
-# distribution que le modèle n'a jamais apprise — sans qu'aucune exception ne soit levée. Un test
-# de `--smoke` les arrime au SOURCE de `_run_block` (cf. `_smoke`, section « les durées »).
+# Elles vivent désormais dans `core/errp_track.py`, avec le reste de la piste (2026-09-07). Elles
+# étaient jusque-là RECOPIÉES ici depuis les littéraux de `research/errp_calibrate.py:_run_block`,
+# et un test de `--smoke` lisait le code source de cette fonction pour vérifier qu'elles n'avaient
+# pas dérivé. Le test a disparu avec la recopie : les deux lisent maintenant le même nom, ce qui
+# rend la dérive impossible au lieu de la détecter après coup.
 #
-# ⚠️ Même valeur ne suffit pas : il faut la même PLACE. `_run_block` n'a longtemps joué son écran
-# « nouvelle cible » qu'en tête de bloc, ce qui donnait la même constante à un SOA de transition
-# différent (1,7 s là-bas, 2,6 s ici). Aligné depuis — les deux jouent les deux écrans à chaque fin
-# de course. Un test arrime les VALEURS ; la PLACE, elle, ne se vérifie qu'en lisant les deux
-# boucles, alors relire `_run_block` avant d'affirmer quoi que ce soit ici.
-
-PAUSE_INTER_PAS_S = 0.45        # `_run_block` « pause inter-pas / settle » -> SOA intra 1,45 s
-PAUSE_FIN_COURSE_S = 0.7        # `_run_block` « atteinte » / « on recommence », état FINAL
-PAUSE_NOUVELLE_COURSE_S = 0.9   # `_run_block` « nouvelle cible », état NEUF — en tête de bloc ET
-                                # après chaque course, des deux côtés
+# ⚠️ Même valeur ne suffit toujours pas : il faut la même PLACE. `_run_block` n'a longtemps joué
+# son écran « nouvelle cible » qu'en tête de bloc, ce qui donnait la même constante à un SOA de
+# transition différent (1,7 s là-bas, 2,6 s ici). Aligné depuis — les deux jouent les deux écrans
+# à chaque fin de course. Aucun test ne couvre la PLACE : relire les deux boucles avant
+# d'affirmer quoi que ce soit ici.
+from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
+                            PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 
 # Ce que le moteur JETTE avant d'écouter pour de bon : sa chauffe (l'offset DC de l'Unicorn dérive
 # après ouverture) puis son repos (il y mesure la référence du rejet d'artefact). Valeurs lues dans
@@ -187,40 +185,14 @@ ATTENTE_MOTEUR_S = SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S
 MIN_CELLS = 3
 
 
-# --- Le protocole (fonctions PURES, testables sans écran ni pygame) ---------
-
-def nouvelle_cible(n_cells, rng):
-    """La cible, à L'UNE des deux extrémités de la piste (tirage 50/50).
-
-    Même choix que `research/errp_calibrate.py:_new_goal` : sur l'ensemble d'une séance, les
-    erreurs (des pas qui ÉLOIGNENT) sont autant à gauche qu'à droite -> le SENS du mouvement est
-    décorrélé de l'étiquette erreur/correct, un décodeur ne peut donc pas apprendre la direction à
-    la place de l'ErrP (Chavarriaga 2010 équilibre ainsi).
-    """
-    return rng.choice([0, n_cells - 1])
-
-
-def decide_pas(rng, pos, cible, n_cells, taux_erreur, force=None):
-    """Un pas du point : avance d'une case vers `cible`, ou s'en éloigne si erreur DÉLIBÉRÉE.
-
-    Même mécanique que `research/errp_calibrate.py:_decide_step` (et le démonstrateur de
-    `research/app.py`) : `force` (utilisé par `--smoke`) impose une erreur (True) ou un pas
-    correct (False) ; sinon tirage à `taux_erreur`. Rebond au bord de la piste (renvoie dans
-    l'autre sens) — sans lui, un point qui atteint une extrémité sortirait de la piste. Retourne
-    `(nouvelle_pos, erreur)` : `erreur` suit l'EFFET RÉEL du pas, après rebond éventuel — pas
-    l'intention du tirage (un rebond peut transformer un tirage « erreur » en pas qui rapproche).
-
-    ⚠️ Cette fonction est un DOUBLE de `_decide_step`, pas encore une source unique : `--smoke`
-    compare les deux trajectoires pas à pas (cf. la docstring du module).
-    """
-    vers = 1 if cible > pos else -1
-    erreur = (rng.random() < taux_erreur) if force is None else bool(force)
-    pas = -vers if erreur else vers
-    nouvelle_pos = pos + pas
-    if nouvelle_pos < 0 or nouvelle_pos >= n_cells:            # bord -> rebond dans l'autre sens
-        nouvelle_pos = pos - pas
-    erreur_reelle = abs(nouvelle_pos - cible) > abs(pos - cible)
-    return nouvelle_pos, erreur_reelle
+# --- Le protocole (fonctions PURES) : `nouvelle_cible` et `decide_pas` -------
+# Elles étaient ÉCRITES ICI, en double de `research/errp_calibrate.py`, et cette docstring-là le
+# disait : « ⚠️ Cette fonction est un DOUBLE de `_decide_step`, pas encore une source unique ». Un
+# test rejouait 500 pas à graine égale pour vérifier que les deux ne divergeaient pas — un test
+# qui protège une duplication au lieu de la supprimer, et qui ne pouvait rien dire du 501e pas.
+# Les deux écritures ont fusionné dans `core/errp_track.py` le 2026-09-07 ; elles sont importées
+# en tête de ce fichier, avec les trois durées. Voir `python src/core/errp_track.py` pour les
+# quatre propriétés dont dépend la validité des modèles déjà entraînés.
 
 
 # --- Boucle principale -------------------------------------------------------
@@ -256,7 +228,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
-    from research.ssvep_stimulus import measure_refresh  # même mesure que les autres stimuli
+    from stimulus.refresh import measure_refresh  # même mesure que les autres stimuli
 
     pygame.init()
     pygame.font.init()
@@ -565,57 +537,28 @@ def _smoke(n_cells, taux_erreur):
         f"au bord de la piste, une erreur FORCÉE rebondit vers la cible : l'étiquette suit "
         f"l'effet RÉEL du pas, pas l'intention du tirage (pos={pos_bord}, erreur={erreur_bord})")
 
-    # --- Le protocole est écrit DEUX fois : au moins, qu'il ne DÉRIVE pas ----------
-    # Import tardif : `errp_calibrate` traîne numpy/sklearn/pygame, dont un émetteur n'a que faire
-    # (il doit rester lançable à côté du moteur, sur une machine minimale). Les deux écritures
-    # consomment le même nombre de tirages (1 `choice` par cible, 1 `random` par pas) : à graine
-    # égale, leurs trajectoires doivent être identiques, pas seulement « du même genre ».
-    from core.errp_decoder import ERROR
-    from research.errp_calibrate import _decide_step, _new_goal, _run_block
-    ra, rb = random.Random(7), random.Random(7)
-    pos_a, pos_b = n_cells // 2, n_cells // 2
-    cible_a, cible_b = nouvelle_cible(n_cells, ra), _new_goal(rb, n_cells)
-    divergence = None if cible_a == cible_b else f"cible initiale {cible_a} vs {cible_b}"
-    for i in range(500):
-        if divergence:
-            break
-        pos_a, err_a = decide_pas(ra, pos_a, cible_a, n_cells, taux_erreur)
-        pos_b, label_b = _decide_step(rb, pos_b, cible_b, n_cells, taux_erreur)
-        if (pos_a, err_a) != (pos_b, label_b == ERROR):
-            divergence = (f"pas {i} : ici ({pos_a}, erreur={err_a}) vs errp_calibrate "
-                          f"({pos_b}, label={label_b})")
-        elif pos_a == cible_a:
-            pos_a, cible_a = n_cells // 2, nouvelle_cible(n_cells, ra)
-            pos_b, cible_b = n_cells // 2, _new_goal(rb, n_cells)
-    chk(divergence is None,
-        f"500 pas joués à graine égale : `decide_pas`/`nouvelle_cible` et les `_decide_step`/"
-        f"`_new_goal` de errp_calibrate (celles qui ENTRAÎNENT le modèle) donnent EXACTEMENT la "
-        f"même trajectoire — le protocole est écrit deux fois, il ne doit pas dériver "
-        f"({divergence or 'aucune divergence'})")
+    # --- Le protocole n'est plus écrit qu'UNE fois -------------------------------
+    # Deux tests vivaient ici, et tous deux protégeaient une duplication : l'un rejouait 500 pas à
+    # graine égale contre les fonctions de `research/errp_calibrate.py`, l'autre lisait le CODE
+    # SOURCE de `_run_block` pour vérifier que les trois durées n'avaient pas dérivé. La
+    # duplication a été supprimée le 2026-09-07 (`core/errp_track.py`) ; les deux tests avec elle.
+    # Ce qui reste à vérifier n'est plus « les deux écritures s'accordent-elles » mais « cette
+    # fenêtre utilise-t-elle bien la source unique » — sinon quelqu'un pourrait réintroduire une
+    # copie locale, et les assertions de cadence plus bas, qui construisent `soa_intra` à partir
+    # de `PAUSE_INTER_PAS_S`, se compareraient de nouveau à elles-mêmes sans rien voir.
+    import core.errp_track as errp_track
+    chk(decide_pas is errp_track.decide_pas and nouvelle_cible is errp_track.nouvelle_cible,
+        "le protocole des pas vient de `core/errp_track.py`, pas d'une copie locale — c'est la "
+        "MÊME règle qui entraîne le modèle et qui le joue")
+    chk((PAUSE_INTER_PAS_S, PAUSE_FIN_COURSE_S, PAUSE_NOUVELLE_COURSE_S)
+        == (errp_track.PAUSE_INTER_PAS_S, errp_track.PAUSE_FIN_COURSE_S,
+            errp_track.PAUSE_NOUVELLE_COURSE_S),
+        "…et les trois durées aussi : ce sont celles sous lesquelles les époques du modèle ont "
+        "été enregistrées")
 
-    # --- ...et les trois DURÉES ne doivent pas dériver non plus ---------------------
-    # Le test différentiel ci-dessus ne couvre que le protocole des PAS. Les trois `PAUSE_*_S`
-    # sont, elles aussi, une recopie de `_run_block`, et l'assertion de cadence (plus bas) les
-    # compare à ELLES-MÊMES : `soa_intra` est construit avec `PAUSE_INTER_PAS_S`, donc passer cette
-    # constante de 0,45 à 0,1 s laisse les 18 contrôles VERTS (mesuré). Le défaut corrigé au tour 2
-    # se réintroduirait ainsi sans qu'un seul test bouge, et le moteur décoderait une distribution
-    # jamais apprise. On les arrime donc au SOURCE de `_run_block`, où elles sont des littéraux.
-    #
-    # ⚠️ Ce contrôle prouve que les VALEURS sont celles de la calibration. Il ne prouve PAS qu'elles
-    # soient jouées au même ENDROIT : `PAUSE_NOUVELLE_COURSE_S` ne l'est pas (là-bas une fois par
+    # ⚠️ Ce qu'AUCUN test ne couvre, ni avant ni maintenant : la PLACE où ces durées sont jouées.
+    # `PAUSE_NOUVELLE_COURSE_S` ne l'est pas au même endroit des deux côtés (là-bas une fois par
     # BLOC, ici après chaque course). Écart assumé, chiffré dans la docstring du module.
-    import inspect
-    src_bloc = inspect.getsource(_run_block)
-    absentes = [f"{nom} = {v:g}" for nom, v in
-                (("PAUSE_INTER_PAS_S", PAUSE_INTER_PAS_S),
-                 ("PAUSE_FIN_COURSE_S", PAUSE_FIN_COURSE_S),
-                 ("PAUSE_NOUVELLE_COURSE_S", PAUSE_NOUVELLE_COURSE_S))
-                if f", {v:g}," not in src_bloc]
-    chk(not absentes,
-        f"les trois durées de cet émetteur sont CELLES sous lesquelles le modèle a été entraîné "
-        f"(littéraux de errp_calibrate._run_block) — sinon le moteur décode une distribution "
-        f"jamais apprise, sans qu'aucune exception ne soit levée "
-        f"({'introuvables là-bas : ' + ', '.join(absentes) if absentes else 'les trois y sont'})")
 
     # --- La seule garde de réglage : une piste où le centre est une extrémité ------
     chk(run(windowed=True, refresh=60.0, n_cells=2, taux_erreur=taux_erreur, seconds=0.1,

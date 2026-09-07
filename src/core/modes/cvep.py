@@ -12,7 +12,7 @@ corrélation ne veut rien dire.
 point à comprendre avant de lire plus loin.** Le P300 et l'ErrP DÉCOUPENT une époque **autour** de
 chaque marqueur — le marqueur délimite un événement discret (un flash, un feedback). Le c-VEP, lui,
 décode **en continu sur une fenêtre glissante**, comme le SSVEP : ses marqueurs ne délimitent RIEN,
-ils **tiennent une horloge**. Un programme séparé (`research/cvep_stimulus.py`, tâche 5 de ce
+ils **tiennent une horloge**. Un programme séparé (`stimulus/cvep.py`, tâche 5 de ce
 chantier) affiche le clignotement et publie un marqueur `{"mode":"cvep","event":"cycle",
 "refresh":…}` à CHAQUE redémarrage de la m-séquence (toutes les 63 frames). Ce runtime reconstruit,
 à tout instant `t_fin`, la position dans le code que ce marqueur implique : c'est la **phase**.
@@ -76,7 +76,7 @@ cadence et sur la même géométrie que l'écran pygame que ce chantier archive,
 donc strictement plus permissif que la référence à laquelle la séance casque doit le comparer.
 
 ⚠️ **Ce fichier ne rend AUCUN stimulus.** Comme le P300 et l'ErrP, c'est une application EXTERNE
-(`research/cvep_stimulus.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
+(`stimulus/cvep.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
 le c-VEP demande de plus qu'eux est un verrouillage à la FRAME : une seule frame sautée décale le
 code et détruit la corrélation — c'est pourquoi sa calibration reste `Calib(kind="natif")`, jouée
 par l'appli pygame et jamais par la console.

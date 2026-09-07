@@ -63,7 +63,7 @@ Un troisième terminal montre ce que reçoit un vrai client :
 
 Même montage pour le P300, à ceci près que le stimulus PARLE au moteur (il publie l'onset de
 chaque flash sur `EEG_API_Unicorn_stim`) et qu'un modèle entraîné est exigé :
-    python src/research/p300_stimulus.py --windowed  # affiche et MARQUE (n'ouvre pas le casque)
+    python src/stimulus/p300.py --windowed  # affiche et MARQUE (n'ouvre pas le casque)
     python src/core/server.py --mode p300            # découpe sur les marqueurs et décide
 """
 
@@ -2085,11 +2085,19 @@ def _smoke_calibration_refus():
 # Les paquets que `core` n'a pas le droit d'importer : les deux autres paquets du dépôt, et les
 # deux bibliothèques d'écran. Le nom n'est écrit QU'ICI — jamais dans une prose voisine, jamais
 # sous la forme d'un import complet dans un commentaire : voir `_imports_interdits`.
-_FRONTIERE_INTERDITS = ("research", "console", "pygame", "qtpy", "pyqtgraph")
+_FRONTIERE_INTERDITS = ("research", "console", "stimulus", "pygame", "qtpy", "pyqtgraph")
 _FRONTIERE_INTERDITS_RE = r"PySide\d+|PyQt\d+"
 
+# Ce que `src/stimulus/` n'a pas le droit d'importer. La liste est PLUS COURTE que celle de
+# `core` — et c'est le point : une fenêtre de stimulus EST du pygame, l'interdire ici n'aurait
+# aucun sens. Ce qu'on lui interdit, c'est de tirer le banc d'essai ou la console derrière elle :
+# la console l'importe (`stimulus/registry.py`), donc `stimulus -> research` ferait entrer tout
+# `research` dans la console, et `stimulus -> console` rendrait une fenêtre inlançable sur une
+# machine sans Qt — alors qu'elle n'a besoin que d'un écran.
+_FRONTIERE_STIMULUS_INTERDITS = ("research", "console")
 
-def _imports_interdits(source, nom_fichier="<extrait>"):
+
+def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdits_re=None):
     """Les paquets interdits que CE CODE importe. Retourne [(ligne, paquet), ...].
 
     ⚠️ **Juge le CODE, pas le texte** (correction de revue, 2026-08-19). La version précédente
@@ -2121,7 +2129,15 @@ def _imports_interdits(source, nom_fichier="<extrait>"):
     import ast
     import re
 
-    motif = re.compile(rf"^(?:{'|'.join(_FRONTIERE_INTERDITS)}|{_FRONTIERE_INTERDITS_RE})$")
+    # `interdits` est paramétrable pour que `core` et `stimulus` soient scannés par le MÊME code,
+    # avec deux listes différentes. Une seconde fonction copiée-collée aurait divergé : celle qui
+    # ne sert qu'à un paquet est celle qu'on oublie de corriger.
+    noms = tuple(_FRONTIERE_INTERDITS if interdits is None else interdits)
+    motif_re = _FRONTIERE_INTERDITS_RE if interdits_re is None else interdits_re
+    alternatives = "|".join(noms)
+    if motif_re:
+        alternatives = f"{alternatives}|{motif_re}" if alternatives else motif_re
+    motif = re.compile(rf"^(?:{alternatives})$")
     fautes = []
     for noeud in ast.walk(ast.parse(source, filename=nom_fichier)):
         if isinstance(noeud, ast.Import):
@@ -2186,6 +2202,12 @@ def _smoke_frontiere():
         ("# from PySide6.QtCore import QTimer\n", []),                          # commentaire
         ("x = 'import pygame'\n", []),                                          # chaîne
         ("import numpy\nfrom core.config import DATA_DIR\n", []),               # légitime
+        # `stimulus` est le quatrième paquet (2026-09-07). Interdit dans `core` au même titre que
+        # `research` et `console` : le moteur tourne sans écran, et une fenêtre de stimulus est
+        # du pygame. Sans ces deux lignes, la règle ÉCRITE serait plus large que la règle
+        # VÉRIFIÉE — le cran qui compte, cf. la correction du tour 2 juste au-dessus.
+        ("from stimulus.registry import commande\n", ["stimulus"]),
+        ("import stimulus.p300\n", ["stimulus"]),
     ]
     for source, attendu in fabrique:
         trouve = [paquet for _ligne, paquet in _imports_interdits(source)]
@@ -2193,21 +2215,39 @@ def _smoke_frontiere():
             f"« {source.strip().splitlines()[0][:52]} » -> {trouve or 'rien'} "
             f"(attendu {attendu or 'rien'})")
 
+    def _scanner(racine_dir, etiquette, interdits, interdits_re):
+        """Applique la garde à tout un arbre. Rend (violations, fichiers scannés)."""
+        trouvees, vus = [], 0
+        for dossier, _sous, fichiers in os.walk(racine_dir):
+            if "__pycache__" in dossier:
+                continue
+            for nom in fichiers:
+                if not nom.endswith(".py"):
+                    continue
+                chemin = os.path.join(dossier, nom)
+                rel = os.path.relpath(chemin, racine_dir)
+                vus += 1
+                with open(chemin, encoding="utf-8") as f:
+                    for ligne, paquet in _imports_interdits(f.read(), rel, interdits=interdits,
+                                                            interdits_re=interdits_re):
+                        trouvees.append(f"{etiquette}/{rel}:{ligne} importe {paquet}")
+        return trouvees, vus
+
     # 2. Et maintenant le vrai `src/core/`.
     racine = os.path.dirname(os.path.abspath(__file__))
-    fautes, fichiers_vus = [], 0
-    for dossier, _sous, fichiers in os.walk(racine):
-        if "__pycache__" in dossier:
-            continue
-        for nom in fichiers:
-            if not nom.endswith(".py"):
-                continue
-            chemin = os.path.join(dossier, nom)
-            rel = os.path.relpath(chemin, racine)
-            fichiers_vus += 1
-            with open(chemin, encoding="utf-8") as f:
-                for ligne, paquet in _imports_interdits(f.read(), rel):
-                    fautes.append(f"core/{rel}:{ligne} importe {paquet}")
+    fautes, fichiers_vus = _scanner(racine, "core", None, None)
+
+    # 3. Et `src/stimulus/`, avec sa liste à lui (cf. `_FRONTIERE_STIMULUS_INTERDITS`). Le dossier
+    #    DOIT exister : sans cette vérification, supprimer le paquet rendrait « 0 violation » et
+    #    passerait pour un succès — la garde muette que la partie 1 existe déjà pour éviter.
+    racine_stim = os.path.join(os.path.dirname(racine), "stimulus")
+    chk(os.path.isdir(racine_stim), f"le paquet src/stimulus/ existe ({racine_stim})")
+    if os.path.isdir(racine_stim):
+        fautes_stim, vus_stim = _scanner(racine_stim, "stimulus", _FRONTIERE_STIMULUS_INTERDITS,
+                                         "")
+        chk(vus_stim >= 3, f"…et il contient au moins les trois fenêtres ({vus_stim} fichiers)")
+        fautes += fautes_stim
+        fichiers_vus += vus_stim
 
     for faute in fautes:
         print(f"[smoke-frontiere] ÉCHEC : {faute}")

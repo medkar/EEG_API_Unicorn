@@ -5,7 +5,7 @@ moteur, dans deux terminaux — le même montage que pour le P300 et l'ErrP :
 
     python src/core/server.py --mode cvep          # terminal 1 : acquiert et décode (EXIGE un
                                                     # modèle entraîné, cf. research/app.py -> c-VEP)
-    python src/research/cvep_stimulus.py           # terminal 2 : fait clignoter et marque
+    python src/stimulus/cvep.py           # terminal 2 : fait clignoter et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
 et surtout l'endroit exact où prendre l'horodatage.
@@ -127,16 +127,16 @@ modèle a été calibré (`CVEPRuntime.maj_reference`) — c'est-à-dire au bon 
 connaît le modèle.
 
 Lancer :
-    python src/research/cvep_stimulus.py                  # plein écran, ESC pour quitter
-    python src/research/cvep_stimulus.py --windowed       # fenêtre 1000x700 (dev)
-    python src/research/cvep_stimulus.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
-    python src/research/cvep_stimulus.py --seconds 20     # 20 s de STIMULATION DÉCODABLE (la
+    python src/stimulus/cvep.py                  # plein écran, ESC pour quitter
+    python src/stimulus/cvep.py --windowed       # fenêtre 1000x700 (dev)
+    python src/stimulus/cvep.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
+    python src/stimulus/cvep.py --seconds 20     # 20 s de STIMULATION DÉCODABLE (la
                                                           # chauffe du moteur ne compte pas)
-    python src/research/cvep_stimulus.py --seed 1         # rejouer la même SÉQUENCE de consignes
-    python src/research/cvep_stimulus.py --log seance.jsonl  # la VÉRITÉ-TERRAIN dans un fichier :
+    python src/stimulus/cvep.py --seed 1         # rejouer la même SÉQUENCE de consignes
+    python src/stimulus/cvep.py --log seance.jsonl  # la VÉRITÉ-TERRAIN dans un fichier :
                                                           # sans elle, la séance ne se dépouille pas
-    python src/research/cvep_stimulus.py --no-wait        # ne pas attendre le moteur (émetteur seul)
-    python src/research/cvep_stimulus.py --smoke          # test sans écran (CI) : phase ET rendu
+    python src/stimulus/cvep.py --no-wait        # ne pas attendre le moteur (émetteur seul)
+    python src/stimulus/cvep.py --smoke          # test sans écran (CI) : phase ET rendu
 """
 
 import argparse
@@ -149,7 +149,7 @@ import sys
 import time
 
 # Permet `from core.config import ...` que le module soit lancé via
-# `python src/research/cvep_stimulus.py` ou importé comme `research.cvep_stimulus`.
+# `python src/stimulus/cvep.py` ou importé comme `stimulus.cvep`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BITS, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,  # noqa: E402
                          MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S, use_utf8_console)
@@ -403,7 +403,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
-    from research.ssvep_stimulus import measure_refresh  # même mesure que les autres stimuli
+    from stimulus.refresh import measure_refresh  # même mesure que les autres stimuli
 
     plan, code = build_targets()
     L = len(code)
