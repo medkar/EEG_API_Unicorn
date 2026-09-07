@@ -6,9 +6,19 @@ flash de la cible attendue est rare (1/N) et compté -> il évoque un P300 ; les
 enregistre chaque flash comme une époque étiquetée « cible / non-cible » (via le timestamp du
 flux, cf. core.p300_decoder.epoch_from_stream). On change de cible attendue à chaque manche.
 
-Ensuite : xDAWN + Riemann appris sur cible-vs-non-cible (voir core.p300_decoder). Deux chiffres de
-contrôle : l'AUC cible/non-cible (GroupKFold par manche) et surtout la PRÉCISION DE SÉLECTION en
-leave-one-round-out — retrouve-t-on la cible attendue ? — d'où découle l'ITR.
+⚠️ **Ce fichier ne fait plus que la MOITIÉ PYGAME du travail.** L'entraînement — le `fit`, l'AUC
+par manche, la sélection en leave-one-round-out, la sauvegarde horodatée — a déménagé dans
+`core/modes/p300_calib.py` le 2026-09-07, parce que c'est désormais le MOTEUR qui calibre
+(la console lance `src/stimulus/p300.py --calibrer`, le moteur écoute les marqueurs et entraîne).
+Ce qui reste ici est ce qui touche pygame : les écrans, la couronne, le ramassage des époques par
+l'horloge de l'appli. La suite est un simple appel à `p300_calib.entrainer` — une seule écriture de
+l'entraînement pour les deux chemins, au lieu de deux qui dériveraient.
+
+⚠️ **L'épochage, lui, reste DIFFÉRENT de celui du moteur**, et ce n'est pas un oubli : cet écran
+découpe depuis `app.acq.get_raw` (l'horloge de l'appli), le moteur depuis son tampon et les
+horodatages LSL. C'est précisément le second chemin que le chantier « la console, seul point
+d'entrée » existe pour retirer. Tant qu'il vit, ne pas s'en servir pour produire le modèle d'une
+séance sérieuse : passer par la console.
 
 Compter les flashs n'est pas un gadget : la tâche mentale (« combien de fois ? ») est ce qui rend
 le stimulus attendu SAILLANT et amplifie le P300. Sans tâche, l'onde s'effondre.
@@ -19,13 +29,12 @@ import random
 import sys
 import time
 
-import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_FLASH_OFF_FR,  # noqa: E402
                     P300_FLASH_ON_FR, P300_MIDLINE, P300_MODEL_PATH, P300_PRE_S, P300_REPS,
                     p300_targets)
-from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream  # noqa: E402
+from core.modes import p300_calib  # noqa: E402
+from core.p300_decoder import NONTARGET, TARGET, epoch_from_stream  # noqa: E402
 from research.itr import itr  # noqa: E402
 # `blocs_melanges` vit dans l'émetteur : c'est lui qui documente l'invariant oddball, et
 # `p300_stimulus` n'importe pygame qu'à l'intérieur de `run()` — l'importer ici ne coûte rien.
@@ -170,28 +179,6 @@ def _collect(app, plan, spots, cue_name, flashes, t_start, cue_idx, fs,
     return added
 
 
-def _loro_selection(epochs, flashed, groups, cues, fs):
-    """Précision de SÉLECTION en leave-one-round-out : pour chaque manche tenue à l'écart, le
-    modèle appris sur les autres retrouve-t-il la cible attendue ? Renvoie (ok, total)."""
-    epochs, flashed, groups = np.asarray(epochs), np.asarray(flashed), np.asarray(groups)
-    y = np.array([TARGET if flashed[i] == cues[groups[i]] else NONTARGET
-                  for i in range(len(groups))])
-    ok = tot = 0
-    for r in sorted(set(groups.tolist())):
-        tr = groups != r
-        if len(set(y[tr].tolist())) < 2:
-            continue
-        m = P300Model(fs=fs).fit(epochs[tr], y[tr], compute_cv=False)
-        te = np.where(groups == r)[0]
-        by = {}
-        for i in te:
-            by.setdefault(int(flashed[i]), []).append(epochs[i])
-        pick, _ = m.select(by)
-        ok += int(pick == cues[r])
-        tot += 1
-    return ok, tot
-
-
 def _results(app, auc, sel_ok, sel_tot, t_sel, n_targets):
     """Écran de résultat (6 s ou une touche)."""
     sel = sel_ok / sel_tot if sel_tot else 0.0
@@ -219,22 +206,6 @@ def _results(app, auc, sel_ok, sel_tot, t_sel, n_targets):
             return
 
 
-def _archive(save_path, epochs, labels, flashed, groups, cues, fs):
-    """Sauvegarde le modèle + un .npz horodaté des époques brutes (pour ré-analyse hors ligne)."""
-    data_dir = os.path.dirname(save_path)
-    os.makedirs(data_dir, exist_ok=True)
-    last = os.path.join(data_dir, "p300_calib_last.npz")
-    np.savez(last, epochs=np.asarray(epochs), labels=np.asarray(labels),
-             flashed=np.asarray(flashed), groups=np.asarray(groups),
-             cues=np.asarray(cues), fs=fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    np.savez(os.path.join(data_dir, f"p300_calib_{stamp}_n{len(cues)}.npz"),
-             epochs=np.asarray(epochs), labels=np.asarray(labels),
-             flashed=np.asarray(flashed), groups=np.asarray(groups),
-             cues=np.asarray(cues), fs=fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
-    return last
-
-
 def chemin_modele_horodate(dossier=None):
     """`data/p300_model_AAAAMMJJ_HHMMSS.joblib` — un fichier NEUF, jamais un écrasement.
 
@@ -244,12 +215,14 @@ def chemin_modele_horodate(dossier=None):
     P300 enregistré au casque, et le MI a déjà perdu ses quatre modèles de cette façon. Rien
     n'appliquait cet invariant : seule une prose l'affirmait.
 
-    Horodater est aussi ce que fait la calibration MI du moteur (`core/modes/mi_calib.py`), et
-    `p300_models.MOTIF` (`p300_model*.joblib`) liste déjà ces fichiers, du plus récent au plus
-    ancien. Le mode P300 du moteur et l'appli pygame prennent donc automatiquement le dernier.
+    Le nom est fabriqué par `core/modes/p300_calib.chemins_libres`, pas ici : c'est la calibration
+    du MOTEUR qui écrit désormais les modèles de séance, et deux façons de nommer le même fichier
+    finiraient par diverger — celle-ci pourrait produire un nom que `p300_models.MOTIF` ne liste
+    plus. Cadeau au passage : ce chemin-là est GARANTI libre, alors que `strftime` seul rendait
+    deux fois le même nom pour deux calibrations finies dans la même seconde.
     """
     dossier = os.path.dirname(P300_MODEL_PATH) if dossier is None else dossier
-    return os.path.join(dossier, f"p300_model_{time.strftime('%Y%m%d_%H%M%S')}.joblib")
+    return p300_calib.chemins_libres(dossier, 0)[0]
 
 
 def calibrate(app, rounds=P300_CAL_ROUNDS, reps=P300_REPS, save_path=None):
@@ -291,33 +264,34 @@ def calibrate(app, rounds=P300_CAL_ROUNDS, reps=P300_REPS, save_path=None):
                          epochs, labels, flashed, groups, r)
         print(f"[p300-cal] manche {r + 1}/{eff_rounds} cible={cue_name}  {added} époques")
 
-    if len(epochs) < 2 * n or len(set(labels)) < 2:
-        print("[p300-cal] pas assez de données (ou une seule classe) -> pas d'entraînement.")
-        if not app.smoke:
-            app.flash("Calibration insuffisante",
-                      "trop peu d'époques — relance et vérifie la liaison casque", 3.5)
-        return False
-
     if not app.smoke:   # fit + AUC + LORO enchaînent ~17 ré-entraînements : prévenir (écran figé)
         app.win.fill(BG)
         app.center(app.big, "Analyse...", FG, int(app.size[1] * 0.45))
         app.center(app.small, "entraînement du modèle et évaluation de la sélection", DIM,
                    int(app.size[1] * 0.55))
         app.pygame.display.flip()
-    model = P300Model(fs=fs).fit(epochs, labels, groups=np.asarray(groups),
-                                 compute_cv=not app.smoke)
-    model.save(save_path)
-    last = save_path if app.smoke else \
-        _archive(save_path, epochs, labels, flashed, groups, cues, fs)   # pas d'archive en smoke
 
-    sel_ok, sel_tot = (1, 1) if app.smoke else _loro_selection(epochs, flashed, groups, cues, fs)
+    # L'entraînement vit dans `core/modes/p300_calib.py`, une seule fois pour les deux chemins
+    # (cet écran et la calibration du moteur). Il LÈVE sur une séance trop pauvre, avec la phrase
+    # qui dit quoi faire — on la montre telle quelle plutôt que d'en réécrire une ici.
+    # ⚠️ En smoke : pas d'archive .npz (rien ne doit rester sur le disque) et pas d'évaluation
+    # (~17 ré-entraînements, pour un test qui ne juge que le câblage).
+    npz = None if app.smoke else p300_calib.chemins_libres(os.path.dirname(save_path), len(cues))[1]
+    try:
+        res = p300_calib.entrainer(epochs, labels, flashed, groups, cues, fs,
+                                   chemin_modele=save_path, chemin_npz=npz,
+                                   evaluer=not app.smoke)
+    except ValueError as e:
+        print(f"[p300-cal] {e}")
+        if not app.smoke:
+            app.flash("Calibration insuffisante", str(e), 4.5)
+        return False
+
     t_sel = eff_reps * n * soa_s
-    auc = model.cv_auc_
-    print(f"[p300-cal] AUC={'—' if auc is None else f'{auc*100:.1f}%'}  "
-          f"sélection LORO={sel_ok}/{sel_tot}  modèle -> {os.path.basename(save_path)}  "
-          f"époques -> {os.path.basename(last)}")
+    print(f"[p300-cal] modèle -> {os.path.basename(save_path)}"
+          + (f"  époques -> {os.path.basename(npz)}" if npz else ""))
     if not app.smoke:
-        _results(app, auc, sel_ok, sel_tot, t_sel, n)
+        _results(app, res["auc"], res["selection_ok"], res["selection_total"], t_sel, n)
     return True
 
 
