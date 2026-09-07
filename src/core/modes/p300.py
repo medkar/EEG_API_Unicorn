@@ -201,7 +201,7 @@ class P300Runtime(ModeRuntime):
             return None
         return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
                 f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Recalibre "
-                f"(`python src/research/app.py`, mode P300) plutôt que de le forcer.")
+                f"— recalibre (console, page P300, « Calibrer le P300 ») plutôt que de le forcer.")
 
     def _open(self):
         # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
@@ -537,7 +537,8 @@ SPEC = ModeSpec(
               choices_fn=lambda: p300_models.modeles_disponibles(),
               help="Le modèle produit par une calibration P300, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
-                   "dans la liste ? Lance `python src/research/app.py`, mode P300, et calibre."),
+                   "dans la liste ? Ouvre la console, page P300, et clique « Calibrer le "
+                   "P300 » : la fenêtre de stimulus mène la séance, le moteur entraîne."),
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
@@ -773,9 +774,16 @@ def _selftest():
         _os.makedirs(vide, exist_ok=True)
         p300_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
         _v, raison = validate(SPEC, {})
+        # ⚠️ Le refus doit envoyer là où l'on calibre AUJOURD'HUI. Il a nommé `research/app.py`
+        # jusqu'au 2026-09-07 ; cet écran ne mène plus la séance P300, c'est la console qui lance
+        # la fenêtre de stimulus. Un refus qui donne le bon diagnostic et la MAUVAISE marche à
+        # suivre coûte plus cher qu'un refus muet : l'étudiant fait ce qu'on lui dit, ça ne marche
+        # pas, et il cherche la panne ailleurs. Même texte, même geste que
+        # `core/p300_models.charger`, où cette phrase a déjà été fausse deux fois.
         chk(raison is not None and "aucun choix disponible" in raison
-            and "research/app.py" in raison,
-            f"sans modèle, le mode refuse en disant quoi faire ({raison})")
+            and "console" in raison and "Calibrer" in raison
+            and "research/app.py" not in raison,
+            f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")
 
         # 2. Avec un modèle, les défauts sont valides et c'est lui qui est pris.
         p300_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)

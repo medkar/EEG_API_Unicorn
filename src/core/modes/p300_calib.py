@@ -179,7 +179,7 @@ def chemins_libres(dossier, n_manches):
         maintenant += 1.0
 
 
-def selection_loro(epochs, flashed, groups, cues, fs):
+def selection_loro(epochs, flashed, groups, cues, fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
     """Justesse de SÉLECTION en leave-one-round-out : pour chaque manche tenue à l'écart, le
     modèle appris sur les autres retrouve-t-il la cible désignée ? Rend `(ok, total)`.
 
@@ -197,7 +197,7 @@ def selection_loro(epochs, flashed, groups, cues, fs):
         tr = groups != r
         if len(set(y[tr].tolist())) < 2:
             continue
-        m = P300Model(fs=fs).fit(epochs[tr], y[tr], compute_cv=False)
+        m = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs[tr], y[tr], compute_cv=False)
         te = np.where(groups == r)[0]
         by = {}
         for i in te:
@@ -209,7 +209,7 @@ def selection_loro(epochs, flashed, groups, cues, fs):
 
 
 def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_npz=None,
-              evaluer=True):
+              evaluer=True, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
 
@@ -225,6 +225,14 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
     `evaluer=False` saute la validation croisée ET le leave-one-round-out : ~2 N entraînements de
     moins, pour un smoke qui vérifie le câblage et non la justesse.
+
+    ⚠️ **`pre_s`/`post_s` sont ceux avec lesquels les époques ont RÉELLEMENT été découpées**, pas
+    une valeur par défaut reprise de la configuration. Le modèle les porte en attributs, et
+    `core/modes/p300.py::_desaccord_geometrie` les COMPARE à ce que le runtime prélève avant
+    d'accepter de décoder avec. Les laisser par défaut marcherait tant que personne ne touche à
+    `P300Runtime.pre_s` — et le jour où quelqu'un y touche, le mode refuserait le modèle qu'on
+    vient tout juste de calibrer, en accusant le modèle. L'appelant qui a découpé les époques est
+    le seul à savoir avec quoi.
     """
     epochs = np.asarray(epochs, dtype=float)
     labels = np.asarray(labels, dtype=int)
@@ -241,8 +249,10 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
             f"perdues en cours de route (le journal du moteur les compte) donnent exactement "
             f"cette allure")
 
-    modele = P300Model(fs=fs).fit(epochs, labels, groups=groups, compute_cv=evaluer)
-    sel_ok, sel_tot = selection_loro(epochs, flashed, groups, cues, fs) if evaluer else (0, 0)
+    modele = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs, labels, groups=groups,
+                                                              compute_cv=evaluer)
+    sel_ok, sel_tot = (selection_loro(epochs, flashed, groups, cues, fs, pre_s, post_s)
+                       if evaluer else (0, 0))
     selection = (sel_ok / sel_tot) if sel_tot else None
 
     _os.makedirs(_os.path.dirname(chemin_modele) or ".", exist_ok=True)
@@ -250,7 +260,7 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         # `pre_s`/`post_s` sont ARCHIVÉS avec les époques : sans eux, un ré-entraînement futur ne
         # saurait pas où tombe l'onset dans les échantillons qu'il relit.
         np.savez(chemin_npz, epochs=epochs, labels=labels, flashed=flashed, groups=groups,
-                 cues=np.asarray(cues), fs=fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
+                 cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s)
     modele.save(chemin_modele)
 
     auc = modele.cv_auc_
@@ -281,12 +291,14 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
     }
 
 
-def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True):
+def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True,
+                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés
     et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur."""
     chemin_modele, chemin_npz = chemins_libres(dossier, len(cues))
     return entrainer(epochs, labels, flashed, groups, cues, fs,
-                     chemin_modele=chemin_modele, chemin_npz=chemin_npz, evaluer=evaluer)
+                     chemin_modele=chemin_modele, chemin_npz=chemin_npz, evaluer=evaluer,
+                     pre_s=pre_s, post_s=post_s)
 
 
 class P300Calibration(MarkerCalibrationRuntime):
@@ -418,7 +430,11 @@ class P300Calibration(MarkerCalibrationRuntime):
         flashed = [lab.flashee for _e, lab in enregistre]
         groups = [lab.manche for _e, lab in enregistre]
         groups, cues = _renumerote(groups, self._cues)
-        return entrainer_dans(self.dossier, epochs, labels, flashed, groups, cues, fs)
+        # `self.pre_s`/`self.post_s` : la géométrie avec laquelle le socle vient RÉELLEMENT de
+        # découper ces époques, lue sur le runtime de décodage. Le modèle la porte, et le mode la
+        # compare à la sienne avant d'accepter de décoder (`p300.py::_desaccord_geometrie`).
+        return entrainer_dans(self.dossier, epochs, labels, flashed, groups, cues, fs,
+                              pre_s=self.pre_s, post_s=self.post_s)
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -639,6 +655,34 @@ def _selftest():
         chk(p300_models.modeles_disponibles(dossier) == [res.get("modele")],
             f"le modèle produit est VISIBLE dans la liste de la console — c'est le motif "
             f"`{p300_models.MOTIF}` qui le veut ({p300_models.modeles_disponibles(dossier)})")
+
+        # --- 6bis. Le modèle produit est ACCEPTÉ par le mode qui décodera avec -----------------
+        # `P300Runtime.__init__` refuse un modèle dont la géométrie d'époque n'est pas celle qu'il
+        # prélève (`_desaccord_geometrie`) — et il a raison : les scores seraient plausibles et
+        # faux. C'est le contrôle SYMÉTRIQUE de tout ce fichier : on a vérifié que la calibration
+        # découpe comme le décodage, on vérifie ici que ce qu'elle en SAUVEGARDE le dit aussi.
+        # Sans cette ligne, `P300Model(fs=fs)` construit avec ses défauts passait tous les tests,
+        # et le premier changement de `P300Runtime.pre_s` aurait fait refuser, au démarrage du
+        # mode, le modèle qu'on venait tout juste de calibrer — en accusant le modèle.
+        class _MoteurDuMode:
+            acq = _FausseAcq()
+            instance = "selftest"
+
+        try:
+            decodeur = _p300.P300Runtime(_p300.SPEC,
+                                         {"model": res["modele"], "stream_in": "x"},
+                                         _MoteurDuMode())
+            refus = None
+        except ValueError as e:
+            decodeur, refus = None, str(e)
+        chk(decodeur is not None,
+            f"le modèle sorti de cette calibration est ACCEPTÉ par le mode qui décodera avec "
+            f"({refus or 'aucun refus'})")
+        chk(refus is not None or (decodeur.model.pre_s == _p300.P300Runtime.pre_s
+                                  and decodeur.model.post_s == _p300.P300Runtime.post_s
+                                  and decodeur.model.fs == _FausseAcq.fs),
+            f"...parce qu'il PORTE la géométrie avec laquelle ses époques ont été découpées, pas "
+            f"un défaut de configuration ({getattr(decodeur, 'model', None)})")
 
         # --- 7. Une séance trop pauvre est REFUSÉE, en disant quoi faire -----------------------
         plan_court, eeg_c, ts_c, _cues_c = seance(rounds=1, reps=1, graine=1)
