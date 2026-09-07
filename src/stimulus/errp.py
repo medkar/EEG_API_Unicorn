@@ -728,11 +728,11 @@ def _smoke(n_cells, taux_erreur):
         f"visible et rendrait faux tout ce qu'on mesure ({marqueur_feedback(True, False)})")
     chk(marqueur_feedback(True, calibrer=True) == {"mode": "errp", "event": "feedback",
                                                    "error": True}
-        and marqueur_feedback(False, calibrer=True)["error"] is False,
+        and marqueur_feedback(False, calibrer=True).get("error") is False,
         f"EN CALIBRATION il porte son étiquette, et elle est BOOLÉENNE : sans elle, aucune époque "
         f"n'a de vérité-terrain et il n'y a rien à entraîner "
         f"({marqueur_feedback(False, calibrer=True)})")
-    chk(marqueur_feedback(erreur_bord, calibrer=True)["error"] is False,
+    chk(marqueur_feedback(erreur_bord, calibrer=True).get("error") is False,
         f"…et au bord, un tirage « erreur » qui REBONDIT vers la cible est publié `error: false` — "
         f"l'étiquette publiée suit l'EFFET du pas, jamais l'intention du tirage : l'étiqueter à "
         f"l'intention apprendrait au modèle le CONTRAIRE de ce qu'il doit détecter, sur environ un "
@@ -745,7 +745,7 @@ def _smoke(n_cells, taux_erreur):
     pos_lab, cible_lab, etiquettes = n_cells // 2, nouvelle_cible(n_cells, rng_lab), []
     for _ in range(5000):
         pos_lab, err_lab = decide_pas(rng_lab, pos_lab, cible_lab, n_cells, taux_erreur)
-        etiquettes.append(marqueur_feedback(err_lab, calibrer=True)["error"])
+        etiquettes.append(bool(marqueur_feedback(err_lab, calibrer=True).get("error")))
         if pos_lab == cible_lab:
             pos_lab, cible_lab = n_cells // 2, nouvelle_cible(n_cells, rng_lab)
     taux_etiquete = sum(etiquettes) / len(etiquettes)
@@ -971,7 +971,7 @@ def _smoke(n_cells, taux_erreur):
 
     pas_c = _feedbacks(journal_c)
     chk(all("error" in m for m, _ts, _e, _d in pas_c)
-        and all(isinstance(m["error"], bool) for m, _ts, _e, _d in pas_c),
+        and all(isinstance(m.get("error"), bool) for m, _ts, _e, _d in pas_c),
         f"EN CALIBRATION, chaque `feedback` porte son étiquette booléenne — sans elle, aucune "
         f"époque n'a de vérité-terrain ({[m.get('error') for m, _t, _e, _d in pas_c]})")
 
@@ -988,7 +988,7 @@ def _smoke(n_cells, taux_erreur):
         depart_case = n_cells // 2 if debut else precedent
         attendues.append(abs(pos_vu - cible_vue) > abs(depart_case - cible_vue))
         precedent = pos_vu
-    publiees = [m["error"] for m, _ts, _e, _d in pas_c]
+    publiees = [m.get("error") for m, _ts, _e, _d in pas_c]
     chk(publiees == attendues,
         f"…et l'étiquette publiée est celle du pas RÉELLEMENT AFFICHÉ, relue à l'écran "
         f"({publiees} publiées contre {attendues} lues dans les pixels)")
@@ -1015,6 +1015,12 @@ def _smoke(n_cells, taux_erreur):
         f"une séance INTERROMPUE ne publie AUCUN calib_end — un modèle appris sur un pas sur six "
         f"serait indiscernable d'un modèle complet dans la liste ({evenements_i})")
 
+    # ⚠️ Appelé SANS `ok and …` : `and` court-circuite, donc le bout-à-bout serait SAUTÉ dès qu'une
+    # assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. Le défaut a été
+    # attrapé par mutation côté P300 ; `chk` met `ok` à jour par `nonlocal`, la valeur de retour
+    # n'a rien à faire ici.
+    _smoke_bout_en_bout(chk, journal_c, journal)
+
     n_err_reel = sum(1 for _m, _ts, e, _d in journal if e)
     print(f"[errp-stim] --smoke : {len(journal)} pas RÉELS (écran factice), {n_err_reel} erreurs "
           f"({n_err_reel / len(journal):.0%}, visé {taux_erreur:.0%} — N trop petit ici pour "
@@ -1022,6 +1028,116 @@ def _smoke(n_cells, taux_erreur):
 
     print(f"[errp-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def _smoke_bout_en_bout(chk, journal_calib, journal_decodage):
+    """LES MARQUEURS DE CETTE FENÊTRE, donnés à la calibration du MOTEUR. Le seul test qui les fait
+    se parler.
+
+    Les deux moitiés du chantier se vérifient séparément partout ailleurs : la fenêtre publie une
+    séquence (juste au-dessus), et le moteur sait en faire un modèle
+    (`python src/core/modes/errp_calib.py`, qui rejoue une séance qu'il FABRIQUE lui-même). Rien ne
+    prouvait qu'elles parlent de la même chose. Un désaccord de protocole — l'étiquette sur une
+    autre clé, `calib_start` renommé, `error` publié en entier plutôt qu'en booléen — ne lève RIEN
+    de visible : le moteur enregistre simplement moins d'époques, ou les refuse toutes, et l'on ne
+    l'apprend qu'au bout d'une séance casque de six minutes.
+
+    ⚠️ Ce test vit ICI et il ne peut pas vivre ailleurs : `core` n'a pas le droit d'importer
+    `stimulus` (frontière vérifiée par `python src/core/server.py --smoke`), `stimulus -> core` est
+    autorisé. C'est donc à l'émetteur de prouver que le moteur le comprend.
+
+    On lui donne AUSSI le journal de DÉCODAGE, et c'est la moitié qui compte le plus : le moteur
+    doit refuser ces marqueurs-là comme dépourvus de vérité-terrain. Une fenêtre laissée en
+    décodage pendant une calibration ne doit pas produire un jeu d'entraînement silencieusement
+    étiqueté « correct ».
+
+    Le tampon EEG est à ZÉRO, exprès : on ne juge pas ici un décodage, seulement le PROTOCOLE —
+    combien d'époques, sous quelles étiquettes. Et on n'entraîne pas (aucun `tick` après
+    `calib_end`), donc rien n'est écrit sur le disque.
+    """
+    import tempfile
+
+    import numpy as np
+
+    from core.modes.errp import SPEC as SPEC_ERRP
+    from core.modes.errp_calib import ErrPCalibration
+
+    class _FausseAcq:
+        fs = 250.0
+
+    class _MoteurFactice:
+        """Le strict nécessaire pour la calibration : un tampon EEG horodaté, une file vide."""
+
+        def __init__(self, recent, recent_ts):
+            self.acq = _FausseAcq()
+            self.recent, self.recent_ts = recent, recent_ts
+
+        def markers_murs(self, mode_id, post_s):
+            return []      # les marqueurs sont donnés à la main, un par un, par `encaisser`
+
+    def rejoue(journal_source, dossier, annonce=None):
+        """Fait vivre une calibration du moteur sur un journal de cette fenêtre.
+
+        `annonce` : un `calib_start` à injecter quand le journal n'en contient pas. C'est le cas du
+        journal de DÉCODAGE, et il n'a rien d'artificiel — c'est la situation réelle qu'on veut
+        éprouver : la console a bien demandé une calibration au moteur, mais la fenêtre lancée à
+        côté, elle, tourne en décodage. Sans cette annonce, la calibration resterait en chauffe et
+        jetterait tout sans jamais REGARDER un marqueur : on ne testerait pas le refus.
+        """
+        t_debut, t_fin = journal_source[0][1], journal_source[-1][1]
+        recent_ts = np.arange(t_debut - 2.0, t_fin + 2.0, 1.0 / _FausseAcq.fs)
+        moteur = _MoteurFactice(np.zeros((len(recent_ts), 8)), recent_ts)
+        rt = ErrPCalibration(SPEC_ERRP, {}, moteur, dossier=dossier)
+        rt.tick(moteur, t_debut)                    # démarre la chauffe
+
+        def fin_de_chauffe():
+            """La chauffe s'écoule d'un coup : c'est l'horloge de l'APPELANT, pas celle des
+            marqueurs, et c'est justement ce qui permet de la traverser sans attendre. Elle ne peut
+            s'écouler qu'APRÈS l'annonce — le socle n'ouvre les essais qu'une fois la fenêtre
+            déclarée vivante, et tout ce qui arrive avant est jeté, pas refusé."""
+            rt.tick(moteur, t_debut + rt.warmup_s + 0.01)
+
+        if annonce is not None:
+            rt.encaisser(moteur, t_debut, annonce)
+            fin_de_chauffe()
+        for m, ts_m, _e, _d in journal_source:
+            rt.encaisser(moteur, ts_m, m)
+            if m["event"] == "calib_start":
+                fin_de_chauffe()
+        return rt
+
+    with tempfile.TemporaryDirectory(prefix="errp_stim_smoke_") as dossier:
+        rt = rejoue(journal_calib, dossier)
+        pas = _feedbacks(journal_calib)
+        chk(rt.essai == len(pas) and len(rt._enregistre) == len(pas),
+            f"le moteur enregistre UNE époque par pas de cette fenêtre "
+            f"({rt.essai} pour {len(pas)} pas poussés)")
+        chk(rt.total() == len(pas),
+            f"...et le `trials` annoncé par la fenêtre est bien ce nombre-là : c'est sur lui que "
+            f"la console affiche l'avancement et que le moteur juge une fenêtre morte "
+            f"({rt.total()} annoncés)")
+        chk(rt._refus == 0,
+            f"aucun marqueur de cette fenêtre n'est refusé par le moteur ({rt._refus} refus)")
+        chk([lab for _e, lab in rt._enregistre] == [m.get("error") for m, _t, _e, _d in pas],
+            f"...et la vérité-terrain que le moteur retient est EXACTEMENT celle que la fenêtre a "
+            f"publiée, pas par pas ({[lab for _e, lab in rt._enregistre]})")
+        chk(rt.phase == "entrainement" and rt.resultat is None,
+            f"`calib_end` a bien clos la séance côté moteur, sans qu'on lui demande d'entraîner "
+            f"ici ({rt.phase})")
+
+        # ⚠️ L'AUTRE SENS, et c'est celui qui protège le produit : les marqueurs du DÉCODAGE, qui
+        # ne portent aucune étiquette, doivent être REFUSÉS. Une fenêtre restée en décodage
+        # pendant qu'une calibration tourne ne doit pas produire un jeu entier d'époques
+        # silencieusement rangées dans la classe majoritaire.
+        rt_nu = rejoue(journal_decodage, dossier,
+                       annonce={"mode": "errp", "event": "calib_start",
+                                "trials": len(journal_decodage)})
+        chk(rt_nu.essai == 0 and rt_nu._enregistre == []
+            and rt_nu._refus == len(journal_decodage),
+            f"les marqueurs de DÉCODAGE, eux, sont tous refusés par la calibration : ils n'ont "
+            f"aucune vérité-terrain, et les ranger d'office en « correct » entraînerait le modèle "
+            f"à ne jamais rien détecter ({rt_nu.essai} enregistrée(s), {rt_nu._refus} refus sur "
+            f"{len(journal_decodage)} marqueurs)")
 
 
 def _parse_args(argv):
