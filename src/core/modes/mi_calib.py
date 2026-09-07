@@ -60,6 +60,26 @@ VERDICTS = ((0.60, "EXCELLENT"), (0.45, "UTILISABLE"),
             (0.00, "FAIBLE — ré-essaie : contact des électrodes, immobilité, imagerie "
                    "kinesthésique (SENTIR, pas voir)"))
 
+# La phrase d'honnêteté du MI : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un
+# « 40 % » sans elle ne veut rien dire.
+#
+# ⚠️ Elle vit ICI, avec le chiffre qu'elle explique, et PAS dans `console/calib_page.py` où elle
+# se trouvait jusqu'au 2026-09-07. Elle y était une constante de l'interface, donc affichée sous
+# TOUS les résultats de calibration : la page est générique, elle ne connaît aucun mode. Depuis
+# que le P300 se calibre lui aussi depuis la console (tâche 4), cette phrase — « 40 % à trois
+# classes », « niveau du hasard 33 % » — se serait affichée sous une SÉLECTION parmi six cibles,
+# où elle n'a aucun sens. Chaque calibration porte donc la sienne dans son résultat, comme le
+# P300 le fait déjà (`p300_calib.HONNETETE`).
+HONNETETE = (
+    "Ce chiffre est une validation croisée PAR ESSAI : il estime ce que le modèle fera sur un "
+    "essai qu'il n'a jamais vu. C'est plus bas — et plus vrai — que ce qu'affichait l'ancien "
+    "écran de calibration, qui mélangeait des fenêtres d'un même essai entre apprentissage et "
+    "test et se gonflait ainsi de 10 à 16 points.\n"
+    "Repère : sur la seule séance de référence du projet, mesurée honnêtement, 40 % à 3 classes "
+    "(pas significatif) et 63 % à 2 classes. Le Motor Imagery ne marche pas également bien chez "
+    "tout le monde, et une séance modeste est un résultat ordinaire, pas une faute."
+)
+
 
 def horodatage(maintenant=None):
     """`AAAAMMJJ-HHMMSS`. Le paramètre existe pour que le test soit reproductible.
@@ -226,6 +246,10 @@ class MICalibration(CalibrationRuntime):
             "hasard": hasard,
             "classes": list(self.classes),
             "verdict": verdict_txt,
+            # La phrase qui dit ce que ce chiffre vaut. Elle voyage AVEC le résultat, parce que
+            # l'écran qui l'affiche est générique et ne connaît aucun mode : celle du P300 parle
+            # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes.
+            "honnetete": HONNETETE,
         }
 
 
@@ -355,6 +379,15 @@ def _selftest():
         chk(res["verdict"] == verdict(res["cv_groupee"]),
             f"le verdict est recalculé depuis la CV HONNÊTE, pas depuis la naïve "
             f"({res['verdict']!r} == verdict({res['cv_groupee']!r}))")
+
+        # La phrase d'honnêteté voyage AVEC le résultat, et c'est bien CELLE DU MI. L'écran qui
+        # l'affiche (`console/calib_page.py`) est générique : il ne connaît aucun mode, donc il ne
+        # peut pas la choisir. Tant qu'elle vivait dans l'interface, elle s'affichait aussi sous
+        # le résultat du P300 — « 40 % à trois classes » sous une sélection parmi six cibles.
+        chk(bool(res.get("honnetete")) and "3 classes" in res["honnetete"],
+            "le résultat porte SA phrase d'honnêteté, celle du MI")
+        chk("AUC" not in res.get("honnetete", "") and "six cibles" not in res.get("honnetete", ""),
+            "...et pas celle du P300, qui parle d'AUC et de sélection parmi six cibles")
 
         # Le modèle et l'enregistrement de CETTE séance sont horodatés. (« Rien n'est jamais
         # écrasé » — même à la même seconde — est prouvé plus bas, par DEUX séances RÉUSSIES :

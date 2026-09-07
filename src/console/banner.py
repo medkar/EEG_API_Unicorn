@@ -19,11 +19,24 @@ class Banner(QWidget):
         self.sigmas = QLabel("")
         self.alarme = QLabel("")
         self.alarme.setStyleSheet("color: #e2603f; font-weight: bold;")
+        # L'état de la FENÊTRE de stimulus, s'il y en a une. Ici et pas sur une page, pour la même
+        # raison que le reste du bandeau : une fenêtre qui meurt pendant qu'on regarde la grille
+        # doit se voir quand même. Et une fenêtre morte en silence, c'est un moteur qui attend des
+        # marqueurs qui ne viendront plus — indiscernable d'un étudiant qui fixe mal.
+        self.fenetre = QLabel("")
+        self.fenetre.setWordWrap(True)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        for widget in (self.liaison, self.sigmas, self.alarme):
+        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre):
             layout.addWidget(widget)
         layout.addStretch(1)
+
+    def set_fenetre(self, texte, alerte=False):
+        """Ce que devient la fenêtre de stimulus. Vient de `LanceurFenetre`, pas du moteur : le
+        moteur ne sait pas qu'elle existe, et c'est délibéré (il tourne sans écran)."""
+        self.fenetre.setText(texte or "")
+        self.fenetre.setStyleSheet("color: #e2603f; font-weight: bold;" if alerte
+                                   else "color: #8a8f9c;")
 
     def update_from(self, state):
         board = state.get("board", "?")

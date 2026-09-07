@@ -37,15 +37,44 @@ class ModePage(QWidget):
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
-        # Le bouton n'existe que si le CONTRAT dit que ce mode se calibre depuis la console. Rien
-        # ici ne sait qu'un MI s'entraîne et qu'un SSVEP non : c'est `Calib.kind` qui le dit.
+        # --- les deux boutons qui SORTENT de la console ------------------------------------
+        # Rien ici ne sait qu'un MI s'entraîne, qu'un SSVEP non, ou qu'un P300 a besoin d'une
+        # fenêtre : c'est le CONTRAT qui le dit, par trois champs distincts.
+        #
+        # ⚠️ Le critère de « Calibrer » n'est PAS `kind` (qui dit seulement QUI mène le protocole,
+        # le moteur ou une fenêtre) mais `jouable` — le moteur a-t-il un runtime pour cette
+        # calibration. Le critère précédent, `kind == "console"`, désignait une valeur que le
+        # vocabulaire du contrat n'a plus depuis la tâche 2 : le bouton avait purement DISPARU de
+        # tous les modes, y compris du MI qui se calibre depuis toujours. Aucun test ne l'a vu —
+        # le smoke appelait `console.show_calibration()` directement, sans jamais cliquer.
         calib = spec.get("calibration") or {}
         self.bouton_calibrer = None
-        if calib.get("kind") == "console":
+        self.bouton_stimulus = None
+        if calib:
             self.bouton_calibrer = QPushButton("Calibrer")
             self.bouton_calibrer.clicked.connect(
                 lambda: console.show_calibration(self.mode_id))
+            if not calib.get("jouable"):
+                # Une calibration DÉCLARÉE mais dont le runtime n'est pas livré. Le bouton reste
+                # visible — c'est ainsi qu'on apprend que ce mode se calibre — mais grisé, et il
+                # DIT pourquoi : la même honnêteté que les tuiles grisées de la grille.
+                self.bouton_calibrer.setEnabled(False)
+                self.bouton_calibrer.setToolTip(
+                    f"La calibration de « {spec['label']} » est déclarée mais le moteur ne sait "
+                    f"pas encore la jouer.")
             entete.addWidget(self.bouton_calibrer)
+        # « Lancer le stimulus » : le même mécanisme, la même fenêtre, SANS `--calibrer`. Il
+        # n'existe que pour les modes dont le contrat déclare un `stimulus_id` — c'est-à-dire ceux
+        # qui ne décodent RIEN sans une fenêtre en face (P300, ErrP, c-VEP). Sans lui, le seul
+        # moyen de faire décoder ces trois modes était un second terminal.
+        if calib.get("stimulus_id"):
+            self.bouton_stimulus = QPushButton("Lancer le stimulus")
+            self.bouton_stimulus.setToolTip(
+                "Ouvre la fenêtre de stimulus dans un second processus. Elle n'ouvre PAS le "
+                "casque : elle dessine et publie des marqueurs, à côté du moteur.")
+            self.bouton_stimulus.clicked.connect(
+                lambda: console.demander_stimulus(self.mode_id))
+            entete.addWidget(self.bouton_stimulus)
         entete.addStretch(1)
         self.etat = QLabel("")
         entete.addWidget(self.etat)

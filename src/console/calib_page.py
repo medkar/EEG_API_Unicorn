@@ -22,18 +22,12 @@ from console.params_form import ParamsForm  # noqa: E402
 # l'ancien nom).
 from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 
-# La phrase d'honnêteté : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un « 40 % »
-# sans elle ne veut rien dire, et le Motor Imagery ne marche pas également bien chez tout le
-# monde — le produit le dit au lieu de le laisser découvrir.
-HONNETETE = (
-    "Ce chiffre est une validation croisée PAR ESSAI : il estime ce que le modèle fera sur un "
-    "essai qu'il n'a jamais vu. C'est plus bas — et plus vrai — que ce qu'affichait l'ancien "
-    "écran de calibration, qui mélangeait des fenêtres d'un même essai entre apprentissage et "
-    "test et se gonflait ainsi de 10 à 16 points.\n"
-    "Repère : sur la seule séance de référence du projet, mesurée honnêtement, 40 % à 3 classes "
-    "(pas significatif) et 63 % à 2 classes. Le Motor Imagery ne marche pas également bien chez "
-    "tout le monde, et une séance modeste est un résultat ordinaire, pas une faute."
-)
+# ⚠️ La phrase d'honnêteté N'EST PLUS une constante de ce fichier. Elle vit dans chaque
+# calibration (`mi_calib.HONNETETE`, `p300_calib.HONNETETE`) et voyage dans son résultat, sous la
+# clé `honnetete`. La raison est la règle de cette page : elle ne connaît AUCUN mode. Celle du MI
+# parle de « 40 % à 3 classes » et d'un hasard à 33 % ; sous une sélection P300 parmi six cibles,
+# elle n'a aucun sens — et c'est pourtant ce qui se serait affiché, mot pour mot, dès que le P300
+# a gagné sa page de calibration. Une constante d'interface ne peut pas être vraie pour six modes.
 
 
 class CalibPage(QWidget):
@@ -84,6 +78,12 @@ class CalibPage(QWidget):
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        # Ce que le MOTEUR a répondu quand on a essayé de commencer. Un refus qui ne s'affiche que
+        # sur stdout est un bouton qui ne fait rien : c'est le défaut que ce chantier répare (la
+        # recette a relevé cinq clics d'affilée sur un bouton qui refusait, dans le terminal).
+        self.avis = QLabel("")
+        self.avis.setWordWrap(True)
+        self.avis.setStyleSheet("color: #e2603f;")
         self.bouton_commencer = QPushButton("Commencer")
         self.bouton_commencer.clicked.connect(self._commencer)
         avant = QVBoxLayout(self.bloc_avant)
@@ -92,6 +92,7 @@ class CalibPage(QWidget):
         avant.addWidget(self.formulaire)
         avant.addWidget(self.duree)
         avant.addWidget(self.bouton_commencer)
+        avant.addWidget(self.avis)
 
         # --- écran 2 : pendant ----------------------------------------------------------------
         self.bloc_pendant = QGroupBox("Séance en cours")
@@ -129,13 +130,30 @@ class CalibPage(QWidget):
         self.resultat.setStyleSheet("font-size: 15px; font-weight: bold;")
         self.details = QLabel("")
         self.details.setWordWrap(True)
-        self.honnetete = QLabel(HONNETETE)
+        self.honnetete = QLabel("")
         self.honnetete.setWordWrap(True)
         self.honnetete.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        # La DÉCISION. Le moteur écrit désormais son modèle dans un dossier temporaire et attend
+        # un geste : tant que « Enregistrer » n'est pas cliqué, RIEN n'est dans `data/`, et la
+        # fermeture de la console effacerait le candidat. Le dire, sinon un étudiant qui lit son
+        # accuracy croit légitimement que son modèle existe.
+        self.decision = QLabel("")
+        self.decision.setWordWrap(True)
+        self.decision.setStyleSheet("font-weight: bold;")
+        self.bouton_enregistrer = QPushButton("Enregistrer le modèle")
+        self.bouton_enregistrer.clicked.connect(self._enregistrer)
+        self.bouton_refaire = QPushButton("Refaire")
+        self.bouton_refaire.clicked.connect(self._refaire)
+        gestes = QHBoxLayout()
+        gestes.addWidget(self.bouton_enregistrer)
+        gestes.addWidget(self.bouton_refaire)
+        gestes.addStretch(1)
         apres = QVBoxLayout(self.bloc_apres)
         apres.addWidget(self.resultat)
         apres.addWidget(self.details)
         apres.addWidget(self.honnetete)
+        apres.addWidget(self.decision)
+        apres.addLayout(gestes)
 
         layout = QVBoxLayout(self)
         # Ordre choisi pour la lecture, pas pour la construction : « pendant » et « après » ne
@@ -155,15 +173,53 @@ class CalibPage(QWidget):
         self.bloc_apres.setVisible(False)
 
     def _commencer(self):
-        """Émet `start_calibration` avec les réglages choisis. Le moteur valide, refuse ou
-        accepte — cette page ne devine jamais laquelle des deux, elle envoie et attend l'état."""
-        self.console.commande("start_calibration", id=self.mode_id,
-                              params=self.formulaire.values())
+        """Demande une calibration à la CONSOLE, qui l'orchestre. Cette page n'envoie plus
+        `start_calibration` elle-même, et c'est l'ordre qui l'impose.
+
+        Trois choses doivent arriver, dans cet ordre, et deux d'entre elles ne sont pas de son
+        ressort : contrôler la liaison casque, ARRÊTER le mode s'il décode (sans quoi le moteur
+        refuse — un mode et sa calibration liraient la même file de marqueurs), puis seulement
+        soumettre `start_calibration` et lancer la fenêtre de stimulus. Cf.
+        `Console.demander_calibration`.
+        """
+        self.avis.setText("")
+        self.console.demander_calibration(self.mode_id, self.formulaire.values())
 
     def _abandonner(self):
         """Émet `cancel_calibration`. Aucun `id` à fournir : le moteur ne tient qu'UNE
         calibration à la fois, la sienne, quel que soit le mode qui l'a démarrée."""
-        self.console.commande("cancel_calibration")
+        self.console.arreter_calibration()
+
+    def _enregistrer(self):
+        """Émet `save_calibration` : le candidat REJOINT `data/`, sous un nom horodaté libre.
+
+        ⚠️ La console n'écrit RIEN sur le disque, ici pas plus qu'ailleurs. Elle envoie une
+        commande ; c'est la boucle du moteur qui déplace les fichiers, depuis le fil qui les a
+        écrits. Un `shutil.move` dans le fil Qt toucherait un dossier que l'autre fil est en train
+        de balayer.
+        """
+        ack = self.console.commande("save_calibration")
+        self.decision.setText(self.decision.text() if ack.get("accepted")
+                              else ack.get("reason", ""))
+
+    def _refaire(self):
+        """Émet `discard_calibration` : le candidat est supprimé et l'écran de verdict effacé.
+
+        Le moteur remet alors `calibration` à `None`, donc `update_from` ramène tout seul sur
+        l'écran « Avant » — cette page ne navigue pas, elle attend l'état comme pour le reste.
+        """
+        ack = self.console.commande("discard_calibration")
+        if not ack.get("accepted"):
+            self.decision.setText(ack.get("reason", ""))
+
+    def montrer_avis(self, texte, alerte=True):
+        """Affiche ce que le moteur (ou le lanceur de fenêtre) a répondu à « Commencer ».
+
+        `alerte=False` pour une information de déroulé (« arrêt du mode demandé… ») : la peindre
+        en rouge la ferait lire comme un échec, alors que c'est le début du succès.
+        """
+        self.avis.setText(texte or "")
+        self.avis.setStyleSheet("color: #e2603f;" if alerte else "color: #8a8f9c;")
 
     def _maybe_beep(self, calib_state):
         """Joue le top de la classe cuée sur le FRONT MONTANT de `etape` vers « cue », jamais de
@@ -231,6 +287,9 @@ class CalibPage(QWidget):
         # `if en_cours`, couvre les DEUX sorties (fin normale et abandon) par le même geste, sans
         # dépendre de la manière dont chacune est sortie.
         if en_cours:
+            # Une séance TOURNE : le refus affiché avant elle parlait d'une tentative qui n'a plus
+            # cours. Le laisser à l'écran ferait lire « ça n'a pas démarré » pendant que ça tourne.
+            self.avis.setText("")
             self._maybe_beep(calib_state)
             self.consigne.setText(calib_state.get("instruction") or "")
             self.classe_cuee.setText(calib_state.get("classe") or "")
@@ -246,36 +305,8 @@ class CalibPage(QWidget):
 
         if termine:
             resultat = calib_state.get("resultat")
-            if resultat is not None and resultat.get("cv_groupee") is None:
-                # `cv_groupee` vaut `None`, jamais 0.0, quand la CV honnête n'a pas pu être
-                # calculée (pas assez d'essais distincts par classe pour former deux plis) — cf.
-                # `mi_calib.py`. `float(None or 0.0)` afficherait « 0 % » : un diagnostic précis
-                # (contact des électrodes, immobilité…) et SANS RAPPORT avec la vraie cause. Le
-                # `verdict` du moteur porte déjà la raison en clair dans ce cas (« justesse non
-                # mesurable : … ») — l'afficher SEUL évite de le faire suivre d'un chiffre qui
-                # n'existe pas.
-                self.resultat.setText(resultat.get("verdict", ""))
-                self.details.setText(
-                    f"Modèle : {resultat.get('nom', '')}\n"
-                    f"{resultat.get('n_essais', 0)} essais enregistrés, "
-                    f"{resultat.get('n_fenetres', 0)} fenêtres d'entraînement — classes : "
-                    f"{', '.join(resultat.get('classes') or [])}")
-                # Rien à mettre en garde : sans accuracy, il n'y a rien à sur-interpréter.
-                self.honnetete.setVisible(False)
-            elif resultat is not None:
-                # `cv_groupee` — jamais `cv_naive` (gonflée de 10 à 16 points, cf. HONNETETE) —
-                # et le niveau du hasard À CÔTÉ : un « 40 % » seul ne veut rien dire.
-                cv = float(resultat["cv_groupee"])
-                hasard = float(resultat.get("hasard") or 0.0)
-                self.resultat.setText(
-                    f"{resultat.get('verdict', '')} — accuracy honnête (validation croisée par "
-                    f"essai) : {cv*100:.1f} % (hasard {hasard*100:.0f} %)")
-                self.details.setText(
-                    f"Modèle : {resultat.get('nom', '')}\n"
-                    f"{resultat.get('n_essais', 0)} essais enregistrés, "
-                    f"{resultat.get('n_fenetres', 0)} fenêtres d'entraînement — classes : "
-                    f"{', '.join(resultat.get('classes') or [])}")
-                self.honnetete.setVisible(True)
+            if resultat is not None:
+                self._montrer_resultat(resultat)
             else:
                 self.resultat.setText(
                     f"Calibration abandonnée : "
@@ -283,3 +314,102 @@ class CalibPage(QWidget):
                 self.details.setText("")
                 # Rien à mettre en garde : sans accuracy, il n'y a rien à sur-interpréter.
                 self.honnetete.setVisible(False)
+            # `candidat` non nul = il reste une DÉCISION à prendre. Le moteur a écrit le modèle
+            # dans un dossier temporaire et n'a rien mis dans `data/` — c'est le correctif de la
+            # tâche 5, et sans les deux boutons ci-dessous plus AUCUNE calibration n'atteindrait
+            # jamais `data/`.
+            self._montrer_decision(calib_state.get("candidat"), resultat)
+
+    # --- le verdict : rendu sur ce que le résultat PORTE, jamais sur un mode connu -------------
+    #
+    # Chaque calibration rend son propre dictionnaire, et il n'y a pas deux modes qui mesurent la
+    # même chose : le MI publie une accuracy par essai sur 3 classes, le P300 un taux de cibles
+    # retrouvées sur 6. Les deux tables ci-dessous sont indexées par CLÉ DE RÉSULTAT, jamais par
+    # identifiant de mode — c'est la même discipline que `live_views`, qui route sur la forme de
+    # la sortie et pas sur `spec["id"]`.
+    #
+    # ⚠️ Écrire les lignes du MI en dur (ce que faisait cette page avant le 2026-09-07) affichait
+    # « 0 fenêtres d'entraînement — classes : » sous un résultat P300, qui n'a ni fenêtres ni
+    # classes : deux chiffres FABRIQUÉS et une liste vide, sous le seul écran qui sert à décider
+    # si on garde le modèle. On n'écrit donc que ce qui est présent.
+
+    # La mesure qui DÉCIDE. Une seule est présente à la fois ; à `None` (mesure impossible), on
+    # passe à la suivante, et s'il n'en reste aucune on n'affiche AUCUN chiffre — jamais un 0 %,
+    # qui se lirait comme un diagnostic précis (« contact des électrodes ») sans rapport avec la
+    # vraie cause.
+    MESURES = (
+        ("cv_groupee", "accuracy honnête (validation croisée par essai)"),
+        ("selection", "sélection en leave-one-round-out (la cible désignée est-elle retrouvée ?)"),
+    )
+    # Le détail, par clé présente elle aussi. `cv_naive` n'y est PAS et n'y sera jamais : elle est
+    # gonflée de 10 à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
+    DETAILS = (
+        ("n_essais", "{} essais enregistrés"),
+        ("n_fenetres", "{} fenêtres d'entraînement"),
+        ("n_manches", "{} manches"),
+    )
+
+    def _mesure(self, resultat):
+        """(libellé, valeur) de la mesure qui décide, ou None si le résultat n'en publie aucune."""
+        for cle, libelle in self.MESURES:
+            valeur = resultat.get(cle)
+            if valeur is not None:
+                return libelle, float(valeur)
+        return None
+
+    def _montrer_resultat(self, resultat):
+        mesure = self._mesure(resultat)
+        if mesure is None:
+            # Le `verdict` du moteur porte déjà la raison en clair dans ce cas (« justesse non
+            # mesurable : … ») — l'afficher SEUL évite de le faire suivre d'un chiffre inexistant.
+            self.resultat.setText(resultat.get("verdict", ""))
+        else:
+            libelle, valeur = mesure
+            hasard = resultat.get("hasard")
+            # Le niveau du hasard À CÔTÉ : « 40 % » seul ne veut rien dire, et il ne vaut pas la
+            # même chose à 3 classes (33 %) qu'à 6 cibles (17 %).
+            repere = "" if hasard is None else f" (hasard {float(hasard)*100:.0f} %)"
+            self.resultat.setText(
+                f"{resultat.get('verdict', '')} — {libelle} : {valeur*100:.1f} %{repere}")
+
+        lignes = [f"Modèle : {resultat.get('nom', '')}"]
+        morceaux = [gabarit.format(resultat[cle]) for cle, gabarit in self.DETAILS
+                    if resultat.get(cle) is not None]
+        if resultat.get("auc") is not None:
+            morceaux.append(f"AUC cible/non-cible {float(resultat['auc'])*100:.0f} %")
+        if resultat.get("classes"):
+            morceaux.append("classes : " + ", ".join(resultat["classes"]))
+        if morceaux:
+            lignes.append(" — ".join(morceaux))
+        self.details.setText("\n".join(lignes))
+
+        # ⚠️ La phrase d'honnêteté vient du RÉSULTAT, jamais d'une constante de ce fichier : celle
+        # du MI parle de 40 % à trois classes, celle du P300 d'AUC et de sélection parmi six
+        # cibles. Une calibration qui n'en fournirait pas n'affiche rien plutôt que celle d'un
+        # autre mode.
+        phrase = resultat.get("honnetete") or ""
+        self.honnetete.setText(phrase)
+        self.honnetete.setVisible(bool(phrase) and mesure is not None)
+
+    def _montrer_decision(self, candidat, resultat):
+        """Ce qu'il reste à faire du modèle : le garder, ou le refaire.
+
+        ⚠️ Le point d'honnêteté de cet écran. Un chiffre affiché n'est PAS un modèle enregistré :
+        tant que `candidat` est renseigné, le fichier vit dans un dossier temporaire que la
+        fermeture de la console efface (`EngineServer.close()`). L'écrire noir sur blanc.
+        """
+        a_decider = bool(candidat)
+        self.bouton_enregistrer.setVisible(a_decider)
+        self.bouton_refaire.setVisible(a_decider)
+        if a_decider:
+            self.decision.setText(
+                "⚠ Rien n'est encore enregistré : ce modèle vit dans un dossier temporaire que "
+                "la fermeture de la console effacera. « Enregistrer le modèle » le met dans "
+                "data/ sous un nom horodaté, et il apparaît alors dans la liste déroulante du "
+                "mode. « Refaire » le supprime et ramène au briefing.")
+            self.decision.setStyleSheet("color: #b8860b; font-weight: bold;")
+        elif resultat is not None:
+            self.decision.setText(f"Modèle en place : {resultat.get('modele', '')}")
+            self.decision.setStyleSheet("color: #3fae5a; font-weight: bold;")
+        else:
+            self.decision.setText("")

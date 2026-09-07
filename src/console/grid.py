@@ -143,7 +143,15 @@ class ModeTile(QFrame):
             self._arrete = True
             self.demarrage.setText("Démarrer")
             self.etat.setText("arrêté")
+            # ⚠️ `blockSignals` ICI AUSSI, et pour la même raison qu'en bas de cette méthode :
+            # décocher la case ÉMET `set_published(id, False)`. Un mode qu'on vient d'arrêter
+            # postait donc, à l'instant même où sa tuile se repeignait, une commande que personne
+            # n'avait demandée — engendrée par un simple AFFICHAGE. Bénigne tant que le moteur
+            # répond « arrêté entre-temps », mais si le mode est redémarré dans la même seconde,
+            # la commande en file arrive APRÈS et retire silencieusement le flux du réseau.
+            self.publie.blockSignals(True)
             self.publie.setChecked(False)
+            self.publie.blockSignals(False)
             self.publie.setEnabled(False)
             self.apercu.set_values([])
             self.detail.setText(self.spec["summary"])

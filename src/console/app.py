@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -45,13 +46,15 @@ _ARGS = _parse_args(sys.argv[1:])
 if _ARGS.smoke:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtCore import QObject, QProcess, QTimer, Signal  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,  # noqa: E402
                                QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
 from console.calib_page import CalibPage  # noqa: E402
+from console.contact_page import ContactPage  # noqa: E402
+from console.fenetres import LanceurFenetre  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
@@ -61,15 +64,33 @@ from core.server import EngineServer  # noqa: E402
 
 REFRESH_MS = 100    # ~10 Hz : le moteur décide à 5 Hz, sonder plus vite ne montrerait rien de plus
 
+# Combien de temps on attend qu'un mode rende la main avant de lancer SA calibration. `stop_mode`
+# est mis en FILE : la boucle l'applique à sa cadence (~50 ms), donc l'attente normale est d'un ou
+# deux tours. Ce délai n'existe que pour ne pas attendre en SILENCE si la boucle est bloquée ou
+# arrêtée — un écran qui ne dit rien pendant que rien ne se passe est la panne que ce chantier
+# répare, et elle serait ici indiscernable d'une chauffe qui démarre.
+DELAI_ARRET_S = 5.0
+
 
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
 
-    def __init__(self, engine):
+    def __init__(self, engine, fabrique_fenetre=None, horloge=None):
         super().__init__()
         self.engine = engine
         self.setWindowTitle("EEG_API_Unicorn — console d'expérimentation")
         self.resize(1100, 720)
+
+        # Le lanceur de fenêtres de stimulus. `fabrique_fenetre` est injectable pour que le smoke
+        # n'ait JAMAIS à démarrer un vrai pygame ; `horloge` l'est pour que le délai d'attente
+        # ci-dessous soit testable sans attendre cinq secondes.
+        self.lanceur = LanceurFenetre(fabrique_fenetre)
+        self._horloge = horloge or time.monotonic
+        self._dernier_etat = {}
+        # Ce qu'on s'apprête à lancer, le temps du contrôle de liaison. Et, une fois le contrôle
+        # passé, le mode qu'on attend de voir s'arrêter avant de démarrer sa calibration.
+        self._demande = None
+        self._attente = None
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -80,6 +101,9 @@ class Console(QMainWindow):
         # 1,03 s l'appel, donc 1,9 s de fenêtre gelée au démarrage quand on en fait trois. Le
         # catalogue est une DÉCLARATION — il ne change pas entre deux lignes de ce constructeur.
         catalogue = registry.catalog()
+        # Le catalogue indexé, pour retrouver le contrat d'un mode sans le resérialiser (ce qui
+        # relirait le disque : `choices_fn` charge les modèles entraînés).
+        self.catalogue = {spec["id"]: spec for spec in catalogue}
         self.grid = ModeGrid(catalogue)
         self.grid.ouvrir.connect(self.show_mode)
         self.grid.publier.connect(self._publier)
@@ -110,6 +134,13 @@ class Console(QMainWindow):
             self.calib_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
+        # UNE page de contrôle de liaison pour tous les modes : les huit voies sont les mêmes,
+        # seul le surlignage des voies clés change d'un mode à l'autre (`viser`).
+        self.contact = ContactPage(self)
+        self.contact.lancer.connect(self._contact_lance)
+        self.contact.annuler.connect(self._contact_annule)
+        self.stack.addWidget(self.contact)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -126,11 +157,18 @@ class Console(QMainWindow):
         self.apply_state(self.engine.snapshot())
 
     def apply_state(self, state):
+        self._dernier_etat = state or {}
         self.banner.update_from(state)
+        # L'état de la fenêtre de stimulus est poussé À CHAQUE rafraîchissement, et dans le
+        # bandeau : une fenêtre qui meurt pendant qu'on regarde une autre page doit se voir quand
+        # même — et le moteur, lui, ne sait pas qu'elle existe.
+        texte, alerte = self.lanceur.etat_texte()
+        self.banner.set_fenetre(texte, alerte)
         self.grid.update_from(state)
         page = self.stack.currentWidget()
         if page is not self.grid:
             page.update_from(state)
+        self._suivre_attente(state)
 
     def _publier(self, mode_id, on):
         """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
@@ -159,6 +197,167 @@ class Console(QMainWindow):
         if not ack.get("accepted"):
             print(f"[console] refusé : {ack.get('reason')}")
         return ack
+
+    # --- lancer quelque chose : le contact d'abord, puis l'ORDRE ---------------------------
+    #
+    # 🔴 L'ordre est le piège de tout ce sous-système, et il ne lève aucune exception quand il est
+    # faux. La fenêtre de stimulus attend ~15 s À PARTIR DE SON PROPRE LANCEMENT ; le moteur
+    # compte sa chauffe À PARTIR DE `start_calibration`. Il n'existe AUCUNE poignée de main entre
+    # les deux processus, et c'est délibéré (les tâches 4 et 5 ont refusé d'en inventer une).
+    #
+    # Donc : `start_calibration` D'ABORD, la fenêtre ENSUITE. L'initialisation de pygame (~3 s)
+    # plus l'attente propre de la fenêtre couvrent alors la chauffe du moteur. Dans l'autre sens,
+    # les premières manches tombent dans la chauffe : elles sont jetées, comptées et dites — mais
+    # la séance est plus courte que ce que l'écran annonce, et c'est indiscernable d'un protocole
+    # qui s'est bien passé.
+
+    def demander_calibration(self, mode_id, params):
+        """« Commencer » sur une page de calibration : on passe d'abord par le contrôle de liaison.
+
+        Rien n'est soumis ici. Le lancement réel est dans `_contact_lance`, et il n'a lieu que si
+        le contrôle de liaison ne refuse pas.
+        """
+        self._demande = {"quoi": "calibration", "mode_id": mode_id,
+                         "params": dict(params or {}),
+                         "retour": self.calib_pages.get(mode_id)}
+        self._montrer_contact(mode_id, "Commencer la calibration")
+
+    def demander_stimulus(self, mode_id):
+        """« Lancer le stimulus » sur une page de mode : même chemin, sans calibration.
+
+        La fenêtre est alors lancée en mode DÉCODAGE : c'est elle qui affiche les cibles et publie
+        les marqueurs que le mode découpe. Elle n'ouvre pas le casque, donc elle vit à côté du
+        moteur — c'est exactement pour ça qu'elle est un second processus.
+        """
+        self._demande = {"quoi": "stimulus", "mode_id": mode_id, "params": {},
+                         "retour": self.pages.get(mode_id)}
+        self._montrer_contact(mode_id, "Lancer le stimulus")
+
+    def _montrer_contact(self, mode_id, quoi):
+        spec = self.catalogue.get(mode_id)
+        if spec is None:
+            self._demande = None
+            return
+        self.contact.viser(spec, quoi)
+        # L'état DÉJÀ reçu, tout de suite : sans lui, la page resterait sur « en attente de la
+        # première mesure » jusqu'au prochain tour de `QTimer`, et un écran qui refuse pour une
+        # raison périmée se lit comme un écran cassé.
+        self.contact.update_from(self._dernier_etat)
+        self.stack.setCurrentWidget(self.contact)
+
+    def _contact_annule(self):
+        demande, self._demande = self._demande, None
+        retour = (demande or {}).get("retour")
+        self.stack.setCurrentWidget(retour if retour is not None else self.grid)
+
+    def _contact_lance(self):
+        """Le contrôle de liaison est passé. On revient sur la page d'origine, puis on lance."""
+        demande, self._demande = self._demande, None
+        if demande is None:
+            return
+        retour = demande.get("retour")
+        # Revenir AVANT de lancer : c'est sur cette page-là que s'affichera un éventuel refus du
+        # moteur, et la page de contact ne doit pas rester devant un refus qu'elle ne porte pas.
+        self.stack.setCurrentWidget(retour if retour is not None else self.grid)
+        if demande["quoi"] == "stimulus":
+            self._lancer_fenetre(demande["mode_id"], calibrer=False)
+            return
+        # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration ne démarre : les deux liraient la
+        # même file de marqueurs, et `submit` refuse (tâche 5). On l'arrête donc nous-mêmes plutôt
+        # que d'infliger deux gestes à l'étudiant — mais `stop_mode` est mis en FILE, et
+        # `start_calibration` soumise dans la foulée verrait encore le mode actif et serait
+        # refusée. On attend donc de le voir DISPARAÎTRE de l'état.
+        if demande["mode_id"] in (self._dernier_etat.get("modes_state") or {}):
+            self.commande("stop_mode", id=demande["mode_id"])
+            self._attente = dict(demande, echeance=self._horloge() + DELAI_ARRET_S)
+            self._avis(demande["mode_id"],
+                       f"arrêt de « {demande['mode_id']} » demandé — sa calibration démarrera dès "
+                       f"qu'il aura rendu la main (un mode et sa calibration ne peuvent pas lire "
+                       f"la même file de marqueurs).", alerte=False)
+            return
+        self._demarrer_calibration(demande)
+
+    def _suivre_attente(self, state):
+        """Le mode qu'on attendait s'est-il arrêté ? Appelée à chaque rafraîchissement."""
+        if self._attente is None:
+            return
+        mode_id = self._attente["mode_id"]
+        if mode_id not in ((state or {}).get("modes_state") or {}):
+            attente, self._attente = self._attente, None
+            self._demarrer_calibration(attente)
+        elif self._horloge() > self._attente["echeance"]:
+            attente, self._attente = self._attente, None
+            self._avis(mode_id,
+                       f"« {mode_id} » ne s'est pas arrêté en {DELAI_ARRET_S:.0f} s : la "
+                       f"calibration n'a PAS été lancée. Arrête-le depuis la grille, puis "
+                       f"reclique « Commencer ».")
+
+    def _demarrer_calibration(self, demande):
+        """`start_calibration` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse."""
+        mode_id = demande["mode_id"]
+        ack = self.commande("start_calibration", id=mode_id, params=demande["params"])
+        if not ack.get("accepted"):
+            self._avis(mode_id, ack.get("reason", ""))
+            return
+        spec = self.catalogue.get(mode_id) or {}
+        stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
+        if not stimulus_id:
+            return          # le moteur mène tout seul le protocole (Motor Imagery)
+        ouvert = self._lancer_fenetre(mode_id, calibrer=True)
+        if not ouvert.get("accepted"):
+            # La calibration TOURNE, mais personne ne lui enverra de marqueurs : elle attendrait
+            # jusqu'à l'abandon, en comptant une chauffe qui ne mène nulle part. L'annuler et le
+            # dire, plutôt que de laisser l'étudiant devant un décompte qui n'aboutira pas.
+            self.commande("cancel_calibration")
+            self._avis(mode_id,
+                       f"{ouvert.get('reason', '')}\nLa calibration a été annulée : sans sa "
+                       f"fenêtre, le moteur attendrait des marqueurs qui ne viendront jamais.")
+
+    def _lancer_fenetre(self, mode_id, calibrer):
+        """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
+        spec = self.catalogue.get(mode_id) or {}
+        stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
+        if not stimulus_id:
+            return {"accepted": False,
+                    "reason": f"« {spec.get('label', mode_id)} » ne déclare aucune fenêtre de "
+                              f"stimulus : il n'y a rien à lancer."}
+        return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
+                                   label=spec.get("label", mode_id))
+
+    def arreter_calibration(self):
+        """« Abandonner » : la commande au moteur ET la fenêtre. Les deux, toujours.
+
+        Abandonner sans fermer la fenêtre laisserait un émetteur publier des marqueurs pour une
+        séance qui n'existe plus — et la calibration SUIVANTE hériterait de ses premières manches.
+        """
+        self._attente = None
+        self.commande("cancel_calibration")
+        self.lanceur.arreter()
+
+    def _avis(self, mode_id, texte, alerte=True):
+        """Affiche un message sur la page de calibration du mode, s'il en a une.
+
+        C'est ce qui sépare « le refus est correct » de « le refus se VOIT » : la recette du
+        projet (test 1.13) a relevé cinq clics d'affilée sur un bouton qui refusait correctement,
+        mais dans le terminal.
+        """
+        print(f"[console] {mode_id} : {texte}")
+        page = self.calib_pages.get(mode_id)
+        if page is not None:
+            page.montrer_avis(texte, alerte=alerte)
+
+    def closeEvent(self, event):
+        """Fermer la console doit fermer ce qu'elle a ouvert : la fenêtre, puis le moteur.
+
+        `EngineServer.close()` est idempotente et supprime le dossier temporaire des candidats de
+        calibration. Sans cet appel, un modèle EEG d'une personne identifiable pourrait survivre à
+        la fermeture dans `%TEMP%` — inoffensif tant qu'il y reste, mais le premier remaniement
+        qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
+        """
+        self.lanceur.arreter()
+        if self.engine is not None:
+            self.engine.close()
+        super().closeEvent(event)
 
     def show_grid(self):
         self.stack.setCurrentWidget(self.grid)
@@ -226,9 +425,16 @@ def _smoke():
         SEULE ligne du fichier à toucher le moteur — sans ça, une faute de nom y passerait
         tous les tests et n'échouerait que devant un étudiant."""
 
-        def __init__(self):
+        def __init__(self, journal):
             self.appels = 0
             self.commandes = []
+            self.fermetures = 0
+            # Le journal PARTAGÉ avec les faux processus. C'est lui, et lui seul, qui permet de
+            # vérifier un ORDRE entre deux mécanismes différents (une commande au moteur, un
+            # processus lancé) : deux listes séparées diraient que les deux ont eu lieu, jamais
+            # lequel a précédé l'autre — or c'est exactement là qu'est le piège de cette page.
+            self.journal = journal
+            self.refus = {}       # {nom de commande : raison} — pour éprouver le chemin du refus
 
         def snapshot(self):
             self.appels += 1
@@ -242,13 +448,59 @@ def _smoke():
             passerait tous les tests.
             """
             self.commandes.append((name, params))
+            self.journal.append(("commande", name))
+            if name in self.refus:
+                return {"accepted": False, "reason": self.refus[name]}
             return {"accepted": True}
+
+        def close(self):
+            """`EngineServer.close()` : libère le dossier temporaire des candidats. Comptée ici
+            parce que la console DOIT l'appeler en se fermant — sans ça, un modèle EEG d'une
+            personne identifiable survit à la fermeture dans `%TEMP%`."""
+            self.fermetures += 1
 
         def recent_window(self, seconds):
             """Un moteur factice n'a pas de tampon d'acquisition. La TracesView demande cette
             méthode, mais sur le faux moteur elle rend None. Le vrai tracé est éprouvé plus bas
             contre un vrai EngineServer."""
             return None
+
+    class _FauxProcessus(QObject):
+        """Un `QProcess` de façade : il n'exécute RIEN, il RETIENT ce qu'on lui a demandé.
+
+        ⚠️ Aucun VRAI processus dans ce smoke. Un test qui démarre un pygame plein écran en CI est
+        un test qu'on finit par désactiver, et le jour où on le désactive on perd d'un coup les
+        trois règles du lanceur (une seule fenêtre, la commande vient du registre, une mort se
+        voit). La surface imitée est exactement celle que `LanceurFenetre` utilise.
+        """
+
+        readyReadStandardOutput = Signal()
+        finished = Signal(int, object)
+        errorOccurred = Signal(object)
+
+        def __init__(self, journal):
+            super().__init__()
+            self.journal = journal
+            self.argv = None
+            self.tue = False
+            self.sortie = b""
+
+        def setProcessChannelMode(self, mode):
+            pass
+
+        def start(self, program, args):
+            self.argv = [program] + list(args)
+            self.journal.append(("fenetre", tuple(self.argv)))
+
+        def kill(self):
+            self.tue = True
+
+        def waitForFinished(self, ms=0):
+            return True
+
+        def readAllStandardOutput(self):
+            sortie, self.sortie = self.sortie, b""
+            return sortie
 
     ok = True
 
@@ -258,8 +510,16 @@ def _smoke():
         ok = ok and bool(cond)
 
     app = QApplication.instance() or QApplication([])
-    moteur_faux = _FauxMoteur()
-    console = Console(moteur_faux)
+    journal = []                  # la ligne du temps commune : commandes ET fenêtres
+    processus = []                # les faux processus fabriqués, dans l'ordre
+    horloge = [0.0]               # une horloge PILOTÉE : le délai d'attente doit être testable
+
+    def _fabrique():
+        processus.append(_FauxProcessus(journal))
+        return processus[-1]
+
+    moteur_faux = _FauxMoteur(journal)
+    console = Console(moteur_faux, fabrique_fenetre=_fabrique, horloge=lambda: horloge[0])
     console.timer.stop()          # pas de moteur : on pilote l'état à la main
     console.show()
 
@@ -360,6 +620,15 @@ def _smoke():
     console.apply_state(state)
     chk(not moteur_faux.commandes,
         f"et afficher l'état ne réémet aucune commande ({moteur_faux.commandes})")
+    # ...y compris quand un mode PUBLIÉ vient de s'ARRÊTER. C'est l'autre branche de la même
+    # méthode, et elle N'ÉTAIT PAS protégée : décocher la case émet `set_published`, donc la tuile
+    # d'un mode arrêté postait une commande que personne n'avait demandée, engendrée par un simple
+    # affichage. Trouvé en écrivant le test d'ORDRE de la calibration P300, où ce `set_published`
+    # fantôme s'intercalait entre `stop_mode` et `start_calibration`.
+    console.apply_state({**state, "modes_state": {}})
+    chk(not moteur_faux.commandes,
+        f"...et un mode publié qui s'ARRÊTE n'en réémet pas non plus ({moteur_faux.commandes})")
+    console.apply_state(state)
 
     # Démarrer / arrêter de bout en bout : clic -> signal de la tuile -> signal de la grille ->
     # commande au moteur. Le bouton est CLIQUÉ, pas contourné : c'est la seule façon de prouver
@@ -954,17 +1223,94 @@ def _smoke():
         "le briefing affiché vient du contrat du mode")
     chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
 
+    # --- le CONTRÔLE DE LIAISON s'interpose, et il REFUSE ---------------------------------
+    # Il vient de `research/ui.py:signal_check`, qui existe depuis le jour où un câble débranché a
+    # laissé enregistrer 3,4 min de signal plat puis produire un modèle à 0 %. Les fenêtres de
+    # `src/stimulus/` ne peuvent pas le reprendre — elles n'ouvrent pas le casque, elles n'ont
+    # aucun σ à montrer. La console, elle, sonde `snapshot()`.
+    # ⚠️ Une qualité NEUVE, relue depuis `fake_state()` : l'état `state` de ce smoke a été mué
+    # plus haut pour éprouver l'alarme du bandeau (`reference_lost: True`), et tous les fixtures
+    # qui en descendent — `mi_state`, `p300_state` — portent cette référence décrochée. Les
+    # réutiliser ici ferait refuser le contrôle de liaison pour la MAUVAISE raison, et les
+    # assertions sur la voie morte passeraient à côté de leur sujet.
+    qualite_saine = fake_state()["quality"]
+    # Le MI est ARRÊTÉ ici (`modes_state` sans lui) : c'est le chemin nominal d'une calibration.
+    # La console arrête toujours le mode avant SA calibration — règle uniforme, elle ne recopie
+    # PAS la table du moteur disant lesquels se voleraient les marqueurs — et ce chemin-là est
+    # éprouvé plus bas, sur le P300 qui décode.
+    mi_sain = {**mi_state, "calibration": None, "quality": qualite_saine,
+               "modes_state": state["modes_state"]}
+
     moteur_faux.commandes.clear()
     # Capturé AVANT le clic : c'est ce que le formulaire contient RÉELLEMENT en ce moment, pas une
     # valeur supposée — un formulaire qui soumettrait 999 en dur, peu importe ce qu'il affiche,
-    # doit faire échouer la comparaison ci-dessous.
+    # doit faire échouer la comparaison plus bas.
     valeurs_formulaire = cal.formulaire.values()
     cal.bouton_commencer.click()
+    chk(console.stack.currentWidget() is console.contact,
+        "« Commencer » passe D'ABORD par le contrôle de la liaison casque")
+    chk(not moteur_faux.commandes,
+        f"et RIEN n'est encore soumis au moteur à ce stade ({moteur_faux.commandes})")
+
+    # Une voie MORTE : le lancement doit être refusé, et le refus doit se LIRE. Un bouton
+    # simplement grisé se lit comme une interface cassée — c'est la panne que ce chantier répare
+    # (recette 1.13 : cinq clics d'affilée sur un bouton qui refusait, dans le terminal).
+    mauvais = {**mi_sain, "quality": {
+        **qualite_saine, "sigmas": [7.2, 0.0, 6.9, 9.4, 5.5, 11.2, 6.1, 7.8],
+        "verdicts": ["ok", "morte", "ok", "ok", "ok", "ok", "ok", "ok"]}}
+    console.apply_state(mauvais)
+    chk(not console.contact.bouton_lancer.isEnabled(),
+        "une voie morte empêche le lancement")
+    chk("C3" in console.contact.refus.text() and "morte" in console.contact.refus.text(),
+        f"...et le DIT à l'écran, en nommant la voie — pas seulement en grisant un bouton "
+        f"({console.contact.refus.text()[:90]}…)")
+    # La RÉFÉRENCE DÉCROCHÉE, le défaut que les huit σ ne montrent PAS : les voies mesurent alors
+    # toutes la même référence flottante, avec des amplitudes parfaitement plausibles.
+    reference = {**mi_sain, "quality": {
+        **qualite_saine, "reference_lost": True, "common_mode": 0.99}}
+    console.apply_state(reference)
+    chk(not console.contact.bouton_lancer.isEnabled()
+        and "MASTOÏDES" in console.contact.refus.text(),
+        f"une référence décrochée refuse elle aussi, en nommant le geste qui la répare "
+        f"({console.contact.refus.text()[:70]}…)")
+    # ...et un état SANS qualité (tampon pas encore rempli) refuse aussi : lancer là reviendrait à
+    # enregistrer à l'aveugle, ce qui est exactement l'accident d'origine.
+    console.apply_state({**mi_sain, "quality": None})
+    chk(not console.contact.bouton_lancer.isEnabled() and console.contact.refus.text(),
+        f"...et tant qu'AUCUN σ n'est mesuré, on ne lance pas non plus "
+        f"({console.contact.refus.text()[:70]}…)")
+
+    # Les voies CLÉS du mode visé sont surlignées, et la liste vient du CONTRAT.
+    console.apply_state(mi_sain)
+    cles_mi = registry.get("mi").key_channels
+    chk(all(state["channels"][i] in console.contact.cles.text() for i in cles_mi),
+        f"les voies clés du MI sont nommées, telles que son contrat les déclare "
+        f"({console.contact.cles.text()[:80]}…)")
+    chk(console.contact.bouton_lancer.isEnabled() and not console.contact.refus.text(),
+        "et sur un montage sain, le lancement est permis")
+
+    # Le clic qui lance pour de bon.
+    moteur_faux.commandes.clear()
+    console.contact.bouton_lancer.click()
+    chk(console.stack.currentWidget() is cal,
+        "cliquer « Commencer la calibration » ramène sur la page de calibration")
     envoyees = [c for c in moteur_faux.commandes if c[0] == "start_calibration"]
     chk(envoyees and envoyees[0][1]["id"] == "mi"
         and envoyees[0][1]["params"] == valeurs_formulaire,
-        f"cliquer « Commencer » soumet EXACTEMENT ce que le formulaire contenait ({envoyees} "
+        f"...et soumet EXACTEMENT ce que le formulaire contenait ({envoyees} "
         f"pour un formulaire à {valeurs_formulaire})")
+    chk(not processus,
+        f"le MI ne lance AUCUNE fenêtre : son contrat ne déclare pas de stimulus, le moteur mène "
+        f"seul son protocole ({processus})")
+
+    # Un refus du moteur DOIT s'afficher sur la page, pas seulement sur stdout.
+    moteur_faux.refus["start_calibration"] = "une calibration est déjà en cours (P300)"
+    console.apply_state(mi_sain)
+    cal.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk("déjà en cours" in cal.avis.text(),
+        f"un refus du moteur est AFFICHÉ sur la page, mot pour mot ({cal.avis.text()!r})")
+    moteur_faux.refus.clear()
 
     # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
     en_cours = {**mi_state, "calibration": {
@@ -1000,7 +1346,11 @@ def _smoke():
                          "n_essais": 42, "n_fenetres": 126, "cv_groupee": 0.401,
                          "cv_naive": 0.556, "hasard": 1 / 3,
                          "classes": ["GAUCHE", "DROITE", "REPOS"],
-                         "verdict": "FAIBLE — ré-essaie"}}}
+                         "honnetete": mi_calib.HONNETETE,
+                         "verdict": "FAIBLE — ré-essaie"},
+            # Le CANDIDAT : le modèle est écrit, mais dans un dossier temporaire. Tant que ce
+            # champ est renseigné, RIEN n'est dans `data/` (tâche 5) et il reste une décision.
+            "candidat": {"modele": "/tmp/calib/candidat_mi_model_20260730-141205.joblib"}}}
     console.apply_state(fini)
     chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
         f"l'accuracy affichée est l'HONNÊTE ({cal.resultat.text()})")
@@ -1010,8 +1360,94 @@ def _smoke():
         f"le niveau du hasard est à côté — sans lui, 40 % ne veut rien dire ({cal.resultat.text()})")
     chk("mi_model_20260730-141205.joblib" in cal.details.text(),
         f"le nom du modèle produit est donné ({cal.details.text()})")
+    # ⚠️ La phrase d'honnêteté vient du RÉSULTAT DU MOTEUR, plus d'une constante de la page. Elle
+    # vivait dans `calib_page.py` — donc affichée sous TOUS les résultats de calibration, la page
+    # ne connaissant aucun mode. Depuis que le P300 se calibre lui aussi ici, ce « 40 % à trois
+    # classes » se serait affiché mot pour mot sous une SÉLECTION parmi six cibles.
     chk("séance de référence" in cal.honnetete.text(),
         "et la page dit franchement ce qu'un résultat modeste signifie")
+    chk(cal.honnetete.text() == mi_calib.HONNETETE,
+        "...avec la phrase que la calibration MI publie elle-même, pas une constante d'interface")
+
+    # --- LA DÉCISION : « Enregistrer » ou « Refaire » -------------------------------------
+    # Sans ces deux boutons, PLUS AUCUNE calibration n'atteint `data/` : la tâche 5 a déplacé
+    # l'écriture derrière un geste explicite, pour qu'un modèle soit JUGÉ avant d'être gardé.
+    chk(cal.bouton_enregistrer.isVisibleTo(cal) and cal.bouton_refaire.isVisibleTo(cal),
+        "un candidat en attente fait apparaître « Enregistrer » et « Refaire »")
+    chk("temporaire" in cal.decision.text() and "data/" in cal.decision.text(),
+        f"...et l'écran DIT qu'un chiffre affiché n'est pas encore un modèle enregistré "
+        f"({cal.decision.text()[:80]}…)")
+
+    # ⚠️ La console n'écrit JAMAIS sur le disque : elle envoie des commandes. On le PROUVE en
+    # comparant l'empreinte du VRAI `data/` avant et après le clic, servi par un moteur FACTICE
+    # (qui ne fait rien d'autre que retenir la commande). `git status` ne prouverait rien : `data/`
+    # est gitignoré.
+    from core.config import DATA_DIR, empreinte_dossier
+    avant_disque = empreinte_dossier(DATA_DIR)
+    moteur_faux.commandes.clear()
+    cal.bouton_enregistrer.click()
+    chk(("save_calibration", {}) in moteur_faux.commandes,
+        f"« Enregistrer » envoie `save_calibration` au moteur ({moteur_faux.commandes})")
+    cal.bouton_refaire.click()
+    chk(("discard_calibration", {}) in moteur_faux.commandes,
+        f"« Refaire » envoie `discard_calibration` ({moteur_faux.commandes})")
+    chk(empreinte_dossier(DATA_DIR) == avant_disque,
+        "et NI l'un NI l'autre n'a touché au disque : c'est la boucle du moteur qui déplace les "
+        "fichiers, depuis le fil qui les a écrits")
+
+    # Le candidat RETIRÉ (« Enregistrer » appliqué par le moteur) : plus rien à décider, mais le
+    # verdict RESTE à l'écran — il faut pouvoir le lire après avoir enregistré.
+    enregistre = {**fini, "calibration": {**fini["calibration"], "candidat": None,
+                  "resultat": {**fini["calibration"]["resultat"],
+                               "modele": "data/mi_model_20260730-141205.joblib"}}}
+    console.apply_state(enregistre)
+    chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
+        f"une fois enregistré, le verdict reste lisible ({cal.resultat.text()[:60]}…)")
+    chk(not cal.bouton_enregistrer.isVisibleTo(cal),
+        "mais « Enregistrer » disparaît : il n'y a plus rien à trancher")
+    chk("data/mi_model_20260730-141205.joblib" in cal.decision.text(),
+        f"...et l'écran dit OÙ le modèle est désormais ({cal.decision.text()!r})")
+
+    # Un refus de `save_calibration` (candidat déjà tranché ailleurs) doit se VOIR lui aussi.
+    console.apply_state(fini)
+    moteur_faux.refus["save_calibration"] = "rien à enregistrer : aucune calibration n'attend"
+    cal.bouton_enregistrer.click()
+    chk("rien à enregistrer" in cal.decision.text(),
+        f"un refus d'enregistrement s'affiche mot pour mot ({cal.decision.text()[:60]}…)")
+    moteur_faux.refus.clear()
+
+    # --- le résultat d'un AUTRE mode : aucun chiffre fabriqué -----------------------------
+    # Le P300 ne mesure ni « fenêtres d'entraînement » ni « classes » : il compte des manches et
+    # une SÉLECTION. La page écrivait les lignes du MI en dur — elle affichait donc, sous un
+    # résultat P300, « 0 fenêtres d'entraînement — classes : ». Deux chiffres inventés et une
+    # liste vide, sur le seul écran qui sert à décider si on garde le modèle.
+    from core.modes import p300_calib
+    cal_p3 = console.calib_pages["p300"]
+    console.show_calibration("p300")
+    p300_fini = {**state, "calibration": {
+        "mode_id": "p300", "label": "Calibrer le P300", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 12,
+        "total": 12, "duree_estimee_s": 132.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_p300_model_20260907_101500.joblib",
+                     "nom": "p300_model_20260907_101500.joblib",
+                     "enregistrement": "/tmp/calib/candidat_p300_calib_20260907_101500.npz",
+                     "n_essais": 576, "n_manches": 12, "auc": 0.71,
+                     "selection": 10 / 12, "selection_ok": 10, "selection_total": 12,
+                     "hasard": 1 / 6, "verdict": "EXCELLENT",
+                     "honnetete": p300_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_p300_model_20260907_101500.joblib"}}}
+    console.apply_state(p300_fini)
+    chk("83.3" in cal_p3.resultat.text() and "17 %" in cal_p3.resultat.text(),
+        f"le P300 affiche SA mesure — la sélection — et SON hasard (1/6) "
+        f"({cal_p3.resultat.text()})")
+    chk("fenêtres" not in cal_p3.details.text() and "classes" not in cal_p3.details.text(),
+        f"...et AUCUN chiffre du MI n'est fabriqué à côté ({cal_p3.details.text()!r})")
+    chk("12 manches" in cal_p3.details.text() and "576 essais" in cal_p3.details.text(),
+        f"...seulement ce que son résultat porte vraiment ({cal_p3.details.text()!r})")
+    chk(cal_p3.honnetete.text() == p300_calib.HONNETETE
+        and "40 %" not in cal_p3.honnetete.text(),
+        "et sa phrase d'honnêteté est CELLE DU P300, jamais celle du MI")
+    console.show_calibration("mi")      # la suite éprouve de nouveau la page du MI
 
     # 3bis. Après, mais SANS CV honnête mesurable (B2) : `cv_groupee: None` — pas assez d'essais
     # DISTINCTS par classe pour former deux plis, cf. mi_calib.py. C'est le pendant console d'un
@@ -1048,6 +1484,158 @@ def _smoke():
     cal.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid,
         "et la page de calibration ramène sur la grille")
+
+    # --- 🔴 L'ORDRE DE LANCEMENT, et la fenêtre de stimulus --------------------------------
+    # C'est le piège de tout ce sous-système, et il ne lève aucune exception quand il est faux.
+    # La fenêtre attend ~15 s À PARTIR DE SON PROPRE lancement ; le moteur compte sa chauffe À
+    # PARTIR DE `start_calibration`. Il n'existe aucune poignée de main entre les deux processus.
+    # Dans le mauvais ordre, les premières manches tombent dans la chauffe : elles sont jetées,
+    # comptées et dites — mais la séance est PLUS COURTE que ce que l'écran annonce, et c'est
+    # indiscernable d'un protocole qui s'est bien passé.
+    console.show_calibration("p300")
+    cal_p3 = console.stack.currentWidget()
+    # Le P300 est ARRÊTÉ dans cet état : le chemin nominal, sans arrêt préalable à attendre. La
+    # qualité est la SAINE (cf. plus haut : `state` porte une référence décrochée depuis le test
+    # du bandeau), sans quoi le contrôle de liaison refuserait avant même d'arriver au sujet.
+    p300_pret = {**state, "calibration": None, "quality": qualite_saine}
+    console.apply_state(p300_pret)
+    journal.clear()
+    processus.clear()
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    noms = [e[0] for e in journal]
+    chk(("commande", "start_calibration") in journal and ("fenetre" in noms),
+        f"une calibration P300 soumet la commande ET lance la fenêtre ({journal})")
+    chk(noms.index("commande") < noms.index("fenetre"),
+        f"🔴 et dans CET ordre : `start_calibration` AVANT la fenêtre — sinon les premières "
+        f"manches tombent dans la chauffe du moteur ({journal})")
+
+    # La commande de la fenêtre vient de `stimulus/registry.py`, jamais d'une chaîne écrite ici.
+    from stimulus import registry as stim_registry
+    attendue = stim_registry.commande("p300", calibrer=True)
+    lancee = [e[1] for e in journal if e[0] == "fenetre"][0]
+    chk(list(lancee) == list(attendue),
+        f"la ligne de commande est CELLE du registre des stimulus, à l'identique "
+        f"({list(lancee)} pour {list(attendue)})")
+    chk("--calibrer" in lancee,
+        f"...et elle porte `--calibrer` : c'est la fenêtre en mode CALIBRATION ({lancee})")
+
+    # Deux fenêtres publieraient les mêmes marqueurs sous le même nom, et le moteur mélangerait
+    # les deux séances sans rien signaler. Le second lancement est refusé — et le refus se VOIT.
+    avant_second = len(processus)
+    refus = console.lanceur.lancer("p300", calibrer=True)
+    chk(not refus.get("accepted") and len(processus) == avant_second,
+        f"une SECONDE fenêtre est refusée, et aucun processus de plus n'est créé ({refus})")
+    console.apply_state(p300_pret)
+    chk("tourne déjà" in console.banner.fenetre.text(),
+        f"...et le refus est AFFICHÉ dans le bandeau, pas seulement rendu à l'appelant "
+        f"({console.banner.fenetre.text()[:70]}…)")
+
+    # Une fenêtre qui MEURT anormalement doit le dire. Le silence est le défaut d'origine : le
+    # moteur attendrait alors des marqueurs qui ne viendront plus, indiscernable d'un étudiant
+    # qui fixe mal.
+    fenetre = processus[-1]
+    fenetre.sortie = b"ModuleNotFoundError: No module named 'pygame'\n"
+    fenetre.readyReadStandardOutput.emit()
+    fenetre.finished.emit(1, QProcess.ExitStatus.NormalExit)
+    console.apply_state(p300_pret)
+    chk("pygame" in console.banner.fenetre.text()
+        and "anormalement" in console.banner.fenetre.text(),
+        f"une fenêtre morte le DIT à l'écran, avec sa dernière sortie ({console.banner.fenetre.text()})")
+    chk(not console.lanceur.en_cours(),
+        "...et le lanceur la considère bien terminée : on peut en relancer une")
+
+    # Une fenêtre qu'on tue SOI-MÊME (abandon, fermeture) n'est pas une panne : ne pas crier.
+    console.lanceur.lancer("p300", calibrer=True)
+    console.lanceur.arreter()
+    console.apply_state(p300_pret)
+    chk(console.banner.fenetre.text() == "",
+        f"une fenêtre arrêtée par la console ne s'annonce pas comme une panne "
+        f"({console.banner.fenetre.text()!r})")
+
+    # ⚠️ Le mode P300 qui DÉCODE pendant qu'on lance sa calibration : les deux liraient la même
+    # file de marqueurs, et le moteur REFUSE (tâche 5). La console arrête donc le mode elle-même —
+    # mais `stop_mode` est mis en FILE : soumettre `start_calibration` dans la foulée serait
+    # refusé. Elle attend de voir le mode DISPARAÎTRE de l'état.
+    journal.clear()
+    processus.clear()
+    p300_actif = {**p300_state, "calibration": None, "quality": qualite_saine}
+    console.apply_state(p300_actif)
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
+        f"le mode qui décode est ARRÊTÉ d'abord, et rien d'autre n'est soumis ({journal})")
+    chk(not processus, f"...et AUCUNE fenêtre n'est lancée tant qu'il décode ({processus})")
+    chk("arrêt de" in cal_p3.avis.text(),
+        f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.avis.text()[:70]}…)")
+    # Le mode a rendu la main : la calibration part, dans le bon ordre, sans autre clic.
+    console.apply_state(p300_pret)
+    noms = [e[0] for e in journal]
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode", "start_calibration"],
+        f"dès qu'il a rendu la main, la calibration part toute seule ({journal})")
+    chk(noms.index("fenetre") > noms.index("commande", 1),
+        f"...et la fenêtre vient encore APRÈS `start_calibration` ({journal})")
+    console.lanceur.arreter()
+
+    # ...et si le mode ne s'arrête JAMAIS, on renonce en le DISANT. Sans ce délai, l'écran
+    # attendrait en silence — indiscernable d'une chauffe qui démarre.
+    journal.clear()
+    console.apply_state(p300_actif)
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    horloge[0] += DELAI_ARRET_S + 1.0
+    console.apply_state(p300_actif)          # il décode toujours
+    chk("PAS été lancée" in cal_p3.avis.text(),
+        f"un mode qui ne s'arrête pas fait renoncer la calibration, à l'écran "
+        f"({cal_p3.avis.text()[:80]}…)")
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
+        f"...et `start_calibration` n'est JAMAIS soumise ({journal})")
+
+    # « Lancer le stimulus » : la même fenêtre, SANS `--calibrer`, depuis la page du mode.
+    journal.clear()
+    processus.clear()
+    console.show_mode("p300")
+    page_p3 = console.pages["p300"]
+    chk(page_p3.bouton_stimulus is not None and page_p3.bouton_calibrer is not None,
+        "la page du P300 porte « Calibrer » ET « Lancer le stimulus »")
+    console.apply_state(p300_pret)
+    page_p3.bouton_stimulus.click()
+    chk(console.stack.currentWidget() is console.contact,
+        "« Lancer le stimulus » passe lui aussi par le contrôle de liaison")
+    console.contact.bouton_lancer.click()
+    lancee = [e[1] for e in journal if e[0] == "fenetre"][0]
+    chk(list(lancee) == list(stim_registry.commande("p300")),
+        f"...et lance la fenêtre en mode DÉCODAGE, sans --calibrer ({list(lancee)})")
+    chk(not [e for e in journal if e[0] == "commande"],
+        f"...sans soumettre la moindre commande au moteur : le mode se démarre depuis la grille "
+        f"({journal})")
+    console.lanceur.arreter()
+
+    # « Annuler » sur le contrôle de liaison ne lance rien et ramène d'où l'on vient.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    page_p3.bouton_stimulus.click()
+    console.contact.bouton_retour.click()
+    chk(console.stack.currentWidget() is page_p3 and not journal,
+        f"« Annuler » revient sur la page d'origine sans rien lancer ({journal})")
+
+    # Les boutons sont posés par le CONTRAT, pas par une liste écrite ici. Le SSVEP n'a ni
+    # calibration ni stimulus ; l'ErrP en déclare une que le moteur ne sait pas encore jouer.
+    chk(console.pages["ssvep"].bouton_calibrer is None
+        and console.pages["ssvep"].bouton_stimulus is None,
+        "un mode sans calibration n'expose aucun de ces deux boutons")
+    chk(console.pages["mi"].bouton_calibrer is not None
+        and console.pages["mi"].bouton_stimulus is None,
+        "le MI se calibre mais n'a AUCUNE fenêtre : le moteur mène seul son protocole")
+    errp_calib = (console.pages["errp"].spec.get("calibration") or {})
+    chk(console.pages["errp"].bouton_calibrer.isEnabled() == bool(errp_calib.get("jouable")),
+        f"et « Calibrer » n'est actif que si le moteur sait JOUER la calibration "
+        f"(errp jouable={errp_calib.get('jouable')})")
+    chk(bool(console.pages["errp"].bouton_calibrer.toolTip())
+        or errp_calib.get("jouable"),
+        "...un bouton grisé DIT pourquoi il l'est, il ne se contente pas de ne rien faire")
+    console.show_grid()
 
     # --- régression : les tops de l'ÉCHAUFFEMENT, pas seulement ceux des essais enregistrés ----
     # `essai` (le compteur d'essais ENREGISTRÉS) ne bouge JAMAIS pendant l'échauffement — seule
@@ -1312,6 +1900,20 @@ def _smoke():
     console.refresh()
     chk(moteur_faux.appels == 1,
         f"refresh() a consulté le moteur (appels={moteur_faux.appels})")
+
+    # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
+    # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet
+    # appel, un modèle EEG d'une personne identifiable survit à la fermeture dans `%TEMP%` — et
+    # le premier remaniement qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
+    console.apply_state(p300_pret)
+    console.lanceur.lancer("p300", calibrer=True)
+    fenetre_ouverte = processus[-1]
+    console.close()
+    chk(moteur_faux.fermetures == 1,
+        f"fermer la console appelle `EngineServer.close()` ({moteur_faux.fermetures})")
+    chk(fenetre_ouverte.tue and not console.lanceur.en_cours(),
+        "...et tue la fenêtre de stimulus restée ouverte, plutôt que de la laisser plein écran "
+        "devant l'étudiant")
 
     app.processEvents()
     print(f"[console-smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
