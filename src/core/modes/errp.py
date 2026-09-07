@@ -125,6 +125,10 @@ from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
 from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+# ⚠️ L'arête ne va QUE dans ce sens : `errp_calib` ne nous importe pas en retour (il lit
+# `ErrPRuntime` par un import TARDIF, dans une propriété — cf. sa docstring). Un import en tête
+# là-bas refermerait un cycle qui casse `python src/core/modes/errp.py`, mesuré côté P300.
+from core.modes.errp_calib import BRIEFING as BRIEFING_CALIB, ErrPCalibration  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Palier d'alarme du taux de rejet (panne n°8) : au-delà, ce n'est plus « un clignement
@@ -691,7 +695,13 @@ SPEC = ModeSpec(
         instruction="Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
     ),
     calibration=Calib(kind="fenetre", stimulus_id="errp",
-                      label="Calibrer l'ErrP"),
+                      label="Calibrer l'ErrP",
+                      briefing=BRIEFING_CALIB,
+                      # La géométrie que la calibration PRÉLÈVE, écrite comme la somme que le
+                      # runtime découpe — pas un nombre choisi à part, qui dériverait le jour où
+                      # l'une des deux bornes bouge.
+                      epoch_s=ERRP_PRE_S + ERRP_EPOCH_S,
+                      runtime_cls=ErrPCalibration),
     # Le suffixe est le même littéral que celui que `DecodedErrPPublisher` construit lui-même via
     # `stream_name("decoded_errp")` (core/lsl_io.py) — la même convention que le MI (`decoded_mi`).
     # Les VOIES, elles, viennent de `errp_channel_labels()` : LA seule fonction qui les nomme, pour
