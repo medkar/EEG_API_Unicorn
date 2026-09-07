@@ -241,10 +241,9 @@ def check():
         # PREMIER par le smoke, précisément parce qu'« un défaut là-dedans explique tous les
         # suivants » (cf. sa docstring) — mais elle ignorait `spec.calibration` : un défaut
         # invalide dans un `Calib.params` traversait les quatre tests verts et n'était
-        # découvert qu'au clic « Calibrer ». Une calibration « native » (kind="natif",
-        # runtime_cls=None) n'est en revanche JAMAIS jouée par le moteur — c'est
-        # `src/research/app.py` qui la joue — donc vérifier ses défauts ici n'aurait aucun
-        # sens et signalerait des « défauts » qui n'en sont pas.
+        # découvert qu'au clic « Calibrer ». Une calibration dont le `runtime_cls` est encore
+        # `None` n'est en revanche jamais jouée par le moteur — vérifier ses défauts ici
+        # signalerait des « défauts » qui n'en sont pas.
         calib = spec.calibration
         if calib is not None and calib.runtime_cls is not None:
             # Même traitement que les params du MODE juste au-dessus : un choix dynamique

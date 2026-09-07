@@ -36,12 +36,14 @@ def charger(chemin):
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
     # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
     if not chemin:
-        # ⚠️ « depuis la console » était FAUX : la console n'a pas de page de calibration P300
-        # (son stimulus doit être verrouillé à la frame, cf. `Calib(kind="natif")` du mode). Ce
-        # texte est celui du `help` du réglage « Modèle entraîné » — le même geste dit du même
-        # mot aux deux endroits où un étudiant peut le lire.
-        return None, ("aucun modèle désigné — lance `python src/research/app.py`, mode P300, et "
-                      "calibre : c'est l'appli pygame qui rend ce stimulus, pas la console")
+        # ⚠️ Ce texte a été FAUX deux fois, dans les deux sens. Il a d'abord dit « depuis la
+        # console » quand la console n'avait pas de page P300 ; il a ensuite renvoyé vers l'appli
+        # pygame, qui ne rend plus ce stimulus depuis le 2026-09-07. Le stimulus est verrouillé à
+        # la frame et rendu par une FENÊTRE de `src/stimulus/`, que la console lance elle-même
+        # (`Calib(kind="fenetre")` du mode). Ce texte est celui du `help` du réglage « Modèle
+        # entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le lit.
+        return None, ("aucun modèle désigné — ouvre la console, page P300, et clique "
+                      "« Calibrer le P300 » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:

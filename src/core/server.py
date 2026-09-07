@@ -177,11 +177,13 @@ class EngineServer:
         # avec un tiers des fenêtres d'entraînement attendues. C'est `Calib.epoch_s` qui le déclare.
         #
         # `runtime_cls is not None` EN PLUS de `calibration is not None` : une calibration
-        # « native » (c-VEP, P300) n'est JAMAIS jouée par le moteur — c'est `research/app.py` qui
-        # la joue — donc son `epoch_s`, purement documentaire, ne doit dimensionner AUCUN tampon
-        # ici. Sans ce filtre, un `epoch_s` posé sur une calibration native pour la lisibilité
-        # gonflerait `keep` en silence — et, par ricochet, la fenêtre de mesure de la qualité
-        # (`_publish_quality`, cf. son propre avertissement).
+        # DÉCLARÉE mais dont le runtime n'est pas livré n'est jamais jouée par le moteur, donc son
+        # `epoch_s`, purement documentaire, ne doit dimensionner AUCUN tampon ici. Sans ce filtre,
+        # un `epoch_s` posé pour la lisibilité gonflerait `keep` en silence — et, par ricochet, la
+        # fenêtre de mesure de la qualité (`_publish_quality`, cf. son propre avertissement).
+        # ⚠️ Ce filtre a changé de population le 2026-09-07 : il excluait les trois calibrations
+        # « natives » (jouées par l'appli pygame) ; depuis que le moteur les joue toutes, il ne
+        # reste que celles dont le runtime n'est pas encore écrit.
         epoque_calib = max([spec.calibration.epoch_s for spec in registry.MODES
                             if spec.calibration is not None
                             and spec.calibration.runtime_cls is not None] or [0.0])
@@ -191,8 +193,10 @@ class EngineServer:
         # un jour tronquerait CHAQUE époque P300 en silence.
         #
         # ⚠️ À ne pas confondre avec le filtre juste au-dessus : l'`epoch_s` d'une calibration
-        # NATIVE ne dimensionne rien, parce que le moteur ne joue jamais ces calibrations. Ici
-        # c'est l'époque du RUNTIME, que le moteur prélève lui-même à chaque marqueur.
+        # SANS RUNTIME ne dimensionne rien, parce que le moteur ne la joue pas. Ici c'est l'époque
+        # du RUNTIME, que le moteur prélève lui-même à chaque marqueur — et c'est elle, pas
+        # `epoch_s`, qui dimensionne le tampon des calibrations menées par une FENÊTRE, puisque
+        # celles-ci prélèvent par le même chemin que le décodage (cf. `modes/marker_calib.py`).
         epoque_marqueur = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
