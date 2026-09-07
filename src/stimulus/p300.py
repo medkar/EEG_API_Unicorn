@@ -769,8 +769,98 @@ def _smoke(reps, n_targets):
         f"une séance INTERROMPUE ne publie AUCUN calib_end — un modèle appris sur trois manches "
         f"sur douze serait indiscernable d'un modèle complet dans la liste ({evenements_i})")
 
+    # ⚠️ Appelée SANS `ok and …` : `and` court-circuite, donc le bout-à-bout aurait été SAUTÉ dès
+    # qu'une assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. Attrapé
+    # par mutation (renommer l'événement `cue` faisait rougir la moitié C et taisait la D).
+    # `chk` met à jour `ok` par `nonlocal` : la valeur de retour n'a rien à faire ici.
+    _smoke_bout_en_bout(chk, journal_c, designees)
+
     print(f"[p300-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def _smoke_bout_en_bout(chk, journal, designees):
+    """LES MARQUEURS DE CETTE FENÊTRE, donnés à la calibration du MOTEUR. Le seul test qui les
+    fait se parler.
+
+    Les deux moitiés de ce chantier se vérifient séparément partout ailleurs : la fenêtre publie
+    une séquence (juste au-dessus), et le moteur sait en faire un modèle
+    (`python src/core/modes/p300_calib.py`, qui rejoue une séance qu'il FABRIQUE lui-même). Rien
+    ne prouvait qu'elles parlent de la même chose. Un désaccord de protocole — un événement
+    renommé, la cible sur une autre clé, un `round_end` oublié — ne lève RIEN : le moteur
+    enregistre simplement moins d'époques, ou les étiquette toutes « non-cible », et la
+    calibration produit un modèle plausible qui décodera du bruit.
+
+    ⚠️ Ce test vit ICI et il ne peut pas vivre ailleurs : `core` n'a pas le droit d'importer
+    `stimulus` (frontière vérifiée par `python src/core/server.py --smoke`), `stimulus -> core`
+    est autorisé. C'est donc à l'émetteur de prouver que le moteur le comprend.
+
+    Le tampon EEG est à ZÉRO, exprès : on ne juge pas ici un décodage, seulement le PROTOCOLE —
+    combien d'époques, sous quelles étiquettes, sous quelle manche. Et on n'entraîne pas (aucun
+    `tick` après `calib_end`), donc rien n'est écrit sur le disque.
+    """
+    import tempfile
+
+    import numpy as np
+
+    from core.modes.p300 import SPEC as SPEC_P300
+    from core.modes.p300_calib import P300Calibration
+
+    class _FausseAcq:
+        fs = 250.0
+
+    class _MoteurFactice:
+        """Le strict nécessaire pour la calibration : un tampon EEG horodaté, une file vide."""
+
+        def __init__(self, recent, recent_ts):
+            self.acq = _FausseAcq()
+            self.recent, self.recent_ts = recent, recent_ts
+
+        def markers_murs(self, mode_id, post_s):
+            return []      # les marqueurs sont donnés à la main, un par un, par `encaisser`
+
+    t_debut, t_fin = journal[0][1], journal[-1][1]
+    recent_ts = np.arange(t_debut - 2.0, t_fin + 2.0, 1.0 / _FausseAcq.fs)
+    moteur = _MoteurFactice(np.zeros((len(recent_ts), 8)), recent_ts)
+
+    with tempfile.TemporaryDirectory(prefix="p300_stim_smoke_") as dossier:
+        rt = P300Calibration(SPEC_P300, {}, moteur, dossier=dossier)
+        rt.tick(moteur, t_debut)                    # démarre la chauffe
+        for m, ts_m in journal:
+            rt.encaisser(moteur, ts_m, m)
+            if m["event"] == "calib_start":
+                # La chauffe s'écoule d'un coup : c'est l'horloge de l'APPELANT, pas celle des
+                # marqueurs, et c'est justement ce qui permet de la traverser sans attendre.
+                rt.tick(moteur, t_debut + rt.warmup_s + 0.01)
+
+        flashs = sum(1 for m, _t in journal if m["event"] == "flash")
+        chk(rt.essai == flashs and len(rt._enregistre) == flashs,
+            f"le moteur enregistre UNE époque par flash de cette fenêtre "
+            f"({rt.essai} pour {flashs} flashs poussés)")
+        chk(rt.total() == flashs,
+            f"...et le `trials` annoncé par la fenêtre est bien ce nombre-là : c'est sur lui que "
+            f"la console affiche l'avancement et que le moteur juge une fenêtre morte "
+            f"({rt.total()} annoncés)")
+        chk(rt._refus == 0,
+            f"aucun marqueur de cette fenêtre n'est refusé par le moteur ({rt._refus} refus)")
+
+        etiquettes = [lab for _e, lab in rt._enregistre]
+        manches = sorted({lab.manche for lab in etiquettes})
+        chk(manches == list(range(len(designees))),
+            f"chaque manche de l'écran est une manche du moteur ({manches} pour "
+            f"{len(designees)} manches jouées)")
+        chk([next(lab.attendue for lab in etiquettes if lab.manche == m) for m in manches]
+            == designees,
+            f"...et la vérité-terrain que le moteur retient est la cible que l'écran a DÉSIGNÉE, "
+            f"manche par manche ({designees})")
+        cibles = sum(1 for lab in etiquettes if lab.est_cible)
+        chk(cibles == len(designees) * P300_MIN_REPS,
+            f"une époque « cible » par répétition et par manche, le reste en « non-cible » — "
+            f"c'est l'oddball, et un protocole désaccordé le déséquilibrerait sans un mot "
+            f"({cibles} cibles sur {len(etiquettes)} époques)")
+        chk(rt.phase == "entrainement" and rt.resultat is None,
+            f"`calib_end` a bien clos la séance côté moteur, sans qu'on lui demande d'entraîner "
+            f"ici ({rt.phase})")
 
 
 def _parse_args(argv):
