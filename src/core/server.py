@@ -516,6 +516,14 @@ class EngineServer:
         # qu'une nouvelle tourne laisserait « Enregistrer » actif sur un résultat qui n'est plus
         # celui qu'on regarde — et personne ne saurait lequel des deux part dans `data/`.
         self._efface_candidat("une nouvelle calibration commence")
+        # ⚠️ Lâcher la calibration PRÉCÉDENTE, pas seulement son candidat. `_candidat_de` la
+        # référence, et une calibration terminée avec succès garde ses époques (`_enregistre`,
+        # plusieurs minutes de signal) et une référence vers le moteur entier : seul `cancel()`
+        # les libère, et `_terminer` ne l'appelle pas. Sans ces deux lignes, chaque séance de la
+        # journée resterait vivante en mémoire derrière la suivante.
+        if self._candidat_de is not None:
+            self._candidat_de.cancel()      # sur une calibration « fini », ne change QUE ça
+            self._candidat_de = None
         # `dossier=` : le dossier CANDIDAT, et il est passé à TOUTES les calibrations sans
         # distinction — l'argument vit sur `CalibrationRuntime`, pas sur telle ou telle
         # sous-classe. C'est ce qui empêche une calibration future de retomber sur `data/` :
@@ -2339,6 +2347,26 @@ def _smoke_calibration():
             chk(not refus_save.get("accepted")
                 and "aucune calibration" in (refus_save.get("reason") or ""),
                 f"un second « Enregistrer » est refusé, avec un motif ({refus_save})")
+
+            # 3bis. Une séance terminée est LÂCHÉE quand la suivante commence. Elle garde sinon
+            # ses époques (plusieurs minutes de signal) et une référence vers le moteur entier :
+            # seul `cancel()` les libère, et `_terminer` ne l'appelle pas. `_candidat_de` la
+            # référence après coup, donc sans ce lâcher explicite chaque séance de la journée
+            # resterait vivante derrière la suivante. La nouvelle est abandonnée aussitôt : ce
+            # qu'on éprouve ici est le passage de relais, pas une seconde séance.
+            ancienne = server.calibration
+            server.submit("start_calibration", id="mi", params={})
+            t0 = time.perf_counter()
+            while server.calibration is ancienne and time.perf_counter() - t0 < 5.0:
+                time.sleep(0.05)
+            chk(ancienne is not None and ancienne.engine is None and ancienne._enregistre == [],
+                f"la séance précédente est LÂCHÉE quand la suivante commence : époques et "
+                f"référence au moteur libérées "
+                f"({None if ancienne is None else len(ancienne._enregistre)} époque(s) retenue(s))")
+            server.submit("cancel_calibration")
+            t0 = time.perf_counter()
+            while server.phase == "calibrating" and time.perf_counter() - t0 < 5.0:
+                time.sleep(0.05)
 
             produits = mi_models.modeles_disponibles(data_dir)
             chk(produits == [retenu.get("modele")],
