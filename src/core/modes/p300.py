@@ -71,6 +71,11 @@ from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+# ⚠️ L'arête ne va QUE dans ce sens : `p300_calib` ne nous importe pas en retour (il lit
+# `P300Runtime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
+# refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
+# `python src/core/modes/p300.py` compris. Mesuré, pas supposé.
+from core.modes.p300_calib import BRIEFING as BRIEFING_CALIB, P300Calibration  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Plafond DUR d'une manche, compté **PAR CIBLE** : au-delà, ce ne sont plus les répétitions d'une
@@ -552,8 +557,15 @@ SPEC = ModeSpec(
     ),
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
               instruction="Le casque se stabilise — reste immobile."),
+    # ⚠️ `epoch_s` doit être > 0 (`registry.check()` l'exige), mais il ne dimensionne RIEN de plus
+    # ici : le tampon d'une calibration à fenêtre vient de `marker_epoch_s` du mode, déjà lié à
+    # `pre_s + post_s` du runtime. On y écrit donc la géométrie que cette calibration prélève
+    # vraiment — c'est la seule valeur qui ne mente pas à un lecteur.
     calibration=Calib(kind="fenetre", stimulus_id="p300",
-                      label="Calibrer le P300"),
+                      label="Calibrer le P300",
+                      briefing=BRIEFING_CALIB,
+                      epoch_s=P300_PRE_S + P300_EPOCH_S,
+                      runtime_cls=P300Calibration),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrivait à
     # deux endroits (`SPEC.stream` et le littéral de `DecodedP300Publisher`) sans que rien ne les
     # relie — deux façons de nommer la même chose finissent toujours par diverger.

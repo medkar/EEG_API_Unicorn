@@ -776,6 +776,16 @@ P300_REPS = 8                 # sert aussi de PLAFOND de répétitions en arrêt
 P300_MIN_REPS = 2             # jamais moins de N rép avant de pouvoir stopper (bruit sinon)
 P300_STOP_MARGIN = 0.6        # marge (log-odds moyens) 1er-2e requise pour stopper — À TUNER
 P300_CAL_ROUNDS = 12          # manches de calibration (chaque cible cuée 2× à 6 cibles)
+# La PAUSE entre deux manches — l'écran où rien ne clignote, où l'on choisit (en décodage) ou lit
+# (en calibration) la cible à fixer. Ce n'est pas du confort : sans elle, la frontière entre deux
+# manches est visuellement identique à un intervalle entre deux flashs (~150 ms), et les époques de
+# la manche suivante contiennent la transition du regard. Valeur calée sur les deux écrans validés
+# au casque (2,2 s dans `research/app.py`, 2,5 s dans `research/p300_calibrate.py`).
+# ⚠️ Elle vit ICI, dans `core/`, parce que DEUX programmes en ont besoin et qu'aucun des deux ne
+# peut importer l'autre : la fenêtre `src/stimulus/p300.py` la JOUE, et `core/modes/p300_calib.py`
+# en a besoin pour ESTIMER la durée d'une séance — le moteur ne voit pas l'écran. Recopiée des deux
+# côtés, elle dériverait, et la console annoncerait une durée que la fenêtre ne tient pas.
+P300_PAUSE_MANCHE_S = 2.5
 P300_SELECT_MARGIN = 0.0      # marge de score mini 1er-2e pour émettre (0 = toujours l'argmax)
 P300_BURST_S = 1.2            # durée d'exécution d'une commande sélectionnée puis STOP (s)
 P300_XDAWN_NFILTER = 4        # composantes xDAWN par classe
