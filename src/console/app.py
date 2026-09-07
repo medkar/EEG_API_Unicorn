@@ -509,6 +509,19 @@ def _smoke():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
+    def rang(suite, valeur, depart=0):
+        """L'indice de `valeur` à partir de `depart`, ou -1. Ne LÈVE jamais.
+
+        `list.index` lèverait `ValueError` quand l'élément manque, et une assertion qui lève
+        emporte avec elle TOUTES celles qui la suivent — c'est-à-dire exactement quand on a besoin
+        de les lire. Mesuré : la preuve par mutation « le mode n'est pas arrêté avant sa
+        calibration » faisait sauter la moitié de ce smoke sur un `index()` d'ordre.
+        """
+        try:
+            return suite.index(valeur, depart)
+        except ValueError:
+            return -1
+
     app = QApplication.instance() or QApplication([])
     journal = []                  # la ligne du temps commune : commandes ET fenêtres
     processus = []                # les faux processus fabriqués, dans l'ordre
@@ -1506,19 +1519,19 @@ def _smoke():
     noms = [e[0] for e in journal]
     chk(("commande", "start_calibration") in journal and ("fenetre" in noms),
         f"une calibration P300 soumet la commande ET lance la fenêtre ({journal})")
-    chk(noms.index("commande") < noms.index("fenetre"),
+    chk(0 <= rang(noms, "commande") < rang(noms, "fenetre"),
         f"🔴 et dans CET ordre : `start_calibration` AVANT la fenêtre — sinon les premières "
         f"manches tombent dans la chauffe du moteur ({journal})")
 
     # La commande de la fenêtre vient de `stimulus/registry.py`, jamais d'une chaîne écrite ici.
     from stimulus import registry as stim_registry
     attendue = stim_registry.commande("p300", calibrer=True)
-    lancee = [e[1] for e in journal if e[0] == "fenetre"][0]
-    chk(list(lancee) == list(attendue),
+    lancees = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(lancees and list(lancees[0]) == list(attendue),
         f"la ligne de commande est CELLE du registre des stimulus, à l'identique "
-        f"({list(lancee)} pour {list(attendue)})")
-    chk("--calibrer" in lancee,
-        f"...et elle porte `--calibrer` : c'est la fenêtre en mode CALIBRATION ({lancee})")
+        f"({lancees} pour {list(attendue)})")
+    chk(lancees and "--calibrer" in lancees[0],
+        f"...et elle porte `--calibrer` : c'est la fenêtre en mode CALIBRATION ({lancees})")
 
     # Deux fenêtres publieraient les mêmes marqueurs sous le même nom, et le moteur mélangerait
     # les deux séances sans rien signaler. Le second lancement est refusé — et le refus se VOIT.
@@ -1553,6 +1566,48 @@ def _smoke():
         f"une fenêtre arrêtée par la console ne s'annonce pas comme une panne "
         f"({console.banner.fenetre.text()!r})")
 
+    # --- le lanceur contre un VRAI `QProcess` ------------------------------------------------
+    # Tout ce qui précède tourne sur un `QProcess` de façade : ça prouve la LOGIQUE du lanceur, et
+    # rien du contact avec Qt. Une signature qui changerait (`finished(int, ExitStatus)`, un
+    # `readAllStandardOutput` qui rend un `QByteArray`) laisserait ces assertions vertes et
+    # n'échouerait qu'en séance — sous la forme exacte du défaut qu'on répare : la fenêtre meurt,
+    # et rien ne le dit.
+    #
+    # ⚠️ Ce n'est PAS un pygame : c'est un `python -c` qui écrit sur stderr et sort en 3, borné par
+    # `waitForFinished`. Un smoke qui ouvre une fenêtre plein écran en CI est un smoke qu'on
+    # désactive, et le jour où on le désactive on perd tout ce bloc. La commande est détournée le
+    # temps de ce test SEULEMENT — en production, `stimulus/registry.py` en reste la seule source,
+    # et c'est vérifié plus haut sur la ligne de commande réellement lancée.
+    from console import fenetres as mod_fenetres
+    vraie_commande = mod_fenetres.stimulus_registry.commande
+    try:
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False: [
+            sys.executable, "-u", "-c",
+            "import sys; sys.stderr.write('BOUM : dépendance absente\\n'); sys.exit(3)"]
+        vrai = LanceurFenetre()
+        chk(vrai.lancer("p300", calibrer=True).get("accepted"),
+            "un VRAI QProcess démarre")
+        vrai._proc.waitForFinished(5000)
+        app.processEvents()
+        chk(not vrai.en_cours(), "...et le lanceur le voit terminé (signal `finished` reçu)")
+        chk("code 3" in vrai.probleme and "BOUM" in vrai.probleme,
+            f"...avec son code de sortie ET sa dernière ligne de stderr, non tamponnée grâce au "
+            f"`-u` du registre ({vrai.probleme})")
+        # L'autre mort, celle où `finished` n'arrive JAMAIS : exécutable introuvable. Sans la
+        # branche `errorOccurred`, le lanceur resterait « en cours » pour toujours et le bouton
+        # redeviendrait silencieux.
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False: [
+            "programme-qui-nexiste-pas-12345"]
+        introuvable = vrai.lancer("p300")
+        app.processEvents()
+        chk(not introuvable.get("accepted") and not vrai.en_cours(),
+            f"un exécutable introuvable est rendu comme un REFUS, pas comme un succès qui "
+            f"n'arrivera jamais ({introuvable})")
+        chk("n'a pas DÉMARRÉ" in vrai.probleme,
+            f"...et il le dit à l'écran ({vrai.probleme[:60]}…)")
+    finally:
+        mod_fenetres.stimulus_registry.commande = vraie_commande
+
     # ⚠️ Le mode P300 qui DÉCODE pendant qu'on lance sa calibration : les deux liraient la même
     # file de marqueurs, et le moteur REFUSE (tâche 5). La console arrête donc le mode elle-même —
     # mais `stop_mode` est mis en FILE : soumettre `start_calibration` dans la foulée serait
@@ -1573,7 +1628,7 @@ def _smoke():
     noms = [e[0] for e in journal]
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode", "start_calibration"],
         f"dès qu'il a rendu la main, la calibration part toute seule ({journal})")
-    chk(noms.index("fenetre") > noms.index("commande", 1),
+    chk(0 <= rang(noms, "commande", 1) < rang(noms, "fenetre"),
         f"...et la fenêtre vient encore APRÈS `start_calibration` ({journal})")
     console.lanceur.arreter()
 
@@ -1603,9 +1658,9 @@ def _smoke():
     chk(console.stack.currentWidget() is console.contact,
         "« Lancer le stimulus » passe lui aussi par le contrôle de liaison")
     console.contact.bouton_lancer.click()
-    lancee = [e[1] for e in journal if e[0] == "fenetre"][0]
-    chk(list(lancee) == list(stim_registry.commande("p300")),
-        f"...et lance la fenêtre en mode DÉCODAGE, sans --calibrer ({list(lancee)})")
+    lancees = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(lancees and list(lancees[0]) == list(stim_registry.commande("p300")),
+        f"...et lance la fenêtre en mode DÉCODAGE, sans --calibrer ({lancees})")
     chk(not [e for e in journal if e[0] == "commande"],
         f"...sans soumettre la moindre commande au moteur : le mode se démarre depuis la grille "
         f"({journal})")
