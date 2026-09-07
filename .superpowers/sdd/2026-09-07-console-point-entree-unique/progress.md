@@ -50,3 +50,33 @@ précédent : 0 régression dans 2000 lignes de code relu, 1 régression et 8 fa
 - **Cas gelé par choix** : tous les essais annoncés reçus mais `calib_end` perdu → attente
   indéfinie, sortie par « Abandonner ». Entraîner quand même ferait un second déclencheur à côté
   de `calib_end`, donc une seconde vérité.
+- **Task 4 : complete** — `93c7d8a` → `b0c0f01` (7 commits), sous-agent `a508d4a9a16656036`,
+  interrompu une fois par une erreur d'API et relancé sur son contexte intact (rien de perdu).
+  Vérifié par moi : les 7 autotests verts, et **`data/` intact — contrôlé par HORODATAGE**, rien
+  de postérieur au 2026-08-17 (`git status` ne prouve rien, `data/` est gitignoré).
+  ⚠️ **Défaut réel trouvé et corrigé (`e3199bb`)** : `P300Model` était construit avec ses `pre_s`/
+  `post_s` PAR DÉFAUT alors que les époques étaient découpées avec ceux de `P300Runtime`. Mêmes
+  nombres aujourd'hui, donc tous les tests verts — et le jour où quelqu'un déplace
+  `P300Runtime.pre_s`, le mode aurait refusé le modèle qu'on venait de calibrer en accusant le
+  modèle. Le découpage, lui, était bien identique (structurel, via le socle) : c'est ce qui en
+  était SAUVEGARDÉ qui ne l'était pas.
+  Deux trouvailles de chemin : le cycle d'import `p300 ↔ p300_calib` casse vraiment
+  `python src/core/modes/p300.py` (mesuré) — **patron d'import tardif à reprendre en T7 et T8** ;
+  et un `ok and helper(...)` court-circuitait le bout-à-bout du sous-agent exactement quand il
+  servait.
+
+## Réserves à porter (mise à jour)
+
+- 🔴 **T5** : vol de marqueurs mode↔calibration (`markers_murs`, un curseur par `mode_id`). Refus
+  attendu côté `server.submit`, DANS LES DEUX SENS. Toujours entier.
+- 🔴 **T6, ordre de lancement** : la fenêtre attend 15 s à partir de SON lancement, le moteur
+  compte sa chauffe à partir de `start_calibration`. Il n'existe AUCUNE poignée de main entre les
+  deux processus — le sous-agent n'en a pas inventé, à raison. La console doit donc envoyer
+  `start_calibration` D'ABORD, puis lancer la fenêtre : l'initialisation pygame (~3 s) plus
+  l'attente de la fenêtre couvrent alors la chauffe du moteur. À TESTER, sinon les premières
+  manches tombent dans la chauffe — jetées, comptées, dites, mais la séance est plus courte que ce
+  que l'écran annonce.
+- ⚠️ **T11** : `docs/markers.md` et `docs/SPEC.md` ignorent encore `calib_start`/`cue`/`calib_end`.
+  Le contrat PUBLIC a bougé.
+- ⚠️ `research/p300_calibrate.py` reste un second chemin vers un modèle, avec son épochage propre
+  (horloge pygame). Réduit et marqué, pas supprimé — à trancher à la revue finale.
