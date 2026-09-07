@@ -60,6 +60,7 @@ from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.modes import registry  # noqa: E402
+from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 from core.server import EngineServer  # noqa: E402
 
 REFRESH_MS = 100    # ~10 Hz : le moteur décide à 5 Hz, sonder plus vite ne montrerait rien de plus
@@ -91,6 +92,9 @@ class Console(QMainWindow):
         # passé, le mode qu'on attend de voir s'arrêter avant de démarrer sa calibration.
         self._demande = None
         self._attente = None
+        # Une calibration soumise dont la fenêtre a refusé de s'ouvrir. Elle doit être annulée,
+        # mais pas avant que le moteur ne l'ait réellement démarrée — cf. `_suivre_attente`.
+        self._a_annuler = False
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -278,7 +282,22 @@ class Console(QMainWindow):
         self._demarrer_calibration(demande)
 
     def _suivre_attente(self, state):
-        """Le mode qu'on attendait s'est-il arrêté ? Appelée à chaque rafraîchissement."""
+        """Ce qu'on attend du moteur, tour par tour. Appelée à chaque rafraîchissement.
+
+        Deux attentes, et toutes les deux existent pour la MÊME raison : `submit` ne fait que
+        mettre en file, donc une commande soumise juste après une autre juge un moteur qui n'a pas
+        encore appliqué la première.
+        """
+        # 1. Une calibration soumise dont la fenêtre a refusé de s'ouvrir : on l'annule dès
+        #    qu'elle existe pour de bon. Sans ça, l'écran annonce une annulation qui n'a pas eu
+        #    lieu, avec le décompte de la chauffe qui démarre juste en dessous.
+        if self._a_annuler:
+            calib = (state or {}).get("calibration")
+            if calib is not None and calib.get("phase") not in PHASES_TERMINALES:
+                self._a_annuler = False
+                self.commande("cancel_calibration")
+                self.lanceur.arreter()
+
         if self._attente is None:
             return
         mode_id = self._attente["mode_id"]
@@ -305,12 +324,18 @@ class Console(QMainWindow):
             return          # le moteur mène tout seul le protocole (Motor Imagery)
         ouvert = self._lancer_fenetre(mode_id, calibrer=True)
         if not ouvert.get("accepted"):
-            # La calibration TOURNE, mais personne ne lui enverra de marqueurs : elle attendrait
-            # jusqu'à l'abandon, en comptant une chauffe qui ne mène nulle part. L'annuler et le
-            # dire, plutôt que de laisser l'étudiant devant un décompte qui n'aboutira pas.
-            self.commande("cancel_calibration")
+            # La calibration EST PARTIE, mais personne ne lui enverra de marqueurs : elle
+            # attendrait jusqu'à l'abandon, en comptant une chauffe qui ne mène nulle part.
+            #
+            # ⚠️ On ne peut PAS l'annuler tout de suite : `start_calibration` vient d'être mise en
+            # FILE, la boucle ne l'a pas encore appliquée, donc `self.calibration` est encore
+            # `None` côté moteur et `submit("cancel_calibration")` répond « aucune calibration en
+            # cours ». Annuler ici et écrire « la calibration a été annulée » serait une phrase
+            # FAUSSE à l'écran, avec un décompte qui démarre juste en dessous. On note donc
+            # l'annulation, et `_suivre_attente` la soumet dès que la séance apparaît.
+            self._a_annuler = True
             self._avis(mode_id,
-                       f"{ouvert.get('reason', '')}\nLa calibration a été annulée : sans sa "
+                       f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa "
                        f"fenêtre, le moteur attendrait des marqueurs qui ne viendront jamais.")
 
     def _lancer_fenetre(self, mode_id, calibrer):
@@ -331,6 +356,7 @@ class Console(QMainWindow):
         séance qui n'existe plus — et la calibration SUIVANTE hériterait de ses premières manches.
         """
         self._attente = None
+        self._a_annuler = False       # le geste explicite prime sur l'annulation en attente
         self.commande("cancel_calibration")
         self.lanceur.arreter()
 
@@ -1607,6 +1633,34 @@ def _smoke():
             f"...et il le dit à l'écran ({vrai.probleme[:60]}…)")
     finally:
         mod_fenetres.stimulus_registry.commande = vraie_commande
+
+    # Une calibration dont la FENÊTRE refuse de s'ouvrir : le moteur attendrait des marqueurs qui
+    # ne viendront jamais, en comptant une chauffe qui ne mène nulle part. La console l'annule —
+    # mais PAS tout de suite : `start_calibration` vient d'être mise en file, donc
+    # `cancel_calibration` soumise dans la foulée s'entendrait dire « aucune calibration en
+    # cours », et l'écran annoncerait une annulation qui n'a pas eu lieu, décompte à l'appui.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    console.lanceur.lancer("p300")                 # une fenêtre occupe déjà la place
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk("tourne déjà" in cal_p3.avis.text() and "annulée" in cal_p3.avis.text(),
+        f"une fenêtre indisponible annule la calibration, et le DIT ({cal_p3.avis.text()[:80]}…)")
+    chk([e[1] for e in journal if e[0] == "commande"] == ["start_calibration"],
+        f"...sans soumettre `cancel_calibration` à un moteur qui n'a encore rien démarré "
+        f"({journal})")
+    # La séance apparaît : c'est MAINTENANT que l'annulation part, sans un clic de plus.
+    en_chauffe = {**p300_pret, "calibration": {
+        "mode_id": "p300", "label": "Calibrer le P300", "phase": "chauffe", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 12.0, "essai": 0,
+        "total": 12, "duree_estimee_s": 132.0, "params": {}, "resultat": None, "probleme": "",
+        "candidat": None}}
+    console.apply_state(en_chauffe)
+    chk([e[1] for e in journal if e[0] == "commande"]
+        == ["start_calibration", "cancel_calibration"],
+        f"...mais dès que la séance existe, l'annulation part toute seule ({journal})")
+    console.lanceur.arreter()
 
     # ⚠️ Le mode P300 qui DÉCODE pendant qu'on lance sa calibration : les deux liraient la même
     # file de marqueurs, et le moteur REFUSE (tâche 5). La console arrête donc le mode elle-même —
