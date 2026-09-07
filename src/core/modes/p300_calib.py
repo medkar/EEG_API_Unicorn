@@ -56,9 +56,10 @@ from collections import namedtuple
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (DATA_DIR, P300_CAL_ROUNDS, P300_EPOCH_S,  # noqa: E402
-                         P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
-                         P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS, use_utf8_console)
+from core.config import (CALIB_CANDIDAT_PREFIXE, P300_CAL_ROUNDS,  # noqa: E402
+                         P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS,
+                         P300_N_TARGETS, P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS,
+                         use_utf8_console)
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 from core.p300_decoder import NONTARGET, TARGET, P300Model  # noqa: E402
 # ⚠️ `core.modes.p300` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
@@ -157,7 +158,7 @@ def horodatage(maintenant=None):
                           _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
-def chemins_libres(dossier, n_manches):
+def chemins_libres(dossier, n_manches, prefixe=""):
     """(chemin du modèle, chemin de l'enregistrement), les DEUX garantis libres au retour.
 
     Jumeau exact de `core/modes/mi_calib.py::_chemins_libres`, et pour la même raison : le format
@@ -168,12 +169,19 @@ def chemins_libres(dossier, n_manches):
 
     Le motif `p300_model*.joblib` est celui que `core/p300_models.MOTIF` cherche : s'en écarter
     produirait un modèle que la console ne proposerait jamais.
+
+    `prefixe` : `CALIB_CANDIDAT_PREFIXE` quand ce qu'on écrit est un CANDIDAT — un fichier qui
+    ne doit correspondre à aucun motif de découverte tant que personne ne l'a retenu (cf. le
+    commentaire de cette constante dans `core/config.py`). Défaut `""` : l'autre appelant,
+    `research/p300_calibrate.py`, écrit directement dans `data/` un modèle définitif, et doit
+    garder le nom que `p300_models` cherche.
     """
     maintenant = _time.time()
     while True:
         stamp = horodatage(maintenant)
-        chemin_modele = _os.path.join(dossier, f"p300_model_{stamp}.joblib")
-        chemin_npz = _os.path.join(dossier, f"p300_calib_{stamp}_n{int(n_manches):02d}.npz")
+        chemin_modele = _os.path.join(dossier, f"{prefixe}p300_model_{stamp}.joblib")
+        chemin_npz = _os.path.join(dossier,
+                                   f"{prefixe}p300_calib_{stamp}_n{int(n_manches):02d}.npz")
         if not _os.path.exists(chemin_modele) and not _os.path.exists(chemin_npz):
             return chemin_modele, chemin_npz
         maintenant += 1.0
@@ -292,10 +300,13 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
 
 def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True,
-                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
+                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S, prefixe=""):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés
-    et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur."""
-    chemin_modele, chemin_npz = chemins_libres(dossier, len(cues))
+    et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
+
+    `prefixe` passe tel quel à `chemins_libres` — voir sa docstring.
+    """
+    chemin_modele, chemin_npz = chemins_libres(dossier, len(cues), prefixe=prefixe)
     return entrainer(epochs, labels, flashed, groups, cues, fs,
                      chemin_modele=chemin_modele, chemin_npz=chemin_npz, evaluer=evaluer,
                      pre_s=pre_s, post_s=post_s)
@@ -321,11 +332,14 @@ class P300Calibration(MarkerCalibrationRuntime):
                          + P300_EPOCH_S)
 
     def __init__(self, spec, params, engine, rng=None, dossier=None):
-        """`dossier` : où écrire. Injectable pour que les tests n'approchent jamais le vrai
-        `data/`, et pour que la tâche 5 puisse faire écrire dans un dossier CANDIDAT — d'où le
-        fait que `_entrainer` ne connaisse aucun autre chemin que `self.dossier`."""
-        super().__init__(spec, params, engine, rng=rng)
-        self.dossier = dossier or DATA_DIR
+        """`dossier` : où écrire — porté par `CalibrationRuntime` et SANS repli sur `DATA_DIR`.
+
+        C'est le moteur qui le donne, et c'est son dossier CANDIDAT temporaire : une calibration
+        qui choisissait elle-même écrivait dans `data/` AVANT d'annoncer sa précision, donc une
+        séance ratée y devenait le modèle le plus récent — celui qui est proposé par défaut —
+        sans que personne ait pu la refuser.
+        """
+        super().__init__(spec, params, engine, rng=rng, dossier=dossier)
         self._attendue = None    # la cible désignée par le dernier `cue` ; None avant le premier
         self._manche = -1        # le numéro de la manche en cours (le GROUPE de la CV)
         self._cues = []          # la cible désignée, manche par manche
@@ -433,8 +447,11 @@ class P300Calibration(MarkerCalibrationRuntime):
         # `self.pre_s`/`self.post_s` : la géométrie avec laquelle le socle vient RÉELLEMENT de
         # découper ces époques, lue sur le runtime de décodage. Le modèle la porte, et le mode la
         # compare à la sienne avant d'accepter de décoder (`p300.py::_desaccord_geometrie`).
-        return entrainer_dans(self.dossier, epochs, labels, flashed, groups, cues, fs,
-                              pre_s=self.pre_s, post_s=self.post_s)
+        # `CALIB_CANDIDAT_PREFIXE` : ce qui sort d'ici est un CANDIDAT, invisible à
+        # `p300_model*.joblib` tant que personne ne l'a retenu (cf. `core/config.py`).
+        return entrainer_dans(self.dossier_ou_lever(), epochs, labels, flashed, groups, cues, fs,
+                              pre_s=self.pre_s, post_s=self.post_s,
+                              prefixe=CALIB_CANDIDAT_PREFIXE)
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -470,10 +487,12 @@ def _selftest():
     l'entraînement porte sur quelque chose, et le test peut juger le CONTENU, pas seulement la
     plomberie.
     """
+    import glob as _glob
     import shutil
     import tempfile
+    from fnmatch import fnmatch
 
-    from core.config import empreinte_dossier
+    from core.config import empreinte_dossier, nom_retenu
     from core.modes import p300 as _p300
     from core.p300_decoder import synth_p300_epoch
 
@@ -644,7 +663,7 @@ def _selftest():
         # --- 6. Le modèle est écrit dans le dossier DONNÉ, et jamais dans le vrai data/ --------
         chk(res.get("modele", "").startswith(dossier),
             f"le modèle est écrit dans le dossier reçu ({res.get('modele')})")
-        chk(_os.path.basename(res.get("modele", "")).startswith("p300_model_")
+        chk(nom_retenu(res.get("modele", "")).startswith("p300_model_")
             and res.get("modele", "").endswith(".joblib"),
             f"...sous un nom HORODATÉ, jamais fixe ({_os.path.basename(res.get('modele', ''))})")
         chk(bool(res.get("enregistrement")) and _os.path.exists(res["enregistrement"]),
@@ -652,9 +671,21 @@ def _selftest():
 
         from core import p300_models
 
-        chk(p300_models.modeles_disponibles(dossier) == [res.get("modele")],
-            f"le modèle produit est VISIBLE dans la liste de la console — c'est le motif "
-            f"`{p300_models.MOTIF}` qui le veut ({p300_models.modeles_disponibles(dossier)})")
+        # ⚠️ L'INVERSE de ce que ce test exigeait avant le chantier « seul point d'entrée » : ce
+        # qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE tant
+        # que quelqu'un ne l'a pas retenu. Le préfixe le rend invisible au motif de découverte —
+        # sans lui, un candidat oublié dans son dossier temporaire redeviendrait « le modèle
+        # chargeable le plus récent » le jour où ce dossier serait scanné, c'est-à-dire le défaut
+        # que ce chantier ferme, rouvert par sa propre correction.
+        chk(_os.path.basename(res.get("modele", "")).startswith(CALIB_CANDIDAT_PREFIXE),
+            f"le modèle produit est un CANDIDAT, marqué comme tel "
+            f"({_os.path.basename(res.get('modele', ''))})")
+        chk(p300_models.modeles_disponibles(dossier) == [],
+            f"...donc INVISIBLE au motif `{p300_models.MOTIF}` : rien à découvrir dans son "
+            f"dossier ({p300_models.modeles_disponibles(dossier)})")
+        chk(fnmatch(nom_retenu(res.get("modele", "")), p300_models.MOTIF),
+            f"...mais le nom sous lequel il sera RETENU, lui, correspond au motif — sinon le "
+            f"modèle enregistré ne serait jamais proposé ({nom_retenu(res.get('modele', ''))})")
 
         # --- 6bis. Le modèle produit est ACCEPTÉ par le mode qui décodera avec -----------------
         # `P300Runtime.__init__` refuse un modèle dont la géométrie d'époque n'est pas celle qu'il
@@ -693,8 +724,22 @@ def _selftest():
             f"une séance trop pauvre refuse d'entraîner ({rt_court.phase}, {rt_court.probleme})")
         chk("Refais une séance plus longue" in rt_court.probleme,
             f"...en disant quoi faire ({rt_court.probleme})")
-        chk(len(p300_models.modeles_disponibles(dossier)) == 1,
-            "...et n'ajoute AUCUN modèle à la liste")
+        chk(len(_glob.glob(_os.path.join(dossier, "*p300_model*.joblib"))) == 1,
+            f"...et n'écrit AUCUN second fichier de modèle "
+            f"({_glob.glob(_os.path.join(dossier, '*p300_model*.joblib'))})")
+
+        # Une calibration sans dossier ne retombe PAS sur `data/` : elle refuse, en disant qui
+        # aurait dû lui en donner un. C'est le repli silencieux qui faisait proposer une séance
+        # ratée comme modèle par défaut.
+        rt_sans = P300Calibration(_p300.SPEC, {}, _MoteurFactice(eeg, ts))
+        try:
+            rt_sans.dossier_ou_lever()
+            refus_dossier = None
+        except ValueError as e:
+            refus_dossier = str(e)
+        chk(refus_dossier is not None and "data/" in refus_dossier,
+            f"sans dossier, la calibration REFUSE au lieu de retomber sur data/ "
+            f"({(refus_dossier or 'aucun refus')[:70]}…)")
 
         # --- 8. Les marqueurs mal formés sont refusés, pas étiquetés au hasard -----------------
         moteur_r = _MoteurFactice(eeg, ts)

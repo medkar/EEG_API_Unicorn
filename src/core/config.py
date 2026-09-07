@@ -351,6 +351,54 @@ CALIB_FENETRE_SILENCE_S = 15.0
 # récent est celui que le moteur ÉLIT par défaut — un modèle à moitié écrit y serait donc proposé.
 CALIB_TMP_PREFIX = "calib_candidat_"
 
+# Préfixe du NOM DE FICHIER d'un candidat, à l'intérieur de ce dossier temporaire. Il existe pour
+# une raison unique et sérieuse : **aucun motif de découverte ne doit reconnaître un candidat**.
+# `mi_models.MOTIF` cherche `mi_model*.joblib`, `p300_models.MOTIF` `p300_model*.joblib`,
+# `errp_models.MOTIF` `errp_model*.joblib`, `cvep_models.MOTIFS` `cvep_model*.npz` et
+# `cvep_rcca_model*.npz` — et `glob` compare le nom ENTIER, donc n'importe quel préfixe suffit à
+# rendre le fichier invisible. Sans lui, un candidat oublié (nettoyage sauté, dossier temporaire
+# rouvert par erreur, chemin pointé sur `data/` par un futur remaniement) redeviendrait « le
+# modèle chargeable le plus récent » : le défaut que ce chantier ferme, rouvert par sa propre
+# correction.
+CALIB_CANDIDAT_PREFIXE = "candidat_"
+
+
+def nom_retenu(chemin):
+    """Le NOM DE FICHIER sous lequel un candidat sera retenu : son basename SANS le préfixe.
+
+    L'inverse exact de ce que `chemins_libres(..., prefixe=CALIB_CANDIDAT_PREFIXE)` construit,
+    côté `mi_calib` et `p300_calib`. Rend un basename, jamais un chemin : la destination n'est
+    pas le dossier d'origine (`DATA_DIR`), et rendre un chemin inviterait à l'utiliser tel quel.
+
+    Un candidat SANS le préfixe est rendu tel quel plutôt que refusé : le fichier existe et vaut
+    plusieurs minutes de séance, l'enregistrer sous son propre nom vaut mieux que la perdre. Le
+    manquement, lui, est DIT ailleurs et fort (`EngineServer._candidats_visibles`).
+    """
+    nom = _os.path.basename(chemin)
+    return nom[len(CALIB_CANDIDAT_PREFIXE):] if nom.startswith(CALIB_CANDIDAT_PREFIXE) else nom
+
+
+def chemin_libre(dossier, nom):
+    """Un chemin dans `dossier` qui n'existe PAS, dérivé de `nom`. N'écrase jamais rien.
+
+    `nom` tel quel s'il est libre, sinon `base-2.ext`, `base-3.ext`… Le suffixe est inséré AVANT
+    l'extension, et jamais devant : les motifs de découverte (`mi_model*.joblib`) filtrent sur le
+    DÉBUT du nom et sur l'extension — un suffixe ajouté à la fin (`…joblib-2`) rendrait le modèle
+    retenu invisible dans la console, ce qui est exactement l'accident qu'on cherche à éviter.
+
+    Le format des noms a une résolution d'une SECONDE (`AAAAMMJJ-HHMMSS`) : deux modèles retenus
+    dans la même seconde, ou un candidat re-déposé après un premier enregistrement, produiraient
+    sinon le même nom — et `shutil.move` écrase sans rien demander. C'est la panne qui a coûté
+    ses époques à une séance MI à 42 essais, transposée à l'étape d'enregistrement.
+    """
+    base, ext = _os.path.splitext(nom)
+    chemin = _os.path.join(dossier, nom)
+    n = 1
+    while _os.path.exists(chemin):
+        n += 1
+        chemin = _os.path.join(dossier, f"{base}-{n}{ext}")
+    return chemin
+
 
 # --- c-VEP (3e mode : code-VEP, codes pseudo-aléatoires) ---------------------
 # Toutes les cibles affichent LE MÊME code (m-séquence), décalé circulairement. Le décodage
@@ -1074,6 +1122,48 @@ def _selftest():
     jeu, note = propose_frequencies(60.0, 1, 9.6)
     chk(len(jeu) == 1 and note == "",
         f"n=1 : une seule fréquence retournée ({jeu[0] if jeu else 'ÉCHOUÉ'})")
+
+    # --- le nom d'un CANDIDAT : réversible, et le suffixe anti-écrasement ---------------------
+    # ⚠️ Ce qu'on ne peut PAS vérifier ici, et qui est le verrou de la tâche « data/ écrit à un
+    # seul endroit » : qu'un nom préfixé échappe aux motifs des QUATRE catalogues. Ce fichier est
+    # importé PAR eux (`mi_models` fait `from core.config import DATA_DIR`) ; les importer ici
+    # inverserait la dépendance, et le ferait sous deux noms de module distincts dès qu'on lance
+    # `python src/core/config.py`. Ce contrôle-là vit donc dans `server.py::_smoke_candidat`, qui
+    # a déjà tout le paquet sous la main.
+    import fnmatch as _fnmatch
+
+    chk(nom_retenu("/un/dossier/" + CALIB_CANDIDAT_PREFIXE + "mi_model_1.joblib")
+        == "mi_model_1.joblib",
+        "`nom_retenu` ôte le préfixe et rend un BASENAME — la destination n'est pas le dossier "
+        "d'origine")
+    chk(nom_retenu("/x/mi_model_1.joblib") == "mi_model_1.joblib",
+        "un fichier SANS préfixe est rendu tel quel : mieux vaut l'enregistrer sous son propre "
+        "nom que perdre une séance parce que le préfixe manquait")
+
+    # `chemin_libre` : le suffixe s'insère AVANT l'extension, sinon le modèle retenu deviendrait
+    # invisible dans la console — l'accident exact qu'on cherche à éviter.
+    import tempfile as _tempfile
+
+    sonde = _tempfile.mkdtemp(prefix="config_libre_")
+    try:
+        premier = chemin_libre(sonde, "mi_model_20260907-101112.joblib")
+        chk(_os.path.basename(premier) == "mi_model_20260907-101112.joblib",
+            f"un nom libre est rendu tel quel ({_os.path.basename(premier)})")
+        open(premier, "wb").close()
+        second = chemin_libre(sonde, "mi_model_20260907-101112.joblib")
+        open(second, "wb").close()
+        troisieme = chemin_libre(sonde, "mi_model_20260907-101112.joblib")
+        chk(_os.path.basename(second) == "mi_model_20260907-101112-2.joblib"
+            and _os.path.basename(troisieme) == "mi_model_20260907-101112-3.joblib",
+            f"un nom pris est décliné, sans jamais écraser ({_os.path.basename(second)}, "
+            f"{_os.path.basename(troisieme)})")
+        chk(_fnmatch.fnmatch(_os.path.basename(second), "mi_model*.joblib"),
+            f"…et le nom décliné reste DÉCOUVRABLE : un suffixe posé APRÈS l'extension rendrait "
+            f"le modèle retenu invisible ({_os.path.basename(second)})")
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(sonde, ignore_errors=True)
 
     print(f"[config] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

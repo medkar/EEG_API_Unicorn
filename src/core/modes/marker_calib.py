@@ -109,8 +109,8 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
     # de plus ; il doit seulement être > 0 pour que `check()` ne le signale pas comme oublié.
     imagery_s = None
 
-    def __init__(self, spec, params, engine, rng=None):
-        super().__init__(spec, params, engine, rng=rng)
+    def __init__(self, spec, params, engine, rng=None, dossier=None):
+        super().__init__(spec, params, engine, rng=rng, dossier=dossier)
         self._annonce_recue = False     # un `calib_start` est arrivé (la fenêtre est VIVANTE)
         self._essais_annonces = 0       # le champ `trials` de cet annonce ; 0 = inconnu
         self._debut = None              # instant du premier tick (horloge de l'appelant)

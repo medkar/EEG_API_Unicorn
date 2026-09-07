@@ -49,14 +49,23 @@ class CalibrationRuntime:
     warmup_s = 15.0         # stabilisation du casque, JETÉE (dérive DC de l'Unicorn)
     warmup_per_class = 2    # essais d'échauffement NON enregistrés
 
-    def __init__(self, spec, params, engine, rng=None):
+    def __init__(self, spec, params, engine, rng=None, dossier=None):
         """`spec` : le `ModeSpec` du mode calibré. `params` : les réglages VALIDÉS de la calibration.
 
         `rng` est injectable pour que le test obtienne un ordre reproductible. En séance il est
         tiré au hasard, et il DOIT l'être : un ordre fixe apprendrait au sujet à anticiper la
         classe suivante, ce qui contamine l'imagerie par de l'attente motrice.
+
+        `dossier` : OÙ écrire le modèle et son enregistrement. Il vit sur la classe de BASE, donc
+        toute calibration l'accepte, et le moteur peut le passer sans savoir laquelle il
+        construit (`EngineServer._start_calibration`). ⚠️ **Aucun défaut, surtout pas `DATA_DIR`** :
+        une calibration qui choisissait elle-même son dossier écrivait dans `data/` AVANT
+        d'annoncer sa précision, donc une séance ratée y devenait le modèle le plus récent — donc
+        le défaut proposé — sans que personne ait pu la refuser. Une calibration ne décide plus
+        où elle écrit ; cf. `dossier_ou_lever`.
         """
         self.spec = spec
+        self.dossier = dossier
         self.calib = spec.calibration
         self.params = dict(params)
         self.engine = engine
@@ -84,8 +93,27 @@ class CalibrationRuntime:
         return ""
 
     def _entrainer(self, enregistre, fs):
-        """Entraîne et sauvegarde. Rend le dict de résultat, ou lève avec un message lisible."""
+        """Entraîne et sauvegarde. Rend le dict de résultat, ou lève avec un message lisible.
+
+        ⚠️ Le chemin d'écriture vient de `dossier_ou_lever()` et de NULLE PART ailleurs — pas
+        d'un défaut de configuration, pas d'un `or DATA_DIR`.
+        """
         raise NotImplementedError
+
+    def dossier_ou_lever(self):
+        """Le dossier d'écriture, ou une exception LISIBLE — jamais un repli silencieux.
+
+        `_terminer` attrape déjà ce qui lève et le solde en « annulé » avec sa raison affichée :
+        un oubli se voit donc à l'écran, sur la calibration qui l'a commis, plutôt que de
+        produire un modèle à un endroit que personne n'a demandé.
+        """
+        if not self.dossier:
+            raise ValueError(
+                f"{type(self).__name__} n'a reçu aucun dossier d'écriture. C'est le MOTEUR qui le "
+                f"donne (`EngineServer.calib_dir`, un dossier CANDIDAT temporaire), pour que le "
+                f"résultat soit ANNONCÉ avant d'être retenu. Retomber sur `data/` est exactement "
+                f"ce qui faisait proposer une calibration ratée comme modèle par défaut.")
+        return self.dossier
 
     # --- la ligne du temps ---------------------------------------------------
 

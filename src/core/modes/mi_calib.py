@@ -22,9 +22,9 @@ import time as _time
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (DATA_DIR, MI_CUE_S, MI_IMAGERY_S, MI_REST_S,  # noqa: E402
-                         MI_SESSIONS, MI_TRAIN_STEP_S, MI_WARMUP_PER_CLASS, MI_WINDOW_S,
-                         SSVEP_WARMUP_S, use_utf8_console)
+from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa: E402
+                         MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S, MI_WARMUP_PER_CLASS,
+                         MI_WINDOW_S, SSVEP_WARMUP_S, use_utf8_console)
 from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.modes.contract import Calib, Param  # noqa: E402
@@ -73,7 +73,7 @@ def horodatage(maintenant=None):
                           _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
-def _chemins_libres(dossier, n_essais):
+def _chemins_libres(dossier, n_essais, prefixe=""):
     """Le couple (chemin du modèle, chemin de l'enregistrement) pour CETTE séance — les DEUX
     chemins sont GARANTIS libres au moment du retour, sans changer le FORMAT du nom.
 
@@ -82,12 +82,19 @@ def _chemins_libres(dossier, n_essais):
     exactement la panne que l'horodatage existe pour fermer (cf. docstring du module, point 2).
     On avance donc d'une seconde tant que l'un des deux fichiers existe déjà : un décalage de
     quelques secondes sur l'estampille est un prix dérisoire devant la perte d'une séance.
+
+    `prefixe` : ce que la calibration du moteur passe (`CALIB_CANDIDAT_PREFIXE`) pour que le
+    fichier écrit ne corresponde à AUCUN motif de découverte tant qu'il n'est pas retenu — cf. le
+    long commentaire de cette constante dans `core/config.py`. Défaut `""` : un appelant qui écrit
+    un modèle DÉFINITIF (il n'y en a plus dans le dépôt pour le MI, mais le P300 en a un) garde
+    le nom que sa liste cherche. Le préfixe est posé ICI, dans la fonction qui vérifie la liberté
+    du nom, et pas après coup : vérifier un nom puis en écrire un autre ne vérifie rien.
     """
     maintenant = _time.time()
     while True:
         stamp = horodatage(maintenant)
-        chemin_modele = _os.path.join(dossier, f"mi_model_{stamp}.joblib")
-        chemin_npz = _os.path.join(dossier, f"mi_calib_{stamp}_n{n_essais:02d}.npz")
+        chemin_modele = _os.path.join(dossier, f"{prefixe}mi_model_{stamp}.joblib")
+        chemin_npz = _os.path.join(dossier, f"{prefixe}mi_calib_{stamp}_n{n_essais:02d}.npz")
         if not _os.path.exists(chemin_modele) and not _os.path.exists(chemin_npz):
             return chemin_modele, chemin_npz
         maintenant += 1.0
@@ -126,10 +133,11 @@ class MICalibration(CalibrationRuntime):
     window_s = MI_WINDOW_S
     step_s = MI_TRAIN_STEP_S
 
-    def __init__(self, spec, params, engine, rng=None, dossier=None):
-        """`dossier` : où écrire. Injectable pour que les tests n'approchent jamais le vrai `data/`."""
-        super().__init__(spec, params, engine, rng=rng)
-        self.dossier = dossier or DATA_DIR
+    # ⚠️ Plus de `__init__` ici : `dossier` est porté par `CalibrationRuntime`, et il n'a PLUS de
+    # repli sur `DATA_DIR`. C'est le correctif du chantier « seul point d'entrée » : cette
+    # calibration sauvegardait AVANT d'annoncer sa précision, donc une séance ratée devenait
+    # aussitôt le modèle le plus récent de `data/` — celui que le moteur, la console et les
+    # applis proposent par défaut — sans que personne ait pu la refuser.
 
     def instruction(self):
         return INSTRUCTIONS.get(self.classe, "")
@@ -165,12 +173,17 @@ class MICalibration(CalibrationRuntime):
 
         modele = MIModel(fs=fs).fit(np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
 
-        _os.makedirs(self.dossier, exist_ok=True)
+        dossier = self.dossier_ou_lever()
+        _os.makedirs(dossier, exist_ok=True)
         # Le motif `mi_model*.joblib` est celui que `mi_models.modeles_disponibles` cherche :
-        # ne pas s'en écarter, sinon le modèle produit n'apparaîtra jamais dans la liste.
+        # ne pas s'en écarter, sinon le modèle RETENU n'apparaîtra jamais dans la liste.
         # `_chemins_libres` (pas `horodatage` appelée seule) : deux séances qui finissent la
         # même seconde ne doivent PAS produire le même couple de fichiers — cf. sa docstring.
-        chemin_modele, chemin_npz = _chemins_libres(self.dossier, len(enregistre))
+        # ⚠️ `CALIB_CANDIDAT_PREFIXE` : ce qu'on écrit ici est un CANDIDAT, dans le dossier
+        # temporaire du moteur. Le préfixe le rend invisible à `mi_model*.joblib` tant qu'il n'a
+        # pas été retenu ; c'est `save_calibration` qui l'ôte en le déplaçant vers `data/`.
+        chemin_modele, chemin_npz = _chemins_libres(dossier, len(enregistre),
+                                                    prefixe=CALIB_CANDIDAT_PREFIXE)
         # Le `.npz` D'ABORD, le `.joblib` ENSUITE : si `savez` échoue (disque plein, verrou
         # antivirus), l'exception remonte AVANT que le modèle n'existe — aucun fichier orphelin.
         # Dans l'ordre inverse, un `.npz` qui échoue après un `.joblib` déjà écrit laissait un
@@ -240,10 +253,13 @@ CALIB = Calib(
 
 def _selftest():
     """Une séance complète, jouée en accéléré sur du signal FABRIQUÉ, dans un dossier temporaire."""
+    import glob as _glob
     import hashlib
     import shutil
     import tempfile
+    from fnmatch import fnmatch
 
+    from core.config import empreinte_dossier, nom_retenu
     from core.mi_decoder import synth_mi_trial
     from core.modes import mi as _mi
 
@@ -285,6 +301,7 @@ def _selftest():
             return epoque
 
     dossier = tempfile.mkdtemp(prefix="mi_calib_")
+    empreinte_avant = empreinte_dossier()
     try:
         # PAS `is CALIB` : lancé directement (`python src/core/modes/mi_calib.py`), CE fichier
         # tourne en `__main__` avec SON `CALIB`. L'import de `core.modes.mi` juste en dessous
@@ -339,19 +356,31 @@ def _selftest():
             f"le verdict est recalculé depuis la CV HONNÊTE, pas depuis la naïve "
             f"({res['verdict']!r} == verdict({res['cv_groupee']!r}))")
 
-        # Le modèle et l'enregistrement de CETTE séance sont horodatés et visibles dans le
-        # catalogue. (« Rien n'est jamais écrasé » — même à la même seconde — est prouvé plus
-        # bas, par DEUX séances RÉUSSIES : une seule séance ici ne pourrait rien en dire.)
+        # Le modèle et l'enregistrement de CETTE séance sont horodatés. (« Rien n'est jamais
+        # écrasé » — même à la même seconde — est prouvé plus bas, par DEUX séances RÉUSSIES :
+        # une seule séance ici ne pourrait rien en dire.)
         from core import mi_models
 
-        chk(_os.path.basename(res["modele"]).startswith("mi_model_")
+        chk(nom_retenu(res["modele"]).startswith("mi_model_")
             and res["modele"].endswith(".joblib"),
             f"le modèle est horodaté ({_os.path.basename(res['modele'])})")
         chk("_n18.npz" in res["enregistrement"],
             f"l'enregistrement porte le nombre d'essais ({_os.path.basename(res['enregistrement'])})")
-        chk(mi_models.modeles_disponibles(dossier) == [res["modele"]],
-            f"et le modèle produit est VISIBLE dans la liste — c'est le motif "
-            f"`mi_model*.joblib` qui le veut ({mi_models.modeles_disponibles(dossier)})")
+
+        # ⚠️ L'INVERSE de ce que ce test exigeait jusqu'au chantier « seul point d'entrée » : ce
+        # qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE tant
+        # que quelqu'un ne l'a pas retenu. Une calibration ratée devenait sinon, en silence, le
+        # modèle le plus récent — donc celui que le moteur ÉLIT par défaut — avant même que son
+        # chiffre ne s'affiche.
+        chk(_os.path.basename(res["modele"]).startswith(CALIB_CANDIDAT_PREFIXE),
+            f"le modèle produit est un CANDIDAT, marqué comme tel "
+            f"({_os.path.basename(res['modele'])})")
+        chk(mi_models.modeles_disponibles(dossier) == [],
+            f"...donc INVISIBLE au motif `{mi_models.MOTIF}` : rien à découvrir dans son dossier "
+            f"({mi_models.modeles_disponibles(dossier)})")
+        chk(fnmatch(nom_retenu(res["modele"]), mi_models.MOTIF),
+            f"...mais le nom sous lequel il sera RETENU, lui, correspond au motif — sinon le "
+            f"modèle enregistré ne serait jamais proposé ({nom_retenu(res['modele'])})")
 
         d = mi_models.decrire(res["modele"])
         chk(d["cv_groupee"] is not None and abs(d["cv_groupee"] - res["cv_groupee"]) < 1e-9,
@@ -397,8 +426,22 @@ def _selftest():
         chk(court.phase == "annule" and "pas assez de données" in court.probleme,
             f"une séance trop courte refuse d'entraîner, en disant pourquoi "
             f"({court.phase}, {court.probleme})")
-        chk(len(mi_models.modeles_disponibles(dossier)) == 1,
-            "et n'ajoute AUCUN modèle à la liste")
+        chk(len(_glob.glob(_os.path.join(dossier, "*mi_model*.joblib"))) == 1,
+            f"et n'écrit AUCUN second fichier de modèle "
+            f"({[_os.path.basename(p) for p in _glob.glob(_os.path.join(dossier, '*mi_model*.joblib'))]})")
+
+        # Une calibration sans dossier ne retombe PAS sur `data/` : elle refuse, en nommant qui
+        # aurait dû lui en donner un. C'est ce repli silencieux qui faisait proposer une séance
+        # ratée comme modèle par défaut.
+        sans = MICalibration(_mi.SPEC, {"trials_per_class": 1}, None, rng=_random.Random(9))
+        try:
+            sans.dossier_ou_lever()
+            refus_dossier = None
+        except ValueError as e:
+            refus_dossier = str(e)
+        chk(refus_dossier is not None and "data/" in refus_dossier,
+            f"sans dossier, la calibration REFUSE au lieu de retomber sur data/ "
+            f"({(refus_dossier or 'aucun refus')[:70]}…)")
 
         # --- `_chemins_libres` seule, avant l'intégration complète --------------------------
         # Une collision sur le premier essai force une avance d'exactement 1 s, sur les DEUX
@@ -412,8 +455,15 @@ def _selftest():
             open(m1, "wb").close()
             open(n1, "wb").close()
             m2, n2 = _chemins_libres(sonde_dossier, 7)
+            # Le préfixe fait un nom DIFFÉRENT, donc un fichier différent : un candidat n'entre
+            # jamais en collision avec un modèle définitif du même dossier, et réciproquement.
+            m3, _n3 = _chemins_libres(sonde_dossier, 7, prefixe=CALIB_CANDIDAT_PREFIXE)
         finally:
             _time.time = vrai_time
+        chk(_os.path.basename(m3) == CALIB_CANDIDAT_PREFIXE + _os.path.basename(m1)
+            and not _os.path.exists(m3),
+            f"le préfixe candidat s'applique au NOM, et le rend libre indépendamment "
+            f"({_os.path.basename(m3)})")
         chk(m1 != m2 and n1 != n2,
             f"une collision force une avance sur les DEUX chemins "
             f"({_os.path.basename(m1)} -> {_os.path.basename(m2)})")
@@ -472,10 +522,13 @@ def _selftest():
             f"et deux enregistrements DISTINCTS "
             f"({_os.path.basename(res1.get('enregistrement', '?'))} vs "
             f"{_os.path.basename(res2.get('enregistrement', '?'))})")
-        disponibles = mi_models.modeles_disponibles(dossier)
-        chk(res1.get("modele") in disponibles and res2.get("modele") in disponibles,
-            f"et les DEUX modèles sont listés, aucun n'a chassé l'autre "
-            f"({[_os.path.basename(p) for p in disponibles]})")
+        # Les deux fichiers EXISTENT côte à côte, aucun n'a chassé l'autre. On regarde le disque
+        # (`glob`) et non `modeles_disponibles` : un candidat est justement invisible à ce
+        # catalogue-là, et exiger l'inverse ici testerait le contraire de la ligne du dessus.
+        sur_disque = _glob.glob(_os.path.join(dossier, "*mi_model*.joblib"))
+        chk(res1.get("modele") in sur_disque and res2.get("modele") in sur_disque,
+            f"et les DEUX modèles sont sur le disque, aucun n'a chassé l'autre "
+            f"({[_os.path.basename(p) for p in sur_disque]})")
         chk(hash_modele_avant is not None and bool(res1.get("modele"))
             and _hash_fichier(res1["modele"]) == hash_modele_avant,
             "le modèle de la PREMIÈRE séance est resté OCTET POUR OCTET intact après la seconde")
@@ -499,6 +552,10 @@ def _selftest():
             "les verdicts sont calés sur l'échelle HONNÊTE : 40 % n'est pas « utilisable »")
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
+
+    chk(empreinte_dossier() == empreinte_avant,
+        "AUCUN fichier n'a bougé dans le vrai `data/` — il porte des enregistrements EEG d'une "
+        "personne identifiable, et son modèle le plus récent est celui que le moteur ÉLIT")
 
     print(f"[mi-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

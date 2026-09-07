@@ -71,17 +71,20 @@ import argparse
 import math
 import os
 import queue
+import shutil
 import signal
 import sys
+import tempfile
 import time
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from core.config import (ALPHA_DEFAUT_HZ, CH_NAMES, MARKER_LATE_S, MARKER_STREAM_DEFAULT,  # noqa: E402
-                    MI_WINDOW_S, NEURO_WINDOW_S, TOLERANCE_DIVISEUR, choose_frequencies,
-                    json_float, propose_frequencies, reference_lost, use_utf8_console)
+from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
+                    MARKER_LATE_S, MARKER_STREAM_DEFAULT, MI_WINDOW_S, NEURO_WINDOW_S,
+                    TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies, json_float,
+                    nom_retenu, propose_frequencies, reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
                     StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
                     verdict_from_sigma)
@@ -148,11 +151,15 @@ class EngineServer:
     """
 
     def __init__(self, serial=None, synthetic=False, verbose=False, modes=("raw",),
-                 params=None, instance=None):
+                 params=None, instance=None, data_dir=None):
         """`modes` : les identifiants à démarrer. `params` : {mode_id: {clé: valeur}}, facultatif.
 
         Un identifiant inconnu ou un réglage invalide lève ici, au démarrage — bruyamment et
         tout de suite, plutôt qu'en séance sur un décodage qui ne détecte jamais rien.
+
+        `data_dir` : où atterrit un modèle qu'on RETIENT. Injectable pour que les tests
+        n'approchent jamais le vrai `data/` — enregistrements EEG d'une personne identifiable, sur
+        un dépôt public, et dont le fichier le plus récent est ce que le moteur ÉLIT par défaut.
         """
         self.synthetic = synthetic
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
@@ -188,6 +195,27 @@ class EngineServer:
         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
         # modèle (le MI) rendrait sa propre calibration inatteignable.
         self.calibration = None
+        # ⚠️ OÙ UNE CALIBRATION ÉCRIT, ET OÙ ELLE N'ÉCRIT PAS.
+        # Jusqu'au 2026-09-07, une calibration sauvegardait DANS `data/` puis annonçait sa
+        # précision. Comme le moteur, la console et les applis proposent tous le modèle
+        # chargeable le PLUS RÉCENT, une séance ratée devenait le défaut — en silence, et sans
+        # que personne puisse la refuser : quand le chiffre s'affichait, le fichier était déjà là.
+        # Désormais elle écrit un CANDIDAT dans un dossier temporaire propre à CE moteur, et
+        # `save_calibration` est le seul geste qui touche `data/`.
+        self.data_dir = data_dir or DATA_DIR
+        # ⚠️ ÉCART AU BRIEF, assumé : le dossier est créé à la PREMIÈRE calibration, pas à la
+        # construction du moteur. Sa seule différence observable est le déchet : `run()` le
+        # balaie dans son `finally`, mais tous les `EngineServer` construits SANS être lancés —
+        # une dizaine par passage de `--smoke`, plus tous ceux d'un `--mode` refusé — laisseraient
+        # un dossier vide de plus dans le temporaire du système à chaque fois, que rien n'efface
+        # jamais sous Windows. Ce qui compte du brief est tenu : un dossier par moteur, créé par
+        # le moteur, jamais partagé. Cf. `_dossier_candidat`.
+        self.calib_dir = None
+        self.candidat = None        # le dict rendu par `_entrainer`, tant qu'il n'est pas tranché
+        # La calibration DONT le candidat courant provient. Sert à n'adopter le résultat qu'UNE
+        # fois : sans elle, `save`/`discard` remettraient `candidat` à None et le tour de boucle
+        # suivant le ré-adopterait depuis une calibration toujours en phase « fini ».
+        self._candidat_de = None
         self.rest_instruction = ""  # la consigne du repos en cours, partagée s'il l'est
         self._stop = False
         self._last_tick = {}
@@ -484,11 +512,169 @@ class EngineServer:
         if refus:
             print(f"[server] calibration refusée : {refus}")
             return
-        self.calibration = spec.calibration.runtime_cls(spec, values, self)
+        # Un candidat encore en attente appartient à la séance PRÉCÉDENTE. Le garder pendant
+        # qu'une nouvelle tourne laisserait « Enregistrer » actif sur un résultat qui n'est plus
+        # celui qu'on regarde — et personne ne saurait lequel des deux part dans `data/`.
+        self._efface_candidat("une nouvelle calibration commence")
+        # `dossier=` : le dossier CANDIDAT, et il est passé à TOUTES les calibrations sans
+        # distinction — l'argument vit sur `CalibrationRuntime`, pas sur telle ou telle
+        # sous-classe. C'est ce qui empêche une calibration future de retomber sur `data/` :
+        # elle n'a plus de défaut à retomber dessus (cf. `dossier_ou_lever`).
+        self.calibration = spec.calibration.runtime_cls(spec, values, self,
+                                                        dossier=self._dossier_candidat())
         print(f"[server] {spec.calibration.label or spec.label} : "
               f"{self.calibration.total()} essais, "
               f"≈ {self.calibration.duree_estimee_s() / 60:.0f} min — "
               f"stabilisation {self.calibration.warmup_s:.0f} s d'abord")
+
+    # --- le candidat : produit, montré, puis retenu ou jeté --------------------
+    # `_entrainer` écrit dans `self.calib_dir`. Le résultat est ADOPTÉ ici (une fois), affiché par
+    # la console, et ne rejoint `data/` que sur `save_calibration`. Trois gestes, dans cet ordre —
+    # c'est tout le correctif : avant, l'écriture précédait l'annonce.
+
+    _FICHIERS_CANDIDAT = ("modele", "enregistrement")
+
+    def _dossier_candidat(self):
+        """Le dossier temporaire de CE moteur, créé au premier besoin. Jamais `data/`.
+
+        Appelée par `_start_calibration` et par elle seule : c'est le seul moment où quelqu'un a
+        quelque chose à y écrire. `close()` le supprime ; un appel ultérieur en recrée un — rien
+        ici ne dépend de sa persistance, et un moteur qui ne calibre jamais n'en a jamais.
+        """
+        if not self.calib_dir or not os.path.isdir(self.calib_dir):
+            self.calib_dir = tempfile.mkdtemp(prefix=CALIB_TMP_PREFIX)
+        return self.calib_dir
+
+    def _adopte_candidat(self):
+        """Ramasse le résultat d'une calibration qui vient d'aboutir. Appelée à chaque tour.
+
+        Idempotente par `_candidat_de` : le résultat d'une calibration donnée n'est adopté qu'une
+        seule fois, sans quoi un candidat enregistré (donc remis à None) serait ré-adopté au tour
+        suivant, avec des chemins qui n'existent plus.
+        """
+        calib = self.calibration
+        if calib is None or calib is self._candidat_de:
+            return
+        if calib.phase != "fini" or not calib.resultat:
+            return
+        self._candidat_de = calib
+        self.candidat = calib.resultat
+        visibles = self._candidats_visibles()
+        if visibles:
+            # Le garde qui protège les calibrations À VENIR (ErrP, c-VEP). Un candidat qui
+            # correspond à un motif de découverte redeviendrait « le modèle chargeable le plus
+            # récent » dès que ce dossier serait scanné — le défaut qu'on ferme, rouvert par sa
+            # propre correction. On le DIT fort plutôt que de jeter un modèle qui vaut plusieurs
+            # minutes de séance.
+            print(f"[server] ⚠️ le candidat de « {calib.spec.label} » est DÉCOUVRABLE par un "
+                  f"catalogue de modèles : {', '.join(os.path.basename(v) for v in visibles)}. "
+                  f"Sa calibration doit écrire avec `prefixe=CALIB_CANDIDAT_PREFIXE` "
+                  f"(cf. core/config.py) — sans ça, un candidat oublié se fait ÉLIRE.")
+        print(f"[server] candidat prêt : {os.path.basename(self.candidat.get('modele') or '?')} "
+              f"— rien n'est encore dans {self.data_dir}. « Enregistrer » ou « Jeter ».")
+
+    def _candidats_visibles(self, dossier=None):
+        """Ce que les QUATRE catalogues de modèles découvriraient dans le dossier candidat.
+
+        Doit rendre `[]`. Les modules sont importés ICI et non en tête : ils ne servent qu'à ce
+        contrôle, qui ne tourne qu'à la fin d'une calibration — et `modeles_disponibles` CHARGE
+        chaque fichier qui correspond, ce qui ne coûte rien quand la réponse est vide.
+        """
+        from core import cvep_models, errp_models, mi_models, p300_models
+
+        dossier = self.calib_dir if dossier is None else dossier
+        if not dossier or not os.path.isdir(dossier):
+            return []
+        trouves = []
+        for module in (mi_models, p300_models, errp_models, cvep_models):
+            try:
+                trouves.extend(module.modeles_disponibles(dossier))
+            except Exception as e:  # noqa: BLE001 - un catalogue qui casse ne doit pas tuer la boucle
+                print(f"[server] catalogue {module.__name__} illisible sur le dossier "
+                      f"candidat : {type(e).__name__} : {e}")
+        return trouves
+
+    def _efface_candidat(self, pourquoi):
+        """Supprime les fichiers du candidat en attente et oublie le verdict. Sans effet s'il
+        n'y en a pas. Ne touche JAMAIS à `data/` : ne sont effacés que des chemins du candidat."""
+        candidat = self.candidat
+        self.candidat = None
+        if not candidat:
+            return
+        for cle in self._FICHIERS_CANDIDAT:
+            chemin = candidat.get(cle)
+            if chemin and os.path.isfile(chemin):
+                try:
+                    os.remove(chemin)
+                except OSError as e:
+                    print(f"[server] candidat non supprimé ({chemin}) : {e}")
+        print(f"[server] candidat jeté — {pourquoi}. Aucun modèle n'a rejoint {self.data_dir}.")
+
+    def _save_calibration(self):
+        """DÉPLACE les fichiers du candidat vers `data_dir`, sous un nom libre. Jamais une copie.
+
+        Déplacer et non copier : une copie laisserait l'original dans le temporaire — bénin, il
+        sera balayé — mais surtout ferait exister le MÊME modèle deux fois, sous deux noms, le
+        temps que le nettoyage passe. `shutil.move` et non `os.replace` : le dossier temporaire du
+        système peut vivre sur un autre volume, où `os.replace` lève `OSError`.
+
+        `chemin_libre` garantit qu'on n'écrase rien : le format d'horodatage a une résolution
+        d'une seconde, et `data/` porte des enregistrements qui ne se refont pas.
+        """
+        candidat = self.candidat
+        if not candidat:
+            print("[server] rien à enregistrer : aucune calibration en attente de décision")
+            return
+        os.makedirs(self.data_dir, exist_ok=True)
+        retenu = dict(candidat)
+        for cle in self._FICHIERS_CANDIDAT:
+            source = candidat.get(cle)
+            if not source or not os.path.isfile(source):
+                continue
+            destination = chemin_libre(self.data_dir, nom_retenu(source))
+            shutil.move(source, destination)
+            retenu[cle] = destination
+            print(f"[server] enregistré : {destination}")
+        if retenu.get("modele"):
+            retenu["nom"] = os.path.basename(retenu["modele"])
+        # Le verdict reste LISIBLE à l'écran, avec les chemins définitifs : on remplace le dict
+        # d'un coup (une affectation d'attribut est atomique) plutôt que de le modifier en place,
+        # que la console pourrait lire à moitié réécrit depuis son propre fil.
+        if self.calibration is not None:
+            self.calibration.resultat = retenu
+        self.candidat = None
+
+    def _discard_calibration(self):
+        """Jette le candidat ET l'écran de verdict : plus rien à décider, plus rien à montrer."""
+        if not self.candidat and self.calibration is None:
+            print("[server] rien à jeter : aucune calibration en attente de décision")
+            return
+        self._efface_candidat("« Jeter » demandé")
+        if self.calibration is not None:
+            # `cancel()` sur une calibration déjà terminée ne change pas sa phase, mais il libère
+            # ses époques et sa référence vers le moteur — le même cycle que les modes actifs.
+            self.calibration.cancel()
+        self.calibration = None
+        self._candidat_de = None
+
+    def close(self):
+        """Libère ce que CE moteur a créé sur le disque. Idempotente, appelable de partout.
+
+        ⚠️ **Inconditionnelle**, et appelée aussi bien par le `finally` de `run()` que par la
+        console qui se ferme : si l'interface disparaît entre l'entraînement et la décision, aucun
+        candidat ne doit survivre. Un `.joblib` orphelin dans un dossier temporaire est inoffensif
+        tant qu'il y reste — mais c'est un modèle EEG d'une personne identifiable, et le premier
+        remaniement qui le déplacerait le ferait élire.
+
+        Le dossier est SUPPRIMÉ, pas vidé. Une calibration démarrée après un `close()` en obtient
+        un neuf (`_dossier_candidat`), et le `close()` suivant le reprendra : rien ne dépend de sa
+        persistance.
+        """
+        self._efface_candidat("le moteur se ferme")
+        self._candidat_de = None
+        if self.calib_dir:
+            shutil.rmtree(self.calib_dir, ignore_errors=True)
+            self.calib_dir = None
 
     # --- API de commande interne (SPEC §12.1) --------------------------------
     # La console et, plus tard, l'adaptateur de commandes LSL passent tous les deux PAR ICI.
@@ -501,7 +687,8 @@ class EngineServer:
     # corruptions qu'aucun test ne rattraperait.
 
     COMMANDS = ("start_mode", "propose_params", "stop_mode", "set_params", "set_published",
-                "recalibrate", "start_calibration", "cancel_calibration", "stop")
+                "recalibrate", "start_calibration", "cancel_calibration", "save_calibration",
+                "discard_calibration", "stop")
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
@@ -645,6 +832,21 @@ class EngineServer:
             self._commands.put(("cancel_calibration", {}))
             return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
+        if command in ("save_calibration", "discard_calibration"):
+            # Une seule lecture de `self.candidat`, comme partout ici : la boucle peut le remettre
+            # à `None` (arrêt du moteur, nouvelle calibration) entre deux lectures, et `submit`
+            # promet en toutes lettres de ne jamais lever.
+            candidat = self.candidat
+            if not candidat:
+                quoi = "enregistrer" if command == "save_calibration" else "jeter"
+                return {"accepted": False,
+                        "reason": f"rien à {quoi} : aucune calibration n'attend de décision. Un "
+                                  f"candidat n'existe qu'entre la fin d'un entraînement et le "
+                                  f"clic qui le retient ou le jette."}
+            self._commands.put((command, {}))
+            return {"accepted": True, "command": command,
+                    "modele": candidat.get("modele")}
+
         spec, reason = self._one(params.get("id"))
         if spec is None:
             return {"accepted": False, "reason": reason}
@@ -724,6 +926,10 @@ class EngineServer:
             if self.calibration is not None:
                 self.calibration.cancel()
                 print(f"[server] calibration abandonnée — aucun modèle produit")
+        elif command == "save_calibration":
+            self._save_calibration()
+        elif command == "discard_calibration":
+            self._discard_calibration()
 
     def _drain_commands(self):
         while True:
@@ -889,7 +1095,17 @@ class EngineServer:
         """
         active = dict(self.active)
         calib = self.calibration
+        # UNE copie, comme pour `calib` : sans elle, un même instantané pourrait porter un
+        # `resultat` déjà déplacé dans `data/` ET le `candidat` d'avant le déplacement.
+        candidat = self.candidat
         state = self._state(not self._stop, active=active, calibration=calib)
+        etat_calib = None if calib is None else calib.state(now=time.perf_counter())
+        if etat_calib is not None:
+            # Ce que la console lit pour savoir s'il reste une DÉCISION à prendre. `resultat` dit
+            # ce que vaut la séance ; `candidat` dit que le fichier n'est encore nulle part.
+            # Après « Enregistrer », `resultat` reste (le verdict est toujours à l'écran) et
+            # `candidat` retombe à None : plus rien à trancher.
+            etat_calib["candidat"] = candidat
         state.update({
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
@@ -897,8 +1113,7 @@ class EngineServer:
             # `now` est passé pour que le décompte affiché soit celui de MAINTENANT, pas celui du
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
-            "calibration": (None if calib is None
-                            else calib.state(now=time.perf_counter())),
+            "calibration": etat_calib,
             # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
             # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
             # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
@@ -1344,6 +1559,10 @@ class EngineServer:
                             self.calibration.phase = "annule"
                             print(f"[server] calibration interrompue par une exception : "
                                   f"{self.calibration.probleme}")
+                    # Hors du `if` ci-dessus, et c'est le point : une calibration qui vient
+                    # d'aboutir EST terminée, donc ce `if` ne l'exécute plus. Son résultat serait
+                    # sinon adopté seulement si une autre calibration démarrait après.
+                    self._adopte_candidat()
 
                     # Publié quand l'état change, plus un rappel périodique pour les clients qui
                     # se connectent après le démarrage (LSL ne rejoue pas le passé).
@@ -1407,6 +1626,11 @@ class EngineServer:
                 if self.calibration is not None:
                     self.calibration.cancel()
                     self.calibration = None
+                # ⚠️ INCONDITIONNEL, dans le `finally` : si le moteur s'arrête entre
+                # l'entraînement et la décision — console fermée, Ctrl+C, exception BrainFlow —
+                # aucun candidat ne doit survivre au processus. `close()` est idempotente, la
+                # console peut donc l'appeler aussi de son côté sans rien casser.
+                self.close()
                 self.active = {}
                 # APRÈS `self.active = {}`, jamais avant : `_libere_marker_inlet` ne lâche que
                 # s'il ne reste plus un seul écouteur, et c'est cette ligne-là qui le garantit.
@@ -1874,11 +2098,20 @@ def _smoke_calibration():
     produit un modèle que `modeles_disponibles` retrouve. L'autotest de `mi_calib.py`, lui, joue
     la même séance sur un faux moteur : il valide le protocole, pas l'intégration.
 
-    Tout est écrit dans un dossier temporaire. Le vrai `data/` n'est jamais approché.
+    Il couvre aussi, depuis le chantier « seul point d'entrée », TOUT LE CYCLE DU CANDIDAT : le
+    modèle est écrit dans le dossier temporaire du moteur, invisible aux quatre catalogues, et ne
+    rejoint `data/` que sur `save_calibration`. C'est ici qu'il faut le vérifier, parce que le
+    candidat y est produit par une VRAIE calibration passée par la boucle — pas fabriqué à la main.
+
+    Tout est écrit dans des dossiers temporaires : le `data/` du moteur est DÉTOURNÉ (`data_dir`),
+    et le vrai est comparé avant/après par son empreinte. Aucun des deux n'est approché.
     """
     import shutil
     import tempfile
     import threading
+    from fnmatch import fnmatch
+
+    from core.config import CALIB_CANDIDAT_PREFIXE, empreinte_dossier
 
     ok = True
 
@@ -1889,19 +2122,22 @@ def _smoke_calibration():
 
     from core.modes import mi_calib
 
-    dossier = tempfile.mkdtemp(prefix="srv_calib_")
+    # Le `data/` DÉTOURNÉ : la destination de `save_calibration`. Le vrai `data/` porte des
+    # enregistrements EEG d'une personne identifiable, sur un dépôt public, et son fichier le plus
+    # récent est celui que le moteur ÉLIT — un modèle de test qui y atterrirait serait proposé à
+    # la prochaine séance casque.
+    data_dir = tempfile.mkdtemp(prefix="srv_data_")
+    empreinte_avant = empreinte_dossier()
     # On raccourcit le protocole POUR LE TEST en remplaçant les durées sur la classe : c'est la
     # seule façon de jouer une séance de sept minutes en quelques secondes sans donner à
     # `CalibrationRuntime` une horloge accélérée, qui serait un chemin de code que la séance
     # réelle n'emprunte jamais.
+    # ⚠️ Plus de monkeypatch de `MICalibration.__init__` ici : c'est le MOTEUR qui donne son
+    # dossier candidat à la calibration, donc le détour n'a plus lieu d'être — et le supprimer
+    # fait de ce test la preuve que ce câblage-là fonctionne.
     anciens = {c: getattr(mi_calib.MICalibration, c)
                for c in ("cue_s", "imagery_s", "rest_s", "warmup_s", "warmup_per_class",
                          "window_s", "step_s")}
-    ancien_init = mi_calib.MICalibration.__init__
-
-    def _init_temporaire(self, spec, params, engine, rng=None, dossier=dossier):
-        ancien_init(self, spec, params, engine, rng=rng, dossier=dossier)
-
     try:
         # ⚠️ `window_s` et `step_s` sont raccourcis AVEC `imagery_s`, pas séparément : avec une
         # imagerie de 0,20 s et une fenêtre restée à 2 s, `decouper` ne rend AUCUNE fenêtre et
@@ -1924,9 +2160,9 @@ def _smoke_calibration():
         mi_calib.MICalibration.warmup_per_class = 1
         mi_calib.MICalibration.window_s = 0.16
         mi_calib.MICalibration.step_s = 0.08
-        mi_calib.MICalibration.__init__ = _init_temporaire
 
-        server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-calib")
+        server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-calib",
+                              data_dir=data_dir)
         # 120 s, pas 60 : la séance mesure ~27 s mais le PAS de boucle (POLL_S, plus la latence
         # des E/S) ajoute couramment ~8,5 s de plus sur ce poste, et un dépassement de
         # `duration_s` arrête le moteur EN PLEINE séance — un échec de timing du test, pas de la
@@ -2034,9 +2270,80 @@ def _smoke_calibration():
 
             from core import mi_models
 
-            produits = mi_models.modeles_disponibles(dossier)
-            chk(len(produits) == 1 and produits[0] == res.get("modele"),
-                f"le modèle produit est chargeable et listé ({produits})")
+            # === LE CYCLE DU CANDIDAT ===================================================
+            # 1. Le candidat vit dans le dossier du MOTEUR, et `data/` n'a RIEN reçu.
+            candidat = server.snapshot().get("calibration", {}).get("candidat")
+            chk(candidat is not None and candidat.get("modele") == res.get("modele"),
+                f"`snapshot()[\"calibration\"][\"candidat\"]` porte le résultat de l'entraînement "
+                f"({None if candidat is None else os.path.basename(candidat.get('modele') or '')})")
+            chk(bool(res.get("modele")) and os.path.dirname(res["modele"]) == server.calib_dir,
+                f"le modèle est écrit dans le dossier CANDIDAT du moteur, pas dans data/ "
+                f"({res.get('modele')})")
+            chk(os.path.basename(res.get("modele", "")).startswith(CALIB_CANDIDAT_PREFIXE),
+                f"…sous un nom qui le marque comme candidat "
+                f"({os.path.basename(res.get('modele', ''))})")
+            chk(os.listdir(data_dir) == [],
+                f"…et une calibration TERMINÉE n'a rien écrit dans data/ : le chiffre s'affiche "
+                f"AVANT que quoi que ce soit ne soit retenu ({os.listdir(data_dir)})")
+
+            # 2. Aucun des QUATRE catalogues ne découvre le candidat. Sans ça, un candidat
+            #    orphelin (nettoyage sauté, dossier rouvert) redeviendrait « le modèle chargeable
+            #    le plus récent » : le défaut qu'on ferme, rouvert par sa propre correction.
+            chk(server._candidats_visibles() == [],
+                f"aucun des quatre catalogues ne découvre quoi que ce soit dans le dossier "
+                f"candidat ({server._candidats_visibles()})")
+            from core import cvep_models, errp_models, p300_models
+
+            motifs = ((mi_models.MOTIF, p300_models.MOTIF, errp_models.MOTIF)
+                      + tuple(cvep_models.MOTIFS))
+            fuit = [m for m in motifs
+                    if not fnmatch(os.path.basename(res.get("modele", "")), m)]
+            decouvre = [m for m in motifs if fnmatch(nom_retenu(res.get("modele", "")), m)]
+            chk(len(fuit) == len(motifs) and len(decouvre) == 1,
+                f"le NOM d'un candidat échappe aux {len(motifs)} motifs de découverte, et le nom "
+                f"RETENU en retrouve exactement un ({len(fuit)}/{len(motifs)} fuis, "
+                f"{decouvre} retrouvé)")
+
+            # 3. `save_calibration` DÉPLACE — et n'écrase jamais. On plante d'abord un fichier
+            #    au nom exact que le candidat va réclamer : la panne à fermer est un `move` qui
+            #    passe par-dessus un enregistrement existant, et `data/` ne se refait pas.
+            occupe = os.path.join(data_dir, nom_retenu(res["modele"]))
+            with open(occupe, "wb") as f:
+                f.write(b"un modele qui existait deja")
+            source = res["modele"]
+            npz_source = res.get("enregistrement")
+            ack_save = server.submit("save_calibration")
+            chk(ack_save.get("accepted"), f"« Enregistrer » est accepté ({ack_save})")
+            t0 = time.perf_counter()
+            while server.candidat is not None and time.perf_counter() - t0 < 5.0:
+                time.sleep(0.05)
+            retenu = (server.snapshot().get("calibration") or {}).get("resultat") or {}
+            chk(server.candidat is None,
+                "…et après application, plus aucun candidat n'attend de décision")
+            chk(not os.path.exists(source) and (not npz_source or not os.path.exists(npz_source)),
+                f"le candidat a été DÉPLACÉ, pas copié : l'original n'existe plus "
+                f"({os.path.basename(source)})")
+            chk(bool(retenu.get("modele")) and os.path.dirname(retenu["modele"]) == data_dir
+                and os.path.isfile(retenu["modele"]),
+                f"…et il est maintenant dans data/ ({retenu.get('modele')})")
+            with open(occupe, "rb") as f:
+                intact = f.read() == b"un modele qui existait deja"
+            chk(intact and retenu.get("modele") != occupe,
+                f"…sans avoir écrasé le fichier qui portait déjà ce nom "
+                f"({os.path.basename(retenu.get('modele') or '')} à côté de "
+                f"{os.path.basename(occupe)})")
+            chk(bool(retenu.get("verdict")) and retenu.get("cv_groupee") == res.get("cv_groupee"),
+                f"…et le VERDICT reste lisible à l'écran après l'enregistrement "
+                f"({retenu.get('verdict')})")
+            refus_save = server.submit("save_calibration")
+            chk(not refus_save.get("accepted")
+                and "aucune calibration" in (refus_save.get("reason") or ""),
+                f"un second « Enregistrer » est refusé, avec un motif ({refus_save})")
+
+            produits = mi_models.modeles_disponibles(data_dir)
+            chk(produits == [retenu.get("modele")],
+                f"le modèle RETENU, lui, est chargeable et listé — c'est le motif "
+                f"`{mi_models.MOTIF}` qui le veut ({[os.path.basename(p) for p in produits]})")
             # Que la CV honnête soit RAPPORTÉE est un fait déterministe — une vraie propriété du
             # chantier — donc reste une assertion. Que cv_groupee < cv_naive, en revanche, n'EN
             # est plus une : `_smoke_calibration` entraîne sur le bruit RÉEL du board synthétique
@@ -2066,7 +2373,7 @@ def _smoke_calibration():
             # (`MIRuntime.__init__`) charge le modèle par CHEMIN direct (`mi_models.charger`), qui
             # ne consulte jamais `modeles_disponibles`.
             vrai_disponibles = mi_models.modeles_disponibles
-            mi_models.modeles_disponibles = lambda d=dossier: vrai_disponibles(d)
+            mi_models.modeles_disponibles = lambda d=data_dir: vrai_disponibles(d)
             try:
                 # `if produits else ...` : pas pour éviter un faux vert (un build réellement
                 # cassé échoue de toute façon, `produits` serait déjà vide plus haut) mais pour
@@ -2081,14 +2388,61 @@ def _smoke_calibration():
                 mi_models.modeles_disponibles = vrai_disponibles
             chk(demarrage.get("accepted"),
                 f"le mode MI démarre sur le modèle qui vient d'être entraîné ({demarrage})")
+
+            # 4. « Jeter » : le fichier disparaît, et l'écran de verdict avec lui.
+            #    Le candidat est REFABRIQUÉ à partir du modèle réellement produit (on le recopie
+            #    dans le dossier candidat) : refaire une seconde séance complète coûterait 30 s
+            #    de plus pour éprouver quatre lignes de suppression.
+            refait = os.path.join(server.calib_dir, os.path.basename(source))
+            shutil.copy2(retenu["modele"], refait)
+            server.candidat = {"modele": refait, "nom": os.path.basename(refait)}
+            avant_data = sorted(os.listdir(data_dir))
+            ack_jeter = server.submit("discard_calibration")
+            chk(ack_jeter.get("accepted"), f"« Jeter » est accepté ({ack_jeter})")
+            t0 = time.perf_counter()
+            while server.candidat is not None and time.perf_counter() - t0 < 5.0:
+                time.sleep(0.05)
+            chk(not os.path.exists(refait) and server.candidat is None,
+                f"…et le candidat est SUPPRIMÉ du disque ({refait})")
+            chk(sorted(os.listdir(data_dir)) == avant_data,
+                f"…sans toucher à data/, qui n'a rien à voir avec ce refus "
+                f"({sorted(os.listdir(data_dir))})")
+            chk(server.snapshot().get("calibration") is None,
+                f"…et l'écran de verdict est effacé : il n'y a plus rien à décider "
+                f"({server.snapshot().get('calibration')})")
+            refus_jeter = server.submit("discard_calibration")
+            chk(not refus_jeter.get("accepted")
+                and "aucune calibration" in (refus_jeter.get("reason") or ""),
+                f"un second « Jeter » est refusé, avec un motif ({refus_jeter})")
+
+            # 5. Le moteur s'arrête SANS qu'on ait tranché : aucun candidat ne survit.
+            #    C'est le cas de la console fermée entre l'entraînement et la décision, et il ne
+            #    doit dépendre d'AUCUN geste de l'utilisateur — d'où le `finally` de `run()`.
+            orphelin = os.path.join(server.calib_dir, os.path.basename(source))
+            shutil.copy2(retenu["modele"], orphelin)
+            server.candidat = {"modele": orphelin, "nom": os.path.basename(orphelin)}
+            calib_dir = server.calib_dir
         finally:
             server.stop()
             thread.join(timeout=10.0)
+        chk(server.candidat is None and not os.path.exists(orphelin)
+            and not os.path.isdir(calib_dir),
+            f"arrêter le moteur SANS trancher ne laisse aucun candidat orphelin : le dossier "
+            f"entier est balayé par le `finally` de run() ({calib_dir})")
+        chk(sorted(os.listdir(data_dir)) == avant_data,
+            f"…et le candidat jamais tranché n'a PAS été enregistré au passage "
+            f"({sorted(os.listdir(data_dir))})")
     finally:
-        mi_calib.MICalibration.__init__ = ancien_init
         for cle, valeur in anciens.items():
             setattr(mi_calib.MICalibration, cle, valeur)
-        shutil.rmtree(dossier, ignore_errors=True)
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+    # ⚠️ L'instrument de preuve, et ce n'est PAS `git status` : `data/` est gitignoré, donc
+    # `git status --short data/` rend une sortie vide même quand un modèle vient d'y être écrit.
+    chk(empreinte_dossier() == empreinte_avant,
+        "AUCUN fichier n'a bougé dans le VRAI `data/` — enregistrements EEG d'une personne "
+        "identifiable sur un dépôt public, et son fichier le plus récent est celui que le moteur "
+        "propose à la prochaine séance casque")
 
     print(f"[smoke-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
@@ -2136,6 +2490,18 @@ def _smoke_calibration_refus():
     r4 = froid.submit("cancel_calibration")
     chk(not r4.get("accepted") and "aucune calibration" in (r4.get("reason") or ""),
         f"annuler sans calibration en cours : refusé ({r4.get('reason')})")
+
+    # 4bis. « Enregistrer » et « Jeter » sans candidat. Ce sont les deux boutons que la console
+    # affichera sur l'écran de verdict : cliqués hors de ce moment-là (ou deux fois de suite),
+    # ils doivent refuser AVEC un motif, jamais tomber sur un chemin qui n'existe plus.
+    for commande, mot in (("save_calibration", "enregistrer"), ("discard_calibration", "jeter")):
+        r = froid.submit(commande)
+        chk(not r.get("accepted") and mot in (r.get("reason") or "")
+            and "aucune calibration" in (r.get("reason") or ""),
+            f"« {commande} » sans candidat : refusé, en disant ce qui manque ({r.get('reason')})")
+    chk(froid.calib_dir is None,
+        f"…et un moteur qui n'a jamais calibré n'a créé AUCUN dossier temporaire "
+        f"({froid.calib_dir})")
 
     # 5. L'annulation de bout en bout : commande -> boucle -> retour à « streaming » -> l'état de
     # la calibration elle-même. Ici il FAUT un moteur qui tourne : `submit` met en file, seule la
