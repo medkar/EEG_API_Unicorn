@@ -87,6 +87,7 @@ from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  
                     verdict_from_sigma)
 from core.markers import MarkerInlet  # noqa: E402
 from core.modes import contract, registry  # noqa: E402
+from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 
 # Cadence de la boucle. On ne publie PAS échantillon par échantillon : on ramasse ~50 ms de
 # signal d'un coup. Assez court pour rester très en dessous des fenêtres de décision d'un
@@ -104,6 +105,36 @@ _MARQUEUR_ERREUR_PERIODE_S = 10.0
 # Le premier vaut 1 : le tout premier incident doit se voir, c'est celui qui explique tous les
 # suivants.
 _SEUILS_MARQUEURS = (1, 10, 100, 1000, 10000)
+
+# ⚠️ LE VOL DE MARQUEURS. `markers_murs(mode_id)` ne tient qu'UN curseur par `mode_id`, et l'appel
+# le fait AVANCER. Un mode à marqueurs et sa calibration se réclament tous les deux du MÊME
+# `spec.id` : lancés ensemble, chacun n'obtient qu'une partie des marqueurs, l'autre partie
+# disparaît pour de bon. La phrase est écrite ICI, une fois, et sert aux deux sens du refus —
+# la même panne expliquée de deux façons finirait par n'en décrire qu'une.
+_VOL_DE_MARQUEURS = (
+    "un mode et sa calibration lisent la MÊME file de marqueurs sous le MÊME identifiant, et le "
+    "moteur n'y tient qu'UN curseur : chaque marqueur ne serait vu que par l'un des deux, au "
+    "hasard du tour de boucle. Aucune exception, aucun compteur — la calibration s'entraînerait "
+    "sur des époques trouées et le décodage raterait des flashs, les deux rendant des chiffres "
+    "plausibles et faux")
+
+
+def _calibration_lit_les_marqueurs(calib):
+    """La calibration DÉCLARÉE par un mode consomme-t-elle la file de marqueurs du moteur ?
+
+    Lu sur la CLASSE du runtime (`issubclass(..., MarkerCalibrationRuntime)`), jamais sur
+    `Calib.kind` : c'est cette classe-là qui appelle `markers_murs`, donc c'est elle qui vole.
+    `kind` est une DÉCLARATION, et une déclaration peut cesser de décrire le code sans que rien
+    ne le dise — le motif que ce chantier traque partout (ce qui coïncide aujourd'hui sans
+    qu'aucun lien ne le garantisse). Les deux se recoupent aujourd'hui ; c'est la classe qui fait
+    foi.
+
+    `runtime_cls` peut valoir None (calibration déclarée, runtime pas encore livré) : elle n'est
+    alors jamais jouée, donc elle ne vole rien. D'où le `isinstance(cls, type)` avant le
+    `issubclass`, qui lèverait sinon.
+    """
+    cls = None if calib is None else calib.runtime_cls
+    return isinstance(cls, type) and issubclass(cls, MarkerCalibrationRuntime)
 
 
 class EngineServer:
@@ -237,11 +268,57 @@ class EngineServer:
 
     # --- démarrer, arrêter, régler — les opérations sur les modes -----------
 
+    # --- le refus du vol de marqueurs, dans ses DEUX sens ---------------------
+    # Les deux méthodes rendent une RAISON (à afficher) ou None. Elles servent à la fois à
+    # `submit` — qui refuse tout de suite, avec sa raison — et à la BOUCLE, qui doit refuser une
+    # seconde fois : `submit` juge sur l'état à l'instant où la commande est SOUMISE, et deux
+    # commandes soumises dans la même fenêtre de sondage (`start_mode` et `start_calibration`)
+    # voient toutes les deux un moteur vierge et sont acceptées toutes les deux. C'est exactement
+    # la course que `_start_calibration` documente déjà pour le double-clic sur « Commencer ».
+
+    def _refus_calibration_pendant_mode(self, spec, actifs):
+        """Refuser la calibration de `spec` parce que SON mode décode ? La raison, ou None.
+
+        `actifs` : une copie de `self.active` prise par l'appelant (même discipline que
+        `_phase_of`) — `submit` tourne sur le fil de l'interface pendant que la boucle démarre et
+        arrête des modes sur le sien.
+        """
+        if spec is None or spec.id not in actifs or spec.marker_epoch_s <= 0:
+            return None
+        if not _calibration_lit_les_marqueurs(spec.calibration):
+            return None
+        return (f"« {spec.label} » DÉCODE en ce moment : {_VOL_DE_MARQUEURS}. Arrête le mode "
+                f"« {spec.id} » avant de lancer sa calibration.")
+
+    def _refus_mode_pendant_calibration(self, spec, calibration):
+        """Refuser de démarrer `spec` parce que SA calibration tourne ? La raison, ou None.
+
+        `calibration` : une copie de `self.calibration` prise par l'appelant, pour la même raison
+        que ci-dessus. Ici on interroge l'OBJET qui tourne (`isinstance`), pas une déclaration :
+        c'est lui qui appelle `markers_murs`, donc lui qui vole.
+        """
+        if spec is None or calibration is None or calibration.terminee:
+            return None
+        if calibration.spec.id != spec.id or spec.marker_epoch_s <= 0:
+            return None
+        if not isinstance(calibration, MarkerCalibrationRuntime):
+            return None
+        return (f"la calibration de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS}. Attends "
+                f"qu'elle finisse, ou abandonne-la, avant de démarrer « {spec.id} ».")
+
     def _start(self, ids, values, now):
         """Démarre des modes. Ceux lancés ENSEMBLE partagent une seule phase de repos."""
         demarres = []
+        calibration = self.calibration     # une seule copie, pour tous les modes de ce lot
         for spec in registry.MODES:            # ordre du registre : il arbitre les égalités
             if spec.id not in ids:
+                continue
+            refus = self._refus_mode_pendant_calibration(spec, calibration)
+            if refus:
+                # Le second contrôle, côté BOUCLE : `submit` a jugé sur un moteur où la
+                # calibration n'était pas encore appliquée. Sans lui, `start_mode` et
+                # `start_calibration` soumis dans la même fenêtre de sondage passent tous les deux.
+                print(f"[server] démarrage refusé : {refus}")
                 continue
             runtime = spec.runtime_cls(spec, values[spec.id], self)
             runtime.open()
@@ -400,6 +477,13 @@ class EngineServer:
                   f"en cours")
             return
         spec = registry.get(mode_id)
+        # Le second contrôle du VOL DE MARQUEURS, côté boucle — jumeau exact de celui de `_start`,
+        # et pour la même course : `submit` a jugé sur un moteur où `start_mode` n'était pas
+        # encore appliqué.
+        refus = self._refus_calibration_pendant_mode(spec, self.active)
+        if refus:
+            print(f"[server] calibration refusée : {refus}")
+            return
         self.calibration = spec.calibration.runtime_cls(spec, values, self)
         print(f"[server] {spec.calibration.label or spec.label} : "
               f"{self.calibration.total()} essais, "
@@ -444,6 +528,16 @@ class EngineServer:
             specs, reason = self._resolve(ids, doit_tourner=False)
             if specs is None:
                 return {"accepted": False, "reason": reason}
+            # ⚠️ AVANT `contract.validate`, délibérément. Le refus du vol de marqueurs est une
+            # propriété de l'ÉTAT du moteur (« sa calibration tourne »), pas des réglages soumis :
+            # le faire passer après la validation ferait dépendre le message de l'existence d'un
+            # modèle entraîné dans `data/` — un dépôt fraîchement cloné s'entendrait dire « aucun
+            # choix disponible » là où la vraie raison est qu'une calibration est en cours.
+            en_calibration = self.calibration   # copie unique, cf. `start_calibration` plus bas
+            for spec in specs:
+                refus = self._refus_mode_pendant_calibration(spec, en_calibration)
+                if refus:
+                    return {"accepted": False, "reason": refus}
             wanted, values = params.get("params") or {}, {}
             for spec in specs:
                 v, reason = contract.validate(spec, wanted.get(spec.id, {}))
@@ -519,6 +613,12 @@ class EngineServer:
                         "reason": f"la calibration de « {spec.label} » est déclarée mais son "
                                   f"runtime n'est pas livré : le moteur ne sait pas encore la "
                                   f"jouer"}
+            # ⚠️ LE VOL DE MARQUEURS, premier sens. `dict(self.active)` : une copie atomique, prise
+            # une seule fois — `submit` tourne sur le fil de l'appelant pendant que la boucle
+            # démarre et arrête des modes sur le sien.
+            refus = self._refus_calibration_pendant_mode(spec, dict(self.active))
+            if refus:
+                return {"accepted": False, "reason": refus}
             # ⚠️ Ce mode n'a PAS besoin d'être démarré : c'est même le cas normal. Le mode MI
             # refuse de démarrer sans modèle, or c'est justement la calibration qui en produit un.
             # Copie LOCALE de `self.calibration`, prise UNE fois : la boucle peut la remettre à
@@ -1457,6 +1557,7 @@ def _smoke():
         _smoke_mi(),
         _smoke_calibration(),
         _smoke_calibration_refus(),
+        _smoke_vol_marqueurs(),
         _smoke_cumul(),
         _smoke_proposition(),
         _smoke_dimensionnement(),
@@ -2093,6 +2194,149 @@ def _smoke_calibration_refus():
         "même — c'est le `finally` de run() qui le fait, pas cancel() tout seul")
 
     print(f"[smoke-calib-refus] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_vol_marqueurs():
+    """LE VOL DE MARQUEURS, refusé DANS LES DEUX SENS — mode puis calibration, et l'inverse.
+
+    C'est la panne la plus coûteuse de ce sous-système parce qu'elle ne casse RIEN : le mode P300
+    et sa calibration se réclament du même `spec.id`, `markers_murs` n'y tient qu'UN curseur, et
+    chacun n'obtient donc qu'une moitié arbitraire des marqueurs. Aucune exception, aucun
+    compteur qui bouge — une séance entière d'époques trouées, et un modèle qui décodera du bruit
+    avec de belles probabilités.
+
+    Les DEUX sens sont exercés, et c'est délibéré : c'est exactement le genre de garde qu'on pose
+    dans un sens en croyant avoir fermé la porte. Chacun l'est deux fois — à la SOUMISSION
+    (`submit`) et dans la BOUCLE (`_start`, `_start_calibration`), qui sont deux instants
+    différents : deux commandes soumises dans la même fenêtre de sondage voient toutes les deux un
+    moteur vierge.
+
+    Aucun casque, aucune boucle : `submit` ne dépend pas de la boucle (cf. sa docstring) et les
+    deux gardes côté boucle sont des méthodes appelables directement.
+    """
+    import shutil
+    import tempfile
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    from core import p300_models
+    from core.modes.p300 import SPEC as SPEC_P300
+    from core.modes.p300_calib import P300Calibration
+
+    dossier = tempfile.mkdtemp(prefix="smoke_vol_")
+    srv = EngineServer(synthetic=True, modes=(), instance="smoke-vol")
+
+    class _ModeFactice:
+        """Un P300 « démarré » sans casque ni modèle.
+
+        `submit` et les deux gardes ne lisent que les CLÉS de `self.active` — démarrer un vrai
+        `P300Runtime` exigerait un modèle entraîné dans le VRAI `data/`, c'est-à-dire faire
+        dépendre ce refus de l'état du disque de la machine qui lance le test.
+        """
+
+        spec = SPEC_P300
+        params = {}
+        phase = "running"
+        published = True
+
+        def state(self):
+            return {}
+
+        def close(self):
+            pass
+
+    try:
+        chk(_calibration_lit_les_marqueurs(SPEC_P300.calibration)
+            and SPEC_P300.marker_epoch_s > 0,
+            f"le P300 est bien le cas à protéger : son mode ÉPOQUE sur marqueurs "
+            f"({SPEC_P300.marker_epoch_s:g} s) et sa calibration LIT la même file "
+            f"({SPEC_P300.calibration.runtime_cls.__name__})")
+
+        # === SENS 1 : le mode DÉCODE, on demande sa calibration ==========================
+        srv.active["p300"] = _ModeFactice()
+        r = srv.submit("start_calibration", id="p300")
+        raison = r.get("reason") or ""
+        chk(not r.get("accepted") and "DÉCODE" in raison,
+            f"sens 1 — calibrer un mode qui décode est REFUSÉ ({raison[:60]}…)")
+        chk("p300" in raison and "MÊME file de marqueurs" in raison,
+            f"…en NOMMANT le mode à arrêter et en disant la panne ({raison})")
+
+        # Le négatif qui prouve que le refus est ciblé : un AUTRE mode, dont la calibration ne
+        # lit aucun marqueur (le MI est endogène), n'est pas concerné par ce refus-là.
+        r_mi = srv.submit("start_calibration", id="mi", params={})
+        chk(r_mi.get("accepted"),
+            f"…et la calibration d'un mode SANS marqueurs reste acceptée pendant ce temps "
+            f"({r_mi})")
+
+        # La garde côté BOUCLE, même sens : c'est elle qui attrape la course.
+        srv.calibration = None
+        srv._start_calibration("p300", {})
+        chk(srv.calibration is None,
+            f"sens 1, côté BOUCLE — la course (start_mode et start_calibration soumis dans la "
+            f"même fenêtre de sondage) est rattrapée : aucune calibration n'est construite "
+            f"({srv.calibration})")
+
+        # === SENS 2 : la CALIBRATION tourne, on demande le mode ==========================
+        srv.active.pop("p300", None)
+        srv._commands = queue.Queue()          # on jette ce que les refus ci-dessus ont mis en file
+        srv.calibration = P300Calibration(SPEC_P300, {}, srv, dossier=dossier)
+        chk(isinstance(srv.calibration, MarkerCalibrationRuntime)
+            and not srv.calibration.terminee,
+            f"une VRAIE calibration P300 tourne ({type(srv.calibration).__name__}, "
+            f"phase={srv.calibration.phase})")
+
+        # ⚠️ La liste de modèles est VIDÉE le temps de l'appel. Sans ça, ce test passerait pour la
+        # mauvaise raison sur un dépôt fraîchement cloné (« aucun choix disponible ») et
+        # dirait PASSERAIT aussi si le refus était placé après `contract.validate` — c'est la
+        # preuve que la garde ne dépend pas de l'état de `data/`.
+        vrai_dispo = p300_models.modeles_disponibles
+        p300_models.modeles_disponibles = lambda d=None: []
+        try:
+            r = srv.submit("start_mode", id="p300")
+        finally:
+            p300_models.modeles_disponibles = vrai_dispo
+        raison = r.get("reason") or ""
+        chk(not r.get("accepted") and "EN COURS" in raison,
+            f"sens 2 — démarrer un mode dont la calibration tourne est REFUSÉ ({raison[:60]}…)")
+        chk("MÊME file de marqueurs" in raison and "choix disponible" not in raison,
+            f"…pour LA bonne raison, et sans dépendre d'un modèle présent dans data/ ({raison})")
+
+        # Le négatif, dans ce sens aussi : un AUTRE mode démarre pendant la calibration P300.
+        r_ssvep = srv.submit("start_mode", id="ssvep")
+        chk(r_ssvep.get("accepted"),
+            f"…et un mode qui n'est pas celui qu'on calibre démarre normalement ({r_ssvep})")
+
+        # La garde côté BOUCLE, même sens. `values` volontairement vides : si la garde tombait,
+        # `P300Runtime.__init__` lèverait — on l'attrape pour rendre un ÉCHEC lisible plutôt
+        # qu'une trace Python qui ferait sauter les sous-tests suivants de `_smoke()`.
+        try:
+            srv._start(["p300"], {"p300": {}}, time.perf_counter())
+            leve = None
+        except Exception as e:  # noqa: BLE001 - la garde a sauté, on veut le dire proprement
+            leve = f"{type(e).__name__} : {e}"
+        chk("p300" not in srv.active and leve is None,
+            f"sens 2, côté BOUCLE — la course symétrique est rattrapée elle aussi : le mode n'est "
+            f"pas démarré ({sorted(srv.active)}, exception={leve})")
+
+        # === Le contrôle qui rend la garde FALSIFIABLE ==================================
+        # Une calibration TERMINÉE ne lit plus rien : elle ne doit plus rien bloquer. Sans cette
+        # ligne, un refus écrit « dès qu'une calibration existe » passerait les six assertions
+        # ci-dessus et interdirait le mode P300 pour le reste de la séance.
+        srv.calibration.cancel()
+        r = srv.submit("start_mode", id="p300")
+        chk((r.get("reason") or "").find("MÊME file de marqueurs") < 0,
+            f"une calibration TERMINÉE ne bloque plus rien — le refus porte sur « en cours », pas "
+            f"sur « existe » ({r})")
+    finally:
+        shutil.rmtree(dossier, ignore_errors=True)
+
+    print(f"[smoke-vol-marqueurs] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
