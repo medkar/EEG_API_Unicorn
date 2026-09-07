@@ -342,8 +342,14 @@ class P300Calibration(MarkerCalibrationRuntime):
 
         Deux marqueurs DIFFÉRENTS, et c'est pour ça que le socle a fait de ce point d'entrée une
         méthode à état plutôt qu'une table : la vérité-terrain n'arrive pas sur le marqueur qui
-        délimite l'époque. `round_end` ne délimite rien non plus ici — en calibration, la fin
-        d'une manche est dite par le `cue` suivant, et c'est `calib_end` qui clôt la séance.
+        délimite l'époque.
+
+        ⚠️ `round_end` ne délimite aucune époque, mais il n'est pas ignoré pour autant : il FERME
+        la manche, donc il oublie la cible désignée. C'est le seul garde contre un `cue` PERDU. Si
+        on gardait la cible de la manche précédente, les flashs de la manche suivante seraient
+        étiquetés sur elle : une manche entière apprise à l'envers, la vraie cible glissée dans la
+        classe majoritaire, et rien pour le dire — ni exception, ni compteur, l'entraînement
+        recevant exactement le bon nombre d'époques.
         """
         event = marqueur.get("event")
 
@@ -357,16 +363,20 @@ class P300Calibration(MarkerCalibrationRuntime):
             self.classe = f"cible {cible}"
             return None
 
+        if event == "round_end":
+            self._attendue = None
+            return None
+
         if event != "flash":
             return None
 
         if self._attendue is None:
-            # Des flashs AVANT le premier `cue` : la fenêtre ne suit pas le protocole de
-            # calibration (elle décode ?), ou son `cue` s'est perdu. Ces époques n'ont aucune
-            # vérité-terrain — les étiqueter « non-cible » par défaut en glisserait de vraies
-            # cibles dans la classe majoritaire, en silence.
-            self._refuse("un flash est arrivé avant le premier « cue » : sans lui, cette époque "
-                         "n'a AUCUNE vérité-terrain")
+            # Aucune cible désignée pour ce flash : soit la manche n'a pas encore été ouverte par
+            # un `cue`, soit celui-ci s'est perdu (cf. le ⚠️ ci-dessus), soit la fenêtre décode au
+            # lieu de calibrer. Ces époques n'ont AUCUNE vérité-terrain — les étiqueter
+            # « non-cible » par défaut y glisserait de vraies cibles, en silence.
+            self._refuse("un flash est arrivé sans qu'aucun « cue » n'ait désigné de cible pour "
+                         "sa manche : cette époque n'a AUCUNE vérité-terrain")
             return None
         cible = self._cible_lisible(marqueur.get("target"), "flash")
         if cible is None:
@@ -514,8 +524,6 @@ def _selftest():
         n_pre = int(round(P300_PRE_S * FS))
         n_post = int(round(P300_EPOCH_S * FS))
         for instant, m in plan:
-            if m["event"] != "flash" or m["target"] != cues[-1]:
-                pass
             if m["event"] != "flash":
                 continue
             manche = sum(1 for tt, mm in plan if mm["event"] == "cue" and tt <= instant) - 1
@@ -676,6 +684,17 @@ def _selftest():
             f"les refus sont VISIBLES dans l'instantané : sinon une fenêtre qui numérote mal ses "
             f"cibles ne se voit que dans un terminal que personne ne lit "
             f"({rt_r.state(now=t_r)['refus_cible']})")
+
+        # Un `cue` PERDU ne doit pas faire hériter la cible de la manche précédente : `round_end`
+        # a fermé la manche, donc les flashs suivants n'ont plus de vérité-terrain et sont
+        # REFUSÉS. Sans ce garde, une manche entière serait apprise sur la cible d'AVANT — même
+        # nombre d'époques, mêmes proportions, rien à voir dans aucun compteur.
+        avant = len(rt_r._enregistre)
+        rt_r.encaisser(moteur_r, t_r + 1.0, {"mode": "p300", "event": "flash", "target": 4})
+        chk(len(rt_r._enregistre) == avant and rt_r._refus == 4,
+            f"après un `round_end`, un flash sans nouveau `cue` est REFUSÉ — pas étiqueté sur la "
+            f"cible de la manche précédente ({len(rt_r._enregistre) - avant} enregistrée(s), "
+            f"{rt_r._refus} refus)")
 
         # --- 9. Une manche entièrement perdue ne DÉCALE pas la vérité-terrain ------------------
         # Le trou dans la numérotation est le seul défaut que `_renumerote` existe pour fermer, et
