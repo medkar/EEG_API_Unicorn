@@ -137,6 +137,18 @@ class LanceurFenetre(QObject):
         if proc is None:
             return
         self._tue = True
+        # ⚠️ On COUPE ses signaux avant de le tuer. `waitForFinished` n'attend que 2 s : un
+        # processus qui ne meurt pas dans ce délai pourrait émettre son `finished` bien plus tard,
+        # alors qu'une AUTRE fenêtre tourne déjà — et `_fini` marquerait celle-là comme terminée,
+        # remettant `_proc` à None sur un processus bien vivant. Un mort qui parle à la place d'un
+        # vivant : la console croirait pouvoir en lancer une deuxième.
+        for signal, receveur in ((proc.finished, self._fini),
+                                 (proc.errorOccurred, self._erreur),
+                                 (proc.readyReadStandardOutput, self._encaisser_sortie)):
+            try:
+                signal.disconnect(receveur)
+            except (RuntimeError, TypeError):
+                pass      # déjà déconnecté (le processus est mort entre-temps) : rien à faire
         proc.kill()
         # Attendre : sans ça, la console peut se fermer avant que le système n'ait repris le
         # processus, et une fenêtre plein écran orpheline reste devant l'écran de l'étudiant.
@@ -181,9 +193,10 @@ class LanceurFenetre(QObject):
         `FailedToStart` et rien d'autre. Sans cette branche, le bouton resterait « en cours » pour
         toujours, et le clic redeviendrait silencieux.
         """
-        if erreur != QProcess.ProcessError.FailedToStart:
+        if erreur != QProcess.ProcessError.FailedToStart or self._proc is None:
             # Les autres erreurs (crash, timeout d'écriture…) sont suivies d'un `finished`, qui
-            # dira la même chose avec le code de sortie. Ne pas parler deux fois.
+            # dira la même chose avec le code de sortie. Ne pas parler deux fois. Et un processus
+            # qu'on a déjà lâché (`_proc is None`) ne doit rien annoncer du tout.
             return
         quoi, self._quoi = self._quoi, ""
         self._proc = None
