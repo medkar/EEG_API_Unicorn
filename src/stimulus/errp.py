@@ -10,7 +10,7 @@ moteur, dans deux terminaux — le même montage que pour le P300 et le SSVEP :
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
 et surtout l'endroit exact où prendre l'horodatage.
 
-Protocole publié (figé, cf. docs/SPEC.md) — UNE SEULE forme de marqueur, sur le flux
+Protocole publié (figé, cf. docs/SPEC.md) — UNE SEULE forme de marqueur en DÉCODAGE, sur le flux
 `MARKER_STREAM_DEFAULT` (core/config.py), type "Markers", 1 voie "string", cadence irrégulière :
 
     {"mode": "errp", "event": "feedback"}     # le point vient de sauter à sa nouvelle case
@@ -22,6 +22,30 @@ depuis l'EEG (BCI **passive**). Publier la vérité-terrain sur le réseau revie
 réponse. Pour la mesurer HORS LIGNE quand même, chaque pas est imprimé au terminal avec son
 horodatage LSL exact (`t=…`) : il suffit à raccrocher chaque ligne à l'échantillon `decoded_errp`
 correspondant, et `--seed` rejoue la séquence à l'identique.
+
+`--calibrer` joue la MÊME piste, avec deux marqueurs de plus autour et UN CHAMP de plus dessus :
+
+    {"mode": "errp", "event": "calib_start", "trials": 200}   # la séance s'ouvre, voici ses époques
+    {"mode": "errp", "event": "feedback", "error": true}      # ce pas-là a ÉLOIGNÉ le point
+    {"mode": "errp", "event": "calib_end"}                    # la séance est finie -> le moteur entraîne
+
+⚠️⚠️ **`error` n'existe QU'EN CALIBRATION, et c'est LA faute grave de ce fichier.** L'ErrP est une
+BCI *passive* : tout son objet est de deviner, depuis l'EEG seul, que la machine s'est trompée. Le
+champ est la vérité-terrain — indispensable pour ÉTIQUETER les époques d'entraînement, interdit
+pendant qu'on décode. Un émetteur qui le publierait en décodage donnerait la réponse au moteur, et
+rien ne le signalerait : le flux `decoded_errp` garderait exactement la même forme, les scores
+resteraient plausibles, et tout ce que ce produit affirme sur ce mode deviendrait faux. La
+construction du marqueur est donc écrite à UN SEUL endroit (`marqueur_feedback`), et `--smoke`
+vérifie les DEUX sens — en calibration chaque feedback porte son étiquette, en décodage aucun.
+
+⚠️ Et l'étiquette publiée est celle du pas **RÉELLEMENT AFFICHÉ**, pas celle que le tirage avait
+décidée : `core/errp_track.py:decide_pas` rend `erreur` d'après l'EFFET du pas, rebond de bord
+compris — un tirage « erreur » au bord rapproche le point de sa cible, et ce n'est donc PAS une
+erreur vécue. C'est la même faute que d'horodater avant le flip, sur un autre axe.
+
+⚠️ **Une séance interrompue (ESC, `--seconds`) ne publie PAS de `calib_end`**, comme chez le P300 :
+le moteur n'entraînera donc rien, et le dira. Un modèle appris sur un tiers de séance serait
+indiscernable d'un modèle complet dans la liste de la console.
 
 La tâche est le curseur-vers-cible (Ferrez & Millán 2008, Chavarriaga 2010), reprise des DEUX
 endroits qui la jouent déjà — le démonstrateur (`research/app.py`, mode ErrP) et la calibration
@@ -132,6 +156,8 @@ Lancer :
                                                           # moteur ne compte pas dans le décompte)
     python src/stimulus/errp.py --seed 1         # rejouer EXACTEMENT la même séquence
     python src/stimulus/errp.py --no-wait        # ne pas attendre le moteur (émetteur seul)
+    python src/stimulus/errp.py --calibrer       # séance de CALIBRATION (la console la lance)
+    python src/stimulus/errp.py --calibrer --essais 100   # pas de calibration (défaut ERRP_CAL_TRIALS)
     python src/stimulus/errp.py --smoke          # test sans écran (CI) : protocole ET rendu
 """
 
@@ -145,9 +171,9 @@ import time
 # Permet `from config import ...` que le module soit lancé via `python src/stimulus/errp.py`
 # ou importé comme `src.errp_stimulus`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (ERRP_ERROR_RATE, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS,  # noqa: E402
-                         ERRP_TRACK_CELLS, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
-                         use_utf8_console)
+from core.config import (ERRP_CAL_TRIALS, ERRP_EPOCH_S, ERRP_ERROR_RATE,  # noqa: E402
+                         ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS, ERRP_TRACK_CELLS,
+                         MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S, use_utf8_console)
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -195,25 +221,67 @@ MIN_CELLS = 3
 # quatre propriétés dont dépend la validité des modèles déjà entraînés.
 
 
+def marqueur_feedback(erreur, calibrer):
+    """Le marqueur d'un pas. **L'UNIQUE endroit du dépôt qui décide si la vérité-terrain part.**
+
+    `erreur` : ce pas a-t-il ÉLOIGNÉ le point de sa cible — l'EFFET réel, tel que `decide_pas` le
+    rend, rebond de bord compris. `calibrer` : est-on en train de fabriquer un jeu d'entraînement.
+
+    ⚠️ **En décodage le marqueur reste NU, et ce n'est pas une économie d'octets.** L'ErrP est une
+    BCI passive : le moteur doit deviner depuis l'EEG que la machine s'est trompée. Lui glisser la
+    réponse dans le marqueur qui délimite l'époque ne casserait RIEN de visible — même flux, mêmes
+    scores plausibles — et rendrait faux tout ce que ce produit affirme sur ce mode. Le champ
+    n'existe donc que quand quelqu'un doit ÉTIQUETER des époques, c'est-à-dire en calibration.
+
+    Écrire ce choix dans une fonction plutôt qu'à l'endroit du `push_sample` est ce qui le rend
+    testable dans les DEUX sens sans lancer d'écran (cf. `_smoke`) : « en calibration l'étiquette
+    est là » et « hors calibration elle n'y est pas » sont deux assertions, pas une.
+    """
+    marqueur = {"mode": "errp", "event": "feedback"}
+    if calibrer:
+        marqueur["error"] = bool(erreur)
+    return marqueur
+
+
 # --- Boucle principale -------------------------------------------------------
 
 def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP_ERROR_RATE,
         seconds=None, smoke=False, stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0,
-        journal=None, seed=None, max_run_steps=ERRP_MAX_RUN_STEPS):
-    """La boucle du stimulus. `journal`, s'il est fourni, reçoit
-    `(marqueur, horodatage, erreur, debut_de_course)` pour CHAQUE feedback réellement poussé.
+        journal=None, seed=None, max_run_steps=ERRP_MAX_RUN_STEPS,
+        calibrer=False, essais=ERRP_CAL_TRIALS, attente_moteur_s=None, sonde_ecran=None):
+    """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
-    `erreur` (bool, vérité-terrain LOCALE : ce pas a-t-il ÉLOIGNÉ le point de sa cible) ne part
-    JAMAIS sur le réseau (cf. ⚠️ de la docstring du module) — il n'existe que pour permettre à
-    `--smoke` de vérifier, sur le déroulé RÉEL, que le taux d'erreur joué reste raisonnable, en
-    plus de la fonction pure `decide_pas` (vérifiée à grande échelle, sans écran, dans `_smoke`).
+    ⚠️ Les deux modes partagent la MÊME boucle et la MÊME piste. Une séance de calibration est une
+    séance normale, bornée à `essais` pas, encadrée de `calib_start`/`calib_end`, et dont chaque
+    feedback porte son étiquette. Écrire une seconde boucle « pour la calibration » rouvrirait
+    exactement la duplication que la tâche 1 a supprimée (la piste était écrite deux fois, avec un
+    test de 500 pas pour garder les copies d'accord).
+
+    `journal`, s'il est fourni, reçoit `(marqueur, horodatage, erreur, debut_de_course)` pour
+    CHAQUE marqueur réellement poussé — `calib_start`/`calib_end` compris, avec `erreur=None`.
+
+    `erreur` (bool, vérité-terrain LOCALE : ce pas a-t-il ÉLOIGNÉ le point de sa cible) ne part sur
+    le réseau QUE pendant une calibration (cf. `marqueur_feedback` et le ⚠️⚠️ du module) ; ici il
+    permet en plus à `--smoke` de vérifier, sur le déroulé RÉEL, que le taux d'erreur joué reste
+    raisonnable, en plus de la fonction pure `decide_pas` (vérifiée à grande échelle, sans écran).
     `debut_de_course` dit si ce pas est le PREMIER d'une nouvelle course, donc s'il a été précédé
     des deux écrans statiques : c'est ce qui permet à `--smoke` de mesurer séparément la cadence
-    intra-course (1,45 s) et l'écart de transition (2,6 s), qu'une moyenne unique confondrait.
+    intra-course (1,45 s) et l'écart de transition (2,6 s), qu'une moyenne unique confondrait — et
+    d'exclure de la vérification d'étiquette le pas qui suit une téléportation du point.
 
     `seed` graine le tirage des erreurs : deux exécutions rejouent alors la MÊME séquence, ce qui
     est la seule façon de refaire une séance à l'identique. `max_run_steps` n'existe que pour que
     `--smoke` puisse EXERCER le plafond de pas (sinon jamais atteint en quelques secondes).
+
+    `sonde_ecran(surface, centres, rayon)` n'existe QUE pour `--smoke`, et c'est le garde-fou le
+    plus sérieux de ce fichier avec l'horodatage au flip : elle est appelée juste après le `flip`
+    sur lequel un feedback vient de partir, et donne donc à voir l'écran EXACT que ce marqueur
+    prétend décrire. Le test y LIT la case du point et celle de la cible dans les pixels, au lieu
+    de croire le compteur de l'émetteur — qui, lui, ne peut que se donner raison.
+
+    `attente_moteur_s` : combien de temps occuper avant le premier pas d'une calibration, le temps
+    que le moteur finisse sa chauffe ET son repos (cf. `ATTENTE_MOTEUR_S`). `None` = la valeur par
+    défaut ; `0` pour un test.
     """
     if int(n_cells) < MIN_CELLS:
         print(f"[errp-stim] REFUSÉ — --cells {n_cells} : il en faut au moins {MIN_CELLS} pour "
@@ -293,6 +361,12 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     dx = int(w * 0.09)
     x0 = int(w / 2 - (n_cells - 1) * dx / 2)
     r = max(6, int(min(dx * 0.32, h * 0.05)))
+    # ENTIERS, et calculés une SEULE fois : ce sont les centres exacts auxquels les cases sont
+    # tracées, donc ceux auxquels `--smoke` va relire le point et la cible dans les pixels.
+    # Recalculés de son côté, le test chercherait à quelques pixels près et ne trouverait rien —
+    # un test qui échoue pour la mauvaise raison est pire qu'un test absent (même discipline que
+    # `rayon_cue` dans `stimulus/p300.py`).
+    centres = [(x0 + i * dx, int(cy)) for i in range(n_cells)]
 
     hud_font = pygame.font.SysFont("consolas", max(12, int(min(w, h) * 0.016)))
     note_font = pygame.font.SysFont("consolas", max(16, int(min(w, h) * 0.030)))
@@ -334,10 +408,10 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
 
     def draw(pos, cible, note=None):
         win.fill(BG)
-        for i in range(n_cells):
-            pygame.draw.circle(win, OUTLINE, (x0 + i * dx, int(cy)), r, 2)
-        pygame.draw.circle(win, GOAL_COLOR, (x0 + cible * dx, int(cy)), r + 3)   # la cible
-        pygame.draw.circle(win, ON_COLOR, (x0 + pos * dx, int(cy)), r)          # le point
+        for centre in centres:
+            pygame.draw.circle(win, OUTLINE, centre, r, 2)
+        pygame.draw.circle(win, GOAL_COLOR, centres[cible], r + 3)   # la cible : disque PLEIN
+        pygame.draw.circle(win, ON_COLOR, centres[pos], r)          # le point, PAR-DESSUS
         if note is not None:
             txt = note_font.render(note, True, NOTE)
             win.blit(txt, txt.get_rect(center=(int(w / 2), int(cy + h * 0.16))))
@@ -367,6 +441,30 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     pos = n_cells // 2
     cible = nouvelle_cible(n_cells, rng)
     n_pas_course = 0
+    essais = int(essais)
+    seance_complete = False
+
+    if calibrer:
+        # ⚠️ `trials` compte des ÉPOQUES, et ici une époque = un pas : c'est l'unité que le moteur
+        # incrémente à chaque feedback enregistré (`core/modes/marker_calib.py::total`). Une autre
+        # unité n'empêcherait rien mais afficherait un avancement faux et ferait mal régler la
+        # détection de fenêtre morte.
+        emet({"mode": "errp", "event": "calib_start", "trials": essais}, None, False)
+        print(f"[errp-stim] CALIBRATION : {essais} pas annoncés — chaque feedback portera son "
+              f"étiquette `error`, ce que le décodage ne fait JAMAIS")
+        if attente_consommateur_s > 0 and not outlet.have_consumers():
+            print(f"[errp-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
+                  f"Lance la calibration depuis la console, ou ferme cette fenêtre.")
+        # La chauffe ET le repos du moteur (~23 s) : les pas joués pendant ce temps sont comptés
+        # et JETÉS (`_jeter_marqueurs_de_chauffe`), donc la séance serait plus courte que ce que
+        # l'écran annonce. Le `calib_start`, lui, est bien retenu par le moteur pendant sa chauffe.
+        attente_initiale_s = (ATTENTE_MOTEUR_S if attente_moteur_s is None
+                              else float(attente_moteur_s))
+        note_initiale = "le casque se stabilise — installe-toi, ne bouge plus"
+        if attente_initiale_s > 0:
+            print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe et son repos "
+                  f"(~{attente_initiale_s:g} s) : piste STATIQUE en attendant, le premier pas "
+                  f"part après.")
 
     # ⚠️ La piste doit être VUE avant son premier pas : sans cet écran, le tout premier feedback
     # est aussi la première image de la séance, l'utilisateur n'a pas eu le temps de voir d'où le
@@ -391,9 +489,16 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             # trop tôt décale TOUTES les époques d'une frame, et le décodeur corrèle alors contre
             # une réponse évoquée qui n'a pas encore eu lieu.
             if f == 0:
-                ts = emet({"mode": "errp", "event": "feedback"}, erreur, debut_de_course)
+                # `marqueur_feedback` est l'UNIQUE endroit qui décide si l'étiquette part : en
+                # calibration oui, en décodage jamais (cf. le ⚠️⚠️ de la docstring du module).
+                ts = emet(marqueur_feedback(erreur, calibrer), erreur, debut_de_course)
                 pas_total += 1
                 erreurs_total += int(erreur)
+                if sonde_ecran is not None:
+                    # L'écran EXACT sur lequel ce feedback vient de partir. Cf. la docstring de
+                    # `run` : c'est ce qui permet à `--smoke` de LIRE le pas joué au lieu de croire
+                    # le compteur de cet émetteur.
+                    sonde_ecran(win, list(centres), r)
                 # `t=` est l'horodatage LSL EXACT du marqueur : c'est lui qui permet, après la
                 # séance, de raccrocher cette ligne à l'échantillon `decoded_errp` correspondant
                 # et de calculer un TPR/TNR — sans jamais mettre la vérité-terrain sur le réseau.
@@ -405,6 +510,12 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             # ferait décoder une époque dont l'image a disparu en cours de route. On finit la
             # fenêtre, PUIS on sort (au pire ~1 s de plus que `--seconds`).
         if not running:
+            break
+        if calibrer and pas_total >= essais:
+            # ⚠️ Ici, et pas après les écrans de fin de course : la séance s'arrête sur son
+            # dernier PAS. Enchaîner une remise à zéro dont plus aucun feedback ne suit ferait
+            # regarder l'étudiant une piste morte pendant 1,6 s avant l'écran de fin.
+            seance_complete = True
             break
 
         if pos == cible or n_pas_course >= max_run_steps:
@@ -426,6 +537,23 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             tenir(pos, cible, PAUSE_NOUVELLE_COURSE_S, note="nouvelle cible")
         else:
             tenir(pos, cible, PAUSE_INTER_PAS_S)     # pause inter-pas / settle (cadence du modèle)
+
+    if calibrer and seance_complete:
+        # ⚠️ Laisser la DERNIÈRE époque se remplir avant d'annoncer la fin. Le moteur ne libère un
+        # marqueur qu'une fois son post-stimulus écoulé (`markers_murs(post_s=…)`) : un `calib_end`
+        # publié dans la foulée du dernier pas arriverait bien après lui, mais l'écran, lui, serait
+        # déjà noir et le sujet aurait bougé. Même geste que chez le P300.
+        tenir(pos, cible, ERRP_EPOCH_S + 0.15, note="calibration terminée — ne bouge plus")
+        emet({"mode": "errp", "event": "calib_end"}, None, False)
+        print(f"[errp-stim] calibration terminée : {pas_total} pas, « calib_end » envoyé — le "
+              f"moteur entraîne, le résultat s'affiche dans la console.")
+    elif calibrer:
+        # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
+        # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
+        # dans la liste de la console, et donnerait ensuite des scores plausibles et faux.
+        print(f"[errp-stim] ⚠️ calibration INTERROMPUE à {pas_total}/{essais} pas : AUCUN "
+              f"« calib_end » envoyé, donc aucun modèle ne sera entraîné. Le moteur attend — "
+              f"clique « Abandonner » dans la console, puis recommence.")
 
     # Un BILAN, toujours : « 0 pas joué » doit se lire, pas se deviner. Une séance muette (fenêtre
     # fermée trop tôt, `--seconds` trop court) et une séance réussie se ressemblaient à l'écran
@@ -454,6 +582,12 @@ def _empreinte_ecran(pygame):
     return hash(pygame.transform.scale(surface, (100, 70)).get_buffer().raw)
 
 
+def _feedbacks(journal):
+    """Les seules entrées du journal qui sont des PAS. `calib_start`/`calib_end` n'en sont pas :
+    ils encadrent la séance et leurs écarts au premier/dernier pas n'ont aucune cadence à tenir."""
+    return [e for e in journal if e[0].get("event") == "feedback"]
+
+
 def _ecarts(journal):
     """(intra_course, transitions) : les écarts entre onsets, séparés par CE QUE LE PROTOCOLE A
     INTERCALÉ entre eux — la pause inter-pas seule, ou les deux écrans de fin de course.
@@ -462,14 +596,51 @@ def _ecarts(journal):
     ±50 % autour de 1 s acceptait aussi bien 1,0 s (l'émetteur d'avant, hors protocole) que 1,45 s
     (la cadence du modèle) que 2,6 s (une transition).
     """
+    pas = _feedbacks(journal)
     intra, transitions = [], []
-    for (_ma, ta, _ea, _da), (_mb, tb, _eb, debut) in zip(journal, journal[1:]):
+    for (_ma, ta, _ea, _da), (_mb, tb, _eb, debut) in zip(pas, pas[1:]):
         (transitions if debut else intra).append(tb - ta)
     return intra, transitions
 
 
+def _piste_a_l_ecran(surface, centres, r):
+    """(case du POINT, case de la CIBLE), lues dans les PIXELS. -1 quand on ne trouve pas.
+
+    ⚠️ C'est le point de tout ce garde-fou : on ne demande pas à l'émetteur quel pas il croit
+    avoir joué — il ne peut que se donner raison. On regarde l'image, et on en RECALCULE
+    l'étiquette (« ce pas a-t-il éloigné le point de sa cible ? »). Même famille de test que la
+    sonde à pixels de `stimulus/p300.py` et que celle de `stimulus/cvep.py`.
+
+    Le point est un disque PLEIN de rayon `r` tracé PAR-DESSUS tout le reste : son centre porte
+    donc `ON_COLOR` exact (`pygame.draw.circle` ne lisse pas). La cible est un disque plein de
+    rayon `r + 3` tracé AVANT lui : on la lit à `r + 2` du centre — à l'intérieur d'elle, en
+    dehors du point ET en dehors du contour de case (tracé à `r`, épaisseur 2, donc [r-2, r]).
+    C'est ce décalage qui permet de lire les DEUX quand le point est arrivé sur sa cible.
+
+    ⚠️ **Ce qu'elle n'attrape PAS, et il faut le savoir avant de s'y fier** : remonter le `emet`
+    au-dessus du `flip`. Sous le pilote logiciel à tampon UNIQUE (`SDL_VIDEODRIVER=dummy`, celui
+    du smoke), la surface porte déjà l'image dessinée avant même le `flip` — la sonde lirait la
+    même chose des deux côtés. Elle prouve QUEL pas est à l'écran, jamais QUAND il y est arrivé.
+    Le QUAND est gardé un cran plus haut, par l'empreinte d'écran de `_smoke` (partie B).
+    """
+    largeur, hauteur = surface.get_width(), surface.get_height()
+
+    def couleur(x, y):
+        if 0 <= x < largeur and 0 <= y < hauteur:
+            return tuple(surface.get_at((int(x), int(y))))[:3]
+        return None
+
+    pos = cible = -1
+    for i, (x, y) in enumerate(centres):
+        if couleur(x, y) == ON_COLOR:
+            pos = i
+        if couleur(x + r + 2, y) == GOAL_COLOR:
+            cible = i
+    return pos, cible
+
+
 def _smoke(n_cells, taux_erreur):
-    """Deux moitiés, comme `p300_stimulus._smoke`.
+    """Trois moitiés, comme `stimulus/p300.py::_smoke` — la troisième est la calibration.
 
     **A. Le PROTOCOLE** (`decide_pas`/`nouvelle_cible`, fonctions pures) : le point reste toujours
     sur la piste après rebond, et surtout le taux d'erreur RÉEL sur un grand nombre de pas — c'est
@@ -488,6 +659,14 @@ def _smoke(n_cells, taux_erreur):
     B1 aux réglages normaux (cadence intra-course), B2 avec un plafond de 2 pas et 100 % d'erreurs
     — le point ne peut alors JAMAIS rejoindre sa cible, donc le plafond et les écrans de fin de
     course sont exercés à coup sûr, au lieu d'une fois sur trois par chance.
+
+    **C. `--calibrer`**, sur le même écran factice : la forme exacte de la séance, et surtout que
+    l'étiquette `error` de chaque feedback décrit le pas que l'écran a RÉELLEMENT joué — le point
+    et la cible lus dans les PIXELS (`_piste_a_l_ecran`), l'étiquette RECALCULÉE à partir d'eux.
+    C'est la même faute que d'horodater avant le flip, sur un autre axe : le marqueur est
+    parfaitement formé, il décrit juste autre chose que ce qu'on voit. Et son pendant, qui compte
+    autant : **hors calibration, AUCUN feedback ne porte d'étiquette** — vérifié sur les trois
+    passages B, où le moteur ne doit jamais recevoir la réponse qu'il est censé deviner.
 
     Ce qui n'est PAS revérifié ici : le transport LSL (mûrissement, horodatage, offset d'horloge)
     est déjà prouvé par `core/markers.py`.
@@ -536,6 +715,44 @@ def _smoke(n_cells, taux_erreur):
     chk(pos_bord == 1 and erreur_bord is False,
         f"au bord de la piste, une erreur FORCÉE rebondit vers la cible : l'étiquette suit "
         f"l'effet RÉEL du pas, pas l'intention du tirage (pos={pos_bord}, erreur={erreur_bord})")
+
+    # --- LA GARDE DE CE FICHIER, dans les DEUX sens, avant tout écran ---------------
+    # `marqueur_feedback` est l'unique endroit qui décide si la vérité-terrain part sur le réseau.
+    # Une garde écrite dans un seul sens laisse passer la moitié de la panne : « l'étiquette est
+    # là en calibration » ne dit RIEN de « elle n'y est pas en décodage », qui est celui des deux
+    # qui rend faux tout ce que le produit affirme sur ce mode.
+    chk(marqueur_feedback(True, calibrer=False) == {"mode": "errp", "event": "feedback"}
+        and marqueur_feedback(False, calibrer=False) == {"mode": "errp", "event": "feedback"},
+        f"EN DÉCODAGE le marqueur est NU, quel que soit le pas joué : l'ErrP est une BCI PASSIVE, "
+        f"le moteur doit DEVINER l'erreur depuis l'EEG — la lui donner ne casserait rien de "
+        f"visible et rendrait faux tout ce qu'on mesure ({marqueur_feedback(True, False)})")
+    chk(marqueur_feedback(True, calibrer=True) == {"mode": "errp", "event": "feedback",
+                                                   "error": True}
+        and marqueur_feedback(False, calibrer=True)["error"] is False,
+        f"EN CALIBRATION il porte son étiquette, et elle est BOOLÉENNE : sans elle, aucune époque "
+        f"n'a de vérité-terrain et il n'y a rien à entraîner "
+        f"({marqueur_feedback(False, calibrer=True)})")
+    chk(marqueur_feedback(erreur_bord, calibrer=True)["error"] is False,
+        f"…et au bord, un tirage « erreur » qui REBONDIT vers la cible est publié `error: false` — "
+        f"l'étiquette publiée suit l'EFFET du pas, jamais l'intention du tirage : l'étiqueter à "
+        f"l'intention apprendrait au modèle le CONTRAIRE de ce qu'il doit détecter, sur environ un "
+        f"pas de bord sur deux")
+
+    # Le taux d'erreurs ÉTIQUETÉES, à grande échelle et sans écran — c'est ici qu'il veut dire
+    # quelque chose. La séance de `--smoke` (partie C) fait quelques pas : aucune tolérance sur un
+    # taux n'y serait honnête (rigueur statistique du projet : ne jamais conclure sur du bruit).
+    rng_lab = random.Random(5)
+    pos_lab, cible_lab, etiquettes = n_cells // 2, nouvelle_cible(n_cells, rng_lab), []
+    for _ in range(5000):
+        pos_lab, err_lab = decide_pas(rng_lab, pos_lab, cible_lab, n_cells, taux_erreur)
+        etiquettes.append(marqueur_feedback(err_lab, calibrer=True)["error"])
+        if pos_lab == cible_lab:
+            pos_lab, cible_lab = n_cells // 2, nouvelle_cible(n_cells, rng_lab)
+    taux_etiquete = sum(etiquettes) / len(etiquettes)
+    chk(abs(taux_etiquete - taux_erreur) < 5 * sigma,
+        f"le taux d'erreurs PUBLIÉES en calibration ({taux_etiquete:.1%}) reste dans sa plage "
+        f"({taux_erreur:.0%}, marge ±{5 * sigma:.1%} à 5σ) — le modèle a besoin d'une classe "
+        f"minoritaire d'environ un quart, pas d'un déséquilibre à 5 %")
 
     # --- Le protocole n'est plus écrit qu'UNE fois -------------------------------
     # Deux tests vivaient ici, et tous deux protégeaient une duplication : l'un rejouait 500 pas à
@@ -621,6 +838,34 @@ def _smoke(n_cells, taux_erreur):
             stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
             journal=journal3, seed=0)
         trace_b3 = list(trace)
+        trace.clear()
+        coupure["armee"], coupure["flips_depuis_push"] = False, None
+
+        # --- C. La CALIBRATION, sur le même écran factice -------------------------------
+        # ⚠️ `taux_erreur=1.0` et un plafond de 5 pas : ce n'est pas la séance réelle, c'est la
+        # séance qui EXERCE la garde. À 28 % d'erreurs, six pas peuvent très bien n'en contenir
+        # aucune — et `[False]*6 == [False]*6` resterait vert avec un émetteur qui publierait
+        # « correct » quoi qu'il arrive. À 100 %, le point s'éloigne à chaque pas jusqu'au BORD,
+        # où le rebond le ramène vers la cible : ce pas-là est un `error: false` au milieu de
+        # `error: true`, c'est-à-dire exactement le cas où intention et EFFET divergent. Le taux
+        # d'erreurs, lui, se vérifie à grande échelle en partie A — pas sur six pas.
+        # `attente_moteur_s=0.4` : assez pour qu'un écran statique précède le premier feedback (le
+        # contrôle de frame CHANGÉE en a besoin), sans subir les 23 s réelles.
+        journal_c, vues = [], []
+        fait_c = run(windowed=True, refresh=60.0, n_cells=n_cells, taux_erreur=1.0,
+                     calibrer=True, essais=6, max_run_steps=5, attente_moteur_s=0.4,
+                     seconds=60.0, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
+                     attente_consommateur_s=0.0, journal=journal_c, seed=0,
+                     sonde_ecran=lambda surface, centres, rayon: vues.append(
+                         _piste_a_l_ecran(surface, centres, rayon)))
+        trace_c = list(trace)
+        trace.clear()
+        # Et une séance INTERROMPUE : `--seconds` tombe pendant le premier pas.
+        journal_i = []
+        run(windowed=True, refresh=60.0, n_cells=n_cells, taux_erreur=taux_erreur,
+            calibrer=True, essais=6, attente_moteur_s=0.0, seconds=0.1,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            journal=journal_i, seed=0)
     finally:
         pygame.display.flip = vrai_flip
         pylsl.StreamOutlet.push_sample = vrai_push
@@ -632,9 +877,15 @@ def _smoke(n_cells, taux_erreur):
         print("[errp-stim] VERDICT : PROBLÈME")
         return False
 
-    chk(all(m == {"mode": "errp", "event": "feedback"} for m, _ts, _e, _d in journal),
-        "chaque marqueur poussé est EXACTEMENT {mode: errp, event: feedback} — rien d'autre : le "
-        "moteur ne doit JAMAIS recevoir la vérité-terrain (cf. ⚠️ de la docstring du module)")
+    # ⚠️ LA MOITIÉ « DÉCODAGE » DE LA GARDE, sur le déroulé RÉEL des trois passages : pas un seul
+    # marqueur ne porte autre chose que son mode et son événement. C'est la seule des deux moitiés
+    # dont la violation ne casse RIEN de visible — mêmes flux, mêmes scores, juste faux.
+    for nom, jn in (("B1", journal), ("B2", journal2), ("B3", journal3)):
+        chk(jn and all(m == {"mode": "errp", "event": "feedback"} for m, _ts, _e, _d in jn),
+            f"[{nom}] chaque marqueur poussé HORS calibration est EXACTEMENT "
+            f"{{mode: errp, event: feedback}} — aucune étiquette, aucune case, rien : le moteur "
+            f"ne doit jamais recevoir la réponse qu'il est censé deviner "
+            f"({sorted({k for m, _t, _e, _d in jn for k in m})})")
 
     horodatages = [ts for _m, ts, _e, _d in journal]
     chk(all(b > a for a, b in zip(horodatages, horodatages[1:])),
@@ -707,6 +958,63 @@ def _smoke(n_cells, taux_erreur):
         f"feedback va quand même à son TERME ({flips_apres} frames affichées après le marqueur, "
         f"sur {n_fr_attendu} attendues) — on ne coupe pas l'écran au milieu d'une époque")
 
+    # --- C. La séance de CALIBRATION -------------------------------------------------
+    chk(fait_c, "run(calibrer=True) va au bout sur un écran factice")
+    evenements_c = [m["event"] for m, _ts, _e, _d in journal_c]
+    chk(evenements_c == ["calib_start"] + ["feedback"] * 6 + ["calib_end"],
+        f"la séance s'ouvre par calib_start, joue ses pas, et se ferme par calib_end "
+        f"({evenements_c})")
+    depart = journal_c[0][0]
+    chk(depart.get("trials") == evenements_c.count("feedback"),
+        f"`calib_start` annonce des ÉPOQUES, dans l'unité que le moteur compte — un pas, une "
+        f"époque ({depart.get('trials')} annoncées, {evenements_c.count('feedback')} poussées)")
+
+    pas_c = _feedbacks(journal_c)
+    chk(all("error" in m for m, _ts, _e, _d in pas_c)
+        and all(isinstance(m["error"], bool) for m, _ts, _e, _d in pas_c),
+        f"EN CALIBRATION, chaque `feedback` porte son étiquette booléenne — sans elle, aucune "
+        f"époque n'a de vérité-terrain ({[m.get('error') for m, _t, _e, _d in pas_c]})")
+
+    # ⚠️⚠️ LE test de cette moitié, et le pendant de l'horodatage-au-flip : la vérité-terrain
+    # publiée doit décrire ce que l'écran a RÉELLEMENT montré, pas ce que le tirage avait décidé.
+    # On lit le point et la cible dans les PIXELS, et on RECALCULE l'étiquette (« ce pas a-t-il
+    # éloigné le point ? »). Le départ d'un pas est la case lue au pas précédent — sauf en début de
+    # course, où le point vient d'être remis au CENTRE devant une cible neuve : c'est justement la
+    # transition que les deux écrans statiques séparent du feedback suivant.
+    chk(len(vues) == len(pas_c) and all(p >= 0 and c >= 0 for p, c in vues),
+        f"la sonde retrouve le point ET la cible dans les pixels, à chaque pas ({vues})")
+    attendues, precedent = [], None
+    for (_m, _ts, _e, debut), (pos_vu, cible_vue) in zip(pas_c, vues):
+        depart_case = n_cells // 2 if debut else precedent
+        attendues.append(abs(pos_vu - cible_vue) > abs(depart_case - cible_vue))
+        precedent = pos_vu
+    publiees = [m["error"] for m, _ts, _e, _d in pas_c]
+    chk(publiees == attendues,
+        f"…et l'étiquette publiée est celle du pas RÉELLEMENT AFFICHÉ, relue à l'écran "
+        f"({publiees} publiées contre {attendues} lues dans les pixels)")
+    chk(len(set(publiees)) == 2,
+        f"…sur une séance qui contient les DEUX étiquettes : à 100 % d'erreurs tirées, le rebond "
+        f"de bord en fabrique une « correct » au milieu, donc une comparaison toute-vraie ou "
+        f"toute-fausse ne peut pas passer par chance ({publiees})")
+
+    # Le flip -> push de la calibration est un chemin de code DISTINCT (le marqueur est construit
+    # par `marqueur_feedback`) : il mérite le même contrôle que B1/B2.
+    i_push_c = [i for i, (quoi, _e) in enumerate(trace_c) if quoi == "push"]
+    change_c = []
+    for i in i_push_c[1:]:            # le premier push est `calib_start` : aucune frame à changer
+        empreintes = [e for quoi, e in trace_c[:i] if quoi == "flip"]
+        change_c.append(len(empreintes) >= 2 and empreintes[-1] != empreintes[-2])
+    chk(len(i_push_c) == len(journal_c) and bool(change_c) and all(change_c[:len(pas_c)]),
+        f"[C] en calibration aussi, chaque feedback part APRÈS le flip qui a CHANGÉ l'écran "
+        f"({sum(change_c)}/{len(change_c)})")
+
+    # Une séance INTERROMPUE ne publie AUCUN calib_end : le moteur ne doit rien entraîner sur une
+    # séance tronquée, qui produirait un modèle que rien ne distingue d'un modèle complet.
+    evenements_i = [m["event"] for m, _ts, _e, _d in journal_i]
+    chk("calib_start" in evenements_i and "calib_end" not in evenements_i,
+        f"une séance INTERROMPUE ne publie AUCUN calib_end — un modèle appris sur un pas sur six "
+        f"serait indiscernable d'un modèle complet dans la liste ({evenements_i})")
+
     n_err_reel = sum(1 for _m, _ts, e, _d in journal if e)
     print(f"[errp-stim] --smoke : {len(journal)} pas RÉELS (écran factice), {n_err_reel} erreurs "
           f"({n_err_reel / len(journal):.0%}, visé {taux_erreur:.0%} — N trop petit ici pour "
@@ -733,6 +1041,14 @@ def _parse_args(argv):
                         "refaire une séance à l'identique, ou pour la dépouiller hors ligne)")
     p.add_argument("--no-wait", action="store_true",
                    help="ne pas attendre le moteur (ni ses ~23 s de chauffe) : émetteur seul")
+    p.add_argument("--calibrer", action="store_true",
+                   help="séance de CALIBRATION : même piste, plus calib_start / calib_end, et "
+                        "chaque feedback porte son étiquette `error` (ce que le décodage ne fait "
+                        "JAMAIS). C'est le moteur qui entraîne — la console lance cette fenêtre "
+                        "elle-même, la lancer à la main n'a de sens que pour la mettre au point")
+    p.add_argument("--essais", type=int, default=ERRP_CAL_TRIALS,
+                   help=f"pas de calibration (défaut {ERRP_CAL_TRIALS}). Sans --calibrer, ce "
+                        f"réglage ne sert à rien : le décodage enchaîne les pas jusqu'à ESC")
     p.add_argument("--smoke", action="store_true",
                    help="test headless (CI) : le protocole ET la boucle réelle, sur écran factice")
     return p.parse_args(argv)
@@ -743,7 +1059,8 @@ if __name__ == "__main__":
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, n_cells=args.cells,
              taux_erreur=args.error_rate, seconds=args.seconds, smoke=args.smoke,
-             seed=args.seed, attente_consommateur_s=0.0 if args.no_wait else 5.0)
+             seed=args.seed, attente_consommateur_s=0.0 if args.no_wait else 5.0,
+             calibrer=args.calibrer, essais=args.essais)
     # Un réglage refusé (`--cells` trop petit) doit sortir en 1 même hors smoke : lancé depuis un
     # script, « ça n'a rien affiché » et « ça a refusé » ne doivent pas se ressembler.
     sys.exit(0 if ok else 1)
