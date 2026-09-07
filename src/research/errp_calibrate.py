@@ -17,6 +17,21 @@ Sortie : `data/errp_model_AAAAMMJJ_HHMMSS.joblib` (ErrPModel : xDAWN+Riemann+LR,
 + un .npz des époques brutes. Le nom est HORODATÉ, jamais fixe : `data/errp_model.joblib` est la
 trace casque du 24 juillet, et une calibration ne doit rien écraser (cf. `chemin_modele_horodate`). Métriques honnêtes : AUC (GroupKFold par bloc) + TPR/TNR séparés (pas l'accuracy
 brute, trompeuse sous déséquilibre). Se lance depuis l'appli (mode ErrP -> Calibrer) ou en smoke.
+
+⚠️ **Ce fichier ne fait plus que la MOITIÉ PYGAME du travail.** L'entraînement — le `fit`, l'AUC
+groupée par bloc, le test de permutation, le seuil, la sauvegarde horodatée et l'archive des
+époques — a déménagé dans `core/modes/errp_calib.py` le 2026-09-07, parce que c'est désormais le
+MOTEUR qui calibre (la console lance `src/stimulus/errp.py --calibrer`, le moteur écoute les
+marqueurs et entraîne). Ce qui reste ici est ce qui touche pygame : les écrans, la piste, le
+ramassage des époques par l'horloge de l'appli. La suite est un simple appel à
+`errp_calib.entrainer` — une seule écriture de l'entraînement pour les deux chemins, au lieu de
+deux qui dériveraient.
+
+⚠️ **L'épochage, lui, reste DIFFÉRENT de celui du moteur**, et ce n'est pas un oubli : cet écran
+découpe depuis `app.acq.get_raw` (l'horloge de l'appli), le moteur depuis son tampon et les
+horodatages LSL. C'est précisément le second chemin que le chantier « la console, seul point
+d'entrée » existe pour retirer. Tant qu'il vit, ne pas s'en servir pour produire le modèle d'une
+séance sérieuse : passer par la console.
 """
 
 import os
@@ -31,7 +46,9 @@ from core.config import (ERRP_CAL_BLOCKS, ERRP_CAL_TRIALS, ERRP_EPOCH_S,  # noqa
                     ERRP_ERROR_RATE, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS, ERRP_MIDLINE,
                     ERRP_MODEL_PATH, ERRP_PRE_S, ERRP_TRACK_CELLS)
 from core.p300_decoder import epoch_from_stream  # noqa: E402
-from core.errp_decoder import CORRECT, ERROR, ErrPModel, rates  # noqa: E402
+from core import errp_models  # noqa: E402
+from core.errp_decoder import CORRECT, ERROR, rates  # noqa: E402
+from core.modes import errp_calib  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR,  # noqa: E402,F401
@@ -326,19 +343,6 @@ def adjust_threshold(app, model, save_path=None):
                   f"TPR {tpr * 100:.0f}%   ·   TNR {tnr * 100:.0f}%   ·   seuil {th:+.2f}", 2.2)
 
 
-def _archive(save_path, epochs, labels, groups, fs):
-    """Sauve un .npz horodaté des époques brutes (ré-analyse hors ligne, comme le P300)."""
-    data_dir = os.path.dirname(save_path)
-    os.makedirs(data_dir, exist_ok=True)
-    payload = dict(epochs=np.asarray(epochs), labels=np.asarray(labels),
-                   groups=np.asarray(groups), fs=fs, pre_s=ERRP_PRE_S, post_s=ERRP_EPOCH_S)
-    last = os.path.join(data_dir, "errp_calib_last.npz")
-    np.savez(last, **payload)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    np.savez(os.path.join(data_dir, f"errp_calib_{stamp}_n{len(labels)}.npz"), **payload)
-    return last
-
-
 def chemin_modele_horodate(dossier=None):
     """`data/errp_model_AAAAMMJJ_HHMMSS.joblib` — un fichier NEUF, jamais un écrasement.
 
@@ -347,18 +351,22 @@ def chemin_modele_horodate(dossier=None):
     du 24 juillet que ce chantier a explicitement choisi de préserver — le seul modèle ErrP
     enregistré au casque, celui dont viennent l'AUC 0,7763 (validation croisée groupée par bloc,
     200 essais, 5 blocs) et le p = 0,0099 sur 100 permutations. Une calibration de démonstration
-    par un étudiant le détruisait sans un mot. Les époques survivaient (`_archive` horodate les
-    `.npz`), mais aucun code de ce dépôt ne sait ré-entraîner depuis elles : le remède aurait été
-    une séance casque complète. Le MI a déjà perdu ses quatre modèles de cette façon, faute
-    d'époques ; le P300 a corrigé exactement ceci la veille (`p300_calibrate`, même fonction).
-    Rien n'appliquait cet invariant : seule une prose l'affirmait.
+    par un étudiant le détruisait sans un mot. Les époques survivaient (les `.npz` sont horodatés),
+    mais aucun code de ce dépôt ne sait ré-entraîner depuis elles : le remède aurait été une séance
+    casque complète. Le MI a déjà perdu ses quatre modèles de cette façon, faute d'époques ; le
+    P300 a corrigé exactement ceci la veille (`p300_calibrate`, même fonction).
+
+    Le nom est fabriqué par `core/modes/errp_calib.chemins_libres`, pas ici : c'est la calibration
+    du moteur qui le définit, et deux façons de le construire finiraient par diverger — l'une
+    lisible par `errp_models.MOTIF`, l'autre pas. Cadeau au passage : ce chemin est GARANTI LIBRE,
+    là où un `strftime` seul rendait le même nom à deux calibrations finies dans la même seconde.
 
     `errp_models.MOTIF` (`errp_model*.joblib`) liste déjà ces fichiers, du plus récent au plus
     ancien : le mode ErrP du moteur et l'appli pygame prennent donc automatiquement le dernier,
     sans qu'un nom fixe soit nécessaire nulle part.
     """
     dossier = os.path.dirname(ERRP_MODEL_PATH) if dossier is None else dossier
-    return os.path.join(dossier, f"errp_model_{time.strftime('%Y%m%d_%H%M%S')}.joblib")
+    return errp_calib.chemins_libres(dossier, 0)[0]
 
 
 def _results(app, model, n_err, n_tot, save_path=None):
@@ -443,8 +451,18 @@ def calibrate(app, trials=ERRP_CAL_TRIALS, blocks=ERRP_CAL_BLOCKS,
 
     n_tot = len(labels)
     n_err = int(sum(1 for lbl in labels if lbl == ERROR))
-    if n_tot < 8 or len(set(labels)) < 2:
-        print("[errp-cal] pas assez de données (ou une seule classe) -> pas d'entraînement.")
+    # ⚠️ Les planchers sont LUS dans `errp_calib`, pas recopiés ici. Ils y valaient 8 et ici 10 :
+    # entre les deux, cet écran acceptait d'entraîner et `errp_calib.entrainer` LEVAIT — une
+    # `ValueError` nue qui remonte jusqu'à `app.calib_errp`, lequel n'attrape qu'`Abort`, donc
+    # l'appli pygame mourait sur une séance simplement trop courte. Un seul jeu de planchers, et
+    # c'est celui sous lequel l'entraînement ne produit VRAIMENT rien d'utilisable (aucun score
+    # hors-pli, donc aucun seuil, donc un modèle que le mode refusera au démarrage).
+    par_classe = min(sum(1 for lbl in labels if lbl == ERROR),
+                     sum(1 for lbl in labels if lbl == CORRECT))
+    if (n_tot < errp_calib.MIN_EPOQUES or len(set(labels)) < 2
+            or par_classe < errp_calib.MIN_PAR_CLASSE):
+        print(f"[errp-cal] pas assez de données ({n_tot} époques, {par_classe} dans la classe la "
+              f"moins représentée) -> pas d'entraînement.")
         if not app.smoke:
             app.flash("Calibration insuffisante",
                       "trop peu d'époques d'erreur — rallonge la séance / vérifie la liaison", 3.5)
@@ -456,23 +474,30 @@ def calibrate(app, trials=ERRP_CAL_TRIALS, blocks=ERRP_CAL_BLOCKS,
         app.center(app.small, "balayage nfilter, seuil, baseline sLDA, test de permutation (~30 s)",
                    DIM, int(app.size[1] * 0.55))
         app.pygame.display.flip()
-    # smoke : n_perm=0 (permutation sautée, synthétique non signifiant) ; réel : ERRP_PERM_N
-    model = ErrPModel(fs=fs).fit(epochs, labels, groups=np.asarray(groups),
-                                 n_perm=0 if app.smoke else None)
-    model.save(save_path)
-    last = save_path if app.smoke else _archive(save_path, epochs, labels, groups, fs)
-
-    auc = model.cv_auc_
-    mt = model.metrics_ or {"tpr": 0.0, "tnr": 0.0, "bal_acc": 0.0}
-    sweep = "  ".join(f"nf{nf}={a * 100:.0f}%" for nf, a in sorted((model.sweep_ or {}).items()))
-    pp = "—" if model.perm_p_ is None else f"{model.perm_p_:.3f}"
-    slda = "—" if model.slda_auc_ is None else f"{model.slda_auc_ * 100:.1f}%"
-    print(f"[errp-cal] {n_err}/{n_tot} erreurs  "
-          f"AUC={'—' if auc is None else f'{auc * 100:.1f}%'} (nf retenu={model.nfilter_} ; {sweep})  "
-          f"perm p={pp}  sLDA={slda}  "
-          f"TPR={mt['tpr'] * 100:.0f}% TNR={mt['tnr'] * 100:.0f}% "
-          f"bal-acc={mt['bal_acc'] * 100:.0f}%  seuil={model.threshold_:+.2f}  "
-          f"modèle -> {os.path.basename(save_path)}  époques -> {os.path.basename(last)}")
+    # ⚠️ L'entraînement vit dans `core/modes/errp_calib.py`, une seule fois pour les deux chemins
+    # (cf. le ⚠️ de la docstring du module). On lui passe la géométrie avec laquelle CES époques-ci
+    # ont été découpées (`_epoch_now` : ERRP_PRE_S / ERRP_EPOCH_S), pas un défaut : le modèle la
+    # porte, et le mode la compare à la sienne avant d'accepter de décoder avec.
+    # smoke : n_perm=0 (permutation sautée, synthétique non signifiant) ; réel : ERRP_PERM_N.
+    # `blocs` : les GROUPES sont ceux que cette boucle a réellement joués — `errp_calib` les
+    # reconstruirait sinon depuis l'ordre d'arrivée, ce qui donne la même chose ici (un bloc = une
+    # tranche contiguë) mais n'a pas à être supposé.
+    npz = None if app.smoke else os.path.join(os.path.dirname(save_path),
+                                              os.path.basename(save_path)
+                                              .replace("errp_model_", "errp_calib_")
+                                              .replace(".joblib", f"_n{n_tot}.npz"))
+    res = errp_calib.entrainer(epochs, labels, fs, chemin_modele=save_path, chemin_npz=npz,
+                               pre_s=ERRP_PRE_S, post_s=ERRP_EPOCH_S,
+                               n_perm=0 if app.smoke else None, blocs=eff_blocks)
+    model, _err = errp_models.charger(save_path)
+    if model is None:
+        # Le modèle vient d'être écrit : s'il ne se relit pas, c'est le disque ou une version de
+        # bibliothèque, pas la séance. On le DIT plutôt que d'afficher un écran de résultat vide.
+        print(f"[errp-cal] ⚠️ modèle écrit mais illisible ({_err}) — pas d'écran de résultat")
+        return True
+    print(f"[errp-cal] {n_err}/{n_tot} erreurs  {res['verdict']}  "
+          f"modèle -> {os.path.basename(save_path)}"
+          + ("" if not npz else f"  époques -> {os.path.basename(npz)}"))
     if not app.smoke:
         _results(app, model, n_err, n_tot, save_path)
     return True
