@@ -311,6 +311,47 @@ MI_TRAIN_STEP_S = 1.0      # pas du découpage en fenêtres -> 3 fenêtres par e
 MI_SESSIONS = (10, 14, 18, 26)
 
 
+# --- Calibrations menées par une FENÊTRE de stimulus (P300, ErrP, c-VEP) ----------------------
+# Le Motor Imagery est ENDOGÈNE : le moteur mène sa calibration lui-même (les trois durées
+# ci-dessus). Les trois autres exigent un stimulus verrouillé à la frame, donc une fenêtre de
+# `src/stimulus/`, et le moteur y est PASSIF : il n'affiche rien, ne tire aucune consigne, ne
+# décompte aucun essai. Il ne voit la fenêtre QUE par les marqueurs qu'elle publie.
+#
+# Ces deux délais sont donc sa SEULE façon de distinguer « la séance se déroule » de « il ne se
+# passe plus rien ». Sans eux, une fenêtre qui ne se lance pas ou qui plante en plein milieu
+# laisserait la calibration en attente pour toujours, en affichant « séance en cours ».
+
+# Délai laissé à une fenêtre pour S'ANNONCER (`calib_start`) après le lancement de la calibration.
+# 30 s parce qu'une fenêtre pygame en PLEIN ÉCRAN met plusieurs secondes à s'initialiser (bascule
+# de mode vidéo, création du contexte, chargement des polices) et que la console la lance en même
+# temps qu'elle demande la calibration au moteur : le délai court donc à partir d'un instant où
+# la fenêtre n'existe pas encore. Passé ce délai, le diagnostic est binaire et il n'y en a pas
+# d'autre : ou la fenêtre ne s'est pas lancée, ou elle publie ses marqueurs sous un autre nom que
+# celui que le moteur écoute (cf. MARKER_STREAM_DEFAULT).
+CALIB_FENETRE_ATTENTE_S = 30.0
+
+# Silence au-delà duquel la fenêtre est réputée MORTE, une fois la séance commencée.
+# 15 s parce que le plus long silence NORMAL des trois protocoles est la pause entre deux manches
+# P300 — `PAUSE_ENTRE_MANCHES_S = 2,5 s` dans `src/stimulus/p300.py` — soit six fois la marge. Ce
+# qu'on cherche ici n'est pas un ralentissement mais un processus DISPARU : un seuil serré tuerait
+# des séances parfaitement saines (et une séance de calibration ne se refait pas gratuitement,
+# c'est plusieurs minutes de fixation), là où un seuil large ne coûte que 15 s d'attente dans le
+# seul cas où la fenêtre est déjà morte.
+CALIB_FENETRE_SILENCE_S = 15.0
+
+# Préfixe du dossier TEMPORAIRE où une calibration écrit avant que son résultat ne soit retenu.
+# Posé ici par le chantier « la console, seul point d'entrée » (tâche 3) et consommé par la tâche
+# 5 : la constante vit dans `core/config.py` plutôt que dans le module qui s'en sert, pour la même
+# raison que tout le reste de ce fichier — deux endroits qui nomment la même chose finissent par
+# diverger, et ici le second endroit serait celui qui NETTOIE.
+# Un préfixe EXPLICITE plutôt que le défaut de `tempfile` : un dossier oublié se reconnaît alors
+# d'un coup d'œil et se retrouve par son nom, au lieu de se confondre avec les temporaires du
+# système. ⚠️ Écrire d'abord ailleurs que dans `data/` n'est pas une précaution de style : `data/`
+# est un dépôt PUBLIC d'enregistrements EEG d'une personne identifiable, et son fichier le plus
+# récent est celui que le moteur ÉLIT par défaut — un modèle à moitié écrit y serait donc proposé.
+CALIB_TMP_PREFIX = "calib_candidat_"
+
+
 # --- c-VEP (3e mode : code-VEP, codes pseudo-aléatoires) ---------------------
 # Toutes les cibles affichent LE MÊME code (m-séquence), décalé circulairement. Le décodage
 # compare la réponse EEG au template appris, décalé de chaque lag -> la cible fixée gagne.
