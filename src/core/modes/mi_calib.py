@@ -217,7 +217,7 @@ class MICalibration(CalibrationRuntime):
 
 
 CALIB = Calib(
-    kind="console",
+    kind="moteur",
     label="Calibration Motor Imagery",
     briefing=BRIEFING,
     epoch_s=MI_IMAGERY_S,

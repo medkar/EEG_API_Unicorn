@@ -14,7 +14,8 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH,  # noqa: E402
-                         NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S, json_float, use_utf8_console)
+                         NEURO_KEY_CHANNELS, NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S,
+                         json_float, use_utf8_console)
 from core.lsl_io import DecodedNeuroPublisher, stream_name  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
@@ -140,6 +141,7 @@ SPEC = ModeSpec(
     family="passif",
     summary="Charge mentale, somnolence et engagement, en écart au repos du jour.",
     status="moteur",
+    key_channels=tuple(NEURO_KEY_CHANNELS),   # Fz et Pz portent les trois indices
     params=(
         Param(
             key="smoothing", label="Lissage", kind="float",

@@ -507,12 +507,14 @@ class EngineServer:
                 return {"accepted": False,
                         "reason": f"« {spec.label} » n'a pas de calibration — il n'apprend rien"}
             if calib.runtime_cls is None:
-                # Le c-VEP et le P300 : leur stimulus est verrouillé à la frame, une interface Qt
-                # ne peut pas le rendre. La raison est dans le contrat, on la transmet telle quelle.
+                # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré. Ce refus
+                # existait pour le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans
+                # l'appli pygame ; il ne reste, depuis le 2026-09-07, que le temps d'un chantier
+                # en cours. Dire « pas encore livrée » plutôt que d'inventer une cause.
                 return {"accepted": False,
-                        "reason": f"la calibration de « {spec.label} » n'est pas jouable par le "
-                                  f"moteur : {calib.reason or 'stimulus natif requis'} — passe "
-                                  f"par `python src/research/app.py`"}
+                        "reason": f"la calibration de « {spec.label} » est déclarée mais son "
+                                  f"runtime n'est pas livré : le moteur ne sait pas encore la "
+                                  f"jouer"}
             # ⚠️ Ce mode n'a PAS besoin d'être démarré : c'est même le cas normal. Le mode MI
             # refuse de démarrer sans modèle, or c'est justement la calibration qui en produit un.
             # Copie LOCALE de `self.calibration`, prise UNE fois : la boucle peut la remettre à
@@ -2014,9 +2016,17 @@ def _smoke_calibration_refus():
     chk(not r2.get("accepted") and "n'a pas de calibration" in (r2.get("reason") or ""),
         f"mode SANS calibration (SSVEP, la CCA n'apprend rien) : refusé ({r2.get('reason')})")
 
+    # ⚠️ Ce contrôle change de sens PENDANT le chantier « seul point d'entrée » (2026-09-07) : le
+    # c-VEP, le P300 et l'ErrP sont passés de `kind="natif"` (calibration jouée par l'appli
+    # pygame, refusée ici en renvoyant vers elle) à `kind="fenetre"` (jouée par le moteur, la
+    # fenêtre ne faisant qu'afficher). Tant que leur `runtime_cls` n'est pas livré, le refus
+    # subsiste mais dit autre chose — « déclarée, pas encore jouable » et non « va ailleurs ».
+    # Aux tâches 4, 7 et 8, les trois deviennent acceptées : ce contrôle devra alors migrer vers
+    # un mode encore dépourvu de runtime, ou disparaître.
     r3 = froid.submit("start_calibration", id="cvep")
-    chk(not r3.get("accepted") and "src/research/app.py" in (r3.get("reason") or ""),
-        f"calibration NATIVE (c-VEP) : refusée, en disant où aller à la place ({r3.get('reason')})")
+    chk(not r3.get("accepted") and "pas livré" in (r3.get("reason") or ""),
+        f"calibration déclarée mais sans runtime (c-VEP) : refusée, en disant que le moteur ne "
+        f"sait pas encore la jouer ({r3.get('reason')})")
 
     r4 = froid.submit("cancel_calibration")
     chk(not r4.get("accepted") and "aucune calibration" in (r4.get("reason") or ""),

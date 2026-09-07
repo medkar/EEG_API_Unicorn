@@ -95,14 +95,15 @@ class Console(QMainWindow):
             self.pages[spec["id"]] = page
             self.stack.addWidget(page)
 
-        # Une page de calibration par mode qui se calibre DEPUIS la console. Les autres (c-VEP,
-        # P300 : stimulus verrouillé à la frame) n'en ont pas — leur contrat le dit, et le moteur
-        # refuserait la commande de toute façon.
+        # Une page de calibration par mode que LE MOTEUR sait jouer. Le critère n'est plus `kind`
+        # (qui dit seulement qui mène le protocole — le moteur ou une fenêtre de stimulus) mais
+        # `jouable`, que le contrat calcule depuis son `runtime_cls`. Un mode dont la calibration
+        # est déclarée mais pas encore livrée n'a donc pas de page, et son bouton ne ment pas.
         self.beeps = Beeps()
         self.calib_pages = {}
         for spec in catalogue:
             calib = spec.get("calibration") or {}
-            if calib.get("kind") != "console" or spec["status"] != "moteur":
+            if not calib.get("jouable") or spec["status"] != "moteur":
                 continue
             page = CalibPage(spec, self)
             page.retour.connect(self.show_grid)
@@ -935,13 +936,15 @@ def _smoke():
     console.show_calibration("mi")
     cal = console.stack.currentWidget()
     chk(cal is console.calib_pages["mi"], "« Calibrer » ouvre la page de calibration du MI")
-    # Là encore le compte vient du CONTRAT : une page de calibration existe pour les modes du
-    # moteur dont la calibration est de genre « console ». Les autres (c-VEP, P300) ont un
-    # stimulus NATIF, verrouillé à la frame, que la console ne rend pas.
+    # Là encore le compte vient du CONTRAT, et le critère a changé le 2026-09-07 : ce n'est plus
+    # `kind == "console"` (OÙ la calibration vivait) mais `jouable` (le moteur a-t-il un runtime
+    # pour elle). Les deux coïncidaient tant que le MI était seul ; ils divergent dès qu'une
+    # calibration menée par une FENÊTRE devient jouable par le moteur — et c'est tout l'objet du
+    # chantier. Prendre `kind` ici laisserait les trois nouvelles pages invisibles.
     attendu_calib = [s["id"] for s in registry.catalog()
-                     if s["status"] == "moteur" and (s.get("calibration") or {}).get("kind") == "console"]
+                     if s["status"] == "moteur" and (s.get("calibration") or {}).get("jouable")]
     chk(sorted(console.calib_pages) == sorted(attendu_calib),
-        f"et exactement les modes dont le CONTRAT dit « calibration console » en ont une "
+        f"et exactement les modes dont le moteur sait JOUER la calibration en ont une "
         f"({sorted(console.calib_pages)} pour {sorted(attendu_calib)})")
 
     # 1. Avant : le briefing du CONTRAT, pas un texte recopié dans l'interface.

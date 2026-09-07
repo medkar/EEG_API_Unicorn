@@ -116,7 +116,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (ERRP_ARTIFACT_RATIO, ERRP_EPOCH_S, ERRP_PRE_S,  # noqa: E402
-                         ERRP_TNR_TARGET, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
+                         ERRP_MIDLINE, ERRP_TNR_TARGET, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
                          use_utf8_console)
 import numpy as np  # noqa: E402
 
@@ -633,6 +633,7 @@ SPEC = ModeSpec(
     id="errp", label="ErrP", family="passif",   # passif : une RÉACTION observée, pas un choix fait
     summary="Un verdict par feedback affiché : la machine vient-elle de se tromper (potentiel d'erreur).",
     status="moteur",
+    key_channels=tuple(ERRP_MIDLINE),   # Fz, Cz, Pz (xDAWN utilise les 8, mais le contact se juge là)
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: errp_models.modeles_disponibles(),
@@ -689,8 +690,8 @@ SPEC = ModeSpec(
         duration_s=8.0,            # même durée que le SSVEP : deux modes lancés ensemble PARTAGENT
         instruction="Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
     ),
-    calibration=Calib(kind="natif",
-                      reason="l'onset du feedback écran doit être horodaté à la frame"),
+    calibration=Calib(kind="fenetre", stimulus_id="errp",
+                      label="Calibrer l'ErrP"),
     # Le suffixe est le même littéral que celui que `DecodedErrPPublisher` construit lui-même via
     # `stream_name("decoded_errp")` (core/lsl_io.py) — la même convention que le MI (`decoded_mi`).
     # Les VOIES, elles, viennent de `errp_channel_labels()` : LA seule fonction qui les nomme, pour
@@ -838,9 +839,10 @@ def _selftest():
             f"l'époque déclarée vaut pré+post ({SPEC.marker_epoch_s:g})")
         chk(SPEC.rest.warmup_s == SSVEP_WARMUP_S and SPEC.rest.duration_s == 8.0,
             f"chauffe 15 s puis repos 8 s, comme le SSVEP ({SPEC.rest})")
-        chk(SPEC.calibration is not None and SPEC.calibration.kind == "natif"
-            and SPEC.calibration.runtime_cls is None,
-            "sa calibration reste NATIVE : l'appli pygame la joue, pas le moteur")
+        chk(SPEC.calibration is not None and SPEC.calibration.kind == "fenetre"
+            and SPEC.calibration.stimulus_id == "errp",
+            "sa calibration est menée par une FENÊTRE (l'onset du feedback doit être horodaté à "
+            "la frame, ce que Qt ne sait pas rendre) — le moteur, lui, écoute et entraîne")
         chk(SPEC.status == "moteur" and SPEC.stream == "decoded_errp",
             f"le mode est publié sur decoded_errp (status={SPEC.status!r}, stream={SPEC.stream!r})")
         chk(list(SPEC.channels_for(values)) == errp_channel_labels(),

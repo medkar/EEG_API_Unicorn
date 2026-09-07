@@ -78,7 +78,7 @@ donc strictement plus permissif que la référence à laquelle la séance casque
 ⚠️ **Ce fichier ne rend AUCUN stimulus.** Comme le P300 et l'ErrP, c'est une application EXTERNE
 (`stimulus/cvep.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
 le c-VEP demande de plus qu'eux est un verrouillage à la FRAME : une seule frame sautée décale le
-code et détruit la corrélation — c'est pourquoi sa calibration reste `Calib(kind="natif")`, jouée
+code et détruit la corrélation — c'est pourquoi sa calibration est `Calib(kind="fenetre")`, menée
 par l'appli pygame et jamais par la console.
 
 Autotest :
@@ -734,6 +734,7 @@ SPEC = ModeSpec(
     id="cvep", label="c-VEP", family="actif",
     summary="Cible fixée parmi N, par codes pseudo-aléatoires décalés (le plus rapide).",
     status="moteur",
+    key_channels=tuple(CVEP_CHANNELS),   # Pz, PO7, Oz, PO8 — le filtre spatial fait le tri
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=_modeles_disponibles,
@@ -796,7 +797,7 @@ SPEC = ModeSpec(
         #                            contre un repos du jour (contrairement au SSVEP/neuro/ErrP)
         instruction="Le casque se stabilise — reste immobile.",
     ),
-    calibration=Calib(kind="natif", reason="stimulus verrouillé à la frame", label="Calibrer"),
+    calibration=Calib(kind="fenetre", stimulus_id="cvep", label="Calibrer le c-VEP"),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrirait
     # sinon à deux endroits sans que rien ne les relie — et deux façons de nommer la même chose
     # finissent toujours par diverger (cf. `DecodedP300Publisher.SUFFIXE`).
@@ -1013,9 +1014,10 @@ def _selftest():
     chk(SPEC.stream == "decoded_cvep", f"publié sur decoded_cvep ({SPEC.stream})")
     chk(abs(SPEC.marker_epoch_s - 2.1) < 1e-9,
         f"la fenêtre de décision dimensionne le tampon, 2 x 63/60 = 2,1 s ({SPEC.marker_epoch_s:g})")
-    chk(SPEC.calibration is not None and SPEC.calibration.kind == "natif"
-        and SPEC.calibration.label == "Calibrer" and SPEC.calibration.runtime_cls is None,
-        "sa calibration reste NATIVE : l'appli pygame la joue, pas le moteur")
+    chk(SPEC.calibration is not None and SPEC.calibration.kind == "fenetre"
+        and SPEC.calibration.stimulus_id == "cvep",
+        "sa calibration est menée par une FENÊTRE : le code doit défiler frame par frame, et le "
+        "marqueur de cycle qu'elle publie est l'horloge sans laquelle il n'y a pas de phase")
     chk(SPEC.rest is not None and SPEC.rest.warmup_s == SSVEP_WARMUP_S
         and SPEC.rest.duration_s == 0.0,
         f"chauffe seule, pas de repos à mesurer — le c-VEP ne normalise pas contre un plancher "

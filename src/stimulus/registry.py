@@ -75,6 +75,26 @@ def _selftest():
     except KeyError as e:
         chk("connues" in str(e), f"…en disant lesquelles sont connues ({e})")
 
+    # --- La correspondance avec le CONTRAT, dans les deux sens ---------------------
+    # ⚠️ Ce contrôle est ici et pas dans `core/modes/registry.py::check()`, où il avait d'abord
+    # été écrit : `core` ne connaît que des CLÉS, jamais des fenêtres, et la frontière AST de
+    # `server.py --smoke` a refusé l'import — à juste titre. C'est ce module qui détient la
+    # correspondance, c'est donc lui qui la vérifie. `stimulus -> core` est autorisé.
+    from core.modes import registry as modes
+
+    attendues = {s.calibration.stimulus_id for s in modes.MODES
+                 if s.calibration is not None and s.calibration.kind == "fenetre"}
+    orphelines = sorted(attendues - set(FENETRES))
+    chk(not orphelines,
+        f"chaque `stimulus_id` déclaré par un mode a sa fenêtre ({orphelines or 'aucun orphelin'}) "
+        f"— sinon le bouton « Calibrer » lance un processus qui meurt aussitôt, et le clic "
+        f"redevient SILENCIEUX, le défaut que ce chantier répare")
+    inutilisees = sorted(set(FENETRES) - attendues)
+    chk(not inutilisees,
+        f"…et réciproquement, aucune fenêtre déclarée ici n'est orpheline d'un mode "
+        f"({inutilisees or 'aucune'}) : une entrée que plus personne ne demande est une entrée "
+        f"que personne ne corrigera")
+
     print(f"[stim-registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 

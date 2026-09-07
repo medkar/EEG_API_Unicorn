@@ -121,12 +121,12 @@ def charger(chemin):
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
     # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
     if not chemin:
-        # ⚠️ Le stimulus de calibration c-VEP est verrouillé à la frame, donc rendu par l'appli
-        # pygame et pas par la console (cf. `Calib(kind="natif")` du mode). Ce texte est celui du
-        # `help` du réglage « Modèle entraîné » : le même geste dit du même mot aux deux endroits
-        # où un étudiant peut le lire.
-        return None, ("aucun modèle désigné — lance `python src/research/app.py`, mode c-VEP, "
-                      "et calibre pour en produire un")
+        # ⚠️ Le stimulus de calibration c-VEP est verrouillé à la frame : il est rendu par une
+        # FENÊTRE de `src/stimulus/`, que la console lance (cf. `Calib(kind="fenetre")` du mode).
+        # Ce texte est celui du `help` du réglage « Modèle entraîné » : le même geste dit du même
+        # mot aux deux endroits où un étudiant peut le lire.
+        return None, ("aucun modèle désigné — ouvre la console, page c-VEP, et clique "
+                      "« Calibrer le c-VEP » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     nom = _os.path.basename(chemin)

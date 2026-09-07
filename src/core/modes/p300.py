@@ -63,7 +63,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_EPOCH_S, P300_MIN_REPS,  # noqa: E402
                          P300_N_TARGETS, P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S,
-                         P300_SELECT_MARGIN, SSVEP_WARMUP_S, use_utf8_console)
+                         P300_MIDLINE, P300_SELECT_MARGIN, SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
 from core import p300_models  # noqa: E402
@@ -526,6 +526,7 @@ SPEC = ModeSpec(
     family="actif",
     summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
     status="moteur",
+    key_channels=tuple(P300_MIDLINE),   # Fz, Cz, Pz — la ligne médiane, où le P300 culmine
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: p300_models.modeles_disponibles(),
@@ -551,9 +552,8 @@ SPEC = ModeSpec(
     ),
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
               instruction="Le casque se stabilise — reste immobile."),
-    calibration=Calib(kind="natif",
-                      reason="époques calées sur l'onset exact de chaque flash, rendu par "
-                             "l'application externe"),
+    calibration=Calib(kind="fenetre", stimulus_id="p300",
+                      label="Calibrer le P300"),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrivait à
     # deux endroits (`SPEC.stream` et le littéral de `DecodedP300Publisher`) sans que rien ne les
     # relie — deux façons de nommer la même chose finissent toujours par diverger.
@@ -1231,9 +1231,11 @@ def _selftest():
         chk(SPEC.stream == DecodedP300Publisher.SUFFIXE,
             f"...et ce nom vient du PUBLIEUR, pas d'un second littéral qui pourrait en diverger "
             f"({SPEC.stream} / {DecodedP300Publisher.SUFFIXE})")
-        chk(SPEC.calibration is not None and SPEC.calibration.kind == "natif"
-            and SPEC.calibration.runtime_cls is None,
-            "sa calibration reste NATIVE : le moteur ne la joue pas, l'appli pygame la joue")
+        chk(SPEC.calibration is not None and SPEC.calibration.kind == "fenetre"
+            and SPEC.calibration.stimulus_id == "p300",
+            "sa calibration est menée par une FENÊTRE : chaque époque est calée sur l'onset exact "
+            "d'un flash, que seule une fenêtre verrouillée à la frame sait produire — le moteur, "
+            "lui, écoute les marqueurs et entraîne")
         chk(all(p.affecte_decodage for p in SPEC.params if p.key != "stream_in"),
             "le modèle affecte le décodage ; le flux de marqueurs (juste le NOM écouté), non")
         chk(P300_ROUND_TIMEOUT_S > 0.0,

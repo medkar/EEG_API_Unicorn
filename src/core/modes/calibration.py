@@ -311,7 +311,7 @@ def _selftest():
 
     spec = ModeSpec(
         id="essai", label="Essai", family="actif", summary="", status="moteur",
-        calibration=Calib(kind="console", label="Calibration d'essai", epoch_s=4.0,
+        calibration=Calib(kind="moteur", label="Calibration d'essai", epoch_s=4.0,
                           params=(Param("trials_per_class", "Essais par classe", "int",
                                         default=3, min=1, max=40),),
                           runtime_cls=_Essai))

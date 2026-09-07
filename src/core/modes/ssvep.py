@@ -14,7 +14,7 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (SSVEP_BASELINE_S, SSVEP_WARMUP_S, ARTIFACT_SIGMA_RATIO,  # noqa: E402
-                         ALPHA_DEFAUT_HZ, use_utf8_console, choose_frequencies)
+                         ALPHA_DEFAUT_HZ, OCCIPITAL, use_utf8_console, choose_frequencies)
 import numpy as np  # noqa: E402
 
 from core.cca_decoder import CCADecoder  # noqa: E402
@@ -199,6 +199,7 @@ SPEC = ModeSpec(
     family="actif",
     summary="Quelle cible clignotante l'utilisateur regarde, ~5 fois par seconde.",
     status="moteur",
+    key_channels=tuple(OCCIPITAL),   # les 4 occipitales : le SSVEP y est maximal
     params=(
         Param(
             key="freqs",

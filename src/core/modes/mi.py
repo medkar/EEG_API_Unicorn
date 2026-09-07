@@ -220,6 +220,9 @@ SPEC = ModeSpec(
     family="actif",
     summary="Imagination d'un mouvement main gauche / main droite (CSP+LDA).",
     status="moteur",
+    key_channels=(1, 2, 3),   # C3, Cz, C4 — les voies motrices. ⚠️ Ce sont aussi
+                              # les deux qui SATURENT quand on rouvre la session
+                              # BrainFlow : le mode le plus exposé au piège.
     params=(
         Param(
             key="model",

@@ -148,13 +148,20 @@ class Rest:
 class Calib:
     """Comment ce mode s'entraîne : par qui, avec quels réglages, et pour quel coût en signal.
 
-    Deux valeurs de `kind`, et elles ne décrivent pas une préférence mais une CONTRAINTE :
-      - "console" — les consignes sont du texte et un décompte, rendus par la console. Le moteur
-        joue le protocole et enregistre. C'est le cas du Motor Imagery : il est ENDOGÈNE, donc il
-        n'a aucun stimulus à afficher à la milliseconde près.
-      - "natif" — le protocole a besoin d'un stimulus verrouillé à la frame (c-VEP, P300), qui ne
-        peut pas être rendu par une interface Qt. `reason` dit pourquoi, et la calibration reste
-        dans l'appli pygame.
+    Deux valeurs de `kind`. Elles disaient jusqu'au 2026-09-07 OÙ la calibration vivait
+    (« console » ou « natif », c'est-à-dire dans l'appli pygame) ; elles disent maintenant **qui
+    mène la ligne du temps**, parce que les quatre calibrations sont jouées par le MOTEUR et
+    affichées par la console :
+      - "moteur" — le moteur mène. Les consignes sont du texte et un décompte. C'est le cas du
+        Motor Imagery : il est ENDOGÈNE, il n'a aucun stimulus à afficher à la frame près.
+      - "fenetre" — une fenêtre de `src/stimulus/` mène, parce que le protocole exige un stimulus
+        verrouillé à la frame que Qt ne sait pas rendre. Le moteur est alors PASSIF : il écoute les
+        marqueurs, découpe ses époques par le chemin du décodage, et entraîne quand la fenêtre
+        annonce la fin. `stimulus_id` dit laquelle.
+
+    ⚠️ `stimulus_id` est une CLÉ, jamais un chemin de module. `core` ne nomme aucune fenêtre — il
+    tournerait sinon sur une machine sans écran en important du pygame. La résolution clé ->
+    commande vit dans `stimulus/registry.py`, et c'est la console qui fait le pont.
 
     ⚠️ `epoch_s` n'est pas décoratif : c'est la plus longue tranche que cette calibration
     prélèvera dans le tampon glissant du moteur. `EngineServer` dimensionne son tampon dessus. La
@@ -162,13 +169,27 @@ class Calib:
     porterait sur trois fois moins de données que l'écran n'en annonce.
     """
 
-    kind: str              # "console" | "natif"
-    reason: str = ""       # pourquoi "natif" — une contrainte PHYSIQUE, pas un goût
+    kind: str              # "moteur" (le moteur mène) | "fenetre" (une fenêtre de stimulus mène)
+    stimulus_id: str = ""  # la CLÉ que `stimulus/registry.py` résout ; "" si kind == "moteur"
     label: str = ""        # "Calibration Motor Imagery" — le titre de la page
     briefing: tuple = ()   # les consignes à lire AVANT de commencer, une ligne par élément
     params: tuple = ()     # les `Param` de la calibration (durée de séance…)
     epoch_s: float = 0.0   # la plus longue tranche prélevée dans le tampon du moteur
-    runtime_cls: object = None   # la classe `CalibrationRuntime`, ou None si "natif"
+    runtime_cls: object = None   # la classe du runtime, ou None si le moteur ne sait pas la jouer
+
+    def __post_init__(self):
+        if self.kind not in ("moteur", "fenetre"):
+            raise ValueError(f"kind inconnu : « {self.kind} » (attendu « moteur » ou « fenetre »)")
+        if self.kind == "fenetre" and not self.stimulus_id:
+            raise ValueError(
+                "une calibration « fenetre » doit déclarer son stimulus_id : sans lui, le bouton "
+                "« Calibrer » n'a aucune fenêtre à lancer, et le clic reste SILENCIEUX — le défaut "
+                "que ce chantier répare, réintroduit par le contrat lui-même")
+        if self.kind == "moteur" and self.stimulus_id:
+            raise ValueError(
+                f"une calibration « moteur » ne lance aucune fenêtre : stimulus_id "
+                f"« {self.stimulus_id} » est de trop (il ferait apparaître un bouton « Lancer le "
+                f"stimulus » sur un mode qui n'a pas de stimulus)")
 
     def defaults(self):
         """Les réglages par défaut de cette calibration, résolus maintenant.
@@ -200,6 +221,10 @@ class ModeSpec:
     stream: str = None         # suffixe du flux publié, ex. "decoded_ssvep"
     channels: tuple = ()       # voies de ce flux, quand elles sont FIXES
     channels_fn: object = None  # (params) -> voies, quand elles dépendent d'un réglage (SSVEP)
+    key_channels: tuple = ()   # les voies où CE mode lit son signal, pour le contrôle de liaison
+                               # de la console. Elles viennent de `core/config.py` (OCCIPITAL,
+                               # P300_MIDLINE…) : le mode les DÉCLARE, la console les surligne,
+                               # et aucune liste n'est recopiée dans l'interface.
     marker_epoch_s: float = 0.0   # tranche prélevée autour d'un marqueur (pré + post), 0 = ce
                                   # mode n'écoute pas les marqueurs. Dimensionne le tampon du
                                   # moteur : sous-dimensionné, CHAQUE époque serait tronquée en
@@ -537,7 +562,7 @@ def _selftest():
     # ce que le validateur lit. Un second validateur pour les calibrations serait une deuxième
     # vérité, avec ses propres messages de refus — le défaut que ce module existe pour éliminer.
     calib = Calib(
-        kind="console", label="Calibration d'essai",
+        kind="moteur", label="Calibration d'essai",
         briefing=("Première ligne.", "Deuxième ligne."),
         epoch_s=4.0,
         params=(Param("trials_per_class", "Essais par classe", "int", default=14,
@@ -555,9 +580,35 @@ def _selftest():
     chk(values is None and raison and "réglage inconnu" in raison,
         f"et un réglage inconnu est refusé pareil ({raison})")
 
-    vide = Calib(kind="natif", reason="stimulus verrouillé à la frame")
+    vide = Calib(kind="fenetre", stimulus_id="p300")
     chk(vide.defaults() == {} and vide.runtime_cls is None and vide.epoch_s == 0.0,
-        "une calibration NATIVE ne déclare ni réglage, ni runtime, ni époque")
+        "une calibration peut ne déclarer ni réglage, ni runtime, ni époque")
+
+    # --- `kind` et `stimulus_id` vont par paire ------------------------------------
+    # Les deux refus ci-dessous ferment la même porte par ses deux côtés, et chacun correspond à
+    # un défaut VISIBLE de l'interface : sans `stimulus_id`, le bouton « Calibrer » n'a aucune
+    # fenêtre à lancer et le clic reste SILENCIEUX (le défaut que ce chantier répare — cf. le
+    # test 1.13 de la recette, cinq clics d'affilée sur un bouton muet) ; avec un `stimulus_id`
+    # de trop, un bouton « Lancer le stimulus » apparaît sur un mode qui n'a pas de stimulus.
+    try:
+        Calib(kind="fenetre")
+        chk(False, "une calibration « fenetre » SANS stimulus_id doit être refusée")
+    except ValueError as e:
+        chk("stimulus_id" in str(e) and "SILENCIEUX" in str(e).upper(),
+            f"…et le refus nomme le champ ET la conséquence ({str(e)[:70]}…)")
+
+    try:
+        Calib(kind="moteur", stimulus_id="p300")
+        chk(False, "une calibration « moteur » AVEC un stimulus_id doit être refusée")
+    except ValueError as e:
+        chk("moteur" in str(e), f"…et le refus dit pourquoi ({str(e)[:70]}…)")
+
+    try:
+        Calib(kind="natif", stimulus_id="p300")
+        chk(False, "l'ancien vocabulaire (« natif », « console ») doit être REFUSÉ, pas ignoré")
+    except ValueError as e:
+        chk("moteur" in str(e) and "fenetre" in str(e),
+            f"…en nommant les deux valeurs attendues ({str(e)[:70]}…)")
 
     # Cas limites : rafraîchissement négatif, nul, fréquence négative
     _v, raison = validate(ecran, {"refresh_hz": -60.0, "freqs": [17.0, 18.0]})

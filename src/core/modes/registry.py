@@ -118,9 +118,15 @@ def serialize(spec, params=None):
             "duration_s": spec.rest.duration_s,
             "instruction": spec.rest.instruction,
         },
+        "key_channels": list(spec.key_channels),
         "calibration": None if spec.calibration is None else {
             "kind": spec.calibration.kind,
-            "reason": spec.calibration.reason,
+            "stimulus_id": spec.calibration.stimulus_id,
+            # Le moteur sait-il JOUER cette calibration ? La console en a besoin pour décider si
+            # elle ouvre une page — et elle ne peut pas le déduire de `kind`, qui dit seulement
+            # qui mène le protocole. Un `runtime_cls` à None est une calibration déclarée mais pas
+            # encore livrée : la tuile reste, le bouton ne ment pas.
+            "jouable": spec.calibration.runtime_cls is not None,
             "label": spec.calibration.label,
             "briefing": list(spec.calibration.briefing),
             "epoch_s": spec.calibration.epoch_s,
@@ -278,6 +284,20 @@ def check():
                 defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
                                f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
                                f"serait tronquée en silence")
+
+        # ⚠️ **Le contrôle « chaque `stimulus_id` désigne une fenêtre qui existe » n'est PAS ici**,
+        # et la première écriture de ce chantier s'y est trompée : elle importait
+        # `stimulus.registry` localement, et la frontière AST de `server.py --smoke` l'a
+        # refusée — à juste titre. `core` ne connaît pas les fenêtres, il ne connaît que des clés.
+        # Le contrôle vit donc chez celui qui détient la correspondance :
+        # `python src/stimulus/registry.py` lit le registre des modes et vérifie les deux sens.
+
+        # Les voies clés annoncées doivent exister sur le montage 8 voies de l'Unicorn. Une voie
+        # hors bornes ne lèverait rien : la console surlignerait dans le vide, et le contrôle de
+        # liaison validerait un contact qu'il n'a pas regardé.
+        hors_bornes = [c for c in spec.key_channels if not 0 <= int(c) < 8]
+        if hors_bornes:
+            defauts.append(f"{spec.id} : voies clés hors du montage 8 voies : {hors_bornes}")
 
         # Le même piège que pour la calibration, un cran plus loin : `marker_epoch_s` (ici)
         # dimensionne le tampon du moteur ; `pre_s`/`post_s` (côté runtime) décident ce qu'on en
