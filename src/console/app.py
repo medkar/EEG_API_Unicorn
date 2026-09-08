@@ -1483,9 +1483,73 @@ def _smoke():
         f"...et AUCUN chiffre du MI n'est fabriqué à côté ({cal_p3.details.text()!r})")
     chk("12 manches" in cal_p3.details.text() and "576 essais" in cal_p3.details.text(),
         f"...seulement ce que son résultat porte vraiment ({cal_p3.details.text()!r})")
+    # L'AUC du P300 est un DÉTAIL — elle accompagne la sélection sans jamais la remplacer. Cette
+    # ligne est le pendant de celle de l'ErrP juste en dessous : la page n'affiche l'AUC en détail
+    # que lorsqu'elle n'est PAS la mesure qui décide, et retirer ce détail pour l'ErrP ne doit pas
+    # le retirer ici du même geste.
+    chk("AUC cible/non-cible 71 %" in cal_p3.details.text(),
+        f"...dont son AUC, en DÉTAIL et jamais comme mesure qui décide ({cal_p3.details.text()!r})")
     chk(cal_p3.honnetete.text() == p300_calib.HONNETETE
         and "40 %" not in cal_p3.honnetete.text(),
         "et sa phrase d'honnêteté est CELLE DU P300, jamais celle du MI")
+
+    # --- et le TROISIÈME mode qui se calibre ici : l'ErrP -----------------------------------
+    # Il ne mesure NI accuracy par essai (MI), NI sélection parmi six cibles (P300) : il répond
+    # oui/non à chaque feedback, et le seul de ses chiffres qui ne soit pas mesuré au seuil qui l'a
+    # choisi est son AUC hors-pli. La page doit donc l'afficher COMME MESURE, contre un hasard de
+    # 50 %, sans rien fabriquer des deux autres modes. Les valeurs sont celles de la seule séance
+    # ErrP réellement enregistrée sur un cerveau (2026-07-24 : AUC 0,776, p = 0,0099, 200 essais).
+    from core.modes import errp_calib
+    cal_errp = console.calib_pages["errp"]
+    console.show_calibration("errp")
+    errp_fini = {**state, "calibration": {
+        "mode_id": "errp", "label": "Calibrer l'ErrP", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 200,
+        "total": 200, "duree_estimee_s": 420.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_errp_model_20260907_101500.joblib",
+                     "nom": "errp_model_20260907_101500.joblib",
+                     "enregistrement": "/tmp/calib/candidat_errp_calib_20260907_101500_n200.npz",
+                     "n_essais": 200, "n_erreurs": 56, "auc": 0.776, "perm_p": 0.0099,
+                     "tpr": 0.500, "tnr": 0.855, "hasard": 0.5,
+                     "verdict": "BON pour un ErrP mono-essai",
+                     "honnetete": errp_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_errp_model_20260907_101500.joblib"}}}
+    console.apply_state(errp_fini)
+    chk(("77.6" in cal_errp.resultat.text() or "77,6" in cal_errp.resultat.text())
+        and "50 %" in cal_errp.resultat.text(),
+        f"l'ErrP affiche SA mesure — l'AUC hors-pli — et SON hasard (50 %, pas 33 % ni 17 %) "
+        f"({cal_errp.resultat.text()})")
+    chk("AUC" in cal_errp.resultat.text() and "sélection" not in cal_errp.resultat.text(),
+        f"...sous SON libellé : ce mode n'a aucune cible à retrouver ({cal_errp.resultat.text()})")
+    chk("fenêtres" not in cal_errp.details.text() and "classes" not in cal_errp.details.text()
+        and "manches" not in cal_errp.details.text(),
+        f"...et AUCUN chiffre du MI ni du P300 n'est fabriqué à côté ({cal_errp.details.text()!r})")
+    chk("200 essais" in cal_errp.details.text() and "dont 56 erreurs" in cal_errp.details.text(),
+        f"...le nombre d'époques ET celui d'ERREURS, qui est la classe minoritaire dont tout "
+        f"dépend ({cal_errp.details.text()!r})")
+    # « attrape 50% » / « garde 86% » sans espace insécable : c'est la MÊME formulation, au
+    # caractère près, que la tuile ErrP de `live_views` — le même taux doit se lire pareil sur les
+    # deux écrans qui le montrent, et l'écart typographique avec le « 50 % » de la ligne du dessus
+    # est le prix assumé de cet alignement-là.
+    chk("attrape 50%" in cal_errp.details.text()
+        and "garde 86%" in cal_errp.details.text()
+        and "permutation p = 0.010" in cal_errp.details.text(),
+        f"...son point de fonctionnement et sa p-value, en DÉTAIL — jamais comme mesure qui "
+        f"décide : ces deux taux sont mesurés au seuil qui les a choisis "
+        f"({cal_errp.details.text()!r})")
+    # ⚠️ L'AUC est ici la mesure qui DÉCIDE : la répéter en détail l'afficherait deux fois, la
+    # seconde sous « cible/non-cible » — le vocabulaire du P300, qui n'a aucun sens pour un mode
+    # qui n'a ni cible ni non-cible mais des feedbacks corrects et erronés.
+    chk("cible/non-cible" not in cal_errp.details.text(),
+        f"...et l'AUC n'est PAS répétée sous le libellé d'un autre paradigme "
+        f"({cal_errp.details.text()!r})")
+    chk(cal_errp.honnetete.text() == errp_calib.HONNETETE
+        and "optimiste" in cal_errp.honnetete.text().lower(),
+        "et sa phrase d'honnêteté est CELLE DE L'ErrP — celle qui dit que ses deux taux sont "
+        "eux-mêmes optimistes, le seuil ayant été choisi sur les scores qui le mesurent")
+    chk("40 %" not in cal_errp.honnetete.text()
+        and "leave-one-round-out" not in cal_errp.honnetete.text(),
+        "...ni celle du MI, ni celle du P300")
     console.show_calibration("mi")      # la suite éprouve de nouveau la page du MI
 
     # 3bis. Après, mais SANS CV honnête mesurable (B2) : `cv_groupee: None` — pas assez d'essais

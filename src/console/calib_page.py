@@ -340,6 +340,13 @@ class CalibPage(QWidget):
     MESURES = (
         ("cv_groupee", "accuracy honnête (validation croisée par essai)"),
         ("selection", "sélection en leave-one-round-out (la cible désignée est-elle retrouvée ?)"),
+        # ⚠️ L'AUC vient EN DERNIER, et sa place dans cette liste est ce qui la rend correcte pour
+        # les deux modes qui la publient. Le P300 la rend AUSSI, mais ce n'est pas chez lui le
+        # chiffre qui décide (la sélection l'est) : la mettre plus haut lui ferait afficher la
+        # mauvaise mesure. L'ErrP, lui, ne publie qu'elle — il n'a ni manche à retrouver ni classe
+        # à choisir, il répond oui/non à chaque feedback, et son AUC hors-pli est le SEUL de ses
+        # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
+        ("auc", "AUC erreur/correct (validation croisée hors-pli, par bloc)"),
     )
     # Le détail, par clé présente elle aussi. `cv_naive` n'y est PAS et n'y sera jamais : elle est
     # gonflée de 10 à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
@@ -347,14 +354,22 @@ class CalibPage(QWidget):
         ("n_essais", "{} essais enregistrés"),
         ("n_fenetres", "{} fenêtres d'entraînement"),
         ("n_manches", "{} manches"),
+        ("n_erreurs", "dont {} erreurs"),
+        # Le point de FONCTIONNEMENT de l'ErrP, en détail et jamais comme mesure qui décide : ces
+        # deux taux sont mesurés au seuil qui les a choisis, donc optimistes par construction (sa
+        # phrase d'honnêteté le dit au long, juste en dessous).
+        ("tpr", "attrape {:.0%} des erreurs"),
+        ("tnr", "garde {:.0%} des bonnes commandes"),
+        ("perm_p", "permutation p = {:.3f}"),
     )
 
     def _mesure(self, resultat):
-        """(libellé, valeur) de la mesure qui décide, ou None si le résultat n'en publie aucune."""
+        """(clé, libellé, valeur) de la mesure qui décide, ou None si le résultat n'en publie
+        aucune. La CLÉ est rendue pour que le détail ne répète pas le chiffre principal."""
         for cle, libelle in self.MESURES:
             valeur = resultat.get(cle)
             if valeur is not None:
-                return libelle, float(valeur)
+                return cle, libelle, float(valeur)
         return None
 
     def _montrer_resultat(self, resultat):
@@ -364,10 +379,10 @@ class CalibPage(QWidget):
             # mesurable : … ») — l'afficher SEUL évite de le faire suivre d'un chiffre inexistant.
             self.resultat.setText(resultat.get("verdict", ""))
         else:
-            libelle, valeur = mesure
+            _cle, libelle, valeur = mesure
             hasard = resultat.get("hasard")
             # Le niveau du hasard À CÔTÉ : « 40 % » seul ne veut rien dire, et il ne vaut pas la
-            # même chose à 3 classes (33 %) qu'à 6 cibles (17 %).
+            # même chose à 3 classes (33 %) qu'à 6 cibles (17 %) qu'à une AUC (50 %).
             repere = "" if hasard is None else f" (hasard {float(hasard)*100:.0f} %)"
             self.resultat.setText(
                 f"{resultat.get('verdict', '')} — {libelle} : {valeur*100:.1f} %{repere}")
@@ -375,7 +390,11 @@ class CalibPage(QWidget):
         lignes = [f"Modèle : {resultat.get('nom', '')}"]
         morceaux = [gabarit.format(resultat[cle]) for cle, gabarit in self.DETAILS
                     if resultat.get(cle) is not None]
-        if resultat.get("auc") is not None:
+        # ⚠️ L'AUC ne figure en détail que quand elle n'est PAS la mesure qui décide — chez le P300,
+        # où elle accompagne la sélection. Chez l'ErrP elle EST la mesure : la répéter afficherait
+        # le même chiffre deux fois, la seconde fois sous un libellé (« cible/non-cible ») qui
+        # appartient à un autre paradigme.
+        if resultat.get("auc") is not None and (mesure is None or mesure[0] != "auc"):
             morceaux.append(f"AUC cible/non-cible {float(resultat['auc'])*100:.0f} %")
         if resultat.get("classes"):
             morceaux.append("classes : " + ", ".join(resultat["classes"]))
