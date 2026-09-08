@@ -3,8 +3,8 @@
 ⚠️ **Ce fichier ne contient plus le décodeur, ni la calibration.** `RCCAModel` et `RCCADecoder`
 sont partis dans `src/core/cvep_rcca.py` : le moteur en a besoin, donc ils suivent la règle du
 déménagement. `calibrate_rcca` (l'écran pygame qui calibrait CETTE variante) est parti dans
-`archive/cvep_rcca_pilot.py` (tâche 6) : la calibration au menu de `research/app.py` entraîne
-désormais le rCCA sur le stimulus DÉCALÉ que le produit garde, ce qui rend cet écran-là redondant
+`archive/cvep_rcca_pilot.py` (tâche 6) : la calibration que le produit garde — celle du MOTEUR,
+lancée depuis la console — entraîne le rCCA sur le stimulus DÉCALÉ, ce qui rend cet écran-là redondant
 — voir `archive/README.md` pour pourquoi il reste exécutable malgré tout. Ce qui reste ici, c'est
 la **fabrique de codes Gold** et le plan de cibles qui va avec — c'est-à-dire la moitié de
 l'hypothèse qui a été mesurée et **réfutée**.
@@ -138,7 +138,8 @@ def _demo(n_targets=6, n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=12, n_test=48,
     # ⚠️ Le `-` du `np.roll` ci-dessous était un `+`, et il CACHAIT un vrai défaut : le `scores`
     # d'origine recalait dans le mauvais sens, et cette ligne fabriquait sa fenêtre dans le
     # mauvais sens aussi — les deux erreurs s'annulaient ici, et seulement ici. Le pilotage en
-    # ligne (`research/app.py::_cvep_decode`), lui, note à des phases quelconques avec la
+    # ligne (`archive/cvep_pilot.py::_cvep_decode`, et le mode du moteur), lui, note à des
+    # phases quelconques avec la
     # convention de l'eCCA, donc à travers un alignement retourné. Le défaut a survécu parce que
     # cette ligne IMPRIMAIT son résultat sans jamais l'AFFIRMER — exactement le défaut que cette
     # fonction reproduisait un cran plus haut, pour le VERDICT entier. La convention, désormais
