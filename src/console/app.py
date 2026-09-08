@@ -47,8 +47,8 @@ if _ARGS.smoke:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,  # noqa: E402
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: E402
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
@@ -58,6 +58,7 @@ from console.fenetres import LanceurFenetre  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
+from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
@@ -792,6 +793,23 @@ def _smoke():
     chk(page.vue._barres["charge"].value() == attendu,
         f"et la barre porte le z réellement reçu ({page.vue._barres['charge'].value()} pour "
         f"z={z['charge']:+.1f} sur ±{live_views.PassiveView.SPAN:g})")
+
+    # Chaque barre porte le NOM en clair, la formule et le SENS de la montée — et les trois
+    # viennent du moteur (`core.neuro_monitor.INDEX_DESCRIPTIONS`), pas d'une liste recopiée dans
+    # l'interface. Cette page affichait la CLÉ brute (« charge ») pendant que l'écran pygame
+    # montrait les trois : deux écrans du même produit qui disaient deux choses du même chiffre,
+    # et le seul des deux qu'un étudiant gardera était le moins explicite.
+    console.apply_state(neuro_state)
+    etiquettes = [page.vue.barres.itemAt(i, QFormLayout.LabelRole).widget().text()
+                  for i in range(page.vue.barres.rowCount())]
+    nom, formule, sens = neuro_monitor.INDEX_DESCRIPTIONS["charge"]
+    porteuse = [t for t in etiquettes if nom in t]
+    chk(porteuse and formule in porteuse[0] and sens in porteuse[0],
+        f"la barre « charge » porte son nom, sa formule et son sens de montée "
+        f"({porteuse[0][:70] if porteuse else 'AUCUNE étiquette ne porte le nom'}…)")
+    chk(all(cle in neuro_monitor.INDEX_DESCRIPTIONS for cle in neuro_monitor.INDEX_KEYS),
+        "…et les trois indices publiés ont tous leur description : une clé sans description "
+        "retomberait en silence sur son nom brut, sans formule ni sens")
 
     # Le bouton « ← Modes » est CLIQUÉ, pas contourné : c'est la seule sortie de la page.
     page.bouton_retour.click()

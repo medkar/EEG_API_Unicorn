@@ -53,7 +53,7 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS
                     P300_SELECT_MARGIN, P300_STOP_MARGIN,
                     p300_targets, RHO_MIN, SSVEP_BASELINE_S, UDP_HOST,
                     available_frequencies, choose_frequencies, use_utf8_console)
-from core.neuro_monitor import IndexNormalizer, NeuroDecoder  # noqa: E402
+from core.neuro_monitor import INDEX_DESCRIPTIONS, INDEX_KEYS, IndexNormalizer, NeuroDecoder  # noqa: E402
 from research.controller import SSVEPController  # noqa: E402
 from research.ssvep_stimulus import is_on as ssvep_on  # noqa: E402
 from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN, Abort, App)  # noqa: E402
@@ -625,11 +625,15 @@ def mode_p300(app, model_path=None, dynamic=False):
 # Voir neuro_monitor.py pour les formules et leur limite (indices corrélés, dérivants). Pas de
 # thread de décodage/émission : sans stimulus clignotant, le calcul (PSD ~ms) tient dans la boucle.
 
-_NEURO_VIEW = [   # (clé, libellé, formule courte, couleur, sens de la montée)
-    ("charge",     "Charge mentale", "θ(Fz,Cz) / α post.", ACCENT, "+ = plus chargé"),
-    ("somnolence", "Somnolence",     "α postérieur",       WARN,   "+ = assoupissement"),
-    ("engagement", "Engagement",     "β/(α+θ) post-c.",    GO,     "+ = plus attentif"),
-]
+# (clé, libellé, formule courte, couleur, sens de la montée)
+# ⚠️ Les TEXTES viennent du moteur (`core.neuro_monitor.INDEX_DESCRIPTIONS`) depuis le 2026-09-08 :
+# ils étaient écrits ici, et la console — l'autre écran du même produit — n'en avait aucun, elle
+# affichait la clé brute « charge ». Seule la COULEUR reste locale : c'est de la présentation, et
+# les deux interfaces n'ont pas les mêmes.
+_NEURO_COULEURS = {"charge": ACCENT, "somnolence": WARN, "engagement": GO}
+_NEURO_VIEW = [(cle, *INDEX_DESCRIPTIONS[cle][:2],
+                _NEURO_COULEURS[cle], INDEX_DESCRIPTIONS[cle][2])
+               for cle in INDEX_KEYS]
 
 
 def _neuro_sample(app, decoder):

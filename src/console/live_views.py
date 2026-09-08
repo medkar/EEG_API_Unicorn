@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, Q
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import SPAN_SEUILS, classement_relatif, span_correlation  # noqa: E402
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
+from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
 
 
 class TracesView(QWidget):
@@ -430,7 +431,23 @@ class PassiveView(QWidget):
                 barre.setRange(-100, 100)
                 barre.setFormat("%v")
                 self._barres[cle] = barre
-                self.barres.addRow(QLabel(cle), barre)
+                # Le nom en clair, la formule et le SENS de la montée viennent du MOTEUR
+                # (`core.neuro_monitor.INDEX_DESCRIPTIONS`), jamais d'une liste recopiée ici.
+                # Cette page affichait la CLÉ brute — « charge » — pendant que l'écran pygame
+                # montrait « Charge mentale · θ(Fz,Cz) / α postérieur · + = plus chargé » : deux
+                # écrans du même produit qui disaient deux choses du même chiffre. Une barre sans
+                # son sens de montée ne dit pas si elle est bon signe.
+                nom, formule, sens = INDEX_DESCRIPTIONS.get(cle, (cle, "", ""))
+                etiquette = QLabel(f"<b>{nom}</b><br>"
+                                   f"<span style='color:#8a8f9c; font-size:10px'>"
+                                   f"{formule}<br>{sens}</span>" if formule else f"<b>{nom}</b>")
+                self.barres.addRow(etiquette, barre)
+            # ⚠️ Écrêtage LINÉAIRE, et c'est un choix, pas un oubli. L'écran pygame comprime en
+            # `tanh(z / SPAN)` pour éviter un plafond brutal au-delà de ±SPAN. Le porter ici a été
+            # essayé le 2026-09-08 et ABANDONNÉ : `tanh` comprime aussi À L'INTÉRIEUR de la plage
+            # (z = +1,2 sur ±3 donne 37 % au lieu de 40 %), donc la barre cesse d'être un relevé
+            # linéaire du z reçu — ce que le test de cette page vérifie nommément. On perd la
+            # lisibilité du cas courant pour gagner un cas rare, l'inverse du compromis voulu.
             part = max(-1.0, min(float(valeur) / self.SPAN, 1.0))
             self._barres[cle].setValue(int(part * 100))
 

@@ -46,6 +46,33 @@ from core.config import (FS_UNICORN, NEURO_ARTIFACT_RATIO, NEURO_BANDS,  # noqa:
 
 INDEX_KEYS = ("charge", "somnolence", "engagement")
 
+# Comment CHAQUE indice se dit à quelqu'un qui le lit pour la première fois : son nom en clair, la
+# formule en une ligne, et le SENS de la montée. Sans les trois, une barre étiquetée « charge »
+# qui monte ne dit pas si c'est bon signe, ni ce qu'elle mesure.
+#
+# ⚠️ Ces textes vivaient dans `research/app.py` (`_NEURO_VIEW`), c'est-à-dire dans le banc d'essai,
+# et la console n'en avait aucun : elle affichait la CLÉ brute (« charge »), sans formule ni sens.
+# Deux écrans du même produit disaient donc deux choses différentes du même chiffre. Ils sont
+# montés ici le 2026-09-08, avec le calcul qui les produit — la couleur, elle, reste à chaque
+# interface, c'est de la présentation.
+#
+# L'ordre est celui de `INDEX_KEYS`, et il est vérifié par l'autotest : deux listes parallèles qui
+# se désalignent afficheraient la formule de la somnolence sous la barre de la charge, sans qu'une
+# seule exception ne soit levée.
+INDEX_DESCRIPTIONS = {
+    "charge":     ("Charge mentale", "θ(Fz,Cz) / α postérieur", "+ = plus chargé"),
+    "somnolence": ("Somnolence",     "α postérieur",            "+ = assoupissement"),
+    "engagement": ("Engagement",     "β / (α+θ) postéro-central", "+ = plus attentif"),
+}
+
+if set(INDEX_DESCRIPTIONS) != set(INDEX_KEYS):
+    # Levé à l'IMPORT, pas dans un test : un indice publié sans description retombe en silence sur
+    # sa clé brute dans la console (« charge », sans formule ni sens de montée), et une description
+    # orpheline ne s'affiche nulle part. Les deux passeraient tous les autotests du dépôt.
+    raise RuntimeError(
+        f"INDEX_DESCRIPTIONS et INDEX_KEYS ne décrivent pas les mêmes indices : "
+        f"{sorted(set(INDEX_DESCRIPTIONS) ^ set(INDEX_KEYS))} n'est que d'un côté")
+
 
 def highpass_filter(x, fs, cutoff):
     """Passe-haut léger (Butterworth ordre 2, filtfilt) — retire la dérive lente des électrodes
