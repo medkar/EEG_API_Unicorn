@@ -34,12 +34,12 @@ sys.path.insert(0, os.path.join(
 from core.config import (CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_MIN_VOTES,  # noqa: E402
                     CVEP_RCCA_CORR_MIN, CVEP_RCCA_MODEL_PATH, CVEP_VOTE_LEN, DATA_DIR,
                     empreinte_dossier, use_utf8_console)
-from research.app import Live, _live_loop, _running, _vote  # noqa: E402  (machinerie PARTAGÉE avec
-                                                             # le SSVEP, resté dans app.py : Live,
-                                                             # le fil de décodage/émission, le rendu)
 from research.cvep_rcca import RCCADecoder, RCCAModel, build_targets_rcca  # noqa: E402
 from research.itr import itr as _itr  # noqa: E402
-from research.ui import Abort, App  # noqa: E402
+# La machinerie PARTAGÉE (Live, le fil de décodage/émission, le rendu, le vote) vivait dans
+# `research/app.py` ; elle est dans `research/ui.py` depuis le 2026-09-08, l'appli pygame ayant été
+# supprimée — voir `archive/README.md`.
+from research.ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E402
 
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
@@ -279,28 +279,40 @@ def main(argv=None):
             # temporaire (jamais le vrai `data/`), et on vérifie que le fichier écrit porte un nom
             # HORODATÉ, pas le nom fixe.
             #
-            # ⚠️ **Détourné aux DEUX endroits, pas un seul — vécu, pas anticipé.** `CVEP_RCCA_
-            # MODEL_PATH` est importé indépendamment ICI (`from core.config import ...`, en tête
-            # de CE fichier) ET dans `research.cvep_calibrate` (que lit `chemin_modele_horodate`) :
-            # deux liaisons de nom SÉPARÉES vers la même valeur d'origine, et patcher une seule ne
-            # protège que le code qui la lit, PAS un futur correctif qui lirait l'autre. Une
-            # mutation de preuve rouge écrite pour cette tâche a lu CETTE copie-ci, non patchée à
-            # l'époque, et a réellement écrasé `data/cvep_rcca_model.npz` une DEUXIÈME fois avant
-            # d'être repérée et corrigée. Les deux sont maintenant détournées.
-            import research.cvep_calibrate as _cal_mod
+            # ⚠️ **Détourner le module que la fonction LIT, et le PROUVER avant d'écrire.**
+            # Histoire de ce détournement, trois accidents pour une seule leçon :
+            #   1. il ne patchait que la copie de `CVEP_RCCA_MODEL_PATH` de l'écran de calibration,
+            #      pas celle importée en tête de CE fichier — deux liaisons de nom séparées vers la
+            #      même valeur ;
+            #   2. une mutation de preuve rouge a lu la copie non patchée et écrasé
+            #      `data/cvep_rcca_model.npz` une deuxième fois ;
+            #   3. le 2026-09-08, `chemin_modele_horodate` a DÉMÉNAGÉ dans `core/modes/cvep_calib.py`
+            #      (chantier « la console, seul point d'entrée », tâche 8) : elle lit désormais le
+            #      `CVEP_MODEL_PATH` de CE module-là, et patcher l'écran de calibration ne
+            #      détournait plus rien. Mesuré : ce smoke a écrit un
+            #      `cvep_rcca_model_<horodatage>.npz` dans le VRAI `data/`, sous un nom que
+            #      `cvep_models.MOTIF` liste — donc proposable comme modèle du jour.
+            # Patcher « tous les endroits » est un jeu qu'on reperd à chaque déménagement. Ce qui
+            # tient, c'est de patcher le module que la fonction lit ET de VÉRIFIER le détournement
+            # sur son résultat, AVANT tout appel : le jour où elle redéménage, l'assertion
+            # ci-dessous rougit sans qu'une seule ligne n'ait été écrite dans `data/`.
+            import core.modes.cvep_calib as _horodate_mod
             _ce_module_rcca = sys.modules[__name__]
             avant_repli = set(os.listdir(tmp))
-            _cvep_model_path_reel = _cal_mod.CVEP_MODEL_PATH
-            _cvep_rcca_model_path_reel_cal = _cal_mod.CVEP_RCCA_MODEL_PATH
+            _cvep_model_path_reel = _horodate_mod.CVEP_MODEL_PATH
             _cvep_rcca_model_path_reel_ici = _ce_module_rcca.CVEP_RCCA_MODEL_PATH
-            _cal_mod.CVEP_MODEL_PATH = os.path.join(tmp, "cvep_model.npz")
-            _cal_mod.CVEP_RCCA_MODEL_PATH = os.path.join(tmp, "cvep_rcca_model.npz")
+            _horodate_mod.CVEP_MODEL_PATH = os.path.join(tmp, "cvep_model.npz")
             _ce_module_rcca.CVEP_RCCA_MODEL_PATH = os.path.join(tmp, "cvep_rcca_model.npz")
             try:
+                vise = _horodate_mod.chemin_modele_horodate("rCCA")
+                assert os.path.dirname(os.path.abspath(vise)) == os.path.abspath(tmp), (
+                    f"le repli de `calibrate_rcca` écrirait AILLEURS que dans le dossier "
+                    f"temporaire de ce smoke ({vise}) : `chemin_modele_horodate` ne lit plus le "
+                    f"`CVEP_MODEL_PATH` détourné ci-dessus (a-t-elle changé de module ?). Ne PAS "
+                    f"l'appeler — c'est le vrai `data/` qu'elle remplirait")
                 calibrate_rcca(app, save_path=None)   # <- LE REPLI, jamais explicite
             finally:
-                _cal_mod.CVEP_MODEL_PATH = _cvep_model_path_reel
-                _cal_mod.CVEP_RCCA_MODEL_PATH = _cvep_rcca_model_path_reel_cal
+                _horodate_mod.CVEP_MODEL_PATH = _cvep_model_path_reel
                 _ce_module_rcca.CVEP_RCCA_MODEL_PATH = _cvep_rcca_model_path_reel_ici
             nouveaux_repli = set(os.listdir(tmp)) - avant_repli
             assert "cvep_rcca_model.npz" not in nouveaux_repli, (

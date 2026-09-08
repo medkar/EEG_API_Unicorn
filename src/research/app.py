@@ -29,14 +29,11 @@ mode à l'autre est instantané (ESC ramène au menu, sans rouvrir le Bluetooth)
 """
 
 import argparse
-import contextlib
 import os
 import shutil
 import sys
 import tempfile
-import threading
 import time
-from collections import Counter
 
 import numpy as np
 
@@ -56,79 +53,10 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS, COMMANDS
 from core.neuro_monitor import INDEX_DESCRIPTIONS, INDEX_KEYS, IndexNormalizer, NeuroDecoder  # noqa: E402
 from research.controller import SSVEPController  # noqa: E402
 from research.ssvep_stimulus import is_on as ssvep_on  # noqa: E402
-from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN, Abort, App)  # noqa: E402
+from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR, OUTLINE,  # noqa: E402
+                         WARN, Abort, App, _live_loop, _running)
 
 
-# --- État partagé entre le rendu (60 fps) et le décodage (thread séparé) ----
-# Le décodage ne DOIT PAS tourner dans la boucle de rendu : une CCA de 10 ms suffirait à
-# faire sauter une frame, et le clignotement perdrait sa régularité (SSVEP/c-VEP inutilisables).
-
-class Live:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.stop = threading.Event()
-        self.cmd, self.scores, self.sigma, self.ready = None, {}, 0.0, False
-        self.frame, self.t_flip = 0, time.perf_counter()
-
-    def publish(self, cmd, scores, sigma):
-        with self.lock:
-            self.cmd, self.scores, self.sigma, self.ready = cmd, scores, sigma, True
-
-    def snapshot(self):
-        with self.lock:
-            return self.cmd, dict(self.scores), self.sigma, self.ready
-
-    def mark_frame(self, frame):
-        """Horodate la frame qui vient d'être affichée (sert à retrouver la phase du code)."""
-        with self.lock:
-            self.frame, self.t_flip = frame, time.perf_counter()
-
-    def phase(self, refresh, code_len):
-        """Position actuelle dans le code, extrapolée depuis la dernière frame affichée."""
-        with self.lock:
-            f, t = self.frame, self.t_flip
-        return int(f + (time.perf_counter() - t) * refresh) % code_len
-
-
-def _sender_loop(app, live, hz=15.0):
-    """Ré-émet la consigne courante en continu : sans réémission, le chien de garde de
-    l'actionneur coupe au bout de 0,5 s (cf. docs/robot_testbed.md)."""
-    while not live.stop.is_set():
-        cmd, _, _, _ = live.snapshot()
-        app.emit(cmd["jx"] if cmd else 0.0, cmd["jy"] if cmd else 0.0)
-        time.sleep(1.0 / hz)
-
-
-def _vote(buffer, min_votes, name_to_cmd):
-    winner, count = Counter(buffer).most_common(1)[0]
-    return name_to_cmd[winner] if (winner is not None and count >= min_votes) else None
-
-
-# --- Rendu commun aux modes ------------------------------------------------
-
-def _panel(app, order, scores, threshold, cmd, sigma, ready, subtitle, scale=1.0):
-    pg = app.pygame
-    w, h = app.size
-    x, y = int(w * 0.06), int(h * 0.68)
-    barw = int(w * 0.30)
-    if not ready:
-        app.center(app.big, "acquisition...", DIM, int(h * 0.62))
-        return
-    title = cmd["name"] if cmd else "—   (rien détecté)"
-    app.center(app.big, title, GO if cmd else DIM, int(h * 0.60))
-    for i, name in enumerate(order):
-        v = float(scores.get(name, 0.0))
-        ry = y + i * int(h * 0.045)
-        pg.draw.rect(app.win, BAR_BG, (x + int(w * 0.13), ry, barw, 16))
-        col = GO if (cmd and cmd["name"] == name) else ACCENT
-        pg.draw.rect(app.win, col,
-                     (x + int(w * 0.13), ry, int(barw * min(max(v / scale, 0.0), 1.0)), 16))
-        tx = x + int(w * 0.13) + int(barw * min(threshold / scale, 1.0))
-        pg.draw.line(app.win, WARN, (tx, ry - 3), (tx, ry + 19), 2)   # repère du seuil
-        app.win.blit(app.small.render(f"{name:<8} {v:5.2f}", True, FG), (x, ry - 2))
-    app.hud(f"{subtitle}   σ≈{sigma:.0f}   seuil={threshold:.2f}   "
-            f"{'⚠ UDP ROBOT ACTIF' if app.send else 'UDP off'}   ESC=menu",
-            WARN if app.send else DIM)
 
 
 def _arrow_painter(app, plan, polys, on_fn, highlight_target=False):
@@ -145,47 +73,6 @@ def _arrow_painter(app, plan, polys, on_fn, highlight_target=False):
                 pg.draw.polygon(app.win, GO, polys[d], 8)
     return paint
 
-
-def _live_loop(app, live, order, threshold, subtitle, paint, scale=1.0):
-    """Boucle de rendu commune : `paint(frame, cmd)` dessine les cibles, le reste est partagé.
-
-    Le paramètre `paint` existe parce que les modes n'ont plus la même géométrie : SSVEP
-    utilise 4 directions de flèche, le c-VEP une couronne de N cibles (c'est justement ce qui
-    lui permet de dépasser 4 commandes).
-
-    ⚠️ Aucun mode à stimulus ne doit surligner la cible détectée : un élément statique lumineux
-    en pleine fovée écrase la modulation de contraste, donc la réponse — la détection retombe,
-    le surlignage disparaît, puis revient. Le retour visuel passe par le panneau, hors du regard.
-    """
-    frame = 0
-    while True:
-        app.drain()
-        app.win.fill(BG)
-        cmd, scores, sigma, ready = live.snapshot()
-        paint(frame, cmd)
-        _panel(app, order, scores, threshold, cmd, sigma, ready, subtitle, scale=scale)
-        app.pygame.display.flip()
-        live.mark_frame(frame)
-        app.clock.tick(int(app.refresh) + 5)
-        frame += 1
-        if app.smoke and frame >= 40:
-            return
-
-
-@contextlib.contextmanager
-def _running(app, decode_fn, *args):
-    """Démarre décodage + émission, puis nettoie — y compris un stop robot franc en sortant."""
-    live = Live()
-    threading.Thread(target=decode_fn, args=(app, live) + args, daemon=True).start()
-    threading.Thread(target=_sender_loop, args=(app, live), daemon=True).start()
-    try:
-        yield live
-    except Abort:
-        pass                 # ESC = retour au menu, pas une erreur
-    finally:
-        live.stop.set()
-        time.sleep(0.15)
-        app.emit(0.0, 0.0)   # consigne neutre en quittant le mode
 
 
 # --- Mode 1 : SSVEP --------------------------------------------------------

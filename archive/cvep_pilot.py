@@ -31,11 +31,11 @@ sys.path.insert(0, os.path.join(
 from core.config import (CVEP_CHANNELS, CVEP_CORR_MIN, CVEP_DECISION_CYCLES,  # noqa: E402
                     CVEP_MIN_VOTES, CVEP_MODEL_PATH, CVEP_VOTE_LEN, DATA_DIR,
                     empreinte_dossier, use_utf8_console)
-from research.app import Live, _live_loop, _running, _vote  # noqa: E402  (machinerie PARTAGÉE avec
-                                                             # le SSVEP, resté dans app.py : Live,
-                                                             # le fil de décodage/émission, le rendu)
 from research.itr import itr as _itr  # noqa: E402
-from research.ui import Abort, App  # noqa: E402
+# La machinerie PARTAGÉE (Live, le fil de décodage/émission, le rendu, le vote) vivait dans
+# `research/app.py` ; elle est dans `research/ui.py` depuis le 2026-09-08, l'appli pygame ayant été
+# supprimée — voir `archive/README.md`.
+from research.ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E402
 
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
