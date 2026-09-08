@@ -252,9 +252,14 @@ class ErrPRuntime(ModeRuntime):
                 ecarts.append(f"{nom} : modèle {valeur}, moteur {attendu:g}")
         if not ecarts:
             return None
+        # ⚠️ La marche à suivre nomme la console, PLUS l'appli pygame : depuis le 2026-09-07 c'est
+        # elle qui lance la fenêtre de stimulus et le moteur qui entraîne. Un refus qui donne le
+        # bon diagnostic et la MAUVAISE marche à suivre coûte plus cher qu'un refus muet —
+        # l'étudiant fait ce qu'on lui dit, produit un modèle par le second chemin (celui dont
+        # l'épochage n'est pas celui du décodage), et cherche la panne ailleurs.
         return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
                 f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Recalibre "
-                f"(`python src/research/app.py`, mode ErrP) plutôt que de le forcer.")
+                f"(console, page ErrP, « Calibrer l'ErrP ») plutôt que de le forcer.")
 
     def _sans_scores_oof(self):
         """La phrase à dire si le modèle n'a pas de scores hors-pli — None si tout va bien.
@@ -281,7 +286,7 @@ class ErrPRuntime(ModeRuntime):
             cause = getattr(self.model, "echec_oof_", None)
             return (f"ce modèle n'a pas de scores hors-pli "
                     f"({cause or 'calibration trop courte ou dégénérée'}) — impossible d'y régler "
-                    f"un seuil. Recalibre (`python src/research/app.py`, mode ErrP) plutôt que de "
+                    f"un seuil. Recalibre (console, page ErrP, « Calibrer l'ErrP ») plutôt que de "
                     f"le forcer.")
         return None
 
@@ -643,7 +648,8 @@ SPEC = ModeSpec(
               choices_fn=lambda: errp_models.modeles_disponibles(),
               help="Le modèle produit par une calibration ErrP, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des verdicts plausibles et faux. Aucun modèle "
-                   "dans la liste ? Lance `python src/research/app.py`, mode ErrP, et calibre."),
+                   "dans la liste ? Ouvre la console, page ErrP, et clique « Calibrer l'ErrP » : "
+                   "la fenêtre de stimulus mène la piste, le moteur entraîne."),
         Param(
             key="tnr_target",
             label="Bonnes commandes gardées",
@@ -798,9 +804,17 @@ def _selftest():
         _os.makedirs(vide, exist_ok=True)
         errp_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
         _v, raison = validate(SPEC, {})
+        # ⚠️ Le refus doit envoyer là où l'on calibre AUJOURD'HUI. Il a nommé `research/app.py`
+        # jusqu'au 2026-09-07 — et CETTE assertion exigeait ce nom-là, donc elle CLOUAIT la
+        # mauvaise marche à suivre. L'écran pygame existe toujours, ce qui rend l'erreur coûteuse :
+        # l'étudiant qu'on y envoie produit bel et bien un modèle, par le second chemin d'épochage
+        # (l'horloge de l'appli, pas les horodatages LSL du moteur) — celui que ce chantier existe
+        # pour retirer. Même geste, même texte que `p300.py`, où la phrase a déjà été fausse deux
+        # fois. On exige donc le nouveau chemin ET l'absence de l'ancien.
         chk(raison is not None and "aucun choix disponible" in raison
-            and "research/app.py" in raison,
-            f"sans modèle, le mode refuse en disant quoi faire ({raison})")
+            and "console" in raison and "Calibrer" in raison
+            and "research/app.py" not in raison,
+            f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")
 
         # Un modèle jetable, entraîné sur de l'ErrP synthétique (même recette que
         # `errp_models._selftest` : 40 essais, 30 % d'erreurs, 4 blocs — assez pour une AUC

@@ -45,12 +45,17 @@ def charger(chemin):
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
     # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
     if not chemin:
-        # ⚠️ la console n'a PAS de page de calibration ErrP (le stimulus — piste + feedback — vit
-        # dans l'appli pygame, cf. `errp_calibrate.py`) : ce texte est celui du `help` du réglage
-        # « Modèle entraîné » côté console ET celui qu'un étudiant lit ici — le même geste dit du
-        # même mot aux deux endroits où il peut le lire.
-        return None, ("aucun modèle désigné — lance `python src/research/app.py`, mode ErrP, "
-                      "et calibre pour en produire un")
+        # ⚠️ Ce texte a été FAUX, et il l'a été parce qu'il décrivait un état du dépôt : il
+        # disait, en toutes lettres, que « la console n'a PAS de page de calibration ErrP » et
+        # renvoyait à l'appli pygame. Depuis le 2026-09-07 elle en a une — le stimulus est rendu
+        # par une FENÊTRE de `src/stimulus/` que la console lance elle-même (`Calib(kind="fenetre")`
+        # du mode) et c'est le moteur qui entraîne. L'écran pygame, lui, existe toujours : envoyer
+        # là-bas ne produit donc pas une erreur visible, mais un modèle découpé par l'horloge de
+        # l'appli au lieu des horodatages LSL du moteur. C'est le texte du `help` du réglage
+        # « Modèle entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le
+        # lit. Même correction que `core/p300_models.charger`, où elle a déjà été faite.
+        return None, ("aucun modèle désigné — ouvre la console, page ErrP, et clique "
+                      "« Calibrer l'ErrP » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:
@@ -85,7 +90,7 @@ def charger(chemin):
         # désigné » 25 lignes plus haut disait déjà, elle, le vrai geste. Deux instructions
         # contradictoires pour la même panne : on garde celle qu'un étudiant peut suivre.
         return None, (f"modèle hérité (module {module!r}, attendu {_MODULE_ATTENDU!r}), abandonné "
-                      f"délibérément — recalibre (`python src/research/app.py`, mode ErrP) : "
+                      f"délibérément — recalibre (console, page ErrP, « Calibrer l'ErrP ») : "
                       f"{_os.path.basename(chemin)}")
     # `ErrPModel` n'HÉRITE pas de `P300Model`, il le CONTIENT (`self.core`) : un pickle d'ErrP
     # porte donc DEUX chemins de module, et c'est le second qui SCORE (`score` -> `self.core.pipe`).
@@ -99,7 +104,7 @@ def charger(chemin):
     if noyau != _NOYAU_ATTENDU:
         return None, (f"le noyau P300 de ce modèle vient du module {noyau!r} (attendu "
                       f"{_NOYAU_ATTENDU!r}) : sa coquille est neuve mais ce qui CALCULE les scores "
-                      f"est hérité — recalibre (`python src/research/app.py`, mode ErrP) : "
+                      f"est hérité — recalibre (console, page ErrP, « Calibrer l'ErrP ») : "
                       f"{_os.path.basename(chemin)}")
     # ⚠️ Correction de revue (tâche 3) : `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la
     # calibration a au moins 10 essais, 2 classes, et une classe minoritaire d'au moins 2 membres
@@ -122,7 +127,7 @@ def charger(chemin):
         cause = getattr(modele, "echec_oof_", None) or (
             "cause non enregistrée — modèle produit avant que `fit` ne la note")
         return None, (f"pas de scores hors-pli, donc aucun seuil réglable ({cause}) : recalibre "
-                      f"(`python src/research/app.py`, mode ErrP) : {_os.path.basename(chemin)}")
+                      f"(console, page ErrP, « Calibrer l'ErrP ») : {_os.path.basename(chemin)}")
     return modele, None
 
 
@@ -356,6 +361,7 @@ def _selftest():
             chk(_m is None and raison and "aucun modèle" in raison,
                 f"charger({entree!r}) rend une raison au lieu de lever ({raison})")
 
+
         # 1. Un modèle d'un module ÉTRANGER est refusé EN LE NOMMANT, pas par une exception obscure.
         etranger = _os.path.join(dossier, "errp_model_etranger.joblib")
         joblib.dump(_ModeleEtranger(), etranger)
@@ -471,6 +477,24 @@ def _selftest():
         chk(modele_degenere.echec_oof_ and modele_degenere.echec_oof_ in (raison or ""),
             f"...et la raison RECOPIE le diagnostic posé par fit lui-même, mot pour mot "
             f"({modele_degenere.echec_oof_!r})")
+
+        # ⚠️ LES QUATRE REFUS ENSEMBLE : chacun envoie là où l'on calibre AUJOURD'HUI. Tous les
+        # quatre nommaient `python src/research/app.py` jusqu'au 2026-09-07 ; depuis, c'est la
+        # console qui lance la fenêtre de stimulus et le moteur qui entraîne. L'écran pygame
+        # existe TOUJOURS, et c'est ce qui rend l'erreur coûteuse : y envoyer ne produit aucune
+        # panne visible, juste un modèle découpé par l'horloge de l'appli au lieu des horodatages
+        # LSL du moteur — le second chemin d'épochage que ce chantier existe pour retirer. Un
+        # refus au bon diagnostic et à la MAUVAISE marche à suivre coûte plus cher qu'un refus
+        # muet. Cette phrase a déjà été fausse deux fois côté P300 : on la cloue ici, dans les
+        # DEUX sens, et sur les quatre refus à la fois plutôt qu'un par un — c'est le quatrième
+        # ajouté demain qui, sans ça, repartirait avec l'ancienne adresse.
+        raisons = [charger(None)[1] or "", charger(etranger)[1] or "",
+                   charger(noyau_etranger)[1] or "", charger(degenere)[1] or ""]
+        chk(all("console" in r and "Calibrer" in r for r in raisons)
+            and not any("research/app.py" in r for r in raisons),
+            f"chacun des {len(raisons)} refus de `charger` envoie à la CONSOLE, jamais à l'appli "
+            f"pygame — qui produirait bien un modèle, mais par l'autre chemin d'épochage "
+            f"({[r[:40] for r in raisons]})")
         chk(degenere not in modeles_disponibles(dossier),
             f"...et il n'apparaît donc pas dans la liste proposée à l'étudiant "
             f"({modeles_disponibles(dossier)})")
