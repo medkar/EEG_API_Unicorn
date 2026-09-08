@@ -200,12 +200,41 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 
-# Ce que le moteur JETTE avant d'écouter pour de bon : sa chauffe (l'offset DC de l'Unicorn dérive
-# après ouverture) puis son repos (il y mesure la référence du rejet d'artefact). Valeurs lues dans
-# `core/modes/errp.py` (SPEC.rest) : `warmup_s=SSVEP_WARMUP_S`, `duration_s=8.0`. C'est la plus
-# longue attente des cinq modes, et `wait_for_consumers` répond « oui » bien avant qu'elle finisse.
+# Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
+# et en calibration, et les confondre a coûté une séance entière** (voir plus bas).
+#
+# En DÉCODAGE, c'est `ErrPRuntime` qui tourne : chauffe (l'offset DC de l'Unicorn dérive après
+# ouverture) PUIS repos, pendant lequel il mesure la référence de son rejet d'artefact et veut un
+# écran immobile. Les deux sont jetés (`errp.py::_jeter_marqueurs_de_chauffe`). Valeurs lues dans
+# `core/modes/errp.py` (SPEC.rest) : `warmup_s=SSVEP_WARMUP_S`, `duration_s=8.0`.
 ATTENTE_MOTEUR_REPOS_S = 8.0
-ATTENTE_MOTEUR_S = SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S
+ATTENTE_MOTEUR_DECODAGE_S = SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S
+# En CALIBRATION, c'est `ErrPCalibration` qui tourne, et elle n'a AUCUNE phase de repos : ses
+# phases sont chauffe → essais → entraînement (`core/modes/calibration.py::PHASES`, où « rest » ne
+# figure pas). Elle ne mesure aucune référence d'artefact — elle ne décode rien.
+#
+# ⚠️ **Cette attente a valu 23 s ici aussi, et c'était FAUX — mesuré, pas relu.** La valeur était
+# lue sur le bon fichier mais sur le mauvais RUNTIME : le repos du mode de DÉCODAGE, ajouté à
+# l'attente d'une CALIBRATION qui ne le joue jamais. C'est le motif « mesurer ailleurs que là où ça
+# sert », relevé quatre fois au chantier c-VEP.
+#
+# ⚠️ Et ce n'était pas seulement 8 s perdues à fixer une piste immobile. Le socle ABANDONNE une
+# calibration après `CALIB_FENETRE_SILENCE_S` (15 s) sans le moindre marqueur, décompté depuis la
+# fin de SA chauffe : l'échéance du premier pas tombe donc `SSVEP_WARMUP_S +
+# CALIB_FENETRE_SILENCE_S` = 30 s après `start_calibration`. En en consommant 23, la fenêtre ne
+# laissait plus que 7 s à son propre démarrage — init pygame, `set_mode`, mesure du
+# rafraîchissement, et jusqu'à 5 s de `wait_for_consumers`. MESURÉ en rejouant la ligne du temps du
+# socle : à 7,5 s de démarrage, la calibration abandonne (« la fenêtre de stimulus s'est arrêtée en
+# pleine séance ») avant qu'un seul pas ait été joué, en accusant une fenêtre parfaitement vivante.
+# À la chauffe seule, le budget de démarrage repasse à 15 s, et cette fenêtre s'aligne enfin sur
+# celles du P300 et du c-VEP, qui n'ont jamais attendu que leur chauffe.
+ATTENTE_MOTEUR_S = SSVEP_WARMUP_S
+
+# Les deux postes du DÉMARRAGE de cette fenêtre, ceux qui doivent tenir dans ce que l'attente
+# ci-dessus ne consomme pas. Ils ne règlent rien : ils existent pour que `--smoke` puisse VÉRIFIER
+# que le budget les couvre (cf. son contrôle « budget de démarrage »).
+ATTENTE_CONSOMMATEUR_MAX_S = 5.0   # le défaut de `run(attente_consommateur_s=…)`
+MARGE_INIT_PYGAME_S = 5.0          # init + `set_mode` plein écran + mesure du rafraîchissement
 
 # En dessous, la piste est dégénérée — cf. la garde de `run` et le ⚠️ de la docstring du module.
 MIN_CELLS = 3
@@ -349,12 +378,16 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # ensuite tout ce qui arrive pendant sa chauffe et son repos (`_jeter_marqueurs_de_chauffe`
         # core/modes/errp.py). Marcher pendant ce temps, c'est offrir ~23 pas dont AUCUN ne sera
         # décodé — et le repos du moteur, lui, demande un écran immobile.
+        # ⚠️ `ATTENTE_MOTEUR_DECODAGE_S`, pas `ATTENTE_MOTEUR_S` : ici c'est bien le MODE qui
+        # tourne, donc chauffe ET repos. La calibration, elle, n'a pas de repos — cf. les deux
+        # constantes en tête de fichier, qui ne valent PAS la même chose pour cette raison.
         print(f"[errp-stim] le moteur écoute — mais il JETTE tout pendant sa chauffe et son repos "
-              f"(~{ATTENTE_MOTEUR_S:g} s : {SSVEP_WARMUP_S:g} + {ATTENTE_MOTEUR_REPOS_S:g} s, cf. "
-              f"core/modes/errp.py). Piste STATIQUE en attendant — les pas décodés seront ceux "
-              f"d'après. `--no-wait` pour démarrer tout de suite.")
-        attente_initiale_s = ATTENTE_MOTEUR_S
-        note_initiale = f"le moteur chauffe (~{ATTENTE_MOTEUR_S:g} s) — la piste démarre après"
+              f"(~{ATTENTE_MOTEUR_DECODAGE_S:g} s : {SSVEP_WARMUP_S:g} + "
+              f"{ATTENTE_MOTEUR_REPOS_S:g} s, cf. core/modes/errp.py). Piste STATIQUE en attendant "
+              f"— les pas décodés seront ceux d'après. `--no-wait` pour démarrer tout de suite.")
+        attente_initiale_s = ATTENTE_MOTEUR_DECODAGE_S
+        note_initiale = (f"le moteur chauffe (~{ATTENTE_MOTEUR_DECODAGE_S:g} s) — la piste "
+                         f"démarre après")
 
     w, h = size
     cy = h / 2
@@ -455,16 +488,18 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         if attente_consommateur_s > 0 and not outlet.have_consumers():
             print(f"[errp-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
                   f"Lance la calibration depuis la console, ou ferme cette fenêtre.")
-        # La chauffe ET le repos du moteur (~23 s) : les pas joués pendant ce temps sont comptés
-        # et JETÉS (`_jeter_marqueurs_de_chauffe`), donc la séance serait plus courte que ce que
-        # l'écran annonce. Le `calib_start`, lui, est bien retenu par le moteur pendant sa chauffe.
+        # La CHAUFFE du moteur (~15 s) : les pas joués pendant ce temps sont comptés et JETÉS
+        # (`marker_calib::encaisser`, phase « chauffe »), donc la séance serait plus courte que ce
+        # que l'écran annonce. Le `calib_start`, lui, est bien retenu par le moteur pendant sa
+        # chauffe — c'est pour ça qu'il part AVANT cette attente et pas après.
+        # ⚠️ Pas le repos du MODE : une calibration n'en a pas, et l'attendre quand même faisait
+        # abandonner la séance avant son premier pas (cf. `ATTENTE_MOTEUR_S` en tête de fichier).
         attente_initiale_s = (ATTENTE_MOTEUR_S if attente_moteur_s is None
                               else float(attente_moteur_s))
         note_initiale = "le casque se stabilise — installe-toi, ne bouge plus"
         if attente_initiale_s > 0:
-            print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe et son repos "
-                  f"(~{attente_initiale_s:g} s) : piste STATIQUE en attendant, le premier pas "
-                  f"part après.")
+            print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe (~{attente_initiale_s:g} "
+                  f"s) : piste STATIQUE en attendant, le premier pas part après.")
 
     # ⚠️ La piste doit être VUE avant son premier pas : sans cet écran, le tout premier feedback
     # est aussi la première image de la séance, l'utilisateur n'a pas eu le temps de voir d'où le
@@ -773,6 +808,34 @@ def _smoke(n_cells, taux_erreur):
         "…et les trois durées aussi : ce sont celles sous lesquelles les époques du modèle ont "
         "été enregistrées")
 
+    # --- Le BUDGET de démarrage : ce que la fenêtre laisse au socle avant qu'il la croie morte ---
+    # ⚠️ Cette assertion a été écrite APRÈS avoir mesuré la panne, pas en prévention. La fenêtre
+    # attendait la chauffe du moteur PLUS le repos du MODE ErrP (8 s) — un repos qu'une CALIBRATION
+    # ne joue jamais (`core/modes/calibration.py::PHASES` n'a pas de « rest »). Or le socle abandonne
+    # une calibration après `CALIB_FENETRE_SILENCE_S` sans marqueur, décompté depuis la fin de sa
+    # chauffe : tout ce que la fenêtre attend est pris sur CE budget-là, et le reste est ce qu'il
+    # lui reste pour démarrer (init pygame, `set_mode`, mesure du rafraîchissement, jusqu'à 5 s de
+    # `wait_for_consumers`). À 23 s d'attente il ne restait que 7 s, et une fenêtre lente était
+    # déclarée morte avant son premier pas — en séance, cela coûte l'installation du casque.
+    #
+    # On exige donc que le reste couvre au moins `wait_for_consumers` PLUS une marge d'init. Écrit
+    # comme une SOUSTRACTION des constantes du socle, jamais comme un nombre : sinon la prochaine
+    # personne qui rallonge la chauffe rouvrirait le trou sans qu'aucun test ne bronche.
+    from core.config import CALIB_FENETRE_SILENCE_S
+    budget_demarrage_s = SSVEP_WARMUP_S + CALIB_FENETRE_SILENCE_S - ATTENTE_MOTEUR_S
+    chk(budget_demarrage_s >= ATTENTE_CONSOMMATEUR_MAX_S + MARGE_INIT_PYGAME_S,
+        f"la fenêtre laisse {budget_demarrage_s:.0f} s à son propre démarrage avant que le socle "
+        f"ne la croie morte, soit au moins les {ATTENTE_CONSOMMATEUR_MAX_S:g} s de "
+        f"`wait_for_consumers` plus {MARGE_INIT_PYGAME_S:g} s d'init pygame — sous ce seuil, une "
+        f"calibration ABANDONNE avant son premier pas en accusant une fenêtre vivante (mesuré à "
+        f"7 s de budget)")
+    chk(ATTENTE_MOTEUR_S == SSVEP_WARMUP_S
+        and ATTENTE_MOTEUR_DECODAGE_S == SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S,
+        f"...et les deux attentes restent DISTINCTES : le décodage attend le repos du mode "
+        f"({ATTENTE_MOTEUR_DECODAGE_S:g} s), la calibration ne l'attend pas "
+        f"({ATTENTE_MOTEUR_S:g} s) — c'est `ErrPCalibration` qui tourne alors, et elle n'a aucune "
+        f"phase de repos")
+
     # ⚠️ Ce qu'AUCUN test ne couvre, ni avant ni maintenant : la PLACE où ces durées sont jouées.
     # `PAUSE_NOUVELLE_COURSE_S` ne l'est pas au même endroit des deux côtés (là-bas une fois par
     # BLOC, ici après chaque course). Écart assumé, chiffré dans la docstring du module.
@@ -850,7 +913,7 @@ def _smoke(n_cells, taux_erreur):
         # `error: true`, c'est-à-dire exactement le cas où intention et EFFET divergent. Le taux
         # d'erreurs, lui, se vérifie à grande échelle en partie A — pas sur six pas.
         # `attente_moteur_s=0.4` : assez pour qu'un écran statique précède le premier feedback (le
-        # contrôle de frame CHANGÉE en a besoin), sans subir les 23 s réelles.
+        # contrôle de frame CHANGÉE en a besoin), sans subir la chauffe réelle.
         journal_c, vues = [], []
         fait_c = run(windowed=True, refresh=60.0, n_cells=n_cells, taux_erreur=1.0,
                      calibrer=True, essais=6, max_run_steps=5, attente_moteur_s=0.4,
@@ -1156,7 +1219,8 @@ def _parse_args(argv):
                    help="graine du tirage des erreurs : rejoue EXACTEMENT la même séquence (pour "
                         "refaire une séance à l'identique, ou pour la dépouiller hors ligne)")
     p.add_argument("--no-wait", action="store_true",
-                   help="ne pas attendre le moteur (ni ses ~23 s de chauffe) : émetteur seul")
+                   help="ne pas attendre le moteur (ni sa chauffe : ~23 s en décodage, ~15 s en "
+                        "calibration, qui n'a pas de repos) : émetteur seul")
     p.add_argument("--calibrer", action="store_true",
                    help="séance de CALIBRATION : même piste, plus calib_start / calib_end, et "
                         "chaque feedback porte son étiquette `error` (ce que le décodage ne fait "
