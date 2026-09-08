@@ -10,7 +10,7 @@ sont en bas ; deux d'entre elles appellent une décision qui n'est pas la mienne
 | `src/core/modes/cvep_calib.py` **(neuf)** | `CVEPCalibration`, `entraine_les_deux`/`gagnant` montés depuis `research`, le verdict par McNemar, les chemins horodatés |
 | `src/core/modes/cvep.py` | son `Calib` gagne `runtime_cls`, `epoch_s`, `briefing` |
 | `src/stimulus/cvep.py` | `--calibrer` : `calib_start`/`cue`/`block_end`/`calib_end`, le programme entrelacé, la sonde à pixels du cercle, la section C7 du smoke |
-| `src/research/cvep_calibrate.py` | réduit de **1202 à 758 lignes** : sa moitié d'entraînement appelle `core` |
+| `src/research/cvep_calibrate.py` | réduit de **1202 à 760 lignes** : sa moitié d'entraînement appelle `core` |
 | `src/core/cvep_code.py` | `blocs_entrelaces` — la règle de protocole que l'appli pygame et la fenêtre partagent |
 | `src/core/config.py` | `CVEP_CAL_SETTLE_CYCLES = 4`, hissée depuis la fenêtre |
 | `src/core/server.py` | `modele_rcca` dans `_FICHIERS_CANDIDAT` (défaut réel, cf. plus bas) |
