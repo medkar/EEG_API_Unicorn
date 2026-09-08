@@ -424,6 +424,18 @@ CVEP_CAL_CYCLES = 15          # cycles enregistrés PAR cible
 # fortement en cours de séance (mesuré : 34% / 28% / 66% sur les trois tiers du 2026-07-20),
 # les dernières cibles paraissaient bien meilleures. C'était un artefact de protocole.
 CVEP_CAL_BLOCKS = 3
+# Cycles JETÉS au début de chaque bloc entrelacé : le regard se déplace vers la nouvelle cible, et
+# la réponse visuelle au code met une fraction de seconde à s'installer. Les enregistrer donnerait
+# des époques étiquetées sur une cible que l'œil n'avait pas encore trouvée.
+# ⚠️ 4 cycles = 4,2 s à 60 Hz, et ce nombre n'est pas choisi à la main : c'est ce que le protocole
+# validé de `src/research/cvep_calibrate.py` obtenait en DEUX morceaux — un écran de transition de
+# 1,8 s (« Change de cible ») PUIS 2 cycles de settle (2,1 s). La fenêtre `src/stimulus/cvep.py`,
+# elle, ne peut pas se permettre l'écran de transition : elle doit CONTINUER à faire clignoter le
+# code, sinon l'horloge du moteur se tait et sa référence de phase devient périmée
+# (CVEP_PEREMPTION_CYCLES, 3,15 s — l'écran de 1,8 s passait tout juste, et une seule seconde de
+# plus l'aurait fait basculer). Les deux morceaux fusionnent donc en cycles jetés, à durée totale
+# équivalente. Ils sont comptés dans la durée annoncée du protocole, jamais dans les époques.
+CVEP_CAL_SETTLE_CYCLES = 4
 # Cycles moyennés par décision. Mesuré à 6 cibles sur 150 cycles (2026-07-20, cvep_analyze.py) :
 #   1 cycle 42.7% -> 15.4 bits/min | 2 : 48.6% -> 11.2 | 3 : 56.2% -> 11.1 | 4 : 66.7% -> 12.8
 # L'accuracy monte avec k, mais l'ITR PLAFONNE À k=1 : quadrupler la latence pour gagner 24

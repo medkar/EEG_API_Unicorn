@@ -28,7 +28,7 @@ from core.config import (CH_NAMES, CVEP_BAND, CVEP_CAL_BLOCKS,  # noqa: E402
                     CVEP_CAL_CYCLES, CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_LAG_ROTATION,
                     CVEP_MODEL_PATH, CVEP_RCCA_MODEL_PATH, FS_UNICORN, cvep_lag_gap_ms,
                     use_utf8_console)
-from core.cvep_code import build_targets, is_on  # noqa: E402
+from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 # ⚠️ `_mcnemar_p` et `SEUIL_MCNEMAR` sont NÉS ici (commit `bd3b588`) et ont DÉMÉNAGÉ dans `core/` :
 # `core/cvep_rcca.py::_rejouer` (la commande `--seuils`) en a besoin lui aussi, et `core/`
@@ -78,24 +78,14 @@ def _briefing(app):
 
 
 def _make_blocks(plan, cycles, n_blocks):
-    """Découpe les cycles de chaque cible en `n_blocks` blocs, puis MÉLANGE l'ordre de passage.
+    """Le plan des blocs entrelacés — DÉLÈGUE à `core.cvep_code.blocs_entrelaces`.
 
-    ⚠️ Sans ça, chaque cible occupe une tranche de temps distincte et « quelle cible » devient
-    indissociable de « à quel moment » : mesuré le 2026-07-20, l'accuracy passait de 34% sur le
-    premier tiers de la séance à 66% sur le dernier, ce qui faisait passer les deux dernières
-    cibles pour les meilleures. Entrelacer répartit l'effet d'apprentissage sur toutes les cibles.
+    ⚠️ La règle a DÉMÉNAGÉ dans `core/` (chantier « la console, seul point d'entrée », tâche 8) :
+    la fenêtre `src/stimulus/cvep.py` la joue elle aussi maintenant, et `stimulus` n'a pas le
+    droit d'importer `research`. Deux exemplaires de la même règle de protocole finiraient par
+    diverger sans que personne le voie. Ce passe-plat reste pour ne pas toucher `calibrate()`.
     """
-    per = max(1, cycles // n_blocks)
-    blocks = []
-    for target in plan:
-        left = cycles
-        for b in range(n_blocks):
-            n = left if b == n_blocks - 1 else min(per, left)
-            if n > 0:
-                blocks.append((target, n))
-            left -= n
-    random.shuffle(blocks)
-    return blocks
+    return blocs_entrelaces(plan, cycles, n_blocks, random)
 
 
 def _wilson_hi(acc, n, z=1.96):

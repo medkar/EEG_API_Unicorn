@@ -77,6 +77,44 @@ def is_on(frame, target_code):
     return bool(target_code[frame % len(target_code)])
 
 
+def blocs_entrelaces(plan, cycles, n_blocs, rng=None):
+    """Le PLAN d'une calibration : `[(cible, nb de cycles), ...]`, dans un ordre MÉLANGÉ.
+
+    Chaque cible est découpée en `n_blocs` blocs de `cycles // n_blocs` cycles, puis TOUS les
+    blocs sont mélangés ensemble.
+
+    ⚠️ **L'entrelacement n'est pas cosmétique.** Sans lui, chaque cible occupe une tranche de temps
+    distincte et « quelle cible » devient indissociable de « à quel moment » : mesuré le
+    2026-07-20, l'accuracy passait de 34 % sur le premier tiers de la séance à 66 % sur le dernier,
+    ce qui faisait passer les deux dernières cibles pour les meilleures. C'était un artefact de
+    protocole, pas un résultat.
+
+    ⚠️ **Né dans `research/cvep_calibrate.py::_make_blocks`, monté ici parce qu'il a maintenant DEUX
+    joueurs** : l'appli pygame et la fenêtre `src/stimulus/cvep.py` (que la console lance pour
+    calibrer). Deux exemplaires de la même règle de protocole finiraient par diverger sans que
+    personne le voie — les deux séances resteraient plausibles, et seule la comparaison de leurs
+    modèles dirait qu'elles n'ont pas joué le même jeu. Même geste, même raison, que
+    `core/errp_track.py` pour la piste de l'ErrP.
+
+    `rng` : un `random.Random` (ou le module `random`). None -> le module. Le passer EXPLICITEMENT
+    est ce qui rend une séance rejouable à l'identique avec `--seed`.
+    """
+    import random as _random
+
+    rng = _random if rng is None else rng
+    par_bloc = max(1, int(cycles) // int(n_blocs))
+    blocs = []
+    for cible in plan:
+        reste = int(cycles)
+        for b in range(int(n_blocs)):
+            n = reste if b == int(n_blocs) - 1 else min(par_bloc, reste)
+            if n > 0:
+                blocs.append((cible, n))
+            reste -= n
+    rng.shuffle(blocs)
+    return blocs
+
+
 # --- Autotest (aucun casque, aucun écran) ---------------------------------
 
 def _selftest():
@@ -107,6 +145,31 @@ def _selftest():
     ok &= (ac[0] == L)
     ok &= (len({c["name"] for c in plan}) == len(plan))   # noms de cibles distincts
     ok &= (gap >= 150.0)                            # séparation > durée d'une réponse VEP
+
+    # --- le PLAN d'une calibration : mêmes cycles pour tous, et VRAIMENT entrelacé -------------
+    import random as _random
+
+    from core.config import CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES
+
+    blocs = blocs_entrelaces(plan, CVEP_CAL_CYCLES, CVEP_CAL_BLOCKS, _random.Random(0))
+    par_cible = {}
+    for cible, n in blocs:
+        par_cible[cible["name"]] = par_cible.get(cible["name"], 0) + n
+    total_ok = set(par_cible.values()) == {CVEP_CAL_CYCLES} and len(par_cible) == len(plan)
+    ok &= total_ok
+    # L'entrelacement lui-même : sans lui, les blocs sortiraient groupés par cible, et « quelle
+    # cible » ne se distinguerait plus de « à quel moment » (mesuré : 34 % -> 66 % du premier au
+    # dernier tiers d'une séance NON entrelacée, le 2026-07-20).
+    groupes = [nom for nom, _g in
+               [(c["name"], None) for c, _n in blocs]]
+    tranches = 1 + sum(1 for a, b in zip(groupes, groupes[1:]) if a != b)
+    entrelace = tranches > len(plan)
+    ok &= entrelace
+    print(f"[cvep] calibration : {len(blocs)} blocs, {CVEP_CAL_CYCLES} cycles par cible "
+          f"({'équilibré' if total_ok else 'DÉSÉQUILIBRÉ : ' + str(par_cible)}), "
+          f"{tranches} tranches pour {len(plan)} cibles "
+          f"({'entrelacé' if entrelace else 'PAS ENTRELACÉ — artefact de protocole'})")
+
     print("[cvep] autotest :", "OK" if ok else "ÉCHEC")
     return ok
 
