@@ -19,10 +19,13 @@ game event, a visualisation, a robot command) is the client application's job.
 > engine both sends streams and *receives* markers, so an external application can render the
 > stimulus and let the engine decode — see **[docs/markers.md](docs/markers.md)**. Motor Imagery
 > and neuro arrived first, P300 on 2026-08-17, ErrP on 2026-08-19, and **c-VEP closed the set on
-> 2026-08-21**. ⚠️ Four of the six — MI, P300, ErrP, c-VEP — have **never been decoded from a real
-> brain through the engine**: the pipe is verified end to end without a headset, the decoding was
-> validated in the pygame app, and putting both halves on one head is the session that remains. See
-> **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
+> 2026-08-21**. Since **2026-09-08 the engine also plays all four calibrations**, and the console is
+> the only entry point you need: contact check, calibrate, pick a model, show a stimulus, decode —
+> all in one window that never has to be closed. ⚠️ Four of the six — MI, P300, ErrP, c-VEP — have
+> **never been decoded from a real brain through the engine**, and moving the calibrations did not
+> change that: the pipe is verified end to end without a headset, the decoding was validated in the
+> pygame app that has since been retired, and putting both halves on one head is the session that
+> remains. See **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
 
 ## Requirements
 
@@ -34,9 +37,19 @@ pip install -r requirements.txt
 
 ## Run
 
-Three entry points, from the most useful to the most specialised.
+**Start here: the console.** Since 2026-09-08 it is the only entry point you need — one window for
+the whole path, and one you never have to close mid-session.
 
-**The engine** — no interface, streams over the network. This is the product.
+```bash
+outils\Console EEG.bat                        # double-click from the explorer, no terminal
+python src/console/app.py                     # the same thing from a shell
+python src/console/app.py --synthetic         # no headset (BrainFlow test board)
+python src/console/app.py --mode ssvep        # start a mode straight away
+```
+
+**The engine** — no interface, streams over the network. This is the product; the console is a
+client of it. Run it on its own when you want it headless, or beside a stimulus window in a second
+terminal.
 
 ```bash
 python src/core/server.py --mode ssvep --refresh 60   # acquire, decode, publish
@@ -44,6 +57,9 @@ python src/core/server.py --mode neuro                # passive: no stimulus, no
 python src/core/server.py --mode cvep                 # needs a trained model AND a clock emitter
 python src/core/server.py --synthetic                 # no headset (BrainFlow test board)
 ```
+
+⚠️ **Never run the console and the engine at the same time.** The console creates its own engine,
+and stream names are a public contract — both would publish under the same names.
 
 Six published modes, and a client should not treat them alike. **SSVEP is active**: the user chooses
 a target, there is a right answer, and your application must render the flickering stimulus. **Motor
@@ -77,30 +93,45 @@ AUC on grouped cross-validation* (0.776, permutation p = 0.0099) and still only 
 what a single-trial ERP costs. Best-validated is not the same claim as most reliable — that one is
 SSVEP, on a different axis.
 
-**The console** — the engine plus a desktop window, one page per mode.
+### What the console gives you
 
 ```bash
-python src/console/app.py --mode ssvep        # set up, watch, publish
-python src/console/app.py --synthetic         # no headset (BrainFlow test board)
-python src/core/server.py --mode ssvep,neuro  # the engine alone, no interface (headless)
-python src/core/server.py --no-raw --mode neuro   # decode without broadcasting the raw signal
+python src/console/app.py --mode ssvep,neuro      # start two modes at once (shared rest phase)
+python src/core/server.py --no-raw --mode neuro   # engine only: decode without broadcasting raw
 ```
 
-A grid of every mode — including the ones the engine cannot run, greyed out with the reason. Each
-runnable tile has its own **Start**/**Stop**: launching with `--mode` is a convenience for bringing
-up several modes at once (they then share one rest phase), not a requirement — the console did not
-use to be able to start a mode on its own, and now it can. Open one and you get what it produces
-live, its settings, and a Python snippet that consumes its stream, both generated from the mode's
-contract rather than written by hand. Across the top, permanently: channel quality and a
-detached-reference alarm. The raw mode draws the eight channels themselves.
+A grid of every mode. Each runnable tile has its own **Start**/**Stop**: launching with `--mode` is
+a convenience for bringing up several modes at once (they then share one rest phase), not a
+requirement. Open one and you get what it produces live, its settings, and a Python snippet that
+consumes its stream, both generated from the mode's contract rather than written by hand. Across the
+top, permanently: channel quality, a detached-reference alarm, and the state of the stimulus window
+if one is running. The raw mode draws the eight channels themselves.
 
 Settings are **not validated by the interface**. It submits, and shows the engine's refusal in its own
 words — a rule copied into the UI drifts from the engine's eventually, and the day it drifts it lets
 through a setting that decodes nothing, silently.
 
-A mode page that needs training also has a **Calibrate** button. It runs the whole protocol —
-cued trials, training, an honest accuracy figure — **inside the same window**: nothing to launch
-separately, nothing to close and reopen. Motor Imagery is the one mode that uses it today (below).
+**Calibrate** — on all four modes that need a model (MI, P300, ErrP, c-VEP) since 2026-09-08. The
+engine plays the session; the console shows it and judges it. For the three whose protocol needs a
+frame-locked stimulus, the console also launches the window that renders it — a second process that
+opens **no** headset, so the one Bluetooth connection stays with the engine.
+
+Three things about that button are worth knowing before you press it:
+
+- **A link check comes first.** Per-channel σ, the mode's own key channels highlighted, and a
+  **refusal** if any of the eight is outside [0.5, 500] µV or the reference has come off. There is
+  no override — a one-click bypass is a bypass you take by reflex. ⚠️ It has never been tried on a
+  real headset, so it may yet block a legitimate session; if it does, that is worth reporting.
+- **Nothing is written to `data/` until you say so.** The session ends by showing the figure it
+  actually earned, and two buttons: **Save the model** or **Redo**. Before this, a calibration saved
+  first and announced its accuracy afterwards — and since the engine offers the most recent loadable
+  model as its default, a bad session silently became everyone's default.
+- **A mode and its own calibration cannot run together**, and the engine refuses both orders: they
+  would read the same marker queue and each would see a random half of it. The console stops the
+  mode for you and says so.
+
+**Launch stimulus** — the same window, without `--calibrer`, for the three modes that decode nothing
+without one. Before this, the only way to run them was a second terminal.
 
 Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
 (`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
@@ -170,8 +201,10 @@ That is what the marker gives it:
 
 ```bash
 python src/core/server.py --mode cvep       # terminal 1: decode and publish
-python src/research/cvep_stimulus.py        # terminal 2: flicker, and send the clock
+python src/stimulus/cvep.py                 # terminal 2: flicker, and send the clock
 ```
+
+Or press **Launch stimulus** on the c-VEP page of the console, which starts the same window for you.
 
 The emitter opens no headset, which is why the two run side by side. It is also the reference
 implementation to copy if you render the stimulus yourself — read
@@ -191,9 +224,9 @@ marker ever arrived · the clock went stale · correlations missed the threshold
 disagreed. The stream carries only the `-1`; the engine's state counts the four separately, because
 "it is not detecting" without the cause sends you looking in the wrong place.
 
-Like MI, P300 and ErrP it needs a **model trained on you** — one calibration in the pygame app,
-about three minutes. (The exact length is computed and printed when it starts; at the repository's
-settings it is 2.7 min, not counting the briefing and the link check.) That calibration trains
+Like MI, P300 and ErrP it needs a **model trained on you** — one calibration, from the console's
+**Calibrate** button, about three minutes. (The exact length is computed and printed when it starts;
+at the repository's settings it is 2.7 min, not counting the briefing and the link check.) That calibration trains
 **both** decoders the product has for this stimulus (eCCA and rCCA) on the same epochs and compares
 them with a **paired McNemar test** rather than two percentages side by side. On the reference
 session they were **indistinguishable** (37 paired decisions, 8 discordant, p = 0.727), so the model
@@ -204,7 +237,7 @@ leave-one-out on the reference session of 2026-07-21: **59.5 % (eCCA) and 64.9 %
 paired decisions. At the engine's own geometry — 2 code cycles, so one decision every 2.10 s — that
 is **19.1 bits/min for eCCA and 23.8 for rCCA**, which the calibration screen itself calls
 **WEAK**: under half of the 25.0 bits/min the SSVEP already delivers. (Recomputable:
-`research/itr.py`, and asserted in `src/research/cvep_calibrate.py`. An earlier "~22 bits/min" had
+`research/itr.py`, and asserted in `archive/cvep_calibrate.py`. An earlier "~22 bits/min" had
 no traceable source, and the screen printed exactly twice the truth until 2026-09-03.)
 
 ⚠️ Those bits/min assume **one decision published per window**. The engine publishes far fewer: it
@@ -213,33 +246,42 @@ the default 0.26/0.09 (`core/config.py`). Expect roughly **half** that rate out 
 and expect worse still live, because no c-VEP has ever been decoded from a real brain *through the
 engine*. Roughly one designation in three is wrong even offline.
 
-**The pygame app** — the original all-in-one. It is no longer the only way to run any mode: with
-c-VEP published on 2026-08-21, all six decode in the engine. What is left here is what the engine
-cannot do — the **calibrations** for c-VEP, P300 and ErrP, whose protocols need a frame-locked
-stimulus that a Qt window cannot render — plus the live histogram for neuro-monitoring. Motor
-Imagery has fully moved out, calibration included. It owns the headset and publishes nothing.
+### The stimulus windows
 
-⚠️ It also still carries **three piloting screens this work did not remove**: live SSVEP decoding,
-live P300 selection and the single-trial ErrP demonstrator. They duplicate what the engine does and
-must never run alongside it. Only c-VEP and Motor Imagery lost their piloting screens here.
-
-Its former Motor Imagery and c-VEP **piloting** screens are not deleted, kept in
-[`archive/`](archive/README.md) instead: still runnable (`--smoke`), and the reference the engine's
-own version was checked against. `archive/cvep_pilot.py` is the one that still earns its keep — it
-decodes c-VEP locally, on the same model and the same 2-of-3 vote as the engine, so a headset
-session can run both on one head and see whether they name the same target. Without that
-comparison, a poor network result cannot be told apart from a poor session. The Motor Imagery ones
-write to `data/` under the old, fixed filenames, so running one **overwrites** whatever the console
-last trained — read `archive/README.md` before reaching for them.
+Three programs, in `src/stimulus/`, one per paradigm that cannot decode without something on screen.
+They render a frame-locked stimulus and publish markers — and they open **no headset**, which is the
+whole point: they run beside the engine rather than instead of it.
 
 ```bash
-python src/research/app.py                 # fullscreen, real headset — main menu
-python src/research/app.py --windowed      # windowed (keeps the console visible)
-python src/research/app.py --synthetic     # no headset (BrainFlow synthetic board)
-python src/research/app.py --smoke         # headless end-to-end self-test (CI)
+python src/stimulus/p300.py                # the oddball ring
+python src/stimulus/errp.py                # the cursor-to-target track
+python src/stimulus/cvep.py                # the six flickering discs, and the clock
+python src/stimulus/cvep.py --calibrer     # the same, wrapped in a calibration protocol
+python src/stimulus/cvep.py --log s.jsonl  # ground truth to a FILE — required to score a session
 ```
 
-⚠️ The engine and the app both open the headset, so **run only one at a time**.
+You normally never type these: the console launches them for you, with `--calibrer` when you press
+**Calibrate** and without when you press **Launch stimulus**. Type them when you need an option the
+buttons do not pass — the launcher sends the file path and `--calibrer`, nothing else, so `--log`
+and `--seed` (c-VEP), `--no-wait` (ErrP), `--refresh` and `--windowed` are hand-launch only. Run
+`--help` on any of the three for its own list.
+
+### The pygame app is gone
+
+`src/research/app.py` was deleted on 2026-09-08. Its six screens live in
+[`archive/`](archive/README.md), each still runnable with its own `--smoke`: three **piloting**
+screens (SSVEP, P300 selection, the ErrP demonstrator) and three **calibrations** (c-VEP, P300,
+ErrP). They are kept for one reason — they decode **locally**, in the program that draws, which is
+what separates "the network decoding is worse" from "the session is worse" on one and the same
+fixation. `archive/cvep_pilot.py` is the clearest case: same model, same 2-of-3 vote as the engine.
+
+⚠️ They open the headset themselves, so **run only one program at a time** — the console, the
+engine, or one archived screen. Two of them (`mi_calibrate.py`, `mi_pilot.py`) still write to
+`data/` under the old, fixed filenames, so running one **overwrites** what the console last trained.
+Read `archive/README.md` before reaching for any of them.
+
+⚠️ Their epoching is not the engine's: they cut on the pygame clock, the engine cuts on the LSL
+timestamps of incoming markers. For a session that matters, go through the console.
 
 ## Consume the stream
 
@@ -285,38 +327,52 @@ against a sinusoid nobody is displaying — so pass the same refresh rate to bot
 that coupling is tighter still: declaring the refresh rate is not enough, you must send a marker
 every time the code restarts.
 
-`ESC` returns to the menu from any mode; the BrainFlow session stays open, so switching modes is
-instant. **Do not close and reopen the app mid-session** — C3/Cz saturate when the amplifier restarts.
+**Do not close and reopen the program that holds the headset mid-session** — C3/Cz saturate when the
+amplifier restarts. That is the practical reason the console became the single entry point: contact
+check, calibration and decoding now all happen in one window, so a whole session needs the headset
+opened exactly once. `ESC` closes a stimulus window without touching that session.
 
 ## Decoding modes
 
-**All six are decoded by the engine and published as streams.** The pygame app keeps only the
-calibrations the engine cannot play. Stimulus frequencies and codes adapt automatically to the
-display refresh rate.
+**All six are decoded by the engine and published as streams, and all four calibrations are played
+by it too.** Stimulus frequencies and codes adapt automatically to the display refresh rate.
 
 | Mode | How it works | Calibration | Status |
 |---|---|---|---|
 | **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable; the only one validated on hardware **through the engine** |
-| **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~3 min, in the pygame app | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~60-65 % offline → 19.1 (eCCA) / 23.8 (rCCA) bits/min, **WEAK** vs the SSVEP's 25.0 |
-| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min, in the pygame app | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
+| **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~3 min, **from the console** | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~60-65 % offline → 19.1 (eCCA) / 23.8 (rCCA) bits/min, **WEAK** vs the SSVEP's 25.0 |
+| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min, **from the console** | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min, **from the console** | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
-| **ErrP** | Error potential: single-trial detection when the machine errs | ~7 min (200 trials), in the pygame app | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
+| **ErrP** | Error potential: single-trial detection when the machine errs | ~7 min (200 trials), **from the console** | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
 
-⚠️ **"Published" is not "validated".** Only SSVEP has been decoded from a real brain *through the
-engine*. Four of the others — MI, P300, ErrP, c-VEP — were validated in the pygame app, and their
-engine path is verified without a headset. **Neuro-monitoring has never been validated at all**:
-its plumbing is tested, its content is not, anywhere. Every accuracy figure on this page comes from
-**one person**, usually one session.
+⚠️ **"Published" is not "validated", and "calibrated by the engine" is not either.** Only SSVEP has
+been decoded from a real brain *through the engine*. Four of the others — MI, P300, ErrP, c-VEP —
+were validated in the pygame app that has since been retired, and their engine path is verified
+without a headset. Moving the four calibrations into the engine on 2026-09-08 **measured nothing**:
+it is a change of gesture, tested between two processes on a synthetic board. **Neuro-monitoring has
+never been validated at all**: its plumbing is tested, its content is not, anywhere. Every accuracy
+figure on this page comes from **one person**, usually one session.
 
 ## Layout
 
-The source splits in two, on a rule you can check rather than a matter of taste: **a module lives in
-`core/` if and only if the engine needs it to run.** Everything else is `research/`. `research` may
-import `core`; `core` must never import `research`. When a mode graduates from exploration to a
-published stream, its decoder *moves* to `core/` — nobody threads an import across the boundary.
-All six have now made that trip, c-VEP last, so nothing in `research/` is a decoder waiting its
-turn any more.
+Four packages, on a rule you can check rather than a matter of taste: **a module lives in `core/` if
+and only if the engine needs it to run.**
+
+```text
+core       imports nothing else from this repository   (not research, not console, not stimulus)
+stimulus   -> core                                     (never research, never console)
+console    -> core, stimulus
+research   -> core, stimulus
+```
+
+The two prohibitions are enforced by a test, not by discipline: `python src/core/server.py --smoke`
+parses every file in `src/core/` and `src/stimulus/` as an AST and fails on a single forbidden
+import. No pygame and no Qt in `core`, either — the engine runs on a machine without a screen.
+
+When a module needs to cross a boundary upwards, it *moves* rather than reaching: that is how all
+six decoders arrived in `core/`, c-VEP last, and how the three stimulus windows became a package of
+their own on 2026-09-07.
 
 ### [`src/core/`](src/core/) — the engine, and therefore the product
 
@@ -350,38 +406,59 @@ engine's command queue — and no logic lives here that the engine does not alre
 | [`app.py`](src/console/app.py) | The window: reads state, sends commands, and the headless self-test |
 | [`grid.py`](src/console/grid.py) | The mode grid — every mode, runnable or not |
 | [`mode_page.py`](src/console/mode_page.py) | One page per mode: live output · settings · how to consume it |
-| [`calib_page.py`](src/console/calib_page.py) | The **Calibrate** screen: briefing · live trial · honest result — Motor Imagery today |
+| [`calib_page.py`](src/console/calib_page.py) | The **Calibrate** screen: briefing · live session · honest result · **Save / Redo** — all four modes that need a model |
+| [`contact_page.py`](src/console/contact_page.py) | The link check that stands between **Start** and anything expensive. Computes no verdict — it displays the engine's, and refuses |
+| [`fenetres.py`](src/console/fenetres.py) | Launches one stimulus window as a second process, and says when it dies |
 | [`params_form.py`](src/console/params_form.py) | The settings form, generated from the contract. Validates nothing |
 | [`live_views.py`](src/console/live_views.py) | Rendering picked by **family** — active, passive, raw traces |
-| [`banner.py`](src/console/banner.py) | Channel quality and the detached-reference alarm, always visible |
+| [`banner.py`](src/console/banner.py) | Channel quality, the detached-reference alarm, and the stimulus window's state — always visible |
 | [`beeps.py`](src/console/beeps.py) | The calibration's lateralised audio cues — left/right ear tones, honest when audio is missing |
 
-### [`src/research/`](src/research/) — everything not yet in the engine
+### [`src/stimulus/`](src/stimulus/) — the three windows that draw and mark
 
-Not a synonym for "unfinished" — several of these modes are hardware-validated. It means the engine
-does not publish them yet, so they are not part of what students consume and may still change shape.
+Created 2026-09-07. They render a frame-locked stimulus and publish markers, and they **open no
+headset** — which is exactly what lets them run beside the engine, or be launched by the console as
+a second process. Each one plays its paradigm twice: as a stimulus (`--calibrer` absent) and as a
+calibration protocol (`--calibrer` present).
+
+| Module | What it does |
+|---|---|
+| [`p300.py`](src/stimulus/p300.py) | The oddball ring: `flash` · `round_end`, plus `calib_start` · `cue` · `calib_end` |
+| [`errp.py`](src/stimulus/errp.py) | The cursor-to-target track: `feedback`, which gains `error` **in calibration only** |
+| [`cvep.py`](src/stimulus/cvep.py) | Six flickering discs and the `cycle` clock, plus `cue` · `block_end` around it |
+| [`registry.py`](src/stimulus/registry.py) | Key → command line. The only file in the repo that names a window module |
+
+### [`src/research/`](src/research/) — the bench, not the product
+
+Not a synonym for "unfinished" — several of these were hardware-validated. It means the engine does
+not publish them, so they are not part of what students consume and may still change shape. There is
+no longer an application here, and no longer a decoder or a calibration: all six decoders moved to
+`core/`, all four calibrations are the engine's, and the pygame screens went to `archive/`.
 
 | Family | Modules |
 |---|---|
-| pygame app — **opens the headset itself**, never run it beside the engine | [`app.py`](src/research/app.py) (menu, five pages: the calibrations, the neuro histogram, and three piloting screens the engine now duplicates — SSVEP, P300, ErrP) · `ui.py` · `viewing.py` |
-| Stimulus emitters — **open no headset**, meant to run *beside* the engine in a second terminal | `ssvep_stimulus.py` · [`p300_stimulus.py`](src/research/p300_stimulus.py) · `errp_stimulus.py` · [`cvep_stimulus.py`](src/research/cvep_stimulus.py) — the last three publish markers, see [`docs/markers.md`](docs/markers.md) |
-| Calibrations — long protocols, train a model into `data/` | `cvep_calibrate` · `p300_calibrate` · `errp_calibrate` |
-| Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `alpha_check` |
+| pygame scaffolding — the window, the headset session, the live-mode machinery the archive imports | `ui.py` · `ssvep_stimulus.py` (arrow geometry and refresh measurement — publishes no marker) · `viewing.py` |
+| Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `calibrate` |
+| Measured protocols, no counterpart elsewhere | `ssvep_guided.py` · `alpha_check.py` (measures your own alpha peak) |
 | Refuted hypotheses, kept readable | `cvep_rcca.py` — the **Gold code factory**, not a decoder (the rCCA *decoder* is published, in `core/`); only `archive/cvep_rcca_pilot.py` still calls it |
 | Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
 
 ### [`archive/`](archive/) — retired, but still runs
 
-Code that used to live in `research/` and was fully replaced — not deleted, because it is the
-reference the replacement was checked against. Each file keeps its own `--smoke`. See
-[`archive/README.md`](archive/README.md) for what moved where, and why running one can still
-overwrite `data/mi_model.joblib`.
+Ten programs that used to live in `research/` and were fully replaced — not deleted, because they
+are the reference the replacement was checked against, and because they decode **locally**, which is
+the only way to tell "the network decoding is worse" apart from "the session is worse". Six of them
+arrived on 2026-09-08 with the pygame app's deletion: three pilots and three calibrations. Each file
+keeps its own `--smoke`. See [`archive/README.md`](archive/README.md) for what moved where, and why
+running one can still overwrite `data/mi_model.joblib`.
 
 ## Self-tests (no headset needed)
 
 ```bash
-python src/core/server.py --smoke        # engine: registry, package boundary, shared rest, streams
-python src/console/app.py --smoke        # console: grid, mode page, settings (Qt offscreen)
+python src/core/server.py --smoke        # engine: registry, package boundary (core AND stimulus),
+                                         #   shared rest, streams, marker theft, save/discard
+python src/console/app.py --smoke        # console: grid, mode page, settings, link check,
+                                         #   window launcher, launch ORDER (Qt offscreen)
 python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board
@@ -396,10 +473,21 @@ python src/core/cvep_models.py           # c-VEP models: legacy refused, which d
 python src/core/modes/cvep.py            # the c-VEP mode: PHASE, the four causes of -1, the sliding vote
 python src/core/markers.py               # the engine's ear: resolve BY NAME, time_correction
 
-python src/research/app.py --smoke       # whole app headless: menu + every mode + calibrations
-python src/research/errp_stimulus.py --smoke  # ErrP marker emitter: track, deliberate errors, stamped at flip
-python src/research/p300_stimulus.py --smoke  # P300 flash sequence: every target seen `reps` times
-python src/research/cvep_stimulus.py --smoke  # c-VEP clock emitter: phase read from the PIXELS, frame by frame
+python src/core/modes/marker_calib.py    # the base class of the three window-led calibrations:
+                                         #   the two epochings agree, on two geometries
+python src/core/modes/p300_calib.py      # P300 training: cue -> label, flash -> epoch
+python src/core/modes/errp_calib.py      # ErrP training: the label rides on the feedback itself
+python src/core/modes/cvep_calib.py      # c-VEP training: the phase is CALLED, never copied
+python src/core/modes/mi_calib.py        # MI training: honest accuracy, never overwrites
+python src/core/errp_track.py            # the ErrP track: one written protocol, two screens
+
+python src/stimulus/registry.py          # key -> command, checked against the contract BOTH ways
+python src/stimulus/errp.py --smoke      # ErrP window: track, deliberate errors, stamped at flip,
+                                         #   and the ground-truth guard in BOTH directions
+python src/stimulus/p300.py --smoke      # P300 flash sequence: every target seen `reps` times
+python src/stimulus/cvep.py --smoke      # c-VEP clock: phase read from the PIXELS, frame by frame
+
+# The ten retired screens keep their own --smoke; see archive/README.md. No self-test above runs them.
 python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
 python src/research/itr.py               # information transfer rate — common yardstick
 ```

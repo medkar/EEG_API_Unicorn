@@ -73,9 +73,11 @@ qu'un jugement : **un module est dans `src/core/` si et seulement si `server.py`
 tourner.** Tout le reste est dans `src/research/`.
 
 ```
-src/core/       config · acquisition · cca_decoder · lsl_io · neuro_monitor · server · modes/
-src/console/    la console PySide6 : app · banner · grid · mode_page · params_form · live_views
-src/research/   app + ui + stimulus · décodeurs des modes non publiés · calibrations · analyses
+src/core/       config · acquisition · décodeurs · lsl_io · markers · server · modes/ (+ *_calib)
+src/stimulus/   les 3 fenêtres qui dessinent et marquent : p300 · errp · cvep · registry
+src/console/    la console PySide6 : app · banner · grid · mode_page · calib_page · contact_page ·
+                fenetres · params_form · live_views · beeps
+src/research/   socle pygame · analyses hors ligne · protocoles chiffrés · hypothèses réfutées
 ```
 
 Deux règles en découlent, et elles sont ce qui empêche la frontière de s'effacer avec le temps :
@@ -91,11 +93,14 @@ Deux règles en découlent, et elles sont ce qui empêche la frontière de s'eff
 `research` ne veut pas dire « brouillon ». Ça veut dire que le moteur ne le publie pas, donc que ça
 ne fait pas partie du contrat rendu aux étudiants. La règle a été appliquée jusqu'au bout : **les six
 décodeurs ont déménagé dans `core/` à mesure que le moteur les publiait**, le c-VEP en dernier le
-2026-08-21. Ce qui reste dans `research/` aujourd'hui n'est plus un décodeur en attente mais ce qui
-n'a rien à faire dans un moteur sans écran : l'appli pygame, les calibrations, les émetteurs de
-stimulus, les analyses hors ligne — et les **hypothèses réfutées gardées lisibles**
+2026-08-21, **et les quatre calibrations les ont suivis le 2026-09-07** (`core/modes/*_calib.py`).
+Ce qui reste dans `research/` aujourd'hui n'est ni un décodeur en attente ni une calibration : c'est
+le socle pygame que l'archive importe, les analyses hors ligne, deux protocoles chiffrés
+(`ssvep_guided.py`, `alpha_check.py`) — et les **hypothèses réfutées gardées lisibles**
 (`research/cvep_rcca.py`, la fabrique de codes Gold ; ce n'est PAS un décodeur, celui du rCCA vit
-dans `core/` et est publié).
+dans `core/` et est publié). **`src/research/app.py` a été supprimée le 2026-09-08** : ses six
+écrans sont dans `archive/`, encore exécutables, gardés comme la référence LOCALE contre laquelle
+une séance casque compare le décodage réseau.
 
 Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
 **centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
@@ -107,6 +112,32 @@ règle ne change pas, elle s'étend : `console` importe `core`, et `core` n'impo
 ni `console`, ni pygame, ni Qt**. Le moteur doit continuer à tourner sur une machine sans écran.
 C'est vérifié par un test, pas par la discipline : `python src/core/server.py --smoke` scanne
 `src/core/**/*.py` et échoue sur le moindre import interdit.
+
+**Et depuis le 2026-09-07, un QUATRIÈME : `src/stimulus/`** (chantier « la console, seul point
+d'entrée »). Il contient les trois fenêtres qui affichent un stimulus verrouillé à la frame et
+publient des marqueurs — `p300.py`, `errp.py`, `cvep.py` — plus le `registry.py` qui résout une clé
+de contrat en ligne de commande. Elles vivaient dans `research/`, où elles n'étaient plus à leur
+place : la console les LANCE, les calibrations en DÉPENDENT, et `docs/markers.md` les présente aux
+étudiants comme les émetteurs de référence. Ce ne sont plus des outils de banc d'essai, ce sont des
+composants du produit.
+
+```text
+core       n'importe rien du dépôt hors de lui-même   (ni research, ni console, ni stimulus)
+stimulus   -> core                                    (jamais research, jamais console)
+console    -> core, stimulus
+research   -> core, stimulus
+```
+
+Les deux INTERDITS sont vérifiés : le scanner AST de `server.py --smoke` parse `src/core/**/*.py`
+**et** `src/stimulus/**/*.py`, avec deux listes distinctes — une fenêtre de stimulus EST du pygame,
+le lui interdire n'aurait aucun sens ; ce qu'on lui interdit, c'est de tirer le banc d'essai ou la
+console derrière elle. Les deux autres lignes sont des permissions : il n'y a rien à y vérifier.
+
+⚠️ **`core` ne nomme aucune fenêtre.** Le contrat d'un mode porte une CLÉ (`Calib.stimulus_id`,
+par exemple `"p300"`), jamais un chemin de module — c'est ce qui garde l'arête `core -> stimulus`
+inexistante. La correspondance clé → commande vit dans `stimulus/registry.py`, et c'est la console
+qui fait le pont. Un contrôle y vérifie la correspondance **dans les deux sens** : chaque
+`stimulus_id` déclaré par un mode a sa fenêtre, et aucune fenêtre déclarée n'est orpheline.
 
 `src/core/modes/` est arrivé en même temps : un mode y est un **contrat** (`ModeSpec` : ce qu'il
 est, ce qui s'y règle, ce qu'il publie) posé à côté de son **runtime**. L'algorithme reste
@@ -197,10 +228,10 @@ Conséquences à connaître (LSL est conçu pour *streamer*, pas pour du requêt
 |---|---|---|
 | **SSVEP** | évoqué | `{target_index, freq_hz, confidence, scores[]}` — **implémenté** ; flux numérique, `target_index = -1` quand aucune cible n'est fixée de façon fiable. Les métadonnées portent `decision_scale` (`z` après mesure du repos, sinon `rho`) et le seuil : sans cette indication, un seuil posé côté client n'a aucun sens. |
 | **Motor Imagery** | endogène | `{intent_index, confidence, p_GAUCHE, p_DROITE, p_REPOS}` — **implémenté** (2026-07-30). ⚠️ `intent_index = -1` (« le vote glissant n'a pas conclu ») et l'indice de **REPOS** (« le modèle a décidé que la personne se repose ») sont **deux choses différentes** : pour une application, c'est la différence entre « attends » et « arrête ». Les voies sont dérivées des **classes du modèle chargé**, pas d'une liste figée. Métadonnées : `decision_scale = "proba"`, plus le seuil et les paramètres du vote. ⚠️ Exige un **modèle entraîné par personne** ; le mode refuse de démarrer sans, en le disant. Mesuré honnêtement (validation croisée groupée par essai, 1 personne, 1 séance) : **63 % en gauche-vs-droite** (hasard 50 %, p = 0,038), 40 % à trois classes (hasard 33 %, non significatif). Démonstrateur, pas pilotage fin. |
-| **P300** | évoqué | `{target_index, confidence, n_flashes, score_0…score_5}` — **implémenté** (2026-08-17). Événementiel : **un échantillon par manche**, pas un débit régulier — un client qui attend 5 Hz attend pour rien. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** ; les métadonnées portent `no_decision_index` pour qu'un client non-Python puisse le lire sans ouvrir le code. `confidence` = log-odds moyens du gagnant : non bornés, non comparables entre personnes, d'où `decision_scale = "logodds"` dans les métadonnées. ⚠️ **Exige des MARQUEURS ENTRANTS** — avec l'ErrP, les deux seuls : l'application externe affiche les flashs et déclare l'onset de chacun — contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration dans l'appli pygame ; AUC mesurée 0,71 en validation croisée par manche, 1 personne, 1 séance). |
+| **P300** | évoqué | `{target_index, confidence, n_flashes, score_0…score_5}` — **implémenté** (2026-08-17). Événementiel : **un échantillon par manche**, pas un débit régulier — un client qui attend 5 Hz attend pour rien. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** ; les métadonnées portent `no_decision_index` pour qu'un client non-Python puisse le lire sans ouvrir le code. `confidence` = log-odds moyens du gagnant : non bornés, non comparables entre personnes, d'où `decision_scale = "logodds"` dans les métadonnées. ⚠️ **Exige des MARQUEURS ENTRANTS** — avec l'ErrP, les deux seuls : l'application externe affiche les flashs et déclare l'onset de chacun — contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration **jouée par le moteur** depuis le 2026-09-07, lancée d'un bouton de la console ; AUC mesurée 0,71 en validation croisée par manche, 1 personne, 1 séance). |
 | **Neuro-monitoring** | passif | `{charge, somnolence, engagement, artifact}` — **implémenté** (2026-07-27). z relatifs à un repos mesuré **en début de mode, pour cet utilisateur, ce jour-là** : les valeurs ne se comparent ni entre personnes, ni entre séances, et n'ont aucun sens absolu. `artifact = 1` republie les derniers z valides plutôt que des indices calculés sur un clignement — ceux-ci seraient plausibles, donc indétectables en aval. ⚠️ Plomberie testée, **contenu jamais validé sur casque**. |
-| **ErrP** | passif | `{error, score, threshold, artifact}` — **implémenté** (2026-08-19). Un échantillon par marqueur `feedback`, cadence irrégulière. ⚠️ `error = -1` signifie « pas de verdict » (époque hors tampon, ou rejetée pour artefact — un clignement au moment où la machine se trompe est le cas FRÉQUENT), **jamais** « pas d'erreur ». ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré** (`tnr_target`, `tpr_measured`, `tnr_measured`) : au réglage par défaut ce détecteur attrape **une erreur sur deux** et annule une bonne commande sur sept — une application qui lit `error = 1` doit pouvoir le savoir sans lire le code. Le seul réglage est un **taux** (« quelle part des bonnes commandes garder »), dont le moteur déduit le seuil sur les scores hors-pli de la calibration de la personne. ⚠️ **Le moteur PUBLIE, il n'annule rien** : la période réfractaire et la décision d'annuler appartiennent au client. Mesuré honnêtement (CV groupée par bloc, 200 essais, 1 personne, 1 séance) : **AUC 0,776, p = 0,0099 sur 100 permutations** — le mieux validé des modes, devant le P300 (0,714). ⚠️ **Mais `tpr_measured`/`tnr_measured` sont OPTIMISTES et le flux le dit** (`measured_on`) : l'AUC vient de scores hors-pli, le **seuil** est choisi en les regardant, donc `tnr_measured ≥ tnr_target` est vrai *par construction* sur la calibration et pas en séance. Un client qui règle sa politique d'annulation sur ces deux nombres observera **plus** de faux vetos que promis. ⚠️ Exige lui aussi un **modèle entraîné par personne** (calibration dans l'appli pygame) ; le mode refuse de démarrer sans, en le disant. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et par le même tuyau — un seul événement, `feedback`. |
-| **c-VEP** | évoqué | `{target_index, confidence, score_0…score_5, corr_min, margin}` — **implémenté** (2026-08-21), **6e et dernier mode**. Continu, ~5 Hz. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** — et il a **QUATRE causes** que le flux ne distingue pas (`sans_reference`, `reference_perimee`, `sous_les_seuils`, `vote_non_conclu`), séparées par des compteurs dans l'état du moteur : quatre gestes opposés (relancer l'émetteur · vérifier le nom du flux · saliner · fixer UNE cible). ⚠️ **`corr_min`/`margin` voyagent DEUX fois et ne disent pas la même chose** : dans les métadonnées, la valeur **figée à l'ouverture** du flux ; dans les deux dernières **voies**, celle réellement en vigueur pour CET échantillon — ces deux seuils se règlent en pleine séance sans recréer le flux, donc seules les voies restent exactes pour dépouiller un enregistrement plus tard. `decision_scale = "correlation"` (Pearson dans [-1, 1]) : ni le z du SSVEP, ni les log-odds du P300. `confidence` décrit le **vote** (moyenne des fenêtres concordantes), les `score_*` la **dernière fenêtre seule**. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et l'ErrP — mais les siens ne délimitent aucune époque : ils tiennent une **HORLOGE** (`{"mode":"cvep","event":"cycle","refresh":…}`, un par redémarrage du code), contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration dans l'appli pygame). Seul mode du produit à avoir **deux décodeurs sur le même stimulus** (`eCCA`, `rCCA`) : c'est le FICHIER de modèle qui déclare le sien, et les métadonnées le publient sous `decoder`. Mesurés à jeu égal sur la séance de référence (37 décisions appariées, k=2) : **indiscernables — McNemar p = 0,727**, 8 décisions discordantes. ⚠️ **Jamais vérifié au casque à travers le moteur** (recette 2.9). |
+| **ErrP** | passif | `{error, score, threshold, artifact}` — **implémenté** (2026-08-19). Un échantillon par marqueur `feedback`, cadence irrégulière. ⚠️ `error = -1` signifie « pas de verdict » (époque hors tampon, ou rejetée pour artefact — un clignement au moment où la machine se trompe est le cas FRÉQUENT), **jamais** « pas d'erreur ». ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré** (`tnr_target`, `tpr_measured`, `tnr_measured`) : au réglage par défaut ce détecteur attrape **une erreur sur deux** et annule une bonne commande sur sept — une application qui lit `error = 1` doit pouvoir le savoir sans lire le code. Le seul réglage est un **taux** (« quelle part des bonnes commandes garder »), dont le moteur déduit le seuil sur les scores hors-pli de la calibration de la personne. ⚠️ **Le moteur PUBLIE, il n'annule rien** : la période réfractaire et la décision d'annuler appartiennent au client. Mesuré honnêtement (CV groupée par bloc, 200 essais, 1 personne, 1 séance) : **AUC 0,776, p = 0,0099 sur 100 permutations** — le mieux validé des modes, devant le P300 (0,714). ⚠️ **Mais `tpr_measured`/`tnr_measured` sont OPTIMISTES et le flux le dit** (`measured_on`) : l'AUC vient de scores hors-pli, le **seuil** est choisi en les regardant, donc `tnr_measured ≥ tnr_target` est vrai *par construction* sur la calibration et pas en séance. Un client qui règle sa politique d'annulation sur ces deux nombres observera **plus** de faux vetos que promis. ⚠️ Exige lui aussi un **modèle entraîné par personne** (calibration **jouée par le moteur** depuis le 2026-09-07, bouton « Calibrer » de la console) ; le mode refuse de démarrer sans, en le disant. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et par le même tuyau — un seul événement, `feedback`. |
+| **c-VEP** | évoqué | `{target_index, confidence, score_0…score_5, corr_min, margin}` — **implémenté** (2026-08-21), **6e et dernier mode**. Continu, ~5 Hz. ⚠️ `target_index = -1` signifie « pas de décision », **jamais la cible 0** — et il a **QUATRE causes** que le flux ne distingue pas (`sans_reference`, `reference_perimee`, `sous_les_seuils`, `vote_non_conclu`), séparées par des compteurs dans l'état du moteur : quatre gestes opposés (relancer l'émetteur · vérifier le nom du flux · saliner · fixer UNE cible). ⚠️ **`corr_min`/`margin` voyagent DEUX fois et ne disent pas la même chose** : dans les métadonnées, la valeur **figée à l'ouverture** du flux ; dans les deux dernières **voies**, celle réellement en vigueur pour CET échantillon — ces deux seuils se règlent en pleine séance sans recréer le flux, donc seules les voies restent exactes pour dépouiller un enregistrement plus tard. `decision_scale = "correlation"` (Pearson dans [-1, 1]) : ni le z du SSVEP, ni les log-odds du P300. `confidence` décrit le **vote** (moyenne des fenêtres concordantes), les `score_*` la **dernière fenêtre seule**. ⚠️ **Exige des MARQUEURS ENTRANTS**, comme le P300 et l'ErrP — mais les siens ne délimitent aucune époque : ils tiennent une **HORLOGE** (`{"mode":"cvep","event":"cycle","refresh":…}`, un par redémarrage du code), contrat public dans [markers.md](markers.md). ⚠️ Exige aussi un **modèle entraîné par personne** (calibration **jouée par le moteur** depuis le 2026-09-07, bouton « Calibrer » de la console). Seul mode du produit à avoir **deux décodeurs sur le même stimulus** (`eCCA`, `rCCA`) : c'est le FICHIER de modèle qui déclare le sien, et les métadonnées le publient sous `decoder`. Mesurés à jeu égal sur la séance de référence (37 décisions appariées, k=2) : **indiscernables — McNemar p = 0,727**, 8 décisions discordantes. ⚠️ **Jamais vérifié au casque à travers le moteur** (recette 2.9). |
 
 Chaque mode publie **une intention neutre** (quelle cible / quelle classe / quel état), jamais une commande
 d'actionneur. La conversion en action appartient à l'application avale : c'est ce qui rend le même flux
@@ -244,18 +275,48 @@ jeu de fréquences.
 
 ## 6. Calibration
 
-**Par défaut : calibration NATIVE et standardisée, possédée par l'API** (les écrans de calibration
-actuels). Justification : la calibration exige une **vérité-terrain sous protocole contrôlé** (timing
-maîtrisé, labels fiables) — on ne veut pas que chaque étudiant la réimplémente de travers.
+**Par défaut : calibration NATIVE et standardisée, possédée par l'API.** Justification : la
+calibration exige une **vérité-terrain sous protocole contrôlé** (timing maîtrisé, labels fiables) —
+on ne veut pas que chaque étudiant la réimplémente de travers.
 
-- L'étudiant fait **une fois** `calibrer <mode>` (fenêtre native) → un **modèle** est sauvegardé.
-- Modèles rangés dans `models/` (hors git), nommés par étudiant/mode ; l'**état** (calibré ou non) est
-  exposé (control/quality) pour que l'appli externe sache si un flux est prêt.
+- L'étudiant fait **une fois** la calibration du mode → un **modèle** est sauvegardé.
+- Modèles rangés dans `data/` (hors git), **horodatés**, jamais écrasés ; le mode propose le plus
+  récent qui se charge vraiment. L'**état** (calibré ou non) est exposé pour que l'appli externe
+  sache si un flux est prêt.
 - **Modes sans calibration** : SSVEP (juste un repos court pour caler les seuils), neuro-monitoring
   (repos de référence). **Modes avec calibration** : MI, c-VEP, P300, ErrP (par personne, quelques min).
 - ⚠️ **Cohérence calibration ↔ runtime** : pour les modes évoqués, le décodeur est un peu accordé au
   stimulus de calibration. L'API publie donc une **« spec de stimulus » par mode** (fréquences
   autorisées, rythme des flashs, format des marqueurs) que l'appli externe doit respecter au runtime.
+
+### 6.1 — Les quatre calibrations sont jouées par le MOTEUR (2026-09-07)
+
+Le mot « native » ci-dessus voulait dire « dans notre appli pygame ». Il veut maintenant dire
+« menée par le moteur, affichée par la console ». Ce qui a changé, et pourquoi :
+
+- **`Calib.kind` ne dit plus OÙ la calibration vit, mais QUI mène la ligne du temps.** Deux valeurs,
+  et le contrat REFUSE tout autre mot (l'ancien vocabulaire « console » / « natif » lève) :
+  `"moteur"` — le moteur tire les classes, affiche les consignes, décompte (c'est le MI, endogène) ;
+  `"fenetre"` — une fenêtre de `src/stimulus/` mène et le moteur est **PASSIF** (P300, ErrP, c-VEP).
+  `Calib.stimulus_id` dit laquelle, sous forme de CLÉ.
+- ⚠️ **L'invariant que ce déplacement existe pour tenir** : les époques d'entraînement étaient
+  découpées par un chemin de code (l'appli pygame et son horloge) et celles du décodage par un autre
+  (le tampon du moteur, les marqueurs LSL, `time_correction`), et **rien ne vérifiait qu'ils
+  s'accordent**. Un décalage de quelques échantillons ne lève aucune exception : le modèle est
+  entraîné sur un alignement, appliqué sur un autre, et il décode du bruit avec une confiance élevée
+  pendant que tous les tests restent verts. `core/modes/marker_calib.py` ne redéclare **pas**
+  `pre_s`/`post_s` : il les LIT sur la classe du runtime de DÉCODAGE, et prélève l'époque par le
+  MÊME appel. Le désaccord devient structurellement impossible au lieu d'être seulement testé.
+- **`data/` n'est écrit qu'à UN endroit** : la commande `save_calibration`, envoyée quand on clique
+  « Enregistrer le modèle ». Une séance écrit d'abord dans un dossier candidat, s'affiche avec son
+  chiffre, et n'est retenue que sur ce clic. Avant, une calibration sauvegardait PUIS annonçait sa
+  précision — et comme le moteur propose le modèle chargeable le plus récent, une séance ratée
+  devenait le défaut **en silence**.
+- **Un mode et SA calibration ne peuvent pas tourner ensemble**, et `server.submit` le refuse dans
+  les deux sens : ils liraient la même file de marqueurs sous le même `mode_id`, donc chacun n'en
+  verrait qu'une partie au hasard du tour de boucle — deux décodages muets, sans erreur.
+- ⚠️ **Aucune de ces quatre calibrations n'a jamais été jouée au casque par ce chemin.** Elles sont
+  vérifiées entre deux processus, sur board synthétique. Ce sont les tests 2.6 à 2.9 de la recette.
 
 ## 7. Stimulus : natif vs externalisé
 
@@ -276,8 +337,29 @@ grâce à l'horloge partagée LSL, le moteur aligne l'EEG sur l'événement au m
 justifiait n'a pas disparu pour autant.** Elle a seulement changé de camp : le moteur ne demande plus
 un stimulus rendu chez lui, il demande que le stimulus lui donne l'heure. Une frame sautée décale le
 code jusqu'au marqueur suivant, et une frame d'avance à l'horodatage décale TOUT, définitivement,
-sans lever la moindre exception. C'est pourquoi la **calibration** c-VEP reste native
-(`Calib(kind="natif")`) : le pilotage tolère un émetteur externe, l'enregistrement des époques non.
+sans lever la moindre exception.
+
+⚠️ **Et le 2026-09-07, la CALIBRATION a suivi le même chemin — c'est l'évolution F2 (§13), livrée.**
+Elle restait « native » parce qu'on croyait que le rendu à la frame obligeait à enregistrer les
+époques dans le programme qui dessine. C'était faux, de la même façon que pour le pilotage : ce que
+l'enregistrement exige, ce n'est pas d'être dans la fenêtre, c'est de savoir **quand** chaque
+événement a été affiché. Le contrat public des marqueurs a donc gagné trois événements —
+`calib_start` (la fenêtre s'annonce, avec le nombre d'ÉPOQUES qu'elle promet), `cue` (la
+vérité-terrain), `calib_end` (le déclencheur, unique, de l'entraînement) —, plus `block_end` pour le
+c-VEP. Les époques, elles, **ne voyagent pas** : c'est le moteur qui les découpe, dans son propre
+tampon, par le chemin du décodage.
+
+⚠️ **L'ErrP n'utilise PAS `cue`** : son étiquette voyage sur son `feedback`, qui gagne
+`error: true|false` **en calibration seulement**. C'est une BCI *passive* — publier la
+vérité-terrain en décodage reviendrait à donner la réponse au moteur, et **rien ne le signalerait** :
+le flux garderait la même forme et les scores resteraient plausibles.
+
+**Conséquence directe, et c'est l'apport de conception du chantier : toute application capable
+d'afficher le stimulus peut désormais entraîner un modèle.** La calibration n'est plus verrouillée à
+notre pygame. Quatre exigences seulement, celles que les trois fenêtres de référence satisfont :
+horodater APRÈS le flip · annoncer un `trials` honnête, en époques · n'envoyer `calib_end` que sur
+une séance complète · n'ouvrir AUCUN casque. Contrat détaillé : [markers.md](markers.md), section
+« Training a model through the markers ».
 
 ## 8. Dépendances et installation
 
@@ -455,9 +537,15 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
   besoin de la phase exacte du code » — était réel mais mal formulé : il n'exigeait pas que l'API
   rende le stimulus, seulement qu'elle sache **où en est le code**. Un marqueur par cycle suffit. Ce
   qui reste vrai et qui n'a pas été levé : la **calibration** c-VEP demande toujours un rendu natif.
-- **F2 — calibration externalisée (pilotée par l'app)** : l'appli externe joue le protocole et envoie
-  les époques + labels à l'API pour entraîner. Avantage : stimulus calib == runtime (précision max,
-  tout dans le jeu). Coût : le dev implémente le protocole → fournir un template/SDK.
+- ~~**F2 — calibration externalisée (pilotée par l'app)**~~ : **FAIT le 2026-09-07** (§6.1, §14).
+  Livré **autrement que prévu ici**, et l'écart vaut d'être noté : la formulation d'origine
+  supposait que l'appli externe enverrait « les époques + labels à l'API pour entraîner ». Elle
+  n'envoie **rien de tel** — LSL ne transporte toujours pas d'époques, et il n'a pas fallu qu'il le
+  fasse. L'appli joue le protocole et publie **trois marqueurs de plus** (`calib_start`, `cue`,
+  `calib_end`) ; le moteur découpe les époques dans son propre tampon, par le chemin du décodage.
+  L'avantage visé est atteint (stimulus calib == runtime) et le coût annoncé — « fournir un
+  template/SDK » — se réduit à trois émetteurs de référence et une page de contrat
+  ([markers.md](markers.md)). ⚠️ **Aucune application tierce ne s'en est encore servie.**
 
 ## 14. Roadmap / TODO
 
@@ -524,9 +612,10 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        fonctionnement** dans ses métadonnées : sans ça une application lirait `error = 1` comme un
        verdict. Conception :
        [docs/superpowers/specs/2026-08-18-errp-moteur-design.md](superpowers/specs/2026-08-18-errp-moteur-design.md).
-       - **[à faire]** la **calibration ErrP jouée par le moteur** : elle reste dans l'appli pygame,
-         donc un étudiant doit y passer avant que le moteur puisse décoder. Même décision que pour
-         le P300.
+       - **[fait 2026-09-07]** la **calibration ErrP est jouée par le moteur**
+         (`core/modes/errp_calib.py`), lancée par le bouton « Calibrer » de la console. ⚠️ Elle est
+         le seul des trois protocoles à ne PAS utiliser `cue` : son étiquette voyage sur son
+         `feedback`, qui gagne `error: true|false` **en calibration seulement**.
        - **[à faire]** une **seconde personne mesurée**. Tous les chiffres de ce mode viennent d'une
          personne et d'une séance ; le jour où une deuxième est mesurée, ils deviendront une moyenne
          au lieu d'un point.
@@ -539,8 +628,8 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        décode en CONTINU sur une fenêtre glissante comme le SSVEP, et reconstruit à tout instant la
        **phase** du code à partir du dernier marqueur. Le décodeur, la m-séquence et le catalogue de
        modèles ont **déménagé** dans `core/` (`cvep_decoder`, `cvep_code`, `cvep_rcca`,
-       `cvep_models`) ; l'émetteur de référence est `research/cvep_stimulus.py`, qui **n'ouvre pas
-       le casque** et se lance donc à côté du moteur. Contrat public des marqueurs :
+       `cvep_models`) ; l'émetteur de référence est `src/stimulus/cvep.py` (`research/cvep_stimulus.py`
+       jusqu'au 2026-09-07), qui **n'ouvre pas le casque** et se lance donc à côté du moteur. Contrat public des marqueurs :
        [docs/markers.md](markers.md).
        ⚠️ **La panne caractéristique de ce mode ne casse rien**, et c'est ce que le chantier a
        principalement outillé : une phase fausse de quelques frames ne lève aucune exception, les
@@ -584,18 +673,42 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        - **[à faire]** le **rendu par une application cliente** : aucun client externe n'affiche
          encore un stimulus c-VEP. `cvep_stimulus.py` est un émetteur de référence, pas une preuve
          qu'un moteur de jeu tient la frame.
-       - **[à faire]** la **calibration c-VEP jouée par le moteur** : elle reste dans l'appli
-         pygame, comme celles du P300 et de l'ErrP, et pour une raison plus forte qu'elles — son
-         stimulus doit être verrouillé à la frame (§7).
+       - **[fait 2026-09-07]** la **calibration c-VEP est jouée par le moteur**
+         (`core/modes/cvep_calib.py`). La raison qui la retenait — le stimulus doit être verrouillé
+         à la frame — n'imposait pas d'enregistrer les époques dans la fenêtre : la fenêtre garde le
+         rendu, le moteur prend l'épochage. ⚠️ Sa calibration **continue de publier `cycle`** : sans
+         l'horloge il n'y a pas de phase, donc pas d'époque étiquetable. Et `block_end` ferme un
+         bloc, faute de quoi les cycles passés à chercher la nouvelle cible hériteraient de
+         l'étiquette précédente — même nombre d'époques, proportions plausibles, modèle faux.
        - **[à faire]** une **seconde personne mesurée**. Comme pour l'ErrP, tous les chiffres du
          c-VEP viennent d'une personne et d'une séance.
-     - **[à faire]** la **calibration P300 jouée par le moteur** (évolution F2, §13) : elle reste
-       dans l'appli pygame, donc un étudiant doit y passer avant que le moteur puisse décoder.
+     - **[fait 2026-09-07 — chantier « la console, seul point d'entrée »]** la **calibration P300
+       est jouée par le moteur** (`core/modes/p300_calib.py`), et avec elle les trois autres : c'est
+       l'évolution F2 (§13), livrée. Voir **§6.1** pour ce que ça change, et
+       [markers.md](markers.md) pour le contrat public des trois nouveaux événements.
+       - **[fait 2026-09-08]** **`src/research/app.py` est SUPPRIMÉE.** Ses six écrans (trois
+         pilotages, trois calibrations) sont dans `archive/`, avec leur `--smoke`, gardés comme la
+         référence LOCALE d'une séance casque. La console est devenue le point d'entrée du produit,
+         et `outils/Console EEG.bat` l'ouvre sans terminal.
+       - **[à faire — LE point ouvert, toujours le même]** la **séance casque**. Les quatre
+         calibrations du moteur n'ont jamais vu un cerveau, et quatre modes sur six non plus. Le
+         chantier de la console **n'a mesuré strictement rien** : il déplace un geste. Recette 2.6
+         à 2.9.
+       - **[à faire]** trancher, DEVANT UN CASQUE, si le **contrôle de liaison** de la console est
+         trop strict : il refuse dès qu'une voie sort de [0,5 ; 500] µV et n'offre aucune porte de
+         sortie, là où `research/ui.py:signal_check` laissait passer sur n'importe quelle touche.
+       - **[à faire]** une **poignée de main** entre la console et la fenêtre de stimulus. Il n'en
+         existe aucune : la console soumet `start_calibration` puis lance la fenêtre, et c'est
+         l'initialisation de pygame qui couvre les 15 s de chauffe du moteur. Ça tient, ce n'est pas
+         garanti.
      - **[à faire]** le **control plane** (commandes JSON entrantes, §12.1) reste entier : ce
        chantier n'a livré que les marqueurs de STIMULUS, qui ne partagent que le mot « marqueur ».
-   - **[à faire — séance matérielle]** la console n'a **jamais été ouverte en fenêtre** : tout est
-     vérifié hors écran (`--smoke`, Qt en `offscreen`). Restent à faire au casque : non-régression
-     SSVEP, charge CPU en cumul de modes, et un repos partagé vécu de bout en bout.
+   - **[partiellement fait 2026-08-17]** la console a été ouverte en fenêtre au niveau 1 de la
+     recette (13 tests, 3 défauts trouvés dont un non cosmétique). ⚠️ **Mais jamais AVEC un
+     casque**, et ses pages de calibration, son contrôle de liaison et son lanceur de fenêtre — tous
+     livrés le 2026-09-08 — n'ont été vus qu'hors écran (`--smoke`, Qt en `offscreen`, faux
+     processus). Restent à faire au casque : non-régression SSVEP, charge CPU en cumul de modes, un
+     repos partagé vécu de bout en bout, et les quatre calibrations.
 1. **[fait]** Import du code existant dans le dépôt GitHub (`medkar/EEG_API_Unicorn`).
 2. **[en cours]** Cette spec.
 3. **[fait 2026-07-27]** Extraire le **moteur** en cœur réutilisable ; restructurer `core/` vs

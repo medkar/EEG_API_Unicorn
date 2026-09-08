@@ -11,13 +11,22 @@ chacun se suffit à lui-même.
 | Niveau | Ce qu'il faut | Durée | Ce qu'il prouve |
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
-| 1 | un écran | ~45 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.16** |
+| 1 | un écran | ~45 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.16** ; ⚠️ **1.2, 1.14, 1.15 et 1.16 ont changé le 2026-09-08** : la console lance elle-même les fenêtres de stimulus |
 | 2 | le casque | ~2 h | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min ; et 2.9 : calibration c-VEP ~3 min + A 5 + B 5 + A' 5, montages compris) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
 
 ⚠️ **Les quatre derniers tests du niveau 2 (2.6 à 2.9) n'ont JAMAIS été joués**, et ce sont eux qui
 portent tout ce que le produit affirme sur les quatre modes à modèle. Une seule séance casque les
 couvre — c'est le travail qui reste.
+
+⚠️ **Ce que le chantier « la console, seul point d'entrée » (2026-09-08) a changé dans ce document,
+et ce qu'il n'a PAS changé.** Il a changé les **gestes** : les quatre calibrations sont désormais
+jouées par le moteur et lancées d'un bouton, la console lance elle-même les fenêtres de stimulus, et
+`src/research/app.py` n'existe plus. Il n'a changé **aucun repère chiffré** de ce document — ni le
+100 %/44 % du SSVEP, ni le 46 %/71 % du c-VEP, ni l'erreur sur deux de l'ErrP, ni les ~40 % à trois
+classes du MI. **Il n'a mesuré strictement rien** : quatre modes sur six n'ont toujours jamais été
+décodés au casque à travers le moteur, et la séance qui le ferait est exactement celle décrite en
+2.6 à 2.9. Elle est simplement devenue exécutable sans l'appli pygame.
 
 ## Avant toute séance — trois pièges qui ont déjà coûté des heures
 
@@ -62,21 +71,42 @@ python src/core/acquisition.py --synthetic   # acquisition seule + fenêtre MI N
 python src/core/lsl_io.py            # publication LSL, pont d'horloge, verdicts qualité
 python src/core/modes/cvep.py        # le mode c-VEP : la PHASE, les 4 causes de -1, le vote
 python src/core/cvep_models.py       # les modèles c-VEP : refus des hérités, quel décodeur, tri par date
-python src/research/cvep_stimulus.py --smoke  # l'émetteur c-VEP : la phase lue dans les PIXELS
-python src/core/server.py --smoke    # le moteur : frontière core/, cumul, repos partagé, flux
-python src/console/app.py --smoke    # la console : grille, page de mode, formulaire (Qt offscreen)
-python src/research/app.py --smoke   # l'appli pygame : menu + 5 modes + calibrations (~3 min)
+python src/stimulus/cvep.py --smoke  # la fenêtre c-VEP : la phase lue dans les PIXELS
+python src/core/server.py --smoke    # le moteur : frontière core/ ET stimulus/, cumul, repos
+                                     # partagé, flux, vol de marqueurs, save/discard
+python src/console/app.py --smoke    # la console : grille, page de mode, formulaire, contrôle de
+                                     # liaison, lanceur de fenêtre, ORDRE (Qt offscreen)
 ```
 
 ⚠️ **Les trois lignes c-VEP ne sont pas décoratives non plus**, et la troisième moins que les
-autres : `cvep_stimulus.py --smoke` est le **seul** test du dépôt qui compare, image par image, la
-phase que le moteur reconstruirait à celle réellement affichée — lue dans les **pixels**, pas dans le
-compteur de l'émetteur. C'est la panne caractéristique de ce mode, celle qui ne lève aucune
+autres : `src/stimulus/cvep.py --smoke` est le **seul** test du dépôt qui compare, image par image,
+la phase que le moteur reconstruirait à celle réellement affichée — lue dans les **pixels**, pas dans
+le compteur de l'émetteur. C'est la panne caractéristique de ce mode, celle qui ne lève aucune
 exception et ressemble à un étudiant qui fixe mal. La liste complète est dans `CLAUDE.md`.
+
+⚠️ **`python src/research/app.py --smoke` a disparu de cette liste le 2026-09-08** : l'appli pygame
+est **supprimée**. Ses six écrans sont dans `archive/`, chacun avec son `--smoke` — dix au total,
+listés dans [`archive/README.md`](../archive/README.md). Ils ne sont couverts par aucun des deux
+smokes ci-dessus ; les lancer est un geste à part, le jour où on a besoin d'un écran archivé.
+
+**Les huit lignes du chantier « la console, seul point d'entrée »** (2026-09-08), qu'aucun des deux
+smokes n'exécute et qui portent tout ce que la console sait faire de neuf :
+
+```bash
+python src/core/modes/marker_calib.py   # le SOCLE des 3 calibrations à fenêtre : l'accord des DEUX
+                                        # épochages sur deux géométries, les 3 causes d'abandon
+python src/core/modes/p300_calib.py     # la calibration P300 : cue -> étiquette, flash -> époque
+python src/core/modes/errp_calib.py     # la calibration ErrP : l'étiquette voyage sur le feedback
+python src/core/modes/cvep_calib.py     # la calibration c-VEP : la phase APPELÉE, jamais recopiée
+python src/core/errp_track.py           # la piste ErrP : UNE écriture du protocole, deux écrans
+python src/stimulus/registry.py         # clé -> commande, correspondance vérifiée DANS LES 2 SENS
+python src/stimulus/p300.py --smoke     # la fenêtre P300 : séquence + séance de calibration
+python src/stimulus/errp.py --smoke     # la fenêtre ErrP : la vérité-terrain DANS LES DEUX SENS
+```
 
 Attendu : `VERDICT : OK` pour tous, **sauf `acquisition.py`** qui n'imprime pas de ligne de verdict
 — pour celui-là, lire les `OK` ligne à ligne et le code de sortie (`$LASTEXITCODE` sous PowerShell,
-qui doit valoir 0) — et `smoke OK : menu + SSVEP + c-VEP … câblés (headless)` pour le dernier.
+qui doit valoir 0).
 
 ⚠️ **Les cinq lignes MI ne sont pas décoratives.** Aucun des trois smokes ne les exécute, et le
 **non-filtrage de la fenêtre MI** — l'invariant central du mode, un double filtrage décoderait du
@@ -152,10 +182,17 @@ dernier. **Le moteur publie les six modes.** Le module qui portait les entrées 
 - [ ] **Aucune des 7 tuiles n'est grisée.** Chacune porte sa case « publié » et son bouton
       « Ouvrir ». Si tu en vois une grise, c'est une régression — et la console le tient du
       contrat, pas d'une liste écrite à la main (`spec["status"] != "moteur"`).
-- [ ] Le bouton **Calibrer** n'apparaît que sur la page **Motor Imagery**. C'est voulu, et ce
-      n'est pas un oubli : `Calib(kind="natif")` dans les `ModeSpec` du c-VEP, du P300 et de
-      l'ErrP dit que leur protocole a besoin d'un stimulus verrouillé à la frame, que Qt ne sait
-      pas rendre. On calibre ces trois-là dans l'appli pygame.
+- [ ] **⚠️ Ce point a changé le 2026-09-08.** Le bouton **Calibrer** apparaît maintenant sur les
+      **quatre** modes à modèle — MI, P300, ErrP, c-VEP — parce que le moteur joue les quatre
+      calibrations. Le critère est `calibration.jouable` dans le catalogue (« le moteur a-t-il un
+      runtime pour cette calibration »), pas `kind`, qui dit seulement QUI mène le protocole.
+      Un bouton absent sur l'un des quatre est une régression : c'est exactement le défaut que la
+      tâche 6 du chantier a trouvé, où un critère périmé (`kind == "console"`) l'avait fait
+      disparaître de tous les modes, MI compris, sans qu'aucun test ne le voie.
+- [ ] Sur le P300, l'ErrP et le c-VEP, un **second** bouton apparaît à côté : **Lancer le
+      stimulus**. Leur `Calib(kind="fenetre")` dit que leur protocole a besoin d'un stimulus
+      verrouillé à la frame, que Qt ne sait pas rendre — la console lance donc une fenêtre de
+      `src/stimulus/`, en second processus. Le MI, endogène, n'a ni ce bouton ni cette fenêtre.
 
 > **Sans modèle entraîné sur ce poste, c'est normal** : la tuile reste active, mais lancer le mode
 > sera refusé avec « aucun choix disponible » et l'aide qui dit de calibrer. Ça vaut pour les
@@ -343,36 +380,71 @@ C'est le chantier du 2026-08-17, et c'est la première fois que le moteur **éco
 seulement publier. Le décodage sera du hasard en synthétique — ce n'est pas ce qu'on teste. Ce qu'on
 vérifie, c'est que les marqueurs partent, arrivent, trouvent leur EEG, et qu'une décision sort.
 
-**Deux terminaux**, et c'est le point : le stimulus **n'ouvre pas le casque**, donc les deux
-programmes cohabitent — impossible avec l'appli pygame.
+**Depuis le 2026-09-08, ce test se joue en UN seul programme** : la console démarre le mode ET lance
+la fenêtre de stimulus (bouton **Lancer le stimulus** sur la page P300). Le point de départ n'a pas
+changé pour autant — le stimulus **n'ouvre pas le casque**, c'est ce qui lui permet de tourner à
+côté du moteur, que ce soit la console qui le lance ou toi.
 
 ```bash
-# terminal 1
-python src/core/server.py --synthetic --mode p300
-# terminal 2
-python src/research/p300_stimulus.py --windowed
+# terminal 1 — la console. Page P300 -> « Lancer le stimulus »
+python src/console/app.py --synthetic --mode p300
+# terminal 2 (facultatif) — pour voir ce qui sort
+python -u examples/receiver.py --stream decoded_p300
 ```
+
+⚠️ La console passe par le **contrôle de liaison** avant de lancer quoi que ce soit. En
+`--synthetic` il laisse passer (σ de 7 à 75 µV, huit verdicts « ok ») ; si tu vois un refus ici,
+c'est une régression. ⚠️ Elle lance la fenêtre **en plein écran**, par-dessus la console : c'est le
+comportement voulu en séance. Alt-tab pour revenir, ESC pour la fermer.
 
 - [ ] Le moteur dit qu'il attend le flux de marqueurs, **puis** qu'il s'y connecte quand le
       stimulus démarre. S'il reste muet, c'est le défaut que ce test existe pour attraper.
 - [ ] Les 6 cibles clignotent une par une, en ordre mélangé.
-- [ ] À la fin de la manche, **une sélection sort** sur `decoded_p300` — vérifiable dans un
-      troisième terminal avec `python -u examples/receiver.py --stream decoded_p300`.
+- [ ] À la fin de la manche, **une sélection sort** sur `decoded_p300`.
 - [ ] La cible désignée sera fausse cinq fois sur six : **c'est normal**, le board synthétique ne
       produit aucun P300. On teste le tuyau, pas le cerveau.
+- [ ] **Le bandeau de la console dit l'état de la fenêtre**, en permanence et même depuis la grille.
+      Ferme la fenêtre par ESC : le bandeau doit le refléter sans qu'on ait rien à cliquer. Tue-la
+      autrement (gestionnaire de tâches) : le bandeau doit annoncer une mort **anormale**, avec le
+      code de sortie et la dernière ligne de sa sortie d'erreur. Un processus qui meurt en silence
+      est le défaut que ce chantier répare.
+- [ ] **Un second clic sur « Lancer le stimulus » est REFUSÉ**, et le refus s'affiche. Deux fenêtres
+      publieraient les mêmes marqueurs sous le même nom, et le moteur mélangerait les deux séances
+      sans rien signaler.
+- [ ] Fermer la console : la fenêtre de stimulus meurt avec elle (`closeEvent`). Aucun processus
+      orphelin ne doit rester (`Get-Process python`).
 
-> ⚠️ Sans modèle P300 entraîné sur ce poste, le mode **refuse de démarrer** et dit d'aller calibrer
-> dans l'appli pygame. C'est le comportement attendu sur un dépôt fraîchement cloné (`data/` est
-> gitignoré), pas une panne.
+**Le montage historique à deux terminaux reste valable**, et c'est lui qu'utilise une application
+tierce :
+
+```bash
+python src/core/server.py --synthetic --mode p300   # terminal 1
+python src/stimulus/p300.py --windowed              # terminal 2
+```
+
+⚠️ **Jamais la console ET le moteur en même temps** : ils publieraient `decoded_p300` deux fois sous
+le même nom.
+
+> ⚠️ Sans modèle P300 entraîné sur ce poste, le mode **refuse de démarrer** et dit d'aller cliquer
+> sur « Calibrer ». C'est le comportement attendu sur un dépôt fraîchement cloné (`data/` est
+> gitignoré), pas une panne. Le bouton **Calibrer** de la page P300 joue la séance
+> (`P300_CAL_ROUNDS` = 12 manches) : la console lance la fenêtre avec `--calibrer`, le moteur
+> encaisse les marqueurs et entraîne à la fin. ⚠️ **Ce chemin-là n'a JAMAIS été joué**, ni au
+> casque ni en synthétique — seulement en autotest. Un modèle obtenu en synthétique serait
+> chargeable et dépourvu de tout sens, comme celui du c-VEP en 1.16 : suffisant pour tester le
+> tuyau, rien d'autre.
 
 ### 1.15 — L'ErrP : le 5e mode, sans casque
 
-> ⚠️ **Sans modèle ErrP entraîné sur ce poste, le mode refuse de démarrer** et dit d'aller calibrer
-> (`python src/research/app.py`, menu → ErrP → Calibrer). C'est le comportement attendu sur un dépôt
-> fraîchement cloné (`data/` est gitignoré), pas une panne. ⚠️ **Mais cette calibration-là exige le
-> casque** : ~200 essais, il n'existe aucun moyen d'en fabriquer un sans. Si tu n'en as jamais fait,
-> ce test du niveau 1 n'est jouable **qu'après le 2.8** — c'est la seule entorse à la règle « le
-> niveau 1 ne demande pas de matériel », et elle est dans la nature du mode, pas dans son code.
+> ⚠️ **Sans modèle ErrP entraîné sur ce poste, le mode refuse de démarrer** et dit d'aller cliquer
+> sur « Calibrer ». C'est le comportement attendu sur un dépôt fraîchement cloné (`data/` est
+> gitignoré), pas une panne. Depuis le 2026-09-08 le bouton **Calibrer** de la page ErrP joue la
+> séance : la console lance `src/stimulus/errp.py --calibrer`, le moteur encaisse les `feedback`
+> **étiquetés** et entraîne à la fin. ⚠️ **Mais cette calibration-là exige le casque** :
+> `ERRP_CAL_TRIALS` = 200 essais, et un modèle appris sur du bruit synthétique ne dit rien du
+> détecteur qu'on veut éprouver ici. Si tu n'en as jamais fait, ce test du niveau 1 n'est jouable
+> **qu'après le 2.8** — c'est la seule entorse à la règle « le niveau 1 ne demande pas de
+> matériel », et elle est dans la nature du mode, pas dans son code.
 
 Le décodage sera du hasard en synthétique — ce qu'on vérifie, c'est que le tuyau porte le second
 paradigme sans qu'on ait rien redécouvert.
@@ -382,14 +454,21 @@ demandent une page et un réglage qui n'existent que dans la console ; `server.p
 n'a ni page ErrP ni option `tnr_target`. La console crée son propre moteur, donc **lancer les deux
 publierait `decoded_errp` deux fois sous le même nom** — exactement le piège que CLAUDE.md interdit.
 
+**Deux terminaux au lieu de trois** depuis le 2026-09-08 : la fenêtre de stimulus se lance
+maintenant depuis la page ErrP, bouton **Lancer le stimulus**.
+
 ```bash
-# terminal 1 — la console (le mode démarre déjà « publié » ; la case est sur la TUILE, pas sur la page)
+# terminal 1 — la console (le mode démarre déjà « publié » ; la case est sur la TUILE, pas sur la
+#              page). Page ErrP -> « Lancer le stimulus »
 python src/console/app.py --synthetic --mode errp
 # terminal 2
-python src/research/errp_stimulus.py --windowed
-# terminal 3
 python -u examples/receiver.py --stream decoded_errp
 ```
+
+⚠️ La console lance la fenêtre **sans `--windowed`** : elle s'ouvre en plein écran, par-dessus la
+console. C'est le comportement voulu en séance (le stimulus doit occuper l'écran) ; pour développer,
+lance-la à la main dans un troisième terminal — `python src/stimulus/errp.py --windowed` — et ne
+clique pas le bouton, sinon deux fenêtres publieraient sous le même nom.
 
 - [ ] Le moteur passe par **15 s de chauffe puis 8 s de repos** avant de décoder, et annonce le σ
       par voie qu'il a mesuré. C'est sa référence de rejet d'artefact — sans elle, pas de décodage.
@@ -398,12 +477,19 @@ python -u examples/receiver.py --stream decoded_errp
       donc **rien** sur des marqueurs jetés : ce silence est le succès, pas une panne.
 - [ ] Pour voir l'autre moitié du garde-fou, relance l'émetteur avec `--no-wait` : il démarre tout de
       suite, et le moteur écrit alors « N feedback(s) reçus pendant la CHAUFFE/le REPOS : jetés ».
-      C'est voulu : l'offset du casque dérive encore, ces époques ne valent rien.
+      C'est voulu : l'offset du casque dérive encore, ces époques ne valent rien. ⚠️ Le bouton de la
+      console ne passe **pas** `--no-wait` : pour ce point-là, ferme la fenêtre lancée par la console
+      et lance-la à la main (`python src/stimulus/errp.py --windowed --no-wait`).
 - [ ] Un point avance sur une piste, se trompe délibérément **environ une fois sur quatre** (28 %,
       le chiffre est affiché à l'écran), et montre son résultat une seconde.
 - [ ] À chaque résultat affiché, **un échantillon sort** sur `decoded_errp`, visible dans le
-      terminal 3. Y compris quand le moteur ne peut pas juger : il publie alors `error = -1`,
+      terminal 2. Y compris quand le moteur ne peut pas juger : il publie alors `error = -1`,
       jamais `0`.
+- [ ] ⚠️ **Le marqueur de DÉCODAGE est NU** : `{"mode": "errp", "event": "feedback"}`, sans champ
+      `error`. Le champ n'existe qu'en calibration (`--calibrer`). S'il apparaissait ici, l'émetteur
+      donnerait la réponse au moteur et tout ce que ce mode affirme deviendrait faux — sans qu'aucun
+      compteur ne bouge. C'est ce que `python src/stimulus/errp.py --smoke` vérifie **dans les deux
+      sens**.
 - [ ] Sur la page ErrP, le verdict s'affiche **avec le score et le point de fonctionnement**, pas
       comme une sentence. Et « pas de verdict » se distingue visuellement de « pas d'erreur ».
 
@@ -412,40 +498,50 @@ python -u examples/receiver.py --stream decoded_errp
 > ne laisse attraper qu'une erreur sur quatre.
 >
 > ⚠️ **Mais ce réglage recrée le flux.** Le moteur écrit lui-même « RECRÉÉ (réabonnez-vous) », et le
-> mode **refait chauffe + repos, ~23 s**, avant de décoder à nouveau. Ton `receiver.py` du terminal 3
+> mode **refait chauffe + repos, ~23 s**, avant de décoder à nouveau. Ton `receiver.py` du terminal 2
 > est abonné à l'ancien flux : **il devient muet définitivement**. Relance-le après chaque changement
 > et attends la fin du repos avant de compter quoi que ce soit — sinon tu mesureras un flux mort et
 > tu concluras que baisser le réglage a cassé le détecteur, ce qui est l'inverse de la vérité.
 
 ### 1.16 — Le c-VEP : une HORLOGE dans le tuyau, sans casque
 
-C'est le chantier du 2026-08-21, le **6e et dernier mode**. Même montage à trois terminaux que le
-1.15, et pourtant ce test ne vérifie pas la même chose — parce que **ces marqueurs-là ne délimitent
-aucune époque : ils tiennent une horloge**. Le P300 et l'ErrP demandent au moteur de découper autour
-d'un instant ; le c-VEP décode en continu, comme le SSVEP, et ses marqueurs lui disent seulement
-**où en est le code affiché**. Sans eux il ne décode rien du tout — pas « mal », *rien*.
+C'est le chantier du 2026-08-21, le **6e et dernier mode**. Même montage que le 1.15, et pourtant ce
+test ne vérifie pas la même chose — parce que **ces marqueurs-là ne délimitent aucune époque : ils
+tiennent une horloge**. Le P300 et l'ErrP demandent au moteur de découper autour d'un instant ; le
+c-VEP décode en continu, comme le SSVEP, et ses marqueurs lui disent seulement **où en est le code
+affiché**. Sans eux il ne décode rien du tout — pas « mal », *rien*.
 
 > ⚠️ **Il faut un modèle c-VEP sur ce poste**, sinon le mode refuse de démarrer et dit d'aller
-> calibrer (`python src/research/app.py`, menu → c-VEP → Calibrer). Contrairement à l'ErrP (1.15),
-> cette calibration-là **se joue en synthétique** : `python src/research/app.py --synthetic`, page
-> c-VEP → Calibrer, **~3 min** (la durée exacte est calculée et imprimée au lancement : ≈ 2,7 min
-> aux réglages du dépôt). Le modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu
-> aucun cerveau. Il suffit pour ce test, qui vérifie le tuyau et pas le décodage. Elle écrit **deux**
-> fichiers horodatés (`data/cvep_model_*.npz` pour l'eCCA, `data/cvep_rcca_model_*.npz` pour le
-> rCCA) et n'écrase jamais rien.
+> cliquer sur « Calibrer ». Contrairement à l'ErrP (1.15), cette calibration-là **se joue en
+> synthétique** : `python src/console/app.py --synthetic`, page c-VEP → **Calibrer**, **~3 min**
+> (`CVEP_CAL_CYCLES` = 15 cycles par cible, `CVEP_CAL_SETTLE_CYCLES` = 4 jetés à chaque changement ;
+> la durée exacte est calculée et imprimée au lancement : ≈ 2,7 min aux réglages du dépôt). Le
+> modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu aucun cerveau. Il suffit pour
+> ce test, qui vérifie le tuyau et pas le décodage. Elle écrit **deux** fichiers horodatés
+> (`data/cvep_model_*.npz` pour l'eCCA, `data/cvep_rcca_model_*.npz` pour le rCCA) et n'écrase jamais
+> rien — **et rien n'est écrit tant qu'on n'a pas cliqué « Enregistrer le modèle »** : l'écran montre
+> d'abord les deux justesses et le verdict de McNemar, puis on garde ou on refait.
+>
+> ⚠️ **Ce chemin n'a jamais été joué** : l'ancienne calibration pygame l'a été (elle est archivée en
+> `archive/cvep_calibrate.py`), celle du moteur ne l'a été qu'en autotest.
 
 **La console plutôt que le moteur nu**, comme au 1.15 : les deux seuils qu'on manipule au dernier
 point n'existent que là, et les compteurs qui font tout l'intérêt de ce test s'y lisent d'un coup
 d'œil. Jamais les deux à la fois — ils publieraient `decoded_cvep` deux fois sous le même nom.
 
+**Deux terminaux au lieu de trois** : la fenêtre se lance depuis la page c-VEP, bouton **Lancer le
+stimulus**.
+
 ```bash
-# terminal 1 — la console
+# terminal 1 — la console. Page c-VEP -> « Lancer le stimulus »
 python src/console/app.py --synthetic --mode cvep
-# terminal 2 — l'émetteur : n'ouvre PAS le casque, donc il cohabite
-python src/research/cvep_stimulus.py --windowed
-# terminal 3
+# terminal 2
 python -u examples/receiver.py --stream decoded_cvep
 ```
+
+⚠️ Les deux points ci-dessous qui demandent `--refresh 75` et `--seed` exigent de lancer la fenêtre
+**à la main** — le bouton ne passe aucune option : `python src/stimulus/cvep.py --windowed
+--refresh 75`. Ne clique pas le bouton en même temps, sinon deux fenêtres publient sous le même nom.
 
 - [ ] Le moteur annonce qu'il attend le flux de marqueurs, **puis** qu'il s'y connecte quand
       l'émetteur démarre.
@@ -461,7 +557,7 @@ python -u examples/receiver.py --stream decoded_cvep
 - [ ] L'émetteur imprime sa **graine** (`--seed N` rejoue la séance à l'identique) et, pour chaque
       consigne, **deux** horodatages : `t=` et « compter à partir de t=… (+2,7 s de transition) ».
       Le second est celui qui sert à dépouiller — voir le 2.9.
-- [ ] Sur `decoded_cvep`, terminal 3 : **10 voies**, nommées
+- [ ] Sur `decoded_cvep`, terminal 2 : **10 voies**, nommées
       `target_index`, `confidence`, `score_0`…`score_5`, puis `corr_min` et `margin`, à ~5 Hz.
 - [ ] `target_index` vaut **-1** en permanence : **c'est le résultat attendu**, le board synthétique
       ne produit aucune réponse c-VEP. On teste le tuyau, pas le cerveau.
@@ -490,9 +586,9 @@ python -u examples/receiver.py --stream decoded_cvep
 - [ ] Sur la page c-VEP, changer **« Corrélation minimale »** de 0,26 à 0,05 puis **Appliquer**.
       Attendu, et c'est la différence avec le réglage ErrP du 1.15 : le terminal écrit « sans effet
       sur le décodage : ni repos refait, ni flux recréé », **le flux n'est PAS recréé** et ton
-      `receiver.py` du terminal 3 continue de recevoir sans rien relancer. Le seuil bas fait sortir
+      `receiver.py` du terminal 2 continue de recevoir sans rien relancer. Le seuil bas fait sortir
       des cibles au hasard : c'est normal, et c'est le but — on vérifie que le réglage mord.
-- [ ] Toujours dans le terminal 3, les deux dernières voies **`corr_min` et `margin` ont suivi**
+- [ ] Toujours dans le terminal 2, les deux dernières voies **`corr_min` et `margin` ont suivi**
       (0,05 sur la première), alors que les métadonnées du flux, elles, portent encore 0,26. Les
       deux disent bien deux choses différentes : la métadonnée décrit le réglage **à l'ouverture**
       du flux, la voie celui **en vigueur pour cet échantillon**. C'est ce qui permet de dépouiller
@@ -590,11 +686,28 @@ cette étape, donc plus de risque de saturation C3/Cz à la réouverture rien qu
 python src/console/app.py --mode mi
 ```
 
-- [ ] Ouvrir **Motor Imagery** → bouton **Calibrer**. La page affiche la consigne en cours
-      (GAUCHE / DROITE / REPOS), l'essai en cours et le temps restant — 5 à 7 min par défaut,
-      fatigant : sujet frais.
-- [ ] La calibration va au bout et annonce avoir écrit un modèle horodaté. Noter l'accuracy
-      affichée : ______ %.
+- [ ] Ouvrir **Motor Imagery** → bouton **Calibrer** → briefing, réglages, **Commencer**.
+      ⚠️ **Depuis le 2026-09-08 un écran s'intercale entre « Commencer » et le lancement : le
+      CONTRÔLE DE LIAISON.** Il montre le σ des huit voies, surligne les voies clés du mode
+      (C3, Cz, C4 — elles viennent du contrat, `ModeSpec.key_channels`, pas d'une liste écrite dans
+      l'interface) et **REFUSE de lancer** si une seule des huit sort de [0,5 ; 500] µV, ou si la
+      référence a décroché. **Il n'y a aucune porte de sortie** — c'est délibéré, et c'est le point
+      du test à trancher ici : si une électrode refuse de descendre sous le seuil malgré la saline,
+      la console devient inutilisable. **Note ce qui s'est passé**, c'est la seule mesure qui puisse
+      arbitrer.
+- [ ] ⚠️ **Si le mode MI décodait déjà, la console l'ARRÊTE avant d'ouvrir la calibration**, et le
+      dit. C'est une règle uniforme (elle vaut pour les quatre modes, même quand le moteur ne
+      l'exigerait pas), et la conséquence visible est qu'il faudra le **redémarrer** depuis la grille
+      ensuite — ce qu'on ferait de toute façon, pour prendre le nouveau modèle.
+- [ ] La page affiche la consigne en cours (GAUCHE / DROITE / REPOS), l'essai en cours et le temps
+      restant — 5 à 7 min par défaut, fatigant : sujet frais.
+- [ ] La calibration va au bout et affiche son accuracy. Noter : ______ %.
+- [ ] ⚠️ **Rien n'est encore écrit sur le disque.** Deux boutons apparaissent : **Enregistrer le
+      modèle** et **Refaire**. C'est le geste qui a changé le 2026-09-08 : avant, une calibration
+      sauvegardait PUIS annonçait sa précision, et comme le moteur propose le modèle chargeable le
+      plus récent, une séance ratée devenait le défaut en silence. Vérifie que `data/` ne contient
+      **rien de neuf** tant que tu n'as pas cliqué (`Get-ChildItem data -Filter mi_model_*` avant et
+      après), puis clique **Enregistrer le modèle**.
 - [ ] **Ce qu'il faut attendre — à lire AVANT de regarder ce chiffre.** Il est désormais
       **honnête** (validation croisée groupée PAR ESSAI, jamais par fenêtre — l'ancien écran
       pygame affichait un chiffre gonflé de 10 à 16 points) et porte sur les **trois classes**
@@ -630,17 +743,42 @@ sous les anciens noms FIXES (`data/mi_model.joblib`, `data/mi_calib_last.npz`), 
 
 ### 2.7 — P300 : sélectionner une cible par la pensée, via le réseau
 
-Le mode le plus exigeant du produit, et le seul où **ton application doit parler au moteur**. Il
-demande un modèle entraîné : si tu n'en as pas sur ce poste, calibre d'abord dans l'appli pygame
-(menu → P300 → Calibrer, ~4 min), puis **ferme-la** avant de lancer le moteur. La calibration
-écrit un fichier **horodaté** (`data/p300_model_AAAAMMJJ_HHMMSS.joblib`) : elle n'écrase jamais la
-précédente, et le moteur propose la plus récente par défaut.
+Le mode le plus exigeant du produit, et le seul où **ton application doit parler au moteur**.
+
+**La calibration : un bouton, dans la même console, sans jamais fermer la session casque.** C'est
+ce que le chantier du 2026-09-08 a changé ici — avant, il fallait passer par l'appli pygame, donc
+fermer et rouvrir le casque, donc risquer la saturation C3/Cz pour rien.
+
+```bash
+python src/console/app.py --mode p300      # page P300 -> « Calibrer »
+```
+
+- [ ] La console passe par le **contrôle de liaison** (voies clés Fz, Cz, Pz surlignées), puis
+      lance la fenêtre de stimulus en mode calibration. `P300_CAL_ROUNDS` = 12 manches, ~4 min.
+- [ ] ⚠️ **L'ordre compte, et il n'est garanti par aucune poignée de main.** La console soumet
+      `start_calibration` **d'abord**, lance la fenêtre **ensuite** ; le moteur compte alors 15 s de
+      chauffe pendant que pygame s'initialise. **Regarde le terminal** : s'il écrit « marqueur(s)
+      reçus pendant la CHAUFFE : jetés », la fenêtre a pris de l'avance sur cette machine — la
+      séance n'est pas perdue, mais elle est plus courte que ce que l'écran annonce. **Note-le.**
+- [ ] À la fin, l'écran montre **la sélection en leave-one-round-out** — « la cible désignée
+      est-elle retrouvée ? », la mesure qui décide pour ce mode, pas l'AUC (qui est publiée en
+      détail) — et attend : **Enregistrer le modèle** ou **Refaire**. Rien n'est écrit avant le
+      clic. La sauvegarde produit un fichier **horodaté**
+      (`data/p300_model_AAAAMMJJ_HHMMSS.joblib`) : elle n'écrase jamais la précédente, et le moteur
+      propose la plus récente par défaut.
+- [ ] ⚠️ **Le mode P300 et sa calibration ne peuvent pas tourner ensemble** — le moteur refuse, dans
+      les deux sens. Ils liraient la même file de marqueurs. Vérifie le refus : démarre le mode
+      depuis la grille, puis clique « Calibrer ». La console doit **arrêter le mode d'abord** et le
+      dire, jamais lancer les deux.
+
+**Puis le décodage.** Tout se fait depuis la même console (page P300 → **Lancer le stimulus**), ou
+en deux terminaux si tu veux le moteur nu :
 
 ```bash
 # terminal 1
 python src/core/server.py --mode p300
 # terminal 2 — n'ouvre PAS le casque, d'où les deux terminaux
-python src/research/p300_stimulus.py
+python src/stimulus/p300.py
 # terminal 3
 python -u examples/receiver.py --stream decoded_p300
 ```
@@ -693,14 +831,37 @@ pas moins. Le moteur le dit lui-même dans le champ `measured_on` de son flux.
 **Donc : ne conclus rien d'un essai, ni de dix.** Sur dix erreurs délibérées, en attraper cinq est
 le résultat *attendu*. En attraper huit ou deux tient dans le bruit.
 
-Il faut un modèle entraîné. Si tu n'en as pas sur ce poste, calibre d'abord dans l'appli pygame
-(menu → ErrP → Calibrer, ~200 essais), puis **ferme-la** avant de lancer le moteur.
+**La calibration : un bouton, ~200 essais, sans quitter la console.** Elle aussi a changé le
+2026-09-08 — il n'y a plus d'appli pygame à ouvrir puis refermer.
+
+```bash
+python src/console/app.py --mode errp      # page ErrP -> « Calibrer »
+```
+
+- [ ] Contrôle de liaison (voies clés Fz, Cz, Pz), puis la console lance
+      `src/stimulus/errp.py --calibrer`. `ERRP_CAL_TRIALS` = 200 essais, ~7 min.
+- [ ] ⚠️ **Ce que ce chemin fait de plus que le décodage, et qu'il ne faut PAS confondre :** en
+      calibration, chaque marqueur `feedback` porte un champ `error` — la vérité-terrain. **En
+      décodage il est absent**, et il doit le rester : l'ErrP est une BCI *passive*, tout son objet
+      est de deviner l'erreur depuis l'EEG seul. Si tu vois `error` dans un marqueur de décodage,
+      arrête tout : le flux `decoded_errp` garderait exactement la même forme et tous les chiffres
+      de ce test deviendraient faux, sans rien pour le signaler.
+- [ ] ⚠️ **L'étiquette suit l'EFFET du pas, pas le tirage.** Un pas « erreur » tiré au bord de piste
+      rapproche le point de sa cible : il n'y a pas d'erreur vécue, donc il est publié
+      `error: false`. C'est la même faute que d'horodater avant le flip, sur un autre axe.
+- [ ] À la fin, l'écran montre l'**AUC** (pas une accuracy, pas un chiffre du P300) et attend
+      **Enregistrer le modèle** / **Refaire**. Le fichier est horodaté
+      (`data/errp_model_AAAAMMJJ_HHMMSS.joblib`) et n'écrase jamais `data/errp_model.joblib`, qui
+      est la trace casque du 24 juillet — le **seul** modèle ErrP jamais enregistré sur un vrai
+      cerveau.
+
+**Puis le décodage** (page ErrP → **Lancer le stimulus**, ou le moteur nu en deux terminaux) :
 
 ```bash
 # terminal 1
 python src/core/server.py --mode errp
 # terminal 2
-python src/research/errp_stimulus.py
+python src/stimulus/errp.py
 # terminal 3
 python -u examples/receiver.py --stream decoded_errp
 ```
@@ -821,13 +982,16 @@ numérique :
 
 | côté | quoi | comment |
 |---|---|---|
-| vérité-terrain | une ligne JSON par consigne, avec `t` et `compter_a_partir_de` | `cvep_stimulus.py --log seance_stim.jsonl` |
+| vérité-terrain | une ligne JSON par consigne, avec `t` et `compter_a_partir_de` | `src/stimulus/cvep.py --log seance_stim.jsonl` |
 | verdicts | une ligne par échantillon, préfixée `t=…` | `python -u examples/receiver.py --stream decoded_cvep > seance_recv.txt` |
 
 - [ ] **Lance l'émetteur avec `--log` et redirige le terminal 3 dans un fichier.** Sans ces deux
       fichiers, la séance n'est **pas dépouillable** : le scrollback est le seul autre exemplaire,
       le 2.9 demande plus bas de fermer les trois terminaux entre ses blocs, et une séance casque ne
       se répète pas.
+      ⚠️ **C'est la raison pour laquelle ce test-ci lance l'émetteur À LA MAIN et non par le bouton
+      « Lancer le stimulus » de la console** : le bouton ne passe aucune option, donc pas de `--log`
+      et pas de `--seed`. Sans journal, la séance ne se dépouille pas et le 2.9 ne conclut rien.
 
 #### ⚠️ 3. Il faut un modèle, et il est propre à TA personne
 
@@ -835,21 +999,32 @@ Le modèle de quelqu'un d'autre donne des corrélations plausibles et fausses �
 mondes. Si tu n'en as pas :
 
 ```bash
-python src/research/app.py     # menu → c-VEP → Calibrer, ~3 min, fixer chaque cible
+python src/console/app.py      # page c-VEP → « Calibrer », ~3 min, fixer chaque cible cerclée
 ```
+
+⚠️ **Depuis le 2026-09-08, c'est le MOTEUR qui entraîne** : la console lance
+`src/stimulus/cvep.py --calibrer` et le moteur découpe ses époques **par le chemin du décodage**,
+sur l'horloge que la fenêtre publie déjà. L'ancien écran pygame existe toujours — il est archivé en
+`archive/cvep_calibrate.py` — mais il découpe sur l'horloge pygame ; pour une séance qui compte,
+passe par la console. ⚠️ **Le chemin du moteur n'a jamais été joué au casque.**
 
 La durée exacte est **calculée et imprimée au lancement** (`[cvep-cal] … ≈ 2.7 min`) : 6 cibles ×
 15 cycles en 18 blocs entrelacés, hors briefing et hors contrôle de liaison. Budgète-la comme telle
 — la « ~1 min » qui traînait dans cette recette datait d'un ancien réglage, et un facteur 3 sur un
 préalable de séance se paie en fatigue et en électrodes qui sèchent.
 
-Elle entraîne **eCCA ET rCCA sur les mêmes époques**, affiche les deux justesses et nomme le gagnant
-par McNemar — « indiscernables » est la réponse attendue. Elle écrit **deux** fichiers horodatés
-(`data/cvep_model_AAAAMMJJ-HHMMSS.npz` et `data/cvep_rcca_model_*.npz`) et n'écrase jamais rien.
+Elle entraîne **eCCA ET rCCA sur les mêmes époques**, affiche les deux justesses et rend le **test**
+de McNemar — « indiscernables » est la réponse attendue, et c'est pourquoi l'écran ne nomme aucun
+gagnant. Elle écrit **deux** fichiers horodatés (`data/cvep_model_AAAAMMJJ-HHMMSS.npz` et
+`data/cvep_rcca_model_*.npz`) et n'écrase jamais rien.
 
+- [ ] ⚠️ **Rien n'est écrit avant le clic sur « Enregistrer le modèle ».** Les DEUX fichiers partent
+      ensemble — le c-VEP est le seul mode à en produire deux par séance, et « Jeter » les jette
+      tous les deux. Vérifie qu'ils sont bien tous les deux dans `data/` après le clic : perdre le
+      `.npz` rCCA en croyant avoir tout enregistré est le défaut que la tâche 8 a corrigé.
 - [ ] **Note le nom exact du fichier eCCA** : ______________________ . Tu en auras besoin pour la
       comparaison, qui n'a de sens que sur le **même modèle**.
-- [ ] **Ferme l'appli pygame** avant de lancer le moteur. Elle ouvre le casque, et l'Unicorn
+- [ ] **Ferme la console** avant de lancer le moteur du bloc A. Elle ouvre le casque, et l'Unicorn
       n'accepte qu'une connexion.
 
 #### La séance
@@ -863,7 +1038,7 @@ sur la même tête.
 python src/core/server.py --mode cvep
 # terminal 2 — l'émetteur : n'ouvre PAS le casque, d'où les deux terminaux.
 #              --log est OBLIGATOIRE ici : c'est la vérité-terrain, et rien d'autre ne la porte.
-python src/research/cvep_stimulus.py --log seance_A_stim.jsonl
+python src/stimulus/cvep.py --log seance_A_stim.jsonl
 # terminal 3 — redirigé dans un fichier, pour la même raison
 python -u examples/receiver.py --stream decoded_cvep > seance_A_recv.txt
 ```
@@ -1089,13 +1264,21 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
   (`p300_stimulus.py`, `errp_stimulus.py`, `cvep_stimulus.py`) sont des références écrites ici, dans
   ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
   vérifié nulle part — c'est le 3.3, et il n'a jamais été joué.
-- **L'appli pygame n'est couverte que par son smoke.** Elle n'est plus le seul accès à aucun mode :
-  il lui reste les **calibrations** que le moteur ne sait pas jouer (c-VEP, P300, ErrP),
-  l'histogramme neuro, **et trois écrans de PILOTAGE que ce chantier n'a pas retirés — SSVEP,
-  sélection P300, démonstrateur ErrP**. Ces trois-là font double emploi avec le moteur et ne
-  doivent jamais tourner en même temps que lui ; seuls le c-VEP et le MI y ont perdu leur pilotage.
-  Les tester au casque est une autre séance — celle-ci vérifie l'API, pas l'appli
-  d'expérimentation.
+- **RIEN de la console n'a été vu avec un casque sur la tête** — ni ses quatre pages de
+  calibration, ni son contrôle de liaison, ni son lanceur de fenêtre. Tout ce que le chantier du
+  2026-09-08 a livré est vérifié **hors écran** (Qt en `offscreen`, board synthétique, faux
+  processus) : ça prouve le câblage entre deux processus, jamais l'ergonomie ni le décodage. Trois
+  questions n'ont de réponse qu'en séance, et les tests 2.6 à 2.9 sont l'occasion de les trancher :
+  est-ce que les 15 s de chauffe couvrent vraiment l'écart de lancement fenêtre/moteur **sur cette
+  machine** ; est-ce qu'un étudiant comprend qu'un chiffre affiché n'est pas encore un modèle
+  enregistré ; et est-ce que le **contrôle de liaison bloque une séance légitime** (il refuse dès
+  qu'une seule voie sort de [0,5 ; 500] µV, sans porte de sortie).
+- **Les dix écrans de `archive/` ne sont couverts que par leur `--smoke`**, et par rien d'autre :
+  aucun des deux smokes du dépôt ne les exécute. Trois d'entre eux décodent en LOCAL
+  (`cvep_pilot.py`, `p300_pilot.py`, `errp_demo.py`) et servent de RÉFÉRENCE en séance — c'est ce
+  que le 2.9 exploite pour le c-VEP, et le même geste est désormais possible pour le P300 et l'ErrP.
+  ⚠️ Aucun des dix n'a vu un cerveau depuis son archivage, et deux d'entre eux (`mi_calibrate.py`,
+  `mi_pilot.py`) écrivent encore sous les anciens noms FIXES : lire `archive/README.md` avant.
 
 ---
 

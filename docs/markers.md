@@ -160,10 +160,13 @@ marker cursor keeps up (otherwise the backlog would count as genuinely lost mark
 and the first decoded window gets a fresh phase instead of waiting up to 1.05 s for the next one.
 Keep flickering through the 15 s warm-up.
 
-**One target must be fixated, and the engine never learns which.** The marker carries `{mode, event,
-refresh}` and nothing else — no target field, deliberately. If you are running a session you intend
-to score, your emitter has to log which target it asked for, with the LSL timestamp, on its own
-side. `src/research/cvep_stimulus.py` prints exactly that.
+**One target must be fixated, and the engine never learns which.** While *decoding*, the marker
+carries `{mode, event, refresh}` and nothing else — no target field, deliberately. If you are
+running a session you intend to score, your emitter has to log which target it asked for, with the
+LSL timestamp, on its own side. `src/stimulus/cvep.py --log seance.jsonl` writes exactly that, one
+JSON line per cue. (While *calibrating* there is a target field, on a separate `cue` event — see
+[Training a model through the markers](#training-a-model-through-the-markers) below. The clock
+marker itself never carries one.)
 
 ## Where you take the timestamp — the one thing that matters
 
@@ -201,11 +204,15 @@ Lock the flicker to vsync while you are at it. The engine extrapolates the phase
 between two markers; without vsync the screen draws at whatever rate the CPU allows, and the
 reconstructed phase is wrong from the second frame on, with no exception to tell you.
 
-`src/research/p300_stimulus.py` and `src/research/cvep_stimulus.py` are the reference
+`src/stimulus/p300.py`, `src/stimulus/errp.py` and `src/stimulus/cvep.py` are the reference
 implementations of this gesture — read one before writing your own. **They open no headset**: they
 only draw and publish markers, which is why you can run one in a second terminal while the engine
 holds the one Bluetooth connection the Unicorn allows. Anything you write yourself must keep that
 property.
+
+Those three files are a package of their own, `src/stimulus/`, and the boundary is enforced by
+`python src/core/server.py --smoke`: they may import `core`, never `research` and never the console.
+The engine, for its part, never imports them — it must run on a machine with no screen.
 
 ## A complete emitter, in Python
 
@@ -491,19 +498,26 @@ does not repeat. Read the counters first.
 ## Before any of this works: a trained model
 
 None of these three is SSVEP. All need a model **of your own brain** — someone else's gives
-plausible, wrong answers, which is the worst of both worlds. Record one with:
+plausible, wrong answers, which is the worst of both worlds. Until you have one the engine refuses
+to start the mode, and says why.
 
-```bash
-python src/research/app.py     # menu -> P300  -> Calibrer
-python src/research/app.py     # menu -> ErrP  -> Calibrer
-python src/research/app.py     # menu -> c-VEP -> Calibrer   (~3 min)
-```
+**Recording one is a button.** Open the console (`outils\Console EEG.bat`, or
+`python src/console/app.py`), go to the mode's page and click **Calibrer**; read the briefing, then
+**Commencer**. A link check stands between that click and anything expensive — per-channel σ, and a
+refusal if any of the eight channels is outside [0.5, 500] µV. Past it, the console tells the engine
+to start the session and launches the stimulus window itself, in that order. When it is over you see
+the figure the session actually earned, and *then* decide: **Enregistrer le modèle** or **Refaire**.
+Nothing reaches `data/` before that click — the engine offers the most recent loadable model as a
+default, so a bad calibration saved automatically would silently become everyone's default.
+
+(The console's own labels are in French; the rest of this page is not, because the marker contract
+is what a third-party application implements.)
 
 Each calibration writes a **new, timestamped** file — `data/p300_model_20260818_101500.joblib`,
 `data/errp_model_20260819_142230.joblib`, `data/cvep_model_20260821-093000.npz` — and **never
-overwrites the previous one**. The engine offers the most recent loadable model as its default, and
-each mode's page lists the others. The timestamp goes down to the second, so the only way to lose a
-model is to finish two calibrations within the same second, which a multi-minute protocol makes hard.
+overwrites the previous one**. Each mode's page lists the others. The timestamp goes down to the
+second, so the only way to lose a model is to finish two calibrations within the same second, which
+a multi-minute protocol makes hard.
 
 The c-VEP calibration is the one that writes **two** models from a single recording: it trains both
 decoders on the same epochs and saves each (`cvep_model_*.npz` for eCCA, `cvep_rcca_model_*.npz` for
@@ -512,11 +526,142 @@ picking a model is picking an algorithm without having to think about it. On the
 the two were **indistinguishable** — 37 paired decisions, 8 of them discordant, McNemar p = 0.727 —
 so there is no default worth arguing about yet.
 
-Until then the engine refuses to start the mode, and says why.
+⚠️ **A mode and its own calibration cannot run at the same time**, and the engine refuses both
+orders. They would read the same marker queue under the same mode id, so each would see a random
+half of it — two silent, wrong decodings and no error anywhere. The console stops the mode for you
+before opening its calibration; you restart it afterwards, which you would do anyway to pick up the
+new model.
 
-⚠️ Close the pygame app before starting the engine. It opens the headset itself, and the Unicorn
-accepts exactly one connection. (`p300_stimulus.py`, `errp_stimulus.py` and `cvep_stimulus.py` are
-the exceptions — they draw only.)
+⚠️ Run only one program that opens the headset: the console, or the engine, or an archived screen
+from [`archive/`](../archive/README.md). The Unicorn accepts exactly one connection. The three
+windows in `src/stimulus/` are the exception — they draw only.
+
+## Training a model through the markers
+
+Everything above is about *decoding*. This section is the other half of the contract, and it is new
+on 2026-09-08: **the same marker stream can now train the model, not just use it.** The engine plays
+the calibration; the window that owns the screen plays the timeline. If your application can render
+the stimulus, it can train a model — the protocol is no longer locked to our pygame windows.
+
+The engine is **passive** here. It shows nothing, draws no cue, counts no trial. It waits for the
+window to announce itself, banks the markers, cuts an epoch around the ones that delimit one — with
+**the same call the decoder uses**, so the training alignment cannot drift from the decoding one —
+and trains when the window says the session is over.
+
+### The three events
+
+```json
+{"mode": "p300", "event": "calib_start", "trials": 576}
+{"mode": "p300", "event": "cue", "target": 3}
+{"mode": "p300", "event": "calib_end"}
+```
+
+**`calib_start`** — *the window is alive, and here is what it promises.* Send it **before** you
+start showing anything: the engine keeps it through its 15 s warm-up (it is the only marker that
+survives that phase), and it has a 30 s deadline after which it declares the window absent and
+cancels the session, naming both possible causes — window not launched, or publishing under a
+different stream name.
+
+⚠️ **`trials` counts EPOCHS, not rounds.** It is the unit the engine increments: one recorded epoch,
+one trial. A P300 session of 12 rounds × 6 targets × 8 repetitions announces **576**, not 12. The
+wrong unit does not break anything — it shows a false progress bar, and it mis-tunes the dead-window
+detector described below. `trials` must be a real number: `true` is rejected on purpose, because
+`bool` subclasses `int` in Python and a 300-epoch session would then be declared complete at its
+first epoch.
+
+**`cue`** — *the ground truth of this round.* It carries the target the screen has just designated,
+and it is the one thing decoding never gives the engine. It is stamped **after the flip that showed
+it**, exactly like a flash, and for the same reason. It labels; it does not delimit — the epoch is
+still cut around the `flash` (P300) or the `cycle` (c-VEP) that follows.
+
+**`calib_end`** — *the session is over, train now.* This is the **only** trigger for training.
+
+⚠️ **An interrupted session must NOT send `calib_end`.** If the user hits escape, or your emitter
+exits early, stay silent: the engine will train nothing and say so. A model learnt on a third of a
+session is indistinguishable from a complete one in the console's model list, and everything
+downstream then rests on it. All three reference windows behave this way.
+
+### What each mode expects, exactly
+
+| mode | announces | labels with | epoch is cut at | closes with |
+|---|---|---|---|---|
+| **P300** | `calib_start` | `cue` (`target`) | each `flash` | `round_end` per round, then `calib_end` |
+| **ErrP** | `calib_start` | **the `feedback` itself** (`error`) | each `feedback` | `calib_end` |
+| **c-VEP** | `calib_start` | `cue` (`target`) | each `cycle` | `block_end` per block, then `calib_end` |
+
+⚠️ **ErrP does not use `cue`, and that asymmetry is deliberate.** Its label rides on the event that
+delimits the epoch:
+
+```json
+{"mode": "errp", "event": "feedback", "error": true}
+```
+
+`error` exists **in calibration only**. ErrP is a *passive* BCI: its whole job is to work out from
+the EEG alone that the machine got something wrong. The field is the ground truth — required to
+label training epochs, forbidden while decoding. An emitter that published it during decoding would
+be handing the engine the answer, and **nothing would signal it**: `decoded_errp` would keep exactly
+the same shape, the scores would stay plausible, and every claim this product makes about that mode
+would become false. Build the marker in one place, and test both directions.
+
+⚠️ And publish the label of the step **actually displayed**, not the one your random draw decided.
+In the reference track a "deliberate error" drawn at the edge bounces the cursor *toward* its goal,
+so the user experiences no error at all: it is published `error: false`. The label follows the
+effect, never the intention.
+
+⚠️ **c-VEP keeps its clock running throughout.** Its `cycle` markers do not stop during calibration,
+not even between two blocks while the gaze is looking for the next circled target. Without the clock
+there is no phase, so there is no epoch to label — the mode would not train badly, it would not
+train at all. `block_end` closes a block and makes the engine forget the target: the few cycles
+spent moving the gaze then belong to no block, instead of inheriting the previous one's label —
+same number of epochs, plausible proportions, and a model trained on a lie.
+
+⚠️ **Order matters at a cycle boundary**: `cycle`, then `block_end`, then `cue`. The `cycle` marker
+closes the cycle that just *ended*. Publishing the `cue` before it would let one epoch per block —
+recorded while the gaze was still moving — into the training set.
+
+### The three ways a session is abandoned
+
+The engine drops the whole session rather than train on part of it. All three go through the same
+door, print the reason, and free the epochs:
+
+| what happened | how long | what you see |
+|---|---|---|
+| no `calib_start` arrived | 30 s | *"the stimulus window did not launch, or it publishes under a name other than …"* |
+| markers stopped mid-session | 15 s of silence | *"N trial(s) recorded out of the M announced — nothing is trained or saved"* |
+| the user clicked **Abandonner** | — | the same path, no reason |
+
+One case is frozen on purpose: if **every announced trial arrived** but `calib_end` was lost, the
+engine **waits** instead of dropping minutes of good signal — and instead of training on its own,
+which would be a second source of truth about when a session ends. It says so once; **Abandonner**
+is the way out.
+
+⚠️ Markers received during the 15 s warm-up are **dropped and counted** (`marqueurs_chauffe`), for
+the same reason epochs are dropped during decoding: the Unicorn's DC offset is still ramping and
+those epochs are worthless. `calib_start` is the one exception — it is banked, so your window does
+not have to guess how long the warm-up is in order not to be declared absent. A window that starts
+its first trial immediately loses that many epochs; the three reference windows wait.
+
+⚠️ **The c-VEP is a known false alarm here, and it is worth recognising rather than chasing.** Its
+window keeps flickering — and keeps publishing `cycle` — right through the warm-up, on purpose: a
+clock does not need to be good to be on time. The engine counts those ~14 clock markers under
+`marqueurs_chauffe` and prints *"the window should wait before its first trial"*. It already does:
+no block starts before the warm-up ends. The message is wrong; nothing else is.
+
+### What this buys you
+
+A third-party application that already renders the stimulus can now **train the model too**, without
+this repository's pygame anywhere in the loop. Four things are required of it, and they are the same
+four the reference windows meet:
+
+1. stamp every marker **after** the flip that showed the frame (the section above);
+2. announce a truthful `trials` **in epochs**, before the stimulus starts;
+3. send `calib_end` **only** on a complete session;
+4. open **no** headset — the engine holds the one connection the Unicorn allows.
+
+Nothing else is needed. The epochs never travel: they are cut by the engine, out of its own buffer,
+by the same code path that cuts them while decoding. That is the point of doing it this way —
+training and decoding cannot disagree about where an epoch starts, because there is only one place
+where that is decided.
 
 ## Two machines
 
