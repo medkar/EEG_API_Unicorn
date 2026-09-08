@@ -540,7 +540,13 @@ class EngineServer:
     # la console, et ne rejoint `data/` que sur `save_calibration`. Trois gestes, dans cet ordre —
     # c'est tout le correctif : avant, l'écriture précédait l'annonce.
 
-    _FICHIERS_CANDIDAT = ("modele", "enregistrement")
+    # ⚠️ Les clés de `_entrainer` qui portent un CHEMIN DE FICHIER, et rien d'autre. Une clé
+    # oubliée ici ne lève rien : son fichier n'est ni déplacé à l'enregistrement (le modèle reste
+    # dans le temporaire, donc perdu à la fermeture) ni supprimé au rejet. `modele_rcca` est le
+    # SECOND modèle du c-VEP — le seul mode du produit à en produire deux par séance, un par
+    # décodeur. Une valeur `None` (séance c-VEP interrompue : pas de rCCA écrivable) est ignorée
+    # par les deux boucles, qui testent `os.path.isfile`.
+    _FICHIERS_CANDIDAT = ("modele", "modele_rcca", "enregistrement")
 
     def _dossier_candidat(self):
         """Le dossier temporaire de CE moteur, créé au premier besoin. Jamais `data/`.
@@ -2503,17 +2509,33 @@ def _smoke_calibration_refus():
     chk(not r2.get("accepted") and "n'a pas de calibration" in (r2.get("reason") or ""),
         f"mode SANS calibration (SSVEP, la CCA n'apprend rien) : refusé ({r2.get('reason')})")
 
-    # ⚠️ Ce contrôle change de sens PENDANT le chantier « seul point d'entrée » (2026-09-07) : le
-    # c-VEP, le P300 et l'ErrP sont passés de `kind="natif"` (calibration jouée par l'appli
-    # pygame, refusée ici en renvoyant vers elle) à `kind="fenetre"` (jouée par le moteur, la
-    # fenêtre ne faisant qu'afficher). Tant que leur `runtime_cls` n'est pas livré, le refus
-    # subsiste mais dit autre chose — « déclarée, pas encore jouable » et non « va ailleurs ».
-    # Aux tâches 4, 7 et 8, les trois deviennent acceptées : ce contrôle devra alors migrer vers
-    # un mode encore dépourvu de runtime, ou disparaître.
-    r3 = froid.submit("start_calibration", id="cvep")
+    # ⚠️ **Ce contrôle porte désormais sur un mode FABRIQUÉ, et c'est le seul moyen de le garder.**
+    # Il visait le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans l'appli pygame ; le
+    # chantier « seul point d'entrée » leur a livré un `runtime_cls` à chacun (tâches 4, 7, 8), et
+    # il ne reste PLUS AUCUN mode réel dans cet état. Le supprimer aurait laissé sans test le seul
+    # refus qui protège le prochain mode déclaré avant d'être jouable — celui-là repartirait alors
+    # sur un `None(spec, …)` incompréhensible au lieu d'une phrase. On injecte donc un mode le
+    # temps du contrôle, et on restaure le registre juste après.
+    from dataclasses import replace as _replace
+
+    faux = _replace(registry.get("cvep"), id="__pas_livre__", label="Mode pas livré",
+                    calibration=_replace(registry.get("cvep").calibration, runtime_cls=None))
+    registry.BY_ID[faux.id] = faux
+    try:
+        r3 = froid.submit("start_calibration", id=faux.id)
+    finally:
+        registry.BY_ID.pop(faux.id, None)
     chk(not r3.get("accepted") and "pas livré" in (r3.get("reason") or ""),
-        f"calibration déclarée mais sans runtime (c-VEP) : refusée, en disant que le moteur ne "
-        f"sait pas encore la jouer ({r3.get('reason')})")
+        f"calibration DÉCLARÉE mais sans runtime : refusée, en disant que le moteur ne sait pas "
+        f"encore la jouer ({r3.get('reason')})")
+    # …et le pendant, vérifié SANS rien soumettre : soumettre un `start_calibration` accepté à ce
+    # moteur froid créerait son dossier candidat et laisserait une commande en file, ce que deux
+    # contrôles plus bas mesurent justement (mesuré : les deux rougissent).
+    chk(all(s.calibration is None or s.calibration.runtime_cls is not None
+            for s in registry.MODES),
+        f"…et plus AUCUN mode réel n'est dans ce cas : les six calibrations déclarées sont "
+        f"jouables par le moteur ("
+        f"{[s.id for s in registry.MODES if s.calibration and s.calibration.runtime_cls is None]})")
 
     r4 = froid.submit("cancel_calibration")
     chk(not r4.get("accepted") and "aucune calibration" in (r4.get("reason") or ""),

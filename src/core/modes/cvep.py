@@ -107,6 +107,11 @@ from core.cvep_rcca import RCCADecoder  # noqa: E402
 from core.lsl_io import DecodedCVEPPublisher, cvep_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+# ⚠️ L'arête ne va QUE dans ce sens : `cvep_calib` ne nous importe pas en retour (il lit
+# `CVEPRuntime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
+# refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
+# `python src/core/modes/cvep.py` compris. Mesuré côté P300, repris tel quel ici.
+from core.modes.cvep_calib import BRIEFING as BRIEFING_CALIB, CVEPCalibration  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Quel décodeur pour quel modèle. C'est le FICHIER qui déclare le sien (`cvep_models.charger` rend
@@ -797,7 +802,20 @@ SPEC = ModeSpec(
         #                            contre un repos du jour (contrairement au SSVEP/neuro/ErrP)
         instruction="Le casque se stabilise — reste immobile.",
     ),
-    calibration=Calib(kind="fenetre", stimulus_id="cvep", label="Calibrer le c-VEP"),
+    calibration=Calib(
+        kind="fenetre", stimulus_id="cvep", label="Calibrer le c-VEP",
+        briefing=BRIEFING_CALIB,
+        runtime_cls=CVEPCalibration,
+        # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`
+        # juste en dessous. Celui-ci dimensionne le tampon du moteur pour ce que la CALIBRATION
+        # prélève : `CVEPCalibration` découpe `code_len / refresh` secondes JUSTE AVANT chaque
+        # marqueur de cycle (cf. sa `pre_s`), là où le DÉCODAGE, lui, replie
+        # `CVEP_DECISION_CYCLES` cycles glissants. Le déclarer trop court tronquerait chaque
+        # époque enregistrée SANS erreur.
+        # Au rafraîchissement de RÉFÉRENCE (60 Hz) : 1,05 s. Un écran PLUS LENT allonge l'époque
+        # — c'est `marker_epoch_s` (2,1 s) qui dimensionne alors le tampon, et il couvre tout
+        # écran au-dessus de 30 Hz.
+        epoch_s=(2 ** CVEP_BITS - 1) / 60.0),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrirait
     # sinon à deux endroits sans que rien ne les relie — et deux façons de nommer la même chose
     # finissent toujours par diverger (cf. `DecodedP300Publisher.SUFFIXE`).
