@@ -80,3 +80,33 @@ précédent : 0 régression dans 2000 lignes de code relu, 1 régression et 8 fa
   Le contrat PUBLIC a bougé.
 - ⚠️ `research/p300_calibrate.py` reste un second chemin vers un modèle, avec son épochage propre
   (horloge pygame). Réduit et marqué, pas supprimé — à trancher à la revue finale.
+- **Task 6 : complete** — `a7784b5` → `2189bee` (5 commits), sous-agent `a6215b9759abdd487`.
+  12 mutations prouvées. ⚠️ **Il a trouvé une RÉGRESSION que J'AVAIS introduite en T2** : le bouton
+  « Calibrer » avait disparu de TOUS les modes, MI compris, depuis le renommage de `Calib.kind` —
+  et aucun test ne l'a vu parce que le smoke appelait `show_calibration()` directement au lieu de
+  cliquer le bouton. Un test qui vérifie la destination sans vérifier qu'on peut y aller.
+  Deux autres défauts de chemin : la grille émettait `set_published` depuis un simple repaint, et
+  l'écran annonçait une annulation qui n'avait pas eu lieu quand la fenêtre refuse de s'ouvrir.
+  Écart assumé : le smoke lance UN vrai processus (`python -c`, 100 ms) en plus du faux QProcess —
+  un faux prouve la logique du lanceur et rien de son contact avec Qt.
+- **Task 7 : complete** — `80c4eab` → `ca603d7` (8 commits), sous-agent `a639649bbc3cc9ef4`,
+  **coupé par une erreur d'API au moment précis d'écrire son rapport** : le code est commité,
+  l'arbre est propre, seul `task-7-report.md` manque. Vérifié par moi : 7 autotests verts, `data/`
+  intact, et surtout la garde de fuite de vérité-terrain **dans les deux sens** — en décodage le
+  marqueur est NU, en calibration il porte son `error` booléen, et au bord de piste un tirage
+  « erreur » qui rebondit VERS la cible est publié `error: false` (l'étiquette suit l'EFFET du pas,
+  jamais l'intention du tirage).
+
+## Réserves à porter (mise à jour)
+
+- 🔴 **À trancher devant un casque, pas ici** : le contrôle de liaison de la console refuse dès
+  qu'une voie sort de [0,5 ; 500] µV et n'offre **aucune porte de sortie**, là où l'ancien
+  `signal_check` laissait passer sur n'importe quelle touche. Il peut donc bloquer une séance
+  légitime. Délibéré, mais jamais vu un vrai montage.
+- ⚠️ **T11** : `docs/markers.md` et `docs/SPEC.md` ignorent toujours `calib_start`/`cue`/
+  `calib_end` et le champ `error` de l'ErrP. Le contrat PUBLIC a bougé deux fois.
+- ⚠️ `research/{p300,errp}_calibrate.py` restent des seconds chemins vers un modèle, avec leur
+  épochage propre (horloge pygame) et une écriture directe dans `data/` qui contourne la garde de
+  la tâche 5. Réduits et marqués, pas supprimés — à trancher à la revue finale.
+- ⚠️ Rien de tout ce chantier n'a vu un cerveau. Les smokes prouvent le câblage, jamais
+  l'ergonomie ni le décodage.
