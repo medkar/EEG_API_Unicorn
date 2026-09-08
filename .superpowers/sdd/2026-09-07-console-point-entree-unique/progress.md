@@ -110,3 +110,53 @@ précédent : 0 régression dans 2000 lignes de code relu, 1 régression et 8 fa
   la tâche 5. Réduits et marqués, pas supprimés — à trancher à la revue finale.
 - ⚠️ Rien de tout ce chantier n'a vu un cerveau. Les smokes prouvent le câblage, jamais
   l'ergonomie ni le décodage.
+
+## Revue de branche finale (2026-09-08) — 5 tranches parallèles, lecture seule
+
+### Corrigé
+
+- 🔴 **CRITIQUE, trouvé par DEUX relecteurs indépendants** : le moteur n'ouvrait jamais son inlet de
+  marqueurs pour une calibration. Les quatre décisions (ouvrir / nommer / lâcher / purger) lisaient
+  `self.active` seul, or une calibration n'y vit pas, et la console DOIT arrêter le mode avant de
+  la démarrer. Sur le parcours normal, la fenêtre aurait publié cinq minutes dans le vide et le
+  moteur aurait abandonné en accusant une fenêtre qui marche. **Aucun test ne pouvait le voir** :
+  les quatre autotests de calibration passent par un moteur factice dont la file est déjà remplie.
+  Corrigé (`_ecouteurs_de_marqueurs`, `_flux_attendu`) + `_smoke_oreille_calibration`, qui rougit
+  sur 3 assertions avec l'ancien comportement.
+- La frontière `stimulus` interdit maintenant `brainflow` ET `core.acquisition` : l'invariant
+  fondateur du paquet (« une fenêtre n'ouvre jamais le casque ») ne reposait que sur une docstring.
+  Prouvé par mutation.
+- `_FICHIERS_CANDIDAT` déplace l'enregistrement AVANT les modèles — l'ordre que les quatre
+  entraîneurs s'appliquent déjà à l'écriture, et pour la même raison.
+- « Abandonner » pendant l'entraînement jette le candidat, au lieu d'annoncer « aucun modèle
+  produit » avec un modèle à un clic de `data/`.
+- Quatre commentaires que le code avait dépassés, dont un qui affirmait l'inverse exact.
+- Documentation : durées que la console aurait contredites (4 → 2,2 min, 7 → 5,7, 2,7 → 3,1),
+  la réserve manquante de `markers.md`, deux options annoncées et inexistantes dans
+  `archive/README.md`, l'arithmétique « 4 + 1 = 6 » de `CLAUDE.md`, σ 75 → 73.
+
+### 🟠 PARKÉ — non corrigé, à traiter avant la séance casque
+
+Ces constats sont réels et documentés dans les rapports de revue. Ils n'ont pas été traités faute
+de temps, pas parce qu'ils seraient faux.
+
+1. **La console prend `accepted` pour « la séance a démarré »** (revue C, critique). `submit`
+   promet une mise en FILE, jamais une application — la console le sait, elle a construit un
+   mécanisme d'attente pour `stop_mode`, puis traite `start_calibration` comme un fait accompli.
+   Si le moteur refuse ensuite, la fenêtre joue le protocole entier dans le vide. **C'est le
+   refus-dans-le-terminal du test 1.13, sur le chemin le plus cher du produit.**
+2. **Tous les refus de la GRILLE ne vont que dans le terminal** (revue C). Cas le plus banal : un
+   dépôt sans modèle, clic sur « Démarrer » d'un mode à modèle → rien à l'écran. Pré-existant,
+   mais c'est désormais le SEUL chemin de démarrage.
+3. **`p300_calib.entrainer` garde le défaut de configuration** que ses deux jumeaux ont supprimé,
+   et sa propre docstring affirme le contraire (revue A).
+4. **Les compteurs de refus se disent « visibles dans l'instantané » ; personne ne les affiche**
+   (revue A) — aussi invisibles que la ligne de terminal qu'ils remplaçaient.
+5. **`close()` appelée depuis le fil Qt** pendant que la boucle tourne peut laisser un dossier
+   candidat derrière (revue B).
+6. **`_runtime_de_test` de `stimulus/cvep.py` ne prouve pas son détournement** (revue D) — la
+   faute exacte qui a écrit un modèle synthétique dans `data/` le 2026-09-08.
+7. Les trois `stimulus/*.py --smoke` n'ont aucune garde `empreinte_dossier`, contrairement aux dix
+   de `archive/` et à la console (revue D).
+8. `archive/errp_calibrate.py --smoke` ignore la valeur de retour de `calibrate` : il peut
+   annoncer « OK » sur une séance trop pauvre. Son jumeau P300 a reçu l'assertion, pas lui.
