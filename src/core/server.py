@@ -2354,6 +2354,43 @@ def _smoke_calibration():
                 and "aucune calibration" in (refus_save.get("reason") or ""),
                 f"un second « Enregistrer » est refusé, avec un motif ({refus_save})")
 
+            # 3ter. TOUS les fichiers d'un candidat sont déplacés, pas seulement le premier.
+            # ⚠️ Le c-VEP est le seul mode à produire DEUX modèles par séance (eCCA et rCCA, sur
+            # les mêmes époques) : sa clé `modele_rcca` doit figurer dans `_FICHIERS_CANDIDAT`. Une
+            # clé oubliée là ne lève RIEN — le fichier reste dans le dossier temporaire, que la
+            # fermeture du moteur efface, et l'étudiant perd la moitié d'une calibration en
+            # croyant l'avoir enregistrée. La calibration jouée ci-dessus est celle du MI, qui n'a
+            # qu'un modèle : on fabrique donc un candidat à trois fichiers pour exercer la boucle.
+            # ⚠️ Les clés sont écrites EN DUR ici, surtout pas relues sur `_FICHIERS_CANDIDAT` :
+            # une fixture construite depuis la constante qu'elle vérifie ne peut rien prouver —
+            # retirer une clé retirerait le fichier de la fixture du même geste, et le test
+            # resterait vert (mesuré). Cette liste-ci est celle des clés de chemin que les
+            # calibrations rendent vraiment : `modele` + `enregistrement` (MI, P300, ErrP) et
+            # `modele_rcca` en plus pour le c-VEP (`core/modes/cvep_calib.py::entrainer`).
+            cles_de_chemin = ("modele", "modele_rcca", "enregistrement")
+            manquantes = [c for c in cles_de_chemin
+                          if c not in EngineServer._FICHIERS_CANDIDAT]
+            chk(not manquantes,
+                f"toutes les clés de chemin que les calibrations produisent sont connues de "
+                f"`_FICHIERS_CANDIDAT` ({manquantes or 'aucune manquante'})")
+            faux = {}
+            for cle in cles_de_chemin:
+                chemin = os.path.join(server.calib_dir, f"{CALIB_CANDIDAT_PREFIXE}faux_{cle}.npz")
+                with open(chemin, "wb") as f:
+                    f.write(cle.encode())
+                faux[cle] = chemin
+            server.candidat = dict(faux, nom=os.path.basename(faux["modele"]))
+            server._save_calibration()
+            restes = [c for c in faux.values() if os.path.exists(c)]
+            arrives = [n for n in os.listdir(data_dir) if n.startswith("faux_")]
+            chk(not restes and len(arrives) == len(faux),
+                f"les {len(faux)} fichiers d'un candidat rejoignent TOUS data/, pas seulement le "
+                f"premier — une clé absente de `_FICHIERS_CANDIDAT` laisserait son fichier dans le "
+                f"temporaire, effacé à la fermeture, sans un mot ({len(arrives)} arrivé(s), "
+                f"{len(restes)} resté(s))")
+            for n in arrives:
+                os.remove(os.path.join(data_dir, n))
+
             # 3bis. Une séance terminée est LÂCHÉE quand la suivante commence. Elle garde sinon
             # ses époques (plusieurs minutes de signal) et une référence vers le moteur entier :
             # seul `cancel()` les libère, et `_terminer` ne l'appelle pas. `_candidat_de` la
