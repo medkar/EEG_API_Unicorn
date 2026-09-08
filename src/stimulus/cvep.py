@@ -399,7 +399,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     ⚠️ **`--calibrer` joue EXACTEMENT le même stimulus**, à la frame près : même code, même
     couronne, même géométrie, même geste flip→horodatage, même marqueur `cycle`. C'est la
     condition pour que le modèle appris décrive ce que le décodage verra. Ce qui s'ajoute, ce
-    sont TROIS marqueurs autour (`calib_start`, `cue`, `block_end`, `calib_end`) et un ordre de
+    sont QUATRE marqueurs autour (`calib_start`, `cue`, `block_end`, `calib_end`) et un ordre de
     passage des cibles qui n'est plus tiré au sort mais ENTRELACÉ (`programme_de_calibration`).
     L'horloge `cycle`, elle, continue de battre sans interruption — y compris entre deux blocs et
     pendant la chauffe du moteur. Sans elle il n'y a pas de phase, donc pas d'époque alignée : le

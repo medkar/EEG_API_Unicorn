@@ -1001,8 +1001,7 @@ def _smoke():
     errp_page = console.pages["errp"]
 
     # DÉMARRÉ, MAIS AUCUN FEEDBACK ENCORE (`output: None`) — l'état dans lequel la page vit ses
-    # 23 premières secondes (chauffe + repos), plus le temps d'aller lancer `errp_stimulus.py`
-    # dans un second terminal. Aucun état de ce smoke ne le construisait, et c'est le SEUL dans
+    # 23 premières secondes (chauffe + repos), plus le temps de cliquer « Lancer le stimulus ». Aucun état de ce smoke ne le construisait, et c'est le SEUL dans
     # lequel le défaut existait : `PassiveView` initialisait son avertissement avec le texte du
     # NEURO, et seule l'arrivée d'un feedback l'écrasait. La page de l'ErrP affirmait donc, en
     # toutes lettres et pendant tout ce temps, que son score est « un z contre TON repos du
@@ -1020,7 +1019,7 @@ def _smoke():
     # repos fini (il n'y a plus de consigne : c'est au stimulus de jouer), donc le label principal
     # de la page devenait VIDE. Un écran vide se lit « ça ne marche pas » — la panne canonique de
     # ce projet, sous une autre forme : l'étudiant traverse chauffe et repos, l'écran se vide, et
-    # rien ne lui dit qu'il lui reste à lancer `errp_stimulus.py` dans un second terminal.
+    # rien ne lui dit qu'il lui reste à cliquer « Lancer le stimulus ».
     chk(errp_page.vue.etat.text().strip() != "",
         f"...et elle dit tout de même quelque chose plutôt que de rester vide "
         f"({errp_page.vue.etat.text()!r})")

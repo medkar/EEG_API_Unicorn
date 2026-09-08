@@ -173,7 +173,7 @@ def chemins_libres(dossier, n_manches, prefixe=""):
     `prefixe` : `CALIB_CANDIDAT_PREFIXE` quand ce qu'on écrit est un CANDIDAT — un fichier qui
     ne doit correspondre à aucun motif de découverte tant que personne ne l'a retenu (cf. le
     commentaire de cette constante dans `core/config.py`). Défaut `""` : l'autre appelant,
-    `research/p300_calibrate.py`, écrit directement dans `data/` un modèle définitif, et doit
+    `archive/p300_calibrate.py`, écrit directement dans `data/` un modèle définitif, et doit
     garder le nom que `p300_models` cherche.
     """
     maintenant = _time.time()

@@ -391,8 +391,8 @@ def chemins_libres(dossier, n_epoques, prefixe=""):
 def chemin_modele_horodate(decodeur, dossier=None):
     """`cvep_model_AAAAMMJJ-HHMMSS.npz` (eCCA) ou `cvep_rcca_model_…` (rCCA) — un fichier NEUF.
 
-    Le chemin d'entrée de l'appli pygame (`research/cvep_calibrate.calibrate`), qui écrit encore
-    directement dans `data/`. La calibration du MOTEUR, elle, passe par `chemins_libres` et son
+    Le chemin d'entrée de l'écran ARCHIVÉ (`archive/cvep_calibrate.calibrate`), qui écrit encore
+    directement dans `data/` — c'est assumé et documenté dans `archive/README.md`. La calibration du MOTEUR, elle, passe par `chemins_libres` et son
     dossier candidat : elle n'a pas le droit de choisir où elle écrit.
     """
     if decodeur not in ("eCCA", "rCCA"):

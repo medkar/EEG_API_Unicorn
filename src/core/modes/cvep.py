@@ -79,7 +79,9 @@ donc strictement plus permissif que la référence à laquelle la séance casque
 (`stimulus/cvep.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
 le c-VEP demande de plus qu'eux est un verrouillage à la FRAME : une seule frame sautée décale le
 code et détruit la corrélation — c'est pourquoi sa calibration est `Calib(kind="fenetre")`, menée
-par l'appli pygame et jamais par la console.
+par une fenêtre de `src/stimulus/` — que la console LANCE, et dont le moteur écoute les marqueurs.
+(⚠️ Cette phrase a dit le contraire, « menée par l'appli pygame et jamais par la console », jusqu'à
+la revue finale du 2026-09-08 : le chantier avait changé le code sans changer le commentaire.)
 
 Autotest :
     python src/core/modes/cvep.py
