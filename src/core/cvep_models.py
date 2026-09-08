@@ -199,8 +199,8 @@ def charger(chemin):
                         "codes par lag croissant au lieu de l'ordre du plan. Un ordre permuté "
                         "ferait nommer la cible voisine, d'où le refus")
             return None, (f"ce modèle rCCA a été calibré sur d'AUTRES codes que ceux affichés "
-                          f"aujourd'hui : {quoi}. Recalibre (`python src/research/app.py`, mode "
-                          f"c-VEP) : {nom}")
+                          f"aujourd'hui : {quoi}. Recalibre depuis la console, page c-VEP, "
+                          f"bouton « Calibrer le c-VEP » : {nom}")
 
     try:
         modele = classe.load(chemin)

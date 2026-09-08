@@ -280,8 +280,8 @@ class CVEPRuntime(ModeRuntime):
         if self.model.code_len != len(self.code):
             return (f"ce modèle a été calibré pour un code de {self.model.code_len} frames, la "
                     f"config actuelle (CVEP_BITS={CVEP_BITS}) en construit un de "
-                    f"{len(self.code)} — recalibre (`python src/research/app.py`, mode c-VEP), "
-                    f"ou restaure CVEP_BITS à sa valeur de calibration.")
+                    f"{len(self.code)} — recalibre depuis la console (page c-VEP, bouton "
+                    f"« Calibrer le c-VEP »), ou restaure CVEP_BITS à sa valeur de calibration.")
         # ...et le NOMBRE DE CIBLES sur lequel il a été calibré. `CVEPModel.save` enregistre ce
         # champ « pour pouvoir prévenir » (sa propre docstring) : jusqu'ici personne ne prévenait.
         # Le template eCCA est COMMUN à tous les lags, donc un modèle calibré sur 3 cibles
@@ -295,8 +295,8 @@ class CVEPRuntime(ModeRuntime):
             return (f"ce modèle a été calibré sur {cibles} cible(s), le stimulus actuel en "
                     f"affiche {len(self.plan)} (CVEP_N_TARGETS) — le template vaut pour tous les "
                     f"lags, mais les cibles supplémentaires n'ont JAMAIS été validées et leurs "
-                    f"corrélations sont plausibles. Recalibre (`python src/research/app.py`, "
-                    f"mode c-VEP) sans interrompre, ou remets CVEP_N_TARGETS à {cibles}.")
+                    f"corrélations sont plausibles. Recalibre depuis la console (page c-VEP) "
+                    f"sans interrompre, ou remets CVEP_N_TARGETS à {cibles}.")
         return None
 
     def maj_reference(self, ts, refresh):
@@ -748,8 +748,8 @@ SPEC = ModeSpec(
                    "va du plus récent au plus ancien, donc le défaut est celui que tu viens de "
                    "calibrer. Les DEUX décodeurs (eCCA et rCCA) y figurent ensemble : c'est le "
                    "fichier qui déclare le sien, la question posée ici est « quel modèle », pas "
-                   "« quel algorithme ». Aucun modèle dans la liste ? Lance "
-                   "`python src/research/app.py`, mode c-VEP, et calibre."),
+                   "« quel algorithme ». Aucun modèle dans la liste ? Clique "
+                   "« Calibrer le c-VEP » sur cette page."),
         Param(key="corr_min", label="Corrélation minimale", kind="float",
               default=CVEP_CORR_MIN, min=0.0, max=1.0, affecte_decodage=False,
               help="Le gagnant doit dépasser cette corrélation pour être retenu — en dessous, la "
@@ -919,9 +919,15 @@ def _selftest():
     # --- 1. Sans modèle du tout : le mode REFUSE et dit comment en obtenir un. ----------------
     with _modele_temporaire(None):
         valeurs, raison = validate(SPEC, {})
+    # ⚠️ Le refus doit envoyer là où l'on calibre AUJOURD'HUI. Il a nommé
+    # `python src/research/app.py` jusqu'au 2026-09-08, date à laquelle ce fichier a été SUPPRIMÉ :
+    # un refus au bon diagnostic mais au mauvais geste coûte plus cher qu'un silence — l'étudiant
+    # fait ce qu'on lui dit, ça échoue, et il cherche la faute ailleurs. La seconde condition
+    # INTERDIT donc l'ancien texte, elle ne se contente pas d'exiger le nouveau.
     chk(raison is not None and "aucun choix disponible" in raison
-        and "research/app.py" in raison,
-        f"sans modèle, le mode refuse en disant quoi faire ({raison})")
+        and "Calibrer" in raison and "research/app.py" not in raison,
+        f"sans modèle, le mode refuse en envoyant vers la CONSOLE, pas vers l'appli supprimée "
+        f"({raison})")
 
     # --- 2. La phase, et ses TROIS états muets (LE test de cette tâche, brief étape 1) --------
     # Chacun est une panne muette s'il n'est pas traité : le mode continuerait de publier des
