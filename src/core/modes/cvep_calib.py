@@ -1360,6 +1360,111 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     chk(_mcnemar_p is _core_rcca._mcnemar_p and SEUIL_MCNEMAR == _core_rcca.SEUIL_MCNEMAR,
         "la calibration et `cvep_rcca.py --seuils` appellent LE MÊME `_mcnemar_p`, au même seuil")
 
+    # =====================================================================================
+    # D. `entraine_les_deux` : la comparaison est-elle HONNÊTE ?
+    # =====================================================================================
+    # ⚠️ Ces assertions ont DÉMÉNAGÉ ici avec leur fonction (chantier « seul point d'entrée »,
+    # tâche 8) : elles vivaient dans `research/cvep_calibrate.py`, qui n'entraîne plus. Elles
+    # gardent la seule chose qui rend un « gagnant » lisible — que les deux décodeurs aient vu les
+    # MÊMES époques, les MÊMES groupes de validation croisée et le MÊME nombre d'alternatives.
+    # 8 voies BRUTES (comme l'Unicorn), réduites à 4 AJUSTÉES : un jeu généré directement à 4
+    # voies ne pourrait jamais faire diverger « brut » et « réduit », et le garde de largeur de
+    # voies resterait invérifiable.
+    fs_d, ref_d, voies_d = 250.0, 60.0, list(CVEP_CHANNELS)
+    rng_d = np.random.default_rng(0)
+    epochs_d = [synth_cvep(code, c["lag"], len(CH_NAMES), fs_d, ref_d, -6.0, rng_d)
+                for c in plan for _ in range(8)]
+    labels_d = [c["lag"] for c in plan for _ in range(8)]
+    res_d = entraine_les_deux(epochs_d, labels_d, fs=fs_d, refresh=ref_d, channels=voies_d)
+    chk(res_d["eCCA"]["n_epoques"] == res_d["rCCA"]["n_epoques"] == len(labels_d),
+        f"les deux décodeurs s'ajustent sur le MÊME nombre d'époques — sinon la comparaison ne "
+        f"veut rien dire ({res_d['eCCA']['n_epoques']}, {res_d['rCCA']['n_epoques']})")
+    chk(res_d["eCCA"]["groupes"] == res_d["rCCA"]["groupes"],
+        f"…et sur les mêmes groupes de validation croisée "
+        f"({len(res_d['eCCA']['groupes'])} groupes)")
+    # ⚠️ Ce contrôle est ce qui empêche « groupes » d'être décoratif : il compare ce que CHAQUE
+    # décodeur a RÉELLEMENT noté (la longueur de son propre `hors_pli`) au nombre annoncé. Un
+    # `n_cycles` différent passé à un seul des deux `hors_pli` noterait un autre nombre de
+    # groupes, silencieusement.
+    chk(res_d["eCCA"]["n_decisions"] == res_d["rCCA"]["n_decisions"]
+        == len(res_d["eCCA"]["groupes"]),
+        f"…et chacun a RÉELLEMENT noté autant de groupes qu'annoncé — sinon deux géométries "
+        f"différentes se compareraient sans qu'aucun message ne le dise "
+        f"({res_d['eCCA']['n_decisions']}, {res_d['rCCA']['n_decisions']})")
+    chk(res_d["eCCA"]["n_cibles"] == res_d["rCCA"]["n_cibles"] == len(plan),
+        f"…et parmi le MÊME nombre d'alternatives ({res_d['eCCA']['n_cibles']}, "
+        f"{res_d['rCCA']['n_cibles']})")
+    chk(res_d["eCCA"]["modele"].decoder == "eCCA" and res_d["rCCA"]["modele"].decoder == "rCCA",
+        "…et chaque modèle SAIT quel décodeur il est (le champ que `save` écrit)")
+    defaut_k = inspect.signature(entraine_les_deux).parameters["n_cycles"].default
+    chk(defaut_k == CVEP_DECISION_CYCLES,
+        f"la comparaison mesure par défaut à la géométrie de DÉCISION DU MOTEUR "
+        f"(CVEP_DECISION_CYCLES={CVEP_DECISION_CYCLES}), pas à celle d'une époque de calibration "
+        f"seule où k=1 masquerait un écart réel ({defaut_k})")
+
+    # ⚠️ Une séance INTERROMPUE ne doit pas fausser le hasard. Tronquée à 3 cibles sur 6 : SANS
+    # restreindre les codes du rCCA aux cibles VUES, il resterait jugé sur 1/6 (16,7 %) quand
+    # l'eCCA rétrécit correctement à 1/3 (33,3 %) — c'est EXACTEMENT ce qui a produit
+    # « gagnant : eCCA » sur des points offerts par le hasard, pas par le signal (mesuré sur une
+    # séance réelle tronquée : 71,1 % contre 51,1 %).
+    epochs_t = [synth_cvep(code, c["lag"], len(CH_NAMES), fs_d, ref_d, -6.0, rng_d)
+                for c in plan[:3] for _ in range(8)]
+    labels_t = [c["lag"] for c in plan[:3] for _ in range(8)]
+    res_t = entraine_les_deux(epochs_t, labels_t, fs=fs_d, refresh=ref_d, channels=voies_d)
+    chk(res_t["eCCA"]["n_cibles"] == res_t["rCCA"]["n_cibles"] == 3,
+        f"une séance tronquée à 3 cibles juge les DEUX décodeurs parmi 3 alternatives, jamais 6 "
+        f"pour l'un et 3 pour l'autre ({res_t['eCCA']['n_cibles']}, {res_t['rCCA']['n_cibles']})")
+    chk(res_t["rCCA"]["modele"].n_targets == 3,
+        f"…et le modèle rCCA entraîné porte VRAIMENT 3 codes ({res_t['rCCA']['modele'].n_targets})")
+
+    # ⚠️ ZÉRO décision à la géométrie de mesure : chaque cible n'apparaît qu'une fois, dans un
+    # ordre qui alterne. `groupes_de_cycles` rend alors [] à k=2 et `hors_pli` un tableau VIDE. Un
+    # chiffre d'apparence normale sur du vide est la panne muette que ce dépôt existe pour
+    # éliminer : `justesse`, `n_cibles` et `corrects` doivent dire eux-mêmes qu'il n'y a rien.
+    epochs_v = [synth_cvep(code, c["lag"], len(CH_NAMES), fs_d, ref_d, -6.0, rng_d)
+                for _ in range(2) for c in plan]
+    labels_v = [c["lag"] for _ in range(2) for c in plan]
+    chk(groupes_de_cycles(labels_v, CVEP_DECISION_CYCLES) == [],
+        f"fixture : AUCUNE paire de cycles consécutifs de la même cible à k={CVEP_DECISION_CYCLES}")
+    res_v = entraine_les_deux(epochs_v, labels_v, fs=fs_d, refresh=ref_d, channels=voies_d)
+    chk(all(res_v[n]["n_decisions"] == 0 and res_v[n]["justesse"] is None
+            and res_v[n]["n_cibles"] is None and res_v[n]["corrects"] is None
+            for n in ("eCCA", "rCCA")),
+        f"…et les deux décodeurs le DISENT — justesse, n_cibles et corrects à None, jamais un "
+        f"chiffre d'apparence normale sur du vide ({res_v['eCCA']['n_cibles']}, "
+        f"{res_v['rCCA']['n_cibles']})")
+
+    # ⚠️ `_fit_et_compte` est le mécanisme qui rend `n_epoques` non-décoratif : il DOIT compter
+    # l'ARGUMENT réellement passé à `.fit()`, jamais une longueur recalculée à côté (qui, elle, ne
+    # verrait PAS un futur tronquage écrit à même l'appel, `epochs[:-6]`).
+    class _ModeleFactice:
+        vu = None
+
+        def fit(self, epochs, labels, **kw):
+            self.vu = (list(epochs), list(labels), kw)
+
+    mf = _ModeleFactice()
+    n_a = _fit_et_compte(mf, [1, 2, 3], ["a", "b", "c"], compute_cv=False)
+    chk(n_a == 3 and mf.vu == ([1, 2, 3], ["a", "b", "c"], {"compute_cv": False}),
+        f"_fit_et_compte ajuste EXACTEMENT ce qu'on lui donne, mots-clés compris ({n_a}, {mf.vu})")
+    chk(_fit_et_compte(mf, [1, 2, 3], ["a", "b"]) == 3,
+        "…et il compte les ÉPOQUES reçues, pas les étiquettes — sinon un tronquage appliqué à un "
+        "seul des deux côtés passerait inaperçu")
+
+    # Les chemins de l'appli pygame : horodatés, jamais les noms FIXES (qui s'écrasent), et
+    # reconnus par les motifs de découverte — chacun sous LE SIEN.
+    from core.cvep_models import MOTIFS as _MOTIFS
+
+    ch_e, ch_r = chemin_modele_horodate("eCCA"), chemin_modele_horodate("rCCA")
+    chk(ch_e != CVEP_MODEL_PATH and fnmatch(_os.path.basename(ch_e), _MOTIFS[0])
+        and fnmatch(_os.path.basename(ch_r), _MOTIFS[1])
+        and not fnmatch(_os.path.basename(ch_r), _MOTIFS[0]),
+        f"`chemin_modele_horodate` rend des noms HORODATÉS, vus par `cvep_models` et chacun sous "
+        f"SON motif ({_os.path.basename(ch_e)}, {_os.path.basename(ch_r)})")
+    chk(_os.path.dirname(chemin_modele_horodate("eCCA", dossier="/tmp/xyz_cvep")) == "/tmp/xyz_cvep",
+        "…et un `dossier` explicite est respecté, jamais celui de CVEP_MODEL_PATH — c'est le "
+        "détour qu'un test doit prendre pour ne jamais écrire dans data/")
+
     # --- La phrase d'honnêteté est celle du c-VEP, pas celle d'un autre mode ------------------
     chk("16,7" in HONNETETE and "hasard" in HONNETETE,
         "la phrase d'honnêteté donne le hasard à SIX cibles (16,7 %)")

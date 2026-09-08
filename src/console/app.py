@@ -1550,6 +1550,56 @@ def _smoke():
     chk("40 %" not in cal_errp.honnetete.text()
         and "leave-one-round-out" not in cal_errp.honnetete.text(),
         "...ni celle du MI, ni celle du P300")
+
+    # --- et le QUATRIÈME : le c-VEP, le seul à entraîner DEUX décodeurs ----------------------
+    # Il ne mesure ni accuracy par essai (MI), ni sélection (P300), ni AUC (ErrP) : une justesse
+    # hors-pli à SIX cibles, donc contre un hasard de 16,7 % — et il en rend DEUX, une par
+    # décodeur. Les valeurs sont celles de la séance de référence (2026-07-21, k=2) : eCCA 59,5 %,
+    # rCCA 64,9 %, 8 décisions discordantes sur 37, McNemar p = 0,727.
+    # ⚠️ Le point de cet écran-ci : les cinq points d'écart entre les deux décodeurs sont du
+    # BRUIT, et la page ne doit pas les présenter comme un choix à faire. C'est le `verdict` qui
+    # porte le test, et le second décodeur qui reste en DÉTAIL.
+    from core.modes import cvep_calib
+    cal_cvep = console.calib_pages["cvep"]
+    console.show_calibration("cvep")
+    cvep_fini = {**state, "calibration": {
+        "mode_id": "cvep", "label": "Calibrer le c-VEP", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 90,
+        "total": 90, "duree_estimee_s": 185.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_cvep_model_20260907-101500.npz",
+                     "modele_rcca": "/tmp/calib/candidat_cvep_rcca_model_20260907-101500.npz",
+                     "nom": "cvep_model_20260907-101500.npz",
+                     "enregistrement": "/tmp/calib/candidat_cvep_calib_20260907-101500_n090.npz",
+                     "n_essais": 90, "n_cibles": 6, "acc_ecca": 22 / 37, "acc_rcca": 24 / 37,
+                     "mcnemar_p": 0.7265625, "n_discordantes": 8, "n_decisions": 37,
+                     "hasard": 1 / 6,
+                     "verdict": cvep_calib.verdict(24 / 37, {"gagnant": None, "p": 0.7265625,
+                                                             "b": 3, "c": 5, "n_discordantes": 8}),
+                     "honnetete": cvep_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_cvep_model_20260907-101500.npz"}}}
+    console.apply_state(cvep_fini)
+    chk(("59.5" in cal_cvep.resultat.text() or "59,5" in cal_cvep.resultat.text())
+        and "17 %" in cal_cvep.resultat.text(),
+        f"le c-VEP affiche SA mesure — une justesse hors-pli — contre SON hasard (1/6 = 17 %, "
+        f"jamais 50 %) ({cal_cvep.resultat.text()})")
+    chk("INDISCERNABLES" in cal_cvep.resultat.text()
+        and "0.727" in cal_cvep.resultat.text().replace(",", "."),
+        f"...et son verdict rend le TEST qui compare les deux décodeurs, avec sa p-value — pas "
+        f"l'écart de cinq points, qui est du bruit ({cal_cvep.resultat.text()})")
+    chk("fenêtres" not in cal_cvep.details.text() and "manches" not in cal_cvep.details.text()
+        and "AUC" not in cal_cvep.details.text(),
+        f"...et AUCUN chiffre des trois autres modes n'est fabriqué à côté "
+        f"({cal_cvep.details.text()!r})")
+    chk("90 essais" in cal_cvep.details.text()
+        and "rCCA" in cal_cvep.details.text()
+        and "8 décision(s) discordante(s)" in cal_cvep.details.text(),
+        f"...le second décodeur reste en DÉTAIL, à côté du nombre de décisions DISCORDANTES — "
+        f"c'est LUI qui porte l'information, pas les deux pourcentages pris isolément "
+        f"({cal_cvep.details.text()!r})")
+    chk(cal_cvep.honnetete.text() == cvep_calib.HONNETETE
+        and "16,7" in cal_cvep.honnetete.text() and "46 %" in cal_cvep.honnetete.text(),
+        "et sa phrase d'honnêteté est CELLE DU c-VEP — le hasard à six cibles, et le couple "
+        "émission/justesse que le moteur produira vraiment")
     console.show_calibration("mi")      # la suite éprouve de nouveau la page du MI
 
     # 3bis. Après, mais SANS CV honnête mesurable (B2) : `cv_groupee: None` — pas assez d'essais

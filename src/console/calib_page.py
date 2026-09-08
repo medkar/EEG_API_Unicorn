@@ -347,6 +347,12 @@ class CalibPage(QWidget):
         # à choisir, il répond oui/non à chaque feedback, et son AUC hors-pli est le SEUL de ses
         # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
         ("auc", "AUC erreur/correct (validation croisée hors-pli, par bloc)"),
+        # ⚠️ Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
+        # qui décide est celle de l'eCCA — arbitrairement, et c'est assumé : les deux sont
+        # INDISCERNABLES sur la seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt
+        # que l'autre ici ne choisit rien. Celle du rCCA est en détail juste en dessous, et le
+        # `verdict` porte le TEST qui dit s'il y a lieu de les départager.
+        ("acc_ecca", "justesse hors-pli eCCA (à la géométrie où le moteur décide)"),
     )
     # Le détail, par clé présente elle aussi. `cv_naive` n'y est PAS et n'y sera jamais : elle est
     # gonflée de 10 à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
@@ -361,6 +367,12 @@ class CalibPage(QWidget):
         ("tpr", "attrape {:.0%} des erreurs"),
         ("tnr", "garde {:.0%} des bonnes commandes"),
         ("perm_p", "permutation p = {:.3f}"),
+        # Le SECOND décodeur du c-VEP, en détail et jamais comme mesure qui décide : afficher deux
+        # pourcentages côte à côte invite à prendre le plus beau, et cinq points d'écart sur
+        # 37 décisions sont du bruit. C'est `n_discordantes` qui porte l'information, et le
+        # `verdict` qui rend le test de McNemar.
+        ("acc_rcca", "second décodeur (rCCA) {:.1%}"),
+        ("n_discordantes", "{} décision(s) discordante(s) entre les deux"),
     )
 
     def _mesure(self, resultat):
