@@ -353,5 +353,8 @@ corriger réécrirait un fait historique. Signalé, non touché.
 ## 7. Commit
 
 ```
-__COMMIT__
+0724dee Tell the docs the console is the way in, and that nothing was measured
+
+Sept fichiers : les cinq documents, plus `task-11-brief.md` et ce rapport.
+Arbre propre, `data/` intact (43 fichiers, `sha256 = 42120328…8083d`, identique au début de session).
 ```
