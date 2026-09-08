@@ -546,7 +546,15 @@ class EngineServer:
     # SECOND modèle du c-VEP — le seul mode du produit à en produire deux par séance, un par
     # décodeur. Une valeur `None` (séance c-VEP interrompue : pas de rCCA écrivable) est ignorée
     # par les deux boucles, qui testent `os.path.isfile`.
-    _FICHIERS_CANDIDAT = ("modele", "modele_rcca", "enregistrement")
+    # ⚠️ **L'ORDRE compte, et il est l'inverse de l'ordre naturel.** L'`enregistrement` (le .npz
+    # des époques) part EN PREMIER, les modèles ensuite — exactement la règle que les quatre
+    # `_entrainer` s'appliquent à l'écriture, et pour la même raison, qu'ils écrivent chacun en
+    # toutes lettres : si un déplacement échoue à mi-course (verrou antivirus sur `data/`, disque
+    # plein), ce qui reste dans `data/` doit être INOFFENSIF. Un `.npz` orphelin ne l'est : rien
+    # ne le liste, rien ne le propose. Un MODÈLE orphelin, lui, est découvert par son catalogue,
+    # élu « le plus récent », et proposé par défaut à la séance suivante — sans son enregistrement
+    # ni sa provenance. La première écriture de ce tuple mettait les modèles devant.
+    _FICHIERS_CANDIDAT = ("enregistrement", "modele", "modele_rcca")
 
     def _dossier_candidat(self):
         """Le dossier temporaire de CE moteur, créé au premier besoin. Jamais `data/`.
@@ -938,8 +946,19 @@ class EngineServer:
             self._start_calibration(params["id"], params["params"])
         elif command == "cancel_calibration":
             if self.calibration is not None:
+                # ⚠️ `cancel()` ne change PAS la phase d'une calibration déjà « fini », et c'est
+                # voulu là-bas. Mais `_terminer` BLOQUE la boucle le temps du `fit` (plusieurs
+                # secondes, assumé) : c'est précisément l'instant où l'écran est figé et où l'on
+                # clique « Abandonner ». La commande était alors acceptée, le `fit` se terminait,
+                # le candidat était adopté — et ce message annonçait « aucun modèle produit »
+                # alors qu'un modèle venait d'être écrit et attendait, à un clic de `data/`, avec
+                # « Enregistrer » actif. Le geste de l'étudiant était ignoré et l'écran le
+                # contredisait. On jette donc AUSSI le candidat, ce qui rend le message vrai.
+                jete = self.candidat is not None
                 self.calibration.cancel()
-                print(f"[server] calibration abandonnée — aucun modèle produit")
+                self._efface_candidat("abandon demandé pendant l'entraînement")
+                print(f"[server] calibration abandonnée — aucun modèle produit"
+                      + (" (le candidat entraîné pendant l'abandon a été jeté)" if jete else ""))
         elif command == "save_calibration":
             self._save_calibration()
         elif command == "discard_calibration":
@@ -1181,8 +1200,7 @@ class EngineServer:
         On le dit bruyamment et on retient le premier rencontré (ordre de `self.active`, qui suit
         l'ordre de démarrage) plutôt que de deviner lequel l'utilisateur voulait vraiment.
         """
-        noms = [rt.params.get("stream_in", MARKER_STREAM_DEFAULT)
-                for rt in self.active.values() if rt.spec.marker_epoch_s > 0.0]
+        noms = [self._flux_attendu(rt) for rt in self._ecouteurs_de_marqueurs()]
         if not noms:
             return MARKER_STREAM_DEFAULT
         distincts = sorted(set(noms))
@@ -1211,13 +1229,64 @@ class EngineServer:
         """
         if self.marker_inlet is not None:
             return
-        if not any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
+        if not any(True for _rt in self._ecouteurs_de_marqueurs()):
             # Ouvrir un flux entrant qui ne sert à personne ferait chercher sur le réseau à
             # chaque tour pour rien.
             return
         self.marker_inlet = MarkerInlet(self._nom_flux_marqueurs(), timeout_s=0.0)
         self._marqueur_attente_dite = False
         self._resout_marker_inlet()
+
+    def _ecouteurs_de_marqueurs(self):
+        """Tout ce qui, dans CE moteur, consomme la file de marqueurs : les modes ET la calibration.
+
+        ⚠️ **Le défaut que cette méthode existe pour fermer, trouvé à la revue finale du
+        2026-09-08 par deux relecteurs indépendants.** Les quatre décisions « faut-il une oreille,
+        sous quel nom, quand la lâcher, jusqu'où purger » se prenaient sur `self.active` SEUL. Or
+        une calibration ne vit PAS dans `self.active` — c'est l'invariant explicite de
+        `modes/calibration.py` : elle a son emplacement propre, parce qu'un mode qui refuse de
+        démarrer sans modèle rendrait sa propre calibration inatteignable.
+
+        Conséquence, sur le parcours NORMAL du produit : la console arrête le mode avant de
+        démarrer sa calibration (elle y est obligée, c'est le refus du vol de marqueurs), donc
+        plus aucun mode à marqueurs n'est actif, donc aucun inlet n'était ouvert. La fenêtre
+        publiait ses marqueurs cinq minutes dans le vide, et le moteur abandonnait au bout de
+        `CALIB_FENETRE_ATTENTE_S` en annonçant « la fenêtre ne s'est pas lancée, ou elle publie
+        sous un autre nom » — **les deux causes citées étaient fausses**, et l'étudiant était
+        envoyé vérifier une fenêtre qui tournait parfaitement.
+
+        Aucun test ne pouvait le voir : les autotests des quatre calibrations passent par un
+        moteur factice dont `markers_murs` rend une file déjà remplie, donc le seul chemin jamais
+        exercé était celui où les marqueurs sont DÉJÀ là. `_smoke_marqueurs_calibration` couvre
+        désormais le chemin manquant.
+        """
+        for rt in self.active.values():
+            if rt.spec.marker_epoch_s > 0.0:
+                yield rt
+        calib = self.calibration
+        if (calib is not None and not calib.terminee
+                and _calibration_lit_les_marqueurs(calib.spec.calibration)):
+            yield calib
+
+    @staticmethod
+    def _flux_attendu(rt):
+        """Le nom du flux de marqueurs que CE runtime attend.
+
+        Un mode le déclare dans ses `params` (`stream_in`). Une calibration, elle, porte les
+        `params` de la CALIBRATION, qui n'ont pas cette clé : on retombe alors sur le défaut
+        DÉCLARÉ PAR LE MODE, pas sur la constante globale — sinon une calibration n'écouterait
+        jamais le flux personnalisé de son propre mode, et `stream_in` redeviendrait le
+        réglage-décor que ce projet combat.
+        """
+        nom = rt.params.get("stream_in")
+        if not nom:
+            # `getattr` plutôt qu'un appel direct : plusieurs smokes du dépôt fabriquent des
+            # `spec` factices (`SimpleNamespace`) qui ne portent que les deux ou trois champs
+            # dont ils ont besoin. Un moteur ne doit pas tomber parce qu'un mode déclare moins
+            # que le contrat complet — il retombe sur le défaut global, qui est le bon.
+            defauts = getattr(rt.spec, "defaults", None)
+            nom = (defauts() or {}).get("stream_in") if callable(defauts) else None
+        return nom or MARKER_STREAM_DEFAULT
 
     def _resout_marker_inlet(self):
         """Tente la résolution si besoin, et DIT la transition — une seule fois par transition.
@@ -1255,7 +1324,7 @@ class EngineServer:
         """
         if self.marker_inlet is None:
             return False
-        if any(rt.spec.marker_epoch_s > 0.0 for rt in self.active.values()):
+        if any(True for _rt in self._ecouteurs_de_marqueurs()):
             return False
         self._marqueurs_illisibles_clos += self.marker_inlet.illisibles
         self.marker_inlet.lache(raison)
@@ -1372,11 +1441,15 @@ class EngineServer:
         """
         if len(self._marqueurs) <= 4096:
             return
-        ecouteurs = [mode_id for mode_id, rt in self.active.items()
-                    if rt.spec.marker_epoch_s > 0.0]
+        # `spec.id` et non la clé de `self.active` : une CALIBRATION est un écouteur elle aussi
+        # (cf. `_ecouteurs_de_marqueurs`), et elle n'a pas d'entrée dans `self.active`. Son curseur
+        # est rangé dans `_marqueur_curseur` sous l'identifiant de son mode, comme celui du mode —
+        # ce qui est exactement pourquoi les deux ne peuvent pas tourner ensemble.
+        ecouteurs = [rt.spec.id for rt in self._ecouteurs_de_marqueurs()]
         if not ecouteurs:
             print(f"[server] marqueurs entrants : {len(self._marqueurs)} marqueur(s) jetés — "
-                  f"aucun mode actif ne les écoute plus.")
+                  f"plus personne ne les écoute (aucun mode à marqueurs actif, aucune "
+                  f"calibration en cours).")
             self._marqueurs = []
             self._marqueur_curseur = {}
             return
@@ -1795,6 +1868,7 @@ def _smoke():
         _smoke_mi(),
         _smoke_calibration(),
         _smoke_calibration_refus(),
+        _smoke_oreille_calibration(),
         _smoke_vol_marqueurs(),
         _smoke_cumul(),
         _smoke_proposition(),
@@ -2650,6 +2724,85 @@ def _smoke_calibration_refus():
     return ok
 
 
+def _smoke_oreille_calibration():
+    """Une calibration à FENÊTRE, seule, fait-elle ouvrir l'oreille du moteur ?
+
+    ⚠️ **Le test qui manquait, et le défaut qu'il ferme.** Les quatre décisions « faut-il une
+    oreille, sous quel nom, quand la lâcher, jusqu'où purger » se prenaient sur `self.active`
+    SEUL. Une calibration ne vit pas dans `self.active` — c'est l'invariant de
+    `modes/calibration.py` — et la console ARRÊTE le mode avant de démarrer sa calibration (elle y
+    est obligée, cf. `_smoke_vol_marqueurs`). Donc, sur le parcours NORMAL du produit, plus
+    personne n'écoutait : la fenêtre publiait ses marqueurs cinq minutes dans le vide, et le
+    moteur abandonnait au bout de `CALIB_FENETRE_ATTENTE_S` en annonçant « la fenêtre ne s'est pas
+    lancée, ou elle publie sous un autre nom ». **Les deux causes étaient fausses.**
+
+    Pourquoi aucun test existant ne pouvait le voir : les autotests des quatre calibrations
+    passent tous par un moteur factice dont `markers_murs` rend une file DÉJÀ REMPLIE. Le seul
+    chemin jamais exercé était celui où les marqueurs sont là. Trouvé par deux relecteurs
+    indépendants à la revue finale du 2026-09-08, jamais par un test.
+
+    Aucun casque, aucune boucle, aucun émetteur : on interroge les prédicats eux-mêmes.
+    """
+    import shutil
+    import tempfile
+
+    from core.modes.p300 import SPEC as SPEC_P300
+    from core.modes.p300_calib import P300Calibration
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    dossier = tempfile.mkdtemp(prefix="smoke_oreille_")
+    srv = EngineServer(synthetic=True, modes=(), instance="smoke-oreille")
+    try:
+        chk(not list(srv._ecouteurs_de_marqueurs()),
+            "moteur vierge : personne n'écoute de marqueurs")
+        srv._ouvre_marker_inlet()
+        chk(srv.marker_inlet is None,
+            "…donc aucun inlet n'est ouvert — chercher sur le réseau pour personne coûterait un "
+            "tour de boucle à chaque tour")
+
+        # LE cas du parcours normal : une calibration à fenêtre, et AUCUN mode actif.
+        srv.calibration = P300Calibration(SPEC_P300, {}, srv, dossier=dossier)
+        ecouteurs = list(srv._ecouteurs_de_marqueurs())
+        chk(ecouteurs == [srv.calibration],
+            f"une calibration à fenêtre écoute les marqueurs, MÊME sans aucun mode actif — c'est "
+            f"le cas normal, la console ayant dû arrêter le mode pour la démarrer "
+            f"({[type(e).__name__ for e in ecouteurs]})")
+        srv._ouvre_marker_inlet()
+        chk(srv.marker_inlet is not None,
+            "…et le moteur ouvre son oreille pour elle. Sans ça la fenêtre publie dans le vide "
+            "pendant toute la séance, et l'abandon accuse une fenêtre qui marche")
+        chk(srv._nom_flux_marqueurs() == srv._flux_attendu(srv.calibration),
+            f"le nom résolu est celui que la calibration attend ({srv._nom_flux_marqueurs()})")
+
+        # Le nom vient du MODE, pas de la constante globale : une calibration porte les `params`
+        # de la CALIBRATION, qui n'ont pas de `stream_in`.
+        defaut_du_mode = (SPEC_P300.defaults() or {}).get("stream_in")
+        chk(defaut_du_mode and srv._flux_attendu(srv.calibration) == defaut_du_mode,
+            f"…et il vient du défaut DÉCLARÉ PAR LE MODE ({defaut_du_mode!r}), pas de la "
+            f"constante globale — sinon `stream_in` serait un réglage-décor pour la calibration")
+
+        # Une calibration TERMINÉE cesse d'écouter, et l'oreille se lâche.
+        srv.calibration.phase = "fini"
+        chk(not list(srv._ecouteurs_de_marqueurs()),
+            "une calibration TERMINÉE n'écoute plus rien")
+        chk(srv._libere_marker_inlet("smoke") and srv.marker_inlet is None,
+            "…et l'inlet est lâché : le garder ouvert empêcherait sa re-résolution et ferait "
+            "grossir la file sans personne pour la consommer")
+    finally:
+        srv.calibration = None
+        srv.close()
+        shutil.rmtree(dossier, ignore_errors=True)
+
+    print(f"[smoke-oreille-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
 def _smoke_vol_marqueurs():
     """LE VOL DE MARQUEURS, refusé DANS LES DEUX SENS — mode puis calibration, et l'inverse.
 
@@ -2805,10 +2958,20 @@ _FRONTIERE_INTERDITS_RE = r"PySide\d+|PyQt\d+"
 # la console l'importe (`stimulus/registry.py`), donc `stimulus -> research` ferait entrer tout
 # `research` dans la console, et `stimulus -> console` rendrait une fenêtre inlançable sur une
 # machine sans Qt — alors qu'elle n'a besoin que d'un écran.
-_FRONTIERE_STIMULUS_INTERDITS = ("research", "console")
+_FRONTIERE_STIMULUS_INTERDITS = ("research", "console", "brainflow")
+
+# ⚠️ **Et l'acquisition, nommément.** L'invariant fondateur de `src/stimulus/` — *« une fenêtre
+# n'ouvre JAMAIS le casque »* — est ce qui autorise le montage à deux programmes : l'Unicorn
+# n'accepte qu'une connexion, et c'est parce que la fenêtre n'en ouvre aucune qu'elle peut tourner
+# à côté du moteur. Cet invariant ne reposait que sur la PROSE de `stimulus/__init__.py` jusqu'à la
+# revue finale du 2026-09-08, dans un dépôt dont la règle est « vérifié par un test, pas par la
+# discipline ». `brainflow` ci-dessus ferme la porte d'en bas ; celle-ci ferme la porte d'en haut,
+# car `core.acquisition` est un import de `core`, donc autorisé par la liste des paquets.
+_FRONTIERE_STIMULUS_MODULES_INTERDITS = ("core.acquisition",)
 
 
-def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdits_re=None):
+def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdits_re=None,
+                       exacts=None):
     """Les paquets interdits que CE CODE importe. Retourne [(ligne, paquet), ...].
 
     ⚠️ **Juge le CODE, pas le texte** (correction de revue, 2026-08-19). La version précédente
@@ -2864,6 +3027,11 @@ def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdit
             paquet = cible.split(".")[0]
             if motif.match(paquet):
                 fautes.append((noeud.lineno, paquet))
+            elif any(cible == m or cible.startswith(m + ".") for m in (exacts or ())):
+                # Un module PRÉCIS, pas un paquet entier : `core.acquisition` est interdit dans
+                # `stimulus/` alors que `core` y est autorisé. Le nom complet est rendu tel quel,
+                # pour que le message dise ce qui est interdit et pas seulement où.
+                fautes.append((noeud.lineno, cible))
     return fautes
 
 
@@ -2926,7 +3094,7 @@ def _smoke_frontiere():
             f"« {source.strip().splitlines()[0][:52]} » -> {trouve or 'rien'} "
             f"(attendu {attendu or 'rien'})")
 
-    def _scanner(racine_dir, etiquette, interdits, interdits_re):
+    def _scanner(racine_dir, etiquette, interdits, interdits_re, exacts=None):
         """Applique la garde à tout un arbre. Rend (violations, fichiers scannés)."""
         trouvees, vus = [], 0
         for dossier, _sous, fichiers in os.walk(racine_dir):
@@ -2940,9 +3108,31 @@ def _smoke_frontiere():
                 vus += 1
                 with open(chemin, encoding="utf-8") as f:
                     for ligne, paquet in _imports_interdits(f.read(), rel, interdits=interdits,
-                                                            interdits_re=interdits_re):
+                                                            interdits_re=interdits_re,
+                                                            exacts=exacts):
                         trouvees.append(f"{etiquette}/{rel}:{ligne} importe {paquet}")
         return trouvees, vus
+
+    # 1 bis. La règle du paquet `stimulus`, sur des extraits fabriqués eux aussi. Elle diffère de
+    # celle de `core` par les deux bouts : `pygame` y est AUTORISÉ (une fenêtre de stimulus est du
+    # pygame), et `core.acquisition` y est INTERDIT alors que `core` ne l'est pas. Ce second point
+    # est l'invariant fondateur du paquet — *une fenêtre n'ouvre JAMAIS le casque* — et il ne
+    # reposait que sur la prose jusqu'à la revue finale du 2026-09-08. C'est lui qui autorise le
+    # montage à deux programmes : l'Unicorn n'accepte qu'une connexion.
+    for source, attendu in (
+            ("from core.acquisition import UnicornAcquisition\n", ["core.acquisition"]),
+            ("import core.acquisition as acq\n", ["core.acquisition"]),
+            ("import brainflow\n", ["brainflow"]),
+            ("from brainflow.board_shim import BoardShim\n", ["brainflow"]),
+            ("from core.config import DATA_DIR\n", []),          # `core` reste autorisé
+            ("import pygame\n", []),                             # et pygame aussi, ici
+            ("from research.ui import App\n", ["research"])):
+        trouve = [p for _ligne, p in _imports_interdits(
+            source, interdits=_FRONTIERE_STIMULUS_INTERDITS, interdits_re="",
+            exacts=_FRONTIERE_STIMULUS_MODULES_INTERDITS)]
+        chk(trouve == attendu,
+            f"règle stimulus — « {source.strip()} » -> {trouve or 'rien'} "
+            f"(attendu {attendu or 'rien'})")
 
     # 2. Et maintenant le vrai `src/core/`.
     racine = os.path.dirname(os.path.abspath(__file__))
@@ -2955,7 +3145,7 @@ def _smoke_frontiere():
     chk(os.path.isdir(racine_stim), f"le paquet src/stimulus/ existe ({racine_stim})")
     if os.path.isdir(racine_stim):
         fautes_stim, vus_stim = _scanner(racine_stim, "stimulus", _FRONTIERE_STIMULUS_INTERDITS,
-                                         "")
+                                         "", _FRONTIERE_STIMULUS_MODULES_INTERDITS)
         chk(vus_stim >= 3, f"…et il contient au moins les trois fenêtres ({vus_stim} fichiers)")
         fautes += fautes_stim
         fichiers_vus += vus_stim
