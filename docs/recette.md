@@ -393,7 +393,7 @@ python -u examples/receiver.py --stream decoded_p300
 ```
 
 ⚠️ La console passe par le **contrôle de liaison** avant de lancer quoi que ce soit. En
-`--synthetic` il laisse passer (σ de 7 à 75 µV, huit verdicts « ok ») ; si tu vois un refus ici,
+`--synthetic` il laisse passer (σ de 7 à 73 µV, huit verdicts « ok ») ; si tu vois un refus ici,
 c'est une régression. ⚠️ Elle lance la fenêtre **en plein écran**, par-dessus la console : c'est le
 comportement voulu en séance. Alt-tab pour revenir, ESC pour la fermer.
 
@@ -515,7 +515,8 @@ affiché**. Sans eux il ne décode rien du tout — pas « mal », *rien*.
 > cliquer sur « Calibrer ». Contrairement à l'ErrP (1.15), cette calibration-là **se joue en
 > synthétique** : `python src/console/app.py --synthetic`, page c-VEP → **Calibrer**, **~3 min**
 > (`CVEP_CAL_CYCLES` = 15 cycles par cible, `CVEP_CAL_SETTLE_CYCLES` = 4 jetés à chaque changement ;
-> la durée exacte est calculée et imprimée au lancement : ≈ 2,7 min aux réglages du dépôt). Le
+> la console annonce **≈ 3,1 min** — 15 s de chauffe plus ≈ 2,8 min de protocole, que la fenêtre
+> calcule et imprime de son côté : `[cvep-stim] … ≈ 2.8 min`). Le
 > modèle obtenu est **chargeable et dépourvu de tout sens** — il n'a vu aucun cerveau. Il suffit pour
 > ce test, qui vérifie le tuyau et pas le décodage. Elle écrit **deux** fichiers horodatés
 > (`data/cvep_model_*.npz` pour l'eCCA, `data/cvep_rcca_model_*.npz` pour le rCCA) et n'écrase jamais
@@ -754,7 +755,8 @@ python src/console/app.py --mode p300      # page P300 -> « Calibrer »
 ```
 
 - [ ] La console passe par le **contrôle de liaison** (voies clés Fz, Cz, Pz surlignées), puis
-      lance la fenêtre de stimulus en mode calibration. `P300_CAL_ROUNDS` = 12 manches, ~4 min.
+      lance la fenêtre de stimulus en mode calibration. `P300_CAL_ROUNDS` = 12 manches. La console annonce **≈ 2,2 min** (chauffe comprise) ; compte un
+      peu plus, la fenêtre tenant en plus son écran de consigne à chaque manche.
 - [ ] ⚠️ **L'ordre compte, et il n'est garanti par aucune poignée de main.** La console soumet
       `start_calibration` **d'abord**, lance la fenêtre **ensuite** ; le moteur compte alors 15 s de
       chauffe pendant que pygame s'initialise. **Regarde le terminal** : s'il écrit « marqueur(s)
@@ -839,7 +841,7 @@ python src/console/app.py --mode errp      # page ErrP -> « Calibrer »
 ```
 
 - [ ] Contrôle de liaison (voies clés Fz, Cz, Pz), puis la console lance
-      `src/stimulus/errp.py --calibrer`. `ERRP_CAL_TRIALS` = 200 essais, ~7 min.
+      `src/stimulus/errp.py --calibrer`. `ERRP_CAL_TRIALS` = 200 essais. La console annonce **≈ 5,7 min**, chauffe comprise.
 - [ ] ⚠️ **Ce que ce chemin fait de plus que le décodage, et qu'il ne faut PAS confondre :** en
       calibration, chaque marqueur `feedback` porte un champ `error` — la vérité-terrain. **En
       décodage il est absent**, et il doit le rester : l'ErrP est une BCI *passive*, tout son objet
@@ -1019,7 +1021,7 @@ gagnant. Elle écrit **deux** fichiers horodatés (`data/cvep_model_AAAAMMJJ-HHM
 `data/cvep_rcca_model_*.npz`) et n'écrase jamais rien.
 
 - [ ] ⚠️ **Rien n'est écrit avant le clic sur « Enregistrer le modèle ».** Les DEUX fichiers partent
-      ensemble — le c-VEP est le seul mode à en produire deux par séance, et « Jeter » les jette
+      ensemble — le c-VEP est le seul mode à en produire deux par séance, et « Refaire » les jette
       tous les deux. Vérifie qu'ils sont bien tous les deux dans `data/` après le clic : perdre le
       `.npz` rCCA en croyant avoir tout enregistré est le défaut que la tâche 8 a corrigé.
 - [ ] **Note le nom exact du fichier eCCA** : ______________________ . Tu en auras besoin pour la
@@ -1260,9 +1262,9 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
 - **Tous les chiffres de ce projet viennent d'UNE personne.** SSVEP, MI, P300, ErrP, c-VEP : une
   tête, souvent une séance. Ce ne sont pas des moyennes, ce sont des points.
 - **Le contenu du mode neuro n'a jamais été validé.** Cf. 2.5.
-- **Aucune application CLIENTE n'affiche encore un stimulus.** Les trois émetteurs
-  (`p300_stimulus.py`, `errp_stimulus.py`, `cvep_stimulus.py`) sont des références écrites ici, dans
-  ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
+- **Aucune application CLIENTE n'affiche encore un stimulus.** Les trois fenêtres
+  (`src/stimulus/p300.py`, `src/stimulus/errp.py`, `src/stimulus/cvep.py`) sont des références
+  écrites ici, dans ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
   vérifié nulle part — c'est le 3.3, et il n'a jamais été joué.
 - **RIEN de la console n'a été vu avec un casque sur la tête** — ni ses quatre pages de
   calibration, ni son contrôle de liaison, ni son lanceur de fenêtre. Tout ce que le chantier du

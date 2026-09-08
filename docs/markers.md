@@ -658,7 +658,13 @@ four the reference windows meet:
 3. send `calib_end` **only** on a complete session;
 4. open **no** headset — the engine holds the one connection the Unicorn allows.
 
-Nothing else is needed. The epochs never travel: they are cut by the engine, out of its own buffer,
+**Two things this section cannot promise, and they belong here rather than in a design document
+nobody outside this repository reads.** This path has **never been run against a headset** -- the
+engine's own autotests prove the wiring, not the decoding -- and **no third-party application has
+used it yet**. The three windows in `src/stimulus/` are the only emitters that have ever driven it,
+and they were written here.
+
+Nothing else is needed for the protocol itself. The epochs never travel: they are cut by the engine, out of its own buffer,
 by the same code path that cuts them while decoding. That is the point of doing it this way —
 training and decoding cannot disagree about where an epoch starts, because there is only one place
 where that is decided.

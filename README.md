@@ -226,7 +226,8 @@ disagreed. The stream carries only the `-1`; the engine's state counts the four 
 
 Like MI, P300 and ErrP it needs a **model trained on you** — one calibration, from the console's
 **Calibrate** button, about three minutes. (The exact length is computed and printed when it starts;
-at the repository's settings it is 2.7 min, not counting the briefing and the link check.) That calibration trains
+at the repository's settings the window prints 2.8 min, and the console announces 3.1 min because
+it counts the engine's 15 s warm-up.) That calibration trains
 **both** decoders the product has for this stimulus (eCCA and rCCA) on the same epochs and compares
 them with a **paired McNemar test** rather than two percentages side by side. On the reference
 session they were **indistinguishable** (37 paired decisions, 8 discordant, p = 0.727), so the model
@@ -268,7 +269,7 @@ and `--seed` (c-VEP), `--no-wait` (ErrP), `--refresh` and `--windowed` are hand-
 
 ### The pygame app is gone
 
-`src/research/app.py` was deleted on 2026-09-08. Its six screens live in
+`src/research/app.py` was deleted on 2026-09-08. Six of its seven pages live in
 [`archive/`](archive/README.md), each still runnable with its own `--smoke`: three **piloting**
 screens (SSVEP, P300 selection, the ErrP demonstrator) and three **calibrations** (c-VEP, P300,
 ErrP). They are kept for one reason — they decode **locally**, in the program that draws, which is
@@ -341,10 +342,10 @@ by it too.** Stimulus frequencies and codes adapt automatically to the display r
 |---|---|---|---|
 | **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable; the only one validated on hardware **through the engine** |
 | **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~3 min, **from the console** | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~60-65 % offline → 19.1 (eCCA) / 23.8 (rCCA) bits/min, **WEAK** vs the SSVEP's 25.0 |
-| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~4 min, **from the console** | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
+| **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~2.2 min, **from the console** | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min, **from the console** | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
 | **Neuro-monitoring** | Passive spectral indices: workload, drowsiness, engagement | 25 s rest | 🟡 **published as a stream**, content not yet hardware-validated |
-| **ErrP** | Error potential: single-trial detection when the machine errs | ~7 min (200 trials), **from the console** | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
+| **ErrP** | Error potential: single-trial detection when the machine errs | ~5.7 min (200 trials), **from the console** | ✅ **published as a stream** — your app shows the feedback and sends markers ([docs/markers.md](docs/markers.md)); catches ~1 error in 2 at the default operating point (AUC 0.776) |
 
 ⚠️ **"Published" is not "validated", and "calibrated by the engine" is not either.** Only SSVEP has
 been decoded from a real brain *through the engine*. Four of the others — MI, P300, ErrP, c-VEP —

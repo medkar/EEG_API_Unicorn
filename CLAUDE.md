@@ -174,7 +174,8 @@ trois `--calibrer` restent lançables à la main pour déboguer :
 ```bash
 python src/stimulus/p300.py --calibrer     # 12 manches (P300_CAL_ROUNDS)
 python src/stimulus/errp.py --calibrer     # 200 essais (ERRP_CAL_TRIALS)
-python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,7 min
+python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,8 min (la console annonce
+                                           # ~3,1 min : elle compte les 15 s de chauffe du moteur)
 ```
 
 **Après toute modification**, les deux tests headless qui couvrent le plus de code (aucun casque) :
@@ -286,7 +287,9 @@ n'a vu un cerveau.** Les autotests prouvent le câblage entre deux processus, su
 synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
 
 - **QUATRE des six modes n'ont jamais été décodés au casque À TRAVERS LE MOTEUR** — MI, P300, ErrP,
-  c-VEP. Seul le SSVEP l'a été. Le moteur joue maintenant leurs quatre calibrations et la console
+  c-VEP. Seul le SSVEP l'a été. Le sixième, le **neuro**, est un cas à part et il ne faut pas le
+  perdre dans l'arithmétique : sa plomberie est testée, mais **son contenu n'a jamais été validé,
+  nulle part** — ni au casque, ni ailleurs (cf. test 2.5). Le moteur joue maintenant leurs quatre calibrations et la console
   les lance et les juge ; **ça n'ajoute aucune mesure**, ça rend seulement les tests 2.6 à 2.9 de
   `docs/recette.md` exécutables sans l'appli pygame. Une seule séance casque les couvre, et c'est le
   travail qui reste.
@@ -297,7 +300,7 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   C'est délibéré (un contournement à un clic est un contournement qu'on prend par réflexe), mais si
   une électrode refuse de descendre sous le seuil, la console devient inutilisable. **À trancher
   devant un casque, pas avant.** Vérifié en revanche que `--synthetic` passe : σ mesurés de 7 à
-  75 µV, huit verdicts « ok », aucun refus.
+  73 µV, huit verdicts « ok », aucun refus.
 - 🔴 **L'ordre de lancement fenêtre/moteur n'a AUCUNE poignée de main.** La console soumet
   `start_calibration` **puis** lance la fenêtre — l'ordre est figé par un test (journal partagé,
   la mutation qui l'inverse fait rougir deux assertions) — et c'est l'initialisation de pygame plus

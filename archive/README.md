@@ -64,10 +64,13 @@ python archive/p300_calibrate.py --smoke
 python archive/errp_calibrate.py --smoke
 ```
 
-Each is also runnable for real, on a headset, on its own — `--windowed`, `--synthetic`, and an
-explicit `--model` wherever one is loaded or written. The six that arrived in 2026-09 default
-`--model` to `None`, which means **the most recent LOADABLE model** for the pilots and **a
-timestamped name** for the calibrations; neither ever defaults to a fixed path.
+Each is also runnable for real, on a headset, on its own. They do **not** share one set of options:
+`--synthetic` and `--smoke` are on all ten, but `--windowed` is not (`mi_pilot.py` calls it
+`--fullscreen`, `mi_calibrate.py` has neither), and `--model` exists only on the **five** that load
+or write one — `ssvep_pilot.py` has none, because the SSVEP needs no calibration, which the table
+above already says. On those five, `--model` defaults to `None`, which means **the most recent
+LOADABLE model** for the pilots and **a timestamped name** for the calibrations; neither ever
+defaults to a fixed path.
 
 ## What they are allowed to write
 
@@ -83,8 +86,11 @@ the file a miswired smoke run had *already* destroyed once earlier the same day.
 explicitly if you want the old fixed-name behavior back.
 
 All ten `--smoke` runs are guarded by `core.config.empreinte_dossier`: it snapshots `data/` (size +
-mtime per file) before and after, and fails loudly if anything changed. This is exactly the
-mechanism that has cost this project four Motor Imagery models. ⚠️ The guard is blind to a
+mtime per file) before and after, and fails loudly if anything changed. The guard exists because of
+what it catches: an unchecked save is what cost this project four Motor Imagery models, and on
+2026-09-08 `cvep_rcca_pilot.py` wrote a model trained on synthetic noise straight into the real
+`data/`, under a name its catalogue lists -- so it would have been offered by default at the next
+headset session. ⚠️ The guard is blind to a
 write-then-delete that happens **within** one run — see the docstring of `empreinte_dossier` for
 what it does and does not catch.
 

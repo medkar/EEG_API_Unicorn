@@ -93,7 +93,8 @@ Deux règles en découlent, et elles sont ce qui empêche la frontière de s'eff
 `research` ne veut pas dire « brouillon ». Ça veut dire que le moteur ne le publie pas, donc que ça
 ne fait pas partie du contrat rendu aux étudiants. La règle a été appliquée jusqu'au bout : **les six
 décodeurs ont déménagé dans `core/` à mesure que le moteur les publiait**, le c-VEP en dernier le
-2026-08-21, **et les quatre calibrations les ont suivis le 2026-09-07** (`core/modes/*_calib.py`).
+2026-08-21, **et les quatre calibrations les ont suivis, la dernière le 2026-09-08**
+(`core/modes/*_calib.py` : MI le 2026-07-30, P300 et ErrP le 2026-09-07, c-VEP le 2026-09-08).
 Ce qui reste dans `research/` aujourd'hui n'est ni un décodeur en attente ni une calibration : c'est
 le socle pygame que l'archive importe, les analyses hors ligne, deux protocoles chiffrés
 (`ssvep_guided.py`, `alpha_check.py`) — et les **hypothèses réfutées gardées lisibles**
@@ -289,7 +290,7 @@ on ne veut pas que chaque étudiant la réimplémente de travers.
   stimulus de calibration. L'API publie donc une **« spec de stimulus » par mode** (fréquences
   autorisées, rythme des flashs, format des marqueurs) que l'appli externe doit respecter au runtime.
 
-### 6.1 — Les quatre calibrations sont jouées par le MOTEUR (2026-09-07)
+### 6.1 — Les quatre calibrations sont jouées par le MOTEUR (2026-09-08)
 
 Le mot « native » ci-dessus voulait dire « dans notre appli pygame ». Il veut maintenant dire
 « menée par le moteur, affichée par la console ». Ce qui a changé, et pourquoi :
@@ -339,7 +340,8 @@ un stimulus rendu chez lui, il demande que le stimulus lui donne l'heure. Une fr
 code jusqu'au marqueur suivant, et une frame d'avance à l'horodatage décale TOUT, définitivement,
 sans lever la moindre exception.
 
-⚠️ **Et le 2026-09-07, la CALIBRATION a suivi le même chemin — c'est l'évolution F2 (§13), livrée.**
+⚠️ **Et les 2026-09-07 et 08, la CALIBRATION a suivi le même chemin — c'est l'évolution F2 (§13),
+livrée** (P300 et ErrP le 07, c-VEP le 08).
 Elle restait « native » parce qu'on croyait que le rendu à la frame obligeait à enregistrer les
 époques dans le programme qui dessine. C'était faux, de la même façon que pour le pilotage : ce que
 l'enregistrement exige, ce n'est pas d'être dans la fenêtre, c'est de savoir **quand** chaque
@@ -537,7 +539,7 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
   besoin de la phase exacte du code » — était réel mais mal formulé : il n'exigeait pas que l'API
   rende le stimulus, seulement qu'elle sache **où en est le code**. Un marqueur par cycle suffit. Ce
   qui reste vrai et qui n'a pas été levé : la **calibration** c-VEP demande toujours un rendu natif.
-- ~~**F2 — calibration externalisée (pilotée par l'app)**~~ : **FAIT le 2026-09-07** (§6.1, §14).
+- ~~**F2 — calibration externalisée (pilotée par l'app)**~~ : **FAIT le 2026-09-08** (§6.1, §14).
   Livré **autrement que prévu ici**, et l'écart vaut d'être noté : la formulation d'origine
   supposait que l'appli externe enverrait « les époques + labels à l'API pour entraîner ». Elle
   n'envoie **rien de tel** — LSL ne transporte toujours pas d'époques, et il n'a pas fallu qu'il le
@@ -635,7 +637,7 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        principalement outillé : une phase fausse de quelques frames ne lève aucune exception, les
        corrélations baissent juste assez pour que la détection ne se déclenche presque jamais, et
        c'est **indiscernable d'un étudiant qui ne fixe pas sa cible**. D'où la garde au niveau de la
-       frame (`cvep_stimulus.py --smoke` compare, image par image, la phase que le moteur
+       frame (`src/stimulus/cvep.py --smoke` compare, image par image, la phase que le moteur
        reconstruirait à celle réellement affichée, lue dans les PIXELS) et le refus bruyant de tout
        marqueur dont le `refresh` s'écarte de plus de 1 Hz de celui du modèle. ⚠️ **Ce refus porte
        sur les MARQUEURS, pas sur le démarrage du mode** : le moteur continue de tourner et publie
@@ -649,13 +651,17 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        6 cibles : **eCCA 59,5 % → 19,1 bits/min**, **rCCA 64,9 % → 23,8**, à la géométrie du moteur
        (k = 2 cycles, une décision toutes les 2,10 s). Verdict de l'écran de calibration :
        **FAIBLE** — sous la moitié des 25,0 bits/min du SSVEP. (Recalculable par `research/itr.py`,
-       et **asserté** dans `research/cvep_calibrate.py`. Le « ~22 bits/min » qui traînait dans le
+       et **asserté** dans `archive/cvep_calibrate.py`. Le « ~22 bits/min » qui traînait dans le
        README n'avait aucune provenance, et l'écran a imprimé exactement le DOUBLE jusqu'au
        2026-08-21.) ⚠️ Ces bits/min supposent **une décision publiée par fenêtre** ; le moteur
        n'émet qu'après seuils + vote — 46 % des fenêtres hors ligne à 0,26/0,09
        (`core/config.py`) — donc l'ITR réellement délivré par `decoded_cvep` est de l'ordre de la
-       moitié. ⚠️ La calibration dure **≈ 2,7 min** (calculé et imprimé au lancement), pas la
-       « ~1 min » héritée d'un ancien réglage.
+       moitié. ⚠️ La calibration dure **≈ 2,8 min** de protocole — c'est ce que
+       `src/stimulus/cvep.py` calcule et imprime au lancement (`[cvep-stim] … ≈ 2.8 min`) — et la
+       console annonce **≈ 3,1 min**, parce qu'elle ajoute les 15 s de chauffe du moteur
+       (`duree_estimee_s`). Ni l'une ni l'autre n'est la « ~1 min » héritée d'un ancien réglage, ni
+       les « 2,7 min » de l'écran archivé (`archive/cvep_calibrate.py`, qui ne jette que
+       `SETTLE_CYCLES = 2` cycles par bloc là où la fenêtre en jette `CVEP_CAL_SETTLE_CYCLES = 4`).
        ⚠️ **Les deux seuils de décision (`corr_min`, `margin`) se règlent EN PLEINE SÉANCE**, sans
        recréer le flux ni refaire la chauffe (`affecte_decodage=False`) — une première dans le
        produit, et la raison pour laquelle ils voyagent aussi **par échantillon** : les métadonnées
@@ -671,9 +677,9 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
          ~48 % pour les deux décodeurs sur le stimulus décalé partagé). Ce n'est pas une dette,
          c'est une hypothèse close ; `archive/cvep_rcca_pilot.py` la garde vérifiable.
        - **[à faire]** le **rendu par une application cliente** : aucun client externe n'affiche
-         encore un stimulus c-VEP. `cvep_stimulus.py` est un émetteur de référence, pas une preuve
+         encore un stimulus c-VEP. `src/stimulus/cvep.py` est un émetteur de référence, pas une preuve
          qu'un moteur de jeu tient la frame.
-       - **[fait 2026-09-07]** la **calibration c-VEP est jouée par le moteur**
+       - **[fait 2026-09-08]** la **calibration c-VEP est jouée par le moteur**
          (`core/modes/cvep_calib.py`). La raison qui la retenait — le stimulus doit être verrouillé
          à la frame — n'imposait pas d'enregistrer les époques dans la fenêtre : la fenêtre garde le
          rendu, le moteur prend l'épochage. ⚠️ Sa calibration **continue de publier `cycle`** : sans
@@ -683,7 +689,8 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        - **[à faire]** une **seconde personne mesurée**. Comme pour l'ErrP, tous les chiffres du
          c-VEP viennent d'une personne et d'une séance.
      - **[fait 2026-09-07 — chantier « la console, seul point d'entrée »]** la **calibration P300
-       est jouée par le moteur** (`core/modes/p300_calib.py`), et avec elle les trois autres : c'est
+       est jouée par le moteur** (`core/modes/p300_calib.py`) — l'ErrP le même jour, le c-VEP le
+       lendemain, ce qui donne les quatre au **2026-09-08** : c'est
        l'évolution F2 (§13), livrée. Voir **§6.1** pour ce que ça change, et
        [markers.md](markers.md) pour le contrat public des trois nouveaux événements.
        - **[fait 2026-09-08]** **`src/research/app.py` est SUPPRIMÉE.** Ses six écrans (trois
