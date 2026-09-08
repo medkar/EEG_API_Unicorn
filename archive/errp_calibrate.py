@@ -1,4 +1,28 @@
-"""Calibration ErrP : élicite des potentiels d'erreur en faisant SE TROMPER la machine.
+"""Calibration ErrP pygame — l'écran de CALIBRATION retiré de l'appli unifiée.
+
+Ce fichier vivait dans `src/research/`, appelé depuis la page « ErrP » de `src/research/app.py`,
+supprimé le 2026-09-08. C'est le MOTEUR qui calibre désormais : la console lance
+`src/stimulus/errp.py --calibrer`, le moteur écoute les marqueurs et entraîne
+(`core/modes/errp_calib.py`), puis la console AFFICHE le résultat avant de demander « Refaire /
+Enregistrer ». Cet écran-ci écrit son modèle DIRECTEMENT dans `data/` sans passer par ce garde —
+c'est exactement pourquoi il n'est plus au menu de rien.
+
+Gardé ici, ENCORE EXÉCUTABLE, comme référence : le moteur a été écrit contre lui, il APPELLE le
+même entraînement (`core/modes/errp_calib.entrainer`) et la même règle de piste
+(`core/errp_track.py`), et il porte l'écran de RÉGLAGE DU SEUIL (`adjust_threshold`, touche T)
+qu'aucune autre interface n'a encore. `archive/errp_demo.py`, le démonstrateur, l'importe d'ici.
+
+⚠️ Ne jamais le lancer en même temps que le moteur, la console ou un autre écran archivé : le casque
+n'accepte qu'UNE connexion.
+
+    python archive/errp_calibrate.py                   # plein écran, casque réel
+    python archive/errp_calibrate.py --windowed
+    python archive/errp_calibrate.py --model data/mon_errp.joblib
+    python archive/errp_calibrate.py --synthetic       # sans casque (board de test BrainFlow)
+    python archive/errp_calibrate.py --smoke           # test headless (CI)
+
+Le protocole, inchangé depuis l'appli : élicite des potentiels d'erreur en faisant SE TROMPER la
+machine.
 
 Déroulé d'un ESSAI : (1) on affiche l'INTENTION de l'utilisateur (« prépare : GAUCHE ») ; (2) court
 gap avec point de fixation ; (3) FEEDBACK — la machine « exécute » une direction, affichée AU CENTRE
@@ -34,15 +58,20 @@ d'entrée » existe pour retirer. Tant qu'il vit, ne pas s'en servir pour produi
 séance sérieuse : passer par la console.
 """
 
+import argparse
 import os
 import random
+import shutil
 import sys
+import tempfile
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import (ERRP_CAL_BLOCKS, ERRP_CAL_TRIALS, ERRP_EPOCH_S,  # noqa: E402
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
+from core.config import (DATA_DIR, empreinte_dossier, ERRP_CAL_BLOCKS,  # noqa: E402
+                    ERRP_CAL_TRIALS, ERRP_EPOCH_S,
                     ERRP_ERROR_RATE, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS, ERRP_MIDLINE,
                     ERRP_MODEL_PATH, ERRP_PRE_S, ERRP_TRACK_CELLS)
 from core.p300_decoder import epoch_from_stream  # noqa: E402
@@ -51,8 +80,8 @@ from core.errp_decoder import CORRECT, ERROR, rates  # noqa: E402
 from core.modes import errp_calib  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
-from research.ui import (ACCENT, BAR_BG, BG, DIM, FG, GO, ON_COLOR,  # noqa: E402,F401
-                OUTLINE, WARN, Abort)
+from research.ui import (ACCENT, App, BAR_BG, BG, DIM, FG, GO,  # noqa: E402,F401
+                ON_COLOR, OUTLINE, WARN, Abort)
 
 BRIEF = [
     "Calibration ErrP (potentiel d'erreur)",
@@ -93,7 +122,7 @@ def _briefing(app):
 # divergeaient pas. C'est le module qui entraîne le modèle et celui qui le joue : ils ne peuvent
 # pas se permettre deux écritures. Ce qui suit n'est plus qu'une ADAPTATION de signature — l'ordre
 # des arguments et l'étiquette ERROR/CORRECT attendus par le reste de ce fichier et par le
-# démonstrateur de `research/app.py`.
+# démonstrateur voisin (`archive/errp_demo.py`).
 
 def _new_goal(rng, n_cells):
     """Cible à l'une des deux extrémités. Cf. `core.errp_track.nouvelle_cible` pour le pourquoi."""
@@ -503,8 +532,80 @@ def calibrate(app, trials=ERRP_CAL_TRIALS, blocks=ERRP_CAL_BLOCKS,
     return True
 
 
+def _parse(argv):
+    p = argparse.ArgumentParser(
+        description="Calibration ErrP pygame (ARCHIVÉE — le moteur calibre désormais).")
+    # ⚠️ `--model` EXPLICITE, et son défaut est HORODATÉ, jamais `ERRP_MODEL_PATH` : ce nom fixe
+    # porte la trace du 24 juillet (AUC 0,7763, p = 0,0099 sur 200 essais), le seul modèle ErrP
+    # enregistré au casque, et aucun code de ce dépôt ne sait ré-entraîner depuis ses époques.
+    p.add_argument("--model", default=None,
+                   help="où écrire le modèle (défaut : un nom HORODATÉ dans data/)")
+    p.add_argument("--trials", type=int, default=ERRP_CAL_TRIALS, help="pas épochés au total")
+    p.add_argument("--blocks", type=int, default=ERRP_CAL_BLOCKS, help="nombre de blocs")
+    p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
+    p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")
+    p.add_argument("--smoke", action="store_true", help="test headless (CI)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    a = _parse(sys.argv[1:] if argv is None else argv)
+    app = App(windowed=a.windowed, synthetic=a.synthetic, smoke=a.smoke)
+    tmp, save_path = None, a.model
+    # `data/` porte des enregistrements EEG d'une personne identifiable sur un dépôt public :
+    # aucun test n'a le droit d'y écrire, et le plus récent modèle CHARGEABLE de `data/` est le
+    # défaut que le moteur et la console proposent — un modèle de test oublié là se fait élire.
+    empreinte_avant = empreinte_dossier(DATA_DIR) if a.smoke else None
+    try:
+        if a.smoke:
+            tmp = tempfile.mkdtemp(prefix="errp_calibrate_smoke_")
+            save_path = os.path.join(tmp, "errp_model_smoke.joblib")
+        try:
+            calibrate(app, trials=a.trials, blocks=a.blocks, save_path=save_path)
+        except Abort:
+            print("[errp-cal] annulé.")
+    finally:
+        app.close()
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+    if a.smoke:
+        _invariants_smoke()
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"ce smoke a touché data/ — il doit écrire UNIQUEMENT dans le dossier temporaire "
+            f"ci-dessus : {set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
+        print("[errp-cal] smoke OK : blocs + époques + entraînement câblés (headless).")
+    return True
+
+
+def _invariants_smoke():
+    """L'invariant monté ici AVEC l'écran qu'il protège (il vivait dans le `_smoke` de
+    `research/app.py`, supprimé)."""
+    import fnmatch
+    import inspect
+
+    # Une calibration ErrP n'écrase JAMAIS `data/errp_model.joblib` — la trace du 24 juillet, seul
+    # modèle ErrP enregistré au casque (AUC 0,7763, validation croisée groupée par bloc, 200
+    # essais / 5 blocs, p = 0,0099 sur 100 permutations). Les époques survivent, mais AUCUN code de
+    # ce dépôt ne sait ré-entraîner depuis elles : l'écraser coûtait une séance casque entière.
+    horodate = chemin_modele_horodate()
+    assert horodate != ERRP_MODEL_PATH, (
+        f"une calibration ErrP écrirait dans data/errp_model.joblib et écraserait la trace du "
+        f"24 juillet ({horodate})")
+    assert fnmatch.fnmatch(os.path.basename(horodate), errp_models.MOTIF), (
+        f"le modèle horodaté {os.path.basename(horodate)} ne correspond pas à errp_models.MOTIF "
+        f"({errp_models.MOTIF}) : il n'apparaîtrait dans aucune liste de modèles")
+    # ...et c'est bien `calibrate` qui s'en sert quand personne ne lui donne de chemin. Vérifié sur
+    # le TEXTE SOURCE et pas en l'exécutant : appeler `calibrate(app)` sans `save_path` pour voir
+    # où il écrit, c'est exactement l'accident qu'on veut interdire.
+    src = inspect.getsource(calibrate)
+    assert "chemin_modele_horodate()" in src and "or ERRP_MODEL_PATH" not in src, (
+        "calibrate() doit retomber sur chemin_modele_horodate() quand save_path est None : un "
+        "défaut à ERRP_MODEL_PATH écrase la trace du 24 juillet dès la première calibration de "
+        "démonstration")
+
+
 if __name__ == "__main__":
     from core.config import use_utf8_console
     use_utf8_console()
-    print("Ce module se lance depuis l'appli (mode ErrP -> Calibrer). "
-          "Test de câblage headless : python src/research/app.py --smoke")
+    main()

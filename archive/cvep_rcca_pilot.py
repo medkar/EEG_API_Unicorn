@@ -6,8 +6,8 @@ dans `src/research/app.py`. Codes Gold distincts + reconvolution ont été mesur
 stimulus décalé que le produit garde, il n'est pas DISTINGUABLE de l'eCCA sur la seule séance
 mesurée : k=2, rCCA 24/37 contre eCCA 22/37, McNemar p = 0,727, UNE personne UNE séance — ce qui
 n'est pas la même chose que « il fait jeu égal »), c'est la moitié « codes Gold »
-de l'hypothèse qui l'était. La calibration DÉSORMAIS au menu (`python src/research/app.py`, page
-c-VEP) entraîne le rCCA sur le stimulus décalé, pas sur des codes Gold — elle REMPLACE celle-ci.
+de l'hypothèse qui l'était. La calibration que le produit garde — celle du MOTEUR, lancée depuis la
+console — entraîne le rCCA sur le stimulus DÉCALÉ, pas sur des codes Gold : elle REMPLACE celle-ci.
 
 Ce fichier reste ici, ENCORE EXÉCUTABLE, pour une seule raison : c'est la trace vivante de ce qui a
 été mesuré et écarté — le rejouer reste le moyen le plus direct de vérifier qu'un futur changement
@@ -43,7 +43,8 @@ from research.ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E
 
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
-    """Copie EXACTE de `research.app._cvep_decode` (avant son retrait) : le fil qui décode en
+    """Copie EXACTE du `_cvep_decode` de `research/app.py` (avant la suppression de ce fichier,
+    le 2026-09-08) : le fil qui décode en
     continu et publie le vote. Dupliquée dans `cvep_pilot.py` à dessein — les deux fichiers
     archivés doivent rester compréhensibles et exécutables SEULS, sans dépendre l'un de l'autre."""
     votes = deque(maxlen=CVEP_VOTE_LEN)
@@ -71,13 +72,15 @@ def calibrate_rcca(app, cycles=None, save_path=None):
     EXACTEMENT le fichier qu'un smoke mal câblé a déjà écrasé une fois (tour 1, incident
     documenté dans le rapport de tâche 6) — un `python archive/cvep_rcca_pilot.py --calibrate`
     sans `--model` explicite écrivait DROIT dessus. Même patron que
-    `research.cvep_calibrate.calibrate`, adopté ici pour la même raison.
+    `cvep_calibrate.calibrate` (le fichier voisin), adopté ici pour la même raison.
 
     Réutilise les helpers éprouvés de cvep_calibrate (briefing, blocs mélangés, rendu, garde-fous)
     pour ne pas diverger du protocole validé. Retourne (ok, cv_loo|None).
     """
     from core.config import CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES
-    from research.cvep_calibrate import (_briefing, _draw, _make_blocks, _wilson_hi,  # noqa: E402
+    # `cvep_calibrate` est le FICHIER VOISIN, dans `archive/` : les deux écrans partagent le
+    # briefing, les blocs entrelacés et les garde-fous, et ils ont été archivés ensemble.
+    from cvep_calibrate import (_briefing, _draw, _make_blocks, _wilson_hi,  # noqa: E402
                                 chemin_modele_horodate, EARLY_ITR_MIN, SETTLE_CYCLES)
 
     save_path = save_path or chemin_modele_horodate("rCCA")
@@ -190,7 +193,8 @@ def calibrate_rcca(app, cycles=None, save_path=None):
 
 
 def mode_cvep_rcca(app, model_path=CVEP_RCCA_MODEL_PATH):
-    """Copie EXACTE de `research.app.mode_cvep_rcca` (avant son retrait, tâche 6). 2e variante
+    """Copie EXACTE du `mode_cvep_rcca` de `research/app.py` (avant son retrait, tâche 6 ; ce
+    fichier-là a été supprimé le 2026-09-08). 2e variante
     c-VEP : CODES DISTINCTS (Gold) décodés par reconvolution (rCCA, pyntbci). Réutilise
     `_cvep_decode` (interface `classify(window, phase)` identique à l'eCCA)."""
     from core.cvep_code import is_on as cvep_on
@@ -328,7 +332,7 @@ def main(argv=None):
             # `calibrate_rcca` est déjà sûr) mais `main()` ne saurait alors plus QUEL fichier
             # piloter juste après.
             if model_path is None:
-                from research.cvep_calibrate import chemin_modele_horodate
+                from cvep_calibrate import chemin_modele_horodate
                 model_path = chemin_modele_horodate("rCCA")
             try:
                 calibrate_rcca(app, save_path=model_path)

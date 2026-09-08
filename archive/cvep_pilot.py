@@ -7,9 +7,10 @@ la RÉFÉRENCE contre laquelle on compare le décodage réseau lors d'une séanc
 mêmes cibles, deux décodeurs indépendants (celui-ci en pygame local, celui du moteur sur le réseau)
 qui doivent désigner la MÊME cible.
 
-La CALIBRATION, elle, n'a pas bougé : elle reste le seul moyen d'obtenir un modèle, au menu de
-`python src/research/app.py` (page « c-VEP » -> « Calibrer »). Ce fichier ne fait que PILOTER un
-modèle déjà entraîné.
+La CALIBRATION, elle, a bougé DEUX FOIS depuis : c'est le MOTEUR qui calibre (la console lance
+`src/stimulus/cvep.py --calibrer`, le moteur entraîne, la console fait juger avant d'enregistrer),
+et l'écran pygame qui le faisait est archivé à côté d'ici, dans `archive/cvep_calibrate.py`. Ce
+fichier-ci ne fait que PILOTER un modèle déjà entraîné.
 
     python archive/cvep_pilot.py                       # plein écran, casque réel
     python archive/cvep_pilot.py --windowed
@@ -39,7 +40,8 @@ from research.ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E
 
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):
-    """Copie EXACTE de `research.app._cvep_decode` (avant son retrait) : le fil qui décode en
+    """Copie EXACTE du `_cvep_decode` de `research/app.py` (avant la suppression de ce fichier,
+    le 2026-09-08) : le fil qui décode en
     continu et publie le vote. Dupliquée dans `cvep_rcca_pilot.py` à dessein — les deux fichiers
     archivés doivent rester compréhensibles et exécutables SEULS, sans dépendre l'un de l'autre."""
     votes = deque(maxlen=CVEP_VOTE_LEN)
@@ -56,13 +58,14 @@ def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz
 
 
 def mode_cvep(app, model_path=CVEP_MODEL_PATH):
-    """Copie EXACTE de `research.app.mode_cvep` (avant son retrait, tâche 6 du chantier c-VEP)."""
+    """Copie EXACTE du `mode_cvep` de `research/app.py` (avant son retrait, tâche 6 du chantier
+    c-VEP ; ce fichier-là a été supprimé le 2026-09-08)."""
     from core.cvep_code import build_targets, is_on as cvep_on
     from core.cvep_decoder import CVEPDecoder, CVEPModel
 
     if not os.path.exists(model_path):
         app.flash("Pas de modèle c-VEP",
-                  "calibre d'abord (python src/research/app.py, page c-VEP)", 3.5)
+                  "calibre d'abord : console -> c-VEP -> Calibrer", 3.5)
         return
     plan, code = build_targets()
     model = CVEPModel.load(model_path)
@@ -135,7 +138,7 @@ def main(argv=None):
             # DEUX fichiers : `rcca_save_path` DOIT être détourné aussi, sinon son défaut
             # (`CVEP_RCCA_MODEL_PATH`) écrit dans le VRAI `data/cvep_rcca_model.npz` — data/ porte
             # des enregistrements EEG d'une personne identifiable sur un dépôt public.
-            import research.cvep_calibrate as cvep_calibrate
+            import cvep_calibrate            # le FICHIER VOISIN, archivé le 2026-09-08
             tmp = tempfile.mkdtemp(prefix="cvep_pilot_smoke_")
             model_path = os.path.join(tmp, "cvep_model_smoke.npz")
             cvep_calibrate.calibrate(app, save_path=model_path,

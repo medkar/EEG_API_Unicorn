@@ -7,18 +7,20 @@ l'inverse est interdit (voir `core/__init__.py`).
 
 Quatre familles, à ne pas confondre en parcourant le dossier :
 
-1. **L'application pygame** — `app.py` (menu, 5 modes), `ui.py`, `ssvep_stimulus.py`,
-   `viewing.py`. Elle ouvre le casque ELLE-MÊME : ne jamais la lancer en même temps que le
-   moteur, le casque n'accepte qu'une connexion.
-   ⚠️ `p300_stimulus.py`, `errp_stimulus.py` et `cvep_stimulus.py` sont les exceptions qui
-   confirment la règle : ils n'ouvrent PAS le casque, ils ne font qu'AFFICHER et publier leurs
-   marqueurs. C'est ce qui permet de les lancer en même temps que le moteur, dans deux
-   terminaux — comme `ssvep_stimulus.py`.
-   ⚠️ Le troisième, `cvep_stimulus.py`, ne publie pas le même GENRE de marqueur que les deux
-   autres, et c'est ce qu'il faut avoir en tête avant de le recopier : ceux du P300 et de l'ErrP
-   délimitent une époque à découper, les siens tiennent une HORLOGE (un par redémarrage de la
-   m-séquence, ~1/s). Le moteur n'en épochera rien ; il s'en sert pour savoir où en est le code
-   affiché — sans quoi il ne décode rien du tout.
+1. **Le socle pygame** — `ui.py` (la fenêtre, la session casque, l'écran de contrôle de liaison,
+   et la machinerie des modes en direct : `Live`, le fil de décodage, le vote, la boucle de
+   rendu), `ssvep_stimulus.py`, `viewing.py`.
+   ⚠️ **Il n'y a plus d'application pygame ici.** `app.py` — le menu et ses cinq modes — a été
+   supprimé le 2026-09-08 (chantier « la console, seul point d'entrée ») : le moteur publie les
+   six modes, la console les pilote, et les écrans pygame qui faisaient doublon sont archivés,
+   encore exécutables, dans `archive/` (voir `archive/README.md`). Ce socle-ci reste parce que
+   ce sont EUX qui l'importent — plus `ssvep_guided.py` et `alpha_check.py`, deux protocoles
+   chiffrés qui n'ont jamais eu de doublon.
+   ⚠️ Les fenêtres de STIMULUS, elles, ont leur propre paquet : `src/stimulus/` (`p300.py`,
+   `errp.py`, `cvep.py`). Elles n'ouvrent PAS le casque, elles AFFICHENT et publient des
+   marqueurs — c'est ce qui permet de les lancer en même temps que le moteur, dans deux
+   terminaux. `ssvep_stimulus.py` est resté ici : il ne publie aucun marqueur, il ne fournit que
+   la géométrie des flèches et la mesure du rafraîchissement.
 2. **Les décodeurs des modes** — **plus aucun, désormais.** `cvep_code`, `cvep_decoder` ET
    `cvep_rcca` ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le
    2026-07-27, `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec
@@ -28,8 +30,12 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    codes GOLD, la moitié RÉFUTÉE de l'hypothèse rCCA (voir sa docstring), donc de la famille 4.
    Le décodeur rCCA, lui, EST publié : `core/modes/cvep.py` instancie `RCCADecoder` quand le
    fichier de modèle déclare ce décodeur, et la calibration en écrit un à chaque séance.
-3. **Les calibrations** — `*_calibrate.py` : protocoles longs qui entraînent un modèle dans
-   `data/`. Coûteuses en fatigue, à lancer sur un sujet frais.
+3. **Les calibrations** — **plus aucune ici non plus.** `cvep_calibrate.py`, `p300_calibrate.py`
+   et `errp_calibrate.py` sont partis dans `archive/` le 2026-09-08, avec l'appli qui les
+   appelait. Ce n'était pas qu'un doublon : elles écrivaient un modèle DIRECTEMENT dans `data/`,
+   sans passer par le « Refaire / Enregistrer » que la console impose depuis ce chantier — un
+   modèle raté pouvait donc devenir le défaut proposé sans que personne ne le voie. Le moteur
+   calibre les quatre modes à modèle (`core/modes/*_calib.py`), la console les lance et les juge.
 4. **Les analyses hors ligne et les hypothèses RÉFUTÉES gardées lisibles** — `*_analyze.py`,
    `ssvep_guided.py`, `mi_compare.py`, `itr.py`, et `cvep_rcca.py` (la fabrique de codes Gold,
    seule appelée par `archive/cvep_rcca_pilot.py`) : rejouer un enregistrement, comparer,
@@ -41,7 +47,8 @@ envoient un `{jx,jy}` en UDP. Le produit ne fonctionne plus ainsi (l'API publie 
 neutre sur LSL, cf. `docs/robot_testbed.md`), ils survivent comme référence de comparaison.
 
 `mi_calibrate.py` et `mi_pilot.py` ont quitté ce dossier le jour où le moteur a appris à
-calibrer et décoder le Motor Imagery lui-même (`core/modes/mi_calib.py`, `core/modes/mi.py`) :
-ils vivent maintenant dans `archive/`, encore exécutables (`--smoke`), gardés comme référence
-pour vérifier la calibration du moteur — voir `archive/README.md`.
+calibrer et décoder le Motor Imagery lui-même (`core/modes/mi_calib.py`, `core/modes/mi.py`).
+Les huit autres écrans pygame les ont suivis, mode par mode, jusqu'au 2026-09-08 : ils vivent
+tous dans `archive/`, encore exécutables (`--smoke`), gardés comme la référence LOCALE contre
+laquelle une séance casque compare le décodage réseau — voir `archive/README.md`.
 """

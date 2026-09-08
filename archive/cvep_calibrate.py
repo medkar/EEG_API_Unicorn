@@ -1,4 +1,31 @@
-"""Calibration c-VEP : fixer chaque cible quelques secondes -> template + filtre spatial.
+"""Calibration c-VEP pygame — l'écran de CALIBRATION retiré de l'appli unifiée.
+
+Ce fichier vivait dans `src/research/`, appelé depuis la page « c-VEP » de `src/research/app.py`,
+supprimé le 2026-09-08. C'est le MOTEUR qui calibre désormais : la console lance
+`src/stimulus/cvep.py --calibrer`, le moteur écoute l'horloge du stimulus et entraîne
+(`core/modes/cvep_calib.py`), puis la console AFFICHE le résultat avant de demander « Refaire /
+Enregistrer ». Cet écran-ci, lui, écrit son modèle DIRECTEMENT dans `data/` sans passer par ce
+garde — c'est exactement pourquoi il n'est plus au menu de rien.
+
+Gardé ici, ENCORE EXÉCUTABLE, pour deux raisons : c'est la référence contre laquelle la calibration
+du moteur a été écrite (même protocole, mêmes blocs entrelacés, même entraînement — il APPELLE
+`core/modes/cvep_calib.entraine_les_deux`, il n'en a pas de copie), et c'est le seul chemin qui
+existe encore vers un modèle si le montage à deux processus (moteur + fenêtre) est indisponible.
+
+⚠️ Son ÉPOCHAGE reste différent de celui du moteur, et ce n'est pas un détail : il découpe sur
+l'horloge de pygame (frontières de cycle comptées en frames), le moteur sur les marqueurs LSL. Pour
+une séance sérieuse, passer par la console.
+
+⚠️ Ne jamais le lancer en même temps que le moteur, la console ou un autre écran archivé : le casque
+n'accepte qu'UNE connexion.
+
+    python archive/cvep_calibrate.py                   # plein écran, casque réel
+    python archive/cvep_calibrate.py --windowed
+    python archive/cvep_calibrate.py --model data/mon_ecca.npz --rcca-model data/mon_rcca.npz
+    python archive/cvep_calibrate.py --synthetic       # sans casque (board de test BrainFlow)
+    python archive/cvep_calibrate.py --smoke           # autotest headless (CI)
+
+Le protocole, inchangé depuis l'appli :
 
 Plus courte que la calibration Motor Imagery (~3 min contre 5-7 min) parce qu'on n'apprend pas
 une intention mentale, seulement la **forme de ta réponse visuelle** au code. ⚠️ La durée exacte
@@ -16,6 +43,7 @@ Chaque époque est prélevée EXACTEMENT à une frontière de cycle (frame % L =
 fenêtre couvre alors le cycle qui vient de s'écouler, donc démarre à la phase 0 du code.
 """
 
+import argparse
 import os
 import random
 import sys
@@ -23,8 +51,10 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (CH_NAMES, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E402
+                    DATA_DIR, empreinte_dossier,
                     CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_LAG_ROTATION,
                     CVEP_MODEL_PATH, CVEP_RCCA_MODEL_PATH, cvep_lag_gap_ms,
                     use_utf8_console)
@@ -46,7 +76,7 @@ from core.cvep_rcca import SEUIL_MCNEMAR, _mcnemar_p  # noqa: E402
 from core.modes.cvep_calib import (chemin_modele_horodate,  # noqa: E402
                                    entraine_les_deux, gagnant as _gagnant)
 from research.itr import itr  # noqa: E402
-from research.ui import BG, DIM, FG, GO, WARN, Abort  # noqa: E402
+from research.ui import App, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 SETTLE_CYCLES = 2   # cycles jetés après un changement de cible (déplacement du regard + VEP qui s'installe)
 # Plancher d'utilité pour le contrôle de séance (bits/min). ~1/3 du meilleur c-VEP mesuré
@@ -751,10 +781,70 @@ def _selftest():
     finally:
         app_int.close()
 
+    # --- Les défauts d'écriture : `calibrate()` n'écrase JAMAIS un nom FIXE. -------------------
+    # Ces trois assertions vivaient dans le `_smoke` de `research/app.py` ; elles sont montées ici
+    # AVEC l'écran qu'elles protègent, le 2026-09-08. Vérifiées sur le TEXTE SOURCE, comme leurs
+    # jumelles P300 et ErrP : appeler `calibrate(app)` sans chemin pour VOIR où il écrit serait
+    # exactement l'accident qu'on veut interdire. `CVEP_RCCA_MODEL_PATH` porte la trace du
+    # 21 juillet (35,6 %, codes Gold) que ce dépôt cite comme preuve mesurée du jeu égal
+    # eCCA/rCCA, et une revue a mesuré qu'un smoke mal câblé suffisait à l'écraser.
+    import inspect
+
+    src_cal = inspect.getsource(calibrate)
+    chk("save_path=CVEP_MODEL_PATH" not in src_cal,
+        "calibrate() n'a JAMAIS CVEP_MODEL_PATH comme défaut de save_path — un défaut fixe "
+        "écraserait le modèle eCCA à chaque calibration de démonstration")
+    chk("rcca_save_path=CVEP_RCCA_MODEL_PATH" not in src_cal,
+        "...et rcca_save_path non plus : CVEP_RCCA_MODEL_PATH est la trace du 21 juillet "
+        "(35,6 %, codes Gold), preuve mesurée du jeu égal eCCA/rCCA")
+    chk("chemin_modele_horodate(" in src_cal,
+        "...et calibrate() retombe sur des chemins HORODATÉS quand on ne lui en donne pas")
+
     print(f"[cvep-calibrate] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
+def _parse(argv):
+    p = argparse.ArgumentParser(
+        description="Calibration c-VEP pygame (ARCHIVÉE — le moteur calibre désormais).")
+    # ⚠️ Les deux chemins sont EXPLICITES et leur défaut est HORODATÉ, jamais un nom fixe :
+    # `CVEP_RCCA_MODEL_PATH` (`data/cvep_rcca_model.npz`) porte le seul modèle Gold jamais
+    # calibré au casque, et ce dépôt l'a déjà détruit une fois avec un défaut fixe.
+    p.add_argument("--model", default=None,
+                   help="où écrire le modèle eCCA (défaut : un nom HORODATÉ dans data/)")
+    p.add_argument("--rcca-model", default=None,
+                   help="où écrire le modèle rCCA (défaut : un nom HORODATÉ dans data/)")
+    p.add_argument("--cycles", type=int, default=CVEP_CAL_CYCLES,
+                   help="cycles enregistrés par cible")
+    p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
+    p.add_argument("--synthetic", action="store_true", help="board de test (sans casque)")
+    p.add_argument("--smoke", action="store_true", help="autotest headless (CI)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    a = _parse(sys.argv[1:] if argv is None else argv)
+    if a.smoke:
+        # L'autotest ne touche QUE des dossiers temporaires — vérifié, pas supposé. `data/` porte
+        # des enregistrements EEG d'une personne identifiable sur un dépôt public, et c'est un
+        # smoke mal câblé de ce sous-système qui a déjà écrasé `data/cvep_rcca_model.npz`.
+        empreinte_avant = empreinte_dossier(DATA_DIR)
+        ok = _selftest()
+        empreinte_apres = empreinte_dossier(DATA_DIR)
+        assert empreinte_apres == empreinte_avant, (
+            f"cet autotest a touché data/ — il doit écrire UNIQUEMENT dans des dossiers "
+            f"temporaires : {set(empreinte_apres) ^ set(empreinte_avant) or 'contenu modifié'}")
+        return ok
+    app = App(windowed=a.windowed, synthetic=a.synthetic)
+    try:
+        calibrate(app, cycles=a.cycles, save_path=a.model, rcca_save_path=a.rcca_model)
+    except Abort:
+        print("[cvep-cal] annulé.")
+    finally:
+        app.close()
+    return True
+
+
 if __name__ == "__main__":
     use_utf8_console()
-    sys.exit(0 if _selftest() else 1)
+    sys.exit(0 if main() else 1)
