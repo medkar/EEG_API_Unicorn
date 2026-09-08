@@ -218,7 +218,7 @@ def groupes_contigus(n, blocs=ERRP_CAL_BLOCKS):
     return [min(blocs - 1, int(i // par_bloc)) for i in range(n)]
 
 
-def entrainer(epochs, labels, fs, chemin_modele, chemin_npz=None, pre_s=None, post_s=None,
+def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=None,
               n_perm=None, blocs=ERRP_CAL_BLOCKS):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
@@ -238,6 +238,16 @@ def entrainer(epochs, labels, fs, chemin_modele, chemin_npz=None, pre_s=None, po
     `ErrPRuntime.pre_s` — et le jour où quelqu'un y touche, le mode refuserait le modèle qu'on
     vient tout juste de calibrer, EN ACCUSANT LE MODÈLE. C'est le défaut mesuré côté P300 à la
     tâche 4, et il ne se voit dans aucun test tant que les deux nombres coïncident.
+
+    ⚠️ Les deux sont donc EXIGÉS, par mot-clé et sans valeur par défaut : celui qui a découpé les
+    époques est le seul à savoir avec quoi, et il n'existe aucun repli honnête. Un défaut à `None`
+    (ce qu'ils valaient d'abord) laissait la panne se produire À DISTANCE — `ErrPModel` acceptait
+    la construction, et l'entraînement mourait vingt lignes plus bas sur
+    `unsupported operand type(s) for *: 'NoneType' and 'float'`, qui ne nomme ni le paramètre
+    oublié ni la fonction qui l'a oublié. Un défaut repris de `core/config.py` aurait été pire
+    encore : il aurait SILENCIEUSEMENT produit un modèle plausible et faux le jour où la géométrie
+    du runtime bouge. Sans défaut, l'oubli est un `TypeError` de Python au point d'appel, qui
+    nomme les deux arguments manquants.
 
     `n_perm` : None -> `ERRP_PERM_N` (100), la valeur du protocole. 0 saute la permutation, donc
     rend `perm_p = None` — un autotest de câblage peut le vouloir ; une séance réelle, jamais : sans
@@ -301,10 +311,14 @@ def entrainer(epochs, labels, fs, chemin_modele, chemin_npz=None, pre_s=None, po
     }
 
 
-def entrainer_dans(dossier, epochs, labels, fs, pre_s=None, post_s=None, n_perm=None,
+def entrainer_dans(dossier, epochs, labels, fs, *, pre_s, post_s, n_perm=None,
                    blocs=ERRP_CAL_BLOCKS, prefixe=""):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés et
-    garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur."""
+    garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
+
+    `pre_s`/`post_s` sont EXIGÉS ici aussi, et pour la même raison — cf. `entrainer`. Un défaut
+    posé sur ce passe-plat suffirait à rouvrir le trou qu'on vient de fermer un cran plus bas.
+    """
     chemin_modele, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe)
     return entrainer(epochs, labels, fs, chemin_modele=chemin_modele, chemin_npz=chemin_npz,
                      pre_s=pre_s, post_s=post_s, n_perm=n_perm, blocs=blocs)
@@ -711,6 +725,23 @@ def _selftest():
                                   and decodeur.model.fs == _FausseAcq.fs),
             f"...parce qu'il PORTE la géométrie avec laquelle ses époques ont été découpées, pas "
             f"un défaut de configuration ({getattr(decodeur, 'model', None)})")
+
+        # ...et l'autre moitié de la même garde : la géométrie ne peut pas être OMISE. Elle n'a
+        # aucun repli honnête — un défaut repris de `core/config.py` produirait silencieusement un
+        # modèle plausible et faux le jour où `ErrPRuntime.pre_s` bouge, et un défaut à `None`
+        # (ce que c'était) faisait mourir l'entraînement vingt lignes plus bas sur
+        # « unsupported operand type(s) for *: 'NoneType' and 'float' », qui ne nomme ni le
+        # paramètre oublié ni l'appelant qui l'a oublié. Sans défaut, Python les nomme tous les deux.
+        try:
+            entrainer_dans(dossier, [e for e, _l in rt._enregistre],
+                           [1 if lab else 0 for _e, lab in rt._enregistre], FS, n_perm=0)
+            refus_geo = None
+        except TypeError as e:
+            refus_geo = str(e)
+        chk(refus_geo is not None and "pre_s" in refus_geo and "post_s" in refus_geo,
+            f"omettre la géométrie est refusé AU POINT D'APPEL, en nommant les deux arguments "
+            f"manquants — pas vingt lignes plus bas dans un produit par None "
+            f"({refus_geo or 'AUCUN refus : un modèle a été écrit sans géométrie'})")
 
         # --- 7. Une séance trop pauvre est REFUSÉE, en disant quoi faire -----------------------
         plan_court, eeg_c, ts_c, _v = seance(n_pas=6, graine=1)
