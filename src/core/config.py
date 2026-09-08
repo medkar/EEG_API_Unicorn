@@ -154,7 +154,7 @@ COMMON_REFRESH = [60, 75, 90, 100, 120, 144, 165, 240]  # pour « snapper » la 
 # ⚠️ MESURE PERSONNELLE, pas une constante universelle. C'est le pic alpha du développeur.
 # Le pic alpha individuel varie fortement d'une personne à l'autre (moyenne de population ~9,6 Hz,
 # écart-type ~1 Hz, plage 7-13 Hz, décroissant avec l'âge). Un seul consommateur aujourd'hui :
-# `research/app.py`, pour ses propres séances. Tout ce qui s'adresse à QUELQU'UN D'AUTRE doit
+# `archive/ssvep_pilot.py`, pour ses propres séances. Tout ce qui s'adresse à QUELQU'UN D'AUTRE doit
 # passer par le réglage `alpha_hz` du mode SSVEP, pas par cette valeur.
 ALPHA_PEAK_HZ = 10.5
 
@@ -840,7 +840,8 @@ P300_CAL_ROUNDS = 12          # manches de calibration (chaque cible cuée 2× �
 # (en calibration) la cible à fixer. Ce n'est pas du confort : sans elle, la frontière entre deux
 # manches est visuellement identique à un intervalle entre deux flashs (~150 ms), et les époques de
 # la manche suivante contiennent la transition du regard. Valeur calée sur les deux écrans validés
-# au casque (2,2 s dans `research/app.py`, 2,5 s dans `research/p300_calibrate.py`).
+# au casque : 2,2 s et 2,5 s, mesurés dans les deux écrans pygame que ce dépôt a retirés le
+# 2026-09-08 et qui restent lisibles dans `archive/p300_pilot.py` et `archive/p300_calibrate.py`.
 # ⚠️ Elle vit ICI, dans `core/`, parce que DEUX programmes en ont besoin et qu'aucun des deux ne
 # peut importer l'autre : la fenêtre `src/stimulus/p300.py` la JOUE, et `core/modes/p300_calib.py`
 # en a besoin pour ESTIMER la durée d'une séance — le moteur ne voit pas l'écran. Recopiée des deux

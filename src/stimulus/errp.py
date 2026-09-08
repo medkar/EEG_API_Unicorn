@@ -4,7 +4,7 @@
 moteur, dans deux terminaux — le même montage que pour le P300 et le SSVEP :
 
     python src/core/server.py --mode errp           # terminal 1 : acquiert et décode (EXIGE un
-                                                      # modèle entraîné, cf. research/app.py -> ErrP)
+                                                      # modèle entraîné : console, page ErrP, « Calibrer »)
     python src/stimulus/errp.py             # terminal 2 : affiche la piste et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,

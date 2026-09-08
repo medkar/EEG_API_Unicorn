@@ -247,7 +247,7 @@ class RCCAModel:
         Personne ne l'avait vu parce que le seul test du fichier d'origine IMPRIMAIT le résultat
         de la phase glissante sans l'affirmer (« recalage OK si ≈ tout »), et parce que la
         calibration, elle, n'épochait qu'à la phase 0 — donc `cv_` restait juste. Le PILOTAGE en
-        ligne, lui, note à des phases quelconques (`research/app.py::_cvep_decode`) : la variante
+        ligne, lui, note à des phases quelconques (`archive/cvep_pilot.py`) : la variante
         rCCA a donc été jugée en séance à travers un alignement retourné. C'est une raison de
         plus de ne pas prendre pour acquis le verdict « le rCCA est moins bon ».
         """

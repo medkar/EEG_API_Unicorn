@@ -4,7 +4,7 @@
 moteur, dans deux terminaux — le même montage que pour le P300 et l'ErrP :
 
     python src/core/server.py --mode cvep          # terminal 1 : acquiert et décode (EXIGE un
-                                                    # modèle entraîné, cf. research/app.py -> c-VEP)
+                                                    # modèle entraîné : console, page c-VEP, « Calibrer »)
     python src/stimulus/cvep.py           # terminal 2 : fait clignoter et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,

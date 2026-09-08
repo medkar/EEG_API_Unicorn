@@ -1,8 +1,8 @@
 """Moteur headless : casque Unicorn -> flux LSL. C'est le MVP de docs/SPEC.md §10.
 
-Ce fichier est le **cœur du produit** : il tourne SANS interface graphique. L'application
-pygame (`src/research/app.py`), la future console PySide6 et le code d'un étudiant sont tous, du
-point de vue du moteur, des clients qui écoutent les mêmes flux.
+Ce fichier est le **cœur du produit** : il tourne SANS interface graphique. La console PySide6,
+les fenêtres de `src/stimulus/` et le code d'un étudiant sont tous, du point de vue du moteur,
+des clients — les uns écoutent ses flux, les autres lui envoient des marqueurs.
 
 Le moteur ne garde que le **vraiment commun** : la session BrainFlow, le tampon glissant, le pont
 d'horloge, la qualité du signal, la file de commandes. Tout le reste — la séquence chauffe /
@@ -32,9 +32,9 @@ modèle, le mode refuse de démarrer plutôt que de publier des probabilités qu
 Le P300 est actif ET évoqué : il exige un modèle entraîné (comme le MI) **et** que l'application
 cliente dise au moteur QUAND chaque cible s'est allumée — c'est à ça que sert le flux entrant.
 
-Pas encore dans le moteur : c-VEP et ErrP — voir `src/core/modes/registry.py` pour le catalogue
-complet ; ils restent l'affaire de `src/research/app.py`. Pas encore non plus : le control plane
-entrant (démarrer un mode depuis le réseau). Les MARQUEURS entrants, eux, existent depuis le
+Le moteur publie les SIX modes depuis le 2026-08-21, et joue les QUATRE calibrations depuis le
+2026-09-07 — voir `src/core/modes/registry.py` pour le catalogue complet. Pas encore : le control
+plane entrant (démarrer un mode depuis le réseau). Les MARQUEURS entrants, eux, existent depuis le
 2026-08-17 : le moteur ouvre un inlet LSL dès qu'un mode qui en consomme démarre (`core/markers.py`),
 et le contrat public de ces marqueurs est dans `docs/markers.md`.
 

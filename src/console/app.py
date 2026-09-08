@@ -7,7 +7,7 @@ Lancer :
     python src/console/app.py --mode ssvep,neuro   # les deux en même temps
     python src/console/app.py --smoke              # test headless (CI), puis quitte
 
-⚠️ Ne jamais la lancer en même temps que `src/core/server.py` ni que `src/research/app.py` : le
+⚠️ Ne jamais la lancer en même temps que `src/core/server.py` : le
 casque n'accepte qu'une connexion, et les noms de flux sont un contrat public — deux moteurs
 publient sous le même nom.
 """

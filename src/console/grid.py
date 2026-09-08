@@ -5,8 +5,8 @@ l'état réel, un aperçu vivant de ce que le mode produit, s'il est publié, et
 POURQUOI (« demande des marqueurs », « verrouillé à la frame »).
 
 Les modes que le moteur ne sait pas faire sont affichés, grisés, avec leur raison. Sans eux, un
-étudiant croirait que le produit fait trois choses et ne saurait pas qu'un décodeur c-VEP validé
-l'attend dans `src/research/app.py`.
+étudiant croirait que le produit fait trois choses. Depuis le 2026-09-08, les sept tuiles sont
+toutes du moteur : cette grille EST le catalogue.
 """
 
 import os
