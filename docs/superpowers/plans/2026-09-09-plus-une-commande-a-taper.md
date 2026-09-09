@@ -699,7 +699,7 @@ fichier reste au banc d'essai. **Dis lequel dans ton rapport.**
 python src/core/server.py --smoke
 ```
 
-Attendu : **`[smoke-frontiere] VERDICT : OK`**. Le test écrit à la tâche 1, rouge sur cinq fichiers,
+Attendu : **`[smoke-frontiere] VERDICT : OK`**. Le test écrit à la tâche 1, rouge sur six fichiers,
 est maintenant vert. **Colle la ligne dans ton rapport.**
 
 - [ ] **Étape 4 : les smokes de l'archive** — les dix existants plus les trois nouveaux.
