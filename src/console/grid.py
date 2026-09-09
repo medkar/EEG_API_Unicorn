@@ -23,6 +23,10 @@ from console import PHASES_FR, SPAN_SEUILS, classement_relatif, span_correlation
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
 from core.config import NEURO_Z_SPAN  # noqa: E402
+# Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
+# ici, qui vaudrait l'ancien nom le jour d'un renommage et laisserait la tuile sur « en cours »
+# pour toujours.
+from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
 
 COLONNES = 4
 BLEU, GRIS = QColor("#4c8dff"), QColor("#8a8f9c")
@@ -312,28 +316,144 @@ def _resume(mode_state):
     return ""
 
 
+class MesureTile(QFrame):
+    """Une tuile de MESURE. Beaucoup plus courte qu'une tuile de mode, et c'est le sujet.
+
+    Une mesure ne publie aucun flux (donc pas de case « publié »), ne se démarre pas depuis la
+    grille (elle a un briefing à lire et un protocole à suivre : ça se fait sur sa page), et ne
+    produit aucune sortie en direct à prévisualiser. Il reste : ce qu'elle répond, si elle est une
+    BARRIÈRE, et où elle en est.
+    """
+
+    ouvrir = Signal(str)
+
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumHeight(130)
+
+        self.titre = QLabel(f"<b>{spec['label']}</b>")
+        self.etat = QLabel("")
+        self.detail = QLabel(spec.get("summary") or "")
+        self.detail.setWordWrap(True)
+        self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        # Le mot BARRIÈRE est le seul de cette tuile qui change un comportement : il dit qu'un
+        # échec ARRÊTE la séance. Il vient du contrat (`MesureSpec.barriere`), jamais d'une liste
+        # d'identifiants écrite ici.
+        self.marque = QLabel("BARRIÈRE — à passer AVANT le reste" if spec.get("barriere") else "")
+        self.marque.setWordWrap(True)
+        self.marque.setStyleSheet("color: #b8860b; font-size: 11px; font-weight: bold;")
+        self.bouton = QPushButton("Ouvrir")
+        self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
+
+        haut = QHBoxLayout()
+        haut.addWidget(self.titre)
+        haut.addStretch(1)
+        haut.addWidget(self.etat)
+        bas = QHBoxLayout()
+        bas.addStretch(1)
+        bas.addWidget(self.bouton)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(haut)
+        layout.addWidget(self.detail)
+        layout.addWidget(self.marque)
+        layout.addStretch(1)
+        layout.addLayout(bas)
+
+        if not spec.get("jouable"):
+            # Même point d'honnêteté que pour un mode hors moteur : montrée, grisée, avec sa
+            # raison. Une mesure décrite mais pas livrée doit se voir — sinon le produit paraît
+            # se limiter à ce qui est chargé aujourd'hui.
+            self.setEnabled(False)
+            self.etat.setText("pas livrée")
+            self.bouton.hide()
+
+    def update_from(self, etat):
+        """`etat` = `snapshot()["mesure"]` quand c'est CELLE-CI qui tourne, sinon None."""
+        if not self.spec.get("jouable"):
+            return
+        if etat is None:
+            self.etat.setText("")
+            self.detail.setText(self.spec.get("summary") or "")
+            return
+        if etat.get("phase") in PHASES_TERMINALES:
+            resultat = etat.get("resultat") or {}
+            self.etat.setText("terminée")
+            # Le verdict du MOTEUR, en clair et jamais retraduit. `barriere_franchie` ne sert ici
+            # qu'à la COULEUR : recomposer une phrase à partir du booléen ferait dire à la grille
+            # autre chose qu'à la page, sur les mêmes données.
+            self.detail.setText(resultat.get("verdict") or etat.get("probleme") or "")
+            franchie = resultat.get("barriere_franchie")
+            self.detail.setStyleSheet(
+                "font-size: 11px; color: "
+                + ("#8a8f9c" if franchie is None else
+                   ("#3fae5a" if franchie else "#e2603f")))
+            return
+        self.etat.setText("en cours")
+        self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.detail.setText(etat.get("instruction") or "")
+
+
 class ModeGrid(QWidget):
-    """Toutes les tuiles, construites UNE FOIS depuis le catalogue, mises à jour ensuite."""
+    """Toutes les tuiles, construites UNE FOIS depuis le catalogue, mises à jour ensuite.
+
+    Deux familles, deux rangées de tuiles : les MODES (ce que le produit publie sur le réseau) et
+    les MESURES (ce qu'on contrôle avant de croire à ce qu'il publie). Elles ne se mélangent pas —
+    une mesure n'a ni flux, ni case « publié », ni bouton « Démarrer » — mais elles vivent sur le
+    MÊME écran, parce que « faire le contrôle alpha » et « lancer le SSVEP » sont deux gestes de
+    la même séance, et qu'un menu séparé serait un menu qu'on oublie d'ouvrir.
+    """
 
     ouvrir = Signal(str)
     publier = Signal(str, bool)
     demarrer = Signal(str, bool)
+    ouvrir_mesure = Signal(str)
 
-    def __init__(self, catalog):
+    def __init__(self, catalog, mesures=()):
         super().__init__()
         self.tuiles = {}
-        layout = QGridLayout(self)
-        layout.setSpacing(10)
+        self.tuiles_mesure = {}
+
+        modes_layout = QGridLayout()
+        modes_layout.setSpacing(10)
         for i, spec in enumerate(catalog):
             tuile = ModeTile(spec)
             tuile.ouvrir.connect(self.ouvrir)
             tuile.publier.connect(self.publier)
             tuile.demarrer.connect(self.demarrer)
             self.tuiles[spec["id"]] = tuile
-            layout.addWidget(tuile, i // COLONNES, i % COLONNES)
-        layout.setRowStretch(len(catalog) // COLONNES + 1, 1)
+            modes_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
+
+        mesures_layout = QGridLayout()
+        mesures_layout.setSpacing(10)
+        for i, spec in enumerate(mesures):
+            tuile = MesureTile(spec)
+            tuile.ouvrir.connect(self.ouvrir_mesure)
+            self.tuiles_mesure[spec["id"]] = tuile
+            mesures_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
+
+        self.titre_mesures = QLabel(
+            "<b>Contrôles et mesures</b> — à faire AVANT de décoder : ils disent si ce que le "
+            "casque envoie vaut quelque chose. Ils ne publient rien et n'écrivent rien.")
+        self.titre_mesures.setWordWrap(True)
+        self.titre_mesures.setVisible(bool(mesures))
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.addLayout(modes_layout)
+        layout.addWidget(self.titre_mesures)
+        layout.addLayout(mesures_layout)
+        layout.addStretch(1)
 
     def update_from(self, state):
         etats = state.get("modes_state") or {}
         for mode_id, tuile in self.tuiles.items():
             tuile.update_from(etats.get(mode_id))
+        # ⚠️ Le moteur ne tient qu'UNE mesure à la fois : chaque tuile filtre sur `mode_id` plutôt
+        # que de recevoir l'état sans vérifier à qui il appartient. Sans ce filtre, le verdict du
+        # contrôle alpha s'afficherait sur la tuile du taux SSVEP dès qu'il y en aura deux.
+        mesure = state.get("mesure")
+        for mesure_id, tuile in self.tuiles_mesure.items():
+            tuile.update_from(mesure if (mesure or {}).get("mode_id") == mesure_id else None)

@@ -56,6 +56,7 @@ from console.calib_page import CalibPage  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
+from console.mesure_page import MesurePage  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
@@ -106,13 +107,20 @@ class Console(QMainWindow):
         # 1,03 s l'appel, donc 1,9 s de fenêtre gelée au démarrage quand on en fait trois. Le
         # catalogue est une DÉCLARATION — il ne change pas entre deux lignes de ce constructeur.
         catalogue = registry.catalog()
-        # Le catalogue indexé, pour retrouver le contrat d'un mode sans le resérialiser (ce qui
-        # relirait le disque : `choices_fn` charge les modèles entraînés).
+        # Le catalogue des MESURES, sérialisé par le moteur comme celui des modes : la console ne
+        # recopie ni libellés, ni briefings, ni réglages. Un appel séparé, mais sans résolution
+        # LSL derrière lui (une mesure n'a ni flux ni marqueurs) — donc rien de comparable au coût
+        # de `registry.catalog()` juste au-dessus.
+        mesures = registry.catalogue_mesures()
+        # Les catalogues indexés, pour retrouver un contrat sans le resérialiser (ce qui relirait
+        # le disque : `choices_fn` charge les modèles entraînés).
         self.catalogue = {spec["id"]: spec for spec in catalogue}
-        self.grid = ModeGrid(catalogue)
+        self.mesures = {spec["id"]: spec for spec in mesures}
+        self.grid = ModeGrid(catalogue, mesures)
         self.grid.ouvrir.connect(self.show_mode)
         self.grid.publier.connect(self._publier)
         self.grid.demarrer.connect(self._demarrer)
+        self.grid.ouvrir_mesure.connect(self.show_mesure)
         self.stack.addWidget(self.grid)
 
         self.pages = {}
@@ -137,6 +145,19 @@ class Console(QMainWindow):
             page = CalibPage(spec, self)
             page.retour.connect(self.show_grid)
             self.calib_pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
+        # Une page par MESURE que le moteur sait jouer. Même critère que pour les calibrations
+        # (`jouable`, calculé depuis le `runtime_cls` du contrat) : une mesure déclarée mais pas
+        # livrée garde sa tuile — grisée, avec sa raison — et n'a pas de page, donc son bouton ne
+        # ment pas.
+        self.mesure_pages = {}
+        for spec in mesures:
+            if not spec.get("jouable"):
+                continue
+            page = MesurePage(spec, self)
+            page.retour.connect(self.show_grid)
+            self.mesure_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
         # UNE page de contrôle de liaison pour tous les modes : les huit voies sont les mêmes,
@@ -225,7 +246,24 @@ class Console(QMainWindow):
         self._demande = {"quoi": "calibration", "mode_id": mode_id,
                          "params": dict(params or {}),
                          "retour": self.calib_pages.get(mode_id)}
-        self._montrer_contact(mode_id, "Commencer la calibration")
+        self._montrer_contact(self.catalogue.get(mode_id), "Commencer la calibration")
+
+    def demander_mesure(self, mesure_id, params):
+        """« Commencer » sur une page de mesure : même chemin, et pour une raison de plus.
+
+        Une mesure ne lit aucun marqueur et n'entre en conflit avec aucun mode démarré — il n'y a
+        donc rien à arrêter avant elle, à la différence d'une calibration. Mais le contrôle de
+        liaison, lui, s'interpose exactement pareil : le contrôle alpha calculé sur quatre voies
+        plates rend un rapport de bruit d'arrondi, et le moteur ne peut le refuser qu'APRÈS
+        37 secondes de casque. Autant le refuser avant.
+
+        ⚠️ Le `ContactPage` reçoit un `MesureSpec` sérialisé, qui n'a pas de `key_channels` — il
+        n'entoure donc aucune voie et refuse sur les huit, ce qui est exactement ce qu'on veut
+        ici : cette mesure lit quatre voies mais son verdict porte sur tout le montage.
+        """
+        self._demande = {"quoi": "mesure", "mode_id": mesure_id, "params": dict(params or {}),
+                         "retour": self.mesure_pages.get(mesure_id)}
+        self._montrer_contact(self.mesures.get(mesure_id), "Commencer la mesure")
 
     def demander_stimulus(self, mode_id):
         """« Lancer le stimulus » sur une page de mode : même chemin, sans calibration.
@@ -236,10 +274,15 @@ class Console(QMainWindow):
         """
         self._demande = {"quoi": "stimulus", "mode_id": mode_id, "params": {},
                          "retour": self.pages.get(mode_id)}
-        self._montrer_contact(mode_id, "Lancer le stimulus")
+        self._montrer_contact(self.catalogue.get(mode_id), "Lancer le stimulus")
 
-    def _montrer_contact(self, mode_id, quoi):
-        spec = self.catalogue.get(mode_id)
+    def _montrer_contact(self, spec, quoi):
+        """`spec` : le contrat SÉRIALISÉ de ce qu'on s'apprête à lancer — un mode ou une mesure.
+
+        C'est l'appelant qui le résout, plutôt que cette méthode qui chercherait un identifiant
+        dans le bon catalogue : les deux catalogues sont distincts et un identifiant seul ne dit
+        pas duquel il vient (`registry.check` refuse d'ailleurs qu'un même mot serve aux deux).
+        """
         if spec is None:
             self._demande = None
             return
@@ -266,6 +309,14 @@ class Console(QMainWindow):
         self.stack.setCurrentWidget(retour if retour is not None else self.grid)
         if demande["quoi"] == "stimulus":
             self._lancer_fenetre(demande["mode_id"], calibrer=False)
+            return
+        if demande["quoi"] == "mesure":
+            # Aucun mode à arrêter, aucune fenêtre à ouvrir : le moteur mène le protocole tout
+            # seul et la console lit son état. Un seul geste, donc — et son refus s'AFFICHE.
+            ack = self.commande("start_mesure", id=demande["mode_id"],
+                                params=demande["params"])
+            if not ack.get("accepted"):
+                self._avis_mesure(demande["mode_id"], ack.get("reason", ""))
             return
         # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration ne démarre : les deux liraient la
         # même file de marqueurs, et `submit` refuse (tâche 5). On l'arrête donc nous-mêmes plutôt
@@ -361,6 +412,22 @@ class Console(QMainWindow):
         self.commande("cancel_calibration")
         self.lanceur.arreter()
 
+    def arreter_mesure(self):
+        """« Abandonner » sur une page de mesure. Aucune fenêtre à fermer : il n'y en a pas.
+
+        C'est toute la différence avec `arreter_calibration`, qui doit tuer l'émetteur de
+        marqueurs en même temps sous peine de voir la séance suivante hériter de ses manches. Une
+        mesure n'a pas d'émetteur — le moteur affiche sa consigne dans la console, et c'est tout.
+        """
+        self.commande("cancel_mesure")
+
+    def _avis_mesure(self, mesure_id, texte, alerte=True):
+        """Affiche sur la page de la mesure ce que le moteur a répondu. Jumeau de `_avis`."""
+        print(f"[console] {mesure_id} : {texte}")
+        page = self.mesure_pages.get(mesure_id)
+        if page is not None:
+            page.montrer_avis(texte, alerte=alerte)
+
     def _avis(self, mode_id, texte, alerte=True):
         """Affiche un message sur la page de calibration du mode, s'il en a une.
 
@@ -394,6 +461,16 @@ class Console(QMainWindow):
         if page is not None:
             self.stack.setCurrentWidget(page)
 
+    def show_mesure(self, mesure_id):
+        """Ouvre la page d'une mesure. Pas de `rafraichir_choix` : une mesure ne lit aucun modèle."""
+        page = self.mesure_pages.get(mesure_id)
+        if page is not None:
+            # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la
+            # page reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une
+            # mesure vient de se terminer et que le verdict est là, à lire.
+            page.update_from(self._dernier_etat)
+            self.stack.setCurrentWidget(page)
+
     def show_mode(self, mode_id):
         page = self.pages.get(mode_id)
         if page is not None:
@@ -421,6 +498,7 @@ def fake_state():
                     "verdicts": ["ok"] * 8, "common_mode": 0.38, "reference_lost": False},
         "rest_instruction": "",
         "calibration": None,
+        "mesure": None,
         "modes_state": {
             "raw": {"id": "raw", "label": "Brut", "family": "brut", "phase": "running",
                     "published": True, "params": {}, "instruction": "", "stream": "raw",
@@ -1984,6 +2062,224 @@ def _smoke():
     cal.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid,
         "et la page de calibration ramène sur la grille, après l'abandon aussi")
+
+    # --- LA PAGE D'UNE MESURE : le contrôle alpha, de bout en bout -----------------------------
+    # Jumelle de la page de calibration, éprouvée de la même façon : sur des états FABRIQUÉS,
+    # phase par phase. Ce qui est PROPRE à cette page — et ce que les blocs ci-dessous existent
+    # pour tenir — tient en trois points : le TOP SONORE (le sujet a les yeux fermés et ne peut
+    # rien lire), la BARRIÈRE (un échec arrête la séance et l'écran doit le dire comme tel), et
+    # le RÉGLAGE renvoyé au moteur d'un clic (la boucle que la recette fait faire à la main).
+    from core.modes import alpha as mod_alpha
+
+    attendu_mesures = [s["id"] for s in registry.catalogue_mesures()]
+    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures) == ["alpha"],
+        f"la grille porte une tuile par MESURE du registre, à côté des modes "
+        f"({sorted(console.grid.tuiles_mesure)} pour {sorted(attendu_mesures)})")
+    chk(len(console.grid.tuiles) == len(registry.MODES),
+        f"…sans que les mesures se mélangent aux modes : ce sont deux catalogues, et une mesure "
+        f"n'a ni flux, ni case « publié », ni bouton « Démarrer » ({len(console.grid.tuiles)})")
+    chk("BARRIÈRE" in console.grid.tuiles_mesure["alpha"].marque.text(),
+        f"…et la tuile du contrôle alpha annonce qu'il est une BARRIÈRE, depuis le CONTRAT "
+        f"({console.grid.tuiles_mesure['alpha'].marque.text()!r})")
+
+    console.grid.tuiles_mesure["alpha"].bouton.click()
+    mes = console.stack.currentWidget()
+    chk(mes is console.mesure_pages["alpha"],
+        "cliquer la tuile ouvre la page de la mesure")
+    chk(mod_alpha.BRIEFING[0] in mes.briefing.text(),
+        "le briefing affiché vient du contrat de la mesure, pas d'un texte recopié ici")
+
+    # Le TOP SONORE, et le fait qu'il soit DIT quand il manque. C'est le point n°1 de cette page :
+    # la seconde moitié de la mesure se passe les yeux fermés, où l'écran ne sert plus à rien.
+    # La page est reconstruite contre une console SANS son — la machine qui lance ce smoke en a
+    # peut-être, et l'avertissement ne serait alors jamais exercé.
+    class _ConsoleSansSon:
+        class beeps:
+            disponible = False
+            raison = "aucune sortie audio sur cette machine"
+
+    mes_muette = MesurePage(dict(console.mesures["alpha"]), _ConsoleSansSon())
+    chk("YEUX FERMÉS" in mes_muette.audio_avertissement.text().upper()
+        and "rouvrir" in mes_muette.audio_avertissement.text(),
+        f"sans sortie audio, la page DIT que la mesure se fait les yeux fermés et qu'on ne "
+        f"saura pas quand rouvrir — plutôt que de laisser un top silencieux passer pour un "
+        f"départ manqué ({mes_muette.audio_avertissement.text()[:60]}…)")
+
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base_m = {"mode_id": "alpha", "label": "Contrôle alpha", "phase": "essais", "etape": "",
+                  "essai": 0, "total": 2, "duree_estimee_s": 37.0, "params": {},
+                  "classes": [], "resultat": None, "probleme": ""}
+        # La CHAUFFE d'abord, comme le moteur la publie réellement (15 s avant la 1re étape).
+        chauffe = {**base_m, "phase": "chauffe", "classe": "", "rappel": "",
+                   "instruction": "Le casque se stabilise…", "restant_s": 15.0}
+        console.apply_state({**state, "mesure": chauffe})
+        console.apply_state({**state, "mesure": chauffe})
+        chk(console.beeps.appels == [],
+            f"la chauffe ne sonne PAS : un top pendant la stabilisation ferait fermer les yeux "
+            f"15 s trop tôt, et la fenêtre enregistrée tomberait à côté ({console.beeps.appels})")
+
+        etapes = ["préparation", mod_alpha.OUVERT, "préparation", mod_alpha.FERME]
+        for nom in etapes:
+            etat = {**base_m, "classe": nom, "instruction": f"consigne {nom}",
+                    "rappel": "immobile", "restant_s": 3.0}
+            console.apply_state({**state, "mesure": etat})
+            # Le MÊME état, rejoué : la page est repeinte ~10 fois par seconde pendant l'étape.
+            console.apply_state({**state, "mesure": etat})
+        chk(console.beeps.appels == ["TOP"] * 4,
+            f"UN top par changement d'étape, quatre en tout, et pas un de plus sur les "
+            f"rafraîchissements répétés ({console.beeps.appels})")
+        chk(mes.consigne.text() == f"consigne {mod_alpha.FERME}"
+            and mes.etape.text() == mod_alpha.FERME and mes.rappel.text() == "immobile",
+            f"…et l'écran montre la consigne de l'étape en cours ({mes.consigne.text()!r})")
+        chk(mes.bloc_pendant.isVisibleTo(mes) and not mes.bloc_apres.isVisibleTo(mes),
+            "pendant la mesure, l'écran de verdict reste caché")
+
+        # ⚠️ LE TOP QUI COMPTE LE PLUS, et il n'est pas un changement d'ÉTAPE : la fin de « yeux
+        # fermés » fait passer le moteur en phase « mesure » (non terminale) avec une étape vide.
+        # C'est le SEUL signal qui dise « tu peux rouvrir les yeux » — sans lui, la personne
+        # attend dans le noir jusqu'à ce qu'elle se décide toute seule, ce qui contamine la
+        # dernière seconde de la fenêtre qu'on vient d'enregistrer.
+        calcul = {**base_m, "phase": "mesure", "classe": "", "essai": 2,
+                  "instruction": "Calcul du verdict…", "rappel": "", "restant_s": 0.0}
+        console.apply_state({**state, "mesure": calcul})
+        console.apply_state({**state, "mesure": calcul})
+        chk(console.beeps.appels == ["TOP"] * 5,
+            f"…plus UN à la fin de « yeux fermés » : c'est le seul signal qui dise de rouvrir "
+            f"les yeux ({console.beeps.appels})")
+        # ⚠️ Le top est assis sur `classe`, pas sur `etape` — qui reste VIDE de bout en bout sur
+        # une mesure (choix explicite de `core/modes/mesure.py`, pour ne pas faire sonner la page
+        # de CALIBRATION au hasard des noms d'étapes). Un `_maybe_beep` recopié depuis
+        # `calib_page.py` serait donc parfaitement MUET ici, sans lever quoi que ce soit.
+        chk(base_m["etape"] == "" and console.beeps.appels == ["TOP"] * 5,
+            "…et il est assis sur `classe` : `etape` reste VIDE de bout en bout sur une mesure "
+            "(choix explicite de core/modes/mesure.py), donc un `_maybe_beep` recopié depuis "
+            "calib_page.py serait parfaitement MUET ici, sans lever quoi que ce soit")
+    finally:
+        console.beeps = vrais_beeps
+
+    # LE VERDICT, et la BARRIÈRE. Les deux résultats sont produits par le VRAI code du moteur sur
+    # des signaux fabriqués — pas écrits à la main ici : un dictionnaire de résultat recopié dans
+    # ce fichier deviendrait faux en silence à la première clé ajoutée côté moteur.
+    def _verdict_alpha(avec_alpha):
+        """Rejoue `_mesurer` sur du bruit, plus une sinusoïde à 10,5 Hz si `avec_alpha`."""
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        n = int(mod_alpha.DUREE_PHASE_S * 250.0)
+
+        def fenetre(pose):
+            x = rng.normal(0.0, 8.0, (n, 8))
+            if pose:
+                t = np.arange(n) / 250.0
+                for c in (4, 5, 6, 7):
+                    x[:, c] += 4.0 * np.sin(2 * np.pi * 10.5 * t)
+            return x
+
+        runtime = mod_alpha.ControleAlpha(mod_alpha.SPEC, {}, None)
+        return runtime._mesurer([(fenetre(False), mod_alpha.OUVERT),
+                                 (fenetre(avec_alpha), mod_alpha.FERME)], 250.0)
+
+    reussi = _verdict_alpha(True)
+    fini = {**base_m, "phase": "fini", "classe": "", "instruction": "", "rappel": "",
+            "restant_s": 0.0, "essai": 2, "resultat": reussi}
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.bloc_apres.isVisibleTo(mes) and mes.verdict.text() == reussi["verdict"],
+        f"le verdict affiché est CELUI DU MOTEUR, mot pour mot ({mes.verdict.text()[:50]}…)")
+    chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
+        f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
+    chk(f"{reussi['ratio']:.2f}" in mes.details.text() and "Pz/PO7/Oz/PO8" in mes.details.text(),
+        f"le détail porte le ratio et les voies RÉELLEMENT moyennées ({mes.details.text()})")
+    chk(mes.honnetete.text() == reussi["honnetete"] and mes.honnetete.text(),
+        "la phrase d'honnêteté vient du résultat, comme pour une calibration")
+    chk("terminée" in console.grid.tuiles_mesure["alpha"].etat.text()
+        and console.grid.tuiles_mesure["alpha"].detail.text() == reussi["verdict"],
+        f"…et la TUILE porte le même verdict, sans le retraduire "
+        f"({console.grid.tuiles_mesure['alpha'].detail.text()[:40]}…)")
+
+    # LA BOUCLE FERMÉE : le pic mesuré part au moteur d'un clic. C'est ce que la recette fait
+    # aujourd'hui à la main — noter le pic sur un carnet, ouvrir la page du SSVEP, le retaper.
+    moteur_faux.commandes.clear()
+    chk(mes.appliquer_pic.isVisibleTo(mes)
+        and f"{reussi['pic_hz']:g}" in mes.appliquer_pic.text(),
+        f"le bouton propose la valeur MESURÉE, pas un texte générique "
+        f"({mes.appliquer_pic.text()!r})")
+    mes.appliquer_pic.click()
+    chk(("set_params", {"id": "ssvep", "params": {"alpha_hz": reussi["pic_hz"]}})
+        in moteur_faux.commandes,
+        f"« Appliquer » envoie le RÉGLAGE au moteur — la valeur ne se recopie plus à la main "
+        f"d'un écran à l'autre ({moteur_faux.commandes})")
+    chk(mes.reponse_pic.text() and "SSVEP" in mes.reponse_pic.text(),
+        f"…et l'écran confirme où c'est parti ({mes.reponse_pic.text()[:50]}…)")
+
+    # Le refus du moteur s'AFFICHE : `set_params` n'atteint qu'un mode DÉMARRÉ, et c'est un refus
+    # que l'étudiant rencontrera pour de vrai (le SSVEP n'a aucune raison de tourner pendant un
+    # contrôle alpha). Un bouton qui échoue en silence est la panne que ce chantier répare.
+    moteur_faux.refus["set_params"] = "« SSVEP » n'est pas démarré"
+    mes.appliquer_pic.click()
+    chk("pas démarré" in mes.reponse_pic.text(),
+        f"un refus du moteur est montré tel quel ({mes.reponse_pic.text()})")
+    moteur_faux.refus.pop("set_params")
+
+    # LA BARRIÈRE NON FRANCHIE : la phrase qui ARRÊTE, et AUCUN pic à appliquer.
+    rate = _verdict_alpha(False)
+    console.apply_state({**state, "mesure": {**fini, "resultat": rate}})
+    chk(rate["barriere_franchie"] is False and "🛑" in mes.barriere.text()
+        and "ARRÊTE" in mes.barriere.text(),
+        f"une barrière non franchie s'affiche comme un ARRÊT, pas comme un chiffre à négocier "
+        f"({mes.barriere.text()[:60]}…)")
+    chk("arrête" in mes.verdict.text().lower() and "électrodes" in mes.verdict.text().lower(),
+        f"…et le verdict dit QUOI vérifier ({mes.verdict.text()[:60]}…)")
+    chk(not mes.appliquer_pic.isVisibleTo(mes),
+        "…et AUCUN pic n'est proposé à appliquer : sur un signal sans alpha, le « pic » est le "
+        "plus grand bin d'un spectre de bruit, et l'appliquer d'un clic serait pire que le "
+        "carnet qu'on remplace")
+
+    # Une mesure ABANDONNÉE : ni verdict, ni barrière. La distinction compte — « barrière non
+    # franchie » accuse le MONTAGE, alors qu'un abandon ne dit rien du tout.
+    console.apply_state({**state, "mesure": {**base_m, "phase": "annule", "classe": "",
+                                             "instruction": "", "rappel": "", "restant_s": 0.0,
+                                             "probleme": "abandon demandé"}})
+    chk(mes.barriere.text() == "" and "interrompue" in mes.verdict.text()
+        and not mes.appliquer_pic.isVisibleTo(mes),
+        f"un abandon n'accuse PAS le montage : pas de barrière, pas de chiffre "
+        f"({mes.verdict.text()})")
+
+    # Les deux gestes qui partent au moteur, cliqués pour de vrai.
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "mesure": {**base_m, "classe": mod_alpha.FERME,
+                                             "instruction": "x", "rappel": "", "restant_s": 1.0}})
+    mes.bouton_abandon.click()
+    chk(("cancel_mesure", {}) in moteur_faux.commandes,
+        f"« Abandonner » émet `cancel_mesure` ({moteur_faux.commandes})")
+
+    # « Commencer » passe par le CONTRÔLE DE LIAISON, comme une calibration — et pour une raison
+    # de plus : quatre voies plates donneraient un rapport de bruit d'arrondi après 37 s de casque.
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    chk(console.stack.currentWidget() is console.contact,
+        "« Commencer » montre d'abord le contrôle de liaison")
+    chk(not moteur_faux.commandes,
+        f"…et RIEN n'est soumis tant qu'il n'est pas passé ({moteur_faux.commandes})")
+    console.contact.bouton_lancer.click()
+    chk(("start_mesure", {"id": "alpha", "params": {}}) in moteur_faux.commandes,
+        f"…puis « Lancer » soumet `start_mesure` ({moteur_faux.commandes})")
+    chk(console.stack.currentWidget() is mes,
+        "et on revient sur la page de la mesure, là où le refus éventuel s'affichera")
+
+    moteur_faux.refus["start_mesure"] = "une CALIBRATION est en cours"
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk("CALIBRATION" in mes.avis.text(),
+        f"un refus du moteur s'AFFICHE sur la page, pas seulement dans le terminal "
+        f"({mes.avis.text()})")
+    moteur_faux.refus.pop("start_mesure")
+
+    mes.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid,
+        "et la page de mesure ramène sur la grille")
 
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la

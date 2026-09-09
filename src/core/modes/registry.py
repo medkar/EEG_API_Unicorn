@@ -14,7 +14,7 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import cvep, errp, mi, neuro, p300, raw, ssvep  # noqa: E402
+from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 # ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
@@ -53,9 +53,12 @@ BY_ID = {spec.id: spec for spec in MODES}
 # pas importer les mesures en retour sans cycle. Rassembler les modules d'un paquet pour en faire
 # une liste est exactement ce que ce fichier fait déjà, une ligne plus haut.
 #
-# Vide tant que la première mesure n'est pas livrée : le chantier « plus une seule commande à
-# taper » y met le contrôle alpha (tâche 3) puis le taux d'émission SSVEP (tâche 9).
-MESURES = ()
+# ⚠️ L'ORDRE est celui de la séance, pas celui de la livraison : le contrôle alpha est une
+# BARRIÈRE — tant qu'il n'est pas franchi, aucune autre mesure ne veut rien dire — donc il vient
+# en premier, et l'écran le range en premier sans avoir à le savoir.
+MESURES = (
+    alpha.SPEC,         # la barrière d'entrée : les électrodes occipitales captent-elles ?
+)
 
 
 def get_mesure(mesure_id):
