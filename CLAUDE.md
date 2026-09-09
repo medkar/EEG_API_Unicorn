@@ -35,10 +35,29 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 
   Si l'envie de remonter une flèche se présente, c'est que le module visé doit DÉMÉNAGER — vers
   `core` s'il sert au décodage, vers `stimulus` s'il sert au stimulus. Ni pygame ni Qt dans `core` :
-  le moteur tourne sans écran. **Les deux INTERDITS sont vérifiés par un test**, pas par la
-  discipline : `server.py --smoke` (`[smoke-frontiere]`) parse en AST tout `src/core/**/*.py` et
-  tout `src/stimulus/**/*.py`, et échoue sur le moindre import interdit. Les deux autres lignes
-  sont des permissions : il n'y a rien à y vérifier.
+  le moteur tourne sans écran. **Les INTERDITS sont vérifiés par un test**, pas par la
+  discipline : `server.py --smoke` (`[smoke-frontiere]`) parse en AST tout `src/core/**/*.py`,
+  tout `src/stimulus/**/*.py` et tout `src/research/**/*.py`, et échoue sur le moindre import
+  interdit.
+- 🔴 **TOUT L'USAGE RÉEL SE PILOTE DEPUIS L'INTERFACE. Un utilisateur ne tape aucune commande.**
+  C'est une contrainte de conception permanente, du même rang que la frontière ci-dessus — pas une
+  fonctionnalité qu'on ajoute quand on y pense. **Une capacité livrée sans chemin graphique est une
+  tâche INCOMPLÈTE**, pas une tâche à finir plus tard.
+
+  L'« usage réel », c'est **l'acquisition, le décodage, et le flux récupérable à l'extérieur** par
+  l'application qu'écrira l'utilisateur. En sont DEHORS, et ce n'est pas une échappatoire : les
+  autotests (`--smoke`, autotests de module), qui s'adressent au développeur ; et
+  `server.py --mode X`, le moteur **sans écran**, dont c'est justement le contrat public.
+
+  **Vérifié par le même test** : rien dans `src/research/` n'importe `core.acquisition`,
+  `brainflow` ni `pygame`. Le banc d'essai peut tout CALCULER sur des fichiers archivés — c'est son
+  métier — mais ouvrir le casque ou afficher un stimulus sont des gestes d'usage réel, donc ils
+  appartiennent à l'application.
+
+  ⚠️ **Cette règle a été demandée CINQ FOIS entre juillet et septembre 2026 avant d'être écrite
+  ici.** Chaque fois elle a été traitée comme une fonctionnalité — on ajoutait un bouton — et le
+  chantier suivant repartait sans elle, donc un nouveau trou apparaissait. C'est pour ça qu'elle
+  est dans ce fichier ET dans un test : une contrainte tenue par la discipline n'est pas tenue.
 - **La console est un CLIENT du moteur**, pas le moteur : elle crée un `EngineServer`, lance sa
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :

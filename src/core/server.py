@@ -2969,6 +2969,20 @@ _FRONTIERE_STIMULUS_INTERDITS = ("research", "console", "brainflow")
 # car `core.acquisition` est un import de `core`, donc autorisé par la liste des paquets.
 _FRONTIERE_STIMULUS_MODULES_INTERDITS = ("core.acquisition",)
 
+# Ce que `src/research/` n'a pas le droit d'importer. Le banc d'essai peut tout CALCULER sur des
+# fichiers archivés — c'est son métier, et `cvep_analyze.py`, `p300_analyze.py`, `mi_compare.py`,
+# `itr.py` le font très bien — mais il ne touche NI au casque NI à un écran : ces deux gestes-là
+# sont de l'USAGE RÉEL, et l'usage réel se pilote depuis la console.
+#
+# ⚠️ **Cette règle existe parce qu'elle a été demandée CINQ FOIS sans jamais être écrite nulle
+# part.** Entre juillet et septembre 2026, l'utilisateur a redemandé cinq fois que tout se pilote
+# depuis l'interface graphique ; cinq fois la demande a été traitée comme une fonctionnalité à
+# ajouter — on ajoutait un bouton — et le chantier suivant repartait sans la règle, donc un nouveau
+# trou apparaissait. Une contrainte tenue par la discipline n'est pas tenue. Celle-ci est
+# désormais tenue par ce scanner, comme la frontière entre les paquets.
+_FRONTIERE_RESEARCH_INTERDITS = ("pygame", "brainflow")
+_FRONTIERE_RESEARCH_MODULES_INTERDITS = ("core.acquisition",)
+
 
 def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdits_re=None,
                        exacts=None):
@@ -3134,6 +3148,24 @@ def _smoke_frontiere():
             f"règle stimulus — « {source.strip()} » -> {trouve or 'rien'} "
             f"(attendu {attendu or 'rien'})")
 
+    # 1 ter. La règle de `research`, sur des extraits fabriqués. Elle diffère encore des deux
+    # autres : `pygame` y est INTERDIT — le banc d'essai n'affiche AUCUN stimulus, c'est le travail
+    # de `stimulus/` — alors qu'il est autorisé là-bas. Calculer, en revanche, reste entièrement
+    # libre : c'est tout le métier de `research/`.
+    for source, attendu in (
+            ("from core.acquisition import UnicornAcquisition\n", ["core.acquisition"]),
+            ("import pygame\n", ["pygame"]),
+            ("import brainflow\n", ["brainflow"]),
+            ("from core.config import DATA_DIR\n", []),               # calculer reste libre
+            ("import numpy as np\n", []),
+            ("from stimulus.refresh import measure_refresh\n", [])):  # research -> stimulus, OK
+        trouve = [p for _ligne, p in _imports_interdits(
+            source, interdits=_FRONTIERE_RESEARCH_INTERDITS, interdits_re="",
+            exacts=_FRONTIERE_RESEARCH_MODULES_INTERDITS)]
+        chk(trouve == attendu,
+            f"règle research — « {source.strip()} » -> {trouve or 'rien'} "
+            f"(attendu {attendu or 'rien'})")
+
     # 2. Et maintenant le vrai `src/core/`.
     racine = os.path.dirname(os.path.abspath(__file__))
     fautes, fichiers_vus = _scanner(racine, "core", None, None)
@@ -3149,6 +3181,18 @@ def _smoke_frontiere():
         chk(vus_stim >= 3, f"…et il contient au moins les trois fenêtres ({vus_stim} fichiers)")
         fautes += fautes_stim
         fichiers_vus += vus_stim
+
+    # 4. `src/research/` : le banc d'essai ne touche ni au casque ni à un écran.
+    racine_res = os.path.join(os.path.dirname(racine), "research")
+    if os.path.isdir(racine_res):
+        fautes_res, vus_res = _scanner(racine_res, "research", _FRONTIERE_RESEARCH_INTERDITS,
+                                       "", _FRONTIERE_RESEARCH_MODULES_INTERDITS)
+        if fautes_res:
+            print("[smoke-frontiere]   → RÈGLE : un utilisateur ne tape pas de commande. Si cette "
+                  "capacité lui est destinée, elle doit avoir un chemin dans la console ; sinon "
+                  "elle appartient à `archive/`.")
+        fautes += fautes_res
+        fichiers_vus += vus_res
 
     for faute in fautes:
         print(f"[smoke-frontiere] ÉCHEC : {faute}")
