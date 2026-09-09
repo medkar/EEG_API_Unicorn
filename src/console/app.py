@@ -57,6 +57,7 @@ from console.demarrage import SYNTHETIQUE, choisir_source  # noqa: E402
 from stimulus import registry as stimulus_registry  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
+from console.flux_page import FluxPage  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mesure_page import MesurePage  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
@@ -123,6 +124,7 @@ class Console(QMainWindow):
         self.grid.publier.connect(self._publier)
         self.grid.demarrer.connect(self._demarrer)
         self.grid.ouvrir_mesure.connect(self.show_mesure)
+        self.grid.ouvrir_flux.connect(self.show_flux)
         self.stack.addWidget(self.grid)
 
         self.pages = {}
@@ -169,6 +171,15 @@ class Console(QMainWindow):
         self.contact.annuler.connect(self._contact_annule)
         self.stack.addWidget(self.contact)
 
+        # « Ce que voit ton application » : le flux sortant, lu PAR LSL. ⚠️ On lui passe `self`
+        # pour qu'elle ait un canal de COMMANDES (l'enregistrement de séance) — elle n'en garde
+        # que `self.commande` et jamais le moteur, cf. l'en-tête de `console/flux_page.py`. C'est
+        # tout l'intérêt de cette page : si elle lisait `snapshot()`, elle afficherait des données
+        # pendant que le réseau est muet, c'est-à-dire exactement la panne qu'on vient y voir.
+        self.flux_page = FluxPage(self)
+        self.flux_page.retour.connect(self.show_grid)
+        self.stack.addWidget(self.flux_page)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -176,9 +187,25 @@ class Console(QMainWindow):
         layout.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
+        # Branché APRÈS le dernier `addWidget` : le tout premier en émet un lui aussi (la pile
+        # passe de « vide » à « la grille »), et le brancher plus haut ferait donc tourner ce
+        # nettoyage avant que `self.flux_page` n'existe.
+        self.stack.currentChanged.connect(self._page_changee)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(REFRESH_MS)
+
+    def _page_changee(self, _index):
+        """Quitter la page des flux LÂCHE son inlet. Un seul endroit, quel que soit le chemin.
+
+        Un inlet laissé ouvert derrière une page qu'on ne regarde plus est un abonné que
+        l'émetteur croit servir — l'habitude exacte que le moteur corrige de son côté
+        (`_libere_marker_inlet`). Écrit ici plutôt que dans chaque `show_*` : il y a six façons de
+        quitter cette page, et la septième qu'on ajoutera demain oublierait la ligne.
+        """
+        if self.stack.currentWidget() is not self.flux_page:
+            self.flux_page.quitter()
 
     def refresh(self):
         """Sonde le moteur et redistribue l'état. Le SEUL endroit qui appelle `snapshot()`."""
@@ -459,6 +486,9 @@ class Console(QMainWindow):
         qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
         """
         self.lanceur.arreter()
+        # L'inlet de la page des flux part avec le reste : elle peut être la page COURANTE au
+        # moment où l'on ferme, donc `_page_changee` ne passera jamais.
+        self.flux_page.quitter()
         if self.engine is not None:
             self.engine.close()
         super().closeEvent(event)
@@ -480,6 +510,16 @@ class Console(QMainWindow):
             # mesure vient de se terminer et que le verdict est là, à lire.
             page.update_from(self._dernier_etat)
             self.stack.setCurrentWidget(page)
+
+    def show_flux(self):
+        """Ouvre « Ce que voit ton application ». La découverte LSL se fait à l'ENTRÉE.
+
+        Même règle que `show_mode` et `rafraichir_choix` : résoudre le réseau coûte sa borne
+        entière, donc ça se fait sur un ÉVÉNEMENT — jamais dans le rafraîchissement périodique,
+        qui gèlerait la fenêtre 0,3 s dix fois par seconde.
+        """
+        self.flux_page.entrer()
+        self.stack.setCurrentWidget(self.flux_page)
 
     def show_mode(self, mode_id):
         page = self.pages.get(mode_id)
@@ -2453,6 +2493,151 @@ def _smoke():
     console.refresh()
     chk(moteur_faux.appels == 1,
         f"refresh() a consulté le moteur (appels={moteur_faux.appels})")
+
+    # --- « Ce que voit ton application » : le flux sortant, LU PAR LSL ---------------------
+    #
+    # ⚠️ **Aucun vrai flux LSL ici.** On injecte un faux inlet de la même surface que `FluxLSL`
+    # (`nom`, `type`, `voies`, `tirer()`, `fermer()`). Un smoke qui dépend du réseau est un smoke
+    # qu'on finit par désactiver — et ce projet interdit déjà de lancer deux programmes à la fois,
+    # donc un vrai flux y serait de toute façon fragile : les noms sont un contrat PUBLIC, un
+    # moteur oublié sur le poste répondrait à la place de celui qu'on teste.
+    class _FauxInlet:
+        def __init__(self, voies, echantillons, nom="EEG_API_Unicorn_decoded_ssvep"):
+            self.nom, self.type, self.voies = nom, "Decoded", list(voies)
+            self.echantillons = list(echantillons)
+            self.ferme = 0
+
+        def tirer(self):
+            lus, self.echantillons = self.echantillons, []
+            return [(1000.0 + i, valeurs) for i, valeurs in enumerate(lus)]
+
+        def fermer(self):
+            self.ferme += 1
+
+    class _FauxInfo:
+        """Ce que `resolve_streams` rendrait, réduit à ce que la page en lit."""
+
+        def __init__(self, nom, type_="Decoded", voies=2, source=""):
+            self._n, self._t, self._v, self._s = nom, type_, voies, source
+
+        def name(self):
+            return self._n
+
+        def type(self):
+            return self._t
+
+        def channel_count(self):
+            return self._v
+
+        def source_id(self):
+            return self._s
+
+    from console.flux_page import FluxPage, _ligne
+
+    page_flux = console.flux_page
+    chk(isinstance(page_flux, FluxPage), "la console porte une page « flux sortant »")
+    # LES DEUX COUTURES, posées AVANT le premier clic : à partir d'ici, plus une seule ligne de
+    # ce smoke ne touche le réseau. Sans elles, `chercher()` résoudrait pour de vrai — et
+    # trouverait les flux du moteur qu'un autre bloc de ce même smoke fait tourner, ce qui rend le
+    # test dépendant de l'ordre d'exécution ET du poste.
+    visibles = []
+    inlets = []
+    page_flux._decouvrir = lambda: list(visibles)
+
+    def _ouvre_faux(info):
+        inlets.append(_FauxInlet(voies=["target_index", "confidence"],
+                                 echantillons=[[2.0, 0.81]], nom=info.name()))
+        return inlets[-1]
+
+    page_flux._fabrique_inlet = _ouvre_faux
+
+    console.grid.bouton_flux.click()
+    chk(console.stack.currentWidget() is page_flux,
+        "…et la grille y mène par un bouton — sans quoi la capacité existerait sans chemin")
+    chk(page_flux.etat.text() and "aucun" in page_flux.etat.text().lower(),
+        f"aucun flux visible se DIT, plutôt qu'un panneau vide ({page_flux.etat.text()})")
+
+    # La découverte de bout en bout : la liste se remplit, on choisit PAR NOM, un inlet s'ouvre.
+    visibles = [_FauxInfo("EEG_API_Unicorn_decoded_ssvep", voies=6),
+                _FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
+    page_flux.chercher()
+    chk(page_flux.choix.count() == 2
+        and "EEG_API_Unicorn_decoded_ssvep" in page_flux.choix.itemText(0),
+        f"la liste porte les flux découverts, le NOM COMPLET en tête "
+        f"({[page_flux.choix.itemText(i) for i in range(page_flux.choix.count())]})")
+    chk(page_flux.choisir("EEG_API_Unicorn_decoded_ssvep") and len(inlets) == 1,
+        "choisir un flux PAR SON NOM ouvre un inlet dessus")
+    page_flux.rafraichir()
+    chk("0.81" in page_flux.lignes.toPlainText(),
+        f"…et ce qui en sort défile ({page_flux.lignes.toPlainText()!r})")
+
+    page_flux._inlet = _FauxInlet(voies=["target_index", "confidence"],
+                                  echantillons=[[2.0, 0.81]])
+    page_flux.rafraichir()
+    chk("target_index" in page_flux.entetes.text() and "0.81" in page_flux.lignes.toPlainText(),
+        f"le panneau montre les VOIES et les VALEURS du flux choisi "
+        f"({page_flux.entetes.text()!r} / {page_flux.lignes.toPlainText()!r})")
+
+    # ⚠️ LA règle de cette page, en trois assertions qui se complètent. La première est littérale,
+    # la deuxième ferme la porte de côté (un objet stocké par lequel l'état serait ATTEIGNABLE),
+    # la troisième est la seule qui prouve vraiment quelque chose : un état COMPLET du moteur
+    # arrive, et le panneau reste vide. Lire `snapshot()` donnerait un panneau qui défile pendant
+    # que le réseau est muet — c'est-à-dire exactement la panne qu'on vient regarder ici.
+    chk(not hasattr(page_flux, "engine") and "engine" not in page_flux.__dict__,
+        "…et il ne tient AUCUNE référence vers le moteur : il lit le réseau comme un client")
+    porteurs = [nom for nom, valeur in page_flux.__dict__.items()
+                if hasattr(valeur, "snapshot") or hasattr(valeur, "recent_window")]
+    chk(not porteurs,
+        f"…ni aucun objet par lequel l'état du moteur serait ATTEIGNABLE ({porteurs}) — la "
+        f"console garde un canal de commandes, jamais une source d'état")
+    page_flux._inlet = None
+    page_flux._derniers = []
+    page_flux.lignes.setPlainText("")
+    page_flux.entetes.setText("")
+    page_flux.update_from(fake_state())      # un état COMPLET, avec des scores plein `modes_state`
+    chk(not page_flux.lignes.toPlainText() and not page_flux.entetes.text(),
+        f"…et un état complet du moteur ne remplit RIEN sans inlet : la preuve que le panneau "
+        f"vient du RÉSEAU ({page_flux.lignes.toPlainText()!r})")
+    # Des flux VISIBLES mais aucun d'ouvert : troisième phrase, distincte des deux autres. Sans
+    # elle, l'étudiant qui a bien trouvé ses flux mais n'en a choisi aucun lirait le message
+    # « aucun flux sur le réseau » et irait chercher une panne qui n'existe pas.
+    chk("choisis" in page_flux.etat.text().lower() and "2 flux" in page_flux.etat.text(),
+        f"…et quand des flux existent sans qu'aucun soit ouvert, la page dit d'en CHOISIR un "
+        f"({page_flux.etat.text()})")
+
+    # Quitter la page LÂCHE l'inlet — un abonné LSL laissé derrière une page qu'on ne regarde
+    # plus est l'habitude que le moteur corrige de son côté (`_libere_marker_inlet`).
+    inlet_espion = _FauxInlet(voies=["a"], echantillons=[])
+    page_flux._inlet = inlet_espion
+    console.show_grid()
+    chk(inlet_espion.ferme == 1 and page_flux._inlet is None,
+        f"quitter la page ferme le flux ouvert ({inlet_espion.ferme} fermeture(s))")
+
+    # Un flux MUET (l'émetteur est là, il n'envoie rien) ne doit pas se lire comme un flux absent :
+    # c'est la différence entre « mon mode ne décode pas » et « mon mode n'est pas publié », et
+    # c'est tout ce qu'un étudiant vient chercher ici.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[])
+    page_flux.rafraichir()
+    chk("rien" in page_flux.etat.text().lower() and "ouvert" in page_flux.etat.text().lower(),
+        f"un flux OUVERT mais muet le dit, sans se confondre avec « aucun flux » "
+        f"({page_flux.etat.text()})")
+
+    # Un émetteur qui MEURT lève (`recover=False`, cf. `FluxLSL`). La page doit le dire et lâcher,
+    # jamais garder un inlet mort en se croyant connectée — la panne des 4 pannes de `MarkerInlet`.
+    class _InletMort(_FauxInlet):
+        def tirer(self):
+            raise RuntimeError("the stream has been lost.")
+
+    page_flux._inlet = _InletMort(voies=["a"], echantillons=[])
+    page_flux.rafraichir()
+    chk(page_flux._inlet is None and "disparu" in page_flux.etat.text().lower(),
+        f"un émetteur disparu est LÂCHÉ et DIT ({page_flux.etat.text()[:60]})")
+
+    # Les marqueurs voyagent en CHAÎNES : `float(valeur)` lèverait ici, dans le fil Qt, sur un flux
+    # parfaitement normal — et emporterait toute la console avec lui.
+    texte = _ligne(1234.5678, ['{"mode": "cvep", "event": "cycle"}'])
+    chk("cvep" in texte and "1234.568" in texte,
+        f"un échantillon TEXTE (flux de marqueurs) s'affiche sans lever ({texte})")
 
     # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
     # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet

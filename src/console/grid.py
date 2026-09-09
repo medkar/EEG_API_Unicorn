@@ -410,6 +410,7 @@ class ModeGrid(QWidget):
     publier = Signal(str, bool)
     demarrer = Signal(str, bool)
     ouvrir_mesure = Signal(str)
+    ouvrir_flux = Signal()
 
     def __init__(self, catalog, mesures=()):
         super().__init__()
@@ -440,12 +441,28 @@ class ModeGrid(QWidget):
         self.titre_mesures.setWordWrap(True)
         self.titre_mesures.setVisible(bool(mesures))
 
+        # La sortie du produit, vue du DEHORS. Ce n'est ni un mode ni une mesure — c'est le
+        # réseau —, donc pas une tuile de plus : une ligne à part, en bas, qui répond à la seule
+        # question qu'un étudiant se pose une fois son décodage lancé (« est-ce que mon appli
+        # reçoit quelque chose ? ») et à laquelle la console ne savait pas répondre.
+        self.bouton_flux = QPushButton("Ce que voit ton application")
+        self.bouton_flux.setToolTip(
+            "Ouvre les flux LSL du réseau et montre ce qui en sort, EN LISANT COMME UN CLIENT. "
+            "Si ce panneau reste vide alors qu'un mode décode, la panne est côté réseau.")
+        self.bouton_flux.clicked.connect(self.ouvrir_flux)
+        ligne_flux = QHBoxLayout()
+        ligne_flux.addWidget(QLabel(
+            "<b>La sortie</b> — ce que ton application reçoit vraiment, lu sur le réseau."))
+        ligne_flux.addStretch(1)
+        ligne_flux.addWidget(self.bouton_flux)
+
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.addLayout(modes_layout)
         layout.addWidget(self.titre_mesures)
         layout.addLayout(mesures_layout)
         layout.addStretch(1)
+        layout.addLayout(ligne_flux)
 
     def update_from(self, state):
         etats = state.get("modes_state") or {}
