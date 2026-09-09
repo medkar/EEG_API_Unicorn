@@ -25,7 +25,7 @@ casse de mille façons, aucune ne doit fermer la console.
 import os
 import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -191,6 +191,9 @@ class FluxPage(QWidget):
         self._inlet = None            # `FluxLSL` ouvert, ou None
         self._infos = []              # les `StreamInfo` de la dernière découverte
         self._derniers = []           # les dernières lignes reçues, les plus récentes en bas
+        # Le sens du bouton d'enregistrement, tel que le MOTEUR l'a dit au dernier état reçu.
+        # Jamais une bascule tenue ici : elle se désynchroniserait au premier refus.
+        self._enregistre = False
 
         entete = QHBoxLayout()
         self.bouton_retour = QPushButton("← Modes")
@@ -234,10 +237,40 @@ class FluxPage(QWidget):
         flux_layout.addWidget(self.entetes)
         flux_layout.addWidget(self.lignes, 1)
 
+        # --- enregistrer la séance ------------------------------------------------------------
+        # ⚠️ **C'est le MOTEUR qui écrit**, sur commande : la console reste un client qui ne
+        # touche jamais au disque, exactement comme pour `save_calibration`. Elle envoie
+        # `start_enregistrement` / `stop_enregistrement` et LIT où ça écrit — elle ne compose
+        # aucun chemin et n'ouvre aucun fichier.
+        self.bloc_enregistrement = QGroupBox("Enregistrer cette séance")
+        pourquoi = QLabel(
+            "Écrit les verdicts du moteur dans un fichier, une ligne par décision publiée, "
+            "horodatée sur la MÊME horloge que le « Journal de séance » de la fenêtre de "
+            "stimulus. C'est le second des deux fichiers qu'il faut pour dépouiller une séance "
+            "après coup : sans lui, il ne reste que ce qui a défilé à l'écran.")
+        pourquoi.setWordWrap(True)
+        pourquoi.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.bouton_enregistrer = QPushButton("Enregistrer les verdicts")
+        self.bouton_enregistrer.clicked.connect(self._basculer_enregistrement)
+        self.etat_enregistrement = QLabel("")
+        self.etat_enregistrement.setWordWrap(True)
+        # Sélectionnable à la souris : c'est un CHEMIN, et le geste suivant est de le copier pour
+        # aller ouvrir le fichier. Un chemin qu'on doit retaper à la main est un chemin qu'on
+        # retape faux.
+        self.etat_enregistrement.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ligne_enr = QHBoxLayout()
+        ligne_enr.addWidget(self.bouton_enregistrer)
+        ligne_enr.addStretch(1)
+        enr_layout = QVBoxLayout(self.bloc_enregistrement)
+        enr_layout.addWidget(pourquoi)
+        enr_layout.addLayout(ligne_enr)
+        enr_layout.addWidget(self.etat_enregistrement)
+
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
         layout.addWidget(explication)
         layout.addWidget(self.bloc_flux, 1)
+        layout.addWidget(self.bloc_enregistrement)
 
         self._dire_etat()
 
@@ -382,17 +415,83 @@ class FluxPage(QWidget):
         self.etat.setText(f"{len(self._infos)} flux visible(s) — choisis-en un dans la liste "
                           f"pour voir ce qu'il envoie.")
 
+    # --- enregistrer la séance : la console DEMANDE, le moteur écrit -------------------------
+
+    def _basculer_enregistrement(self):
+        """Un seul bouton pour les deux gestes : ce qui est en cours décide lequel.
+
+        Le sens du clic se lit sur l'ÉTAT REÇU (`_enregistre`), jamais sur une bascule tenue ici :
+        une variable locale se désynchroniserait du moteur au premier refus, et le bouton
+        demanderait alors l'inverse de ce qu'il annonce.
+
+        ⚠️ Le refus du moteur est AFFICHÉ. Il en existe des vrais et ils sont utiles : « ce mode
+        n'est pas démarré », « un enregistrement est déjà en cours ». Un bouton qui échoue en
+        silence est la panne que ce chantier répare — la recette du projet a relevé cinq clics
+        d'affilée sur un bouton qui refusait correctement, mais dans le terminal.
+        """
+        if self.commande is None:
+            self.etat_enregistrement.setText("aucun moteur (mode test) : rien à enregistrer.")
+            return
+        if self._enregistre:
+            ack = self.commande("stop_enregistrement")
+        else:
+            flux = self._inlet.nom if self._inlet is not None else ""
+            if not flux:
+                self.etat_enregistrement.setText(
+                    "Choisis d'abord le flux à enregistrer dans la liste ci-dessus : le moteur "
+                    "enregistre les verdicts d'UN mode, pas tout le réseau.")
+                return
+            ack = self.commande("start_enregistrement", stream=flux)
+        if not ack.get("accepted"):
+            self.etat_enregistrement.setText(ack.get("reason", ""))
+            self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+
+    def _montrer_enregistrement(self, etat):
+        """Peint l'état de l'enregistrement TEL QUE LE MOTEUR le publie. Ne déduit rien.
+
+        ⚠️ Le chemin vient d'ici et de nulle part ailleurs. L'accusé de `start_enregistrement` n'en
+        porte volontairement AUCUN (cf. `server.submit`) : deux clics dans la même fenêtre de
+        sondage sont tous les deux acceptés, et le second annoncerait un fichier que la boucle
+        refuse de créer. Ce champ-là, lui, est écrit par le fil qui écrit le fichier.
+        """
+        self._enregistre = bool((etat or {}).get("actif"))
+        self.bouton_enregistrer.setText(
+            "Arrêter l'enregistrement" if self._enregistre else "Enregistrer les verdicts")
+        if not etat:
+            return
+        if etat.get("probleme"):
+            self.etat_enregistrement.setText(
+                f"⚠ enregistrement INTERROMPU : {etat['probleme']} — {etat.get('lignes', 0)} "
+                f"verdict(s) tout de même sauvés dans {etat.get('chemin', '')}")
+            self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+            return
+        self.etat_enregistrement.setStyleSheet("color: #8a8f9c;")
+        if self._enregistre:
+            self.etat_enregistrement.setText(
+                f"en cours — {etat.get('lignes', 0)} verdict(s) écrits dans "
+                f"{etat.get('chemin', '')}")
+        else:
+            self.etat_enregistrement.setText(
+                f"terminé — {etat.get('lignes', 0)} verdict(s) dans {etat.get('chemin', '')}. "
+                f"Pour dépouiller la séance, ce fichier se joint au journal de la fenêtre de "
+                f"stimulus sur la colonne « t ».")
+
     # --- le cycle de la page ------------------------------------------------------------------
 
     def update_from(self, state):
         """Appelée à ~10 Hz par la console tant que cette page est devant.
 
-        ⚠️ **`state` n'alimente PAS le panneau de flux.** Il est reçu parce que toutes les pages
-        le reçoivent, et il ne sert qu'à ce que la page a d'autre à montrer. Les valeurs qui
-        défilent viennent de `rafraichir()`, donc du réseau, et de nulle part ailleurs — un test
-        du smoke le prouve en passant un état complet du moteur et en vérifiant que rien ne
-        s'affiche.
+        ⚠️ **`state` n'alimente PAS le panneau de flux.** Il ne sert QU'À l'enregistrement — un
+        fichier écrit par le moteur, dont seul le moteur connaît le chemin et le compte. Les
+        valeurs qui défilent, elles, viennent de `rafraichir()`, donc du réseau, et de nulle part
+        ailleurs : le smoke le prouve en passant un état complet du moteur et en vérifiant que le
+        panneau reste vide.
+
+        Les deux blocs de cette page lisent donc deux sources différentes, et c'est exactement ce
+        qu'ils doivent faire — l'un montre ce qui SORT (donc le réseau), l'autre ce que le moteur
+        ÉCRIT (donc le moteur).
         """
+        self._montrer_enregistrement((state or {}).get("enregistrement"))
         self.rafraichir()
 
     def entrer(self):

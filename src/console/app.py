@@ -549,6 +549,10 @@ def fake_state():
         "rest_instruction": "",
         "calibration": None,
         "mesure": None,
+        # `None` = aucun enregistrement n'a jamais été demandé sur ce moteur. La clé EXISTE quand
+        # même : une page qui la lit doit voir la même forme d'état ici et en séance, sinon le
+        # smoke ne couvre pas le chemin qu'un étudiant emprunte.
+        "enregistrement": None,
         "modes_state": {
             "raw": {"id": "raw", "label": "Brut", "family": "brut", "phase": "running",
                     "published": True, "params": {}, "instruction": "", "stream": "raw",
@@ -2638,6 +2642,67 @@ def _smoke():
     texte = _ligne(1234.5678, ['{"mode": "cvep", "event": "cycle"}'])
     chk("cvep" in texte and "1234.568" in texte,
         f"un échantillon TEXTE (flux de marqueurs) s'affiche sans lever ({texte})")
+
+    # --- enregistrer la séance : la console DEMANDE, le MOTEUR écrit -----------------------
+    #
+    # ⚠️ Ce que ce bloc protège n'est pas le fichier (il est éprouvé côté moteur, avec l'empreinte
+    # de `data/` de part et d'autre) : c'est que la console reste un CLIENT. Elle envoie deux
+    # commandes et LIT un état ; elle ne compose aucun chemin et n'ouvre aucun fichier.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[],
+                                  nom="EEG_API_Unicorn_decoded_ssvep")
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(("start_enregistrement", {"stream": "EEG_API_Unicorn_decoded_ssvep"})
+        in moteur_faux.commandes,
+        f"« Enregistrer » demande au MOTEUR d'écrire, en nommant le flux OUVERT "
+        f"({moteur_faux.commandes})")
+    ecritures = [n for n, _p in moteur_faux.commandes if "enregistr" in n]
+    chk(ecritures == ["start_enregistrement"],
+        f"…et c'est TOUT ce que la console fait : aucune écriture de son côté ({ecritures})")
+
+    # L'état reçu retourne le bouton ET donne le chemin. ⚠️ Le chemin vient de l'ÉTAT, jamais de
+    # l'accusé : `start_enregistrement` n'en promet aucun (deux clics dans la même fenêtre de
+    # sondage sont tous deux acceptés, et le second annoncerait un fichier jamais créé).
+    page_flux.update_from({**fake_state(), "enregistrement": {
+        "actif": True, "chemin": "seances/moteur_decoded_ssvep_20260909-101500.jsonl",
+        "lignes": 42, "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    chk("Arrêter" in page_flux.bouton_enregistrer.text()
+        and "42" in page_flux.etat_enregistrement.text()
+        and "seances/" in page_flux.etat_enregistrement.text(),
+        f"pendant l'enregistrement, le bouton s'inverse et l'écran dit OÙ et COMBIEN "
+        f"({page_flux.bouton_enregistrer.text()} / {page_flux.etat_enregistrement.text()})")
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(("stop_enregistrement", {}) in moteur_faux.commandes,
+        f"…et le même bouton l'ARRÊTE : le sens vient de l'état reçu, pas d'une bascule tenue "
+        f"dans l'interface, qui se désynchroniserait au premier refus ({moteur_faux.commandes})")
+
+    # Un refus du moteur s'AFFICHE. La recette du projet a relevé cinq clics d'affilée sur un
+    # bouton qui refusait correctement — dans le terminal.
+    moteur_faux.refus["start_enregistrement"] = "« SSVEP » n'est pas démarré"
+    page_flux.update_from({**fake_state(), "enregistrement": None})
+    page_flux.bouton_enregistrer.click()
+    chk("pas démarré" in page_flux.etat_enregistrement.text(),
+        f"un refus du moteur s'affiche SUR LA PAGE ({page_flux.etat_enregistrement.text()})")
+    moteur_faux.refus.clear()
+
+    # Sans flux ouvert, on ne devine PAS lequel enregistrer : le moteur enregistre les verdicts
+    # d'UN mode, pas tout le réseau. On le dit, et on n'envoie rien.
+    page_flux._inlet = None
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(not moteur_faux.commandes and "Choisis" in page_flux.etat_enregistrement.text(),
+        f"sans flux choisi, rien n'est envoyé et la page dit quoi faire "
+        f"({page_flux.etat_enregistrement.text()[:50]})")
+
+    # Un enregistrement TERMINÉ garde son chemin à l'écran : c'est ce qu'on vient chercher pour
+    # dépouiller. Un écran qui l'oublie au clic « Arrêter » oblige à fouiller le dossier.
+    page_flux.update_from({**fake_state(), "enregistrement": {
+        "actif": False, "chemin": "seances/fini.jsonl", "lignes": 7,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    chk("fini.jsonl" in page_flux.etat_enregistrement.text()
+        and "Enregistrer" in page_flux.bouton_enregistrer.text(),
+        f"…et une fois terminé le chemin RESTE lisible ({page_flux.etat_enregistrement.text()})")
 
     # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
     # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet

@@ -68,6 +68,7 @@ chaque flash sur `EEG_API_Unicorn_stim`) et qu'un modèle entraîné est exigé 
 """
 
 import argparse
+import json
 import math
 import os
 import queue
@@ -83,8 +84,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
                     MARKER_LATE_S, MARKER_STREAM_DEFAULT, MI_WINDOW_S, NEURO_WINDOW_S,
-                    TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies, json_float,
-                    nom_retenu, propose_frequencies, reference_lost, use_utf8_console)
+                    SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
+                    empreinte_dossier, json_float, nom_retenu, propose_frequencies,
+                    reference_lost, use_utf8_console)
 from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
                     StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
                     verdict_from_sigma)
@@ -151,6 +153,140 @@ def _calibration_lit_les_marqueurs(calib):
     return isinstance(cls, type) and issubclass(cls, MarkerCalibrationRuntime)
 
 
+class _Enregistrement:
+    """Une séance en train de s'écrire : un JSONL, **une ligne par DÉCISION PUBLIÉE**.
+
+    ⚠️ **C'est le MOTEUR qui écrit, jamais la console.** La console est un client : elle envoie
+    `start_enregistrement` et lit l'état, elle ne touche pas au disque — exactement le partage de
+    `save_calibration`. Et l'écriture se fait sur le fil de la BOUCLE, comme tout ce qui a un
+    effet : `submit` ne fait que mettre en file.
+
+    ⚠️ **Le fichier ne va pas dans `data/`** (cf. `config.SEANCES_DIR`) : ce sont des verdicts de
+    séance, ni un modèle ni un enregistrement EEG, et `data/` garde son autorité d'écriture unique.
+
+    ⚠️ **Une ligne par décision PUBLIÉE, pas par tour de boucle**, et c'est toute la subtilité de
+    `noter`. Les six modes reconstruisent leur dictionnaire de sortie à CHAQUE publication ; un
+    tour où le mode n'a rien publié (fenêtre incomplète, époque hors tampon, mode encore en repos)
+    rend donc le MÊME objet qu'au tour d'avant. On compare par IDENTITÉ, et on n'écrit que du
+    neuf : sinon le fichier porterait une décision par tour de boucle, et un mode qui n'émet que
+    44 % du temps — le régime NORMAL du SSVEP, mesuré le 2026-07-27 — se relirait à 100 %. Le
+    fichier mentirait précisément sur la grandeur qu'on vient y chercher.
+
+    ⚠️ Cette règle repose sur une propriété des modes (« publier reconstruit la sortie ») que le
+    smoke pin par un runtime factice : le mode #7 qui MUTERAIT son dict en place perdrait des
+    lignes en silence. C'est écrit ici et vérifié là-bas, pas laissé à la discipline.
+
+    L'horodatage est celui que le mode a donné à son publieur — donc l'horloge LSL, la MÊME que le
+    journal d'une fenêtre de stimulus (`stimulus/cvep.py --log`). C'est ce qui rend la jointure des
+    deux fichiers purement numérique, et c'est la raison d'être de tout ceci (recette 2.9).
+    """
+
+    def __init__(self, chemin, mode_id, flux):
+        self.chemin = chemin
+        self.mode_id = mode_id
+        self.flux = flux
+        self.lignes = 0          # verdicts écrits — ni l'en-tête ni le bilan ne comptent
+        self.actif = False
+        self.probleme = ""
+        self._fichier = None
+        self._derniere = None    # l'OBJET de la dernière sortie notée, cf. le ⚠️ de la classe
+
+    def ouvrir(self, runtime, instance="", fs_hz=0.0):
+        """Crée le fichier et écrit l'en-tête. Lève si le disque refuse — et c'est voulu.
+
+        Le seul endroit de cette classe qui a le droit de lever : `_start_enregistrement` en fait
+        un refus AFFICHÉ. Un dossier non inscriptible doit se dire au moment du clic, pas à la fin
+        d'une séance qu'on croyait enregistrée.
+        """
+        os.makedirs(os.path.dirname(self.chemin) or ".", exist_ok=True)
+        # "a" et non "w" : `chemin_libre` garantit déjà que le nom est neuf, et l'ajout est le
+        # mode qui ne peut pas détruire une séance sur un nom qu'on aurait mal calculé.
+        self._fichier = open(self.chemin, "a", encoding="utf-8")
+        self.actif = True
+        from pylsl import local_clock
+
+        self._ecrire({
+            "kind": "header",
+            "t": float(local_clock()),
+            "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "flux": self.flux,
+            "mode": self.mode_id,
+            "instance": instance,
+            "fs_hz": float(fs_hz),
+            # Les voies et les réglages EN VIGUEUR au départ. Sans eux, une colonne de verdicts ne
+            # se relit pas six mois plus tard : « score_15Hz » n'existe que pour ce jeu de
+            # fréquences-là, et c'est le genre de contexte qu'on croit toujours se rappeler.
+            "voies": list(runtime.channels()),
+            "params": {k: (list(v) if isinstance(v, tuple) else v)
+                       for k, v in dict(runtime.params).items()},
+            # ⚠️ DIT, pas supposé : un mode peut décoder sans PUBLIER (case « publié » décochée).
+            # Le fichier serait alors parfaitement rempli pendant qu'aucun client ne reçoit rien —
+            # et personne ne pourrait, après coup, distinguer les deux situations.
+            "publie": bool(runtime.published),
+        })
+
+    def noter(self, runtime, lsl_ts):
+        """Écrit la sortie du mode SI elle est neuve. True si une ligne a été écrite."""
+        if not self.actif:
+            return False
+        sortie = runtime.output()
+        if sortie is None or sortie is self._derniere:
+            return False
+        self._derniere = sortie
+        self._ecrire({"kind": "verdict", "t": float(lsl_ts), "phase": runtime.phase,
+                      # La sortie du mode telle qu'il l'a publiée, sous ses PROPRES clés — jamais
+                      # aplatie en colonnes. Un mode qui gagnerait un champ demain ne décalerait
+                      # donc rien de ce qui précède, et un dépouillement écrit contre ce fichier
+                      # lit des noms, pas des positions.
+                      "sortie": sortie})
+        self.lignes += 1
+        return True
+
+    def fermer(self):
+        """Écrit le bilan et referme. Idempotente : `close()` et l'arrêt de la boucle l'appellent
+        tous les deux, et une séance ne doit pas dépendre de qui arrive en premier."""
+        if not self.actif:
+            return
+        from pylsl import local_clock
+
+        self._ecrire({"kind": "fin", "t": float(local_clock()), "verdicts": self.lignes})
+        self.actif = False
+        fichier, self._fichier = self._fichier, None
+        if fichier is not None:
+            try:
+                fichier.close()
+            except OSError:
+                pass
+
+    def state(self):
+        """Ce que la console lit. `actif` False APRÈS un arrêt, jamais None : le chemin doit
+        rester à l'écran, c'est ce qu'on vient chercher pour dépouiller."""
+        return {"actif": self.actif, "chemin": self.chemin, "lignes": self.lignes,
+                "flux": self.flux, "mode": self.mode_id, "probleme": self.probleme}
+
+    def _ecrire(self, objet):
+        """Une ligne JSON, écrite ET VIDÉE tout de suite — même geste que `stimulus/cvep.py`.
+
+        Le `flush` est le point de l'exercice : un moteur tué au milieu d'une séance laisse alors
+        un fichier complet jusqu'à sa dernière ligne, ce qu'un JSON global écrit à la fin ne
+        permettrait pas. Une séance casque ne se refait pas.
+
+        Une écriture qui échoue (disque plein, fichier verrouillé) ARRÊTE l'enregistrement en le
+        DISANT, et ne remonte pas dans la boucle : perdre la trace d'une séance est fâcheux,
+        perdre l'acquisition qui la produit l'est bien davantage.
+        """
+        if self._fichier is None:
+            return
+        try:
+            self._fichier.write(json.dumps(objet, ensure_ascii=False, default=float) + "\n")
+            self._fichier.flush()
+        except Exception as e:  # noqa: BLE001 - cf. docstring : jamais dans la boucle
+            self.probleme = f"écriture impossible ({type(e).__name__} : {e})"
+            self.actif = False
+            print(f"[server] ⚠️ enregistrement INTERROMPU : {self.probleme} — "
+                  f"{self.lignes} verdict(s) sauvés dans {self.chemin}")
+
+
 class EngineServer:
     """Boucle acquisition -> publication. Un objet, une session casque, N modes actifs.
 
@@ -162,7 +298,7 @@ class EngineServer:
     """
 
     def __init__(self, serial=None, synthetic=False, verbose=False, modes=("raw",),
-                 params=None, instance=None, data_dir=None):
+                 params=None, instance=None, data_dir=None, seances_dir=None):
         """`modes` : les identifiants à démarrer. `params` : {mode_id: {clé: valeur}}, facultatif.
 
         Un identifiant inconnu ou un réglage invalide lève ici, au démarrage — bruyamment et
@@ -171,6 +307,11 @@ class EngineServer:
         `data_dir` : où atterrit un modèle qu'on RETIENT. Injectable pour que les tests
         n'approchent jamais le vrai `data/` — enregistrements EEG d'une personne identifiable, sur
         un dépôt public, et dont le fichier le plus récent est ce que le moteur ÉLIT par défaut.
+
+        `seances_dir` : où atterrissent les VERDICTS d'une séance enregistrée. Un dossier distinct
+        de `data_dir`, et injectable pour la même raison — à ceci près que le risque est inverse :
+        ici on ne craint pas d'élire un fichier de test, on craint de semer dans le dossier d'un
+        utilisateur des séances qui n'en sont pas.
         """
         self.synthetic = synthetic
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
@@ -222,6 +363,14 @@ class EngineServer:
         # Désormais elle écrit un CANDIDAT dans un dossier temporaire propre à CE moteur, et
         # `save_calibration` est le seul geste qui touche `data/`.
         self.data_dir = data_dir or DATA_DIR
+        # Là où le moteur écrit les VERDICTS d'une séance, sur commande de la console. ⚠️ Un
+        # dossier distinct de `data_dir`, et ce n'est pas cosmétique : la moitié de la valeur de
+        # `empreinte_dossier(DATA_DIR)` vient de ce que RIEN d'autre n'a le droit d'écrire là.
+        self.seances_dir = seances_dir or SEANCES_DIR
+        # AU PLUS UN enregistrement à la fois. Un `_Enregistrement` (arrêté ou non) survit à son
+        # arrêt : `state()` garde le chemin à l'écran, c'est ce qu'on vient chercher pour
+        # dépouiller. Il n'est remplacé qu'au démarrage du suivant.
+        self.enregistrement = None
         # ⚠️ ÉCART AU BRIEF, assumé : le dossier est créé à la PREMIÈRE calibration, pas à la
         # construction du moteur. Sa seule différence observable est le déchet : `run()` le
         # balaie dans son `finally`, mais tous les `EngineServer` construits SANS être lancés —
@@ -623,6 +772,48 @@ class EngineServer:
               f"{self.mesure.total()} fenêtre(s) prélevée(s) — stabilisation "
               f"{self.mesure.warmup_s:.0f} s d'abord. Rien ne sera écrit sur le disque.")
 
+    def _start_enregistrement(self, mode_id):
+        """Ouvre le fichier de séance. Appelée par la BOUCLE, jamais par le fil d'une interface.
+
+        ⚠️ **Le refus est REFAIT ici**, comme pour `_start_mesure` et `_start_calibration`, et
+        pour la même raison : `submit` a jugé sur l'état du moteur à l'instant de la SOUMISSION.
+        Deux `start_enregistrement` soumises dans la même fenêtre de sondage — un double-clic y
+        suffit — ont toutes les deux vu un moteur vierge. Sans ce second contrôle, la seconde
+        remplacerait silencieusement la première : le premier fichier resterait ouvert, sans
+        bilan, et personne ne saurait lequel des deux porte la séance.
+
+        ⚠️ **Le NOM du fichier se décide ici**, pas à la soumission — cf. le commentaire de
+        `submit`. C'est ce qui garantit qu'aucun chemin n'est annoncé pour un fichier qui ne sera
+        pas créé, et accessoirement que `chemin_libre` juge du disque depuis le seul fil qui y
+        écrit.
+        """
+        en_cours = self.enregistrement
+        if en_cours is not None and en_cours.actif:
+            print(f"[server] enregistrement refusé : un autre écrit déjà dans {en_cours.chemin}")
+            return
+        runtime = self.active.get(mode_id)
+        if runtime is None:
+            # Le mode s'est arrêté entre la soumission et l'application. On ne crée AUCUN fichier :
+            # un fichier vide se lit après coup comme une séance ratée.
+            print(f"[server] enregistrement annulé : « {mode_id} » s'est arrêté entre-temps")
+            return
+        # `chemin_libre` n'écrase jamais rien : le format d'horodatage a une résolution d'une
+        # seconde, et deux enregistrements démarrés dans la même produiraient sinon le même nom.
+        chemin = chemin_libre(
+            self.seances_dir,
+            f"moteur_{runtime.spec.stream}_{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
+        enr = _Enregistrement(chemin, mode_id, stream_name(runtime.spec.stream))
+        try:
+            enr.ouvrir(runtime, instance=self.instance, fs_hz=self.acq.fs)
+        except OSError as e:
+            # Dossier non inscriptible, disque plein, antivirus : ça se dit MAINTENANT, pas à la
+            # fin d'une séance qu'on croyait enregistrée.
+            print(f"[server] enregistrement IMPOSSIBLE ({chemin}) : {e}")
+            return
+        self.enregistrement = enr
+        print(f"[server] enregistrement de « {runtime.spec.label} » -> {chemin} "
+              f"(une ligne par décision publiée ; rien n'est écrit dans {self.data_dir})")
+
     # --- le candidat : produit, montré, puis retenu ou jeté --------------------
     # `_entrainer` écrit dans `self.calib_dir`. Le résultat est ADOPTÉ ici (une fois), affiché par
     # la console, et ne rejoint `data/` que sur `save_calibration`. Trois gestes, dans cet ordre —
@@ -782,6 +973,13 @@ class EngineServer:
         """
         self._efface_candidat("le moteur se ferme")
         self._candidat_de = None
+        # L'enregistrement se REFERME proprement (bilan compris), il ne se supprime pas : à la
+        # différence d'un candidat de calibration, ce fichier est exactement ce qu'on voulait
+        # garder. Chaque ligne est déjà vidée sur le disque, donc ce `fermer()` ne sauve pas les
+        # verdicts — il sauve le BILAN qui dit combien il y en a, et donc la possibilité de savoir
+        # qu'une séance a été tronquée.
+        if self.enregistrement is not None:
+            self.enregistrement.fermer()
         if self.calib_dir:
             shutil.rmtree(self.calib_dir, ignore_errors=True)
             self.calib_dir = None
@@ -798,7 +996,33 @@ class EngineServer:
 
     COMMANDS = ("start_mode", "propose_params", "stop_mode", "set_params", "set_published",
                 "recalibrate", "start_calibration", "cancel_calibration", "save_calibration",
-                "discard_calibration", "start_mesure", "cancel_mesure", "stop")
+                "discard_calibration", "start_mesure", "cancel_mesure",
+                "start_enregistrement", "stop_enregistrement", "stop")
+
+    def _mode_du_flux(self, nom):
+        """Le `ModeSpec` ACTIF qui publie ce flux, ou (None, raison). Ne lève jamais.
+
+        Accepte le nom PUBLIC (`EEG_API_Unicorn_decoded_ssvep`) comme le suffixe
+        (`decoded_ssvep`) : la console désigne ce qu'elle a vu sur le réseau — donc le nom
+        complet —, alors qu'un appel écrit à la main désigne naturellement le suffixe du contrat.
+        Les refuser l'un ou l'autre serait un piège dont la seule cause est un préfixe.
+        """
+        suffixe = str(nom or "")
+        prefixe = stream_name("")
+        if suffixe.startswith(prefixe):
+            suffixe = suffixe[len(prefixe):]
+        actifs = dict(self.active)     # une copie, comme partout ici : `submit` ne lève jamais
+        publiables = [s.stream for s in registry.MODES if s.stream]
+        for spec in registry.MODES:
+            if spec.stream and spec.stream == suffixe:
+                if spec.id not in actifs:
+                    return None, (f"« {spec.label} » n'est pas démarré : il n'y a rien à "
+                                  f"enregistrer. Démarre-le depuis la grille, laisse-le décoder, "
+                                  f"puis reviens — un fichier vide se lit après coup comme une "
+                                  f"séance ratée, pas comme un mode qu'on a oublié de lancer.")
+                return spec, ""
+        return None, (f"flux inconnu : {nom} (publiables : "
+                      f"{', '.join(stream_name(s) for s in publiables)})")
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
@@ -984,6 +1208,44 @@ class EngineServer:
             self._commands.put(("cancel_mesure", {}))
             return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
+        if command == "start_enregistrement":
+            # Enregistrer les VERDICTS d'une séance, dans `seances/` — jamais dans `data/`. Les
+            # mêmes conventions d'acceptation que `save_calibration` juste en dessous : un accusé
+            # avec un motif LISIBLE, et rien d'appliqué avant que la boucle ne le fasse.
+            spec, refus = self._mode_du_flux(params.get("stream"))
+            if spec is None:
+                return {"accepted": False, "reason": refus}
+            # Une seule lecture, comme partout ici : la boucle peut le remettre à None entre deux.
+            en_cours = self.enregistrement
+            if en_cours is not None and en_cours.actif:
+                return {"accepted": False,
+                        "reason": f"un enregistrement est déjà en cours ({en_cours.chemin}) — "
+                                  f"arrête-le avant d'en ouvrir un autre. Deux fichiers écrits en "
+                                  f"parallèle sur la même séance ne se distinguent plus après coup."}
+            # ⚠️ **Aucun `chemin` dans cet accusé, et c'est délibéré.** Le nom du fichier est
+            # décidé par la BOUCLE, et l'écran le lit dans `snapshot()["enregistrement"]`. Le
+            # calculer ici pour le rendre tout de suite serait plus commode et FAUX : deux clics
+            # dans la même fenêtre de sondage (100 ms) voient tous les deux `self.enregistrement`
+            # à None, donc les deux seraient acceptés — et le second afficherait le chemin d'un
+            # fichier que la boucle refusera de créer. MESURÉ en écrivant ce test : l'accusé
+            # annonçait un fichier qui n'a jamais existé. Ne rien promettre qu'on ne puisse tenir
+            # est moins cher que d'expliquer après coup pourquoi le fichier annoncé est absent.
+            self._commands.put(("start_enregistrement", {"id": spec.id}))
+            return {"accepted": True, "command": command, "id": spec.id,
+                    "stream": stream_name(spec.stream)}
+
+        if command == "stop_enregistrement":
+            en_cours = self.enregistrement
+            if en_cours is None or not en_cours.actif:
+                return {"accepted": False,
+                        "reason": "aucun enregistrement en cours — il n'y a rien à arrêter."}
+            self._commands.put(("stop_enregistrement", {}))
+            # Le chemin et le compte sont rendus TOUT DE SUITE, alors que la fermeture, elle,
+            # attend la boucle : c'est ce que l'écran a besoin d'afficher, et `submit` ne promet
+            # de toute façon jamais que la commande soit déjà appliquée (cf. sa docstring).
+            return {"accepted": True, "command": command, "chemin": en_cours.chemin,
+                    "lignes": en_cours.lignes}
+
         if command in ("save_calibration", "discard_calibration"):
             # Une seule lecture de `self.candidat`, comme partout ici : la boucle peut le remettre
             # à `None` (arrêt du moteur, nouvelle calibration) entre deux lectures, et `submit`
@@ -1093,6 +1355,13 @@ class EngineServer:
             self._save_calibration()
         elif command == "discard_calibration":
             self._discard_calibration()
+        elif command == "start_enregistrement":
+            self._start_enregistrement(params["id"])
+        elif command == "stop_enregistrement":
+            if self.enregistrement is not None and self.enregistrement.actif:
+                self.enregistrement.fermer()
+                print(f"[server] enregistrement arrêté : {self.enregistrement.lignes} verdict(s) "
+                      f"dans {self.enregistrement.chemin}")
         elif command == "start_mesure":
             self._start_mesure(params["id"], params["params"])
         elif command == "cancel_mesure":
@@ -1274,6 +1543,7 @@ class EngineServer:
         # `None` (arrêt du moteur) entre deux lectures, et `None.state()` lèverait ICI, dans le
         # fil de la console.
         mesure = self.mesure
+        enregistrement = self.enregistrement
         state = self._state(not self._stop, active=active, calibration=calib)
         etat_calib = None if calib is None else calib.state(now=time.perf_counter())
         if etat_calib is not None:
@@ -1300,6 +1570,13 @@ class EngineServer:
             # décodage (le taux d'émission SSVEP a précisément besoin que le mode tourne), donc
             # annoncer autre chose que « decoding » à un client serait faux.
             "mesure": None if mesure is None else mesure.state(now=time.perf_counter()),
+            # L'enregistrement de séance : `None` tant qu'il n'y en a jamais eu, puis le dernier
+            # — ARRÊTÉ OU NON. Le garder après l'arrêt est délibéré : c'est le chemin du fichier
+            # qu'on vient chercher pour dépouiller, et une console qui l'oublie à la seconde où on
+            # clique « Arrêter » obligerait à aller fouiller le dossier à la main. Copie prise une
+            # seule fois, comme les trois voisines : la boucle peut le remplacer entre deux
+            # lectures, et `None.state()` lèverait ICI, dans le fil de la console.
+            "enregistrement": None if enregistrement is None else enregistrement.state(),
             # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
             # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
             # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
@@ -1781,8 +2058,20 @@ class EngineServer:
 
                     for mode_id, runtime in list(self.active.items()):
                         if now - self._last_tick.get(mode_id, 0.0) >= runtime.period_s():
-                            runtime.tick(self, self.clock.to_lsl(time.time()), now)
+                            # L'horodatage est calculé UNE fois et servi deux fois : au mode (qui
+                            # le donne à son publieur) puis à l'enregistrement. Le recalculer pour
+                            # le fichier écrirait une date légèrement différente de celle partie
+                            # sur le réseau — quelques dizaines de microsecondes, invisibles, et
+                            # fausses. C'est le genre d'écart qu'on ne retrouve jamais après coup.
+                            lsl_ts = self.clock.to_lsl(time.time())
+                            runtime.tick(self, lsl_ts, now)
                             self._last_tick[mode_id] = now
+                            # L'enregistrement de séance, juste après le tick du mode qu'il suit.
+                            # `noter` n'écrit que si une NOUVELLE décision a été publiée (cf.
+                            # `_Enregistrement`), donc un tour muet ne laisse aucune trace.
+                            enr = self.enregistrement
+                            if enr is not None and enr.actif and enr.mode_id == mode_id:
+                                enr.noter(runtime, float(lsl_ts))
 
                     # La calibration tourne à CHAQUE tour, sans période minimale : sa ligne du
                     # temps se compte en dixièmes de seconde et un décompte qui saute serait vu.
@@ -2046,6 +2335,7 @@ def _smoke():
         _smoke_oreille_calibration(),
         _smoke_vol_marqueurs(),
         _smoke_mesure(),
+        _smoke_enregistrement(),
         _smoke_cumul(),
         _smoke_proposition(),
         _smoke_dimensionnement(),
@@ -2995,6 +3285,194 @@ def _smoke_mesure():
     from core.modes.mesure import _selftest as _selftest_mesure
 
     return _selftest_mesure()
+
+
+def _smoke_enregistrement():
+    """Enregistrer une séance : le MOTEUR tient la plume, et JAMAIS au-dessus de `data/`.
+
+    ⚠️ **Ce test existe surtout pour la deuxième moitié de cette phrase.** C'est la première
+    capacité d'ÉCRITURE que le moteur gagne en dehors des modèles de calibration : c'est donc
+    exactement le moment où `data/` peut être touché par accident. `data/` porte des
+    enregistrements EEG d'une personne identifiable, sur un dépôt PUBLIC, et le fichier le plus
+    récent qui s'y trouve est ce que le moteur ÉLIT par défaut — un verdict de séance déposé là ne
+    se contenterait pas d'encombrer. On prend donc l'empreinte du VRAI `data/` avant et après.
+
+    ⚠️ **Ce que le fichier vaut se juge à la JOINTURE, pas ici.** Une séance c-VEP ne se dépouille
+    qu'avec DEUX fichiers : la vérité-terrain côté fenêtre (`stimulus/cvep.py --log`) et les
+    verdicts côté moteur (celui-ci). Les deux portent la même horloge `local_clock()`, et c'est
+    tout ce qui rend la jointure possible — d'où l'assertion sur le DOMAINE de l'horodatage, qui
+    est la seule chose qu'un test sans casque puisse vraiment prouver de ce fichier.
+    """
+    import json
+    import shutil
+    import tempfile
+    import threading
+
+    from pylsl import local_clock
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # 1. LE DOSSIER. Vérifié sur la CONSTANTE, sans rien écrire : le test tourne dans un
+    #    temporaire (il ne doit pas semer dans le `seances/` de l'utilisateur), donc si personne
+    #    ne regardait le défaut, le jour où il repointerait sur `data/` aucun test ne rougirait.
+    chk(os.path.abspath(SEANCES_DIR) != os.path.abspath(DATA_DIR)
+        and not os.path.abspath(SEANCES_DIR).startswith(os.path.abspath(DATA_DIR) + os.sep),
+        f"le dossier des séances vit HORS de data/ ({SEANCES_DIR})")
+
+    dossier = tempfile.mkdtemp(prefix="smoke_seances_")
+    try:
+        # 2. LES REFUS, à la SOUMISSION — sans boucle : `submit` n'en dépend pas (cf. sa docstring).
+        srv = EngineServer(synthetic=True, instance="smoke-enr", modes=("raw",),
+                           seances_dir=dossier)
+        chk(srv.snapshot().get("enregistrement") is None,
+            "aucun enregistrement au démarrage — le champ existe et vaut None, il ne manque pas")
+        r = srv.submit("start_enregistrement", stream="decoded_pasdemode")
+        chk(not r.get("accepted") and "decoded_pasdemode" in (r.get("reason") or ""),
+            f"un flux inconnu est refusé, en le nommant ({r})")
+        r = srv.submit("start_enregistrement", stream="decoded_ssvep")
+        chk(not r.get("accepted") and "démarr" in (r.get("reason") or "").lower(),
+            f"…et un flux dont le mode n'est PAS démarré aussi : un fichier vide se lit comme "
+            f"une séance ratée, pas comme un mode oublié ({r})")
+        r = srv.submit("stop_enregistrement")
+        chk(not r.get("accepted") and r.get("reason"),
+            f"arrêter alors que rien n'enregistre est refusé avec un motif ({r})")
+
+        # 3. LA RÈGLE DU FICHIER, sur l'objet seul : **une ligne par DÉCISION PUBLIÉE**, jamais une
+        #    par tour de boucle. Les modes republient leur sortie dans un dict NEUF à chaque
+        #    publication ; un tour où rien n'a été publié rend donc le MÊME objet, et écrire une
+        #    ligne pour lui fabriquerait une décision que personne n'a prise. C'est la faute qui
+        #    ferait lire 100 % d'émission à un mode qui n'émet que 44 % du temps.
+        class _RuntimeFactice:
+            def __init__(self):
+                self.spec = registry.get("ssvep")
+                self.params, self.published, self.phase = {}, True, "running"
+                self._sortie = None
+
+            def channels(self):
+                return ["target_index"]
+
+            def output(self):
+                return self._sortie
+
+        rt = _RuntimeFactice()
+        enr = _Enregistrement(os.path.join(dossier, "regle.jsonl"), "ssvep",
+                              stream_name("decoded_ssvep"))
+        enr.ouvrir(rt, instance="test", fs_hz=250.0)
+        rt._sortie = {"target_index": 1}
+        enr.noter(rt, 100.0)
+        enr.noter(rt, 100.2)               # même objet : rien n'a été publié entre les deux
+        chk(enr.lignes == 1,
+            f"deux tours de boucle sans NOUVELLE décision = UNE ligne ({enr.lignes}) — sinon un "
+            f"mode qui émet 44 % du temps se relirait à 100 %")
+        rt._sortie = {"target_index": 1}   # même CONTENU, objet neuf : une vraie 2e publication
+        enr.noter(rt, 100.4)
+        chk(enr.lignes == 2,
+            f"…et une décision RÉPÉTÉE à l'identique compte quand même ({enr.lignes}) : c'est une "
+            f"émission de plus, et le taux d'émission est précisément ce qu'on vient mesurer")
+        enr.fermer()
+
+        # 4. DE BOUT EN BOUT, avec une vraie boucle : le moteur décode, on enregistre, on arrête.
+        empreinte_avant = empreinte_dossier(DATA_DIR)
+        freqs = [c["actual_hz"] for c in choose_frequencies(60.0)]
+        srv = EngineServer(synthetic=True, instance="smoke-enr2", modes=("raw", "ssvep"),
+                           params={"ssvep": {"freqs": freqs}}, seances_dir=dossier)
+        fil = threading.Thread(target=srv.run,
+                               kwargs={"duration_s": 12.0, "baseline_s": 1.0, "warmup_s": 0.5},
+                               daemon=True)
+        fil.start()
+        t0 = time.perf_counter()
+        while srv.phase != "decoding" and time.perf_counter() - t0 < 10.0 and fil.is_alive():
+            time.sleep(0.05)
+
+        depart = local_clock()
+        r = srv.submit("start_enregistrement", stream="decoded_ssvep")
+        chk(r.get("accepted"), f"l'enregistrement démarre ({r})")
+        # ⚠️ **L'accusé de départ ne promet AUCUN chemin**, et c'est ce que cette assertion
+        # protège. Le nom du fichier est décidé par la BOUCLE : `submit` ne fait que mettre en
+        # file, donc un chemin rendu ici serait celui d'un fichier que la boucle peut refuser de
+        # créer — mesuré en écrivant ce test, sur le double-clic juste en dessous. L'écran lit le
+        # chemin dans `snapshot()`, où il est vrai.
+        chk("chemin" not in r,
+            f"…sans promettre de chemin : c'est la BOUCLE qui le décide, et l'écran le lit dans "
+            f"l'état ({r})")
+        # LE DOUBLE-CLIC, dans la MÊME fenêtre de sondage : les deux commandes voient un moteur
+        # vierge (la boucle n'a pas encore appliqué la première), donc les deux sont ACCEPTÉES —
+        # c'est le motif exact de `start_mesure`, et c'est pourquoi le refus est refait dans la
+        # boucle. Ce qui compte n'est pas l'accusé, c'est qu'UN SEUL fichier existe au bout.
+        srv.submit("start_enregistrement", stream="decoded_ssvep")
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 2.5 and fil.is_alive():
+            time.sleep(0.1)
+        chk(len([f for f in os.listdir(dossier) if f.startswith("moteur_")]) == 1,
+            f"un double-clic ne produit qu'UN fichier : le second départ est refusé par la BOUCLE, "
+            f"pas par l'accusé ({sorted(os.listdir(dossier))})")
+
+        etat = (srv.snapshot() or {}).get("enregistrement") or {}
+        chk(etat.get("actif") and etat.get("lignes", 0) > 0 and etat.get("chemin"),
+            f"pendant l'enregistrement, l'état PUBLIÉ dit qu'il tourne, où, et combien "
+            f"({etat})")
+        # …et une fois la boucle passée, `submit` refuse tout seul : c'est le cas NORMAL (deux
+        # clics à une seconde d'intervalle), celui où l'utilisateur mérite un motif à l'écran.
+        r2 = srv.submit("start_enregistrement", stream="decoded_ssvep")
+        chk(not r2.get("accepted") and "cours" in (r2.get("reason") or "").lower(),
+            f"…et un SECOND enregistrement est alors refusé, en disant lequel tourne ({r2})")
+
+        r = srv.submit("stop_enregistrement")
+        chemin = r.get("chemin") or ""
+        chk(r.get("accepted") and os.path.isfile(chemin),
+            f"l'enregistrement produit un fichier ({chemin})")
+        # On attend que la BOUCLE ait appliqué l'arrêt : `submit` ne fait que mettre en file, et
+        # c'est le fil de la boucle qui ferme le fichier (la console, elle, ne touche rien).
+        t0 = time.perf_counter()
+        while ((srv.snapshot().get("enregistrement") or {}).get("actif")
+               and time.perf_counter() - t0 < 5.0 and fil.is_alive()):
+            time.sleep(0.05)
+        r2 = srv.submit("stop_enregistrement")
+        chk(not r2.get("accepted") and r2.get("reason"),
+            f"arrêter deux fois est refusé avec un motif ({r2})")
+        srv.stop()
+        fil.join(timeout=5.0)
+
+        chk(empreinte_dossier(DATA_DIR) == empreinte_avant,
+            "…et data/ est INTACT : une séance n'est ni un modèle ni un enregistrement EEG, et "
+            "data/ garde son autorité unique")
+        chk(os.path.abspath(DATA_DIR) not in os.path.abspath(chemin),
+            f"le fichier vit hors de data/ ({chemin})")
+
+        with open(chemin, encoding="utf-8") as f:
+            lignes = [json.loads(l) for l in f if l.strip()]
+        genres = [l.get("kind") for l in lignes]
+        verdicts = [l for l in lignes if l.get("kind") == "verdict"]
+        chk(genres[:1] == ["header"] and genres[-1:] == ["fin"],
+            f"le fichier s'ouvre par un en-tête et se ferme par un bilan ({genres[:2]}…{genres[-1:]})")
+        chk(len(verdicts) >= 3,
+            f"…et porte les verdicts du moteur, un par décision publiée ({len(verdicts)})")
+        chk(lignes[0].get("flux") == stream_name("decoded_ssvep")
+            and lignes[0].get("voies"),
+            f"l'en-tête nomme le flux COMPLET et ses voies ({lignes[0].get('flux')})")
+        chk(lignes[-1].get("verdicts") == len(verdicts),
+            f"le bilan compte ce que le fichier contient vraiment "
+            f"({lignes[-1].get('verdicts')} annoncés, {len(verdicts)} écrits)")
+        # ⚠️ **L'HORLOGE.** C'est la seule chose de ce fichier qu'un test sans casque puisse
+        # vraiment prouver, et c'est celle dont tout dépend : sans elle, la jointure avec le
+        # journal de la fenêtre (recette 2.9) ne se fait pas. `local_clock()` compte depuis le
+        # démarrage de la machine — un horodatage pris en temps UNIX y serait ~50 ans trop grand
+        # et personne ne s'en apercevrait avant de dépouiller.
+        ts = [l["t"] for l in verdicts]
+        chk(all(depart - 1.0 <= t <= local_clock() + 1.0 for t in ts),
+            f"les verdicts sont horodatés dans l'horloge LSL, la MÊME que le journal de la "
+            f"fenêtre de stimulus ({ts[0] if ts else '?'} pour local_clock()={local_clock():.1f})")
+        chk(ts == sorted(ts), "…et dans l'ordre, comme les recevrait un client")
+    finally:
+        shutil.rmtree(dossier, ignore_errors=True)
+
+    print(f"[smoke-enregistrement] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
 
 
 def _smoke_vol_marqueurs():

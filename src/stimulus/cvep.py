@@ -153,7 +153,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E402
                          CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,
-                         MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S, use_utf8_console)
+                         MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
@@ -400,9 +400,14 @@ def _chemin_journal_auto():
     ⚠️ **Pas dans `data/`** : `data/` porte des enregistrements EEG et des modèles, et son autorité
     d'écriture appartient au moteur seul. Un journal de séance est une trace de protocole ; il vit
     à côté, dans un dossier gitignoré.
+
+    Le dossier vient de `core.config.SEANCES_DIR`, jamais d'un `os.path.join` recomposé ici : le
+    moteur y dépose l'AUTRE moitié de la séance (ses verdicts, cf. `start_enregistrement`), et
+    deux façons de nommer le même dossier finissent toujours par diverger — ce jour-là les deux
+    fichiers d'une même séance ne seraient plus côte à côte, et la jointure de la recette 2.9
+    demanderait de les chercher.
     """
-    racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    dossier = os.path.join(racine, "seances")
+    dossier = SEANCES_DIR
     os.makedirs(dossier, exist_ok=True)
     horodatage = time.strftime("%Y%m%d-%H%M%S")
     return os.path.join(dossier, f"cvep_{horodatage}.jsonl")

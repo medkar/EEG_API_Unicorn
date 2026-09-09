@@ -18,6 +18,17 @@ import itertools as _itertools
 PROJECT_ROOT = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 DATA_DIR = _os.path.join(PROJECT_ROOT, "data")          # modèles entraînés, enregistrements
 EXAMPLES_DIR = _os.path.join(PROJECT_ROOT, "examples")  # clients d'exemple (récepteur LSL, UDP)
+# Les TRACES D'UNE SÉANCE : la vérité-terrain qu'une fenêtre de stimulus journalise (`--log`) et
+# les verdicts que le moteur enregistre en face. Les deux portent la même horloge
+# (`local_clock()`), ce qui rend leur jointure purement numérique — c'est ce qu'exige le
+# dépouillement d'une séance c-VEP (recette 2.9), et c'est pour ça que les deux vivent côte à côte.
+#
+# ⚠️ **Délibérément HORS de `data/`.** `data/` porte des enregistrements EEG d'une personne
+# identifiable et les modèles du casque, dont le plus récent CHARGEABLE est ce que le moteur, la
+# console et les applis ÉLISENT par défaut : y déposer des fichiers d'une autre nature, c'est
+# rouvrir la porte qu'`empreinte_dossier` existe pour surveiller. Un verdict de séance n'est ni un
+# modèle ni un enregistrement — il vit à côté, dans un dossier gitignoré.
+SEANCES_DIR = _os.path.join(PROJECT_ROOT, "seances")
 
 FS_UNICORN = 250.0  # échantillonnage de l'Unicorn Hybrid Black (Hz)
 
