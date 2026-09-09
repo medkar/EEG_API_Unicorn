@@ -46,6 +46,21 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
 - **Correctif hors plan** — `36fdc5c` : le test de cadence c-VEP rougissait 1 fois sur 3 (cause
   connue depuis la revue du 2026-09-08, jamais corrigée). Borne inférieure au lieu d'une égalité ;
   la garde mord toujours (0 cale → rouge), six lancements propres après.
+- **T6 : complete** — `0bbf656`, en ligne. `console/flux_page.py` : les flux LSL du réseau, lus
+  COMME UN CLIENT. Trois assertions ferment la porte de l'état interne, dont celle qui prouve
+  vraiment (un état complet arrive, le panneau reste vide) — mutation faite, elle seule rougit.
+  ⚠️ Deux coutures injectables (`decouvrir`, `ouvrir`) ajoutées **après un premier jet qui n'en
+  avait pas** : le smoke résolvait pour de vrai et trouvait les 5 flux du moteur qu'un AUTRE bloc
+  du même smoke fait tourner.
+- **T7 : complete** — `5634cec`, en ligne. `start_enregistrement`/`stop_enregistrement`, JSONL dans
+  `seances/`, **une ligne par décision PUBLIÉE** (identité de `output()` — sinon un mode qui émet
+  44 % du temps se relirait à 100 %). `stimulus/cvep.py` importe désormais `config.SEANCES_DIR` au
+  lieu de recomposer le chemin. Empreinte du vrai `data/` identique avant/après
+  (43 fichiers, `42120328…`), `seances/` réel intact (0 fichier).
+  🔴 **Trouvé en testant** : l'accusé de `start_enregistrement` promettait un `chemin` qui pouvait
+  ne jamais exister — deux clics dans la même fenêtre de sondage sont tous deux acceptés, la boucle
+  refuse le second. Le nom du fichier est maintenant décidé par la BOUCLE et lu dans `snapshot()`.
+  C'est une instance de plus du constat parqué « la console prend `accepted` pour “ça a démarré” ».
 
 ## Réserve à porter
 
@@ -53,3 +68,12 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   pouvait pas bouger autrement) mais la T10 doit en tenir compte : il lui reste `live_ssvep.py`,
   `ssvep_analyze.py`, `ssvep_guided.py` (après T8/T9) et surtout **`ui.py`, dont l'ordre est
   contraint**.
+- 🟡 **T7 : la règle « une ligne par décision publiée » n'est pas structurelle.** Elle repose sur
+  une propriété des six modes (publier reconstruit le dict de sortie), documentée dans
+  `_Enregistrement` et pinnée par un runtime factice — pas sur un contrat déclaré. Le mode #7 qui
+  muterait sa sortie en place perdrait des lignes EN SILENCE. La version étanche serait un
+  compteur de publications dans `ModeRuntime` ; ça touche les six modes.
+- 🟡 **Pour la T11** : la page « Ce que voit ton application » et le bouton d'enregistrement n'ont
+  aucune ligne dans `README.md`, `docs/SPEC.md` ni `docs/recette.md`. Le test **2.9 doit citer les
+  DEUX fichiers**, pas seulement le journal de la fenêtre. Et `CLAUDE.md` cite encore
+  `python src/research/app.py`, qui n'existe plus.
