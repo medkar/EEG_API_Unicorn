@@ -350,7 +350,7 @@ simply never fire. So each of these is announced, in the engine's terminal:
 | A marker arrived too late to find its EEG | counted in `marqueurs_perdus` |
 | A marker is stamped in the future | counted in `marqueurs_futurs` — see the clock section below |
 | A marker was not readable JSON | counted in `marqueurs_illisibles` |
-| Markers arrived during the warm-up (**15 s for P300; 15 s + 8 s of rest = 23 s for ErrP**) | counted in `marqueurs_chauffe`, said once — they are dropped on purpose. **c-VEP is the exception: it keeps them** |
+| Markers arrived during the warm-up (**15 s for P300; 15 s + 8 s of rest = 23 s for ErrP; 15 s for the SSVEP emission-rate measurement**) | counted in `marqueurs_chauffe`, said once — they are dropped on purpose. **c-VEP is the exception: it keeps them.** The SSVEP measurement drops trials but keeps the `calib_start` announcement, so the window does not have to guess how long the warm-up lasts |
 | `target` outside `[0, 6[` | named, with the expected range, counted in `refus_cible` |
 | An epoch fell out of the buffer | counted in `epoques_perdues` |
 | `round_end` with too few flashes | `target_index = -1` **and** the reason |

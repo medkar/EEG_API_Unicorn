@@ -19,13 +19,15 @@ game event, a visualisation, a robot command) is the client application's job.
 > engine both sends streams and *receives* markers, so an external application can render the
 > stimulus and let the engine decode — see **[docs/markers.md](docs/markers.md)**. Motor Imagery
 > and neuro arrived first, P300 on 2026-08-17, ErrP on 2026-08-19, and **c-VEP closed the set on
-> 2026-08-21**. Since **2026-09-08 the engine also plays all four calibrations**, and the console is
-> the only entry point you need: contact check, calibrate, pick a model, show a stimulus, decode —
-> all in one window that never has to be closed. ⚠️ Four of the six — MI, P300, ErrP, c-VEP — have
-> **never been decoded from a real brain through the engine**, and moving the calibrations did not
-> change that: the pipe is verified end to end without a headset, the decoding was validated in the
-> pygame app that has since been retired, and putting both halves on one head is the session that
-> remains. See **[docs/SPEC.md](docs/SPEC.md)** for the stream contract and the roadmap.
+> 2026-08-21**. Since **2026-09-08 the engine also plays all four calibrations**, and since
+> **2026-09-09 there is no command left to type**: picking the source, checking your alpha,
+> measuring the SSVEP rate, logging a session and watching the outgoing stream are all buttons, in
+> one window that never has to be closed. ⚠️ Four of the six — MI, P300, ErrP, c-VEP — have
+> **never been decoded from a real brain through the engine**, and neither moving the calibrations
+> nor moving the measurements changed that: the pipe is verified end to end without a headset, the
+> decoding was validated in the pygame app that has since been retired, and putting both halves on
+> one head is the session that remains. See **[docs/SPEC.md](docs/SPEC.md)** for the stream contract
+> and the roadmap.
 
 ## Requirements
 
@@ -38,14 +40,23 @@ pip install -r requirements.txt
 ## Run
 
 **Start here: the console.** Since 2026-09-08 it is the only entry point you need — one window for
-the whole path, and one you never have to close mid-session.
+the whole path, and one you never have to close mid-session. Since 2026-09-09 it is also the only
+thing you have to type: every real-use capability has a button, and a self-test fails if one
+reappears as a command (see [Layout](#layout)).
 
 ```bash
 outils\Console EEG.bat                        # double-click from the explorer, no terminal
 python src/console/app.py                     # the same thing from a shell
-python src/console/app.py --synthetic         # no headset (BrainFlow test board)
+python src/console/app.py --synthetic         # developer shortcut: skip the dialog, open the board
 python src/console/app.py --mode ssvep        # start a mode straight away
 ```
+
+**It asks what to open the session on** — the Unicorn headset, or BrainFlow's test board. ⚠️ **There
+is no silent fallback.** A headset that refuses to open says so and the choice comes back; falling
+through to the test board would record a whole session of manufactured signal while you believed it
+was real, and nothing in the files would say otherwise. The banner repeats the source for as long
+as the console runs. `--synthetic` still works and skips the dialog — that is a developer shortcut,
+not the normal path.
 
 **The engine** — no interface, streams over the network. This is the product; the console is a
 client of it. Run it on its own when you want it headless, or beside a stimulus window in a second
@@ -133,6 +144,54 @@ Three things about that button are worth knowing before you press it:
 **Launch stimulus** — the same window, without `--calibrer`, for the three modes that decode nothing
 without one. Before this, the only way to run them was a second terminal.
 
+**Session log** — a checkbox on the mode page, **ticked by default**, that hands the window `--log`.
+It only appears where the stimulus registry says the window can write one, which today means c-VEP.
+The window picks its own timestamped name under `seances/`; the console shows you where and writes
+nothing itself. It is ticked by default because scoring a c-VEP session without that file is not
+possible after the fact (see the recipe's test 2.9) — an unticked box would be a session lost by
+omission.
+
+### Checks and measurements
+
+A second row of tiles, added 2026-09-09. A measurement is a timed protocol that returns a **verdict**
+instead of a model: it writes nothing to disk, so there is no *Save* and no *Redo*. Only one timed
+activity runs at a time — the engine refuses a calibration during a measurement and the reverse,
+because there is one headset and two protocols would steal each other's windows.
+
+- **Alpha check** (37 s) — eyes open, then eyes closed; the Berger effect on the occipital channels.
+  It is a **barrier**, and the tile says so: if alpha does not rise, the electrodes or the reference
+  are wrong and nothing else you measure today means anything. The verdict is a sentence that stops
+  you, not a number to negotiate with, and it names what to check in order. When it passes, one
+  click applies the measured peak to the SSVEP's `alpha_hz` setting — a value you used to write on
+  paper and retype into another screen.
+- **SSVEP emission rate** (3.6 min) — a window flickers the configured targets (three at the
+  repository's defaults) and *designates* the one to fixate; the engine applies its own decision
+  rule and reports how often it commits and how often it is right when it does. **One trial counts
+  as one decision**: the engine's windows overlap (1.5 s every 0.2 s), so counting them would
+  inflate the sample by a factor of about 7 and shrink the confidence interval by √7 for nothing.
+
+⚠️ Both numbers of the SSVEP measurement are read **together**. The reference measured on hardware
+on 2026-07-27 is *100 % accurate whenever it commits, but it only commits 44 % of the time*. Either
+figure alone misleads: the second without the first makes a perfectly normal silence look like a
+breakdown.
+
+### What your app sees
+
+A button at the bottom of the grid opens the outgoing side: it resolves the LSL streams on the
+network, opens one, and shows its channel names and values scrolling by. ⚠️ **It reads over LSL,
+like any client — never the engine's internal state.** That is the honest version: if the panel
+shows values, a real client would see them too. A panel wired to `snapshot()` would scroll happily
+while the network was silent, which is exactly the failure you came here to look at.
+
+**Record the verdicts** — one button on that page writes a JSONL file to `seances/`, one line per
+**published** decision, timestamped on the LSL clock. The engine holds the pen; the console sends
+two commands and reads where it writes. One line per *published* decision and not per loop turn: a
+mode that only emits 44 % of the time would otherwise re-read as 100 %, and the file would lie about
+the one quantity you opened it for.
+
+⚠️ `seances/` is gitignored and sits **outside `data/`**. A session verdict is neither a model nor an
+EEG recording, and `data/` keeps its single writer.
+
 Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
 (`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
 that lie. Connected clients must re-resolve — the stream name itself does not change. The rest floor
@@ -148,7 +207,8 @@ engine now refuses those, and the console has a **Propose** button that asks it 
 The proposal steers away from the **individual alpha peak**, which is a per-person trait (population
 mean ≈ 9.6 Hz, range 7–13). A target sitting on someone's peak does not stand out from their own
 resting background — so the set that works for one person can fail for the next. Set `alpha_hz` per
-person; `python src/research/alpha_check.py` measures it.
+person: the **Alpha check** tile measures it and offers to apply it, so the value never has to be
+copied between two screens.
 
 ### Motor Imagery
 
@@ -249,23 +309,28 @@ engine*. Roughly one designation in three is wrong even offline.
 
 ### The stimulus windows
 
-Three programs, in `src/stimulus/`, one per paradigm that cannot decode without something on screen.
-They render a frame-locked stimulus and publish markers — and they open **no headset**, which is the
-whole point: they run beside the engine rather than instead of it.
+Four programs, in `src/stimulus/`, one per paradigm that needs something on screen. They render a
+frame-locked stimulus and publish markers — and they open **no headset**, which is the whole point:
+they run beside the engine rather than instead of it.
 
 ```bash
 python src/stimulus/p300.py                # the oddball ring
 python src/stimulus/errp.py                # the cursor-to-target track
 python src/stimulus/cvep.py                # the six flickering discs, and the clock
+python src/stimulus/ssvep.py               # the flickering arrows (three at the default settings)
+python src/stimulus/ssvep.py --guide       # the same, designating a target per trial (ground truth)
 python src/stimulus/cvep.py --calibrer     # the same, wrapped in a calibration protocol
 python src/stimulus/cvep.py --log s.jsonl  # ground truth to a FILE — required to score a session
 ```
 
 You normally never type these: the console launches them for you, with `--calibrer` when you press
-**Calibrate** and without when you press **Launch stimulus**. Type them when you need an option the
-buttons do not pass — the launcher sends the file path and `--calibrer`, nothing else, so `--log`
-and `--seed` (c-VEP), `--no-wait` (ErrP), `--refresh` and `--windowed` are hand-launch only. Run
-`--help` on any of the three for its own list.
+**Calibrate**, with `--guide` when you start the SSVEP emission-rate measurement, and bare when you
+press **Launch stimulus**. Type them when you need an option the buttons do not pass — the launcher
+sends the file path, `--calibrer` and the session log, so `--seed`, `--no-wait` (ErrP), `--refresh`
+and `--windowed` are hand-launch only. Run `--help` on any of the four for its own list.
+
+The SSVEP window moved here from `research/` on 2026-09-09 and gained `--guide`; the three others
+arrived on 2026-09-07.
 
 ### The pygame app is gone
 
@@ -275,6 +340,11 @@ screens (SSVEP, P300 selection, the ErrP demonstrator) and three **calibrations*
 ErrP). They are kept for one reason — they decode **locally**, in the program that draws, which is
 what separates "the network decoding is worse" from "the session is worse" on one and the same
 fixation. `archive/cvep_pilot.py` is the clearest case: same model, same 2-of-3 vote as the engine.
+
+Three more retirements followed on 2026-09-09, when "no command to type" became a rule a test can
+fail on: `alpha_check.py` (now the Alpha check tile), `live_ssvep.py` — a **seventh** piloting
+screen the previous cleanup had missed — and `ui.py`, the shared pygame machinery that eight of the
+archived screens import and that nothing living used any more.
 
 ⚠️ They open the headset themselves, so **run only one program at a time** — the console, the
 engine, or one archived screen. Two of them (`mi_calibrate.py`, `mi_pilot.py`) still write to
@@ -302,6 +372,10 @@ python examples/receiver.py --stream decoded_cvep   # which coded target is bein
 Any LSL client works — Python, MATLAB, C++, a game engine. Unity happens to have a worked example
 in [`examples/unity/`](examples/unity/), for SSVEP. Two machines: see
 [`docs/network.md`](docs/network.md).
+
+`receiver.py` is the *example* — the thing you copy into your own project. To simply **look** at
+what is on the network, the console's **What your app sees** page does the same job without a second
+terminal, and its **Record the verdicts** button files the session for you.
 
 | Stream | Contents |
 |---|---|
@@ -351,9 +425,11 @@ by it too.** Stimulus frequencies and codes adapt automatically to the display r
 been decoded from a real brain *through the engine*. Four of the others — MI, P300, ErrP, c-VEP —
 were validated in the pygame app that has since been retired, and their engine path is verified
 without a headset. Moving the four calibrations into the engine on 2026-09-08 **measured nothing**:
-it is a change of gesture, tested between two processes on a synthetic board. **Neuro-monitoring has
-never been validated at all**: its plumbing is tested, its content is not, anywhere. Every accuracy
-figure on this page comes from **one person**, usually one session.
+it is a change of gesture, tested between two processes on a synthetic board. Moving the two
+measurements in on 2026-09-09 measured nothing either, for the same reason: **not one figure on
+this page was produced, changed or re-derived by that work.** **Neuro-monitoring has never been
+validated at all**: its plumbing is tested, its content is not, anywhere. Every accuracy figure on
+this page comes from **one person**, usually one session.
 
 ## Layout
 
@@ -367,13 +443,21 @@ console    -> core, stimulus
 research   -> core, stimulus
 ```
 
-The two prohibitions are enforced by a test, not by discipline: `python src/core/server.py --smoke`
-parses every file in `src/core/` and `src/stimulus/` as an AST and fails on a single forbidden
-import. No pygame and no Qt in `core`, either — the engine runs on a machine without a screen.
+The prohibitions are enforced by a test, not by discipline: `python src/core/server.py --smoke`
+parses every file in `src/core/`, `src/stimulus/` and `src/research/` as an AST and fails on a
+single forbidden import. No pygame and no Qt in `core`, either — the engine runs on a machine
+without a screen.
+
+**And nothing in `research/` may import `core.acquisition`, `brainflow` or `pygame`** (2026-09-09).
+The bench can *compute* anything it likes on archived files — that is its job — but opening the
+headset and drawing a stimulus are real use, and real use is driven from the application. This is
+the mechanical form of "no command to type": a capability shipped without a graphical path is an
+unfinished task, not one to finish later. The rule had been asked for five times between July and
+September 2026 without being written anywhere, and each cleanup rediscovered it by failing.
 
 When a module needs to cross a boundary upwards, it *moves* rather than reaching: that is how all
-six decoders arrived in `core/`, c-VEP last, and how the three stimulus windows became a package of
-their own on 2026-09-07.
+six decoders arrived in `core/`, c-VEP last, how three stimulus windows became a package of their
+own on 2026-09-07, and how the fourth (SSVEP) plus the alpha check followed on 2026-09-09.
 
 ### [`src/core/`](src/core/) — the engine, and therefore the product
 
@@ -391,7 +475,7 @@ their own on 2026-09-07.
 | [`cvep_models.py`](src/core/cvep_models.py) | Which c-VEP models load, and **which decoder each file declares** |
 | [`markers.py`](src/core/markers.py) | The engine's ear: resolves the incoming marker stream **by name**, one shared inlet |
 | [`config.py`](src/core/config.py) | Channels, frequencies, codes, per-mode constants, repo paths |
-| [`modes/`](src/core/modes/) | One contract per mode (`ModeSpec`) beside its runtime — what it is, what you can set, what it publishes |
+| [`modes/`](src/core/modes/) | One contract per mode (`ModeSpec`) beside its runtime — what it is, what you can set, what it publishes. Plus `mesure.py` and its two protocols, `alpha.py` and `ssvep_mesure.py`, which return a **verdict** instead of a model |
 
 No pygame and no Qt anywhere in here: the engine runs on a machine without a screen. A self-test
 enforces it rather than trusting discipline.
@@ -405,61 +489,74 @@ engine's command queue — and no logic lives here that the engine does not alre
 | Module | What it does |
 |---|---|
 | [`app.py`](src/console/app.py) | The window: reads state, sends commands, and the headless self-test |
-| [`grid.py`](src/console/grid.py) | The mode grid — every mode, runnable or not |
+| [`demarrage.py`](src/console/demarrage.py) | The startup dialog: headset or test board. **Never falls back in silence** |
+| [`grid.py`](src/console/grid.py) | The tiles — every mode, every measurement, and the way out to the stream |
 | [`mode_page.py`](src/console/mode_page.py) | One page per mode: live output · settings · how to consume it |
 | [`calib_page.py`](src/console/calib_page.py) | The **Calibrate** screen: briefing · live session · honest result · **Save / Redo** — all four modes that need a model |
+| [`mesure_page.py`](src/console/mesure_page.py) | Its twin for a **measurement**: briefing · live session · verdict. No Save, no Redo — a measurement writes nothing |
+| [`flux_page.py`](src/console/flux_page.py) | **What your app sees**: the LSL streams, read as a client, plus the record button |
 | [`contact_page.py`](src/console/contact_page.py) | The link check that stands between **Start** and anything expensive. Computes no verdict — it displays the engine's, and refuses |
-| [`fenetres.py`](src/console/fenetres.py) | Launches one stimulus window as a second process, and says when it dies |
+| [`fenetres.py`](src/console/fenetres.py) | Launches one stimulus window as a second process, with its options, and says when it dies |
 | [`params_form.py`](src/console/params_form.py) | The settings form, generated from the contract. Validates nothing |
 | [`live_views.py`](src/console/live_views.py) | Rendering picked by **family** — active, passive, raw traces |
-| [`banner.py`](src/console/banner.py) | Channel quality, the detached-reference alarm, and the stimulus window's state — always visible |
-| [`beeps.py`](src/console/beeps.py) | The calibration's lateralised audio cues — left/right ear tones, honest when audio is missing |
+| [`banner.py`](src/console/banner.py) | The source in force, channel quality, the detached-reference alarm, and the stimulus window's state — always visible |
+| [`beeps.py`](src/console/beeps.py) | The lateralised audio cues of the MI calibration, and the neutral step tone a measurement needs — you cannot read a screen with your eyes shut |
 
-### [`src/stimulus/`](src/stimulus/) — the three windows that draw and mark
+### [`src/stimulus/`](src/stimulus/) — the four windows that draw and mark
 
-Created 2026-09-07. They render a frame-locked stimulus and publish markers, and they **open no
-headset** — which is exactly what lets them run beside the engine, or be launched by the console as
-a second process. Each one plays its paradigm twice: as a stimulus (`--calibrer` absent) and as a
-calibration protocol (`--calibrer` present).
+Created 2026-09-07 with three windows; SSVEP joined on 2026-09-09. They render a frame-locked
+stimulus and publish markers, and they **open no headset** — which is exactly what lets them run
+beside the engine, or be launched by the console as a second process. Each one plays its paradigm
+twice: as a plain stimulus, and as a protocol that publishes ground truth (`--calibrer`, or
+`--guide` for SSVEP).
 
 | Module | What it does |
 |---|---|
 | [`p300.py`](src/stimulus/p300.py) | The oddball ring: `flash` · `round_end`, plus `calib_start` · `cue` · `calib_end` |
 | [`errp.py`](src/stimulus/errp.py) | The cursor-to-target track: `feedback`, which gains `error` **in calibration only** |
 | [`cvep.py`](src/stimulus/cvep.py) | Six flickering discs and the `cycle` clock, plus `cue` · `block_end` around it |
-| [`registry.py`](src/stimulus/registry.py) | Key → command line. The only file in the repo that names a window module |
+| [`ssvep.py`](src/stimulus/ssvep.py) | Four flickering arrows; with `--guide`, `calib_start` · `repos` · `cue` · `calib_end` |
+| [`refresh.py`](src/stimulus/refresh.py) | Measures the real refresh rate of the screen that will show the stimulus |
+| [`registry.py`](src/stimulus/registry.py) | Key → command line, and which windows can write a session log. The only file in the repo that names a window module |
 
 ### [`src/research/`](src/research/) — the bench, not the product
 
 Not a synonym for "unfinished" — several of these were hardware-validated. It means the engine does
 not publish them, so they are not part of what students consume and may still change shape. There is
-no longer an application here, and no longer a decoder or a calibration: all six decoders moved to
-`core/`, all four calibrations are the engine's, and the pygame screens went to `archive/`.
+no longer an application here, no decoder, no calibration, and since 2026-09-09 **nothing that opens
+the headset or draws on screen**: all six decoders moved to `core/`, all four calibrations are the
+engine's, the two measurements followed, and the pygame screens went to `archive/`. What is left
+computes on files that were recorded earlier.
 
 | Family | Modules |
 |---|---|
-| pygame scaffolding — the window, the headset session, the live-mode machinery the archive imports | `ui.py` · `ssvep_stimulus.py` (arrow geometry and refresh measurement — publishes no marker) · `viewing.py` |
-| Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `mi_compare` · `itr` · `calibrate` |
-| Measured protocols, no counterpart elsewhere | `ssvep_guided.py` · `alpha_check.py` (measures your own alpha peak) |
+| Offline analysis — replay, compare, measure | `cvep_analyze` · `p300_analyze` · `ssvep_analyze` · `ssvep_guided` (replays an archived guided run with other settings) · `mi_compare` · `itr` · `calibrate` |
+| Stimulus geometry, on paper | `viewing.py` — target size and spacing in **degrees of visual angle**, the least controlled parameter of these measurements |
 | Refuted hypotheses, kept readable | `cvep_rcca.py` — the **Gold code factory**, not a decoder (the rCCA *decoder* is published, in `core/`); only `archive/cvep_rcca_pilot.py` still calls it |
-| Robot-testbed leftovers, kept as a baseline | `controller.py` · `live_ssvep.py` |
+| Robot-testbed leftovers, kept as a baseline | `controller.py` |
 
 ### [`archive/`](archive/) — retired, but still runs
 
-Ten programs that used to live in `research/` and were fully replaced — not deleted, because they
+Thirteen files that used to live in `research/` and were fully replaced — not deleted, because they
 are the reference the replacement was checked against, and because they decode **locally**, which is
-the only way to tell "the network decoding is worse" apart from "the session is worse". Six of them
-arrived on 2026-09-08 with the pygame app's deletion: three pilots and three calibrations. Each file
-keeps its own `--smoke`. See [`archive/README.md`](archive/README.md) for what moved where, and why
-running one can still overwrite `data/mi_model.joblib`.
+the only way to tell "the network decoding is worse" apart from "the session is worse". Six arrived
+on 2026-09-08 with the pygame app's deletion (three pilots, three calibrations), three more on
+2026-09-09: the alpha check, a seventh pilot screen, and `ui.py`.
+
+Twelve of the thirteen keep their own `--smoke`; `ui.py` has none because there is nothing to run in
+it — it is the shared pygame machinery (`App`, `Abort`, `signal_check`) that eight of the others
+import, and those eight cover it. See [`archive/README.md`](archive/README.md) for what moved where,
+and why running one can still overwrite `data/mi_model.joblib`.
 
 ## Self-tests (no headset needed)
 
 ```bash
-python src/core/server.py --smoke        # engine: registry, package boundary (core AND stimulus),
-                                         #   shared rest, streams, marker theft, save/discard
-python src/console/app.py --smoke        # console: grid, mode page, settings, link check,
-                                         #   window launcher, launch ORDER (Qt offscreen)
+python src/core/server.py --smoke        # engine: registry, package boundary (core, stimulus AND
+                                         #   research), shared rest, streams, marker theft,
+                                         #   save/discard, session recording
+python src/console/app.py --smoke        # console: grid, mode page, settings, link check, window
+                                         #   launcher, launch ORDER, startup screen, measurement
+                                         #   page, stream page (Qt offscreen)
 python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board
@@ -482,15 +579,23 @@ python src/core/modes/cvep_calib.py      # c-VEP training: the phase is CALLED, 
 python src/core/modes/mi_calib.py        # MI training: honest accuracy, never overwrites
 python src/core/errp_track.py            # the ErrP track: one written protocol, two screens
 
+python src/core/modes/mesure.py          # the base class of the two measurements: the timeline, and
+                                         #   the refusal of a SECOND timed activity, both ways
+python src/core/modes/alpha.py           # the alpha check: detrend held, flat channels refused
+python src/core/modes/ssvep_mesure.py    # the emission rate: ONE TRIAL IS ONE DECISION
+
 python src/stimulus/registry.py          # key -> command, checked against the contract BOTH ways
 python src/stimulus/errp.py --smoke      # ErrP window: track, deliberate errors, stamped at flip,
                                          #   and the ground-truth guard in BOTH directions
 python src/stimulus/p300.py --smoke      # P300 flash sequence: every target seen `reps` times
 python src/stimulus/cvep.py --smoke      # c-VEP clock: phase read from the PIXELS, frame by frame
+python src/stimulus/ssvep.py --smoke     # SSVEP arrows: cue read from the PIXELS, trials interleaved
 
-# The ten retired screens keep their own --smoke; see archive/README.md. No self-test above runs them.
+# The twelve retired screens keep their own --smoke; see archive/README.md. No self-test above runs
+# them.
 python src/research/controller.py        # SSVEP decode → smoothing → UDP, verified end to end
 python src/research/itr.py               # information transfer rate — common yardstick
+python src/research/ssvep_guided.py --smoke   # replays an archived guided run, offline
 ```
 
 ⚠️ Run them **one at a time**. Stream names are a public contract, so every instance publishes under

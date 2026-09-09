@@ -73,11 +73,12 @@ qu'un jugement : **un module est dans `src/core/` si et seulement si `server.py`
 tourner.** Tout le reste est dans `src/research/`.
 
 ```
-src/core/       config · acquisition · décodeurs · lsl_io · markers · server · modes/ (+ *_calib)
-src/stimulus/   les 3 fenêtres qui dessinent et marquent : p300 · errp · cvep · registry
-src/console/    la console PySide6 : app · banner · grid · mode_page · calib_page · contact_page ·
-                fenetres · params_form · live_views · beeps
-src/research/   socle pygame · analyses hors ligne · protocoles chiffrés · hypothèses réfutées
+src/core/       config · acquisition · décodeurs · lsl_io · markers · server ·
+                modes/ (+ *_calib, + mesure/alpha/ssvep_mesure)
+src/stimulus/   les 4 fenêtres qui dessinent et marquent : p300 · errp · cvep · ssvep · registry
+src/console/    la console PySide6 : app · demarrage · banner · grid · mode_page · calib_page ·
+                mesure_page · flux_page · contact_page · fenetres · params_form · live_views · beeps
+src/research/   analyses hors ligne · hypothèses réfutées — et RIEN qui ouvre le casque ou dessine
 ```
 
 Deux règles en découlent, et elles sont ce qui empêche la frontière de s'effacer avec le temps :
@@ -93,15 +94,17 @@ Deux règles en découlent, et elles sont ce qui empêche la frontière de s'eff
 `research` ne veut pas dire « brouillon ». Ça veut dire que le moteur ne le publie pas, donc que ça
 ne fait pas partie du contrat rendu aux étudiants. La règle a été appliquée jusqu'au bout : **les six
 décodeurs ont déménagé dans `core/` à mesure que le moteur les publiait**, le c-VEP en dernier le
-2026-08-21, **et les quatre calibrations les ont suivis, la dernière le 2026-09-08**
-(`core/modes/*_calib.py` : MI le 2026-07-30, P300 et ErrP le 2026-09-07, c-VEP le 2026-09-08).
-Ce qui reste dans `research/` aujourd'hui n'est ni un décodeur en attente ni une calibration : c'est
-le socle pygame que l'archive importe, les analyses hors ligne, deux protocoles chiffrés
-(`ssvep_guided.py`, `alpha_check.py`) — et les **hypothèses réfutées gardées lisibles**
-(`research/cvep_rcca.py`, la fabrique de codes Gold ; ce n'est PAS un décodeur, celui du rCCA vit
-dans `core/` et est publié). **`src/research/app.py` a été supprimée le 2026-09-08** : ses six
-écrans sont dans `archive/`, encore exécutables, gardés comme la référence LOCALE contre laquelle
-une séance casque compare le décodage réseau.
+2026-08-21, **les quatre calibrations les ont suivis, la dernière le 2026-09-08**
+(`core/modes/*_calib.py` : MI le 2026-07-30, P300 et ErrP le 2026-09-07, c-VEP le 2026-09-08), **et
+les deux MESURES le 2026-09-09** (`core/modes/alpha.py`, `core/modes/ssvep_mesure.py`).
+Ce qui reste dans `research/` aujourd'hui n'est ni un décodeur en attente, ni une calibration, ni un
+protocole à jouer : ce sont les analyses hors ligne (dont `ssvep_guided.py`, réduit au rejeu d'un
+run archivé), la géométrie visuelle sur le papier (`viewing.py`) et les **hypothèses réfutées gardées
+lisibles** (`research/cvep_rcca.py`, la fabrique de codes Gold ; ce n'est PAS un décodeur, celui du
+rCCA vit dans `core/` et est publié). **`src/research/app.py` a été supprimée le 2026-09-08** : ses
+six écrans sont dans `archive/`, encore exécutables, gardés comme la référence LOCALE contre
+laquelle une séance casque compare le décodage réseau — rejoints le 2026-09-09 par `alpha_check.py`,
+`live_ssvep.py` (un septième écran de pilotage) et `ui.py` (la machinerie pygame partagée).
 
 Corollaire pratique : les chemins du dépôt (`PROJECT_ROOT`, `DATA_DIR`, `EXAMPLES_DIR`) sont
 **centralisés dans `core/config.py`**. Ils étaient auparavant recalculés à la main dans dix modules
@@ -129,10 +132,12 @@ console    -> core, stimulus
 research   -> core, stimulus
 ```
 
-Les deux INTERDITS sont vérifiés : le scanner AST de `server.py --smoke` parse `src/core/**/*.py`
-**et** `src/stimulus/**/*.py`, avec deux listes distinctes — une fenêtre de stimulus EST du pygame,
-le lui interdire n'aurait aucun sens ; ce qu'on lui interdit, c'est de tirer le banc d'essai ou la
-console derrière elle. Les deux autres lignes sont des permissions : il n'y a rien à y vérifier.
+Les INTERDITS sont vérifiés : le scanner AST de `server.py --smoke` parse `src/core/**/*.py`,
+`src/stimulus/**/*.py` **et** `src/research/**/*.py`, avec trois listes distinctes — une fenêtre de
+stimulus EST du pygame, le lui interdire n'aurait aucun sens ; ce qu'on lui interdit, c'est de tirer
+le banc d'essai ou la console derrière elle.
+
+Les deux dernières lignes du tableau ci-dessus sont des permissions : il n'y a rien à y vérifier.
 
 ⚠️ **`core` ne nomme aucune fenêtre.** Le contrat d'un mode porte une CLÉ (`Calib.stimulus_id`,
 par exemple `"p300"`), jamais un chemin de module — c'est ce qui garde l'arête `core -> stimulus`
@@ -145,6 +150,42 @@ est, ce qui s'y règle, ce qu'il publie) posé à côté de son **runtime**. L'a
 séparé — `cca_decoder.py` est une CCA, indifférente au produit ; `modes/ssvep.py` est le mode.
 C'est ce contrat qui génère la grille de la console, ses formulaires de réglages et l'extrait de
 code client : aucun de ces trois ne recopie de catalogue, donc aucun ne peut vieillir séparément.
+
+### 3.2 La troisième liste : « plus une seule commande à taper » (2026-09-09)
+
+Le scan de `src/research/` est d'une autre nature que les deux premiers : il ne protège pas une
+dépendance technique, il protège une **règle de produit**.
+
+> **Rien dans `src/research/` ne doit ouvrir le casque ni afficher un stimulus.**
+> Concrètement : ni `core.acquisition`, ni `brainflow`, ni `pygame`.
+
+Le banc d'essai peut tout **calculer** sur des fichiers archivés — c'est son métier — mais acquérir
+et afficher sont de l'**usage réel**, et l'usage réel se pilote depuis l'interface. C'est la forme
+mécanique de la contrainte « un utilisateur ne tape aucune commande » : une capacité livrée sans
+chemin graphique est une tâche **INCOMPLÈTE**, pas une tâche à finir plus tard.
+
+⚠️ **Cette règle avait été demandée CINQ FOIS entre juillet et septembre 2026 sans jamais être
+écrite nulle part.** Chaque fois elle était traitée comme une fonctionnalité — on ajoutait un
+bouton — et le chantier suivant repartait sans elle, donc un nouveau trou apparaissait. C'est
+pourquoi elle est maintenant dans un TEST : une contrainte tenue par la discipline n'est pas tenue.
+
+Le test a d'ailleurs été écrit **avant** les retraits, et il était volontairement **ROUGE** : il
+nommait les six fichiers à traiter (`alpha_check`, `ssvep_guided`, `ssvep_stimulus`, `live_ssvep`,
+`ssvep_analyze`, `ui`), et chaque tâche du chantier le faisait verdir d'un cran. Écrit en dernier,
+il aurait constaté un état déjà propre et n'aurait rien prouvé. État final :
+`[smoke-frontiere] 57 fichiers scannés, 0 violation(s) de frontière`.
+
+En sont DEHORS, et ce n'est pas une échappatoire : les autotests (`--smoke`, autotests de module),
+qui s'adressent au développeur ; et `server.py --mode X`, le moteur **sans écran**, dont c'est
+justement le contrat public.
+
+Un cas a été tranché en lisant plutôt qu'en appliquant la règle mécaniquement :
+`research/ssvep_analyze.py` importait `core.acquisition` mais ne s'en servait que pour **une**
+méthode de filtrage, sur une session jamais démarrée. Il **reste** au banc d'essai ; c'est l'import
+qui est parti, remplacé par `ssvep_mesure.acquisition_de_reference()` — réécrire le filtrage ici
+aurait donné un second filtrage, accordé au premier le jour de son écriture puis divergeant en
+silence, alors que cet outil existe pour produire des chiffres **comparables** à ceux du moteur.
+Vérifié : sorties octet pour octet identiques sur les quatre `ssvep_guided_*.npz` archivés.
 
 ## 4. Les flux (contrat d'API)
 
@@ -270,9 +311,11 @@ filtre passé, la proposition automatique de fréquences (réglage `refresh_hz` 
 l'autre (moyenne de population ≈ 9,6 Hz, plage 7-13 Hz) et une cible posée dessus ne se distingue
 pas du bruit de fond au repos. Conséquence directe : **un jeu de fréquences qui marche pour une
 personne peut échouer pour la suivante.** Un enseignant ne doit donc jamais distribuer un réglage
-unique à toute une promotion sans le dire — chacun doit régler `alpha_hz` sur son propre pic
-(mesurable avec `python src/research/alpha_check.py`) et laisser la console lui proposer son propre
-jeu de fréquences.
+unique à toute une promotion sans le dire — chacun doit régler `alpha_hz` sur son propre pic et
+laisser la console lui proposer son propre jeu de fréquences. **Depuis le 2026-09-09 la boucle se
+ferme sans papier** : la mesure « Contrôle alpha » (§6.2) rend le pic et propose de l'appliquer
+elle-même au réglage `alpha_hz` du SSVEP. Auparavant il fallait le noter à la main sur un écran et
+le retaper sur un autre, ce qui est exactement le genre de valeur que ce dépôt a déjà vu diverger.
 
 ## 6. Calibration
 
@@ -318,6 +361,53 @@ Le mot « native » ci-dessus voulait dire « dans notre appli pygame ». Il veu
   verrait qu'une partie au hasard du tour de boucle — deux décodages muets, sans erreur.
 - ⚠️ **Aucune de ces quatre calibrations n'a jamais été jouée au casque par ce chemin.** Elles sont
   vérifiées entre deux processus, sur board synthétique. Ce sont les tests 2.6 à 2.9 de la recette.
+
+### 6.2 — Les MESURES : un protocole qui rend un verdict, pas un modèle (2026-09-09)
+
+Une **mesure** est le cousin d'une calibration : même ligne du temps (chauffe → essais → calcul →
+fini/annulé), même contrat public, donc **la même page générique de la console sans une ligne de
+plus** (`console/mesure_page.py`, jumelle de `calib_page.py`). Ce qui diffère tient en une phrase :
+
+> une calibration produit un **modèle** et demande s'il faut le garder ; une mesure produit un
+> **verdict** et n'écrit **rien**.
+
+Conséquence directe : pas de dossier candidat, pas de `save_calibration`, ni « Enregistrer » ni
+« Refaire ». Le seul geste proposé après coup est d'**appliquer un réglage que le moteur a
+lui-même désigné**. Socle : `core/modes/mesure.py` (`MesureRuntime`), commandes `start_mesure` /
+`cancel_mesure`.
+
+⚠️ **Une seule activité minutée à la fois.** `server.submit` refuse une calibration pendant une
+mesure **et** une mesure pendant une calibration — dans les deux sens, à la soumission comme dans
+la boucle (deux commandes envoyées dans la même fenêtre de sondage voient toutes deux un moteur
+vierge). Il n'y a qu'un casque, et deux protocoles minutés se voleraient leurs fenêtres de signal.
+C'est le jumeau exact du refus « mode + sa calibration » du §6.1.
+
+Deux mesures sont livrées, dans cet ordre — et le rang n'est pas décoratif :
+
+| mesure | durée | rend | barrière ? |
+|---|---|---|---|
+| `alpha` — **Contrôle alpha** | 37 s | ratio yeux fermés / yeux ouverts, pic (Hz), verdict | **OUI** |
+| `ssvep_taux` — **Taux d'émission SSVEP** | 3,6 min | taux d'émission, justesse à l'émission, intervalle de confiance | non |
+
+- Le **contrôle alpha est une BARRIÈRE** : sans montée d'alpha à la fermeture des yeux, les
+  électrodes occipitales ou la référence sont en cause et **aucun autre test de la séance ne veut
+  rien dire**. Le verdict est une phrase qui ARRÊTE, affichée au-dessus du chiffre — un chiffre lu
+  d'abord invite à négocier avec. Il remplace `research/alpha_check.py` (archivé) **à protocole
+  identique** : les durées et les bandes font corps avec le repère « ratio > ~1,5 », donc la mesure
+  n'expose **aucun** réglage.
+- Le **taux d'émission SSVEP** remplace `research/ssvep_guided.py`, un monolithe qui affichait,
+  acquérait et analysait. Il est coupé en deux : la fenêtre (`stimulus/ssvep.py --guide`) désigne la
+  cible et publie la vérité-terrain, le moteur applique **sa propre règle de décision**.
+  ⚠️ **UN ESSAI = UNE DÉCISION** : les fenêtres du moteur se chevauchent (1,5 s toutes les 0,2 s),
+  les compter gonflerait l'effectif d'un facteur ~7 et rétrécirait l'intervalle de confiance de √7.
+  L'effectif annoncé est un nombre d'essais.
+- 🔴 **Un désaccord CONSTATÉ et NON corrigé, à connaître avant de citer un taux** : le σ du rejet
+  d'artefact est pris sur les **8** voies par la mesure et sur les **4 occipitales filtrées** par le
+  mode. L'écart est **antérieur** — `ssvep_guided.py` faisait déjà ainsi — donc c'est la règle sous
+  laquelle les repères 100 %/44 % du 2026-07-27 ont été obtenus. L'aligner maintenant rendrait le
+  prochain chiffre incomparable au seul dont on dispose. **Décision à prendre hors chantier.**
+- ⚠️ **Ni l'une ni l'autre n'a jamais vu un cerveau.** Elles ont été éprouvées sur du bruit blanc et
+  des sinusoïdes posées à la main. Ce sont les tests 2.1 et 2.2 de la recette.
 
 ## 7. Stimulus : natif vs externalisé
 
@@ -519,7 +609,20 @@ correctif NaN→null. Seul le rendu HTML est parti.
 | `propose_params` | `id`, `key` | rend un jeu de valeurs proposé pour le réglage que `key` propose ; **ne l'applique pas** |
 | `set_published` | `id`, `on` | publie ou non le flux de ce mode ; le décodage continue pour l'affichage |
 | `recalibrate` | `id` | refait chauffe + repos de ce mode seul |
+| `start_calibration` · `cancel_calibration` | `id`, `params?` | joue / abandonne la calibration d'un mode (§6.1) |
+| `save_calibration` · `discard_calibration` | — | retient ou jette le modèle candidat. **Le seul chemin vers `data/`** |
+| `start_mesure` · `cancel_mesure` | `id`, `params?` | joue / abandonne une mesure (§6.2). N'écrit **rien** |
+| `start_enregistrement` | `stream` | le moteur écrit les verdicts d'un mode dans `seances/`, **une ligne par décision publiée**. ⚠️ **L'accusé ne promet AUCUN chemin** : le nom est décidé par la boucle et lu dans `snapshot()["enregistrement"]` |
+| `stop_enregistrement` | — | ferme le fichier ; rend le chemin et le compte |
 | `stop` | — | arrête le moteur |
+
+⚠️ **Les quatre dernières lignes tiennent la même règle : la console n'écrit JAMAIS sur le disque.**
+Elle envoie une commande et lit un état ; c'est le moteur qui tient la plume, sur le fil de la
+boucle. `start_enregistrement` a d'ailleurs coûté un correctif à ce titre : son premier accusé
+rendait tout de suite le nom du fichier, ce qui est plus commode et **faux** — deux clics dans la
+même fenêtre de sondage sont tous deux acceptés, la boucle refuse le second, et le second accusé
+annonçait donc un fichier qui n'a jamais existé (mesuré). Ne rien promettre qu'on ne puisse tenir
+est moins cher que d'expliquer après coup pourquoi le fichier annoncé est absent.
 
 `set_mode` et `set_freqs` **n'existent plus** : la première est remplacée par
 `start_mode`/`stop_mode`, la seconde par `set_params`. Leurs deux conséquences documentées
@@ -703,19 +806,46 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
          à 2.9.
        - **[à faire]** trancher, DEVANT UN CASQUE, si le **contrôle de liaison** de la console est
          trop strict : il refuse dès qu'une voie sort de [0,5 ; 500] µV et n'offre aucune porte de
-         sortie, là où `research/ui.py:signal_check` laissait passer sur n'importe quelle touche.
+         sortie, là où `archive/ui.py:signal_check` laissait passer sur n'importe quelle touche.
        - **[à faire]** une **poignée de main** entre la console et la fenêtre de stimulus. Il n'en
          existe aucune : la console soumet `start_calibration` puis lance la fenêtre, et c'est
          l'initialisation de pygame qui couvre les 15 s de chauffe du moteur. Ça tient, ce n'est pas
          garanti.
      - **[à faire]** le **control plane** (commandes JSON entrantes, §12.1) reste entier : ce
        chantier n'a livré que les marqueurs de STIMULUS, qui ne partagent que le mot « marqueur ».
+     - **[fait 2026-09-09 — chantier « plus une seule commande à taper »]** **il ne reste aucune
+       commande d'usage réel.** La règle est passée d'une intention à un test que le dépôt peut
+       échouer (§3.2). Livré : les **deux mesures** du §6.2 (contrôle alpha, taux d'émission SSVEP,
+       sur un socle `MesureRuntime` commun) ; l'**écran de départ** qui demande la source au lieu
+       d'un `--synthetic`, **sans repli automatique** ; la case **« Journal de séance »** cochée par
+       défaut, qui passe `--log` à la fenêtre ; la page **« Ce que voit ton application »**, qui lit
+       les flux **par LSL comme un client** ; et l'**enregistrement** d'une séance
+       (`start_enregistrement`, JSONL dans `seances/`, hors de `data/`). Retraits : `alpha_check.py`,
+       `live_ssvep.py` et `ui.py` vers `archive/` ; `ssvep_stimulus.py` vers `src/stimulus/ssvep.py`,
+       où il gagne `--guide`.
+       - **[à faire — LE point ouvert, toujours le même]** la **séance casque**. Ce chantier
+         **n'a mesuré strictement rien** : aucun repère chiffré du projet n'a bougé, aucun n'a été
+         produit. Les deux mesures neuves n'ont vu que du bruit blanc et des sinusoïdes posées à la
+         main. Ce sont les tests **2.1** et **2.2** de la recette, devenus des clics.
+       - **[à faire]** trancher le **désaccord de σ** entre `modes/ssvep.py` (4 voies occipitales
+         filtrées) et `core/modes/ssvep_mesure.py` (8 voies), documenté au §6.2. Les deux choix se
+         défendent ; ce qui ne se défend pas, c'est de continuer sans le savoir.
+       - **[à faire]** le **dépouillement** du test 2.9 reste manuel. Les deux fichiers existent
+         désormais côte à côte dans `seances/` et portent le même `local_clock()`, donc la jointure
+         est purement numérique — mais **rien n'a été écrit qui la fasse**.
+       - **[à faire]** rendre **structurelle** la règle « une ligne par décision publiée » de
+         l'enregistrement. Elle repose aujourd'hui sur une propriété des six modes (publier
+         reconstruit le dict de sortie), documentée et pinnée par un runtime factice, pas sur un
+         contrat déclaré : le mode #7 qui muterait sa sortie en place perdrait des lignes **en
+         silence**. La version étanche serait un compteur de publications dans `ModeRuntime`.
    - **[partiellement fait 2026-08-17]** la console a été ouverte en fenêtre au niveau 1 de la
      recette (13 tests, 3 défauts trouvés dont un non cosmétique). ⚠️ **Mais jamais AVEC un
      casque**, et ses pages de calibration, son contrôle de liaison et son lanceur de fenêtre — tous
      livrés le 2026-09-08 — n'ont été vus qu'hors écran (`--smoke`, Qt en `offscreen`, faux
-     processus). Restent à faire au casque : non-régression SSVEP, charge CPU en cumul de modes, un
-     repos partagé vécu de bout en bout, et les quatre calibrations.
+     processus), pas plus que son écran de départ, ses deux pages de mesure et sa page de flux,
+     livrés le 2026-09-09 (tests 1.17 et 1.18, neufs et jamais joués). Restent à faire au casque :
+     non-régression SSVEP, charge CPU en cumul de modes, un repos partagé vécu de bout en bout, les
+     quatre calibrations et les deux mesures.
 1. **[fait]** Import du code existant dans le dépôt GitHub (`medkar/EEG_API_Unicorn`).
 2. **[en cours]** Cette spec.
 3. **[fait 2026-07-27]** Extraire le **moteur** en cœur réutilisable ; restructurer `core/` vs

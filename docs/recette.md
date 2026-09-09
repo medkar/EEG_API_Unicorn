@@ -11,8 +11,8 @@ chacun se suffit à lui-même.
 | Niveau | Ce qu'il faut | Durée | Ce qu'il prouve |
 |---|---|---|---|
 | 0 | rien | 5 min | le code n'est pas cassé — **déjà passé le 2026-07-29** |
-| 1 | un écran | ~45 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.16** ; ⚠️ **1.2, 1.14, 1.15 et 1.16 ont changé le 2026-09-08** : la console lance elle-même les fenêtres de stimulus |
-| 2 | le casque | ~2 h | le décodage n'a pas régressé (dont 2.6 : la calibration MI, ~15 min ; et 2.9 : calibration c-VEP ~3 min + A 5 + B 5 + A' 5, montages compris) |
+| 1 | un écran | ~55 min | la console marche pour un humain — **passé le 2026-08-17, sauf 1.14 à 1.18** ; ⚠️ **1.2, 1.14, 1.15 et 1.16 ont changé le 2026-09-08** (la console lance elle-même les fenêtres de stimulus) et **1.17 / 1.18 sont NEUFS le 2026-09-09** (écran de départ, page de flux + enregistrement) |
+| 2 | le casque | ~2 h | le décodage n'a pas régressé (dont 2.1 et 2.2, devenus des pages de la console, ~5 min à eux deux ; 2.6 : la calibration MI, ~15 min ; et 2.9 : calibration c-VEP ~3 min + A 5 + B 5 + A' 5, montages compris) |
 | 3 | une 2e machine | ~15 min | c'est bien une API, pas un programme |
 
 ⚠️ **Les quatre derniers tests du niveau 2 (2.6 à 2.9) n'ont JAMAIS été joués**, et ce sont eux qui
@@ -27,6 +27,17 @@ jouées par le moteur et lancées d'un bouton, la console lance elle-même les f
 classes du MI. **Il n'a mesuré strictement rien** : quatre modes sur six n'ont toujours jamais été
 décodés au casque à travers le moteur, et la séance qui le ferait est exactement celle décrite en
 2.6 à 2.9. Elle est simplement devenue exécutable sans l'appli pygame.
+
+⚠️ **Et ce que le chantier « plus une seule commande à taper » (2026-09-09) y a changé.** Même
+nature, même avertissement : **des gestes, aucune mesure.** Quatre tests de ce document ne se
+tapent plus, ils se cliquent — **2.1** (contrôle alpha) et **2.2** (taux d'émission SSVEP) sont
+devenus des pages de la console, la source (casque ou board de test) se choisit à l'ouverture au
+lieu d'un `--synthetic`, et le journal de séance du **2.9** est une case cochée par défaut. Deux
+choses s'ajoutent, sans rien remplacer : la page **« Ce que voit ton application »**, qui montre le
+flux sortant lu comme un client, et son bouton **« Enregistrer les verdicts »**, qui écrit l'autre
+moitié du dépouillement du 2.9. **Aucun repère chiffré n'a bougé, et aucun n'a été produit.** Les
+deux mesures nouvelles n'ont jamais vu un cerveau : elles ont été éprouvées sur du bruit blanc et
+des sinusoïdes posées à la main.
 
 ## Avant toute séance — trois pièges qui ont déjà coûté des heures
 
@@ -72,10 +83,12 @@ python src/core/lsl_io.py            # publication LSL, pont d'horloge, verdicts
 python src/core/modes/cvep.py        # le mode c-VEP : la PHASE, les 4 causes de -1, le vote
 python src/core/cvep_models.py       # les modèles c-VEP : refus des hérités, quel décodeur, tri par date
 python src/stimulus/cvep.py --smoke  # la fenêtre c-VEP : la phase lue dans les PIXELS
-python src/core/server.py --smoke    # le moteur : frontière core/ ET stimulus/, cumul, repos
-                                     # partagé, flux, vol de marqueurs, save/discard
+python src/core/server.py --smoke    # le moteur : frontière core/, stimulus/ ET research/, cumul,
+                                     # repos partagé, flux, vol de marqueurs, save/discard,
+                                     # enregistrement de séance
 python src/console/app.py --smoke    # la console : grille, page de mode, formulaire, contrôle de
-                                     # liaison, lanceur de fenêtre, ORDRE (Qt offscreen)
+                                     # liaison, lanceur de fenêtre, ORDRE, écran de départ, page des
+                                     # mesures, page de flux (Qt offscreen)
 ```
 
 ⚠️ **Les trois lignes c-VEP ne sont pas décoratives non plus**, et la troisième moins que les
@@ -85,9 +98,11 @@ le compteur de l'émetteur. C'est la panne caractéristique de ce mode, celle qu
 exception et ressemble à un étudiant qui fixe mal. La liste complète est dans `CLAUDE.md`.
 
 ⚠️ **`python src/research/app.py --smoke` a disparu de cette liste le 2026-09-08** : l'appli pygame
-est **supprimée**. Ses six écrans sont dans `archive/`, chacun avec son `--smoke` — dix au total,
-listés dans [`archive/README.md`](../archive/README.md). Ils ne sont couverts par aucun des deux
-smokes ci-dessus ; les lancer est un geste à part, le jour où on a besoin d'un écran archivé.
+est **supprimée**. Ses écrans sont dans `archive/`, chacun avec son `--smoke` — **douze** au total
+pour treize fichiers (`ui.py` n'a rien à lancer : c'est la machinerie partagée, couverte par les
+huit qui l'importent), listés dans [`archive/README.md`](../archive/README.md). Ils ne sont couverts
+par aucun des deux smokes ci-dessus ; les lancer est un geste à part, le jour où on a besoin d'un
+écran archivé.
 
 **Les huit lignes du chantier « la console, seul point d'entrée »** (2026-09-08), qu'aucun des deux
 smokes n'exécute et qui portent tout ce que la console sait faire de neuf :
@@ -103,6 +118,27 @@ python src/stimulus/registry.py         # clé -> commande, correspondance véri
 python src/stimulus/p300.py --smoke     # la fenêtre P300 : séquence + séance de calibration
 python src/stimulus/errp.py --smoke     # la fenêtre ErrP : la vérité-terrain DANS LES DEUX SENS
 ```
+
+**Les quatre lignes du chantier « plus une seule commande à taper »** (2026-09-09), qui portent les
+deux mesures des tests 2.1 et 2.2 et la fenêtre qui sert la seconde :
+
+```bash
+python src/core/modes/mesure.py         # le SOCLE des mesures : la ligne du temps, et le refus
+                                        # d'une SECONDE activité minutée — dans les DEUX sens
+python src/core/modes/alpha.py          # le contrôle alpha (test 2.1) : le DÉTREND tenu (sans lui,
+                                        # l'offset DC de 10⁵ µV fait tomber le ratio de 4,44 à 2,26
+                                        # et TOUTE séance échoue à la barrière, casque parfait
+                                        # compris) et le refus des voies PLATES
+python src/core/modes/ssvep_mesure.py   # le taux d'émission (test 2.2) : UN ESSAI = UNE DÉCISION
+python src/stimulus/ssvep.py --smoke    # la fenêtre guidée : la cible lue dans les PIXELS,
+                                        # horodatage APRÈS le flip, essais ENTRELACÉS
+```
+
+⚠️ **`ssvep_mesure.py` porte l'invariant statistique de la mesure 2.2.** Les fenêtres du moteur se
+chevauchent (1,5 s toutes les 0,2 s) : compter chacune comme un essai indépendant est
+l'« amélioration » qui vient naturellement à l'esprit, et elle est fausse. Mesuré en mutant le
+fichier : n = 24 devient **168**, et l'intervalle de confiance s'effondre de 0,19 à **0,03** de
+large. Aucun autre test du dépôt ne rougit sous cette mutation.
 
 Attendu : `VERDICT : OK` pour tous, **sauf `acquisition.py`** qui n'imprime pas de ligne de verdict
 — pour celui-là, lire les `OK` ligne à ligne et le code de sortie (`$LASTEXITCODE` sous PowerShell,
@@ -135,9 +171,14 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
 
 ⚠️ **Le test 1.14 est arrivé APRÈS ce passage** (chantier des marqueurs entrants, livré le même
-jour) : il n'a jamais été joué à l'écran. C'est le seul du niveau 1 qui reste à faire.
+jour) : il n'a jamais été joué à l'écran. **Les tests 1.17 et 1.18 sont arrivés le 2026-09-09** et
+n'ont jamais été joués non plus. Ce sont les trois du niveau 1 qui restent à faire.
 
 Le board synthétique de BrainFlow remplace le casque : signal artificiel, aucun matériel.
+
+⚠️ **Le `--synthetic` des lancements ci-dessous est un RACCOURCI** depuis le 2026-09-09 : il saute
+l'écran de départ. C'est voulu pour cette recette — on veut le board de test sans un clic de plus —
+mais ce n'est plus le chemin normal, et l'écran qu'il saute est ce que le test 1.17 vérifie.
 
 **Deux choses à savoir avant de commencer, sinon tu vas chercher un bug qui n'existe pas :**
 
@@ -595,6 +636,65 @@ python -u examples/receiver.py --stream decoded_cvep
       du flux, la voie celui **en vigueur pour cet échantillon**. C'est ce qui permet de dépouiller
       un enregistrement six mois plus tard sans sa description LSL. Remettre 0,26 avant de partir.
 
+### 1.17 — L'écran de départ, et l'absence de repli
+
+⚠️ **Nouveau le 2026-09-09, jamais joué à l'écran.** C'est le seul test du niveau 1 qui se lance
+**sans `--synthetic`** — puisque c'est précisément le drapeau que cet écran remplace.
+
+```bash
+python src/console/app.py
+```
+
+- [ ] Une fenêtre s'ouvre AVANT la console : « sur quoi ouvrir la session ? », deux choix, casque
+      Unicorn ou board de test. Chacun est décrit ; celui du board dit franchement que le signal est
+      **FABRIQUÉ** et ne sert jamais à mesurer quoi que ce soit.
+- [ ] Choisir le **board de test** → la console s'ouvre, et le **bandeau du haut annonce la source
+      en permanence**. C'est le point : un board de test qu'on oublie est une séance entière de faux
+      signal prise pour du vrai.
+- [ ] Fermer la fenêtre de choix sans rien choisir (croix ou Échap) → **la console ne démarre pas**,
+      et le terminal le dit. Ouvrir « par défaut » sur l'un des deux serait le repli silencieux que
+      cet écran existe pour interdire, avec un clic de moins.
+- [ ] ⚠️ **Le point qui demande un casque, donc à faire au niveau 2** : choisir **Unicorn** alors
+      qu'aucun casque n'est appairé. Attendu — la console **ne bascule PAS** en synthétique : elle
+      dit que l'ouverture a échoué et repropose le choix. Un basculement silencieux ferait
+      enregistrer une séance entière de signal fabriqué. **Note ce qui s'est passé.**
+
+### 1.18 — « Ce que voit ton application », et l'enregistrement
+
+⚠️ **Nouveau le 2026-09-09, jamais joué à l'écran.** Cette page répond à la seule question qu'un
+étudiant se pose une fois son décodage lancé — *est-ce que mon appli reçoit quelque chose ?* — et à
+laquelle la console ne savait pas répondre.
+
+```bash
+python src/console/app.py --synthetic --mode ssvep
+```
+
+- [ ] En bas de la grille, un bouton **« Ce que voit ton application »**. Le cliquer → la page liste
+      les flux LSL trouvés **sur le réseau**, les nôtres en tête.
+- [ ] Choisir `EEG_API_Unicorn_decoded_ssvep` → les **noms de voies** s'affichent
+      (`target_index`, `freq_hz`, `confidence`, `score_*`) et des valeurs défilent. ⚠️ Attends la
+      fin de la chauffe et du repos (~23 s) : le flux décodé n'est créé qu'à ce moment-là.
+- [ ] **LE point de ce test, et il tient en une case à cocher.** Retourner à la grille, **décocher
+      « publié » sur la tuile SSVEP** (le mode continue de décoder, seule la diffusion s'arrête),
+      revenir sur la page de flux et **relancer « Chercher les flux »**. Attendu :
+      `decoded_ssvep` a **disparu de la liste**, et l'absence se **DIT** plutôt que de laisser un
+      panneau vide. Le moteur, lui, décode toujours — si le panneau montrait encore quelque chose,
+      c'est qu'il lirait l'état interne au lieu du réseau, et il afficherait alors des données
+      pendant qu'aucun client ne reçoit rien. C'est exactement la panne qu'on vient regarder ici.
+      Recocher « publié » → le flux revient.
+- [ ] Cliquer **« Enregistrer les verdicts »**. La page affiche **où** ça écrit — un `.jsonl` dans
+      `seances/`, à la racine du dépôt, **jamais dans `data/`**.
+      ⚠️ Le refus est explicite si le mode n'est **pas démarré** : un fichier vide se relirait après
+      coup comme une séance ratée, pas comme un mode qu'on avait oublié de lancer.
+- [ ] Laisser tourner une minute, cliquer **« Arrêter l'enregistrement »**, puis ouvrir le fichier.
+      Attendu : une ligne `header` (le flux, le mode, les voies, les réglages en vigueur), N lignes
+      `verdict` avec un `t` en horloge LSL, une ligne `fin` avec le compte.
+- [ ] ⚠️ **Une ligne par décision PUBLIÉE, pas par tour de boucle.** Sur un mode qui n'émet que
+      44 % du temps — le régime normal du SSVEP — un fichier qui compterait les tours se relirait à
+      100 %, et il mentirait sur la seule grandeur qu'on vient y chercher.
+- [ ] Vérifier que `data/` n'a **rien** gagné (`Get-ChildItem data | Measure-Object`, avant et
+      après). Un verdict de séance n'est ni un modèle ni un enregistrement EEG.
+
 ---
 
 ## Niveau 2 — au casque
@@ -603,18 +703,50 @@ python -u examples/receiver.py --stream decoded_cvep
 
 ### 2.1 — Ton pic alpha (à faire en premier : tout le reste en dépend)
 
+⚠️ **Ce test ne se tape plus, il se clique** (2026-09-09). C'était `python src/research/alpha_check.py` ;
+c'est maintenant une **page de la console**, et le protocole est joué par le moteur. Le script
+existe encore, archivé en `archive/alpha_check.py`, et il n'y a **aucune raison de le lancer** : il
+ouvrirait le casque une seconde fois.
+
+**Le protocole n'a pas changé d'un pouce** — 8 s les yeux ouverts, 8 s les yeux fermés, bande
+8-12 Hz, repère **ratio > ~1,5**. C'est délibéré : le repère a été observé sous CES durées, et
+raccourcir une phase diviserait la résolution spectrale par deux en continuant d'afficher un
+verdict avec le même aplomb. C'est aussi pourquoi cette mesure **n'expose aucun réglage**.
+
 ```bash
-python src/research/alpha_check.py
+python src/console/app.py
 ```
 
-Suivre les consignes yeux ouverts / yeux fermés. Test de référence = effet de Berger : l'alpha monte
-franchement quand tu fermes les yeux.
+Grille → seconde rangée, **« Contrôles et mesures »** → tuile **« Contrôle alpha »**, marquée
+**BARRIÈRE — à passer AVANT le reste** → **Ouvrir** → lire le briefing → **Commencer**.
 
-- [ ] L'alpha monte à la fermeture des yeux sur PO7/Oz/PO8. **Si non, arrête tout** : électrodes ou
-      référence mal placées, aucun autre test du niveau 2 ne voudra rien dire.
-- [ ] Noter la fréquence du pic : ______ Hz.
-- [ ] La saisir dans « Pic alpha » (console → SSVEP), cliquer **Proposer**, noter le jeu proposé :
-      ______ . S'il diffère de 8,571/15/20, c'est attendu et c'est l'intérêt du réglage.
+- [ ] La console passe d'abord par le **contrôle de liaison**, comme pour une calibration. C'est
+      utile ici pour une raison propre : une voie débranchée s'y refuse en 2 s au lieu de 37.
+- [ ] **Un TOP SONORE annonce chaque changement d'étape**, et il y en a cinq. Le dernier est le plus
+      important : il n'annonce pas une étape mais la **fin** des yeux fermés — c'est le seul signal
+      qui dise de rouvrir les yeux. Si la machine n'a pas de son, la page le **dit** : dans ce cas,
+      fais-toi assister, ou renonce à ce test. ⚠️ La chauffe, elle, ne sonne pas.
+- [ ] Mâchoire relâchée : un serrement de dents noie la bande alpha sous de l'EMG et le ratio
+      devient illisible. Yeux ouverts, fixe un point ; yeux fermés, sans serrer les paupières.
+- [ ] **Le verdict.** Il porte le **ratio** et le **pic**, et il est moyenné sur les quatre voies
+      occipitales que le moteur nomme lui-même — **Pz, PO7, Oz, PO8** (`OCCIPITAL`). ⚠️ L'écran
+      d'origine imprimait « PO7/Oz/PO8 » alors qu'il en moyennait quatre : la phrase avait cessé
+      d'être vraie le jour où Pz a rejoint la liste, sans que rien ne le signale.
+      Ratio : ______ (repère > ~1,5) · pic : ______ Hz.
+- [ ] **Si la barrière n'est pas franchie, ARRÊTE LA SÉANCE ICI.** La page l'écrit en rouge,
+      au-dessus du détail, et nomme les trois gestes dans l'ordre : électrodes occipitales →
+      mastoïdes → saline. Aucun autre test du niveau 2 ne veut rien dire sans alpha.
+- [ ] **La boucle se ferme d'un clic** : quand la barrière passe, un bouton apparaît, du genre
+      `Appliquer « Pic alpha » = 10,5 Hz à « SSVEP »` — la phrase est **composée par le moteur**,
+      qui nomme lui-même le mode et le réglage. Le clic envoie `set_params` : la valeur ne se note
+      plus sur un carnet pour être retapée dans un autre écran. ⚠️ Rien n'est proposé quand la
+      barrière échoue, et c'est voulu : sur un signal sans alpha, le « pic » n'est que le plus grand
+      bin d'un spectre de bruit. ⚠️ Le moteur peut aussi
+      **refuser** (`set_params` n'atteint qu'un mode démarré, et le SSVEP n'a aucune raison de
+      tourner pendant un contrôle alpha) : le refus s'affiche, et il suffit alors de saisir le pic
+      à la main sur la page SSVEP.
+- [ ] Sur la page SSVEP, cliquer **Proposer** et noter le jeu obtenu : ______ . S'il diffère de
+      8,571/15/20, c'est attendu et c'est tout l'intérêt du réglage.
 
 ### 2.2 — Non-régression du SSVEP
 
@@ -622,14 +754,48 @@ Le seul point où une régression silencieuse coûterait vraiment cher. Référe
 2026-07-27 : **100 % de justesse quand le moteur émet (0 confusion sur 36 essais), mais il n'émet
 que 44 % du temps**.
 
-```bash
-python src/research/ssvep_guided.py
-```
+⚠️ **Ce test ne se tape plus non plus** (2026-09-09). C'était `python src/research/ssvep_guided.py`,
+un monolithe qui affichait, acquérait et analysait. Il est coupé en deux : la **fenêtre**
+(`src/stimulus/ssvep.py --guide`, qui désigne la cible) et la **mesure** (`core/modes/ssvep_mesure.py`,
+qui décide et compte), et la console lance les deux. `research/ssvep_guided.py` existe toujours,
+réduit à sa moitié d'analyse : il **rejoue un run archivé** avec d'autres réglages, sans casque.
 
+Grille → **« Contrôles et mesures »** → tuile **« Taux d'émission SSVEP »** → **Ouvrir** →
+**Commencer**. Une seconde fenêtre s'ouvre et fait clignoter les cibles du réglage en vigueur —
+**trois** au défaut du dépôt (AVANT 15 Hz, GAUCHE 20 Hz, DROITE 8,571 Hz) ; **3,6 min** au total
+(15 s de chauffe, 12 s de repos, 12 essais par cible soit **36**).
+🐛 *La géométrie des flèches en prévoit quatre, et le briefing affiché par la console en annonce
+encore « quatre » : le jeu de fréquences par défaut n'en a que trois. Message faux, sans danger —
+compte les flèches à l'écran, pas dans le texte.*
+
+- [ ] ⚠️ **Fixe la flèche entourée de bleu**, dans la fenêtre de stimulus — pas la console, qui n'a
+      rien à montrer pendant ce temps. Pendant le REPOS du début, fixe la **croix centrale** et ne
+      suis **aucune** flèche : c'est là que le moteur mesure son fond de corrélation, et le suivre
+      fausserait tout ce qui vient après.
+- [ ] ⚠️ **Ne ferme pas la fenêtre de stimulus à la main.** Sans son marqueur de fin, aucun verdict
+      n'est calculé — un taux sur séance tronquée serait indiscernable d'un taux complet.
 - [ ] Justesse quand le moteur émet : ______ % (référence : 100 %).
 - [ ] Taux d'émission : ______ % (référence : 44 %).
+- [ ] **Les deux chiffres se lisent ENSEMBLE**, et la page l'écrit. Le taux seul fait passer un
+      régime parfaitement normal pour une panne ; la justesse seule fait croire à un sans-faute. Un
+      long silence entre deux verdicts justes **est** le régime normal de ce mode.
+- [ ] ⚠️ **L'effectif annoncé est un nombre d'ESSAIS, pas de fenêtres.** Les fenêtres du moteur se
+      chevauchent (1,5 s toutes les 0,2 s), donc une fixation en contient sept ou huit ; les compter
+      gonflerait l'effectif d'un facteur ~7 et rétrécirait l'intervalle de confiance de √7, sans
+      apporter une seule observation. L'intervalle affiché doit être **large** à n = 36 : s'il est
+      étroit, c'est le défaut que cette mesure existe pour éviter.
 - [ ] Aucun avertissement « cible quasi INDÉTECTABLE » au démarrage. S'il apparaît, le plancher de
       repos est trop bruité : re-saliner, revérifier les mastoïdes, refaire la chauffe.
+
+> 🔴 **Un désaccord connu entre cette mesure et le mode, à connaître avant de citer un taux.** Le
+> σ du rejet d'artefact est pris sur les **8** voies par la mesure, et sur les **4 occipitales
+> filtrées** par le mode qui décode en direct. Le rejet ne tombe donc pas forcément sur les mêmes
+> essais, et il est vraisemblablement plus sensible aux artefacts **frontaux** (le clignement, que
+> Fz voit et qu'Oz voit peu) : le taux relevé ici est, sur ce point, légèrement **conservateur**.
+> ⚠️ **Cet écart est ANTÉRIEUR** — `ssvep_guided.py` mesurait déjà son σ ainsi, donc c'est la règle
+> sous laquelle le 100 %/44 % du 2026-07-27 a été obtenu. Il est laissé tel quel exprès : l'aligner
+> rendrait le prochain chiffre incomparable au seul dont on dispose. **Décision à prendre hors
+> séance.**
 
 ### 2.3 — Le cumul sous charge réelle
 
@@ -978,22 +1144,32 @@ comptent** :
 
 ⚠️ **Cette règle ne s'applique QUE si tu écris les deux côtés dans des fichiers.** Le dépouillement
 se fait **après** la séance, sur un journal — jamais en direct, et jamais en comparant deux fenêtres
-de terminal à l'œil (~1 500 lignes à 5 Hz pour 5 min, contre ~35 consignes). Les deux moitiés
-existent, et elles portent le **même horodatage `local_clock()`**, ce qui rend la jointure purement
-numérique :
+de terminal à l'œil (~1 500 lignes à 5 Hz pour 5 min, contre ~35 consignes).
 
-| côté | quoi | comment |
-|---|---|---|
-| vérité-terrain | une ligne JSON par consigne, avec `t` et `compter_a_partir_de` | `src/stimulus/cvep.py --log seance_stim.jsonl` |
-| verdicts | une ligne par échantillon, préfixée `t=…` | `python -u examples/receiver.py --stream decoded_cvep > seance_recv.txt` |
+**Il faut DEUX fichiers, et depuis le 2026-09-09 la console les produit tous les deux sans qu'on
+tape quoi que ce soit.** Ils portent le **même horodatage `local_clock()`**, ce qui rend la jointure
+purement numérique — c'est toute la raison d'être de ce couple :
 
-- [ ] **Lance l'émetteur avec `--log` et redirige le terminal 3 dans un fichier.** Sans ces deux
-      fichiers, la séance n'est **pas dépouillable** : le scrollback est le seul autre exemplaire,
-      le 2.9 demande plus bas de fermer les trois terminaux entre ses blocs, et une séance casque ne
-      se répète pas.
-      ⚠️ **C'est la raison pour laquelle ce test-ci lance l'émetteur À LA MAIN et non par le bouton
-      « Lancer le stimulus » de la console** : le bouton ne passe aucune option, donc pas de `--log`
-      et pas de `--seed`. Sans journal, la séance ne se dépouille pas et le 2.9 ne conclut rien.
+| côté | ce que c'est | où il naît | comment l'obtenir |
+|---|---|---|---|
+| **vérité-terrain** | une ligne JSON par consigne, avec `t` et `compter_a_partir_de` | la **fenêtre** de stimulus | case **« Journal de séance »** sur la page c-VEP, **cochée par défaut** — ou `src/stimulus/cvep.py --log …` à la main |
+| **verdicts** | une ligne par décision **publiée**, avec son `t` | le **moteur** | bouton **« Enregistrer les verdicts »** de la page « Ce que voit ton application » — ou `python -u examples/receiver.py --stream decoded_cvep > seance_recv.txt` |
+
+Les deux atterrissent dans **`seances/`**, à la racine du dépôt, côte à côte et horodatés
+(`cvep_AAAAMMJJ-HHMMSS.jsonl` pour la fenêtre, `moteur_decoded_cvep_AAAAMMJJ-HHMMSS.jsonl` pour le
+moteur). ⚠️ **Jamais dans `data/`** : ce sont des verdicts de séance, ni des modèles ni des
+enregistrements EEG.
+
+- [ ] **Vérifie que tu as bien les DEUX**, avant de commencer et pas après. Sans eux la séance n'est
+      **pas dépouillable** : le scrollback est le seul autre exemplaire, le 2.9 demande plus bas de
+      fermer les terminaux entre ses blocs, et une séance casque ne se répète pas.
+- [ ] ⚠️ **L'enregistrement du moteur écrit une ligne par décision PUBLIÉE, pas par tour de
+      boucle.** C'est ce qui le rend comparable au relevé qu'on cherche : sur un mode qui se tait la
+      moitié du temps, un fichier qui compterait les tours se relirait à 100 % d'émission.
+- [ ] ⚠️ **Ce qui reste hors des boutons : `--seed`.** Le journal, lui, est passé par la case. Si tu
+      veux pouvoir **rejouer la séance à l'identique**, il faut lancer l'émetteur à la main
+      (`python src/stimulus/cvep.py --seed N --log …`) — c'est le montage à trois terminaux décrit
+      plus bas, et c'est celui que les blocs A/A' utilisent pour être comparables.
 
 #### ⚠️ 3. Il faut un modèle, et il est propre à TA personne
 
@@ -1026,14 +1202,37 @@ gagnant. Elle écrit **deux** fichiers horodatés (`data/cvep_model_AAAAMMJJ-HHM
       `.npz` rCCA en croyant avoir tout enregistré est le défaut que la tâche 8 a corrigé.
 - [ ] **Note le nom exact du fichier eCCA** : ______________________ . Tu en auras besoin pour la
       comparaison, qui n'a de sens que sur le **même modèle**.
-- [ ] **Ferme la console** avant de lancer le moteur du bloc A. Elle ouvre le casque, et l'Unicorn
-      n'accepte qu'une connexion.
+- [ ] **Si tu pars sur le montage (b) ci-dessous, ferme la console** avant de lancer le moteur du
+      bloc A. Elle ouvre le casque, et l'Unicorn n'accepte qu'une connexion. En montage (a) tu ne
+      la fermes jamais — c'est précisément l'intérêt, une seule ouverture d'amplificateur pour toute
+      la séance (cf. la saturation C3/Cz à la réouverture).
 
 #### La séance
 
 ⚠️ **Ne retire pas le casque, ne resaline pas, ne referme pas la session entre les deux moitiés de
 ce test.** La comparaison du dernier point ne vaut que si les deux décodages voient le même montage
 sur la même tête.
+
+**Deux montages, et il faut choisir AVANT de mettre le casque.**
+
+**(a) Tout depuis la console** — le chemin du produit depuis le 2026-09-09, et le seul qui ne
+demande aucune commande. Un seul programme, une seule connexion casque :
+
+```bash
+python src/console/app.py --mode cvep
+```
+
+1. Page c-VEP → vérifie que **« Journal de séance » est cochée** (elle l'est par défaut) →
+   **Lancer le stimulus**.
+2. Retour à la grille → **« Ce que voit ton application »** → choisir `EEG_API_Unicorn_decoded_cvep`
+   → **Enregistrer les verdicts**.
+
+Les deux fichiers partent dans `seances/`, la console dit où. ⚠️ **Ce montage ne donne pas de
+`--seed`** : la séance ne se rejouera pas à l'identique. C'est acceptable pour un premier bloc A,
+pas pour un A-B-A qu'on veut reproductible — d'où le montage (b).
+
+**(b) Trois terminaux** — le montage historique, et **celui que les blocs A / A' doivent utiliser**
+si tu veux pouvoir rejouer. C'est aussi celui d'une application tierce :
 
 ```bash
 # terminal 1 — le moteur (15 s de chauffe, PAS de repos : le c-VEP ne mesure aucun plancher)
@@ -1045,8 +1244,12 @@ python src/stimulus/cvep.py --log seance_A_stim.jsonl
 python -u examples/receiver.py --stream decoded_cvep > seance_A_recv.txt
 ```
 
-⚠️ Le terminal 3 **n'affiche donc plus rien** : c'est voulu, il écrit. Pour surveiller en direct,
-regarde le terminal 1 (une ligne par seconde, verdict + corrélations) et le bandeau de l'émetteur.
+⚠️ **Jamais la console ET le moteur en même temps** : ils publieraient `decoded_cvep` deux fois sous
+le même nom. Choisis (a) OU (b).
+
+⚠️ En montage (b), le terminal 3 **n'affiche donc plus rien** : c'est voulu, il écrit. Pour
+surveiller en direct, regarde le terminal 1 (une ligne par seconde, verdict + corrélations) et le
+bandeau de l'émetteur.
 
 - [ ] Le terminal 2 dit **« le moteur écoute. »**. S'il dit « PERSONNE n'écoute », arrête tout : le
       moteur n'est pas là, ou le nom du flux diffère. Le bandeau du haut de l'écran garde cet
@@ -1070,10 +1273,13 @@ regarde le terminal 1 (une ligne par seconde, verdict + corrélations) et le ban
       de frames sautées — quelques-unes sont sans gravité, chacune est résorbée au marqueur suivant.
       (Le même bilan est aussi la dernière ligne de `seance_A_stim.jsonl`, `"kind":"bilan"`.)
 - [ ] **Dépouille, après la séance, sur les deux fichiers.** Pour chaque ligne `"kind":"consigne"`
-      de `seance_A_stim.jsonl`, prends les lignes de `seance_A_recv.txt` dont le `t=` est **≥ son
+      du journal de la fenêtre, prends les lignes de verdicts dont le `t` est **≥ son
       `compter_a_partir_de`** et **< le `t` de la consigne suivante** ; compare leur `target_index`
       au champ `cible`. Trois colonnes : cible juste, cible fausse, `-1`.
       Justes : ______ · fausses : ______ · silences : ______ .
+      *(Montage (a) : `seances/cvep_*.jsonl` et `seances/moteur_decoded_cvep_*.jsonl`, le
+      `target_index` étant sous `sortie`. Montage (b) : `seance_A_stim.jsonl` et
+      `seance_A_recv.txt`, le `t=` étant en tête de ligne.)*
       ⚠️ Les deux `t` sont dans le **même domaine** (`local_clock()`) : c'est une comparaison de
       nombres, pas un rapprochement à l'œil. Si tu n'as qu'un seul des deux fichiers, ce point n'est
       pas faisable — reprends la séance avec `--log` et la redirection.
@@ -1262,25 +1468,40 @@ mais **n'ont jamais été compilés** : il n'y a pas d'Unity sur ce poste.
 - **Tous les chiffres de ce projet viennent d'UNE personne.** SSVEP, MI, P300, ErrP, c-VEP : une
   tête, souvent une séance. Ce ne sont pas des moyennes, ce sont des points.
 - **Le contenu du mode neuro n'a jamais été validé.** Cf. 2.5.
-- **Aucune application CLIENTE n'affiche encore un stimulus.** Les trois fenêtres
-  (`src/stimulus/p300.py`, `src/stimulus/errp.py`, `src/stimulus/cvep.py`) sont des références
-  écrites ici, dans ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
+- **Aucune application CLIENTE n'affiche encore un stimulus.** Les quatre fenêtres
+  (`src/stimulus/p300.py`, `errp.py`, `cvep.py`, `ssvep.py`) sont des références écrites ici, dans
+  ce dépôt, en Python et en pygame. Qu'un moteur de jeu tienne la frame comme le c-VEP l'exige n'est
   vérifié nulle part — c'est le 3.3, et il n'a jamais été joué.
 - **RIEN de la console n'a été vu avec un casque sur la tête** — ni ses quatre pages de
-  calibration, ni son contrôle de liaison, ni son lanceur de fenêtre. Tout ce que le chantier du
-  2026-09-08 a livré est vérifié **hors écran** (Qt en `offscreen`, board synthétique, faux
-  processus) : ça prouve le câblage entre deux processus, jamais l'ergonomie ni le décodage. Trois
-  questions n'ont de réponse qu'en séance, et les tests 2.6 à 2.9 sont l'occasion de les trancher :
+  calibration, ni ses deux pages de mesure, ni son écran de départ, ni son contrôle de liaison, ni
+  son lanceur de fenêtre, ni sa page de flux. Tout ce que les chantiers du 2026-09-08 et du
+  2026-09-09 ont livré est vérifié **hors écran** (Qt en `offscreen`, board synthétique, faux
+  processus) : ça prouve le câblage entre deux processus, jamais l'ergonomie ni le décodage. Quatre
+  questions n'ont de réponse qu'en séance, et les tests 2.1 à 2.9 sont l'occasion de les trancher :
   est-ce que les 15 s de chauffe couvrent vraiment l'écart de lancement fenêtre/moteur **sur cette
   machine** ; est-ce qu'un étudiant comprend qu'un chiffre affiché n'est pas encore un modèle
-  enregistré ; et est-ce que le **contrôle de liaison bloque une séance légitime** (il refuse dès
-  qu'une seule voie sort de [0,5 ; 500] µV, sans porte de sortie).
-- **Les dix écrans de `archive/` ne sont couverts que par leur `--smoke`**, et par rien d'autre :
+  enregistré ; est-ce que le **contrôle de liaison bloque une séance légitime** (il refuse dès
+  qu'une seule voie sort de [0,5 ; 500] µV, sans porte de sortie) ; et est-ce que le **top sonore**
+  du contrôle alpha s'entend vraiment, sur cette machine et avec ce casque audio — c'est le seul
+  signal qui dise de rouvrir les yeux.
+- **Les deux MESURES n'ont jamais vu un cerveau non plus.** Le contrôle alpha et le taux d'émission
+  SSVEP ont été exercés sur du bruit blanc et des sinusoïdes posées à la main. Le repère
+  « ratio > ~1,5 » vient d'**une** personne sur ce casque, et la seconde cause d'échec du contrôle
+  alpha — « ça monte, mais ce n'est pas de l'alpha » — n'a **jamais** été observée sur un vrai
+  signal : le test qui la couvre la fabrique avec une raie à 7,5 Hz, et que ce soit la forme qu'un
+  artefact de mouvement prend réellement est une **hypothèse**.
+- 🟠 **Deux constats parqués mordront pendant cette recette.** La console prend `accepted` pour
+  « la séance a démarré » — une instance a été traitée à la source pour l'enregistrement, le motif
+  reste ailleurs — et **les refus lancés depuis la GRILLE ne vont encore que dans le terminal**
+  (c'est le défaut 1.13, toujours ouvert). Si un clic paraît sans effet, regarde le terminal avant
+  de conclure à une panne.
+- **Les douze écrans de `archive/` ne sont couverts que par leur `--smoke`**, et par rien d'autre :
   aucun des deux smokes du dépôt ne les exécute. Trois d'entre eux décodent en LOCAL
   (`cvep_pilot.py`, `p300_pilot.py`, `errp_demo.py`) et servent de RÉFÉRENCE en séance — c'est ce
   que le 2.9 exploite pour le c-VEP, et le même geste est désormais possible pour le P300 et l'ErrP.
-  ⚠️ Aucun des dix n'a vu un cerveau depuis son archivage, et deux d'entre eux (`mi_calibrate.py`,
-  `mi_pilot.py`) écrivent encore sous les anciens noms FIXES : lire `archive/README.md` avant.
+  ⚠️ Aucun des douze n'a vu un cerveau depuis son archivage, et deux d'entre eux
+  (`mi_calibrate.py`, `mi_pilot.py`) écrivent encore sous les anciens noms FIXES : lire
+  `archive/README.md` avant.
 
 ---
 
