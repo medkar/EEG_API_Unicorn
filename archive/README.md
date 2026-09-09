@@ -48,14 +48,23 @@ the console.
 
 ## Arrived 2026-09-09 — "no command left to type"
 
-The first of the command-line **protocols** to move in, and the only one here that never drew
-anything: it printed to a terminal. It is retired for the same reason as the pygame screens — it
-opened the headset itself, so it could not run beside the console, and a student had to type its
-name to start a session.
+This is the round that turned the rule into a test: **nothing under `src/research/` may open the
+headset or put a stimulus on screen** — no `pygame`, no `brainflow`, no `core.acquisition` —
+checked by `python src/core/server.py --smoke` (the `[smoke-frontiere]` block). Acquiring and
+displaying are real use, and real use is driven from the console rather than typed into a terminal;
+calculating on files already recorded is bench work and stays free. The rule had been asked for
+five times between July and September 2026 without ever being written down anywhere, so every round
+rediscovered it by failing. A constraint held by discipline is not held.
+
+Three files came down here as a result, and they are three different kinds of thing: a
+command-line protocol, a pilot screen the previous round missed, and the machinery underneath the
+screens.
 
 | File | What it was, and why it is here |
 |---|---|
 | `alpha_check.py` | The Berger check (eyes open / eyes closed) on the command line, formerly `src/research/alpha_check.py` and step 2.1 of the recipe. Now a MEASURE the engine plays and the console drives (`src/core/modes/alpha.py`, "Contrôle alpha" tile), which took its protocol verbatim — 3 s / 8 s open / 3 s / 8 s closed, band 8-12 Hz, peak in 6-14 Hz, "ratio > ~1.5". Kept because that identical arithmetic is what the engine's version was written against: when the app returns a surprising number, running this one separates "the computation changed" from "the session changed". Three things it does NOT have: a sound cue (half the measure happens with the eyes closed, where a printed line is unreadable), a refusal on a dead link (four flat channels give ~1e-27 of power on both sides, so the ratio here is rounding noise), and the one-click hand-off of the measured peak to the SSVEP's `alpha_hz`. |
+| `live_ssvep.py` | The live SSVEP diagnostic, formerly `src/research/live_ssvep.py`: flickering arrows with each target's CCA rho drawn on top, the winning target, the smoothed decision and the signal sigma. This is the **seventh** pilot screen, and the 2026-09-08 round simply missed it — it opens the headset itself and draws a stimulus, exactly like the six above. Both of its uses now have a path in the app: watching rho rise under fixation is the SSVEP mode's live plot in the console, and measuring the emission rate is the "Taux d'émission SSVEP" tile (`core/modes/ssvep_mesure.py`), which counts **one trial per decision** where this screen let overlapping windows be read as independent samples. Kept as a LOCAL decoder to compare against the network one in session, and because its `--guided` protocol is what wrote the `data/ssvep_guided_*.npz` archives — the only files `src/research/ssvep_analyze.py` knows how to read. ⚠️ `--guided` writes into `data/` for real; see the last section. |
+| `ui.py` | **Not a screen: the machinery the eight screens above import.** The shared pygame window, the single BrainFlow session, the link-quality display, and the live-mode plumbing (`App`, `Abort`, `Live`, `_live_loop`, `_running`, `_vote`). It was `src/research/ui.py`, where it was the base of the unified pygame app deleted on 2026-09-08; from that day it had no live caller left in `research/` at all, only the archived screens here. It broke the new rule in both ways at once — pygame AND `core.acquisition` — which is unsurprising, since drawing and acquiring are precisely its job. It has **no `--smoke` of its own** because it has nothing to launch; it is covered by the twelve below, eight of which fail to import without it. |
 
 ## Running them
 
@@ -74,18 +83,30 @@ python archive/cvep_calibrate.py --smoke
 python archive/p300_calibrate.py --smoke
 python archive/errp_calibrate.py --smoke
 python archive/alpha_check.py --smoke
+python archive/live_ssvep.py --smoke
 ```
 
+That is twelve commands for thirteen files: `ui.py` is machinery, not a screen, and has nothing to
+launch. It is exercised by the eight smokes that import it — hide it and they stop at
+`ModuleNotFoundError`.
+
 Each is also runnable for real, on a headset, on its own. They do **not** share one set of options:
-`--smoke` is on all eleven and `--synthetic` on the ten pygame ones — `alpha_check.py` has no
+`--smoke` is on all twelve and `--synthetic` on the eleven pygame ones — `alpha_check.py` has no
 `--synthetic`, because its protocol IS 22 seconds of `time.sleep` and a synthetic board would only
 make you wait them; its `--smoke` therefore exercises the arithmetic alone, with no board at all.
 `--windowed` is not universal either (`mi_pilot.py` calls it `--fullscreen`, `mi_calibrate.py` and
-`alpha_check.py` have neither), and `--model` exists only on the **five** that load
-or write one — `ssvep_pilot.py` has none, because the SSVEP needs no calibration, which the table
-above already says. On those five, `--model` defaults to `None`, which means **the most recent
-LOADABLE model** for the pilots and **a timestamped name** for the calibrations; neither ever
-defaults to a fixed path.
+`alpha_check.py` have neither), and `--model` exists only on the **seven** that load or write one:
+`cvep_pilot.py`, `cvep_rcca_pilot.py`, `p300_pilot.py`, `errp_demo.py` and the three calibrations.
+`ssvep_pilot.py` and `live_ssvep.py` have none, because the SSVEP needs no calibration, which the
+table above already says; `mi_pilot.py` and `mi_calibrate.py` have none either, because they still
+use the old fixed names (see below).
+
+On six of those seven, `--model` defaults to `None`, which means **the most recent LOADABLE model**
+for the pilots and **a timestamped name** for the calibrations. ⚠️ **`cvep_pilot.py` is the
+exception**: its default is `CVEP_MODEL_PATH`, a fixed path, so running it bare loads whatever sits
+at `data/cvep_model.npz` rather than your latest calibration. Pass `--model` explicitly — this is
+the one that matters in session, since it is the local reference the network decoding is compared
+against, and `CLAUDE.md` carries the same warning.
 
 ## What they are allowed to write
 
@@ -94,13 +115,19 @@ names (`mi_model.joblib`, `mi_calib_last.npz`) — so a real, hands-on run of an
 calibration **overwrites** the previous one. That is one of the two defects the engine's
 calibration fixed; it is left here on purpose, so the archive stays what it was.
 
+`live_ssvep.py --guided` also writes to `data/`, and that one is **not** a defect: it archives the
+raw 8-channel windows of a guided run under a timestamped name, and those files are the only input
+`src/research/ssvep_analyze.py` has. It overwrites nothing. Its `--smoke` runs both of its paths —
+the guided one included, since that is the only one that ever writes — and refuses to touch the
+folder; the guard sits at the top of `_save_raw`, **before** the `np.savez`, never after.
+
 Nothing else here does that. `cvep_rcca_pilot.py --calibrate` and the three 2026-09 calibrations
 default to **timestamped** names (`chemin_modele_horodate`), same pattern as the engine — changed
 after a review round found the old fixed default pointed straight at `data/cvep_rcca_model.npz`,
 the file a miswired smoke run had *already* destroyed once earlier the same day. Pass `--model`
 explicitly if you want the old fixed-name behavior back.
 
-All eleven `--smoke` runs are guarded by `core.config.empreinte_dossier`: it snapshots `data/` (size +
+All twelve `--smoke` runs are guarded by `core.config.empreinte_dossier`: it snapshots `data/` (size +
 mtime per file) before and after, and fails loudly if anything changed. The guard exists because of
 what it catches: an unchecked save is what cost this project four Motor Imagery models, and on
 2026-09-08 `cvep_rcca_pilot.py` wrote a model trained on synthetic noise straight into the real
