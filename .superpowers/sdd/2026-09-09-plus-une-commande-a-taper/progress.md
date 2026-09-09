@@ -81,6 +81,27 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   ont été mesurés — l'aligner rendrait le prochain chiffre incomparable. Documenté en tête de
   `ssvep_mesure.py` ; **décision à prendre hors chantier**.
 
+- **T10 : complete** — `1fd659d`→`ea25e62` (5 commits), sous-agent. **`[smoke-frontiere] VERDICT :
+  OK`** : 57 fichiers scannés, **0 violation**. Le test de la T1 est vert, compteur **trois → zéro**.
+  L'ordre contraint a été tenu : `ui.py` traité seul et en premier, les **12** smokes de `archive/`
+  verts avant tout le reste. ⚠️ Déménagements faits au `git mv` : **l'étape « suppressions en
+  dernier » n'a pas d'objet**, il n'a jamais existé d'instant où original et copie coexistaient.
+  🔵 **`ssvep_analyze.py` RESTE au banc d'essai** — question tranchée en le lisant : son import ne
+  servait aucun enregistrement live, seulement `_filter` sur une acquisition jamais démarrée
+  (`prepare_session()` est dans `start()`, jamais atteinte). Il emprunte désormais le filtrage du
+  moteur via `ssvep_mesure.acquisition_de_reference()`, rendue **publique** pour la raison écrite
+  dans sa propre docstring (« pour que le banc d'essai n'ait plus à connaître l'acquisition »).
+  Sorties **octet pour octet identiques** sur les 4 `ssvep_guided_*.npz` : aucun chiffre n'a bougé.
+  🔴 **Le risque `data/` était réel et il est traité** : `live_ssvep.py --guided` ÉCRIT dans `data/`.
+  Sa garde était déjà bien placée (avant le `np.savez`), mais son smoke ne jouait pas ce chemin-là.
+  Il joue maintenant **les deux** et vérifie l'empreinte. Preuve du rouge faite : garde neutralisée
+  → le smoke rougit en nommant `ssvep_guided_20260909-144750.npz` ; restauré, fichier supprimé,
+  empreinte revenue à la baseline. Empreinte du vrai `data/` **identique** début/fin
+  (43 fichiers, sha1 `5b6bf6c3…`), `seances/` à 0.
+  🟡 `archive/README.md` portait **deux faussetés antérieures**, corrigées contre la source :
+  `--model` est sur **sept** fichiers (pas cinq), et `cvep_pilot.py` **défaut vers un chemin FIXE**
+  (`CVEP_MODEL_PATH`) — c'est la référence locale de la séance, et `CLAUDE.md` le disait déjà.
+
 ## Réserve à porter
 
 - 🔴 **La T3 a empiété sur la T10** en archivant `alpha_check.py`. C'est justifié (le compteur ne
@@ -106,3 +127,13 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   aucune ligne dans `README.md`, `docs/SPEC.md` ni `docs/recette.md`. Le test **2.9 doit citer les
   DEUX fichiers**, pas seulement le journal de la fenêtre. Et `CLAUDE.md` cite encore
   `python src/research/app.py`, qui n'existe plus.
+- 🟡 **Pour la T11, trois chemins morts laissés par la T10**, à jour dans le code mais pas dans les
+  trois documents que la T11 réécrit : `README.md:445` range encore `live_ssvep.py` (et
+  `controller.py`) dans `research/` ; `CLAUDE.md:318` et `docs/SPEC.md:706` citent
+  `research/ui.py:signal_check`, désormais `archive/ui.py:signal_check`. Les **17** références
+  équivalentes dans le code ont été repointées (`ea25e62`).
+- 🟡 **`ssvep_analyze.py` filtre à `fs=250` quel que soit le `fs` du fichier lu.** Antérieur à la
+  T10 et sans effet aujourd'hui (board synthétique et Unicorn sont tous deux à 250 Hz — c'est
+  pourquoi la sortie est restée identique après le changement d'import). Un enregistrement pris à
+  un autre `fs` serait filtré de travers **en silence** ; `ssvep_mesure` a `longueur_bloc_attendue`
+  pour refuser ce cas, cet outil-ci n'a pas d'équivalent. Hors périmètre T10.
