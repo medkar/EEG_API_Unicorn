@@ -49,6 +49,14 @@ class CalibrationRuntime:
     warmup_s = 15.0         # stabilisation du casque, JETÉE (dérive DC de l'Unicorn)
     warmup_per_class = 2    # essais d'échauffement NON enregistrés
 
+    # Comment cette séance se NOMME dans le journal, et comment s'appelle son calcul final. Deux
+    # attributs de classe plutôt qu'un texte en dur dans `_terminer` : cette méthode est héritée
+    # TELLE QUELLE par `modes/mesure.py`, qui n'entraîne RIEN. Un contrôle alpha raté
+    # s'annonçait « [calib] entraînement impossible » — et un étudiant y cherchait un modèle que
+    # personne n'avait demandé.
+    _journal = "calib"
+    _nom_du_calcul = "entraînement"
+
     def __init__(self, spec, params, engine, rng=None, dossier=None):
         """`spec` : le `ModeSpec` du mode calibré. `params` : les réglages VALIDÉS de la calibration.
 
@@ -253,7 +261,7 @@ class CalibrationRuntime:
         except Exception as e:  # noqa: BLE001 - l'échec de l'entraînement ne tue pas le moteur
             self.probleme = f"{type(e).__name__} : {e}"
             self.phase = "annule"
-            print(f"[calib] entraînement impossible : {self.probleme}")
+            print(f"[{self._journal}] {self._nom_du_calcul} impossible : {self.probleme}")
         self.etape, self.classe, self._echeance = "", "", None
 
     # --- l'état, pour l'afficheur -------------------------------------------

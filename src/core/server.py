@@ -121,6 +121,17 @@ _VOL_DE_MARQUEURS = (
     "sur des époques trouées et le décodage raterait des flashs, les deux rendant des chiffres "
     "plausibles et faux")
 
+# ⚠️ UN SEUL PROTOCOLE MINUTÉ À LA FOIS — calibrations et mesures confondues. Même forme que la
+# phrase ci-dessus, autre cause : ici rien n'est volé, c'est la PERSONNE qui ne peut pas obéir à
+# deux consignes. Écrite ICI, une fois, et servie aux deux sens du refus — la même panne expliquée
+# de deux façons finirait par n'en décrire qu'une.
+_UNE_SEULE_ACTIVITE = (
+    "il n'y a qu'UN casque et qu'une personne. Deux protocoles minutés qui tourneraient ensemble "
+    "prélèveraient leurs fenêtres dans le MÊME tampon glissant, chacun à ses propres instants, "
+    "pendant qu'un seul écran affiche une seule consigne : celui qui demande « ferme les yeux » et "
+    "celui qui demande « imagine ton poing » obtiendraient exactement le même signal. Aucune "
+    "exception, aucun compteur — les deux rendraient des chiffres plausibles et faux")
+
 
 def _calibration_lit_les_marqueurs(calib):
     """La calibration DÉCLARÉE par un mode consomme-t-elle la file de marqueurs du moteur ?
@@ -195,6 +206,14 @@ class EngineServer:
         # personne. Elle vit ICI et non dans `self.active` — un mode qui refuse de démarrer sans
         # modèle (le MI) rendrait sa propre calibration inatteignable.
         self.calibration = None
+        # AU PLUS UNE mesure, et jamais en même temps qu'une calibration : c'est le même casque et
+        # la même personne (cf. `_UNE_SEULE_ACTIVITE`). Elle vit dans son propre emplacement, à
+        # côté de `self.calibration` et pour la même raison — un protocole minuté n'est pas un
+        # mode : il ne publie aucun flux, il rend un VERDICT qu'on lit à l'écran.
+        #
+        # ⚠️ Ce qui la sépare vraiment d'une calibration : **elle n'écrit rien**. Pas de dossier
+        # candidat, pas de `save_mesure`, aucun fichier — donc rien à nettoyer dans `close()`.
+        self.mesure = None
         # ⚠️ OÙ UNE CALIBRATION ÉCRIT, ET OÙ ELLE N'ÉCRIT PAS.
         # Jusqu'au 2026-09-07, une calibration sauvegardait DANS `data/` puis annonçait sa
         # précision. Comme le moteur, la console et les applis proposent tous le modèle
@@ -333,6 +352,38 @@ class EngineServer:
             return None
         return (f"la calibration de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS}. Attends "
                 f"qu'elle finisse, ou abandonne-la, avant de démarrer « {spec.id} ».")
+
+    # --- le refus d'une SECONDE ACTIVITÉ, dans ses DEUX sens -------------------
+    # Même discipline que les deux méthodes ci-dessus : une RAISON ou None, sur une copie prise
+    # par l'appelant, et servie à la fois à `submit` (qui refuse tout de suite) et à la BOUCLE
+    # (`_start_calibration`, `_start_mesure`), qui doit refuser une seconde fois — deux commandes
+    # soumises dans la même fenêtre de sondage voient toutes les deux un moteur vierge.
+    #
+    # ⚠️ Le sens qu'on oublie est TOUJOURS le second. La porte se ferme naturellement dans le sens
+    # où l'on pense en l'écrivant (« ne pas calibrer pendant une mesure ») et reste ouverte dans
+    # l'autre, parce que rien ne la rappelle. Les deux sont donc écrits côte à côte, et les deux
+    # sont testés (`core/modes/mesure.py`).
+
+    def _refus_pour_calibration_en_cours(self, calibration):
+        """Refuser une nouvelle activité parce qu'une CALIBRATION tourne ? La raison, ou None.
+
+        `calibration` : une copie de `self.calibration` prise par l'appelant — `submit` tourne sur
+        le fil de l'interface pendant que la boucle en démarre et en abandonne sur le sien.
+        """
+        if calibration is None or calibration.terminee:
+            return None
+        return (f"une CALIBRATION est en cours ({calibration.spec.label}) : {_UNE_SEULE_ACTIVITE}. "
+                f"Attends qu'elle finisse, ou abandonne-la.")
+
+    def _refus_pour_mesure_en_cours(self, mesure):
+        """Refuser une nouvelle activité parce qu'une MESURE tourne ? La raison, ou None.
+
+        `mesure` : une copie de `self.mesure`, pour la même raison que ci-dessus.
+        """
+        if mesure is None or mesure.terminee:
+            return None
+        return (f"une MESURE est en cours ({mesure.spec.label}) : {_UNE_SEULE_ACTIVITE}. "
+                f"Attends qu'elle finisse, ou abandonne-la.")
 
     def _start(self, ids, values, now):
         """Démarre des modes. Ceux lancés ENSEMBLE partagent une seule phase de repos."""
@@ -504,6 +555,13 @@ class EngineServer:
             print(f"[server] calibration ignorée : « {self.calibration.spec.label} » est déjà "
                   f"en cours")
             return
+        # Le SECOND sens de la même porte : une mesure tourne, et `submit` a jugé sur un moteur où
+        # `start_mesure` n'était pas encore appliqué. Sans ce contrôle-ci, côté boucle, les deux
+        # protocoles tourneraient bel et bien ensemble.
+        refus_mesure = self._refus_pour_mesure_en_cours(self.mesure)
+        if refus_mesure:
+            print(f"[server] calibration refusée : {refus_mesure}")
+            return
         spec = registry.get(mode_id)
         # Le second contrôle du VOL DE MARQUEURS, côté boucle — jumeau exact de celui de `_start`,
         # et pour la même course : `submit` a jugé sur un moteur où `start_mode` n'était pas
@@ -534,6 +592,36 @@ class EngineServer:
               f"{self.calibration.total()} essais, "
               f"≈ {self.calibration.duree_estimee_s() / 60:.0f} min — "
               f"stabilisation {self.calibration.warmup_s:.0f} s d'abord")
+
+    def _start_mesure(self, mesure_id, values):
+        """Construit la mesure. Appelée par la boucle, jamais par le fil d'une interface.
+
+        ⚠️ **Les DEUX refus sont refaits ICI**, et ce n'est pas de la ceinture et des bretelles :
+        `submit()` a jugé sur l'état du moteur à l'instant où la commande a été SOUMISE. Deux
+        commandes soumises dans la même fenêtre de sondage — `start_mesure` et
+        `start_calibration`, ou deux `start_mesure` sur un double-clic — ont toutes les deux vu un
+        moteur vierge et ont donc été acceptées toutes les deux. Sans ce second contrôle, la
+        seconde écraserait SILENCIEUSEMENT la première, et les deux protocoles prélèveraient dans
+        le même tampon. C'est le jumeau exact du contrôle de `_start_calibration`.
+        """
+        refus = (self._refus_pour_mesure_en_cours(self.mesure)
+                 or self._refus_pour_calibration_en_cours(self.calibration))
+        if refus:
+            print(f"[server] mesure refusée : {refus}")
+            return
+        spec = registry.get_mesure(mesure_id)
+        if spec is None or spec.runtime_cls is None:
+            # `submit` a déjà refusé les deux cas ; on ne construit pas un `None(spec, …)` pour
+            # autant si la commande arrive par un autre chemin.
+            print(f"[server] mesure ignorée : « {mesure_id} » est inconnue ou n'est pas livrée")
+            return
+        # ⚠️ Aucun `dossier=`, à la différence d'une calibration : une mesure n'écrit RIEN. Son
+        # runtime n'accepte même pas l'argument (cf. `modes/mesure.py`), pour qu'un ajout distrait
+        # échoue bruyamment au lieu de faire entrer un verdict de séance dans `data/`.
+        self.mesure = spec.runtime_cls(spec, values, self)
+        print(f"[server] {spec.label} : ≈ {self.mesure.duree_estimee_s() / 60:.1f} min, "
+              f"{self.mesure.total()} fenêtre(s) prélevée(s) — stabilisation "
+              f"{self.mesure.warmup_s:.0f} s d'abord. Rien ne sera écrit sur le disque.")
 
     # --- le candidat : produit, montré, puis retenu ou jeté --------------------
     # `_entrainer` écrit dans `self.calib_dir`. Le résultat est ADOPTÉ ici (une fois), affiché par
@@ -710,7 +798,7 @@ class EngineServer:
 
     COMMANDS = ("start_mode", "propose_params", "stop_mode", "set_params", "set_published",
                 "recalibrate", "start_calibration", "cancel_calibration", "save_calibration",
-                "discard_calibration", "stop")
+                "discard_calibration", "start_mesure", "cancel_mesure", "stop")
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
@@ -841,6 +929,14 @@ class EngineServer:
                 return {"accepted": False,
                         "reason": f"une calibration est déjà en cours ({en_cours.spec.label}) — "
                                   f"abandonne-la avant d'en lancer une autre"}
+            # ⚠️ Et le SECOND sens de la même porte, celui qu'on oublie : une MESURE tourne. Placé
+            # ici, AVANT `contract.validate`, pour la même raison que le refus du vol de marqueurs
+            # dix lignes plus haut — c'est une propriété de l'ÉTAT du moteur, pas des réglages
+            # soumis, et le faire passer après ferait dépendre le message de l'existence d'un
+            # modèle dans `data/`.
+            refus_mesure = self._refus_pour_mesure_en_cours(self.mesure)
+            if refus_mesure:
+                return {"accepted": False, "reason": refus_mesure}
             values, reason = contract.validate(calib, params.get("params") or {})
             if values is None:
                 return {"accepted": False, "reason": reason}
@@ -852,6 +948,40 @@ class EngineServer:
             if en_cours is None or en_cours.terminee:
                 return {"accepted": False, "reason": "aucune calibration en cours"}
             self._commands.put(("cancel_calibration", {}))
+            return {"accepted": True, "command": command, "id": en_cours.spec.id}
+
+        if command == "start_mesure":
+            # Une MESURE : un protocole minuté qui rend un VERDICT à l'écran et n'écrit rien
+            # (cf. `core/modes/mesure.py`). D'où l'absence totale de `save_mesure`/`discard_mesure`
+            # en face de `save_calibration` : il n'y a aucun fichier à retenir ou à jeter.
+            spec = registry.get_mesure(params.get("id"))
+            if spec is None:
+                connus = ", ".join(s.id for s in registry.MESURES) or "aucune pour l'instant"
+                return {"accepted": False,
+                        "reason": f"mesure inconnue : {params.get('id')} (connues : {connus})"}
+            if spec.runtime_cls is None:
+                return {"accepted": False,
+                        "reason": f"la mesure « {spec.label} » est déclarée mais son runtime "
+                                  f"n'est pas livré : le moteur ne sait pas encore la jouer"}
+            # ⚠️ LES DEUX SENS DU REFUS, sur des copies prises UNE fois chacune (la boucle peut
+            # les remettre à `None` entre deux lectures, et `submit` promet en toutes lettres de
+            # ne jamais lever). Le premier refuse une mesure pendant une calibration ; le second,
+            # une mesure pendant une autre mesure — un double-clic sur « Commencer » y suffit.
+            refus = (self._refus_pour_calibration_en_cours(self.calibration)
+                     or self._refus_pour_mesure_en_cours(self.mesure))
+            if refus:
+                return {"accepted": False, "reason": refus}
+            values, reason = contract.validate(spec, params.get("params") or {})
+            if values is None:
+                return {"accepted": False, "reason": reason}
+            self._commands.put(("start_mesure", {"id": spec.id, "params": values}))
+            return {"accepted": True, "command": command, "id": spec.id, "params": values}
+
+        if command == "cancel_mesure":
+            en_cours = self.mesure   # même motif de copie que `cancel_calibration` plus haut
+            if en_cours is None or en_cours.terminee:
+                return {"accepted": False, "reason": "aucune mesure en cours"}
+            self._commands.put(("cancel_mesure", {}))
             return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
         if command in ("save_calibration", "discard_calibration"):
@@ -963,6 +1093,15 @@ class EngineServer:
             self._save_calibration()
         elif command == "discard_calibration":
             self._discard_calibration()
+        elif command == "start_mesure":
+            self._start_mesure(params["id"], params["params"])
+        elif command == "cancel_mesure":
+            if self.mesure is not None:
+                # Plus simple que son homologue `cancel_calibration` : il n'y a AUCUN candidat à
+                # jeter en même temps, donc aucun risque que ce message contredise un fichier
+                # écrit entre-temps. Une mesure n'écrit rien, c'est sa définition.
+                self.mesure.cancel()
+                print("[server] mesure abandonnée — aucun verdict produit")
 
     def _drain_commands(self):
         while True:
@@ -1131,6 +1270,10 @@ class EngineServer:
         # UNE copie, comme pour `calib` : sans elle, un même instantané pourrait porter un
         # `resultat` déjà déplacé dans `data/` ET le `candidat` d'avant le déplacement.
         candidat = self.candidat
+        # UNE copie de la mesure, pour la même raison exactement : la boucle peut la remettre à
+        # `None` (arrêt du moteur) entre deux lectures, et `None.state()` lèverait ICI, dans le
+        # fil de la console.
+        mesure = self.mesure
         state = self._state(not self._stop, active=active, calibration=calib)
         etat_calib = None if calib is None else calib.state(now=time.perf_counter())
         if etat_calib is not None:
@@ -1147,6 +1290,16 @@ class EngineServer:
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
             "calibration": etat_calib,
+            # La MESURE en cours, dans la MÊME forme qu'une calibration — c'est tout l'intérêt du
+            # socle : `MesureRuntime` hérite de `state()` sans la redéfinir, donc un écran de
+            # protocole peint l'une comme l'autre sans une ligne de plus.
+            #
+            # ⚠️ Elle ne figure pas dans `_state()`, donc pas dans le flux LSL `status` — comme
+            # `calibration`, et pour la même raison : c'est un état d'INTERFACE, pas un contrat
+            # public. La phase publiée, elle, reste celle des modes : une mesure n'empêche aucun
+            # décodage (le taux d'émission SSVEP a précisément besoin que le mode tourne), donc
+            # annoncer autre chose que « decoding » à un client serait faux.
+            "mesure": None if mesure is None else mesure.state(now=time.perf_counter()),
             # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
             # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
             # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
@@ -1651,6 +1804,21 @@ class EngineServer:
                     # sinon adopté seulement si une autre calibration démarrait après.
                     self._adopte_candidat()
 
+                    # La MESURE, exactement au même régime que la calibration : chaque tour, sans
+                    # période minimale, et sous le même filet. ⚠️ Aucun `_adopte_candidat` en
+                    # face : une mesure ne produit AUCUN fichier, donc il n'y a rien à ramasser —
+                    # son verdict vit dans `self.mesure.resultat` et part dans `snapshot()`.
+                    if self.mesure is not None and not self.mesure.terminee:
+                        try:
+                            self.mesure.tick(self, now)
+                        except Exception as e:  # noqa: BLE001 - un tick fautif ne doit tuer NI le
+                            # moteur NI la séance des autres modes. Même traitement que la
+                            # calibration juste au-dessus : « annulé » avec sa raison à l'écran.
+                            self.mesure.probleme = f"{type(e).__name__} : {e}"
+                            self.mesure.phase = "annule"
+                            print(f"[server] mesure interrompue par une exception : "
+                                  f"{self.mesure.probleme}")
+
                     # Publié quand l'état change, plus un rappel périodique pour les clients qui
                     # se connectent après le démarrage (LSL ne rejoue pas le passé).
                     due = now - last_status >= STATUS_PERIOD_S
@@ -1713,6 +1881,13 @@ class EngineServer:
                 if self.calibration is not None:
                     self.calibration.cancel()
                     self.calibration = None
+                # Une mesure non plus : elle tient les mêmes fenêtres de signal et la même
+                # référence vers `self`, donc le même cycle. Le verdict disparaît avec elle, et
+                # c'est sans conséquence : le moteur ne s'arrête que quand la console se ferme,
+                # et il n'y a aucun fichier à récupérer.
+                if self.mesure is not None:
+                    self.mesure.cancel()
+                    self.mesure = None
                 # ⚠️ INCONDITIONNEL, dans le `finally` : si le moteur s'arrête entre
                 # l'entraînement et la décision — console fermée, Ctrl+C, exception BrainFlow —
                 # aucun candidat ne doit survivre au processus. `close()` est idempotente, la
@@ -1870,6 +2045,7 @@ def _smoke():
         _smoke_calibration_refus(),
         _smoke_oreille_calibration(),
         _smoke_vol_marqueurs(),
+        _smoke_mesure(),
         _smoke_cumul(),
         _smoke_proposition(),
         _smoke_dimensionnement(),
@@ -2801,6 +2977,24 @@ def _smoke_oreille_calibration():
 
     print(f"[smoke-oreille-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def _smoke_mesure():
+    """Les mesures : leur ligne du temps ET le refus d'une seconde activité.
+
+    ⚠️ **DÉLÉGUÉ, pas recopié.** Le refus vit dans CE fichier (`_refus_pour_mesure_en_cours` /
+    `_refus_pour_calibration_en_cours`, plus leurs jumeaux côté boucle), mais il n'a de sens
+    qu'avec un `MesureRuntime` en face, et l'autotest de `core/modes/mesure.py` en construit
+    déjà un — avec son protocole, son horloge fabriquée et son moteur factice. Écrire la même
+    vérité aux deux endroits, c'est la laisser diverger : un jour l'un des deux serait corrigé
+    et pas l'autre, et le vert de celui qu'on lance le plus couvrirait le rouge de l'autre.
+
+    Ce qui compte est que `python src/core/server.py --smoke` rougisse si l'un des deux sens du
+    refus disparaît — et c'est ce que cet appel garantit.
+    """
+    from core.modes.mesure import _selftest as _selftest_mesure
+
+    return _selftest_mesure()
 
 
 def _smoke_vol_marqueurs():

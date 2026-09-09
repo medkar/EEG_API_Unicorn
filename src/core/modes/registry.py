@@ -45,6 +45,71 @@ MODES = (
 
 BY_ID = {spec.id: spec for spec in MODES}
 
+# --- LES MESURES ------------------------------------------------------------------------------
+# Une mesure n'est PAS un mode : elle ne publie aucun flux, ne se règle pas en cours de route, et
+# rend un VERDICT qu'on lit à l'écran plutôt qu'un modèle sur le disque (cf. `core/modes/mesure.py`).
+# Son catalogue vit néanmoins ICI, avec celui des modes, pour une raison d'IMPORTS : une mesure
+# concrète (`core/modes/alpha.py`) importe `MesureRuntime` de `mesure.py`, donc `mesure.py` ne peut
+# pas importer les mesures en retour sans cycle. Rassembler les modules d'un paquet pour en faire
+# une liste est exactement ce que ce fichier fait déjà, une ligne plus haut.
+#
+# Vide tant que la première mesure n'est pas livrée : le chantier « plus une seule commande à
+# taper » y met le contrôle alpha (tâche 3) puis le taux d'émission SSVEP (tâche 9).
+MESURES = ()
+
+
+def get_mesure(mesure_id):
+    """Le `MesureSpec` de cet identifiant, ou None.
+
+    Parcourt `MESURES` plutôt qu'un dictionnaire pré-calculé à l'import, à la différence de
+    `get()` : l'autotest de `core/modes/mesure.py` REMPLACE `MESURES` le temps de son passage
+    (comme `_selftest` d'ici le fait déjà pour `MODES`), et un index figé à l'import continuerait
+    à répondre sur l'ancienne liste — le test passerait alors pour la mauvaise raison. Deux
+    mesures dans le produit : le coût du parcours ne se mesure pas.
+    """
+    return next((s for s in MESURES if s.id == mesure_id), None)
+
+
+def catalogue_mesures():
+    """Toutes les mesures, sérialisées — ce que la console reçoit pour peindre ses tuiles.
+
+    Même geste que `catalog()` pour les modes : la console lit un ÉTAT et ne recopie aucun
+    catalogue (règle de `CLAUDE.md`). Sans ça, elle réécrirait les libellés et les briefings dans
+    son propre code, et les deux vérités divergeraient au premier réglage ajouté.
+    """
+    return [
+        {
+            "id": spec.id,
+            "label": spec.label,
+            "summary": spec.summary,
+            "briefing": list(spec.briefing),
+            # Le moteur sait-il JOUER cette mesure ? Même champ, même usage que pour une
+            # calibration : la tuile reste, et le bouton ne ment pas.
+            "jouable": spec.runtime_cls is not None,
+            "barriere": spec.barriere,
+            "params": _params_serialises(spec.params),
+        }
+        for spec in MESURES
+    ]
+
+
+def _params_serialises(params):
+    """Des `Param` en dictionnaires JSON-ables — la forme que `console/params_form.py` consomme.
+
+    Partagée entre la calibration d'un mode et une mesure. Le bloc des params du MODE, lui, garde
+    sa propre écriture : il tire son `default` de `defauts`, résolu UNE fois pour tout le
+    `serialize` (cf. son long commentaire), là où ces deux-ci résolvent à l'appel.
+    """
+    return [
+        {
+            "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
+            "default": p.default_now(), "min": p.min, "max": p.max,
+            "count": list(p.count) if p.count else None, "proposes": p.proposes,
+            "choices": list(p.choices_now()), "help": p.help,
+        }
+        for p in params
+    ]
+
 # Tolérance des comparaisons de DURÉES de `check()`. Mesuré le 2026-08-18 : `0.15 + 0.80` vaut
 # 0.9500000000000001 en flottant, donc `0.95 < 0.15 + 0.80` est VRAI. Un auteur de mode qui écrit
 # `marker_epoch_s=0.95` en clair — la valeur exacte et juste — s'entendait dire « est SOUS
@@ -131,16 +196,10 @@ def serialize(spec, params=None):
             "briefing": list(spec.calibration.briefing),
             "epoch_s": spec.calibration.epoch_s,
             # Même forme que les `params` d'un mode, juste au-dessus : la console réutilise
-            # `ParamsForm` sans une ligne de code particulière.
-            "params": [
-                {
-                    "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
-                    "default": p.default_now(), "min": p.min, "max": p.max,
-                    "count": list(p.count) if p.count else None, "proposes": p.proposes,
-                    "choices": list(p.choices_now()), "help": p.help,
-                }
-                for p in spec.calibration.params
-            ],
+            # `ParamsForm` sans une ligne de code particulière. La MESURE emprunte la même
+            # fonction (`catalogue_mesures`) — trois écritures du même dictionnaire auraient fini
+            # par diverger sur le champ ajouté à l'une des trois.
+            "params": _params_serialises(spec.calibration.params),
         },
     }
 
@@ -325,6 +384,34 @@ def check():
                                f"époque serait tronquée en silence")
         if spec.marker_epoch_s > 0 and spec.runtime_cls is None:
             defauts.append(f"{spec.id} : déclare marker_epoch_s sans runtime pour les consommer")
+
+    # --- les MESURES, par les mêmes contrôles que ce qui compte pour elles ---------------------
+    # Beaucoup plus court que pour un mode : une mesure n'a ni flux, ni voies, ni repos, ni
+    # marqueurs. Restent les trois défauts qui ne lèveraient rien à l'exécution — un identifiant en
+    # double (la commande `start_mesure` en atteindrait un seul, au hasard de l'ordre), une mesure
+    # sans runtime (le clic partirait sur un `None(spec, …)` incompréhensible), et un défaut hors
+    # de ses propres bornes (la mesure refuserait ses propres valeurs au premier démarrage).
+    vus_mesure = set()
+    for spec in MESURES:
+        if spec.id in vus_mesure:
+            defauts.append(f"mesure : identifiant en double : {spec.id}")
+        vus_mesure.add(spec.id)
+        if spec.id in vus_id:
+            defauts.append(f"mesure « {spec.id} » : porte le même identifiant qu'un MODE — les "
+                           f"deux catalogues sont distincts, mais un étudiant qui lit « alpha » "
+                           f"dans un journal ne saurait pas duquel il s'agit")
+        if spec.runtime_cls is None:
+            defauts.append(f"mesure « {spec.id} » : aucun runtime_cls — le moteur ne saurait pas "
+                           f"la jouer, et le clic partirait sur un None(spec, …)")
+        if not spec.label:
+            defauts.append(f"mesure « {spec.id} » : sans libellé, sa tuile serait vide")
+        values, reason = validate(spec, {})
+        if values is None:
+            defauts.append(f"mesure « {spec.id} » : ses valeurs par défaut sont refusées — {reason}")
+        for p in spec.params:
+            if not p.help:
+                defauts.append(f"mesure {spec.id}.{p.key} : pas de texte d'aide "
+                               f"(un étudiant doit savoir ce qu'il règle)")
 
     return (not defauts), defauts
 
