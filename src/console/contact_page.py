@@ -1,6 +1,6 @@
 """Le contrôle de liaison casque, AVANT tout lancement coûteux.
 
-Repris de `src/research/ui.py:signal_check`, qui existe depuis le 2026-07-20 : ce jour-là un câble
+Repris de `archive/ui.py:signal_check`, qui existe depuis le 2026-07-20 : ce jour-là un câble
 débranché a laissé enregistrer 3,4 minutes de signal plat, puis produire tranquillement un modèle
 à 0 %. Rien ne le signalait. Mieux vaut bloquer cinq secondes ici que perdre une séance.
 
@@ -26,7 +26,7 @@ from core.config import SIGNAL_SAT_SIGMA  # noqa: E402
 
 # Jusqu'où va la barre d'un σ. Pas le seuil de saturation (500 µV) : à cette échelle, un EEG
 # normal (5-20 µV) serait un trait invisible et l'écran ne montrerait plus rien. 40 µV est
-# l'échelle qu'utilise déjà `research/ui.py:signal_check`, choisie pour que l'EEG occupe le
+# l'échelle qu'utilise déjà `archive/ui.py:signal_check`, choisie pour que l'EEG occupe le
 # premier tiers et qu'une voie qui grimpe se voie tout de suite.
 SPAN_SIGMA = 40.0
 

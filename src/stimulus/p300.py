@@ -85,7 +85,7 @@ BG = (0, 0, 0)          # fond noir -> contraste ON/OFF maximal (meilleur P300)
 ON_COLOR = (255, 255, 255)
 OUTLINE = (55, 55, 70)  # contour statique : garde le repère spatial quand la cible est OFF
 FIX_DOT = (200, 40, 40)  # point de fixation CHROMATIQUE : ancre le regard sans amputer le
-#                          contraste (même choix que research/ui.py, cf. draw_ring)
+#                          contraste (même choix que archive/ui.py, cf. draw_ring)
 LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 PAUSE = (110, 150, 110)  # l'écran d'entre-manches : vert éteint, ne concurrence pas les flashs
@@ -116,7 +116,7 @@ CUE_EPAISSEUR_PX = 4
 ATTENTE_MOTEUR_S = SSVEP_WARMUP_S
 
 # Rayon du point de fixation, en PIXELS et non proportionnel — la MÊME valeur que
-# `research/ui.py:FIX_DOT_R`, celle sous laquelle les données d'entraînement ont été
+# `archive/ui.py:FIX_DOT_R`, celle sous laquelle les données d'entraînement ont été
 # enregistrées. Il valait 3 ici, soit 2,25× la surface : un stimulus qui n'est pas celui du
 # modèle, pour une constante recopiée de travers.
 FIX_DOT_R = 2
@@ -208,7 +208,7 @@ def valide_reglages(reps, targets):
     return True, ""
 
 
-# --- Géométrie (cercle, angle 0 = haut, sens horaire — même convention que research/ui.py) -
+# --- Géométrie (cercle, angle 0 = haut, sens horaire — même convention que archive/ui.py) -
 
 def target_positions(n_targets, span):
     """Centres (dx, dy) des `n_targets` cibles, relatifs au centre de l'écran.
@@ -217,7 +217,7 @@ def target_positions(n_targets, span):
     ici en `2πi/n`, ce qui donne le même résultat pour n=6 mais DIVERGE dès n=3 (`cvep_targets(3)`
     reprend exactement les angles de `COMMANDS`, pas trois tiers de tour). Deux géométries pour
     le même protocole, et l'écran ne montre plus les cibles sur lesquelles le modèle a été
-    entraîné. Les ratios (0,31 et 0,075) sont ceux de `research/ui.py:ring_spots`, pour la même
+    entraîné. Les ratios (0,31 et 0,075) sont ceux de `archive/ui.py:ring_spots`, pour la même
     raison.
     """
     dist = span * 0.31

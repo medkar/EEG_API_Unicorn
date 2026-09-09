@@ -1463,7 +1463,7 @@ def _smoke():
     chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
 
     # --- le CONTRÔLE DE LIAISON s'interpose, et il REFUSE ---------------------------------
-    # Il vient de `research/ui.py:signal_check`, qui existe depuis le jour où un câble débranché a
+    # Il vient de `archive/ui.py:signal_check`, qui existe depuis le jour où un câble débranché a
     # laissé enregistrer 3,4 min de signal plat puis produire un modèle à 0 %. Les fenêtres de
     # `src/stimulus/` ne peuvent pas le reprendre — elles n'ouvrent pas le casque, elles n'ont
     # aucun σ à montrer. La console, elle, sonde `snapshot()`.

@@ -1,6 +1,6 @@
 """Calibration des seuils de décision SSVEP à partir d'un log guidé étiqueté.
 
-Lit un fichier produit par `live_ssvep.py --guided` (lignes `[PHASE] AVA=.. GAU=.. DRO=..
+Lit un fichier produit par `archive/live_ssvep.py --guided` (lignes `[PHASE] AVA=.. GAU=.. DRO=..
 ARR=..`), et cherche les paramètres de décision qui SÉPARENT le mieux :
   - REPOS (ne rien fixer) : on veut 0 commande émise (faux positif = mauvais),
   - FIXATION d'une cible : on veut la bonne commande émise (vrai positif).

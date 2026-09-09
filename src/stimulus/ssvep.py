@@ -150,7 +150,7 @@ def arrow_polygon(cx, cy, size, direction):
 # --- Mesure du refresh écran ----------------------------------------------
 
 # `measure_refresh` a DÉMÉNAGÉ dans `stimulus/refresh.py` le 2026-09-07, avec les trois fenêtres
-# qui l'importaient. Réexporté sous son nom d'origine : `research/ui.py` et les écrans de
+# qui l'importaient. Réexporté sous son nom d'origine : `archive/ui.py` et les écrans de
 # `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 

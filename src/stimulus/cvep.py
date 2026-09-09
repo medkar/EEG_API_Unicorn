@@ -77,7 +77,7 @@ séance est bornée en secondes : cf. le ⚠️ de `poll`), et la graine est IMP
 donne pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se
 dépouille pas deux fois. Le cercle est tracé à 1,7× le rayon du disque, LOIN à l'extérieur : posé dessus, un
 contour lumineux statique écraserait la modulation de contraste du stimulus (même choix, et même
-raison, que `research/ui.py:draw_ring`).
+raison, que `archive/ui.py:draw_ring`).
 
 ⚠️ **`--log CHEMIN` écrit cette vérité-terrain dans un FICHIER, et sans lui la séance 2.9 n'est pas
 dépouillable.** Le terminal ne suffit pas : c'est le seul exemplaire de la consigne, un `Ctrl+C`
@@ -162,7 +162,7 @@ from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa:
 BG = (0, 0, 0)              # fond noir -> profondeur de modulation maximale
 ON_COLOR = (255, 255, 255)  # disque allumé
 OUTLINE = (55, 55, 70)      # contour statique : garde le repère spatial quand la cible est OFF
-FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (cf. research/ui.py : la réponse c-VEP
+FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (cf. archive/ui.py : la réponse c-VEP
 #                             est pilotée par la LUMINANCE, un point rouge n'ampute donc quasiment
 #                             pas la modulation tout en restant visible allumé comme éteint)
 ACCENT = (60, 200, 90)      # le cercle de consigne, LARGEMENT à l'extérieur du disque
@@ -171,19 +171,19 @@ HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
 
 # Rayon du point de fixation, en PIXELS et non proportionnel — la MÊME valeur que
-# `research/ui.py:FIX_DOT_R`, celle sous laquelle les modèles c-VEP ont été calibrés. Quelques
+# `archive/ui.py:FIX_DOT_R`, celle sous laquelle les modèles c-VEP ont été calibrés. Quelques
 # pixels suffisent à ancrer le regard, et l'emprise sur le stimulus reste négligeable (~0,1 % de la
 # surface) quelle que soit la résolution.
 FIX_DOT_R = 2
 
-# La couronne : ratios de `research/ui.py:ring_spots`, c'est-à-dire la géométrie EXACTE sous
+# La couronne : ratios de `archive/ui.py:ring_spots`, c'est-à-dire la géométrie EXACTE sous
 # laquelle `research/app.py` a enregistré les époques de calibration. Les changer, c'est afficher un
 # stimulus que le modèle n'a jamais vu — sans qu'aucune exception ne le dise.
 DIST_RATIO = 0.31
 TAILLE_RATIO = 0.075
 # Rayon du cercle de consigne, en multiples du rayon du disque. LARGEMENT à l'extérieur : posé
 # dessus, un contour lumineux STATIQUE écraserait la modulation de contraste du stimulus — même
-# valeur, et même raison, que `research/ui.py:draw_ring`. Nommé parce que `--smoke` a besoin du
+# valeur, et même raison, que `archive/ui.py:draw_ring`. Nommé parce que `--smoke` a besoin du
 # MÊME nombre pour aller lire ce cercle dans les pixels (cf. `point_de_sonde_cercle`) : recopié,
 # il suffirait de le déplacer d'un côté pour que la sonde lise le fond noir et ne rougisse plus.
 RATIO_CERCLE = 1.7
@@ -238,7 +238,7 @@ SEUIL_SAUT = 1.5
 def positions_cibles(plan, size, dist_ratio=DIST_RATIO, size_ratio=TAILLE_RATIO):
     """`[(x, y, rayon), ...]` DANS L'ORDRE DU PLAN — donc dans l'ordre des indices publiés.
 
-    C'est `research/ui.py:ring_spots` réduit à ce dont un émetteur a besoin (pas de dictionnaire
+    C'est `archive/ui.py:ring_spots` réduit à ce dont un émetteur a besoin (pas de dictionnaire
     indexé par nom : ici l'ordre EST l'information, `plan[i]` correspond à `score_i` sur le flux).
     Les angles sont LUS dans le plan, jamais recalculés en `2πi/n` : `cvep_targets(3)` reprend
     exactement les angles de `COMMANDS` et ne fait PAS trois tiers de tour — deux géométries pour le
@@ -693,7 +693,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         if consigne is not None:
             # ⚠️ `RATIO_CERCLE` (1,7) fois le rayon : LARGEMENT à l'extérieur du disque. Posé
             # dessus, ce contour lumineux STATIQUE écraserait la modulation de contraste — même
-            # valeur, et même raison, que `research/ui.py:draw_ring`. C'est aussi le cercle que
+            # valeur, et même raison, que `archive/ui.py:draw_ring`. C'est aussi le cercle que
             # `--smoke` va LIRE DANS LES PIXELS pour vérifier que le `cue` publié désigne la cible
             # réellement cerclée (cf. `point_de_sonde_cercle`).
             x, y, r = spots[consigne]

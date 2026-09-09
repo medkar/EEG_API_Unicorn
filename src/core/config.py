@@ -186,7 +186,7 @@ UNICORN_SERIAL = "UN-2023.08.50"
 # --- Fenêtre & décision ------------------------------------------------------
 # Cibles hors du pic alpha (8.57/12/15) => ρ propre. MARGE (1er-2e) + LISSAGE trient repos
 # vs fixation. 1 s s'était révélé trop bruité (le ρ alpha explosait) -> 1.5 s = compromis
-# bruit/réactivité. À re-valider via `live_ssvep.py --guided`.
+# bruit/réactivité. À re-valider via `archive/live_ssvep.py --guided`.
 WINDOW_S = 1.5     # longueur de la fenêtre CCA (s) — courte = plus réactif, mais plus bruité
 RHO_MIN = 0.45     # corrélation mini du gagnant
 MARGIN = 0.18      # écart mini entre ρ du 1er et du 2e
