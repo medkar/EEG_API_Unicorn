@@ -49,9 +49,13 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    mesurer. C'est ici qu'on décide si une hypothèse tient, et il n'y a rien de honteux à ce
    qu'une analyse conclue « bruit ».
 
-Reste `controller.py` et `live_ssvep.py`, hérités du banc d'essai robot : ils décodent et
-envoient un `{jx,jy}` en UDP. Le produit ne fonctionne plus ainsi (l'API publie une intention
-neutre sur LSL, cf. `docs/robot_testbed.md`), ils survivent comme référence de comparaison.
+Reste `controller.py`, hérité du banc d'essai robot : il lisse une suite de décisions SSVEP en
+un `{jx,jy}`. Le produit ne fonctionne plus ainsi (l'API publie une intention neutre sur LSL,
+cf. `docs/robot_testbed.md`), il survit comme référence de comparaison — et il a le droit de
+rester ici parce qu'il ne fait que CALCULER : son seul appelant est `archive/ssvep_pilot.py`,
+tout comme `itr.py` n'est plus appelé que depuis `archive/`. Son ancien compagnon `live_ssvep.py`,
+lui, ouvrait le casque et affichait des flèches : c'était le SEPTIÈME écran de pilotage, oublié
+par le chantier du 2026-09-08, et il est parti dans `archive/` le 2026-09-09.
 
 `mi_calibrate.py` et `mi_pilot.py` ont quitté ce dossier le jour où le moteur a appris à
 calibrer et décoder le Motor Imagery lui-même (`core/modes/mi_calib.py`, `core/modes/mi.py`).

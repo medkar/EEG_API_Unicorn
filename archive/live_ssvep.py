@@ -1,20 +1,45 @@
-"""Diagnostic SSVEP en direct : flèches clignotantes + ρ (CCA) temps réel par cible.
+"""Diagnostic SSVEP en direct : flèches clignotantes + ρ (CCA) temps réel — écran de PILOTAGE retiré.
 
-Assemble tout : stimulus (ssvep_stimulus) + acquisition (BrainFlow) + décodage (CCA) +
-lissage (SSVEPController), et AFFICHE par-dessus les flèches, en temps réel :
+Il vivait comme `src/research/live_ssvep.py`. C'est le **septième** écran de pilotage de ce dépôt,
+et il avait été OUBLIÉ par le chantier du 2026-09-08 qui en a archivé six : il ouvre le casque
+LUI-MÊME et affiche un stimulus, exactement comme les autres. Il est descendu ici le 2026-09-09,
+quand « rien dans `src/research/` n'ouvre le casque ni n'affiche un stimulus » est devenu un test
+(`python src/core/server.py --smoke`, bloc `[smoke-frontiere]`) plutôt qu'une intention.
+
+Ce qu'il assemble : stimulus (`stimulus/ssvep.py`) + acquisition (BrainFlow) + décodage (CCA) +
+lissage (`SSVEPController`), et AFFICHE par-dessus les flèches, en temps réel :
   - la corrélation ρ de chaque cible (barres),
   - la cible gagnante et si elle passe le seuil rho_min,
-  - la décision lissée (ce qui serait envoyé au robot),
+  - la décision lissée,
   - le σ du signal (contrôle du contact électrodes).
 
-Sert à : vérifier que fixer une flèche fait bien monter SON ρ, mesurer les faux positifs
-alpha quand on ne fixe rien, et CALIBRER rho_min — avant de brancher le robot.
+**Par quoi il est remplacé.** Ses deux usages ont chacun leur chemin dans l'application :
+  • « est-ce que fixer une flèche fait monter SON ρ ? » -> le mode SSVEP du moteur, dont la console
+    trace les ρ en direct (`python src/console/app.py --mode ssvep`) ;
+  • « quel taux d'émission, et quelle justesse quand il émet ? » -> la mesure « Taux d'émission
+    SSVEP » de la grille (`core/modes/ssvep_mesure.py`), qui compte **un essai = une décision**
+    là où cet écran-ci laissait lire des fenêtres chevauchantes comme des mesures indépendantes.
 
-    python src/research/live_ssvep.py                 # plein écran, casque réel, ESC pour quitter
-    python src/research/live_ssvep.py --windowed      # fenêtre (voir la console à côté)
-    python src/research/live_ssvep.py --send          # + envoi UDP à l'actionneur (config.UDP_HOST)
-    python src/research/live_ssvep.py --synthetic     # sans casque (board de test) — pour déboguer l'UI
-    python src/research/live_ssvep.py --smoke         # test headless (CI), n'affiche rien
+**Pourquoi on le garde.** Comme les autres écrans d'ici : c'est un décodage LOCAL, sans réseau.
+En séance, comparer ce qu'il affiche à ce que le moteur publie sépare « le décodage réseau est
+moins bon » de « la séance est moins bonne ». Il porte aussi le protocole `--guided`, dont les
+archives `data/ssvep_guided_*.npz` sont les seules que `src/research/ssvep_analyze.py` sache lire.
+
+⚠️ **`--guided` ÉCRIT dans `data/`** (fenêtres brutes 8 voies, fichier horodaté). C'est voulu et
+c'est sa raison d'être — mais `--smoke` ne doit JAMAIS le faire : le garde-fou est dans `_save_raw`,
+AVANT le `np.savez`, et l'autotest vérifie l'empreinte du dossier pour que ce soit constaté plutôt
+que supposé. Un écran archivé n'est plus relu par personne ; c'est exactement là qu'un test qui
+écrit dans le vrai `data/` peut déposer un fichier que le catalogue proposera à la séance suivante.
+
+⚠️ Ne jamais le lancer en même temps que le moteur, la console ou un autre écran archivé : il ouvre
+le casque LUI-MÊME, et l'Unicorn n'accepte qu'une connexion. Non maintenu.
+
+    python archive/live_ssvep.py                 # plein écran, casque réel, ESC pour quitter
+    python archive/live_ssvep.py --windowed      # fenêtre (voir la console à côté)
+    python archive/live_ssvep.py --guided        # protocole guidé : consignes + archive dans data/
+    python archive/live_ssvep.py --send          # + envoi UDP à l'actionneur (config.UDP_HOST)
+    python archive/live_ssvep.py --synthetic     # sans casque (board de test) — pour déboguer l'UI
+    python archive/live_ssvep.py --smoke         # test headless (CI) : les DEUX chemins, rien d'écrit
 """
 
 import argparse
@@ -23,7 +48,8 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))      # -> src/
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (CH_NAMES, DATA_DIR, EXAMPLES_DIR, UDP_HOST, UDP_PORT,  # noqa: E402
                     WINDOW_S, apply_invert, choose_frequencies, use_utf8_console)
 from core.cca_decoder import CCADecoder  # noqa: E402
@@ -402,7 +428,13 @@ def guided(windowed=False, synthetic=False, smoke=False):
 
 
 def _save_raw(epochs, labels, plan, fs, refresh, smoke):
-    """Archive horodatée des fenêtres brutes 8 voies du protocole guidé."""
+    """Archive horodatée des fenêtres brutes 8 voies du protocole guidé.
+
+    ⚠️ Le refus d'écrire en `--smoke` est ICI, en tête, AVANT le `np.savez` — jamais après.
+    Une garde placée après l'écriture ne garde rien : elle constate. Ce dépôt a déjà vu un
+    autotest déposer un modèle entraîné sur du bruit synthétique dans le vrai `data/`, sous un
+    nom que le catalogue liste, donc proposable par défaut à la séance suivante.
+    """
     if smoke or len(epochs) < 4:
         return
     import numpy as np
@@ -426,10 +458,36 @@ def _parse_args(argv):
     return p.parse_args(argv)
 
 
+def _smoke():
+    """Les DEUX chemins de l'écran, headless, et la preuve que `data/` n'a pas bougé.
+
+    `--guided` est le seul des deux qui écrive : le passer en revue sans lui ferait tester la
+    garde de `_save_raw` sur le chemin qui ne l'appelle jamais, c'est-à-dire rien du tout.
+    """
+    from core.config import empreinte_dossier
+
+    avant = empreinte_dossier(DATA_DIR)
+    run(smoke=True)
+    guided(smoke=True)
+    apres = empreinte_dossier(DATA_DIR)
+    if apres != avant:
+        ajouts = sorted(set(apres) - set(avant))
+        modifs = sorted(k for k in set(apres) & set(avant) if apres[k] != avant[k])
+        print(f"[live-ssvep] ÉCHEC : l'autotest a TOUCHÉ au vrai data/ — ajouts {ajouts}, "
+              f"modifications {modifs}. Le garde-fou de `_save_raw` doit rester AVANT le "
+              f"`np.savez`, et le dossier ne doit jamais être celui de la séance.")
+        return False
+    print(f"[live-ssvep] smoke OK : les deux chemins câblés, data/ intact "
+          f"({len(avant)} fichiers, inchangés).")
+    return True
+
+
 if __name__ == "__main__":
     use_utf8_console()
     a = _parse_args(sys.argv[1:])
-    if a.guided:
+    if a.smoke:
+        sys.exit(0 if _smoke() else 1)
+    elif a.guided:
         guided(windowed=a.windowed, synthetic=a.synthetic, smoke=a.smoke)
     else:
         run(windowed=a.windowed, send=a.send, synthetic=a.synthetic, smoke=a.smoke)
