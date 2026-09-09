@@ -62,6 +62,25 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   refuse le second. Le nom du fichier est maintenant décidé par la BOUCLE et lu dans `snapshot()`.
   C'est une instance de plus du constat parqué « la console prend `accepted` pour “ça a démarré” ».
 
+- **T8+T9 : complete** — `f648d74`, sous-agent. **UN seul commit** : le selftest de
+  `stimulus/registry.py` refuse une fenêtre orpheline ET une mesure sans fenêtre, donc chaque
+  moitié seule est ROUGE. La fenêtre déménage en `stimulus/ssvep.py` et gagne `--guide`
+  (`calib_start`/`repos`/`cue`/`calib_end`) ; `core/modes/ssvep_mesure.py` porte la mesure.
+  Compteur frontière : **cinq → trois** (restent `live_ssvep`, `ssvep_analyze`, `ui`).
+  ⚠️ **Trouvé un chantier INTERROMPU en arrivant** (`git status` sale, snapshot du prompt périmé) :
+  l'essentiel était écrit, mais `console/app.py --smoke` **plantait** sur un `MARKER_STREAM_DEFAULT`
+  jamais importé, et `alpha.py` rougissait (il affirmait `MESURES == ["alpha"]`, remplacé par le
+  RANG : l'alpha est la première, parce que c'est la barrière).
+  Les **deux preuves du rouge** faites : compter les fenêtres → n=24 devient **168** et l'intervalle
+  s'effondre de 0,19 à **0,03**, et c'est **le seul rouge du dépôt** (console, server et
+  ssvep_guided restent verts sous la mutation) ; bloc contigu → la garde d'entrelacement mord des
+  deux côtés. Empreinte du vrai `data/` identique (43 fichiers, mtime max inchangé), `seances/` à 0.
+  🔴 **Désaccord protocole/mode trouvé, DIT, non corrigé** : le σ du rejet d'artefact est pris sur
+  **8 voies** dans la mesure et sur les **4 occipitales filtrées** dans le mode. Écart ANTÉRIEUR
+  (le monolithe utilisait déjà `sigma_from_block`), donc c'est la règle sous laquelle 100 %/44 %
+  ont été mesurés — l'aligner rendrait le prochain chiffre incomparable. Documenté en tête de
+  `ssvep_mesure.py` ; **décision à prendre hors chantier**.
+
 ## Réserve à porter
 
 - 🔴 **La T3 a empiété sur la T10** en archivant `alpha_check.py`. C'est justifié (le compteur ne
@@ -73,6 +92,16 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   `_Enregistrement` et pinnée par un runtime factice — pas sur un contrat déclaré. Le mode #7 qui
   muterait sa sortie en place perdrait des lignes EN SILENCE. La version étanche serait un
   compteur de publications dans `ModeRuntime` ; ça touche les six modes.
+- 🔴 **Pour la T10, ordre confirmé** : après T8/T9 il ne reste QUE `live_ssvep.py`,
+  `ssvep_analyze.py` et **`ui.py`, dont l'ordre est contraint**. `ssvep_guided.py` n'est plus à
+  archiver — il est réduit à son analyse et ne viole plus la règle.
+- 🟡 **Pour la T11, deux faussetés que T8/T9 ont CRÉÉES** : `README.md:441` range encore
+  `ssvep_stimulus.py` dans le socle pygame de `research/` (le fichier n'y est plus), et
+  `docs/markers.md` ne dit rien des marqueurs du run guidé — décision assumée (personne ne
+  réimplémente cet émetteur, le mode SSVEP de décodage ne consomme aucun marqueur), mais le tableau
+  « chauffe » de `markers.md:353` gagnerait une ligne. ⚠️ `examples/unity/README.md` citait une
+  commande **cassée** par le déménagement : corrigé dans `f648d74`, mais **ce dossier n'est dans la
+  liste de fichiers d'aucune tâche et n'est couvert par aucun test**.
 - 🟡 **Pour la T11** : la page « Ce que voit ton application » et le bouton d'enregistrement n'ont
   aucune ligne dans `README.md`, `docs/SPEC.md` ni `docs/recette.md`. Le test **2.9 doit citer les
   DEUX fichiers**, pas seulement le journal de la fenêtre. Et `CLAUDE.md` cite encore
