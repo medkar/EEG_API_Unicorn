@@ -69,9 +69,12 @@ class ParamsForm(QWidget):
         bas.addWidget(self.bouton)
         bas.addStretch(1)
 
-        # `None` quand le mode a des réglages : un QLabel construit sans parent serait une
-        # fenêtre de premier niveau en Qt, pas un widget inerte.
-        self.vide = None if self.params else QLabel("aucun réglage pour ce mode")
+        # `None` quand il y a des réglages : un QLabel construit sans parent serait une fenêtre
+        # de premier niveau en Qt, pas un widget inerte.
+        # ⚠️ « ici » et pas « pour ce mode » : ce formulaire sert aussi les CALIBRATIONS et les
+        # MESURES, qui ne sont pas des modes. Le contrôle alpha, qui n'expose délibérément aucun
+        # réglage (ses durées font corps avec son repère chiffré), est le premier à l'afficher.
+        self.vide = None if self.params else QLabel("aucun réglage à changer ici")
         layout = QVBoxLayout(self)
         if self.vide is not None:
             layout.addWidget(self.vide)

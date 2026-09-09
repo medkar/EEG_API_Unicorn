@@ -2105,6 +2105,13 @@ def _smoke():
         f"saura pas quand rouvrir — plutôt que de laisser un top silencieux passer pour un "
         f"départ manqué ({mes_muette.audio_avertissement.text()[:60]}…)")
 
+    # Le contrôle alpha n'expose AUCUN réglage — ses durées font corps avec le repère « > 1,5 »,
+    # et les exposer laisserait l'invalider en croyant gagner du temps. La page doit donc le DIRE,
+    # comme la page du mode « brut ».
+    chk(len(mes.formulaire.champs) == 0 and mes.formulaire.vide is not None
+        and mes.formulaire.bouton.isHidden(),
+        "sans réglage, le formulaire l'écrit et ne montre pas un bouton « Appliquer » sans effet")
+
     console.beeps = _BeepsEnregistreur()
     try:
         base_m = {"mode_id": "alpha", "label": "Contrôle alpha", "phase": "essais", "etape": "",
