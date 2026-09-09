@@ -1432,11 +1432,28 @@ def _smoke():
     chk(bilan1.get("sautees", 0) <= 0.02 * bilan1.get("frames", 1),
         f"[C1] ...sans fabriquer de fausses frames sautées quand tout va bien "
         f"({bilan1.get('sautees')} sur {bilan1.get('frames')})")
-    chk(cales["faites"] == C3_CALES and bilan3.get("sautees") == C3_CALES,
+    # ⚠️ **Une borne INFÉRIEURE, pas une égalité — et c'est une correction, pas un relâchement.**
+    # L'égalité `sautees == C3_CALES` a rougi par intermittence pendant tout le chantier du
+    # 2026-09-09 (mesuré : 1 échec sur 3 lancements, « 3 cales posées -> 4 comptées »), et la
+    # revue du 2026-09-08 en avait donné la cause exacte : sur une course de 1,2 s, une pause du
+    # ramasse-miettes dépassant `SEUIL_SAUT` ajoute une frame sautée VRAIE, que rien ne distingue
+    # d'une cale. Le compteur a raison ; c'est l'assertion qui prétendait connaître l'avenir.
+    #
+    # Ce qui est vérifié reste ce qui compte : **le compteur voit AU MOINS toutes les cales
+    # posées** — s'il en ratait une, il ne compterait pas ce qu'il prétend compter. Le faux
+    # positif en masse, lui, est déjà couvert par C1 juste au-dessus (≤ 2 % des frames), et la
+    # borne haute ci-dessous garde le garde-fou : quelques frames de charge machine, pas dix.
+    #
+    # Un rouge qui tombe une fois sur trois finit par être ignoré, puis désactivé. Ce dépôt a
+    # déjà enterré un « test instable » en trouvant sa vraie cause ; ici la cause était connue et
+    # documentée depuis une revue, et l'assertion ne l'avait pas suivie.
+    sautees3 = bilan3.get("sautees", 0)
+    chk(cales["faites"] == C3_CALES and C3_CALES <= sautees3 <= C3_CALES + 3,
         f"[C3] les {C3_CALES} frames RÉELLEMENT retenues (flip bloqué "
-        f"{SEUIL_SAUT * 1.4:.1f} périodes) sont comptées, toutes et seulement elles "
-        f"({cales['faites']} cales posées -> {bilan3.get('sautees')} comptées) — sous `dummy` il "
-        f"n'y a jamais de vsync manqué, donc sans ces cales le compteur ne prouverait rien")
+        f"{SEUIL_SAUT * 1.4:.1f} périodes) sont TOUTES comptées "
+        f"({cales['faites']} cales posées -> {sautees3} comptées, tolérance +3 pour la charge "
+        f"machine) — sous `dummy` il n'y a jamais de vsync manqué, donc sans ces cales le "
+        f"compteur ne prouverait rien")
 
     # --- `--seed` tient sa promesse, et la graine est TOUJOURS connue ------------------------
     # ⚠️ Le contrat n'était vérifié par rien : remplacer `random.Random(seed)` par
