@@ -73,7 +73,7 @@ def build_targets(commands=None, n_bits=CVEP_BITS, taps=CVEP_TAPS):
 
 
 def is_on(frame, target_code):
-    """Bit à afficher pour cette cible à cette frame (équivalent c-VEP de ssvep_stimulus.is_on)."""
+    """Bit à afficher pour cette cible à cette frame (équivalent c-VEP de `stimulus.ssvep.is_on`)."""
     return bool(target_code[frame % len(target_code)])
 
 

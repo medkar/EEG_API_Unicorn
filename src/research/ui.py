@@ -21,7 +21,7 @@ from core.config import (CH_NAMES, EXAMPLES_DIR, UDP_HOST, UDP_PORT,  # noqa: E4
                     apply_invert, reference_lost, signal_verdict)
 
 sys.path.insert(0, EXAMPLES_DIR)  # l'actionneur d'exemple vit dans examples/, hors du paquet
-from research.ssvep_stimulus import arrow_polygon, measure_refresh  # noqa: E402
+from stimulus.ssvep import arrow_polygon, measure_refresh  # noqa: E402
 
 BG = (10, 10, 16)
 FG = (225, 225, 235)

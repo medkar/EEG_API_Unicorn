@@ -28,7 +28,7 @@ from core.config import (COMMANDS, DATA_DIR, empreinte_dossier, EXAMPLES_DIR,  #
                     UDP_HOST, UDP_PORT, apply_invert, use_utf8_console)
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.mi_decoder import MI_LABELS, MIDecoder, MIModel  # noqa: E402
-from research.ssvep_stimulus import arrow_polygon  # noqa: E402
+from stimulus.ssvep import arrow_polygon  # noqa: E402
 
 sys.path.insert(0, EXAMPLES_DIR)  # l'actionneur d'exemple vit dans examples/, hors du paquet
 from actuator_udp import ActuatorSender  # noqa: E402

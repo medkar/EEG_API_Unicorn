@@ -22,6 +22,12 @@ croirait.
 `core/modes/mesure.py`), donc cette page n'a ni « Enregistrer » ni « Refaire » — il n'y a aucun
 candidat à retenir ou à jeter. Le seul geste qu'elle propose après coup est d'APPLIQUER un réglage
 que le moteur a lui-même désigné.
+
+⚠️ **Certaines mesures ont une FENÊTRE de stimulus, d'autres non**, et cette page ne le sait pas :
+c'est `Console._demarrer_mesure` qui lit `stimulus_id` dans le contrat et lance la fenêtre juste
+après la commande. Le contrôle alpha n'en a aucune (les yeux sont fermés la moitié du temps) ; le
+taux d'émission SSVEP en a une, puisqu'il n'y a rien à décoder sans cibles qui clignotent. Le
+briefing de chaque mesure dit lequel des deux cas s'applique — écrit par le moteur, pas ici.
 """
 
 import os
@@ -62,6 +68,15 @@ class MesurePage(QWidget):
         ("repere_ratio", "repère > {:g}"),
         ("pic_hz", "pic à {:.1f} Hz les yeux fermés"),
         ("pic_ouvert_hz", "pic à {:.1f} Hz les yeux ouverts"),
+        # Le taux d'émission SSVEP. ⚠️ `n_essais` porte son UNITÉ dans le libellé, et ce n'est pas
+        # de la coquetterie : c'est le seul endroit de l'interface où l'on peut confondre un
+        # nombre d'essais avec un nombre de fenêtres du moteur, et l'écart entre les deux vaut un
+        # facteur 7 sur l'effectif (cf. `core/modes/ssvep_mesure.py`).
+        ("n_essais", "{:d} essais"),
+        ("n_emis", "{:d} avec décision"),
+        ("n_justes", "dont {:d} justes"),
+        ("n_artefacts", "{:d} rejetés (artefact)"),
+        ("fenetres_repos", "plancher sur {:d} fenêtres de repos"),
     )
 
     def __init__(self, spec, console):

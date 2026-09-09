@@ -1,6 +1,6 @@
 """Source unique de vérité pour l'appli EEG : commandes, mapping {jx,jy}, voies, réseau.
 
-Importé par le stimulus (`ssvep_stimulus.py`), le décodeur (`cca_decoder.py`) et la boucle
+Importé par le stimulus (`stimulus/ssvep.py`), le décodeur (`cca_decoder.py`) et la boucle
 d'intégration (`controller.py`) pour qu'ils ne divergent JAMAIS (une seule table à éditer).
 """
 
@@ -265,6 +265,28 @@ SSVEP_WARMUP_S = 15.0
 ARTIFACT_SIGMA_RATIO = 4.0
 Z_MIN = 2.5              # écarts-types au-dessus du bruit pour accepter une détection
 Z_MARGIN = 0.0           # marge sur l'échelle z (la normalisation rend la marge quasi inutile)
+
+# --- Le run GUIDÉ SSVEP : le protocole qui MESURE le taux d'émission ------------------------
+# ⚠️ Ces cinq constantes sont ici, et pas dans l'un des deux programmes qui les jouent, parce que
+# DEUX programmes en dépendent et qu'aucun ne peut importer l'autre : la fenêtre
+# `src/stimulus/ssvep.py --guide` les JOUE (elle minute les phases et publie les marqueurs), et
+# `src/core/modes/ssvep_mesure.py` s'en sert pour savoir OÙ prélever la fenêtre de chaque essai et
+# pour ESTIMER la durée que la console annonce avant qu'on ne s'asseye. Deux copies dériveraient,
+# et le moteur prélèverait alors ailleurs que là où l'écran a montré la cible — sans lever la
+# moindre exception, en décodant simplement du signal d'une autre phase. C'est exactement la raison
+# pour laquelle `P300_PAUSE_MANCHE_S` a été hissée ici le 2026-09-07.
+#
+# Les valeurs sont celles de `research/ssvep_guided.py`, sous lesquelles les repères du 2026-07-27
+# (100 % de justesse à l'émission, 44 % d'émission) ont été observés.
+SSVEP_GUIDE_CUE_S = 1.2      # on désigne la cible : le regard s'y déplace. NON enregistré — la
+#                              saccade et sa fin de course polluent le début de la fixation.
+SSVEP_GUIDE_FIX_S = 3.0      # la fixation. Le moteur n'en garde que la DERNIÈRE fenêtre : les
+#                              1,5 premières secondes servent d'établissement de la réponse SSVEP.
+SSVEP_GUIDE_GAP_S = 1.0      # retour à la croix, pour que deux essais ne se recouvrent pas
+SSVEP_GUIDE_REPOS_S = 12.0   # le plancher de repos, CLIGNOTEMENT ALLUMÉ : il doit être mesuré dans
+#                              les mêmes conditions visuelles que les essais, sinon on soustrait un
+#                              fond qui n'est pas celui du test.
+SSVEP_GUIDE_TRIALS_PER_TARGET = 12   # 3 cibles -> 36 essais -> ~3 min de fixation
 
 # --- Correction du sens (le PC maîtrise le signe envoyé — cf. docs/robot_testbed.md) ---
 # Observé le 2026-07-17 : avant/arrière inversés sur ce robot -> on inverse jy à la source.

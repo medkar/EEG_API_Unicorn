@@ -9,20 +9,26 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
 
 1. **Le socle pygame** — `ui.py` (la fenêtre, la session casque, l'écran de contrôle de liaison,
    et la machinerie des modes en direct : `Live`, le fil de décodage, le vote, la boucle de
-   rendu), `ssvep_stimulus.py`, `viewing.py`.
+   rendu), `viewing.py`.
    ⚠️ **Il n'y a plus d'application pygame ici.** `app.py` — le menu et ses cinq modes — a été
    supprimé le 2026-09-08 (chantier « la console, seul point d'entrée ») : le moteur publie les
    six modes, la console les pilote, et les écrans pygame qui faisaient doublon sont archivés,
    encore exécutables, dans `archive/` (voir `archive/README.md`). Ce socle-ci reste parce que
-   ce sont EUX qui l'importent — plus `ssvep_guided.py`, un protocole chiffré qui n'a jamais eu
-   de doublon. `alpha_check.py` en était le second jusqu'au 2026-09-09 : le contrôle alpha est
-   désormais une MESURE que le moteur joue (`core/modes/alpha.py`, tuile de la console), et le
-   script est archivé.
-   ⚠️ Les fenêtres de STIMULUS, elles, ont leur propre paquet : `src/stimulus/` (`p300.py`,
-   `errp.py`, `cvep.py`). Elles n'ouvrent PAS le casque, elles AFFICHENT et publient des
-   marqueurs — c'est ce qui permet de les lancer en même temps que le moteur, dans deux
-   terminaux. `ssvep_stimulus.py` est resté ici : il ne publie aucun marqueur, il ne fournit que
-   la géométrie des flèches et la mesure du rafraîchissement.
+   ce sont EUX qui l'importent. `alpha_check.py` et `ssvep_guided.py` en étaient les deux
+   derniers clients vivants jusqu'au 2026-09-09 ; il n'en reste aucun :
+   • le contrôle alpha est une MESURE que le moteur joue (`core/modes/alpha.py`, tuile de la
+     console), et le script est archivé ;
+   • `ssvep_guided.py` a perdu ses deux tiers le même jour — son stimulus est
+     `stimulus/ssvep.py --guide` et son acquisition `core/modes/ssvep_mesure.py`. Ce qui reste
+     ne fait plus que rejouer un enregistrement archivé, donc il est de la famille 4.
+   ⚠️ **Ce socle ne sert donc plus qu'à `archive/`**, et c'est pour cela qu'il doit y descendre :
+   `ui.py` importe pygame ET `core.acquisition`, les deux gestes que `research/` n'a plus le
+   droit de faire (règle vérifiée par `python src/core/server.py --smoke`).
+   ⚠️ Les fenêtres de STIMULUS, elles, ont leur propre paquet : `src/stimulus/` (`ssvep.py`,
+   `p300.py`, `errp.py`, `cvep.py`). Elles n'ouvrent PAS le casque, elles AFFICHENT et publient
+   des marqueurs — c'est ce qui permet de les lancer en même temps que le moteur, dans deux
+   terminaux. `ssvep.py` est le dernier arrivé (2026-09-09, ex-`ssvep_stimulus.py`) : il vivait
+   ici tant qu'il ne publiait aucun marqueur, et son mode `--guide` lui en a donné.
 2. **Les décodeurs des modes** — **plus aucun, désormais.** `cvep_code`, `cvep_decoder` ET
    `cvep_rcca` ont fait le trajet vers `core` le 2026-08-20, comme `neuro_monitor` le
    2026-07-27, `mi_decoder` (avec `mi_models`) le 2026-07-29, `p300_decoder` (avec

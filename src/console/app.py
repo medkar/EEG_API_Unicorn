@@ -100,6 +100,11 @@ class Console(QMainWindow):
         # Une calibration soumise dont la fenêtre a refusé de s'ouvrir. Elle doit être annulée,
         # mais pas avant que le moteur ne l'ait réellement démarrée — cf. `_suivre_attente`.
         self._a_annuler = False
+        # Le jumeau, côté MESURE : même course, même remède. La mesure du taux SSVEP a une fenêtre
+        # de stimulus elle aussi, et sans elle le moteur attendrait `CALIB_FENETRE_ATTENTE_S` avant
+        # d'abandonner — trente secondes pendant lesquelles l'écran annonce une séance qui n'aura
+        # jamais lieu.
+        self._a_annuler_mesure = False
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -340,12 +345,7 @@ class Console(QMainWindow):
             self._lancer_fenetre(demande["mode_id"], calibrer=False)
             return
         if demande["quoi"] == "mesure":
-            # Aucun mode à arrêter, aucune fenêtre à ouvrir : le moteur mène le protocole tout
-            # seul et la console lit son état. Un seul geste, donc — et son refus s'AFFICHE.
-            ack = self.commande("start_mesure", id=demande["mode_id"],
-                                params=demande["params"])
-            if not ack.get("accepted"):
-                self._avis_mesure(demande["mode_id"], ack.get("reason", ""))
+            self._demarrer_mesure(demande)
             return
         # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration ne démarre : les deux liraient la
         # même file de marqueurs, et `submit` refuse (tâche 5). On l'arrête donc nous-mêmes plutôt
@@ -379,6 +379,15 @@ class Console(QMainWindow):
                 self.commande("cancel_calibration")
                 self.lanceur.arreter()
 
+        # 1 bis. Le même, côté MESURE. Une mesure à fenêtre dont la fenêtre n'a pas voulu s'ouvrir
+        #        attendrait 30 s en accusant un stimulus que l'étudiant vient de voir échouer.
+        if self._a_annuler_mesure:
+            mesure = (state or {}).get("mesure")
+            if mesure is not None and mesure.get("phase") not in PHASES_TERMINALES:
+                self._a_annuler_mesure = False
+                self.commande("cancel_mesure")
+                self.lanceur.arreter()
+
         if self._attente is None:
             return
         mode_id = self._attente["mode_id"]
@@ -391,6 +400,42 @@ class Console(QMainWindow):
                        f"« {mode_id} » ne s'est pas arrêté en {DELAI_ARRET_S:.0f} s : la "
                        f"calibration n'a PAS été lancée. Arrête-le depuis la grille, puis "
                        f"reclique « Commencer ».")
+
+    def _demarrer_mesure(self, demande):
+        """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse.
+
+        Exactement la discipline de `_demarrer_calibration`, et pour la même raison : la fenêtre
+        attend ~15 s à partir de SON lancement, le moteur compte sa chauffe à partir de la commande,
+        et il n'existe AUCUNE poignée de main entre les deux processus. Dans l'autre sens, les
+        premiers essais tombent dans la chauffe : ils sont jetés, comptés et dits — mais la séance
+        est plus courte que ce que l'écran annonce, et c'est indiscernable d'un protocole réussi.
+
+        ⚠️ Toutes les mesures n'ont pas de fenêtre : le contrôle alpha n'en a aucune (les yeux sont
+        fermés la moitié du temps, il n'y a rien à montrer). C'est le CONTRAT qui le dit
+        (`stimulus_id`), jamais une liste tenue ici.
+        """
+        mesure_id = demande["mode_id"]
+        ack = self.commande("start_mesure", id=mesure_id, params=demande["params"])
+        if not ack.get("accepted"):
+            self._avis_mesure(mesure_id, ack.get("reason", ""))
+            return
+        spec = self.mesures.get(mesure_id) or {}
+        stimulus_id = spec.get("stimulus_id")
+        if not stimulus_id:
+            return          # le moteur mène tout seul le protocole (contrôle alpha)
+        ouvert = self.lanceur.lancer(
+            stimulus_id, label=spec.get("label", mesure_id),
+            options=stimulus_registry.options_de_mesure(stimulus_id))
+        if not ouvert.get("accepted"):
+            # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait
+            # trente secondes avant d'abandonner, en accusant une fenêtre que l'étudiant vient de
+            # voir refuser de s'ouvrir. On note l'annulation ; `_suivre_attente` la soumet dès que
+            # la séance apparaît vraiment côté moteur (`submit` ne fait que mettre en file).
+            self._a_annuler_mesure = True
+            self._avis_mesure(mesure_id,
+                              f"{ouvert.get('reason', '')}\nLa mesure est annulée : sans sa "
+                              f"fenêtre, le moteur attendrait des marqueurs qui ne viendront "
+                              f"jamais.")
 
     def _demarrer_calibration(self, demande):
         """`start_calibration` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse."""
@@ -450,13 +495,19 @@ class Console(QMainWindow):
         self.lanceur.arreter()
 
     def arreter_mesure(self):
-        """« Abandonner » sur une page de mesure. Aucune fenêtre à fermer : il n'y en a pas.
+        """« Abandonner » sur une page de mesure : la commande au moteur ET la fenêtre.
 
-        C'est toute la différence avec `arreter_calibration`, qui doit tuer l'émetteur de
-        marqueurs en même temps sous peine de voir la séance suivante hériter de ses manches. Une
-        mesure n'a pas d'émetteur — le moteur affiche sa consigne dans la console, et c'est tout.
+        ⚠️ Les DEUX, comme pour une calibration — cette méthode ne fermait rien parce qu'aucune
+        mesure n'avait de fenêtre avant le taux SSVEP. Abandonner sans la fermer laisserait un
+        émetteur désigner des cibles pour une séance qui n'existe plus, et la mesure SUIVANTE
+        hériterait de ses premiers essais.
+
+        `arreter()` est idempotente : sur le contrôle alpha, qui n'a pas de fenêtre, elle ne fait
+        rien. Tester `stimulus_id` ici serait une seconde règle de décision dans l'interface.
         """
+        self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
         self.commande("cancel_mesure")
+        self.lanceur.arreter()
 
     def _avis_mesure(self, mesure_id, texte, alerte=True):
         """Affiche sur la page de la mesure ce que le moteur a répondu. Jumeau de `_avis`."""
@@ -2123,10 +2174,15 @@ def _smoke():
     # pour tenir — tient en trois points : le TOP SONORE (le sujet a les yeux fermés et ne peut
     # rien lire), la BARRIÈRE (un échec arrête la séance et l'écran doit le dire comme tel), et
     # le RÉGLAGE renvoyé au moteur d'un clic (la boucle que la recette fait faire à la main).
+    # ⚠️ `MARKER_STREAM_DEFAULT` est lu dans `core.config`, et PAS dans le catalogue que la console
+    # vient d'afficher : le vérifier contre sa propre source ne prouverait que « la console recopie
+    # ce qu'elle a lu ». Le nom du flux de marqueurs est un contrat public entre la fenêtre de
+    # stimulus et le moteur ; c'est cette valeur-là que la mesure doit recevoir.
+    from core.config import MARKER_STREAM_DEFAULT
     from core.modes import alpha as mod_alpha
 
     attendu_mesures = [s["id"] for s in registry.catalogue_mesures()]
-    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures) == ["alpha"],
+    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures) == ["alpha", "ssvep_taux"],
         f"la grille porte une tuile par MESURE du registre, à côté des modes "
         f"({sorted(console.grid.tuiles_mesure)} pour {sorted(attendu_mesures)})")
     chk(len(console.grid.tuiles) == len(registry.MODES),
@@ -2338,9 +2394,67 @@ def _smoke():
         f"({mes.avis.text()})")
     moteur_faux.refus.pop("start_mesure")
 
+    # Le contrôle alpha n'a AUCUNE fenêtre, et c'est le contrat qui le dit : les yeux sont fermés
+    # la moitié du temps, il n'y a rien à montrer. Vérifié ici pour que le bloc suivant — qui
+    # exige une fenêtre pour le taux SSVEP — ne puisse pas passer en lançant TOUJOURS quelque chose.
+    console.lanceur.arreter()
+    journal.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(not [e for e in journal if e[0] == "fenetre"] and not console.lanceur.en_cours(),
+        f"le contrôle alpha ne lance AUCUNE fenêtre — son contrat n'en déclare pas "
+        f"({console.mesures['alpha'].get('stimulus_id')!r})")
+
     mes.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid,
         "et la page de mesure ramène sur la grille")
+
+    # --- LE TAUX D'ÉMISSION SSVEP : la mesure qui a BESOIN d'une fenêtre ------------------------
+    # ⚠️ C'est la seule vérification du chemin graphique de cette mesure. Sans fenêtre, le moteur
+    # attend `CALIB_FENETRE_ATTENTE_S` puis abandonne en accusant un stimulus que personne n'a
+    # lancé : trente secondes de casque pour un message faux.
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.grid.tuiles_mesure["ssvep_taux"].bouton.click()
+    mes_ssvep = console.stack.currentWidget()
+    chk(mes_ssvep is console.mesure_pages["ssvep_taux"],
+        "la tuile du taux d'émission ouvre sa page")
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    ordre = [e[0] for e in journal if e[0] in ("commande", "fenetre")]
+    chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
+        in moteur_faux.commandes,
+        f"« Commencer » soumet `start_mesure` avec ses réglages ({moteur_faux.commandes})")
+    lancees_m = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(lancees_m and list(lancees_m[-1]) == list(
+        stim_registry.commande("ssvep", options=stim_registry.options_de_mesure("ssvep"))),
+        f"…et LANCE la fenêtre guidée, avec son option --guide, depuis le registre des stimulus "
+        f"({lancees_m})")
+    chk(ordre and ordre.index("commande") < ordre.index("fenetre"),
+        f"…dans cet ORDRE : le moteur d'abord, la fenêtre ensuite. L'inverse ferait tomber les "
+        f"premiers essais dans la chauffe du moteur, qui les jette — une séance plus courte que "
+        f"ce que l'écran annonce, et rien pour le dire ({ordre})")
+
+    # Une fenêtre qui refuse de s'ouvrir : la mesure est ANNULÉE, pas laissée à attendre 30 s.
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    console.lanceur.probleme = ""
+    console._demarrer_mesure({"mode_id": "ssvep_taux", "params": {}})
+    console._demarrer_mesure({"mode_id": "ssvep_taux", "params": {}})   # la 2e est REFUSÉE
+    chk(console._a_annuler_mesure and "fenêtre" in mes_ssvep.avis.text(),
+        f"une fenêtre qui refuse de s'ouvrir fait ANNULER la mesure, et le dit sur sa page "
+        f"({mes_ssvep.avis.text()[:60]}…)")
+    en_cours = {**base_m, "mode_id": "ssvep_taux", "phase": "chauffe"}
+    console.apply_state({**state, "mesure": en_cours})
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and not console._a_annuler_mesure,
+        f"…et l'annulation est soumise dès que la séance EXISTE côté moteur, jamais avant : "
+        f"`submit` ne fait que mettre en file ({moteur_faux.commandes})")
+    console.lanceur.arreter()
 
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la

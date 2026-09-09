@@ -21,12 +21,31 @@ from core.config import use_utf8_console  # noqa: E402
 
 _ICI = _os.path.dirname(_os.path.abspath(__file__))
 
-# clé du contrat -> fichier de ce paquet. Les clés sont celles de `Calib.stimulus_id`.
+# clé du contrat -> fichier de ce paquet. Les clés sont celles de `Calib.stimulus_id` — et, depuis
+# le 2026-09-09, de `MesureSpec.stimulus_id` : une MESURE peut avoir besoin d'une fenêtre elle
+# aussi (le taux SSVEP n'a rien à décoder sans cibles qui clignotent).
 FENETRES = {
     "p300": "p300.py",
     "errp": "errp.py",
     "cvep": "cvep.py",
+    "ssvep": "ssvep.py",
 }
+
+
+# Les OPTIONS que la console ajoute pour une mesure donnée. Déclaré ici, avec les fenêtres : le
+# `--guide` du SSVEP est le nom d'un argument de `stimulus/ssvep.py`, donc il appartient au module
+# qui connaît les fenêtres. La console demande, elle ne sait pas.
+#
+# ⚠️ Ce n'est PAS `--calibrer` : une mesure n'entraîne rien. La fenêtre guidée joue le même
+# clignotement que le décodage, avec des consignes en plus — c'est la même distinction qu'entre
+# `--calibrer` et le décodage pour les trois autres fenêtres, sous un autre mot parce que le
+# résultat est un verdict et pas un modèle.
+MESURE_OPTIONS = {"ssvep": ("--guide",)}
+
+
+def options_de_mesure(stimulus_id):
+    """Les arguments à ajouter pour lancer la fenêtre AU SERVICE d'une mesure. () par défaut."""
+    return tuple(MESURE_OPTIONS.get(stimulus_id, ()))
 
 
 # Quelles fenêtres savent tenir un JOURNAL DE SÉANCE, et sous quel argument. Déclaré ICI, comme
@@ -113,16 +132,29 @@ def _selftest():
 
     attendues = {s.calibration.stimulus_id for s in modes.MODES
                  if s.calibration is not None and s.calibration.kind == "fenetre"}
+    # Les MESURES demandent des fenêtres elles aussi, par le même champ et pour la même raison :
+    # `core` ne nomme aucun fichier, il ne connaît que des clés.
+    attendues |= {s.stimulus_id for s in modes.MESURES if s.stimulus_id}
     orphelines = sorted(attendues - set(FENETRES))
     chk(not orphelines,
-        f"chaque `stimulus_id` déclaré par un mode a sa fenêtre ({orphelines or 'aucun orphelin'}) "
-        f"— sinon le bouton « Calibrer » lance un processus qui meurt aussitôt, et le clic "
-        f"redevient SILENCIEUX, le défaut que ce chantier répare")
+        f"chaque `stimulus_id` déclaré par un mode OU une mesure a sa fenêtre "
+        f"({orphelines or 'aucun orphelin'}) — sinon le bouton qui la lance ouvre un processus qui "
+        f"meurt aussitôt, et le clic redevient SILENCIEUX, le défaut que ce chantier répare")
     inutilisees = sorted(set(FENETRES) - attendues)
     chk(not inutilisees,
-        f"…et réciproquement, aucune fenêtre déclarée ici n'est orpheline d'un mode "
+        f"…et réciproquement, aucune fenêtre déclarée ici n'est orpheline "
         f"({inutilisees or 'aucune'}) : une entrée que plus personne ne demande est une entrée "
         f"que personne ne corrigera")
+
+    # Les options de mesure désignent des fenêtres qui existent, et seulement des mesures qui en
+    # demandent une. Une entrée pour une clé inconnue serait un `--guide` jamais passé à personne.
+    mesures_avec_fenetre = {s.stimulus_id for s in modes.MESURES if s.stimulus_id}
+    chk(set(MESURE_OPTIONS) <= mesures_avec_fenetre,
+        f"les options de mesure ne visent que des fenêtres RÉCLAMÉES par une mesure "
+        f"({sorted(set(MESURE_OPTIONS) - mesures_avec_fenetre) or 'aucune orpheline'})")
+    argv_guide = commande("ssvep", options=options_de_mesure("ssvep"))
+    chk(argv_guide[-1] == "--guide" and argv_guide[2].endswith("ssvep.py"),
+        f"…et la commande du run guidé porte bien son option ({argv_guide[-2:]})")
 
     print(f"[stim-registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

@@ -513,9 +513,16 @@ def _selftest():
     # `__main__` et `registry` importe `core.modes.alpha` — deux modules distincts, donc deux
     # classes `ControleAlpha` distinctes, donc une égalité de dataclass qui échoue alors que le
     # catalogue est parfaitement correct.
-    chk([s.id for s in registry.MESURES] == ["alpha"],
-        f"…et elle est dans le catalogue du moteur : sans ça, `start_mesure` ne l'atteindrait "
-        f"pas et aucune tuile n'existerait ({[s.id for s in registry.MESURES]})")
+    # ⚠️ La PREMIÈRE du catalogue, et pas « la seule » : le taux SSVEP s'y est ajouté le
+    # 2026-09-09, et une égalité de liste aurait fait rougir cette assertion à chaque mesure
+    # nouvelle — un rouge qui ne dit rien sur l'alpha. Ce qui compte VRAIMENT ici est le rang :
+    # l'alpha est la barrière d'entrée, l'écran range les tuiles dans cet ordre, et une mesure
+    # jouée avant elle rendrait un chiffre qui décrit le montage plutôt que le décodage.
+    ids_mesures = [s.id for s in registry.MESURES]
+    chk(ids_mesures and ids_mesures[0] == "alpha",
+        f"…et elle ouvre le catalogue du moteur : sans ça, `start_mesure` ne l'atteindrait "
+        f"pas et aucune tuile n'existerait — et le rang dit que la barrière passe EN PREMIER "
+        f"({ids_mesures})")
     sain, defauts = registry.check()
     chk(sain and not defauts, f"le registre reste sain avec elle ({defauts})")
     chk(SPEC.params == (),

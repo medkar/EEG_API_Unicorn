@@ -14,7 +14,7 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep  # noqa: E402
+from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mesure  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 # ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
@@ -58,6 +58,9 @@ BY_ID = {spec.id: spec for spec in MODES}
 # en premier, et l'écran le range en premier sans avoir à le savoir.
 MESURES = (
     alpha.SPEC,         # la barrière d'entrée : les électrodes occipitales captent-elles ?
+    ssvep_mesure.SPEC,  # puis le taux d'émission du SSVEP : le moteur a-t-il raison quand il parle ?
+    #                     Après la barrière, et jamais avant : un taux mesuré sur des occipitales
+    #                     qui ne captent pas est un chiffre qui décrit le montage, pas le décodage.
 )
 
 
@@ -90,6 +93,11 @@ def catalogue_mesures():
             # calibration : la tuile reste, et le bouton ne ment pas.
             "jouable": spec.runtime_cls is not None,
             "barriere": spec.barriere,
+            # La CLÉ de la fenêtre à ouvrir en même temps, ou "" — même champ et même rôle que
+            # `calibration.stimulus_id` d'un mode. Sans lui dans le catalogue, la console ne
+            # saurait pas qu'une mesure a besoin d'un stimulus, et le moteur attendrait 30 s des
+            # marqueurs que personne n'enverrait.
+            "stimulus_id": spec.stimulus_id,
             "params": _params_serialises(spec.params),
         }
         for spec in MESURES

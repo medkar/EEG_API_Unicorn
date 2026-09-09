@@ -35,7 +35,7 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS,  # noqa:
                     SSVEP_BASELINE_S, UDP_HOST, available_frequencies, choose_frequencies,
                     use_utf8_console)
 from research.controller import SSVEPController  # noqa: E402
-from research.ssvep_stimulus import is_on as ssvep_on  # noqa: E402
+from stimulus.ssvep import is_on as ssvep_on  # noqa: E402
 # La machinerie PARTAGÉE (Live, le fil de décodage/émission, le rendu) vivait dans `research/app.py`
 # avec cet écran ; elle est dans `research/ui.py` depuis le 2026-09-08 — voir `archive/README.md`.
 from research.ui import (ACCENT, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN,  # noqa: E402

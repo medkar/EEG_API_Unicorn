@@ -108,6 +108,13 @@ class MesureSpec:
     barriere: bool = False      # cette mesure ARRÊTE-t-elle la séance quand elle échoue ?
     #                             (le contrôle alpha, oui : sans alpha rien d'autre ne veut dire
     #                             quoi que ce soit. Le taux SSVEP, non : c'est un chiffre à lire.)
+    stimulus_id: str = ""       # la CLÉ de la fenêtre à ouvrir en même temps, ou "" si la mesure
+    #                             se joue sans écran. Exactement la même clé et le même rôle que
+    #                             `Calib.stimulus_id` : `core` ne nomme aucun fichier de fenêtre,
+    #                             c'est `stimulus/registry.py` qui détient la correspondance. Le
+    #                             contrôle alpha n'en a pas (rien à montrer, les yeux sont fermés
+    #                             la moitié du temps) ; le taux SSVEP en a un, puisqu'il n'y a
+    #                             rien à décoder sans cibles qui clignotent.
 
     def defaults(self):
         """Les réglages par défaut de cette mesure, résolus maintenant.
@@ -153,6 +160,17 @@ class MesureRuntime(CalibrationRuntime):
     # entraînement impossible » — un étudiant irait chercher un modèle que personne n'a demandé.
     _journal = "mesure"
     _nom_du_calcul = "calcul du verdict"
+
+    # Ce que cette mesure prélève AUTOUR D'UN MARQUEUR, en secondes. 0 = elle n'en prélève pas (le
+    # contrôle alpha, dont les fenêtres viennent de sa propre ligne du temps).
+    #
+    # ⚠️ Ce champ existe pour DIMENSIONNER le tampon du moteur (`EngineServer.__init__`, terme
+    # `epoque_mesure`), et il doit être déclaré ici plutôt que déduit. Le tampon n'était couvert
+    # que par accident, à travers l'`epoch_s` de la calibration MI (4 s) — une grandeur qui n'a
+    # aucun rapport avec une mesure. Le jour où le MI raccourcirait la sienne, chaque époque de
+    # cette mesure serait TRONQUÉE en silence, et le verdict porterait sur moins de signal que ce
+    # que l'écran annonce. Nommer le besoin est ce qui empêche cette panne-là.
+    epoque_marqueur_s = 0.0
 
     # --- ce qui appartient à la ligne du temps d'une CALIBRATION, et pas à celle-ci -----------
     # Ces quatre-là découpent un essai que le moteur mène (top, imagerie, repos) et comptent un

@@ -56,7 +56,7 @@ Lancer :
     python src/core/server.py --smoke                   # test headless de bout en bout (CI)
 
 Essai sur casque, en deux terminaux (le stimulus n'ouvre PAS le casque, aucun conflit) :
-    python src/research/ssvep_stimulus.py --windowed --refresh 60   # les cibles clignotent
+    python src/stimulus/ssvep.py --windowed --refresh 60        # les cibles clignotent
     python src/core/server.py --mode ssvep --refresh 60         # décode et trace en console
 Un troisième terminal montre ce que reçoit un vrai client :
     python -u examples/receiver.py --stream decoded_ssvep
@@ -133,6 +133,16 @@ _UNE_SEULE_ACTIVITE = (
     "pendant qu'un seul écran affiche une seule consigne : celui qui demande « ferme les yeux » et "
     "celui qui demande « imagine ton poing » obtiendraient exactement le même signal. Aucune "
     "exception, aucun compteur — les deux rendraient des chiffres plausibles et faux")
+
+
+def _lit_les_marqueurs(rt):
+    """Ce runtime consomme-t-il la file de marqueurs du moteur ?
+
+    Lu sur l'OBJET, par la présence d'un `marker_mode_id` non vide : c'est ce champ qui nomme la
+    clé passée à `markers_murs`, donc un runtime qui le déclare est exactement un runtime qui
+    appelle `markers_murs`. Servi aux MESURES, qui n'ont pas de `Calib` sur quoi raisonner.
+    """
+    return bool(getattr(rt, "marker_mode_id", ""))
 
 
 def _calibration_lit_les_marqueurs(calib):
@@ -425,11 +435,20 @@ class EngineServer:
         # `epoch_s`, qui dimensionne le tampon des calibrations menées par une FENÊTRE, puisque
         # celles-ci prélèvent par le même chemin que le décodage (cf. `modes/marker_calib.py`).
         epoque_marqueur = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
+        # Et l'époque des MESURES menées par une fenêtre. ⚠️ Ce terme doit être NOMMÉ, pas hérité
+        # par accident : la mesure du taux SSVEP prélève la fixation entière (4 s), et jusqu'ici
+        # elle n'était couverte que par `epoque_calib` — l'`epoch_s` de la calibration MI, une
+        # grandeur qui n'a aucun rapport avec elle. Le jour où le MI raccourcirait la sienne,
+        # CHAQUE époque de la mesure serait tronquée en silence, et le taux porterait sur moins de
+        # signal que ce que l'écran annonce. Déclaré par `MesureRuntime.epoque_marqueur_s`.
+        epoque_mesure = max([getattr(spec.runtime_cls, "epoque_marqueur_s", 0.0) or 0.0
+                             for spec in registry.MESURES if spec.runtime_cls is not None] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
                         int(MI_WINDOW_S * self.acq.fs),
                         int(epoque_calib * self.acq.fs),
                         int(round((epoque_marqueur + MARKER_LATE_S) * self.acq.fs)),
+                        int(round(epoque_mesure * self.acq.fs)),
                         self.acq.window_n) + self.acq.margin_n
 
         self._pending = self._prepare(modes or (), params or {})
@@ -1697,6 +1716,29 @@ class EngineServer:
         if (calib is not None and not calib.terminee
                 and _calibration_lit_les_marqueurs(calib.spec.calibration)):
             yield calib
+        # ⚠️ Et la MESURE, qui a exactement le même besoin et vit dans un troisième emplacement.
+        # Elle n'est ni dans `self.active` ni dans `self.calibration` : l'oublier ici rejouerait,
+        # à l'identique, le défaut trouvé à la revue du 2026-09-08 — la fenêtre guidée publierait
+        # quatre minutes de marqueurs dans le vide, et la mesure abandonnerait en annonçant « la
+        # fenêtre ne s'est pas lancée, ou elle publie sous un autre nom », **les deux causes citées
+        # étant fausses**. Le critère est le même que pour une calibration : est-ce que cet
+        # objet-là appelle `markers_murs` ? Il le déclare par `marker_mode_id`.
+        mesure = self.mesure
+        if mesure is not None and not mesure.terminee and _lit_les_marqueurs(mesure):
+            yield mesure
+
+    @staticmethod
+    def _cle_marqueurs(rt):
+        """Sous quelle clé CE runtime range son curseur dans `_marqueur_curseur`.
+
+        Un mode et sa calibration la rangent sous l'identifiant du mode — c'est exactement pourquoi
+        les deux ne peuvent pas tourner ensemble. Une MESURE, elle, porte son propre identifiant
+        (`ssvep_taux`) mais lit des marqueurs estampillés d'un AUTRE `mode` (`ssvep`, celui du
+        stimulus qu'elle mesure), et `markers_murs` filtre là-dessus. Sans cette lecture, la purge
+        chercherait un curseur sous « ssvep_taux » qui n'existe pas et couperait devant la mesure,
+        perdant en silence tout ce qui lui était adressé.
+        """
+        return getattr(rt, "marker_mode_id", None) or rt.spec.id
 
     @staticmethod
     def _flux_attendu(rt):
@@ -1875,7 +1917,7 @@ class EngineServer:
         # (cf. `_ecouteurs_de_marqueurs`), et elle n'a pas d'entrée dans `self.active`. Son curseur
         # est rangé dans `_marqueur_curseur` sous l'identifiant de son mode, comme celui du mode —
         # ce qui est exactement pourquoi les deux ne peuvent pas tourner ensemble.
-        ecouteurs = [rt.spec.id for rt in self._ecouteurs_de_marqueurs()]
+        ecouteurs = [self._cle_marqueurs(rt) for rt in self._ecouteurs_de_marqueurs()]
         if not ecouteurs:
             print(f"[server] marqueurs entrants : {len(self._marqueurs)} marqueur(s) jetés — "
                   f"plus personne ne les écoute (aucun mode à marqueurs actif, aucune "
@@ -5035,7 +5077,7 @@ def _parse_args(argv):
                         "(mode ssvep uniquement)")
     p.add_argument("--refresh", type=float, default=None,
                    help="refresh de l'écran qui affiche le stimulus : le moteur en déduit les "
-                        "mêmes fréquences que src/research/ssvep_stimulus.py lancé avec ce "
+                        "mêmes fréquences que src/stimulus/ssvep.py lancé avec ce "
                         "refresh (mode ssvep uniquement)")
     p.add_argument("--baseline", type=float, default=None,
                    help="durée du repos initial en s, pour TOUS les modes démarrés ensemble "
