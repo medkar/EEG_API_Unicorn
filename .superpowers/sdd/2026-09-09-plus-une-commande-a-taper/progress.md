@@ -102,6 +102,29 @@ MINIMISER LE TEMPS.** Donc **quatre dispatches seulement** (contre huit au chant
   `--model` est sur **sept** fichiers (pas cinq), et `cvep_pilot.py` **défaut vers un chemin FIXE**
   (`CVEP_MODEL_PATH`) — c'est la référence locale de la séance, et `CLAUDE.md` le disait déjà.
 
+- **T11 : complete** — `cdcf8d8` (+ `95a6b0c` pour le rapport), en ligne. **Le chantier est fini.**
+  Les tests **2.1** et **2.2** de la recette sont devenus des clics ; le **2.9** cite les DEUX
+  fichiers d'une séance et les nomme (`seances/cvep_*.jsonl` et `seances/moteur_decoded_cvep_*.jsonl`,
+  même `local_clock()`) ; **1.17** et **1.18** créés pour l'écran de départ et la page de flux ;
+  `docs/SPEC.md` gagne **§3.2** (la règle vérifiable) et **§6.2** (les mesures) ; `docs/markers.md`
+  gagne la ligne « chauffe » que la T8/T9 avait laissée à trancher.
+  **Neuf chemins morts corrigés** — les trois annoncés (`README:445`, `CLAUDE:318`, `SPEC:706`)
+  plus six trouvés au balayage. ⚠️ **Le constat « `CLAUDE.md` cite encore `src/research/app.py` »
+  était PÉRIMÉ** : le chantier précédent avait déjà retiré la ligne.
+  🟡 **Deux faussetés que la doc portait toute seule** : la recette disait « l'alpha monte sur
+  **PO7/Oz/PO8** » alors que le moteur moyenne **quatre** voies (Pz compris) — même erreur que la
+  T3 avait corrigée dans le code, elle vivait aussi ici ; et le 2.9 affirmait que « le bouton ne
+  passe aucune option, donc pas de `--log` », **faux depuis la T5**.
+  🐛 **Trouvé, DIT, non corrigé (interdit de toucher à `src/`)** : `stimulus/ssvep.py:1` et le
+  `BRIEFING` de `ssvep_mesure.py` annoncent « **quatre** flèches » ; `choose_frequencies` en rend
+  **trois** à 60, 75, 120 et 144 Hz, et le rendu ne dessine que le plan. Message faux, sans danger,
+  mais affiché à l'étudiant qui s'assoit 3,6 min. **Deux lignes de code.**
+  Vérifications : les **44 chemins** `python …/*.py` cités dans les cinq documents extraits et
+  testés (42 existent, les 2 absents sont cités au passé) ; **42 autotests** + les **12** smokes de
+  `archive/` + les deux smokes → exit 0 ; `[smoke-frontiere] VERDICT : OK` (57 fichiers, 0
+  violation). `data/` **identique** avant/après (43 fichiers, sha256 `42120328…`), `seances/` à 0.
+  **Aucun repère chiffré supprimé** (contrôlé sur les lignes `-` du diff) ni inventé.
+
 ## Réserve à porter
 
 - 🔴 **La T3 a empiété sur la T10** en archivant `alpha_check.py`. C'est justifié (le compteur ne
