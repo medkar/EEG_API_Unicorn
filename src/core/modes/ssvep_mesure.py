@@ -557,7 +557,7 @@ class MesureSSVEP(MesureRuntime):
 
 # --- Le calcul, PARTAGÉ avec le banc d'essai ----------------------------------------------------
 
-def _acquisition_de_reference():
+def acquisition_de_reference():
     """Une `UnicornAcquisition` JAMAIS démarrée : on n'emprunte que ses filtres et sa géométrie.
 
     ⚠️ Elle n'ouvre aucune session — `start()` n'est jamais appelée — et ne touche donc à aucun
@@ -567,6 +567,13 @@ def _acquisition_de_reference():
     et c'est la seule chose qui rendrait ce module inutile, puisqu'il existe pour mesurer la règle
     du PRODUIT. C'est déjà le geste que faisait `research/ssvep_guided.analyze` ; il vit ici
     désormais, du côté du moteur, pour que le banc d'essai n'ait plus à connaître l'acquisition.
+
+    ⚠️ **Publique, et c'est le point.** `src/research/` n'a plus le droit d'importer
+    `core.acquisition` (règle vérifiée par `python src/core/server.py --smoke`), or ses analyses
+    hors ligne doivent filtrer leurs fenêtres archivées EXACTEMENT comme le moteur filtre les
+    siennes — sinon leurs chiffres cessent de décrire le produit. C'est ce point d'entrée-ci qui
+    leur donne le bon filtrage sans leur donner le casque : `ssvep_analyze.py` s'en sert depuis le
+    2026-09-09, `rejouer` et `longueur_bloc_attendue` sont publiques pour la même raison.
 
     ⚠️ Neuve à chaque appel, et NON mise en cache : un `BoardShim` gardé jusqu'à la fermeture de
     l'interpréteur y lève dans son `__del__` (« sys.meta_path is None »), et un étudiant lit ce
@@ -586,7 +593,7 @@ def longueur_bloc_attendue(acq=None):
     simplement None, chaque essai compterait comme « aucune cible », et le taux serait de 0 % —
     lu comme une panne de casque plutôt que comme un désaccord de réglages.
     """
-    acq = acq or _acquisition_de_reference()
+    acq = acq or acquisition_de_reference()
     return int(acq.window_n + acq.margin_n)
 
 
@@ -605,7 +612,7 @@ def rejouer(essais, repos, freqs, fs, acq=None):
     ⚠️ Elle attend **une fenêtre par essai**, déjà choisie. Le choix (la dernière de la fixation)
     appartient à l'appelant, et c'est délibéré : c'est là qu'il est visible et testable.
     """
-    acq = acq or _acquisition_de_reference()
+    acq = acq or acquisition_de_reference()
     freqs = [float(f) for f in freqs]
     if not freqs:
         raise ValueError("aucune fréquence : il n'y a rien contre quoi corréler")

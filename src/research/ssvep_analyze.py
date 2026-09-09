@@ -2,8 +2,21 @@
 
 Le pendant SSVEP de `cvep_analyze.py`. Jusqu'au 2026-07-20 le SSVEP ne conservait que les ρ,
 c'est-à-dire la SORTIE du décodeur : toute idée d'amélioration exigeait une nouvelle séance.
-`live_ssvep.py --guided` archive désormais les fenêtres brutes 8 voies, ce qui permet de rejouer
-et de comparer des variantes sur les mêmes données.
+Le protocole guidé archive les fenêtres brutes 8 voies, ce qui permet de rejouer et de comparer
+des variantes sur les mêmes données.
+
+⚠️ **Les fichiers que cet outil lit sont HISTORIQUES.** Ils étaient écrits par
+`research/live_ssvep.py --guided`, un écran de PILOTAGE parti dans `archive/` le 2026-09-09 : il
+ouvrait le casque et affichait un stimulus, deux gestes que `src/research/` n'a plus le droit de
+faire. La commande existe toujours (`python archive/live_ssvep.py --guided`), mais ce n'est plus
+le chemin normal — mesurer le SSVEP se fait depuis la console, tuile « Taux d'émission SSVEP ».
+Cet outil-ci reste ICI parce qu'il ne fait que CALCULER sur des fichiers déjà pris.
+
+⚠️ **Le filtrage vient du MOTEUR**, via `ssvep_mesure.acquisition_de_reference()` : une
+`UnicornAcquisition` jamais démarrée, dont on n'emprunte que la chaîne detrend + passe-bande +
+notch. Le réécrire ici (scipy, par exemple) donnerait un second filtrage, accordé au premier le
+jour de son écriture puis divergeant en silence — et les chiffres de cet outil cesseraient de
+décrire le produit sans que rien ne le dise.
 
 Ce que l'outil répond :
   1. le signal est-il là ? (accuracy argmax sur les fixations, vs hasard)
@@ -27,8 +40,11 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.cca_decoder import CCADecoder  # noqa: E402
+# Le filtrage du MOTEUR, emprunté sans toucher au casque : `acquisition_de_reference()` rend une
+# `UnicornAcquisition` que personne ne démarre. `research/` n'importe pas `core.acquisition` —
+# acquérir est de l'usage réel, et l'usage réel se pilote depuis la console.
+from core.modes.ssvep_mesure import acquisition_de_reference  # noqa: E402
 from core.config import (ARTIFACT_SIGMA_RATIO, CH_NAMES, DATA_DIR,  # noqa: E402
                          OCCIPITAL, use_utf8_console)
 
@@ -79,7 +95,8 @@ def _eval(S, lab, names, keep=None):
 def analyze(path=None):
     path = path or _latest()
     if not path or not os.path.exists(path):
-        print("[ssvep-an] aucun run guidé archivé. Lance `python src/research/live_ssvep.py --guided`.")
+        print("[ssvep-an] aucun run guidé archivé dans data/. Ces fichiers sont HISTORIQUES : "
+              "l'écran qui les écrivait est `archive/live_ssvep.py --guided`.")
         return False
     d = np.load(path, allow_pickle=True)
     ep, lab = d["epochs"], [str(x) for x in d["labels"]]
@@ -94,7 +111,7 @@ def analyze(path=None):
     print(f"   cibles " + "  ".join(f"{n}={f:.2f}Hz" for n, f in zip(names, freqs))
           + f"   |  fenêtres {counts}   (hasard {chance:.0f}%)")
 
-    flt = UnicornAcquisition(synthetic=True)   # emprunte _filter (aucune session ouverte)
+    flt = acquisition_de_reference()   # emprunte _filter (aucune session ouverte, aucun casque)
 
     print("\n== 1. Voies et normalisation (accuracy argmax sur les fixations) ==")
     best = None
