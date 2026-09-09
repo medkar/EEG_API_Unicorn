@@ -54,6 +54,7 @@ from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
 from console.calib_page import CalibPage  # noqa: E402
 from console.demarrage import SYNTHETIQUE, choisir_source  # noqa: E402
+from stimulus import registry as stimulus_registry  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
@@ -399,8 +400,16 @@ class Console(QMainWindow):
             return {"accepted": False,
                     "reason": f"« {spec.get('label', mode_id)} » ne déclare aucune fenêtre de "
                               f"stimulus : il n'y a rien à lancer."}
+        # La case « Journal de séance » de la page, si la fenêtre sait la tenir. `--log` SANS
+        # valeur : c'est la fenêtre qui choisit son nom horodaté, la console ne compose aucun
+        # chemin — elle reste un client qui n'écrit jamais sur le disque.
+        options = []
+        page = self.pages.get(mode_id)
+        journal = getattr(page, "journal", None)
+        if journal is not None and journal.isChecked():
+            options.append(stimulus_registry.JOURNAL[stimulus_id])
         return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
-                                   label=spec.get("label", mode_id))
+                                   label=spec.get("label", mode_id), options=options)
 
     def arreter_calibration(self):
         """« Abandonner » : la commande au moteur ET la fenêtre. Les deux, toujours.
@@ -1817,7 +1826,7 @@ def _smoke():
     from console import fenetres as mod_fenetres
     vraie_commande = mod_fenetres.stimulus_registry.commande
     try:
-        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False: [
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
             sys.executable, "-u", "-c",
             "import sys; sys.stderr.write('BOUM : dépendance absente\\n'); sys.exit(3)"]
         vrai = LanceurFenetre()
@@ -1832,7 +1841,7 @@ def _smoke():
         # L'autre mort, celle où `finished` n'arrive JAMAIS : exécutable introuvable. Sans la
         # branche `errorOccurred`, le lanceur resterait « en cours » pour toujours et le bouton
         # redeviendrait silencieux.
-        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False: [
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
             "programme-qui-nexiste-pas-12345"]
         introuvable = vrai.lancer("p300")
         app.processEvents()

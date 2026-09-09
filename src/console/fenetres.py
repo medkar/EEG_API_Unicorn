@@ -80,7 +80,7 @@ class LanceurFenetre(QObject):
 
     # --- écriture ---------------------------------------------------------------
 
-    def lancer(self, stimulus_id, calibrer=False, label=""):
+    def lancer(self, stimulus_id, calibrer=False, label="", options=()):
         """Démarre la fenêtre. Rend le MÊME accusé que le moteur : `{accepted, reason}`.
 
         La forme est celle de `EngineServer.submit` délibérément : l'appelant traite un refus de
@@ -92,7 +92,7 @@ class LanceurFenetre(QObject):
                 f"autre. Deux fenêtres publieraient les mêmes marqueurs sous le même nom, et le "
                 f"moteur mélangerait les deux séances sans rien signaler.")
         try:
-            argv = stimulus_registry.commande(stimulus_id, calibrer=calibrer)
+            argv = stimulus_registry.commande(stimulus_id, calibrer=calibrer, options=options)
         except KeyError as e:
             # Une clé de contrat sans fenêtre. `stimulus/registry.py` vérifie déjà la
             # correspondance dans les deux sens, mais son autotest n'est pas la console : si on

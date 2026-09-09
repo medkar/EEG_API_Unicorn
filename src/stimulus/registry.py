@@ -29,7 +29,23 @@ FENETRES = {
 }
 
 
-def commande(stimulus_id, calibrer=False):
+# Quelles fenêtres savent tenir un JOURNAL DE SÉANCE, et sous quel argument. Déclaré ICI, comme
+# les fenêtres elles-mêmes : la console demande « celle-ci sait-elle ? » au lieu de savoir, sinon
+# elle tiendrait un second catalogue qui divergerait au premier ajout.
+#
+# ⚠️ Seul le c-VEP en a un aujourd'hui, et ce n'est pas un oubli : c'est le seul mode dont la
+# recette dise qu'une séance sans journal NE SE DÉPOUILLE PAS (test 2.9). Le P300 et l'ErrP
+# publient une vérité-terrain que le moteur reçoit déjà par marqueurs.
+JOURNAL = {"cvep": "--log"}
+
+
+def sait_journaliser(stimulus_id):
+    """Cette fenêtre sait-elle écrire un journal de séance ? La console le DEMANDE, elle ne le
+    sait pas : une case à cocher sur une fenêtre qui ignore l'option serait un réglage-décor."""
+    return stimulus_id in JOURNAL
+
+
+def commande(stimulus_id, calibrer=False, options=()):
     """La ligne de commande complète d'une fenêtre. Lève `KeyError` si la clé est inconnue.
 
     `-u` n'est pas décoratif : la sortie de la fenêtre doit arriver NON TAMPONNÉE à la console,
@@ -42,6 +58,11 @@ def commande(stimulus_id, calibrer=False):
     argv = [_sys.executable, "-u", _os.path.join(_ICI, FENETRES[stimulus_id])]
     if calibrer:
         argv.append("--calibrer")
+    # `options` s'AJOUTE à `--calibrer`, elle ne le remplace pas : une calibration c-VEP a besoin
+    # des deux à la fois (le mode calibration ET son journal de vérité-terrain). Les éléments sont
+    # des arguments DÉJÀ FORMÉS (`["--log", chemin]`) — ce module ne connaît pas les options de
+    # chaque fenêtre, et n'a pas à les connaître : il assemble une ligne de commande.
+    argv.extend(str(o) for o in options)
     return argv
 
 
@@ -65,6 +86,14 @@ def _selftest():
     chk("--calibrer" not in argv, "…sans --calibrer par défaut : le décodage est le cas normal")
     chk(commande("p300", calibrer=True)[-1] == "--calibrer",
         "…et avec, quand on le demande")
+
+    # Les options s'AJOUTENT à `--calibrer` : une calibration c-VEP a besoin des deux à la fois.
+    avec = commande("cvep", calibrer=True, options=[JOURNAL["cvep"]])
+    chk("--calibrer" in avec and avec[-1] == "--log",
+        f"une option s'ajoute à --calibrer au lieu de le remplacer ({avec[-2:]})")
+    chk(sait_journaliser("cvep") and not sait_journaliser("p300"),
+        "le registre dit QUI sait journaliser — la console le demande au lieu de le savoir, "
+        "sinon une case à cocher apparaîtrait sur une fenêtre qui ignore l'option")
     chk(_os.path.isabs(argv[2]),
         "le chemin est ABSOLU : la console ne partage pas forcément le dossier courant de la "
         "fenêtre qu'elle lance")

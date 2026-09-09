@@ -9,12 +9,13 @@ import os
 import sys
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
+from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import PHASES_FR, live_views  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
+from stimulus import registry as stimulus_registry  # noqa: E402
 from core.lsl_io import stream_name  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.contract import client_snippet  # noqa: E402
@@ -50,6 +51,7 @@ class ModePage(QWidget):
         calib = spec.get("calibration") or {}
         self.bouton_calibrer = None
         self.bouton_stimulus = None
+        self.journal = None
         if calib:
             self.bouton_calibrer = QPushButton("Calibrer")
             self.bouton_calibrer.clicked.connect(
@@ -75,6 +77,24 @@ class ModePage(QWidget):
             self.bouton_stimulus.clicked.connect(
                 lambda: console.demander_stimulus(self.mode_id))
             entete.addWidget(self.bouton_stimulus)
+
+            # « Journal de séance », et elle est COCHÉE PAR DÉFAUT. La recette dit noir sur blanc
+            # qu'une séance c-VEP sans ce fichier NE SE DÉPOUILLE PAS (test 2.9) : décochée par
+            # défaut, ce serait une séance perdue par omission, et une séance casque ne se répète
+            # pas. La fenêtre choisit elle-même son nom horodaté — la console ne compose aucun
+            # chemin et n'écrit rien.
+            #
+            # ⚠️ La case n'apparaît que si la FENÊTRE sait le faire, et c'est le registre des
+            # stimulus qu'on interroge, pas une liste tenue ici : une case sur une fenêtre qui
+            # ignore l'option serait un réglage-décor, exactement ce que ce projet combat.
+            if stimulus_registry.sait_journaliser(calib["stimulus_id"]):
+                self.journal = QCheckBox("Journal de séance")
+                self.journal.setChecked(True)
+                self.journal.setToolTip(
+                    "Écrit la vérité-terrain de la séance (une ligne par consigne, horodatée sur "
+                    "la même horloge que le flux décodé). Sans ce fichier, la séance ne se "
+                    "dépouille pas après coup : le terminal en est le seul autre exemplaire.")
+                entete.addWidget(self.journal)
         entete.addStretch(1)
         self.etat = QLabel("")
         entete.addWidget(self.etat)

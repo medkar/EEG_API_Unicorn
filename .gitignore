@@ -49,3 +49,9 @@ crash.txt
 # 2. Les paquets de diff : une copie de ce que git contient déjà, régénérable
 #    par `git diff BASE..HEAD`. 645 Ko de redondance contre 371 Ko de carnet.
 .superpowers/**/*.diff
+
+# Journaux de séance écrits par les fenêtres de stimulus et par le moteur (chantier « plus une
+# seule commande à taper », 2026-09-09). Ce ne sont ni des modèles ni des enregistrements EEG —
+# ils vivent hors de `data/`, dont l'autorité d'écriture reste au moteur seul — mais ils portent
+# le déroulé d'une séance d'une personne identifiable : ils ne partent pas sur un dépôt public.
+seances/

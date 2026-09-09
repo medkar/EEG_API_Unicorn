@@ -389,6 +389,25 @@ def tirage_cible(rng, n_cibles, precedente=None):
 
 # --- Boucle principale -------------------------------------------------------
 
+# Sentinelle de `--log` sans valeur. Un objet, pas une chaîne : aucun chemin ne peut lui être
+# égal par accident.
+_AUTO = object()
+
+
+def _chemin_journal_auto():
+    """Un nom horodaté dans `seances/`, à la racine du dépôt. Créé au besoin.
+
+    ⚠️ **Pas dans `data/`** : `data/` porte des enregistrements EEG et des modèles, et son autorité
+    d'écriture appartient au moteur seul. Un journal de séance est une trace de protocole ; il vit
+    à côté, dans un dossier gitignoré.
+    """
+    racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dossier = os.path.join(racine, "seances")
+    os.makedirs(dossier, exist_ok=True)
+    horodatage = time.strftime("%Y%m%d-%H%M%S")
+    return os.path.join(dossier, f"cvep_{horodatage}.jsonl")
+
+
 def run(windowed=False, refresh=None, seconds=None, smoke=False,
         stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
@@ -447,6 +466,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     # sous un plein écran qu'on ne peut plus quitter. Ouvert en AJOUT ("a") : deux séances sur le
     # même chemin s'empilent, aucune ne s'efface.
     fichier_log = None
+    # `--log` sans valeur : la FENÊTRE choisit son nom, pas la console. C'est ce qui permet à
+    # l'interface de cocher « Journal de séance » sans avoir à composer un chemin — et la console
+    # n'écrit jamais sur le disque, elle ne fait que demander.
+    if log_path is _AUTO:
+        log_path = _chemin_journal_auto()
     if log_path:
         try:
             fichier_log = open(log_path, "a", encoding="utf-8")
@@ -1639,7 +1663,7 @@ def _parse_args(argv):
                         "est identique, et chaque consigne est horodatée — c'est ce qui compte "
                         "pour dépouiller. Seule une borne en IMAGES (`max_frames`, réservé à "
                         "`--smoke`) donne l'égalité stricte")
-    p.add_argument("--log", default=None, metavar="CHEMIN",
+    p.add_argument("--log", nargs="?", const=_AUTO, default=None, metavar="CHEMIN",
                    help="écrit la VÉRITÉ-TERRAIN en JSONL (une ligne par consigne, horodatée en "
                         "`local_clock()`, plus un en-tête et le bilan). SANS DÉFAUT : rien n'est "
                         "écrit tant que l'option n'est pas donnée. ⚠️ La séance 2.9 de la recette "
