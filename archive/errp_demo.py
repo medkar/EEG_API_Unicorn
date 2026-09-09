@@ -37,7 +37,10 @@ sys.path.insert(0, os.path.join(
 from core.config import (DATA_DIR, empreinte_dossier, ERRP_DEMO_ERROR_RATE,  # noqa: E402
                     ERRP_EPOCH_S, ERRP_FEEDBACK_S, ERRP_MAX_RUN_STEPS, ERRP_MIDLINE,
                     ERRP_MODEL_PATH, ERRP_PRE_S, ERRP_TRACK_CELLS, use_utf8_console)
-from research.ui import ACCENT, BG, DIM, FG, GO, Abort, App  # noqa: E402
+# La machinerie pygame partagée est le VOISIN `archive/ui.py` depuis le 2026-09-09 (elle était
+# `research/ui.py`) : `research/` n'a plus le droit d'ouvrir le casque ni de dessiner. Nom de
+# module NU, car Python met le dossier du script en tête de `sys.path`.
+from ui import ACCENT, BG, DIM, FG, GO, Abort, App  # noqa: E402
 
 
 

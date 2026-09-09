@@ -38,7 +38,10 @@ from core.config import (DATA_DIR, empreinte_dossier, P300_BURST_S,  # noqa: E40
                     P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIDLINE,
                     P300_MIN_REPS, P300_MODEL_PATH, P300_PRE_S, P300_REPS, P300_SELECT_MARGIN,
                     P300_STOP_MARGIN, UDP_HOST, p300_targets, use_utf8_console)
-from research.ui import ACCENT, BAR_BG, BG, DIM, FG, GO, WARN, Abort, App  # noqa: E402
+# La machinerie pygame partagée est le VOISIN `archive/ui.py` depuis le 2026-09-09 (elle était
+# `research/ui.py`) : `research/` n'a plus le droit d'ouvrir le casque ni de dessiner. Nom de
+# module NU, car Python met le dossier du script en tête de `sys.path`.
+from ui import ACCENT, BAR_BG, BG, DIM, FG, GO, WARN, Abort, App  # noqa: E402
 
 
 def _p300_ready(app, plan, spots, seconds=2.2):

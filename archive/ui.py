@@ -1,11 +1,23 @@
-"""Contexte partagé de l'appli unifiée : UNE fenêtre, UNE session casque, UN socket UDP.
+"""Contexte partagé des écrans archivés : UNE fenêtre, UNE session casque, UN socket UDP.
 
-Pourquoi centraliser : ouvrir/fermer la session BrainFlow entre deux modes coûte plusieurs
-secondes (appairage Bluetooth) et fait perdre le buffer. Ici, `App` possède les ressources
-et les modes se contentent de les emprunter — on passe du SSVEP au c-VEP instantanément.
+`App` possède les ressources (fenêtre pygame, session BrainFlow, socket UDP) et les écrans se
+contentent de les emprunter ; `Abort` est l'exception que lève ESC. S'y ajoutent les primitives
+d'affichage communes (texte centré, flèches, écrans de message) et la machinerie de pilotage
+partagée (`Live`, `_live_loop`, `_running`, `_vote`).
 
-Contient aussi les primitives d'affichage réutilisées par tous les modes (texte centré,
-flèches, écrans de message) pour que les trois modes se ressemblent visuellement.
+⚠️ **Ce fichier n'est PAS un écran** : c'est la machinerie que les huit écrans archivés d'à côté
+importent. Il n'a rien à lancer, donc pas de `--smoke` à lui ; il est couvert par les leurs.
+
+Il vivait comme `src/research/ui.py`, où il était le socle de l'appli pygame unifiée — supprimée
+le 2026-09-08. Il a déménagé ici le 2026-09-09, quand la règle « rien dans `src/research/` n'ouvre
+le casque ni n'affiche un stimulus » est devenue un test (`python src/core/server.py --smoke`,
+bloc `[smoke-frontiere]`). Il violait cette règle des deux façons à la fois — pygame ET
+`core.acquisition` — et pour cause : dessiner et acquérir sont exactement son métier. Plus rien de
+vivant dans `research/` ne l'importait ; ses seuls appelants sont ici. Il appartient donc ici, avec
+les écrans qu'il porte.
+
+⚠️ Non maintenu, comme tout ce dossier : gardé EXÉCUTABLE parce que les écrans qu'il fait tourner
+sont la référence contre laquelle on compare le moteur en séance.
 """
 
 import contextlib
@@ -16,7 +28,8 @@ import threading
 import time
 from collections import Counter
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))      # -> src/
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))      # -> src/
 from core.config import (CH_NAMES, EXAMPLES_DIR, UDP_HOST, UDP_PORT,  # noqa: E402
                     apply_invert, reference_lost, signal_verdict)
 

@@ -37,9 +37,10 @@ from core.config import (CVEP_CHANNELS, CVEP_DECISION_CYCLES, CVEP_MIN_VOTES,  #
 from research.cvep_rcca import RCCADecoder, RCCAModel, build_targets_rcca  # noqa: E402
 from research.itr import itr as _itr  # noqa: E402
 # La machinerie PARTAGÉE (Live, le fil de décodage/émission, le rendu, le vote) vivait dans
-# `research/app.py` ; elle est dans `research/ui.py` depuis le 2026-09-08, l'appli pygame ayant été
-# supprimée — voir `archive/README.md`.
-from research.ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E402
+# `research/app.py` ; elle est passée dans `research/ui.py` le 2026-09-08, l'appli pygame ayant été
+# supprimée, puis ICI (`archive/ui.py`) le 2026-09-09 — voir `archive/README.md`. Nom de module NU,
+# car Python met le dossier du script en tête de `sys.path`.
+from ui import Abort, App, Live, _live_loop, _running, _vote  # noqa: E402
 
 
 def _cvep_decode(app, live, dec, rows, epoch_s, n_win, code_len, name_to_cmd, hz=5.0):

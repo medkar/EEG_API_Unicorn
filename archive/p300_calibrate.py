@@ -66,7 +66,10 @@ from research.itr import itr  # noqa: E402
 # `blocs_melanges` vit dans l'émetteur : c'est lui qui documente l'invariant oddball, et
 # `p300_stimulus` n'importe pygame qu'à l'intérieur de `run()` — l'importer ici ne coûte rien.
 from stimulus.p300 import blocs_melanges  # noqa: E402
-from research.ui import ACCENT, App, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
+# La machinerie pygame partagée est le VOISIN `archive/ui.py` depuis le 2026-09-09 (elle était
+# `research/ui.py`) : `research/` n'a plus le droit d'ouvrir le casque ni de dessiner. Nom de
+# module NU, car Python met le dossier du script en tête de `sys.path`.
+from ui import ACCENT, App, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 BRIEF = [
     "Calibration P300",

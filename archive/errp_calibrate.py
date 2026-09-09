@@ -80,7 +80,10 @@ from core.errp_decoder import CORRECT, ERROR, rates  # noqa: E402
 from core.modes import errp_calib  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
-from research.ui import (ACCENT, App, BAR_BG, BG, DIM, FG, GO,  # noqa: E402,F401
+# La machinerie pygame partagée est le VOISIN `archive/ui.py` depuis le 2026-09-09 (elle était
+# `research/ui.py`) : `research/` n'a plus le droit d'ouvrir le casque ni de dessiner. Nom de
+# module NU, car Python met le dossier du script en tête de `sys.path`.
+from ui import (ACCENT, App, BAR_BG, BG, DIM, FG, GO,  # noqa: E402,F401
                 ON_COLOR, OUTLINE, WARN, Abort)
 
 BRIEF = [

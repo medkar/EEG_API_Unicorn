@@ -37,9 +37,11 @@ from core.config import (ALPHA_PEAK_HZ, ARTIFACT_SIGMA_RATIO, BANDPASS,  # noqa:
 from research.controller import SSVEPController  # noqa: E402
 from stimulus.ssvep import is_on as ssvep_on  # noqa: E402
 # La machinerie PARTAGÉE (Live, le fil de décodage/émission, le rendu) vivait dans `research/app.py`
-# avec cet écran ; elle est dans `research/ui.py` depuis le 2026-09-08 — voir `archive/README.md`.
-from research.ui import (ACCENT, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN,  # noqa: E402
-                         Abort, App, _live_loop, _running)
+# avec cet écran ; elle est passée dans `research/ui.py` le 2026-09-08, puis ICI (`archive/ui.py`)
+# le 2026-09-09 — voir `archive/README.md`. Nom de module NU, car Python met le dossier du script
+# en tête de `sys.path`.
+from ui import (ACCENT, BG, DIM, FG, GO, ON_COLOR, OUTLINE, WARN,  # noqa: E402
+                Abort, App, _live_loop, _running)
 
 
 def _arrow_painter(app, plan, polys, on_fn, highlight_target=False):

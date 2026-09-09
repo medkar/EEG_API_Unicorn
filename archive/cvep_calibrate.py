@@ -76,7 +76,10 @@ from core.cvep_rcca import SEUIL_MCNEMAR, _mcnemar_p  # noqa: E402
 from core.modes.cvep_calib import (chemin_modele_horodate,  # noqa: E402
                                    entraine_les_deux, gagnant as _gagnant)
 from research.itr import itr  # noqa: E402
-from research.ui import App, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
+# La machinerie pygame partagée est le VOISIN `archive/ui.py` depuis le 2026-09-09 (elle était
+# `research/ui.py`) : `research/` n'a plus le droit d'ouvrir le casque ni de dessiner. Nom de
+# module NU, car Python met le dossier du script en tête de `sys.path`.
+from ui import App, BG, DIM, FG, GO, WARN, Abort  # noqa: E402
 
 SETTLE_CYCLES = 2   # cycles jetés après un changement de cible (déplacement du regard + VEP qui s'installe)
 # Plancher d'utilité pour le contrôle de séance (bits/min). ~1/3 du meilleur c-VEP mesuré
@@ -640,7 +643,7 @@ def _selftest():
     import re as _re
 
     from research.itr import itr as _itr_ref
-    from research.ui import App
+    from ui import App
 
     _ce_module = sys.modules[__name__]
     _make_blocks_original = _ce_module._make_blocks
