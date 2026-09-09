@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
 from console.calib_page import CalibPage  # noqa: E402
+from console.demarrage import SYNTHETIQUE, choisir_source  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
@@ -2472,8 +2473,23 @@ def run(args):
     # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Un traceback autour
     # n'ajouterait rien et enterrait ce message sous la pile : on l'attrape ici, comme le fait
     # déjà `core/server.py` pour le même appel lancé sans interface.
+    # ⚠️ `QApplication` AVANT le moteur, et c'est nouveau (2026-09-09) : le choix de la source est
+    # désormais une question posée à l'écran, pas un drapeau tapé. Il faut donc une application Qt
+    # vivante avant que quoi que ce soit n'ouvre le casque.
+    app = QApplication([])
+
+    synthetic = args.synthetic
+    if not args.synthetic:
+        # `--synthetic` reste accepté et SAUTE le dialogue : c'est le raccourci du développeur et
+        # des smokes, pas le chemin normal. Ne pas le passer ouvre la question.
+        choix = choisir_source()
+        if choix is None:
+            print("[console] aucune source choisie — la console ne démarre pas.")
+            sys.exit(0)
+        synthetic = (choix == SYNTHETIQUE)
+
     try:
-        engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
+        engine = EngineServer(serial=args.serial, synthetic=synthetic, verbose=args.verbose,
                               modes=modes, instance=args.instance)
     except ValueError as refus:
         print(f"[console] {refus}")
@@ -2487,7 +2503,6 @@ def run(args):
     thread.start()
 
     try:
-        app = QApplication([])
         console = Console(engine)
         console.show()
         app.exec()
