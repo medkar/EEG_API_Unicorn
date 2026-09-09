@@ -242,8 +242,9 @@ SPEC = ModeSpec(
             affecte_decodage=False,
             help="Le pic alpha varie FORTEMENT d'une personne à l'autre (moyenne ~9,6 Hz, plage "
                  "6-14 Hz) et il est stable chez chacun. Une cible posée dessus ne se distingue "
-                 "pas du fond au repos. La proposition s'en écarte. Pour mesurer le tien : "
-                 "`python src/research/alpha_check.py`. Ne relance pas le repos.",
+                 "pas du fond au repos. La proposition s'en écarte. Pour mesurer le tien : la "
+                 "tuile « Contrôle alpha » de la grille — elle le mesure en ~40 s et propose de "
+                 "l'appliquer ICI d'un clic, sans le retaper. Ne relance pas le repos.",
         ),
     ),
     rest=Rest(

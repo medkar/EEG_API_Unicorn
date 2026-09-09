@@ -14,8 +14,10 @@ Quatre familles, à ne pas confondre en parcourant le dossier :
    supprimé le 2026-09-08 (chantier « la console, seul point d'entrée ») : le moteur publie les
    six modes, la console les pilote, et les écrans pygame qui faisaient doublon sont archivés,
    encore exécutables, dans `archive/` (voir `archive/README.md`). Ce socle-ci reste parce que
-   ce sont EUX qui l'importent — plus `ssvep_guided.py` et `alpha_check.py`, deux protocoles
-   chiffrés qui n'ont jamais eu de doublon.
+   ce sont EUX qui l'importent — plus `ssvep_guided.py`, un protocole chiffré qui n'a jamais eu
+   de doublon. `alpha_check.py` en était le second jusqu'au 2026-09-09 : le contrôle alpha est
+   désormais une MESURE que le moteur joue (`core/modes/alpha.py`, tuile de la console), et le
+   script est archivé.
    ⚠️ Les fenêtres de STIMULUS, elles, ont leur propre paquet : `src/stimulus/` (`p300.py`,
    `errp.py`, `cvep.py`). Elles n'ouvrent PAS le casque, elles AFFICHENT et publient des
    marqueurs — c'est ce qui permet de les lancer en même temps que le moteur, dans deux
