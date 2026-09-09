@@ -150,7 +150,7 @@ HONNETETE = (
 BRIEFING = (
     "Cette mesure répond à une seule question : quand le moteur annonce une cible, est-ce la "
     "bonne — et à quelle fréquence annonce-t-il quelque chose ?",
-    "Une seconde fenêtre s'ouvre et fait clignoter quatre flèches. Elle DÉSIGNE une cible à "
+    "Une seconde fenêtre s'ouvre et fait clignoter les cibles. Elle en DÉSIGNE une à "
     "chaque essai : fixe celle qui est entourée de bleu, jusqu'à ce que l'écran passe à autre "
     "chose.",
     f"Déroulé : stabilisation du casque, puis {SSVEP_GUIDE_REPOS_S:.0f} s de REPOS (fixe la croix "

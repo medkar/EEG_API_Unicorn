@@ -1,4 +1,11 @@
-"""Stimulus SSVEP — 4 flèches clignotantes, et le run GUIDÉ qui permet de le MESURER.
+"""Stimulus SSVEP — les flèches clignotantes, et le run GUIDÉ qui permet de le MESURER.
+
+⚠️ **TROIS flèches, pas quatre.** Ce fichier a annoncé « 4 flèches » jusqu'au 2026-09-09, dans sa
+docstring, dans son `--help` et dans le briefing de la mesure. `choose_frequencies` en rend TROIS
+(AVANT, GAUCHE, DROITE) à 60, 75, 120 et 144 Hz — vérifié aux quatre —, et le rendu ne dessine que
+ce plan. La quatrième est un vestige du banc d'essai robot, retiré depuis. Le nombre vient donc du
+PLAN et de nulle part ailleurs : quelqu'un qui s'assoit 3,6 minutes devant cet écran ne doit pas y
+chercher une flèche qui n'existe pas.
 
 Brique « affichage » du produit. **Ce programme n'ouvre PAS le casque** : il ne fait que présenter
 les stimuli visuels et, en mode guidé, publier des marqueurs. C'est ce qui lui permet de tourner
@@ -384,7 +391,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     seance_complete = False
     try:
         if not guide:
-            # --- décodage libre : les quatre flèches clignotent, rien d'autre ------------------
+            # --- décodage libre : les flèches du plan clignotent, rien d'autre ----------------
             while running:
                 poll()
                 dessine()
@@ -682,7 +689,7 @@ def _rejouer_guide(per_target, seed, seconds=None):
 
 
 def _parse_args(argv):
-    p = argparse.ArgumentParser(description="Stimulus SSVEP 4 flèches (EEG_API_Unicorn).")
+    p = argparse.ArgumentParser(description="Stimulus SSVEP (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenetre au lieu du plein ecran")
     p.add_argument("--refresh", type=float, default=None, help="forcer le refresh (Hz)")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit apres N secondes")
