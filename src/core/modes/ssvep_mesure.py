@@ -568,7 +568,14 @@ class MesureSSVEP(MesureRuntime):
         essais = [(self._decision_de_l_essai(blocs[-1]), cible)
                   for cible, blocs in (par_essai[n] for n in sorted(par_essai))]
 
-        resultat = rejouer(essais, repos, self._freqs, fs, acq=acq)
+        # ⚠️ **Les deux pertes voyagent avec le chiffre.** `n_essais` ne compte que les essais
+        # RETENUS ; ceux dont l'époque a débordé du tampon disparaissent du dénominateur sans
+        # laisser de trace. Ils étaient comptés et imprimés sur stdout — que la console ne montre
+        # pas — donc un verdict « Sur 26 ESSAIS… » se citait ensuite comme s'il décrivait la
+        # séance de 36. C'est le même geste que `n_artefacts`, qui est publié ET nommé dans la
+        # phrase depuis toujours. Trouvé par la revue de branche du 2026-09-10.
+        resultat = rejouer(essais, repos, self._freqs, fs, acq=acq,
+                           perdus=self._epoques_perdues, chauffe=self._marqueurs_chauffe)
         resultat["refresh_hz"] = self._refresh_hz
         return resultat
 
@@ -615,12 +622,26 @@ def longueur_bloc_attendue(acq=None):
     return int(acq.window_n + acq.margin_n)
 
 
-def rejouer(essais, repos, freqs, fs, acq=None):
+def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
     """**La règle du moteur, rejouée sur des fenêtres — une décision par essai.** Rend le verdict.
 
-    `essais` : `[(fenêtre BRUTE (n, 8), indice de la cible fixée), ...]`, **une par essai**.
-    `repos`  : `[fenêtre BRUTE (n, 8), ...]`, les fenêtres du plancher.
-    `freqs`  : les fréquences AFFICHÉES, dans l'ordre des indices de cible.
+    `essais`  : `[(fenêtre BRUTE (n, 8), indice de la cible fixée), ...]`, **une par essai**.
+    `repos`   : `[fenêtre BRUTE (n, 8), ...]`, les fenêtres du plancher.
+    `freqs`   : les fréquences AFFICHÉES, dans l'ordre des indices de cible.
+    `perdus`  : essais JOUÉS mais absents de `essais` — leur époque a débordé du tampon.
+    `chauffe` : marqueurs reçus pendant la chauffe du moteur, jetés avant la mesure.
+
+    ⚠️ **`perdus` et `chauffe` ne changent aucun calcul : ils rendent le dénominateur HONNÊTE.**
+    L'effectif reste `len(essais)`, parce qu'un essai sans époque ne peut produire aucune décision
+    — mais sans ces deux nombres, une séance de 36 essais dont 10 ont débordé rend « Sur 26
+    ESSAIS… », avec un intervalle calculé sur 26, et rien ne dit que 10 ont été jetés. Le chiffre
+    est ensuite cité comme s'il décrivait la séance entière. Ils sont donc publiés ET nommés dans
+    la phrase de verdict, exactement comme `n_artefacts`.
+
+    ⚠️ Ils valent **0 par défaut**, et c'est ce que voit le banc d'essai : un enregistrement
+    archivé ne porte pas le compte de ce que la séance a perdu au moment où elle a été prise. Un
+    rejeu hors ligne dit donc « aucune perte » faute de mieux — il décrit le FICHIER, pas la
+    séance.
 
     ⚠️ Cette fonction est le SEUL chemin de décodage de la mesure, et elle est publique pour que le
     banc d'essai (`src/research/ssvep_guided.py`) rejoue un enregistrement archivé **par le même
@@ -693,6 +714,11 @@ def rejouer(essais, repos, freqs, fs, acq=None):
         "n_emis": int(n_emis),
         "n_justes": int(n_justes),
         "n_artefacts": int(artefacts),
+        # Les deux pertes, publiées à côté de l'effectif qu'elles qualifient. `n_artefacts` compte
+        # des essais QUI SONT dans `n_essais` (ils comptent comme « aucune cible ») ; `n_perdus`
+        # et `n_chauffe` comptent des essais qui n'y sont PAS. La nuance est dans le verdict.
+        "n_perdus": int(perdus),
+        "n_chauffe": int(chauffe),
         "n_cibles": len(freqs),
         "taux_emission": round(float(taux_emission), 3),
         "justesse_emission": round(float(justesse), 3),
@@ -704,13 +730,21 @@ def rejouer(essais, repos, freqs, fs, acq=None):
         "fenetres_repos": len(scores_repos),
         "decisions": [(int(c), None if d is None else int(d)) for c, d in decisions],
         "verdict": verdict(len(freqs), n_essais, n_emis, n_justes, taux_emission, justesse,
-                           ic_bas, ic_haut, artefacts),
+                           ic_bas, ic_haut, artefacts, perdus=perdus, chauffe=chauffe),
         "honnetete": HONNETETE,
     }
 
 
-def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_haut, artefacts):
-    """LA phrase. Les DEUX chiffres, toujours ensemble, et l'effectif qui les porte."""
+def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_haut, artefacts,
+            perdus=0, chauffe=0):
+    """LA phrase. Les DEUX chiffres, toujours ensemble, et l'effectif qui les porte.
+
+    ⚠️ `perdus` et `chauffe` sont NOMMÉS ici, pas seulement publiés. C'est toute la thèse de ce
+    module : l'effectif doit être visible et honnête. `n_essais` ne compte que les essais retenus,
+    donc dire « Sur 26 ESSAIS » sans dire que 10 ont été jetés laisse citer ce chiffre comme s'il
+    décrivait la séance de 36 — et la phrase de verdict est la SEULE chose que la console affiche
+    en entier.
+    """
     hasard = 1.0 / n_cibles
     phrase = (
         f"Sur {n_essais} ESSAIS (une décision par essai, jamais une par fenêtre), le moteur a "
@@ -718,6 +752,17 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
         f"raison {n_justes} fois sur {n_emis}, soit {justesse * 100:.0f} % "
         f"[IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
         f"{hasard * 100:.0f} %. ")
+    # ⚠️ AVANT les artefacts, parce que ces deux-là qualifient l'effectif lui-même : les artefacts
+    # SONT dans `n_essais` (ils y comptent comme « aucune cible »), les perdus n'y sont PAS.
+    if perdus:
+        phrase += (f"⚠️ {perdus} essai(s) de plus ont été JOUÉS mais ne sont pas dans ce calcul : "
+                   f"leur EEG avait quitté le tampon du moteur avant qu'on prélève l'époque. "
+                   f"L'effectif ci-dessus décrit {n_essais} essais, pas les {n_essais + perdus} "
+                   f"que la séance a joués. ")
+    if chauffe:
+        phrase += (f"{chauffe} marqueur(s) de plus sont arrivés pendant la CHAUFFE du moteur et "
+                   f"ont été jetés : la fenêtre a pris de l'avance sur la stabilisation de "
+                   f"l'offset DC. ")
     if artefacts:
         phrase += (f"{artefacts} essai(s) rejeté(s) comme artefact (amplitude > "
                    f"{ARTIFACT_SIGMA_RATIO:g}× le repos) — ils comptent comme « aucune "
@@ -953,6 +998,44 @@ def _selftest():
     muet = verdict(3, 24, 0, 0, 0.0, 0.0, 0.0, 0.0, 0)
     chk("RIEN" in muet and "absence de score" in muet,
         f"zéro émission se lit comme une ABSENCE de score, pas comme un mauvais score ({muet[:70]}…)")
+
+    # === Les essais JETÉS sont DANS le résultat, et NOMMÉS dans le verdict =====================
+    # ⚠️ `n_essais` ne compte que les essais RETENUS. Une séance de 36 dont 10 époques débordent le
+    # tampon (moteur chargé, `calib_start` tardif) annonce « Sur 26 ESSAIS… », avec un intervalle
+    # calculé sur 26 — et ce chiffre-là se cite ensuite comme s'il décrivait les 36. Les deux
+    # compteurs n'existaient que sur stdout, que la console ne montre pas. Ils voyagent maintenant
+    # avec le chiffre, comme `n_artefacts`.
+    rt_perdu = MesureSSVEP(SPEC, {}, _FauxMoteur())
+    rt_perdu._freqs = list(FREQS)
+    rt_perdu._epoques_perdues = 10
+    rt_perdu._marqueurs_chauffe = 4
+    rng_p = np.random.default_rng(11)
+    enr_perdu = [(_bruit(rng_p, BESOIN), REPOS) for _ in range(40)]
+    for i in range(1, 27):                      # 26 RETENUS, sur les 36 que la séance a joués
+        enr_perdu.append((_ssvep(rng_p, BESOIN, FREQS[(i - 1) % 3]), Essai(i, (i - 1) % 3)))
+    res_perdu = rt_perdu._mesurer(enr_perdu, FS)
+    chk(res_perdu["n_essais"] == 26 and res_perdu["n_perdus"] == 10
+        and res_perdu["n_chauffe"] == 4,
+        f"les essais jetés sont PUBLIÉS à côté de l'effectif qu'ils qualifient "
+        f"({res_perdu['n_essais']} retenus, {res_perdu['n_perdus']} perdus, "
+        f"{res_perdu['n_chauffe']} jetés à la chauffe) — comptés et imprimés ne suffit pas, la "
+        f"console ne lit pas stdout")
+    chk("10 essai(s) de plus ont été JOUÉS" in res_perdu["verdict"]
+        and "pas les 36 que la séance a joués" in res_perdu["verdict"],
+        f"…et NOMMÉS dans la phrase de verdict, avec le total qu'ils reconstituent — la phrase "
+        f"est la seule chose que la console affiche en entier ({res_perdu['verdict'][80:230]}…)")
+    chk("4 marqueur(s) de plus" in res_perdu["verdict"]
+        and "CHAUFFE" in res_perdu["verdict"],
+        f"…les marqueurs de la chauffe aussi, et pour une raison DIFFÉRENTE des perdus : la "
+        f"fenêtre a pris de l'avance sur la stabilisation ({res_perdu['verdict'][-260:-120]}…)")
+    # Ce qui rend les deux assertions ci-dessus falsifiables : une phrase CONSTANTE les passerait
+    # toutes les deux. Sans perte, le verdict n'en dit rien — et `res` vient d'une séance jouée
+    # sans perdre une seule époque.
+    chk(res["n_perdus"] == 0 and res["n_chauffe"] == 0
+        and "de plus ont été JOUÉS" not in res["verdict"]
+        and "CHAUFFE" not in res["verdict"],
+        f"…et une séance qui n'a RIEN perdu n'en parle pas : la phrase n'est pas un gabarit "
+        f"constant ({res['n_perdus']}, {res['n_chauffe']})")
 
     # === Les refus, avant tout calcul ==========================================================
     rt_vide = MesureSSVEP(SPEC, {}, _FauxMoteur())

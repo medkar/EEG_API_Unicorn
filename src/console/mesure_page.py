@@ -76,6 +76,11 @@ class MesurePage(QWidget):
         ("n_emis", "{:d} avec décision"),
         ("n_justes", "dont {:d} justes"),
         ("n_artefacts", "{:d} rejetés (artefact)"),
+        # ⚠️ Ces deux-là ne sont PAS dans `n_essais` — ils ont été joués et jetés avant le calcul.
+        # Les afficher est ce qui empêche de citer « 26 essais » pour une séance qui en a joué 36 ;
+        # le verdict les nomme aussi, en toutes lettres.
+        ("n_perdus", "{:d} joués mais perdus (EEG hors tampon)"),
+        ("n_chauffe", "{:d} jetés (arrivés pendant la chauffe)"),
         ("fenetres_repos", "plancher sur {:d} fenêtres de repos"),
     )
 
