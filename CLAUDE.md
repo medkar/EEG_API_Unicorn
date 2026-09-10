@@ -187,9 +187,16 @@ python src/console/app.py --mode ssvep     # + décodage SSVEP démarré au lanc
 ```
 
 **Elle commence par demander sur quoi ouvrir la session** (2026-09-09) : casque Unicorn ou board de
-test BrainFlow. ⚠️ **Aucun repli automatique** — un casque qui refuse de s'ouvrir le fait dire et
-repropose le choix ; basculer en douce ferait enregistrer une séance entière de signal fabriqué en
-croyant tenir du vrai. Le bandeau répète la source tant que la console tourne.
+test BrainFlow. ⚠️ **Aucun repli automatique** — basculer en douce ferait enregistrer une séance
+entière de signal fabriqué en croyant tenir du vrai. Le bandeau répète la source tant que la
+console tourne.
+
+⚠️ **Ce que la console fait vraiment quand le casque refuse de s'ouvrir, depuis le 2026-09-10** :
+elle le **DIT**, à l'écran. Elle ne **repropose pas** le choix — cette phrase-ci l'a affirmé, et
+`docs/recette.md` §1.17 aussi, alors que ce n'était implémenté nulle part. La revue de branche l'a
+trouvé. Reproposer exigerait de sortir le cycle de vie du fil du moteur de `run()` : c'est un
+chantier, pas un correctif, et **une promesse écrite non tenue coûte plus qu'une absence** —
+l'étudiant attend un écran qui ne viendra jamais.
 
 Dans la console : une grille de **sept tuiles** (les six modes plus le brut), une page par mode
 (sortie en direct · réglages · extrait de code client), et **deux boutons qui sortent de la
