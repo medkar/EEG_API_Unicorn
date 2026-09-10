@@ -38,10 +38,20 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 
   Si l'envie de remonter une flèche se présente, c'est que le module visé doit DÉMÉNAGER — vers
   `core` s'il sert au décodage, vers `stimulus` s'il sert au stimulus. Ni pygame ni Qt dans `core` :
-  le moteur tourne sans écran. **Les INTERDITS sont vérifiés par un test**, pas par la
-  discipline : `server.py --smoke` (`[smoke-frontiere]`) parse en AST tout `src/core/**/*.py`,
-  tout `src/stimulus/**/*.py` et tout `src/research/**/*.py`, et échoue sur le moindre import
-  interdit.
+  le moteur tourne sans écran. **Les INTERDITS des QUATRE lignes sont vérifiés par un test**, pas
+  par la discipline : `server.py --smoke` (`[smoke-frontiere]`) parse en AST **les quatre paquets**
+  — `src/core/`, `src/stimulus/`, `src/research/` et `src/console/` —, chacun avec sa liste
+  d'interdits, et échoue sur le moindre import interdit. Il vérifie aussi que chaque dossier est
+  **présent et non vide** : un paquet renommé ou vidé rendrait « 0 violation » et passerait pour
+  un succès.
+
+  ⚠️ **`src/console/` n'était scanné par AUCUNE règle avant le 2026-09-10**, alors que cette phrase
+  promettait déjà un test sous le tableau : `console → research` et `research → console` passaient
+  tous les deux. Même forme que le défaut trouvé le 2026-09-08 sur `core` (« ni pygame **ni Qt** »
+  écrit, seul pygame vérifié) — **la règle écrite plus large que sa vérification**, et c'est
+  toujours le cran manquant qui compte. Aucun import fautif n'existait le jour du correctif : le
+  risque était théorique, mais « personne ne le fait aujourd'hui » est de la discipline, pas un
+  test.
 - 🔴 **TOUT L'USAGE RÉEL SE PILOTE DEPUIS L'INTERFACE. Un utilisateur ne tape aucune commande.**
   C'est une contrainte de conception permanente, du même rang que la frontière ci-dessus — pas une
   fonctionnalité qu'on ajoute quand on y pense. **Une capacité livrée sans chemin graphique est une
@@ -53,9 +63,12 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   `server.py --mode X`, le moteur **sans écran**, dont c'est justement le contrat public.
 
   **Vérifié par le même test** : rien dans `src/research/` n'importe `core.acquisition`,
-  `brainflow` ni `pygame`. Le banc d'essai peut tout CALCULER sur des fichiers archivés — c'est son
-  métier — mais ouvrir le casque ou afficher un stimulus sont des gestes d'usage réel, donc ils
-  appartiennent à l'application. **Vert depuis le 2026-09-09** : `[smoke-frontiere] 0 violation(s)
+  `brainflow`, `pygame` ni `console`. Le banc d'essai peut tout CALCULER sur des fichiers
+  archivés — c'est son métier — mais ouvrir le casque ou afficher un stimulus sont des gestes
+  d'usage réel, donc ils appartiennent à l'application. Et **la réciproque est vérifiée depuis le
+  2026-09-10** : rien dans `src/console/` n'importe `research`. Une analyse hors ligne qui doit
+  passer à portée de clic DÉMÉNAGE dans `core` ; elle ne se branche pas sur un bouton depuis le
+  banc d'essai. **Vert depuis le 2026-09-09** : `[smoke-frontiere] 0 violation(s)
   de frontière`. (Le NOMBRE de fichiers n'est pas cité : un compte en prose n'est tenu par rien,
   et celui-ci était déjà faux deux commits plus tard — 57 contre 58.) Il était ROUGE en le posant, sur six fichiers — c'est ce
   rouge-là qui a servi de liste de travail au chantier « plus une seule commande à taper ».
@@ -275,9 +288,10 @@ python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,8 min (la con
 **Après toute modification**, les deux tests headless qui couvrent le plus de code (aucun casque) :
 
 ```bash
-python src/core/server.py --smoke          # moteur : registre, FRONTIÈRE (core + stimulus +
-                                           # research), repos partagé, cumul, flux, vol de
-                                           # marqueurs, save/discard, ENREGISTREMENT de séance
+python src/core/server.py --smoke          # moteur : registre, FRONTIÈRE (les QUATRE paquets :
+                                           # core + stimulus + research + console), repos partagé,
+                                           # cumul, flux, vol de marqueurs, save/discard,
+                                           # ENREGISTREMENT de séance
 python src/console/app.py --smoke          # console : grille, page de mode, réglages, contrôle de
                                            # liaison, lanceur de fenêtre, ORDRE, écran de départ,
                                            # page des mesures, page de flux (Qt offscreen)

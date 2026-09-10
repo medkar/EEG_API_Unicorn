@@ -3703,8 +3703,29 @@ _FRONTIERE_STIMULUS_MODULES_INTERDITS = ("core.acquisition",)
 # ajouter — on ajoutait un bouton — et le chantier suivant repartait sans la règle, donc un nouveau
 # trou apparaissait. Une contrainte tenue par la discipline n'est pas tenue. Celle-ci est
 # désormais tenue par ce scanner, comme la frontière entre les paquets.
-_FRONTIERE_RESEARCH_INTERDITS = ("pygame", "brainflow")
+#
+# `console` a rejoint la liste le 2026-09-10 : le tableau des quatre flèches donne à `research`
+# le droit d'importer `core` et `stimulus`, et RIEN d'autre. Un `research -> console` tirerait Qt
+# dans une analyse hors ligne — donc rendrait le banc d'essai inutilisable sur une machine sans
+# écran, alors que c'est précisément là qu'il tourne.
+_FRONTIERE_RESEARCH_INTERDITS = ("pygame", "brainflow", "console")
 _FRONTIERE_RESEARCH_MODULES_INTERDITS = ("core.acquisition",)
+
+# Ce que `src/console/` n'a pas le droit d'importer. **Un seul nom**, et c'est tout ce que le
+# tableau des quatre flèches lui interdit : la console importe `core` (elle est un CLIENT du
+# moteur), `stimulus` (elle lance les fenêtres) et Qt (elle EST du Qt). Ce qu'elle ne doit pas
+# faire, c'est tirer le banc d'essai derrière un bouton : `research/` contient des analyses hors
+# ligne, des protocoles chiffrés et des hypothèses réfutées, dont rien n'est du parcours d'un
+# étudiant. Un import suffirait à en faire entrer un dans l'interface sans qu'on l'ait décidé.
+#
+# ⚠️ **`src/console/` n'était scanné par AUCUNE règle jusqu'au 2026-09-10**, alors que `CLAUDE.md`
+# annonçait « les INTERDITS sont vérifiés par un test » juste sous ce tableau de quatre flèches.
+# Deux des quatre passaient : `console -> research` et `research -> console`. C'est la forme exacte
+# du défaut trouvé le 2026-09-08 sur `core` (« ni pygame **ni Qt** » écrit, seul pygame vérifié) —
+# la règle ÉCRITE plus large que sa VÉRIFICATION, et c'est toujours le cran qui manque qui compte.
+# Le risque était théorique le jour du correctif (aucun import fautif), mais « aujourd'hui personne
+# ne le fait » est de la discipline, pas un test.
+_FRONTIERE_CONSOLE_INTERDITS = ("research",)
 
 
 def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdits_re=None,
@@ -3810,10 +3831,18 @@ def _smoke_frontiere():
     un moteur dont le contrat est justement de tourner sans écran. La règle VÉRIFIÉE était plus
     étroite d'un cran que la règle ÉCRITE, et c'était le cran qui compte.
 
+    ⚠️ Correction de revue (2026-09-10) : **le paquet `src/console/` n'était scanné nulle part**,
+    et `console` n'était pas dans la liste de `research` — donc `console -> research` ET
+    `research -> console` passaient tous les deux, sous un `CLAUDE.md` qui annonçait « les
+    INTERDITS sont vérifiés par un test » juste sous un tableau de QUATRE flèches. Même forme que
+    la correction du tour 2 juste au-dessus, un cran plus haut : la règle écrite plus large que sa
+    vérification. Les quatre paquets sont maintenant scannés, chacun avec sa liste.
+
     La détection elle-même vit dans `_imports_interdits` (voir sa docstring pour ce qui lui
-    échappe). Ce test l'applique à tout `src/core/**/*.py`, ET la met à l'épreuve sur des extraits
-    fabriqués — sans quoi une garde muette (motif vidé, parcours cassé) rendrait « 0 violation »
-    et passerait pour un succès.
+    échappe). Ce test l'applique à tout `src/core/**/*.py`, `src/stimulus/`, `src/research/` et
+    `src/console/`, ET la met à l'épreuve sur des extraits fabriqués — sans quoi une garde muette
+    (motif vidé, parcours cassé) rendrait « 0 violation » et passerait pour un succès. Chaque
+    dossier est de plus vérifié PRÉSENT et NON VIDE, pour la même raison.
     """
     ok = True
 
@@ -3905,6 +3934,8 @@ def _smoke_frontiere():
             ("from core import acquisition as acq\n", ["core.acquisition"]),
             ("import pygame\n", ["pygame"]),
             ("import brainflow\n", ["brainflow"]),
+            # `research -> console`, la 2e des deux flèches qui passaient jusqu'au 2026-09-10.
+            ("from console.grid import ModeGrid\n", ["console"]),
             ("from core.config import DATA_DIR\n", []),               # calculer reste libre
             ("import numpy as np\n", []),
             ("from stimulus.refresh import measure_refresh\n", [])):  # research -> stimulus, OK
@@ -3914,6 +3945,24 @@ def _smoke_frontiere():
         chk(trouve == attendu,
             f"règle research — « {source.strip()} » -> {trouve or 'rien'} "
             f"(attendu {attendu or 'rien'})")
+
+    # 1 quater. La règle de `src/console/`, sur des extraits fabriqués. C'est la plus COURTE des
+    # quatre — un seul nom interdit — et c'est justement pour ça qu'elle manquait : une liste d'un
+    # élément n'a pas l'air d'une règle. Les trois cas autorisés ci-dessous sont aussi importants
+    # que le cas interdit : ce sont eux qui disent que `interdits_re=""` est délibéré. La console
+    # EST du Qt, et le motif par défaut (`PySide\d+`) la déclarerait fautive de haut en bas.
+    for source, attendu in (
+            ("from research.ssvep_guided import analyze\n", ["research"]),
+            ("import research.itr\n", ["research"]),
+            ("def f():\n    from research.mi_compare import charger\n", ["research"]),  # indenté
+            ("from core.server import EngineServer\n", []),        # elle est un CLIENT du moteur
+            ("from stimulus import registry\n", []),               # elle lance les fenêtres
+            ("from PySide6.QtWidgets import QLabel\n", [])):       # …et elle EST du Qt
+        trouve = [p for _ligne, p in _imports_interdits(
+            source, interdits=_FRONTIERE_CONSOLE_INTERDITS, interdits_re="")]
+        chk(trouve == attendu,
+            f"règle console — « {source.strip().splitlines()[-1].strip()[:48]} » -> "
+            f"{trouve or 'rien'} (attendu {attendu or 'rien'})")
 
     # 2. Et maintenant le vrai `src/core/`.
     racine = os.path.dirname(os.path.abspath(__file__))
@@ -3950,6 +3999,26 @@ def _smoke_frontiere():
             f"rendrait « 0 violation » sans que la règle ait rien vérifié")
         fautes += fautes_res
         fichiers_vus += vus_res
+
+    # 5. `src/console/` : la console est un client du MOTEUR, pas du banc d'essai. Quatrième et
+    #    dernière section — c'est elle qui rend le tableau des quatre flèches de `CLAUDE.md`
+    #    entièrement vérifié, `research -> console` étant fermé par la liste ci-dessus.
+    #    Même `chk` d'existence et même assertion d'effectif que les deux sections précédentes,
+    #    pour la même raison : sans elles, supprimer ou vider le dossier rendrait « 0 violation »
+    #    et « VERDICT : OK ».
+    racine_console = os.path.join(os.path.dirname(racine), "console")
+    chk(os.path.isdir(racine_console), f"la console src/console/ existe ({racine_console})")
+    if os.path.isdir(racine_console):
+        fautes_con, vus_con = _scanner(racine_console, "console", _FRONTIERE_CONSOLE_INTERDITS, "")
+        if fautes_con:
+            print("[smoke-frontiere]   → RÈGLE : la console importe `core` et `stimulus`, jamais "
+                  "`research`. Si cette analyse doit être à portée de clic, elle doit DÉMÉNAGER "
+                  "dans `core` ; sinon elle reste une commande de développeur.")
+        chk(vus_con >= 10,
+            f"…et elle contient bien ses pages ({vus_con} fichiers) — un dossier vidé rendrait "
+            f"« 0 violation » sans que la règle ait rien vérifié")
+        fautes += fautes_con
+        fichiers_vus += vus_con
 
     for faute in fautes:
         print(f"[smoke-frontiere] ÉCHEC : {faute}")
