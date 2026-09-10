@@ -155,6 +155,7 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
+from stimulus.garde import sous_garde_data  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -455,7 +456,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     `errp_stimulus.py`.
     """
     if smoke:
-        return _smoke()
+        return sous_garde_data(_smoke)
 
     # `--refresh 0` (ou négatif) divisait par zéro au premier `L / refresh`, APRÈS avoir ouvert la
     # fenêtre : traceback nu, pas de `pygame.quit()`, écran plein resté à l'écran. Le refus se pose
@@ -886,6 +887,24 @@ def _runtime_de_test(code_len=63, refresh=60.0):
         valeurs, raison = validate(mode_cvep.SPEC, {})
         if raison is not None:
             raise RuntimeError(f"fabrique de test cassée : {raison}")
+
+        # ⚠️ **Le détournement doit être PROUVÉ, pas espéré** — constat de la revue du 2026-09-08,
+        # et ce n'est pas une précaution théorique : c'est EXACTEMENT la faute qui, ce jour-là, a
+        # fait écrire un modèle entraîné sur du bruit synthétique dans le vrai `data/`, sous un
+        # nom que le catalogue liste, donc proposable par défaut à la séance suivante.
+        #
+        # Repointer `mode_cvep.CVEP_MODEL_PATH` ne marche que parce que `_modeles_disponibles`
+        # relit cette variable de module à CHAQUE appel — une propriété d'un AUTRE fichier, que
+        # rien ne promet. Le jour où elle change (le même déménagement qui a cassé
+        # `cvep_rcca_pilot` en septembre), `validate` élirait le modèle le plus récent du VRAI
+        # `data/` : sur ce poste il est à 60 Hz et L=63, donc la course de phase ci-dessous
+        # tournerait contre un modèle de séance casque **et resterait verte**.
+        choisi = valeurs.get("model", "")
+        if os.path.dirname(os.path.abspath(choisi)) != os.path.abspath(dossier):
+            raise RuntimeError(
+                f"fabrique de test cassée : le détournement de CVEP_MODEL_PATH n'a PAS pris. "
+                f"Le modèle élu est « {choisi} », hors du dossier temporaire « {dossier} » — "
+                f"ce test tournerait contre un modèle du vrai data/ sans que rien ne le dise.")
         return mode_cvep.CVEPRuntime(mode_cvep.SPEC, valeurs, engine=None)
     finally:
         mode_cvep.CVEP_MODEL_PATH = avant

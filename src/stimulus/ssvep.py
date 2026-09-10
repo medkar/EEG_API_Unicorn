@@ -160,6 +160,7 @@ def arrow_polygon(cx, cy, size, direction):
 # qui l'importaient. Réexporté sous son nom d'origine : `archive/ui.py` et les écrans de
 # `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
+from stimulus.garde import sous_garde_data  # noqa: E402
 
 
 # --- L'ordre des essais du run guidé (fonction PURE, testable sans écran) ---
@@ -712,7 +713,7 @@ if __name__ == "__main__":
     use_utf8_console()
     args = _parse_args(sys.argv[1:])
     if args.smoke:
-        sys.exit(0 if _smoke() else 1)
+        sys.exit(0 if sous_garde_data(_smoke) else 1)
     fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
                guide=args.guide, per_target=args.trials, seed=args.seed)
     # Une séance guidée INTERROMPUE sort en 1 : lancée depuis la console, « elle s'est fermée » et

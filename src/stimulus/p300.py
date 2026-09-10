@@ -77,6 +77,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
                          P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
+from stimulus.garde import sous_garde_data  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -255,7 +256,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     `0` pour un test.
     """
     if smoke:
-        return _smoke(reps, targets)
+        return sous_garde_data(lambda: _smoke(reps, targets))
 
     ok, raison = valide_reglages(reps, targets)
     if not ok:

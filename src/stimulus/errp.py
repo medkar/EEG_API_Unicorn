@@ -199,6 +199,7 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 # d'affirmer quoi que ce soit ici.
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
+from stimulus.garde import sous_garde_data  # noqa: E402
 
 # Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
 # et en calibration, et les confondre a coûté une séance entière** (voir plus bas).
@@ -321,7 +322,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         return False
 
     if smoke:
-        return _smoke(n_cells, taux_erreur)
+        return sous_garde_data(lambda: _smoke(n_cells, taux_erreur))
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
