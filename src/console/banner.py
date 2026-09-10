@@ -38,11 +38,33 @@ class Banner(QWidget):
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e2603f; font-weight: bold;")
+        # La MORT du fil du moteur. Ici, et pas sur une page, pour la raison de tout ce bandeau :
+        # elle peut arriver pendant qu'on regarde n'importe quel écran, et elle rend faux tout ce
+        # qui s'affiche ailleurs.
+        self.moteur = QLabel("")
+        self.moteur.setWordWrap(True)
+        self.moteur.setStyleSheet("color: #e2603f; font-weight: bold;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre, self.refus):
+        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre, self.refus,
+                       self.moteur):
             layout.addWidget(widget)
         layout.addStretch(1)
+
+    def set_moteur(self, texte):
+        """Le fil du moteur est-il encore vivant ? `""` quand oui.
+
+        ⚠️ **Il ÉCRASE le reste du bandeau quand il est non vide, et c'est tout l'intérêt.** Un fil
+        mort laisse `snapshot()` figé sur son dernier état : « Unicorn · 250 Hz · 0 mode actif » et
+        « σ : en attente du tampon… » restent alors à l'écran POUR TOUJOURS, tous les deux
+        parfaitement plausibles — la console a l'air d'attendre le tampon d'un casque qui ne
+        s'ouvrira jamais. C'est pour ça que cette méthode est appelée APRÈS `update_from` : l'écran
+        doit dire que plus rien n'arrive, pas continuer à décrire un moteur qui n'existe plus.
+        """
+        self.moteur.setText(texte or "")
+        if texte:
+            self.sigmas.setText("σ : plus aucune mesure — le moteur est arrêté")
+            self.alarme.setText("")
 
     def set_refus(self, texte):
         """Le dernier refus du moteur, ou "" pour l'effacer. Un refus ACCEPTÉ n'efface pas le

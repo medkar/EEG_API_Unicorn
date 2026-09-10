@@ -655,9 +655,20 @@ python src/console/app.py
       et le terminal le dit. Ouvrir « par défaut » sur l'un des deux serait le repli silencieux que
       cet écran existe pour interdire, avec un clic de moins.
 - [ ] ⚠️ **Le point qui demande un casque, donc à faire au niveau 2** : choisir **Unicorn** alors
-      qu'aucun casque n'est appairé. Attendu — la console **ne bascule PAS** en synthétique : elle
-      dit que l'ouverture a échoué et repropose le choix. Un basculement silencieux ferait
-      enregistrer une séance entière de signal fabriqué. **Note ce qui s'est passé.**
+      qu'aucun casque n'est appairé. Attendu — la console **ne bascule PAS** en synthétique. Un
+      basculement silencieux ferait enregistrer une séance entière de signal fabriqué ; il n'en
+      existe aucun dans le code, c'est vérifié.
+
+      Ce qui se passe alors, très exactement (**corrigé le 2026-09-10 — cette case promettait
+      jusque-là un écran qui n'existe pas**) : `prepare_session()` lève dans le **fil du moteur**,
+      qui meurt. Le bandeau du haut affiche en rouge **« ⛔ LE MOTEUR S'EST ARRÊTÉ »** avec la
+      cause la plus fréquente, et **les σ cessent d'annoncer un tampon qui ne viendra jamais**. Le
+      message exact de BrainFlow, lui, est dans le terminal.
+
+      ⚠️ La console **ne repropose PAS** le choix : il faut la **fermer et la relancer**, casque
+      allumé. Reproposer demanderait de reconstruire le moteur, son fil et la fenêtre entière —
+      c'est une amélioration possible, ce n'est pas ce que le code fait aujourd'hui.
+      **Note ce qui s'est passé.**
 
 ### 1.18 — « Ce que voit ton application », et l'enregistrement
 

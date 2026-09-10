@@ -97,7 +97,7 @@ DELAI_DEMARRAGE_S = 5.0
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
 
-    def __init__(self, engine, fabrique_fenetre=None, horloge=None):
+    def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None):
         super().__init__()
         self.engine = engine
         self.setWindowTitle("EEG_API_Unicorn — console d'expérimentation")
@@ -108,6 +108,11 @@ class Console(QMainWindow):
         # ci-dessous soit testable sans attendre cinq secondes.
         self.lanceur = LanceurFenetre(fabrique_fenetre)
         self._horloge = horloge or time.monotonic
+        # « Le fil du moteur tourne-t-il encore ? » — un prédicat, pas le fil : la console ne
+        # possède pas le fil (c'est `run()` qui le crée), et lui passer un objet `Thread` la
+        # rendrait intestable sans en démarrer un. `run()` y branche `thread.is_alive` ; `None`
+        # veut dire « personne ne surveille », ce qui est le cas des tests qui n'ont pas de fil.
+        self._moteur_vivant = moteur_vivant
         self._dernier_etat = {}
         # Ce qu'on s'apprête à lancer, le temps du contrôle de liaison. Et, une fois le contrôle
         # passé, le mode qu'on attend de voir s'arrêter avant de démarrer sa calibration.
@@ -250,7 +255,36 @@ class Console(QMainWindow):
         page = self.stack.currentWidget()
         if page is not self.grid:
             page.update_from(state)
+        # APRÈS le reste du bandeau, délibérément : quand le fil est mort, ce message écrase les
+        # champs que `update_from` vient de peindre depuis un état qui ne bougera plus.
+        self.banner.set_moteur(self._moteur_mort())
         self._suivre_attente(state)
+
+    def _moteur_mort(self):
+        """Le message à afficher si le fil du moteur s'est arrêté tout seul. `""` sinon.
+
+        🔴 **`prepare_session()` n'est appelée que dans `acquisition.start()`, donc dans
+        `server.run()`, donc DANS LE FIL — et hors de son `try`.** Un `BrainFlowError` (casque
+        éteint, non appairé, `BOARD_NOT_READY` parce qu'une session traîne ailleurs) tue le fil
+        avec un traceback sur stderr, que personne ne lit : la console est une fenêtre Qt, et
+        `outils/Console EEG.bat` laisse la console cmd DERRIÈRE elle.
+
+        Ce qui restait à l'écran, alors, était parfaitement plausible : `snapshot()["running"]`
+        vaut toujours `True` (il a été calculé avant), le bandeau annonce « Unicorn · 250 Hz ·
+        0 mode actif », et les σ restent « en attente du tampon… » — indéfiniment. L'étudiant
+        attend un tampon qui ne viendra jamais.
+
+        ⚠️ On ne REPROPOSE pas la source : ça demanderait de reconstruire le moteur, son fil et la
+        fenêtre entière, et `docs/recette.md` (test 1.17) décrit désormais ce que ce code fait —
+        pas l'inverse.
+        """
+        if self._moteur_vivant is None or self._moteur_vivant():
+            return ""
+        return ("⛔ LE MOTEUR S'EST ARRÊTÉ — plus rien n'est acquis ni publié, et ce qui reste à "
+                "l'écran date de son dernier tour. Cause la plus fréquente : le casque n'a pas pu "
+                "s'ouvrir (éteint, non appairé, ou une session restée ouverte par un autre "
+                "programme). Le message exact est dans le terminal. Ferme la console, allume le "
+                "casque, relance.")
 
     def _publier(self, mode_id, on):
         """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
@@ -497,7 +531,8 @@ class Console(QMainWindow):
         `lancer` : ce qu'on fait quand elle y est. `avis` : où le renoncement s'affiche.
 
         Tout ce qui SÉPARE une calibration d'une mesure tient dans ces quatre valeurs ; le reste —
-        la course, le délai, le renoncement — est écrit une seule fois, dans `_lancer_quand_partie`.
+        la course, le délai, le renoncement — est écrit une seule fois, dans
+        `_lancer_quand_partie`.
         """
         return {"mode_id": mode_id, "cle": cle, "quoi": quoi, "lancer": lancer, "avis": avis,
                 "echeance": self._horloge() + DELAI_DEMARRAGE_S}
@@ -609,7 +644,8 @@ class Console(QMainWindow):
         rien. Tester `stimulus_id` ici serait une seconde règle de décision dans l'interface.
         """
         self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
-        self._a_lancer_mesure = None      # …et sur le lancement en attente, cf. `arreter_calibration`
+        self._a_lancer_mesure = None      # …et sur le lancement en attente (cf. l'abandon
+                                          #    de calibration, juste au-dessus)
         self.commande("cancel_mesure")
         self.lanceur.arreter()
 
@@ -2840,10 +2876,54 @@ def _smoke():
         "et elles portent des données après un rafraîchissement")
 
     # Moteur pas encore démarré : rien ne doit lever.
-    console.apply_state({"running": False, "board": "unicorn", "fs_hz": 250.0,
-                         "modes": [], "quality": None, "catalog": []})
+    etat_vide = {"running": False, "board": "unicorn", "fs_hz": 250.0,
+                 "modes": [], "quality": None, "catalog": []}
+    console.apply_state(etat_vide)
     chk("attente" in console.banner.sigmas.text(),
         f"un état vide est encaissé — « {console.banner.sigmas.text()} »")
+
+    # --- 🔴 LE FIL DU MOTEUR QUI MEURT ------------------------------------------------------
+    #
+    # `prepare_session()` n'est appelée que dans `acquisition.start()`, donc dans `server.run()`,
+    # donc DANS LE FIL — et hors de son `try`. Un `BrainFlowError` (casque éteint, non appairé,
+    # `BOARD_NOT_READY`) le tue avec un traceback sur stderr, que personne ne lit : la console est
+    # une fenêtre Qt et `outils/Console EEG.bat` laisse la console cmd DERRIÈRE elle.
+    #
+    # Ce qui restait à l'écran était parfaitement plausible, et c'est ça le défaut : l'état figé
+    # dit encore « running », le bandeau annonce « Unicorn · 250 Hz · 0 mode actif », et les σ
+    # restent « en attente du tampon… » **indéfiniment**. L'étudiant attend un tampon qui ne
+    # viendra jamais, sans un mot pour le lui dire.
+    vivant = [True]
+    console._moteur_vivant = lambda: vivant[0]
+    console.apply_state(etat_vide)
+    chk(console.banner.moteur.text() == "",
+        f"un moteur vivant n'affiche RIEN de plus ({console.banner.moteur.text()!r})")
+    vivant[0] = False
+    console.apply_state(etat_vide)
+    chk("ARRÊTÉ" in console.banner.moteur.text() and "casque" in console.banner.moteur.text(),
+        f"un fil mort le DIT à l'écran, avec la cause la plus fréquente "
+        f"({console.banner.moteur.text()[:70]}…)")
+    # ⚠️ ET il écrase l'attente. Sans ça le bandeau garderait « σ : en attente du tampon… » à
+    # côté du message : deux phrases contradictoires, dont une qui promet que ça va venir.
+    chk("attente" not in console.banner.sigmas.text(),
+        f"…et le bandeau cesse d'annoncer un tampon qui ne viendra jamais "
+        f"({console.banner.sigmas.text()!r})")
+    console._moteur_vivant = None
+
+    # 🔴 **Le prédicat est-il BRANCHÉ en production ?** Tout ce qui précède tourne sur un `lambda`
+    # posé par ce test : sans cette assertion, `run()` pourrait ne jamais passer `moteur_vivant`
+    # et le message n'apparaîtrait sur aucun écran réel — un garde-fou vert et mort. On lit donc
+    # l'appel `Console(...)` de `run()` dans l'AST, plutôt que le texte du fichier (une chaîne
+    # cherchée dans un commentaire passerait).
+    import ast
+    import inspect
+
+    appel = next(n for n in ast.walk(ast.parse(inspect.getsource(run)))
+                 if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "Console")
+    branche = [kw for kw in appel.keywords if kw.arg == "moteur_vivant"]
+    chk(branche and ast.unparse(branche[0].value) == "thread.is_alive",
+        f"…et `run()` branche VRAIMENT le prédicat sur le fil du moteur "
+        f"({[ast.unparse(kw.value) for kw in appel.keywords]})")
 
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
     console.refresh()
@@ -3002,7 +3082,8 @@ def _smoke():
     # Il tient jusqu'au GESTE qui y répond — pas au-delà : rechercher, c'est reposer la question.
     page_flux.chercher()
     chk("2 flux" in page_flux.etat.text(),
-        f"…jusqu'à « Chercher les flux », qui reprend la question à zéro ({page_flux.etat.text()})")
+        f"…jusqu'à « Chercher les flux », qui reprend la question à zéro "
+        f"({page_flux.etat.text()})")
 
     # Les DEUX autres diagnostics, mêmes rétention et falsifiabilité : un nom introuvable, et un
     # inlet qui refuse de s'ouvrir. Les trois laissent `_inlet` à None, donc les trois tombaient
@@ -3091,7 +3172,8 @@ def _smoke():
     page_flux.update_from(fini)
     page_flux.update_from(fini)
     chk("Choisis" in page_flux.etat_enregistrement.text(),
-        f"…et ce refus RESTE à l'écran aux tours suivants ({page_flux.etat_enregistrement.text()[:50]})")
+        f"…et ce refus RESTE à l'écran aux tours suivants "
+        f"({page_flux.etat_enregistrement.text()[:50]})")
 
     # Un enregistrement TERMINÉ garde son chemin à l'écran : c'est ce qu'on vient chercher pour
     # dépouiller. Un écran qui l'oublie au clic « Arrêter » oblige à fouiller le dossier.
@@ -3171,7 +3253,12 @@ def run(args):
     thread.start()
 
     try:
-        console = Console(engine)
+        # ⚠️ `thread.is_alive` PASSÉ à la console, et c'est le correctif du 2026-09-10 : c'est le
+        # seul endroit d'où l'on peut savoir que la boucle a rendu l'âme. `prepare_session()` vit
+        # dans ce fil-ci et hors de son `try` — un casque qui refuse de s'ouvrir le tue, et sans ce
+        # prédicat l'interface continuait d'annoncer un moteur qui n'existe plus (cf.
+        # `Console._moteur_mort`).
+        console = Console(engine, moteur_vivant=thread.is_alive)
         console.show()
         app.exec()
     finally:
