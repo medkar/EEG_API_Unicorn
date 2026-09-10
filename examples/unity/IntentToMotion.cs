@@ -19,6 +19,9 @@ public class IntentToMotion : MonoBehaviour
     [Tooltip("Metres per second while an intent is held.")]
     public float speed = 1.5f;
 
+    [Tooltip("Stop if no decision has arrived for this long. The engine speaks ~5 times a second.")]
+    public float watchdogSeconds = 1.0f;
+
     [Tooltip("Direction for each target index, in the order the engine declares its frequencies.")]
     public Vector3[] directions =
     {
@@ -38,6 +41,12 @@ public class IntentToMotion : MonoBehaviour
     {
         if (target == null) return;
 
+        // Silence is not an intent. TargetIndex keeps its last value until the next sample, so
+        // without this the object would coast forever on the last decision if the engine died
+        // mid-move. Same watchdog idea as examples/actuator_udp.py: the consumer stops itself
+        // when the stream goes quiet, rather than trusting it to say goodbye.
+        if (eeg.SecondsSinceLastDecision > watchdogSeconds) return;
+
         int index = eeg.TargetIndex;
 
         // -1 means the engine saw nothing convincing: no target above its threshold, or a
@@ -51,10 +60,13 @@ public class IntentToMotion : MonoBehaviour
     private void OnGUI()
     {
         // Minimal on-screen feedback. Seeing the confidence next to the decision is what
-        // tells a missed detection from an absent signal when nothing seems to happen.
-        string label = eeg.TargetIndex < 0
-            ? "no target"
-            : $"target {eeg.TargetIndex} @ {eeg.FrequencyHz:0.##} Hz";
+        // tells a missed detection from an absent signal when nothing seems to happen -- and
+        // "stream quiet" is a third state that looks like both until you print it.
+        string label = eeg.SecondsSinceLastDecision > watchdogSeconds
+            ? "stream quiet"
+            : eeg.TargetIndex < 0
+                ? "no target"
+                : $"target {eeg.TargetIndex} @ {eeg.FrequencyHz:0.##} Hz";
         GUI.Label(new Rect(12, 12, 420, 22),
                   $"{label}   confidence {eeg.Confidence:0.00} ({eeg.DecisionScale})");
     }

@@ -1,9 +1,19 @@
-"""Exemple : traduire une intention décodée en ACTION, ici des datagrammes UDP-JSON.
+"""La MOITIÉ AVAL du patron « l'action appartient au client » : envoyer une consigne d'actionneur.
 
-C'est le patron « l'action appartient au client » (SPEC §9). L'API publie une intention
-neutre — quelle cible, quelle classe, quel état mental — et ne sait pas ce qu'on en fait.
-Décider qu'une cible signifie « avance » est le travail de l'application avale, et ce
-fichier montre à quoi ressemble ce travail réduit au minimum.
+⚠️ **Ce fichier ne lit AUCUN flux LSL, et c'est délibéré.** Il ne contient pas la traduction
+intention → action : il contient le TUYAU par lequel une consigne part, plus une démo qui
+envoie trois consignes écrites en dur. La table « cible 0 = avance » est justement ce qui
+t'appartient — c'est le patron de SPEC §9 : l'API publie une intention neutre (quelle cible,
+quelle classe, quel état mental) et ne sait pas ce qu'on en fait.
+
+Le montage complet tient en deux morceaux : `examples/receiver.py` lit le flux décodé,
+ce fichier pousse la consigne. Entre les deux, TA table de correspondance. Et une règle qui
+n'est pas négociable au milieu :
+
+⚠️ **`target_index` / `intent_index` / `error` valent `-1` pour « pas de décision »** — jamais
+« la cible 0 », jamais « pas d'erreur », jamais « repos ». Sur `-1`, un actionneur doit
+`stop()`, pas continuer : une fenêtre rejetée pour artefact (un clignement) ressemble
+exactement à ça, et une intention entretenue par un clignement est le pire des deux mondes.
 
 Le transport est volontairement trivial : un datagramme UDP JSON, aucune dépendance hors
 stdlib. Un actionneur qui écoute ça s'écrit en dix lignes dans n'importe quel langage, sans
@@ -23,7 +33,7 @@ noms — c'est son contrat, pas celui de l'API.
 robot n'est plus un objectif du produit ; ce fichier reste comme exemple de sortie
 applicative.)*
 
-Démo :
+Démo (consignes écrites en dur, aucun EEG : c'est un test de câblage réseau) :
     python examples/actuator_udp.py 192.168.1.42
 """
 

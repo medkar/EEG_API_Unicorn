@@ -1,8 +1,9 @@
 """Hello world: receive an EEG_API_Unicorn stream from Python.
 
-This is the smallest useful client. Start the engine in one terminal:
+This is the smallest useful client. Start the engine in one terminal — either the console
+(`outils\\Console EEG.bat`, then start a mode from its grid) or headless:
 
-    python src/core/server.py --synthetic
+    python src/core/server.py --synthetic --mode ssvep
 
 then run this in another:
 
@@ -16,8 +17,15 @@ then run this in another:
     python examples/receiver.py --stream decoded_cvep   # which coded target is being fixated
     python examples/receiver.py --list                  # what is currently on the network
 
-The decoded stream only appears once the engine finishes its short rest measurement, so
-start the engine with --mode ssvep and give it a few seconds before looking for it.
+A decoded stream exists from the moment its mode is STARTED, and stays SILENT until the engine
+has finished warming up and measuring its rest floor — about 23 s for SSVEP, 40 s for neuro. So
+`--list` shows it immediately while this script prints nothing: that is the normal start, not a
+fault. Without `--mode`, the engine publishes `raw`, `quality` and `status` and nothing else.
+
+⚠️ Every decoded stream uses `-1` for "no decision" in its first channel (`target_index`,
+`intent_index`, `error`). It is NEVER target 0, never "no error", never rest. This script prints
+the number raw, on purpose: interpreting it is your application's job, and getting it wrong is
+the single most expensive mistake a client of this API can make.
 
 Every line starts with `t=`, the sample's LSL timestamp corrected to this machine's clock. That
 number is what makes a session scorable afterwards: the stimulus programs stamp their cues on the
@@ -27,6 +35,9 @@ compared to anything.
 
 The only dependency is `pylsl`. The same three steps (resolve, open, pull) work identically
 in Unity (LSL4Unity), MATLAB and C++ — that is the whole point of using LSL.
+
+To simply LOOK at what is on the network, the console's "What your app sees" page does this
+without a second terminal. This file is the thing you COPY into your own application.
 """
 
 import argparse
@@ -80,12 +91,20 @@ def main(argv):
     print(f"Looking for '{name}'...")
     found = resolve_byprop("name", name, timeout=10.0)
     if not found:
-        print(f"Not found. Start the engine first:  python src/core/server.py --synthetic")
+        # A `decoded_*` stream exists only while ITS mode runs: naming the mode is the part
+        # people forget. `--stream raw` needs no mode at all.
+        print("Not found. Start the engine and its mode first, e.g.:")
+        print("    python src/core/server.py --synthetic --mode ssvep")
+        print("...or start the mode from the console's grid. `--list` shows what IS there.")
         return 1
 
     # A machine with several network interfaces answers once per interface, so the same
     # outlet comes back two or three times. Count distinct source_ids, not replies, or the
     # warning below cries wolf on every single-engine setup.
+    # ⚠️ Best effort only: `resolve_byprop` returns as soon as ONE stream answers
+    # (`minimum=1`), so a second engine that replies a few ms later is simply not in `found`.
+    # Forcing the full 10 s wait to be sure would make every normal start feel broken. When it
+    # matters — a classroom — give each engine an `--id` and pick by `source_id()`.
     engines = {info.source_id(): info for info in found}
     if len(engines) > 1:
         # Genuinely several engines: a whole classroom, or a server left running. Attaching

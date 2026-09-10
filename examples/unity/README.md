@@ -21,17 +21,22 @@ empty GameObject, add both components to it, and drag any object (a cube will do
 
 ## 3. Run the engine
 
-On the machine with the headset:
+On the machine with the headset, the normal way is the console — double-click
+`outils\Console EEG.bat`, choose the source, open the **SSVEP** tile, then **Start the
+stimulus**. No command to type, and one window that holds the headset for the whole session.
+
+The two-terminal setup below is the headless equivalent, for a machine without a screen or
+when the stimulus runs on another computer:
 
 ```powershell
 python src/stimulus/ssvep.py --refresh 60              # the flickering targets
 python src/core/server.py --mode ssvep --refresh 60    # acquisition and decoding
 ```
 
-The engine starts with a warm-up and a short rest measurement — **look at nothing and stay
-still** until the console says it is decoding. That rest floor is what makes the thresholds
-meaningful, and a floor measured while you were staring at a target stays wrong for the
-whole session.
+The engine starts with a warm-up and a short rest measurement (~23 s for SSVEP) — **look at
+nothing and stay still** until it says it is decoding. That rest floor is what makes the
+thresholds meaningful, and a floor measured while you were staring at a target stays wrong
+for the whole session.
 
 Press Play in Unity. The cube moves while you look at a flickering target.
 
@@ -63,6 +68,15 @@ screen refresh rate, so a 60 Hz screen gives 15 / 20 / 8.5714 Hz while a 144 Hz 
 guarantees they agree. A mismatch fails silently: the decoder simply never fires, because it
 is correlating against a sinusoid nobody is displaying.
 
+**Changing the frequencies mid-session RECREATES the stream.** The engine closes the outlet
+and opens a new one under the same name, so clients have to re-subscribe. `SsvepIntentReceiver`
+resolves once and never looks again: it will sit on a dead inlet, silently. Set the
+frequencies before you press Play, or restart the scene after changing them.
+
+**Silence is not an intent.** A decoded value is only valid while samples keep arriving. If the
+engine stops, `TargetIndex` keeps its last value forever — which is why `IntentToMotion` stops
+after `Watchdog Seconds` without a decision. Any consumer you write needs the same reflex.
+
 **On a shared network, name your engine.** Every instance publishes the same stream names.
 Start the engine with `--id yourname` and set `Instance Id` on the component, otherwise you
 may quietly connect to a classmate's headset.
@@ -72,11 +86,25 @@ across two machines, allow Python and Unity through the firewall.
 
 ## Status
 
-⚠️ These scripts were written against the LSL4Unity API but have **not been run in Unity** —
-there is no Unity install on the development machine. The Python side of the pairing is
-tested; treat the C# as a reviewed starting point rather than a guaranteed build, and report
+⚠️ These scripts have **never been compiled or run in Unity** — there is no Unity install on
+the development machine, so nobody here can tell you they build. What was done instead, on
+2026-09-10, is a line-by-line reading against the LSL4Unity sources linked below.
+
+Checked that way, and fixed: every type and method used exists with the signature used
+(`resolve_stream`, `StreamInlet`, `open_stream`, `pull_sample(float[], double)`,
+`time_correction`, `info`, `desc`, `child`, `child_value`, `source_id`, `channel_count`);
+the stream name and the channel layout match what the engine really publishes; `-1` is
+handled as "no decision" on both scripts; and the resolver call is now written `LSL.LSL.
+resolve_stream(...)`, because LSL4Unity declares a static class `LSL` **inside** a namespace
+also called `LSL` — a bare `LSL.resolve_stream` binds to the namespace. LSL4Unity's own code
+writes `LSL.LSL.local_clock()` for exactly that reason.
+
+Still unverified, and only Unity can answer: that it compiles under your Unity and LSL4Unity
+versions; that `liblsl` loads on your platform; and everything about frame timing. Report
 what breaks.
 
 Sources: [LSL4Unity](https://github.com/labstreaminglayer/LSL4Unity),
 [Runtime/LSL.cs API](https://github.com/labstreaminglayer/LSL4Unity/blob/master/Runtime/LSL.cs),
+[Runtime/Scripts/TimeSync.cs](https://github.com/labstreaminglayer/LSL4Unity/blob/master/Runtime/Scripts/TimeSync.cs)
+(where `LSL.LSL.local_clock()` is written that way),
 [SimpleInletScaleObject sample](https://github.com/labstreaminglayer/LSL4Unity/blob/master/Samples~/SimpleInletScaleObject/SimpleInletScaleObject.cs)
