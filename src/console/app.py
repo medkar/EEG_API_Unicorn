@@ -591,7 +591,15 @@ class Console(QMainWindow):
         # moment où l'on ferme, donc `_page_changee` ne passera jamais.
         self.flux_page.quitter()
         if self.engine is not None:
-            self.engine.close()
+            # ⚠️ `stop()` ICI, et `close()` seulement APRÈS que la boucle se soit arrêtée
+            # (`run()`, plus bas, dans son `finally`). Appeler `close()` depuis le FIL QT pendant
+            # que la boucle tourne encore ouvre une course perdante : `close()` supprime le
+            # dossier des candidats, puis `_entrainer` — qui peut être en plein `fit`, plusieurs
+            # secondes assumées — fait `os.makedirs(..., exist_ok=True)` et le RECRÉE, modèle
+            # compris. Le dossier survit alors à la fermeture, et le garde « candidat
+            # découvrable » ne peut plus rougir parce que `calib_dir` est déjà `None`.
+            # Constat n°5 de la revue du 2026-09-08.
+            self.engine.stop()
         super().closeEvent(event)
 
     def show_grid(self):
@@ -718,6 +726,11 @@ def _smoke():
             parce que la console DOIT l'appeler en se fermant — sans ça, un modèle EEG d'une
             personne identifiable survit à la fermeture dans `%TEMP%`."""
             self.fermetures += 1
+
+        def stop(self):
+            """Le vrai moteur l'a ; la console l'appelle à la fermeture depuis le
+            2026-09-10, pour que `close()` n'arrive qu'une fois la boucle arrêtée."""
+            self.arrete = True
 
         def recent_window(self, seconds):
             """Un moteur factice n'a pas de tampon d'acquisition. La TracesView demande cette
@@ -1680,6 +1693,29 @@ def _smoke():
     # --- LA DÉCISION : « Enregistrer » ou « Refaire » -------------------------------------
     # Sans ces deux boutons, PLUS AUCUNE calibration n'atteint `data/` : la tâche 5 a déplacé
     # l'écriture derrière un geste explicite, pour qu'un modèle soit JUGÉ avant d'être gardé.
+    # 🔴 **Les compteurs de refus arrivent-ils à l'ÉCRAN ?** Ils étaient dans `snapshot()` depuis
+    # le chantier précédent, justifiés par « sans lui, une fenêtre qui numérote mal ses cibles ne
+    # se voit que dans le terminal » — et RIEN ne les peignait. Aussi invisibles que la ligne de
+    # terminal qu'ils remplaçaient. Le cas qu'ils rattrapent : la fenêtre lancée sans
+    # `--calibrer`, où l'écran affiche une progression normale à zéro essai pendant six minutes.
+    _en_cours = {"mode_id": "p300", "phase": "essais", "instruction": "", "classe": "",
+                 "rappel": "", "restant_s": 3.0, "total": 12, "resultat": None, "probleme": "",
+                 "candidat": None}
+    # La console ne rafraîchit que la page VISIBLE : il faut donc être dessus pour la voir peindre.
+    cal_diag = console.calib_pages["p300"]
+    console.show_calibration("p300")
+    console.apply_state({**state, "calibration": {**_en_cours, "essai": 0, "refus_cible": 7}})
+    chk("7" in cal_diag.diagnostic.text() and "REFUS" in cal_diag.diagnostic.text().upper(),
+        f"les marqueurs refusés s'affichent PENDANT la séance ({cal_diag.diagnostic.text()!r})")
+    chk("calibration" in cal_diag.diagnostic.text().lower(),
+        "…et la ligne dit quoi VÉRIFIER, pas seulement un nombre — c'est la fenêtre lancée sans "
+        "`--calibrer`, la panne la plus banale de ce sous-système")
+    console.apply_state({**state, "calibration": {**_en_cours, "essai": 4}})
+    chk(not cal_diag.diagnostic.text(),
+        f"…et rien ne s'affiche quand le moteur ne refuse rien ({cal_diag.diagnostic.text()!r})")
+    console.show_calibration("mi")      # on rend la page au test suivant, dans l'état qu'il attend
+    console.apply_state(fini)
+
     chk(cal.bouton_enregistrer.isVisibleTo(cal) and cal.bouton_refaire.isVisibleTo(cal),
         "un candidat en attente fait apparaître « Enregistrer » et « Refaire »")
     chk("temporaire" in cal.decision.text() and "data/" in cal.decision.text(),
@@ -2939,8 +2975,16 @@ def _smoke():
     console.lanceur.lancer("p300", calibrer=True)
     fenetre_ouverte = processus[-1]
     console.close()
-    chk(moteur_faux.fermetures == 1,
-        f"fermer la console appelle `EngineServer.close()` ({moteur_faux.fermetures})")
+    # ⚠️ **`stop()`, pas `close()`, et c'est le correctif du 2026-09-10.** Fermer la fenêtre
+    # demande l'ARRÊT de la boucle ; `close()` — qui supprime le dossier des candidats — n'arrive
+    # qu'après le `join`, dans le `finally` de `run()`. Appelé depuis le fil Qt pendant que la
+    # boucle tourne, il ouvrait une course perdante : `_entrainer`, en plein `fit`, recréait le
+    # dossier avec `exist_ok=True` juste après sa suppression, et le candidat survivait à la
+    # fermeture — dans un dossier que le moteur ne suivait plus.
+    chk(getattr(moteur_faux, "arrete", False) and moteur_faux.fermetures == 0,
+        f"fermer la console DEMANDE l'arrêt du moteur, sans supprimer quoi que ce soit tant que "
+        f"sa boucle tourne (arrêté={getattr(moteur_faux, 'arrete', False)}, "
+        f"fermetures={moteur_faux.fermetures})")
     chk(fenetre_ouverte.tue and not console.lanceur.en_cours(),
         "...et tue la fenêtre de stimulus restée ouverte, plutôt que de la laisser plein écran "
         "devant l'étudiant")
@@ -2997,6 +3041,10 @@ def run(args):
         # une session laissée ouverte empêche la suivante de s'ouvrir (BOARD_NOT_READY).
         engine.stop()
         thread.join(timeout=5.0)
+        # `close()` APRÈS le `join`, jamais avant : c'est le seul instant où plus personne ne
+        # peut recréer le dossier des candidats. Idempotente, donc un `close()` déjà fait
+        # ailleurs ne coûte rien.
+        engine.close()
 
 
 if __name__ == "__main__":

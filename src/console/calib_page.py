@@ -30,6 +30,25 @@ from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 # a gagné sa page de calibration. Une constante d'interface ne peut pas être vraie pour six modes.
 
 
+def _diagnostic(calib_state):
+    """Ce que le moteur a REFUSÉ pendant cette séance, en une ligne — ou "" s'il n'a rien refusé.
+
+    Les clés viennent du `state()` de chaque calibration ; on n'en invente aucune et on ne branche
+    sur aucun identifiant de mode. Une clé absente vaut zéro : ce qui n'est pas compté ne
+    s'affiche pas.
+    """
+    quoi = [(("refus_cible", "refus_etiquette", "refus_marqueur"),
+             "marqueur(s) REFUSÉ(s) — la fenêtre tourne-t-elle bien en mode calibration ?"),
+            (("epoques_perdues",), "époque(s) perdue(s) — le tampon n'était pas prêt"),
+            (("marqueurs_chauffe",), "marqueur(s) jeté(s) pendant la chauffe (normal au début)")]
+    morceaux = []
+    for cles, phrase in quoi:
+        n = sum(int(calib_state.get(c, 0) or 0) for c in cles)
+        if n:
+            morceaux.append(f"{n} {phrase}")
+    return " · ".join(morceaux)
+
+
 class CalibPage(QWidget):
     """Trois écrans construits UNE FOIS, montrés ou cachés selon la phase reçue.
 
@@ -106,6 +125,20 @@ class CalibPage(QWidget):
         self.decompte = QLabel("")
         self.decompte.setStyleSheet("font-size: 22px;")
         self.progression = QLabel("")
+        # 🔴 **Ce que le moteur REFUSE pendant la séance, et personne ne l'affichait.**
+        # Les trois calibrations à fenêtre comptent leurs refus (`refus_cible`, `refus_etiquette`,
+        # `refus_marqueur`) et le socle compte ses époques perdues et ses marqueurs de chauffe.
+        # Leurs docstrings justifient ces compteurs par « sans lui, une fenêtre qui numérote mal
+        # ses cibles ne se voit que dans le terminal » — sauf qu'ils étaient dans `snapshot()` et
+        # que RIEN ne les peignait. Ils étaient donc exactement aussi invisibles que la ligne de
+        # terminal qu'ils devaient remplacer (revue du 2026-09-08, constat n°4).
+        #
+        # Le cas que ça rattrape : la fenêtre lancée sans `--calibrer`. L'écran affichait une
+        # progression normale à zéro essai, et l'étudiant découvrait au bout de six minutes que
+        # la séance était vide.
+        self.diagnostic = QLabel("")
+        self.diagnostic.setWordWrap(True)
+        self.diagnostic.setStyleSheet("color: #b8860b;")
         self.barre = QProgressBar()
         self.barre.setTextVisible(False)
         self.bouton_abandon = QPushButton("Abandonner")
@@ -116,6 +149,7 @@ class CalibPage(QWidget):
         pendant.addWidget(self.rappel)
         pendant.addWidget(self.decompte)
         pendant.addWidget(self.progression)
+        pendant.addWidget(self.diagnostic)
         pendant.addWidget(self.barre)
         # « Abandonner » doit exister pendant TOUTE la séance (chauffe, échauffement, essais,
         # entraînement) : un étudiant qui a mal placé une électrode doit pouvoir sortir sans
@@ -300,6 +334,7 @@ class CalibPage(QWidget):
             self.progression.setText(f"essai {essai} sur {total}")
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(essai, max(total, 1)))
+            self.diagnostic.setText(_diagnostic(calib_state))
         else:
             self._etape_precedente = None
 
