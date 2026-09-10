@@ -521,6 +521,10 @@ def _cible_designee_a_l_ecran(surface, positions):
     celui du smoke), la surface porte déjà l'image dessinée avant même le `flip` — la sonde lirait
     donc la même chose des deux côtés. Elle prouve QUELLE cible est à l'écran, jamais QUAND elle y
     est arrivée. Même limite, même cause et même formulation que `stimulus/p300.py`.
+
+    Ce trou-là est **fermé depuis le 2026-09-10 par la partie F du smoke**, qui ne regarde aucun
+    pixel : elle compte les `flip` ENTRE deux marqueurs. Aucun pixel ne pouvait répondre à la
+    question, parce que la question n'est pas « quoi » mais « quand ».
     """
     import pygame
 
@@ -666,6 +670,39 @@ def _smoke():
         f"les durées du protocole viennent de core/config.py, aucune copie locale n'est revenue "
         f"({copies or 'aucune copie'})")
 
+    # --- F. LE MARQUEUR PART APRÈS LE FLIP, vérifié sur l'ORDRE DES APPELS ---------
+    #
+    # ⚠️ La sonde en pixels de la partie C ne peut PAS attraper ça, et sa propre docstring le dit :
+    # sous `SDL_VIDEODRIVER=dummy` la surface porte déjà l'image AVANT le `flip`, donc elle lirait
+    # la même chose des deux côtés. Elle prouve QUELLE cible est à l'écran, jamais QUAND elle y est
+    # arrivée. Or « horodater avant le flip » est l'un des deux gestes que `CLAUDE.md` nomme comme
+    # la panne caractéristique de cette famille de fenêtres : rien ne lève, le moteur prélève juste
+    # sa fenêtre une frame trop tôt, et c'est indiscernable d'un étudiant qui fixe mal.
+    #
+    # L'invariant, lui, ne dépend d'aucun pixel : chaque marqueur de PHASE est publié après le
+    # premier `flip` de sa phase, donc deux marqueurs consécutifs ont toujours au moins un `flip`
+    # entre eux. Remonter `emet` au-dessus du `flip` colle `calib_start` et `repos` l'un contre
+    # l'autre, sans une seule frame entre les deux.
+    import pygame
+
+    melange = []
+    vrai_flip = pygame.display.flip
+    pygame.display.flip = lambda *a, **k: (melange.append("flip"), vrai_flip(*a, **k))[1]
+    try:
+        _rejouer_guide(per_target=1, seed=5, journal=melange)
+    finally:
+        pygame.display.flip = vrai_flip
+
+    rangs = [i for i, e in enumerate(melange) if isinstance(e, tuple)]
+    frames_entre = [sum(1 for e in melange[a + 1:b] if e == "flip")
+                    for a, b in zip(rangs, rangs[1:])]
+    chk(len(rangs) >= 5 and melange.count("flip") >= 5,
+        f"la séance courte a bien joué des frames ET publié des marqueurs "
+        f"({melange.count('flip')} flips, {len(rangs)} marqueurs)")
+    chk(frames_entre and min(frames_entre) >= 1,
+        f"entre deux marqueurs consécutifs il y a TOUJOURS au moins une frame affichée : le "
+        f"marqueur décrit un écran déjà à l'écran, pas un écran à venir ({frames_entre})")
+
     print(f"[ssvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -676,10 +713,14 @@ def _smoke():
 _SMOKE_CUE_S, _SMOKE_FIX_S, _SMOKE_GAP_S, _SMOKE_REPOS_S = 0.10, 0.20, 0.08, 0.15
 
 
-def _rejouer_guide(per_target, seed, seconds=None):
-    """Joue une séance guidée entière sur un écran factice. Rend (journal, cibles AFFICHÉES)."""
+def _rejouer_guide(per_target, seed, seconds=None, journal=None):
+    """Joue une séance guidée entière sur un écran factice. Rend (journal, cibles AFFICHÉES).
+
+    `journal` peut être fourni par l'appelant quand il veut y MÊLER autre chose — la partie F du
+    smoke y intercale les `flip` pour vérifier l'ordre des deux appels.
+    """
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    journal, designees = [], []
+    journal, designees = ([] if journal is None else journal), []
     run(windowed=True, refresh=60.0, guide=True, per_target=per_target, seed=seed,
         seconds=seconds, stream=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
         attente_moteur_s=0.0, cue_s=_SMOKE_CUE_S, fix_s=_SMOKE_FIX_S, gap_s=_SMOKE_GAP_S,
