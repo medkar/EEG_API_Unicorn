@@ -2730,6 +2730,53 @@ def _smoke():
         f"({moteur_faux.commandes})")
     console.lanceur.arreter()
 
+    # --- 🔴 RIEN N'EST TRONQUÉ, ET L'AIDE N'EST PLUS UN MUR DE GRIS -------------------------
+    #
+    # Constat 1.10 de la recette, posé le 2026-08-17 et parké depuis : « le texte d'aide gris est
+    # tronqué en bas, et trop verbeux pour un étudiant ». Deux défauts distincts, et le premier
+    # est fonctionnel : une page plus haute que la fenêtre n'était pas seulement déplaisante, son
+    # bas était INATTEIGNABLE — Qt écrase les blocs du bas, il ne les rend pas défilables.
+    #
+    # Le c-VEP est le cas extrême : six réglages, 2 719 caractères d'aide, et c'est le mode dont
+    # la séance dépend le plus d'un réglage bien compris.
+    page_cvep = console.pages["cvep"]
+    contrat_cvep = {p["key"]: p["help"] for p in registry.serialize(registry.get("cvep"))["params"]
+                    if p["help"]}
+    console.show_mode("cvep")
+    console.resize(1100, 420)               # un portable, ou une fenêtre pas maximisée
+    app.processEvents()
+
+    corps = page_cvep.defilement.widget()
+    barre = page_cvep.defilement.verticalScrollBar()
+    chk(corps.height() >= corps.sizeHint().height(),
+        f"dans une fenêtre trop courte, le corps de la page garde SA hauteur au lieu d'être "
+        f"écrasé ({corps.height()} px pour {corps.sizeHint().height()} px demandés)")
+    chk(barre.maximum() > 0,
+        f"...et le bas se rejoint en DÉFILANT, au lieu d'être tronqué "
+        f"(course de la barre : {barre.maximum()} px)")
+    chk(page_cvep.bouton_retour.isVisible() and not page_cvep.defilement.isAncestorOf(
+            page_cvep.bouton_retour),
+        "l'en-tête, lui, ne défile pas : « ← Modes » reste atteignable depuis le bas de la page")
+
+    visible = sum(len(a.text()) for a, _ in page_cvep.formulaire.aides.values())
+    complet = sum(len(t) for t in contrat_cvep.values())
+    chk(visible * 2 < complet,
+        f"l'aide affichée par défaut est la première phrase de chaque réglage, pas le contrat "
+        f"entier ({visible} caractères contre {complet})")
+    chk(all(page_cvep.formulaire.aides[c][0].toolTip() == t for c, t in contrat_cvep.items()),
+        "mais RIEN n'est perdu : l'infobulle de chaque aide porte le texte entier du contrat")
+    page_cvep.formulaire.detail.setChecked(True)
+    chk(all(page_cvep.formulaire.aides[c][0].text() == t for c, t in contrat_cvep.items()),
+        "et « Aide détaillée » le remet à l'écran, mot pour mot")
+    page_cvep.formulaire.detail.setChecked(False)
+    chk(sum(len(a.text()) for a, _ in page_cvep.formulaire.aides.values()) == visible,
+        "puis le replie — la case est une bascule, pas un aller simple")
+    chk(console.pages["raw"].formulaire.detail is None,
+        "et là où il n'y a aucune aide à déplier — le brut n'a aucun réglage — la case "
+        "n'apparaît PAS : un bouton qui ne change rien à l'écran est un réglage-décor")
+    console.resize(1100, 720)
+    console.show_grid()
+
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
     # soumission, sans avoir besoin de la boucle.

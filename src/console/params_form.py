@@ -8,10 +8,31 @@ rien — sans erreur, comme toujours avec ce genre de panne.
 Le formulaire envoie donc, et affiche la RAISON du refus telle que le moteur l'a formulée.
 """
 
+import re
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
                                QWidget)
+
+
+def premiere_phrase(texte):
+    """La première phrase de `texte`, ou `texte` entier si la couper n'apporte rien.
+
+    Les aides du contrat sont écrites en deux temps : ce que le réglage FAIT, puis pourquoi il est
+    ainsi. La page c-VEP en porte 2 719 caractères sur six champs — un mur de gris de plus de
+    trente lignes, qui pousse le bloc « Brancher un client » hors de la fenêtre. C'est le constat
+    1.10 de la recette (2026-08-17) : « tronqué en bas, et trop verbeux pour un étudiant ».
+
+    On coupe donc au premier point, **et seulement si la coupe est franche** : trop courte (moins
+    de 30 caractères) elle ne dirait rien, trop tardive (plus de 60 % du texte) elle ne gagnerait
+    rien. Le texte entier ne disparaît jamais — il reste en infobulle, et le bouton « Aide
+    détaillée » le remet en place d'un clic.
+    """
+    coupe = re.search(r"(?<=[.!?])\s", texte)
+    if coupe and 30 <= coupe.start() + 1 <= len(texte) * 0.6:
+        return texte[:coupe.start() + 1]
+    return texte
 
 
 class ParamsForm(QWidget):
@@ -25,6 +46,7 @@ class ParamsForm(QWidget):
         self.params = list(params)
         self.champs = {}
         self.boutons_proposer = {}      # {clé : bouton} — pour qu'un smoke puisse le CLIQUER
+        self.aides = {}                 # {clé : (QLabel, texte complet)}
         self._params_par_cle = {p["key"]: p for p in self.params}
 
         formulaire = QFormLayout()
@@ -48,13 +70,28 @@ class ParamsForm(QWidget):
                     detecte.setStyleSheet("color: #8a8f9c; font-size: 11px;")
                     formulaire.addRow("", detecte)
             if param["help"]:
-                aide = QLabel(param["help"])
+                aide = QLabel(premiere_phrase(param["help"]))
                 aide.setWordWrap(True)
                 aide.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+                # L'infobulle porte le texte ENTIER, toujours : le bouton ci-dessous rend le
+                # détail visible pour qui le cherche, l'infobulle le rend accessible sans le
+                # chercher. Rien de ce que le contrat écrit n'est perdu par cet écran.
+                aide.setToolTip(param["help"])
+                champ.setToolTip(param["help"])
+                self.aides[param["key"]] = (aide, param["help"])
                 formulaire.addRow("", aide)
 
         self.bouton = QPushButton("Appliquer")
         self.bouton.clicked.connect(lambda: self.appliquer.emit(self.values()))
+        # « Aide détaillée » : présent seulement si au moins une aide a VRAIMENT été raccourcie.
+        # Un bouton qui ne changerait rien à l'écran est un réglage-décor, et ce projet en a déjà
+        # payé le prix. `None` quand il n'y a rien à déplier — jamais un widget caché sans parent.
+        self.detail = None
+        if any(premiere_phrase(t) != t for _, t in self.aides.values()):
+            self.detail = QCheckBox("Aide détaillée")
+            self.detail.setToolTip("Affiche le POURQUOI de chaque réglage, en plus de ce qu'il "
+                                   "fait. Le texte entier est aussi en infobulle.")
+            self.detail.toggled.connect(self._deplier)
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e2603f;")
@@ -67,6 +104,8 @@ class ParamsForm(QWidget):
 
         bas = QHBoxLayout()
         bas.addWidget(self.bouton)
+        if self.detail is not None:
+            bas.addWidget(self.detail)
         bas.addStretch(1)
 
         # `None` quand il y a des réglages : un QLabel construit sans parent serait une fenêtre
@@ -82,6 +121,11 @@ class ParamsForm(QWidget):
         layout.addLayout(bas)
         layout.addWidget(self.refus)
         layout.addWidget(self.avertissement)
+
+    def _deplier(self, ouvert):
+        """Bascule les aides entre leur première phrase et le texte du contrat, mot pour mot."""
+        for aide, complet in self.aides.values():
+            aide.setText(complet if ouvert else premiere_phrase(complet))
 
     def _champ(self, param):
         kind = param["kind"]

@@ -10,7 +10,7 @@ import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import PHASES_FR, live_views  # noqa: E402
@@ -124,11 +124,30 @@ class ModePage(QWidget):
         client_layout.addWidget(self.extrait)
         client_layout.addWidget(self.copier)
 
+        # ⚠️ Le corps de la page DÉFILE (2026-09-10). Sans ça, une page trop haute pour la fenêtre
+        # ne rétrécit pas : Qt écrase les blocs du bas et le contenu est purement TRONQUÉ, sans
+        # aucun moyen d'y accéder. C'est le constat 1.10 de la recette. Le c-VEP est le cas
+        # extrême — six réglages, chacun avec son aide qui s'enroule — mais tout mode y passe sur
+        # un écran de portable. L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable
+        # même quand on a fait défiler jusqu'en bas.
+        corps = QWidget()
+        dedans = QVBoxLayout(corps)
+        dedans.setContentsMargins(0, 0, 0, 0)
+        # Le tracé ne doit pas se faire écraser par des réglages bavards : dans une zone de
+        # défilement, c'est ce plancher qui décide qui cède la place.
+        bloc_sortie.setMinimumHeight(200)
+        dedans.addWidget(bloc_sortie, 1)
+        dedans.addWidget(self.reglages)
+        dedans.addWidget(self.client)
+
+        self.defilement = QScrollArea()
+        self.defilement.setWidget(corps)
+        self.defilement.setWidgetResizable(True)     # sinon le corps garde sa taille d'origine
+        self.defilement.setFrameShape(QScrollArea.NoFrame)
+
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
-        layout.addWidget(bloc_sortie, 1)
-        layout.addWidget(self.reglages)
-        layout.addWidget(self.client)
+        layout.addWidget(self.defilement, 1)
 
         self._remplir_extrait(None)
 

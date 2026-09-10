@@ -167,7 +167,14 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
   s'affiche en rouge — c'est la grille qui n'a pas de destination visuelle.
 - **1.3** — les 8 tracés du brut sont trop resserrés et se chevauchent. ✅ **Corrigé le
   2026-09-10** (écart mesuré + rognage au couloir, cf. le test 1.3).
-- **1.10** — le texte d'aide gris est tronqué en bas, et trop verbeux pour un étudiant.
+- **1.10** — le texte d'aide gris est tronqué en bas, et trop verbeux pour un étudiant. ✅
+  **Corrigé le 2026-09-10.** Deux défauts distincts, et le premier était **fonctionnel** : une page
+  plus haute que la fenêtre n'était pas seulement déplaisante, son bas était **inatteignable** — Qt
+  écrase les blocs du bas, il ne les rend pas défilables. Le corps d'une page de mode DÉFILE
+  désormais (l'en-tête, lui, reste fixe : « ← Modes » doit rester atteignable depuis le bas). Et
+  l'aide grise n'affiche plus que la **première phrase** de chaque réglage — 838 caractères au lieu
+  de 2 719 sur la page c-VEP —, le texte entier du contrat restant en **infobulle** et revenant à
+  l'écran par la case « Aide détaillée ». Rien n'est supprimé, tout est replié.
 
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
 
