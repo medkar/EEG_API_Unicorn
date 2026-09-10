@@ -65,13 +65,15 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   **Vérifié par le même test** : rien dans `src/research/` n'importe `core.acquisition`,
   `brainflow`, `pygame` ni `console`. Le banc d'essai peut tout CALCULER sur des fichiers
   archivés — c'est son métier — mais ouvrir le casque ou afficher un stimulus sont des gestes
-  d'usage réel, donc ils appartiennent à l'application. Et **la réciproque est vérifiée depuis le
-  2026-09-10** : rien dans `src/console/` n'importe `research`. Une analyse hors ligne qui doit
-  passer à portée de clic DÉMÉNAGE dans `core` ; elle ne se branche pas sur un bouton depuis le
-  banc d'essai. **Vert depuis le 2026-09-09** : `[smoke-frontiere] 0 violation(s)
-  de frontière`. (Le NOMBRE de fichiers n'est pas cité : un compte en prose n'est tenu par rien,
-  et celui-ci était déjà faux deux commits plus tard — 57 contre 58.) Il était ROUGE en le posant, sur six fichiers — c'est ce
-  rouge-là qui a servi de liste de travail au chantier « plus une seule commande à taper ».
+  d'usage réel, donc ils appartiennent à l'application. **Vert depuis le 2026-09-09** :
+  `[smoke-frontiere] 0 violation(s) de frontière`. (Le NOMBRE de fichiers n'est pas cité : un
+  compte en prose n'est tenu par rien, et celui-ci était déjà faux deux commits plus tard — 57
+  contre 58.) Il était ROUGE en le posant, sur six fichiers — c'est ce rouge-là qui a servi de
+  liste de travail au chantier « plus une seule commande à taper ».
+
+  **La RÉCIPROQUE est vérifiée depuis le 2026-09-10** : rien dans `src/console/` n'importe
+  `research`. Une analyse hors ligne qui doit passer à portée de clic DÉMÉNAGE dans `core` ; elle
+  ne se branche pas sur un bouton depuis le banc d'essai.
 
   ⚠️ **Cette règle a été demandée CINQ FOIS entre juillet et septembre 2026 avant d'être écrite
   ici.** Chaque fois elle a été traitée comme une fonctionnalité — on ajoutait un bouton — et le
