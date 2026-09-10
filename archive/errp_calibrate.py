@@ -563,10 +563,32 @@ def main(argv=None):
         if a.smoke:
             tmp = tempfile.mkdtemp(prefix="errp_calibrate_smoke_")
             save_path = os.path.join(tmp, "errp_model_smoke.joblib")
+        ok = True
         try:
-            calibrate(app, trials=a.trials, blocks=a.blocks, save_path=save_path)
+            ok = calibrate(app, trials=a.trials, blocks=a.blocks, save_path=save_path)
         except Abort:
+            ok = False
             print("[errp-cal] annulé.")
+        if a.smoke:
+            # ⚠️ **Sans cette assertion, ce smoke MENT** — et son jumeau P300 l'a reçue le
+            # 2026-09-08, pas lui. `calibrate()` attrape la séance trop pauvre, imprime « pas
+            # assez de données » et rend `False` ; après quoi ce fichier annonçait « smoke OK »
+            # au seul motif que rien n'avait levé. Le P300 a été MESURÉ dans ce cas : 7 époques
+            # au lieu de 12, aucun modèle écrit, « OK » imprimé quand même — cause, un board
+            # fraîchement ouvert. Cet ErrP a la même exposition (`time.sleep(1.0)` de
+            # pré-remplissage contre 1,2 s chez le P300).
+            #
+            # On exige donc le FICHIER, et qu'il se relise par le chemin RÉEL du moteur — celui
+            # qui refuse les modèles hérités. Un modèle écrit mais illisible par `errp_models`
+            # n'apparaîtrait dans aucune liste : le smoke doit le voir.
+            from core.errp_models import charger
+            assert ok and os.path.exists(save_path), (
+                f"la calibration n'a produit AUCUN modèle ({save_path}) : la séance de test est "
+                f"passée sous le plancher d'époques, et l'entraînement n'a donc pas été exercé")
+            modele, probleme = charger(save_path)
+            assert modele is not None, (
+                f"...et le modèle produit doit être ACCEPTÉ par `errp_models.charger`, sinon il "
+                f"n'apparaîtrait dans aucune liste : {probleme}")
     finally:
         app.close()
         if tmp is not None:

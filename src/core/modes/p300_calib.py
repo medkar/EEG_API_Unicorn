@@ -187,7 +187,7 @@ def chemins_libres(dossier, n_manches, prefixe=""):
         maintenant += 1.0
 
 
-def selection_loro(epochs, flashed, groups, cues, fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
+def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s):
     """Justesse de SÉLECTION en leave-one-round-out : pour chaque manche tenue à l'écart, le
     modèle appris sur les autres retrouve-t-il la cible désignée ? Rend `(ok, total)`.
 
@@ -217,7 +217,7 @@ def selection_loro(epochs, flashed, groups, cues, fs, pre_s=P300_PRE_S, post_s=P
 
 
 def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_npz=None,
-              evaluer=True, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
+              evaluer=True, *, pre_s, post_s):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
 
@@ -259,7 +259,8 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
     modele = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs, labels, groups=groups,
                                                               compute_cv=evaluer)
-    sel_ok, sel_tot = (selection_loro(epochs, flashed, groups, cues, fs, pre_s, post_s)
+    sel_ok, sel_tot = (selection_loro(epochs, flashed, groups, cues, fs,
+                                      pre_s=pre_s, post_s=post_s)
                        if evaluer else (0, 0))
     selection = (sel_ok / sel_tot) if sel_tot else None
 
@@ -300,7 +301,7 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
 
 def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True,
-                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S, prefixe=""):
+                   *, pre_s, post_s, prefixe=""):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés
     et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
 

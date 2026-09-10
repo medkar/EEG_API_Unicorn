@@ -318,9 +318,16 @@ def calibrate(app, rounds=P300_CAL_ROUNDS, reps=P300_REPS, save_path=None):
     # (~17 ré-entraînements, pour un test qui ne juge que le câblage).
     npz = None if app.smoke else p300_calib.chemins_libres(os.path.dirname(save_path), len(cues))[1]
     try:
+        # ⚠️ `pre_s`/`post_s` EXPLICITES depuis le 2026-09-10, et sans défaut possible côté
+        # `entrainer` : ce sont ceux avec lesquels `epoch_from_stream` a RÉELLEMENT découpé les
+        # époques, quelques lignes plus haut. Tant qu'ils avaient un défaut repris de
+        # `core/config.py`, cet appel produisait un modèle portant une géométrie qui n'était pas
+        # la sienne dès que quelqu'un déplaçait `P300Runtime.pre_s` — et le mode aurait refusé,
+        # au démarrage, le modèle qu'on venait de calibrer, en accusant le modèle.
         res = p300_calib.entrainer(epochs, labels, flashed, groups, cues, fs,
                                    chemin_modele=save_path, chemin_npz=npz,
-                                   evaluer=not app.smoke)
+                                   evaluer=not app.smoke,
+                                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
     except ValueError as e:
         print(f"[p300-cal] {e}")
         if not app.smoke:
