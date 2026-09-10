@@ -25,11 +25,29 @@ class Banner(QWidget):
         # marqueurs qui ne viendront plus — indiscernable d'un étudiant qui fixe mal.
         self.fenetre = QLabel("")
         self.fenetre.setWordWrap(True)
+        # Le dernier REFUS du moteur, quel qu'il soit. Ici, et pas sur une page, parce que le
+        # refus le plus banal du produit arrive depuis la GRILLE — cliquer « Démarrer » sur un
+        # mode sans modèle entraîné — et que la grille n'a aucune page où l'écrire.
+        #
+        # ⚠️ Jusqu'au 2026-09-10, `Console.commande` imprimait ces refus dans le TERMINAL et nulle
+        # part ailleurs. Sur un dépôt fraîchement cloné, cliquer « Démarrer » sur le MI, le P300,
+        # l'ErrP ou le c-VEP laissait l'écran STRICTEMENT immobile — le moteur refusait
+        # correctement, avec son message complet, derrière la fenêtre. La recette du projet
+        # (test 1.13) a relevé cinq clics d'affilée sur ce bouton muet. C'est le défaut que ce
+        # chantier a passé son temps à réparer ailleurs ; il vivait encore ici.
+        self.refus = QLabel("")
+        self.refus.setWordWrap(True)
+        self.refus.setStyleSheet("color: #e2603f; font-weight: bold;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre):
+        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre, self.refus):
             layout.addWidget(widget)
         layout.addStretch(1)
+
+    def set_refus(self, texte):
+        """Le dernier refus du moteur, ou "" pour l'effacer. Un refus ACCEPTÉ n'efface pas le
+        précédent : c'est l'appelant qui décide quand la question est réglée."""
+        self.refus.setText(texte or "")
 
     def set_fenetre(self, texte, alerte=False):
         """Ce que devient la fenêtre de stimulus. Vient de `LanceurFenetre`, pas du moteur : le

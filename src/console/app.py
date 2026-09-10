@@ -77,6 +77,22 @@ REFRESH_MS = 100    # ~10 Hz : le moteur décide à 5 Hz, sonder plus vite ne mo
 # répare, et elle serait ici indiscernable d'une chauffe qui démarre.
 DELAI_ARRET_S = 5.0
 
+# Combien de temps la console attend de VOIR une séance apparaître dans l'état du moteur avant de
+# lancer sa fenêtre de stimulus.
+#
+# 🔴 **`submit` ne promet qu'une mise en FILE, jamais une application** — c'est écrit dans sa
+# docstring, et la console le savait déjà pour `stop_mode` (`DELAI_ARRET_S`, juste au-dessus).
+# Elle ne le savait pas pour `start_calibration` : elle prenait l'accusé pour « la séance a
+# démarré » et lançait la fenêtre aussitôt. Or `_start_calibration` peut sortir sans rien créer,
+# par trois portes silencieuses — une séance déjà en cours, le refus du vol de marqueurs côté
+# boucle, ou une exception dans `runtime_cls(...)` avalée par `_drain_commands`.
+#
+# Dans ce cas, la fenêtre plein écran jouait le protocole ENTIER dans le vide : 200 essais d'ErrP,
+# sept minutes, et rien à l'écran pour le dire — le seul témoin étant une ligne dans la console
+# cmd que `outils/Console EEG.bat` laisse derrière la fenêtre Qt. C'est-à-dire le
+# refus-dans-le-terminal du test 1.13 de la recette, sur le chemin le plus cher du produit.
+DELAI_DEMARRAGE_S = 5.0
+
 
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
@@ -100,6 +116,8 @@ class Console(QMainWindow):
         # Une calibration soumise dont la fenêtre a refusé de s'ouvrir. Elle doit être annulée,
         # mais pas avant que le moteur ne l'ait réellement démarrée — cf. `_suivre_attente`.
         self._a_annuler = False
+        # Ce qu'il reste à lancer quand la séance apparaîtra (cf. DELAI_DEMARRAGE_S).
+        self._a_lancer = None
         # Le jumeau, côté MESURE : même course, même remède. La mesure du taux SSVEP a une fenêtre
         # de stimulus elle aussi, et sans elle le moteur attendrait `CALIB_FENETRE_ATTENTE_S` avant
         # d'abandonner — trente secondes pendant lesquelles l'écran annonce une séance qui n'aura
@@ -255,7 +273,17 @@ class Console(QMainWindow):
             return {"accepted": False, "reason": "aucun moteur (mode test)"}
         ack = self.engine.submit(name, **params)
         if not ack.get("accepted"):
+            # ⚠️ **À L'ÉCRAN, pas seulement dans le terminal.** C'est ce qui sépare « le refus est
+            # correct » de « le refus se VOIT ». Le cas le plus banal du produit : un dépôt
+            # fraîchement cloné, un clic sur « Démarrer » d'un mode à modèle, et le moteur répond
+            # « aucun choix disponible » — que personne ne lit, parce que la grille n'avait
+            # aucune destination visuelle. Cinq clics d'affilée relevés dans la recette.
             print(f"[console] refusé : {ack.get('reason')}")
+            self.banner.set_refus(f"⚠ {ack.get('reason')}")
+        else:
+            # Une commande ACCEPTÉE efface le refus précédent : le laisser à l'écran ferait lire
+            # un refus périmé comme le verdict de l'action qu'on vient de réussir.
+            self.banner.set_refus("")
         return ack
 
     # --- lancer quelque chose : le contact d'abord, puis l'ORDRE ---------------------------
@@ -388,6 +416,11 @@ class Console(QMainWindow):
                 self.commande("cancel_mesure")
                 self.lanceur.arreter()
 
+        # 1 ter. La séance soumise est-elle VRAIMENT partie ? Tant qu'on ne l'a pas vue dans
+        #        l'état, lancer sa fenêtre serait parier — et perdre le pari coûte le protocole
+        #        entier joué dans le vide.
+        self._lancer_quand_partie(state)
+
         if self._attente is None:
             return
         mode_id = self._attente["mode_id"]
@@ -448,21 +481,38 @@ class Console(QMainWindow):
         stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
         if not stimulus_id:
             return          # le moteur mène tout seul le protocole (Motor Imagery)
-        ouvert = self._lancer_fenetre(mode_id, calibrer=True)
-        if not ouvert.get("accepted"):
-            # La calibration EST PARTIE, mais personne ne lui enverra de marqueurs : elle
-            # attendrait jusqu'à l'abandon, en comptant une chauffe qui ne mène nulle part.
-            #
-            # ⚠️ On ne peut PAS l'annuler tout de suite : `start_calibration` vient d'être mise en
-            # FILE, la boucle ne l'a pas encore appliquée, donc `self.calibration` est encore
-            # `None` côté moteur et `submit("cancel_calibration")` répond « aucune calibration en
-            # cours ». Annuler ici et écrire « la calibration a été annulée » serait une phrase
-            # FAUSSE à l'écran, avec un décompte qui démarre juste en dessous. On note donc
-            # l'annulation, et `_suivre_attente` la soumet dès que la séance apparaît.
-            self._a_annuler = True
+        # ⚠️ **On ne lance PAS la fenêtre ici.** L'accusé qu'on vient de recevoir dit « mise en
+        # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
+        # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
+        self._a_lancer = {"mode_id": mode_id,
+                          "echeance": self._horloge() + DELAI_DEMARRAGE_S}
+
+    def _lancer_quand_partie(self, state):
+        """Lance la fenêtre dès que la calibration existe pour de bon — ou renonce en le disant.
+
+        Jumeau de l'attente d'arrêt : `submit` met en file, donc l'accusé ne prouve rien. Tant que
+        la séance n'apparaît pas dans `snapshot()`, la lancer serait parier.
+        """
+        if not self._a_lancer:
+            return
+        mode_id = self._a_lancer["mode_id"]
+        calib = (state or {}).get("calibration")
+        if calib is not None and calib.get("phase") not in PHASES_TERMINALES:
+            self._a_lancer = None
+            ouvert = self._lancer_fenetre(mode_id, calibrer=True)
+            if not ouvert.get("accepted"):
+                self._a_annuler = True
+                self._avis(mode_id,
+                           f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa "
+                           f"fenêtre, le moteur attendrait des marqueurs qui ne viendront jamais.")
+            return
+        if self._horloge() >= self._a_lancer["echeance"]:
+            self._a_lancer = None
             self._avis(mode_id,
-                       f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa "
-                       f"fenêtre, le moteur attendrait des marqueurs qui ne viendront jamais.")
+                       f"le moteur n'a pas démarré la calibration en "
+                       f"{DELAI_DEMARRAGE_S:.0f} s — la fenêtre de stimulus n'a PAS été lancée. "
+                       f"Sans ce garde-fou elle aurait joué le protocole entier dans le vide. "
+                       f"Regarde le refus dans le bandeau, puis recommence.")
 
     def _lancer_fenetre(self, mode_id, calibrer):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
@@ -864,6 +914,25 @@ def _smoke():
     # La règle centrale du sous-système : la tuile RESSORT l'état reçu, elle n'en déduit aucun.
     # Le clic poste une commande et rien d'autre — muter l'étiquette ICI la ferait mentir tant
     # que le moteur (le vrai, pas ce double factice) n'a pas réellement traité la commande.
+    # 🔴 **Le refus de la GRILLE arrive-t-il à l'ÉCRAN ?** C'est le cas le plus banal du produit :
+    # un dépôt fraîchement cloné, aucun modèle entraîné, un clic sur « Démarrer » d'un mode à
+    # modèle. Jusqu'au 2026-09-10 le moteur refusait correctement — « aucun choix disponible » —
+    # et la console l'imprimait dans le TERMINAL, derrière la fenêtre. L'écran restait
+    # STRICTEMENT immobile : la tuile ne mute délibérément pas son étiquette (juste en dessous),
+    # donc rien ne bougeait. La recette a relevé cinq clics d'affilée sur ce bouton muet.
+    moteur_faux.refus["start_mode"] = "« Modèle entraîné » : aucun choix disponible"
+    console.banner.set_refus("")
+    console.grid.tuiles["mi"].demarrage.click()
+    chk(console.banner.refus.text() and "aucun choix" in console.banner.refus.text(),
+        f"un refus de la grille arrive DANS LE BANDEAU, visible depuis n'importe quelle page "
+        f"({console.banner.refus.text()!r})")
+    # Et il s'efface quand une commande passe : un refus périmé se lirait comme le verdict de
+    # l'action qu'on vient de réussir.
+    moteur_faux.refus.pop("start_mode")
+    console.grid.tuiles["neuro"].demarrage.click()
+    chk(not console.banner.refus.text(),
+        f"…et une commande acceptée l'efface ({console.banner.refus.text()!r})")
+
     chk(console.grid.tuiles["neuro"].demarrage.text() == etiquette_avant_clic,
         f"et le clic ne mute PAS l'étiquette de sa propre tuile — seul le PROCHAIN état reçu le "
         f"fera ({console.grid.tuiles['neuro'].demarrage.text()})")
@@ -1856,9 +1925,23 @@ def _smoke():
     processus.clear()
     cal_p3.bouton_commencer.click()
     console.contact.bouton_lancer.click()
+
+    # 🔴 **La fenêtre n'est PAS encore lancée, et c'est le correctif du 2026-09-10.** L'accusé de
+    # `start_calibration` dit « mise en file », pas « démarrée » : la lancer maintenant serait
+    # parier, et perdre le pari coûte le protocole ENTIER joué dans le vide — 200 essais d'ErrP,
+    # sept minutes, sans rien à l'écran pour le dire.
+    chk([e[0] for e in journal] == ["commande"],
+        f"après le clic, la commande est SOUMISE et la fenêtre attend ({journal})")
+
+    # La séance apparaît vraiment dans l'état : ALORS la fenêtre part.
+    console.apply_state({**p300_pret,
+                         "calibration": {"mode_id": "p300", "phase": "chauffe", "restant_s": 15.0,
+                                         "instruction": "", "essai": 0, "total": 12,
+                                         "resultat": None, "probleme": "", "candidat": None}})
     noms = [e[0] for e in journal]
     chk(("commande", "start_calibration") in journal and ("fenetre" in noms),
-        f"une calibration P300 soumet la commande ET lance la fenêtre ({journal})")
+        f"une calibration P300 soumet la commande, puis lance la fenêtre quand la séance EXISTE "
+        f"pour de bon ({journal})")
     chk(0 <= rang(noms, "commande") < rang(noms, "fenetre"),
         f"🔴 et dans CET ordre : `start_calibration` AVANT la fenêtre — sinon les premières "
         f"manches tombent dans la chauffe du moteur ({journal})")
@@ -1959,21 +2042,24 @@ def _smoke():
     console.lanceur.lancer("p300")                 # une fenêtre occupe déjà la place
     cal_p3.bouton_commencer.click()
     console.contact.bouton_lancer.click()
-    chk("tourne déjà" in cal_p3.avis.text() and "annulée" in cal_p3.avis.text(),
-        f"une fenêtre indisponible annule la calibration, et le DIT ({cal_p3.avis.text()[:80]}…)")
     chk([e[1] for e in journal if e[0] == "commande"] == ["start_calibration"],
         f"...sans soumettre `cancel_calibration` à un moteur qui n'a encore rien démarré "
         f"({journal})")
-    # La séance apparaît : c'est MAINTENANT que l'annulation part, sans un clic de plus.
+    # La séance apparaît : la console tente ALORS de lancer la fenêtre, se la voit refuser, et
+    # note l'annulation. (Depuis le 2026-09-10 la fenêtre n'est plus lancée à l'accusé mais à
+    # l'APPARITION de la séance : c'est ici que le refus de fenêtre se découvre.)
     en_chauffe = {**p300_pret, "calibration": {
         "mode_id": "p300", "label": "Calibrer le P300", "phase": "chauffe", "etape": "",
         "classe": "", "instruction": "", "rappel": "", "restant_s": 12.0, "essai": 0,
         "total": 12, "duree_estimee_s": 132.0, "params": {}, "resultat": None, "probleme": "",
         "candidat": None}}
     console.apply_state(en_chauffe)
+    chk("tourne déjà" in cal_p3.avis.text() and "annulée" in cal_p3.avis.text(),
+        f"une fenêtre indisponible annule la calibration, et le DIT ({cal_p3.avis.text()[:80]}…)")
+    console.apply_state(en_chauffe)
     chk([e[1] for e in journal if e[0] == "commande"]
         == ["start_calibration", "cancel_calibration"],
-        f"...mais dès que la séance existe, l'annulation part toute seule ({journal})")
+        f"...et l'annulation part toute seule au tour suivant, sans un clic de plus ({journal})")
     console.lanceur.arreter()
 
     # ⚠️ Le mode P300 qui DÉCODE pendant qu'on lance sa calibration : les deux liraient la même
@@ -1996,9 +2082,36 @@ def _smoke():
     noms = [e[0] for e in journal]
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode", "start_calibration"],
         f"dès qu'il a rendu la main, la calibration part toute seule ({journal})")
+    chk(not processus,
+        f"...et la fenêtre attend encore : la commande n'est que MISE EN FILE ({processus})")
+    # Un tour de plus, la séance existe : la fenêtre part, et forcément après.
+    console.apply_state({**p300_pret, "calibration": {
+        "mode_id": "p300", "phase": "chauffe", "restant_s": 15.0, "instruction": "", "essai": 0,
+        "total": 12, "resultat": None, "probleme": "", "candidat": None}})
+    noms = [e[0] for e in journal]
     chk(0 <= rang(noms, "commande", 1) < rang(noms, "fenetre"),
         f"...et la fenêtre vient encore APRÈS `start_calibration` ({journal})")
     console.lanceur.arreter()
+
+    # 🔴 **Et si le moteur n'A JAMAIS démarré la séance ?** C'est le cas que ce garde-fou existe
+    # pour couvrir, et il n'est pas théorique : `_start_calibration` peut sortir sans rien créer
+    # par trois portes silencieuses (séance déjà en cours, refus du vol de marqueurs côté boucle,
+    # exception avalée par `_drain_commands`). Avant le 2026-09-10, la console lançait la fenêtre
+    # sur l'ACCUSÉ — donc plein écran, 200 essais d'ErrP, sept minutes dans le vide, et le seul
+    # témoin était une ligne dans la console cmd derrière la fenêtre Qt.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    console.apply_state(p300_pret)          # la séance n'apparaît PAS
+    chk(not processus,
+        f"le moteur n'ayant rien démarré, la fenêtre n'est PAS lancée ({processus})")
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(p300_pret)
+    chk(not processus and "n'a pas démarré" in cal_p3.avis.text(),
+        f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
+        f"jouer un protocole entier dans le vide ({cal_p3.avis.text()[:80]}…)")
 
     # ...et si le mode ne s'arrête JAMAIS, on renonce en le DISANT. Sans ce délai, l'écran
     # attendrait en silence — indiscernable d'une chauffe qui démarre.
