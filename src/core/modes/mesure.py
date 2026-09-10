@@ -172,6 +172,29 @@ class MesureRuntime(CalibrationRuntime):
     # que l'écran annonce. Nommer le besoin est ce qui empêche cette panne-là.
     epoque_marqueur_s = 0.0
 
+    # ⚠️ **La plus longue étape ENREGISTRÉE de ce protocole, en secondes.** Le moteur dimensionne
+    # son tampon dessus, exactement comme il le fait sur `Calib.epoch_s` et `marker_epoch_s`.
+    #
+    # Sans ce terme, le contrôle alpha demandait des fenêtres de 8 s à un tampon qui n'en gardait
+    # que 5 : les deux étapes étaient « IGNORÉES », `_mesurer` recevait une liste VIDE, et la
+    # séance se soldait en `annule` avec un message qui accusait le PROTOCOLE (« phase
+    # manquante ») au lieu du tampon. La barrière d'entrée de toute séance ne pouvait donc jamais
+    # être franchie — trouvé par la revue de branche du 2026-09-10, jamais par un test, parce que
+    # les deux moteurs factices rendent TOUJOURS la longueur demandée.
+    #
+    # `epoque_marqueur_s` ne pouvait pas couvrir ce cas et n'était pas censé le faire : sa
+    # docstring dit « autour d'un MARQUEUR », et le contrôle alpha y met légitimement 0 — ses
+    # fenêtres viennent de sa propre ligne du temps. Deux besoins, deux déclarations.
+    @classmethod
+    def epoque_etape_s(cls):
+        """Calculée depuis `protocole()`, jamais recopiée : une constante à tenir à jour à la main
+        finirait par mentir le jour où quelqu'un rallonge une étape."""
+        try:
+            etapes = cls.protocole(cls)
+        except Exception:      # noqa: BLE001 - un protocole qui exige une instance : on ne devine pas
+            return 0.0
+        return max([float(e.duree_s) for e in etapes if getattr(e, "enregistre", True)] or [0.0])
+
     # --- ce qui appartient à la ligne du temps d'une CALIBRATION, et pas à celle-ci -----------
     # Ces quatre-là découpent un essai que le moteur mène (top, imagerie, repos) et comptent un
     # échauffement qu'il joue. Une mesure n'a rien de tout ça : elle a des ÉTAPES, de durées

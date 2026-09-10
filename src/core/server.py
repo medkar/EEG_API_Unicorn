@@ -443,12 +443,21 @@ class EngineServer:
         # signal que ce que l'écran annonce. Déclaré par `MesureRuntime.epoque_marqueur_s`.
         epoque_mesure = max([getattr(spec.runtime_cls, "epoque_marqueur_s", 0.0) or 0.0
                              for spec in registry.MESURES if spec.runtime_cls is not None] or [0.0])
+        # ⚠️ **Et la plus longue ÉTAPE d'un protocole de mesure**, qui n'a rien à voir avec la
+        # précédente : le contrôle alpha ne prélève AUCUNE époque autour d'un marqueur (son
+        # `epoque_marqueur_s` vaut 0, à raison) mais demande deux fenêtres de 8 s à sa propre
+        # ligne du temps. Sans ce terme, `keep` valait 5 s, les deux étapes étaient ignorées, et
+        # la BARRIÈRE D'ENTRÉE DE TOUTE SÉANCE ne pouvait jamais être franchie — avec un message
+        # qui accusait le protocole. Revue de branche du 2026-09-10.
+        etape_mesure = max([spec.runtime_cls.epoque_etape_s()
+                            for spec in registry.MESURES if spec.runtime_cls is not None] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
                         int(NEURO_WINDOW_S * self.acq.fs),
                         int(MI_WINDOW_S * self.acq.fs),
                         int(epoque_calib * self.acq.fs),
                         int(round((epoque_marqueur + MARKER_LATE_S) * self.acq.fs)),
                         int(round(epoque_mesure * self.acq.fs)),
+                        int(round(etape_mesure * self.acq.fs)),
                         self.acq.window_n) + self.acq.margin_n
 
         self._pending = self._prepare(modes or (), params or {})
