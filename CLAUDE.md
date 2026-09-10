@@ -291,13 +291,21 @@ python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,8 min (la con
 
 ```bash
 python src/core/server.py --smoke          # moteur : registre, FRONTIÈRE (les QUATRE paquets :
-                                           # core + stimulus + research + console), repos partagé,
-                                           # cumul, flux, vol de marqueurs, save/discard,
-                                           # ENREGISTREMENT de séance
+                                           # core + stimulus + research + console), EXEMPLES,
+                                           # repos partagé, cumul, flux, vol de marqueurs,
+                                           # save/discard, ENREGISTREMENT de séance
 python src/console/app.py --smoke          # console : grille, page de mode, réglages, contrôle de
                                            # liaison, lanceur de fenêtre, ORDRE, écran de départ,
-                                           # page des mesures, page de flux (Qt offscreen)
+                                           # page des mesures, page de flux, TRACÉS du brut
+                                           # (Qt offscreen)
 ```
+
+⚠️ **`examples/` n'était couvert par AUCUN test avant le 2026-09-10** — alors que c'est le seul
+endroit du dépôt qui montre comment CONSOMMER le produit. `[smoke-exemples]` compare désormais les
+noms de flux cités dans `examples/**` à ceux que le registre produit vraiment. La panne qu'il
+attrape ne lève rien toute seule : `resolve_byprop` sur un flux renommé attend, rend une liste
+vide, et l'étudiant conclut que le moteur ne publie pas. **Les deux `.cs` d'`examples/unity/` n'ont
+toujours jamais été compilés** : il n'y a pas d'Unity ici, et aucun test ne peut le remplacer.
 
 ⚠️ Il n'y a plus de troisième smoke : `src/research/app.py --smoke` couvrait l'appli pygame, qui
 n'existe plus. Les **douze** écrans archivés gardent chacun le leur — la liste est dans
