@@ -2867,13 +2867,90 @@ def _smoke():
         "et c'est une COPIE : l'afficheur ne peut pas abîmer le tampon d'acquisition")
 
     page = reelle.pages["raw"]
-    page.update_from({"modes_state": {"raw": {
+    etat_brut = {"modes_state": {"raw": {
         "id": "raw", "label": "Brut", "family": "brut", "phase": "running", "published": True,
         "params": {}, "instruction": "", "stream": "raw", "channels": list(moteur_channels),
-        "rest_report": None, "output": None}}})
+        "rest_report": None, "output": None}}}
+    page.update_from(etat_brut)
     chk(len(page.vue.courbes) == 8, f"huit courbes, une par voie ({len(page.vue.courbes)})")
     chk(page.vue.courbes[0].xData is not None and len(page.vue.courbes[0].xData) > 100,
         "et elles portent des données après un rafraîchissement")
+
+    # --- 🔴 LES HUIT TRACÉS NE SE CHEVAUCHENT PLUS, ET C'EST GARANTI ------------------------
+    #
+    # Constat 1.3 de la recette, posé le 2026-08-17 et parké depuis : « les 8 tracés du brut sont
+    # trop resserrés et se chevauchent ». L'écart valait 100 µV EN DUR alors que le brut non
+    # filtré d'un vrai casque respire de plusieurs centaines de µV. Ce n'est pas cosmétique : le
+    # contrôle de contact à l'œil est l'ÉTAPE 1 de toute séance, et c'est ce tracé-là qu'on
+    # regarde.
+    #
+    # Ce qui est vérifié ici n'est pas « l'échelle a l'air bonne » — invérifiable sans œil — mais
+    # la propriété GÉOMÉTRIQUE qui remplace le jugement : rogné à son couloir, un tracé ne PEUT
+    # PAS entrer dans celui du voisin. C'est le rognage, pas l'échelle mesurée, qui rend le
+    # non-chevauchement démontrable ; une échelle mesurée seule le rendrait rare, et « rare » est
+    # exactement ce qu'aucun test ne sait vérifier.
+    vue = page.vue
+
+    def _redessine(signal):
+        moteur.recent = signal
+        page.update_from(etat_brut)
+
+    def _empietement():
+        """La pire remontée d'une voie dans le couloir de la suivante, en µV. ≤ 0 = disjoints."""
+        pire = -1e9
+        for i in range(len(vue.courbes) - 1):
+            haut, bas = vue.courbes[i].yData, vue.courbes[i + 1].yData
+            if haut is None or bas is None:
+                continue
+            pire = max(pire, float(np.max(bas)) - float(np.min(haut)))
+        return pire
+
+    # Des sinusoïdes plutôt qu'un tirage aléatoire : l'étendue d'une sinusoïde vaut deux fois son
+    # amplitude à 0,2 % près, donc chaque graduation attendue ci-dessous est CALCULABLE. Un
+    # `normal(0, σ)` la laisserait à la merci du tirage — et une assertion qu'un autre tirage
+    # rendrait fausse n'est pas une assertion, c'est un pari.
+    _phase = 2 * np.pi * 8.0 * np.arange(1000) / 1000.0 * 4.0
+    def _sinus(amplitudes):
+        return np.stack([a * np.sin(_phase + i) for i, a in enumerate(amplitudes)], axis=1)
+
+    # (1) Un brut qui respire fort : l'écart MONTE. Il valait 100 µV en dur — c'est la panne.
+    _redessine(_sinus([300.0] * 8))
+    chk(vue.ecart == 1000.0,
+        f"l'écart entre voies est MESURÉ sur le signal, pas fixé : 8 voies à ±300 µV le portent "
+        f"à 1000 µV ({vue.ecart:g})")
+    chk(f"{vue.ecart:g} µV" in vue.echelle.text(),
+        f"et l'étiquette annonce l'écart RÉELLEMENT en vigueur, pas une constante "
+        f"(« {vue.echelle.text()[:60]}… »)")
+    chk(_empietement() <= 1e-6,
+        f"aucune voie n'entre dans le couloir de sa voisine ({_empietement():+.1f} µV)")
+
+    # (2) UNE voie déchaînée sur huit — C3 et Cz le font à la réouverture de session. L'échelle
+    # est prise au 75e centile des huit étendues, donc elle suit les SEPT voies saines : avec un
+    # max, l'écart monterait à 10 000 µV et les sept tracés utiles seraient des traits plats.
+    _redessine(_sinus([30.0, 30.0, 30.0, 3000.0, 30.0, 30.0, 30.0, 30.0]))
+    chk(vue.ecart == 100.0,
+        f"une seule voie déchaînée n'écrase PAS les sept autres à plat : l'écart suit les voies "
+        f"saines ({vue.ecart:g} µV, et non 10000)")
+    chk(_empietement() <= 1e-6,
+        f"...et elle ne passe pas non plus devant ses voisines : elle est rognée à son couloir "
+        f"({_empietement():+.1f} µV)")
+    chk("C4" in vue.echelle.text() and "rogné" in vue.echelle.text(),
+        f"...et le rognage est DIT, en nommant la voie — c'est le signal qu'on vient chercher "
+        f"ici, pas un défaut d'affichage à cacher (« {vue.echelle.text()[-90:]} »)")
+
+    # (3) La zone morte. Sans elle, une amplitude qui oscille autour d'une graduation ferait
+    # clignoter l'échelle dix fois par seconde et l'écran serait illisible. ±20 µV « appelle »
+    # 50 µV — une graduation plus bas — et ne doit RIEN changer.
+    _redessine(_sinus([20.0] * 8))
+    chk(vue.ecart == 100.0,
+        f"une baisse d'UNE graduation ne redescend pas l'échelle ({vue.ecart:g} µV)")
+    _redessine(_sinus([5.0] * 8))
+    chk(vue.ecart == 20.0,
+        f"...mais deux graduations plus bas, oui : l'échelle sait descendre, elle n'est pas "
+        f"qu'un cliquet ({vue.ecart:g} µV)")
+    chk("rogné" not in vue.echelle.text(),
+        f"et sur un signal calme, plus aucune voie n'est annoncée rognée "
+        f"(« {vue.echelle.text()[:70]}… »)")
 
     # Moteur pas encore démarré : rien ne doit lever.
     etat_vide = {"running": False, "board": "unicorn", "fs_hz": 250.0,

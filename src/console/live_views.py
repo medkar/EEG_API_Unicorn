@@ -28,10 +28,26 @@ class TracesView(QWidget):
     Les voies sont DÉCALÉES verticalement plutôt que superposées : superposées, une seule voie
     qui dérive écrase les sept autres et on ne voit plus rien — or la dérive d'une voie est
     précisément ce qu'on cherche à repérer ici.
+
+    ⚠️ **L'écart entre deux voies est MESURÉ sur le signal, et le tracé est ROGNÉ à son couloir**
+    (2026-09-10). L'écart valait 100 µV en dur : sur un vrai casque, le brut non filtré respire
+    de plusieurs centaines de µV, donc les huit tracés se chevauchaient et le contrôle de contact
+    à l'œil — l'étape 1 de toute séance — ne montrait qu'un enchevêtrement. C'est le constat 1.3
+    de la recette, posé le 2026-08-17 et parké depuis.
+
+    Le rognage est ce qui rend le non-chevauchement **garanti** plutôt que probable : une voie
+    hors échelle vient s'aplatir sur le rail de son couloir au lieu de passer devant ses voisines.
+    Une échelle mesurée SANS rognage rendrait le chevauchement rare — et « rare » est exactement
+    ce qu'aucun test ne peut vérifier. Le prix est que les pointes des 4 % extrêmes sont écrêtées ;
+    c'est le bon prix ici, où l'on cherche « cette voie est-elle plus agitée que les autres », pas
+    l'amplitude exacte d'un clignement.
     """
 
     SECONDES = 4.0
-    ECART_UV = 100.0     # décalage vertical entre deux voies
+    #: Graduations rondes. L'écart se pose sur l'une d'elles pour que l'étiquette reste lisible et
+    #: que l'échelle ne se remette pas à un chiffre différent à chaque rafraîchissement.
+    GRADUATIONS_UV = (20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
+    ECART_DEPART_UV = 100.0     # avant la première mesure, et quand le signal est plat
 
     def __init__(self, ch_names):
         super().__init__()
@@ -39,18 +55,19 @@ class TracesView(QWidget):
 
         self.source = None
         self.ch_names = list(ch_names)
+        self.ecart = self.ECART_DEPART_UV
         self.plot = pg.PlotWidget()
         self.plot.setMenuEnabled(False)
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.showGrid(x=True, y=False, alpha=0.2)
         self.plot.setLabel("bottom", "secondes")
-        self.plot.getAxis("left").setTicks([[
-            (-i * self.ECART_UV, nom) for i, nom in enumerate(self.ch_names)]])
         self.courbes = [self.plot.plot(pen=pg.mkPen(width=1)) for _ in self.ch_names]
+        self._pose_axe()
 
-        self.echelle = QLabel(f"signal BRUT, non filtré · une graduation = {self.ECART_UV:g} µV "
-                              f"· {self.SECONDES:g} dernières secondes")
+        self.echelle = QLabel("")
+        self.echelle.setWordWrap(True)
         self.echelle.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self._dis_echelle(())
         layout = QVBoxLayout(self)
         layout.addWidget(self.plot, 1)
         layout.addWidget(self.echelle)
@@ -59,20 +76,84 @@ class TracesView(QWidget):
         """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`."""
         self.source = source
 
+    def _pose_axe(self):
+        """Replace les étiquettes de voies et fige la vue sur les couloirs de l'écart courant.
+
+        Sans vue figée, pyqtgraph recadre tout seul sur ce qu'on lui donne : l'écart mesuré ne se
+        verrait pas à l'écran, et deux blocs d'amplitudes différentes s'afficheraient pareil.
+        """
+        if not self.ch_names:
+            return
+        self.plot.getAxis("left").setTicks([[
+            (-i * self.ecart, nom) for i, nom in enumerate(self.ch_names)]])
+        self.plot.setYRange(-(len(self.ch_names) - 0.5) * self.ecart, 0.5 * self.ecart,
+                            padding=0)
+
+    def _dis_echelle(self, rognees):
+        """L'étiquette grise. Elle annonce l'écart RÉELLEMENT en vigueur, jamais une constante.
+
+        Et elle NOMME les voies qui débordent : une voie rognée n'est pas un défaut d'affichage à
+        cacher, c'est le signal qu'on vient chercher ici — celle-là est bien plus agitée que les
+        sept autres, donc son contact est suspect.
+        """
+        texte = (f"signal BRUT, non filtré · un couloir = {self.ecart:g} µV "
+                 f"· {self.SECONDES:g} dernières secondes")
+        if rognees:
+            texte += (f"  ·  ⚠ hors couloir, tracé rogné : {', '.join(rognees)} — bien plus agité "
+                      f"que les autres voies (contact ? électrode décollée ?)")
+        self.echelle.setText(texte)
+
+    def _etendues(self, bloc):
+        """L'étendue de chaque voie, entre ses 2e et 98e centiles.
+
+        Pas entre son min et son max : un seul clignement fixerait sinon l'échelle de tout l'écran
+        pour quatre secondes, et les sept autres voies s'écraseraient à plat.
+        """
+        n = min(bloc.shape[1], len(self.courbes))
+        return [float(np.subtract(*np.percentile(bloc[:, i], (98.0, 2.0)))) for i in range(n)]
+
+    def _echelle_utile(self, etendues):
+        """L'écart qui convient à ces étendues, posé sur une graduation ronde.
+
+        La référence entre voies est le **75e centile** des huit étendues. Ni la médiane, qui
+        laisserait la moitié des voies déborder ; ni le maximum, qui laisserait UNE voie saturée
+        — C3 et Cz le font à la réouverture de session — écraser les sept autres à plat.
+        """
+        if not etendues:
+            return self.ecart
+        besoin = float(np.percentile(etendues, 75.0)) * 1.2
+        for graduation in self.GRADUATIONS_UV:
+            if graduation >= besoin:
+                return graduation
+        return self.GRADUATIONS_UV[-1]
+
     def update_from(self, _mode_state):
         if self.source is None:
             return
         bloc = self.source(self.SECONDES)
         if bloc is None or len(bloc) < 2:
             return
+        etendues = self._etendues(bloc)
+        utile = self._echelle_utile(etendues)
+        # On MONTE dès que c'est trop serré, on ne DESCEND qu'à deux graduations d'écart. Les
+        # graduations sont espacées d'un facteur 2 à 2,5 : sans cette zone morte, une amplitude
+        # qui oscille autour d'une borne ferait clignoter l'échelle dix fois par seconde.
+        if utile > self.ecart or utile * 4.0 <= self.ecart:
+            self.ecart = utile
+            self._pose_axe()
+
         t = np.arange(len(bloc)) / max(len(bloc) / self.SECONDES, 1e-9)
+        demi = self.ecart / 2.0
+        rognees = [self.ch_names[i] for i, e in enumerate(etendues)
+                   if i < len(self.ch_names) and e > self.ecart]
         for i, courbe in enumerate(self.courbes):
             if i >= bloc.shape[1]:
                 break
             # Centré voie par voie : l'Unicorn sort un offset DC énorme (10⁵ µV, en rampe après
             # l'ouverture de session). Sans ce centrage, les 8 courbes sortiraient de l'écran.
             voie = bloc[:, i] - float(np.median(bloc[:, i]))
-            courbe.setData(t, voie - i * self.ECART_UV)
+            courbe.setData(t, np.clip(voie, -demi, demi) - i * self.ecart)
+        self._dis_echelle(rognees)
 
 
 class ActiveView(QWidget):

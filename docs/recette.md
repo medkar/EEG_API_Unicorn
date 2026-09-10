@@ -165,7 +165,8 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
   refusé est **silencieux** : le moteur produit bien son refus, la console l'écrit dans le terminal,
   et rien n'apparaît dans la fenêtre. Depuis le formulaire de réglages (test 1.8) le même refus
   s'affiche en rouge — c'est la grille qui n'a pas de destination visuelle.
-- **1.3** — les 8 tracés du brut sont trop resserrés et se chevauchent.
+- **1.3** — les 8 tracés du brut sont trop resserrés et se chevauchent. ✅ **Corrigé le
+  2026-09-10** (écart mesuré + rognage au couloir, cf. le test 1.3).
 - **1.10** — le texte d'aide gris est tronqué en bas, et trop verbeux pour un étudiant.
 
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
@@ -244,10 +245,22 @@ dernier. **Le moteur publie les six modes.** Le module qui portait les entrées 
 
 - [ ] Cliquer « Ouvrir » sur **Brut** → 8 tracés qui défilent, une étiquette par voie
       (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8).
+- [ ] **Les 8 tracés ne se chevauchent pas**, quelle que soit l'amplitude du signal.
+- [ ] La ligne grise sous le graphe annonce l'écart **en vigueur** (« un couloir = … µV ») et il
+      **change** quand le signal change d'amplitude — il n'est plus fixé à 100 µV.
 - [ ] « ← Modes » revient à la grille.
 
 > 🐛 **2026-08-17** : les 8 tracés sont là et correctement étiquetés, mais **trop resserrés — ils se
 > chevauchent**. Rangé dans le lot d'affichage.
+>
+> ✅ **Corrigé le 2026-09-10.** L'écart entre voies est désormais **mesuré sur le signal** (75e
+> centile des huit étendues, posé sur une graduation ronde, avec une zone morte de deux graduations
+> pour que l'échelle ne clignote pas), et **chaque tracé est rogné à son couloir** : le
+> non-chevauchement est GÉOMÉTRIQUE, pas une affaire de réglage heureux. Une voie qui déborde
+> s'aplatit sur son rail et **la ligne grise la nomme** — c'est justement le signal qu'on cherche
+> ici (contact suspect), pas un défaut à cacher. Vérifié par `console/app.py --smoke`, quatre
+> mutations rouges (rognage retiré, échelle refixée, maximum au lieu du 75e centile, zone morte
+> retirée).
 
 ### 1.4 — Le bandeau vit
 
