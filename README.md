@@ -515,7 +515,7 @@ twice: as a plain stimulus, and as a protocol that publishes ground truth (`--ca
 | [`p300.py`](src/stimulus/p300.py) | The oddball ring: `flash` · `round_end`, plus `calib_start` · `cue` · `calib_end` |
 | [`errp.py`](src/stimulus/errp.py) | The cursor-to-target track: `feedback`, which gains `error` **in calibration only** |
 | [`cvep.py`](src/stimulus/cvep.py) | Six flickering discs and the `cycle` clock, plus `cue` · `block_end` around it |
-| [`ssvep.py`](src/stimulus/ssvep.py) | Four flickering arrows; with `--guide`, `calib_start` · `repos` · `cue` · `calib_end` |
+| [`ssvep.py`](src/stimulus/ssvep.py) | Three flickering arrows; with `--guide`, `calib_start` · `repos` · `cue` · `calib_end` |
 | [`refresh.py`](src/stimulus/refresh.py) | Measures the real refresh rate of the screen that will show the stimulus |
 | [`registry.py`](src/stimulus/registry.py) | Key → command line, and which windows can write a session log. The only file in the repo that names a window module |
 

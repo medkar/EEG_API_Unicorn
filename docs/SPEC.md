@@ -173,7 +173,9 @@ Le test a d'ailleurs été écrit **avant** les retraits, et il était volontair
 nommait les six fichiers à traiter (`alpha_check`, `ssvep_guided`, `ssvep_stimulus`, `live_ssvep`,
 `ssvep_analyze`, `ui`), et chaque tâche du chantier le faisait verdir d'un cran. Écrit en dernier,
 il aurait constaté un état déjà propre et n'aurait rien prouvé. État final :
-`[smoke-frontiere] 57 fichiers scannés, 0 violation(s) de frontière`.
+`[smoke-frontiere] 0 violation(s) de frontière`. (Le NOMBRE de fichiers n'est pas cité : un
+compte en prose n'est tenu par rien et redevient faux au premier fichier ajouté — c'était déjà le
+cas, 57 contre 58, deux commits plus tard.)
 
 En sont DEHORS, et ce n'est pas une échappatoire : les autotests (`--smoke`, autotests de module),
 qui s'adressent au développeur ; et `server.py --mode X`, le moteur **sans écran**, dont c'est

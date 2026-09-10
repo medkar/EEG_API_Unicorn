@@ -3753,22 +3753,43 @@ def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdit
     for noeud in ast.walk(ast.parse(source, filename=nom_fichier)):
         if isinstance(noeud, ast.Import):
             cibles = [alias.name for alias in noeud.names]
+            formes = list(cibles)
         elif isinstance(noeud, ast.ImportFrom):
             # `node.module` vaut None pour `from . import x` ; `level > 0` est un import relatif,
             # examiné lui aussi : `core` n'a aucun sous-module portant l'un de ces noms, donc un
             # match ne peut désigner qu'une remontée hors de `core`.
-            cibles = [noeud.module or ""]
+            # ⚠️ **Les ALIAS comptent, pas seulement le module.** `from core import acquisition`
+            # ne nomme jamais `core.acquisition` dans `noeud.module` — il y a `core`, autorisé —
+            # et l'interdit passait donc EN SILENCE. Or `from X import Y` est l'idiome dominant
+            # de ce dépôt : c'est exactement « la faute plausible, celle qu'on écrit sans y
+            # penser » que cette fonction prétend attraper.
+            #
+            # Deux règles tombaient d'un coup : « rien dans `research/` n'ouvre le casque », et
+            # l'invariant fondateur de `stimulus/` — une fenêtre qui aurait ouvert le casque par
+            # cette forme aurait passé le smoke et volé sa connexion au moteur en séance.
+            # Trouvé par la revue de branche du 2026-09-10.
+            base = noeud.module or ""
+            # Le PAQUET se juge sur le module seul — sinon `from console.grid import Grille`
+            # compterait deux fois la même faute. Les formes complètes servent aux `exacts`.
+            cibles = [base]
+            formes = [base] + [f"{base}.{alias.name}" if base else alias.name
+                               for alias in noeud.names]
         else:
             continue
         for cible in cibles:
             paquet = cible.split(".")[0]
             if motif.match(paquet):
                 fautes.append((noeud.lineno, paquet))
-            elif any(cible == m or cible.startswith(m + ".") for m in (exacts or ())):
+            else:
                 # Un module PRÉCIS, pas un paquet entier : `core.acquisition` est interdit dans
-                # `stimulus/` alors que `core` y est autorisé. Le nom complet est rendu tel quel,
-                # pour que le message dise ce qui est interdit et pas seulement où.
-                fautes.append((noeud.lineno, cible))
+                # `stimulus/` alors que `core` y est autorisé. On rend la forme COMPLÈTE qui a
+                # matché — `core.acquisition`, pas `core` — pour que le message dise ce qui est
+                # interdit et pas seulement où. C'est aussi ce qui permet d'attraper
+                # `from core import acquisition`, dont le module seul (`core`) est autorisé.
+                touchees = [f for f in formes
+                            for m in (exacts or ()) if f == m or f.startswith(m + ".")]
+                if touchees:
+                    fautes.append((noeud.lineno, touchees[0]))
     return fautes
 
 
@@ -3863,6 +3884,7 @@ def _smoke_frontiere():
             ("from brainflow.board_shim import BoardShim\n", ["brainflow"]),
             ("from core.config import DATA_DIR\n", []),          # `core` reste autorisé
             ("import pygame\n", []),                             # et pygame aussi, ici
+            ("from core import acquisition\n", ["core.acquisition"]),
             ("from research.ui import App\n", ["research"])):
         trouve = [p for _ligne, p in _imports_interdits(
             source, interdits=_FRONTIERE_STIMULUS_INTERDITS, interdits_re="",
@@ -3877,6 +3899,10 @@ def _smoke_frontiere():
     # libre : c'est tout le métier de `research/`.
     for source, attendu in (
             ("from core.acquisition import UnicornAcquisition\n", ["core.acquisition"]),
+            # ⚠️ La forme qui PASSAIT en silence jusqu'au 2026-09-10, et c'est l'idiome dominant
+            # du dépôt : `from X import Y` ne nomme jamais `X.Y` dans `noeud.module`.
+            ("from core import acquisition\n", ["core.acquisition"]),
+            ("from core import acquisition as acq\n", ["core.acquisition"]),
             ("import pygame\n", ["pygame"]),
             ("import brainflow\n", ["brainflow"]),
             ("from core.config import DATA_DIR\n", []),               # calculer reste libre
@@ -3907,6 +3933,11 @@ def _smoke_frontiere():
 
     # 4. `src/research/` : le banc d'essai ne touche ni au casque ni à un écran.
     racine_res = os.path.join(os.path.dirname(racine), "research")
+    # ⚠️ Le dossier DOIT exister, exactement comme pour `stimulus/` juste au-dessus — le
+    # raisonnement y était écrit et n'avait pas été appliqué ici. Sans ce `chk`, un
+    # `git mv src/research src/bench` désarmerait la règle en rendant « 0 violation » et
+    # « VERDICT : OK » : la garde muette contre laquelle tout ce chantier a été fait.
+    chk(os.path.isdir(racine_res), f"le banc d'essai src/research/ existe ({racine_res})")
     if os.path.isdir(racine_res):
         fautes_res, vus_res = _scanner(racine_res, "research", _FRONTIERE_RESEARCH_INTERDITS,
                                        "", _FRONTIERE_RESEARCH_MODULES_INTERDITS)
@@ -3914,6 +3945,9 @@ def _smoke_frontiere():
             print("[smoke-frontiere]   → RÈGLE : un utilisateur ne tape pas de commande. Si cette "
                   "capacité lui est destinée, elle doit avoir un chemin dans la console ; sinon "
                   "elle appartient à `archive/`.")
+        chk(vus_res >= 10,
+            f"…et il contient bien le banc d'essai ({vus_res} fichiers) — un dossier vidé "
+            f"rendrait « 0 violation » sans que la règle ait rien vérifié")
         fautes += fautes_res
         fichiers_vus += vus_res
 

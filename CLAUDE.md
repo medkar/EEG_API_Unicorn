@@ -55,8 +55,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   **Vérifié par le même test** : rien dans `src/research/` n'importe `core.acquisition`,
   `brainflow` ni `pygame`. Le banc d'essai peut tout CALCULER sur des fichiers archivés — c'est son
   métier — mais ouvrir le casque ou afficher un stimulus sont des gestes d'usage réel, donc ils
-  appartiennent à l'application. **Vert depuis le 2026-09-09** : `[smoke-frontiere] 57 fichiers
-  scannés, 0 violation(s) de frontière`. Il était ROUGE en le posant, sur six fichiers — c'est ce
+  appartiennent à l'application. **Vert depuis le 2026-09-09** : `[smoke-frontiere] 0 violation(s)
+  de frontière`. (Le NOMBRE de fichiers n'est pas cité : un compte en prose n'est tenu par rien,
+  et celui-ci était déjà faux deux commits plus tard — 57 contre 58.) Il était ROUGE en le posant, sur six fichiers — c'est ce
   rouge-là qui a servi de liste de travail au chantier « plus une seule commande à taper ».
 
   ⚠️ **Cette règle a été demandée CINQ FOIS entre juillet et septembre 2026 avant d'être écrite
