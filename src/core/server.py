@@ -72,6 +72,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import signal
 import sys
@@ -87,9 +88,9 @@ from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR, 
                     SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
-from core.lsl_io import (ClockBridge, DecodedNeuroPublisher, QualityPublisher,  # noqa: E402
-                    StatusPublisher, default_instance_id, mi_channel_labels, stream_name,
-                    verdict_from_sigma)
+from core.lsl_io import (STREAM_PREFIX, ClockBridge, DecodedNeuroPublisher,  # noqa: E402
+                    QualityPublisher, StatusPublisher, default_instance_id, mi_channel_labels,
+                    stream_name, verdict_from_sigma)
 from core.markers import MarkerInlet  # noqa: E402
 from core.modes import contract, registry  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
@@ -2377,6 +2378,7 @@ def _smoke():
         ok,
         integre,
         _smoke_frontiere(),
+        _smoke_exemples(),
         _smoke_repos_partage(),
         _smoke_ssvep(),
         _smoke_neuro(),
@@ -4026,6 +4028,77 @@ def _smoke_frontiere():
           f"{len(fautes)} violation(s) de frontière")
     ok = ok and not fautes
     print(f"[smoke-frontiere] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_exemples():
+    """`examples/` ne nomme aucun flux que le moteur ne publie plus.
+
+    ⚠️ **`examples/` n'était couvert par AUCUN test** jusqu'au 2026-09-10, alors que c'est le seul
+    endroit du dépôt qui montre à un étudiant comment CONSOMMER le produit. Un exemple qui nomme
+    un flux disparu ne lève rien : `resolve_byprop` attend, puis rend une liste vide, et
+    l'étudiant conclut que le moteur ne publie pas — alors qu'il publie sous un autre nom.
+
+    La panne la plus probable est un renommage : c'est le registre des modes qui décide des
+    suffixes, et rien ne le relie aux fichiers d'`examples/`. Ce test fait ce lien, et rien de
+    plus — il ne lance ni LSL, ni moteur, ni Unity.
+
+    Ne sont cherchés que les noms COMPLETS (`EEG_API_Unicorn_…`) et les suffixes `decoded_…` :
+    « raw », « quality » et « status » sont des mots trop courants pour être scannés en prose sans
+    fabriquer des faux positifs, et ce sont aussi les trois seuls qui ne peuvent pas disparaître.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # Ce que le moteur publie VRAIMENT, calculé depuis le registre — jamais recopié ici.
+    suffixes = {spec.stream for spec in registry.MODES if spec.stream} | {"quality", "status"}
+    chk(len(suffixes) >= 8,
+        f"le registre donne les suffixes publiés ({len(suffixes)} : {', '.join(sorted(suffixes))})")
+
+    motif = re.compile(rf"(?:{re.escape(STREAM_PREFIX)}_|\b)(decoded_[a-z0-9_]+|"
+                       rf"(?<={re.escape(STREAM_PREFIX)}_)[a-z0-9_]+)")
+    racine = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "examples")
+    chk(os.path.isdir(racine), f"le dossier examples/ existe ({racine})")
+
+    fautes, vus, cites = [], 0, set()
+    if os.path.isdir(racine):
+        for dossier, _sous, fichiers in os.walk(racine):
+            if "__pycache__" in dossier:
+                continue
+            for nom in sorted(fichiers):
+                if not nom.lower().endswith((".py", ".cs", ".md")):
+                    continue
+                chemin = os.path.join(dossier, nom)
+                vus += 1
+                rel = os.path.relpath(chemin, os.path.dirname(racine)).replace("\\", "/")
+                with open(chemin, encoding="utf-8") as f:
+                    for no, ligne in enumerate(f, 1):
+                        for suffixe in motif.findall(ligne):
+                            cites.add(suffixe)
+                            if suffixe not in suffixes:
+                                fautes.append(f"{rel}:{no} nomme le flux « {suffixe} », que le "
+                                              f"moteur ne publie pas")
+    # Un dossier vidé — ou une extension oubliée — rendrait « 0 faute » sans avoir rien lu. Même
+    # garde muette que les quatre sections de `_smoke_frontiere`, pour la même raison.
+    chk(vus >= 4, f"…et il contient bien les exemples ({vus} fichiers lus)")
+    chk(len(cites) >= 5,
+        f"…dont {len(cites)} nom(s) de flux effectivement trouvé(s) : un motif cassé ne doit pas "
+        f"passer pour « aucune faute » ({', '.join(sorted(cites)) or 'aucun'})")
+
+    for faute in fautes:
+        print(f"[smoke-exemples] ÉCHEC : {faute}")
+    if fautes:
+        print("[smoke-exemples]   → RÈGLE : les suffixes viennent du registre des modes. Si un "
+              "mode a été renommé, l'exemple qui le consomme se renomme avec lui — sinon "
+              "`resolve_byprop` attend un flux qui n'existe plus, sans jamais lever.")
+    ok = ok and not fautes
+    print(f"[smoke-exemples] {vus} fichier(s), {len(cites)} nom(s) de flux, {len(fautes)} faute(s)")
+    print(f"[smoke-exemples] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
