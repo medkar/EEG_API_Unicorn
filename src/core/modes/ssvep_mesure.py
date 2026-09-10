@@ -371,24 +371,42 @@ class MesureSSVEP(MesureRuntime):
         la fenêtre en annonçait davantage ». Une séance dont tous les essais annoncés sont arrivés
         et dont seul le `calib_end` manque n'est pas une fenêtre morte : c'est une séance complète
         dont le dernier marqueur s'est perdu, et la jeter détruirait quatre minutes de signal bon.
+
+        ⚠️ **« Arrivés » se compte sur `_essais_vus`, JAMAIS sur `self.essai`**, et c'est tout ce
+        qui sépare cette méthode de son contraire. Les deux compteurs coïncident tant qu'aucune
+        époque n'est perdue, et se séparent dès la première :
+
+          • `_essais_vus` = les `cue` LISIBLES reçus. C'est ce que la fenêtre a joué, donc la seule
+            grandeur comparable au `trials` qu'elle a annoncé dans son `calib_start`.
+          • `self.essai` = les essais dont l'époque a pu être PRÉLEVÉE. Il est plus petit de
+            `_epoques_perdues`, qu'un seul tour de boucle ralenti suffit à faire monter (l'EEG du
+            `cue` a quitté le tampon avant qu'on le découpe).
+
+        Comparer `self.essai` au nombre annoncé produisait exactement la panne que la méthode
+        existe pour empêcher : 36 essais annoncés, 36 `cue` reçus, **un seul** essai sans époque,
+        et un `calib_end` perdu — la garde n'attendait pas, `cancel()` vidait `_enregistre`, et
+        **les 35 essais valides étaient détruits**. Trouvé par la revue de branche du 2026-09-10.
         """
         if self._dernier_marqueur_s is None:
             return
         silence = now - self._dernier_marqueur_s
         if silence <= CALIB_FENETRE_SILENCE_S:
             return
-        if self._essais_annonces > 0 and self.essai >= self._essais_annonces:
+        if self._essais_annonces > 0 and self._essais_vus >= self._essais_annonces:
             if not self._attente_fin_dite:
                 self._attente_fin_dite = True
-                print(f"[mesure-ssvep] les {self.essai} essais annoncés sont arrivés, mais aucun "
-                      f"« calib_end » depuis {silence:.0f} s : la séance ATTEND. Si la fenêtre est "
-                      f"morte, « Abandonner » dans la console — aucun verdict ne sera calculé.")
+                print(f"[mesure-ssvep] les {self._essais_vus} essais annoncés sont TOUS arrivés "
+                      f"({self.essai} époque(s) retenue(s), {self._epoques_perdues} perdue(s)), "
+                      f"mais aucun « calib_end » depuis {silence:.0f} s : la séance ATTEND. Si la "
+                      f"fenêtre est morte, « Abandonner » dans la console — aucun verdict ne sera "
+                      f"calculé.")
             return
         self._abandonne(
             f"aucun marqueur depuis {silence:.0f} s (> {CALIB_FENETRE_SILENCE_S:.0f} s) : la "
-            f"fenêtre de stimulus s'est arrêtée en pleine séance. {self.essai} essai(s) "
-            f"enregistré(s) sur les {self._essais_annonces or '?'} annoncés — aucun verdict n'est "
-            f"calculé, un taux sur une séance tronquée serait indiscernable d'un taux complet")
+            f"fenêtre de stimulus s'est arrêtée en pleine séance. {self._essais_vus} essai(s) "
+            f"reçu(s) — dont {self.essai} enregistré(s) — sur les "
+            f"{self._essais_annonces or '?'} annoncés ; aucun verdict n'est calculé, un taux sur "
+            f"une séance tronquée serait indiscernable d'un taux complet")
 
     def _abandonne(self, raison):
         """Jette la séance en le DISANT, par le MÊME geste que l'abandon depuis la console."""
@@ -1085,6 +1103,53 @@ def _selftest():
     chk(rt3.essai == 1 and rt3.phase == "essais",
         f"tous les essais annoncés reçus, `calib_end` manquant : la séance ATTEND au lieu de "
         f"jeter ({rt3.phase}, {rt3.essai}/{rt3.total()})")
+
+    # === LE test qui SÉPARE les deux compteurs ================================================
+    # ⚠️ `self.essai` et `self._essais_vus` coïncident tant qu'aucune époque n'est perdue — c'est
+    # pour ça que le cas ci-dessus (rt3) reste vert quel que soit celui des deux qu'on compare, et
+    # c'est pour ça que le défaut avait survécu à la revue. Ici on en perd UNE, ce qui suffit à
+    # les séparer : la garde doit continuer d'ATTENDRE, parce que la fenêtre a bel et bien joué
+    # tous les essais qu'elle avait annoncés. Comparer `self.essai` au nombre annoncé fait
+    # abandonner, donc appeler `cancel()`, donc DÉTRUIRE les onze essais valides — 3,6 min de
+    # signal bon jetées pour une seule époque manquée et un `calib_end` perdu.
+    moteur4 = _FauxMoteur()
+    rt4 = MesureSSVEP(SPEC, {}, moteur4)
+    rt4.tick(moteur4, moteur4.t0)
+    rt4.encaisser(moteur4, moteur4.t0, marqueur("calib_start", trials=12, freqs=FREQS))
+    rt4.tick(moteur4, moteur4.t0 + rt4.warmup_s + 0.1)
+    t4 = moteur4.t0 + rt4.warmup_s + 0.1
+    # Onze `cue` prélevables, plus UN — au milieu, pas au bord — dont l'EEG précède le début du
+    # tampon : `epoch_from_stream` rend None et l'essai est perdu. C'est ce que produit un tour de
+    # boucle ralenti, ou un `calib_start` reçu tard.
+    lot4 = [(moteur4.t0 + 4.0 + 1.5 * i, marqueur("cue", target=i % 3)) for i in range(11)]
+    lot4.insert(5, (moteur4.t0 + 0.5, marqueur("cue", target=2)))   # EEG hors du tampon
+    moteur4.file(lot4)
+    rt4.tick(moteur4, t4 + 1.0)
+    chk(rt4._essais_vus == 12 and rt4.essai == 11 and rt4._epoques_perdues == 1,
+        f"les DEUX compteurs divergent dès la première époque perdue : {rt4._essais_vus} `cue` "
+        f"lisibles reçus, {rt4.essai} époque(s) prélevée(s), {rt4._epoques_perdues} perdue(s) — "
+        f"c'est `_essais_vus` qui se compare au `trials` annoncé, jamais `essai`")
+    rt4.tick(moteur4, t4 + 1.0 + CALIB_FENETRE_SILENCE_S + 0.5)
+    chk(rt4.phase == "essais" and rt4.resultat is None and len(rt4._enregistre) == 11,
+        f"…et une époque perdue ne transforme PAS une séance complète en fenêtre morte : la "
+        f"séance ATTEND son `calib_end` et ses {len(rt4._enregistre)} essais valides sont INTACTS "
+        f"({rt4.phase}, {rt4.essai}/{rt4.total()}). Comparer `self.essai` au nombre annoncé "
+        f"abandonnerait ici, et `cancel()` détruirait les 11")
+    # Le contrôle de sens, sans lequel « la séance attend » passerait en rendant la garde muette :
+    # à un `cue` de moins, la fenêtre n'a PAS fini, et le silence doit bien tuer la séance.
+    moteur5 = _FauxMoteur()
+    rt5 = MesureSSVEP(SPEC, {}, moteur5)
+    rt5.tick(moteur5, moteur5.t0)
+    rt5.encaisser(moteur5, moteur5.t0, marqueur("calib_start", trials=12, freqs=FREQS))
+    rt5.tick(moteur5, moteur5.t0 + rt5.warmup_s + 0.1)
+    t5 = moteur5.t0 + rt5.warmup_s + 0.1
+    moteur5.file(lot4[:-1])                     # 11 `cue` sur les 12 annoncés
+    rt5.tick(moteur5, t5 + 1.0)
+    rt5.tick(moteur5, t5 + 1.0 + CALIB_FENETRE_SILENCE_S + 0.5)
+    chk(rt5._essais_vus == 11 and rt5.phase == "annule" and rt5._enregistre == [],
+        f"…mais un essai annoncé qui n'est JAMAIS arrivé reste une fenêtre morte : la séance "
+        f"s'annule ({rt5._essais_vus}/{rt5.total()} reçus, {rt5.phase}) — sinon la garde "
+        f"attendrait pour toujours, et « elle attend » se lirait comme « elle a fini »")
 
     # === Le contrat public ====================================================================
     lus_par_la_console = {"mode_id", "phase", "etape", "classe", "instruction", "rappel",
