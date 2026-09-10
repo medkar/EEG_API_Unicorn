@@ -1,5 +1,12 @@
 # Recette — vérifier ce qui a été livré
 
+👉 **Pour EXÉCUTER une passe, prends [docs/qa.md](qa.md)** : la même matière, ramenée à
+« action → résultat attendu → ce qui compte pour un échec », dans l'ordre où on la joue. C'est la
+feuille qu'on tient à la main. **Ce document-ci est ce qu'on relit quand un point tombe** : il porte
+le POURQUOI de chaque test, l'histoire des défauts trouvés, les chiffres de référence mesurés et les
+procédures de dépouillement. Les deux se répondent — chaque point de la QA renvoie ici par son
+numéro.
+
 Ce document existe pour une raison précise : le produit a été construit par chantiers successifs, et
 **personne ne peut retenir de tête ce que chacun a ajouté**. Chaque test ci-dessous rappelle d'abord
 ce qu'il vérifie et pourquoi ça a coûté du travail, puis donne la commande exacte et le résultat

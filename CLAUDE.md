@@ -177,7 +177,10 @@ Casque **Unicorn Hybrid Black** : 8 voies EEG sèches, 250 Hz, Bluetooth. Montag
 
 - Répondre en **français** ; README, doc et messages de commit **en anglais** pour GitHub. Deux
   exceptions assumées, parce qu'elles ne s'adressent pas à GitHub : `docs/SPEC.md` (document de
-  travail interne) et `docs/recette.md` (procédure exécutée ici) restent en français.
+  travail interne), `docs/qa.md` et `docs/recette.md` (procédures exécutées ici) restent en
+  français. **`docs/qa.md` est la feuille qu'on EXÉCUTE** — action, résultat attendu, ce qui compte
+  pour un échec ; `docs/recette.md` porte le pourquoi, l'histoire des défauts et les repères
+  chiffrés, et c'est ce qu'on relit quand un point tombe.
 - Avancer par **petits pas testés sur le matériel** : éditer → lancer → coller les logs.
 - **Vérifier la doc** (SDK Unicorn, LSL, littérature BCI) avant d'affirmer ; citer les sources sur les
   points incertains.
