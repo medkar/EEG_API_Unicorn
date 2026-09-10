@@ -123,6 +123,10 @@ class Console(QMainWindow):
         # d'abandonner — trente secondes pendant lesquelles l'écran annonce une séance qui n'aura
         # jamais lieu.
         self._a_annuler_mesure = False
+        # Et le jumeau du PARI, lui aussi (2026-09-10). Il manquait : la mesure lançait sa fenêtre
+        # sur l'ACCUSÉ de `start_mesure`, donc 3,5 min de fixation guidée pouvaient se jouer plein
+        # écran pendant que la page restait sur « Avant de commencer », sans rien pour le dire.
+        self._a_lancer_mesure = None
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -416,9 +420,10 @@ class Console(QMainWindow):
                 self.commande("cancel_mesure")
                 self.lanceur.arreter()
 
-        # 1 ter. La séance soumise est-elle VRAIMENT partie ? Tant qu'on ne l'a pas vue dans
-        #        l'état, lancer sa fenêtre serait parier — et perdre le pari coûte le protocole
-        #        entier joué dans le vide.
+        # 1 ter. Les séances soumises sont-elles VRAIMENT parties ? Tant qu'on ne les a pas vues
+        #        dans l'état, lancer leur fenêtre serait parier — et perdre le pari coûte le
+        #        protocole entier joué dans le vide. Les DEUX sortes y passent : calibration et
+        #        mesure.
         self._lancer_quand_partie(state)
 
         if self._attente is None:
@@ -435,13 +440,21 @@ class Console(QMainWindow):
                        f"reclique « Commencer ».")
 
     def _demarrer_mesure(self, demande):
-        """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse.
+        """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE — et seulement quand elle EXISTE.
 
-        Exactement la discipline de `_demarrer_calibration`, et pour la même raison : la fenêtre
-        attend ~15 s à partir de SON lancement, le moteur compte sa chauffe à partir de la commande,
-        et il n'existe AUCUNE poignée de main entre les deux processus. Dans l'autre sens, les
-        premiers essais tombent dans la chauffe : ils sont jetés, comptés et dits — mais la séance
-        est plus courte que ce que l'écran annonce, et c'est indiscernable d'un protocole réussi.
+        Exactement la discipline de `_demarrer_calibration`, et pour les deux mêmes raisons.
+
+        L'ORDRE : la fenêtre attend ~15 s à partir de SON lancement, le moteur compte sa chauffe à
+        partir de la commande, et il n'existe AUCUNE poignée de main entre les deux processus. Dans
+        l'autre sens, les premiers essais tombent dans la chauffe : ils sont jetés, comptés et dits
+        — mais la séance est plus courte que ce que l'écran annonce, et c'est indiscernable d'un
+        protocole réussi.
+
+        L'ATTENTE : `submit` ne promet qu'une mise en FILE (cf. `DELAI_DEMARRAGE_S`), donc l'accusé
+        ne prouve pas que `_start_mesure` a créé quoi que ce soit — il peut sortir sans rien faire
+        par trois portes silencieuses (une mesure déjà en cours, une calibration en cours, une
+        exception avalée par `_drain_commands`). La fenêtre jouerait alors **3,5 minutes de
+        fixation guidée dans le vide** pendant que la page reste sur « Avant de commencer ».
 
         ⚠️ Toutes les mesures n'ont pas de fenêtre : le contrôle alpha n'en a aucune (les yeux sont
         fermés la moitié du temps, il n'y a rien à montrer). C'est le CONTRAT qui le dit
@@ -453,22 +466,11 @@ class Console(QMainWindow):
             self._avis_mesure(mesure_id, ack.get("reason", ""))
             return
         spec = self.mesures.get(mesure_id) or {}
-        stimulus_id = spec.get("stimulus_id")
-        if not stimulus_id:
+        if not spec.get("stimulus_id"):
             return          # le moteur mène tout seul le protocole (contrôle alpha)
-        ouvert = self.lanceur.lancer(
-            stimulus_id, label=spec.get("label", mesure_id),
-            options=stimulus_registry.options_de_mesure(stimulus_id))
-        if not ouvert.get("accepted"):
-            # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait
-            # trente secondes avant d'abandonner, en accusant une fenêtre que l'étudiant vient de
-            # voir refuser de s'ouvrir. On note l'annulation ; `_suivre_attente` la soumet dès que
-            # la séance apparaît vraiment côté moteur (`submit` ne fait que mettre en file).
-            self._a_annuler_mesure = True
-            self._avis_mesure(mesure_id,
-                              f"{ouvert.get('reason', '')}\nLa mesure est annulée : sans sa "
-                              f"fenêtre, le moteur attendrait des marqueurs qui ne viendront "
-                              f"jamais.")
+        self._a_lancer_mesure = self._attente_depart(
+            mesure_id, "mesure", "la mesure", avis=self._avis_mesure,
+            lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec))
 
     def _demarrer_calibration(self, demande):
         """`start_calibration` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse."""
@@ -484,35 +486,83 @@ class Console(QMainWindow):
         # ⚠️ **On ne lance PAS la fenêtre ici.** L'accusé qu'on vient de recevoir dit « mise en
         # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
         # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
-        self._a_lancer = {"mode_id": mode_id,
-                          "echeance": self._horloge() + DELAI_DEMARRAGE_S}
+        self._a_lancer = self._attente_depart(
+            mode_id, "calibration", "la calibration", avis=self._avis,
+            lancer=lambda: self._lancer_fenetre_calibration(mode_id))
+
+    def _attente_depart(self, mode_id, cle, quoi, lancer, avis):
+        """La fiche d'une séance SOUMISE dont on attend de la VOIR démarrer.
+
+        `cle` : où la séance apparaît dans `snapshot()`. `quoi` : comment on la nomme à l'écran.
+        `lancer` : ce qu'on fait quand elle y est. `avis` : où le renoncement s'affiche.
+
+        Tout ce qui SÉPARE une calibration d'une mesure tient dans ces quatre valeurs ; le reste —
+        la course, le délai, le renoncement — est écrit une seule fois, dans `_lancer_quand_partie`.
+        """
+        return {"mode_id": mode_id, "cle": cle, "quoi": quoi, "lancer": lancer, "avis": avis,
+                "echeance": self._horloge() + DELAI_DEMARRAGE_S}
 
     def _lancer_quand_partie(self, state):
-        """Lance la fenêtre dès que la calibration existe pour de bon — ou renonce en le disant.
+        """Lance la fenêtre dès que la séance existe pour de bon — ou renonce en le disant.
 
         Jumeau de l'attente d'arrêt : `submit` met en file, donc l'accusé ne prouve rien. Tant que
         la séance n'apparaît pas dans `snapshot()`, la lancer serait parier.
+
+        ⚠️ **UN seul corps pour les DEUX activités minutées.** La calibration a eu ce garde-fou le
+        2026-09-10, la mesure ne l'a pas eu — alors que c'est elle qui coûte 3,5 minutes de
+        fixation guidée. Un second corps recopié serait un correctif à refaire deux fois, et la
+        deuxième fois serait affaire de mémoire.
         """
-        if not self._a_lancer:
+        self._a_lancer = self._un_tour_d_attente(self._a_lancer, state)
+        self._a_lancer_mesure = self._un_tour_d_attente(self._a_lancer_mesure, state)
+
+    def _un_tour_d_attente(self, attente, state):
+        """Un tour d'attente. Rend l'attente à GARDER — `None` dès qu'elle est réglée."""
+        if not attente:
+            return None
+        seance = (state or {}).get(attente["cle"])
+        if seance is not None and seance.get("phase") not in PHASES_TERMINALES:
+            attente["lancer"]()
+            return None
+        if self._horloge() >= attente["echeance"]:
+            attente["avis"](
+                attente["mode_id"],
+                f"le moteur n'a pas démarré {attente['quoi']} en {DELAI_DEMARRAGE_S:.0f} s — la "
+                f"fenêtre de stimulus n'a PAS été lancée. Sans ce garde-fou elle aurait joué le "
+                f"protocole entier dans le vide. Regarde le refus dans le bandeau, puis "
+                f"recommence.")
+            return None
+        return attente
+
+    def _lancer_fenetre_calibration(self, mode_id):
+        """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir."""
+        ouvert = self._lancer_fenetre(mode_id, calibrer=True)
+        if ouvert.get("accepted"):
             return
-        mode_id = self._a_lancer["mode_id"]
-        calib = (state or {}).get("calibration")
-        if calib is not None and calib.get("phase") not in PHASES_TERMINALES:
-            self._a_lancer = None
-            ouvert = self._lancer_fenetre(mode_id, calibrer=True)
-            if not ouvert.get("accepted"):
-                self._a_annuler = True
-                self._avis(mode_id,
-                           f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa "
-                           f"fenêtre, le moteur attendrait des marqueurs qui ne viendront jamais.")
+        self._a_annuler = True
+        self._avis(mode_id,
+                   f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa fenêtre, le "
+                   f"moteur attendrait des marqueurs qui ne viendront jamais.")
+
+    def _lancer_fenetre_mesure(self, mesure_id, spec):
+        """La fenêtre guidée d'une mesure. Jumeau exact du cas calibration, ci-dessus.
+
+        La ligne de commande vient de `stimulus/registry.py` — la console ne nomme aucun fichier.
+        """
+        stimulus_id = spec["stimulus_id"]
+        ouvert = self.lanceur.lancer(
+            stimulus_id, label=spec.get("label", mesure_id),
+            options=stimulus_registry.options_de_mesure(stimulus_id))
+        if ouvert.get("accepted"):
             return
-        if self._horloge() >= self._a_lancer["echeance"]:
-            self._a_lancer = None
-            self._avis(mode_id,
-                       f"le moteur n'a pas démarré la calibration en "
-                       f"{DELAI_DEMARRAGE_S:.0f} s — la fenêtre de stimulus n'a PAS été lancée. "
-                       f"Sans ce garde-fou elle aurait joué le protocole entier dans le vide. "
-                       f"Regarde le refus dans le bandeau, puis recommence.")
+        # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait trente
+        # secondes avant d'abandonner, en accusant une fenêtre que l'étudiant vient de voir refuser
+        # de s'ouvrir. On note l'annulation ; `_suivre_attente` la soumet au tour suivant (`submit`
+        # ne fait que mettre en file).
+        self._a_annuler_mesure = True
+        self._avis_mesure(mesure_id,
+                          f"{ouvert.get('reason', '')}\nLa mesure est annulée : sans sa fenêtre, "
+                          f"le moteur attendrait des marqueurs qui ne viendront jamais.")
 
     def _lancer_fenetre(self, mode_id, calibrer):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
@@ -541,6 +591,9 @@ class Console(QMainWindow):
         """
         self._attente = None
         self._a_annuler = False       # le geste explicite prime sur l'annulation en attente
+        # …et sur le LANCEMENT en attente : abandonner puis voir la fenêtre s'ouvrir toute seule
+        # au tour suivant serait le contraire de ce qu'on vient de cliquer.
+        self._a_lancer = None
         self.commande("cancel_calibration")
         self.lanceur.arreter()
 
@@ -556,6 +609,7 @@ class Console(QMainWindow):
         rien. Tester `stimulus_id` ici serait une seconde règle de décision dans l'interface.
         """
         self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
+        self._a_lancer_mesure = None      # …et sur le lancement en attente, cf. `arreter_calibration`
         self.commande("cancel_mesure")
         self.lanceur.arreter()
 
@@ -2573,10 +2627,23 @@ def _smoke():
     console.apply_state({**state, "quality": qualite_saine, "mesure": None})
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
-    ordre = [e[0] for e in journal if e[0] in ("commande", "fenetre")]
     chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
         in moteur_faux.commandes,
         f"« Commencer » soumet `start_mesure` avec ses réglages ({moteur_faux.commandes})")
+
+    # 🔴 **La fenêtre n'est PAS encore lancée, et c'est le jumeau du correctif de la calibration
+    # (2026-09-10).** L'accusé de `start_mesure` dit « mise en file », pas « démarrée » :
+    # `_start_mesure` peut sortir sans rien créer par trois portes silencieuses (mesure déjà en
+    # cours, calibration en cours, exception avalée par `_drain_commands`). Lancer sur l'accusé,
+    # c'était **3,5 minutes de fixation guidée plein écran dans le vide** pendant que la page
+    # restait sur « Avant de commencer », sans rien à l'écran pour le dire.
+    chk(not [e for e in journal if e[0] == "fenetre"],
+        f"après le clic, `start_mesure` est SOUMISE et la fenêtre attend ({journal})")
+
+    # La mesure apparaît vraiment dans l'état : ALORS la fenêtre part.
+    en_cours = {**base_m, "mode_id": "ssvep_taux", "phase": "chauffe"}
+    console.apply_state({**state, "quality": qualite_saine, "mesure": en_cours})
+    ordre = [e[0] for e in journal if e[0] in ("commande", "fenetre")]
     lancees_m = [e[1] for e in journal if e[0] == "fenetre"]
     chk(lancees_m and list(lancees_m[-1]) == list(
         stim_registry.commande("ssvep", options=stim_registry.options_de_mesure("ssvep"))),
@@ -2587,22 +2654,44 @@ def _smoke():
         f"premiers essais dans la chauffe du moteur, qui les jette — une séance plus courte que "
         f"ce que l'écran annonce, et rien pour le dire ({ordre})")
 
+    # 🔴 **Et si le moteur n'a JAMAIS démarré la mesure ?** C'est le cas que ce garde-fou existe
+    # pour couvrir. Sans lui, la fenêtre plein écran joue le protocole ENTIER pendant que la page
+    # de la mesure reste sur son briefing.
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})   # rien n'apparaît
+    chk(not [e for e in journal if e[0] == "fenetre"],
+        f"le moteur n'ayant rien démarré, la fenêtre guidée n'est PAS lancée ({journal})")
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    chk(not [e for e in journal if e[0] == "fenetre"]
+        and "n'a pas démarré" in mes_ssvep.avis.text(),
+        f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
+        f"fixer 3,5 min de consignes dans le vide ({mes_ssvep.avis.text()[:80]}…)")
+
     # Une fenêtre qui refuse de s'ouvrir : la mesure est ANNULÉE, pas laissée à attendre 30 s.
     console.lanceur.arreter()
     journal.clear()
     moteur_faux.commandes.clear()
     console.apply_state({**state, "quality": qualite_saine, "mesure": None})
     console.lanceur.probleme = ""
+    console.lanceur.lancer("ssvep")            # une fenêtre occupe déjà la place
     console._demarrer_mesure({"mode_id": "ssvep_taux", "params": {}})
-    console._demarrer_mesure({"mode_id": "ssvep_taux", "params": {}})   # la 2e est REFUSÉE
+    chk(not console._a_annuler_mesure,
+        f"…sans soumettre `cancel_mesure` à un moteur qui n'a encore rien démarré "
+        f"({moteur_faux.commandes})")
+    console.apply_state({**state, "mesure": en_cours})
     chk(console._a_annuler_mesure and "fenêtre" in mes_ssvep.avis.text(),
         f"une fenêtre qui refuse de s'ouvrir fait ANNULER la mesure, et le dit sur sa page "
         f"({mes_ssvep.avis.text()[:60]}…)")
-    en_cours = {**base_m, "mode_id": "ssvep_taux", "phase": "chauffe"}
     console.apply_state({**state, "mesure": en_cours})
     chk(("cancel_mesure", {}) in moteur_faux.commandes and not console._a_annuler_mesure,
-        f"…et l'annulation est soumise dès que la séance EXISTE côté moteur, jamais avant : "
-        f"`submit` ne fait que mettre en file ({moteur_faux.commandes})")
+        f"…et l'annulation part toute seule au tour suivant, sans un clic de plus "
+        f"({moteur_faux.commandes})")
     console.lanceur.arreter()
 
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
