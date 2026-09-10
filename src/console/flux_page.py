@@ -194,6 +194,22 @@ class FluxPage(QWidget):
         # Le sens du bouton d'enregistrement, tel que le MOTEUR l'a dit au dernier état reçu.
         # Jamais une bascule tenue ici : elle se désynchroniserait au premier refus.
         self._enregistre = False
+        # 🔴 **LES DEUX DIAGNOSTICS RETENUS, et c'est le correctif du 2026-09-10.**
+        #
+        # Cette page est peinte à ~10 Hz. Ses trois messages de panne — « aucun flux nommé X »,
+        # « X n'a pas pu être ouvert », et surtout « X a disparu du réseau » — étaient écrits
+        # directement dans `self.etat`, que le tour SUIVANT écrasait par une des trois phrases
+        # neutres de `_dire_etat` (« N flux visible(s) — choisis-en un »). Durée de vie du
+        # diagnostic : **UN tick, 100 ms.** Et aucun de ces chemins ne passe par
+        # `Console.commande`, donc le bandeau ne les rattrapait pas non plus.
+        #
+        # Sur la page dont la raison d'être est de VOIR les pannes réseau, c'était le
+        # refus-invisible du test 1.13 de la recette, à l'endroit le plus coûteux.
+        #
+        # Un diagnostic tient donc jusqu'au GESTE qui y répond — une nouvelle recherche, un flux
+        # ouvert, un clic de plus — jamais jusqu'au prochain tour d'horloge.
+        self._diagnostic = ""         # côté flux : effacé par `chercher()` et par une ouverture
+        self._diagnostic_enr = ""     # côté enregistrement : effacé par le clic suivant
 
         entete = QHBoxLayout()
         self.bouton_retour = QPushButton("← Modes")
@@ -287,6 +303,10 @@ class FluxPage(QWidget):
         changement de source. Rater une découverte n'est jamais définitif — on reclique.
         """
         courant = self.choix.currentText()
+        # Le geste qui répond au diagnostic l'efface : c'est exactement ce que les trois messages
+        # demandent de faire (« Reclique “Chercher les flux” »). Effacé AVANT la découverte, pour
+        # qu'un nouvel échec puisse en reposer un.
+        self._diagnostic = ""
         self._infos = list(self._decouvrir())
         self.choix.blockSignals(True)     # remplir la liste ne doit pas ouvrir un flux au hasard
         self.choix.clear()
@@ -326,7 +346,7 @@ class FluxPage(QWidget):
             info = next((i for i in self._infos if i.name() == nom), None)
         if info is None:
             self._fermer()
-            self.etat.setText(f"aucun flux nommé « {nom} » sur le réseau en ce moment.")
+            self._dire_probleme(f"aucun flux nommé « {nom} » sur le réseau en ce moment.")
             return False
         return self._ouvrir(info)
 
@@ -348,11 +368,13 @@ class FluxPage(QWidget):
         except Exception as e:  # noqa: BLE001 - un émetteur qui meurt pendant la connexion est le
             # cas NORMAL d'une séance (fenêtre fermée, moteur relancé), pas un incident de console.
             self._inlet = None
-            self.etat.setText(f"« {info.name()} » n'a pas pu être ouvert "
-                              f"({type(e).__name__} : {e}). Reclique « Chercher les flux ».")
+            self._dire_probleme(f"« {info.name()} » n'a pas pu être ouvert "
+                                f"({type(e).__name__} : {e}). Reclique « Chercher les flux ».")
             return False
         self._derniers = []
         self.lignes.setPlainText("")
+        # Un flux OUVERT règle la question : le diagnostic précédent n'a plus rien à dire.
+        self._diagnostic = ""
         self._dire_etat()
         return True
 
@@ -381,7 +403,10 @@ class FluxPage(QWidget):
             nom = self._inlet.nom
             self._fermer()
             self.entetes.setText("")
-            self.etat.setText(
+            # ⚠️ **LE message de cette page**, celui qui distingue « mon appli ne reçoit plus »
+            # de « mon appli n'a jamais reçu ». Sans `_dire_probleme`, le tour suivant — 100 ms
+            # plus tard — le remplaçait par « N flux visible(s) — choisis-en un ».
+            self._dire_probleme(
                 f"« {nom} » a disparu du réseau ({type(e).__name__} : {e}). Le moteur a-t-il été "
                 f"arrêté, ou le mode dépublié ? Reclique « Chercher les flux » pour rouvrir.")
             return
@@ -394,16 +419,32 @@ class FluxPage(QWidget):
             self.lignes.setPlainText("\n".join(self._derniers))
         self._dire_etat(recus=len(recus))
 
+    def _dire_probleme(self, texte):
+        """RETIENT un diagnostic et l'affiche. Le seul chemin par lequel une panne s'écrit ici.
+
+        Écrire dans `self.etat` directement fonctionne le temps d'un tour, et d'un seul : c'est
+        exactement le défaut que ce champ répare (cf. `_diagnostic`, dans le constructeur).
+        """
+        self._diagnostic = texte
+        self.etat.setText(texte)
+
     def _dire_etat(self, recus=0):
         """L'état du panneau, en une phrase. « Rien » se DIT, il ne se laisse pas deviner.
 
         C'est la règle du projet : un écran vide est indiscernable d'un écran cassé. Trois
-        situations, trois phrases — aucun flux sur le réseau, un flux à choisir, un flux ouvert.
+        situations, trois phrases — aucun flux sur le réseau, un flux à choisir, un flux ouvert —
+        plus le DIAGNOSTIC retenu, qui passe devant les deux phrases neutres.
         """
         if self._inlet is not None:
             fin = (f"{recus} échantillon(s) au dernier tour" if recus
                    else "rien depuis le dernier tour — ce mode est-il démarré et publié ?")
             self.etat.setText(f"ouvert : {self._inlet.nom} ({self._inlet.type}) — {fin}")
+            return
+        if self._diagnostic:
+            # Un flux OUVERT passe devant (ci-dessus) : il répond à la question mieux que
+            # n'importe quel diagnostic d'hier. En revanche une phrase neutre, elle, ne dit rien
+            # que le diagnostic ne dise déjà mieux — elle ne doit jamais le remplacer.
+            self.etat.setText(self._diagnostic)
             return
         if not self._infos:
             self.etat.setText(
@@ -429,22 +470,35 @@ class FluxPage(QWidget):
         silence est la panne que ce chantier répare — la recette du projet a relevé cinq clics
         d'affilée sur un bouton qui refusait correctement, mais dans le terminal.
         """
+        # Ce clic-ci reprend la question à zéro : le diagnostic du précédent a fait son temps.
+        self._diagnostic_enr = ""
         if self.commande is None:
-            self.etat_enregistrement.setText("aucun moteur (mode test) : rien à enregistrer.")
+            self._dire_probleme_enr("aucun moteur (mode test) : rien à enregistrer.")
             return
         if self._enregistre:
             ack = self.commande("stop_enregistrement")
         else:
             flux = self._inlet.nom if self._inlet is not None else ""
             if not flux:
-                self.etat_enregistrement.setText(
+                self._dire_probleme_enr(
                     "Choisis d'abord le flux à enregistrer dans la liste ci-dessus : le moteur "
                     "enregistre les verdicts d'UN mode, pas tout le réseau.")
                 return
             ack = self.commande("start_enregistrement", stream=flux)
         if not ack.get("accepted"):
-            self.etat_enregistrement.setText(ack.get("reason", ""))
-            self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+            self._dire_probleme_enr(ack.get("reason", ""))
+
+    def _dire_probleme_enr(self, texte):
+        """Même remède que `_dire_probleme`, sur l'autre bloc de la page.
+
+        ⚠️ Sans la rétention, ces deux messages-là vivaient un tour eux aussi : dès qu'un
+        enregistrement existait dans l'état — même TERMINÉ —, `_montrer_enregistrement` repeignait
+        « terminé — N verdict(s) dans … » par-dessus, 100 ms après le clic. Un étudiant qui clique
+        sans avoir choisi de flux voyait donc le chemin d'un fichier, jamais la raison du refus.
+        """
+        self._diagnostic_enr = texte
+        self.etat_enregistrement.setText(texte)
+        self.etat_enregistrement.setStyleSheet("color: #e2603f;")
 
     def _montrer_enregistrement(self, etat):
         """Peint l'état de l'enregistrement TEL QUE LE MOTEUR le publie. Ne déduit rien.
@@ -457,7 +511,10 @@ class FluxPage(QWidget):
         self._enregistre = bool((etat or {}).get("actif"))
         self.bouton_enregistrer.setText(
             "Arrêter l'enregistrement" if self._enregistre else "Enregistrer les verdicts")
-        if not etat:
+        # Le BOUTON suit toujours le moteur (ci-dessus) : c'est lui qui dit ce que fera le clic
+        # suivant, et le désynchroniser serait pire. Le TEXTE, lui, appartient au diagnostic tant
+        # qu'un clic ne l'a pas repris — sinon le refus qu'on vient de lire disparaît en 100 ms.
+        if self._diagnostic_enr or not etat:
             return
         if etat.get("probleme"):
             self.etat_enregistrement.setText(

@@ -2989,6 +2989,40 @@ def _smoke():
     chk(page_flux._inlet is None and "disparu" in page_flux.etat.text().lower(),
         f"un émetteur disparu est LÂCHÉ et DIT ({page_flux.etat.text()[:60]})")
 
+    # 🔴 **ET LE MESSAGE SURVIT AU TOUR SUIVANT.** Sans ce second `rafraichir()`, l'assertion
+    # ci-dessus ne peut PAS rougir : la page est peinte à ~10 Hz, et jusqu'au 2026-09-10 le tour
+    # suivant repassait par `_dire_etat`, qui ne connaît que trois phrases neutres et écrasait le
+    # diagnostic par « 2 flux visible(s) — choisis-en un dans la liste ». Durée de vie du message
+    # sur la page dont la raison d'être est de VOIR les pannes réseau : 100 ms.
+    page_flux.rafraichir()
+    page_flux.rafraichir()
+    chk("disparu" in page_flux.etat.text().lower(),
+        f"…et il RESTE à l'écran aux tours suivants, au lieu d'être effacé par une phrase neutre "
+        f"({page_flux.etat.text()[:60]})")
+    # Il tient jusqu'au GESTE qui y répond — pas au-delà : rechercher, c'est reposer la question.
+    page_flux.chercher()
+    chk("2 flux" in page_flux.etat.text(),
+        f"…jusqu'à « Chercher les flux », qui reprend la question à zéro ({page_flux.etat.text()})")
+
+    # Les DEUX autres diagnostics, mêmes rétention et falsifiabilité : un nom introuvable, et un
+    # inlet qui refuse de s'ouvrir. Les trois laissent `_inlet` à None, donc les trois tombaient
+    # sur la même phrase neutre au tour suivant.
+    page_flux.choisir("un_flux_qui_nexiste_pas")
+    page_flux.rafraichir()
+    chk("un_flux_qui_nexiste_pas" in page_flux.etat.text(),
+        f"« aucun flux nommé X » survit lui aussi au rafraîchissement ({page_flux.etat.text()})")
+
+    def _refuse_ouverture(_info):
+        raise RuntimeError("timeout")
+
+    page_flux._fabrique_inlet = _refuse_ouverture
+    page_flux.choisir("EEG_API_Unicorn_decoded_ssvep")
+    page_flux.rafraichir()
+    chk("n'a pas pu être ouvert" in page_flux.etat.text(),
+        f"…et « X n'a pas pu être ouvert » aussi ({page_flux.etat.text()[:60]})")
+    page_flux._fabrique_inlet = _ouvre_faux
+    page_flux.chercher()
+
     # Les marqueurs voyagent en CHAÎNES : `float(valeur)` lèverait ici, dans le fil Qt, sur un flux
     # parfaitement normal — et emporterait toute la console avec lui.
     texte = _ligne(1234.5678, ['{"mode": "cvep", "event": "cycle"}'])
@@ -3047,11 +3081,26 @@ def _smoke():
         f"sans flux choisi, rien n'est envoyé et la page dit quoi faire "
         f"({page_flux.etat_enregistrement.text()[:50]})")
 
+    # 🔴 **Et il SURVIT, lui aussi.** Même famille que les trois messages de flux ci-dessus :
+    # `_montrer_enregistrement` repeignait l'état du moteur par-dessus dès qu'un enregistrement
+    # existait dans l'état — même TERMINÉ. L'étudiant qui clique sans avoir choisi de flux lisait
+    # donc le chemin d'un fichier, 100 ms après la raison du refus.
+    fini = {**fake_state(), "enregistrement": {
+        "actif": False, "chemin": "seances/fini.jsonl", "lignes": 7,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}}
+    page_flux.update_from(fini)
+    page_flux.update_from(fini)
+    chk("Choisis" in page_flux.etat_enregistrement.text(),
+        f"…et ce refus RESTE à l'écran aux tours suivants ({page_flux.etat_enregistrement.text()[:50]})")
+
     # Un enregistrement TERMINÉ garde son chemin à l'écran : c'est ce qu'on vient chercher pour
     # dépouiller. Un écran qui l'oublie au clic « Arrêter » oblige à fouiller le dossier.
-    page_flux.update_from({**fake_state(), "enregistrement": {
-        "actif": False, "chemin": "seances/fini.jsonl", "lignes": 7,
-        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    # ⚠️ Le CLIC suivant reprend la question : c'est lui qui rend la main au moteur, jamais
+    # l'horloge. Ici on choisit un flux et on reclique — le geste que le refus demandait.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[],
+                                  nom="EEG_API_Unicorn_decoded_ssvep")
+    page_flux.bouton_enregistrer.click()
+    page_flux.update_from(fini)
     chk("fini.jsonl" in page_flux.etat_enregistrement.text()
         and "Enregistrer" in page_flux.bouton_enregistrer.text(),
         f"…et une fois terminé le chemin RESTE lisible ({page_flux.etat_enregistrement.text()})")
