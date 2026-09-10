@@ -3187,6 +3187,24 @@ def _smoke():
         and "Enregistrer" in page_flux.bouton_enregistrer.text(),
         f"…et une fois terminé le chemin RESTE lisible ({page_flux.etat_enregistrement.text()})")
 
+    # ⚠️ **La seule chose qui passe DEVANT un diagnostic retenu : une INTERRUPTION.** C'est une
+    # nouvelle du moteur sur un fichier qui EXISTE, elle annonce une PERTE, et il ne la dit qu'une
+    # fois. Un refus de clic, lui, se rejoue en recliquant : le masquer un instant ne coûte rien,
+    # masquer celle-ci coûterait la séance. Sans cette précédence, la rétention qu'on vient
+    # d'ajouter cacherait le seul message de cette page qui parle de données perdues.
+    page_flux._inlet = None
+    page_flux.bouton_enregistrer.click()            # on repose un diagnostic retenu
+    chk("Choisis" in page_flux.etat_enregistrement.text(),
+        f"(le diagnostic est bien reposé — {page_flux.etat_enregistrement.text()[:40]}…)")
+    page_flux.update_from({**fake_state(), "enregistrement": {
+        "actif": False, "chemin": "seances/coupe.jsonl", "lignes": 3,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep",
+        "probleme": "OSError : disque plein"}})
+    chk("INTERROMPU" in page_flux.etat_enregistrement.text()
+        and "coupe.jsonl" in page_flux.etat_enregistrement.text(),
+        f"une interruption passe DEVANT le diagnostic retenu, avec ce qui a été sauvé "
+        f"({page_flux.etat_enregistrement.text()[:60]}…)")
+
     # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
     # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet
     # appel, un modèle EEG d'une personne identifiable survit à la fermeture dans `%TEMP%` — et

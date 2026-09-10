@@ -511,16 +511,22 @@ class FluxPage(QWidget):
         self._enregistre = bool((etat or {}).get("actif"))
         self.bouton_enregistrer.setText(
             "Arrêter l'enregistrement" if self._enregistre else "Enregistrer les verdicts")
-        # Le BOUTON suit toujours le moteur (ci-dessus) : c'est lui qui dit ce que fera le clic
-        # suivant, et le désynchroniser serait pire. Le TEXTE, lui, appartient au diagnostic tant
-        # qu'un clic ne l'a pas repris — sinon le refus qu'on vient de lire disparaît en 100 ms.
-        if self._diagnostic_enr or not etat:
-            return
-        if etat.get("probleme"):
+        if (etat or {}).get("probleme"):
+            # ⚠️ **Une INTERRUPTION passe devant un diagnostic retenu**, et c'est la seule chose
+            # qui le fasse. C'est une nouvelle du moteur sur un fichier qui existe, elle annonce
+            # une PERTE, et le moteur ne la dit qu'une fois. Un refus de clic, lui, se rejoue en
+            # recliquant : le masquer un instant ne coûte rien, masquer celle-ci coûterait la
+            # séance.
+            self._diagnostic_enr = ""
             self.etat_enregistrement.setText(
                 f"⚠ enregistrement INTERROMPU : {etat['probleme']} — {etat.get('lignes', 0)} "
                 f"verdict(s) tout de même sauvés dans {etat.get('chemin', '')}")
             self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+            return
+        # Le BOUTON suit toujours le moteur (ci-dessus) : c'est lui qui dit ce que fera le clic
+        # suivant, et le désynchroniser serait pire. Le TEXTE, lui, appartient au diagnostic tant
+        # qu'un clic ne l'a pas repris — sinon le refus qu'on vient de lire disparaît en 100 ms.
+        if self._diagnostic_enr or not etat:
             return
         self.etat_enregistrement.setStyleSheet("color: #8a8f9c;")
         if self._enregistre:
