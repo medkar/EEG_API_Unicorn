@@ -7,6 +7,33 @@ Le détail, l'histoire des défauts et les chiffres de référence vivent dans
 [docs/recette.md](recette.md) ; chaque point d'ici renvoie à sa section là-bas quand il y en a une.
 Cette feuille-ci est ce qu'on tient à la main ; la recette est ce qu'on relit quand un point tombe.
 
+## Combien de temps
+
+| Bloc | Ce qu'il faut | Durée | Mesurée ? |
+|---|---|---|---|
+| **0** — autotests | rien | **~6 min** dont **4,0 min** de calcul | ✅ chronométré le 2026-09-10 |
+| **1** — console à l'écran | un écran | **35-45 min** | estimé |
+| **2** — au casque | le casque + un sujet | **2 h à 2 h 30** | estimé (~50 min de protocole pur) |
+| **3.1-3.2** — réseau | une 2e machine | **~20 min** | estimé |
+| **3.3** — Unity | Unity installé | **hors barème** | jamais compilé |
+
+**Tout d'affilée, Unity mis à part : ~3 h 30.** Mais ne le fais pas d'affilée.
+
+**Les blocs 0 et 1 se jouent SANS casque, donc dès maintenant** — et ce sont eux qui attrapent les
+régressions. Les passer la veille laisse la séance casque entière pour ce qu'elle seule peut faire.
+
+⚠️ **Au casque, ce n'est pas le protocole qui décide de la durée.** Les huit points du bloc 2 ne
+pèsent que ~50 min de protocole minuté (alpha 0,6 · SSVEP ~4,5 · taux SSVEP 3,6 · c-VEP 8 · P300 6 ·
+ErrP 11 · MI 11 · neuro 3,5). Le reste — montage et salinage (15-20 min), briefings, transitions,
+décisions « refaire ou enregistrer », et **au moins une calibration à refaire** — double le total.
+Et deux contraintes de terrain le bornent par le haut : **la fatigue du sujet**, et **les électrodes
+qui sèchent** — le gain du salinage se dégrade en une heure et quelque. C'est exactement pourquoi
+l'ordre commence par le SSVEP et le c-VEP, sur sujet frais.
+
+⚠️ **3.3 (Unity) n'est pas un point de dix minutes.** Les deux `.cs` n'ont **jamais été compilés**,
+il n'y a pas d'Unity sur la machine de dev, et LSL4Unity reste à importer. Première fois : compte
+une demi-journée, et traite-le comme un chantier à part — pas comme la fin d'une passe de QA.
+
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
 - **❌ Régression** — ça a déjà marché ici. Si ça tombe, quelque chose s'est cassé, et le point est
