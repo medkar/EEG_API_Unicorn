@@ -53,6 +53,29 @@ Ce que ça dit de la méthode : les deux défauts sont des **désaccords entre d
 geste**, et aucun test ne les voyait parce que chaque moitié était testée sur son propre décor.
 C'est ce que 45 minutes devant l'écran ont trouvé et que 4 minutes d'autotests ne trouvent pas.
 
+## 🟠 Constats ouverts — relevés en QA, non corrigés
+
+Aucun n'est bloquant ; chacun a un contournement. Ils forment **un seul chantier** : le magasin de
+réglages (`EngineServer.reglages`, posé le 2026-09-21) n'est lu QUE par `start_mode`. Partout
+ailleurs, le moteur et la console continuent de raisonner sur les défauts du contrat.
+
+1. **Un réglage différé ne se VOIT pas sur la page du mode.** `snapshot()` n'expose pas
+   `reglages`, et `ModePage.update_from` sort tout de suite quand `mode_state is None` : le champ
+   garde donc l'ancienne valeur. Le réglage EST en vigueur au démarrage, mais l'écran montre le
+   contraire — c'est-à-dire pire que rien. ⚠️ **Moitié fabriquée le 2026-09-21** : avant, l'appli-
+   cation était refusée franchement ; maintenant elle est acceptée et invisible. Vu en séance sur
+   le pic alpha, qui « n'était pas reporté » sur la page SSVEP.
+   *Contournement : retaper la valeur dans le champ de la page du mode.*
+2. **`propose_params` sur un mode arrêté ignore le magasin** et part de `spec.defaults()`
+   (`server.py`, `courant = dict(runtime.params) if runtime is not None else spec.defaults()`).
+   Donc « Proposer » recalcule sur un pic alpha de 9,6 Hz même après qu'on a appliqué le sien.
+   Exactement le même désaccord entre deux moitiés d'un geste que celui corrigé le matin même,
+   d'un cran plus loin.
+   *Contournement : le champ édité prime sur tout — tape ton pic dans « Pic alpha », PUIS clique
+   « Proposer ».*
+3. **Une page de mode ne sait pas démarrer son mode.** Elle affiche « arrêté » et n'offre aucun
+   bouton pour y remédier : il faut ressortir vers la grille.
+
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
 - **❌ Régression** — ça a déjà marché ici. Si ça tombe, quelque chose s'est cassé, et le point est
