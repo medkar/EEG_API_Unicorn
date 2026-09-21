@@ -221,6 +221,16 @@ Deux chemins à essayer, et **les deux** doivent parler :
    champ « Fréquences des cibles » → taper `15, 17` → **Appliquer**. Sur un mode arrêté, le moteur
    répond « « SSVEP » n'est pas démarré » et ne regarde même pas les fréquences : `set_params`
    n'atteint qu'un mode en cours. Ce refus-là est juste, mais ce n'est pas celui qu'on teste ici.
+   ⚠️ La tuile porte **deux** boutons : « Démarrer », qui bascule en « Arrêter » une fois lancé, et
+   « Ouvrir », qui va à la page. Re-cliquer le premier pour ouvrir la page **arrête le mode** —
+   vérifie le libellé d'état en haut à droite de la page (« décode », pas « arrêté ») avant de
+   conclure quoi que ce soit d'un refus.
+
+   🟠 **Trou relevé en QA le 2026-09-21, non corrigé.** Une page de mode **ne sait pas démarrer son
+   mode** : elle affiche « arrêté » et « ce flux n'est pas publié en ce moment », et n'offre aucun
+   bouton pour y remédier — il faut ressortir vers la grille. C'est le même défaut que le refus de
+   `set_params` sur un mode arrêté, vu de l'autre côté : **la page constate un état sans permettre
+   d'agir dessus**. À traiter ensemble, hors passe de QA.
 2. Grille → tuile d'un mode qui va être refusé (ex. un mode à modèle sans modèle) → **Démarrer**.
 
 ✅ (1) Un refus **en rouge sur la page**, qui nomme le coupable et propose les voisins :
