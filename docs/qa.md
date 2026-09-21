@@ -217,7 +217,10 @@ l'écran est un réglage-décor.
 
 Deux chemins à essayer, et **les deux** doivent parler :
 
-1. Page **SSVEP** → champ « Fréquences des cibles » → taper `15, 17` → **Appliquer**.
+1. ⚠️ **Démarre le SSVEP d'abord** (grille → tuile SSVEP → « Démarrer »), *puis* page **SSVEP** →
+   champ « Fréquences des cibles » → taper `15, 17` → **Appliquer**. Sur un mode arrêté, le moteur
+   répond « « SSVEP » n'est pas démarré » et ne regarde même pas les fréquences : `set_params`
+   n'atteint qu'un mode en cours. Ce refus-là est juste, mais ce n'est pas celui qu'on teste ici.
 2. Grille → tuile d'un mode qui va être refusé (ex. un mode à modèle sans modèle) → **Démarrer**.
 
 ✅ (1) Un refus **en rouge sur la page**, qui nomme le coupable et propose les voisins :
@@ -344,6 +347,12 @@ changement (la moitié de la mesure se passe les yeux fermés, où l'écran ne s
 ✅ Ratio **> ~1,5** → l'alpha monte à la fermeture des yeux. La page propose d'**appliquer le pic
 mesuré** au réglage « Pic alpha » du SSVEP : **accepte**, c'est le geste que la recette faisait
 noter à la main puis retaper ailleurs.
+⚠️ **Démarre le SSVEP AVANT de cliquer « Appliquer le pic »** — sinon le bouton est refusé par
+« « SSVEP » n'est pas démarré » : `set_params` n'atteint qu'un mode en cours, et l'ordre de la
+séance met ce contrôle en premier. Le démarrer d'abord ne coûte rien ici : `alpha_hz` ne change pas
+le décodage, donc l'appliquer ne refait ni le repos ni le flux. Constat relevé en QA le
+2026-09-21 ; la limite est écrite dans `console/mesure_page.py`, mais la phrase de `CLAUDE.md` qui
+vante ce bouton ne la mentionnait pas.
 ✅ Si le son est coupé, la page **le dit** et prévient qu'on ne saura pas quand rouvrir les yeux.
 
 ❌ **ARRÊTE ICI** si le ratio ne monte pas. Ce n'est pas un test qu'on repasse plus tard : sans
