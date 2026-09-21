@@ -239,9 +239,14 @@ class MesurePage(QWidget):
         carnet, aller sur la page du SSVEP, le retaper, cliquer « Proposer ». Une valeur recopiée
         entre deux écrans est exactement ce que ce dépôt a déjà vu diverger.
 
-        Le refus du moteur est AFFICHÉ, et il en existe un vrai : `set_params` n'atteint qu'un
-        mode DÉMARRÉ (« SSVEP n'est pas démarré »). On le montre tel quel plutôt que de deviner —
-        un bouton qui échoue en silence est la panne que ce chantier répare.
+        Le refus du moteur est AFFICHÉ tel quel plutôt que deviné — un bouton qui échoue en
+        silence est la panne que ce chantier répare.
+
+        ⚠️ Il en existait un, et c'était CELUI-CI qui tombait en séance : jusqu'au 2026-09-21,
+        `set_params` exigeait un mode DÉMARRÉ et répondait « « SSVEP » n'est pas démarré ». Or le
+        contrôle alpha est le PREMIER geste d'une séance, bien avant qu'on lance le SSVEP : ce
+        bouton-ci échouait donc systématiquement à l'endroit exact où il sert. Le moteur accepte
+        désormais un réglage sur un mode arrêté, le valide, et le retient pour le démarrage.
         """
         propose = self._propose
         if not propose:

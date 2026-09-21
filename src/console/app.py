@@ -2790,8 +2790,29 @@ def _smoke():
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
 
-    # `submit` ne peut valider que sur un mode DÉMARRÉ : on applique la commande à la main,
-    # comme la boucle le ferait.
+    # --- 🔴 RÉGLER AVANT DE DÉMARRER, ET LE VOIR À L'ÉCRAN ----------------------------------
+    #
+    # Le mode n'est pas encore démarré à cet instant — c'est exactement la situation de quelqu'un
+    # qui ouvre la page pour caler ses fréquences sur son écran avant de lancer quoi que ce soit.
+    # Jusqu'au 2026-09-21 le moteur répondait « « SSVEP » n'est pas démarré » sans regarder les
+    # valeurs (recette 1.6), pendant que « Proposer » acceptait le même mode arrêté.
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page._appliquer(page.formulaire.values())
+    chk("diviseur" in page.formulaire.refus.text(),
+        f"mode ARRÊTÉ : le refus porte sur les RÉGLAGES, pas sur « n'est pas démarré » "
+        f"(« {page.formulaire.refus.text()[:64]}… »)")
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page.formulaire.champs["alpha_hz"].setValue(10.5)
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"…un réglage valide passe ({page.formulaire.refus.text()[:50]})")
+    chk("RETENU" in page.formulaire.avertissement.text()
+        and "arrêté" in page.formulaire.avertissement.text(),
+        f"…et l'écran dit qu'il est RETENU, pas en vigueur — en JAUNE, le canal des « accepté "
+        f"avec réserve ». Un « appliqué » nu ferait croire que le mode décode déjà sous ces "
+        f"réglages (« {page.formulaire.avertissement.text()[:60]}… »)")
+
+    # On applique la commande à la main, comme la boucle le ferait.
     moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)
 
     page.formulaire.champs["freqs"].setText("12, 15, 20")

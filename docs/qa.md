@@ -217,20 +217,25 @@ l'écran est un réglage-décor.
 
 Deux chemins à essayer, et **les deux** doivent parler :
 
-1. ⚠️ **Démarre le SSVEP d'abord** (grille → tuile SSVEP → « Démarrer »), *puis* page **SSVEP** →
-   champ « Fréquences des cibles » → taper `15, 17` → **Appliquer**. Sur un mode arrêté, le moteur
-   répond « « SSVEP » n'est pas démarré » et ne regarde même pas les fréquences : `set_params`
-   n'atteint qu'un mode en cours. Ce refus-là est juste, mais ce n'est pas celui qu'on teste ici.
+1. Page **SSVEP**, **mode ARRÊTÉ** → champ « Fréquences des cibles » → taper `15, 17` →
+   **Appliquer**. C'est le geste réel : on règle en amont, puis on lance.
+   ✅ Le refus porte sur les **réglages** (« 17 Hz n'est pas un diviseur entier de 60 Hz… »), pas
+   sur « n'est pas démarré ».
+   ✅ Corrige en `15, 20, 8.571` → **Appliquer** → accepté, avec un avertissement **jaune** :
+   « réglage RETENU, pas encore en vigueur — « SSVEP » est arrêté. Il démarrera avec. »
+   ✅ Démarre le mode : il part **avec** ces réglages, sans les retaper.
    ⚠️ La tuile porte **deux** boutons : « Démarrer », qui bascule en « Arrêter » une fois lancé, et
-   « Ouvrir », qui va à la page. Re-cliquer le premier pour ouvrir la page **arrête le mode** —
-   vérifie le libellé d'état en haut à droite de la page (« décode », pas « arrêté ») avant de
-   conclure quoi que ce soit d'un refus.
+   « Ouvrir », qui va à la page. Re-cliquer le premier pour ouvrir la page **arrête le mode**.
 
-   🟠 **Trou relevé en QA le 2026-09-21, non corrigé.** Une page de mode **ne sait pas démarrer son
-   mode** : elle affiche « arrêté » et « ce flux n'est pas publié en ce moment », et n'offre aucun
-   bouton pour y remédier — il faut ressortir vers la grille. C'est le même défaut que le refus de
-   `set_params` sur un mode arrêté, vu de l'autre côté : **la page constate un état sans permettre
-   d'agir dessus**. À traiter ensemble, hors passe de QA.
+   ❌ Régression : « « SSVEP » n'est pas démarré » au lieu du refus sur les fréquences. C'était le
+   comportement jusqu'au **2026-09-21**, trouvé par cette QA : `set_params` exigeait un mode en
+   cours alors que `propose_params` — l'autre moitié du même geste — acceptait un mode arrêté
+   depuis toujours. Le moteur proposait un jeu de fréquences, le mettait dans le champ, puis
+   refusait de l'appliquer.
+
+   🟠 **Trou relevé le même jour, NON corrigé** : une page de mode **ne sait pas démarrer son
+   mode**. Elle affiche « arrêté » et n'offre aucun bouton pour y remédier — il faut ressortir vers
+   la grille.
 2. Grille → tuile d'un mode qui va être refusé (ex. un mode à modèle sans modèle) → **Démarrer**.
 
 ✅ (1) Un refus **en rouge sur la page**, qui nomme le coupable et propose les voisins :
@@ -357,12 +362,10 @@ changement (la moitié de la mesure se passe les yeux fermés, où l'écran ne s
 ✅ Ratio **> ~1,5** → l'alpha monte à la fermeture des yeux. La page propose d'**appliquer le pic
 mesuré** au réglage « Pic alpha » du SSVEP : **accepte**, c'est le geste que la recette faisait
 noter à la main puis retaper ailleurs.
-⚠️ **Démarre le SSVEP AVANT de cliquer « Appliquer le pic »** — sinon le bouton est refusé par
-« « SSVEP » n'est pas démarré » : `set_params` n'atteint qu'un mode en cours, et l'ordre de la
-séance met ce contrôle en premier. Le démarrer d'abord ne coûte rien ici : `alpha_hz` ne change pas
-le décodage, donc l'appliquer ne refait ni le repos ni le flux. Constat relevé en QA le
-2026-09-21 ; la limite est écrite dans `console/mesure_page.py`, mais la phrase de `CLAUDE.md` qui
-vante ce bouton ne la mentionnait pas.
+✅ **Le SSVEP n'a pas besoin d'être démarré** pour ça — corrigé le 2026-09-21. Le réglage est
+validé, RETENU, et le mode partira avec. Jusque-là le bouton échouait par « « SSVEP » n'est pas
+démarré », c'est-à-dire **systématiquement** : ce contrôle est le premier geste d'une séance, et
+le SSVEP ne tourne évidemment pas encore à ce moment-là. Trouvé par cette QA.
 ✅ Si le son est coupé, la page **le dit** et prévient qu'on ne saura pas quand rouvrir les yeux.
 
 ❌ **ARRÊTE ICI** si le ratio ne monte pas. Ce n'est pas un test qu'on repasse plus tard : sans

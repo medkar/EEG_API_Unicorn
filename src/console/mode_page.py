@@ -164,6 +164,13 @@ class ModePage(QWidget):
         ack = self.console.commande("set_params", id=self.mode_id, params=values)
         if ack.get("accepted"):
             self.formulaire.show_refus("")
+            # Accepté sur un mode ARRÊTÉ : validé et retenu, mais pas encore en vigueur. Le dire
+            # en jaune (le canal des « accepté, avec réserve ») et pas en vert : un « appliqué »
+            # nu ferait croire que le mode décode déjà sous ces réglages, alors qu'il ne décode
+            # rien du tout. C'est le geste normal — on règle en amont, puis on démarre.
+            self.formulaire.show_avertissement(
+                "réglage RETENU, pas encore en vigueur : « " + self.spec["label"] + " » est "
+                "arrêté. Il démarrera avec." if ack.get("differe") else "")
             return
         # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
         # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire

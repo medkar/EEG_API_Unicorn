@@ -461,7 +461,22 @@ class EngineServer:
                         int(round(etape_mesure * self.acq.fs)),
                         self.acq.window_n) + self.acq.margin_n
 
+        # Les DERNIERS réglages connus de chaque mode, qu'il tourne ou non. C'est ce qui permet de
+        # régler un mode AVANT de le démarrer — le geste naturel : on cale ses fréquences sur son
+        # écran, son pic alpha sur sa tête, puis on lance. Jusqu'au 2026-09-21 `set_params` exigeait
+        # un mode DÉMARRÉ et refusait sans même regarder les valeurs, alors que `propose_params`,
+        # l'autre moitié du même geste, acceptait un mode arrêté depuis toujours : le moteur
+        # proposait un jeu de fréquences, le mettait dans le champ, puis refusait de l'appliquer.
+        #
+        # Écrit à DEUX endroits, et il faut les deux : `submit("set_params")`, qui couvre aussi
+        # bien le réglage différé que celui pris en route ; et `_start`, pour ce avec quoi le mode
+        # a RÉELLEMENT démarré — un `start_mode` peut porter ses propres réglages, et sans cette
+        # seconde écriture un arrêt/redémarrage les perdrait au profit d'un état plus ancien.
+        # `_set_params` n'y touche pas : on n'y arrive que par la file, que `submit` a déjà servie.
+        self.reglages = {}
         self._pending = self._prepare(modes or (), params or {})
+        for spec, values in self._pending:
+            self.reglages[spec.id] = dict(values)
         if not self._pending:
             # `--no-raw` sans `--mode` donne un moteur qui n'a rien à publier. Il tourne, il
             # acquiert, et le réseau reste muet — panne silencieuse dont le seul symptôme est un
@@ -580,6 +595,7 @@ class EngineServer:
             runtime = spec.runtime_cls(spec, values[spec.id], self)
             runtime.open()
             self.active[spec.id] = runtime
+            self.reglages[spec.id] = dict(values[spec.id])   # ce avec quoi il a VRAIMENT démarré
             self._last_tick[spec.id] = 0.0
             demarres.append(runtime)
         self._begin_shared_rest(demarres, now)
@@ -665,6 +681,10 @@ class EngineServer:
             print(f"[server] réglage ignoré : « {mode_id} » a été arrêté entre-temps")
             return
         spec = ancien.spec
+        # ⚠️ Le magasin `self.reglages` n'est PAS écrit ici, et ce n'est pas un oubli : `submit`
+        # l'a déjà fait avant de mettre la commande en file, et on n'arrive ici QUE par cette
+        # file. Une écriture de plus serait redondante — et invérifiable : la retirer ne faisait
+        # rougir aucun test, ce qui est la définition d'une ligne que rien ne tient.
         avant = dict(ancien.params)
         # Le décodeur ne lit pas tous les réglages : le rafraîchissement de l'écran et le pic
         # alpha ne servent qu'à proposer et à valider. Quand rien de ce qu'il lit n'a bougé, on
@@ -1090,13 +1110,58 @@ class EngineServer:
                     return {"accepted": False, "reason": refus}
             wanted, values = params.get("params") or {}, {}
             for spec in specs:
-                v, reason = contract.validate(spec, wanted.get(spec.id, {}))
+                # Le point de départ est ce que le mode a de plus récent — les réglages posés
+                # AVANT le démarrage, s'il y en a eu. Partir des défauts jetterait en silence le
+                # travail de quelqu'un qui vient de caler ses fréquences sur son écran. Ce que
+                # l'appelant envoie prime, lui, sur le magasin.
+                base = self._reglages_de(spec)
+                base.update(wanted.get(spec.id, {}))
+                v, reason = contract.validate(spec, base)
                 if v is None:
                     return {"accepted": False, "reason": reason}
                 values[spec.id] = v
             ids = [s.id for s in specs]
             self._commands.put(("start_mode", {"ids": ids, "params": values}))
             return {"accepted": True, "command": "start_mode", "ids": ids}
+
+        if command == "set_params":
+            # ⚠️ Cette commande ne passe PAS par `_one` (qui exige un mode démarré), et c'est tout
+            # le sujet : on règle un mode AVANT de le lancer. Un réglage soumis à un mode arrêté
+            # est VALIDÉ comme les autres — c'est là qu'on apprend que 17 Hz ne divise pas 60 —
+            # puis RETENU pour le prochain démarrage. Refuser sans regarder, c'était obliger à
+            # démarrer sur des réglages qu'on sait faux, subir 23 s de repos, puis les corriger et
+            # refaire le repos.
+            spec = registry.get(params.get("id"))
+            if spec is None:
+                connus = ", ".join(s.id for s in registry.runnable())
+                return {"accepted": False,
+                        "reason": f"mode inconnu : {params.get('id')} (disponibles : {connus})"}
+            if spec.runtime_cls is None:
+                return {"accepted": False,
+                        "reason": f"« {spec.label} » ne tourne pas dans le moteur : "
+                                  f"{spec.unavailable}"}
+            # Une seule lecture de `self.active` : `submit` tourne sur le fil de l'APPELANT, la
+            # boucle peut arrêter ce mode entre deux lignes, et `submit` promet de ne jamais lever.
+            # Un mode arrêté entre-temps ne produit plus d'erreur — le réglage devient différé,
+            # ce qui est exactement ce qu'on voulait.
+            runtime = self.active.get(spec.id)
+            # On fusionne sur les réglages COURANTS : un appelant peut n'envoyer que ce qu'il
+            # change, sans avoir à relire et renvoyer tout le reste.
+            merged = dict(runtime.params) if runtime is not None else self._reglages_de(spec)
+            merged.update(params.get("params") or {})
+            values, reason = contract.validate(spec, merged)
+            if values is None:
+                return {"accepted": False, "reason": reason}
+            self.reglages[spec.id] = dict(values)
+            if runtime is None:
+                # Rien à mettre en file : il n'y a pas de runtime à régler. `differe` dit à
+                # l'appelant que c'est ACCEPTÉ mais pas encore en vigueur — un « appliqué » nu
+                # ferait croire que le mode décode déjà sous ces réglages.
+                return {"accepted": True, "command": command, "id": spec.id,
+                        "params": values, "differe": True}
+            self._commands.put(("set_params", {"id": spec.id, "params": values}))
+            return {"accepted": True, "command": command, "id": spec.id,
+                    "params": values, "differe": False}
 
         if command == "propose_params":
             # Une commande en LECTURE : elle ne met rien en file et ne touche pas la session
@@ -1304,25 +1369,16 @@ class EngineServer:
                 return {"accepted": False,
                         "reason": f"« {spec.label} » n'a pas de repos à refaire"}
             self._commands.put(("recalibrate", {"id": spec.id}))
-        elif command == "set_params":
-            # ⚠️ `_one` (juste au-dessus) vient de vérifier que `spec.id` est dans `self.active`
-            # — mais `submit` tourne sur le fil de l'APPELANT (la console), pas sur celui de la
-            # boucle, qui peut arrêter ce mode entre les deux. Indexer `self.active[spec.id]`
-            # sans garde lèverait un `KeyError` ICI, dans le fil appelant : exactement ce que
-            # `submit` promet de ne jamais faire (un accusé, toujours — jamais une exception).
-            runtime = self.active.get(spec.id)
-            if runtime is None:
-                return {"accepted": False,
-                        "reason": f"« {spec.label} » a été arrêté entre-temps"}
-            # On fusionne sur les réglages COURANTS : un appelant peut n'envoyer que ce qu'il
-            # change, sans avoir à relire et renvoyer tout le reste.
-            merged = dict(runtime.params)
-            merged.update(params.get("params") or {})
-            values, reason = contract.validate(spec, merged)
-            if values is None:
-                return {"accepted": False, "reason": reason}
-            self._commands.put(("set_params", {"id": spec.id, "params": values}))
         return {"accepted": True, "command": command, "id": spec.id}
+
+    def _reglages_de(self, spec):
+        """Les derniers réglages connus de ce mode, ou ses défauts. Toujours une COPIE.
+
+        Rendre le dictionnaire stocké laisserait un appelant le muter par accident — et un
+        `merged.update(...)` sur la valeur du magasin écrirait dans le magasin AVANT la
+        validation, donc y installerait des réglages refusés.
+        """
+        return dict(self.reglages.get(spec.id) or spec.defaults())
 
     def _resolve(self, ids, doit_tourner):
         """(specs dans l'ordre du registre, None) ou (None, raison). Refuse tôt et en clair."""
@@ -4259,6 +4315,63 @@ def _smoke_proposition():
                          params={"freqs": ack5["value"], "refresh_hz": 144.0})
     chk(ack6.get("accepted"),
         f"et le jeu proposé pour 144 Hz est accepté avec refresh_hz=144 ({ack6})")
+
+    # --- 🔴 RÉGLER UN MODE AVANT DE LE DÉMARRER --------------------------------------------
+    #
+    # Trouvé en recette 1.6 le 2026-09-21. `set_params` exigeait un mode DÉMARRÉ et refusait sans
+    # même regarder les valeurs (« « SSVEP » n'est pas démarré »), alors que `propose_params` —
+    # l'autre moitié du même geste — acceptait un mode arrêté depuis toujours : le moteur
+    # proposait un jeu de fréquences, le mettait dans le champ, puis refusait de l'appliquer.
+    # En pratique on règle EN AMONT : on cale ses fréquences sur son écran, son pic alpha sur sa
+    # tête, puis on lance. L'ancien chemin obligeait à démarrer sur des réglages qu'on savait
+    # faux, subir les 23 s de repos, corriger, et refaire le repos.
+    libre = EngineServer(synthetic=True, modes=("raw",), instance="smoke-reglage-amont")
+    chk("ssvep" not in libre.active, "un moteur dont le SSVEP n'est PAS démarré")
+    refus_amont = libre.submit("set_params", id="ssvep", params={"freqs": [15.0, 17.0]})
+    chk(not refus_amont.get("accepted") and "diviseur" in (refus_amont.get("reason") or ""),
+        f"…dit quand même ce qui cloche dans les réglages, au lieu de « n'est pas démarré » "
+        f"— « {(refus_amont.get('reason') or '')[:70]}… »")
+    bon = libre.submit("set_params", id="ssvep", params={"freqs": [12.0, 15.0, 20.0]})
+    chk(bon.get("accepted") and bon.get("differe") is True,
+        f"…un réglage valide est RETENU, et l'accusé dit qu'il est DIFFÉRÉ — sans ce drapeau, "
+        f"l'écran annoncerait « appliqué » sur un mode qui ne décode rien ({bon})")
+    # ⚠️ Par `submit` PUIS `_drain_commands`, le vrai chemin — pas `_start` appelé à la main avec
+    # des valeurs qu'on aurait composées ici. C'est dans `submit("start_mode")` que le magasin est
+    # relu, donc un `_start` direct court-circuiterait exactement ce qu'on veut prouver.
+    libre.submit("start_mode", ids=["ssvep"])
+    libre._drain_commands()
+    chk(tuple(libre.active["ssvep"].params["freqs"]) == (12.0, 15.0, 20.0),
+        f"…et le démarrage part AVEC, sans que personne ne les repasse "
+        f"({libre.active['ssvep'].params['freqs']})")
+    # Un réglage pris EN ROUTE doit survivre à un arrêt/redémarrage, sans quoi les réglages
+    # d'avant reviendraient par-dessus ceux qu'on vient d'appliquer.
+    libre.submit("set_params", id="ssvep", params={"freqs": [10.0, 20.0]})
+    libre._drain_commands()
+    libre.submit("stop_mode", id="ssvep")
+    libre._drain_commands()
+    libre.submit("start_mode", ids=["ssvep"])
+    libre._drain_commands()
+    chk(tuple(libre.active["ssvep"].params["freqs"]) == (10.0, 20.0),
+        f"…et un réglage pris EN ROUTE survit à un arrêt/redémarrage, au lieu de laisser "
+        f"revenir celui d'avant ({libre.active['ssvep'].params['freqs']})")
+    # La SECONDE écriture du magasin : `start_mode` peut porter ses propres réglages (c'est le
+    # chemin d'un client LSL, et celui de `--mode` en ligne de commande). Sans elle, ces
+    # réglages-là ne survivraient pas au premier arrêt.
+    libre.submit("stop_mode", id="ssvep")
+    libre._drain_commands()
+    libre.submit("start_mode", ids=["ssvep"], params={"ssvep": {"freqs": [12.0, 30.0]}})
+    libre._drain_commands()
+    libre.submit("stop_mode", id="ssvep")
+    libre._drain_commands()
+    libre.submit("start_mode", ids=["ssvep"])
+    libre._drain_commands()
+    chk(tuple(libre.active["ssvep"].params["freqs"]) == (12.0, 30.0),
+        f"…et des réglages portés par « start_mode » lui-même survivent aussi "
+        f"({libre.active['ssvep'].params['freqs']})")
+    mort = libre.submit("set_params", id="bogus", params={})
+    chk(not mort.get("accepted") and "inconnu" in (mort.get("reason") or ""),
+        f"…un mode inconnu reste refusé en le nommant ({(mort.get('reason') or '')[:50]})")
+    libre.close()
 
     # Un réglage sans effet sur le décodage ne reconstruit RIEN. On compare l'objet lui-même et
     # pas la phase : les deux chemins laissent le mode en « warmup » juste après un démarrage, donc

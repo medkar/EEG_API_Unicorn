@@ -83,6 +83,17 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
+- **UN RÉGLAGE SE POSE SUR UN MODE ARRÊTÉ** (2026-09-21). `set_params` le VALIDE — c'est là qu'on
+  apprend que 17 Hz ne divise pas 60 — puis le RETIENT dans `EngineServer.reglages`, et le prochain
+  démarrage part avec. L'accusé porte `differe: True`, que la console affiche en jaune (« retenu,
+  pas encore en vigueur ») : un « appliqué » nu ferait croire que le mode décode déjà.
+  C'est le geste réel — on cale ses fréquences sur son écran et son pic alpha sur sa tête, **puis**
+  on lance. Avant, il fallait démarrer sur des réglages qu'on savait faux, subir 23 s de repos,
+  corriger, et refaire le repos.
+  ⚠️ **Le défaut tenait à ce que les deux moitiés du même geste n'étaient pas d'accord** :
+  `propose_params` acceptait un mode arrêté depuis toujours, `set_params` le refusait. Le moteur
+  proposait un jeu de fréquences, le mettait dans le champ, et refusait de l'appliquer. Aucun test
+  ne le voyait — les deux commandes étaient testées séparément, chacune sur son propre décor.
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
   c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. ⚠️ **Publié ≠ validé** : seul le
   SSVEP a été décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300,
@@ -99,6 +110,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     test de la séance ne veut rien dire, et le verdict est une phrase qui ARRÊTE. La page propose
     d'**appliquer le pic mesuré** au réglage `alpha_hz` du SSVEP — la recette le faisait noter à la
     main puis retaper dans un autre écran.
+    ⚠️ **Ce bouton-là échouait SYSTÉMATIQUEMENT jusqu'au 2026-09-21**, et cette phrase l'annonçait
+    quand même : `set_params` exigeait un mode DÉMARRÉ, or ce contrôle est le PREMIER geste d'une
+    séance, bien avant qu'on lance le SSVEP. Trouvé par la QA, pas par un test. Cf. le point
+    suivant : **un réglage se pose maintenant sur un mode arrêté**.
   - **`ssvep_taux` — Taux d'émission SSVEP** (3,6 min). Une fenêtre (`src/stimulus/ssvep.py
     --guide`) désigne la cible, le moteur applique **sa propre règle de décision** et rend le taux
     d'émission et la justesse à l'émission. ⚠️ **Un essai = UNE décision** : les fenêtres du moteur
