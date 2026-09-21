@@ -75,6 +75,26 @@ ailleurs, le moteur et la console continuent de raisonner sur les défauts du co
    « Proposer ».*
 3. **Une page de mode ne sait pas démarrer son mode.** Elle affiche « arrêté » et n'offre aucun
    bouton pour y remédier : il faut ressortir vers la grille.
+4. 🔴 **Le SSVEP n'a AUCUN bouton « Lancer le stimulus »**, donc on ne peut pas éprouver son
+   décodage depuis l'application — c'est la règle « tout se pilote depuis l'interface » en défaut,
+   sur le seul mode déjà validé au casque. La machinerie existe pourtant entièrement :
+   `stimulus/registry.py` résout la clé `ssvep` vers `src/stimulus/ssvep.py`, la fenêtre qui fait
+   clignoter les flèches, et la console sait déjà lancer des fenêtres. C'est le CRITÈRE du bouton
+   qui est faux : `mode_page.py` le conditionne à `calibration.stimulus_id`, et le SSVEP n'a pas
+   de calibration (la CCA n'apprend rien). Le `stimulus_id` est accroché au mauvais objet — il
+   appartient au `ModeSpec`, pas au `Calib`.
+   *Contournement : la mesure « Taux d'émission SSVEP » lance la fenêtre elle-même.*
+5. 🔴 **La fenêtre SSVEP ignore les fréquences du mode** : `plan = choose_frequencies(refresh)`
+   sur les `COMMANDS` du dépôt, et aucun `--freqs` en ligne de commande. Un étudiant qui règle
+   12 · 15 · 20 dans la console se verra donc afficher 15 · 20 · 8,571 — **et le décodeur
+   corrélera contre des sinusoïdes que personne n'affiche**, la panne caractéristique que tout le
+   chantier 2 existait pour rendre impossible. Vaut aussi pour la mesure « Taux d'émission ».
+   ⚠️ **Conséquence à retenir pour interpréter 2.3** : la mesure tourne sur le trio du dépôt quel
+   que soit le réglage. Si le pic alpha de la personne est **< 10,5 Hz**, la cible à 8,571 Hz est
+   dans sa bande alpha et rendra un mauvais chiffre — c'est une propriété du TRIO, pas du moteur.
+
+Les constats 4 et 5 vont ensemble : livrer le bouton sans la transmission des fréquences donnerait
+un stimulus qui affiche autre chose que ce que le moteur décode.
 
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
