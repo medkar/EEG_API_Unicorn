@@ -83,6 +83,19 @@ class ParamsForm(QWidget):
 
         self.bouton = QPushButton("Appliquer")
         self.bouton.clicked.connect(lambda: self.appliquer.emit(self.values()))
+        # ⚠️ Aucun réglage = rien à appliquer, donc pas de bouton (2026-09-21, trouvé en recette
+        # 1.5). Il soumettait un dictionnaire VIDE : le moteur l'acceptait, rien ne changeait, et
+        # l'étudiant avait cliqué sur quelque chose qui avait l'air de faire quelque chose. C'est
+        # la définition du réglage-décor que ce projet combat ailleurs.
+        #
+        # La règle vit ICI et pas chez les appelants, parce que QUATRE pages sont concernées et
+        # qu'aucune ne le savait : le mode « Brut », et les trois calibrations menées par une
+        # fenêtre (P300, ErrP, c-VEP), dont le `Calib.params` est vide. `console/mesure_page.py`
+        # cachait déjà ce bouton, mais pour une AUTRE raison — une mesure se règle avant de
+        # partir, son formulaire part avec `start_mesure` — donc son geste reste, et il couvre
+        # aussi le cas où une mesure a des réglages.
+        if not self.params:
+            self.bouton.hide()
         # « Aide détaillée » : présent seulement si au moins une aide a VRAIMENT été raccourcie.
         # Un bouton qui ne changerait rien à l'écran est un réglage-décor, et ce projet en a déjà
         # payé le prix. `None` quand il n'y a rien à déplier — jamais un widget caché sans parent.

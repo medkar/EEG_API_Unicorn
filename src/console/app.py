@@ -2876,6 +2876,23 @@ def _smoke():
     chk(reelle.pages["raw"].formulaire.vide is not None
         and reelle.pages["raw"].formulaire.vide.isVisibleTo(reelle.pages["raw"]),
         "et le formulaire l'écrit, au lieu de laisser un cadre vide")
+    # ⚠️ …et il ne montre PAS de bouton « Appliquer ». Trouvé en recette 1.5 le 2026-09-21 : il
+    # soumettait un dictionnaire VIDE, le moteur l'acceptait, rien ne changeait. Le bouton avait
+    # l'air de faire quelque chose. `mesure_page.py` cachait déjà le sien et son commentaire
+    # disait la règle — « un bouton sans effet est un mensonge » — mais la règle n'était vérifiée
+    # QUE sur la page des mesures, un cran plus étroit que là où elle s'applique.
+    chk(reelle.pages["raw"].formulaire.bouton.isHidden(),
+        "…et surtout AUCUN bouton « Appliquer » : il soumettrait un dictionnaire vide")
+    chk(not reelle.pages["ssvep"].formulaire.bouton.isHidden(),
+        "…alors qu'une page QUI a des réglages le garde — la règle ne tire pas trop large")
+    # Les trois calibrations menées par une FENÊTRE déclarent zéro réglage : mêmes quatre pages,
+    # même bouton fantôme. C'est pour ça que la règle vit dans `ParamsForm` et pas chez l'appelant.
+    sans_reglage = [m for m in ("p300", "errp", "cvep")
+                    if not reelle.calib_pages[m].formulaire.bouton.isHidden()]
+    chk(not sans_reglage,
+        f"…et les calibrations sans réglage non plus ({sans_reglage or 'aucune ne le montre'})")
+    chk(not reelle.calib_pages["mi"].formulaire.bouton.isHidden(),
+        "…tandis que la calibration MI, qui a « Essais par classe », garde le sien")
 
     # --- régression : un « choice » NUMÉRIQUE round-trip son TYPE, contre le VRAI validateur ----
     # Trouvé en écrivant cette page, AVANT tout écran : `trials_per_class` (calibration MI) est le
