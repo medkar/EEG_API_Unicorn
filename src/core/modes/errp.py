@@ -643,6 +643,7 @@ SPEC = ModeSpec(
     summary="Un verdict par feedback affiché : la machine vient-elle de se tromper (potentiel d'erreur).",
     status="moteur",
     key_channels=tuple(ERRP_MIDLINE),   # Fz, Cz, Pz (xDAWN utilise les 8, mais le contact se juge là)
+    stimulus_id="errp",
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: errp_models.modeles_disponibles(),

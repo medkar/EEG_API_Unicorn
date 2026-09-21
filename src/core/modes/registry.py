@@ -195,6 +195,11 @@ def serialize(spec, params=None):
             "instruction": spec.rest.instruction,
         },
         "key_channels": list(spec.key_channels),
+        # La fenêtre de stimulus de CE MODE, distincte de celle de sa calibration (cf. la
+        # docstring de `ModeSpec.stimulus_id`). C'est ce champ que la console lit pour décider
+        # d'afficher « Lancer le stimulus » — pas `calibration.stimulus_id`, qui ne répond pas à
+        # la même question et laissait le SSVEP sans bouton.
+        "stimulus_id": spec.stimulus_id,
         "calibration": None if spec.calibration is None else {
             "kind": spec.calibration.kind,
             "stimulus_id": spec.calibration.stimulus_id,

@@ -532,6 +532,7 @@ SPEC = ModeSpec(
     summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
     status="moteur",
     key_channels=tuple(P300_MIDLINE),   # Fz, Cz, Pz — la ligne médiane, où le P300 culmine
+    stimulus_id="p300",
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: p300_models.modeles_disponibles(),

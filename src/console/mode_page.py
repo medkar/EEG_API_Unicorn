@@ -25,6 +25,7 @@ class ModePage(QWidget):
     """Une page par mode, construite une fois, mise à jour à chaque rafraîchissement."""
 
     retour = Signal()
+    marche = Signal(str, bool)      # (id, on) — exactement le signal de la tuile de la grille
 
     def __init__(self, spec, console):
         super().__init__()
@@ -38,6 +39,19 @@ class ModePage(QWidget):
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
+        # 🔴 DÉMARRER/ARRÊTER DEPUIS LA PAGE (2026-09-21). Sans lui, la page était un cul-de-sac :
+        # elle affichait « arrêté » et « ce flux n'est pas publié en ce moment » sans offrir le
+        # moindre moyen d'y remédier — il fallait ressortir vers la grille, deviner laquelle des
+        # deux tuiles cliquer, et revenir. Le même signal que la tuile, à dessein : le sens vient
+        # de l'ÉTAT REÇU (`update_from`), jamais d'une bascule tenue ici, qui se désynchroniserait
+        # au premier refus du moteur.
+        self.bouton_marche = None
+        if spec.get("status") == "moteur" and spec.get("stream"):
+            self.bouton_marche = QPushButton("Démarrer")
+            self._arrete = True
+            self.bouton_marche.clicked.connect(
+                lambda: self.marche.emit(self.mode_id, self._arrete))
+            entete.addWidget(self.bouton_marche)
         # --- les deux boutons qui SORTENT de la console ------------------------------------
         # Rien ici ne sait qu'un MI s'entraîne, qu'un SSVEP non, ou qu'un P300 a besoin d'une
         # fenêtre : c'est le CONTRAT qui le dit, par trois champs distincts.
@@ -66,10 +80,16 @@ class ModePage(QWidget):
                     f"pas encore la jouer.")
             entete.addWidget(self.bouton_calibrer)
         # « Lancer le stimulus » : le même mécanisme, la même fenêtre, SANS `--calibrer`. Il
-        # n'existe que pour les modes dont le contrat déclare un `stimulus_id` — c'est-à-dire ceux
-        # qui ne décodent RIEN sans une fenêtre en face (P300, ErrP, c-VEP). Sans lui, le seul
-        # moyen de faire décoder ces trois modes était un second terminal.
-        if calib.get("stimulus_id"):
+        # n'existe que pour les modes qui ne décodent RIEN sans une fenêtre en face.
+        #
+        # ⚠️ Le critère est `spec["stimulus_id"]` — le stimulus DU MODE — et non
+        # `calibration.stimulus_id`, qui désigne la fenêtre du protocole d'ENTRAÎNEMENT. Les deux
+        # valent la même chose pour le P300, l'ErrP et le c-VEP, ce qui a caché le défaut : le
+        # SSVEP a un stimulus et AUCUNE calibration (la CCA n'apprend rien), donc son bouton
+        # n'existait nulle part. Trouvé en séance casque le 2026-09-21, sur le seul mode déjà
+        # validé sur un cerveau — on ne pouvait pas l'éprouver depuis l'application.
+        stimulus_id = spec.get("stimulus_id") or ""
+        if stimulus_id:
             self.bouton_stimulus = QPushButton("Lancer le stimulus")
             self.bouton_stimulus.setToolTip(
                 "Ouvre la fenêtre de stimulus dans un second processus. Elle n'ouvre PAS le "
@@ -87,7 +107,7 @@ class ModePage(QWidget):
             # ⚠️ La case n'apparaît que si la FENÊTRE sait le faire, et c'est le registre des
             # stimulus qu'on interroge, pas une liste tenue ici : une case sur une fenêtre qui
             # ignore l'option serait un réglage-décor, exactement ce que ce projet combat.
-            if stimulus_registry.sait_journaliser(calib["stimulus_id"]):
+            if stimulus_registry.sait_journaliser(stimulus_id):
                 self.journal = QCheckBox("Journal de séance")
                 self.journal.setChecked(True)
                 self.journal.setToolTip(
@@ -220,6 +240,7 @@ class ModePage(QWidget):
 
     def update_from(self, state):
         mode_state = (state.get("modes_state") or {}).get(self.mode_id)
+        self._marche(mode_state is not None)
         if mode_state is None:
             self.etat.setText("arrêté")
             self.vue.update_from(None)
@@ -227,7 +248,19 @@ class ModePage(QWidget):
             # ce qu'on vient copier — mais annoncer un nom de flux sans réserve enverrait
             # l'étudiant s'abonner à quelque chose que plus personne ne publie.
             self.flux.setText("mode ARRÊTÉ — ce flux n'est pas publié en ce moment")
-            self._derniers_params = None      # forcer la régénération au redémarrage
+            # ⚠️ …mais les RÉGLAGES, eux, se montrent (2026-09-21). `modes_state` ne contient que
+            # les modes actifs : sans cette branche, un réglage posé sur un mode arrêté était
+            # accepté par le moteur, retenu, appliqué au démarrage — et INVISIBLE, le champ
+            # gardant l'ancienne valeur. L'écran disait alors le contraire de la vérité, ce qui
+            # est pire qu'un refus franc. Vu en séance : « mon pic alpha n'a pas été reporté ».
+            retenus = (state.get("reglages") or {}).get(self.mode_id)
+            if retenus and retenus != self._derniers_params:
+                self._derniers_params = dict(retenus)
+                self.formulaire.set_values(retenus)
+                self._remplir_extrait(retenus)
+                self.flux.setText("mode ARRÊTÉ — ce flux n'est pas publié en ce moment")
+            elif not retenus:
+                self._derniers_params = None   # forcer la régénération au redémarrage
             return
         libelle = PHASES_FR
         self.etat.setText(libelle.get(mode_state["phase"], mode_state["phase"])
@@ -238,6 +271,18 @@ class ModePage(QWidget):
             self._derniers_params = dict(params)
             self._remplir_extrait(params)
             self.formulaire.set_values(params)
+
+    def _marche(self, tourne):
+        """Le libellé du bouton vient de l'ÉTAT REÇU, jamais d'une bascule tenue ici.
+
+        Même discipline que la tuile de la grille, et pour la même raison : une bascule locale se
+        désynchronise au premier refus du moteur, et l'écran finit par proposer « Arrêter » sur un
+        mode qui n'a jamais démarré.
+        """
+        if self.bouton_marche is None:
+            return
+        self._arrete = not tourne
+        self.bouton_marche.setText("Démarrer" if self._arrete else "Arrêter")
 
     def rafraichir_choix(self):
         """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).

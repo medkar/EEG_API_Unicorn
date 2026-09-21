@@ -225,6 +225,18 @@ class ModeSpec:
                                # de la console. Elles viennent de `core/config.py` (OCCIPITAL,
                                # P300_MIDLINE…) : le mode les DÉCLARE, la console les surligne,
                                # et aucune liste n'est recopiée dans l'interface.
+    stimulus_id: str = ""      # la CLÉ de la fenêtre qui affiche le stimulus de CE mode pendant
+                               # qu'il DÉCODE — jamais un chemin : `core` ne nomme aucune fenêtre,
+                               # c'est `src/stimulus/registry.py` qui résout clé -> commande.
+                               # ⚠️ À NE PAS confondre avec `Calib.stimulus_id`, qui désigne la
+                               # fenêtre du PROTOCOLE DE CALIBRATION. Les deux valent la même
+                               # chose là où les deux existent, mais ce sont deux questions
+                               # distinctes : « avec quoi décode-t-on » et « avec quoi
+                               # calibre-t-on ». Le SSVEP est la preuve qu'il fallait les séparer
+                               # — il a un stimulus et AUCUNE calibration (la CCA n'apprend rien),
+                               # donc son bouton « Lancer le stimulus » était introuvable tant que
+                               # le critère passait par `calibration`. Trouvé en séance casque le
+                               # 2026-09-21, sur le seul mode déjà validé sur un cerveau.
     marker_epoch_s: float = 0.0   # tranche prélevée autour d'un marqueur (pré + post), 0 = ce
                                   # mode n'écoute pas les marqueurs. Dimensionne le tampon du
                                   # moteur : sous-dimensionné, CHAQUE époque serait tronquée en

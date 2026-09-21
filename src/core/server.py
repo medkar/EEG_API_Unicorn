@@ -1180,7 +1180,13 @@ class EngineServer:
                         "reason": f"« {cle} » ne propose aucun réglage pour « {spec.label} » "
                                   f"(qui propose : {', '.join(proposeurs) or 'aucun'})"}
             runtime = self.active.get(spec.id)
-            courant = dict(runtime.params) if runtime is not None else spec.defaults()
+            # ⚠️ Le MAGASIN, pas les défauts du contrat, quand le mode est arrêté. Sinon les deux
+            # moitiés du même geste se contredisent une seconde fois : on applique son pic alpha à
+            # un mode arrêté (accepté, retenu), puis « Proposer » recalcule sur 9,6 Hz — le pic de
+            # la population, pas le sien — et rend un jeu de fréquences accordé à la mauvaise tête.
+            # C'est le même défaut que celui corrigé le matin du 2026-09-21 sur `set_params`, un
+            # cran plus loin ; il a fallu une séance casque pour le voir.
+            courant = dict(runtime.params) if runtime is not None else self._reglages_de(spec)
             # Ce que l'appelant est en train d'éditer prime sur ce qui est stocké : sans ça,
             # déclarer un écran 144 Hz est refusé (les anciennes fréquences ne le divisent pas)
             # ET la proposition continue de calculer sur 60 — l'étudiant n'a aucune porte de sortie.
@@ -1662,6 +1668,14 @@ class EngineServer:
             # seule fois, comme les trois voisines : la boucle peut le remplacer entre deux
             # lectures, et `None.state()` lèverait ICI, dans le fil de la console.
             "enregistrement": None if enregistrement is None else enregistrement.state(),
+            # ⚠️ Les derniers réglages connus de CHAQUE mode, qu'il tourne ou non. Sans eux, un
+            # réglage posé sur un mode ARRÊTÉ est accepté, retenu, appliqué au démarrage… et
+            # parfaitement INVISIBLE : `modes_state` ne contient que les modes actifs, donc la
+            # page d'un mode arrêté n'a aucune source et garde l'ancienne valeur à l'écran.
+            # L'écran disait alors le contraire de la vérité, ce qui est pire qu'un refus franc.
+            # Vu en séance casque le 2026-09-21 : « mon pic alpha n'a pas été reporté » — il
+            # l'était. Une COPIE par mode, jamais la référence : la boucle écrit dedans.
+            "reglages": {mid: dict(v) for mid, v in self.reglages.items()},
             # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
             # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
             # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
@@ -4371,7 +4385,56 @@ def _smoke_proposition():
     mort = libre.submit("set_params", id="bogus", params={})
     chk(not mort.get("accepted") and "inconnu" in (mort.get("reason") or ""),
         f"…un mode inconnu reste refusé en le nommant ({(mort.get('reason') or '')[:50]})")
+
+    # --- 🔴 LE MAGASIN SE VOIT, ET « PROPOSER » LE LIT ---------------------------------------
+    #
+    # Deux conséquences du même oubli, toutes deux trouvées EN SÉANCE CASQUE le 2026-09-21, après
+    # que `set_params` eut appris à accepter un mode arrêté le matin même.
+    #
+    # (1) `snapshot()` ne portait pas les réglages retenus, et `modes_state` ne contient que les
+    #     modes ACTIFS : la page d'un mode arrêté n'avait donc aucune source et gardait l'ancienne
+    #     valeur à l'écran. Le réglage était en vigueur et l'écran disait le contraire — pire
+    #     qu'un refus franc. Rapporté tel quel : « mon pic alpha n'a pas été reporté ».
+    libre.submit("stop_mode", id="ssvep")
+    libre._drain_commands()
+    libre.submit("set_params", id="ssvep", params={"alpha_hz": 11.0})
+    vu = (libre.snapshot().get("reglages") or {}).get("ssvep") or {}
+    chk(vu.get("alpha_hz") == 11.0,
+        f"un réglage retenu sur un mode ARRÊTÉ est PUBLIÉ dans snapshot() — sans quoi l'écran ne "
+        f"peut pas le montrer, et dit le contraire de la vérité ({vu.get('alpha_hz')})")
+    chk("ssvep" not in (libre.snapshot().get("modes_state") or {}),
+        "…et c'est bien le seul endroit où il apparaît : `modes_state` ne porte que les actifs")
+    # (2) « Proposer » recalculait sur le pic de la POPULATION (9,6 Hz) au lieu de celui qu'on
+    #     venait d'appliquer. Le choix de 11,0 Hz n'est pas neutre : c'est LA valeur qui sépare
+    #     les deux réponses. À 9,6 Hz le moteur propose 12 · 15 · 20 ; à 11,0 il garde 8,571, qui
+    #     est alors assez loin de l'alpha. Une valeur où les deux jeux coïncident rendrait cette
+    #     assertion infalsifiable.
+    prop = libre.submit("propose_params", id="ssvep", key="alpha_hz")
+    chk(prop.get("accepted") and any(abs(f - 60.0 / 7) < 1e-6 for f in (prop.get("value") or [])),
+        f"…et « Proposer » calcule sur CE pic-là, pas sur celui de la population "
+        f"({prop.get('value')} — à 9,6 Hz il rendrait 12, 15, 20)")
     libre.close()
+
+    # --- LE STIMULUS D'UN MODE N'EST PAS CELUI DE SA CALIBRATION ----------------------------
+    #
+    # Deux questions distinctes que `Calib.stimulus_id` confondait : « avec quoi décode-t-on » et
+    # « avec quoi s'entraîne-t-on ». Elles ont la même réponse pour le P300, l'ErrP et le c-VEP —
+    # c'est ce qui a caché le défaut pendant tout le chantier. Le SSVEP a un stimulus et AUCUNE
+    # calibration, donc son bouton « Lancer le stimulus » n'existait nulle part : le seul mode
+    # déjà validé sur un cerveau ne pouvait pas être éprouvé depuis l'application.
+    ssvep_spec = registry.serialize(registry.get("ssvep"))
+    chk(ssvep_spec["stimulus_id"] == "ssvep" and ssvep_spec["calibration"] is None,
+        f"le SSVEP déclare un stimulus SANS déclarer de calibration — le cas que l'ancien critère "
+        f"ne pouvait pas voir ({ssvep_spec['stimulus_id']!r}, calib={ssvep_spec['calibration']})")
+    desaccords = [s.id for s in registry.MODES
+                  if s.calibration is not None and s.calibration.stimulus_id
+                  and s.stimulus_id != s.calibration.stimulus_id]
+    chk(not desaccords,
+        f"…et là où les DEUX existent, elles désignent la même fenêtre : deux clés qui divergent "
+        f"feraient calibrer sur un écran et décoder sur un autre ({desaccords or 'aucun écart'})")
+    sans_stimulus = [s.id for s in registry.MODES if s.stimulus_id and not s.stream]
+    chk(not sans_stimulus,
+        f"…et aucun mode ne déclare un stimulus sans publier de flux ({sans_stimulus or 'aucun'})")
 
     # Un réglage sans effet sur le décodage ne reconstruit RIEN. On compare l'objet lui-même et
     # pas la phase : les deux chemins laissent le mode en « warmup » juste après un démarrage, donc

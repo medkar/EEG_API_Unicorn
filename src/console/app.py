@@ -165,6 +165,9 @@ class Console(QMainWindow):
                 continue          # pas de page pour un mode que le moteur ne sait pas faire
             page = ModePage(spec, self)
             page.retour.connect(self.show_grid)
+            # Le MÊME point d'arrivée que la tuile de la grille : un seul endroit décide ce que
+            # « démarrer » veut dire, donc un refus se comporte pareil des deux côtés.
+            page.marche.connect(self._demarrer)
             self.pages[spec["id"]] = page
             self.stack.addWidget(page)
 
@@ -602,11 +605,17 @@ class Console(QMainWindow):
     def _lancer_fenetre(self, mode_id, calibrer):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
         spec = self.catalogue.get(mode_id) or {}
-        stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
+        # ⚠️ DEUX clés distinctes, et c'est tout le correctif du 2026-09-21 : la fenêtre du
+        # PROTOCOLE d'entraînement (`calibration.stimulus_id`) n'est pas celle du DÉCODAGE
+        # (`spec["stimulus_id"]`). Elles coïncident pour le P300, l'ErrP et le c-VEP, ce qui a
+        # caché le défaut ; le SSVEP a un stimulus et aucune calibration, donc il n'avait rien.
+        stimulus_id = ((spec.get("calibration") or {}).get("stimulus_id") if calibrer
+                       else spec.get("stimulus_id"))
         if not stimulus_id:
+            quoi = "calibration" if calibrer else "stimulus"
             return {"accepted": False,
                     "reason": f"« {spec.get('label', mode_id)} » ne déclare aucune fenêtre de "
-                              f"stimulus : il n'y a rien à lancer."}
+                              f"{quoi} : il n'y a rien à lancer."}
         # La case « Journal de séance » de la page, si la fenêtre sait la tenir. `--log` SANS
         # valeur : c'est la fenêtre qui choisit son nom horodaté, la console ne compose aucun
         # chemin — elle reste un client qui n'écrit jamais sur le disque.
@@ -615,6 +624,18 @@ class Console(QMainWindow):
         journal = getattr(page, "journal", None)
         if journal is not None and journal.isChecked():
             options.append(stimulus_registry.JOURNAL[stimulus_id])
+        # 🔴 Et les FRÉQUENCES du mode, quand la fenêtre sait les recevoir. Sans elles, le
+        # stimulus affiche le jeu du dépôt pendant que le moteur corrèle sur celui de la console :
+        # aucune exception, aucun compteur, le mode ne détecte simplement plus rien. C'est ce que
+        # le réglage « Fréquences des cibles » PROMET depuis toujours et ne tenait pas.
+        #
+        # ⚠️ En CALIBRATION on ne les passe pas : aucune des trois fenêtres de calibration
+        # n'affiche de fréquences, et `option_frequences` rendrait () de toute façon — mais on
+        # s'appuie sur le REGISTRE pour le dire, pas sur cette ligne, qui ne fait que lui fournir
+        # ce qu'il demande.
+        reglages = ((self._dernier_etat.get("modes_state") or {}).get(mode_id) or {}).get("params") \
+            or (self._dernier_etat.get("reglages") or {}).get(mode_id) or {}
+        options.extend(stimulus_registry.option_frequences(stimulus_id, reglages.get("freqs")))
         return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
                                    label=spec.get("label", mode_id), options=options)
 
@@ -2282,11 +2303,77 @@ def _smoke():
     chk(console.stack.currentWidget() is page_p3 and not journal,
         f"« Annuler » revient sur la page d'origine sans rien lancer ({journal})")
 
-    # Les boutons sont posés par le CONTRAT, pas par une liste écrite ici. Le SSVEP n'a ni
-    # calibration ni stimulus ; l'ErrP en déclare une que le moteur ne sait pas encore jouer.
+    # Les boutons sont posés par le CONTRAT, pas par une liste écrite ici — et les DEUX questions
+    # sont distinctes : « ce mode s'entraîne-t-il » (`calibration`) et « ce mode a-t-il un
+    # stimulus » (`stimulus_id`).
+    #
+    # 🔴 Le SSVEP est le cas qui a fait tomber l'ancienne règle. Il n'a AUCUNE calibration — la
+    # CCA n'apprend rien — mais il a bel et bien un stimulus : la fenêtre qui fait clignoter ses
+    # cibles. Tant que le bouton était conditionné à `calibration.stimulus_id`, il n'existait
+    # nulle part, donc le seul mode déjà validé sur un cerveau ne pouvait pas être éprouvé depuis
+    # l'application. Trouvé en séance casque le 2026-09-21, pas par un test.
     chk(console.pages["ssvep"].bouton_calibrer is None
-        and console.pages["ssvep"].bouton_stimulus is None,
-        "un mode sans calibration n'expose aucun de ces deux boutons")
+        and console.pages["ssvep"].bouton_stimulus is not None,
+        "le SSVEP n'a pas de calibration (la CCA n'apprend rien) mais IL A un stimulus : un "
+        "bouton, pas deux")
+    chk(console.pages["neuro"].bouton_calibrer is None
+        and console.pages["neuro"].bouton_stimulus is None,
+        "…tandis qu'un mode PASSIF n'a ni l'un ni l'autre — la règle ne tire pas trop large")
+    # Et la réciproque, sur le contrat lui-même : aucune clé de stimulus ne sort de nulle part.
+    orphelines = [s["id"] for s in registry.catalog()
+                  if s.get("stimulus_id") and s["stimulus_id"] not in stim_registry.FENETRES]
+    chk(not orphelines,
+        f"…et chaque `stimulus_id` déclaré par un mode désigne une fenêtre que le registre sait "
+        f"lancer ({orphelines or 'aucune orpheline'})")
+
+    # --- 🔴 LE STIMULUS SSVEP PART AVEC LES FRÉQUENCES DU MODE -----------------------------
+    #
+    # Sans ça, la fenêtre affiche le jeu du DÉPÔT pendant que le moteur corrèle sur celui de la
+    # console : aucune exception, aucun compteur, le mode ne détecte simplement plus rien. C'est
+    # ce que le réglage « Fréquences des cibles » promet depuis toujours et ne tenait pas.
+    ssvep_qui_tourne = {**state, "quality": qualite_saine, "calibration": None}
+    ssvep_qui_tourne["modes_state"] = {**(state.get("modes_state") or {}), "ssvep": {
+        "id": "ssvep", "label": "SSVEP", "family": "actif", "phase": "running", "published": True,
+        "params": {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.0},
+        "instruction": "", "stream": "decoded_ssvep", "channels": [], "rest_report": None,
+        "output": None}}
+    console.apply_state(ssvep_qui_tourne)
+    journal.clear()
+    processus.clear()
+    console.pages["ssvep"].bouton_stimulus.click()
+    console.contact.bouton_lancer.click()
+    argv = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(argv and "--freqs" in argv[0],
+        f"« Lancer le stimulus » passe les fréquences À LA FENÊTRE ({argv})")
+    chk(argv and "12,15,20" in argv[0],
+        f"…et ce sont celles du MODE, pas celles du dépôt (15, 20, 8.571) ({argv[0][-2:]})")
+    chk(argv and "--calibrer" not in argv[0],
+        f"…sans --calibrer : on décode, on n'entraîne pas ({argv[0][-3:]})")
+    console.lanceur.arreter()
+
+    # --- 🔴 LA PAGE SAIT DÉMARRER SON MODE, ET MONTRE UN RÉGLAGE RETENU ---------------------
+    #
+    # Deux culs-de-sac trouvés en séance casque le 2026-09-21. La page affichait « arrêté » sans
+    # offrir de quoi y remédier ; et un réglage posé sur un mode arrêté était accepté, retenu,
+    # appliqué au démarrage — mais le champ gardait l'ancienne valeur, donc l'écran disait le
+    # contraire de la vérité. Rapporté tel quel : « mon pic alpha n'a pas été reporté ».
+    page_ss = console.pages["ssvep"]
+    chk(page_ss.bouton_marche is not None and page_ss.bouton_marche.text() == "Arrêter",
+        f"mode qui TOURNE : la page propose « Arrêter » ({None if page_ss.bouton_marche is None else page_ss.bouton_marche.text()})")
+    ssvep_arrete = {**state, "quality": qualite_saine, "calibration": None,
+                    "modes_state": {}, "reglages": {"ssvep": {
+                        "freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.5}}}
+    console.apply_state(ssvep_arrete)
+    chk(page_ss.bouton_marche.text() == "Démarrer",
+        f"…mode ARRÊTÉ : elle propose « Démarrer », et le sens vient de l'état REÇU, jamais d'une "
+        f"bascule tenue dans l'interface ({page_ss.bouton_marche.text()})")
+    chk(abs(page_ss.formulaire.champs["alpha_hz"].value() - 10.5) < 1e-9,
+        f"…et le réglage RETENU s'affiche, alors que le mode ne tourne pas : sinon l'écran dit le "
+        f"contraire de la vérité ({page_ss.formulaire.champs['alpha_hz'].value()})")
+    journal.clear()
+    page_ss.bouton_marche.click()
+    chk([e for e in journal if e[0] == "commande"],
+        f"…et le bouton SOUMET vraiment, par le même chemin que la tuile ({journal})")
     chk(console.pages["mi"].bouton_calibrer is not None
         and console.pages["mi"].bouton_stimulus is None,
         "le MI se calibre mais n'a AUCUNE fenêtre : le moteur mène seul son protocole")

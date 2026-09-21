@@ -200,6 +200,10 @@ SPEC = ModeSpec(
     summary="Quelle cible clignotante l'utilisateur regarde, ~5 fois par seconde.",
     status="moteur",
     key_channels=tuple(OCCIPITAL),   # les 4 occipitales : le SSVEP y est maximal
+    # La fenêtre qui fait clignoter les cibles PENDANT le décodage. Le SSVEP n'a aucune
+    # calibration (la CCA n'apprend rien) : sans ce champ, son bouton « Lancer le stimulus »
+    # n'existait nulle part, et on ne pouvait pas éprouver le mode depuis l'application.
+    stimulus_id="ssvep",
     params=(
         Param(
             key="freqs",

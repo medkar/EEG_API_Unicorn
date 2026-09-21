@@ -1,11 +1,24 @@
 """Stimulus SSVEP — les flèches clignotantes, et le run GUIDÉ qui permet de le MESURER.
 
-⚠️ **TROIS flèches, pas quatre.** Ce fichier a annoncé « 4 flèches » jusqu'au 2026-09-09, dans sa
-docstring, dans son `--help` et dans le briefing de la mesure. `choose_frequencies` en rend TROIS
-(AVANT, GAUCHE, DROITE) à 60, 75, 120 et 144 Hz — vérifié aux quatre —, et le rendu ne dessine que
-ce plan. La quatrième est un vestige du banc d'essai robot, retiré depuis. Le nombre vient donc du
-PLAN et de nulle part ailleurs : quelqu'un qui s'assoit 3,6 minutes devant cet écran ne doit pas y
-chercher une flèche qui n'existe pas.
+⚠️ **TROIS flèches par défaut, quatre au maximum.** Ce fichier a annoncé « 4 flèches » jusqu'au
+2026-09-09, dans sa docstring, dans son `--help` et dans le briefing de la mesure, alors que
+`choose_frequencies` en rendait TROIS (AVANT, GAUCHE, DROITE). Le nombre vient du PLAN et de nulle
+part ailleurs : quelqu'un qui s'assoit 3,6 minutes devant cet écran ne doit pas y chercher une
+flèche qui n'existe pas. Depuis le 2026-09-21, `--freqs` décide de ce plan — donc le nombre de
+flèches est la LONGUEUR de la liste, entre 2 et 4. Quatre est la borne de la GÉOMÉTRIE (elle a
+quatre directions), pas celle du moteur, qui accepte jusqu'à 8 cibles.
+
+🔴 **`--freqs`, et pourquoi il a manqué.** Jusqu'au 2026-09-21 cette fenêtre affichait le jeu du
+DÉPÔT quoi qu'on règle dans la console : un étudiant qui pose 12 · 15 · 20 voyait clignoter
+15 · 20 · 8,571, et le moteur corrélait contre des sinusoïdes que PERSONNE n'affichait. Rien ne
+lève, rien ne compte, le mode ne détecte simplement plus rien — la panne caractéristique de ce
+produit. Trouvé en séance casque, pas par un test.
+
+⚠️ Et le corollaire, qui compte autant : une fréquence qui ne divise pas le rafraîchissement est
+**REFUSÉE**, jamais arrondie en silence. `choose_frequencies` ajuste `frames_per_cycle` sans rien
+dire — une valeur impossible deviendrait donc une AUTRE fréquence, affichée sans prévenir, pendant
+que le moteur corrèle sur celle qu'on lui a demandée. La règle du refus n'est pas réécrite ici :
+c'est celle du moteur (`core/modes/contract.py`, contrainte `divise_le_refresh`), APPELÉE.
 
 Brique « affichage » du produit. **Ce programme n'ouvre PAS le casque** : il ne fait que présenter
 les stimuli visuels et, en mode guidé, publier des marqueurs. C'est ce qui lui permet de tourner
@@ -57,15 +70,33 @@ taux complet, et c'est le chiffre entier qu'on irait ensuite citer.
 
 ⚠️ **L'ORDRE DES ESSAIS est entrelacé et tiré au sort, et c'est un INVARIANT** — cf. `_schedule`.
 
+--- Les frames SAUTÉES ---------------------------------------------------------------------------
+
+⚠️ **Une image figée n'est pas un ralentissement : c'est une cible qui CESSE de clignoter.** Pendant
+la durée d'une frame sautée, la flèche n'émet plus à la fréquence annoncée, donc la réponse SSVEP
+cherchée n'existe plus — et le moteur, lui, continue de corréler. Observé en séance le 2026-09-21
+(« périodiquement, l'image se figeait ») : rien n'a levé, rien n'a compté, et le verdict de la
+mesure n'en savait rien. Le compteur `sautees` est celui de `stimulus/cvep.py`, à l'identique :
+même seuil, même façon de mesurer l'écart entre deux flips, et la même honnêteté — **le compte est
+AFFICHÉ, jamais corrigé**. Il tourne dans les DEUX modes, s'affiche au HUD en direct, et
+`bilan_de_seance` l'imprime en fin de séance.
+
 Lancer :
     python src/stimulus/ssvep.py                 # plein écran, ESC pour quitter
     python src/stimulus/ssvep.py --windowed      # fenêtre 1000x700 (dev)
     python src/stimulus/ssvep.py --refresh 60    # forcer le refresh (sinon auto-mesuré)
     python src/stimulus/ssvep.py --seconds 20    # auto-quit après 20 s
+    python src/stimulus/ssvep.py --freqs 12,15,20     # LES FRÉQUENCES DU MODE, dans cet ordre —
+                                                      # c'est ce que la console passe elle-même
+    python src/stimulus/ssvep.py --freqs 10,12,15,20  # quatre cibles (la géométrie en a quatre)
     python src/stimulus/ssvep.py --guide         # le run GUIDÉ (la console le lance elle-même)
     python src/stimulus/ssvep.py --guide --trials 6   # plus court (6 essais par cible)
     python src/stimulus/ssvep.py --guide --seed 5     # rejouer le MÊME ordre d'essais
     python src/stimulus/ssvep.py --smoke         # test sans écran (CI), n'affiche rien
+
+Sortie : 0 si tout s'est déroulé, 1 si une séance guidée a été INTERROMPUE, **2 si les fréquences
+demandées ont été refusées** — rien n'a alors été affiché. La console lance cette fenêtre : « elle
+a refusé de s'ouvrir » et « elle s'est arrêtée en route » ne doivent pas se confondre.
 """
 
 import argparse
@@ -80,7 +111,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 
-from core.config import (MARKER_STREAM_DEFAULT,  # noqa: E402
+from core.config import (COMMANDS, MARKER_STREAM_DEFAULT,  # noqa: E402
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, SSVEP_WARMUP_S,
                          choose_frequencies, use_utf8_console)
@@ -103,6 +134,46 @@ DIM = (110, 110, 130)
 # utilisation de ce bleu déplacerait le centroïde et le test chercherait la mauvaise flèche.
 CUE = (60, 130, 255)
 CUE_EPAISSEUR_PX = 8    # épaisseur du liseré de désignation, en pixels
+
+# La fenêtre de dev (`--windowed`) et l'écran factice de `--smoke`. Nommée plutôt qu'écrite deux
+# fois : `--smoke` relit des PIXELS à des coordonnées calculées sur cette taille, et deux valeurs
+# feraient regarder le test à côté des flèches — sans rien casser, juste en ne prouvant rien.
+TAILLE_FENETRE = (1000, 700)
+
+# La géométrie, en proportion du plus petit côté. Une seule écriture : `positions_cibles` la sert
+# au rendu ET à `--smoke`.
+DIST_RATIO = 0.30       # éloignement des flèches par rapport au centre
+TAILLE_RATIO = 0.13     # demi-taille d'une flèche
+
+# Les QUATRE places de la géométrie, DANS L'ORDRE où `--freqs` les remplit. Les trois premières
+# sont celles du dépôt (`core.config.COMMANDS`), LUES et non recopiées : donner à `--freqs` le trio
+# du dépôt doit redonner EXACTEMENT l'écran du dépôt, et une recopie divergerait au premier
+# changement de `COMMANDS`.
+#
+# ⚠️ La quatrième n'est qu'une PLACE. Elle ne rend aucun jeu de quatre fréquences bon : savoir si
+# quatre cibles tiennent à ce rafraîchissement, hors du pic alpha et séparables, est le métier du
+# moteur (`core.config.propose_frequencies`), pas de cet écran. Elle est là parce que la géométrie
+# a toujours eu quatre directions et n'en montrait que trois — un étudiant qui règle quatre cibles
+# dans la console a droit à quatre flèches, pas à un refus d'affichage.
+EMPLACEMENTS = list(COMMANDS) + [{"name": "ARRIERE", "dir": "down", "jx": 0.0, "jy": -0.6}]
+
+# Une image qui met plus que ça à basculer est une frame SAUTÉE. 1,5 période : un demi-intervalle
+# de marge de part et d'autre, assez pour ne pas compter la gigue ordinaire du planificateur,
+# assez peu pour attraper une image manquée.
+#
+# ⚠️ **La MÊME valeur et la MÊME mesure que `stimulus/cvep.py:SEUIL_SAUT`, et c'est délibéré** :
+# deux fenêtres qui comptent « la même chose » de deux façons finissent par rendre deux chiffres
+# qu'on n'ose plus comparer. Les deux constantes sont aujourd'hui chacune chez elle parce qu'aucun
+# module partagé ne les accueille (`core/` ne connaît pas les écrans) ; leur ACCORD est donc tenu
+# par une assertion de `--smoke` (section H), pas par la discipline. À la troisième fenêtre qui en
+# aura besoin, ceci déménage — comme `core/errp_track.py` l'a fait pour la piste ErrP.
+SEUIL_SAUT = 1.5
+
+# Au-dessus de cette PROPORTION de frames sautées, le bilan de fin AVERTIT au lieu de se contenter
+# de compter. 1 % de 60 Hz = une image figée toutes les 1,7 s : à ce régime, une fixation de 4 s en
+# contient deux, et le taux d'émission mesuré n'est plus celui du cerveau. En dessous, on compte
+# quand même — le chiffre est toujours imprimé.
+SEUIL_ALERTE_SAUTEES = 0.01
 
 # Ce que le MOTEUR jette avant d'enregistrer pour de bon : sa chauffe (l'offset DC de l'Unicorn
 # dérive après ouverture de session — 10⁵ µV en rampe, mesuré le 2026-07-27). Valeur LUE dans
@@ -152,6 +223,147 @@ def arrow_polygon(cx, cy, size, direction):
         ry = x * s + y * c
         pts.append((cx + rx, cy + ry))
     return pts
+
+
+def positions_cibles(plan, size, dist_ratio=DIST_RATIO):
+    """Les centres des flèches, DANS L'ORDRE DU PLAN — donc dans l'ordre des indices publiés.
+
+    ⚠️ **Dans l'ordre du plan, jamais indexée par direction.** L'indice qu'un `cue` publie, et que
+    le moteur compare au rang de SA liste de fréquences, est un rang dans ce plan. Retrouver « la
+    cible 1 » par sa direction supposerait que l'ordre des directions est celui du plan, ce qui
+    n'est vrai que par accident — et devient faux dès qu'un `--freqs` réordonne les cibles.
+
+    Écrite UNE fois : elle sert au rendu et à `--smoke`, qui relit les pixels à ces points exacts.
+    Deux géométries et le test regarderait à côté des flèches — sans rien casser, juste en ne
+    prouvant plus rien. Même raison, même forme que `stimulus/cvep.py:positions_cibles`.
+    """
+    w, h = size
+    cx, cy = w / 2.0, h / 2.0
+    dist = min(w, h) * dist_ratio
+    par_direction = {"up": (cx, cy - dist), "down": (cx, cy + dist),
+                     "left": (cx - dist, cy), "right": (cx + dist, cy)}
+    return [par_direction[c["dir"]] for c in plan]
+
+
+# --- Les fréquences AFFICHÉES : celles du mode, ou rien ---------------------
+
+class FreqsRefusees(ValueError):
+    """Le jeu de fréquences demandé n'est pas affichable ici. Rien n'a été affiché."""
+
+
+def parse_freqs(texte):
+    """`(liste de fréquences, None)` ou `(None, raison)`. Le format de `--freqs`, comme `--mode`.
+
+    Fonction PURE, donc testable sans écran — et c'est la moitié « lecture » d'un geste dont la
+    console tient la moitié « écriture » (`stimulus/registry.py:option_frequences`). Les deux
+    moitiés d'un même geste, testées chacune sur son propre décor et jamais sur leur accord, sont
+    la forme exacte des deux défauts que la QA du 2026-09-21 a trouvés ; leur aller-retour est
+    donc vérifié par `--smoke`.
+    """
+    morceaux = [m.strip() for m in str(texte).split(",") if m.strip()]
+    if not morceaux:
+        return None, ("« --freqs » est vide — donne les fréquences séparées par des virgules, "
+                      "par exemple 12,15,20")
+    out = []
+    for m in morceaux:
+        try:
+            out.append(float(m))
+        except ValueError:
+            return None, (f"« --freqs » : « {m} » n'est pas un nombre. Le séparateur est la "
+                          f"VIRGULE et le séparateur décimal le POINT — écris 15,20,8.571 et non "
+                          f"15,20,8,571, qui ferait quatre cibles dont une à 571 Hz")
+    return out, None
+
+
+def commandes_pour(freqs):
+    """Les commandes du plan pour une liste de fréquences IMPOSÉE, dans CET ordre.
+
+    ⚠️ L'ordre est celui de la liste, et ce n'est pas cosmétique : l'indice qu'un `cue` publie est
+    un rang dans ce plan, et le moteur le compare au rang de sa propre liste. Trier ici ferait
+    décrire la cible 0 par la fréquence d'une autre — sans qu'aucune exception ne le dise, et avec
+    un taux d'émission parfaitement plausible.
+    """
+    return [{**EMPLACEMENTS[i], "desired_hz": float(f)} for i, f in enumerate(freqs)]
+
+
+def verifie_freqs(freqs, refresh):
+    """`None` si ce jeu est affichable ET décodable ici, sinon la RAISON en clair.
+
+    ⚠️ **La règle n'est pas réécrite ici, elle est APPELÉE.** Bande passante, séparabilité et
+    surtout « diviseur entier du rafraîchissement » — avec sa tolérance RELATIVE, celle qui
+    accepte le « 8.57143 » que la console écrit pour 60/7 — vivent dans le contrat du mode
+    (`core/modes/contract.py`). Une seconde écriture accepterait un jour ce que le moteur refuse,
+    ou l'inverse : la fenêtre afficherait alors un jeu que le décodeur n'a pas, c'est-à-dire
+    exactement la panne que `--freqs` existe pour supprimer.
+
+    Le seul refus qui appartienne à la FENÊTRE est le nombre de places. Le moteur accepte jusqu'à
+    8 cibles ; cet écran a quatre directions et ne sait pas en dessiner davantage.
+    """
+    # Import TARDIF : la fenêtre doit rester importable et lançable sans traîner le décodeur du
+    # mode derrière elle. Même geste que `stimulus/cvep.py` pour `core.modes`.
+    from core.modes.contract import validate
+    from core.modes.ssvep import SPEC
+
+    freqs = list(freqs)
+    if len(freqs) > len(EMPLACEMENTS):
+        return (f"« --freqs » : {len(freqs)} fréquences demandées, mais cet écran n'a que "
+                f"{len(EMPLACEMENTS)} places ("
+                + ", ".join(e["name"] for e in EMPLACEMENTS)
+                + "). Le moteur, lui, en accepte davantage : c'est la GÉOMÉTRIE qui borne, pas le "
+                  "décodage.")
+    _valides, raison = validate(SPEC, {"freqs": freqs, "refresh_hz": float(refresh)})
+    return raison
+
+
+def plan_du_stimulus(refresh, freqs=None):
+    """Le plan RÉELLEMENT affiché. Lève `FreqsRefusees` si `freqs` n'est pas affichable ici.
+
+    `freqs=None` — l'absence de `--freqs` — rend le plan du dépôt, inchangé : c'est le seul chemin
+    qui n'est pas validé, et c'est voulu. `choose_frequencies` y ARRONDIT au diviseur le plus
+    proche (à 75 Hz, les 15 · 20 · 8,571 du dépôt deviennent 15 · 18,75 · 8,33), ce qui est le
+    comportement historique de cette fenêtre lancée seule. Dès qu'on IMPOSE des fréquences, en
+    revanche, cet arrondi devient le mensonge qu'on traque : le moteur corrélerait sur ce qu'on a
+    demandé pendant que l'écran montre autre chose. On refuse donc au lieu d'arrondir.
+    """
+    if freqs is None:
+        return choose_frequencies(refresh)
+    raison = verifie_freqs(freqs, refresh)
+    if raison is not None:
+        raise FreqsRefusees(raison)
+    return choose_frequencies(refresh, commands=commandes_pour(freqs))
+
+
+# --- Le bilan de fin de séance --------------------------------------------
+
+def bilan_de_seance(frames, sautees, refresh):
+    """Le bilan de fin : ce qu'on IMPRIME et ce que `--smoke` relit, au même endroit.
+
+    Même forme, même vocabulaire et même honnêteté que `stimulus/cvep.py:bilan_de_seance` — **le
+    compte est AFFICHÉ, jamais corrigé**. Un bilan qui ne serait qu'une suite de `print` n'est
+    gardé par aucune assertion ; il rend donc un dictionnaire, que `run` recopie dans son paramètre
+    `bilan`, et les deux ne peuvent pas diverger puisqu'il n'y a qu'une source.
+
+    ⚠️ En mode GUIDÉ, ce bilan est ce que la mesure « Taux d'émission SSVEP » peut lire dans le
+    terminal. Sans lui, un taux mesuré sur un stimulus qui s'est figé est indiscernable d'un taux
+    mesuré sur un stimulus propre — et c'est le chiffre entier qu'on irait ensuite citer.
+    """
+    part = (sautees / frames) if frames else 0.0
+    if frames:
+        print(f"[ssvep-stim] fin : {frames} frames affichées, {sautees} sautée(s) ({part:.1%})")
+    else:
+        print("[ssvep-stim] fin : aucune frame affichée")
+    avertissement = None
+    if frames and part > SEUIL_ALERTE_SAUTEES:
+        avertissement = (
+            f"⚠️ {part:.1%} des images ont été SAUTÉES (au-delà de "
+            f"{SEUIL_ALERTE_SAUTEES:.0%}) : pendant ce temps les flèches ne clignotaient PAS aux "
+            f"fréquences annoncées, et le moteur corrélait quand même. Ferme ce qui charge la "
+            f"machine, reste en PLEIN ÉCRAN (c'est là qu'il y a un vsync), et REFAIS la mesure — "
+            f"un taux d'émission pris sur un stimulus qui se fige mesure la machine, pas le "
+            f"cerveau.")
+        print(f"[ssvep-stim] {avertissement}")
+    return {"frames": frames, "sautees": sautees, "part_sautees": part,
+            "refresh": float(refresh), "avertissement": avertissement}
 
 
 # --- Mesure du refresh écran ----------------------------------------------
@@ -205,16 +417,25 @@ def schedule(n_targets, per_target, rng):
 # --- Boucle principale ----------------------------------------------------
 
 def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
-        per_target=SSVEP_GUIDE_TRIALS_PER_TARGET, seed=None,
+        per_target=SSVEP_GUIDE_TRIALS_PER_TARGET, seed=None, freqs=None,
         stream=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, attente_moteur_s=None,
-        journal=None, sonde_ecran=None,
+        journal=None, bilan=None, sonde_ecran=None,
         cue_s=None, fix_s=None, gap_s=None, repos_s=None):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
 
-    ⚠️ Les deux modes partagent le MÊME rendu du clignotement et le MÊME compteur de frames.
-    Écrire une seconde boucle « pour le mode guidé » rouvrirait la duplication que ce dépôt a passé
-    son temps à supprimer ailleurs — et surtout, le clignotement du guidé cesserait d'être
-    exactement celui du décodage, donc le taux mesuré ne dirait plus rien du taux réel.
+    ⚠️ Les deux modes partagent le MÊME rendu du clignotement, le MÊME compteur de frames et le
+    MÊME compteur de frames SAUTÉES. Écrire une seconde boucle « pour le mode guidé » rouvrirait la
+    duplication que ce dépôt a passé son temps à supprimer ailleurs — et surtout, le clignotement
+    du guidé cesserait d'être exactement celui du décodage, donc le taux mesuré ne dirait plus rien
+    du taux réel.
+
+    `freqs` IMPOSE le jeu de cibles (l'option `--freqs`, celle que la console passe). `None` garde
+    le jeu du dépôt. Une liste inaffichable à ce rafraîchissement lève `FreqsRefusees` **sans rien
+    afficher** : l'arrondir en silence ferait décoder le moteur contre une sinusoïde absente.
+
+    `bilan`, s'il est fourni, reçoit le dictionnaire de `bilan_de_seance` — c'est ce qui permet à
+    `--smoke` d'ASSERTER sur le compte de frames sautées au lieu de le laisser en `print` que rien
+    ne garde.
 
     `journal`, s'il est fourni, reçoit `(marqueur, horodatage)` pour CHAQUE marqueur réellement
     poussé — c'est ce qui permet à `--smoke` de vérifier la séance réelle et pas une séquence
@@ -245,7 +466,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     pygame.font.init()
 
     if windowed or smoke:
-        size = (1000, 700)
+        size = TAILLE_FENETRE
         flags = pygame.SCALED
     else:
         info = pygame.display.Info()
@@ -262,7 +483,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
     if refresh is None:
         refresh = 60.0 if smoke else measure_refresh(pygame, win)
-    plan = choose_frequencies(refresh)
+    try:
+        plan = plan_du_stimulus(refresh, freqs)
+    except FreqsRefusees:
+        # ⚠️ On FERME avant de propager : un refus qui laisse un écran noir en plein écran par
+        # dessus le terminal cache justement le message qui explique le refus.
+        pygame.quit()
+        raise
 
     print(f"[ssvep-stim] refresh ecran   : {refresh:.0f} Hz")
     print(f"[ssvep-stim] taille fenetre  : {size[0]}x{size[1]}")
@@ -273,20 +500,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     w, h = size
     cx, cy = w / 2, h / 2
     span = min(w, h)
-    dist = span * 0.30   # éloignement des flèches par rapport au centre
-    asize = span * 0.13  # demi-taille d'une flèche
-    pos = {
-        "up":    (cx, cy - dist),
-        "down":  (cx, cy + dist),
-        "left":  (cx - dist, cy),
-        "right": (cx + dist, cy),
-    }
-    polys = {c["dir"]: arrow_polygon(*pos[c["dir"]], asize, c["dir"]) for c in plan}
+    asize = span * TAILLE_RATIO  # demi-taille d'une flèche
     # Les positions des cibles DANS L'ORDRE DU PLAN — c'est-à-dire dans l'ordre des indices que
-    # les marqueurs `cue` publient et que le moteur compare à ses fréquences. Le dictionnaire
-    # `pos`, lui, est indexé par direction : s'en servir pour retrouver « la cible 1 » supposerait
-    # que l'ordre des directions est celui du plan, ce qui n'est vrai que par accident.
-    positions = [pos[c["dir"]] for c in plan]
+    # les marqueurs `cue` publient et que le moteur compare à ses fréquences. Tout ce qui suit est
+    # indexé par ce RANG, jamais par direction : `--freqs` réordonne les cibles, et un
+    # dictionnaire par direction ferait alors décrire la cible 1 par la flèche d'une autre.
+    positions = positions_cibles(plan, size)
+    polys = [arrow_polygon(px, py, asize, c["dir"]) for (px, py), c in zip(positions, plan)]
 
     font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
     hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
@@ -295,6 +515,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     clock = pygame.time.Clock()
     fps = int(refresh) + 5
     frame = 0
+    sautees = 0              # images FIGÉES : cf. le ⚠️ « Les frames SAUTÉES » en tête de module
+    t_flip_precedent = None  # l'instant du flip précédent — un ÉCART, donc pas de prédécesseur
+    #                          pour la toute première image, qui ne peut jamais être comptée
     running = True
     t_start = time.perf_counter()
     fps_acc, fps_n, fps_show = 0.0, 0, refresh
@@ -338,17 +561,16 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         taux mesuré inutilisable pour prédire le décodage.
         """
         win.fill(BG)
-        for c in plan:
-            d = c["dir"]
-            pygame.draw.polygon(win, OUTLINE, polys[d], 2)  # repère statique
+        for i, c in enumerate(plan):
+            pygame.draw.polygon(win, OUTLINE, polys[i], 2)  # repère statique
             if is_on(frame, c["frames_per_cycle"]):
-                pygame.draw.polygon(win, ON_COLOR, polys[d])  # phase ON
+                pygame.draw.polygon(win, ON_COLOR, polys[i])  # phase ON
             # étiquette statique (n'interfère pas avec le clignotement)
             label = font.render(f"{c['name']}  {c['actual_hz']:.2f} Hz", True, LABEL)
-            px, py = pos[d]
+            px, py = positions[i]
             win.blit(label, label.get_rect(center=(px, py + asize * 1.35)))
         if designee is not None:
-            pygame.draw.polygon(win, CUE, polys[plan[designee]["dir"]], CUE_EPAISSEUR_PX)
+            pygame.draw.polygon(win, CUE, polys[designee], CUE_EPAISSEUR_PX)
         if croix:
             pygame.draw.line(win, DIM, (cx - 14, cy), (cx + 14, cy), 3)
             pygame.draw.line(win, DIM, (cx, cy - 14), (cx, cy + 14), 3)
@@ -358,6 +580,38 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         if sous:
             s = hud_font.render(sous, True, DIM)
             win.blit(s, s.get_rect(center=(int(cx), int(h * 0.10) + big_font.get_height())))
+        # ⚠️ Le HUD, EN DERNIER et dans le coin haut-gauche, où il ne recouvre aucune flèche : ce
+        # qu'on ajoute par-dessus un stimulus change ce que l'œil reçoit ET ce que les sondes en
+        # pixels de `--smoke` relisent. Il est DANS ce dessin partagé, donc le mode guidé l'a
+        # aussi — il n'affichait rien du tout jusqu'au 2026-09-21, pas même le FPS, alors que
+        # c'est lui qui MESURE : la seule chose qui distingue « ça marche » de « ça a l'air de
+        # marcher » manquait justement là où elle compte.
+        hud = hud_font.render(f"{fps_show:.0f} fps  |  sautées {sautees}  |  ESC = quitter",
+                              True, HUD)
+        win.blit(hud, (12, 10))
+
+    def apres_flip():
+        """Le comptage qui suit CHAQUE image affichée : une frame de plus, et une frame SAUTÉE si
+        le basculement a pris plus de `SEUIL_SAUT` périodes.
+
+        ⚠️ **Écrit UNE fois pour le décodage libre ET pour le run guidé.** Deux compteurs, même
+        posés le même jour, cessent de compter la même chose au premier changement — et ce serait
+        le mode guidé, celui qui MESURE, qui hériterait du plus vieux. Même mesure, au même
+        endroit du tour de boucle, que `stimulus/cvep.py` : l'écart entre deux instants pris
+        juste APRÈS le flip.
+        """
+        nonlocal frame, sautees, t_flip_precedent, fps_acc, fps_n, fps_show
+        t_flip = time.perf_counter()
+        if t_flip_precedent is not None and (t_flip - t_flip_precedent) > SEUIL_SAUT / refresh:
+            sautees += 1
+        t_flip_precedent = t_flip
+        dt = clock.tick(fps) / 1000.0   # garde-fou si vsync absent
+        if dt > 0:
+            fps_acc += 1.0 / dt
+            fps_n += 1
+            if fps_n >= 30:
+                fps_show, fps_acc, fps_n = fps_acc / fps_n, 0.0, 0
+        frame += 1
 
     def phase(duree, marqueur=None, sonde=False, **kw):
         """Affiche pendant `duree` secondes en gardant le clignotement verrouillé à la frame.
@@ -367,7 +621,6 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         ne lève d'exception, le moteur prélève simplement sa fenêtre décalée. C'est le même geste,
         et la même raison, que l'horodatage des flashs de `stimulus/p300.py`.
         """
-        nonlocal frame, fps_acc, fps_n, fps_show
         premiere = True
         t_end = time.perf_counter() + duree
         while running and time.perf_counter() < t_end:
@@ -380,13 +633,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
                     emet(marqueur)
                     if sonde and sonde_ecran is not None:
                         sonde_ecran(win, list(positions))
-            dt = clock.tick(fps) / 1000.0
-            if dt > 0:
-                fps_acc += 1.0 / dt
-                fps_n += 1
-                if fps_n >= 30:
-                    fps_show, fps_acc, fps_n = fps_acc / fps_n, 0.0, 0
-            frame += 1
+            apres_flip()
         return running
 
     seance_complete = False
@@ -396,16 +643,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             while running:
                 poll()
                 dessine()
-                hud = hud_font.render(f"{fps_show:.0f} fps  |  ESC = quitter", True, HUD)
-                win.blit(hud, (12, 10))
                 pygame.display.flip()
-                dt = clock.tick(fps) / 1000.0   # garde-fou si vsync absent
-                if dt > 0:
-                    fps_acc += 1.0 / dt
-                    fps_n += 1
-                    if fps_n >= 30:
-                        fps_show, fps_acc, fps_n = fps_acc / fps_n, 0.0, 0
-                frame += 1
+                apres_flip()
                 if smoke and frame >= 30:
                     running = False
         else:
@@ -415,6 +654,12 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
                 outlet, attente_consommateur_s)
     finally:
         pygame.quit()
+
+    # Un BILAN, toujours, et dans les DEUX modes : « 0 frame sautée » doit se LIRE, pas se
+    # deviner. En guidé, c'est la seule trace que la mesure puisse relire dans le terminal.
+    resume = bilan_de_seance(frame, sautees, refresh)
+    if bilan is not None:
+        bilan.update(resume)
 
     if smoke and not guide:
         print("[ssvep-stim] smoke OK : rendu de 30 frames sans erreur (aucun ecran requis).")
@@ -536,6 +781,80 @@ def _cible_designee_a_l_ecran(surface, positions):
     centre = trouves.mean(axis=0)                    # (x, y) — array3d est indexé (x, y)
     distances = [(centre[0] - px) ** 2 + (centre[1] - py) ** 2 for px, py in positions]
     return int(np.argmin(distances))
+
+
+def _etats_a_l_ecran(surface, positions):
+    """Pour chaque cible et DANS L'ORDRE DU PLAN : True si elle est ALLUMÉE, lu dans les PIXELS.
+
+    Le point de lecture est le CENTRE de la flèche, qui tombe dans la tige : blanc plein quand la
+    phase est ON, fond noir sinon. Ni le contour (dessiné sur le bord), ni le liseré de
+    désignation (idem), ni l'étiquette (sous la flèche), ni le HUD (coin haut-gauche), ni le titre
+    du mode guidé (haut de l'écran) n'y passent — c'est ce qui fait de ce point une lecture de
+    l'ÉTAT du clignotement et de rien d'autre.
+    """
+    import pygame
+
+    arr = pygame.surfarray.array3d(surface)          # (largeur, hauteur, 3)
+    return [tuple(arr[int(x), int(y)]) == ON_COLOR for x, y in positions]
+
+
+def _periode_observee(suite):
+    """La plus petite période qui explique cette suite ON/OFF, ou None si aucune ne la couvre.
+
+    ⚠️ C'est la FRÉQUENCE AFFICHÉE, reconstruite depuis l'écran : `refresh / période`. On ne
+    demande pas au plan ce qu'il croit afficher — c'est justement le maillon qu'on soupçonne,
+    puisque `run()` a ignoré `--freqs` pendant tout le temps où cette option n'existait pas.
+
+    La recherche s'arrête à la moitié de la suite : une « période » qu'on n'a pas vue se répéter
+    au moins deux fois n'est pas une période, c'est un motif.
+    """
+    for p in range(2, len(suite) // 2 + 1):
+        if all(v == suite[i % p] for i, v in enumerate(suite)):
+            return p
+    return None
+
+
+def _rejouer_libre(freqs=None, cales=0):
+    """Joue le décodage libre sur un écran factice. Rend (périodes LUES DANS LES PIXELS, bilan,
+    cales réellement posées, flips comptés).
+
+    `cales` FABRIQUE des frames sautées, en retenant le flip assez longtemps pour dépasser
+    `SEUIL_SAUT`. C'est le seul moyen d'exercer le compteur de bout en bout — sous `dummy` il n'y
+    a jamais de vsync manqué, donc il resterait à 0 quoi qu'on fasse, et le neutraliser ne
+    rougirait rien. Même geste, même raison que la section C3 de `stimulus/cvep.py --smoke`.
+
+    ⚠️ Les premières images sont ÉPARGNÉES (`attendre`) : l'émetteur mesure un ÉCART entre deux
+    flips, donc la toute première image n'a pas de prédécesseur et ne peut par construction pas
+    être comptée. Caler les toutes premières ferait poser N cales pour N-1 comptées.
+    """
+    import pygame
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    # Là où regarder : la MÊME géométrie que le rendu, appelée et non recalculée ici.
+    positions = positions_cibles(plan_du_stimulus(60.0, freqs), TAILLE_FENETRE)
+    etats = []
+    compteur = {"restantes": int(cales), "faites": 0, "attendre": 5}
+    vrai_flip = pygame.display.flip
+
+    def flip_espion(*a, **k):
+        r = vrai_flip(*a, **k)
+        etats.append(_etats_a_l_ecran(pygame.display.get_surface(), positions))
+        if compteur["attendre"] > 0:
+            compteur["attendre"] -= 1
+        elif compteur["restantes"] > 0:
+            compteur["restantes"] -= 1
+            compteur["faites"] += 1
+            time.sleep(SEUIL_SAUT * 1.4 / 60.0)
+        return r
+
+    bilan = {}
+    pygame.display.flip = flip_espion
+    try:
+        run(smoke=True, refresh=60.0, freqs=freqs, bilan=bilan)
+    finally:
+        pygame.display.flip = vrai_flip
+    suites = [list(s) for s in zip(*etats)] if etats else []
+    return [_periode_observee(s) for s in suites], bilan, compteur["faites"], len(etats)
 
 
 def _smoke():
@@ -703,6 +1022,70 @@ def _smoke():
         f"entre deux marqueurs consécutifs il y a TOUJOURS au moins une frame affichée : le "
         f"marqueur décrit un écran déjà à l'écran, pas un écran à venir ({frames_entre})")
 
+    # --- G. `--freqs` DÉCIDE VRAIMENT DU PLAN, ET DANS L'ORDRE DONNÉ ---------------
+    #
+    # C'est la moitié « lecture » d'un geste dont `stimulus/registry.py` tient la moitié
+    # « écriture ». Les deux défauts trouvés par la QA du 2026-09-21 ont exactement cette forme :
+    # deux moitiés d'un même geste, chacune testée sur son propre décor, jamais sur leur accord.
+    lu, raison = parse_freqs("12,15,20")
+    chk(lu == [12.0, 15.0, 20.0] and raison is None,
+        f"« --freqs 12,15,20 » se lit comme trois fréquences ({lu}, {raison})")
+    plan_impose = plan_du_stimulus(60.0, [12.0, 15.0, 20.0])
+    chk([round(c["actual_hz"], 3) for c in plan_impose] == [12.0, 15.0, 20.0],
+        f"…et le plan AFFICHÉ porte ces fréquences-là, pas celles du dépôt "
+        f"({[round(c['actual_hz'], 3) for c in plan_impose]})")
+    # L'ORDRE, qui n'est pas cosmétique : l'indice qu'un `cue` publie est un rang dans ce plan, et
+    # le moteur le compare au rang de SA liste. Trier ferait décrire la cible 0 par la fréquence
+    # d'une autre — sans exception, et avec un taux d'émission parfaitement plausible.
+    plan_desordre = plan_du_stimulus(60.0, [20.0, 12.0, 15.0])
+    chk([round(c["actual_hz"], 3) for c in plan_desordre] == [20.0, 12.0, 15.0],
+        f"…dans l'ORDRE DONNÉ, jamais trié : le rang EST l'identifiant de la cible "
+        f"({[round(c['actual_hz'], 3) for c in plan_desordre]})")
+    # L'aller-retour avec la moitié « écriture ». Un séparateur qui divergerait entre les deux
+    # ferait lancer la fenêtre sur des fréquences muettes, et personne ne le verrait.
+    from stimulus.registry import option_frequences
+    ecrit = option_frequences("ssvep", [12.0, 15.0, 60.0 / 7])
+    relu, _r = parse_freqs(ecrit[1])
+    chk(ecrit[0] == "--freqs" and relu is not None
+        and all(abs(a - b) < 1e-3 for a, b in zip(relu, [12.0, 15.0, 60.0 / 7])),
+        f"ce que la console ÉCRIT, cette fenêtre le RELIT à l'identique ({ecrit} -> {relu})")
+
+    # --- H. UNE FRÉQUENCE IMPOSSIBLE EST REFUSÉE, JAMAIS ARRONDIE ------------------
+    #
+    # ⚠️ LE test de `--freqs`. `choose_frequencies` ajuste `frames_per_cycle` en silence : 17 Hz à
+    # 60 Hz deviendrait 15 Hz, affiché sans prévenir, pendant que le moteur corrèle sur 17. Il ne
+    # décoderait pas mal — il ne décoderait RIEN, et rien ne le dirait.
+    refuse = None
+    try:
+        plan_du_stimulus(60.0, [15.0, 17.0])
+    except FreqsRefusees as e:
+        refuse = str(e)
+    chk(refuse is not None and "diviseur" in refuse,
+        f"17 Hz à 60 Hz est REFUSÉ, avec la raison du MOTEUR ({(refuse or 'AUCUN REFUS')[:60]}…)")
+    chk(refuse is not None and "15" in refuse and "20" in refuse,
+        f"…et le refus propose les deux voisins affichables ({(refuse or '')[-40:]})")
+    trop = None
+    try:
+        plan_du_stimulus(60.0, [12.0, 15.0, 20.0, 10.0, 6.0])
+    except FreqsRefusees as e:
+        trop = str(e)
+    chk(trop is not None,
+        f"…et cinq cibles sont refusées par la FENÊTRE : le moteur en accepte 8, cet écran a "
+        f"quatre directions et ne sait pas en dessiner plus ({(trop or 'AUCUN REFUS')[:50]}…)")
+
+    # --- I. LE COMPTEUR DE FRAMES SAUTÉES COMPTE, ET NE CORRIGE RIEN ---------------
+    #
+    # Observé en séance le 2026-09-21 : « périodiquement, l'image se figeait ». Rien ne levait,
+    # rien ne comptait, et le verdict de la mesure n'en savait rien. Une image figée n'est pas un
+    # ralentissement : c'est une cible qui CESSE de clignoter pendant que le moteur corrèle.
+    net = bilan_de_seance(1000, 0, 60.0)
+    abime = bilan_de_seance(1000, 37, 60.0)
+    chk(net["sautees"] == 0 and abs(net["part_sautees"]) < 1e-9,
+        f"une course sans saut rend 0 ({net['sautees']}, {net['part_sautees']:.3f})")
+    chk(abime["sautees"] == 37 and abs(abime["part_sautees"] - 0.037) < 1e-9,
+        f"…et 37 sauts sur 1000 frames donnent 3,7 %, le compte BRUT — jamais corrigé, jamais "
+        f"lissé ({abime['sautees']}, {abime['part_sautees']:.3f})")
+
     print(f"[ssvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -735,6 +1118,14 @@ def _parse_args(argv):
     p.add_argument("--windowed", action="store_true", help="fenetre au lieu du plein ecran")
     p.add_argument("--refresh", type=float, default=None, help="forcer le refresh (Hz)")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit apres N secondes")
+    p.add_argument("--freqs", type=str, default=None,
+                   help="LES FRÉQUENCES DU MODE, séparées par des virgules (ex. « 12,15,20 ») — "
+                        "c'est ce que la console passe elle-même quand elle lance cette fenêtre. "
+                        "Le nombre de cibles est la LONGUEUR de la liste, 4 au maximum (la "
+                        "géométrie a quatre places). Sans l'option, le jeu du dépôt. ⚠️ Une "
+                        "fréquence qui ne divise pas le rafraîchissement est REFUSÉE (sortie 2), "
+                        "jamais arrondie en silence : arrondie, elle ferait clignoter autre chose "
+                        "que ce contre quoi le moteur corrèle")
     p.add_argument("--guide", action="store_true",
                    help="run GUIDÉ : désigne une cible par essai et publie la vérité-terrain sur "
                         "le flux de marqueurs. C'est le moteur qui MESURE — la console lance "
@@ -750,13 +1141,38 @@ def _parse_args(argv):
     return p.parse_args(argv)
 
 
+def _refuse(raison):
+    """Dit le refus et sort en 2. Rien n'a été affiché — et c'est le message qui doit rester.
+
+    ⚠️ Sortie **2**, distincte du 1 d'une séance interrompue. La console lance cette fenêtre :
+    « elle a refusé de s'ouvrir » et « elle s'est arrêtée en route » appellent deux gestes
+    différents, et un code de retour unique les confondrait.
+    """
+    print(f"[ssvep-stim] ⚠️ REFUS : {raison}")
+    print("[ssvep-stim] rien n'a été affiché. Une fréquence arrondie en silence ferait clignoter "
+          "autre chose que ce contre quoi le moteur corrèle : il ne décoderait pas mal, il ne "
+          "décoderait RIEN, et rien ne le dirait.")
+    sys.exit(2)
+
+
 if __name__ == "__main__":
     use_utf8_console()
     args = _parse_args(sys.argv[1:])
     if args.smoke:
         sys.exit(0 if sous_garde_data(_smoke) else 1)
-    fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
-               guide=args.guide, per_target=args.trials, seed=args.seed)
+    freqs = None
+    if args.freqs is not None:
+        freqs, raison = parse_freqs(args.freqs)
+        if raison is not None:
+            _refuse(raison)
+    try:
+        fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
+                   guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs)
+    except FreqsRefusees as refus:
+        # ⚠️ Le refus ne peut tomber qu'ICI, et pas plus tôt : sans `--refresh`, le
+        # rafraîchissement est MESURÉ, donc on ne sait qu'après l'ouverture de l'écran si ces
+        # fréquences en sont des diviseurs.
+        _refuse(refus)
     # Une séance guidée INTERROMPUE sort en 1 : lancée depuis la console, « elle s'est fermée » et
     # « elle est allée au bout » ne doivent pas se ressembler.
     sys.exit(0 if fait else 1)

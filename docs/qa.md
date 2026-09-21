@@ -53,48 +53,34 @@ Ce que ça dit de la méthode : les deux défauts sont des **désaccords entre d
 geste**, et aucun test ne les voyait parce que chaque moitié était testée sur son propre décor.
 C'est ce que 45 minutes devant l'écran ont trouvé et que 4 minutes d'autotests ne trouvent pas.
 
+## ✅ Les six constats de la séance du 2026-09-21 sont corrigés
+
+Tous prouvés par mutation, tous invisibles aux autotests d'avant. Ils se testent au point **1.6
+bis** ci-dessous, ajouté pour eux.
+
+| # | Le défaut | Le correctif |
+|---|---|---|
+| 1 | Un réglage différé n'apparaissait pas sur la page du mode — l'écran disait **le contraire de la vérité** | `snapshot()` publie `reglages` ; la page les affiche même mode arrêté |
+| 2 | « Proposer » sur un mode arrêté recalculait sur l'alpha de la **population** (9,6 Hz) | `propose_params` lit le magasin |
+| 3 | Une page de mode ne savait pas démarrer son mode | Bouton **Démarrer/Arrêter** dans l'en-tête, même signal que la tuile |
+| 4 | Le SSVEP n'avait **aucun** bouton « Lancer le stimulus » | `stimulus_id` monte sur le `ModeSpec` — le stimulus du MODE n'est pas celui de sa CALIBRATION |
+| 5 | La fenêtre SSVEP affichait le trio du dépôt quel que soit le réglage | `--freqs`, passé par la console ; une fréquence non affichable est **refusée** (sortie 2), jamais arrondie |
+| 6 | La fenêtre SSVEP ne comptait pas les **frames sautées** | Compteur `sautées` au HUD + bilan de fin, à l'identique de `cvep.py` |
+
+⚠️ **4 et 5 allaient ensemble** : livrer le bouton sans la transmission des fréquences aurait
+donné un stimulus qui affiche autre chose que ce que le moteur décode — pire que pas de bouton.
+
 ## 🟠 Constats ouverts — relevés en QA, non corrigés
 
-Aucun n'est bloquant ; chacun a un contournement. Ils forment **un seul chantier** : le magasin de
-réglages (`EngineServer.reglages`, posé le 2026-09-21) n'est lu QUE par `start_mode`. Partout
-ailleurs, le moteur et la console continuent de raisonner sur les défauts du contrat.
-
-1. **Un réglage différé ne se VOIT pas sur la page du mode.** `snapshot()` n'expose pas
-   `reglages`, et `ModePage.update_from` sort tout de suite quand `mode_state is None` : le champ
-   garde donc l'ancienne valeur. Le réglage EST en vigueur au démarrage, mais l'écran montre le
-   contraire — c'est-à-dire pire que rien. ⚠️ **Moitié fabriquée le 2026-09-21** : avant, l'appli-
-   cation était refusée franchement ; maintenant elle est acceptée et invisible. Vu en séance sur
-   le pic alpha, qui « n'était pas reporté » sur la page SSVEP.
-   *Contournement : retaper la valeur dans le champ de la page du mode.*
-2. **`propose_params` sur un mode arrêté ignore le magasin** et part de `spec.defaults()`
-   (`server.py`, `courant = dict(runtime.params) if runtime is not None else spec.defaults()`).
-   Donc « Proposer » recalcule sur un pic alpha de 9,6 Hz même après qu'on a appliqué le sien.
-   Exactement le même désaccord entre deux moitiés d'un geste que celui corrigé le matin même,
-   d'un cran plus loin.
-   *Contournement : le champ édité prime sur tout — tape ton pic dans « Pic alpha », PUIS clique
-   « Proposer ».*
-3. **Une page de mode ne sait pas démarrer son mode.** Elle affiche « arrêté » et n'offre aucun
-   bouton pour y remédier : il faut ressortir vers la grille.
-4. 🔴 **Le SSVEP n'a AUCUN bouton « Lancer le stimulus »**, donc on ne peut pas éprouver son
-   décodage depuis l'application — c'est la règle « tout se pilote depuis l'interface » en défaut,
-   sur le seul mode déjà validé au casque. La machinerie existe pourtant entièrement :
-   `stimulus/registry.py` résout la clé `ssvep` vers `src/stimulus/ssvep.py`, la fenêtre qui fait
-   clignoter les flèches, et la console sait déjà lancer des fenêtres. C'est le CRITÈRE du bouton
-   qui est faux : `mode_page.py` le conditionne à `calibration.stimulus_id`, et le SSVEP n'a pas
-   de calibration (la CCA n'apprend rien). Le `stimulus_id` est accroché au mauvais objet — il
-   appartient au `ModeSpec`, pas au `Calib`.
-   *Contournement : la mesure « Taux d'émission SSVEP » lance la fenêtre elle-même.*
-5. 🔴 **La fenêtre SSVEP ignore les fréquences du mode** : `plan = choose_frequencies(refresh)`
-   sur les `COMMANDS` du dépôt, et aucun `--freqs` en ligne de commande. Un étudiant qui règle
-   12 · 15 · 20 dans la console se verra donc afficher 15 · 20 · 8,571 — **et le décodeur
-   corrélera contre des sinusoïdes que personne n'affiche**, la panne caractéristique que tout le
-   chantier 2 existait pour rendre impossible. Vaut aussi pour la mesure « Taux d'émission ».
-   ⚠️ **Conséquence à retenir pour interpréter 2.3** : la mesure tourne sur le trio du dépôt quel
-   que soit le réglage. Si le pic alpha de la personne est **< 10,5 Hz**, la cible à 8,571 Hz est
-   dans sa bande alpha et rendra un mauvais chiffre — c'est une propriété du TRIO, pas du moteur.
-
-Les constats 4 et 5 vont ensemble : livrer le bouton sans la transmission des fréquences donnerait
-un stimulus qui affiche autre chose que ce que le moteur décode.
+1. **La mesure « Taux d'émission SSVEP » tourne toujours sur le trio du dépôt.** `--freqs` existe
+   désormais, mais `MESURE_OPTIONS` ne lui passe que `--guide` : la mesure ignore donc le réglage
+   du mode. ⚠️ **À retenir pour interpréter 2.3** : si le pic alpha de la personne est
+   **< 10,5 Hz**, la cible à 8,571 Hz tombe dans sa bande alpha et rendra un mauvais chiffre —
+   c'est une propriété du TRIO, pas du moteur. C'est ce qui s'est passé le 2026-09-21 (pic à
+   10 Hz), et le 100 % de justesse a tenu quand même.
+   *Ce n'est pas qu'un oubli de plomberie : mesurer sur le trio du dépôt est ce qui rend le
+   chiffre COMPARABLE aux repères du 2026-07-27. Le rendre réglable, c'est accepter de perdre la
+   comparaison — une décision, pas un correctif.*
 
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
@@ -310,6 +296,32 @@ rappelle **ce qui reste en vigueur**.
 désormais le **seul** chemin de démarrage — un refus muet y est un cul-de-sac.
 
 → recette 1.8, 1.13
+
+### ☐ 1.6 bis — Les six correctifs de la séance du 2026-09-21
+
+Page **SSVEP**, dans cet ordre.
+
+✅ **Un bouton « Démarrer » dans l'en-tête de la page** — plus besoin de ressortir vers la grille.
+Il dit « Arrêter » quand le mode tourne, et le sens suit l'**état reçu** : le libellé ne change
+qu'au tour suivant, quand le moteur a confirmé.
+✅ **Mode arrêté**, mets « Pic alpha » à `10,5` → **Appliquer** → avertissement jaune « RETENU,
+pas encore en vigueur ». **Va sur la grille et reviens** : le champ affiche toujours **10,5**.
+❌ Régression : il est retombé à 9,6. L'écran dirait le contraire de la vérité — le moteur, lui,
+a bien retenu la valeur.
+✅ Toujours arrêté, clique **« Proposer « freqs » »** → tu obtiens **8,571 · 15 · 20**, le jeu
+accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu accordé au pic de la
+**population** (9,6 Hz) — la proposition ignorerait ton réglage.
+✅ Remets « Pic alpha » à `9,6`, mets les fréquences à `12, 15, 20` → **Appliquer** → **Démarrer**.
+✅ **Un bouton « Lancer le stimulus » existe sur la page SSVEP.** ❌ Régression : il est absent —
+c'est le défaut du 2026-09-21, sur le seul mode déjà validé sur un cerveau.
+✅ Clique-le → contrôle de liaison → la fenêtre s'ouvre, **TROIS flèches** clignotent, et le HUD
+affiche `… fps | sautées N | ESC = quitter`.
+✅ 🔴 **Les fréquences affichées sont celles du MODE** : la fenêtre imprime son plan au lancement
+(`AVANT 12.00 Hz`, `GAUCHE 15.00 Hz`, `DROITE 20.00 Hz`). ❌ Régression : `15 · 20 · 8,571`, le
+trio du dépôt — le décodeur corrélerait contre des sinusoïdes que personne n'affiche.
+✅ **Le compteur `sautées` reste à 0** sur une machine saine. S'il monte, note-le : c'est une
+cible qui CESSE de clignoter, pas un simple ralentissement.
+✅ Ferme la fenêtre (ESC) → un **bilan** s'imprime : `fin : N frames affichées, M sautée(s) (x %)`.
 
 ### ☐ 1.7 — Le contrôle de liaison REFUSE, et ne se contourne pas
 

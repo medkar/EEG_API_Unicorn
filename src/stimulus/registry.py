@@ -64,6 +64,33 @@ def sait_journaliser(stimulus_id):
     return stimulus_id in JOURNAL
 
 
+# 🔴 Quelles fenêtres acceptent qu'on leur DICTE les fréquences du mode, et sous quel argument.
+#
+# ⚠️ Sans ça, la fenêtre SSVEP affichait le jeu de fréquences du DÉPÔT quel que soit le réglage
+# de la console : un étudiant qui pose 12 · 15 · 20 se voyait montrer 15 · 20 · 8,571, et le
+# moteur corrélait contre des sinusoïdes que personne n'affichait. Rien ne lève, rien ne compte,
+# le mode ne détecte simplement plus rien — la panne caractéristique de ce produit. Trouvée en
+# séance casque le 2026-09-21, au moment où le SSVEP a enfin gagné son bouton « Lancer le
+# stimulus » : les deux défauts n'en font qu'un, et livrer le bouton seul aurait été pire que rien.
+#
+# Seul le SSVEP y figure, et ce n'est pas un oubli : les trois autres fenêtres n'affichent pas des
+# FRÉQUENCES. Le P300 et l'ErrP montrent des événements, le c-VEP un code pseudo-aléatoire dont la
+# séparation est une PHASE, pas une période.
+FREQUENCES = {"ssvep": "--freqs"}
+
+
+def option_frequences(stimulus_id, freqs):
+    """Les arguments qui DICTENT ses fréquences à une fenêtre. () si elle n'en accepte pas.
+
+    Rend `()` aussi quand `freqs` est vide : une option sans valeur ferait planter la fenêtre au
+    démarrage, et un stimulus qui ne s'ouvre pas au milieu d'une séance coûte la séance.
+    """
+    argument = FREQUENCES.get(stimulus_id)
+    if not argument or not freqs:
+        return ()
+    return (argument, ",".join(f"{float(f):g}" for f in freqs))
+
+
 def commande(stimulus_id, calibrer=False, options=()):
     """La ligne de commande complète d'une fenêtre. Lève `KeyError` si la clé est inconnue.
 
