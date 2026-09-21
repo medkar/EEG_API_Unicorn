@@ -34,6 +34,25 @@ l'ordre commence par le SSVEP et le c-VEP, sur sujet frais.
 il n'y a pas d'Unity sur la machine de dev, et LSL4Unity reste à importer. Première fois : compte
 une demi-journée, et traite-le comme un chantier à part — pas comme la fin d'une passe de QA.
 
+## Passes jouées
+
+**2026-09-21 — blocs 0 et 1 passés, 26 points.** Deux défauts trouvés, tous deux corrigés le jour
+même, tous deux invisibles aux autotests :
+
+1. **Un bouton « Appliquer » sur un formulaire sans réglage** (trouvé en 1.5). Il soumettait un
+   dictionnaire vide, le moteur l'acceptait, rien ne changeait. **Quatre** pages concernées — le
+   mode Brut et les trois calibrations menées par une fenêtre. `console/mesure_page.py` cachait
+   déjà le sien avec le bon commentaire ; la règle n'était vérifiée que là.
+2. 🔴 **Un réglage ne pouvait pas se poser sur un mode arrêté** (trouvé en 1.6). `set_params`
+   exigeait un mode démarré et refusait sans regarder les valeurs, pendant que `propose_params` —
+   l'autre moitié du même geste — acceptait un mode arrêté depuis toujours. **Conséquence en
+   séance** : le bouton « appliquer le pic » du contrôle alpha échouait à tous les coups, ce
+   contrôle étant le premier geste d'une séance.
+
+Ce que ça dit de la méthode : les deux défauts sont des **désaccords entre deux moitiés d'un même
+geste**, et aucun test ne les voyait parce que chaque moitié était testée sur son propre décor.
+C'est ce que 45 minutes devant l'écran ont trouvé et que 4 minutes d'autotests ne trouvent pas.
+
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
 - **❌ Régression** — ça a déjà marché ici. Si ça tombe, quelque chose s'est cassé, et le point est
