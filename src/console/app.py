@@ -420,23 +420,46 @@ class Console(QMainWindow):
         if demande["quoi"] == "stimulus":
             self._lancer_fenetre(demande["mode_id"], calibrer=False)
             return
+        # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration — ou son TEST — ne démarre : les
+        # deux liraient la même file de marqueurs, et `submit` refuse. On l'arrête donc nous-mêmes
+        # plutôt que d'infliger deux gestes à l'étudiant — mais `stop_mode` est mis en FILE, et la
+        # commande soumise dans la foulée verrait encore le mode actif et serait refusée. On
+        # attend donc de le voir DISPARAÎTRE de l'état.
+        #
+        # Règle UNIFORME, SSVEP compris : la console ne recopie pas la table des conflits que le
+        # moteur possède (qui lit des marqueurs, qui non). Une mesure qui n'est le test d'aucun
+        # mode (le contrôle alpha) n'arrête rien.
+        a_arreter = (demande["mode_id"] if demande["quoi"] == "calibration"
+                     else self._mode_teste_par(demande["mode_id"]))
+        if a_arreter is not None and a_arreter in (self._dernier_etat.get("modes_state") or {}):
+            self.commande("stop_mode", id=a_arreter)
+            self._attente = dict(demande, arreter=a_arreter,
+                                 echeance=self._horloge() + DELAI_ARRET_S)
+            pourquoi = ("un mode ne se teste pas pendant qu'il décode"
+                        if demande["quoi"] == "mesure"
+                        else "un mode et sa calibration ne peuvent pas lire la même file "
+                             "de marqueurs")
+            self._avis_de(demande)(
+                demande["mode_id"],
+                f"arrêt de « {self._nom_du_mode(a_arreter)} » demandé — "
+                f"{'le test' if demande['quoi'] == 'mesure' else 'sa calibration'} démarrera "
+                f"dès qu'il aura rendu la main ({pourquoi}).", alerte=False)
+            return
+        self._demarrer_selon(demande)
+
+    def _demarrer_selon(self, demande):
+        """Lance ce que le contrôle de liaison a laissé passer : une mesure ou une calibration."""
         if demande["quoi"] == "mesure":
             self._demarrer_mesure(demande)
-            return
-        # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration ne démarre : les deux liraient la
-        # même file de marqueurs, et `submit` refuse (tâche 5). On l'arrête donc nous-mêmes plutôt
-        # que d'infliger deux gestes à l'étudiant — mais `stop_mode` est mis en FILE, et
-        # `start_calibration` soumise dans la foulée verrait encore le mode actif et serait
-        # refusée. On attend donc de le voir DISPARAÎTRE de l'état.
-        if demande["mode_id"] in (self._dernier_etat.get("modes_state") or {}):
-            self.commande("stop_mode", id=demande["mode_id"])
-            self._attente = dict(demande, echeance=self._horloge() + DELAI_ARRET_S)
-            self._avis(demande["mode_id"],
-                       f"arrêt de « {demande['mode_id']} » demandé — sa calibration démarrera dès "
-                       f"qu'il aura rendu la main (un mode et sa calibration ne peuvent pas lire "
-                       f"la même file de marqueurs).", alerte=False)
-            return
-        self._demarrer_calibration(demande)
+        else:
+            self._demarrer_calibration(demande)
+
+    def _avis_de(self, demande):
+        """Où s'affiche ce qu'on a à dire d'une demande : sa page de mesure, ou de calibration."""
+        return self._avis_mesure if demande["quoi"] == "mesure" else self._avis
+
+    def _nom_du_mode(self, mode_id):
+        return (self.catalogue.get(mode_id) or {}).get("label", mode_id)
 
     def _suivre_attente(self, state):
         """Ce qu'on attend du moteur, tour par tour. Appelée à chaque rafraîchissement.
@@ -472,16 +495,19 @@ class Console(QMainWindow):
 
         if self._attente is None:
             return
-        mode_id = self._attente["mode_id"]
-        if mode_id not in ((state or {}).get("modes_state") or {}):
+        a_arreter = self._attente["arreter"]
+        if a_arreter not in ((state or {}).get("modes_state") or {}):
             attente, self._attente = self._attente, None
-            self._demarrer_calibration(attente)
+            self._demarrer_selon(attente)
         elif self._horloge() > self._attente["echeance"]:
             attente, self._attente = self._attente, None
-            self._avis(mode_id,
-                       f"« {mode_id} » ne s'est pas arrêté en {DELAI_ARRET_S:.0f} s : la "
-                       f"calibration n'a PAS été lancée. Arrête-le depuis la grille, puis "
-                       f"reclique « Commencer ».")
+            rien = ("le test n'a PAS été lancé" if attente["quoi"] == "mesure"
+                    else "la calibration n'a PAS été lancée")
+            self._avis_de(attente)(
+                attente["mode_id"],
+                f"« {self._nom_du_mode(a_arreter)} » ne s'est pas arrêté en "
+                f"{DELAI_ARRET_S:.0f} s : {rien}. Arrête-le depuis la grille, puis reclique "
+                f"« Commencer ».")
 
     def _demarrer_mesure(self, demande):
         """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE — et seulement quand elle EXISTE.
@@ -512,9 +538,10 @@ class Console(QMainWindow):
         spec = self.mesures.get(mesure_id) or {}
         if not spec.get("stimulus_id"):
             return          # le moteur mène tout seul le protocole (contrôle alpha)
+        params = dict(demande["params"] or {})
         self._a_lancer_mesure = self._attente_depart(
             mesure_id, "mesure", "la mesure", avis=self._avis_mesure,
-            lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec))
+            lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec, params))
 
     def _demarrer_calibration(self, demande):
         """`start_calibration` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse."""
@@ -589,15 +616,28 @@ class Console(QMainWindow):
                    f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa fenêtre, le "
                    f"moteur attendrait des marqueurs qui ne viendront jamais.")
 
-    def _lancer_fenetre_mesure(self, mesure_id, spec):
+    def _lancer_fenetre_mesure(self, mesure_id, spec, params=None):
         """La fenêtre guidée d'une mesure. Jumeau exact du cas calibration, ci-dessus.
 
         La ligne de commande vient de `stimulus/registry.py` — la console ne nomme aucun fichier.
+
+        🔴 **Quand la mesure est le « Tester » d'un mode, la fenêtre part avec les réglages DE CE
+        MODE.** Lancée avec `--guide` seul, elle affichait le trio du dépôt quel que soit le
+        réglage : un « Tester » qui ne testait pas ta configuration. Les réglages sont résolus par
+        le MÊME chemin que la fenêtre de décodage (`_reglages_du_mode`), et la fenêtre annonce
+        ses fréquences au moteur dans `calib_start` — le moteur mesure donc sur ce qu'elle
+        affiche. La LONGUEUR, elle, vient du réglage `essais` de la mesure (ce qui part avec
+        `start_mesure`), pas du mode.
         """
         stimulus_id = spec["stimulus_id"]
+        options = list(stimulus_registry.options_de_mesure(stimulus_id))
+        mode_id = self._mode_teste_par(mesure_id)
+        if mode_id is not None:
+            options.extend(stimulus_registry.option_frequences(
+                stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        options.extend(stimulus_registry.option_compte(stimulus_id, (params or {}).get("essais")))
         ouvert = self.lanceur.lancer(
-            stimulus_id, label=spec.get("label", mesure_id),
-            options=stimulus_registry.options_de_mesure(stimulus_id))
+            stimulus_id, label=spec.get("label", mesure_id), options=options)
         if ouvert.get("accepted"):
             return
         # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait trente
@@ -640,11 +680,24 @@ class Console(QMainWindow):
         # n'affiche de fréquences, et `option_frequences` rendrait () de toute façon — mais on
         # s'appuie sur le REGISTRE pour le dire, pas sur cette ligne, qui ne fait que lui fournir
         # ce qu'il demande.
-        reglages = ((self._dernier_etat.get("modes_state") or {}).get(mode_id) or {}).get("params") \
-            or (self._dernier_etat.get("reglages") or {}).get(mode_id) or {}
-        options.extend(stimulus_registry.option_frequences(stimulus_id, reglages.get("freqs")))
+        options.extend(stimulus_registry.option_frequences(
+            stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
         return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
                                    label=spec.get("label", mode_id), options=options)
+
+    def _reglages_du_mode(self, mode_id):
+        """Les réglages d'un mode tels que le MOTEUR les tient : en vigueur s'il tourne, sinon
+        RETENUS (`snapshot()["reglages"]`). UN seul chemin, pour la fenêtre de décodage, pour la
+        fenêtre d'un test et pour le formulaire d'un test : trois lectures recopiées finiraient
+        par ne plus désigner la même configuration."""
+        etat = self._dernier_etat or {}
+        return (((etat.get("modes_state") or {}).get(mode_id) or {}).get("params")
+                or (etat.get("reglages") or {}).get(mode_id) or {})
+
+    def _mode_teste_par(self, mesure_id):
+        """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
+        return next((mid for mid, spec in self.catalogue.items()
+                     if spec.get("test_id") == mesure_id), None)
 
     def arreter_calibration(self):
         """« Abandonner » : la commande au moteur ET la fenêtre. Les deux, toujours.
@@ -671,6 +724,8 @@ class Console(QMainWindow):
         `arreter()` est idempotente : sur le contrôle alpha, qui n'a pas de fenêtre, elle ne fait
         rien. Tester `stimulus_id` ici serait une seconde règle de décision dans l'interface.
         """
+        if (self._attente or {}).get("quoi") == "mesure":
+            self._attente = None          # …et sur un test qui attendait l'arrêt de son mode
         self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
         self._a_lancer_mesure = None      # …et sur le lancement en attente (cf. l'abandon
                                           #    de calibration, juste au-dessus)
@@ -729,14 +784,34 @@ class Console(QMainWindow):
             self.stack.setCurrentWidget(page)
 
     def show_mesure(self, mesure_id):
-        """Ouvre la page d'une mesure. Pas de `rafraichir_choix` : une mesure ne lit aucun modèle."""
+        """Ouvre la page d'une mesure.
+
+        🔴 **Le « Tester » d'un mode doit tester TES réglages.** Sa page reçoit donc, pour chaque
+        réglage qu'elle partage avec le mode (le modèle, les seuils du MI…), la valeur COURANTE du
+        mode — par le même chemin que la fenêtre (`_reglages_du_mode`). Sans ça elle montre les
+        défauts, on clique « Commencer », et le test tourne sur des réglages que personne n'a
+        choisis, sans que rien ne le dise. Pas pendant qu'un test tourne : ce qu'il affiche est
+        alors ce qui est PARTI avec `start_mesure`.
+        """
         page = self.mesure_pages.get(mesure_id)
-        if page is not None:
-            # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la
-            # page reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une
-            # mesure vient de se terminer et que le verdict est là, à lire.
-            page.update_from(self._dernier_etat)
-            self.stack.setCurrentWidget(page)
+        if page is None:
+            return
+        mode_id = self._mode_teste_par(mesure_id)
+        mesure = self._dernier_etat.get("mesure") or {}
+        en_cours = (mesure.get("mode_id") == mesure_id
+                    and mesure.get("phase") not in PHASES_TERMINALES)
+        if mode_id is not None and not en_cours:
+            # Les listes d'abord (un modèle fraîchement entraîné doit y être), puis les valeurs.
+            # Seulement les clés du MODE : rafraîchir aussi `stream_in` résoudrait le réseau LSL
+            # (~1 s de fenêtre gelée) à chaque clic sur « Tester ».
+            page.rafraichir_choix([p["key"] for p in self.catalogue[mode_id]["params"]])
+            page.formulaire.set_values(self._reglages_du_mode(mode_id))
+        # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la page
+        # reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une mesure
+        # vient de se terminer et que le verdict est là, à lire.
+        page.update_from(self._dernier_etat)
+        self.stack.setCurrentWidget(page)
+
 
     def show_flux(self):
         """Ouvre « Ce que voit ton application ». La découverte LSL se fait à l'ENTRÉE.
@@ -2819,14 +2894,23 @@ def _smoke():
     # ⚠️ C'est la seule vérification du chemin graphique de cette mesure. Sans fenêtre, le moteur
     # attend `CALIB_FENETRE_ATTENTE_S` puis abandonne en accusant un stimulus que personne n'a
     # lancé : trente secondes de casque pour un message faux.
+    #
+    # 🔴 **« Tester » teste TA configuration (2026-09-22).** La tuile de l'accueil n'existe
+    # plus (`ssvep.SPEC.test_id`) ; la page s'ouvre ici en direct, sur un mode ARRÊTÉ dont
+    # les réglages RETENUS ne sont pas ceux du dépôt.
     console.lanceur.arreter()
+    ssvep_regle = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                   "modes_state": {k: v for k, v in state["modes_state"].items() if k != "ssvep"},
+                   "reglages": {"ssvep": {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0,
+                                          "alpha_hz": 10.0}}}
+    console.apply_state(ssvep_regle)
     journal.clear()
     moteur_faux.commandes.clear()
-    console.grid.tuiles_mesure["ssvep_taux"].bouton.click()
+    console.show_mesure("ssvep_taux")
     mes_ssvep = console.stack.currentWidget()
-    chk(mes_ssvep is console.mesure_pages["ssvep_taux"],
-        "la tuile du taux d'émission ouvre sa page")
-    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and not journal,
+        f"la page du test s'ouvre sans rien soumettre ni lancer : c'est « Commencer » qui "
+        f"part ({journal})")
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
     chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
@@ -2844,32 +2928,62 @@ def _smoke():
 
     # La mesure apparaît vraiment dans l'état : ALORS la fenêtre part.
     en_cours = {**base_m, "mode_id": "ssvep_taux", "phase": "chauffe"}
-    console.apply_state({**state, "quality": qualite_saine, "mesure": en_cours})
-    ordre = [e[0] for e in journal if e[0] in ("commande", "fenetre")]
+    console.apply_state({**ssvep_regle, "mesure": en_cours})
+    ordre = [e[0] for e in journal]
     lancees_m = [e[1] for e in journal if e[0] == "fenetre"]
-    chk(lancees_m and list(lancees_m[-1]) == list(
-        stim_registry.commande("ssvep", options=stim_registry.options_de_mesure("ssvep"))),
-        f"…et LANCE la fenêtre guidée, avec son option --guide, depuis le registre des stimulus "
-        f"({lancees_m})")
-    chk(ordre and ordre.index("commande") < ordre.index("fenetre"),
-        f"…dans cet ORDRE : le moteur d'abord, la fenêtre ensuite. L'inverse ferait tomber les "
-        f"premiers essais dans la chauffe du moteur, qui les jette — une séance plus courte que "
-        f"ce que l'écran annonce, et rien pour le dire ({ordre})")
+    chk(ordre == ["commande", "fenetre"],
+        f"UN « Tester » soumet la mesure PUIS ouvre la fenêtre, dans cet ORDRE et rien d'autre : "
+        f"l'inverse ferait tomber les premiers essais dans la chauffe du moteur, qui les jette — "
+        f"une séance plus courte que ce que l'écran annonce, et rien pour le dire ({ordre})")
+    argv_test = list(lancees_m[-1]) if lancees_m else []
+    chk(argv_test[:len(stim_registry.commande("ssvep"))] == stim_registry.commande("ssvep")
+        and "--guide" in argv_test and "--calibrer" not in argv_test,
+        f"…la fenêtre GUIDÉE, depuis le registre des stimulus ({argv_test[2:]})")
+    # 🔴 « Tester » teste TA configuration. Lancée avec `--guide` seul, la fenêtre affichait le
+    # trio du DÉPÔT (15 · 20 · 8,571) quel que soit le réglage : le score rendu décrivait une
+    # configuration que l'étudiant n'avait pas choisie, et rien ne le disait.
+    apres_freqs = argv_test[argv_test.index("--freqs") + 1:][:1] if "--freqs" in argv_test else []
+    chk(apres_freqs == ["12,15,20"],
+        f"…et elle part avec les fréquences RETENUES du mode arrêté (12 · 15 · 20), pas celles du "
+        f"dépôt ({argv_test[3:]})")
 
-    # 🔴 **Et si le moteur n'a JAMAIS démarré la mesure ?** C'est le cas que ce garde-fou existe
-    # pour couvrir. Sans lui, la fenêtre plein écran joue le protocole ENTIER pendant que la page
-    # de la mesure reste sur son briefing.
+    # 🔴 **Le mode testé TOURNE : on l'arrête D'ABORD.** Le moteur refuse le test d'un mode qui
+    # décode dès que ce mode lit des marqueurs — une seule file sous un seul identifiant, donc un
+    # vol de marqueurs silencieux. La console ne recopie pas cette table : elle arrête TOUT mode
+    # testé, SSVEP compris, par le MÊME mécanisme que pour une calibration (`_attente`).
     console.lanceur.arreter()
     journal.clear()
     moteur_faux.commandes.clear()
-    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    ssvep_tourne = {**state, "quality": qualite_saine, "calibration": None, "mesure": None}
+    console.apply_state(ssvep_tourne)
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
-    console.apply_state({**state, "quality": qualite_saine, "mesure": None})   # rien n'apparaît
+    chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})]
+        and "arrêt de" in mes_ssvep.avis.text(),
+        f"mode testé qui TOURNE : `stop_mode` d'abord, et rien d'autre tant qu'il n'a pas rendu "
+        f"la main — l'écran dit ce qu'on attend ({moteur_faux.commandes}, "
+        f"{mes_ssvep.avis.text()[:40]}…)")
+    console.apply_state(ssvep_regle)                          # il a rendu la main
+    console.apply_state({**ssvep_regle, "mesure": en_cours})  # le test existe pour de bon
+    suite = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
+    chk(suite == ["stop_mode", "start_mesure", "fenetre"],
+        f"…puis `start_mesure` part tout seul, et la fenêtre après : arrêter, mesurer, montrer "
+        f"({suite})")
+
+    # 🔴 **Et si le moteur n'a JAMAIS démarré la mesure ?** C'est le cas que ce garde-fou existe
+    # pour couvrir. Sans lui, la fenêtre plein écran joue le protocole ENTIER pendant que la page
+    # de la mesure reste sur son briefing. (Mode ARRÊTÉ : il n'y a rien à attendre avant.)
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.apply_state(ssvep_regle)
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    console.apply_state(ssvep_regle)                          # rien n'apparaît
     chk(not [e for e in journal if e[0] == "fenetre"],
         f"le moteur n'ayant rien démarré, la fenêtre guidée n'est PAS lancée ({journal})")
     horloge[0] += DELAI_DEMARRAGE_S + 1.0
-    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    console.apply_state(ssvep_regle)
     chk(not [e for e in journal if e[0] == "fenetre"]
         and "n'a pas démarré" in mes_ssvep.avis.text(),
         f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
@@ -2895,6 +3009,32 @@ def _smoke():
         f"…et l'annulation part toute seule au tour suivant, sans un clic de plus "
         f"({moteur_faux.commandes})")
     console.lanceur.arreter()
+
+    # --- 🔴 LE « TESTER » DU MI PART AVEC LES RÉGLAGES DU MODE --------------------------------
+    # La page de ce test porte les `Param` du MODE (modèle, seuil, vote). Ouverte sur ses défauts,
+    # elle ferait tester des réglages que personne n'a choisis — et le score rendu décrirait une
+    # configuration qui n'est pas la tienne, sans que rien ne le dise.
+    mi_regle = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                "modes_state": {k: v for k, v in state["modes_state"].items() if k != "mi"},
+                "reglages": {"mi": {"prob_min": 0.8}}}
+    defaut_prob = next(p["default"] for p in console.mesures["mi_test"]["params"]
+                       if p["key"] == "prob_min")
+    console.apply_state(mi_regle)
+    moteur_faux.commandes.clear()
+    console.show_mesure("mi_test")
+    mes_mi = console.stack.currentWidget()
+    chk(mes_mi is console.mesure_pages["mi_test"] and abs(defaut_prob - 0.8) > 1e-9,
+        f"la page du test du MI — et 0,8 n'est PAS son défaut ({defaut_prob}), sinon ce "
+        f"qui suit serait vrai à vide")
+    chk(abs(mes_mi.formulaire.values()["prob_min"] - 0.8) < 1e-9,
+        f"…PRÉ-REMPLI avec le seuil RETENU du mode arrêté, pas avec le défaut "
+        f"({mes_mi.formulaire.values()['prob_min']})")
+    mes_mi.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    soumis = [p for nom, p in moteur_faux.commandes if nom == "start_mesure"]
+    chk(soumis and soumis[-1]["id"] == "mi_test"
+        and abs(soumis[-1]["params"].get("prob_min", -1.0) - 0.8) < 1e-9,
+        f"…et c'est CETTE valeur qui part avec `start_mesure` ({soumis[-1:] or 'rien'})")
 
     # --- 🔴 RIEN N'EST TRONQUÉ, ET L'AIDE N'EST PLUS UN MUR DE GRIS -------------------------
     #

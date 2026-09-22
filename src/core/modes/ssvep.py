@@ -204,6 +204,9 @@ SPEC = ModeSpec(
     # calibration (la CCA n'apprend rien) : sans ce champ, son bouton « Lancer le stimulus »
     # n'existait nulle part, et on ne pouvait pas éprouver le mode depuis l'application.
     stimulus_id="ssvep",
+    # Le « Tester » de ce mode : la mesure du taux d'émission, jouée sur les réglages COURANTS
+    # (la console passe les fréquences retenues à sa fenêtre guidée, qui les annonce au moteur).
+    test_id="ssvep_taux",
     params=(
         Param(
             key="freqs",

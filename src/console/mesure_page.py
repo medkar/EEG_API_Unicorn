@@ -45,6 +45,7 @@ from console.resultat import BlocResultat  # noqa: E402
 # `calib_page.py`. `mesure.PHASES_TERMINALES` EST l'objet de `calibration.py` (cf. son
 # commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de verdict.
 from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
+from core.modes import registry  # noqa: E402
 
 
 class MesurePage(QWidget):
@@ -267,6 +268,20 @@ class MesurePage(QWidget):
         else:
             self.reponse_pic.setText(ack.get("reason", ""))
             self.reponse_pic.setStyleSheet("color: #e2603f;")
+
+    def rafraichir_choix(self, cles):
+        """Recharge les listes de choix DYNAMIQUES des réglages `cles` (les modèles entraînés).
+
+        Sur ÉVÉNEMENT seulement — l'ouverture par « Tester » (`Console.show_mesure`) —, comme
+        `ModePage.rafraichir_choix` : résoudre un choix lit le disque. Sans ça, la liste du test
+        serait celle de l'ouverture de la console, et un modèle entraîné depuis n'y serait pas : le
+        pré-remplissage avec le modèle du mode échouerait EN SILENCE (un QComboBox ignore un texte
+        qu'il ne contient pas), et le test tournerait sur l'ancien.
+        """
+        spec = registry.get_mesure(self.mesure_id)
+        for param in (spec.params if spec is not None else ()):
+            if param.key in cles and param.choices_fn is not None:
+                self.formulaire.set_choices(param.key, param.choices_now())
 
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le contrôle de liaison) a répondu à « Commencer »."""
