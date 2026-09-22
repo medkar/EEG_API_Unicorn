@@ -11,24 +11,37 @@ Cette feuille-ci est ce qu'on tient à la main ; la recette est ce qu'on relit q
 
 | Bloc | Ce qu'il faut | Durée | Mesurée ? |
 |---|---|---|---|
-| **0** — autotests | rien | **~6 min** dont **4,0 min** de calcul | ✅ chronométré le 2026-09-10 |
-| **1** — console à l'écran | un écran | **40-50 min** (12 points) | estimé |
-| **2** — au casque | le casque + un sujet | **2 h à 2 h 30** | estimé (~50 min de protocole pur) |
+| **0** — autotests | rien | **~6-7 min** | ⚠️ ~6 min chronométrées le 2026-09-10 ; six autotests ajoutés le 2026-09-22, pas rechronométrés |
+| **1** — console à l'écran | un écran | **50-60 min** (13 points, dont ~8 min de protocoles minutés) | estimé |
+| **2** — au casque | le casque + un sujet | **1 h 30 à 2 h** | estimé (~34 min de protocole minuté, longueurs par défaut) |
 | **3.1-3.2** — réseau | une 2e machine | **~20 min** | estimé |
 | **3.3** — Unity | Unity installé | **hors barème** | jamais compilé |
 
-**Tout d'affilée, Unity mis à part : ~3 h 30.** Mais ne le fais pas d'affilée.
+**Tout d'affilée, Unity mis à part : ~3 h.** Mais ne le fais pas d'affilée.
 
 **Les blocs 0 et 1 se jouent SANS casque, donc dès maintenant** — et ce sont eux qui attrapent les
 régressions. Les passer la veille laisse la séance casque entière pour ce qu'elle seule peut faire.
 
-⚠️ **Au casque, ce n'est pas le protocole qui décide de la durée.** Les huit points du bloc 2 ne
-pèsent que ~50 min de protocole minuté (alpha 0,6 · SSVEP ~4,5 · taux SSVEP 3,6 · c-VEP 8 · P300 6 ·
-ErrP 11 · MI 11 · neuro 3,5). Le reste — montage et salinage (15-20 min), briefings, transitions,
-décisions « refaire ou enregistrer », et **au moins une calibration à refaire** — double le total.
-Et deux contraintes de terrain le bornent par le haut : **la fatigue du sujet**, et **les électrodes
-qui sèchent** — le gain du salinage se dégrade en une heure et quelque. C'est exactement pourquoi
-l'ordre commence par le SSVEP et le c-VEP, sur sujet frais.
+**Ce que coûte chaque geste au casque**, tel que le moteur l'annonce (`duree_estimee_s`, chauffe de
+15 s comprise, écran à 60 Hz). Un test se refait à chaque réglage : il est **court par défaut**, et
+sa longueur se choisit sur sa page — l'aide du réglage donne la durée de chaque valeur.
+
+| Geste | Par défaut | Autres longueurs |
+|---|---|---|
+| Vérifier le casque | **37 s** | aucune — ses durées font corps avec son repère |
+| Tester le SSVEP | **≈ 3,6 min** (36 essais : 12 par cible, 3 cibles) | aucune — pas de réglage de longueur |
+| Entraîner le c-VEP · Tester le c-VEP | **≈ 3,1 min** · **≈ 1,8 min** (3 cycles par cible, 18 blocs) | test : 2 cycles ≈ 1,3 min |
+| Entraîner le P300 · Tester le P300 | **≈ 2,2 min** (12 manches) · **≈ 1,2 min** (6 manches) | test : 12 ≈ 2,2 · 24 ≈ 4,1 min |
+| Entraîner l'ErrP · Tester l'ErrP | **≈ 5,7 min** (200 essais) · **≈ 2,4 min** (80 essais) | test : 40 ≈ 1,4 · 200 ≈ 5,7 min |
+| Entraîner le MI · Tester le MI | **≈ 7,1 min** (14 essais/classe) · **≈ 2,8 min** (6/classe, 3 classes) | entraîner : 10 ≈ 5,4 min ; test : 4 ≈ 2,0 · 10 ≈ 4,5 min (G/D : 6 ≈ 2,0) |
+| Neuro — Observer | 15 s + 25 s de repos, puis à volonté | — |
+
+⚠️ **Au casque, ce n'est pas le protocole qui décide de la durée.** Les ~34 min ci-dessus doublent
+avec le montage et le salinage (15-20 min), les briefings, les transitions, les décisions « garder
+ou refaire », et **au moins un entraînement à refaire**. Deux contraintes de terrain bornent la
+séance par le haut : **la fatigue du sujet**, et **les électrodes qui sèchent** — le gain du
+salinage se dégrade en une heure et quelque. C'est pourquoi l'ordre commence par le SSVEP et le
+c-VEP, sur sujet frais.
 
 ⚠️ **3.3 (Unity) n'est pas un point de dix minutes.** Les deux `.cs` n'ont **jamais été compilés**,
 il n'y a pas d'Unity sur la machine de dev, et LSL4Unity reste à importer. Première fois : compte
@@ -36,68 +49,111 @@ une demi-journée, et traite-le comme un chantier à part — pas comme la fin d
 
 ## Passes jouées
 
-**2026-09-21 — blocs 0 et 1 passés, 26 points.** Deux défauts trouvés, tous deux corrigés le jour
-même, tous deux invisibles aux autotests :
+**2026-09-21 — blocs 0 et 1 passés, 26 points.** Deux défauts trouvés, corrigés le jour même, tous
+deux invisibles aux autotests :
 
-1. **Un bouton « Appliquer » sur un formulaire sans réglage** (trouvé en 1.5). Il soumettait un
-   dictionnaire vide, le moteur l'acceptait, rien ne changeait. **Quatre** pages concernées — le
-   mode Brut et les trois calibrations menées par une fenêtre. `console/mesure_page.py` cachait
-   déjà le sien avec le bon commentaire ; la règle n'était vérifiée que là.
-2. 🔴 **Un réglage ne pouvait pas se poser sur un mode arrêté** (trouvé en 1.6). `set_params`
-   exigeait un mode démarré et refusait sans regarder les valeurs, pendant que `propose_params` —
-   l'autre moitié du même geste — acceptait un mode arrêté depuis toujours. **Conséquence en
-   séance** : le bouton « appliquer le pic » du contrôle alpha échouait à tous les coups, ce
-   contrôle étant le premier geste d'une séance.
+1. **Un bouton « Appliquer » sur un formulaire sans réglage.** Il soumettait un dictionnaire vide,
+   le moteur l'acceptait, rien ne changeait. Quatre pages concernées — le Brut et les trois
+   entraînements menés par une fenêtre.
+2. 🔴 **Un réglage ne pouvait pas se poser sur un mode arrêté.** `set_params` exigeait un mode
+   démarré, pendant que `propose_params` — l'autre moitié du même geste — acceptait un mode arrêté
+   depuis toujours. En séance, le bouton « appliquer le pic » du contrôle alpha échouait donc à
+   tous les coups.
 
-Ce que ça dit de la méthode : les deux défauts sont des **désaccords entre deux moitiés d'un même
-geste**, et aucun test ne les voyait parce que chaque moitié était testée sur son propre décor.
-C'est ce que 45 minutes devant l'écran ont trouvé et que 4 minutes d'autotests ne trouvent pas.
+Ce que ça dit de la méthode : ce sont des **désaccords entre deux moitiés d'un même geste**, et aucun
+test ne les voyait parce que chaque moitié était testée sur son propre décor.
 
-## ✅ Les six constats de la séance du 2026-09-21 sont corrigés
+**2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
+mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
+essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
+ont surtout produit des constats : six le 21 (table ci-dessous), et le 22 **dix minutes de fixation
+perdues sur un mode arrêté**, suivies de « je ne comprends pas trop ce que l'on fait ». C'est
+l'origine du chantier suivant.
 
-Tous prouvés par mutation, tous invisibles aux autotests d'avant. Ils se testent au point **1.6
-bis** ci-dessous, ajouté pour eux.
+### Les six constats du 2026-09-21
 
-| # | Le défaut | Le correctif |
-|---|---|---|
-| 1 | Un réglage différé n'apparaissait pas sur la page du mode — l'écran disait **le contraire de la vérité** | `snapshot()` publie `reglages` ; la page les affiche même mode arrêté |
-| 2 | « Proposer » sur un mode arrêté recalculait sur l'alpha de la **population** (9,6 Hz) | `propose_params` lit le magasin |
-| 3 | Une page de mode ne savait pas démarrer son mode | Bouton **Démarrer/Arrêter** dans l'en-tête, même signal que la tuile |
-| 4 | Le SSVEP n'avait **aucun** bouton « Lancer le stimulus » | `stimulus_id` monte sur le `ModeSpec` — le stimulus du MODE n'est pas celui de sa CALIBRATION |
-| 5 | La fenêtre SSVEP affichait le trio du dépôt quel que soit le réglage | `--freqs`, passé par la console ; une fréquence non affichable est **refusée** (sortie 2), jamais arrondie |
-| 6 | La fenêtre SSVEP ne comptait pas les **frames sautées** | Compteur `sautées` au HUD + bilan de fin, à l'identique de `cvep.py` |
+Tous corrigés le même jour (`9b55b46`), prouvés par mutation. Ils se testaient au point « 1.6 bis »,
+qui a disparu le 2026-09-22 : ce qui en reste vit aux points 1.6 et 1.9.
 
-⚠️ **4 et 5 allaient ensemble** : livrer le bouton sans la transmission des fréquences aurait
-donné un stimulus qui affiche autre chose que ce que le moteur décode — pire que pas de bouton.
+| # | Le défaut | Le correctif | Depuis le 2026-09-22 |
+|---|---|---|---|
+| 1 | Un réglage différé n'apparaissait pas sur la page — l'écran disait **le contraire de la vérité** | `snapshot()` publie `reglages` ; la page les montre, mode arrêté compris | inchangé — point 1.6 |
+| 2 | « Proposer » sur un mode arrêté calculait sur l'alpha de la **population** (9,6 Hz) | `propose_params` lit le magasin | inchangé — point 1.6 |
+| 3 | Une page de mode ne savait pas démarrer son mode | bouton Démarrer/Arrêter dans l'en-tête | ⚠️ **retiré de la page** (`d111305`) : le décodage continu se démarre depuis la TUILE ; il reviendra sur la page avec « Connecter » |
+| 4 | Le SSVEP n'avait aucun bouton « Lancer le stimulus » | `stimulus_id` sur le `ModeSpec` | ⚠️ **retiré de la page** (`d111305`) : la fenêtre n'est plus qu'un rouage de « Tester » |
+| 5 | La fenêtre SSVEP affichait le trio du dépôt quel que soit le réglage | `--freqs`, passé par la console ; une fréquence non affichable est refusée, jamais arrondie | étendu à « Tester » (`b1e4446`) — point 1.9 |
+| 6 | La fenêtre SSVEP ne comptait pas les **frames sautées** | compteur `sautées` au HUD + bilan de fin | inchangé — point 1.9 |
 
-## 🟠 Constats ouverts — relevés en QA, non corrigés
+## Le chantier du 2026-09-22 : Configurer · Entraîner · Tester
 
-1. **La mesure « Taux d'émission SSVEP » tourne toujours sur le trio du dépôt.** `--freqs` existe
-   désormais, mais `MESURE_OPTIONS` ne lui passe que `--guide` : la mesure ignore donc le réglage
-   du mode. ⚠️ **À retenir pour interpréter 2.3** : si le pic alpha de la personne est
-   **< 10,5 Hz**, la cible à 8,571 Hz tombe dans sa bande alpha et rendra un mauvais chiffre —
-   c'est une propriété du TRIO, pas du moteur. C'est ce qui s'est passé le 2026-09-21 (pic à
-   10 Hz), et le 100 % de justesse a tenu quand même.
-   *Ce n'est pas qu'un oubli de plomberie : mesurer sur le trio du dépôt est ce qui rend le
-   chiffre COMPARABLE aux repères du 2026-07-27. Le rendre réglable, c'est accepter de perdre la
-   comparaison — une décision, pas un correctif.*
+La console parlait le vocabulaire des expériences qui l'ont construite, et mettait à plat
+« Démarrer », « Calibrer » et « Lancer le stimulus » alors qu'il existe un ORDRE. Ce qui a changé, en
+bref (le pourquoi est en recette 1.19 à 1.21) :
 
-2. 🔴 **L'écran de résultat d'une calibration est illisible, et trop long** (séance du
-   2026-09-22, mot pour mot : « c'est pas clair du tout et beaucoup trop verbeux »). Le chiffre
-   qu'on vient chercher — *25,0 % pour un hasard à 17 %* — est enterré **au milieu d'une phrase**,
-   après une subordonnée sur McNemar, elle-même après le conseil de resaliner. Suivent le nom du
-   fichier, six lignes grises d'honnêteté, puis un avertissement sur ce qui n'est pas encore
-   enregistré. Tout y est vrai et rien n'est lisible.
-   *C'est la même famille que le constat 1.10 (l'aide des réglages, trop verbeuse), corrigé le
-   2026-09-10 en repliant sur la première phrase. Le remède vaut ici : le VERDICT et les deux
-   chiffres en grand, le reste replié derrière « Détails ». Ce qui a été écrit ne se supprime
-   pas — la phrase d'honnêteté porte des réserves qu'on ne peut pas se permettre de perdre — il
-   se RANGE.*
-3. **Le bandeau déverse six lignes de sortie quand une fenêtre se ferme normalement.** Conséquence
-   directe du correctif du 2026-09-22 : `_derniere_sortie()` joint `LIGNES_RETENUES = 6` lignes,
-   ce qui est juste pour un traceback (on veut le contexte) et faux pour une fin propre (on veut
-   le BILAN, c'est-à-dire les une ou deux dernières). En séance, le bandeau portait les journaux
-   bloc par bloc de la calibration avant d'arriver au chiffre utile.
+- **Une page de mode = des blocs numérotés, et rien d'autre** : **1. Régler · 2. Entraîner** (si le
+  mode a un modèle) **· N. Tester** (si le mode a un test). Le Neuro et le Brut n'ont aucune
+  vérité-terrain : **2. Observer**, sans aucun score.
+- **« Tester » possède sa séquence entière** : il applique ce qui est à l'écran, ouvre le test
+  pré-rempli avec les réglages du mode, et « Commencer » passe le contrôle de liaison, arrête le
+  mode s'il tourne, lance la mesure PUIS la fenêtre, et rend un verdict. **Aucun test n'écrit sur
+  le disque.**
+- **Un résultat se lit en trois lignes** : un MOT coloré (vert / orange / rouge, décidé par le
+  MOTEUR), les chiffres avec leur point de comparaison, UNE réserve. Le reste est replié sous
+  « Détails ».
+- **Vocabulaire** : « Calibrer » → **Entraîner** ; « Taux d'émission SSVEP » → **Tester le SSVEP**
+  (plus de tuile) ; « Contrôle alpha » → **Vérifier le casque** (tuile) et **Mesurer** (à côté du
+  pic alpha de la page SSVEP).
+- **Ont quitté la page, et reviendront avec « Connecter »** (second chantier, pas fait) :
+  « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance », « Brancher un client ».
+
+🔴 **Ce qui n'a PLUS de chemin dans la console jusqu'à « Connecter » — à savoir AVANT la séance :**
+
+- **La séance c-VEP avec journal (recette 2.9)**. La case « Journal de séance » est partie avec
+  « Lancer le stimulus » : la console ne passe plus jamais `--log`. Sans ce journal la séance **ne
+  se dépouille pas**. En attendant, c'est le montage à trois terminaux de la recette 2.9, ou la
+  console pour le casque et la fenêtre tapée à la main à côté (`python src/stimulus/cvep.py --log`) —
+  des commandes, donc hors de la règle « aucune commande à taper ».
+- **Le décodage continu avec NOTRE fenêtre de stimulus** (SSVEP, P300, ErrP, c-VEP). La tuile
+  « Démarrer » décode et publie toujours, mais c'est à l'application cliente — ou à une fenêtre
+  lancée à la main — d'afficher le stimulus. Pour savoir si une configuration marche, c'est
+  « Tester » qui sert, et il lance sa fenêtre lui-même.
+
+## 🟠 Constats ouverts
+
+**Retirés — corrigés par le chantier du 2026-09-22 :**
+
+- ~~La mesure du taux SSVEP tourne sur le trio du dépôt~~ → « Tester » passe à la fenêtre les
+  fréquences du mode (`b1e4446`). La comparabilité aux repères du 2026-07-27 n'est plus une
+  contrainte du protocole : c'est à toi de tester sur le trio du dépôt si tu veux comparer (point 2.2).
+- ~~L'écran de résultat d'une calibration est illisible~~ → trois lignes en face, le reste sous
+  « Détails » (`06eaeb7`, `c3471f0`).
+- ~~Le bandeau déverse six lignes à la fermeture normale d'une fenêtre~~ → les deux dernières, son
+  bilan (`b9b6529`).
+
+**Ouverts :**
+
+1. 🟠 **Des refus et des aides nomment encore « Calibrer »**, un bouton qui n'existe plus (c'est
+   « Entraîner »). Le cas le plus visible : « Tester » ou « Démarrer » sur un mode sans modèle
+   refuse avec l'aide du réglage « Modèle entraîné », qui dit de cliquer « Calibrer » (MI) ou
+   « Calibrer le P300 » / « Calibrer l'ErrP » / « Calibrer le c-VEP ». Textes dans
+   `core/modes/{mi,p300,errp,cvep}.py` et `core/{p300,errp,cvep}_models.py`.
+2. 🟠 **Restes du vocabulaire d'expérience à l'écran** : sur un test, le bouton du contrôle de
+   liaison dit « Commencer la mesure » ; pendant un test c-VEP, la fenêtre écrit « ENREGISTRE » à
+   chaque bloc ; après « Appliquer » le pic alpha, la réponse dit encore « Ouvre sa page et clique
+   « Proposer » » alors que « ← SSVEP » y ramène. (Côté développeur :
+   `research/ssvep_analyze.py` et `research/ssvep_guided.py` citent la tuile « Taux d'émission
+   SSVEP ».)
+3. 🟠 **Le briefing du P300 dit le comptage mental indispensable** (« sans elle, l'onde
+   s'effondre ») — entraînement ET test, qui le reprend mot pour mot. Au casque, le P300 a été
+   validé **sans** comptage (point 2.4). Les deux textes doivent bouger ensemble.
+4. **Le contrôle de liaison d'un TEST ne surligne aucune voie clé** : le contrat d'une mesure n'en
+   déclare pas. Le refus, lui, porte toujours sur les huit voies — seul le repère visuel manque par
+   rapport à « Entraîner ».
+5. **Le test ErrP calcule la durée réelle de son repos de référence** (`resultat["repos"]`) **mais
+   l'écran ne l'affiche nulle part** ; la phrase d'honnêteté dit seulement « 8 s au plus, souvent
+   moins ». Cette durée n'a jamais été mesurée (estimée à 2-5 s par son auteur).
+6. **La console ne descend pas sous ~1 650 px de large** (relevé par l'auteur de la page en blocs,
+   préexistant, non remesuré ici). À vérifier sur l'écran de la séance.
 
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
@@ -105,7 +161,8 @@ donné un stimulus qui affiche autre chose que ce que le moteur décode — pire
   bloquant.
 - **❌ Échec** — ça n'a **jamais** été vérifié. Si ça tombe, c'est peut-être une découverte, pas une
   casse : note ce que tu as vu, ne conclus pas, et continue. **Tout le bloc 2 sauf le SSVEP est
-  dans ce cas** — quatre modes n'ont jamais décodé un cerveau à travers le moteur.
+  dans ce cas** — quatre modes n'ont jamais décodé un cerveau à travers le moteur, et **aucun
+  « Tester » n'a jamais vu un casque** (ils datent du 2026-09-22, après la séance).
 
 ## Trois règles qui tiennent pendant toute la feuille
 
@@ -115,18 +172,19 @@ donné un stimulus qui affiche autre chose que ce que le moteur décode — pire
    les lance elle-même.
 2. ⚠️ **Ne jamais fermer/rouvrir la console en cours de séance.** C3 et Cz saturent à la
    réouverture (redémarrage de l'amplificateur). C'est exactement ce que le point d'entrée unique
-   rend évitable : calibrer et décoder sans fermer la fenêtre qui tient le casque.
+   rend évitable : entraîner et tester sans fermer la fenêtre qui tient le casque.
 3. ⚠️ **Un utilisateur ne tape aucune commande.** Si un point du bloc 1 ou 2 t'oblige à ouvrir un
    terminal pour de l'usage réel (acquisition, décodage, flux sortant), **c'est le point qui a
-   échoué**, pas toi. Les autotests du bloc 0 sont hors de cette règle : ils s'adressent au
-   développeur.
+   échoué**, pas toi. Hors de cette règle : les autotests du bloc 0 (ils s'adressent au
+   développeur), et les deux trous listés plus haut, connus et datés.
 
 ---
 
 # Bloc 0 — sans casque, sans écran (les autotests)
 
-À passer avant de brancher quoi que ce soit. Environ 3 minutes en tout. **Aucun moteur ne doit
-tourner pendant ces tests.**
+À passer avant de brancher quoi que ce soit. **Aucun moteur ne doit tourner pendant ces tests**, et
+jamais deux en parallèle : ils publient sur les mêmes noms de flux (collision vue le 2026-09-22,
+« le flux qualité ne publie pas » — relancer seul avant de conclure).
 
 ### ☐ 0.1 — Les deux autotests principaux
 
@@ -169,19 +227,26 @@ séance, parce que ce sont les sous-systèmes que la séance va exercer :
 
 ```bash
 python src/core/modes/mesure.py
+python src/core/modes/mesure_marqueurs.py
+python src/core/modes/affichage.py
 python src/core/modes/alpha.py
 python src/core/modes/ssvep_mesure.py
 python src/core/modes/marker_calib.py
 python src/core/modes/p300.py
 python src/core/modes/cvep.py
+python src/core/modes/mi_test.py
+python src/core/modes/p300_test.py
+python src/core/modes/cvep_test.py
+python src/core/modes/errp_test.py
 python src/core/acquisition.py --synthetic
 ```
 
-✅ Sept sorties à 0.
+✅ Treize sorties à 0.
 
-❌ Régression : n'importe lequel en rouge. `modes/p300.py` et `modes/cvep.py` sont ceux dont
-l'échec compte le plus : leur panne caractéristique fait décoder du bruit **avec une confiance
-élevée**, ce qui est indiscernable d'un succès à l'écran.
+❌ Régression : n'importe lequel en rouge. Ceux dont l'échec compte le plus : `modes/p300.py` et
+`modes/cvep.py` (leur panne caractéristique fait décoder du bruit **avec une confiance élevée**),
+et `modes/errp_test.py`, qui porte **la cloison d'étiquette** du test ErrP — une fuite y donne un
+score parfait et faux, sans rien casser.
 
 ### ☐ 0.4 — Aucun test n'a touché `data/`
 
@@ -200,7 +265,9 @@ d'une personne identifiable sur un dépôt public : un test n'y écrit jamais.
 # Bloc 1 — la console à l'écran, sans casque
 
 Board de test BrainFlow : signal artificiel, aucun matériel. **Un seul lancement pour tout le
-bloc** — on ne ferme pas la fenêtre entre deux points.
+bloc** — on ne ferme pas la fenêtre entre deux points. ⚠️ Sur ce signal fabriqué, **aucun verdict
+n'a de sens** : on vérifie les gestes, l'ordre, les refus et la forme des résultats, jamais leurs
+chiffres.
 
 Lancement : **double-clic sur `outils/Console EEG.bat`**. (Le `--synthetic` de la recette est un
 raccourci de développeur qui saute l'écran de départ ; ici on veut justement voir cet écran.)
@@ -219,33 +286,37 @@ Un repli silencieux fait enregistrer une séance entière de signal fabriqué en
 
 → recette 1.17
 
-### ☐ 1.2 — La grille : sept tuiles, puis une seconde rangée
+### ☐ 1.2 — La grille : sept tuiles, UNE tuile de séance
 
-✅ **Sept tuiles** : SSVEP · Neuro · Motor Imagery · P300 · ErrP · c-VEP · Brut.
-✅ Une seconde rangée titrée **« Contrôles et mesures »**, avec **« Contrôle alpha »** (marquée
-*BARRIÈRE*) et **« Taux d'émission SSVEP »**.
-✅ Sur un dépôt sans modèle entraîné, les quatre modes à modèle (MI, P300, ErrP, c-VEP) sont
-**grisés avec leur raison écrite**, pas simplement absents.
+✅ **Sept tuiles**, sur deux rangées : Brut · SSVEP · c-VEP · Neuro, puis Motor Imagery · P300 ·
+ErrP. Chacune porte sa case **« publié »**, **« Démarrer »** et **« Ouvrir »**.
+✅ **Aucune n'est grisée**, même sans modèle entraîné : le manque de modèle se dit au clic, par un
+refus (point 1.6), pas par une tuile éteinte.
+✅ Dessous, **« Contrôles et mesures »** avec **une seule** tuile : **« Vérifier le casque »**,
+marquée *BARRIÈRE — à passer AVANT le reste*.
+✅ Tout en bas, **« La sortie »** et le bouton **« Ce que voit ton application »**.
 
-❌ Régression : une tuile manquante ; une tuile grisée **sans raison affichée** (un étudiant ne peut
-pas deviner qu'il lui manque un modèle) ; la seconde rangée absente.
+❌ Régression : une tuile de mode manquante ; une tuile « Taux d'émission SSVEP » ou « Tester le … »
+sur l'accueil — un test vit sur la page de SON mode, pas sur la grille.
 
-→ recette 1.2
+→ recette 1.1, 1.2
 
-### ☐ 1.3 — Le brut montre vraiment le signal, et les tracés ne se chevauchent pas
+### ☐ 1.3 — Le Brut montre vraiment le signal, et les tracés ne se chevauchent pas
 
 Tuile **Brut** → « Ouvrir ».
 
-✅ Huit tracés qui défilent, une étiquette par voie (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8).
-✅ **Les huit tracés restent séparés** — aucun ne passe devant son voisin, quelle que soit
-l'amplitude.
+✅ Deux blocs : **« 1. Régler »**, qui dit « aucun réglage à changer ici » (ni « Appliquer », ni
+« Aide détaillée »), et **« 2. Observer »**, sans bouton — les tracés lisent le tampon
+d'acquisition, il n'y a rien à démarrer.
+✅ Huit tracés qui défilent, une étiquette par voie (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8), et **qui
+restent séparés** quelle que soit l'amplitude.
 ✅ La ligne grise sous le graphe annonce l'écart **en vigueur** (« un couloir = … µV ») et **ce
-chiffre change** quand l'amplitude du signal change. Il n'est plus figé à 100 µV.
+chiffre change** quand l'amplitude du signal change.
 ✅ « ← Modes » revient à la grille.
 
-❌ Régression : les tracés se chevauchent (c'est le défaut 1.3, corrigé le 2026-09-10) ; ou l'écart
-annoncé ne bouge jamais ; ou une voie hors échelle est rognée **sans que la ligne grise la nomme** —
-une voie rognée est le signal qu'on vient chercher ici, pas un défaut à cacher.
+❌ Régression : les tracés se chevauchent ; l'écart annoncé ne bouge jamais ; une voie hors échelle
+est rognée **sans que la ligne grise la nomme** ; un bouton « Appliquer » qui n'aurait rien à
+appliquer.
 
 → recette 1.3
 
@@ -260,179 +331,222 @@ c'est 0,31-0,50.
 
 → recette 1.4
 
-### ☐ 1.5 — La page d'un mode : rien n'est tronqué, l'aide est lisible
+### ☐ 1.5 — La page d'un mode : ses gestes numérotés, et pas un de plus
 
-Grille → **c-VEP** (le cas extrême : six réglages). Puis **réduis la fenêtre en hauteur**, à la
-taille d'un écran de portable.
+Ouvre les sept pages une à une (tuile → « Ouvrir »).
 
-✅ Trois blocs : « Sortie en direct », « Réglages », « Brancher un client ».
-✅ **Le corps de la page défile.** Rien n'est coupé en bas : « Brancher un client » se rejoint en
-faisant défiler.
-✅ **L'en-tête ne défile pas** : « ← Modes » reste atteignable même en bas de page.
-✅ L'aide grise sous chaque réglage tient en **une phrase**. Une case **« Aide détaillée »** est
-présente ; la cocher affiche le texte complet, la décocher le replie.
-✅ Survoler un champ ou son aide montre le texte complet en infobulle, sans rien cocher.
+| Page | Blocs attendus, dans cet ordre |
+|---|---|
+| SSVEP | **1. Régler · 2. Tester** |
+| c-VEP · P300 · ErrP · Motor Imagery | **1. Régler · 2. Entraîner · 3. Tester** |
+| Neuro | **1. Régler · 2. Observer**, avec un bouton « Observer » |
+| Brut | **1. Régler · 2. Observer**, sans bouton (point 1.3) |
 
-❌ Régression : le bas de la page est **inatteignable** (c'est le défaut 1.10, corrigé le
-2026-09-10 — Qt écrase les blocs du bas, il ne les rend pas défilables) ; ou la case « Aide
-détaillée » apparaît sur la page **Brut**, qui n'a aucun réglage — un bouton qui ne change rien à
-l'écran est un réglage-décor.
+✅ **Aucune page** ne porte « Démarrer », « Lancer le stimulus », « Journal de séance » ni le bloc
+« Brancher un client » : ils reviendront avec « Connecter ».
+✅ Sur les cinq pages qui ont « Tester », une case **« Décodage en direct »**, **décochée** : la
+cocher déplie la vue en direct et l'état (« arrêté » tant que le mode ne tourne pas), sous la phrase
+« Vide tant que le décodage continu ne tourne pas : il se démarre depuis la tuile du mode, sur
+l'accueil. » L'en-tête de ces pages, lui, n'affiche **aucun** état.
+✅ **Neuro** : « Observer » démarre le mode ; le libellé ne passe à « Arrêter » qu'une fois le moteur
+d'accord (état reçu, pas une bascule locale). La vue défile en face, sans aucun chiffre de justesse.
+✅ **Page c-VEP** (le cas extrême : six réglages), **réduis la fenêtre en hauteur** : le corps défile,
+« 3. Tester » se rejoint en faisant défiler, et **« ← Modes » reste visible** (l'en-tête ne défile
+pas).
+✅ L'aide grise sous chaque réglage tient en **une phrase** ; la case **« Aide détaillée »** déplie le
+texte complet ; survoler un champ le montre en infobulle.
 
-### ☐ 1.6 — Un refus s'affiche À L'ÉCRAN, jamais seulement dans le terminal
+❌ Régression : un bloc hors de cette table, ou dans un autre ordre ; un des quatre boutons partis
+revenu sur une page ; un score annoncé sous « Observer » (Neuro et Brut n'ont aucune bonne réponse
+à comparer) ; le bas de page inatteignable.
 
-Deux chemins à essayer, et **les deux** doivent parler :
+→ recette 1.19
 
-1. Page **SSVEP**, **mode ARRÊTÉ** → champ « Fréquences des cibles » → taper `15, 17` →
-   **Appliquer**. C'est le geste réel : on règle en amont, puis on lance.
-   ✅ Le refus porte sur les **réglages** (« 17 Hz n'est pas un diviseur entier de 60 Hz… »), pas
-   sur « n'est pas démarré ».
-   ✅ Corrige en `15, 20, 8.571` → **Appliquer** → accepté, avec un avertissement **jaune** :
-   « réglage RETENU, pas encore en vigueur — « SSVEP » est arrêté. Il démarrera avec. »
-   ✅ Démarre le mode : il part **avec** ces réglages, sans les retaper.
-   ⚠️ La tuile porte **deux** boutons : « Démarrer », qui bascule en « Arrêter » une fois lancé, et
-   « Ouvrir », qui va à la page. Re-cliquer le premier pour ouvrir la page **arrête le mode**.
+### ☐ 1.6 — Un réglage : retenu en vert, refusé en rouge, et le refus toujours à l'écran
 
-   ❌ Régression : « « SSVEP » n'est pas démarré » au lieu du refus sur les fréquences. C'était le
-   comportement jusqu'au **2026-09-21**, trouvé par cette QA : `set_params` exigeait un mode en
-   cours alors que `propose_params` — l'autre moitié du même geste — acceptait un mode arrêté
-   depuis toujours. Le moteur proposait un jeu de fréquences, le mettait dans le champ, puis
-   refusait de l'appliquer.
+Page **SSVEP**, mode **arrêté**, dans cet ordre.
 
-   🟠 **Trou relevé le même jour, NON corrigé** : une page de mode **ne sait pas démarrer son
-   mode**. Elle affiche « arrêté » et n'offre aucun bouton pour y remédier — il faut ressortir vers
-   la grille.
-2. Grille → tuile d'un mode qui va être refusé (ex. un mode à modèle sans modèle) → **Démarrer**.
+1. « Pic alpha de la personne » à `10,5` → **Appliquer**.
+   ✅ En **vert** : « réglage RETENU : « SSVEP » est arrêté, il démarrera avec. »
+2. Reviens à la grille (« ← Modes »), puis rouvre la page SSVEP.
+   ✅ Le champ affiche toujours **10,5**. ❌ Régression : retombé à 9,6 — l'écran dirait le contraire
+   de ce que le moteur a retenu.
+3. **« Proposer « freqs » »** (l'un ou l'autre des deux boutons).
+   ✅ **8,571 · 15 · 20**, le jeu accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu
+   accordé au pic de la **population** (9,6 Hz).
+4. « Fréquences des cibles » à `15, 17` → **Appliquer**.
+   ✅ Un refus **en rouge** qui nomme le coupable et propose les voisins : « 17 Hz n'est pas un
+   diviseur entier de 60 Hz […] Les plus proches sont 15 et 20 Hz ».
+   ✅ La saisie fautive **reste dans le champ**, et le refus rappelle ce qui reste **en vigueur**.
+   ❌ Régression : « « SSVEP » n'est pas démarré » au lieu du refus sur les fréquences (le
+   comportement d'avant le 2026-09-21).
+5. Remets `12, 15, 20` → **Appliquer** → vert.
+6. Grille → tuile **Motor Imagery** (sans modèle sur ce poste) → **Démarrer**.
+   ✅ Le refus apparaît **dans le bandeau**, en haut de la fenêtre — pas seulement dans la console
+   cmd.
 
-✅ (1) Un refus **en rouge sur la page**, qui nomme le coupable et propose les voisins :
-« 17 Hz n'est pas un diviseur entier de 60 Hz […] Les plus proches sont 15 et 20 Hz ».
-✅ (1) La saisie fautive **reste dans le champ** (on la corrige, on ne la retape pas), et le refus
-rappelle **ce qui reste en vigueur**.
-✅ (2) Le refus apparaît **dans la fenêtre**, pas seulement dans la console cmd.
+❌ Régression : (6) écran strictement immobile après le clic — le défaut 1.13, corrigé le
+2026-09-10.
+⚠️ Le texte de ce refus dit de cliquer « Calibrer » : le bouton s'appelle **« Entraîner »**. Connu,
+constat ouvert 1 — pas une régression.
 
-❌ Régression : (2) écran strictement immobile après le clic. C'est le défaut 1.13, et la grille est
-désormais le **seul** chemin de démarrage — un refus muet y est un cul-de-sac.
-
-→ recette 1.8, 1.13
-
-### ☐ 1.6 bis — Les six correctifs de la séance du 2026-09-21
-
-Page **SSVEP**, dans cet ordre.
-
-✅ **Un bouton « Démarrer » dans l'en-tête de la page** — plus besoin de ressortir vers la grille.
-Il dit « Arrêter » quand le mode tourne, et le sens suit l'**état reçu** : le libellé ne change
-qu'au tour suivant, quand le moteur a confirmé.
-✅ **Mode arrêté**, mets « Pic alpha » à `10,5` → **Appliquer** → avertissement jaune « RETENU,
-pas encore en vigueur ». **Va sur la grille et reviens** : le champ affiche toujours **10,5**.
-❌ Régression : il est retombé à 9,6. L'écran dirait le contraire de la vérité — le moteur, lui,
-a bien retenu la valeur.
-✅ Toujours arrêté, clique **« Proposer « freqs » »** → tu obtiens **8,571 · 15 · 20**, le jeu
-accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu accordé au pic de la
-**population** (9,6 Hz) — la proposition ignorerait ton réglage.
-✅ Remets « Pic alpha » à `9,6`, mets les fréquences à `12, 15, 20` → **Appliquer** → **Démarrer**.
-✅ **Un bouton « Lancer le stimulus » existe sur la page SSVEP.** ❌ Régression : il est absent —
-c'est le défaut du 2026-09-21, sur le seul mode déjà validé sur un cerveau.
-✅ Clique-le → contrôle de liaison → la fenêtre s'ouvre, **TROIS flèches** clignotent, et le HUD
-affiche `… fps | sautées N | ESC = quitter`.
-✅ 🔴 **Les fréquences affichées sont celles du MODE** : la fenêtre imprime son plan au lancement
-(`AVANT 12.00 Hz`, `GAUCHE 15.00 Hz`, `DROITE 20.00 Hz`). ❌ Régression : `15 · 20 · 8,571`, le
-trio du dépôt — le décodeur corrélerait contre des sinusoïdes que personne n'affiche.
-✅ **Le compteur `sautées` reste à 0** sur une machine saine. S'il monte, note-le : c'est une
-cible qui CESSE de clignoter, pas un simple ralentissement.
-✅ Ferme la fenêtre (ESC) → ✅ **le bandeau de la console affiche le bilan** : `fenêtre SSVEP
-fermée — … fin : N frames affichées, M sautée(s) (x %)`, en gris, **sans alerte** : une séance qui
-s'est bien passée le dit aussi.
-❌ Régression : rien à l'écran. Le bilan partirait dans la console cmd que personne ne regarde —
-même défaut que le 1.13, sauf qu'ici ce n'est pas un refus qu'on perd, c'est une **mesure**.
-✅ Relance la fenêtre → le bandeau repasse à « en cours » : le bilan de la précédente ne coiffe
-pas celle qui tourne.
+→ recette 1.8, 1.9, 1.13
 
 ### ☐ 1.7 — Le contrôle de liaison REFUSE, et ne se contourne pas
 
-Page d'un mode à stimulus → **« Lancer le stimulus »** (ou **« Calibrer »**).
+Il s'intercale devant **chaque** « Commencer » : Vérifier le casque, Entraîner, Tester. Tu le verras
+aux points 1.8 à 1.10 ; regarde-le une fois pour lui-même.
 
-✅ Un écran intermédiaire montre **le σ de chacune des huit voies**, avec les **voies clés du mode
-surlignées**, et un verdict par voie.
+✅ Un écran « Contrôle de la liaison casque » montre **le σ de chacune des huit voies**, un verdict par
+voie, et deux boutons : **« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance.
+✅ Sur « Entraîner », les **voies clés du mode** sont nommées et surlignées. Sur un test ou sur
+« Vérifier le casque », aucune (constat ouvert 4) — le refus porte sur les huit dans tous les cas.
 ✅ Sur board de test, les huit passent (σ mesurés de 7 à 73 µV) et on continue.
+✅ « ← Annuler » ramène à la page d'où l'on venait.
 
 ❌ Régression : l'écran n'apparaît pas, ou il laisse passer une voie hors de **[0,5 ; 500] µV**.
 ⚠️ **Il n'y a AUCUNE porte de sortie, et c'est délibéré** — un contournement à un clic est un
 contournement qu'on prend par réflexe. Si au casque une électrode refuse de descendre sous le
 seuil, **c'est une décision à prendre devant le casque**, pas un bug à corriger dans l'urgence.
 
-### ☐ 1.8 — Une calibration bout en bout, sans casque
+### ☐ 1.8 — « Mesurer » le pic alpha depuis la page SSVEP, et un résultat en trois lignes
 
-Le P300 est le plus court (~2,2 min annoncées). Page **P300** → **« Calibrer »**.
+Page **SSVEP** → **« Mesurer »**, à droite du champ « Pic alpha de la personne ». ~37 s.
 
-✅ Un **briefing** s'affiche, puis les réglages, puis **« Commencer »**.
-✅ La console **lance elle-même la fenêtre P300** : rien à taper dans un second terminal.
-✅ L'ordre est le bon : le moteur démarre, **puis** la fenêtre s'ouvre. Ses premières manches ne
-doivent pas tomber dans les 15 s de chauffe.
-✅ À la fin : **un chiffre s'affiche**, avec **« Enregistrer le modèle »** et **« Refaire »**.
-✅ **Cliquer « Refaire »** → rien n'a été écrit dans `data/`.
-✅ Refaire, puis **« Enregistrer le modèle »** → le modèle apparaît dans la liste déroulante
-« Modèle » de la page P300, horodaté.
+✅ La page **« Vérifier le casque »** s'ouvre — la même que la tuile de l'accueil — et son bouton de
+retour dit **« ← SSVEP »**.
+✅ Briefing, puis **« Commencer »** → contrôle de liaison → le décompte, et **un top sonore à chaque
+changement d'étape** (la moitié se fait les yeux fermés). Sans son, la page **le dit** avant de
+commencer.
+✅ **Le résultat, en trois lignes en face** : un **mot** en couleur (« ALPHA NET » en vert, ou
+« ARRÊTE ICI » en rouge), une ligne de **chiffres**, **une** phrase de réserve. Puis une case
+**« Détails »**, décochée : elle déplie la ligne BARRIÈRE, la phrase de verdict complète, le ratio,
+le pic, les voies moyennées et la phrase d'honnêteté.
+✅ Si « ALPHA NET » : un bouton « Appliquer « Pic alpha de la personne » = … Hz à « SSVEP » » →
+réponse en vert → **« ← SSVEP »** → le champ montre la valeur mesurée, sans rien retaper.
+⚠️ Sur ce signal fabriqué, les deux verdicts sont possibles et aucun ne veut rien dire. Si c'est
+« ARRÊTE ICI », il n'y a **pas** de bouton « Appliquer » — c'est voulu (le « pic » d'un spectre sans
+alpha est un bin de bruit) ; la boucle se joue au casque, point 2.1.
 
-❌ Régression : le chiffre s'affiche **après** que le modèle a été écrit (une calibration ratée
-deviendrait le défaut en silence) ; ou « Refaire » laisse un fichier derrière lui ; ou le modèle
-enregistré n'apparaît pas dans la liste sans redémarrer la console.
+❌ Régression : « ← » ramène à l'accueil au lieu de la page SSVEP ; un résultat sans couleur ; un
+repli « Détails » qui contient moins que ce qu'il affichait avant (tout y est RANGÉ, rien n'est
+supprimé).
+
+→ recette 1.21, 2.1
+
+### ☐ 1.9 — « Tester » le SSVEP, de bout en bout (~3,6 min)
+
+Pour vérifier qu'un test arrête le mode, **démarre d'abord le SSVEP** depuis sa tuile, puis ouvre sa
+page.
+
+1. Tape `12, 15, 20` dans « Fréquences des cibles » **sans cliquer « Appliquer »**, puis
+   **« Tester »**.
+   ✅ La page **« Tester le SSVEP »** s'ouvre, retour « ← SSVEP ». Reviens voir : le champ dit
+   **12, 15, 20** et c'est ce que le moteur a retenu — « Tester » applique ce qui est à l'écran.
+   ❌ Régression : le test part sur l'ancienne configuration, sans rien dire.
+2. Tape `15, 17` → **« Tester »**.
+   ✅ Le refus s'affiche **sous « 1. Régler »**, et la page de test **ne s'ouvre pas** : tester une
+   configuration impossible ne mesurerait rien.
+3. Remets `12, 15, 20` → **« Tester »** → **« Commencer »** → contrôle de liaison → **« Commencer
+   la mesure »**.
+   ✅ La page dit « arrêt de « SSVEP » demandé — le test démarrera dès qu'il aura rendu la main (un
+   mode ne se teste pas pendant qu'il décode) », et la tuile passe à « arrêté ».
+   ✅ **Puis** la fenêtre s'ouvre, plein écran : **trois** flèches étiquetées **12.00 · 15.00 ·
+   20.00 Hz**, une croix pour le repos, puis une flèche **entourée de bleu** par essai. Le HUD affiche
+   `… fps | sautées N | ESC = quitter`.
+   ❌ Régression : `15 · 20 · 8,571` à l'écran — le trio du dépôt, pendant que le moteur corrèle
+   sur 12 · 15 · 20.
+   ✅ Pendant ce temps la page montre « Mesure en cours », le décompte et une barre d'avancement.
+4. **Ne ferme pas la fenêtre** : elle se ferme seule à la fin.
+   ✅ Le **bandeau** affiche les deux dernières lignes de la fenêtre : son bilan — « fin : N frames
+   affichées, M sautée(s) (x %) », suivi de l'alerte si trop d'images ont sauté —, pas le journal
+   essai par essai.
+   ✅ Le résultat : trois lignes en face — le mot, les chiffres (« … de cibles justes quand il
+   annonce … (hasard 33 %) · il annonce sur … des 36 essais », ou « aucune cible annoncée sur 36
+   essais » s'il s'est tu), une réserve —, le reste sous « Détails ».
+   ✅ Le SSVEP **reste arrêté** après le test : le décodage continu se relance depuis sa tuile.
+   ✅ `data/` n'a rien gagné (empreinte du point 0.4).
+
+❌ Régression : la fenêtre s'ouvre **avant** que la page ne passe à « Mesure en cours » (l'ordre
+moteur → fenêtre est un contrat testé) ; un effectif ~7× plus grand que 36 (les fenêtres glissantes
+comptées comme des essais) ; un fichier écrit.
+
+→ recette 1.20
+
+### ☐ 1.10 — Entraîner puis Tester : le P300 (~2,2 + 1,2 min)
+
+Le plus court des modes à modèle. Page **P300**.
+
+1. **Avant tout entraînement**, sur un poste sans modèle P300 : **« Tester »**.
+   ✅ Refus sous « 1. Régler » (« « Modèle entraîné » : aucun choix disponible — … »), et le test ne
+   s'ouvre pas. C'est le moteur qui tient l'ordre Entraîner → Tester, pas l'écran.
+2. **« 2. Entraîner »** → **« Entraîner »**.
+   ✅ La page **« Entraîner le P300 »**, retour **« ← P300 »** : briefing, **« Commencer »** →
+   contrôle de liaison → **« Commencer la calibration »**.
+   ✅ La console **lance elle-même la fenêtre P300**, **après** que le moteur a démarré.
+   ✅ À la fin : trois lignes en face, une ligne ambre « ⚠ Pas encore enregistré — ce modèle est dans
+   un dossier temporaire. … », et **« Enregistrer le modèle »** / **« Refaire »**.
+3. **« Refaire »** → rien n'a été écrit dans `data/` (empreinte). Relance, puis **« Enregistrer le
+   modèle »** → « Modèle en place : … ».
+4. **« ← P300 »** → le modèle est dans la liste « Modèle entraîné », horodaté.
+5. **« 3. Tester »** → **« Tester »**.
+   ✅ La page **« Tester le P300 »** est **pré-remplie** : même modèle que la page du mode, et
+   « Manches » à **6**.
+   ✅ « Commencer » → contrôle de liaison → la fenêtre s'ouvre **en test** : son écran de fin dit
+   « Test terminé », et le bandeau « … test terminé(e) : 6 manches … le moteur note, le verdict
+   s'affiche dans la console ».
+   ✅ Le résultat porte **« (hasard 17 %) sur 6 manches »** — jamais 50 %.
+   ✅ Rien n'a été écrit dans `data/` : un test n'a ni « Enregistrer » ni « Refaire ».
+
+❌ Régression : le chiffre d'entraînement s'affiche **après** l'écriture du modèle ; « Refaire »
+laisse un fichier ; le modèle enregistré n'apparaît pas dans la liste sans redémarrer ; la fenêtre du
+test dit « CALIBRATION » ; un test qui écrit dans `data/`.
 ⚠️ **Vérifie `data/` par empreinte**, pas par `git status` — le dossier est gitignoré.
 
-→ recette 1.14
+→ recette 1.14, 1.20
 
-### ☐ 1.9 — « Ce que voit ton application » : le flux sortant, vu comme un client
+### ☐ 1.11 — « Ce que voit ton application » : le flux sortant, vu comme un client
 
-Bas de la grille → **« Ce que voit ton application »**. Démarrer le SSVEP d'abord.
+Grille → tuile **SSVEP** → **« Démarrer »** ; attends ~23 s (chauffe + repos). Puis, en bas de la
+grille, **« Ce que voit ton application »**.
 
 ✅ Les flux LSL **du réseau** apparaissent, avec leurs voies et des valeurs qui défilent.
-✅ ⚠️ Le panneau lit **par LSL, comme un client** — pas l'état interne du moteur. Coupe la diffusion
-du mode : le panneau doit **se taire**. S'il continue de défiler, il regarde le mauvais endroit, et
-c'est exactement la panne qu'on vient regarder.
-✅ **« Enregistrer les verdicts »** → un fichier apparaît dans `seances/`
-(`moteur_<flux>_AAAAMMJJ-HHMMSS.jsonl`), **une ligne par décision publiée**, et l'écran dit **où et
-combien**. Le même bouton l'arrête.
-✅ ⚠️ `seances/` est **hors de `data/`** : un verdict de séance n'est ni un modèle ni un
-enregistrement EEG.
+✅ ⚠️ Le panneau lit **par LSL, comme un client** — pas l'état interne du moteur. Décoche « publié »
+sur la tuile SSVEP puis relance « Chercher les flux » : `decoded_ssvep` doit **disparaître**, et
+l'absence se **dire**. S'il défile encore, il regarde le mauvais endroit.
+✅ **« Enregistrer les verdicts »** → un fichier `moteur_<flux>_AAAAMMJJ-HHMMSS.jsonl` dans
+`seances/`, **une ligne par décision publiée**, et l'écran dit **où et combien**. Le même bouton
+l'arrête.
+✅ `seances/` est **hors de `data/`**.
 
-❌ Régression : le panneau défile alors que le réseau est muet ; ou le chemin du fichier n'est pas
-affiché (sans lui, la séance ne se dépouille pas).
+❌ Régression : le panneau défile alors que le réseau est muet ; le chemin du fichier n'est pas
+affiché.
 
 → recette 1.18
 
-### ☐ 1.10 — Le journal de séance, coché par défaut
-
-Page **c-VEP**.
-
-✅ Une case **« Journal de séance »** est présente et **cochée**.
-✅ Lancer le stimulus → l'écran dit **où** le fichier est écrit, dans `seances/`, avec un nom
-horodaté choisi par la fenêtre.
-✅ La case **n'apparaît pas** sur les pages P300 et ErrP : c'est le registre des stimulus qui
-déclare quelle fenêtre sait journaliser, pas une liste tenue dans l'interface.
-
-❌ Régression : la case est décochée par défaut. Une séance c-VEP sans ce fichier **ne se dépouille
-pas** (recette 2.9) — décochée, c'est une séance perdue par omission, et une séance casque ne se
-répète pas.
-
-### ☐ 1.11 — La mort du moteur se dit à l'écran
+### ☐ 1.12 — La mort du moteur se dit à l'écran
 
 Difficile à provoquer proprement sans casque ; le cas réel est un casque éteint ou non appairé.
 À rejouer au bloc 2, à froid : **choisir « Casque Unicorn » avec le casque ÉTEINT**.
 
-✅ La console **DIT à l'écran** que le moteur n'a pas démarré.
-⚠️ **Elle ne repropose PAS le choix de la source** — c'est connu, écrit, et assumé. Reproposer
-exigerait de sortir le cycle de vie du fil moteur de `run()` : c'est un chantier, pas un correctif.
+✅ La console **DIT à l'écran** que le moteur n'a pas démarré (« ⛔ LE MOTEUR S'EST ARRÊTÉ »).
+⚠️ **Elle ne repropose PAS le choix de la source** — c'est connu, écrit, et assumé.
 
 ❌ Régression : la fenêtre reste là, vide et muette, avec le traceback dans une console cmd que
 personne ne regarde.
 
-### ☐ 1.12 — La cadence de l'écran, ISOLÉE (diagnostic, pas une barrière)
+→ recette 1.17
+
+### ☐ 1.13 — La cadence de l'écran, ISOLÉE (diagnostic, pas une barrière)
 
 ⚠️ **Ce point ne se passe ni ne se rate** : il MESURE, et c'est la comparaison de deux chiffres
-qui a du sens, pas l'un des deux tout seul. Il répond à une question posée en séance le
-2026-09-21 : « j'ai toujours ~4 frames sautées toutes les 10 s, périodiquement ». Périodique, ce
-n'est pas du jitter — c'est une **pause de processus**, et il y a trois suspects.
+qui a du sens. Il répond à une question posée en séance le 2026-09-21 : « j'ai toujours ~4 frames
+sautées toutes les 10 s, périodiquement ». Périodique, ce n'est pas du jitter — c'est une **pause
+de processus**, et il y a trois suspects.
 
-**(a)** Relève d'abord le taux **EN SÉANCE**, console et moteur en marche : c'est le bilan du
-point 1.6 bis, ou celui qui s'affiche au bandeau en fermant une fenêtre du bloc 2.
+**(a)** Relève d'abord le taux **EN SÉANCE**, console et moteur en marche : c'est le bilan que le
+bandeau affiche à la fermeture de la fenêtre d'un test (point 1.9, ou n'importe quel test du
+bloc 2).
 **(b)** Puis **ferme la console** — rien d'autre du projet ne doit tourner — et lance la fenêtre
 SEULE. Elle n'ouvre pas le casque, donc il n'y a rien à démonter :
 
@@ -441,8 +555,6 @@ python src/stimulus/ssvep.py --seconds 60 --freqs 12,15,20
 ```
 
 ✅ Un bilan s'imprime : `fin : N frames affichées, M sautée(s) (x %)`. **Note le pourcentage.**
-
-**Ce que la comparaison dit, et c'est tout l'objet du point :**
 
 | (a) en séance | (b) isolée | Conclusion |
 |---|---|---|
@@ -460,15 +572,22 @@ plus rien, en silence** — sa panne caractéristique.
 
 # Bloc 2 — au casque
 
-⚠️ **Sauf le SSVEP, rien de ce bloc n'a jamais décodé un vrai cerveau à travers le moteur.** Les
-autotests prouvent le câblage, jamais l'ergonomie ni le décodage. Un point qui tombe ici est
-**❌ Échec**, pas régression : note ce que tu vois, ne conclus pas.
+⚠️ **Sauf le SSVEP, rien de ce bloc n'a jamais décodé un vrai cerveau à travers le moteur, et aucun
+« Tester » n'a jamais vu un casque.** Les autotests prouvent le câblage, jamais l'ergonomie ni le
+décodage. Un point qui tombe ici est **❌ Échec**, pas régression : note ce que tu vois, ne conclus
+pas.
 
-**Ordre arrêté, à ne pas rouvrir : Contact → SSVEP → c-VEP → P300 → ErrP.** Le SSVEP en référence
-du jour : s'il échoue, c'est la séance qui est mauvaise, pas le mode. Le c-VEP tôt, sur sujet frais,
-parce que sa panne caractéristique est un décodage *dégradé mais plausible*.
+**Ordre arrêté, à ne pas rouvrir : Contact → SSVEP → c-VEP → P300 → ErrP**, puis MI et Neuro si le
+sujet tient. Le SSVEP en référence du jour : s'il échoue, c'est la séance qui est mauvaise, pas le
+mode. Le c-VEP tôt, sur sujet frais, parce que sa panne caractéristique est un décodage *dégradé
+mais plausible*.
 
 ⚠️ **On réentraîne TOUT.** Aucun modèle déjà sur le disque n'est utilisé, même vérifié chargeable.
+
+⚠️ **La boucle d'un mode à modèle est toujours la même** : « Entraîner » → lire le chiffre →
+« Enregistrer le modèle » ou « Refaire » → « ← » → « Tester » (pré-rempli avec ce modèle) → lire le
+verdict. Un chiffre d'entraînement est **hors ligne** (sa réserve le dit) ; c'est le test qui dit ce
+que le mode fait vraiment.
 
 ### ☐ 2.0 — Le montage (chaque point a déjà coûté une séance)
 
@@ -481,158 +600,153 @@ signal qui *ressemble* à du signal.
 ❌ Échec : une corrélation inter-voies à **+1,000** au bandeau = la référence flotte. Ne rien
 enregistrer, reprendre le montage.
 
-### ☐ 2.1 — Contrôle alpha — **BARRIÈRE** (à faire en PREMIER)
+### ☐ 2.1 — Vérifier le casque — **BARRIÈRE** (à faire en PREMIER)
 
-Grille → seconde rangée → **« Contrôle alpha »** → briefing → **« Commencer »**. ~37 s.
-Déroulé : stabilisation, 8 s **yeux ouverts**, 8 s **yeux fermés**. Un **top sonore** annonce chaque
-changement (la moitié de la mesure se passe les yeux fermés, où l'écran ne sert à rien).
+Grille → **« Vérifier le casque »** → « Ouvrir » (ou, c'est la même page : page SSVEP →
+**« Mesurer »**) → briefing → **« Commencer »**. **37 s** : stabilisation, 8 s **yeux ouverts**,
+8 s **yeux fermés**, un **top sonore** à chaque changement.
 
-✅ Un verdict s'affiche, avec le **ratio** et le **pic** mesurés.
-✅ Ratio **> ~1,5** → l'alpha monte à la fermeture des yeux. La page propose d'**appliquer le pic
-mesuré** au réglage « Pic alpha » du SSVEP : **accepte**, c'est le geste que la recette faisait
-noter à la main puis retaper ailleurs.
-✅ **Le SSVEP n'a pas besoin d'être démarré** pour ça — corrigé le 2026-09-21. Le réglage est
-validé, RETENU, et le mode partira avec. Jusque-là le bouton échouait par « « SSVEP » n'est pas
-démarré », c'est-à-dire **systématiquement** : ce contrôle est le premier geste d'une séance, et
-le SSVEP ne tourne évidemment pas encore à ce moment-là. Trouvé par cette QA.
+✅ Le mot en face : **« ALPHA NET »** (vert) ou **« ARRÊTE ICI »** (rouge). Ratio et pic dans la
+ligne de chiffres.
+✅ Ratio **> ~1,5** → un bouton propose d'**appliquer le pic mesuré** au « Pic alpha » du SSVEP :
+**accepte**. Le SSVEP n'a **pas** besoin d'être démarré — le réglage est validé, retenu, et affiché
+en vert.
 ✅ Si le son est coupé, la page **le dit** et prévient qu'on ne saura pas quand rouvrir les yeux.
 
-❌ **ARRÊTE ICI** si le ratio ne monte pas. Ce n'est pas un test qu'on repasse plus tard : sans
-alpha, **aucun autre test de la séance ne veut rien dire**. Reprendre le montage (saline,
-mastoïdes, serrage), puis refaire ce point.
-⚠️ Le repère « > ~1,5 » vient de **UNE personne, sur ce casque**. Un ratio à 1,4 n'est pas une
-preuve d'échec — c'est une raison de reprendre le montage et de remesurer, pas de conclure.
+❌ **ARRÊTE ICI** si le ratio ne monte pas. Sans alpha, **aucun autre test de la séance ne veut rien
+dire**. Reprendre le montage (électrodes occipitales, mastoïdes, saline), puis refaire ce point.
+⚠️ Le repère « > ~1,5 » vient de **UNE personne, sur ce casque** : un ratio à 1,4 est une raison de
+reprendre le montage et de remesurer, pas de conclure.
 ⚠️ La seconde cause d'échec — « ça monte, mais ce n'est pas de l'alpha » (pic hors bande) — **n'a
 jamais été vue sur un vrai signal**. Si elle sort, c'est une première : note tout.
 
 → recette 2.1
 
-### ☐ 2.2 — SSVEP : non-régression, la référence du jour
+### ☐ 2.2 — SSVEP : Tester, la référence du jour (~3,6 min)
 
-Page **SSVEP** → vérifier que les fréquences en vigueur sont celles du dépôt (15 · 20 · 8,571) et
-que « Pic alpha » porte **ton** pic (point 2.1) → **Démarrer**. Laisser passer la chauffe (15 s) et
-le repos (8 s), puis fixer chaque flèche à tour de rôle.
+Page **SSVEP** → vérifie « 1. Régler » : ton **pic alpha** (point 2.1), et des fréquences dont
+**aucune** ne tombe dessus — sinon **« Proposer « freqs » »** et prends ce que le moteur propose.
+Puis **« Tester »** → « Commencer ».
 
-✅ Le mode passe à « décode », et la sortie en direct montre une cible retenue quand tu fixes.
-✅ Aucune cible n'est posée **sur ton pic alpha** — si le trio du dépôt tombe dessus, utilise le
-bouton **« Proposer »** et applique ce que le moteur propose.
+⚠️ **Pour comparer aux repères du 2026-07-27, teste sur le trio du dépôt : 15 · 20 · 8,571.** C'est
+sur lui qu'ils ont été mesurés. Mais si ton pic alpha est sous ~10,5 Hz, la cible à 8,571 Hz tombe
+dans ton alpha — prends alors le jeu proposé, et **note que le chiffre n'est plus comparable**.
 
-❌ Régression : rien ne se déclenche jamais, ou la cible retenue ne correspond pas à ce que tu
-fixes. C'est le **seul** mode qui a déjà décodé un vrai cerveau à travers le moteur : s'il tombe,
-suspecte la séance (contact, saline, fatigue) avant de suspecter le code.
+✅ **Fixe la flèche entourée de bleu**, dans la fenêtre. Pendant le **REPOS** du début, fixe la
+**croix** et ne suis aucune flèche : le moteur y mesure son fond de corrélation.
+✅ **Ne ferme pas la fenêtre à la main** : sans son marqueur de fin, aucun verdict.
+✅ Deux chiffres dans la même ligne : la **justesse quand il annonce** et le **taux d'émission** — à
+lire ENSEMBLE. Repères du **2026-07-27** : **100 % de justesse** (0 confusion sur 36) pour **44 %
+d'émission**. Le 2026-09-22 : 18 annonces sur 36, les 18 justes.
+✅ Le mot : vert si justesse ≥ 90 % **et** émission ≥ 44 % ; orange au-dessus du hasard ; rouge si
+l'intervalle contient le hasard, ou **MUET** si le moteur n'a rien annoncé.
+✅ Bilan de la fenêtre au bandeau : relève le **% de frames sautées** (point 1.13).
+
+❌ Régression : la justesse s'effondre — c'est le **seul** mode déjà validé sur un cerveau : suspecte
+la séance (contact, saline, fatigue) avant le code.
+⚠️ **Un essai = UNE décision.** Un effectif ~7× plus grand que 36, c'est que les fenêtres glissantes
+ont été comptées comme indépendantes.
+⚠️ Le σ du rejet d'artefact est pris sur les **8 voies** ici et sur les **4 occipitales filtrées**
+dans le mode SSVEP. **Connu, dit, et laissé tel quel exprès.**
 
 → recette 2.2
 
-### ☐ 2.3 — Taux d'émission SSVEP : le chiffre comparable
+### ☐ 2.3 — c-VEP : Entraîner puis Tester
 
-Grille → seconde rangée → **« Taux d'émission SSVEP »** → briefing → **« Commencer »**. ~3,6 min.
-Une fenêtre s'ouvre et **désigne** une cible par essai (entourée de bleu) ; fixe celle-là.
-⚠️ **Ne ferme pas la fenêtre à la main** : sans son marqueur de fin, aucun verdict n'est calculé.
-
-✅ Deux chiffres au verdict : **le taux d'émission** (à quelle fréquence le moteur annonce quelque
-chose) et **la justesse à l'émission** (quand il annonce, est-ce la bonne).
-✅ Le verdict dit aussi **combien d'essais ont été jetés** (époques hors tampon, artefacts) — le
-taux porte sur l'effectif réellement retenu, et il le dit.
-✅ Comparer aux repères du **2026-07-27** : **100 % de justesse à l'émission** (0 confusion sur 36)
-et **44 % d'émission**.
-
-❌ Échec : la justesse s'effondre (le moteur annonce souvent, et souvent faux) — c'est plus grave
-qu'un taux d'émission bas, qui ne fait que ralentir.
-⚠️ **Un essai = UNE décision.** Si un chiffre annonce un effectif ~7× plus grand que le nombre
-d'essais joués, c'est que les fenêtres glissantes ont été comptées comme indépendantes : le
-résultat est faux et l'intervalle de confiance l'est encore plus.
-⚠️ Le σ du rejet d'artefact est pris sur les **8 voies** ici et sur les **4 occipitales filtrées**
-dans le mode SSVEP. **C'est connu, dit, et laissé tel quel exprès** : aligner maintenant rendrait ce
-chiffre incomparable au seul repère existant.
-
-### ☐ 2.4 — c-VEP : calibrer puis décoder, sans fermer la console
-
-Page **c-VEP** → **« Calibrer »** (~3,1 min annoncées, chauffe comprise) → « Commencer ».
+Page **c-VEP** → **« Entraîner »** (~3,1 min, chauffe comprise) → « Commencer ».
 
 ✅ La fenêtre c-VEP s'ouvre **toute seule**, blocs entrelacés.
-✅ À la fin : un chiffre de **justesse hors-pli** contre **son** hasard (1/6 ≈ 17 %, jamais 50 %),
-et le test **McNemar** qui compare les deux décodeurs — pas l'écart des deux pourcentages, qui est
-du bruit. Repères du dépôt : **59,5 / 64,9 %** sur la séance de référence.
-✅ **« Enregistrer le modèle »**, puis **Démarrer** le mode c-VEP avec ce modèle, **case « Journal
-de séance » cochée**, et **« Enregistrer les verdicts »** depuis la page de flux.
-✅ Fixer chaque cible à tour de rôle, ~5 min.
+✅ Le chiffre : une **justesse hors-pli** contre **son** hasard (1/6 ≈ 17 %, jamais 50 %), et sous
+« Détails » le test **McNemar** qui compare les deux décodeurs — pas l'écart des deux pourcentages.
+Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
+✅ **« Enregistrer le modèle »** → « ← c-VEP » → **« Tester »** (3 cycles par cible, 18 blocs,
+~1,8 min) → « Commencer ». Fixe le disque **cerclé**, sans bouger les yeux.
+✅ Deux chiffres ensemble : **justesse quand il émet** et **taux d'émission**, à comparer au couple
+**EN DIRECT** du dépôt — **~46 % d'émission, ~71 % de justesse** —, jamais au 59,5/64,9 %.
+⚠️ **Orange est le résultat attendu d'un système AU repère** : à 18 blocs, il ne sort vert qu'environ
+une fois sur quatre (calculé, pas mesuré). La réserve nomme le réglage à tourner.
 
-❌ Échec : rien ne se déclenche jamais **et** aucune erreur n'apparaît. ⚠️ **C'est la panne
-caractéristique du c-VEP** : une phase fausse de quelques frames ne lève aucune exception, les
-corrélations baissent juste assez pour que rien ne se déclenche, et c'est **indiscernable d'un
-étudiant qui fixe mal**. Deux causes possibles, à une ligne l'une de l'autre dans le code :
-horodatage avant le flip, ou un `refresh` que l'écran ne tient pas.
-❌ Échec de dépouillement : **pas de journal de séance** → la séance ne se dépouille pas, point. Le
-terminal en est le seul autre exemplaire, et il n'est pas conservé.
-⚠️ Le compteur `marqueurs_chauffe` est **trompeur** ici : la fenêtre clignote pendant la chauffe
-(exprès — une horloge n'a pas besoin d'être bonne pour être à l'heure), le moteur compte ces ~14
-marqueurs comme « époques jetées » et conseille à la fenêtre d'attendre. **Elle attend déjà.**
-Message faux, sans danger.
+❌ Échec : **MUET** ou « NON MESURÉ » sans autre explication. ⚠️ **C'est la panne caractéristique
+du c-VEP** : une phase fausse de quelques frames ne lève rien, les corrélations baissent juste assez
+pour que rien ne se déclenche. La réserve distingue horloge, seuils et vote — lis-la.
+🔴 **La séance longue avec journal et l'A-B-A contre l'écran archivé (recette 2.9) n'ont PLUS de
+chemin dans la console** jusqu'à « Connecter » : ce sont les montages à terminaux de la recette. Le
+test ne les remplace pas — il ne dit rien de « réseau contre local ».
 
 → recette 2.9
 
-### ☐ 2.5 — P300 : sélectionner une cible par la pensée
+### ☐ 2.4 — P300 : Entraîner puis Tester
 
-Page **P300** → **« Calibrer »** (~2,2 min) → « Commencer » → 12 manches.
+Page **P300** → **« Entraîner »** (~2,2 min, 12 manches) → « Commencer ».
 
-✅ Le chiffre s'affiche, **« Enregistrer le modèle »**, puis **Démarrer** le mode et **« Lancer le
-stimulus »**.
-✅ Fixer une cible : la sortie en direct doit la retenir, avec son score et son seuil **côte à
-côte**.
-✅ ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit.
+✅ Le chiffre (sélection en leave-one-round-out, hasard 17 %) → **« Enregistrer le modèle »**.
+✅ « ← P300 » → **« Tester »** (6 manches, ~1,2 min) → « Commencer ». À chaque manche la fenêtre
+**cercle** une cible : fixe-la.
+✅ Le verdict : « … de cibles justes … (hasard 17 %) sur 6 manches ». Vert à 80 %, orange de 60 à
+80 %, rouge en dessous ou si l'intervalle contient le hasard : **5/6 vert, 4/6 orange, 3/6 rouge**.
+⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). Six manches donnent un
+intervalle LARGE : si la réserve le dit, refais à **24 manches** (~4,1 min).
+✅ ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit. Le
+briefing affirme le contraire : constat ouvert 3.
 
-❌ Échec : la cible retenue est systématiquement décalée d'une position, ou la confiance est élevée
-et la cible fausse. C'est la signature d'un décalage à l'épochage — et c'est justement la panne qui
-rend tous les autres tests verts.
+❌ Échec : la cible retenue systématiquement décalée d'une position, ou une confiance élevée sur une
+cible fausse — la signature d'un décalage à l'épochage, la panne qui rend tous les autres tests
+verts.
 
 → recette 2.7
 
-### ☐ 2.6 — ErrP : le moteur voit-il que la machine s'est trompée ?
+### ☐ 2.5 — ErrP : le moteur voit-il que la machine s'est trompée ?
 
-Page **ErrP** → **« Calibrer »** (~5,7 min, 200 essais) → « Commencer ».
+Page **ErrP** → **« Entraîner »** (~5,7 min, 200 essais) → « Commencer » → **« Enregistrer le
+modèle »** → « ← ErrP » → **« Tester »** (80 essais, ~2,4 min, ~22 erreurs délibérées).
 
-✅ Le chiffre s'affiche ; **enregistrer**, puis **Démarrer** + **« Lancer le stimulus »**.
-✅ La sortie en direct montre le score **et** le seuil, **et** le point de fonctionnement mesuré :
-« garde X % des bonnes commandes / attrape Y % des erreurs ».
-✅ Repère du dépôt : **AUC 0,776** (p = 0,0099).
+✅ Au début du test, **regarde la piste immobile sans bouger** : le moteur y mesure ton bruit de fond
+(la page le dit).
+✅ Le verdict est un **COUPLE** : « garde X % des bonnes commandes, attrape Y % des erreurs (hasard :
+Z %, autant qu'il en annule) ». Pas de 50 % : un détecteur au hasard attrape autant d'erreurs qu'il
+annule de bonnes commandes.
+✅ Repère du dépôt : **AUC 0,776** (p = 0,0099) ; au réglage 85 %, **une erreur attrapée sur deux** —
+un taux optimiste, le seuil ayant été choisi sur les scores qui le mesurent. Attends-toi à garder
+**moins** de bonnes commandes que visé.
 
 ❌ Échec : le détecteur annonce « erreur » sur presque tout, ou sur rien.
-⚠️ **Un verdict « erreur » est une pièce biaisée, pas une certitude** : TPR 0,500 / TNR 0,855 — et
-**ces deux taux sont eux-mêmes optimistes**, le seuil ayant été choisi sur les scores qui le
-mesurent. Ne pas lire un verdict isolé comme une preuve.
-⚠️ En décodage, le marqueur `feedback` est **nu** : pas de `error: true|false`. C'est une BCI
-**passive** — lui donner la réponse rendrait faux tout ce qu'on mesure. Si l'étiquette apparaît en
-décodage, **c'est un échec**, pas un confort.
+⚠️ **Un score PARFAIT est un signal d'alarme, pas une réussite.** Pendant le test, la fenêtre
+publie la réponse de chaque pas ; elle doit atteindre le CORRECTEUR et jamais le DÉCODEUR. C'est
+`errp_test.py` qui tient cette cloison (bloc 0) — l'écran ne peut pas la montrer.
+⚠️ En décodage continu, le marqueur `feedback` reste **nu** : pas de `error: true|false`.
 
 → recette 2.8
 
-### ☐ 2.7 — Motor Imagery
+### ☐ 2.6 — Motor Imagery : Entraîner puis Tester
 
-Page **Motor Imagery** → **« Calibrer »** (5-7 min selon les essais/classe) → « Commencer ». Le
-moteur mène : il tire les classes, affiche les consignes, décompte. Aucune fenêtre à ouvrir.
+Page **Motor Imagery** → **« Entraîner »** (~7,1 min à 14 essais/classe) → « Commencer ». Le moteur
+mène : il tire les classes, affiche les consignes, décompte. Aucune fenêtre.
 
-✅ Le chiffre annoncé est une **accuracy honnête** (validation croisée **par essai**), pas un
-chiffre gonflé par la fuite entre fenêtres du même essai.
-✅ Repères ré-mesurés honnêtement : **40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et
-**63,3 % en gauche/droite** (p = 0,038).
+✅ Le chiffre est une **accuracy honnête** (validation croisée **par essai**). Repères ré-mesurés :
+**40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en gauche/droite** (p = 0,038).
+✅ « ← Motor Imagery » → **« Tester »** (6 essais/classe, ~2,8 min) → « Commencer ». Même consignes
+que l'entraînement, **même top latéralisé** (oreille gauche = poing gauche), et le moteur décide.
+✅ ⚠️ **Rouge est un résultat attendu, et il ne condamne pas l'outil** : même la séance de
+référence (40 % sur 30 essais) a un intervalle qui contient le hasard, donc elle sortirait rouge.
+Pour un chiffre qui tranche, refais à **10 essais/classe** (~4,5 min).
 
-❌ Échec : un chiffre nettement au-dessus de ces repères doit **éveiller un soupçon**, pas
-enthousiasmer — c'est exactement ce que la fuite entre fenêtres produisait (79 % non reproductible).
-⚠️ En décodage, **`-1` veut dire « vote non conclu »**, jamais « repos ». Une application qui lit
-`-1` comme un indice de classe est fausse.
+❌ Échec : un chiffre d'entraînement nettement au-dessus des repères doit **éveiller un soupçon** —
+c'est ce que la fuite entre fenêtres produisait (79 % non reproductible).
+⚠️ **`-1` veut dire « vote non conclu »**, jamais « repos » : le test le compte dans le taux
+d'émission, pas comme une erreur.
 
 → recette 2.6
 
-### ☐ 2.8 — Neuro : le mode dont le CONTENU n'a jamais été validé
+### ☐ 2.7 — Neuro : le mode dont le CONTENU n'a jamais été validé
 
-Page **Neuro** → **Démarrer**. Repos de 25 s, puis les indices défilent.
+Page **Neuro** → **« Observer »**. Repos de 25 s, puis les indices défilent.
 
-✅ Les trois indices bougent, et le bandeau ne se contredit pas.
+✅ Les trois indices bougent, et aucun chiffre de justesse n'est annoncé — il n'y a pas de bonne
+réponse.
 
 ❌ Échec : les indices restent collés à zéro, ou dérivent sans jamais revenir.
-⚠️ **Sa plomberie est testée, son contenu ne l'a jamais été — ni au casque, ni ailleurs.** Un indice
-d'engagement qui « a l'air juste » n'est pas une validation. Ce point sert à vérifier qu'il
-*fonctionne*, pas qu'il *dit vrai*.
+⚠️ **Sa plomberie est testée, son contenu ne l'a jamais été — ni au casque, ni ailleurs.** Ce point
+sert à vérifier qu'il *fonctionne*, pas qu'il *dit vrai*.
 
 → recette 2.5
 
@@ -640,20 +754,23 @@ d'engagement qui « a l'air juste » n'est pas une validation. Ce point sert à 
 
 # Bloc 3 — le réseau, vu d'une application cliente
 
-C'est le produit. Un mode doit tourner dans la console pendant tout ce bloc.
+C'est le produit. Un mode doit tourner pendant tout ce bloc : grille → sa tuile → **« Démarrer »**.
 
 ### ☐ 3.1 — Un client Python sur la même machine
 
-Page du mode → bloc **« Brancher un client »** → **« Copier »** → coller dans un fichier et
-l'exécuter. (Ou `python -u examples/receiver.py --stream decoded_ssvep`.)
+Le client est **ton** application : taper sa commande est normal.
 
-✅ Le client trouve le flux **par son nom complet** (`EEG_API_Unicorn_decoded_…`) et affiche des
+```bash
+python -u examples/receiver.py --stream decoded_ssvep
+```
+
+✅ Le client trouve le flux **par son nom complet** (`EEG_API_Unicorn_decoded_ssvep`) et affiche des
 décisions.
-✅ Le nom affiché sur la page est le nom **complet**, celui qu'un `resolve_byprop` demande — pas le
-suffixe.
-✅ Mode arrêté → la page dit **« mode ARRÊTÉ — ce flux n'est pas publié en ce moment »**.
+✅ « Ce que voit ton application » montre le même flux, sous le même nom.
+⚠️ L'extrait « Brancher un client » a quitté la page du mode le 2026-09-22 ; il reviendra avec
+« Connecter ». En attendant, la référence est `examples/`.
 
-❌ Régression : l'extrait copié ne marche pas tel quel ; ou il nomme un flux qui n'existe pas.
+❌ Régression : le client ne trouve pas le flux alors qu'il est « publié » sur la tuile.
 ⚠️ Un flux décodé **existe dès le démarrage du mode** et reste **silencieux** pendant la chauffe et
 le repos (~23 s pour le SSVEP). Ne pas relancer le moteur en croyant le flux absent.
 
@@ -692,18 +809,21 @@ aucun autotest ne peut le remplacer. Tout ce qui a été vérifié l'a été **p
 
 ## Ce que cette feuille ne teste pas, et il faut le savoir
 
-- **L'ergonomie.** Aucun autotest ne dit si un étudiant comprend qu'un chiffre affiché n'est pas
-  encore un modèle enregistré, ni si le contrôle de liaison est **lu** ou **cliqué au travers**.
-  Ce sont trois questions qui n'ont de réponse qu'en séance, devant quelqu'un qui découvre l'outil.
+- **L'ergonomie.** Aucun autotest ne dit si un étudiant comprend la boucle Régler → Tester →
+  ajuster, qu'un chiffre d'entraînement n'est pas encore un modèle enregistré, ni si le contrôle de
+  liaison est **lu** ou **cliqué au travers**. Ces questions n'ont de réponse qu'en séance, devant
+  quelqu'un qui découvre l'outil.
 - **L'écart de lancement fenêtre/moteur.** La console soumet la commande **puis** lance la fenêtre —
   l'ordre est figé par un test — et ce sont l'initialisation de pygame et l'attente de la fenêtre
-  qui couvrent les 15 s de chauffe du moteur. **Ça tient, ce n'est pas garanti** : les deux
-  processus comptent sur deux horloges différentes, et il n'existe **aucune poignée de main**. Si la
-  fenêtre prend de l'avance, ses premières manches tombent dans la chauffe — jetées, comptées,
-  dites, mais la séance est plus courte que ce que les deux écrans annoncent.
-- **`--cycles` sur le c-VEP.** Une fenêtre lancée à la main avec `--cycles 6` sera deux fois plus
-  courte que ce que la console annonce. Le moteur ne peut pas le savoir : ce n'est pas lui qui mène
-  le protocole.
+  qui couvrent les 15 s de chauffe du moteur. **Ça tient, ce n'est pas garanti** : il n'existe
+  **aucune poignée de main**. Si la fenêtre prend de l'avance, ses premiers essais tombent dans la
+  chauffe — jetés, comptés, dits, mais la séance est plus courte que ce que l'écran annonce.
+- **`--cycles` sur une fenêtre c-VEP lancée à la main.** Il compte des cycles enregistrés **par
+  cible** ; la console le passe dans cette unité pour un test, mais une fenêtre lancée à la main
+  avec `--cycles 6` jouera une séance plus courte que ce que l'entraînement annonce — le moteur ne
+  mène pas ce protocole et ne peut pas le savoir.
+- **La cloison d'étiquette de l'ErrP** ne se voit pas à l'écran : elle est tenue par l'autotest de
+  `errp_test.py` (bloc 0.3), pas par la séance.
 - **Les douze écrans archivés** (`archive/`) gardent chacun leur propre `--smoke` et ne sont couverts
   par aucun des autotests du bloc 0. `archive/cvep_pilot.py` reste utile en séance : il décode **en
   local**, ce qui sépare « le décodage réseau est moins bon » de « la séance est moins bonne ».
