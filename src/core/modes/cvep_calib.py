@@ -515,9 +515,14 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
         **(non_mesure("aucune décision à la géométrie du moteur : trop peu de cycles "
                       "consécutifs de la même cible", "Recalibre sans interrompre la séance.")
            if meilleur is None
+           # ⚠️ « sur N DÉCISIONS », pas « sur N essais » : la justesse est hors-pli sur des
+           # GROUPES de `CVEP_DECISION_CYCLES` cycles (`groupes_de_cycles`) — 37 décisions pour
+           # 90 cycles à la séance de référence. Citer les cycles gonflait l'effectif ×2,4 sur la
+           # seule ligne visible par défaut : « un essai = une décision », perdu par l'affichage.
            else depuis_table(meilleur, VERDICTS,
                              f"{pct(meilleur)} de cibles justes (hasard {pct(1.0 / n_cibles)}) "
-                             f"sur {len(epochs)} essais")),
+                             f"sur {int(res['eCCA']['n_decisions'])} décisions "
+                             f"({len(epochs)} cycles)")),
         "honnetete": HONNETETE,
     }
 
@@ -1134,6 +1139,15 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk("McNemar" in res.get("verdict", ""),
             f"…et le verdict rend le TEST, pas seulement l'écart entre deux pourcentages "
             f"({res.get('verdict')})")
+        # I-1 (revue du 2026-09-22) : la SEULE ligne visible par défaut disait « sur 90 essais »
+        # alors que la justesse porte sur ~37 DÉCISIONS (des groupes de `CVEP_DECISION_CYCLES`
+        # cycles). « Un essai = une décision », réintroduit par l'affichage : l'effectif lu ×2,4.
+        chiffres = res.get("chiffres", "")
+        chk(0 < res.get("n_decisions", 0) < res.get("n_essais", 0)
+            and f"sur {res.get('n_decisions')} décisions" in chiffres
+            and f"sur {res.get('n_essais')} essais" not in chiffres,
+            f"la ligne visible dit l'effectif de la justesse — {res.get('n_decisions')} DÉCISIONS, "
+            f"pas les {res.get('n_essais')} cycles ({chiffres!r})")
 
         # --- 4. DEUX fichiers candidats, invisibles tant que personne ne les retient ------------
         chk(res.get("modele", "").startswith(dossier)
