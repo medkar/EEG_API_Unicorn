@@ -12,7 +12,7 @@ Cette feuille-ci est ce qu'on tient à la main ; la recette est ce qu'on relit q
 | Bloc | Ce qu'il faut | Durée | Mesurée ? |
 |---|---|---|---|
 | **0** — autotests | rien | **~6 min** dont **4,0 min** de calcul | ✅ chronométré le 2026-09-10 |
-| **1** — console à l'écran | un écran | **35-45 min** | estimé |
+| **1** — console à l'écran | un écran | **40-50 min** (12 points) | estimé |
 | **2** — au casque | le casque + un sujet | **2 h à 2 h 30** | estimé (~50 min de protocole pur) |
 | **3.1-3.2** — réseau | une 2e machine | **~20 min** | estimé |
 | **3.3** — Unity | Unity installé | **hors barème** | jamais compilé |
@@ -406,6 +406,38 @@ exigerait de sortir le cycle de vie du fil moteur de `run()` : c'est un chantier
 
 ❌ Régression : la fenêtre reste là, vide et muette, avec le traceback dans une console cmd que
 personne ne regarde.
+
+### ☐ 1.12 — La cadence de l'écran, ISOLÉE (diagnostic, pas une barrière)
+
+⚠️ **Ce point ne se passe ni ne se rate** : il MESURE, et c'est la comparaison de deux chiffres
+qui a du sens, pas l'un des deux tout seul. Il répond à une question posée en séance le
+2026-09-21 : « j'ai toujours ~4 frames sautées toutes les 10 s, périodiquement ». Périodique, ce
+n'est pas du jitter — c'est une **pause de processus**, et il y a trois suspects.
+
+**(a)** Relève d'abord le taux **EN SÉANCE**, console et moteur en marche : c'est le bilan du
+point 1.6 bis, ou celui qui s'affiche au bandeau en fermant une fenêtre du bloc 2.
+**(b)** Puis **ferme la console** — rien d'autre du projet ne doit tourner — et lance la fenêtre
+SEULE. Elle n'ouvre pas le casque, donc il n'y a rien à démonter :
+
+```powershell
+python src/stimulus/ssvep.py --seconds 60 --freqs 12,15,20
+```
+
+✅ Un bilan s'imprime : `fin : N frames affichées, M sautée(s) (x %)`. **Note le pourcentage.**
+
+**Ce que la comparaison dit, et c'est tout l'objet du point :**
+
+| (a) en séance | (b) isolée | Conclusion |
+|---|---|---|
+| ~0,7 % | **~0 %** | **Contention** : le moteur décode à ~5 Hz et la console sonde à 10 Hz sur la même machine. Levier réel, et il ne touche pas la fenêtre. |
+| ~0,7 % | **~0,7 %** | La fenêtre ou le pilote. Premier suspect : le **GC générationnel de Python**, qui produit exactement ce genre de pause régulière — il se teste en une ligne (`gc.freeze()` après l'init, `gc.disable()` dans la boucle). |
+| **> 2 %** partout | — | 🔴 À traiter AVANT toute séance c-VEP : à ce niveau, la phase ne se résorbe plus entre deux cycles. |
+
+⚠️ **Le seuil qui compte n'est pas le même selon le mode.** Pour le SSVEP, 0,7 % est négligeable —
+mesuré le 2026-09-21 : 100 % de justesse avec ce taux-là. Pour le **c-VEP**, chaque saut décale la
+phase jusqu'au marqueur de cycle suivant (~1/s) qui la résorbe : à 0,7 % ça fait ~0,4 frame
+d'erreur par cycle, tolérable. Au-delà de ~2 %, l'erreur ne se résorbe plus et le mode **ne décode
+plus rien, en silence** — sa panne caractéristique.
 
 ---
 
