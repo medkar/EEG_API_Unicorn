@@ -151,6 +151,12 @@ class Console(QMainWindow):
         # le disque : `choices_fn` charge les modèles entraînés).
         self.catalogue = {spec["id"]: spec for spec in catalogue}
         self.mesures = {spec["id"]: spec for spec in mesures}
+        # Quelle mesure sait REMPLIR quel réglage d'un mode : DÉCLARÉ par le moteur, sur le
+        # runtime de la mesure (`REGLAGE_PRODUIT`, cf. `core/modes/alpha.py`). C'est ce qui pose
+        # « Mesurer » à côté du « Pic alpha » sans qu'aucune page écrive « alpha ».
+        self._mesure_par_reglage = {
+            tuple(m.runtime_cls.REGLAGE_PRODUIT): m.id for m in registry.MESURES
+            if getattr(m.runtime_cls, "REGLAGE_PRODUIT", None) and m.id in self.mesures}
         # La page d'où l'on a ouvert une mesure (« Tester », « Mesurer ») : son « ← » y ramène,
         # parce que la boucle est « régler → tester → ajuster », pas un aller-retour par l'accueil.
         self._origine_mesure = None
@@ -701,6 +707,10 @@ class Console(QMainWindow):
         """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
         return next((mid for mid, spec in self.catalogue.items()
                      if spec.get("test_id") == mesure_id), None)
+
+    def mesure_qui_remplit(self, mode_id, cle):
+        """La mesure qui sait remplir ce réglage de ce mode (cf. `REGLAGE_PRODUIT`), ou None."""
+        return self._mesure_par_reglage.get((mode_id, cle))
 
     def arreter_calibration(self):
         """« Abandonner » : la commande au moteur ET la fenêtre. Les deux, toujours.
@@ -2700,6 +2710,13 @@ def _smoke():
     chk("BARRIÈRE" in console.grid.tuiles_mesure["alpha"].marque.text(),
         f"…et la tuile du contrôle alpha annonce qu'il est une BARRIÈRE, depuis le CONTRAT "
         f"({console.grid.tuiles_mesure['alpha'].marque.text()!r})")
+    # Nommée d'après son BUT (2026-09-22), et ce nom vient du CONTRAT (`alpha.SPEC.label`) : la
+    # grille n'en écrit aucun. « Taux d'émission SSVEP », lui, a quitté l'accueil — c'est le
+    # « Tester » de la page SSVEP, cf. l'assertion `tests_de_modes` juste au-dessus.
+    chk("Vérifier le casque" in console.grid.tuiles_mesure["alpha"].titre.text()
+        and "ssvep_taux" in tests_de_modes,
+        f"la tuile s'appelle « Vérifier le casque », et le taux SSVEP est devenu un « Tester » "
+        f"({console.grid.tuiles_mesure['alpha'].titre.text()!r}, tests={sorted(tests_de_modes)})")
 
     console.grid.tuiles_mesure["alpha"].bouton.click()
     mes = console.stack.currentWidget()
@@ -3087,6 +3104,30 @@ def _smoke():
         "« ← » ramène sur la page du MI, d'où l'on venait : la boucle est « régler → tester → "
         "ajuster », pas un détour par l'accueil")
 
+    # --- « MESURER » : LE PIC ALPHA SE MESURE DEPUIS LE CHAMP QUI L'ATTEND ---------------------
+    # Deux portes, UN runtime : « Vérifier le casque » sur l'accueil, et « Mesurer » à côté du
+    # « Pic alpha ». La page ne nomme aucune mesure — le moteur déclare laquelle sait remplir
+    # quel réglage (`REGLAGE_PRODUIT`, cf. `core/modes/alpha.py`).
+    avec_mesurer = sorted((mid, cle) for mid, p in console.pages.items()
+                          for cle in p.boutons_mesurer)
+    chk(avec_mesurer == [("ssvep", "alpha_hz")],
+        f"« Mesurer » n'existe qu'à côté du pic alpha du SSVEP ({avec_mesurer})")
+    console.show_mode("ssvep")
+    console.apply_state(ssvep_regle)
+    page_ss.boutons_mesurer["alpha_hz"].click()
+    chk(console.stack.currentWidget() is console.mesure_pages["alpha"]
+        and "SSVEP" in console.mesure_pages["alpha"].bouton_retour.text(),
+        f"« Mesurer » ouvre la MÊME page que « Vérifier le casque », et son « ← » dit où il "
+        f"ramène ({console.mesure_pages['alpha'].bouton_retour.text()!r})")
+    moteur_faux.commandes.clear()
+    console.mesure_pages["alpha"].bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(("start_mesure", {"id": "alpha", "params": {}}) in moteur_faux.commandes,
+        f"…et « Commencer » y soumet `start_mesure` pour « alpha » ({moteur_faux.commandes})")
+    console.mesure_pages["alpha"].bouton_retour.click()
+    chk(console.stack.currentWidget() is page_ss,
+        "…puis « ← » ramène sur la page SSVEP, là où la valeur est attendue")
+
     # --- 🔴 RIEN N'EST TRONQUÉ, ET L'AIDE N'EST PLUS UN MUR DE GRIS -------------------------
     #
     # Constat 1.10 de la recette, posé le 2026-08-17 et parké depuis : « le texte d'aide gris est
@@ -3185,6 +3226,33 @@ def _smoke():
     chk("3fae5a" in page.formulaire.confirmation.styleSheet(),
         f"…et c'est bien le vert du succès, celui que `mesure_page.py` emploie déjà pour le même "
         f"fait ({page.formulaire.confirmation.styleSheet()})")
+
+    # --- 🔴 LA BOUCLE DU PIC ALPHA, CONTRE LE VRAI MOTEUR : Mesurer → Appliquer → le champ ------
+    # « Le retour doit être VISIBLE » : « Appliquer » sur la page de la mesure pose le réglage sur
+    # le SSVEP ARRÊTÉ (accepté et RETENU), et revenir sur la page SSVEP doit le montrer DANS LE
+    # CHAMP. Contre le VRAI `EngineServer`, parce que c'est lui qui retient et publie
+    # `snapshot()["reglages"]` — un état fabriqué ne prouverait que ce qu'on y a mis.
+    page.formulaire.champs["alpha_hz"].setValue(9.0)
+    page._appliquer(page.formulaire.values())
+    reelle.show_mode("ssvep")
+    reelle.apply_state(moteur.snapshot())
+    page.boutons_mesurer["alpha_hz"].click()
+    mes_r = reelle.stack.currentWidget()
+    reussi_r = _verdict_alpha(True)
+    pic_r = reussi_r["reglage_propose"]["valeur"]
+    chk(mes_r is reelle.mesure_pages["alpha"] and abs(pic_r - 9.0) > 0.4,
+        f"« Mesurer » ouvre la mesure — et le pic ({pic_r}) diffère de la valeur en place (9), "
+        f"sinon ce qui suit serait vrai à vide")
+    reelle.apply_state({**moteur.snapshot(), "mesure": {**fini, "resultat": reussi_r}})
+    mes_r.appliquer_pic.click()
+    chk("SSVEP" in mes_r.reponse_pic.text() and "3fae5a" in mes_r.reponse_pic.styleSheet(),
+        f"« Appliquer » est ACCEPTÉ par le vrai moteur, SSVEP arrêté ({mes_r.reponse_pic.text()})")
+    mes_r.bouton_retour.click()
+    reelle.apply_state(moteur.snapshot())            # le tour de QTimer suivant
+    chk(reelle.stack.currentWidget() is page
+        and abs(page.formulaire.champs["alpha_hz"].value() - pic_r) < 1e-9,
+        f"…et revenu sur la page SSVEP, le champ « Pic alpha » MONTRE la valeur mesurée, sans "
+        f"qu'on la retape ({page.formulaire.champs['alpha_hz'].value()} pour {pic_r})")
 
     # On applique la commande à la main, comme la boucle le ferait.
     moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)

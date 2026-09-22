@@ -187,6 +187,14 @@ class ControleAlpha(MesureRuntime):
     socle et n'est pas redéfini.
     """
 
+    # Le réglage que cette mesure sait REMPLIR : (mode, clé). C'est ce qui pose le bouton
+    # « Mesurer » à côté du champ « Pic alpha » de la page SSVEP — la console le LIT ici, elle
+    # n'écrit ni « alpha » ni « alpha_hz ». Même source que `reglage_propose` ci-dessous : la
+    # porte d'entrée et le retour ne peuvent pas désigner deux champs différents.
+    # ⚠️ Sa place naturelle est un champ de `MesureSpec`, sérialisé par `catalogue_mesures` ; il
+    # vit sur le runtime tant que `registry.py` est en chantier ailleurs (2026-09-22).
+    REGLAGE_PRODUIT = (SPEC_SSVEP.id, PARAM_CIBLE.key)
+
     def protocole(self):
         """Prép. → yeux OUVERTS → prép. → yeux FERMÉS. Les deux préparations ne prélèvent rien.
 
@@ -278,9 +286,9 @@ class ControleAlpha(MesureRuntime):
             # spectre de bruit. Le proposer serait pire que la boucle manuelle qu'on remplace —
             # une valeur fausse, appliquée d'un clic, sans le carnet où l'on aurait hésité.
             "reglage_propose": None if not franchie else {
-                "mode": SPEC_SSVEP.id,
+                "mode": self.REGLAGE_PRODUIT[0],
                 "mode_label": SPEC_SSVEP.label,
-                "cle": PARAM_CIBLE.key,
+                "cle": self.REGLAGE_PRODUIT[1],
                 "label": PARAM_CIBLE.label,
                 "valeur": pic_arrondi,
                 "unite": PARAM_CIBLE.unit,
@@ -336,7 +344,9 @@ class ControleAlpha(MesureRuntime):
 
 SPEC = MesureSpec(
     id="alpha",
-    label="Contrôle alpha",
+    # « Vérifier le casque » (2026-09-22) : nommé d'après son BUT, pas d'après sa métrique. C'est
+    # le geste que l'étudiant fait — l'effet de Berger est le moyen, pas ce qu'il vient chercher.
+    label="Vérifier le casque",
     summary="Yeux ouverts / yeux fermés : les électrodes occipitales captent-elles ? "
             "À faire EN PREMIER — tout le reste de la séance en dépend.",
     briefing=BRIEFING,

@@ -47,6 +47,7 @@ class ParamsForm(QWidget):
         self.champs = {}
         self.boutons_proposer = {}      # {clé : bouton} — pour qu'un smoke puisse le CLIQUER
         self.aides = {}                 # {clé : (QLabel, texte complet)}
+        self.lignes = {}                # {clé : la ligne du champ} — cf. `ajouter_a_cote`
         self._params_par_cle = {p["key"]: p for p in self.params}
 
         formulaire = QFormLayout()
@@ -54,7 +55,12 @@ class ParamsForm(QWidget):
             champ = self._champ(param)
             self.champs[param["key"]] = champ
             etiquette = param["label"] + (f" ({param['unit']})" if param["unit"] else "")
-            formulaire.addRow(etiquette, champ)
+            # Le champ vit dans une LIGNE, pour qu'une page puisse poser un geste juste à côté
+            # (le « Mesurer » du pic alpha) sans que ce formulaire sache lequel.
+            ligne = QHBoxLayout()
+            ligne.addWidget(champ, 1)
+            self.lignes[param["key"]] = ligne
+            formulaire.addRow(etiquette, ligne)
             if param.get("proposes"):
                 bouton = QPushButton(f"Proposer « {param['proposes']} »")
                 bouton.clicked.connect(lambda _c=False, k=param["key"]: self.proposer.emit(k))
@@ -144,6 +150,12 @@ class ParamsForm(QWidget):
         layout.addWidget(self.refus)
         layout.addWidget(self.avertissement)
         layout.addWidget(self.confirmation)
+
+    def ajouter_a_cote(self, cle, widget):
+        """Pose `widget` à droite du champ `cle`. Ne fait rien si ce formulaire n'a pas ce champ."""
+        ligne = self.lignes.get(cle)
+        if ligne is not None:
+            ligne.addWidget(widget)
 
     def _deplier(self, ouvert):
         """Bascule les aides entre leur première phrase et le texte du contrat, mot pour mot."""

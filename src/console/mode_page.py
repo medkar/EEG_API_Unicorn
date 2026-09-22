@@ -25,7 +25,7 @@ Ce qui a QUITTÉ la page — « Démarrer/Arrêter », « Lancer le stimulus »,
 tuiles de la grille) reste en place.
 
 Rien ici ne sait qu'un SSVEP a des fréquences ou qu'un MI s'entraîne : c'est le CONTRAT qui le dit
-(`calibration`, `test_id`).
+(`calibration`, `test_id`), et le moteur qui déclare quelle mesure sait remplir quel réglage.
 """
 
 import os
@@ -80,6 +80,23 @@ class ModePage(QWidget):
         self.formulaire = ParamsForm(spec["params"])
         self.formulaire.appliquer.connect(self._appliquer)
         self.formulaire.proposer.connect(self._proposer)
+        # « Mesurer » à côté d'un champ, quand le MOTEUR déclare une mesure qui sait le remplir (le
+        # pic alpha, pour le SSVEP). Même page de mesure que « Vérifier le casque » sur l'accueil :
+        # deux portes, un seul runtime. La page ne nomme aucune mesure — elle demande.
+        self.boutons_mesurer = {}
+        for param in spec["params"]:
+            mesure_id = console.mesure_qui_remplit(self.mode_id, param["key"])
+            if mesure_id is None:
+                continue
+            bouton = QPushButton("Mesurer")
+            bouton.setToolTip(f"Mesure cette valeur sur toi : « "
+                              f"{console.mesures[mesure_id]['label']} », puis « Appliquer » la "
+                              f"renvoie dans ce champ.")
+            bouton.clicked.connect(
+                lambda _c=False, m=mesure_id: console.show_mesure(m, depuis=self))
+            self.formulaire.ajouter_a_cote(param["key"], bouton)
+            self.boutons_mesurer[param["key"]] = bouton
+
         numero = 1
         self.bloc_regler = QGroupBox(f"{numero}. Régler")
         QVBoxLayout(self.bloc_regler).addWidget(self.formulaire)
