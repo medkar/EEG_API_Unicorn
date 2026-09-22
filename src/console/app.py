@@ -2309,6 +2309,9 @@ def _smoke():
         mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
             sys.executable, "-u", "-c",
             "import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+            "print('[ssvep-stim] t=1.0 essai 16/18 : fixe « AVANT » (cible 0)'); "
+            "print('[ssvep-stim] t=2.0 essai 17/18 : fixe « ARRIERE » (cible 2)'); "
+            "print('[ssvep-stim] test terminé : 18 essais, « calib_end » envoyé'); "
             "print('[ssvep-stim] fin : 600 frames affichées, 4 sautée(s) (0.7%)')"]
         propre = LanceurFenetre()
         propre.lancer("ssvep")
@@ -2320,6 +2323,9 @@ def _smoke():
         chk(not alerte,
             "…sans le peindre en alerte : une séance qui s'est bien passée le dit aussi, et "
             "« 0 sautée » doit se LIRE plutôt que se deviner")
+        chk("essai 16/18" not in texte and "essai 17/18" not in texte,
+            f"…et SEULEMENT son bilan : le journal essai par essai qui le précède ne remonte pas "
+            f"dans le bandeau, où il noyait le chiffre utile ({texte[:90]}…)")
         chk(propre.probleme == "",
             f"…et ce n'est PAS un problème : le canal des morts anormales reste vide "
             f"({propre.probleme[:40]})")

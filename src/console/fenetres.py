@@ -35,6 +35,8 @@ from stimulus import registry as stimulus_registry  # noqa: E402
 # d'erreur d'un processus qui vient de mourir (traceback Python : la dernière ligne suffit, celle
 # d'avant donne le fichier), pas assez pour transformer le bandeau en journal.
 LIGNES_RETENUES = 6
+# …et combien on en montre quand la fenêtre s'est fermée NORMALEMENT : son bilan, pas son journal.
+BILAN_LIGNES = 2
 
 
 class LanceurFenetre(QObject):
@@ -199,8 +201,13 @@ class LanceurFenetre(QObject):
             # partait dans la console cmd que personne ne regarde. Exactement le défaut 1.13
             # (« le refus ne va que dans le terminal »), un cran plus loin : ici ce n'est pas un
             # refus qu'on perd, c'est une mesure.
-            self.resume = f"fenêtre {quoi} fermée — {self._derniere_sortie()}" if self._lignes \
-                else ""
+            # ⚠️ Les DEUX dernières lignes seulement : le bilan (frames sautées) et, pour le
+            # c-VEP, la cadence — ce qu'une fenêtre imprime en tout dernier. La première version
+            # joignait les six lignes retenues, ce qui est juste pour une mort anormale (le
+            # traceback a besoin de son contexte) et faux ici : en séance (2026-09-22), le bandeau
+            # portait les journaux bloc par bloc de la séance avant d'arriver au chiffre utile.
+            self.resume = (f"fenêtre {quoi} fermée — {self._derniere_sortie(BILAN_LIGNES)}"
+                           if self._lignes else "")
         self.change.emit()
 
     def _erreur(self, erreur):
@@ -221,12 +228,13 @@ class LanceurFenetre(QObject):
                          f"dépendance manquante) — {self._derniere_sortie()}")
         self.change.emit()
 
-    def _derniere_sortie(self):
-        """Les dernières lignes du processus, pour que le message dise QUOI réparer."""
+    def _derniere_sortie(self, n=None):
+        """Les dernières lignes du processus (`n` au plus), pour que le message dise QUOI réparer."""
         if not self._lignes:
             return ("aucune sortie ; relance-la à la main dans un terminal pour voir son "
                     "message : `python src/stimulus/<mode>.py`")
-        return " · ".join(self._lignes)
+        lignes = list(self._lignes)
+        return " · ".join(lignes[-n:] if n else lignes)
 
     def oublier_probleme(self):
         """Efface le message. Appelée quand on relance : un vieux problème affiché à côté d'une
