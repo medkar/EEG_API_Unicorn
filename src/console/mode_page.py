@@ -93,8 +93,7 @@ class ModePage(QWidget):
             bouton.setToolTip(f"Mesure cette valeur sur toi : « "
                               f"{console.mesures[mesure_id]['label']} », puis « Appliquer » la "
                               f"renvoie dans ce champ.")
-            bouton.clicked.connect(
-                lambda _c=False, m=mesure_id: console.show_mesure(m, depuis=self))
+            bouton.clicked.connect(lambda _c=False, m=mesure_id: self._mesurer(m))
             self.formulaire.ajouter_a_cote(param["key"], bouton)
             self.boutons_mesurer[param["key"]] = bouton
 
@@ -223,6 +222,29 @@ class ModePage(QWidget):
         layout.addLayout(entete)
         layout.addWidget(self.defilement, 1)
 
+    def _appliquer_avant_de_partir(self):
+        """Envoie ce qui est À L'ÉCRAN avant de quitter la page. Rend (parti, réglages validés).
+
+        Le geste commun à « Tester » et à « Mesurer » : les deux quittent la page, et les deux
+        reviennent dessus. `parti` faux = le moteur a refusé ; le refus s'affiche dans « Régler »,
+        et l'on RESTE — partir tester (ou mesurer) une configuration que le moteur refuse ne
+        mesurerait rien, et la saisie fautive serait perdue au retour.
+
+        ⚠️ Pendant que le TEST de ce mode tourne, rien n'est envoyé (constat M7 de la revue) : il
+        est parti avec ses réglages, et changer le magasin sous lui ferait afficher à cette page
+        une configuration que son verdict ne décrira pas. Le clic mène alors simplement à la
+        page du test en cours.
+        """
+        if self.console.mesure_en_cours(self.spec.get("test_id") or ""):
+            return True, None
+        ack = self.console.commande("set_params", id=self.mode_id,
+                                    params=self.formulaire.values())
+        if not ack.get("accepted"):
+            self.formulaire.show_refus(ack.get("reason", ""))
+            return False, None
+        self.formulaire.show_refus("")
+        return True, ack.get("params")
+
     def _tester(self):
         """« Tester » teste CE QUI EST À L'ÉCRAN, et pas ce qui avait été appliqué avant.
 
@@ -234,16 +256,25 @@ class ModePage(QWidget):
         dans « Régler » et le test n'est PAS ouvert — tester une configuration impossible ne
         mesurerait rien.
         """
-        ack = self.console.commande("set_params", id=self.mode_id,
-                                    params=self.formulaire.values())
-        if not ack.get("accepted"):
-            self.formulaire.show_refus(ack.get("reason", ""))
+        parti, reglages = self._appliquer_avant_de_partir()
+        if not parti:
             return
-        self.formulaire.show_refus("")
         # Les valeurs VALIDÉES par le moteur, pour pré-remplir le test tout de suite : l'état
         # sondé n'aura rattrapé ce réglage qu'au prochain tour de `QTimer`.
-        self.console.show_mesure(self.spec["test_id"], depuis=self,
-                                 reglages=ack.get("params"))
+        self.console.show_mesure(self.spec["test_id"], depuis=self, reglages=reglages)
+
+    def _mesurer(self, mesure_id):
+        """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester » (constat I4).
+
+        🔴 Sans ce geste, l'aller-retour ÉCRASAIT la saisie : on tape « Rafraîchissement 30 » et
+        de nouvelles fréquences sans « Appliquer », on clique « Mesurer », on applique le pic
+        alpha — qui écrit le magasin du mode —, on revient, et `update_from` recharge le
+        formulaire depuis ce magasin : 60 Hz et le trio du dépôt étaient de retour, et « Tester »
+        testait ce que l'étudiant venait d'effacer sans le savoir.
+        """
+        parti, _ = self._appliquer_avant_de_partir()
+        if parti:
+            self.console.show_mesure(mesure_id, depuis=self)
 
     def _appliquer(self, values):
         """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.
@@ -263,9 +294,11 @@ class ModePage(QWidget):
             # nuance « pas encore en vigueur » est un fait de CALENDRIER, et elle est dans le
             # texte ; la couleur ne répond qu'à « est-ce accepté ». L'orange le faisait lire
             # comme un problème, alors que `mesure_page.py` disait déjà vert pour le même fait.
+            # (La page ne démarre plus rien : ce sont « Tester » et le décodage continu qui
+            # partiront avec — constat M14 de la revue.)
             self.formulaire.show_confirmation(
-                "réglage RETENU : « " + self.spec["label"] + " » est arrêté, il démarrera avec."
-                if ack.get("differe") else "")
+                "réglage RETENU : « " + self.spec["label"] + " » est arrêté ; « Tester » et le "
+                "prochain décodage partiront avec." if ack.get("differe") else "")
             return
         # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
         # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire
@@ -341,9 +374,10 @@ class ModePage(QWidget):
 
         Appelée sur ÉVÉNEMENT — à l'entrée dans la page (cf. `Console.show_mode`) — jamais dans le
         rafraîchissement périodique : résoudre ces choix lit le disque, et le faire dix fois par
-        seconde a déjà coûté 30 % d'un cœur à ce projet. Revenir d'une calibration ramène sur la
-        GRILLE, pas sur cette page : rouvrir le mode ensuite retombe dans ce même événement, donc
-        un modèle fraîchement entraîné apparaît quand même dès la prochaine entrée.
+        seconde a déjà coûté 30 % d'un cœur à ce projet. Revenir d'un entraînement, d'un test ou
+        d'une mesure ramène sur CETTE page par `show_mode`, donc par ce même événement : un modèle
+        fraîchement enregistré est dans la liste dès le retour. Quel modèle y est SÉLECTIONNÉ,
+        c'est le magasin du moteur qui le dit (`update_from`), pas cette liste.
         """
         spec = registry.get(self.mode_id)
         if spec is None:

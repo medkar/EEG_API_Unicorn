@@ -767,6 +767,12 @@ class Console(QMainWindow):
         return next((mid for mid, spec in self.catalogue.items()
                      if spec.get("test_id") == mesure_id), None)
 
+    def mesure_en_cours(self, mesure_id):
+        """Cette mesure tourne-t-elle (vue dans le dernier état, et pas encore terminée) ?"""
+        mesure = self._dernier_etat.get("mesure") or {}
+        return (bool(mesure_id) and mesure.get("mode_id") == mesure_id
+                and mesure.get("phase") not in PHASES_TERMINALES)
+
     def mesure_qui_remplit(self, mode_id, cle):
         """La mesure qui sait remplir ce réglage de ce mode (cf. `REGLAGE_PRODUIT`), ou None."""
         return self._mesure_par_reglage.get((mode_id, cle))
@@ -874,13 +880,13 @@ class Console(QMainWindow):
         page.bouton_retour.setText(f"← {depuis.spec['label']}" if depuis is not None
                                    else "← Modes")
         mode_id = self._mode_teste_par(mesure_id)
-        mesure = self._dernier_etat.get("mesure") or {}
-        en_cours = (mesure.get("mode_id") == mesure_id
-                    and mesure.get("phase") not in PHASES_TERMINALES)
-        if mode_id is not None and not en_cours:
+        if mode_id is not None and not self.mesure_en_cours(mesure_id):
             # Les listes d'abord (un modèle fraîchement entraîné doit y être), puis les valeurs.
-            # Seulement les clés du MODE : rafraîchir aussi `stream_in` résoudrait le réseau LSL
-            # (~1 s de fenêtre gelée) à chaque clic sur « Tester ».
+            # Seulement les clés que le test PARTAGE avec le mode (le modèle, les seuils…) : ce
+            # sont elles que la page montre en lecture seule. ⚠️ Un test n'a pas de « Flux de
+            # marqueurs » à lui — il écoute toujours NOTRE fenêtre (constat C2) ; si un contrat de
+            # test en déclarait un, ce rafraîchissement résoudrait le réseau LSL (~1 s de fenêtre
+            # gelée) à chaque clic sur « Tester » (constat M12).
             page.rafraichir_choix([p["key"] for p in self.catalogue[mode_id]["params"]])
             page.formulaire.set_values(reglages if reglages is not None
                                        else self._reglages_du_mode(mode_id))
@@ -3154,11 +3160,13 @@ def _smoke():
         f"réglage qu'au tour de boucle suivant ({console._reglages_du_mode('ssvep')})")
     console._dernier_etat = sauve
     journal.clear()
+    valeurs_test = mes_ssvep.formulaire.values()
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
-    chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
-        in moteur_faux.commandes,
-        f"« Commencer » soumet `start_mesure` avec ses réglages ({moteur_faux.commandes})")
+    chk(("start_mesure", {"id": "ssvep_taux", "params": valeurs_test}) in moteur_faux.commandes
+        and valeurs_test.get("stream_in", MARKER_STREAM_DEFAULT) == MARKER_STREAM_DEFAULT,
+        f"« Commencer » soumet `start_mesure` avec ses réglages — et un test n'écoute jamais "
+        f"d'autre flux que celui de NOTRE fenêtre ({moteur_faux.commandes[-1:]})")
 
     # 🔴 **La fenêtre n'est PAS encore lancée, et c'est le jumeau du correctif de la calibration
     # (2026-09-10).** L'accusé de `start_mesure` dit « mise en file », pas « démarrée » :
@@ -3340,6 +3348,27 @@ def _smoke():
     chk(not mes_mi.precedent.isVisibleTo(mes_mi) and mes_mi.bloc_apres.title() == "Résultat",
         f"…jusqu'à la séance suivante, dont le résultat redevient « Résultat » "
         f"({mes_mi.bloc_apres.title()!r})")
+
+    # 🔴 « Tester » PENDANT le test de ce mode ne réapplique rien (constat M7 de la revue) : le
+    # test est parti avec ses réglages, et changer le magasin sous lui ferait afficher à la page
+    # du mode une configuration que son verdict ne décrira pas. Le clic mène au test en cours.
+    console.show_mode("mi")
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.pages["mi"].formulaire.champs["prob_min"].setValue(0.9)
+    moteur_faux.commandes.clear()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk(not [c for c in moteur_faux.commandes if c[0] == "set_params"]
+        and console.stack.currentWidget() is mes_mi,
+        f"« Tester » pendant le test de ce mode n'envoie AUCUN réglage et montre le test en cours "
+        f"({moteur_faux.commandes})")
+    # …et une fois le test fini, il réapplique de nouveau ce qui est à l'écran.
+    console.show_mode("mi")
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    console.pages["mi"].formulaire.champs["prob_min"].setValue(0.9)
+    moteur_faux.commandes.clear()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk([c for c in moteur_faux.commandes if c[0] == "set_params"],
+        f"…mais le test FINI, « Tester » applique de nouveau l'écran ({moteur_faux.commandes})")
     cliquer(mes_mi.bouton_retour, "« ← » de la page de test MI")
 
     # --- 🔴 LES TESTS À FENÊTRE : `--tester`, la LONGUEUR choisie, et la fenêtre FERMÉE ----------
@@ -3551,7 +3580,10 @@ def _smoke():
     chk(page.formulaire.refus.text() == "",
         f"…un réglage valide passe ({page.formulaire.refus.text()[:50]})")
     chk("RETENU" in page.formulaire.confirmation.text()
-        and "arrêté" in page.formulaire.confirmation.text(),
+        and "arrêté" in page.formulaire.confirmation.text()
+        # …et il dit QUI partira avec : la page ne démarre plus rien, « il démarrera avec »
+        # promettait un démarrage qu'aucun bouton de cette page ne fait (constat M14).
+        and "Tester" in page.formulaire.confirmation.text(),
         f"…et l'écran dit qu'il est RETENU et qu'il démarrera avec — un « appliqué » nu ferait "
         f"croire que le mode décode déjà sous ces réglages "
         f"(« {page.formulaire.confirmation.text()[:60]}… »)")
@@ -3575,7 +3607,18 @@ def _smoke():
     page._appliquer(page.formulaire.values())
     reelle.show_mode("ssvep")
     reelle.apply_state(moteur.snapshot())
-    page.boutons_mesurer["alpha_hz"].click()
+    # 🔴 « Mesurer » applique d'abord ce qui est à l'écran, comme « Tester » (constat I4 de la
+    # revue). Une saisie IMPOSSIBLE n'ouvre donc pas la mesure : le refus reste dans « Régler »…
+    page.formulaire.champs["freqs"].setText("15, 17")
+    cliquer(page.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
+    chk(reelle.stack.currentWidget() is page and "diviseur" in page.formulaire.refus.text(),
+        f"« Mesurer » sur une saisie que le moteur refuse RESTE sur la page, refus affiché "
+        f"(« {page.formulaire.refus.text()[:50]}… »)")
+    # …et une saisie valide NON appliquée — l'écran d'un portable à 30 Hz, deux fréquences qui
+    # le divisent — part au moteur avant l'aller-retour, qui ne l'écrase donc plus.
+    page.formulaire.champs["refresh_hz"].setValue(30.0)
+    page.formulaire.champs["freqs"].setText("15, 10")
+    cliquer(page.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
     mes_r = reelle.stack.currentWidget()
     reussi_r = _verdict_alpha(True)
     pic_r = reussi_r["reglage_propose"]["valeur"]
@@ -3592,6 +3635,15 @@ def _smoke():
         and abs(page.formulaire.champs["alpha_hz"].value() - pic_r) < 1e-9,
         f"…et revenu sur la page SSVEP, le champ « Pic alpha » MONTRE la valeur mesurée, sans "
         f"qu'on la retape ({page.formulaire.champs['alpha_hz'].value()} pour {pic_r})")
+    chk(page.formulaire.champs["refresh_hz"].value() == 30.0
+        and page.formulaire.values()["freqs"] == [15.0, 10.0],
+        f"…ET la saisie faite avant « Mesurer » a survécu à l'aller-retour : sans quoi « Tester » "
+        f"testerait 60 Hz et le trio du dépôt, effacés en silence (constat I4) "
+        f"({page.formulaire.champs['refresh_hz'].value()} Hz, {page.formulaire.values()['freqs']})")
+    # On rend l'écran de 60 Hz à la suite, qui teste des diviseurs de 60.
+    page.formulaire.champs["refresh_hz"].setValue(60.0)
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page._appliquer(page.formulaire.values())
 
     # --- 🔴 « TESTER » TESTE CE QUI EST À L'ÉCRAN — contre le VRAI moteur --------------------
     # Le piège relevé à la livraison de la page en blocs : on change une fréquence, on clique
