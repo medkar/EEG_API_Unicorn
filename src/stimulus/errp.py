@@ -231,6 +231,24 @@ ATTENTE_MOTEUR_DECODAGE_S = SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S
 # celles du P300 et du c-VEP, qui n'ont jamais attendu que leur chauffe.
 ATTENTE_MOTEUR_S = SSVEP_WARMUP_S
 
+def attente_avant_premier_pas(calibrer, tester, attente_moteur_s):
+    """Combien de temps la piste reste IMMOBILE avant le premier pas d'une séance bornée.
+
+    `--calibrer` : la chauffe seule (`ATTENTE_MOTEUR_S`) — `ErrPCalibration` n'a pas de repos.
+    `--tester` : la chauffe PLUS le repos du MODE, lus dans son contrat (`core/modes/errp.py`,
+    `SPEC.rest`) — le test décide avec `ErrPRuntime`, qui prend là sa référence d'artefact sur 8 s
+    de piste immobile, et REFUSE de conclure sur moins (revue du 2026-09-22, I-4). Import tardif :
+    le contrat du mode tire tout le décodeur, et seule cette séance-là en a besoin.
+    `attente_moteur_s` explicite (l'autotest) prime sur les deux.
+    """
+    if attente_moteur_s is not None:
+        return float(attente_moteur_s)
+    if calibrer and tester:
+        from core.modes.errp import SPEC as SPEC_ERRP
+        return float(SPEC_ERRP.rest.warmup_s) + float(SPEC_ERRP.rest.duration_s)
+    return ATTENTE_MOTEUR_S
+
+
 # Les deux postes du DÉMARRAGE de cette fenêtre, ceux qui doivent tenir dans ce que l'attente
 # ci-dessus ne consomme pas. Ils ne règlent rien : ils existent pour que `--smoke` puisse VÉRIFIER
 # que le budget les couvre (cf. son contrôle « budget de démarrage »).
@@ -495,12 +513,15 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # chauffe — c'est pour ça qu'il part AVANT cette attente et pas après.
         # ⚠️ Pas le repos du MODE : une calibration n'en a pas, et l'attendre quand même faisait
         # abandonner la séance avant son premier pas (cf. `ATTENTE_MOTEUR_S` en tête de fichier).
-        attente_initiale_s = (ATTENTE_MOTEUR_S if attente_moteur_s is None
-                              else float(attente_moteur_s))
-        note_initiale = "le casque se stabilise — installe-toi, ne bouge plus"
+        attente_initiale_s = attente_avant_premier_pas(calibrer, tester, attente_moteur_s)
+        note_initiale = ("le casque se stabilise, puis le moteur mesure ton bruit de fond — ne "
+                         "bouge plus" if tester else
+                         "le casque se stabilise — installe-toi, ne bouge plus")
         if attente_initiale_s > 0:
-            print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe (~{attente_initiale_s:g} "
-                  f"s) : piste STATIQUE en attendant, le premier pas part après.")
+            print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe"
+                  + (" puis mesure ton bruit de fond" if tester else "")
+                  + f" (~{attente_initiale_s:g} s) : piste STATIQUE en attendant, le premier pas "
+                    f"part après.")
 
     # ⚠️ La piste doit être VUE avant son premier pas : sans cet écran, le tout premier feedback
     # est aussi la première image de la séance, l'utilisateur n'a pas eu le temps de voir d'où le
@@ -837,6 +858,29 @@ def _smoke(n_cells, taux_erreur):
         f"({ATTENTE_MOTEUR_DECODAGE_S:g} s), la calibration ne l'attend pas "
         f"({ATTENTE_MOTEUR_S:g} s) — c'est `ErrPCalibration` qui tourne alors, et elle n'a aucune "
         f"phase de repos")
+
+    # --- I-4 (revue du 2026-09-22) : en TEST, la piste attend la chauffe ET le repos du MODE -----
+    # Le test décide avec `ErrPRuntime`, qui prend sa référence d'artefact sur 8 s de piste
+    # immobile. À la chauffe seule (15 s), ce repos ne durait que la latence de lancement de la
+    # fenêtre (~2-4 s) : un clignement en polluait la médiane, et le test attrapait des erreurs
+    # que le mode n'attrapera pas. Le moteur REFUSE désormais un repos trop court : cette fenêtre
+    # doit donc l'attendre — durées LUES dans le contrat du mode, pas recopiées.
+    from core.modes.errp import SPEC as _SPEC_ERRP
+    _attente = globals().get("attente_avant_premier_pas")
+    _repos_mode = float(_SPEC_ERRP.rest.warmup_s) + float(_SPEC_ERRP.rest.duration_s)
+    chk(callable(_attente)
+        and _attente(calibrer=True, tester=True, attente_moteur_s=None) == _repos_mode
+        and _attente(calibrer=True, tester=False, attente_moteur_s=None) == ATTENTE_MOTEUR_S
+        and _attente(calibrer=True, tester=True, attente_moteur_s=0.4) == 0.4,
+        f"en --tester la piste reste immobile pendant la chauffe PLUS le repos du mode "
+        f"({_repos_mode:g} s, lus dans SPEC.rest) ; en --calibrer, la chauffe seule "
+        f"({ATTENTE_MOTEUR_S:g} s) — une calibration n'a pas de repos")
+    # Et le budget de démarrage du TEST reste celui d'une calibration : le moteur compte le silence
+    # d'une fenêtre depuis la FIN de son repos (`errp_test.MesureErrP._ouvrir_les_essais`).
+    budget_test_s = SSVEP_WARMUP_S + float(_SPEC_ERRP.rest.duration_s) + CALIB_FENETRE_SILENCE_S \
+        - _repos_mode
+    chk(budget_test_s >= ATTENTE_CONSOMMATEUR_MAX_S + MARGE_INIT_PYGAME_S,
+        f"…et le test lui laisse {budget_test_s:.0f} s pour démarrer, comme une calibration")
 
     # ⚠️ Ce qu'AUCUN test ne couvre, ni avant ni maintenant : la PLACE où ces durées sont jouées.
     # `PAUSE_NOUVELLE_COURSE_S` ne l'est pas au même endroit des deux côtés (là-bas une fois par

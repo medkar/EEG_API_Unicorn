@@ -21,10 +21,13 @@ moteur décide à chaque feedback avec ton modèle et ton réglage ; on compare.
    Pas de hasard unique, c'est un détecteur : au hasard il attraperait autant d'erreurs qu'il annule
    de bonnes commandes, et le test exact de Fisher dit si l'écart dépasse le bruit.
 
-⚠️ **La référence d'artefact** : le mode prend 8 s de repos sur une piste immobile. La fenêtre
-`--calibrer` n'en joue pas, mais tient sa piste IMMOBILE 15 s après son lancement, ce qui déborde la
-chauffe du moteur : le repos est pris là, par le `_rest_step` du mode, clos au premier pas s'il n'a
-pas eu ses 8 s. Sa durée réelle est dans le résultat.
+⚠️ **La référence d'artefact** : le mode prend 8 s de repos sur une piste immobile, et le test
+AUSSI. La fenêtre `--tester` tient sa piste IMMOBILE pendant la chauffe PLUS ce repos (durées lues
+dans `core/modes/errp.py::SPEC.rest`), et le repos est pris là, par le `_rest_step` du mode. Si
+elle marche avant (lancée à la main, sans `--tester`), le test REFUSE de conclure : un repos de 2 s
+fait ~10 fenêtres, un clignement en pollue la MÉDIANE, le seuil de rejet monte, et le test
+attrape des erreurs que le mode n'attrapera pas (revue du 2026-09-22, I-4). Sa durée réelle est
+dans le résultat et dans le verdict.
 
 Autotest :
     python src/core/modes/errp_test.py
@@ -153,6 +156,12 @@ class MesureErrP(MesureMarqueurs):
         super()._ouvrir_les_essais(now)
         self._maintenant = self._repos_debut = now
         self._decideur._rest_until = now + self._decideur._rest_s
+        # La fenêtre se TAIT pendant ce repos, et c'est le protocole : elle tient sa piste immobile
+        # pour que le moteur mesure le bruit de fond. Le silence qui déclare une fenêtre morte se
+        # compte donc depuis la FIN du repos — depuis la fin de la chauffe, une fenêtre qui met
+        # 14 s à s'annoncer (pygame, rafraîchissement, `wait_for_consumers`) était tuée avant son
+        # premier pas. Même budget de démarrage que les calibrations, pas moins.
+        self._dernier_marqueur_s = now + self._decideur._rest_s
 
     def _pendant_les_essais(self, engine, now):
         """`_rest_step` du mode, à SA cadence, tant que la fenêtre tient sa piste immobile."""
@@ -164,19 +173,44 @@ class MesureErrP(MesureMarqueurs):
         if dec._rest_step(_VueEEG(engine), now):
             self._repos_s = now - self._repos_debut
 
-    def _reference_prete(self, engine):
-        """Si la fenêtre joue son premier pas avant les 8 s du mode, le repos est clos sur ce qu'il a
-        mesuré, par le MÊME `_rest_step`, échéance ramenée à maintenant. False si une voie est
-        MORTE : le mode refuserait de conclure, et décider sans référence mesurerait un décodeur
-        que personne n'utilise."""
+    def _repos_trop_court(self):
+        """La durée du repos si la fenêtre a marché AVANT les 8 s du mode, None sinon.
+
+        Une période de tolérance : le repos se clôt au premier `_rest_step` après l'échéance, et
+        ce pas tombe au plus `period_s()` plus tard — une fenêtre à l'heure ne doit pas se voir
+        refuser pour une fraction de tour de boucle.
+        """
         dec = self._decideur
+        duree = self._maintenant - self._repos_debut
+        return duree if duree < dec._rest_s - dec.period_s() else None
+
+    def _reference_prete(self, engine):
+        """Le repos du MODE est-il mesuré ? Rend None si oui, sinon la raison de REFUSER.
+
+        Premier pas arrivé à l'échéance (au tour de boucle près) : le repos est clos sur ce qu'il a
+        mesuré, par le MÊME `_rest_step`. Arrivé AVANT : refus — cf. l'avertissement du module, le
+        biais serait optimiste. Une voie MORTE : refus aussi, le mode refuserait de conclure.
+        """
+        dec = self._decideur
+        if dec._sigmas_repos is not None:
+            return None
+        court = self._repos_trop_court()
+        if court is not None:
+            return (f"la référence d'artefact n'a duré que {court:.1f} s sur les "
+                    f"{dec._rest_s:g} s du mode".replace(".", ",")
+                    + " : la fenêtre a commencé ses pas avant la fin du repos du moteur. Un seuil "
+                      "de rejet pris sur si peu se gonfle au premier clignement, et le test "
+                      "attraperait des erreurs que le mode n'attrapera pas. Relance « Tester » "
+                      "sans toucher à la fenêtre : elle attend elle-même la fin du repos.")
+        dec._rest_until = self._maintenant
+        dec._rest_step(_VueEEG(engine), self._maintenant)
         if dec._sigmas_repos is None:
-            dec._rest_until = self._maintenant
-            dec._rest_step(_VueEEG(engine), self._maintenant)
-            if dec._sigmas_repos is None:
-                return False
-            self._repos_s = self._maintenant - self._repos_debut
-        return True
+            return ("la référence d'artefact n'a pas pu être mesurée sur la piste immobile : une "
+                    "voie a un σ NUL (électrode décollée, câble, amplificateur en butée — le "
+                    "journal du moteur la nomme). Le mode refuserait de décoder ainsi ; le test "
+                    "aussi. Vérifie le contact, puis relance le test.")
+        self._repos_s = self._maintenant - self._repos_debut
+        return None
 
     # --- les marqueurs -------------------------------------------------------------------
 
@@ -191,12 +225,9 @@ class MesureErrP(MesureMarqueurs):
         `_VueEEG`, puis `_consigner`, où SEULEMENT la vérité rejoint la décision déjà prise."""
         if marqueur.get("event") != "feedback":
             return      # un événement inconnu s'ignore : le protocole grandira
-        if not self._reference_prete(engine):
-            self._abandonne(
-                "la référence d'artefact n'a pas pu être mesurée sur la piste immobile : une voie "
-                "a un σ NUL (électrode décollée, câble, amplificateur en butée — le journal du "
-                "moteur la nomme). Le mode refuserait de décoder ainsi ; le test aussi. Vérifie "
-                "le contact, puis relance le test.")
+        refus = self._reference_prete(engine)
+        if refus:
+            self._abandonne(refus)
             return
         self._derniere_epoque = self._prelever(engine, ts)
         dec = self._decideur
@@ -220,6 +251,8 @@ class MesureErrP(MesureMarqueurs):
                          artefacts=sum(1 for obs, _v in enregistre if obs["artifact"]),
                          perdus=self._epoques_perdues, chauffe=self._marqueurs_chauffe,
                          promesse=dec.point_de_fonctionnement,
+                         repos=(float(self._repos_s or 0.0), (dec.rest_report or {}).get("fenetres"),
+                                float(dec._rest_s)),
                          reglages={"model": _os.path.basename(str(self.params.get("model", ""))),
                                    "tnr_target": vise, "seuil": round(float(dec.seuil), 3),
                                    "essais": self.params.get("essais")})
@@ -229,11 +262,12 @@ class MesureErrP(MesureMarqueurs):
 
 
 def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe=0,
-          promesse=None, reglages=None):
+          promesse=None, reglages=None, repos=None):
     """Le score. `essais` : `[(vérité, décision), ...]`, UN par feedback — vérité True = erreur
     délibérée ; décision 1 = erreur vue, 0 = bonne commande, -1 = PAS DE VERDICT.
 
-    Niveaux (la console les peint, elle ne les recalcule pas) : `faible` si Fisher unilatéral ne
+    `repos` : `(secondes, fenêtres, secondes du mode)` de la référence d'artefact, dite dans le
+    verdict. Niveaux (la console les peint, elle ne les recalcule pas) : `faible` si Fisher unilatéral ne
     distingue pas le couple du hasard (p ≥ `PERM_ALPHA`, le seuil de l'entraînement) ; `bon` si
     l'écart attrapées − annulées atteint celui du repère ET que moins de feedbacks restent sans
     verdict que le seuil d'alarme du mode ; `moyen` sinon. Sans erreur OU sans bonne commande
@@ -332,6 +366,12 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
                     f"mesurés sur les scores qui ont choisi le seuil. ")
     if chauffe:
         verdict += f"{chauffe} feedback(s) reçus pendant la stabilisation du casque ont été jetés. "
+    if repos:
+        secondes, fenetres, du_mode = repos
+        verdict += (f"Référence du rejet d'artefact : {secondes:.1f} s de piste immobile".replace(
+                        ".", ",")
+                    + (f" ({fenetres} fenêtres)" if fenetres else "")
+                    + ", comme le mode (" + f"{du_mode:g}".replace(".", ",") + " s). ")
     verdict += (f"Repère du projet (réglage {pct(ERRP_TNR_TARGET)}, une personne) : "
                 f"{pct(REPERE_TPR)} attrapées pour {pct(REPERE_TNR, 1)} gardées, un écart de "
                 f"{REPERE_ECART * 100:.0f} points ; ici {ecart * 100:.0f}.")
@@ -360,7 +400,9 @@ HONNETETE = (
     "MOINS de bonnes commandes que visé. Sur une dizaine d'erreurs, en attraper cinq est le "
     "résultat attendu ; huit ou deux tiennent dans le bruit.\n"
     "La référence d'artefact est mesurée sur la piste IMMOBILE, entre la stabilisation du casque et "
-    "le premier pas : 8 s au plus, souvent moins — le mode, lui, en prend 8 pleines."
+    "le premier pas : 8 s, comme le mode — la fenêtre attend elle-même la fin de ce repos. Un repos "
+    "plus court ANNULE le test : un seuil de rejet pris sur deux secondes se gonfle au premier "
+    "clignement, et le test attraperait des erreurs que le mode n'attrapera pas."
 )
 
 BRIEFING = (
@@ -492,9 +534,10 @@ def _selftest():
             self._curseurs[mode_id] = i
             return murs
 
-    def seance(n_pas, graine=0, amp=1.2, decalage_s=3.0, artefact_a=None):
-        """La fenêtre `--calibrer` : `calib_start`, piste immobile jusqu'à `decalage_s` après la
-        chauffe, un feedback ÉTIQUETÉ par pas, un ErrP synthétique planté sur chaque ERREUR."""
+    def seance(n_pas, graine=0, amp=1.2, decalage_s=9.0, artefact_a=None, annonce_s=1.0):
+        """La fenêtre `--tester` : `calib_start` à `annonce_s`, piste immobile jusqu'à `decalage_s`
+        après la chauffe, un feedback ÉTIQUETÉ par pas, un ErrP synthétique planté sur chaque
+        ERREUR. Défaut : la fenêtre RÉELLE, qui attend chauffe + repos (23 s) après son annonce."""
         rng = np.random.default_rng(graine)
         verites = [(i % 3 == 0) if i < 9 else bool(rng.random() < 0.3) for i in range(n_pas)]
         instants = [T0 + 15.0 + decalage_s + SOA * i for i in range(n_pas)]
@@ -509,7 +552,7 @@ def _selftest():
                 eeg[j - n_pre:j + n_post] += onde - onde.mean(axis=0)
             if i == artefact_a:                        # un sursaut : σ ~100 fois le repos
                 eeg[j - n_pre:j + n_post] += rng.normal(0.0, 200.0, (n_pre + n_post, 8))
-        marqueurs = ([(T0 + 1.0, {"mode": "errp", "event": "calib_start", "trials": n_pas})]
+        marqueurs = ([(T0 + annonce_s, {"mode": "errp", "event": "calib_start", "trials": n_pas})]
                      + [(t, {"mode": "errp", "event": "feedback", "error": v})
                         for t, v in zip(instants, verites)]
                      + [(fin, {"mode": "errp", "event": "calib_end"})])
@@ -642,14 +685,45 @@ def _selftest():
         noms = [nom for nom, _a in espion.vu]
         premier = noms.index("_traiter_feedback") if "_traiter_feedback" in noms else len(noms)
         chk("_rest_step" in noms[:premier] and "_rest_step" not in noms[premier:]
-            and espion.rest_report["fenetres"] >= 10 and 3.0 <= res["repos"]["secondes"] < 8.0,
-            f"le repos du MODE est mesuré sur la piste immobile, et clos AVANT la première décision "
-            f"quand la fenêtre démarre avant 8 s ({res['repos']})")
+            and espion.rest_report["fenetres"] >= 30 and abs(res["repos"]["secondes"] - 8.0) < 0.3,
+            f"le repos du MODE est mesuré sur la piste immobile, ses 8 s PLEINES, et clos AVANT la "
+            f"première décision ({res['repos']})")
+        # I-4 (revue du 2026-09-22) : la durée RÉELLE de la référence est DITE, dans « Détails ».
+        chk(f"{res['repos']['secondes']:.1f} s".replace(".", ",") in res["verdict"],
+            f"…et sa durée réelle est DITE dans le verdict ({res['verdict'][-160:]!r})")
+
+        # 🔴 I-4 : une fenêtre qui marche AVANT la fin du repos. La référence n'aurait duré que ~4 s,
+        # soit ~20 fenêtres : un clignement la gonfle, le seuil de rejet monte, et le test attrape
+        # des erreurs que le mode n'attrapera pas — biais OPTIMISTE. Le test REFUSE de conclure,
+        # tout de suite, en disant la durée réelle.
+        m_tot, e_tot, t_tot, _v = seance(6, graine=6, decalage_s=3.0)
+        moteur = _FauxMoteur(e_tot, t_tot, m_tot)
+        rt_tot = MesureErrP(SPEC, valeurs, moteur)
+        jouer(rt_tot, moteur)
+        chk(rt_tot.phase == "annule" and rt_tot.resultat is None and not rt_tot._enregistre
+            and "3," in (rt_tot.probleme or "") and "8 s" in (rt_tot.probleme or ""),
+            f"une référence plus courte que celle du mode : le test REFUSE de conclure, sans une "
+            f"seule décision, en disant sa durée réelle ({rt_tot.phase}, "
+            f"{(rt_tot.probleme or '')[:90]}…)")
+
+        # I-4, le budget : la fenêtre tient sa piste immobile pendant le repos, donc le silence qui
+        # tue une séance se compte depuis la FIN du repos, pas de la chauffe. Une fenêtre qui
+        # s'annonce tard (14 s : pygame, rafraîchissement, `wait_for_consumers`), puis attend ses
+        # 23 s, joue son premier pas 37 s après le lancement — à 22 s de la fin de la chauffe.
+        m_tard, e_tard, t_tard, _v = seance(6, graine=7, annonce_s=14.0, decalage_s=22.0)
+        moteur = _FauxMoteur(e_tard, t_tard, m_tard)
+        rt_tard = MesureErrP(SPEC, valeurs, moteur)
+        res_tard = jouer(rt_tard, moteur) or {}
+        chk(rt_tard.phase == "fini" and abs((res_tard.get("repos") or {}).get("secondes", 0) - 8.0)
+            < 0.3,
+            f"une fenêtre qui s'annonce à 14 s et attend chauffe + repos n'est PAS déclarée morte : "
+            f"ses 23 s d'attente sont le protocole ({rt_tard.phase}, {rt_tard.probleme[:70]!r})")
         m_lent, e_lent, t_lent, _v = seance(6, graine=2, decalage_s=12.0)
         moteur = _FauxMoteur(e_lent, t_lent, m_lent)
         rt_lent = MesureErrP(SPEC, valeurs, moteur)
         res_lent = jouer(rt_lent, moteur)
-        chk(rt_lent.phase == "fini" and abs(res_lent["repos"]["secondes"] - 8.0) < 0.3,
+        chk(rt_lent.phase == "fini" and abs((res_lent or {}).get("repos", {}).get("secondes", 0)
+                                            - 8.0) < 0.3,
             f"…et une fenêtre lente lui laisse ses 8 s pleines, comme au mode ({res_lent['repos']})")
         m_mort, e_mort, t_mort, _v = seance(6, graine=3)
         e_mort[:, 3] = 0.0                             # C4 débranchée
