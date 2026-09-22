@@ -31,6 +31,7 @@ l'épochage viennent du socle (`modes/mesure_marqueurs.py`, à lire avant).
 ⚠️ **Les réglages sont ceux du MODE** : la `SPEC` déclare les `Param` du mode P300 eux-mêmes (sans
 modèle, `contract.validate` refuse le test avec la raison du mode), plus `essais` = le nombre de
 MANCHES — l'unité de `--rounds`, que la console transmet par `stimulus/registry.option_compte`.
+Tous, sauf le « Flux de marqueurs » : un test écoute le flux de SA fenêtre, le défaut.
 
 Autotest :
     python src/core/modes/p300_test.py
@@ -46,7 +47,8 @@ from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, mot_de, 
                                   non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
-from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
+from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
+                                         params_du_mode_pour_un_test, reglages_du_decideur)
 from core.modes.p300 import SPEC as SPEC_P300  # noqa: E402
 from core.modes.p300 import P300Runtime  # noqa: E402
 # Les consignes, la durée d'une manche et les seuils de l'ENTRAÎNEMENT, importés : le test rejoue
@@ -137,8 +139,7 @@ class MesureP300(MesureMarqueurs):
         super().__init__(spec, params, engine, rng=rng)
         # Le modèle chargé et vérifié par le MODE : un fichier effacé depuis la validation, ou une
         # géométrie d'époque étrangère, lèvent ici avec la raison du mode.
-        self._decideur = _DecideurP300(SPEC_P300, {p.key: self.params.get(p.key)
-                                                   for p in SPEC_P300.params},
+        self._decideur = _DecideurP300(SPEC_P300, reglages_du_decideur(SPEC_P300, self.params),
                                        _Vue(getattr(engine, "acq", None)))
         self._manche_en_cours = False    # un `cue` a ouvert une manche que rien n'a encore fermée
         self._manches_sans_cue = 0       # `round_end` sans manche ouverte : jamais notées
@@ -368,8 +369,9 @@ SPEC = MesureSpec(
             "moteur sélectionne avec ton modèle, et on compare.",
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
-    # la raison du mode — pas l'interface.
-    params=tuple(SPEC_P300.params) + (
+    # la raison du mode — pas l'interface. SAUF le flux de marqueurs : un test écoute toujours
+    # celui de la fenêtre qu'il lance (cf. `mesure_marqueurs.CLE_FLUX`).
+    params=params_du_mode_pour_un_test(SPEC_P300) + (
         Param(
             key="essais",
             label="Manches",
@@ -534,8 +536,8 @@ def _selftest():
         chk(valeurs is not None and valeurs["model"] == chemin
             and valeurs["essais"] == MANCHES_DEFAUT == min(MANCHES),
             f"avec un modèle il passe, et le défaut est le test COURT ({raison or valeurs['essais']})")
-        chk(all(any(p is q for q in SPEC.params) for p in SPEC_P300.params),
-            "le test déclare les `Param` du MODE eux-mêmes (identité)")
+        chk(all(any(p is q for q in SPEC.params) for p in SPEC_P300.params if p.key != "stream_in"),
+            "le test déclare les `Param` du MODE eux-mêmes (identité), sauf le flux de marqueurs")
         autre = _os.path.join(dossier, "geometrie_etrangere.joblib")
         P300Model(fs=125.0).save(autre)
         try:
@@ -563,6 +565,23 @@ def _selftest():
         chk(moteur.appels == [("p300", POST)],
             f"le moteur est interrogé sous le `mode` de la fenêtre, à la maturité du MODE "
             f"({moteur.appels})")
+
+        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
+        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
+        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
+        from core.modes.contract import validate as _valider
+        from core.server import EngineServer as _Moteur_
+        chk("stream_in" not in {p.key for p in SPEC.params},
+            f"le test ne déclare PAS « Flux de marqueurs » ({[p.key for p in SPEC.params]})")
+        _v, _raison = _valider(SPEC, {"stream_in": "MonAppli_P300"})
+        chk(_v is None and "stream_in" in (_raison or ""),
+            f"…et le contrat REFUSE qu'on le lui passe : brancher une appli, c'est « Connecter » "
+            f"({_raison})")
+        chk(_Moteur_._flux_attendu(rt) == _DEFAUT,
+            f"le moteur écoute, pour ce test, le flux PAR DÉFAUT — celui de la fenêtre qu'il lance "
+            f"({_Moteur_._flux_attendu(rt)})")
 
         # === 3. DE BOUT EN BOUT, et UN ESSAI = UNE MANCHE =======================================
         plan, eeg, ts = seance(list(range(6)), graine=2)

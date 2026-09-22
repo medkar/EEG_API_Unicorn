@@ -1888,6 +1888,11 @@ class EngineServer:
         DÉCLARÉ PAR LE MODE, pas sur la constante globale — sinon une calibration n'écouterait
         jamais le flux personnalisé de son propre mode, et `stream_in` redeviendrait le
         réglage-décor que ce projet combat.
+
+        Un TEST (une mesure menée par une fenêtre) n'a pas cette clé non plus, et ce n'est pas un
+        oubli : il lance NOTRE fenêtre, qui publie sur le flux par défaut, donc il l'écoute — le
+        repli ci-dessous (`MesureSpec.defaults()` n'a pas de `stream_in`) y mène. Cf.
+        `modes/mesure_marqueurs.CLE_FLUX`.
         """
         nom = rt.params.get("stream_in")
         if not nom:

@@ -42,6 +42,27 @@ from core.config import (CALIB_FENETRE_ATTENTE_S, CALIB_FENETRE_SILENCE_S,  # no
 from core.modes.mesure import MesureRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 
+# --- Le flux qu'un TEST écoute : TOUJOURS le flux par défaut ------------------------------------
+# « Tester » lance NOTRE fenêtre, et elle publie sur `MARKER_STREAM_DEFAULT`. Jusqu'au 2026-09-22 un
+# test déclarait le « Flux de marqueurs » du mode — que l'étudiant règle sur SON appli pour
+# « Connecter » — et la console le lui recopiait : le moteur écoutait l'appli, la fenêtre publiait
+# ailleurs, et le test abandonnait à 30 s pendant que la fenêtre jouait plein écran dans le vide.
+# Un test n'offre donc pas ce réglage (le contrat REFUSE la clé), et le runtime du mode qu'il fait
+# décider le reçoit fixé au défaut. Brancher une application tierce, c'est « Connecter ».
+CLE_FLUX = "stream_in"
+
+
+def params_du_mode_pour_un_test(spec_du_mode):
+    """Les `Param` du MODE qu'un test déclare — les MÊMES objets —, sauf le flux de marqueurs."""
+    return tuple(p for p in spec_du_mode.params if p.key != CLE_FLUX)
+
+
+def reglages_du_decideur(spec_du_mode, params):
+    """Les réglages que reçoit le runtime du MODE dans un test : ceux du test, flux PAR DÉFAUT."""
+    return {p.key: (MARKER_STREAM_DEFAULT if p.key == CLE_FLUX else params.get(p.key))
+            for p in spec_du_mode.params}
+
+
 # Paliers auxquels une perte se DIT. Même motif que `marker_calib._PALIERS` : une séance P300 fait
 # des centaines d'époques, le dire à chaque perte noierait le terminal ; le dire une seule fois
 # ferait imprimer à une panne massive la même ligne qu'à une perte isolée.

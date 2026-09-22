@@ -81,8 +81,6 @@ from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa:
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, WINDOW_S,
                          use_utf8_console)
-from core.markers import flux_de_marqueurs_visibles  # noqa: E402
-from core.modes.contract import Param  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  # noqa: E402
                                   texte_p)
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
@@ -680,13 +678,10 @@ SPEC = MesureSpec(
     summary="Quand le moteur annonce une cible, est-ce la bonne — et à quelle fréquence "
             "annonce-t-il quelque chose ? Une fenêtre désigne la cible, le moteur mesure.",
     briefing=BRIEFING,
-    params=(
-        Param(key="stream_in", label="Flux de marqueurs", kind="choice",
-              choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
-              help="Le nom du flux LSL sur lequel la fenêtre guidée publie la cible désignée. La "
-                   "console lance cette fenêtre elle-même sur le flux par défaut : ne change ce "
-                   "réglage que si tu mènes le protocole depuis ta propre application."),
-    ),
+    # AUCUN réglage propre : les fréquences sont celles du MODE, que la console passe à la fenêtre
+    # guidée et que celle-ci annonce dans `calib_start`. Et pas de « Flux de marqueurs » : un test
+    # écoute toujours la fenêtre qu'il lance, sur le flux par défaut (`mesure_marqueurs.CLE_FLUX`).
+    params=(),
     runtime_cls=MesureSSVEP,
     # Pas une BARRIÈRE : c'est un chiffre à lire, pas un feu rouge. Le contrôle alpha, lui, arrête
     # la séance — sans alpha, plus rien ne veut dire quoi que ce soit. Un taux d'émission bas ne
@@ -1178,6 +1173,22 @@ def _selftest():
         f"`etape` reste VIDE : la console joue un top au front montant de `etape`, et cette "
         f"mesure ne doit pas biper par-dessus un stimulus visuel ({etat['etape']!r})")
 
+    # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+    # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
+    # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
+    # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+    from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
+    from core.modes.contract import validate as _valider
+    from core.server import EngineServer as _Moteur_
+    chk("stream_in" not in {p.key for p in SPEC.params},
+        f"le test ne déclare PAS « Flux de marqueurs » ({[p.key for p in SPEC.params]})")
+    _v, _raison = _valider(SPEC, {"stream_in": "MonAppli_SSVEP"})
+    chk(_v is None and "stream_in" in (_raison or ""),
+        f"…et le contrat REFUSE qu'on le lui passe : brancher une appli, c'est « Connecter » "
+        f"({_raison})")
+    chk(_Moteur_._flux_attendu(rt) == _DEFAUT,
+        f"le moteur écoute, pour ce test, le flux PAR DÉFAUT — celui de la fenêtre qu'il lance "
+        f"({_Moteur_._flux_attendu(rt)})")
     chk(SPEC.stimulus_id == "ssvep" and SPEC.barriere is False,
         f"la mesure DÉCLARE sa fenêtre et n'est PAS une barrière : un taux d'émission bas est le "
         f"régime normal de ce mode, pas un feu rouge ({SPEC.stimulus_id}, {SPEC.barriere})")

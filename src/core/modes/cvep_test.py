@@ -59,7 +59,8 @@ from core.modes.cvep import CVEPRuntime  # noqa: E402
 from core.modes.cvep_calib import BRIEFING as BRIEFING_CALIB  # noqa: E402
 from core.modes.cvep_calib import REFRESH_REFERENCE_HZ  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
-from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
+from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
+                                         params_du_mode_pour_un_test, reglages_du_decideur)
 # Wilson, importé : deux écritures finiraient par se contredire sur le même effectif.
 from core.modes.ssvep_mesure import wilson  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
@@ -175,7 +176,7 @@ class MesureCVEP(MesureMarqueurs):
             raise ValueError("aucune acquisition : le test ne découperait pas les fenêtres comme "
                              "le mode, donc il ne mesurerait pas la règle du produit")
         # Un modèle effacé depuis la validation lève ICI, avec la raison de `cvep_models.charger`.
-        self._decideur = _DecideurCVEP(SPEC_CVEP, {p.key: params[p.key] for p in SPEC_CVEP.params},
+        self._decideur = _DecideurCVEP(SPEC_CVEP, reglages_du_decideur(SPEC_CVEP, params),
                                        _Rejeu(self._acq))
         # La fenêtre du mode, MESURÉE sur `_fenetre` (cycles repliés + marge), pas recalculée.
         sonde = _Rejeu(self._acq)
@@ -357,8 +358,8 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
         reserve = (f"L'horloge de la fenêtre a été refusée par le mode ("
                    f"{refus_horloge.split(' — ')[0]}) : réentraîne sur CET écran."
                    if refus_horloge else
-                   "Aucun marqueur « cycle » utilisable : vérifie « Flux de marqueurs » et que la "
-                   "fenêtre de stimulus tourne jusqu'au bout.")
+                   "Aucun marqueur « cycle » utilisable : la fenêtre de stimulus doit tourner "
+                   "jusqu'au bout — ne la ferme pas, ne la mets pas en arrière-plan.")
     elif n_emis == 0:
         chiffres = f"aucune cible émise sur {n_essais} blocs (hasard {pct(hasard)})"
         dominante = silences.most_common(1)[0][0]
@@ -483,8 +484,9 @@ SPEC = MesureSpec(
             "réglages, bloc par bloc, et on compare à la cible cerclée.",
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
-    # la raison du mode, et la console passe les réglages courants tels quels.
-    params=tuple(SPEC_CVEP.params) + (
+    # la raison du mode, et la console passe les réglages courants tels quels. SAUF le flux de
+    # marqueurs : un test écoute celui de la fenêtre qu'il lance (`mesure_marqueurs.CLE_FLUX`).
+    params=params_du_mode_pour_un_test(SPEC_CVEP) + (
         Param(
             key="essais",
             label="Longueur : cycles enregistrés par cible",
@@ -605,7 +607,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
 
     def continu(v, eeg, ts, marqueurs, t_fin):
         """Ce qu'un VRAI `CVEPRuntime`, décodant en continu depuis 8 s, publiait à `t_fin`."""
-        ref = _cvep.CVEPRuntime(_cvep.SPEC, {p.key: v[p.key] for p in SPEC_CVEP.params}, None)
+        ref = _cvep.CVEPRuntime(_cvep.SPEC, reglages_du_decideur(SPEC_CVEP, v), None)
         ref._log = lambda *a, **k: None
         moteur = _MoteurContinu([(t, m) for t, m in marqueurs if m["event"] == "cycle"])
         i_fin, pas = int(np.searchsorted(ts, t_fin)), int(round(FS * ref.period_s()))
@@ -626,9 +628,10 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     chk(essais.kind == "choice" and essais.default in essais.choices == ESSAIS
         and "cycles" in essais.label and "par cible" in essais.label,
         f"la longueur est un « choice » dans l'unité de `--cycles`, NOMMÉE ({essais.label!r})")
-    chk(all(any(p is q for q in SPEC.params) for p in SPEC_CVEP.params)
+    chk(all(any(p is q for q in SPEC.params) for p in SPEC_CVEP.params if p.key != "stream_in")
         and SPEC.stimulus_id == "cvep",
-        "le test déclare les `Param` du MODE eux-mêmes (identité), et la fenêtre « cvep »")
+        "le test déclare les `Param` du MODE eux-mêmes (identité, sauf le flux de marqueurs), et "
+        "la fenêtre « cvep »")
 
     rng = np.random.default_rng(5)
     lags = [c["lag"] for c in _PLAN]
@@ -683,6 +686,23 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             f"⚠️ les {rt._marqueurs_chauffe} tics d'horloge de la chauffe ne sont PAS dits perdus")
         chk(all(m.get("event") == "cycle" and "target" not in m for _t, m in rt._horloge),
             "le décideur ne reçoit QUE l'horloge : jamais un `cue`, jamais une cible")
+
+        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
+        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
+        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
+        from core.modes.contract import validate as _valider
+        from core.server import EngineServer as _Moteur_
+        chk("stream_in" not in {p.key for p in SPEC.params},
+            f"le test ne déclare PAS « Flux de marqueurs » ({[p.key for p in SPEC.params]})")
+        _v, _raison = _valider(SPEC, {"stream_in": "MonAppli_CVEP"})
+        chk(_v is None and "stream_in" in (_raison or ""),
+            f"…et le contrat REFUSE qu'on le lui passe : brancher une appli, c'est « Connecter » "
+            f"({_raison})")
+        chk(_Moteur_._flux_attendu(rt) == _DEFAUT,
+            f"le moteur écoute, pour ce test, le flux PAR DÉFAUT — celui de la fenêtre qu'il lance "
+            f"({_Moteur_._flux_attendu(rt)})")
         try:
             chk(bool(json.dumps(rt.state(now=0.0))), "l'instantané, résultat compris, est sérialisable")
         except (TypeError, ValueError) as e:

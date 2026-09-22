@@ -50,7 +50,8 @@ from core.modes.errp import _TAUX_REJET_ALARME, ErrPRuntime  # noqa: E402
 from core.modes.errp_calib import BRIEFING as BRIEFING_ENTRAINEMENT  # noqa: E402
 from core.modes.errp_calib import PERM_ALPHA, _PAS_PAR_COURSE  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
-from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
+from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
+                                         params_du_mode_pour_un_test, reglages_du_decideur)
 from core.modes.ssvep_mesure import wilson  # noqa: E402
 
 # Le repère : la séance de référence (200 essais, une personne), réglage par défaut. ⚠️ Taux
@@ -122,7 +123,7 @@ class MesureErrP(MesureMarqueurs):
         # AVANT le socle : un modèle effacé depuis la validation lève ici, avec la raison du mode.
         # 🔴 Sur une VUE lui aussi : un runtime GARDE le moteur qu'on lui donne à la construction.
         self._decideur = self._classe_decideur(
-            SPEC_ERRP, {p.key: params[p.key] for p in SPEC_ERRP.params}, _VueEEG(engine))
+            SPEC_ERRP, reglages_du_decideur(SPEC_ERRP, params), _VueEEG(engine))
         super().__init__(spec, params, engine, rng=rng)
         self._maintenant = self._repos_debut = self._dernier_repos = None
         self._repos_s = None           # durée RÉELLE de la référence d'artefact
@@ -379,8 +380,9 @@ SPEC = MesureSpec(
             "et on compare aux erreurs que la fenêtre commet exprès.",
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
-    # la raison du mode — pas l'interface. La console passe les réglages courants tels quels.
-    params=tuple(SPEC_ERRP.params) + (
+    # la raison du mode — pas l'interface. La console passe les réglages courants tels quels. SAUF
+    # le flux de marqueurs : un test écoute celui de sa fenêtre (`mesure_marqueurs.CLE_FLUX`).
+    params=params_du_mode_pour_un_test(SPEC_ERRP) + (
         Param(
             key="essais",
             label="Essais",
@@ -535,8 +537,7 @@ def _selftest():
         modele.save(chemin)
         fichiers_avant = sorted(_os.listdir(dossier))
         errp_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
-        valeurs = {"model": chemin, "tnr_target": 0.70, "stream_in": "EEG_Markers",
-                   "essais": ESSAIS_DEFAUT}
+        valeurs = {"model": chemin, "tnr_target": 0.70, "essais": ESSAIS_DEFAUT}
 
         # === 1. 🔴 LA CLOISON : la vérité atteint le CORRECTEUR, JAMAIS le DÉCODEUR =============
         # Un test d'ABSENCE, donc par un décodeur ESPION qui note tout ce qu'on lui passe — à la
@@ -614,8 +615,7 @@ def _selftest():
         nus = [(t, {k: v for k, v in m.items() if k != "error"}) for t, m in marqueurs
                if m["event"] == "feedback"]
         moteur_nu = _FauxMoteur(eeg, ts, nus)
-        direct = ErrPRuntime(SPEC_ERRP, {p.key: valeurs[p.key] for p in SPEC_ERRP.params},
-                             moteur_nu)
+        direct = ErrPRuntime(SPEC_ERRP, reglages_du_decideur(SPEC_ERRP, valeurs), moteur_nu)
         direct._log = lambda *a: None
         direct._out, direct._opened, direct.phase = _FauxPublieur(), True, "running"
         direct._sigmas_repos = espion._sigmas_repos
@@ -705,7 +705,7 @@ def _selftest():
                 f"affichage cohérent : {r['mot']} {verifier(r)}")
 
         # === 5. LE CONTRAT ======================================================================
-        chk(all(any(p is q for q in SPEC.params) for p in SPEC_ERRP.params)
+        chk(all(any(p is q for q in SPEC.params) for p in SPEC_ERRP.params if p.key != "stream_in")
             and SPEC.stimulus_id == "errp"
             and MesureErrP.epoque_marqueur_s == SPEC_ERRP.marker_epoch_s,
             "le test déclare les `Param` du MODE eux-mêmes, la fenêtre ErrP, et l'époque du mode")
@@ -728,6 +728,23 @@ def _selftest():
         except (TypeError, ValueError):
             serialisable = False
         chk(serialisable, "l'instantané, résultat compris, est sérialisable (il part dans `snapshot()`)")
+
+        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
+        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
+        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
+        from core.modes.contract import validate as _valider
+        from core.server import EngineServer as _Moteur_
+        chk("stream_in" not in {p.key for p in SPEC.params},
+            f"le test ne déclare PAS « Flux de marqueurs » ({[p.key for p in SPEC.params]})")
+        _v, _raison = _valider(SPEC, {"stream_in": "MonAppli_ERRP"})
+        chk(_v is None and "stream_in" in (_raison or ""),
+            f"…et le contrat REFUSE qu'on le lui passe : brancher une appli, c'est « Connecter » "
+            f"({_raison})")
+        chk(_Moteur_._flux_attendu(rt) == _DEFAUT,
+            f"le moteur écoute, pour ce test, le flux PAR DÉFAUT — celui de la fenêtre qu'il lance "
+            f"({_Moteur_._flux_attendu(rt)})")
         chk(sorted(_os.listdir(dossier)) == sorted(fichiers_avant + ["vide"]),
             "aucune séance n'a rien écrit à côté du modèle")
     finally:
