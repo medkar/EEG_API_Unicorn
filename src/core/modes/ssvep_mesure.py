@@ -83,7 +83,8 @@ from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa:
                          use_utf8_console)
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Param  # noqa: E402
-from core.modes.mesure import MesureRuntime, MesureSpec  # noqa: E402
+from core.modes.mesure import MesureSpec  # noqa: E402
+from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
 # La cadence de décodage du MODE, importée et jamais recopiée : c'est elle qui dit combien de
 # fenêtres chevauchantes une fixation contient, donc de combien l'effectif serait gonflé si on les
 # comptait. Le test s'en sert pour fabriquer un essai réaliste.
@@ -163,16 +164,17 @@ BRIEFING = (
 )
 
 
-class MesureSSVEP(MesureRuntime):
+class MesureSSVEP(MesureMarqueurs):
     """Le taux d'émission, mesuré sur une séance menée par la FENÊTRE.
 
-    ⚠️ **La ligne du temps n'est PAS celle du socle**, et c'est la seule mesure dans ce cas : le
-    stimulus doit être verrouillé au rafraîchissement de l'écran, donc c'est la fenêtre qui minute
-    les essais et le moteur qui les SUBIT. `tick` est donc redéfinie, sur le patron exact de
-    `modes/marker_calib.py` — même chauffe, mêmes deux délais d'abandon, même consommation des
-    marqueurs à chaque tour, chauffe comprise.
+    La ligne du temps — chauffe, annonce, `calib_end`, les trois abandons, les compteurs, la
+    cloison de vérité, l'épochage — vient ENTIÈRE de `modes/mesure_marqueurs.py`, le socle des
+    mesures menées par une fenêtre. Ce qui reste ICI est la forme d'un essai SSVEP : un `cue` = une
+    fixation = UNE époque, le plancher de repos échantillonné à la cadence du mode, et la règle de
+    décision du mode rejouée dans `_mesurer` — pas plus tôt, puisque le plancher de repos n'est
+    ajusté qu'une fois le repos entier reçu. On consigne donc l'ÉPOQUE, et on décide à la fin.
 
-    Ce qui reste hérité du socle, et qui est tout l'intérêt d'en hériter : `state()`, `cancel()`,
+    Ce qui reste hérité, et qui est tout l'intérêt d'en hériter : `state()`, `cancel()`,
     `_terminer()`, `restant_s()`, `terminee`, le vocabulaire des phases, le refus d'écrire quoi que
     ce soit sur le disque. `src/console/mesure_page.py` est GÉNÉRIQUE : un seul champ manquant dans
     l'instantané la laisserait vide, sans lever la moindre erreur.
@@ -183,6 +185,8 @@ class MesureSSVEP(MesureRuntime):
     # ces marqueurs décrivent un stimulus SSVEP, un étudiant qui lit `docs/markers.md` les cherche
     # sous ce nom-là, et le mode SSVEP lui-même ne consomme aucun marqueur — aucun vol possible.
     marker_mode_id = "ssvep"
+    # Un `cue` porte la cible désignée (la vérité) ET ouvre la fixation (l'unité de `trials`).
+    evenement_verite, champ_verite, evenement_unite = "cue", "target", "cue"
 
     # Ce qu'on prélève autour de chaque `cue` : la FIXATION ENTIÈRE, plus la marge de filtre.
     # ⚠️ La fixation entière, et pas la seule fenêtre de décision, précisément pour que le choix
@@ -191,21 +195,32 @@ class MesureSSVEP(MesureRuntime):
     # tampon du moteur (cf. `MesureRuntime.epoque_marqueur_s`).
     epoque_marqueur_s = SSVEP_GUIDE_FIX_S + FILTER_MARGIN_S
 
+    # ⚠️ L'ancrage. L'époque se termine `SSVEP_GUIDE_FIX_S` APRÈS le `cue`, c'est-à-dire à la FIN
+    # de la fixation — la fenêtre publie ce marqueur au premier flip de celle-ci. Un ancrage sur le
+    # marqueur lui-même prélèverait la seconde de saccade qui le précède, où aucune réponse SSVEP
+    # n'est encore établie : le taux s'effondrerait sans qu'une seule exception ne soit levée. Le
+    # socle en déduit la maturité : un `cue` n'est mûr que lorsque le tampon couvre sa fixation.
+    decalage_s = SSVEP_GUIDE_FIX_S
+
+    # ⚠️ **La seule géométrie REDÉCLARÉE du socle, et voici pourquoi elle est inévitable** : le mode
+    # SSVEP ne découpe aucune époque autour d'un marqueur (il décode une fenêtre glissante), donc
+    # il n'y a pas de `pre_s`/`post_s` à LIRE sur son runtime. Le chemin du décodage est ailleurs,
+    # et il est bien LU : `_decision_de_l_essai` garde de la fixation exactement
+    # `acq.window_n + acq.margin_n` échantillons, la géométrie même d'`occipital_window`.
+    @property
+    def pre_s(self):
+        return float(self.epoque_marqueur_s)
+
+    @property
+    def post_s(self):
+        return 0.0
+
     def __init__(self, spec, params, engine, rng=None):
         super().__init__(spec, params, engine, rng=rng)
-        self._annonce_recue = False      # un `calib_start` est arrivé : la fenêtre est VIVANTE
-        self._essais_annonces = 0        # le champ `trials` de cette annonce ; 0 = inconnu
         self._freqs = []                 # les fréquences que l'écran AFFICHE, telles qu'annoncées
         self._refresh_hz = 0.0
-        self._debut = None               # instant du premier tick (horloge de l'appelant)
-        self._dernier_marqueur_s = None  # dernier tour où un marqueur est arrivé, MÊME horloge
         self._repos_fin_ts = None        # fin du plancher de repos, en horloge LSL
         self._dernier_repos_s = 0.0      # dernier prélèvement de repos (horloge de l'appelant)
-        self._essais_vus = 0             # `cue` reçus, y compris ceux dont l'époque a débordé
-        self._epoques_perdues = 0
-        self._marqueurs_chauffe = 0
-        self._chauffe_dite = False
-        self._attente_fin_dite = False
         # L'acquisition du moteur, retenue à la construction. `_mesurer` en a besoin pour appliquer
         # EXACTEMENT le filtrage du mode (`occipital_window`) et sa définition du σ
         # (`sigma_from_block`) — or `cancel()` met `self.engine` à None, et une mesure abandonnée
@@ -213,25 +228,6 @@ class MesureSSVEP(MesureRuntime):
         self._acq = getattr(engine, "acq", None)
 
     # --- ce que le socle attend --------------------------------------------------
-
-    def protocole(self):
-        """AUCUNE étape : la ligne du temps est tenue par la fenêtre, pas par le moteur.
-
-        Un tuple vide plutôt qu'une `NotImplementedError` héritée : le socle exige que toute mesure
-        déclare son protocole, et « je n'en mène aucun » est une réponse — la même que celle de
-        `modes/marker_calib.py` pour les trois calibrations à fenêtre. Ce qui remplace les étapes
-        est `tick`, redéfinie plus bas.
-        """
-        return ()
-
-    def total(self):
-        """Le nombre d'essais que la FENÊTRE a annoncés. 0 tant qu'elle ne s'est pas annoncée.
-
-        Le moteur ne le calcule pas : il ne connaît ni le nombre de cibles à l'écran, ni le nombre
-        d'essais par cible. Ce nombre vient du champ `trials` de `calib_start`, dans l'unité que
-        `self.essai` compte — **un essai enregistré**.
-        """
-        return self._essais_annonces
 
     def duree_estimee_s(self):
         """La chauffe, plus ce que le moteur SAIT du protocole par ses constantes partagées.
@@ -265,69 +261,25 @@ class MesureSSVEP(MesureRuntime):
             return "immobile, cligne peu — une fenêtre trop agitée est rejetée comme artefact"
         return ""
 
-    # --- la ligne du temps, menée par la fenêtre ---------------------------------
+    def _lire_annonce(self, marqueur):
+        """Les fréquences et le rafraîchissement de `calib_start`.
 
-    def tick(self, engine, now):
-        """Un pas. Appelée par la boucle du moteur, jamais par une interface.
-
-        ⚠️ Les marqueurs sont consommés à CHAQUE TOUR, chauffe comprise. C'est l'APPEL qui fait
-        avancer le curseur du moteur : sans lui pendant la chauffe, l'arriéré s'empile derrière un
-        curseur immobile, et le premier tour de la phase « essais » avale d'un coup 15 s de
-        marqueurs dont l'EEG a déjà quitté le tampon. Panne n°7 de `modes/p300.py`, à l'identique —
-        et c'est le comportement PAR DÉFAUT, puisque la console lance la fenêtre au moment même où
-        elle demande la mesure.
+        ⚠️ LES FRÉQUENCES VIENNENT DE L'ÉCRAN, jamais des réglages du mode. La fenêtre les déduit
+        du rafraîchissement qu'elle MESURE : sur un écran 120 Hz elle n'affichera pas celles d'un
+        60 Hz. Un moteur qui garderait les siennes corrélerait contre des sinusoïdes que personne
+        ne montre, et rendrait un taux nul en accusant le montage.
         """
-        if self.terminee:
-            return
-        if not self._demarre:
-            self._demarre = True
-            self._debut = now
-            self._echeance = now + self.warmup_s
-            return
-
-        phase_avant = self.phase
-
-        # `post_s = SSVEP_GUIDE_FIX_S` : un `cue` n'est mûr que lorsque le tampon couvre la
-        # fixation qu'il ouvre — c'est-à-dire quand l'époque qu'on va prélever existe vraiment.
-        # Le demander plus tôt rendrait une époque tronquée, sans rien dire.
-        lot = engine.markers_murs(self.marker_mode_id, post_s=SSVEP_GUIDE_FIX_S)
-        for ts, marqueur in lot:
-            self.encaisser(engine, ts, marqueur)
-        if lot:
-            self._dernier_marqueur_s = now
-
-        if self.phase == "chauffe":
-            if self._annonce_recue and now - self._debut >= self.warmup_s:
-                self._ouvrir_les_essais(now)
-            elif not self._annonce_recue and now - self._debut >= CALIB_FENETRE_ATTENTE_S:
-                flux = self.params.get("stream_in") or MARKER_STREAM_DEFAULT
-                self._abandonne(
-                    f"aucun « calib_start » reçu en {CALIB_FENETRE_ATTENTE_S:.0f} s : la fenêtre "
-                    f"de stimulus ne s'est pas lancée, ou elle publie ses marqueurs sous un autre "
-                    f"nom que « {flux} »")
-            return
-
-        if self.phase == "essais":
-            self._echantillonne_le_repos(engine, now)
-            self._verifie_silence(now)
-            return
-
-        if self.phase == "mesure" and phase_avant == "mesure":
-            # ⚠️ `phase_avant`, et pas seulement `self.phase` : un tour APRÈS `calib_end`, jamais
-            # dans le MÊME. `_terminer` bloque la boucle du moteur le temps du calcul, et la
-            # console (qui sonde à 10 Hz) doit avoir pu peindre « Calcul… » au moins une fois
-            # avant. Sans ce décalage, l'écran reste sur le dernier essai pendant tout le calcul :
-            # exactement la tête d'un moteur figé. Même geste que `marker_calib.tick`.
-            self._terminer(engine)
+        freqs = marqueur.get("freqs")
+        if isinstance(freqs, (list, tuple)) and freqs:
+            self._freqs = [float(f) for f in freqs]
+        self._refresh_hz = float(marqueur.get("refresh_hz") or 0.0)
 
     def _ouvrir_les_essais(self, now):
-        """Fin de la chauffe. Ce qui a été publié pendant est jeté, et dit."""
-        self.phase = "essais"
-        self.etape, self.classe, self._echeance = "", "", None
-        self._dernier_marqueur_s = now
+        super()._ouvrir_les_essais(now)
         self._dernier_repos_s = now
-        print(f"[mesure-ssvep] chauffe terminée, {self.total()} essai(s) annoncé(s) par la "
-              f"fenêtre — enregistrement en cours")
+
+    def _pendant_les_essais(self, engine, now):
+        self._echantillonne_le_repos(engine, now)
 
     def _echantillonne_le_repos(self, engine, now):
         """Le PLANCHER de repos, échantillonné à la cadence du mode pendant la phase « repos ».
@@ -364,157 +316,31 @@ class MesureSSVEP(MesureRuntime):
         acq = self._acq
         return float(acq.window_n + acq.margin_n) / float(acq.fs)
 
-    def _verifie_silence(self, now):
-        """Abandonne si la fenêtre s'est tue — la 2e des trois causes. Jumelle de `marker_calib`.
+    # --- les marqueurs : la forme d'un essai SSVEP ----------------------------------
 
-        La condition n'est PAS « plus de marqueur » seule : elle est « plus de marqueur ALORS QUE
-        la fenêtre en annonçait davantage ». Une séance dont tous les essais annoncés sont arrivés
-        et dont seul le `calib_end` manque n'est pas une fenêtre morte : c'est une séance complète
-        dont le dernier marqueur s'est perdu, et la jeter détruirait quatre minutes de signal bon.
+    def _encaisser_protocole(self, engine, ts, marqueur):
+        """`repos` ouvre le plancher ; chaque `cue` est une fixation, prélevée ENTIÈRE.
 
-        ⚠️ **« Arrivés » se compte sur `_essais_vus`, JAMAIS sur `self.essai`**, et c'est tout ce
-        qui sépare cette méthode de son contraire. Les deux compteurs coïncident tant qu'aucune
-        époque n'est perdue, et se séparent dès la première :
-
-          • `_essais_vus` = les `cue` LISIBLES reçus. C'est ce que la fenêtre a joué, donc la seule
-            grandeur comparable au `trials` qu'elle a annoncé dans son `calib_start`.
-          • `self.essai` = les essais dont l'époque a pu être PRÉLEVÉE. Il est plus petit de
-            `_epoques_perdues`, qu'un seul tour de boucle ralenti suffit à faire monter (l'EEG du
-            `cue` a quitté le tampon avant qu'on le découpe).
-
-        Comparer `self.essai` au nombre annoncé produisait exactement la panne que la méthode
-        existe pour empêcher : 36 essais annoncés, 36 `cue` reçus, **un seul** essai sans époque,
-        et un `calib_end` perdu — la garde n'attendait pas, `cancel()` vidait `_enregistre`, et
-        **les 35 essais valides étaient détruits**. Trouvé par la revue de branche du 2026-09-10.
+        Le `cue` arrive ici SANS sa cible (le socle l'a retirée et la garde pour le correcteur) :
+        l'époque est rangée par `_consigner`, qui l'apparie à la cible désignée. La décision,
+        elle, n'est prise que dans `_mesurer`.
         """
-        if self._dernier_marqueur_s is None:
-            return
-        silence = now - self._dernier_marqueur_s
-        if silence <= CALIB_FENETRE_SILENCE_S:
-            return
-        if self._essais_annonces > 0 and self._essais_vus >= self._essais_annonces:
-            if not self._attente_fin_dite:
-                self._attente_fin_dite = True
-                print(f"[mesure-ssvep] les {self._essais_vus} essais annoncés sont TOUS arrivés "
-                      f"({self.essai} époque(s) retenue(s), {self._epoques_perdues} perdue(s)), "
-                      f"mais aucun « calib_end » depuis {silence:.0f} s : la séance ATTEND. Si la "
-                      f"fenêtre est morte, « Abandonner » dans la console — aucun verdict ne sera "
-                      f"calculé.")
-            return
-        self._abandonne(
-            f"aucun marqueur depuis {silence:.0f} s (> {CALIB_FENETRE_SILENCE_S:.0f} s) : la "
-            f"fenêtre de stimulus s'est arrêtée en pleine séance. {self._essais_vus} essai(s) "
-            f"reçu(s) — dont {self.essai} enregistré(s) — sur les "
-            f"{self._essais_annonces or '?'} annoncés ; aucun verdict n'est calculé, un taux sur "
-            f"une séance tronquée serait indiscernable d'un taux complet")
-
-    def _abandonne(self, raison):
-        """Jette la séance en le DISANT, par le MÊME geste que l'abandon depuis la console."""
-        print(f"[mesure-ssvep] mesure ABANDONNÉE : {raison}")
-        self.cancel()
-        # APRÈS `cancel()` : lui seul décide de la phase, et il ne pose aucun `probleme` (l'abandon
-        # depuis la console n'en a pas). C'est ici qu'on ajoute la raison, que la console affiche.
-        self.probleme = raison
-
-    # --- les marqueurs -----------------------------------------------------------
-
-    def encaisser(self, engine, ts, marqueur):
-        """Un marqueur, un seul. Le point d'entrée unique de tout ce qui vient de la fenêtre.
-
-        Séparé de `tick` exprès : c'est ce qui permet de le nourrir marqueur par marqueur dans un
-        test, sans faux moteur à file, et de raisonner sur UN cas à la fois.
-        """
-        if self.terminee or not self._demarre:
-            return
         event = marqueur.get("event")
-
-        # L'annonce est retenue MÊME pendant la chauffe : c'est elle qui dit que la fenêtre est
-        # vivante, et le délai d'absence court depuis un instant où elle n'existait pas encore. La
-        # refuser pendant la chauffe obligerait la fenêtre à deviner la durée de celle-ci pour ne
-        # pas être déclarée absente.
-        if event == "calib_start":
-            self._encaisse_annonce(marqueur)
-            return
-
-        if self.phase == "chauffe":
-            self._marqueurs_chauffe += 1
-            if not self._chauffe_dite:
-                self._chauffe_dite = True
-                print(f"[mesure-ssvep] marqueur(s) reçus pendant la CHAUFFE : jetés — l'offset DC "
-                      f"du casque dérive encore ({self.warmup_s:.0f} s). Un plancher de repos "
-                      f"mesuré là-dedans étalonnerait la séance sur le transitoire d'un filtre.")
-            return
-
-        if self.phase != "essais":
-            # « mesure » ou phase terminale : la fenêtre parle encore alors que la séance est
-            # close. Rien à faire, et surtout pas d'erreur — c'est le cas normal d'une fenêtre qui
-            # se ferme un tour après son `calib_end`.
-            return
-
         if event == "repos":
             self._repos_fin_ts = float(ts) + SSVEP_GUIDE_REPOS_S
             return
-
-        if event == "calib_end":
-            self.phase = "mesure"
-            self.etape, self.classe, self._echeance = "", "", None
-            print(f"[mesure-ssvep] « calib_end » reçu : {self.essai} essai(s) sur les "
-                  f"{self._essais_annonces or '?'} annoncés — calcul du taux d'émission")
-            return
-
         if event != "cue":
             # Un événement que ce protocole ne connaît pas est ignoré, pas refusé : le protocole
             # s'enrichira, et un moteur qui casserait au premier ajout serait inutilisable.
             return
-
-        cible = marqueur.get("target")
-        if isinstance(cible, bool) or not isinstance(cible, int):
-            # `bool` HÉRITE de `int` en Python : `True` passerait pour la cible 1. Même piège que
-            # `target` dans `modes/p300.py`.
-            print(f"[mesure-ssvep] `cue` sans cible lisible ({cible!r}) : essai ignoré")
-            return
-        self._essais_vus += 1
         self.classe = f"essai {self._essais_vus}"
+        epoque = self._prelever(engine, ts)
+        if epoque is not None:
+            self._consigner(epoque)
 
-        # ⚠️ L'ancrage. L'époque se termine `SSVEP_GUIDE_FIX_S` APRÈS le `cue`, c'est-à-dire à la
-        # FIN de la fixation — la fenêtre publie ce marqueur au premier flip de celle-ci. Un
-        # ancrage sur le marqueur lui-même prélèverait la seconde de saccade qui le précède, où
-        # aucune réponse SSVEP n'est encore établie : le taux s'effondrerait sans qu'une seule
-        # exception ne soit levée.
-        epoque = epoch_from_stream(engine.recent, engine.recent_ts,
-                                   float(ts) + SSVEP_GUIDE_FIX_S, engine.acq.fs,
-                                   pre_s=self.epoque_marqueur_s, post_s=0.0)
-        if epoque is None:
-            self._epoques_perdues += 1
-            print(f"[mesure-ssvep] essai {self._essais_vus} ignoré : le marqueur était mûr mais "
-                  f"son EEG avait déjà quitté le tampon du moteur")
-            return
-        self._enregistre.append((epoque, Essai(self._essais_vus, int(cible))))
-        self.essai += 1
-
-    def _encaisse_annonce(self, marqueur):
-        """`calib_start` : la fenêtre est vivante, voici ses essais ET ses fréquences."""
-        trials = marqueur.get("trials")
-        if isinstance(trials, bool) or not isinstance(trials, (int, float)):
-            print(f"[mesure-ssvep] « calib_start » sans nombre d'essais lisible ({trials!r}) : "
-                  f"l'avancement ne pourra pas s'afficher, et un silence en cours de séance sera "
-                  f"traité comme une fenêtre morte faute de pouvoir prouver qu'elle a fini")
-            self._essais_annonces = 0
-        else:
-            self._essais_annonces = max(0, int(trials))
-        # ⚠️ LES FRÉQUENCES VIENNENT DE L'ÉCRAN, jamais des réglages du mode. La fenêtre les déduit
-        # du rafraîchissement qu'elle MESURE : sur un écran 120 Hz elle n'affichera pas celles d'un
-        # 60 Hz. Un moteur qui garderait les siennes corrélerait contre des sinusoïdes que personne
-        # ne montre, et rendrait un taux nul en accusant le montage.
-        freqs = marqueur.get("freqs")
-        if isinstance(freqs, (list, tuple)) and freqs:
-            self._freqs = [float(f) for f in freqs]
-        self._refresh_hz = float(marqueur.get("refresh_hz") or 0.0)
-        if self._annonce_recue:
-            print(f"[mesure-ssvep] ⚠️ second « calib_start » sans « calib_end » : les "
-                  f"{self.essai} essai(s) déjà enregistrés RESTENT dans le calcul. Si la fenêtre a "
-                  f"redémarré, abandonne et recommence la mesure.")
-        self._annonce_recue = True
+    def _etiquette_d_essai(self, verite):
+        """`Essai(numéro, cible)` : le numéro regroupe les fenêtres d'un essai dans `_mesurer`."""
+        return Essai(self._essais_vus, int(verite))
 
     # --- le calcul ---------------------------------------------------------------
 
