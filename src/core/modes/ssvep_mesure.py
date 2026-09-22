@@ -83,6 +83,8 @@ from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa:
                          use_utf8_console)
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Param  # noqa: E402
+from core.modes.affichage import lignes, pct  # noqa: E402
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
 from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
 # La cadence de décodage du MODE, importée et jamais recopiée : c'est elle qui dit combien de
@@ -534,6 +536,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
     # ⚠️ L'intervalle porte sur la JUSTESSE À L'ÉMISSION, et son effectif est `n_emis` — un nombre
     # d'ESSAIS ayant produit une décision, jamais un nombre de fenêtres.
     ic_bas, ic_haut = wilson(n_justes, n_emis)
+    _affichage = _lignes(len(freqs), n_essais, n_emis, justesse, taux_emission, ic_bas, ic_haut)
 
     return {
         "n_essais": int(n_essais),
@@ -555,10 +558,59 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
         "refresh_hz": 0.0,
         "fenetres_repos": len(scores_repos),
         "decisions": [(int(c), None if d is None else int(d)) for c, d in decisions],
-        "verdict": verdict(len(freqs), n_essais, n_emis, n_justes, taux_emission, justesse,
-                           ic_bas, ic_haut, artefacts, perdus=perdus, chauffe=chauffe),
+        **_affichage,
+        # Le verdict s'OUVRE sur le mot affiché en face : c'est l'invariant que
+        # `affichage.verifier` tient pour chaque protocole — les deux viennent du même calcul.
+        "verdict": f"{_affichage['mot']} — " + verdict(
+            len(freqs), n_essais, n_emis, n_justes, taux_emission, justesse, ic_bas, ic_haut,
+            artefacts, perdus=perdus, chauffe=chauffe),
         "honnetete": HONNETETE,
     }
+
+
+# Le seuil de « bon » pour la JUSTESSE à l'émission. Le repère du projet est 100 % (0 confusion sur
+# 36) ; l'exiger à la lettre rangerait en orange une séance à 35 justes sur 36. 90 % laisse une
+# confusion pour dix annonces, ce qui reste très loin du hasard à trois cibles.
+JUSTESSE_MIN_BON = 0.90
+
+
+def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
+    """Les quatre clés d'affichage (cf. `core/modes/affichage.py`). MÊMES mots que le test du MI
+    (`mi_test.py`) : deux boutons « Tester » qui jugeraient avec deux vocabulaires apprendraient à
+    l'étudiant que « UTILISABLE » veut dire deux choses.
+
+    Rouge si le moteur s'est tu, ou si l'intervalle contient le hasard ; vert s'il a raison presque
+    toujours ET parle au moins aussi souvent que le repère du 2026-07-27 ; orange entre les deux.
+    """
+    hasard = 1.0 / n_cibles
+    if n_emis == 0 or ic_bas <= hasard:
+        niveau, mot = "faible", ("MUET" if n_emis == 0 else "FAIBLE")
+    elif justesse >= JUSTESSE_MIN_BON and taux >= REFERENCE_EMISSION:
+        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+    else:
+        niveau, mot = "moyen", "UTILISABLE"
+
+    if n_emis == 0:
+        chiffres = (f"aucune cible annoncée sur {n_essais} essais (hasard {pct(hasard)})")
+        reserve = ("Le moteur s'est tu : plancher de repos trop dispersé. Vérifie le contact des "
+                   "occipitales et refais le test immobile pendant le repos.")
+    else:
+        chiffres = (f"{pct(justesse)} de cibles justes quand il annonce, entre "
+                    f"{ic_bas * 100:.0f} et {pct(ic_haut)} (hasard {pct(hasard)}) · il annonce "
+                    f"sur {pct(taux)} des {n_essais} essais")
+        if niveau == "faible":
+            reserve = ("L'intervalle contient le hasard : à cet effectif on ne peut pas conclure. "
+                       "Rallonge le test, ou reprends le montage.")
+        elif taux < REFERENCE_EMISSION:
+            reserve = ("Il a raison quand il parle, mais se tait souvent : essaie un autre jeu de "
+                       "fréquences (« Proposer »), ou refais le repos immobile.")
+        elif niveau == "moyen":
+            reserve = ("Il parle assez, mais se trompe plus que le repère : vérifie qu'aucune "
+                       "cible n'est trop près de ton pic alpha (« Proposer »).")
+        else:
+            reserve = ("Ta configuration tient sur cette séance : tu peux la reporter dans ton "
+                       "application.")
+    return lignes(niveau, mot, chiffres, reserve)
 
 
 def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_haut, artefacts,
@@ -813,6 +865,16 @@ def _selftest():
     # === Le verdict : les DEUX chiffres, et l'effectif qui les porte ==========================
     chk("ESSAIS" in res["verdict"] and str(res["n_essais"]) in res["verdict"],
         f"le verdict dit l'effectif et son UNITÉ ({res['verdict'][:80]}…)")
+    # Les trois lignes affichées EN FACE viennent du même calcul que ce verdict, qui s'ouvre sur le
+    # mot ; les chiffres portent leur hasard (`affichage.verifier`, tenu par chaque protocole).
+    chk(not _verifier_affichage(res),
+        f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
+    # Une séance comme celle du 2026-09-22 (18 annonces sur 36, 18 justes) : AU NIVEAU DU REPÈRE.
+    _seance = _lignes(3, 36, 18, 1.0, 0.5, 0.82, 1.0)
+    chk(_seance["niveau"] == "bon" and "hasard 33 %" in _seance["chiffres"],
+        f"18 justes sur 18 annonces, 50 % d'émission : vert, avec son hasard ({_seance})")
+    chk(_lignes(3, 36, 0, 0.0, 0.0, 0.0, 0.0)["mot"] == "MUET",
+        "un moteur qui ne dit rien est MUET, pas FAIBLE : les deux ne se corrigent pas pareil")
     chk(f"{res['taux_emission'] * 100:.0f} %" in res["verdict"]
         and f"{res['justesse_emission'] * 100:.0f} %" in res["verdict"],
         "…et les deux chiffres, jamais l'un sans l'autre")
@@ -1083,7 +1145,12 @@ def _selftest():
     chk(SPEC.stimulus_id == "ssvep" and SPEC.barriere is False,
         f"la mesure DÉCLARE sa fenêtre et n'est PAS une barrière : un taux d'émission bas est le "
         f"régime normal de ce mode, pas un feu rouge ({SPEC.stimulus_id}, {SPEC.barriere})")
-    chk([s.id for s in registry.MESURES] == ["alpha", "ssvep_taux"],
+    _ids = [s.id for s in registry.MESURES]
+    # La PROPRIÉTÉ, pas la liste : la barrière alpha d'abord, cette mesure après. Une liste figée
+    # rougissait dès qu'une mesure de test s'ajoutait au registre (le MI, le 2026-09-22), sans que
+    # rien de ce que ce test protège n'ait changé.
+    chk(_ids[:1] == ["alpha"] and "ssvep_taux" in _ids
+        and _ids.index("ssvep_taux") > _ids.index("alpha"),
         f"…et elle est dans le catalogue du moteur, APRÈS la barrière alpha, qui se fait en "
         f"premier ({[s.id for s in registry.MESURES]})")
     sain, defauts = registry.check()
