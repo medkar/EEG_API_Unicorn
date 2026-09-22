@@ -37,6 +37,8 @@ from brainflow.data_filter import DataFilter, DetrendOperations, NoiseTypes  # n
 
 from core.config import (CH_NAMES, OCCIPITAL, SIGNAL_DEAD_SIGMA,  # noqa: E402
                          signal_verdict, use_utf8_console)
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import lignes, pct  # noqa: E402
 from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
 # ⚠️ Importé pour UNE chose : le réglage que ce pic alimente (`alpha_hz`), avec son libellé et le
 # mode qui le porte. C'est ce qui permet à la console de PROPOSER l'application du pic sans écrire
@@ -262,6 +264,9 @@ class ControleAlpha(MesureRuntime):
             "voies": list(VOIES),
             "barriere_franchie": franchie,
             "verdict": self._verdict(ratio, pic_hz, monte, au_bon_endroit),
+            # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`). Une barrière n'a que
+            # deux issues — elle se franchit ou elle ARRÊTE —, donc jamais d'orange ici.
+            **self._lignes(ratio, pic_hz, monte, au_bon_endroit),
             "honnetete": HONNETETE,
             # ⚠️ CE QUI FERME LA BOUCLE. La recette faisait NOTER ce pic sur un carnet, puis le
             # RETAPER dans « Pic alpha » de la page SSVEP. La console le renvoie maintenant au
@@ -281,6 +286,23 @@ class ControleAlpha(MesureRuntime):
                 "unite": PARAM_CIBLE.unit,
             },
         }
+
+    def _lignes(self, ratio, pic_hz, monte, au_bon_endroit):
+        """Le verdict en trois lignes. La réserve est le GESTE, jamais un rappel du chiffre."""
+        chiffres = (f"ratio yeux fermés / ouverts {ratio:.2f}".replace(".", ",")
+                    + f" (repère > {RATIO_MIN:g})".replace(".", ",")
+                    + f" · pic à {pic_hz:.1f} Hz".replace(".", ","))
+        if monte and au_bon_endroit:
+            return lignes("bon", "ALPHA NET", chiffres,
+                          "Le casque est bien posé : la séance peut commencer.")
+        if not monte:
+            return lignes("faible", "ARRÊTE ICI", chiffres,
+                          "L'alpha ne monte pas : reprends les électrodes occipitales, les "
+                          "mastoïdes, re-saline — rien d'autre de la séance ne voudra rien dire "
+                          "avant.")
+        return lignes("faible", "ARRÊTE ICI", chiffres,
+                      "Ça monte, mais hors de la bande alpha : probablement un mouvement. "
+                      "Reprends immobile, mâchoire relâchée.")
 
     def _verdict(self, ratio, pic_hz, monte, au_bon_endroit):
         """LA phrase. Elle dit quoi faire, et quand s'arrêter — jamais un chiffre tout seul.
@@ -420,6 +442,10 @@ def _selftest():
     chk(abs(res["pic_hz"] - 10.5) < 1.0,
         f"…et le pic est trouvé là où on l'a mis ({res['pic_hz']:.1f} Hz pour 10,5)")
     chk(res["barriere_franchie"] is True, "la barrière est franchie")
+    # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+    # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+    chk(not _verifier_affichage(res),
+        f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
     chk("séance peut commencer" in res["verdict"] and f"{res['ratio']:.2f}" in res["verdict"],
         f"…et le verdict le DIT, avec son chiffre ({res['verdict'][:60]}…)")
     chk(res["voies"] == VOIES and "Pz" in res["voies"],
@@ -440,6 +466,10 @@ def _selftest():
     plat_rt, plat = _jouer(_bruit(rng), _bruit(rng))
     chk(plat["barriere_franchie"] is False,
         f"sans montée d'alpha, la barrière n'est PAS franchie (ratio {plat['ratio']:.2f})")
+    # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+    # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+    chk(not _verifier_affichage(plat),
+        f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(plat)})")
     chk("arrête" in plat["verdict"].lower() and "électrodes" in plat["verdict"].lower(),
         f"…et le verdict dit d'ARRÊTER et quoi vérifier, il ne rend pas qu'un chiffre "
         f"({plat['verdict'][:70]}…)")

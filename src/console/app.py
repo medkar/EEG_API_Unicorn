@@ -3171,6 +3171,56 @@ def _smoke():
         f"et sur un signal calme, plus aucune voie n'est annoncée rognée "
         f"(« {vue.echelle.text()[:70]}… »)")
 
+    # --- 🔴 LE BLOC DE RÉSULTAT : TROIS LIGNES, LE RESTE RANGÉ -----------------------------
+    #
+    # Séance casque du 2026-09-22, mot pour mot : « c'est pas clair du tout et beaucoup trop
+    # verbeux ». Le chiffre utile — 25 % pour un hasard à 17 % — était enterré au milieu d'une
+    # phrase. Le résultat est construit ici par la VRAIE table du c-VEP (`cvep_calib.VERDICTS`),
+    # via le même appel que le moteur : ce test ne fabrique pas un verdict à sa convenance.
+    from console.resultat import BlocResultat, COULEURS
+    from core.modes.affichage import depuis_table
+    from core.modes.cvep_calib import VERDICTS as VERDICTS_CVEP
+
+    bloc = BlocResultat()
+    faible = {**depuis_table(0.25, VERDICTS_CVEP,
+                             "25 % de cibles justes (hasard 17 %) sur 90 essais"),
+              "verdict": "FAIBLE — ré-essaie : saline Pz/PO7/Oz/PO8 — les deux décodeurs sont "
+                         "INDISCERNABLES (McNemar p = 0.267)",
+              "honnetete": "ces deux chiffres sont HORS LIGNE : ils viennent d'une validation "
+                           "croisée sur les époques d'une calibration",
+              "nom": "candidat_cvep_model_20260922-104204.npz"}
+    bloc.montrer(faible)
+    chk(bloc.verdict.text() == "FAIBLE" and COULEURS["faible"] in bloc.verdict.styleSheet(),
+        f"en face : UN mot, peint en ROUGE ({bloc.verdict.text()!r})")
+    chk("25 %" in bloc.chiffres.text() and "hasard 17 %" in bloc.chiffres.text(),
+        f"…la mesure ET son hasard sur la même ligne, jamais un pourcentage seul "
+        f"({bloc.chiffres.text()!r})")
+    chk(bloc.reserve.text().startswith("ré-essaie"),
+        f"…et une seule réserve : le CONSEIL, puisque le résultat est faible "
+        f"({bloc.reserve.text()[:40]!r})")
+    chk(not bloc.corps.isVisibleTo(bloc) and "McNemar" not in bloc.verdict.text()
+        + bloc.chiffres.text() + bloc.reserve.text(),
+        "McNemar, l'honnêteté et le fichier sont REPLIÉS par défaut — c'est eux qui noyaient "
+        "le chiffre")
+    bloc.details.setChecked(True)
+    chk(bloc.corps.isVisibleTo(bloc) and "HORS LIGNE" in bloc.corps.text()
+        and "McNemar" in bloc.corps.text() and "candidat_cvep" in bloc.corps.text(),
+        "…et un clic les ramène TOUS : rangés, pas supprimés")
+
+    # La couleur vient du NIVEAU publié par le moteur, jamais d'un pourcentage. Un résultat que le
+    # moteur juge « moyen » reste ORANGE même avec 25 % : c'est le moteur qui connaît le hasard
+    # de CE mode (25 % est bon à 6 cibles, catastrophique à 2).
+    moyen_bas = {**faible, "niveau": "moyen", "mot": "FAIBLE"}
+    bloc.montrer(moyen_bas)
+    chk(COULEURS["moyen"] in bloc.verdict.styleSheet(),
+        "la couleur suit le NIVEAU du moteur, pas le pourcentage : aucune seconde table de "
+        "seuils côté écran")
+    # Un résultat ANCIEN, sans les quatre clés : gris, et son verdict tel quel. Rien d'inventé.
+    bloc.montrer({"verdict": "Sur 36 ESSAIS, le moteur a annoncé une cible 18 fois"})
+    chk("#8a8f9c" in bloc.verdict.styleSheet() and "36 ESSAIS" in bloc.verdict.text(),
+        f"un résultat sans niveau reste GRIS, avec son verdict tel quel — on ne devine pas "
+        f"({bloc.verdict.text()[:30]!r})")
+
     # Moteur pas encore démarré : rien ne doit lever.
     etat_vide = {"running": False, "board": "unicorn", "fs_hz": 250.0,
                  "modes": [], "quality": None, "catalog": []}

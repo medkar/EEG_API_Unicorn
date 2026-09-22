@@ -70,6 +70,8 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, CH_NAMES, CVEP_BAND,  # noqa: E
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 from core.cvep_rcca import SEUIL_MCNEMAR, RCCAModel, _mcnemar_p  # noqa: E402
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # ⚠️ `core.modes.cvep` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
 # `CVEPCalibration.runtime_cls_du_mode`, une fois le programme lancé.
@@ -508,6 +510,14 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
         # 0,5. « 60 % » ne veut pas dire la même chose à 3 cibles (33 %) qu'à 6 (16,7 %).
         "hasard": 1.0 / n_cibles,
         "verdict": verdict_txt,
+        # Ce qui s'affiche EN FACE. La comparaison des deux décodeurs (McNemar) reste dans
+        # « Détails », via `verdict` : elle ne change pas la décision de garder ou de refaire.
+        **(non_mesure("aucune décision à la géométrie du moteur : trop peu de cycles "
+                      "consécutifs de la même cible", "Recalibre sans interrompre la séance.")
+           if meilleur is None
+           else depuis_table(meilleur, VERDICTS,
+                             f"{pct(meilleur)} de cibles justes (hasard {pct(1.0 / n_cibles)}) "
+                             f"sur {len(epochs)} essais")),
         "honnetete": HONNETETE,
     }
 
@@ -1117,6 +1127,10 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk(res.get("mcnemar_p") is not None and res.get("n_discordantes") is not None,
             f"le McNemar est CALCULÉ et rendu ({res.get('mcnemar_p')}, "
             f"{res.get('n_discordantes')} discordantes)")
+        # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+        # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+        chk(not _verifier_affichage(res),
+            f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
         chk("McNemar" in res.get("verdict", ""),
             f"…et le verdict rend le TEST, pas seulement l'écart entre deux pourcentages "
             f"({res.get('verdict')})")

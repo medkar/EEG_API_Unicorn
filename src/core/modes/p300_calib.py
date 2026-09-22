@@ -60,6 +60,8 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, P300_CAL_ROUNDS,  # noqa: E402
                          P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS,
                          P300_N_TARGETS, P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS,
                          use_utf8_console)
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 from core.p300_decoder import NONTARGET, TARGET, P300Model  # noqa: E402
 # ⚠️ `core.modes.p300` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
@@ -296,6 +298,12 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         "selection_total": int(sel_tot),
         "hasard": hasard,
         "verdict": verdict_txt,
+        # Ce qui s'affiche EN FACE : la SÉLECTION contre 1/6, jamais l'AUC (cf. VERDICTS).
+        **(non_mesure("pas assez de manches pour en tenir une à l'écart",
+                      "Refais une séance plus longue.") if selection is None
+           else depuis_table(selection, VERDICTS,
+                             f"{pct(selection)} de cibles justes (hasard {pct(hasard)}) "
+                             f"sur {sel_tot} manches")),
         "honnetete": HONNETETE,
     }
 
@@ -639,6 +647,10 @@ def _selftest():
             and res.get("selection_total") == ROUNDS,
             f"la SÉLECTION est mesurée sur CHAQUE manche tenue à l'écart "
             f"({res.get('selection_ok')}/{res.get('selection_total')})")
+        # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+        # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+        chk(not _verifier_affichage(res),
+            f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
         chk(res.get("verdict") == verdict(res.get("selection")),
             f"le verdict est recalculé depuis la SÉLECTION, pas depuis l'AUC "
             f"({res.get('verdict')!r})")

@@ -26,6 +26,8 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa
                          MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S, MI_WARMUP_PER_CLASS,
                          MI_WINDOW_S, SSVEP_WARMUP_S, use_utf8_console)
 from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.modes.contract import Calib, Param  # noqa: E402
 
@@ -246,6 +248,12 @@ class MICalibration(CalibrationRuntime):
             "hasard": hasard,
             "classes": list(self.classes),
             "verdict": verdict_txt,
+            # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`) — même table que le verdict.
+            **(non_mesure("pas assez d'essais distincts par classe pour une validation croisée",
+                          "Refais la séance avec plus d'essais par classe.") if cv is None
+               else depuis_table(cv, VERDICTS,
+                                 f"{pct(cv)} de classes justes (hasard {pct(hasard)}) "
+                                 f"sur {len(enregistre)} essais")),
             # La phrase qui dit ce que ce chiffre vaut. Elle voyage AVEC le résultat, parce que
             # l'écran qui l'affiche est générique et ne connaît aucun mode : celle du P300 parle
             # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes.
@@ -376,6 +384,10 @@ def _selftest():
         # à côté, est plus bas. Une implémentation qui calculerait verdict(cv_naive) tout en
         # gardant cv_groupee honnête passait les 19 assertions précédentes (mutant confirmé) :
         # celle-ci recoupe explicitement les deux au lieu de les vérifier séparément.
+        # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+        # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+        chk(not _verifier_affichage(res),
+            f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
         chk(res["verdict"] == verdict(res["cv_groupee"]),
             f"le verdict est recalculé depuis la CV HONNÊTE, pas depuis la naïve "
             f"({res['verdict']!r} == verdict({res['cv_groupee']!r}))")

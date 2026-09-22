@@ -63,6 +63,8 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_CAL_BLOCKS,  # noqa: E402
 from core.errp_decoder import CORRECT, ERROR, ErrPModel  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import depuis_table, lignes, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # ⚠️ `core.modes.errp` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
 # `ErrPCalibration.runtime_cls_du_mode`, une fois le programme lancé.
@@ -155,6 +157,26 @@ def verdict(auc, perm_p=None):
         if auc >= seuil:
             return texte
     return VERDICTS[-1][1]
+
+
+def _lignes_errp(auc, perm_p, mesures, n, n_erreurs):
+    """Les trois lignes d'affichage de l'ErrP. Quatre issues, dont une propre à ce mode.
+
+    ⚠️ « NON SIGNIFICATIF » n'est pas « FAIBLE », et c'est tout l'objet de `verdict()` plus haut :
+    l'un demande un meilleur signal, l'autre plus d'essais. Il est rouge — ce modèle ne se garde
+    pas — mais sa réserve dit de NE PAS resaliner.
+    """
+    if auc is None:
+        return non_mesure("pas de quoi faire une validation croisée honnête",
+                          "Refais une séance plus longue.")
+    chiffres = (f"AUC {auc:.2f} (hasard 0,50) · garde {pct(mesures['tnr'])} des bonnes "
+                f"commandes, attrape {pct(mesures['tpr'])} des erreurs "
+                f"({n} essais dont {n_erreurs} erreurs)").replace("AUC 0.", "AUC 0,")
+    if perm_p is not None and perm_p >= PERM_ALPHA:
+        return lignes("faible", "NON SIGNIFICATIF", chiffres,
+                      "Indistinguable du hasard sur ce nombre d'essais : refais une séance plus "
+                      "longue — ce n'est PAS un problème de contact.")
+    return depuis_table(auc, VERDICTS, chiffres)
 
 
 def horodatage(maintenant=None):
@@ -307,6 +329,9 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
         # comme la sélection du P300. « 0,68 » ne veut rien dire sans lui.
         "hasard": 0.5,
         "verdict": verdict_txt,
+        # Ce qui s'affiche EN FACE. Un DÉTECTEUR se lit par son couple — bonnes commandes gardées,
+        # erreurs attrapées —, et l'AUC seule laisserait croire à un sélecteur.
+        **_lignes_errp(auc, perm_p, mesures, len(epochs), int(compte[ERROR])),
         "honnetete": HONNETETE,
     }
 
@@ -644,6 +669,10 @@ def _selftest():
         chk(abs(res.get("hasard", 0.0) - 0.5) < 1e-9,
             f"le niveau du hasard d'une AUC est 0,5 — pas 1/6 comme la sélection du P300 "
             f"({res.get('hasard')})")
+        # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+        # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+        chk(not _verifier_affichage(res),
+            f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
         chk(res.get("verdict") == verdict(res.get("auc"), res.get("perm_p")),
             f"le verdict est recalculé depuis l'AUC ET sa significativité, jamais depuis le "
             f"TPR/TNR — qui sont mesurés au seuil qui les a choisis ({res.get('verdict')!r})")
