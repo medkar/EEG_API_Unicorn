@@ -15,6 +15,7 @@ from dataclasses import replace
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
 from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mesure  # noqa: E402
+from core.modes import mi_test  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 # ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
@@ -61,6 +62,7 @@ MESURES = (
     ssvep_mesure.SPEC,  # puis le taux d'émission du SSVEP : le moteur a-t-il raison quand il parle ?
     #                     Après la barrière, et jamais avant : un taux mesuré sur des occipitales
     #                     qui ne captent pas est un chiffre qui décrit le montage, pas le décodage.
+    mi_test.SPEC,       # le « Tester » du Motor Imagery, désigné par `mi.SPEC.test_id`
 )
 
 
@@ -424,7 +426,21 @@ def check():
                            f"la jouer, et le clic partirait sur un None(spec, …)")
         if not spec.label:
             defauts.append(f"mesure « {spec.id} » : sans libellé, sa tuile serait vide")
-        values, reason = validate(spec, {})
+        # Le même tri que pour un MODE, plus haut : un TEST exige un modèle, et une liste VIDE est
+        # l'état normal d'un dépôt cloné — sans ce tri, tout le registre était « malsain » sur un
+        # poste sans modèle MI. Une source qui LÈVE reste un défaut.
+        mesure_sans_choix = []
+        for p in spec.params:
+            if not p.choices_fn:
+                continue
+            choix, erreur = p.choices_status()
+            if erreur:
+                defauts.append(f"mesure {spec.id}.{p.key} : la source de choix a levé — {erreur}")
+            elif not choix:
+                mesure_sans_choix.append(p.key)
+        values, reason = validate(
+            replace(spec, params=tuple(p for p in spec.params if p.key not in mesure_sans_choix)),
+            {})
         if values is None:
             defauts.append(f"mesure « {spec.id} » : ses valeurs par défaut sont refusées — {reason}")
         for p in spec.params:
@@ -501,6 +517,27 @@ def _selftest():
                          choices_fn=lambda: 1 / 0, help="source cassée"))
     chk(any("a levé" in x and "ZeroDivisionError" in x for x in d),
         f"une source de choix qui LÈVE est un défaut, pas une situation normale ({d})")
+
+    # --- le même tri pour une MESURE (un test exige un modèle), sur un registre PIÉGÉ : l'état
+    # réel dépend du poste, et une machine qui a un modèle MI ne prouverait rien.
+    from core.modes.mesure import MesureSpec
+
+    global MESURES
+    vraies = MESURES
+    MESURES = (MesureSpec(id="piege_mesure", label="Piégée", runtime_cls=object, params=(
+        vide, Param(key="gain", label="Gain", kind="float", default=99.0, max=10.0,
+                    help="entre 0 et 10"),
+        Param(key="casse", label="Cassé", kind="choice", choices_fn=lambda: 1 / 0,
+              help="source cassée"))),)
+    try:
+        d = check()[1]
+    finally:
+        MESURES = vraies
+    chk(not any("aucun choix disponible" in x for x in d)
+        and any("dépasse le maximum" in x for x in d)
+        and any("casse" in x and "a levé" in x for x in d),
+        f"une mesure dont la liste de modèles est VIDE n'est pas un défaut ; ses autres réglages "
+        f"restent vérifiés, et une source qui lève reste un défaut ({d})")
 
     # --- `marker_epoch_s` : ABSENT et SOUS-DIMENSIONNÉ ne sont pas le même défaut ---
     # Le champ vaut 0.0 par défaut : l'OUBLI est donc l'état par défaut du prochain auteur de

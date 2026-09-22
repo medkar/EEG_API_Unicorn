@@ -274,6 +274,10 @@ SPEC = ModeSpec(
         instruction="Le casque se stabilise — reste immobile.",
     ),
     calibration=mi_calib.CALIB,   # la calibration est jouée par le MOTEUR (moitié B)
+    # Le TEST : le protocole d'entraînement, rejoué avec le moteur qui DÉCIDE au lieu d'apprendre
+    # (`core/modes/mi_test.py`). Une CLÉ, pas un import : `mi_test` importe CE module pour en
+    # reprendre le runtime et les réglages, et l'inverse ferait un cycle.
+    test_id="mi_test",
     stream="decoded_mi",
     channels_fn=_channels,
     runtime_cls=MIRuntime,
