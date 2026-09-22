@@ -596,9 +596,12 @@ delimits the epoch:
 {"mode": "errp", "event": "feedback", "error": true}
 ```
 
-`error` exists **in calibration only**. ErrP is a *passive* BCI: its whole job is to work out from
-the EEG alone that the machine got something wrong. The field is the ground truth — required to
-label training epochs, forbidden while decoding. An emitter that published it during decoding would
+`error` exists **in calibration and in the Test protocol only** — the two runs of the same window
+protocol (`--calibrer`, `--tester`). ErrP is a *passive* BCI: its whole job is to work out from the
+EEG alone that the machine got something wrong. The field is the ground truth — required to label
+training epochs, required to SCORE a test, forbidden while decoding. ⚠️ In a Test the engine reads
+the label to score each decision and **never hands it to the decoder**: the decoder only ever sees
+a view of the EEG buffer, never the marker, never the engine (`core/modes/errp_test.py`). An emitter that published it during decoding would
 be handing the engine the answer, and **nothing would signal it**: `decoded_errp` would keep exactly
 the same shape, the scores would stay plausible, and every claim this product makes about that mode
 would become false. Build the marker in one place, and test both directions.
