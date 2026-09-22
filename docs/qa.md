@@ -321,7 +321,13 @@ affiche `… fps | sautées N | ESC = quitter`.
 trio du dépôt — le décodeur corrélerait contre des sinusoïdes que personne n'affiche.
 ✅ **Le compteur `sautées` reste à 0** sur une machine saine. S'il monte, note-le : c'est une
 cible qui CESSE de clignoter, pas un simple ralentissement.
-✅ Ferme la fenêtre (ESC) → un **bilan** s'imprime : `fin : N frames affichées, M sautée(s) (x %)`.
+✅ Ferme la fenêtre (ESC) → ✅ **le bandeau de la console affiche le bilan** : `fenêtre SSVEP
+fermée — … fin : N frames affichées, M sautée(s) (x %)`, en gris, **sans alerte** : une séance qui
+s'est bien passée le dit aussi.
+❌ Régression : rien à l'écran. Le bilan partirait dans la console cmd que personne ne regarde —
+même défaut que le 1.13, sauf qu'ici ce n'est pas un refus qu'on perd, c'est une **mesure**.
+✅ Relance la fenêtre → le bandeau repasse à « en cours » : le bilan de la précédente ne coiffe
+pas celle qui tourne.
 
 ### ☐ 1.7 — Le contrôle de liaison REFUSE, et ne se contourne pas
 

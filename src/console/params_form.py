@@ -114,6 +114,15 @@ class ParamsForm(QWidget):
         self.avertissement = QLabel("")
         self.avertissement.setWordWrap(True)
         self.avertissement.setStyleSheet("color: #b8860b;")
+        # ⚠️ TROIS canaux, pas deux (2026-09-22, retour de séance). Un réglage RETENU sur un mode
+        # arrêté a été accepté : rien ne cloche, il n'y a aucune réserve à émettre, et l'orange
+        # le faisait lire comme un problème. La nuance « pas encore en vigueur » est dans le
+        # TEXTE ; la couleur, elle, ne répond qu'à une question : est-ce que ça a été accepté.
+        # `console/mesure_page.py` disait déjà VERT pour le même événement (« pic appliqué ») —
+        # deux écrans, deux couleurs pour un seul fait : c'est ça qu'on corrige.
+        self.confirmation = QLabel("")
+        self.confirmation.setWordWrap(True)
+        self.confirmation.setStyleSheet("color: #3fae5a;")
 
         bas = QHBoxLayout()
         bas.addWidget(self.bouton)
@@ -134,6 +143,7 @@ class ParamsForm(QWidget):
         layout.addLayout(bas)
         layout.addWidget(self.refus)
         layout.addWidget(self.avertissement)
+        layout.addWidget(self.confirmation)
 
     def _deplier(self, ouvert):
         """Bascule les aides entre leur première phrase et le texte du contrat, mot pour mot."""
@@ -257,10 +267,23 @@ class ParamsForm(QWidget):
                 out[param["key"]] = champ.value()
         return out
 
+    def show_confirmation(self, texte):
+        """Un SUCCÈS : accepté, sans réserve. Vert — la couleur ne dit QUE ça.
+
+        Distinct de `show_avertissement` (orange), qui dit « accepté, MAIS ». Confondre les deux
+        fait lire un succès comme un problème : c'est le retour de séance du 2026-09-22 sur le
+        message « réglage RETENU », qui n'annonce aucune réserve — juste un fait de calendrier.
+        """
+        self.confirmation.setText(texte or "")
+        if texte:
+            self.refus.setText("")
+            self.avertissement.setText("")
+
     def show_refus(self, reason):
         """Un REFUS : ce qui vient d'être soumis n'a PAS été accepté."""
         self.refus.setText(reason or "")
         if reason:
+            self.confirmation.setText("")
             # Un refus frais rend caduc tout avertissement affiché avant lui — il parlait d'un
             # réglage qu'on est en train de remplacer par celui-ci, refusé.
             self.avertissement.setText("")
@@ -277,6 +300,7 @@ class ParamsForm(QWidget):
         self.avertissement.setText(texte or "")
         if texte:
             self.refus.setText("")
+            self.confirmation.setText("")
 
     def set_choices(self, cle, choix, garder=True):
         """Recharge la liste d'un champ « choice » sans reconstruire le formulaire.

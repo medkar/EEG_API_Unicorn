@@ -184,13 +184,14 @@ class ModePage(QWidget):
         ack = self.console.commande("set_params", id=self.mode_id, params=values)
         if ack.get("accepted"):
             self.formulaire.show_refus("")
-            # Accepté sur un mode ARRÊTÉ : validé et retenu, mais pas encore en vigueur. Le dire
-            # en jaune (le canal des « accepté, avec réserve ») et pas en vert : un « appliqué »
-            # nu ferait croire que le mode décode déjà sous ces réglages, alors qu'il ne décode
-            # rien du tout. C'est le geste normal — on règle en amont, puis on démarre.
-            self.formulaire.show_avertissement(
-                "réglage RETENU, pas encore en vigueur : « " + self.spec["label"] + " » est "
-                "arrêté. Il démarrera avec." if ack.get("differe") else "")
+            # Accepté sur un mode ARRÊTÉ : validé et retenu. En VERT, pas en orange (retour de
+            # séance du 2026-09-22) — il n'y a aucune réserve à émettre, c'est un succès. La
+            # nuance « pas encore en vigueur » est un fait de CALENDRIER, et elle est dans le
+            # texte ; la couleur ne répond qu'à « est-ce accepté ». L'orange le faisait lire
+            # comme un problème, alors que `mesure_page.py` disait déjà vert pour le même fait.
+            self.formulaire.show_confirmation(
+                "réglage RETENU : « " + self.spec["label"] + " » est arrêté, il démarrera avec."
+                if ack.get("differe") else "")
             return
         # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
         # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire

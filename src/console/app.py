@@ -2175,6 +2175,43 @@ def _smoke():
             f"n'arrivera jamais ({introuvable})")
         chk("n'a pas DÉMARRÉ" in vrai.probleme,
             f"...et il le dit à l'écran ({vrai.probleme[:60]}…)")
+
+        # 🔴 ET UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance : « je
+        # n'ai pas de bilan à la fin »). Les lignes étaient déjà retenues et JETÉES, parce que
+        # seule une mort anormale les affichait. Or la dernière ligne d'une fenêtre est son
+        # BILAN — « N frames affichées, M sautée(s) » —, c'est-à-dire le chiffre qui QUALIFIE la
+        # séance qu'on vient de jouer. Même défaut que le 1.13 (« le refus ne va que dans le
+        # terminal »), un cran plus loin : ici ce n'est pas un refus qu'on perd, c'est une mesure.
+        # ⚠️ `reconfigure(utf-8)` n'est pas du décor : c'est ce que `use_utf8_console()` fait en
+        # tête de CHAQUE fenêtre du projet. Sans lui, Python écrit dans la page de code de la
+        # console Windows et « sautée » arrive mutilé — le bilan serait affiché, et illisible.
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
+            sys.executable, "-u", "-c",
+            "import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+            "print('[ssvep-stim] fin : 600 frames affichées, 4 sautée(s) (0.7%)')"]
+        propre = LanceurFenetre()
+        propre.lancer("ssvep")
+        propre._proc.waitForFinished(5000)
+        app.processEvents()
+        texte, alerte = propre.etat_texte()
+        chk("4 sautée(s)" in texte,
+            f"une fenêtre fermée NORMALEMENT laisse son bilan à l'écran ({texte[:70]}…)")
+        chk(not alerte,
+            "…sans le peindre en alerte : une séance qui s'est bien passée le dit aussi, et "
+            "« 0 sautée » doit se LIRE plutôt que se deviner")
+        chk(propre.probleme == "",
+            f"…et ce n'est PAS un problème : le canal des morts anormales reste vide "
+            f"({propre.probleme[:40]})")
+        propre.lancer("ssvep")
+        # ⚠️ On teste l'ABSENCE du bilan, pas la présence d'un mot que les deux textes partagent :
+        # « fenêtre … en cours » et « fenêtre … fermée » commencent tous les deux par « fenêtre »,
+        # donc `startswith` était vrai des deux côtés et l'assertion ne pouvait pas rougir.
+        # Trouvé en la mutant — c'est exactement à ça que sert la mutation.
+        chk(propre.resume == "" and "sautée" not in propre.etat_texte()[0]
+            and "en cours" in propre.etat_texte()[0],
+            f"…et relancer efface le bilan de la précédente, qui coifferait celle qui tourne "
+            f"(« {propre.etat_texte()[0][:60]}… »)")
+        propre.arreter()
     finally:
         mod_fenetres.stimulus_registry.commande = vraie_commande
 
@@ -2893,11 +2930,21 @@ def _smoke():
     page._appliquer(page.formulaire.values())
     chk(page.formulaire.refus.text() == "",
         f"…un réglage valide passe ({page.formulaire.refus.text()[:50]})")
-    chk("RETENU" in page.formulaire.avertissement.text()
-        and "arrêté" in page.formulaire.avertissement.text(),
-        f"…et l'écran dit qu'il est RETENU, pas en vigueur — en JAUNE, le canal des « accepté "
-        f"avec réserve ». Un « appliqué » nu ferait croire que le mode décode déjà sous ces "
-        f"réglages (« {page.formulaire.avertissement.text()[:60]}… »)")
+    chk("RETENU" in page.formulaire.confirmation.text()
+        and "arrêté" in page.formulaire.confirmation.text(),
+        f"…et l'écran dit qu'il est RETENU et qu'il démarrera avec — un « appliqué » nu ferait "
+        f"croire que le mode décode déjà sous ces réglages "
+        f"(« {page.formulaire.confirmation.text()[:60]}… »)")
+    # ⚠️ En VERT, pas en orange, et c'est un retour de séance (2026-09-22) : « le message RETENU
+    # devrait être vert, pas orange ». Il a raison — rien ne cloche, il n'y a aucune réserve à
+    # émettre, et l'orange le faisait lire comme un problème. La couleur ne répond qu'à « est-ce
+    # accepté » ; le « pas encore en vigueur » est un fait de calendrier, il vit dans le TEXTE.
+    chk(page.formulaire.avertissement.text() == "",
+        f"…et le canal ORANGE reste vide : il est réservé aux « accepté, MAIS » "
+        f"(« {page.formulaire.avertissement.text()[:40]} »)")
+    chk("3fae5a" in page.formulaire.confirmation.styleSheet(),
+        f"…et c'est bien le vert du succès, celui que `mesure_page.py` emploie déjà pour le même "
+        f"fait ({page.formulaire.confirmation.styleSheet()})")
 
     # On applique la commande à la main, comme la boucle le ferait.
     moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)

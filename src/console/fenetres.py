@@ -55,6 +55,7 @@ class LanceurFenetre(QObject):
         self._tue = False          # c'est NOUS qui l'avons arrêté -> sa mort n'est pas anormale
         self._lignes = deque(maxlen=LIGNES_RETENUES)
         self.probleme = ""         # non vide = quelque chose à AFFICHER, tel quel
+        self.resume = ""           # le BILAN d'une fenêtre fermée normalement (frames sautées…)
 
     # --- lecture ----------------------------------------------------------------
 
@@ -76,6 +77,11 @@ class LanceurFenetre(QObject):
             return self.probleme, True
         if self._proc is not None:
             return f"fenêtre {self._quoi} en cours — ne la ferme pas à la main pendant la séance", False
+        # Ni problème ni fenêtre en cours : reste le BILAN de la dernière, s'il y en a un. Il
+        # n'est PAS une alerte — une séance qui s'est bien passée le dit aussi, et c'est même
+        # tout l'intérêt : « 0 sautée » doit se LIRE, pas se deviner.
+        if self.resume:
+            return self.resume, False
         return "", False
 
     # --- écriture ---------------------------------------------------------------
@@ -100,6 +106,7 @@ class LanceurFenetre(QObject):
             return self._refuser(f"⚠ {e}")
 
         self.probleme = ""
+        self.resume = ""          # le bilan de la PRÉCÉDENTE ne doit pas coiffer celle-ci
         self._lignes.clear()
         self._tue = False
         self._quoi = f"{label or stimulus_id}{' (calibration)' if calibrer else ''}"
@@ -184,6 +191,16 @@ class LanceurFenetre(QObject):
             self.probleme = (f"⚠ la fenêtre {quoi} s'est arrêtée anormalement "
                              f"(code {code}{', arrêt brutal' if brutal else ''}) — "
                              f"{self._derniere_sortie()}")
+        else:
+            # 🔴 UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance).
+            # Les lignes étaient déjà retenues — et jetées, parce que seule une mort anormale les
+            # affichait. Or la dernière ligne d'une fenêtre est son BILAN : « N frames affichées,
+            # M sautée(s) ». C'est le chiffre qui QUALIFIE la séance qu'on vient de jouer, et il
+            # partait dans la console cmd que personne ne regarde. Exactement le défaut 1.13
+            # (« le refus ne va que dans le terminal »), un cran plus loin : ici ce n'est pas un
+            # refus qu'on perd, c'est une mesure.
+            self.resume = f"fenêtre {quoi} fermée — {self._derniere_sortie()}" if self._lignes \
+                else ""
         self.change.emit()
 
     def _erreur(self, erreur):
