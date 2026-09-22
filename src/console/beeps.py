@@ -27,6 +27,22 @@ DUREE_CENTRE_S = 0.40
 # lève pas sur une clé inconnue, par conception, donc rien n'aurait signalé la panne.
 TOP_ETAPE = "TOP"
 
+# Les sons que ce module sait jouer, par NOM. Un nom de classe du MI a son propre son, latéralisé
+# (oreille gauche = poing gauche) ; tout autre nom d'étape n'en a pas et reçoit le top neutre.
+# Déclaré au niveau du module, et non dans le constructeur : `connait()` doit répondre même sur une
+# machine SANS son, sinon une page choisirait un autre top selon qu'une carte audio est branchée.
+SONS = {
+    "GAUCHE": (True, False, DUREE_COTE_S),
+    "DROITE": (False, True, DUREE_COTE_S),
+    "REPOS": (True, True, DUREE_CENTRE_S),
+    TOP_ETAPE: (True, True, DUREE_COTE_S),
+}
+
+
+def connait(nom):
+    """Ce module a-t-il un son PROPRE à ce nom (autre que le top neutre) ?"""
+    return nom in SONS and nom != TOP_ETAPE
+
 
 def _onde(gauche, droite, duree):
     """Un top stéréo entrelacé, en int16. Fondu de 10 ms aux deux bouts (anti-clic)."""
@@ -61,11 +77,7 @@ class Beeps:
             fmt.setSampleRate(SR)
             fmt.setChannelCount(2)
             fmt.setSampleFormat(QAudioFormat.Int16)
-            for cle, (g, d, duree) in {
-                    "GAUCHE": (True, False, DUREE_COTE_S),
-                    "DROITE": (False, True, DUREE_COTE_S),
-                    "REPOS": (True, True, DUREE_CENTRE_S),
-                    TOP_ETAPE: (True, True, DUREE_COTE_S)}.items():
+            for cle, (g, d, duree) in SONS.items():
                 octets = QByteArray(_onde(g, d, duree))
                 tampon = QBuffer()
                 tampon.setData(octets)

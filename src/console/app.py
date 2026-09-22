@@ -700,8 +700,12 @@ class Console(QMainWindow):
         fenêtre d'un test et pour le formulaire d'un test : trois lectures recopiées finiraient
         par ne plus désigner la même configuration."""
         etat = self._dernier_etat or {}
-        return (((etat.get("modes_state") or {}).get(mode_id) or {}).get("params")
-                or (etat.get("reglages") or {}).get(mode_id) or {})
+        # ⚠️ Le MAGASIN d'abord, le runtime ensuite. `submit("set_params")` écrit le magasin
+        # SUR-LE-CHAMP, alors que le runtime d'un mode qui tourne ne prend le réglage qu'au tour de
+        # boucle suivant : dans cet intervalle, préférer le runtime rendait l'ANCIENNE valeur. Le
+        # magasin est la dernière configuration voulue, que le mode tourne ou non.
+        return ((etat.get("reglages") or {}).get(mode_id)
+                or ((etat.get("modes_state") or {}).get(mode_id) or {}).get("params") or {})
 
     def _mode_teste_par(self, mesure_id):
         """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
@@ -796,7 +800,7 @@ class Console(QMainWindow):
         if page is not None:
             self.stack.setCurrentWidget(page)
 
-    def show_mesure(self, mesure_id, depuis=None):
+    def show_mesure(self, mesure_id, depuis=None, reglages=None):
         """Ouvre la page d'une mesure. `depuis` : la page de mode d'où l'on vient, ou None.
 
         🔴 **Le « Tester » d'un mode doit tester TES réglages.** Sa page reçoit donc, pour chaque
@@ -821,7 +825,8 @@ class Console(QMainWindow):
             # Seulement les clés du MODE : rafraîchir aussi `stream_in` résoudrait le réseau LSL
             # (~1 s de fenêtre gelée) à chaque clic sur « Tester ».
             page.rafraichir_choix([p["key"] for p in self.catalogue[mode_id]["params"]])
-            page.formulaire.set_values(self._reglages_du_mode(mode_id))
+            page.formulaire.set_values(reglages if reglages is not None
+                                       else self._reglages_du_mode(mode_id))
         # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la page
         # reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une mesure
         # vient de se terminer et que le verdict est là, à lire.
@@ -2798,6 +2803,20 @@ def _smoke():
             "…et il est assis sur `classe` : `etape` reste VIDE de bout en bout sur une mesure "
             "(choix explicite de core/modes/mesure.py), donc un `_maybe_beep` recopié depuis "
             "calib_page.py serait parfaitement MUET ici, sans lever quoi que ce soit")
+
+        # 🔴 Le TEST du Motor Imagery rejoue le protocole d'entraînement, dont le repère est un top
+        # LATÉRALISÉ (oreille gauche = poing gauche). Les noms d'étapes viennent du VRAI protocole
+        # du test (`MesureMI._essai`), pas d'une liste écrite ici.
+        from core.modes.mi_test import MesureMI
+        noms = [e.nom for classe in ("GAUCHE", "DROITE")
+                for e in MesureMI._essai(classe)]
+        console.beeps.appels = []
+        mes._etape_precedente = None
+        for nom in [""] + noms:
+            console.apply_state({**state, "mesure": {**base_m, "classe": nom}})
+        chk(console.beeps.appels == ["TOP", "GAUCHE", "TOP", "DROITE"],
+            f"le test MI joue le top LATÉRALISÉ de la classe, comme l'entraînement, et le top "
+            f"neutre sur la pause ({console.beeps.appels})")
     finally:
         console.beeps = vrais_beeps
 
@@ -2971,9 +2990,26 @@ def _smoke():
     moteur_faux.commandes.clear()
     page_ss.bouton_tester.click()
     mes_ssvep = console.stack.currentWidget()
-    chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and not journal,
-        f"« Tester » ouvre la page du test, sans rien soumettre ni lancer : c'est « Commencer » "
-        f"qui part ({journal})")
+    chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and journal == [("commande", "set_params")],
+        f"« Tester » APPLIQUE d'abord ce qui est à l'écran, puis ouvre la page du test — sans "
+        f"soumettre la mesure ni lancer de fenêtre : c'est « Commencer » qui part ({journal})")
+    # `[-1:]` et non `[-1]` : sans commande soumise, l'assertion doit ROUGIR, pas faire planter
+    # le smoke — un plantage ici masquait toutes les assertions suivantes, dont celles du vrai
+    # moteur, et une mutation passait pour prouvée sur une seule ligne.
+    appliques = [c[1].get("params", {}) for c in moteur_faux.commandes[-1:] if c[0] == "set_params"]
+    chk(appliques and appliques[0].get("freqs") == [12.0, 15.0, 20.0],
+        f"…et ce qu'il applique, ce sont les réglages AFFICHÉS ({appliques})")
+    # Le MAGASIN prime sur le runtime : `submit("set_params")` l'écrit sur-le-champ, alors qu'un
+    # mode qui tourne ne prend le réglage qu'au tour de boucle suivant. Préférer le runtime, c'était
+    # relire l'ANCIENNE valeur juste après un réglage.
+    sauve = console._dernier_etat
+    console._dernier_etat = {"modes_state": {"ssvep": {"params": {"freqs": [15.0, 20.0]}}},
+                             "reglages": {"ssvep": {"freqs": [12.0, 15.0, 20.0]}}}
+    chk(console._reglages_du_mode("ssvep") == {"freqs": [12.0, 15.0, 20.0]},
+        f"les réglages d'un mode se lisent dans le MAGASIN d'abord, le runtime ne rattrapant un "
+        f"réglage qu'au tour de boucle suivant ({console._reglages_du_mode('ssvep')})")
+    console._dernier_etat = sauve
+    journal.clear()
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
     chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
@@ -3253,6 +3289,29 @@ def _smoke():
         and abs(page.formulaire.champs["alpha_hz"].value() - pic_r) < 1e-9,
         f"…et revenu sur la page SSVEP, le champ « Pic alpha » MONTRE la valeur mesurée, sans "
         f"qu'on la retape ({page.formulaire.champs['alpha_hz'].value()} pour {pic_r})")
+
+    # --- 🔴 « TESTER » TESTE CE QUI EST À L'ÉCRAN — contre le VRAI moteur --------------------
+    # Le piège relevé à la livraison de la page en blocs : on change une fréquence, on clique
+    # « Tester » SANS « Appliquer », et l'ancienne configuration était testée sans rien pour le
+    # dire. Ici, rien n'est appliqué à la main : c'est le clic sur « Tester » qui doit le faire.
+    page.formulaire.champs["freqs"].setText("12, 15, 20")
+    page.bouton_tester.click()
+    chk(tuple(moteur.reglages["ssvep"]["freqs"]) == (12.0, 15.0, 20.0),
+        f"une saisie NON appliquée part au moteur au clic sur « Tester » — c'est elle qui sera "
+        f"testée ({moteur.reglages['ssvep']['freqs']})")
+    chk(reelle.stack.currentWidget() is reelle.mesure_pages["ssvep_taux"],
+        "…puis la page du test s'ouvre")
+    reelle.show_mode("ssvep")
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page.bouton_tester.click()
+    chk(reelle.stack.currentWidget() is page and "diviseur" in page.formulaire.refus.text(),
+        f"…mais une saisie IMPOSSIBLE n'ouvre pas le test : le refus s'affiche dans « Régler », "
+        f"et l'on ne mesure pas une configuration qu'aucun écran ne peut afficher "
+        f"(« {page.formulaire.refus.text()[:50]}… »)")
+    chk(tuple(moteur.reglages["ssvep"]["freqs"]) == (12.0, 15.0, 20.0),
+        "…et le moteur garde la dernière configuration VALIDE")
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page._appliquer(page.formulaire.values())
 
     # On applique la commande à la main, comme la boucle le ferait.
     moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)

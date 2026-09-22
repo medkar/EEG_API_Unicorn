@@ -137,8 +137,7 @@ class ModePage(QWidget):
             numero += 1
             self.bloc_tester = QGroupBox(f"{numero}. Tester")
             self.bouton_tester = QPushButton("Tester")
-            self.bouton_tester.clicked.connect(
-                lambda: console.show_mesure(test_id, depuis=self))
+            self.bouton_tester.clicked.connect(self._tester)
             if not (console.mesures.get(test_id) or {}).get("jouable"):
                 self.bouton_tester.setEnabled(False)
                 self.bouton_tester.setToolTip(
@@ -216,6 +215,28 @@ class ModePage(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
         layout.addWidget(self.defilement, 1)
+
+    def _tester(self):
+        """« Tester » teste CE QUI EST À L'ÉCRAN, et pas ce qui avait été appliqué avant.
+
+        ⚠️ Relevé par l'auteur de cette page, à la livraison (2026-09-22) : sans ce premier geste,
+        on change une fréquence, on clique « Tester » sans passer par « Appliquer », et c'est
+        l'ANCIENNE configuration qui est testée — sans que rien ne le dise. Dans la boucle
+        régler → tester → ajuster, c'est le piège exact. Le formulaire part donc d'abord au moteur
+        comme par « Appliquer » ; s'il est refusé (17 Hz ne divise pas 60), le refus s'affiche
+        dans « Régler » et le test n'est PAS ouvert — tester une configuration impossible ne
+        mesurerait rien.
+        """
+        ack = self.console.commande("set_params", id=self.mode_id,
+                                    params=self.formulaire.values())
+        if not ack.get("accepted"):
+            self.formulaire.show_refus(ack.get("reason", ""))
+            return
+        self.formulaire.show_refus("")
+        # Les valeurs VALIDÉES par le moteur, pour pré-remplir le test tout de suite : l'état
+        # sondé n'aura rattrapé ce réglage qu'au prochain tour de `QTimer`.
+        self.console.show_mesure(self.spec["test_id"], depuis=self,
+                                 reglages=ack.get("params"))
 
     def _appliquer(self, values):
         """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.

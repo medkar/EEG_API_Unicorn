@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
                                QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console.beeps import TOP_ETAPE  # noqa: E402
+from console.beeps import TOP_ETAPE, connait  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié — même geste que
@@ -308,7 +308,12 @@ class MesurePage(QWidget):
         """
         etape = etat.get("classe") or ""
         if self._etape_precedente is not None and etape != self._etape_precedente:
-            self.console.beeps.jouer(TOP_ETAPE)
+            # ⚠️ Le son PROPRE à l'étape quand le module en a un, le top neutre sinon. Le test du
+            # Motor Imagery rejoue le protocole d'ENTRAÎNEMENT, dont le repère est un top
+            # LATÉRALISÉ (oreille gauche = poing gauche) : lui jouer un top neutre, c'était changer
+            # le protocole entre l'entraînement et le test — et retirer à l'étudiant le repère
+            # qu'il vient d'apprendre. La page ne nomme aucune classe : elle demande au module.
+            self.console.beeps.jouer(etape if connait(etape) else TOP_ETAPE)
         self._etape_precedente = etape
 
     # --- l'état ------------------------------------------------------------------------------
