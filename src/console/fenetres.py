@@ -53,11 +53,15 @@ class LanceurFenetre(QObject):
         super().__init__()
         self._fabrique = fabrique if fabrique is not None else QProcess
         self._proc = None
-        self._quoi = ""            # ce qui tourne, en clair : « P300 (calibration) »
+        self._quoi = ""            # ce qui tourne, en clair : « P300 (entraînement) »
         self._tue = False          # c'est NOUS qui l'avons arrêté -> sa mort n'est pas anormale
         self._lignes = deque(maxlen=LIGNES_RETENUES)
         self.probleme = ""         # non vide = quelque chose à AFFICHER, tel quel
         self.resume = ""           # le BILAN d'une fenêtre fermée normalement (frames sautées…)
+        # Le numéro de la DERNIÈRE fenêtre lancée. Il sert à `arreter_si` : la console retient le
+        # numéro de la fenêtre qu'une séance a ouverte, et ne ferme que CELLE-LÀ quand la séance
+        # meurt — jamais une fenêtre lancée entre-temps pour autre chose.
+        self.numero = 0
 
     # --- lecture ----------------------------------------------------------------
 
@@ -111,7 +115,8 @@ class LanceurFenetre(QObject):
         self.resume = ""          # le bilan de la PRÉCÉDENTE ne doit pas coiffer celle-ci
         self._lignes.clear()
         self._tue = False
-        self._quoi = f"{label or stimulus_id}{' (calibration)' if calibrer else ''}"
+        self._quoi = f"{label or stimulus_id}{' (entraînement)' if calibrer else ''}"
+        self.numero += 1
         proc = self._fabrique()
         # Les deux canaux fusionnés : ce qu'on cherche à montrer est le message d'erreur d'un
         # processus qui meurt, et Python l'écrit sur stderr. Les séparer obligerait à les
@@ -165,6 +170,18 @@ class LanceurFenetre(QObject):
             proc.waitForFinished(2000)
         self._quoi = ""
         self.change.emit()
+
+    def arreter_si(self, numero):
+        """Tue la fenêtre n° `numero` si c'est ELLE qui tourne encore. Rend True si elle l'a été.
+
+        Une séance ne ferme que la fenêtre qu'ELLE a ouverte : entre son lancement et sa mort, une
+        autre fenêtre a pu prendre la place (elle-même finie, puis une nouvelle lancée), et la
+        tuer sur un vieux souvenir couperait une séance qui n'a rien demandé.
+        """
+        if self._proc is None or numero != self.numero:
+            return False
+        self.arreter()
+        return True
 
     # --- les signaux du processus ------------------------------------------------
 

@@ -132,6 +132,11 @@ class Console(QMainWindow):
         # sur l'ACCUSÉ de `start_mesure`, donc 3,5 min de fixation guidée pouvaient se jouer plein
         # écran pendant que la page restait sur « Avant de commencer », sans rien pour le dire.
         self._a_lancer_mesure = None
+        # La séance à laquelle appartient la fenêtre ouverte : {cle, id, numero}, ou None. Quand le
+        # MOTEUR abandonne cette séance (aucun `calib_start` en 30 s, silence, erreur), c'est ce
+        # lien qui permet de fermer la fenêtre — sans lui, elle continue plein écran à désigner des
+        # cibles pour une séance qui n'existe plus, devant une console qu'elle recouvre.
+        self._fenetre_de = None
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -505,6 +510,10 @@ class Console(QMainWindow):
         #        mesure.
         self._lancer_quand_partie(state)
 
+        # 1 quater. Et une séance que le moteur a ABANDONNÉE ferme la fenêtre qu'elle avait
+        #           ouverte — le jumeau, côté moteur, de « Abandonner ».
+        self._fermer_fenetre_abandonnee(state)
+
         if self._attente is None:
             return
         a_arreter = self._attente["arreter"]
@@ -618,10 +627,49 @@ class Console(QMainWindow):
             return None
         return attente
 
+    def _attacher_fenetre(self, cle, ident):
+        """Retient que la fenêtre qu'on vient d'ouvrir SERT la séance `snapshot()[cle]` n° `ident`."""
+        self._fenetre_de = {"cle": cle, "id": ident, "numero": self.lanceur.numero}
+
+    def _fermer_fenetre_abandonnee(self, state):
+        """Une séance que le MOTEUR a abandonnée ferme la fenêtre qu'elle avait ouverte.
+
+        🔴 Constat I1 de la revue de branche (2026-09-22). Les seuls gestes qui fermaient une
+        fenêtre étaient « Abandonner », un refus d'ouverture et la fermeture de la console. Or le
+        moteur abandonne aussi TOUT SEUL : 30 s sans `calib_start` (un inlet lent à résoudre, un
+        flux mal nommé), un silence, un signal inexploitable. La page passait alors à « Séance
+        interrompue » — que personne ne lisait, puisque la fenêtre plein écran la recouvrait et
+        continuait de désigner des cibles jusqu'au bout de son protocole. Six manches de P300,
+        80 pas d'ErrP, fixés pour rien : l'incident du 2026-09-22, rejoué par le bouton censé le
+        rendre impossible.
+
+        « Abandonnée » = terminée SANS résultat, lu dans l'état et jamais deviné. Une séance FINIE
+        avec un résultat laisse sa fenêtre conclure d'elle-même : la tuer effacerait le bilan
+        qu'elle imprime en dernier (« N frames, M sautées »), qui qualifie la séance qu'on vient
+        de jouer.
+        """
+        lien = self._fenetre_de
+        if lien is None:
+            return
+        seance = (state or {}).get(lien["cle"])
+        if seance is not None and seance.get("mode_id") != lien["id"]:
+            seance = None                      # une autre séance a pris la place : plus de lien
+        if seance is not None and seance.get("phase") not in PHASES_TERMINALES:
+            return                             # elle tourne : la fenêtre la sert
+        self._fenetre_de = None
+        if seance is None or seance.get("resultat") is not None:
+            return
+        if self.lanceur.arreter_si(lien["numero"]):
+            quoi = "du test" if lien["cle"] == "mesure" else "de l'entraînement"
+            avis = self._avis_mesure if lien["cle"] == "mesure" else self._avis
+            avis(lien["id"], f"La fenêtre {quoi} a été fermée : la séance s'est interrompue "
+                             f"(la raison est affichée ci-dessus).", alerte=False)
+
     def _lancer_fenetre_calibration(self, mode_id):
         """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir."""
         ouvert = self._lancer_fenetre(mode_id, calibrer=True)
         if ouvert.get("accepted"):
+            self._attacher_fenetre("calibration", mode_id)
             return
         self._a_annuler = True
         self._avis(mode_id,
@@ -651,6 +699,7 @@ class Console(QMainWindow):
         ouvert = self.lanceur.lancer(
             stimulus_id, label=spec.get("label", mesure_id), options=options)
         if ouvert.get("accepted"):
+            self._attacher_fenetre("mesure", mesure_id)
             return
         # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait trente
         # secondes avant d'abandonner, en accusant une fenêtre que l'étudiant vient de voir refuser
@@ -730,6 +779,7 @@ class Console(QMainWindow):
         # …et sur le LANCEMENT en attente : abandonner puis voir la fenêtre s'ouvrir toute seule
         # au tour suivant serait le contraire de ce qu'on vient de cliquer.
         self._a_lancer = None
+        self._fenetre_de = None       # la fenêtre part avec le geste, pas avec l'état suivant
         self.commande("cancel_calibration")
         self.lanceur.arreter()
 
@@ -749,6 +799,7 @@ class Console(QMainWindow):
         self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
         self._a_lancer_mesure = None      # …et sur le lancement en attente (cf. l'abandon
                                           #    de calibration, juste au-dessus)
+        self._fenetre_de = None
         self.commande("cancel_mesure")
         self.lanceur.arreter()
 
@@ -1018,6 +1069,18 @@ def _smoke():
             return suite.index(valeur, depart)
         except ValueError:
             return -1
+
+    def cliquer(bouton, quoi):
+        """Clique `bouton` s'il existe ; sinon ROUGIT au lieu de planter.
+
+        Constat M13 de la revue de branche : `.click()` sur un bouton qui vaut `None` lève
+        `AttributeError`, et une exception emporte TOUT ce qui suit dans ce smoke — la mutation
+        qui retire le bouton passe alors pour « prouvée » sur une seule ligne, pendant que des
+        centaines d'assertions ne tournent plus.
+        """
+        chk(bouton is not None, f"{quoi} existe")
+        if bouton is not None:
+            bouton.click()
 
     app = QApplication.instance() or QApplication([])
     journal = []                  # la ligne du temps commune : commandes ET fenêtres
@@ -3158,6 +3221,107 @@ def _smoke():
     chk(console.stack.currentWidget() is console.pages["mi"],
         "« ← » ramène sur la page du MI, d'où l'on venait : la boucle est « régler → tester → "
         "ajuster », pas un détour par l'accueil")
+
+    # --- 🔴 LES TESTS À FENÊTRE : `--tester`, la LONGUEUR choisie, et la fenêtre FERMÉE ----------
+    # Constat M13 de la revue de branche : rien ne vérifiait, côté console, la ligne de commande
+    # des tests P300, ErrP et c-VEP. La table attendue est écrite ICI, à la main : la relire dans
+    # `stimulus/registry.py` ne prouverait que « la console recopie ce qu'elle a lu ».
+    #
+    # Et le constat I1 : quand le MOTEUR abandonne un test (30 s sans `calib_start`, silence…), la
+    # fenêtre plein écran continuait son protocole jusqu'au bout, devant une console qu'elle
+    # recouvre et qui disait « interrompue ».
+    attendus_tests = {"p300": "--rounds", "errp": "--essais", "cvep": "--cycles"}
+    for mode_t, argument in attendus_tests.items():
+        test_t = console.pages[mode_t].spec.get("test_id")
+        pret_t = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                  "modes_state": {k: v for k, v in state["modes_state"].items() if k != mode_t}}
+        console.lanceur.arreter()
+        console.show_mode(mode_t)
+        console.apply_state(pret_t)
+        cliquer(console.pages[mode_t].bouton_tester, f"le bouton « Tester » du {mode_t}")
+        mes_t = console.stack.currentWidget()
+        chk(mes_t is console.mesure_pages.get(test_t),
+            f"{mode_t} : « Tester » ouvre SA page de test ({test_t})")
+        # Une longueur qui n'est PAS le défaut : sinon « la bonne longueur » serait vraie à vide,
+        # la fenêtre partant de toute façon sur son défaut.
+        param_t = next((p for p in console.mesures[test_t]["params"] if p["key"] == "essais"), {})
+        autre = next((c for c in param_t.get("choices") or () if c != param_t.get("default")), None)
+        if autre is not None and "essais" in mes_t.formulaire.champs:
+            mes_t.formulaire.champs["essais"].setCurrentText(str(autre))
+        longueur = mes_t.formulaire.values().get("essais")
+        journal.clear()
+        processus.clear()
+        cliquer(mes_t.bouton_commencer, f"« Commencer » du test {mode_t}")
+        cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+        en_cours_t = {"mode_id": test_t, "phase": "chauffe", "essai": 0, "total": 6,
+                      "restant_s": 15.0, "instruction": "", "classe": "", "resultat": None,
+                      "probleme": ""}
+        console.apply_state({**pret_t, "mesure": en_cours_t})
+        lances_t = [list(e[1]) for e in journal if e[0] == "fenetre"]
+        argv_t = lances_t[-1] if lances_t else []
+        chk("--tester" in argv_t and "--calibrer" not in argv_t,
+            f"{mode_t} : la fenêtre du test part avec `--tester`, JAMAIS `--calibrer` — elle "
+            f"entraînerait un modèle au lieu de laisser le moteur noter ({argv_t[2:]})")
+        i_t = rang(argv_t, argument)
+        chk(autre is not None and longueur == autre and i_t >= 0
+            and argv_t[i_t + 1:i_t + 2] == [str(longueur)],
+            f"{mode_t} : …et la LONGUEUR choisie sur la page ({longueur}, pas le défaut "
+            f"{param_t.get('default')}) part dans l'unité de SA fenêtre, `{argument}` "
+            f"({argv_t[2:]})")
+        # I1 : le moteur ABANDONNE — la fenêtre qu'il servait est fermée, sans un clic.
+        fenetre_t = processus[-1] if processus else None
+        console.apply_state({**pret_t, "mesure": {
+            **en_cours_t, "phase": "annule",
+            "probleme": "aucun « calib_start » reçu en 30 s : la fenêtre publie-t-elle ?"}})
+        chk(fenetre_t is not None and fenetre_t.tue and not console.lanceur.en_cours(),
+            f"{mode_t} : un test que le MOTEUR abandonne FERME sa fenêtre — sinon elle continue "
+            f"plein écran jusqu'au bout de son protocole, devant une console qui dit "
+            f"« interrompu » et qu'elle recouvre")
+        chk("fermée" in mes_t.avis.text(),
+            f"{mode_t} : …et la page dit pourquoi la fenêtre a disparu ({mes_t.avis.text()!r})")
+
+    # …mais un test FINI, avec son résultat, laisse sa fenêtre conclure : la tuer effacerait le
+    # bilan qu'elle imprime en dernier (« N frames, M sautées »).
+    journal.clear()
+    processus.clear()
+    console.lanceur.arreter()
+    console.show_mode("p300")
+    pret_t = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+              "modes_state": {k: v for k, v in state["modes_state"].items() if k != "p300"}}
+    console.apply_state(pret_t)
+    cliquer(console.pages["p300"].bouton_tester, "le bouton « Tester » du P300")
+    mes_t = console.stack.currentWidget()
+    cliquer(mes_t.bouton_commencer, "« Commencer » du test P300")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+    en_cours_t = {"mode_id": "p300_test", "phase": "essais", "essai": 3, "total": 6,
+                  "restant_s": 0.0, "instruction": "", "classe": "", "resultat": None,
+                  "probleme": ""}
+    console.apply_state({**pret_t, "mesure": en_cours_t})
+    fenetre_t = processus[-1] if processus else None
+    console.apply_state({**pret_t, "mesure": {**en_cours_t, "phase": "fini", "resultat": {
+        "verdict": "UTILISABLE", "mot": "UTILISABLE", "niveau": "moyen"}}})
+    chk(fenetre_t is not None and not fenetre_t.tue and console.lanceur.en_cours(),
+        "un test FINI laisse sa fenêtre conclure d'elle-même : seul un ABANDON la ferme")
+    console.lanceur.arreter()
+
+    # Le même geste côté ENTRAÎNEMENT : le défaut existait avant ce chantier, pour la même raison.
+    journal.clear()
+    processus.clear()
+    console.show_calibration("p300")
+    console.apply_state(pret_t)
+    cliquer(console.calib_pages["p300"].bouton_commencer, "« Commencer » de l'entraînement P300")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+    cal_t = {"mode_id": "p300", "phase": "chauffe", "restant_s": 15.0, "instruction": "",
+             "essai": 0, "total": 12, "resultat": None, "probleme": "", "candidat": None}
+    console.apply_state({**pret_t, "calibration": cal_t})
+    fenetre_t = processus[-1] if processus else None
+    console.apply_state({**pret_t, "calibration": {
+        **cal_t, "phase": "annule", "probleme": "aucun « calib_start » reçu en 30 s"}})
+    chk(fenetre_t is not None and fenetre_t.tue and not console.lanceur.en_cours(),
+        "un ENTRAÎNEMENT que le moteur abandonne ferme sa fenêtre lui aussi")
+    console.lanceur.arreter()
+    journal.clear()
+    processus.clear()
 
     # --- « MESURER » : LE PIC ALPHA SE MESURE DEPUIS LE CHAMP QUI L'ATTEND ---------------------
     # Deux portes, UN runtime : « Vérifier le casque » sur l'accueil, et « Mesurer » à côté du
