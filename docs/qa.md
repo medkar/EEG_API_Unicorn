@@ -421,7 +421,9 @@ commencer.
 ✅ **Le résultat, en trois lignes en face** : un **mot** en couleur (« ALPHA NET » en vert, ou
 « ARRÊTE ICI » en rouge), une ligne de **chiffres**, **une** phrase de réserve. Puis une case
 **« Détails »**, décochée : elle déplie la ligne BARRIÈRE, la phrase de verdict complète, le ratio,
-le pic, les voies moyennées et la phrase d'honnêteté.
+le pic, les voies moyennées et la phrase d'honnêteté — et **le repli RESTE ouvert** tant que tu ne
+le refermes pas. ❌ Régression : il se referme tout seul au bout d'un instant (le défaut corrigé par
+`07a3303` : chaque rafraîchissement le décochait, dix fois par seconde).
 ✅ Si « ALPHA NET » : un bouton « Appliquer « Pic alpha de la personne » = … Hz à « SSVEP » » →
 réponse en vert → **« ← SSVEP »** → le champ montre la valeur mesurée, sans rien retaper.
 ⚠️ Sur ce signal fabriqué, les deux verdicts sont possibles et aucun ne veut rien dire. Si c'est
