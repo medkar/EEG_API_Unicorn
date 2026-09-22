@@ -173,6 +173,10 @@ class MesurePage(QWidget):
         self.candidat.setWordWrap(True)
         self.candidat.setStyleSheet("color: #b8860b; font-weight: bold;")
         self.candidat.setVisible(False)
+        # Les fréquences que la fenêtre du test affichera (cf. `montrer_frequences`).
+        self.frequences = QLabel("")
+        self.frequences.setWordWrap(True)
+        self.frequences.setVisible(False)
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
@@ -187,6 +191,7 @@ class MesurePage(QWidget):
         avant.addWidget(self.briefing)
         avant.addWidget(self.audio_avertissement)
         avant.addWidget(self.candidat)
+        avant.addWidget(self.frequences)
         avant.addWidget(self.origine)
         avant.addWidget(self.formulaire)
         avant.addWidget(self.duree)
@@ -357,6 +362,22 @@ class MesurePage(QWidget):
         etat = (state or {}).get("mesure") or {}
         self._precedent = (etat.get("mode_id") == self.mesure_id
                            and etat.get("phase") in PHASES_TERMINALES)
+
+    def montrer_frequences(self, freqs):
+        """Les fréquences que la fenêtre de CE test affichera, ou None si elle n'en reçoit pas.
+
+        🔴 « Tester teste TES réglages » doit se VÉRIFIER à l'écran (constat M1 de la revue) : la
+        page du test SSVEP n'a aucun champ, et rien n'y disait sur quelles fréquences il allait
+        tourner — la promesse était vraie, mais invisible. C'est la console qui décide ce qu'elle
+        passe à la fenêtre ; cette page le montre, et dit où ça se change.
+        """
+        if freqs:
+            valeurs = " · ".join(f"{float(f):g}" for f in freqs)
+            origine = f" — celles de la page « {self.mode['label']} », qui se changent là-bas"                 if self.mode else ""
+            self.frequences.setText(f"Fréquences testées : {valeurs} Hz{origine}.")
+        else:
+            self.frequences.setText("")
+        self.frequences.setVisible(bool(freqs))
 
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le contrôle de liaison) a répondu à « Commencer »."""

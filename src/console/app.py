@@ -897,8 +897,16 @@ class Console(QMainWindow):
             # test en déclarait un, ce rafraîchissement résoudrait le réseau LSL (~1 s de fenêtre
             # gelée) à chaque clic sur « Tester » (constat M12).
             page.rafraichir_choix([p["key"] for p in self.catalogue[mode_id]["params"]])
-            page.formulaire.set_values(reglages if reglages is not None
-                                       else self._reglages_du_mode(mode_id))
+            valeurs = reglages if reglages is not None else self._reglages_du_mode(mode_id)
+            page.formulaire.set_values(valeurs)
+            # Les FRÉQUENCES que la fenêtre du test recevra, montrées sur la page (constat M1) :
+            # le test du SSVEP n'a aucun réglage à lui, et rien à l'écran ne disait sur quoi il
+            # allait tourner. Le registre décide si la fenêtre les reçoit — la même question que
+            # pose `_lancer_fenetre_mesure` au lancement, sur les mêmes réglages.
+            freqs = valeurs.get("freqs")
+            page.montrer_frequences(
+                freqs if stimulus_registry.option_frequences(page.spec.get("stimulus_id") or "",
+                                                             freqs) else None)
         # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la page
         # reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une mesure
         # vient de se terminer et que le verdict est là, à lire.
@@ -3174,6 +3182,13 @@ def _smoke():
     chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and journal == [("commande", "set_params")],
         f"« Tester » APPLIQUE d'abord ce qui est à l'écran, puis ouvre la page du test — sans "
         f"soumettre la mesure ni lancer de fenêtre : c'est « Commencer » qui part ({journal})")
+    # 🔴 …et la page DIT sur quelles fréquences le test va tourner (constat M1) : elle n'a aucun
+    # champ, et « Tester teste TES réglages » ne se vérifiait nulle part à l'écran.
+    chk(mes_ssvep.frequences.isVisibleTo(mes_ssvep)
+        and "12 · 15 · 20" in mes_ssvep.frequences.text()
+        and "SSVEP" in mes_ssvep.frequences.text(),
+        f"la page du test montre les fréquences RETENUES du mode, celles que la fenêtre recevra "
+        f"({mes_ssvep.frequences.text()!r})")
     # `[-1:]` et non `[-1]` : sans commande soumise, l'assertion doit ROUGIR, pas faire planter
     # le smoke — un plantage ici masquait toutes les assertions suivantes, dont celles du vrai
     # moteur, et une mutation passait pour prouvée sur une seule ligne.
@@ -3424,8 +3439,9 @@ def _smoke():
         console.apply_state(pret_t)
         cliquer(console.pages[mode_t].bouton_tester, f"le bouton « Tester » du {mode_t}")
         mes_t = console.stack.currentWidget()
-        chk(mes_t is console.mesure_pages.get(test_t),
-            f"{mode_t} : « Tester » ouvre SA page de test ({test_t})")
+        chk(mes_t is console.mesure_pages.get(test_t) and not mes_t.frequences.isVisibleTo(mes_t),
+            f"{mode_t} : « Tester » ouvre SA page de test ({test_t}), sans y annoncer de "
+            f"fréquences : sa fenêtre n'en reçoit pas")
         # Une longueur qui n'est PAS le défaut : sinon « la bonne longueur » serait vraie à vide,
         # la fenêtre partant de toute façon sur son défaut.
         param_t = next((p for p in console.mesures[test_t]["params"] if p["key"] == "essais"), {})
