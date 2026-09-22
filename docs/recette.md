@@ -971,7 +971,11 @@ n'était lisible — mot pour mot : « c'est pas clair du tout et beaucoup trop 
 - [ ] **Derrière « Détails »**, décoché : la phrase de verdict complète, les tests statistiques,
       les repères historiques, le nom du fichier, la phrase d'honnêteté. **Rangées, pas
       supprimées** : chacune a été écrite après une conclusion fausse réellement tirée sur ce
-      projet.
+      projet. Une fois cochée, la case **reste** cochée ; un NOUVEAU résultat repart replié.
+      *(Corrigé par `07a3303`, trouvé par la revue de branche : chaque rafraîchissement — dix par
+      seconde — décochait la case, le repli se refermait au bout de 100 ms, et « rangé, pas
+      supprimé » ne tenait pas. L'autotest restait vert : il cochait puis lisait, sans
+      rafraîchissement entre les deux.)*
 - [ ] Un entraînement réussi porte toujours la même réserve : « Chiffre calculé sur les essais
       d'entraînement : c'est « Tester » qui dira ce que le mode fait vraiment. » (au c-VEP : 59,5 %
       hors ligne, 46 % d'émission en direct).
