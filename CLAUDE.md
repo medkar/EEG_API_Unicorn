@@ -15,10 +15,12 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   objectif** : voir [docs/robot_testbed.md](docs/robot_testbed.md) au besoin, mais rien de neuf ne
   doit en dépendre.
 - **Le moteur reste LE PRODUIT ; la console est devenue le POINT D'ENTRÉE** (2026-09-08), et depuis
-  le **2026-09-09 il n'y a plus une seule commande d'usage réel à taper**. Tout le parcours d'un
-  étudiant — choisir la source, contrôler l'alpha et le contact, mesurer, calibrer, choisir un
-  modèle, afficher un stimulus, décoder, **regarder le flux sortant, enregistrer la séance** — s'y
-  fait aux boutons, dans une seule fenêtre qu'on n'a plus à fermer.
+  le **2026-09-09 il n'y a plus une seule commande d'usage réel à taper**. Le parcours d'un
+  étudiant — choisir la source, vérifier le casque et le contact, régler, entraîner, **tester**,
+  décoder, **regarder le flux sortant, enregistrer les verdicts** — s'y fait aux boutons, dans une
+  seule fenêtre qu'on n'a plus à fermer. ⚠️ **Deux trous, datés du 2026-09-22 et connus** : la
+  séance c-VEP avec journal (recette 2.9) et le décodage continu avec NOTRE fenêtre de stimulus
+  n'ont plus de bouton — ils reviennent avec « Connecter », le second chantier (pas fait).
   `outils/Console EEG.bat` l'ouvre par un double-clic, sans terminal. `src/core/server.py` reste
   lançable seul : c'est l'accès *headless*, pour une machine sans écran ou un montage à deux
   terminaux, et c'est lui que consomme un client LSL.
@@ -79,14 +81,32 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   ici.** Chaque fois elle a été traitée comme une fonctionnalité — on ajoutait un bouton — et le
   chantier suivant repartait sans elle, donc un nouveau trou apparaissait. C'est pour ça qu'elle
   est dans ce fichier ET dans un test : une contrainte tenue par la discipline n'est pas tenue.
+- 🔴 **UNE PAGE DE MODE A SES GESTES NUMÉROTÉS, ET PAS UN DE PLUS ; « TESTER » POSSÈDE SA SÉQUENCE
+  ENTIÈRE** (2026-09-22). Même rang que les deux règles ci-dessus. Une page = **1. Régler ·
+  2. Entraîner** (si le contrat déclare une `calibration`) **· N. Tester** (s'il déclare un
+  `test_id`) ; sans vérité-terrain (Neuro, Brut) : **2. Observer**, sans aucun score. La forme est
+  tirée du CONTRAT (`console/mode_page.py`), jamais d'une liste de l'interface.
+  « Tester » applique d'abord ce qui est à l'écran (refusé → pas de test), ouvre le test
+  pré-rempli avec les réglages du mode, et « Commencer » passe le contrôle de liaison, arrête le
+  mode s'il tourne, soumet la mesure PUIS lance la fenêtre, et rend un verdict. Un nouveau geste
+  s'ajoute DANS une de ces séquences, pas à côté d'elles. **Tenu par `console/app.py --smoke`** :
+  les titres de blocs par mode, et un parcours de l'ARBRE des widgets qui rougit si une page porte
+  « Démarrer », « Lancer le stimulus », « Journal de séance », « Copier » ou « Calibrer ».
+  **Pourquoi** : l'ancienne page offrait « Démarrer », « Calibrer » et « Lancer le stimulus » comme
+  trois choix de même rang, alors qu'il existe un ORDRE. À la séance casque du 2026-09-22, le
+  stimulus a tourné sur un mode arrêté : **dix minutes de fixation perdues**, puis « je ne
+  comprends pas trop ce que l'on fait ». Un bouton qui possède toute la séquence rend ce piège
+  **impossible** au lieu de le signaler. La boucle réelle est régler → tester → ajuster →
+  re-tester (spec : `docs/superpowers/specs/2026-09-22-configurer-entrainer-tester-design.md`).
 - **La console est un CLIENT du moteur**, pas le moteur : elle crée un `EngineServer`, lance sa
   boucle dans un fil et sonde `snapshot()`. Le fil Qt ne touche jamais la session BrainFlow — toute
   action passe par la file de commandes. Et aucune logique n'y vit que le moteur ne possède déjà :
   pas de validation côté interface, pas de catalogue de modes recopié.
 - **UN RÉGLAGE SE POSE SUR UN MODE ARRÊTÉ** (2026-09-21). `set_params` le VALIDE — c'est là qu'on
   apprend que 17 Hz ne divise pas 60 — puis le RETIENT dans `EngineServer.reglages`, et le prochain
-  démarrage part avec. L'accusé porte `differe: True`, que la console affiche en jaune (« retenu,
-  pas encore en vigueur ») : un « appliqué » nu ferait croire que le mode décode déjà.
+  démarrage part avec. L'accusé porte `differe: True`, que la console affiche en VERT (« réglage
+  RETENU : « SSVEP » est arrêté, il démarrera avec. ») : accepté est un succès, la nuance « pas
+  encore en vigueur » est dans le texte, et un « appliqué » nu ferait croire que le mode décode déjà.
   C'est le geste réel — on cale ses fréquences sur son écran et son pic alpha sur sa tête, **puis**
   on lance. Avant, il fallait démarrer sur des réglages qu'on savait faux, subir 23 s de repos,
   corriger, et refaire le repos.
@@ -97,28 +117,40 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
   c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. ⚠️ **Publié ≠ validé** : seul le
   SSVEP a été décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300,
-  ErrP, c-VEP) attendent une séance casque — c'est la recette, tests 2.6 à 2.9. **Le chantier de la
-  console n'y a rien changé** : il déplace le geste de calibration, il ne décode aucun cerveau. Ses
+  ErrP, c-VEP) attendent une séance casque — c'est la recette, tests 2.6 à 2.9. **Les chantiers de
+  la console n'y ont rien changé** : ils déplacent des gestes, ils ne décodent aucun cerveau. Leurs
   autotests prouvent le câblage, jamais l'ergonomie ni le décodage.
-- **Le moteur joue aussi DEUX MESURES** depuis le 2026-09-09 (`core/modes/mesure.py`,
-  `MesureRuntime`). Une mesure est un protocole minuté qui rend un **verdict**, pas un modèle : elle
-  n'écrit **rien** sur le disque, donc elle n'a ni « Enregistrer » ni « Refaire ». Elles partagent le
-  contrat public de `CalibrationRuntime`, ce qui les fait afficher par une page générique
-  (`console/mesure_page.py`) et poser leurs tuiles sur une seconde rangée de la grille.
-  - **`alpha` — Contrôle alpha** (37 s, `core/modes/alpha.py`). Yeux ouverts / yeux fermés, effet
-    de Berger. C'est une **BARRIÈRE** (`MesureSpec.barriere`) : si l'alpha ne monte pas, aucun autre
-    test de la séance ne veut rien dire, et le verdict est une phrase qui ARRÊTE. La page propose
-    d'**appliquer le pic mesuré** au réglage `alpha_hz` du SSVEP — la recette le faisait noter à la
-    main puis retaper dans un autre écran.
-    ⚠️ **Ce bouton-là échouait SYSTÉMATIQUEMENT jusqu'au 2026-09-21**, et cette phrase l'annonçait
-    quand même : `set_params` exigeait un mode DÉMARRÉ, or ce contrôle est le PREMIER geste d'une
-    séance, bien avant qu'on lance le SSVEP. Trouvé par la QA, pas par un test. Cf. le point
-    suivant : **un réglage se pose maintenant sur un mode arrêté**.
-  - **`ssvep_taux` — Taux d'émission SSVEP** (3,6 min). Une fenêtre (`src/stimulus/ssvep.py
-    --guide`) désigne la cible, le moteur applique **sa propre règle de décision** et rend le taux
-    d'émission et la justesse à l'émission. ⚠️ **Un essai = UNE décision** : les fenêtres du moteur
-    se chevauchent, les compter gonflerait l'effectif d'un facteur ~7 et rétrécirait l'intervalle
-    de confiance d'autant.
+- **Le moteur joue aussi SIX MESURES** (`core/modes/mesure.py`, `MesureRuntime` ; celles qu'une
+  fenêtre mène héritent de `core/modes/mesure_marqueurs.py`). Une mesure est un protocole minuté
+  qui rend un **verdict**, pas un modèle : elle n'écrit **rien** sur le disque, donc ni
+  « Enregistrer » ni « Refaire ». Page générique `console/mesure_page.py`. **Une seule a une tuile
+  sur l'accueil** ; les cinq autres sont les « Tester » des modes (`ModeSpec.test_id`) et vivent
+  sur la page de LEUR mode — la grille lit les `test_id`, elle ne tient aucune liste.
+  - **`alpha` — « Vérifier le casque »** (37 s, `core/modes/alpha.py`). Yeux ouverts / yeux fermés,
+    effet de Berger. C'est une **BARRIÈRE** (`MesureSpec.barriere`) : si l'alpha ne monte pas, aucun
+    autre test de la séance ne veut rien dire (mot « ARRÊTE ICI »). Deux portes : la tuile de
+    l'accueil, et **« Mesurer »** à côté du pic alpha de la page SSVEP — le moteur déclare quel
+    réglage la mesure remplit (`ControleAlpha.REGLAGE_PRODUIT`), et la page propose d'**appliquer
+    le pic mesuré** à `alpha_hz`. ⚠️ Ce bouton échouait SYSTÉMATIQUEMENT jusqu'au 2026-09-21
+    (`set_params` exigeait un mode démarré) — trouvé par la QA, pas par un test.
+  - **`ssvep_taux` — « Tester le SSVEP »** (≈ 3,6 min, 36 essais). Une fenêtre (`src/stimulus/ssvep.py
+    --guide --freqs …`) désigne la cible **sur les fréquences du mode**, le moteur applique **sa
+    propre règle de décision** et rend le taux d'émission et la justesse à l'émission. ⚠️ **Un
+    essai = UNE décision** : compter les fenêtres glissantes gonflerait l'effectif d'un facteur ~7.
+  - **`mi_test`, `p300_test`, `cvep_test`, `errp_test` — « Tester le … »**. Le protocole
+    d'ENTRAÎNEMENT rejoué (fenêtre en `--tester` pour P300/ErrP/c-VEP ; le MI n'a pas de fenêtre),
+    le moteur DÉCIDANT par le runtime de son mode au lieu d'apprendre. Exige un modèle — c'est le
+    contrat qui refuse, pas l'écran. Longueur courte par défaut, dans l'unité de la fenêtre
+    (`stimulus/registry.py`, `COMPTES`).
+    🔴 **L'ErrP a besoin de son étiquette pour NOTER, et elle ne doit JAMAIS atteindre le
+    DÉCODEUR** : le socle la retire du marqueur avant la sous-classe et ne la rend qu'au correcteur,
+    le décodeur ne reçoit qu'une vue du tampon EEG. Une fuite = score parfait et faux, en silence.
+    Tenu par `errp_test.py` (décodeur espion), pas par la relecture.
+  - **Un résultat se lit en trois lignes** : `niveau` (bon/moyen/faible → vert/orange/rouge), `mot`,
+    `chiffres` (toujours avec le hasard ou le repère), une `reserve` ; le reste est replié sous
+    « Détails ». ⚠️ **Le niveau est décidé par le MOTEUR** (`core/modes/affichage.py`), par la
+    même table que la phrase de verdict : une couleur déduite côté écran serait une seconde table
+    de seuils, qui peindrait un jour en vert ce que le moteur juge faible.
   - ⚠️ **Une seule activité minutée à la fois** : `server.submit` refuse une calibration pendant une
     mesure **et** l'inverse. Il n'y a qu'un casque, et deux protocoles se voleraient leurs fenêtres.
   - 🔴 **Écart connu, DIT et non corrigé** : le σ du rejet d'artefact est pris sur les **8** voies
@@ -139,8 +171,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   `calib_start` (la fenêtre s'annonce, avec le nombre d'ÉPOQUES qu'elle promet), `cue` (la
   vérité-terrain de la manche), `calib_end` (la séance est finie → le moteur entraîne). ⚠️ **L'ErrP
   n'utilise PAS `cue`** : son étiquette voyage sur son `feedback`, qui gagne `error: true|false`
-  **en calibration seulement** — en décodage le marqueur reste nu, parce que c'est une BCI
-  **passive** et que lui donner la réponse rendrait faux tout ce qu'on mesure sur ce mode. Le c-VEP,
+  **en calibration et en test seulement** (`--calibrer`, `--tester`) — en décodage le marqueur
+  reste nu, parce que c'est une BCI **passive** et que lui donner la réponse rendrait faux tout ce
+  qu'on mesure sur ce mode ; en test, le moteur la retire avant le décodeur (cf. les mesures). Le c-VEP,
   lui, ajoute `block_end` (le `round_end` du P300, transposé) et **continue de publier `cycle`**.
   **Conséquence à retenir : toute application capable d'afficher le stimulus peut désormais
   entraîner un modèle.** La calibration n'est plus verrouillée à notre pygame.
@@ -149,12 +182,14 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   candidat ; on voit son chiffre, puis on garde ou on jette (« Refaire »). Avant, une calibration
   sauvegardait PUIS annonçait sa précision — et comme le moteur propose le modèle chargeable le plus
   récent, une calibration ratée devenait le défaut **en silence**.
-- ⚠️ **Un mode et SA propre calibration ne peuvent plus tourner ensemble**, et `server.submit` le
-  refuse **dans les deux sens**. Ils liraient la même file de marqueurs sous le même `mode_id`
+- ⚠️ **Un mode qui lit des marqueurs (P300, ErrP, c-VEP) ne tourne jamais en même temps que SA
+  calibration, ni que SON TEST** (le test : depuis le 2026-09-22), et `server.submit` le refuse
+  **dans les deux sens**, à la soumission comme dans la boucle. Ils liraient la même file de
+  marqueurs sous le même `mode_id`
   (`EngineServer.markers_murs` tient un curseur par mode), donc chacun n'en verrait qu'une partie au
-  hasard du tour de boucle : deux décodages muets, sans la moindre erreur. La console, elle, arrête
-  le mode avant TOUTE calibration — règle uniforme, pour ne pas recopier côté interface la table des
-  conflits que le moteur possède.
+  hasard du tour de boucle : des décodages muets ou un score plausible et faux, sans la moindre
+  erreur. La console, elle, arrête le mode avant TOUT entraînement et TOUT test — règle uniforme,
+  SSVEP compris, pour ne pas recopier côté interface la table des conflits que le moteur possède.
 - ⚠️ **Le c-VEP est le seul mode dont les marqueurs ne délimitent RIEN.** Ceux du P300 et de l'ErrP
   disent « un événement a eu lieu, découpe autour » ; celui du c-VEP dit « à cet instant, le code
   affiché était à sa frame 0 » — c'est une **HORLOGE**, et le mode décode en continu sur une fenêtre
@@ -179,8 +214,8 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
   **Les quatre fenêtres de `src/stimulus/` sont l'exception** : elles n'ouvrent PAS le casque, elles
   dessinent et publient des marqueurs — c'est exactement pour ça qu'elles se lancent à côté du
-  moteur, dans un second terminal, **ou que la console les lance elle-même** quand on calibre ou
-  qu'on mesure.
+  moteur, dans un second terminal, **ou que la console les lance elle-même** quand on entraîne ou
+  qu'on teste.
 - Public visé = **des étudiants qui vont lire et modifier ce code**. Écrire en conséquence.
 
 ## Matériel
@@ -231,23 +266,21 @@ trouvé. Reproposer exigerait de sortir le cycle de vie du fil du moteur de `run
 chantier, pas un correctif, et **une promesse écrite non tenue coûte plus qu'une absence** —
 l'étudiant attend un écran qui ne viendra jamais.
 
-Dans la console : une grille de **sept tuiles** (les six modes plus le brut), une page par mode
-(sortie en direct · réglages · extrait de code client), et **deux boutons qui sortent de la
-console** sur les modes qui en ont besoin — « Calibrer » (ouvre la page de calibration : briefing,
-réglages, « Commencer ») et « Lancer le stimulus ». Les deux lancements passent par un **contrôle de
-liaison** (σ par voie, voies clés du mode surlignées) qui **REFUSE** dès qu'une seule des huit voies
-sort de [0,5 ; 500] µV. Une calibration finie s'affiche avec son chiffre et attend « Enregistrer le
-modèle » ou « Refaire » : **rien n'atteint `data/` avant ce clic**.
+Dans la console (depuis le 2026-09-22) :
 
-Trois entrées de plus, livrées le 2026-09-09, et aucune n'a d'équivalent en ligne de commande :
-
-- **une seconde rangée de tuiles, « Contrôles et mesures »** — « Contrôle alpha » (marquée
-  *BARRIÈRE*) et « Taux d'émission SSVEP ». Même page générique que les calibrations, mais un
-  verdict à la place d'un modèle et **rien d'écrit sur le disque**.
-- **« Journal de séance »**, une case sur la page du mode, **cochée par défaut**, qui ajoute `--log`
-  à la fenêtre lancée. Elle n'apparaît que là où le registre déclare que la fenêtre sait
-  journaliser — aujourd'hui le c-VEP seul. **La fenêtre choisit elle-même son nom horodaté** dans
-  `seances/` ; la console affiche où c'est et n'écrit rien.
+- **La grille** : **sept tuiles** (les six modes plus le brut), chacune avec « publié »,
+  **« Démarrer »** — le seul bouton qui démarre le décodage continu, hormis l'« Observer » du
+  Neuro — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
+  (marquée *BARRIÈRE*).
+- **Une page par mode, en blocs numérotés** (règle 🔴 plus haut). La vue en direct des modes
+  testables y est repliée sous **« Décodage en direct »**. **Ont quitté la page, et reviendront
+  avec « Connecter »** : « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
+  « Brancher un client ».
+- **« Entraîner »** et **« Tester »** ouvrent chacun une page (briefing, réglages, « Commencer »,
+  « ← » qui ramène au mode). « Commencer » passe par un **contrôle de liaison** (σ par voie) qui
+  **REFUSE** dès qu'une seule des huit voies sort de [0,5 ; 500] µV. Un entraînement fini attend
+  « Enregistrer le modèle » ou « Refaire » : **rien n'atteint `data/` avant ce clic**. Un test
+  n'écrit jamais rien.
 - **« Ce que voit ton application »**, en bas de la grille : les flux LSL du réseau, leurs voies et
   leurs valeurs qui défilent. ⚠️ Elle lit **par LSL, comme un client** — jamais l'état interne du
   moteur : un panneau branché sur `snapshot()` défilerait joliment pendant que le réseau est muet,
@@ -273,36 +306,37 @@ python src/core/server.py --mode cvep      # le c-VEP sur le réseau (EXIGE un m
 python src/stimulus/cvep.py                # la fenêtre c-VEP : fait clignoter ET publie un marqueur
                                            # de CYCLE (~1/s). N'ouvre PAS le casque -> 2 terminaux.
                                            # --seed rejoue les consignes, --windowed pour le dev
-python src/stimulus/cvep.py --log seance.jsonl   # ⚠️ EN SÉANCE : la vérité-terrain dans un FICHIER
-                                           # (une ligne par consigne, horodatée en local_clock()).
-                                           # Sans elle la séance ne se dépouille pas : le terminal
-                                           # en est le seul autre exemplaire. ⚠️ Depuis le
-                                           # 2026-09-09 la CASE « Journal de séance » de la console
-                                           # le fait par défaut : ne le taper que pour choisir le
-                                           # nom soi-même (`--log` sans valeur = nom horodaté auto)
-python src/stimulus/ssvep.py               # la fenêtre SSVEP : les flèches du jeu de fréquences en
-                                           # vigueur — TROIS au défaut du dépôt, la géométrie en
-                                           # prévoit quatre. Ex-`research/ssvep_stimulus.py`,
-                                           # déménagée le 2026-09-09. --guide y ajoute les consignes
-                                           # et la vérité-terrain : c'est ce que lance la mesure
-                                           # « Taux d'émission SSVEP »
+python src/stimulus/cvep.py --log         # ⚠️ EN SÉANCE : la vérité-terrain dans un FICHIER
+                                           # (une ligne par consigne, horodatée en local_clock() ;
+                                           # sans valeur = nom horodaté dans seances/). Sans elle
+                                           # la séance ne se dépouille pas. ⚠️ Depuis le
+                                           # 2026-09-22 la console ne le passe PLUS (la case
+                                           # « Journal de séance » est partie) : à taper, jusqu'à
+                                           # « Connecter » (recette 2.9)
+python src/stimulus/ssvep.py               # la fenêtre SSVEP : une flèche par fréquence de --freqs
+                                           # (sans lui, le trio du dépôt). --guide y ajoute les
+                                           # consignes et la vérité-terrain : c'est ce que lance
+                                           # « Tester » sur la page SSVEP, avec les --freqs du mode
 python archive/cvep_pilot.py --model data/cvep_model_….npz   # l'écran archivé : décodage LOCAL, la
                                            # RÉFÉRENCE à comparer au réseau en séance (recette 2.9).
                                            # ⚠️ --model explicite : son défaut pointe l'ancien nom fixe
 ```
 
-⚠️ **Les quatre calibrations sont des BOUTONS, plus des commandes.** Le bouton « Calibrer » de la
-page du mode démarre la séance côté moteur, **puis** — pour le P300, l'ErrP et le c-VEP — lance la
-fenêtre de `src/stimulus/` avec `--calibrer`. Cet ordre est un contrat testé : la fenêtre attend le
-moteur, le moteur compte ses 15 s de chauffe depuis `start_calibration`, et il n'existe **aucune
-poignée de main** entre les deux processus (cf. « Ce qui n'a jamais été vérifié » plus bas). Les
-trois `--calibrer` restent lançables à la main pour déboguer :
+⚠️ **Les entraînements et les tests sont des BOUTONS, pas des commandes.** « Commencer » sur la page
+« Entraîner » (ou « Tester ») soumet la séance au moteur, **puis** — pour le P300, l'ErrP et le
+c-VEP, et le test SSVEP — lance la fenêtre de `src/stimulus/` avec `--calibrer` (ou `--tester` /
+`--guide`), seulement quand la séance apparaît dans `snapshot()`. Cet ordre est un contrat testé : la
+fenêtre attend le moteur, le moteur compte ses 15 s de chauffe depuis la commande, et il n'existe
+**aucune poignée de main** entre les deux processus (cf. « Ce qui n'a jamais été vérifié »). Les
+fenêtres restent lançables à la main pour déboguer — `--tester` joue le même protocole que
+`--calibrer` et ne change que la formulation (« TEST », « le moteur note ») :
 
 ```bash
-python src/stimulus/p300.py --calibrer     # 12 manches (P300_CAL_ROUNDS)
-python src/stimulus/errp.py --calibrer     # 200 essais (ERRP_CAL_TRIALS)
+python src/stimulus/p300.py --calibrer     # 12 manches (P300_CAL_ROUNDS) ; --rounds N
+python src/stimulus/errp.py --calibrer     # 200 essais (ERRP_CAL_TRIALS) ; --essais N
 python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,8 min (la console annonce
-                                           # ~3,1 min : elle compte les 15 s de chauffe du moteur)
+                                           # ~3,1 min : elle compte les 15 s de chauffe du moteur) ;
+                                           # --cycles N = cycles enregistrés PAR CIBLE
 ```
 
 **Après toute modification**, les deux tests headless qui couvrent le plus de code (aucun casque) :
@@ -349,6 +383,25 @@ ceux de `modes/p300.py` et `stimulus/cvep.py` : compter les fenêtres glissantes
 est **l'amélioration plausible** (« plus de données, intervalle plus serré ») et elle est fausse.
 Mesuré : n = 24 devient **168** et l'intervalle s'effondre de 0,19 à **0,03** de large. La mutation
 ne fait rougir **que** ce fichier — ni les deux smokes, ni `research/ssvep_guided.py`.
+
+Et les six gardes du chantier **« Configurer · Entraîner · Tester »** (2026-09-22), qu'aucun des
+deux smokes n'exécute :
+
+```bash
+python src/core/modes/affichage.py         # les trois lignes d'un résultat : le NIVEAU vient de la
+                                           # table du verdict, jamais d'une seconde table d'écran
+python src/core/modes/mesure_marqueurs.py  # le SOCLE des tests à fenêtre : épochage par le chemin du
+                                           # décodage, garde de silence, CLOISON de la vérité
+python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REPOS
+python src/core/modes/p300_test.py         # Tester le P300 : une MANCHE = un essai, hasard 1/6
+python src/core/modes/cvep_test.py         # Tester le c-VEP : un BLOC = une décision, phase APPELÉE
+python src/core/modes/errp_test.py         # 🔴 Tester l'ErrP : l'étiquette au correcteur, JAMAIS au
+                                           # décodeur (décodeur espion)
+```
+
+⚠️ Même famille de panne que `ssvep_mesure.py`, pour chacun : compter les fenêtres, écrire le hasard
+en dur ou réécrire la décision du mode donnent un score plausible et faux sans rien casser. Ces
+mutations ont été vues rougir dans leur fichier ; les deux smokes ne les exécutent pas.
 
 Et le sous-système des **marqueurs entrants**, livré le 2026-08-17 et étendu aux calibrations le
 2026-09-07, qu'aucun smoke ci-dessus ne couvre entièrement :
@@ -441,8 +494,9 @@ donc identiques pour toutes les instances : un serveur oublié répond à la pla
 
 ## Ce qui n'a jamais été vérifié
 
-À lire avant de croire qu'un test vert veut dire « ça marche ». **Rien de ce que la console fait
-n'a vu un cerveau.** Les autotests prouvent le câblage entre deux processus, sur un board
+À lire avant de croire qu'un test vert veut dire « ça marche ». **La console n'a vu un casque que
+deux fois, et en partie** (2026-09-21 et 22 : contrôle alpha, taux SSVEP, UN entraînement c-VEP à
+25,0 % pour un hasard à 17 %). Les autotests prouvent le câblage entre deux processus, sur un board
 synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
 
 - **QUATRE des six modes n'ont jamais été décodés au casque À TRAVERS LE MOTEUR** — MI, P300, ErrP,
@@ -457,15 +511,22 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   moteur, la source se choisit à l'ouverture, le flux sortant se regarde et s'enregistre. **Aucun
   repère chiffré du projet n'a bougé, et aucun n'a été produit** — ni le 100 %/44 % du SSVEP, ni le
   46 %/71 % du c-VEP, ni l'AUC 0,776 de l'ErrP, ni le 0,71 du P300, ni les ~40 % à trois classes du
-  MI. Les deux mesures nouvelles n'ont été exercées que sur du bruit blanc et des sinusoïdes posées
-  à la main : **le repère « ratio alpha > ~1,5 » vient toujours d'UNE personne, sur ce casque**, et
-  la seconde cause d'échec du contrôle alpha (« ça monte, mais ce n'est pas de l'alpha ») n'a jamais
-  été vue sur un vrai signal.
-- 🟠 **Huit constats de la revue du 2026-09-08 restent parqués**, dont deux mordront en séance : la
-  console prend `accepted` pour « la séance a démarré » — une instance a été traitée à la source
-  pour l'enregistrement (le nom du fichier est décidé par la boucle, pas par l'accusé), **le motif
-  reste** ailleurs —, et les refus lancés depuis la GRILLE ne vont encore que dans le terminal
-  (recette 1.13).
+  MI. Les deux mesures nouvelles, écrites sur du bruit blanc et des sinusoïdes posées à la main,
+  n'ont été jouées au casque que sur UNE personne : **le repère « ratio alpha > ~1,5 » vient
+  toujours d'UNE personne, sur ce casque**, et la seconde cause d'échec du contrôle alpha (« ça
+  monte, mais ce n'est pas de l'alpha ») n'a jamais été vue sur un vrai signal.
+- **Le chantier « Configurer · Entraîner · Tester » (2026-09-22) n'a rien mesuré non plus**, et il
+  ne change aucun chiffre du décodage. **Aucun des cinq « Tester » n'a vu un casque** (ils sont nés
+  après la séance). Leurs seuils de couleur sont argumentés sur UNE séance de référence chacun ; au
+  c-VEP, un système exactement au repère ne sort vert qu'environ une fois sur quatre à 18 blocs
+  (calcul binomial, pas une mesure) ; le repos de référence du test ErrP (estimé 2-5 s) n'a jamais
+  été mesuré et n'est affiché nulle part.
+- 🟠 **Des constats de la revue du 2026-09-08 restent parqués.** La console prenait `accepted` pour
+  « la séance a démarré » : corrigé pour l'enregistrement de séance et pour le lancement des
+  fenêtres (elles attendent de VOIR la séance dans `snapshot()`, 2026-09-10), **pas audité
+  ailleurs**. Les refus lancés depuis la GRILLE, eux, s'affichent dans le bandeau depuis
+  `c960e39` (2026-09-10). Et des refus/aides nomment
+  toujours un bouton « Calibrer » qui s'appelle « Entraîner » (constats ouverts de `docs/qa.md`).
 - 🔴 **Le contrôle de liaison peut BLOQUER une séance légitime.** Il refuse dès qu'**une seule** des
   huit voies sort de [0,5 ; 500] µV — pas seulement les voies clés du mode, qui sont surlignées mais
   ne restreignent pas le refus — et il n'offre **aucune porte de sortie**, là où
@@ -475,7 +536,7 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   devant un casque, pas avant.** Vérifié en revanche que `--synthetic` passe : σ mesurés de 7 à
   73 µV, huit verdicts « ok », aucun refus.
 - 🔴 **L'ordre de lancement fenêtre/moteur n'a AUCUNE poignée de main.** La console soumet
-  `start_calibration` **puis** lance la fenêtre — l'ordre est figé par un test (journal partagé,
+  `start_calibration` (ou `start_mesure`) **puis** lance la fenêtre — l'ordre est figé par un test (journal partagé,
   la mutation qui l'inverse fait rougir deux assertions) — et c'est l'initialisation de pygame plus
   l'attente de la fenêtre qui couvrent les 15 s de chauffe du moteur. **Ça tient, ce n'est pas
   garanti** : les deux processus comptent sur deux horloges différentes. Si la fenêtre prend de
@@ -485,20 +546,22 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   clignoter pendant la chauffe (exprès — une horloge n'a pas besoin d'être bonne pour être à
   l'heure), le socle compte ces ~14 marqueurs comme « époques jetées » et conseille à la fenêtre
   d'attendre. Elle attend déjà. Message faux, sans danger.
-- ⚠️ **`--cycles` rend fausse la durée annoncée du c-VEP.** Sa calibration n'expose aucun `Param` :
-  `duree_protocole_s` vaut pour les défauts, et une fenêtre lancée à la main avec `--cycles 6` sera
-  deux fois plus courte que ce que la console annonce. Le moteur ne peut pas le savoir — ce n'est
-  pas lui qui mène le protocole.
-- ⚠️ **La console n'a jamais été ouverte AVEC un casque** sur les pages de calibration. Trois
-  questions n'ont de réponse qu'en séance : est-ce que les ~15 s couvrent vraiment l'écart de
-  lancement *sur cette machine* ; est-ce qu'un étudiant comprend qu'un chiffre affiché n'est pas
-  encore un modèle enregistré ; et est-ce que le contrôle de liaison est lu ou cliqué au travers.
+- ⚠️ **`--cycles` rend fausse la durée annoncée de l'entraînement c-VEP.** Sa calibration n'expose
+  aucun `Param` : `duree_protocole_s` vaut pour les défauts, et une fenêtre lancée à la main avec
+  `--cycles 6` sera plus courte que ce que la console annonce. Le moteur ne peut pas le savoir —
+  ce n'est pas lui qui mène le protocole. (Le TEST c-VEP, lui, a sa longueur en `Param` et la passe
+  à la fenêtre dans son unité : des cycles enregistrés PAR CIBLE.)
+- ⚠️ **Les pages d'entraînement n'ont vu un casque qu'une fois (c-VEP), les pages de test
+  jamais.** Quatre questions n'ont de réponse qu'en séance : est-ce que les ~15 s couvrent vraiment
+  l'écart de lancement *sur cette machine* ; est-ce qu'un étudiant comprend qu'un chiffre affiché
+  n'est pas encore un modèle enregistré ; est-ce que le contrôle de liaison est lu ou cliqué au
+  travers ; et est-ce que la boucle Régler → Tester → ajuster se comprend sans explication.
 
 ## Pièges matériels à connaître
 
 - **Ne pas fermer/rouvrir la console (ou le moteur)** en cours de séance : les voies C3/Cz saturent
   à la réouverture (redémarrage de l'amplificateur). Garder une seule session ouverte — c'est
-  exactement ce que le point d'entrée unique rend possible : calibrer et décoder sans jamais fermer
+  exactement ce que le point d'entrée unique rend possible : entraîner et tester sans jamais fermer
   la fenêtre qui tient le casque.
 - **Saliner les électrodes** est le principal levier de qualité du signal (gain mesuré très net).
 - Vérifier le contact **avant** d'enregistrer : une électrode ou une référence décollée produit une
