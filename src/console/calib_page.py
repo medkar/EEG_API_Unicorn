@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console.params_form import ParamsForm  # noqa: E402
+from console.resultat import BlocResultat  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
 # que CLAUDE.md interdit — renommer une phase côté moteur laisserait sinon cette page sans écran
 # de résultat, sans qu'aucun test ne le voie (`PHASES_TERMINALES` local aurait continué à valoir
@@ -182,10 +183,15 @@ class CalibPage(QWidget):
         gestes.addWidget(self.bouton_enregistrer)
         gestes.addWidget(self.bouton_refaire)
         gestes.addStretch(1)
+        # ⚠️ EN FACE, trois lignes écrites par le MOTEUR (`core/modes/affichage.py`) : le verdict
+        # en couleur, la mesure avec son hasard, une réserve. La phrase complète, les chiffres
+        # secondaires, le nom du fichier et l'honnêteté passent DANS le repli « Détails » — ils
+        # sont rangés, pas supprimés. Séance casque du 2026-09-22 : l'écran de résultat du c-VEP
+        # était « pas clair du tout et beaucoup trop verbeux ».
+        self.bloc = BlocResultat(corps_auto=False)
+        self.bloc.ajouter_au_detail(self.resultat, self.details, self.honnetete)
         apres = QVBoxLayout(self.bloc_apres)
-        apres.addWidget(self.resultat)
-        apres.addWidget(self.details)
-        apres.addWidget(self.honnetete)
+        apres.addWidget(self.bloc)
         apres.addWidget(self.decision)
         apres.addLayout(gestes)
 
@@ -343,9 +349,14 @@ class CalibPage(QWidget):
             if resultat is not None:
                 self._montrer_resultat(resultat)
             else:
-                self.resultat.setText(
-                    f"Calibration abandonnée : "
-                    f"{calib_state.get('probleme', '') or 'aucun modèle produit'}")
+                raison = (f"Calibration abandonnée : "
+                          f"{calib_state.get('probleme', '') or 'aucun modèle produit'}")
+                # ⚠️ EN FACE, et en gris : pas de verdict, donc rien à peindre en couleur. Le
+                # repli « Détails » a d'abord avalé cette phrase — elle vivait dans
+                # `self.resultat` — et le smoke restait vert, parce qu'il lisait le TEXTE du
+                # label sans jamais vérifier qu'on le VOIT.
+                self.bloc.montrer({"verdict": raison})
+                self.resultat.setText(raison)
                 self.details.setText("")
                 # Rien à mettre en garde : sans accuracy, il n'y a rien à sur-interpréter.
                 self.honnetete.setVisible(False)
@@ -420,6 +431,8 @@ class CalibPage(QWidget):
         return None
 
     def _montrer_resultat(self, resultat):
+        # En face : les trois lignes du moteur. Tout ce qui suit remplit le REPLI « Détails ».
+        self.bloc.montrer(resultat)
         mesure = self._mesure(resultat)
         if mesure is None:
             # Le `verdict` du moteur porte déjà la raison en clair dans ce cas (« justesse non
@@ -468,11 +481,12 @@ class CalibPage(QWidget):
         self.bouton_enregistrer.setVisible(a_decider)
         self.bouton_refaire.setVisible(a_decider)
         if a_decider:
+            # UNE ligne, et elle garde le point d'honnêteté entier : un chiffre affiché n'est
+            # pas un modèle enregistré. Les quatre lignes d'avant disaient la même chose, et
+            # faisaient partie du mur de texte relevé en séance le 2026-09-22.
             self.decision.setText(
-                "⚠ Rien n'est encore enregistré : ce modèle vit dans un dossier temporaire que "
-                "la fermeture de la console effacera. « Enregistrer le modèle » le met dans "
-                "data/ sous un nom horodaté, et il apparaît alors dans la liste déroulante du "
-                "mode. « Refaire » le supprime et ramène au briefing.")
+                "⚠ Pas encore enregistré — ce modèle est dans un dossier temporaire. "
+                "« Enregistrer le modèle » le met dans data/, « Refaire » le jette.")
             self.decision.setStyleSheet("color: #b8860b; font-weight: bold;")
         elif resultat is not None:
             self.decision.setText(f"Modèle en place : {resultat.get('modele', '')}")

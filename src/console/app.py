@@ -151,7 +151,14 @@ class Console(QMainWindow):
         # le disque : `choices_fn` charge les modèles entraînés).
         self.catalogue = {spec["id"]: spec for spec in catalogue}
         self.mesures = {spec["id"]: spec for spec in mesures}
-        self.grid = ModeGrid(catalogue, mesures)
+        # ⚠️ La grille ne porte que les mesures de SÉANCE (le contrôle alpha). Une mesure qui
+        # ÉPROUVE un mode — celle que désigne son `test_id` — garde sa page, que le bouton
+        # « Tester » de ce mode ouvre, mais n'a PAS de tuile : sinon chaque mode testable ajouterait
+        # un bouton de plus sur l'écran d'accueil, loin du mode qu'il teste. La règle est lue dans
+        # le CONTRAT, pas dans une liste tenue ici.
+        tests_de_modes = {spec.get("test_id") for spec in catalogue if spec.get("test_id")}
+        self.grid = ModeGrid(catalogue,
+                             [spec for spec in mesures if spec["id"] not in tests_de_modes])
         self.grid.ouvrir.connect(self.show_mode)
         self.grid.publier.connect(self._publier)
         self.grid.demarrer.connect(self._demarrer)
@@ -1651,6 +1658,7 @@ def _smoke():
     # 1. Avant : le briefing du CONTRAT, pas un texte recopié dans l'interface.
     console.apply_state({**mi_state, "calibration": None})
     from core.modes import mi_calib
+    from core.modes.affichage import depuis_table
     chk(mi_calib.BRIEFING[0] in cal.briefing.text(),
         "le briefing affiché vient du contrat du mode")
     chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
@@ -1779,11 +1787,26 @@ def _smoke():
                          "cv_naive": 0.556, "hasard": 1 / 3,
                          "classes": ["GAUCHE", "DROITE", "REPOS"],
                          "honnetete": mi_calib.HONNETETE,
-                         "verdict": "FAIBLE — ré-essaie"},
+                         "verdict": "FAIBLE — ré-essaie",
+                         # Les trois lignes d'affichage, par la VRAIE table du MI et le même
+                         # appel que le moteur (`affichage.depuis_table`) — pas écrites à la main.
+                         **depuis_table(0.401, mi_calib.VERDICTS,
+                                        "40 % de classes justes (hasard 33 %) sur 42 essais")},
             # Le CANDIDAT : le modèle est écrit, mais dans un dossier temporaire. Tant que ce
             # champ est renseigné, RIEN n'est dans `data/` (tâche 5) et il reste une décision.
             "candidat": {"modele": "/tmp/calib/candidat_mi_model_20260730-141205.joblib"}}}
     console.apply_state(fini)
+    # 🔴 EN FACE : trois lignes, et le mur de texte relevé en séance le 2026-09-22 est replié.
+    chk(cal.bloc.verdict.text() == "FAIBLE" and "#e2603f" in cal.bloc.verdict.styleSheet(),
+        f"la page de calibration montre UN mot, en rouge ({cal.bloc.verdict.text()!r})")
+    chk("hasard 33 %" in cal.bloc.chiffres.text(),
+        f"…la mesure avec son hasard ({cal.bloc.chiffres.text()!r})")
+    chk(not cal.resultat.isVisibleTo(cal) and not cal.honnetete.isVisibleTo(cal),
+        "…et la phrase complète et l'honnêteté sont REPLIÉES : elles ne noient plus le chiffre")
+    cal.bloc.details.setChecked(True)
+    chk(cal.resultat.isVisibleTo(cal) and cal.honnetete.isVisibleTo(cal),
+        "…mais un clic sur « Détails » les ramène : rangées, pas supprimées")
+    cal.bloc.details.setChecked(False)
     chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
         f"l'accuracy affichée est l'HONNÊTE ({cal.resultat.text()})")
     chk("55.6" not in cal.resultat.text() and "55,6" not in cal.resultat.text(),
@@ -2047,8 +2070,9 @@ def _smoke():
     annule = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "annule",
               "resultat": None, "probleme": "ValueError : pas assez de données"}}
     console.apply_state(annule)
-    chk("pas assez de données" in cal.resultat.text(),
-        f"une calibration annulée dit pourquoi ({cal.resultat.text()})")
+    chk("pas assez de données" in cal.bloc.verdict.text() and cal.bloc.verdict.isVisibleTo(cal),
+        f"une calibration annulée dit pourquoi, EN FACE — pas seulement dans un label replié "
+        f"({cal.bloc.verdict.text()})")
 
     cal.bouton_retour.click()
     chk(console.stack.currentWidget() is console.grid,
@@ -2544,10 +2568,18 @@ def _smoke():
     from core.config import MARKER_STREAM_DEFAULT
     from core.modes import alpha as mod_alpha
 
-    attendu_mesures = [s["id"] for s in registry.catalogue_mesures()]
-    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures) == ["alpha", "ssvep_taux"],
-        f"la grille porte une tuile par MESURE du registre, à côté des modes "
+    tests_de_modes = {s.test_id for s in registry.MODES if s.test_id}
+    attendu_mesures = [s["id"] for s in registry.catalogue_mesures()
+                       if s["id"] not in tests_de_modes]
+    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures)
+        and "alpha" in attendu_mesures,
+        f"la grille porte une tuile par mesure de SÉANCE du registre, contrôle alpha compris "
         f"({sorted(console.grid.tuiles_mesure)} pour {sorted(attendu_mesures)})")
+    chk(not set(console.grid.tuiles_mesure) & tests_de_modes,
+        f"…et AUCUNE mesure qui éprouve un mode n'y a sa tuile : elle se lance depuis la page de "
+        f"ce mode (« Tester »), pas depuis l'accueil ({sorted(tests_de_modes)})")
+    chk(all(t in console.mesure_pages for t in tests_de_modes),
+        f"…mais sa PAGE existe bien, pour que « Tester » ait où aller ({sorted(tests_de_modes)})")
     chk(len(console.grid.tuiles) == len(registry.MODES),
         f"…sans que les mesures se mélangent aux modes : ce sont deux catalogues, et une mesure "
         f"n'a ni flux, ni case « publié », ni bouton « Démarrer » ({len(console.grid.tuiles)})")
@@ -2666,6 +2698,15 @@ def _smoke():
     console.apply_state({**state, "mesure": fini})
     chk(mes.bloc_apres.isVisibleTo(mes) and mes.verdict.text() == reussi["verdict"],
         f"le verdict affiché est CELUI DU MOTEUR, mot pour mot ({mes.verdict.text()[:50]}…)")
+    # EN FACE : les trois lignes que le VRAI `_mesurer` d'alpha vient d'écrire (`reussi` sort
+    # du moteur, pas d'un dictionnaire posé ici). La phrase complète ci-dessus est, elle, repliée.
+    chk(mes.bloc.verdict.text() == reussi["mot"] == "ALPHA NET"
+        and "#3fae5a" in mes.bloc.verdict.styleSheet() and mes.bloc.verdict.isVisibleTo(mes),
+        f"en face, le MOT du moteur, en vert ({mes.bloc.verdict.text()!r})")
+    chk("repère > 1,5" in mes.bloc.chiffres.text() and "pic à" in mes.bloc.chiffres.text(),
+        f"…le ratio avec son repère sur la même ligne ({mes.bloc.chiffres.text()!r})")
+    chk(not mes.verdict.isVisibleTo(mes) and not mes.honnetete.isVisibleTo(mes),
+        "…et la phrase complète comme l'honnêteté sont REPLIÉES sous « Détails »")
     chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
         f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
     chk(f"{reussi['ratio']:.2f}" in mes.details.text() and "Pz/PO7/Oz/PO8" in mes.details.text(),
@@ -2720,10 +2761,11 @@ def _smoke():
     console.apply_state({**state, "mesure": {**base_m, "phase": "annule", "classe": "",
                                              "instruction": "", "rappel": "", "restant_s": 0.0,
                                              "probleme": "abandon demandé"}})
-    chk(mes.barriere.text() == "" and "interrompue" in mes.verdict.text()
+    chk(mes.barriere.text() == "" and "interrompue" in mes.bloc.verdict.text()
+        and mes.bloc.verdict.isVisibleTo(mes) and "#8a8f9c" in mes.bloc.verdict.styleSheet()
         and not mes.appliquer_pic.isVisibleTo(mes),
-        f"un abandon n'accuse PAS le montage : pas de barrière, pas de chiffre "
-        f"({mes.verdict.text()})")
+        f"un abandon n'accuse PAS le montage : pas de barrière, pas de chiffre, pas de couleur — "
+        f"et la raison se VOIT en face, pas dans un label replié ({mes.bloc.verdict.text()})")
 
     # Les deux gestes qui partent au moteur, cliqués pour de vrai.
     moteur_faux.commandes.clear()
@@ -3178,7 +3220,6 @@ def _smoke():
     # phrase. Le résultat est construit ici par la VRAIE table du c-VEP (`cvep_calib.VERDICTS`),
     # via le même appel que le moteur : ce test ne fabrique pas un verdict à sa convenance.
     from console.resultat import BlocResultat, COULEURS
-    from core.modes.affichage import depuis_table
     from core.modes.cvep_calib import VERDICTS as VERDICTS_CVEP
 
     bloc = BlocResultat()

@@ -44,8 +44,14 @@ def couleur_du_niveau(niveau):
 class BlocResultat(QWidget):
     """Trois lignes et un repli. `montrer(resultat)` à chaque résultat reçu, `effacer()` sinon."""
 
-    def __init__(self):
+    def __init__(self, corps_auto=True):
+        """`corps_auto=False` : la page hôte range dans le repli ses PROPRES widgets détaillés
+        (`ajouter_au_detail`), au lieu du texte que ce bloc compose. C'est le cas des pages de
+        calibration et de mesure, dont les détails sont déjà écrits, testés, et propres à chaque
+        protocole — les réécrire ici serait en perdre."""
         super().__init__()
+        self.corps_auto = corps_auto
+        self._hotes = 0
         self.verdict = QLabel("")
         self.chiffres = QLabel("")
         self.chiffres.setWordWrap(True)
@@ -57,12 +63,24 @@ class BlocResultat(QWidget):
         self.corps = QLabel("")
         self.corps.setWordWrap(True)
         self.corps.setStyleSheet(f"color: {NEUTRE}; font-size: 11px;")
-        self.corps.setVisible(False)
+        # Le repli est UN conteneur : le corps composé ici, plus ce que la page hôte y range.
+        self.pli = QWidget()
+        self._pli = QVBoxLayout(self.pli)
+        self._pli.setContentsMargins(0, 0, 0, 0)
+        self._pli.addWidget(self.corps)
+        self.pli.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        for w in (self.verdict, self.chiffres, self.reserve, self.details, self.corps):
+        for w in (self.verdict, self.chiffres, self.reserve, self.details, self.pli):
             layout.addWidget(w)
+
+    def ajouter_au_detail(self, *widgets):
+        """Range des widgets de la page hôte DANS le repli : présents, lisibles d'un clic, jamais
+        en face."""
+        for w in widgets:
+            self._pli.addWidget(w)
+            self._hotes += 1
 
     def montrer(self, resultat):
         """Affiche un résultat. Tolère un résultat ANCIEN, sans les quatre clés : son verdict
@@ -90,8 +108,9 @@ class BlocResultat(QWidget):
             morceaux.append(resultat["honnetete"])
         if resultat.get("nom"):
             morceaux.append(f"Fichier : {resultat['nom']}")
-        self.corps.setText("\n\n".join(morceaux))
-        self.details.setVisible(bool(morceaux))
+        self.corps.setText("\n\n".join(morceaux) if self.corps_auto else "")
+        self.corps.setVisible(self.corps_auto and bool(morceaux))
+        self.details.setVisible((self.corps_auto and bool(morceaux)) or self._hotes > 0)
         self.details.setChecked(False)
         self._deplier(False)
 
@@ -102,4 +121,4 @@ class BlocResultat(QWidget):
         self.details.setVisible(False)
 
     def _deplier(self, ouvert):
-        self.corps.setVisible(bool(ouvert))
+        self.pli.setVisible(bool(ouvert))

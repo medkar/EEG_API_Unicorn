@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console.beeps import TOP_ETAPE  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
+from console.resultat import BlocResultat  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié — même geste que
 # `calib_page.py`. `mesure.PHASES_TERMINALES` EST l'objet de `calibration.py` (cf. son
 # commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de verdict.
@@ -195,11 +196,15 @@ class MesurePage(QWidget):
         gestes = QHBoxLayout()
         gestes.addWidget(self.appliquer_pic)
         gestes.addStretch(1)
+        # EN FACE, les trois lignes du MOTEUR (`core/modes/affichage.py`). La barrière y est
+        # portée par le MOT lui-même — « ARRÊTE ICI », en rouge, en premier —, donc son label
+        # dédié, la phrase complète, les chiffres secondaires et l'honnêteté passent dans le
+        # repli « Détails » : rangés, pas supprimés. Le geste « Appliquer » reste en face : c'est
+        # une ACTION, pas une explication.
+        self.bloc = BlocResultat(corps_auto=False)
+        self.bloc.ajouter_au_detail(self.barriere, self.verdict, self.details, self.honnetete)
         apres = QVBoxLayout(self.bloc_apres)
-        apres.addWidget(self.barriere)
-        apres.addWidget(self.verdict)
-        apres.addWidget(self.details)
-        apres.addWidget(self.honnetete)
+        apres.addWidget(self.bloc)
         apres.addLayout(gestes)
         apres.addWidget(self.reponse_pic)
 
@@ -352,12 +357,16 @@ class MesurePage(QWidget):
             # surtout pas de « barrière non franchie », qui accuserait le montage alors que la
             # mesure n'a simplement pas été jouée jusqu'au bout.
             self.barriere.setText("")
-            self.verdict.setText(f"Mesure interrompue : {probleme or 'aucun verdict produit'}")
+            interruption = f"Mesure interrompue : {probleme or 'aucun verdict produit'}"
+            # En face et en gris : aucun verdict, donc aucune couleur à donner.
+            self.bloc.montrer({"verdict": interruption})
+            self.verdict.setText(interruption)
             self.details.setText("")
             self.honnetete.setText("")
             self._montrer_proposition(None)
             return
 
+        self.bloc.montrer(resultat)
         self._montrer_barriere(resultat)
         self.verdict.setText(resultat.get("verdict", ""))
 
