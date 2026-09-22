@@ -124,6 +124,15 @@ _VOL_DE_MARQUEURS = (
     "sur des époques trouées et le décodage raterait des flashs, les deux rendant des chiffres "
     "plausibles et faux")
 
+# La même panne, quand le second lecteur est le TEST du mode et non sa calibration. Une phrase à
+# part plutôt qu'un « calibration ou test » : le refus s'affiche tel quel à l'écran, et un
+# étudiant qui vient de cliquer « Tester » ne doit pas lire qu'il a lancé une calibration.
+_VOL_DE_MARQUEURS_TEST = (
+    "un mode et son test lisent la MÊME file de marqueurs sous le MÊME identifiant, et le moteur "
+    "n'y tient qu'UN curseur : chaque marqueur ne serait vu que par l'un des deux, au hasard du "
+    "tour de boucle. Aucune exception, aucun compteur — le test noterait des essais troués, et "
+    "son score serait plausible et faux")
+
 # ⚠️ UN SEUL PROTOCOLE MINUTÉ À LA FOIS — calibrations et mesures confondues. Même forme que la
 # phrase ci-dessus, autre cause : ici rien n'est volé, c'est la PERSONNE qui ne peut pas obéir à
 # deux consignes. Écrite ICI, une fois, et servie aux deux sens du refus — la même panne expliquée
@@ -546,6 +555,45 @@ class EngineServer:
         return (f"la calibration de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS}. Attends "
                 f"qu'elle finisse, ou abandonne-la, avant de démarrer « {spec.id} ».")
 
+    # --- le même vol, entre un mode et son TEST ------------------------------------------------
+    # Signalé par la revue de la tâche 2 du chantier « Configurer · Entraîner · Tester »
+    # (2026-09-22) : une mesure menée par une fenêtre lit ses marqueurs par
+    # `markers_murs(marker_mode_id)`, et `marker_mode_id` est l'identifiant DU MODE (« p300 »). Le
+    # moteur n'y tient qu'UN curseur par identifiant : un test lancé pendant que son mode décode
+    # verrait la moitié des flashs, le mode l'autre moitié, sans la moindre erreur. Exactement le
+    # défaut que les deux méthodes ci-dessus empêchent entre un mode et sa calibration — le test
+    # est un troisième lecteur de la même file, il fallait lui fermer la même porte.
+
+    def _refus_mesure_pendant_mode(self, mesure_spec, actifs):
+        """Refuser la mesure parce que le mode dont elle lit les marqueurs DÉCODE ? La raison, ou None.
+
+        Lu sur la CLASSE du runtime (`marker_mode_id`), la seule chose connue avant construction.
+        Une mesure sans marqueurs (le contrôle alpha, le test du MI) n'est jamais concernée ; un
+        mode qui n'en lit pas (`marker_epoch_s == 0`, le SSVEP) non plus — le taux d'émission
+        SSVEP tourne très bien pendant que le mode SSVEP décode.
+        """
+        cible = getattr(getattr(mesure_spec, "runtime_cls", None), "marker_mode_id", "") or ""
+        if not cible or cible not in actifs:
+            return None
+        mode = registry.get(cible)
+        if mode is None or mode.marker_epoch_s <= 0:
+            return None
+        return (f"« {mode.label} » DÉCODE en ce moment : {_VOL_DE_MARQUEURS_TEST}. Arrête le "
+                f"mode « {cible} » avant de le tester.")
+
+    def _refus_mode_pendant_mesure(self, spec, mesure):
+        """Refuser de démarrer `spec` parce qu'une mesure lit SES marqueurs ? La raison, ou None.
+
+        Ici on interroge l'OBJET qui tourne, comme `_refus_mode_pendant_calibration` : c'est lui
+        qui appelle `markers_murs`, donc lui qui vole.
+        """
+        if spec is None or mesure is None or mesure.terminee or spec.marker_epoch_s <= 0:
+            return None
+        if getattr(mesure, "marker_mode_id", "") != spec.id:
+            return None
+        return (f"le test de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS_TEST}. Attends qu'il "
+                f"finisse, ou abandonne-le, avant de démarrer « {spec.id} ».")
+
     # --- le refus d'une SECONDE ACTIVITÉ, dans ses DEUX sens -------------------
     # Même discipline que les deux méthodes ci-dessus : une RAISON ou None, sur une copie prise
     # par l'appelant, et servie à la fois à `submit` (qui refuse tout de suite) et à la BOUCLE
@@ -582,10 +630,12 @@ class EngineServer:
         """Démarre des modes. Ceux lancés ENSEMBLE partagent une seule phase de repos."""
         demarres = []
         calibration = self.calibration     # une seule copie, pour tous les modes de ce lot
+        mesure = self.mesure
         for spec in registry.MODES:            # ordre du registre : il arbitre les égalités
             if spec.id not in ids:
                 continue
-            refus = self._refus_mode_pendant_calibration(spec, calibration)
+            refus = (self._refus_mode_pendant_calibration(spec, calibration)
+                     or self._refus_mode_pendant_mesure(spec, mesure))
             if refus:
                 # Le second contrôle, côté BOUCLE : `submit` a jugé sur un moteur où la
                 # calibration n'était pas encore appliquée. Sans lui, `start_mode` et
@@ -812,6 +862,12 @@ class EngineServer:
             # `submit` a déjà refusé les deux cas ; on ne construit pas un `None(spec, …)` pour
             # autant si la commande arrive par un autre chemin.
             print(f"[server] mesure ignorée : « {mesure_id} » est inconnue ou n'est pas livrée")
+            return
+        # Le vol de marqueurs, côté BOUCLE : `start_mode` et `start_mesure` soumis dans la même
+        # fenêtre de sondage voient tous les deux un moteur où aucun des deux ne tourne encore.
+        refus = self._refus_mesure_pendant_mode(spec, dict(self.active))
+        if refus:
+            print(f"[server] mesure refusée : {refus}")
             return
         # ⚠️ Aucun `dossier=`, à la différence d'une calibration : une mesure n'écrit RIEN. Son
         # runtime n'accepte même pas l'argument (cf. `modes/mesure.py`), pour qu'un ajout distrait
@@ -1104,8 +1160,10 @@ class EngineServer:
             # modèle entraîné dans `data/` — un dépôt fraîchement cloné s'entendrait dire « aucun
             # choix disponible » là où la vraie raison est qu'une calibration est en cours.
             en_calibration = self.calibration   # copie unique, cf. `start_calibration` plus bas
+            en_mesure = self.mesure             # idem : la boucle peut la remettre à None
             for spec in specs:
-                refus = self._refus_mode_pendant_calibration(spec, en_calibration)
+                refus = (self._refus_mode_pendant_calibration(spec, en_calibration)
+                         or self._refus_mode_pendant_mesure(spec, en_mesure))
                 if refus:
                     return {"accepted": False, "reason": refus}
             wanted, values = params.get("params") or {}, {}
@@ -1292,7 +1350,8 @@ class EngineServer:
             # ne jamais lever). Le premier refuse une mesure pendant une calibration ; le second,
             # une mesure pendant une autre mesure — un double-clic sur « Commencer » y suffit.
             refus = (self._refus_pour_calibration_en_cours(self.calibration)
-                     or self._refus_pour_mesure_en_cours(self.mesure))
+                     or self._refus_pour_mesure_en_cours(self.mesure)
+                     or self._refus_mesure_pendant_mode(spec, dict(self.active)))
             if refus:
                 return {"accepted": False, "reason": refus}
             values, reason = contract.validate(spec, params.get("params") or {})
@@ -3734,6 +3793,91 @@ def _smoke_vol_marqueurs():
         chk((r.get("reason") or "").find("MÊME file de marqueurs") < 0,
             f"une calibration TERMINÉE ne bloque plus rien — le refus porte sur « en cours », pas "
             f"sur « existe » ({r})")
+
+        # === 🔴 LE TROISIÈME LECTEUR DE LA MÊME FILE : le TEST d'un mode =======================
+        # Chantier « Configurer · Entraîner · Tester » (2026-09-22). Une mesure menée par une
+        # fenêtre lit par `markers_murs(marker_mode_id)`, et `marker_mode_id` est l'identifiant DU
+        # MODE. Un test P300 lancé pendant que le mode P300 décode serait donc le même vol, par un
+        # troisième lecteur. Le test factice ci-dessous ne déclare que ce que le refus examine : la
+        # CLASSE et son `marker_mode_id` — les vrais tests de mode ne sont pas encore branchés.
+        from core.modes import registry as _reg
+        from core.modes.mesure import MesureSpec
+        from core.modes.mesure_marqueurs import MesureMarqueurs
+
+        from core.modes.p300 import P300Runtime
+
+        class _TestFactice(MesureMarqueurs):
+            """CONSTRUCTIBLE, et c'est ce qui rend l'assertion « côté boucle » falsifiable : sans
+            le refus, la boucle construit bel et bien cette mesure, et l'assertion rougit. La
+            première écriture, réduite à `marker_mode_id`, levait à la construction — la garde ne
+            rougissait alors que par accident, sur une exception."""
+            marker_mode_id = "p300"
+            runtime_cls_du_mode = P300Runtime
+            evenement_unite = "round_end"
+            epoque_marqueur_s = SPEC_P300.marker_epoch_s
+
+            def _encaisser_protocole(self, engine, ts, marqueur):
+                pass
+
+            def _mesurer(self, enregistre, fs):
+                return {}
+
+        spec_test = MesureSpec(id="test_p300_factice", label="Test P300 (factice)",
+                               runtime_cls=_TestFactice)
+
+        class _MesureEnCours:
+            """Un test qui TOURNE : ce que `_refus_mode_pendant_mesure` interroge, l'objet."""
+            spec = spec_test
+            marker_mode_id = "p300"
+            terminee = False
+
+        vraies = _reg.MESURES
+        _reg.MESURES = tuple(vraies) + (spec_test,)
+        try:
+            # Sens 1 : le mode DÉCODE, son test est refusé — à la soumission et dans la boucle.
+            srv.active["p300"] = _ModeFactice()
+            r = srv.submit("start_mesure", id="test_p300_factice")
+            chk(not r.get("accepted") and "DÉCODE" in (r.get("reason") or "")
+                and "tester" in (r.get("reason") or "")
+                and "calibration" not in (r.get("reason") or ""),
+                f"sens 1 — tester un mode qui DÉCODE est refusé, en disant quoi arrêter "
+                f"({(r.get('reason') or '')[:70]}…)")
+            srv._start_mesure("test_p300_factice", {})
+            chk(srv.mesure is None,
+                "sens 1, côté BOUCLE — la course (start_mode et start_mesure dans la même fenêtre "
+                "de sondage) est rattrapée : aucune mesure n'est construite")
+            srv.active.pop("p300", None)
+
+            # Sens 2 : le test TOURNE, le mode est refusé — à la soumission et dans la boucle.
+            srv.mesure = _MesureEnCours()
+            r = srv.submit("start_mode", id="p300")
+            chk(not r.get("accepted") and "test de « P300 » est EN COURS" in (r.get("reason") or ""),
+                f"sens 2 — démarrer un mode pendant que son TEST lit ses marqueurs est refusé "
+                f"({(r.get('reason') or '')[:70]}…)")
+            srv._start(["p300"], {"p300": {}}, time.perf_counter())
+            chk("p300" not in srv.active,
+                f"sens 2, côté BOUCLE — la course symétrique est rattrapée ({sorted(srv.active)})")
+
+            # Les contrôles qui rendent la garde FALSIFIABLE : elle porte sur « ce test-là, en
+            # cours, d'un mode qui lit des marqueurs » — pas sur « une mesure existe ».
+            _MesureEnCours.terminee = True
+            r = srv.submit("start_mode", id="p300")
+            chk("EN COURS" not in (r.get("reason") or ""),
+                f"un test TERMINÉ ne bloque plus le mode ({(r.get('reason') or 'accepté')[:60]})")
+            _MesureEnCours.terminee, _MesureEnCours.marker_mode_id = False, "errp"
+            r = srv.submit("start_mode", id="p300")
+            chk("EN COURS" not in (r.get("reason") or ""),
+                "…et le test d'un AUTRE mode ne bloque pas celui-ci : chacun a sa propre file")
+            srv.mesure = None
+            srv.active["ssvep"] = _ModeFactice()
+            chk(srv._refus_mesure_pendant_mode(_reg.get_mesure("ssvep_taux"), dict(srv.active))
+                is None,
+                "…et un mode qui ne lit AUCUN marqueur (le SSVEP) se teste pendant qu'il décode : "
+                "le taux d'émission SSVEP n'a jamais volé personne")
+            srv.active.pop("ssvep", None)
+        finally:
+            _reg.MESURES = vraies
+            srv.mesure = None
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
 
