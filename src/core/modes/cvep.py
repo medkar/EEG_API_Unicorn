@@ -807,7 +807,7 @@ SPEC = ModeSpec(
         instruction="Le casque se stabilise — reste immobile.",
     ),
     calibration=Calib(
-        kind="fenetre", stimulus_id="cvep", label="Calibrer le c-VEP",
+        kind="fenetre", stimulus_id="cvep", label="Entraîner le c-VEP",
         briefing=BRIEFING_CALIB,
         runtime_cls=CVEPCalibration,
         # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`

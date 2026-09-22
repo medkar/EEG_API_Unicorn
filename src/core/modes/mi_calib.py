@@ -263,7 +263,7 @@ class MICalibration(CalibrationRuntime):
 
 CALIB = Calib(
     kind="moteur",
-    label="Calibration Motor Imagery",
+    label="Entraîner le Motor Imagery",
     briefing=BRIEFING,
     epoch_s=MI_IMAGERY_S,
     params=(

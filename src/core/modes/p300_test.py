@@ -342,7 +342,7 @@ BRIEFING = (
 
 SPEC = MesureSpec(
     id="p300_test",
-    label="Test P300",
+    label="Tester le P300",
     summary="Le protocole d'entraînement, rejoué : la fenêtre cercle une cible par manche, le "
             "moteur sélectionne avec ton modèle, et on compare.",
     briefing=BRIEFING,

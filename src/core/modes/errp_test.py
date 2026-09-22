@@ -374,7 +374,7 @@ BRIEFING = (
 
 SPEC = MesureSpec(
     id="errp_test",
-    label="Test ErrP",
+    label="Tester l'ErrP",
     summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et ton réglage, "
             "et on compare aux erreurs que la fenêtre commet exprès.",
     briefing=BRIEFING,

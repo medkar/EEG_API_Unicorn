@@ -471,7 +471,7 @@ BRIEFING = (
 
 SPEC = MesureSpec(
     id="cvep_test",
-    label="Test c-VEP",
+    label="Tester le c-VEP",
     summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et tes "
             "réglages, bloc par bloc, et on compare à la cible cerclée.",
     briefing=BRIEFING,

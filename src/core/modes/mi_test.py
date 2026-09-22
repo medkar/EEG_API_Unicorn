@@ -351,7 +351,7 @@ BRIEFING = (
 
 SPEC = MesureSpec(
     id="mi_test",
-    label="Test Motor Imagery",
+    label="Tester le Motor Imagery",
     summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et tes "
             "réglages, et on compare à la consigne.",
     briefing=BRIEFING,

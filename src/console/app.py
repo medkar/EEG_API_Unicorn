@@ -198,7 +198,10 @@ class Console(QMainWindow):
             if not calib.get("jouable") or spec["status"] != "moteur":
                 continue
             page = CalibPage(spec, self)
-            page.retour.connect(self.show_grid)
+            # « ← » ramène au MODE qu'on entraîne : on y est arrivé par son bouton « Entraîner »,
+            # et la suite de la boucle — tester — se fait là. L'accueil obligeait à y revenir.
+            page.retour.connect(lambda _c=False, m=spec["id"]: self.show_mode(m))
+            page.bouton_retour.setText(f"← {spec['label']}")
             self.calib_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
@@ -2171,9 +2174,19 @@ def _smoke():
         f"une calibration annulée dit pourquoi, EN FACE — pas seulement dans un label replié "
         f"({cal.bloc.verdict.text()})")
 
+    # L'état du décodage (« arrêté »…) n'est plus en tête d'une page TESTABLE : elle ne démarre
+    # rien, et un « arrêté » en tête laissait croire qu'il fallait démarrer avant de tester. Il vit
+    # dans le repli « Décodage en direct ». Sur une page qui OBSERVE (le Neuro), il reste en tête.
+    ss, ne = console.pages["ssvep"], console.pages["neuro"]
+    chk(ss.pli_direct is not None and ss.pli_direct.isAncestorOf(ss.etat),
+        "l'état d'une page testable vit dans le repli « Décodage en direct », pas en tête")
+    chk(ne.pli_direct is None and ne.bloc_observer is not None
+        and not ne.bloc_observer.isAncestorOf(ne.etat),
+        "…et reste en tête d'une page qui observe, où il est l'objet même de la page")
     cal.bouton_retour.click()
-    chk(console.stack.currentWidget() is console.grid,
-        "et la page de calibration ramène sur la grille")
+    chk(console.stack.currentWidget() is console.pages["mi"],
+        "et la page d'entraînement ramène au MODE entraîné — la suite de la boucle, tester, se "
+        "fait là")
 
     # --- 🔴 L'ORDRE DE LANCEMENT, et la fenêtre de stimulus --------------------------------
     # C'est le piège de tout ce sous-système, et il ne lève aucune exception quand il est faux.
@@ -2638,8 +2651,8 @@ def _smoke():
         console.beeps = vrais_beeps
 
     cal.bouton_retour.click()
-    chk(console.stack.currentWidget() is console.grid,
-        "et la page de calibration ramène sur la grille, après ce test aussi")
+    chk(console.stack.currentWidget() is console.pages[cal.mode_id],
+        "et la page d'entraînement ramène au mode entraîné, après ce test aussi")
 
     # --- régression : le premier top d'une séance RELANCÉE après un ABANDON (B1) ---------------
     # `cancel()` (core/modes/calibration.py) pose l'étape vide ET la phase terminale dans le MÊME
@@ -2687,8 +2700,8 @@ def _smoke():
         console.beeps = vrais_beeps
 
     cal.bouton_retour.click()
-    chk(console.stack.currentWidget() is console.grid,
-        "et la page de calibration ramène sur la grille, après l'abandon aussi")
+    chk(console.stack.currentWidget() is console.pages[cal.mode_id],
+        "et la page d'entraînement ramène au mode entraîné, après l'abandon aussi")
 
     # --- LA PAGE D'UNE MESURE : le contrôle alpha, de bout en bout -----------------------------
     # Jumelle de la page de calibration, éprouvée de la même façon : sur des états FABRIQUÉS,

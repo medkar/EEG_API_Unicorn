@@ -171,7 +171,7 @@ class Calib:
 
     kind: str              # "moteur" (le moteur mène) | "fenetre" (une fenêtre de stimulus mène)
     stimulus_id: str = ""  # la CLÉ que `stimulus/registry.py` résout ; "" si kind == "moteur"
-    label: str = ""        # "Calibration Motor Imagery" — le titre de la page
+    label: str = ""        # "Entraîner le Motor Imagery" — le titre de la page
     briefing: tuple = ()   # les consignes à lire AVANT de commencer, une ligne par élément
     params: tuple = ()     # les `Param` de la calibration (durée de séance…)
     epoch_s: float = 0.0   # la plus longue tranche prélevée dans le tampon du moteur

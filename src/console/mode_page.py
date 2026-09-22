@@ -72,9 +72,10 @@ class ModePage(QWidget):
         entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
         entete.addStretch(1)
+        # L'état du décodage (« arrêté », « décode »…). Placé UNE fois, plus bas, selon la page :
+        # en tête quand la page l'observe, dans le repli « Décodage en direct » sinon.
         self.etat = QLabel("")
         self.etat.setStyleSheet(GRIS)
-        entete.addWidget(self.etat)
 
         # --- 1. Régler ---------------------------------------------------------------------------
         self.formulaire = ParamsForm(spec["params"])
@@ -179,6 +180,7 @@ class ModePage(QWidget):
                 dedans.addLayout(haut)
             dedans.addWidget(self.vue, 1)
             blocs.append(self.bloc_observer)
+            entete.addWidget(self.etat)      # ici l'état EST l'objet de la page
         else:
             # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille,
             # et reviendra en face avec « Connecter ». Cachée SANS case pour l'ouvrir, elle serait
@@ -190,6 +192,11 @@ class ModePage(QWidget):
             pli.setContentsMargins(0, 0, 0, 0)
             pli.addWidget(_phrase("Vide tant que le décodage continu ne tourne pas : il se "
                                   "démarre depuis la tuile du mode, sur l'accueil."))
+            # L'état du décodage (« arrêté », « décode »…) vit ICI, et plus dans l'en-tête : une
+            # page testable ne démarre ni n'arrête rien, donc un « arrêté » en tête de page n'y
+            # disait rien d'utile — il laissait croire qu'il fallait démarrer quelque chose avant
+            # de tester (relevé à la livraison de la page en blocs).
+            pli.addWidget(self.etat)
             pli.addWidget(self.vue, 1)
             self.pli_direct.setVisible(False)
             self.direct.toggled.connect(self.pli_direct.setVisible)

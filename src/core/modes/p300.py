@@ -567,7 +567,7 @@ SPEC = ModeSpec(
     # `pre_s + post_s` du runtime. On y écrit donc la géométrie que cette calibration prélève
     # vraiment — c'est la seule valeur qui ne mente pas à un lecteur.
     calibration=Calib(kind="fenetre", stimulus_id="p300",
-                      label="Calibrer le P300",
+                      label="Entraîner le P300",
                       briefing=BRIEFING_CALIB,
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),

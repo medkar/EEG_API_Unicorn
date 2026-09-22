@@ -343,7 +343,7 @@ def bilan_de_seance(frames, sautees, refresh):
     gardé par aucune assertion ; il rend donc un dictionnaire, que `run` recopie dans son paramètre
     `bilan`, et les deux ne peuvent pas diverger puisqu'il n'y a qu'une source.
 
-    ⚠️ En mode GUIDÉ, ce bilan est ce que la mesure « Taux d'émission SSVEP » peut lire dans le
+    ⚠️ En mode GUIDÉ, ce bilan est ce que le test du SSVEP peut lire dans le
     terminal. Sans lui, un taux mesuré sur un stimulus qui s'est figé est indiscernable d'un taux
     mesuré sur un stimulus propre — et c'est le chiffre entier qu'on irait ensuite citer.
     """
@@ -691,7 +691,7 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         if not outlet.wait_for_consumers(attente_consommateur_s):
             print(f"[ssvep-stim] ⚠️ PERSONNE n'écoute « {outlet.get_info().name()} » après "
                   f"{attente_consommateur_s:g} s. La mesure est-elle lancée dans la console "
-                  f"(tuile « Taux d'émission SSVEP ») ? Je clignote quand même.")
+                  f"(bouton « Tester » de la page SSVEP) ? Je clignote quand même.")
         else:
             print("[ssvep-stim] le moteur écoute — on peut commencer.")
 

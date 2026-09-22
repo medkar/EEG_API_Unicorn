@@ -705,7 +705,7 @@ SPEC = ModeSpec(
         instruction="Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
     ),
     calibration=Calib(kind="fenetre", stimulus_id="errp",
-                      label="Calibrer l'ErrP",
+                      label="Entraîner l'ErrP",
                       briefing=BRIEFING_CALIB,
                       # La géométrie que la calibration PRÉLÈVE, écrite comme la somme que le
                       # runtime découpe — pas un nombre choisi à part, qui dériverait le jour où

@@ -663,7 +663,7 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
 
 SPEC = MesureSpec(
     id="ssvep_taux",
-    label="Taux d'émission SSVEP",
+    label="Tester le SSVEP",
     summary="Quand le moteur annonce une cible, est-ce la bonne — et à quelle fréquence "
             "annonce-t-il quelque chose ? Une fenêtre désigne la cible, le moteur mesure.",
     briefing=BRIEFING,
