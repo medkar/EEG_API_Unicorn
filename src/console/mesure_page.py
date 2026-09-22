@@ -373,7 +373,8 @@ class MesurePage(QWidget):
         """
         if freqs:
             valeurs = " · ".join(f"{float(f):g}" for f in freqs)
-            origine = f" — celles de la page « {self.mode['label']} », qui se changent là-bas"                 if self.mode else ""
+            origine = (f" — celles de la page « {self.mode['label']} », qui se changent là-bas"
+                       if self.mode else "")
             self.frequences.setText(f"Fréquences testées : {valeurs} Hz{origine}.")
         else:
             self.frequences.setText("")
