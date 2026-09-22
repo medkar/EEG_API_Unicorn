@@ -40,7 +40,13 @@ FENETRES = {
 # clignotement que le décodage, avec des consignes en plus — c'est la même distinction qu'entre
 # `--calibrer` et le décodage pour les trois autres fenêtres, sous un autre mot parce que le
 # résultat est un verdict et pas un modèle.
-MESURE_OPTIONS = {"ssvep": ("--guide",)}
+MESURE_OPTIONS = {
+    "ssvep": ("--guide",),
+    # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
+    # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
+    # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option
+    # de mesure qu'aucune mesure n'utilise — de la configuration morte (spec du 2026-09-22 §4).
+}
 
 
 def options_de_mesure(stimulus_id):
@@ -77,6 +83,31 @@ def sait_journaliser(stimulus_id):
 # FRÉQUENCES. Le P300 et l'ErrP montrent des événements, le c-VEP un code pseudo-aléatoire dont la
 # séparation est une PHASE, pas une période.
 FREQUENCES = {"ssvep": "--freqs"}
+
+
+# L'argument qui fixe la LONGUEUR d'une séance guidée, par fenêtre — et donc la durée d'un test.
+# ⚠️ Chaque fenêtre compte dans SA propre unité, et le `Param` de la mesure qui la sert doit être
+# exprimé dans la même : des essais PAR CIBLE pour le SSVEP, des MANCHES pour le P300, des ESSAIS
+# pour l'ErrP, des CYCLES par bloc pour le c-VEP. Une valeur passée dans la mauvaise unité ne lève
+# rien : la séance est juste six fois trop courte, ou trop longue, que ce que l'écran annonce.
+#
+# Pourquoi ça existe : l'ErrP calibre en 200 essais, 5,7 minutes. Un bouton « Tester » qu'on refait
+# à chaque réglage ne peut pas coûter ça — la boucle régler → tester → ajuster doit être RAPIDE.
+COMPTES = {"ssvep": "--trials", "p300": "--rounds", "errp": "--essais", "cvep": "--cycles"}
+
+
+def option_compte(stimulus_id, n):
+    """Les arguments qui fixent la longueur d'une séance guidée. () si la fenêtre n'en a pas, ou si
+    `n` n'est pas un entier positif — la fenêtre garde alors sa longueur par défaut plutôt que de
+    planter au démarrage sur une valeur absurde."""
+    argument = COMPTES.get(stimulus_id)
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ()
+    if not argument or n <= 0:
+        return ()
+    return (argument, str(n))
 
 
 def option_frequences(stimulus_id, freqs):
@@ -119,6 +150,29 @@ def _selftest():
         nonlocal ok
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
+
+    # Chaque argument que CE registre ajoute à une fenêtre doit exister dans SON analyseur : sinon
+    # argparse la tue au démarrage (« unrecognized arguments »), et un « Tester » qui ne s'ouvre pas
+    # au milieu d'une séance coûte la séance. On lit la source de la fenêtre plutôt que de l'importer
+    # (elle importe pygame).
+    def _declare(cle, argument):
+        with open(_os.path.join(_ICI, FENETRES[cle]), encoding="utf-8") as f:
+            return f'add_argument("{argument}"' in f.read()
+
+    inconnus = [(k, a) for table in (COMPTES, FREQUENCES) for k, a in table.items()
+                if not _declare(k, a)]
+    inconnus += [(k, a) for k, args in MESURE_OPTIONS.items() for a in args if not _declare(k, a)]
+    chk(not inconnus,
+        f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
+        f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
+        f"arguments »")
+    chk(option_compte("errp", 40) == ("--essais", "40") and option_compte("p300", "6") == ("--rounds", "6"),
+        f"la longueur d'un test part dans l'unité de SA fenêtre ({option_compte('errp', 40)}, "
+        f"{option_compte('p300', '6')})")
+    chk(option_compte("errp", None) == () and option_compte("errp", 0) == ()
+        and option_compte("inconnue", 5) == (),
+        "…et une longueur absente, nulle, ou une fenêtre sans option de longueur n'ajoute RIEN : "
+        "la fenêtre garde sa longueur par défaut plutôt que de planter")
 
     manquants = [k for k, f in FENETRES.items() if not _os.path.isfile(_os.path.join(_ICI, f))]
     chk(not manquants,
