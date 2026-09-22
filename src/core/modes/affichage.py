@@ -47,6 +47,51 @@ RESERVE_HORS_LIGNE = ("Chiffre calculé sur les essais d'entraînement : c'est �
                       "ce que le mode fait vraiment.")
 
 
+# Le seuil d'un « au-dessus du hasard » : 5 %, UNILATÉRAL. Le seuil usuel, fixé AVANT de regarder
+# les données de ce dépôt — un seuil choisi pour faire passer tel résultat ne prouverait plus rien.
+SEUIL_HASARD = 0.05
+
+
+def p_hasard(n_justes, n, hasard):
+    """La p-value du test binomial EXACT, unilatéral : P(X ≥ `n_justes`) sous X ~ B(`n`, `hasard`).
+
+    « Si le décodeur répondait au hasard, quelle chance aurait-il de faire AU MOINS aussi bien ? »
+    `n` est un nombre de DÉCISIONS (une par essai, jamais une par fenêtre), `hasard` la probabilité
+    d'une bonne réponse au hasard (1/6 pour six cibles). Zéro décision : p = 1, rien n'est prouvé.
+
+    ⚠️ **Pourquoi pas la borne basse de Wilson, qui tenait lieu de porte jusqu'au 2026-09-22.**
+    Quand toutes les décisions sont justes, elle vaut n/(n + z²) : elle dépasse 1/6 dès UNE
+    décision (0,207) et 1/3 dès deux (0,342). Un test c-VEP qui n'avait émis qu'une fois, juste,
+    sur 18 blocs, était peint ORANGE — « nettement au-dessus du hasard » — alors qu'un tirage au dé
+    y arrive une fois sur six. Wilson reste l'INTERVALLE qu'on affiche ; la DÉCISION « au-dessus
+    du hasard ou non » est celle-ci, et elle est partagée par tous les tests qui en prennent une
+    (SSVEP, MI, P300, c-VEP) et par la calibration MI : deux portes écrites séparément finiraient
+    par juger le même effectif de deux façons.
+
+    L'ErrP n'est pas concerné : c'est un détecteur sans hasard unique, jugé par le test exact de
+    Fisher sur son couple (bonnes commandes gardées, erreurs attrapées).
+    """
+    n, n_justes = int(n), int(n_justes)
+    if n <= 0:
+        return 1.0
+    # Import tardif : ce module est aussi lu par la console, qui ne peint que des niveaux.
+    from scipy.stats import binomtest
+
+    return float(binomtest(n_justes, n, float(hasard), alternative="greater").pvalue)
+
+
+def au_dessus_du_hasard(n_justes, n, hasard):
+    """La porte : le test binomial exact rejette-t-il le hasard au seuil de 5 % ? Cf. `p_hasard`."""
+    return p_hasard(n_justes, n, hasard) < SEUIL_HASARD
+
+
+def texte_p(p):
+    """`0.111` -> `"p = 0,111"` ; sous le millième, `"p < 0,001"` — trois décimales, pas plus."""
+    if p < 0.001:
+        return "p < 0,001"
+    return f"p = {p:.3f}".replace(".", ",")
+
+
 def pct(x, decimales=0):
     """`0.385` -> `"38 %"`. Virgule décimale et espace : c'est un écran pour des étudiants
     francophones, pas un journal. Zéro décimale par défaut — sur 90 essais, l'intervalle de
@@ -243,6 +288,33 @@ def _selftest():
         "…et un pourcentage sans son point de comparaison aussi")
     chk(verifier({"verdict": "x"}) and "absente" in verifier({"verdict": "x"})[0],
         "…et un résultat qui n'a pas ses quatre clés d'affichage")
+
+    # --- « Au-dessus du hasard » : le test binomial EXACT, unilatéral, UNE fonction partagée ---
+    # Les cas de la revue du 2026-09-22, où Wilson concluait et le test exact non.
+    import sys as _s
+    module = _s.modules[__name__]
+    p_hasard = getattr(module, "p_hasard", None)
+    au_dessus = getattr(module, "au_dessus_du_hasard", None)
+    chk(callable(p_hasard) and callable(au_dessus),
+        "le module offre `p_hasard` et `au_dessus_du_hasard` — la porte que les tests partagent")
+    if callable(p_hasard) and callable(au_dessus):
+        cas = ((1, 1, 1 / 6, 1 / 6), (2, 2, 1 / 3, 1 / 9), (4, 4, 1 / 2, 1 / 16),
+               (2, 3, 1 / 6, 3 * (1 / 6) ** 2 * (5 / 6) + (1 / 6) ** 3))
+        chk(all(abs(p_hasard(k, n, h) - attendu) < 1e-12 for k, n, h, attendu in cas),
+            f"p = P(X ≥ k) sous X ~ B(n, hasard), calculée EXACTEMENT : 1/1 à 1/6 -> "
+            f"{p_hasard(1, 1, 1 / 6):.3f}, 2/2 à 1/3 -> {p_hasard(2, 2, 1 / 3):.3f}, 4/4 à 1/2 -> "
+            f"{p_hasard(4, 4, 1 / 2):.4f}")
+        chk(not any(au_dessus(k, n, h) for k, n, h, _p in cas),
+            "…et AUCUN de ces quatre cas n'est « au-dessus du hasard » : une ou deux décisions "
+            "justes ne prouvent rien, là où la borne de Wilson concluait déjà")
+        chk(au_dessus(14, 18, 1 / 3) and au_dessus(5, 12, 1 / 6) and not au_dessus(6, 13, 1 / 3),
+            f"…alors que 14/18 à 1/3 (p = {p_hasard(14, 18, 1 / 3):.1e}) et 5/12 à 1/6 "
+            f"(p = {p_hasard(5, 12, 1 / 6):.3f}) le sont, et 6/13 à 1/3 non")
+        chk(p_hasard(0, 0, 1 / 3) == 1.0 and not au_dessus(0, 0, 1 / 3),
+            "zéro décision : p = 1, rien n'est prouvé")
+        texte_p = getattr(module, "texte_p", None)
+        chk(callable(texte_p) and texte_p(1 / 9) == "p = 0,111" and texte_p(1e-5) == "p < 0,001",
+            f"la p-value s'écrit à la française ({texte_p(1 / 9) if callable(texte_p) else '—'})")
 
     chk(pct(0.385) == "38 %" and pct(1 / 6) == "17 %" and pct(0.385, 1) == "38,5 %",
         f"les pourcentages s'écrivent à la française ({pct(0.385)}, {pct(1 / 6)}, {pct(0.385, 1)})")

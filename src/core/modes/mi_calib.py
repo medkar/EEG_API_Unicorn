@@ -27,7 +27,9 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa
                          MI_WINDOW_S, SSVEP_WARMUP_S, use_utf8_console)
 from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
-from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
+from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
+                                  niveau_par_seuils, non_mesure, p_hasard, pct, texte_p,
+                                  verifier)
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.modes.contract import Calib, Param  # noqa: E402
 
@@ -131,11 +133,47 @@ def decouper(epoque, n, pas):
     return [epoque[i:i + n].T for i in range(0, len(epoque) - n + 1, pas)]
 
 
-def verdict(cv):
+def _non_significatif(cv, n_essais, hasard):
+    """Un chiffre que la TABLE jugerait utilisable ou mieux, mais que le hasard produit aussi.
+
+    M-5 (revue du 2026-09-22) : 14/30 à 3 classes = 47 % passait la ligne orange (45 %) alors
+    qu'un tirage au hasard fait aussi bien une fois sur dix. L'orange promet « nettement au-dessus
+    du hasard » : c'est le test binomial EXACT qui le dit (`affichage.au_dessus_du_hasard`, la
+    porte des tests), sur les ESSAIS — l'unité de la validation croisée, jamais les fenêtres.
+    Sous la ligne FAIBLE, la table garde la main : son conseil (le signal) est le bon.
+    """
+    if cv is None or not n_essais or not hasard:
+        return False
+    if niveau_par_seuils(cv, VERDICTS) == "faible":
+        return False
+    return not au_dessus_du_hasard(int(round(cv * n_essais)), int(n_essais), hasard)
+
+
+def verdict(cv, n_essais=None, hasard=None):
+    """La phrase. Avec `n_essais` et `hasard`, un chiffre indistinguable du hasard est déclaré
+    NON SIGNIFICATIF au lieu d'« utilisable » — cf. `_non_significatif`."""
+    if _non_significatif(cv, n_essais, hasard):
+        p = p_hasard(int(round(cv * n_essais)), int(n_essais), hasard)
+        return (f"NON SIGNIFICATIF (test binomial exact sur {n_essais} essais, {texte_p(p)}) : un "
+                f"tirage au hasard fait aussi bien. Ce modèle ne se garde pas — refais la séance, "
+                f"reposé, avant de t'en servir")
     for seuil, texte in VERDICTS:
         if cv >= seuil:
             return texte
     return VERDICTS[-1][1]
+
+
+def lignes_de(cv, n_essais, hasard):
+    """Les quatre clés d'affichage — du MÊME calcul que `verdict` (même porte, même table)."""
+    if cv is None:
+        return non_mesure("pas assez d'essais distincts par classe pour une validation croisée",
+                          "Refais la séance avec plus d'essais par classe.")
+    chiffres = f"{pct(cv)} de classes justes (hasard {pct(hasard)}) sur {n_essais} essais"
+    if _non_significatif(cv, n_essais, hasard):
+        return lignes("faible", "NON SIGNIFICATIF", chiffres,
+                      "Indistinguable du hasard sur ce nombre d'essais : ne garde pas ce modèle, "
+                      "refais la séance.")
+    return depuis_table(cv, VERDICTS, chiffres)
 
 
 class MICalibration(CalibrationRuntime):
@@ -230,7 +268,7 @@ class MICalibration(CalibrationRuntime):
                            "pour une validation croisée")
             print(f"[mi-calib] {verdict_txt}")
         else:
-            verdict_txt = verdict(cv)
+            verdict_txt = verdict(cv, len(enregistre), hasard)
             print(f"[mi-calib] accuracy HONNÊTE (validation croisée par essai) : {cv*100:.1f}% "
                   f"— hasard {hasard*100:.0f}% — {verdict_txt}")
         print(f"[mi-calib] (pour mémoire, la CV naïve, fenêtres mélangées : "
@@ -248,12 +286,8 @@ class MICalibration(CalibrationRuntime):
             "hasard": hasard,
             "classes": list(self.classes),
             "verdict": verdict_txt,
-            # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`) — même table que le verdict.
-            **(non_mesure("pas assez d'essais distincts par classe pour une validation croisée",
-                          "Refais la séance avec plus d'essais par classe.") if cv is None
-               else depuis_table(cv, VERDICTS,
-                                 f"{pct(cv)} de classes justes (hasard {pct(hasard)}) "
-                                 f"sur {len(enregistre)} essais")),
+            # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`) — même calcul que le verdict.
+            **lignes_de(cv, len(enregistre), hasard),
             # La phrase qui dit ce que ce chiffre vaut. Elle voyage AVEC le résultat, parce que
             # l'écran qui l'affiche est générique et ne connaît aucun mode : celle du P300 parle
             # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes.
@@ -388,7 +422,7 @@ def _selftest():
         # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
         chk(not _verifier_affichage(res),
             f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
-        chk(res["verdict"] == verdict(res["cv_groupee"]),
+        chk(res["verdict"] == verdict(res["cv_groupee"], res["n_essais"], res["hasard"]),
             f"le verdict est recalculé depuis la CV HONNÊTE, pas depuis la naïve "
             f"({res['verdict']!r} == verdict({res['cv_groupee']!r}))")
 
@@ -585,8 +619,10 @@ def _selftest():
         # séance principale (`res`) ne suffit pas à elle seule à débusquer un `verdict(cv_naive)`
         # ici, ses deux CV tombent dans le MÊME palier — ces deux-ci, si : `cv_groupee`/`cv_naive`
         # encadrent une frontière de `VERDICTS` sur chacune (vérifié sur cette graine).
-        chk(res1.get("verdict") == verdict(res1.get("cv_groupee"))
-            and res2.get("verdict") == verdict(res2.get("cv_groupee")),
+        chk(res1.get("verdict") == verdict(res1.get("cv_groupee"), res1.get("n_essais"),
+                                           res1.get("hasard"))
+            and res2.get("verdict") == verdict(res2.get("cv_groupee"), res2.get("n_essais"),
+                                               res2.get("hasard")),
             f"et sur ces deux séances aussi, le verdict recoupe la CV honnête, pas la naïve "
             f"(séance 1 : {res1.get('verdict')!r} pour honnête {res1.get('cv_groupee')!r}, "
             f"naïve {res1.get('cv_naive')!r} ; séance 2 : {res2.get('verdict')!r} pour honnête "
@@ -595,6 +631,28 @@ def _selftest():
         chk(verdict(0.70) == "EXCELLENT" and verdict(0.50) == "UTILISABLE"
             and verdict(0.40).startswith("FAIBLE"),
             "les verdicts sont calés sur l'échelle HONNÊTE : 40 % n'est pas « utilisable »")
+
+        # --- M-5 : un chiffre que le hasard produit n'est pas « UTILISABLE » ---------------------
+        # 14/30 à 3 classes = 47 %, au-dessus de la ligne orange (45 %), mais un tirage au hasard
+        # fait aussi bien près d'une fois sur dix (p = 0,090). La couleur promet « nettement au-dessus du hasard » :
+        # c'est le test binomial EXACT qui le dit, par la MÊME fonction que les cinq tests.
+        try:
+            v_ns = verdict(14 / 30, n_essais=30, hasard=1 / 3)
+        except TypeError:
+            v_ns = ""
+        lignes_de = globals().get("lignes_de")
+        aff_ns = lignes_de(14 / 30, 30, 1 / 3) if callable(lignes_de) else {}
+        chk(v_ns.startswith("NON SIGNIFICATIF") and "p = 0,090" in v_ns
+            and aff_ns.get("niveau") == "faible" and aff_ns.get("mot") == "NON SIGNIFICATIF",
+            f"14/30 à 3 classes n'est PAS distinguable du hasard : rouge, « NON SIGNIFICATIF », "
+            f"et la p-value dans le verdict ({aff_ns.get('niveau')}, {v_ns[:60]!r})")
+        aff_ok = lignes_de(21 / 30, 30, 1 / 3) if callable(lignes_de) else {}
+        chk(aff_ok.get("niveau") == "bon"
+            and verdict(21 / 30, n_essais=30, hasard=1 / 3) == "EXCELLENT",
+            f"…tandis que 21/30 l'est, et garde la table ({aff_ok.get('niveau')})")
+        chk(callable(lignes_de) and not verifier({**aff_ns, "verdict": v_ns})
+            and not verifier({**aff_ok, "verdict": "EXCELLENT"}),
+            "…et le MOT ouvre le verdict dans les deux cas : un seul calcul")
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
 
