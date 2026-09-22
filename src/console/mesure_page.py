@@ -86,11 +86,19 @@ class MesurePage(QWidget):
         ("fenetres_repos", "plancher sur {:d} fenêtres de repos"),
     )
 
-    def __init__(self, spec, console):
+    def __init__(self, spec, console, mode=None):
+        """`mode` : le contrat SÉRIALISÉ du mode que cette mesure TESTE (son `test_id`), ou None.
+
+        C'est la console qui le résout dans le catalogue, et cette page n'en tire que deux choses :
+        quels réglages VIENNENT du mode (clés partagées), et le nom de la page où ils se changent.
+        """
         super().__init__()
         self.spec = spec
         self.console = console
         self.mesure_id = spec["id"]
+        self.mode = mode
+        # Le verdict affiché date-t-il d'AVANT la dernière ouverture de cette page ? (cf. `ouvrir`)
+        self._precedent = False
         # L'étape telle que vue au DERNIER rafraîchissement, pour détecter le changement et ne
         # sonner qu'une fois (cf. `_maybe_beep`). `None` = aucune séance observée.
         self._etape_precedente = None
@@ -114,19 +122,56 @@ class MesurePage(QWidget):
         self.audio_avertissement.setStyleSheet("color: #b8860b; font-weight: bold;")
         if not console.beeps.disponible:
             # Fixé une fois pour toutes : la disponibilité de l'audio ne change pas en cours de
-            # session. ⚠️ Le message est PLUS ferme que celui d'une calibration, parce que l'enjeu
-            # l'est : sur une calibration MI, les tops épargnent un regard vers l'écran ; ici, la
-            # personne a les yeux FERMÉS et n'a aucun autre moyen de savoir quand rouvrir.
-            self.audio_avertissement.setText(
-                f"⚠ Pas de son sur cette machine ({console.beeps.raison}). Or la seconde moitié "
-                f"de cette mesure se fait LES YEUX FERMÉS : sans top, tu ne sauras pas quand "
-                f"rouvrir. Fais-toi accompagner par quelqu'un qui lit l'écran et te le dit à "
-                f"voix haute, ou branche une sortie audio avant de commencer.")
+            # session.
+            if spec.get("yeux_fermes", False):
+                # ⚠️ PLUS ferme que pour le reste, parce que l'enjeu l'est : la personne a les
+                # yeux FERMÉS et n'a aucun autre moyen de savoir quand rouvrir. C'est le MOTEUR qui
+                # déclare qu'un protocole se fait les yeux fermés (`MesureSpec.yeux_fermes`) : cet
+                # avertissement était posé sur TOUTE page de mesure, et les cinq pages « Tester »
+                # annonçaient sans son une « seconde moitié les yeux fermés » qui n'existe pas —
+                # on y fixe une fenêtre, ou on lit une consigne (constat I3 de la revue).
+                self.audio_avertissement.setText(
+                    f"⚠ Pas de son sur cette machine ({console.beeps.raison}). Or une partie de "
+                    f"cette séance se fait LES YEUX FERMÉS : sans top, tu ne sauras pas quand "
+                    f"rouvrir. Fais-toi accompagner par quelqu'un qui lit l'écran et te le dit à "
+                    f"voix haute, ou branche une sortie audio avant de commencer.")
+            else:
+                self.audio_avertissement.setText(
+                    f"⚠ Pas de son sur cette machine ({console.beeps.raison}) : les tops qui "
+                    f"annoncent chaque étape ne sonneront pas. La séance se déroule quand même "
+                    f"— suis la consigne écrite à l'écran.")
         self.formulaire = ParamsForm(list(spec.get("params") or ()))
         # Cette page n'APPLIQUE aucun réglage en cours de route : une mesure se règle avant de
         # partir, et son formulaire est soumis avec `start_mesure`. Le bouton du formulaire
         # générique n'aurait donc rien à faire, et un bouton sans effet est un mensonge.
         self.formulaire.bouton.hide()
+        # 🔴 Les réglages qui VIENNENT DU MODE testé sont en LECTURE SEULE (constat I5 de la revue).
+        # Éditables ici, ils faisaient une seconde copie de la configuration : on montait le seuil
+        # du MI sur la page de test, le verdict passait au vert — et le mode, son décodage
+        # continu et l'application de l'étudiant gardaient l'ancienne valeur. Le verdict décrivait
+        # une configuration qui n'existait nulle part. Le critère « vient du mode » se lit dans le
+        # CATALOGUE (les clés des réglages du mode), jamais dans une liste tenue ici ; seuls les
+        # réglages PROPRES au test (sa longueur) restent modifiables.
+        cles_du_mode = {p["key"] for p in (mode or {}).get("params") or ()}
+        self.depuis_le_mode = [cle for cle in self.formulaire.champs if cle in cles_du_mode]
+        for cle in self.depuis_le_mode:
+            # Désactivé EXPLICITEMENT : `update_from` réactive le formulaire entier après une
+            # séance, et Qt ne réactive pas un enfant qu'on a désactivé lui-même.
+            self.formulaire.champs[cle].setEnabled(False)
+        self.origine = QLabel(
+            f"Les réglages grisés sont ceux de la page « {mode['label']} » : ils se changent "
+            f"là-bas, bloc « 1. Régler », et ce test part avec eux. Ici, seule la longueur du "
+            f"test se règle." if self.depuis_le_mode else "")
+        self.origine.setWordWrap(True)
+        self.origine.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.origine.setVisible(bool(self.depuis_le_mode))
+        # Un modèle ENTRAÎNÉ mais pas encore ENREGISTRÉ n'est pas dans la liste : il vit dans un
+        # dossier temporaire. « Tester avant de garder » est le geste naturel — et il testait en
+        # silence le modèle PRÉCÉDENT (constat C1 de la revue, côté console). On le dit.
+        self.candidat = QLabel("")
+        self.candidat.setWordWrap(True)
+        self.candidat.setStyleSheet("color: #b8860b; font-weight: bold;")
+        self.candidat.setVisible(False)
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
@@ -140,6 +185,8 @@ class MesurePage(QWidget):
         avant = QVBoxLayout(self.bloc_avant)
         avant.addWidget(self.briefing)
         avant.addWidget(self.audio_avertissement)
+        avant.addWidget(self.candidat)
+        avant.addWidget(self.origine)
         avant.addWidget(self.formulaire)
         avant.addWidget(self.duree)
         avant.addWidget(self.bouton_commencer)
@@ -204,7 +251,17 @@ class MesurePage(QWidget):
         # une ACTION, pas une explication.
         self.bloc = BlocResultat(corps_auto=False)
         self.bloc.ajouter_au_detail(self.barriere, self.verdict, self.details, self.honnetete)
+        # Un résultat retrouvé en REVENANT sur la page date d'avant : on a pu changer les réglages
+        # entre-temps (« ← SSVEP », une autre fréquence, « Tester »), et le vert d'hier coiffait la
+        # page comme s'il décrivait ceux d'aujourd'hui (constat M1 de la revue).
+        self.precedent = QLabel(
+            "Résultat d'une séance PRÉCÉDENTE : il ne décrit pas forcément tes réglages actuels. "
+            "« Commencer », plus bas, relance sur ceux-ci.")
+        self.precedent.setWordWrap(True)
+        self.precedent.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.precedent.setVisible(False)
         apres = QVBoxLayout(self.bloc_apres)
+        apres.addWidget(self.precedent)
         apres.addWidget(self.bloc)
         apres.addLayout(gestes)
         apres.addWidget(self.reponse_pic)
@@ -288,6 +345,16 @@ class MesurePage(QWidget):
             if param.key in cles and param.choices_fn is not None:
                 self.formulaire.set_choices(param.key, param.choices_now())
 
+    def ouvrir(self, state):
+        """Appelée quand on ARRIVE sur la page (`Console.show_mesure`), pas à chaque rafraîchissement.
+
+        Un résultat déjà là à l'arrivée est celui d'une séance précédente : il le reste jusqu'à ce
+        qu'une nouvelle séance démarre (cf. `update_from`).
+        """
+        etat = (state or {}).get("mesure") or {}
+        self._precedent = (etat.get("mode_id") == self.mesure_id
+                           and etat.get("phase") in PHASES_TERMINALES)
+
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le contrôle de liaison) a répondu à « Commencer »."""
         self.avis.setText(texte or "")
@@ -343,6 +410,19 @@ class MesurePage(QWidget):
         self.bloc_apres.setVisible(termine)
         self.formulaire.setEnabled(not en_cours)
         self.bouton_commencer.setEnabled(not en_cours)
+        if en_cours:
+            self._precedent = False
+        self.precedent.setVisible(termine and self._precedent)
+        self.bloc_apres.setTitle("Résultat précédent" if self._precedent else "Résultat")
+
+        calib = (state or {}).get("calibration") or {}
+        attend = (self.mode is not None and calib.get("mode_id") == self.mode.get("id")
+                  and bool(calib.get("candidat")))
+        self.candidat.setText(
+            "⚠ Le modèle que tu viens d'entraîner n'est PAS encore enregistré : ce test porte sur "
+            "le modèle affiché ci-dessous, pas sur lui. « Enregistrer le modèle » d'abord (page "
+            "« Entraîner »), puis reviens tester." if attend else "")
+        self.candidat.setVisible(attend)
 
         if etat is not None:
             self.duree.setText(

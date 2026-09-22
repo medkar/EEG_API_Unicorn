@@ -218,7 +218,10 @@ class Console(QMainWindow):
         for spec in mesures:
             if not spec.get("jouable"):
                 continue
-            page = MesurePage(spec, self)
+            # Le mode que cette mesure TESTE, s'il y en a un : sa page en tire les réglages qui
+            # viennent de lui (en lecture seule) et le nom de la page où ils se changent.
+            page = MesurePage(spec, self,
+                              mode=self.catalogue.get(self._mode_teste_par(spec["id"])))
             page.retour.connect(self._retour_de_mesure)
             self.mesure_pages[spec["id"]] = page
             self.stack.addWidget(page)
@@ -884,6 +887,7 @@ class Console(QMainWindow):
         # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la page
         # reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une mesure
         # vient de se terminer et que le verdict est là, à lire.
+        page.ouvrir(self._dernier_etat)
         page.update_from(self._dernier_etat)
         self.stack.setCurrentWidget(page)
 
@@ -2847,6 +2851,30 @@ def _smoke():
         f"sans sortie audio, la page DIT que la mesure se fait les yeux fermés et qu'on ne "
         f"saura pas quand rouvrir — plutôt que de laisser un top silencieux passer pour un "
         f"départ manqué ({mes_muette.audio_avertissement.text()[:60]}…)")
+    # 🔴 …et SEULEMENT là où c'est vrai (constat I3 de la revue). L'avertissement était posé sur
+    # TOUTE page de mesure : sans son, les cinq pages « Tester » annonçaient une « seconde moitié
+    # les yeux fermés » — on y fixe une fenêtre, ou on lit une consigne. C'est le MOTEUR qui
+    # déclare quel protocole se fait les yeux fermés (`yeux_fermes` dans le catalogue). Deux
+    # pages FABRIQUÉES d'abord, pour éprouver la règle de la page quel que soit le catalogue…
+    ferme_fab = MesurePage({**console.mesures["p300_test"], "yeux_fermes": True},
+                           _ConsoleSansSon())
+    ouvert_fab = MesurePage({**console.mesures["alpha"], "yeux_fermes": False}, _ConsoleSansSon())
+    chk("YEUX FERMÉS" in ferme_fab.audio_avertissement.text()
+        and "YEUX FERMÉS" not in ouvert_fab.audio_avertissement.text().upper()
+        and "ne sonneront pas" in ouvert_fab.audio_avertissement.text(),
+        f"la page lit `yeux_fermes` dans le contrat, et rien d'autre : sans lui, un avertissement "
+        f"générique ({ouvert_fab.audio_avertissement.text()[:70]!r}…)")
+    # …puis le VRAI catalogue : chaque page de test dit la vérité sur son propre protocole.
+    # (Les pages sont GARDÉES le temps de les lire : une page temporaire est détruite par Qt avant
+    # qu'on ait lu son label.)
+    muettes = {mid: MesurePage(dict(sp), _ConsoleSansSon()) for mid, sp in console.mesures.items()}
+    fausses = [mid for mid, pg in muettes.items()
+               if not console.mesures[mid].get("yeux_fermes", False)
+               and "YEUX FERMÉS" in pg.audio_avertissement.text().upper()]
+    chk(not fausses and console.mesures["alpha"].get("yeux_fermes") is True,
+        f"…et sur le vrai catalogue, aucune page dont le protocole ne ferme pas les yeux ne le "
+        f"prétend ({fausses or 'aucune'}) — seul le contrôle alpha le déclare "
+        f"({console.mesures['alpha'].get('yeux_fermes')!r})")
 
     # Le contrôle alpha n'expose AUCUN réglage — ses durées font corps avec le repère « > 1,5 »,
     # et les exposer laisserait l'invalider en croyant gagner du temps. La page doit donc le DIRE,
@@ -3104,7 +3132,7 @@ def _smoke():
         "la page SSVEP a « Tester », et plus ni « Démarrer » ni « Lancer le stimulus »")
     journal.clear()
     moteur_faux.commandes.clear()
-    page_ss.bouton_tester.click()
+    cliquer(page_ss.bouton_tester, "le bouton « Tester » du SSVEP")
     mes_ssvep = console.stack.currentWidget()
     chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and journal == [("commande", "set_params")],
         f"« Tester » APPLIQUE d'abord ce qui est à l'écran, puis ouvre la page du test — sans "
@@ -3237,7 +3265,7 @@ def _smoke():
     console.show_mode("mi")
     console.apply_state(mi_regle)
     moteur_faux.commandes.clear()
-    console.pages["mi"].bouton_tester.click()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
     mes_mi = console.stack.currentWidget()
     chk(mes_mi is console.mesure_pages["mi_test"] and abs(defaut_prob - 0.8) > 1e-9,
         f"« Tester » ouvre le test du MI — et 0,8 n'est PAS son défaut ({defaut_prob}), sinon ce "
@@ -3245,16 +3273,74 @@ def _smoke():
     chk(abs(mes_mi.formulaire.values()["prob_min"] - 0.8) < 1e-9,
         f"…PRÉ-REMPLI avec le seuil RETENU du mode arrêté, pas avec le défaut "
         f"({mes_mi.formulaire.values()['prob_min']})")
-    mes_mi.bouton_commencer.click()
-    console.contact.bouton_lancer.click()
+
+    # 🔴 …et ces réglages-là sont en LECTURE SEULE sur la page de test (constat I5 de la revue).
+    # Éditables, ils faisaient une seconde copie : on montait le seuil ICI, le verdict passait au
+    # vert, et le mode — son décodage, l'application de l'étudiant — gardait l'ancienne valeur.
+    # Le critère est lu dans le CATALOGUE du mode, pas dans une liste : les clés qu'il déclare.
+    cles_mi = {p["key"] for p in console.catalogue["mi"]["params"]}
+    champs_mi = mes_mi.formulaire.champs
+    fige = {k for k, c in champs_mi.items() if not c.isEnabled()}
+    chk(fige and fige == {k for k in champs_mi if k in cles_mi}
+        and any(c.isEnabled() for c in champs_mi.values()),
+        f"les réglages qui VIENNENT du mode sont grisés ({sorted(fige)}), ceux du test seul "
+        f"restent modifiables ({sorted(set(champs_mi) - fige)})")
+    chk(mes_mi.origine.isVisibleTo(mes_mi)
+        and console.catalogue["mi"]["label"] in mes_mi.origine.text(),
+        f"…et la page dit OÙ ils se changent : sur celle du mode ({mes_mi.origine.text()[:60]!r})")
+    cliquer(mes_mi.bouton_commencer, "« Commencer » du test MI")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
     soumis = [p for nom, p in moteur_faux.commandes if nom == "start_mesure"]
     chk(soumis and soumis[-1]["id"] == "mi_test"
         and abs(soumis[-1]["params"].get("prob_min", -1.0) - 0.8) < 1e-9,
         f"…et c'est CETTE valeur qui part avec `start_mesure` ({soumis[-1:] or 'rien'})")
-    mes_mi.bouton_retour.click()
+    # Une séance, puis sa fin : `update_from` réactive le formulaire ENTIER une fois le test
+    # terminé. Les champs du mode doivent rester gris — un `setEnabled(True)` du parent ne réactive
+    # pas un enfant désactivé explicitement, et c'est ce qu'on vérifie ici plutôt que de le croire.
+    mi_test_en_cours = {"mode_id": "mi_test", "phase": "essais", "essai": 1, "total": 12,
+                        "unite": "essai", "restant_s": 2.0, "instruction": "", "classe": "",
+                        "resultat": None, "probleme": ""}
+    mi_test_fini = {**mi_test_en_cours, "phase": "fini", "essai": 12, "resultat": {
+        "verdict": "UTILISABLE", "mot": "UTILISABLE", "niveau": "moyen"}}
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not champs_mi["prob_min"].isEnabled()
+        and all(c.isEnabled() for k, c in champs_mi.items() if k not in cles_mi),
+        "…et ils le RESTENT après une séance, quand la page réactive son formulaire")
+    chk(mes_mi.bloc_apres.title() == "Résultat" and not mes_mi.precedent.isVisibleTo(mes_mi),
+        f"un résultat obtenu SOUS NOS YEUX s'appelle « Résultat », sans réserve "
+        f"({mes_mi.bloc_apres.title()!r})")
+
+    # 🔴 Un modèle entraîné mais PAS ENREGISTRÉ n'est pas dans la liste : « Tester avant de
+    # garder » testait en silence le modèle précédent (constat C1 de la revue, côté console).
+    console.apply_state({**mi_regle, "mesure": mi_test_fini, "calibration": {
+        "mode_id": "mi", "phase": "fini", "resultat": {"verdict": "x"},
+        "candidat": {"modele": "/tmp/calib/candidat_mi_model.joblib"}}})
+    chk(mes_mi.candidat.isVisibleTo(mes_mi) and "PAS encore enregistré" in mes_mi.candidat.text(),
+        f"un modèle entraîné qui attend « Enregistrer » est SIGNALÉ sur la page de test : ce test "
+        f"porterait sur le précédent ({mes_mi.candidat.text()[:60]!r})")
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not mes_mi.candidat.isVisibleTo(mes_mi),
+        "…et rien n'est signalé quand aucun modèle n'attend")
+
+    cliquer(mes_mi.bouton_retour, "« ← » de la page de test MI")
     chk(console.stack.currentWidget() is console.pages["mi"],
         "« ← » ramène sur la page du MI, d'où l'on venait : la boucle est « régler → tester → "
         "ajuster », pas un détour par l'accueil")
+
+    # 🔴 On revient re-tester : le verdict d'avant est encore là, en tête. Il est DIT précédent
+    # (constat M1 de la revue) — les réglages ont pu changer entre-temps sur la page du mode.
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk(mes_mi.precedent.isVisibleTo(mes_mi) and mes_mi.bloc_apres.title() == "Résultat précédent",
+        f"revenu sur la page, l'ancien verdict est annoncé comme celui d'une séance PRÉCÉDENTE "
+        f"({mes_mi.bloc_apres.title()!r})")
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not mes_mi.precedent.isVisibleTo(mes_mi) and mes_mi.bloc_apres.title() == "Résultat",
+        f"…jusqu'à la séance suivante, dont le résultat redevient « Résultat » "
+        f"({mes_mi.bloc_apres.title()!r})")
+    cliquer(mes_mi.bouton_retour, "« ← » de la page de test MI")
 
     # --- 🔴 LES TESTS À FENÊTRE : `--tester`, la LONGUEUR choisie, et la fenêtre FERMÉE ----------
     # Constat M13 de la revue de branche : rien ne vérifiait, côté console, la ligne de commande
@@ -3367,7 +3453,7 @@ def _smoke():
         f"« Mesurer » n'existe qu'à côté du pic alpha du SSVEP ({avec_mesurer})")
     console.show_mode("ssvep")
     console.apply_state(ssvep_regle)
-    page_ss.boutons_mesurer["alpha_hz"].click()
+    cliquer(page_ss.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
     chk(console.stack.currentWidget() is console.mesure_pages["alpha"]
         and "SSVEP" in console.mesure_pages["alpha"].bouton_retour.text(),
         f"« Mesurer » ouvre la MÊME page que « Vérifier le casque », et son « ← » dit où il "
