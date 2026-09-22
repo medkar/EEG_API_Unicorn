@@ -734,7 +734,8 @@ class EngineServer:
         # ⚠️ Le magasin `self.reglages` n'est PAS écrit ici, et ce n'est pas un oubli : `submit`
         # l'a déjà fait avant de mettre la commande en file, et on n'arrive ici QUE par cette
         # file. Une écriture de plus serait redondante — et invérifiable : la retirer ne faisait
-        # rougir aucun test, ce qui est la définition d'une ligne que rien ne tient.
+        # rougir aucun test, ce qui est la définition d'une ligne que rien ne tient. Il n'est
+        # touché ici que pour être REMIS quand le runtime refuse (cf. plus bas, M-7).
         avant = dict(ancien.params)
         # Le décodeur ne lit pas tous les réglages : le rafraîchissement de l'écran et le pic
         # alpha ne servent qu'à proposer et à valider. Quand rien de ce qu'il lit n'a bougé, on
@@ -756,7 +757,17 @@ class EngineServer:
         # `published = True` : la console affichait « publié, en décodage » alors que plus rien ne
         # sortait du réseau. Aucun doublon de flux à craindre ici — un constructeur n'ouvre aucun
         # outlet, c'est `open()` qui le fait, et il n'est appelé qu'après la fermeture.
-        runtime = spec.runtime_cls(spec, values, self)
+        try:
+            runtime = spec.runtime_cls(spec, values, self)
+        except Exception:
+            # M-7 (revue du 2026-09-22) : `validate` a accepté, le RUNTIME refuse (c-VEP : modèle
+            # calibré sur un autre nombre de cibles). Le mode continue sur `avant` ; le magasin,
+            # écrit par `submit`, doit le redire — sinon `snapshot()` annonce le réglage refusé et
+            # « Tester » le relit. Seulement s'il porte ENCORE ce réglage-ci : un `set_params` soumis
+            # depuis a écrit le sien, qu'une remise aveugle effacerait.
+            if self.reglages.get(mode_id) == dict(values):
+                self.reglages[mode_id] = dict(avant)
+            raise
         ancien.close()
         runtime.published = ancien.published
         if runtime.published:
@@ -1043,12 +1054,41 @@ class EngineServer:
             print(f"[server] enregistré : {destination}")
         if retenu.get("modele"):
             retenu["nom"] = os.path.basename(retenu["modele"])
+            self._retenir_modele(self._candidat_de or self.calibration, retenu["modele"])
         # Le verdict reste LISIBLE à l'écran, avec les chemins définitifs : on remplace le dict
         # d'un coup (une affectation d'attribut est atomique) plutôt que de le modifier en place,
         # que la console pourrait lire à moitié réécrit depuis son propre fil.
         if self.calibration is not None:
             self.calibration.resultat = retenu
         self.candidat = None
+
+    def _retenir_modele(self, calib, chemin):
+        """Pose le modèle qu'on vient d'ENREGISTRER comme réglage « model » du mode, au magasin.
+
+        🔴 C1 (revue du 2026-09-22). Réentraîner est le cas NORMAL d'une séance : le magasin tient
+        déjà le modèle d'avant. « Enregistrer » rangeait le nouveau dans `data/` sans y toucher ; la
+        page du mode relisait le magasin, gardait l'ancien sélectionné (il est toujours dans la
+        liste), et « Tester » testait l'ANCIEN — deux noms qui ne diffèrent que par l'horodatage,
+        donc rien ne se remarquait. Le modèle qu'on vient de garder est celui qu'on veut tester.
+
+        Validé par le CONTRAT avant d'être écrit, comme tout ce qui entre au magasin : un modèle
+        qu'aucun catalogue ne retrouve (un `data_dir` détourné, un nom mal formé) ne s'y pose pas —
+        on le dit, et le magasin garde ce qu'il avait. Seul « model » change. Le mode n'est PAS
+        redémarré s'il tourne : c'est un réglage retenu, en vigueur au prochain démarrage ou test.
+        """
+        spec = getattr(calib, "spec", None)
+        if spec is None or not any(p.key == "model" for p in getattr(spec, "params", ())):
+            return
+        base = self._reglages_de(spec)
+        base["model"] = chemin
+        valeurs, raison = contract.validate(spec, base)
+        if valeurs is None:
+            print(f"[server] ⚠️ modèle enregistré, mais PAS posé comme réglage de "
+                  f"« {spec.label} » : {raison}")
+            return
+        self.reglages[spec.id] = dict(valeurs)
+        print(f"[server] « {spec.label} » : réglage « model » -> {os.path.basename(chemin)} "
+              f"(c'est lui que « Tester » utilisera)")
 
     def _discard_calibration(self):
         """Jette le candidat ET l'écran de verdict : plus rien à décider, plus rien à montrer."""
@@ -2532,6 +2572,7 @@ def _smoke():
         _smoke_marqueurs_inlet(),
         _smoke_marqueurs_relance(),
         _smoke_marqueurs_stream_in(),
+        _smoke_magasin_refus_du_runtime(),
     ]
     return all(resultats)
 
@@ -3053,12 +3094,31 @@ def _smoke_calibration():
                 f.write(b"un modele qui existait deja")
             source = res["modele"]
             npz_source = res.get("enregistrement")
+            # 🔴 C1 (revue du 2026-09-22) : le magasin du mode tient DÉJÀ un modèle, l'ancien — l'état
+            # de toute séance où l'on RÉentraîne. Sans correctif, « Enregistrer » rangeait le
+            # nouveau dans `data/` et laissait le magasin sur l'ancien : la page le relisait, et
+            # « Tester » testait l'ANCIEN modèle, en silence (deux noms qui ne diffèrent que par
+            # l'horodatage). La découverte des modèles est pointée sur le `data/` DÉTOURNÉ le temps
+            # de cette étape : c'est là que le moteur enregistre, donc là que le choix doit exister.
+            ancien_magasin = dict(registry.get("mi").defaults(), model=occupe)
+            server.reglages["mi"] = dict(ancien_magasin)
+            vrai_catalogue_mi = mi_models.modeles_disponibles
+            mi_models.modeles_disponibles = lambda d=data_dir: vrai_catalogue_mi(d)
             ack_save = server.submit("save_calibration")
             chk(ack_save.get("accepted"), f"« Enregistrer » est accepté ({ack_save})")
             t0 = time.perf_counter()
             while server.candidat is not None and time.perf_counter() - t0 < 5.0:
                 time.sleep(0.05)
             retenu = (server.snapshot().get("calibration") or {}).get("resultat") or {}
+            mi_models.modeles_disponibles = vrai_catalogue_mi
+            magasin_mi = (server.snapshot().get("reglages") or {}).get("mi") or {}
+            chk(bool(retenu.get("modele")) and magasin_mi.get("model") == retenu.get("modele"),
+                f"🔴 C1 : « Enregistrer » pose le modèle ENREGISTRÉ comme réglage « model » du mode "
+                f"dans le magasin — c'est lui que « Tester » relit ; l'ancien "
+                f"({os.path.basename(occupe)}) n'y reste pas "
+                f"({os.path.basename(str(magasin_mi.get('model')))})")
+            chk(all(magasin_mi.get(k) == v for k, v in ancien_magasin.items() if k != "model"),
+                "…et seul « model » change : les autres réglages retenus du mode restent les siens")
             chk(server.candidat is None,
                 "…et après application, plus aucun candidat n'attend de décision")
             chk(not os.path.exists(source) and (not npz_source or not os.path.exists(npz_source)),
@@ -5518,6 +5578,70 @@ def _smoke_marqueurs_relance():
     srv.active = {}
 
     print(f"[smoke-marqueurs-relance] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_magasin_refus_du_runtime():
+    """M-7 (revue du 2026-09-22) : `set_params` sur un mode EN MARCHE écrit le magasin à la
+    soumission, puis la boucle RECONSTRUIT le runtime — qui peut refuser (c-VEP : un modèle calibré
+    sur un autre nombre de cibles, `_desaccord_code`). Le mode continuait sur l'ancien réglage
+    pendant que `snapshot()["reglages"]` annonçait le nouveau, et la console (« le magasin
+    d'abord ») lançait « Tester » avec ce réglage refusé. Joué sur un mode FABRIQUÉ dont le
+    constructeur refuse un gain > 5 : aucun vrai mode ne peut être laissé fautif pour le test.
+    """
+    from core.modes.contract import ModeSpec, Param
+    from core.modes.runtime import ModeRuntime
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    class _RuntimeExigeant(ModeRuntime):
+        def __init__(self, spec, params, engine):
+            if float(params.get("gain", 0.0)) > 5.0:
+                raise ValueError("ce runtime refuse un gain au-dessus de 5")
+            super().__init__(spec, params, engine)
+
+    spec = ModeSpec(id="smoke-magasin", label="Smoke magasin", family="actif", summary="",
+                    status="moteur", stream="", channels=("x",), runtime_cls=_RuntimeExigeant,
+                    params=(Param("gain", "Gain", "float", default=1.0, min=0.0, max=10.0,
+                                  help="refusé par le runtime au-dessus de 5"),))
+    vrais = registry.MODES
+    registry.MODES = vrais + (spec,)
+    registry.BY_ID[spec.id] = spec          # `registry.get` lit cet index, pas `MODES`
+    srv = EngineServer(synthetic=True, modes=(), instance="smoke-magasin")
+    try:
+        srv.active[spec.id] = _RuntimeExigeant(spec, {"gain": 1.0}, srv)
+        srv.reglages[spec.id] = {"gain": 1.0}
+        ack = srv.submit("set_params", id=spec.id, params={"gain": 8.0})
+        chk(ack.get("accepted") and ack.get("differe") is False,
+            f"le contrat accepte 8 (dans ses bornes) et la commande part en file ({ack})")
+        srv._drain_commands()
+        chk(srv.active[spec.id].params.get("gain") == 1.0,
+            f"la boucle : le runtime REFUSE, le mode continue sur l'ancien réglage "
+            f"({srv.active[spec.id].params})")
+        vu = (srv.snapshot().get("reglages") or {}).get(spec.id) or {}
+        chk(vu.get("gain") == 1.0,
+            f"…et le magasin est REMIS sur ce que le mode fait vraiment — pas sur la valeur "
+            f"refusée, que « Tester » relirait ({vu})")
+        # Le contrôle qui rend la remise FALSIFIABLE et sûre : un réglage soumis APRÈS le refusé (un
+        # second clic, avant que la boucle ne passe) n'est pas écrasé par la remise du premier.
+        srv.submit("set_params", id=spec.id, params={"gain": 9.0})
+        srv.submit("set_params", id=spec.id, params={"gain": 2.0})
+        srv._drain_commands()
+        vu = (srv.snapshot().get("reglages") or {}).get(spec.id) or {}
+        chk(srv.active[spec.id].params.get("gain") == 2.0 and vu.get("gain") == 2.0,
+            f"…mais un réglage ACCEPTÉ soumis juste après n'est pas effacé par cette remise "
+            f"(runtime {srv.active[spec.id].params}, magasin {vu})")
+    finally:
+        registry.MODES = vrais
+        registry.BY_ID.pop(spec.id, None)
+        srv.active.pop(spec.id, None)
+        srv.close()
+    print(f"[smoke-magasin] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
