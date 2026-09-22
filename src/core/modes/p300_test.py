@@ -42,7 +42,8 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_N_TARGETS,  # noqa: E402
                          P300_PAUSE_MANCHE_S, P300_REPS, use_utf8_console)
-from core.modes.affichage import NIVEAUX, lignes, mot_de, non_mesure, pct, verifier  # noqa: E402
+from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, mot_de,  # noqa: E402
+                                  non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
 from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
@@ -235,8 +236,10 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     """Le score. `decisions` : `[(cible cerclée, cible sélectionnée | None), ...]`, **UNE par manche**.
 
     Les niveaux, jugés ICI (la console les peint, elle ne les recalcule pas) :
-      • `faible` — rien de sélectionné (NON MESURÉ) ; ou l'intervalle de Wilson CONTIENT le hasard ;
-        ou la justesse est sous la ligne « UTILISABLE » de l'entraînement (60 %) ;
+      • `faible` — rien de sélectionné (NON MESURÉ) ; ou le test binomial EXACT ne distingue pas
+        la sélection du hasard (`affichage.au_dessus_du_hasard`, p ≥ 0,05 — la porte PARTAGÉE par
+        tous les tests ; Wilson reste l'intervalle affiché) ; ou la justesse est sous la ligne
+        « UTILISABLE » de l'entraînement (60 %) ;
       • `bon` — au-dessus du hasard ET au repère (la ligne « EXCELLENT », 80 %) ;
       • `moyen` — entre les deux.
     """
@@ -249,12 +252,14 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     n_justes = sum(1 for c, d in decisions if d is not None and d == c)
     justesse = n_justes / n
     ic_bas, ic_haut = (float(v) for v in wilson(n_justes, n))
+    p = p_hasard(n_justes, n, hasard)
+    au_dessus = au_dessus_du_hasard(n_justes, n, hasard)
     plus_long = max(MANCHES)
     court = (manches_demandees or 0) < plus_long
 
     if n_sans == n:
         niveau, mot = "faible", "NON MESURÉ"
-    elif ic_bas <= hasard or justesse < SEUIL_UTILISABLE:
+    elif not au_dessus or justesse < SEUIL_UTILISABLE:
         niveau, mot = "faible", "FAIBLE"
     elif justesse >= SEUIL_REPERE:
         niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
@@ -268,11 +273,11 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     if n_sans:
         reserve = (f"{n_sans} manche(s) sur {n} sans décision : le moteur a perdu des époques "
                    f"(liaison, tampon) — ce n'est pas ton modèle ; vérifie le contact et re-teste.")
-    elif niveau == "faible" and ic_bas <= hasard:
-        reserve = (f"L'intervalle contient le hasard : à {n} manches on ne peut pas conclure — "
-                   f"refais le test à {plus_long} manches avant de juger." if court else
-                   f"L'intervalle contient le hasard même sur {n} manches : {reprendre}, puis "
-                   f"réentraîne.")
+    elif niveau == "faible" and not au_dessus:
+        reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n} manches on ne peut pas "
+                   f"conclure — refais le test à {plus_long} manches avant de juger." if court else
+                   f"Pas distinguable du hasard même sur {n} manches ({texte_p(p)}) : "
+                   f"{reprendre}, puis réentraîne.")
     elif niveau == "faible":
         reserve = (f"Sous le seuil d'utilisation ({pct(SEUIL_UTILISABLE)}) : {reprendre}, puis "
                    f"réentraîne.")
@@ -298,7 +303,8 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
         + (f" — {n_epoques} époques au total" if n_epoques else "") +
         f"), la cible sélectionnée était la cible cerclée {n_justes} fois, soit {pct(justesse)} [IC95 "
         f"{ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à {pct(hasard)} ({n_cibles} "
-        f"cibles). ")
+        f"cibles) — test binomial exact, {texte_p(p)} : "
+        f"{'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. ")
     if n_sans:
         verdict += (f"{n_sans} manche(s) sans décision (`target_index = -1`) comptent comme NON "
                     f"sélectionnées : ton application n'aurait rien reçu. ")
@@ -314,7 +320,8 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
         "n_essais": n, "n_justes": n_justes, "n_sans_decision": n_sans,
         "n_epoques": int(n_epoques), "n_hors_calcul": int(hors_calcul),
         "justesse": round(justesse, 3), "ic_bas": round(ic_bas, 3), "ic_haut": round(ic_haut, 3),
-        "hasard": hasard, "n_cibles": int(n_cibles), "repere": SEUIL_REPERE,
+        "hasard": hasard, "p_hasard": round(p, 4), "n_cibles": int(n_cibles),
+        "repere": SEUIL_REPERE,
         "par_cible": par_cible, "decisions": [(c, d) for c, d in decisions],
         "reglages": dict(reglages or {}),
         **affichage,
@@ -372,7 +379,8 @@ SPEC = MesureSpec(
             help=(f"Une manche = une sélection : la fenêtre cercle une cible, fait flasher les "
                   f"{P300_N_TARGETS}, et le moteur choisit. Court par défaut (une manche par "
                   f"cible), parce qu'on refait ce test à chaque réglage — mais un test court a un "
-                  f"intervalle LARGE : s'il contient le hasard, prends {max(MANCHES)}. À 60 Hz : "
+                  f"intervalle LARGE : si le verdict dit « pas distinguable du hasard », prends "
+                  f"{max(MANCHES)}. À 60 Hz : "
                   + ", ".join(f"{n} ≈ {(MesureMarqueurs.warmup_s + duree_protocole_s(n)) / 60:.1f}"
                               f" min".replace(".", ",") for n in MANCHES) + "."),
         ),
@@ -683,8 +691,10 @@ def _selftest():
     six, deux = noter(dec(12, 8), 6), noter(dec(12, 8), 2, manches_demandees=24)
     chk(six["niveau"] == "moyen" and deux["niveau"] == "faible" and "hasard 50 %" in deux["chiffres"],
         f"8/12 bat le hasard à 6 cibles, PAS à 2 ({six['niveau']} / {deux['niveau']})")
-    chk("contient le hasard" in deux["reserve"] and "seuil" not in deux["reserve"],
-        f"…et la réserve dit POURQUOI : l'intervalle, pas un seuil qu'il dépasse ({deux['reserve']})")
+    chk("distinguable du hasard" in deux["reserve"] and "p = " in deux["reserve"]
+        and "seuil" not in deux["reserve"],
+        f"…et la réserve dit POURQUOI : le hasard, p-value à l'appui, pas un seuil qu'il dépasse "
+        f"({deux['reserve']})")
     cas = {
         "5/6": (noter(dec(6, 5), 6, manches_demandees=6), "bon", "confirme à 24"),
         "8/10": (noter(dec(10, 8), 6, manches_demandees=24), "bon", "après une pause"),
@@ -697,6 +707,12 @@ def _selftest():
     for nom, (r, niveau, reserve) in cas.items():
         chk(r["niveau"] == niveau and reserve in r["reserve"],
             f"{nom} -> {niveau} ({r['mot']} | {r['reserve'][:60]}…)")
+    # I-2 : 2 manches justes sur 3 retenues. 67 % passe la ligne « utilisable » (60 %) et Wilson
+    # [21 ; 94] passe 1/6 ; le test binomial exact dit p = 0,074. Rouge.
+    r = noter(dec(3, 2), 6, manches_demandees=6)
+    chk(r["niveau"] == "faible" and "p = 0,074" in r["verdict"],
+        f"2/3 : p = 0,074, FAIBLE — pas UTILISABLE ({r['mot']}, Wilson [{r['ic_bas']} ; "
+        f"{r['ic_haut']}])")
     chk(cas["0/6"][0]["mot"] == "NON MESURÉ",
         "rien de sélectionné : NON MESURÉ, pas FAIBLE — on vérifie la liaison, pas les électrodes")
     for r in [res, six, deux] + [c[0] for c in cas.values()]:

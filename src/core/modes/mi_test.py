@@ -49,7 +49,8 @@ import numpy as np  # noqa: E402
 from core.config import (MI_CUE_S, MI_IMAGERY_S, MI_REST_S, MI_WINDOW_S,  # noqa: E402
                          use_utf8_console)
 from core.mi_decoder import MI_CONTROL  # noqa: E402
-from core.modes.affichage import NIVEAUX, lignes, pct, verifier  # noqa: E402
+from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, p_hasard,  # noqa: E402
+                                  pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
 from core.modes.mi import MI_DECODE_HZ, MIRuntime  # noqa: E402
@@ -220,8 +221,10 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     """Le score. `decisions` : `[(consigne, classe décidée | None), ...]`, **UNE par essai**.
 
     Les niveaux, jugés ICI (la console les peint, elle ne les recalcule pas) :
-      • `faible` — aucune décision, ou l'intervalle de Wilson CONTIENT le hasard. La séance de
-        référence (40 % à 3 classes, p = 0,082) y serait, et c'est juste.
+      • `faible` — aucune décision, ou le test binomial EXACT ne distingue pas la justesse du
+        hasard (`affichage.au_dessus_du_hasard`, la porte partagée — Wilson reste l'intervalle
+        affiché). La séance de référence (40 % à 3 classes, PAS significatif) y serait, et c'est
+        juste.
       • `bon` — intervalle au-dessus du hasard, justesse au repère du projet pour ce nombre de
         classes, ET émission au moins celle du SSVEP dans son régime normal (44 %).
       • `moyen` — au-dessus du hasard, mais sous le repère ou trop souvent muet.
@@ -239,9 +242,11 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     justesse = n_justes / n_emis if n_emis else 0.0
     # Sur les essais DÉCIDÉS : c'est la justesse À L'ÉMISSION qu'on encadre (invariant n°2).
     ic_bas, ic_haut = (float(v) for v in wilson(n_justes, n_emis))
+    p = p_hasard(n_justes, n_emis, hasard)
+    au_dessus = au_dessus_du_hasard(n_justes, n_emis, hasard)
     repere = REPERES_JUSTESSE.get(len(classes))
 
-    if n_emis == 0 or ic_bas <= hasard:
+    if n_emis == 0 or not au_dessus:
         niveau, mot = "faible", ("MUET" if n_emis == 0 else "FAIBLE")
     elif repere is not None and justesse >= repere and taux >= EMISSION_MIN_BON:
         niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
@@ -260,11 +265,12 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     if n_emis == 0:
         reserve = f"Le vote n'a jamais conclu : {reglage}"
     elif niveau == "faible" and (essais_par_classe or 0) < plus_long:
-        reserve = (f"L'intervalle contient le hasard : à {n_emis} essais décidés on ne peut pas "
-                   f"conclure — refais le test à {plus_long} essais par classe avant de juger.")
+        reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n_emis} essais décidés on ne "
+                   f"peut pas conclure — refais le test à {plus_long} essais par classe avant de "
+                   f"juger.")
     elif niveau == "faible":
-        reserve = ("L'intervalle contient le hasard même sur un test long : réentraîne — contact "
-                   "de C3/Cz/C4, immobilité, imagerie kinesthésique (SENTIR, pas voir).")
+        reserve = (f"Pas distinguable du hasard même sur un test long ({texte_p(p)}) : réentraîne "
+                   f"— contact de C3/Cz/C4, immobilité, imagerie kinesthésique (SENTIR, pas voir).")
     elif taux < EMISSION_MIN_BON:
         reserve = f"Le moteur ne décide que sur {pct(taux)} des essais : {reglage}"
     elif niveau == "moyen":
@@ -283,7 +289,9 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
         f"la fin de l'imagerie, jamais une par fenêtre), le moteur a conclu {n_emis} fois — soit "
         f"{pct(taux)} d'émission — et il avait raison {n_justes} fois sur {n_emis}, soit "
         f"{pct(justesse)} [IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
-        f"{pct(hasard)} ({len(classes)} classes). Les {n_essais - n_emis} essai(s) sans décision "
+        f"{pct(hasard)} ({len(classes)} classes) — test binomial exact sur les essais décidés, "
+        f"{texte_p(p)} : {'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. "
+        f"Les {n_essais - n_emis} essai(s) sans décision "
         f"(vote non conclu) ne comptent ni comme une erreur ni comme REPOS. ")
     if perdus:
         verdict += (f"⚠️ {perdus} essai(s) de plus ont été JOUÉS mais ne sont pas dans ce calcul : "
@@ -300,7 +308,7 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
         "n_silences": n_essais - n_emis, "n_perdus": int(perdus),
         "taux_emission": round(taux, 3), "justesse": round(justesse, 3),
         "ic_bas": round(ic_bas, 3), "ic_haut": round(ic_haut, 3),
-        "hasard": hasard, "classes": list(classes), "repere": repere,
+        "hasard": hasard, "p_hasard": round(p, 4), "classes": list(classes), "repere": repere,
         "par_classe": par_classe, "decisions": [(c, d) for c, d in decisions],
         "reglages": dict(reglages or {}),
         **lignes(niveau, mot, chiffres, reserve),
@@ -367,8 +375,8 @@ SPEC = MesureSpec(
             default=ESSAIS_PAR_CLASSE_DEFAUT,
             choices=ESSAIS_PAR_CLASSE,
             help=(f"Court par défaut, parce qu'on refait ce test à chaque réglage. Mais un test "
-                  f"court a un intervalle de confiance LARGE, et le verdict l'affiche : s'il "
-                  f"contient le hasard, prends {max(ESSAIS_PAR_CLASSE)} — l'effectif de la séance "
+                  f"court a un intervalle de confiance LARGE : si le verdict dit « pas distinguable "
+                  f"du hasard », prends {max(ESSAIS_PAR_CLASSE)} — l'effectif de la séance "
                   f"de référence du projet. À 3 classes : "
                   + ", ".join(f"{n} ≈ {_duree_min(n, 3):.1f} min".replace(".", ",")
                               for n in ESSAIS_PAR_CLASSE) + "."),
@@ -637,8 +645,16 @@ def _selftest():
             f"({sous_repere['chiffres']})")
         flou = noter(_dec(MI_LABELS, 18, 13, 6), MI_LABELS, essais_par_classe=6)
         chk(flou["niveau"] == "faible" and "10 essais par classe" in flou["reserve"],
-            f"6/13 : l'intervalle contient le hasard -> faible, et la réserve dit d'allonger "
+            f"6/13 : pas distinguable du hasard -> faible, et la réserve dit d'allonger "
             f"({flou['reserve']})")
+        # I-2 : deux décisions justes sur 18 essais (3 classes), quatre sur 12 en gauche/droite.
+        # Wilson les peignait ORANGE ; le test binomial exact dit p = 0,111 et p = 0,062.
+        deux = noter(_dec(MI_LABELS, 18, 2, 2), MI_LABELS, essais_par_classe=6)
+        gd = noter(_dec(MI_CONTROL, 12, 4, 4), MI_CONTROL, essais_par_classe=6)
+        chk(deux["niveau"] == "faible" and gd["niveau"] == "faible"
+            and "p = 0,111" in deux["verdict"] and "p = 0,06" in gd["verdict"],
+            f"2/2 décidés à 3 classes et 4/4 en G/D ne sont PAS au-dessus du hasard : FAIBLE "
+            f"({deux['mot']} / {gd['mot']})")
         muet = noter(_dec(MI_LABELS, 18, 0, 0), MI_LABELS)
         chk(muet["niveau"] == "faible" and muet["mot"] == "MUET",
             f"aucune décision -> MUET, pas un score ({muet['chiffres']})")

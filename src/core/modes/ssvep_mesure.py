@@ -83,7 +83,8 @@ from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa:
                          use_utf8_console)
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import Param  # noqa: E402
-from core.modes.affichage import lignes, pct  # noqa: E402
+from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  # noqa: E402
+                                  texte_p)
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
 from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
@@ -555,6 +556,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
         "ic_bas": round(float(ic_bas), 3),
         "ic_haut": round(float(ic_haut), 3),
         "hasard": round(1.0 / len(freqs), 3),
+        "p_hasard": round(p_hasard(n_justes, n_emis, 1.0 / len(freqs)), 4),
         "freqs_hz": [round(f, 3) for f in freqs],
         "refresh_hz": 0.0,
         "fenetres_repos": len(scores_repos),
@@ -580,11 +582,17 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
     (`mi_test.py`) : deux boutons « Tester » qui jugeraient avec deux vocabulaires apprendraient à
     l'étudiant que « UTILISABLE » veut dire deux choses.
 
-    Rouge si le moteur s'est tu, ou si l'intervalle contient le hasard ; vert s'il a raison presque
-    toujours ET parle au moins aussi souvent que le repère du 2026-07-27 ; orange entre les deux.
+    Rouge si le moteur s'est tu, ou si le test binomial EXACT ne distingue pas sa justesse du
+    hasard (`affichage.au_dessus_du_hasard` — la MÊME porte que la phrase de `verdict`, et que les
+    autres tests) ; vert s'il a raison presque toujours ET parle au moins aussi souvent que le
+    repère du 2026-07-27 ; orange entre les deux. Wilson (`ic_bas`/`ic_haut`) reste l'intervalle
+    AFFICHÉ, il ne décide plus : sa borne basse passait 1/3 dès deux annonces justes.
     """
     hasard = 1.0 / n_cibles
-    if n_emis == 0 or ic_bas <= hasard:
+    # `justesse` vaut exactement n_justes / n_emis : l'arrondi rend l'entier sans perte.
+    n_justes = int(round(justesse * n_emis))
+    p = p_hasard(n_justes, n_emis, hasard)
+    if n_emis == 0 or not au_dessus_du_hasard(n_justes, n_emis, hasard):
         niveau, mot = "faible", ("MUET" if n_emis == 0 else "FAIBLE")
     elif justesse >= JUSTESSE_MIN_BON and taux >= REFERENCE_EMISSION:
         niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
@@ -600,8 +608,8 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
                     f"{ic_bas * 100:.0f} et {pct(ic_haut)} (hasard {pct(hasard)}) · il annonce "
                     f"sur {pct(taux)} des {n_essais} essais")
         if niveau == "faible":
-            reserve = ("L'intervalle contient le hasard : à cet effectif on ne peut pas conclure. "
-                       "Rallonge le test, ou reprends le montage.")
+            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à cet effectif on ne peut pas "
+                       f"conclure. Rallonge le test, ou reprends le montage.")
         elif taux < REFERENCE_EMISSION:
             reserve = ("Il a raison quand il parle, mais se tait souvent : essaie un autre jeu de "
                        "fréquences (« Proposer »), ou refais le repos immobile.")
@@ -651,13 +659,17 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
                          "l'absence de score. Le plancher de repos est probablement trop "
                          "dispersé pour que le seuil z soit atteignable — contact des "
                          "électrodes occipitales, ou repos refait immobile.")
-    if ic_bas <= hasard:
-        return (phrase + f"L'intervalle de confiance CONTIENT le hasard : à cet effectif, cette "
+    # ⚠️ La MÊME porte que `_lignes` (`affichage.au_dessus_du_hasard`), jamais une seconde : la
+    # phrase disait « le décodage marche » sur 2 annonces justes, au-dessus d'un mot calculé autrement.
+    p = p_hasard(n_justes, n_emis, hasard)
+    if not au_dessus_du_hasard(n_justes, n_emis, hasard):
+        return (phrase + f"Le test binomial exact ne distingue pas ces {n_justes} annonce(s) "
+                         f"juste(s) sur {n_emis} du hasard ({texte_p(p)}) : à cet effectif, cette "
                          f"séance ne permet pas de conclure que le décodage marche. Ce n'est pas "
                          f"la preuve du contraire — c'est un « on ne sait pas ». Rallonge la "
                          f"séance, ou reprends le montage.")
-    return (phrase + f"Le décodage marche sur CETTE séance : l'intervalle est au-dessus du "
-                     f"hasard. À comparer aux repères du 2026-07-27 — "
+    return (phrase + f"Le décodage marche sur CETTE séance : le test binomial exact le distingue "
+                     f"du hasard ({texte_p(p)}). À comparer aux repères du 2026-07-27 — "
                      f"{REFERENCE_JUSTESSE * 100:.0f} % de justesse à l'émission pour "
                      f"{REFERENCE_EMISSION * 100:.0f} % d'émission.")
 
@@ -874,6 +886,26 @@ def _selftest():
     _seance = _lignes(3, 36, 18, 1.0, 0.5, 0.82, 1.0)
     chk(_seance["niveau"] == "bon" and "hasard 33 %" in _seance["chiffres"],
         f"18 justes sur 18 annonces, 50 % d'émission : vert, avec son hasard ({_seance})")
+    # I-2 : 2 annonces, 2 justes, sur 24 essais. Wilson [34 ; 100] passe 1/3 : la porte peignait
+    # ORANGE, et la phrase disait « Le décodage marche sur CETTE séance ». Le test exact : p = 0,111.
+    _bas, _haut = wilson(2, 2)
+    _deux = _lignes(3, 24, 2, 1.0, 2 / 24, _bas, _haut)
+    _phrase = verdict(3, 24, 2, 2, 2 / 24, 1.0, _bas, _haut, 0)
+    chk(_deux["niveau"] == "faible" and "Le décodage marche" not in _phrase
+        and "p = 0,111" in _phrase,
+        f"2/2 annonces justes : FAIBLE, et la phrase ne dit PAS que le décodage marche "
+        f"({_deux['mot']} | {_phrase[-120:]!r})")
+    # La porte et la phrase disent la MÊME chose, sur tout un balayage — une seule fonction.
+    _accord = []
+    for _n_emis in range(1, 13):
+        for _n_justes in range(0, _n_emis + 1):
+            _b, _h = wilson(_n_justes, _n_emis)
+            _niv = _lignes(3, 24, _n_emis, _n_justes / _n_emis, _n_emis / 24, _b, _h)["niveau"]
+            _ph = verdict(3, 24, _n_emis, _n_justes, _n_emis / 24, _n_justes / _n_emis, _b, _h, 0)
+            _accord.append(("Le décodage marche" in _ph) == (_niv != "faible"))
+    chk(all(_accord),
+        f"sur {len(_accord)} couples (émis, justes), la phrase dit « marche » EXACTEMENT quand la "
+        f"porte n'est pas rouge ({_accord.count(False)} désaccord(s))")
     chk(_lignes(3, 36, 0, 0.0, 0.0, 0.0, 0.0)["mot"] == "MUET",
         "un moteur qui ne dit rien est MUET, pas FAIBLE : les deux ne se corrigent pas pareil")
     chk(f"{res['taux_emission'] * 100:.0f} %" in res["verdict"]

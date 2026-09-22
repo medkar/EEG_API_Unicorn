@@ -51,7 +51,8 @@ from core.config import (CH_NAMES, CVEP_CAL_BLOCKS, CVEP_CAL_SETTLE_CYCLES,  # n
                          CVEP_CORR_MIN, CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
                          CVEP_VOTE_LEN, FILTER_MARGIN_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets  # noqa: E402
-from core.modes.affichage import lignes, non_mesure, pct, verifier  # noqa: E402
+from core.modes.affichage import (au_dessus_du_hasard, lignes, non_mesure,  # noqa: E402
+                                  p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.cvep import SPEC as SPEC_CVEP  # noqa: E402
 from core.modes.cvep import CVEPRuntime  # noqa: E402
@@ -309,7 +310,8 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
     par bloc**.
 
     Niveaux (la console les peint, ne les recalcule pas) : `faible` = horloge inutilisable (NON
-    MESURÉ), aucune émission (MUET), ou Wilson de la justesse contenant le hasard (FAIBLE) ; `bon` =
+    MESURÉ), aucune émission (MUET), ou une justesse que le test binomial EXACT ne distingue pas du
+    hasard (FAIBLE — `affichage.au_dessus_du_hasard`, la porte partagée) ; `bon` =
     au-dessus du hasard ET justesse ≥ 71 % ET émission ≥ 46 %, le repère EN DIRECT (points estimés,
     comme `mi_test`) ; `moyen` = au-dessus du hasard, sous le repère sur l'un des deux.
     """
@@ -329,6 +331,8 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
     # justesse (invariant n°3).
     em_bas, em_haut = (float(v) for v in wilson(n_emis, n_essais))
     ic_bas, ic_haut = (float(v) for v in wilson(n_justes, n_emis))
+    p = p_hasard(n_justes, n_emis, hasard)
+    au_dessus = au_dessus_du_hasard(n_justes, n_emis, hasard)
     silences = Counter(k for _c, d, k in decisions if d is None)
     n_horloge = sum(silences[k] for k in _CAUSES_HORLOGE)
     horloge_seule = n_emis == 0 and n_horloge == n_essais
@@ -338,7 +342,7 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
         niveau, mot = "faible", "NON MESURÉ"
     elif n_emis == 0:
         niveau, mot = "faible", "MUET"
-    elif ic_bas <= hasard:
+    elif not au_dessus:
         niveau, mot = "faible", "FAIBLE"
     elif justesse >= REPERE_JUSTESSE and taux >= REPERE_EMISSION:
         niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
@@ -371,12 +375,12 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
         chiffres = (f"{pct(justesse)} de cibles justes quand il émet (hasard {pct(hasard)}), "
                     f"{pct(taux)} d'émission — {n_emis} blocs décidés sur {n_essais}")
         if niveau == "faible" and court:
-            reserve = (f"L'intervalle contient le hasard : à {n_emis} blocs décidés on ne peut pas "
-                       f"conclure — refais le test à {max(ESSAIS)} cycles par cible "
+            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n_emis} blocs décidés on "
+                       f"ne peut pas conclure — refais le test à {max(ESSAIS)} cycles par cible "
                        f"({len(_blocs(max(ESSAIS)))} blocs) avant de juger.")
         elif niveau == "faible":
-            reserve = ("L'intervalle contient le hasard : réentraîne — saline Pz/PO7/Oz/PO8, et "
-                       "PLANTE le regard sur le disque cerclé sans le promener.")
+            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : réentraîne — saline "
+                       f"Pz/PO7/Oz/PO8, et PLANTE le regard sur le disque cerclé sans le promener.")
         elif taux < REPERE_EMISSION and justesse >= REPERE_JUSTESSE:
             reserve = (f"Juste quand il parle, mais il ne parle que sur {pct(taux)} des blocs "
                        f"(repère ~{pct(REPERE_EMISSION)}) : baisse « {seuil} » ou « {vote} » d'un "
@@ -400,7 +404,9 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
                     f"[IC95 {em_bas * 100:.0f} ; {em_haut * 100:.0f}] — et il avait raison "
                     f"{n_justes} fois sur {n_emis}, soit {pct(justesse)} de justesse à l'émission "
                     f"[IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
-                    f"{pct(hasard)} ({n_cibles} cibles). ")
+                    f"{pct(hasard)} ({n_cibles} cibles) — test binomial exact sur les blocs "
+                    f"décidés, {texte_p(p)} : "
+                    f"{'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. ")
     else:
         verdict += (f"le moteur n'a émis AUCUNE cible, soit {pct(0.0)} d'émission, pour un hasard "
                     f"à {pct(hasard)} ({n_cibles} cibles). ")
@@ -435,7 +441,7 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
         "taux_emission": round(taux, 3), "justesse": round(justesse, 3),
         "ic_emission_bas": round(em_bas, 3), "ic_emission_haut": round(em_haut, 3),
         "ic_bas": round(ic_bas, 3), "ic_haut": round(ic_haut, 3),
-        "hasard": hasard, "n_cibles": int(n_cibles),
+        "hasard": hasard, "p_hasard": round(p, 4), "n_cibles": int(n_cibles),
         "repere_emission": REPERE_EMISSION, "repere_justesse": REPERE_JUSTESSE,
         "decisions": [(int(c), None if d is None else int(d), k) for c, d, k in decisions],
         "reglages": reglages,
@@ -749,6 +755,12 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     r = fab(12, 5)
     chk(r["niveau"] == "moyen",
         f"5 justes sur 12 : Wilson [{r['ic_bas']} ; {r['ic_haut']}] passe 1/6, PAS 1/2 ({r['niveau']})")
+    # I-2 : UN bloc émis, juste, sur 18. Wilson [21 ; 100] passe 1/6 et peignait ORANGE ; le test
+    # binomial exact dit p = 0,167 — une décision juste sur six au hasard. Rouge.
+    r = fab(1, 1)
+    chk(r["niveau"] == "faible" and r["mot"] == "FAIBLE" and "p = 0,167" in r["verdict"],
+        f"1 bloc émis juste sur 18 : p = 0,167, FAIBLE — pas UTILISABLE ({r['mot']}, "
+        f"Wilson [{r['ic_bas']} ; {r['ic_haut']}])")
     r = fab(4, 4)
     chk(r["niveau"] == "moyen" and _label("corr_min") in r["reserve"],
         f"juste mais trop muet : orange, la réserve nomme le réglage ({r['reserve'][:60]}…)")
@@ -757,7 +769,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         f"bavard mais faux : REMONTER les seuils ({r['reserve'][:60]}…)")
     r = fab(6, 2, essais=2)
     chk(r["mot"] == "FAIBLE" and "3 cycles" in r["reserve"],
-        "l'intervalle contient le hasard : FAIBLE, et un test court renvoie au plus long")
+        "pas distinguable du hasard : FAIBLE, et un test court renvoie au plus long")
     r = fab(0, 0, cause="vote_non_conclu")
     chk(r["mot"] == "MUET" and _label("min_votes") in r["reserve"],
         f"aucune émission : MUET, et la cause dominante choisit le geste ({r['reserve'][:60]}…)")
