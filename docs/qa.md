@@ -82,6 +82,23 @@ donné un stimulus qui affiche autre chose que ce que le moteur décode — pire
    chiffre COMPARABLE aux repères du 2026-07-27. Le rendre réglable, c'est accepter de perdre la
    comparaison — une décision, pas un correctif.*
 
+2. 🔴 **L'écran de résultat d'une calibration est illisible, et trop long** (séance du
+   2026-09-22, mot pour mot : « c'est pas clair du tout et beaucoup trop verbeux »). Le chiffre
+   qu'on vient chercher — *25,0 % pour un hasard à 17 %* — est enterré **au milieu d'une phrase**,
+   après une subordonnée sur McNemar, elle-même après le conseil de resaliner. Suivent le nom du
+   fichier, six lignes grises d'honnêteté, puis un avertissement sur ce qui n'est pas encore
+   enregistré. Tout y est vrai et rien n'est lisible.
+   *C'est la même famille que le constat 1.10 (l'aide des réglages, trop verbeuse), corrigé le
+   2026-09-10 en repliant sur la première phrase. Le remède vaut ici : le VERDICT et les deux
+   chiffres en grand, le reste replié derrière « Détails ». Ce qui a été écrit ne se supprime
+   pas — la phrase d'honnêteté porte des réserves qu'on ne peut pas se permettre de perdre — il
+   se RANGE.*
+3. **Le bandeau déverse six lignes de sortie quand une fenêtre se ferme normalement.** Conséquence
+   directe du correctif du 2026-09-22 : `_derniere_sortie()` joint `LIGNES_RETENUES = 6` lignes,
+   ce qui est juste pour un traceback (on veut le contexte) et faux pour une fin propre (on veut
+   le BILAN, c'est-à-dire les une ou deux dernières). En séance, le bandeau portait les journaux
+   bloc par bloc de la calibration avant d'arriver au chiffre utile.
+
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
 - **❌ Régression** — ça a déjà marché ici. Si ça tombe, quelque chose s'est cassé, et le point est
