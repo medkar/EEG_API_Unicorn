@@ -14,27 +14,22 @@ justesse quand le moteur émet, mais 44 % d'émission seulement**. Le second san
 passer un régime parfaitement normal pour une panne ; le premier sans le second fait croire à un
 sans-faute. Un long silence entre deux verdicts justes EST le régime normal de ce mode.
 
-⚠️ **Cette mesure ne change RIEN au décodage.** Elle reconstruit le chemin du mode —
-`acq.occipital_window` -> `CCADecoder` calé sur le plancher de repos -> seuil `Z_MIN` -> rejet
-d'artefact au-delà de `ARTIFACT_SIGMA_RATIO` × le σ du repos. Ce qui est mesuré est donc la règle
-du PRODUIT, pas une variante écrite pour l'occasion. Un seuil local ici mesurerait un décodeur que
-personne n'utilise, et le chiffre serait cité comme s'il décrivait le moteur.
+⚠️ **Cette mesure ne change RIEN au décodage : elle le fait faire par le MODE.** Le plancher de
+repos passe par `SsvepRuntime._rest_step`, chaque décision par `SsvepRuntime._run_step` — le
+runtime du mode lui-même (`_DecideurSSVEP`, dont seuls les messages sont coupés) : fenêtre
+occipitale, CCA calée sur le plancher, seuil z, rejet d'artefact au-delà de
+`ARTIFACT_SIGMA_RATIO` × le σ du repos. Un correctif futur du mode (seuil, rejet, fenêtre) est donc
+mesuré ici sans une ligne à reporter.
 
-⚠️ **UNE SEULE chose n'est PAS identique, et il faut la connaître avant de citer un taux : le σ du
-rejet d'artefact ne se mesure pas sur les mêmes voies des deux côtés.** Le mode le prend sur la
-fenêtre occipitale FILTRÉE, donc sur les 4 voies qu'il décode (`modes/ssvep.py::_run_step` :
-`window.std(axis=0).mean()`) ; cette mesure le prend par `acq.sigma_from_block`, c'est-à-dire sur
-les **8** voies. Les deux filtrent et écartent le transitoire de la même façon — la seule
-différence est le jeu de voies. Conséquence : le rejet n'est pas garanti de tomber sur les mêmes
-essais que celui du mode, et il est probablement plus sensible aux artefacts FRONTAUX (le
-clignement, que Fz voit et qu'Oz voit peu). Le taux d'émission rendu ici est donc, sur ce point,
-légèrement CONSERVATEUR par rapport à ce que le mode ferait en direct.
-
-⚠️ **Cet écart est ANTÉRIEUR à ce fichier** : `research/ssvep_guided.py` mesurait déjà son σ par
-`sigma_from_block`, et c'est sous cette règle-là que les repères du 2026-07-27 ont été obtenus.
-Il est donc laissé TEL QUEL — l'aligner sur les 4 voies occipitales changerait la règle sous
-laquelle 100 %/44 % ont été mesurés, et rendrait le prochain chiffre incomparable au seul dont on
-dispose. C'est un constat à porter, pas un correctif à glisser dans un chantier de déménagement.
+⚠️ **Jusqu'au 2026-09-22 la règle était RÉÉCRITE ici, avec un écart** : le σ du rejet d'artefact
+pris sur les **8** voies (`acq.sigma_from_block`) là où le mode le prend sur les 4 occipitales
+FILTRÉES. Un clignement frontal fort faisait rejeter au test un essai que le mode décode (taux
+sous-estimé) ; un artefact de nuque, dilué dans 8 voies, passait au test et pas au mode (taux
+sur-estimé). L'écart avait été GARDÉ parce que les repères du 2026-07-27 (100 %/44 %) ont été
+mesurés sous cette règle-là. La spec « Configurer · Entraîner · Tester » (§4, §9) tranche : un
+« Tester » décide comme le produit, et la comparabilité devient une NOTE — elle est dans
+`HONNETETE`, pas dans le protocole. Les chiffres de ce test ne se comparent donc plus tels quels à
+ces repères.
 
 --- LES TROIS INVARIANTS DU PROTOCOLE -----------------------------------------------------------
 
@@ -75,7 +70,6 @@ from dataclasses import dataclass
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.cca_decoder import CCADecoder  # noqa: E402
 from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa: E402
                          CALIB_FENETRE_SILENCE_S, FILTER_MARGIN_S, MARKER_STREAM_DEFAULT,
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
@@ -90,6 +84,9 @@ from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
 # fenêtres chevauchantes une fixation contient, donc de combien l'effectif serait gonflé si on les
 # comptait. Le test s'en sert pour fabriquer un essai réaliste.
 from core.modes.ssvep import SSVEP_DECODE_HZ  # noqa: E402
+# Le runtime du MODE : c'est LUI qui mesure le plancher et qui décide, dans ce test (I-3).
+from core.modes.ssvep import SPEC as SPEC_SSVEP  # noqa: E402
+from core.modes.ssvep import SsvepRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 
 # L'étiquette des fenêtres du PLANCHER de repos. Une chaîne, là où un essai porte un `Essai` :
@@ -146,7 +143,12 @@ HONNETETE = (
     "Ce que cette mesure ne dit PAS : rien du trajet réseau (publication LSL, horloges, deux "
     "machines), validé séparément — et rien de demain. La variance entre séances est de l'ordre "
     "d'un facteur 9 sur ce casque : un taux mesuré aujourd'hui décrit CETTE séance, avec CE "
-    "montage, sur CETTE personne."
+    "montage, sur CETTE personne.\n"
+    "Ces chiffres ne sont plus comparables TELS QUELS aux repères du 2026-07-27 : ceux-là ont été "
+    "mesurés sur le trio de fréquences du dépôt, avec un rejet d'artefact calculé sur les 8 voies. "
+    "Ce test décide comme le MODE — tes fréquences, son rejet sur les 4 occipitales — pour qu'il "
+    "décrive ce que ton application recevra. Les repères restent un ordre de grandeur, pas une "
+    "ligne d'arrivée."
 )
 
 BRIEFING = (
@@ -410,6 +412,27 @@ class MesureSSVEP(MesureMarqueurs):
 
 # --- Le calcul, PARTAGÉ avec le banc d'essai ----------------------------------------------------
 
+class _DecideurSSVEP(SsvepRuntime):
+    """Le runtime du MODE SSVEP, rejoué. Seuls `_log` (« [ssvep] CIBLE… ») et `_dire` (« décodage en
+    cours sur decoded_ssvep ») sont coupés : ils feraient croire que le mode tourne et publie.
+    `_rest_step`, `_run_step` et `_publish` sont hérités tels quels (vérifié par l'autotest) ; jamais
+    ouvert, donc rien ne part sur le réseau."""
+
+    def _log(self, index, scores, artifact):
+        pass
+
+    def _dire(self, texte):
+        pass
+
+
+class _Vue:
+    """Ce que `SsvepRuntime` lit d'un moteur : `acq` (fenêtre occipitale, fs), `instance`, et
+    `recent` — le bloc qu'on lui fait juger, reposé à chaque appel."""
+
+    def __init__(self, acq):
+        self.acq, self.instance, self.recent = acq, "ssvep_taux", None
+
+
 def acquisition_de_reference():
     """Une `UnicornAcquisition` JAMAIS démarrée : on n'emprunte que ses filtres et sa géométrie.
 
@@ -483,49 +506,51 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
     freqs = [float(f) for f in freqs]
     if not freqs:
         raise ValueError("aucune fréquence : il n'y a rien contre quoi corréler")
+    if abs(float(fs) - float(acq.fs)) > 1e-6:
+        raise ValueError(f"fs = {float(fs):g} Hz, mais l'acquisition qui filtre travaille à "
+                         f"{float(acq.fs):g} Hz : le mode corrélerait contre des sinusoïdes à la "
+                         f"mauvaise cadence")
     if len(essais) < 6:
         raise ValueError(
             f"{len(essais)} essai(s) : il n'y a pas de quoi conclure. Un taux calculé sur si peu "
             f"aurait un intervalle de confiance plus large que l'échelle elle-même, et serait "
             f"cité comme s'il disait quelque chose.")
 
-    # --- Le plancher de repos, EXACTEMENT comme le mode le mesure -----------------------------
-    decodeur = CCADecoder(freqs, fs=float(fs))
-    fenetres_repos = [acq.occipital_window(b) for b in repos]
-    scores_repos = [decodeur.scores(w) for w in fenetres_repos if w is not None]
-    if not decodeur.fit_baseline(scores_repos):
+    # --- Le plancher de repos, par le `_rest_step` du MODE -----------------------------------
+    # Chaque bloc de repos est posé comme tampon, dans l'ordre ; l'échéance n'est atteinte qu'au
+    # DERNIER, qui déclenche le calage — exactement comme en direct, où la dernière fenêtre du
+    # repos est celle qui le clôt. La médiane du σ (sur la fenêtre occipitale filtrée) et la CCA
+    # calée cible par cible sont celles du mode : rien n'est recalculé ici.
+    vue = _Vue(acq)
+    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs)}, vue)
+    pret = False
+    for i, bloc in enumerate(repos):
+        vue.recent = bloc
+        decideur._rest_until = 0.0 if i == len(repos) - 1 else float("inf")
+        pret = decideur._rest_step(vue, 0.0)
+    if not pret:
         raise ValueError(
-            f"plancher de repos impossible : {len(scores_repos)} fenêtre(s) de repos "
+            f"plancher de repos impossible : {len(decideur._samples)} fenêtre(s) de repos "
             f"exploitables. Le SSVEP décide sur z = (ρ − μ) / σ, mesurés cible par cible "
             f"pendant le repos ; sans lui il n'y a aucune décision à mesurer. La phase de "
             f"repos a-t-elle été jouée, ou la fenêtre a-t-elle été lancée trop tard ?")
 
-    # Référence d'amplitude du rejet d'artefact : la MÉDIANE DU REPOS, comme dans le mode. La
-    # prendre sur les essais eux-mêmes serait circulaire — les fenêtres à juger tireraient le
-    # seuil vers le haut, et un essai bruité passerait pour normal.
-    #
-    # ⚠️ `sigma_from_block` travaille sur les **8** voies, là où le mode mesure son σ sur la
-    # fenêtre occipitale filtrée (4 voies) — cf. l'avertissement en tête de module. Le seuil reste
-    # cohérent avec lui-même (numérateur et dénominateur sortent du MÊME estimateur), mais il ne
-    # rejette pas forcément les mêmes essais que le mode. Hérité de `research/ssvep_guided.py`, et
-    # laissé tel quel : c'est la règle sous laquelle les repères du 2026-07-27 ont été obtenus.
-    sigmas_repos = [acq.sigma_from_block(b) for b in repos]
-    sigmas_repos = [float(np.mean(s)) for s in sigmas_repos if s is not None]
-    sigma_ref = float(np.median(sigmas_repos)) if sigmas_repos else None
-
+    # --- UNE décision par essai, par le `_run_step` du MODE ------------------------------------
+    # Rejet d'artefact compris : le mode prend son σ sur les 4 occipitales FILTRÉES, et c'est ce
+    # σ-là qui juge ici — plus celui des 8 voies (cf. l'avertissement en tête de module).
     decisions, artefacts = [], 0
     for fenetre_brute, cible in essais:
-        sd = acq.sigma_from_block(fenetre_brute)
-        if sigma_ref and sd is not None and float(np.mean(sd)) > ARTIFACT_SIGMA_RATIO * sigma_ref:
-            decisions.append((cible, None))   # le mode publierait « aucune cible »
-            artefacts += 1
-            continue
-        fenetre = acq.occipital_window(fenetre_brute)
-        if fenetre is None:
+        vue.recent = fenetre_brute
+        decideur._decoded = None
+        decideur._run_step(vue, 0.0)
+        sortie = decideur.output()
+        if sortie is None:                    # fenêtre trop courte : le mode ne publierait rien
             decisions.append((cible, None))
             continue
-        freq, _scores = decodeur.classify(fenetre)
-        decisions.append((cible, None if freq is None else freqs.index(freq)))
+        if sortie["artifact"]:
+            artefacts += 1
+        index = int(sortie["target_index"])
+        decisions.append((cible, None if index < 0 else index))
 
     n_essais = len(decisions)
     emis = [(cible, decide) for cible, decide in decisions if decide is not None]
@@ -557,7 +582,10 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
         "p_hasard": round(p_hasard(n_justes, n_emis, 1.0 / len(freqs)), 4),
         "freqs_hz": [round(f, 3) for f in freqs],
         "refresh_hz": 0.0,
-        "fenetres_repos": len(scores_repos),
+        "fenetres_repos": len(decideur._samples),
+        # Le compte-rendu du plancher, celui que le mode imprime : μ, σ et le ρ qu'il faudrait
+        # atteindre, par cible. C'est lui qui dit POURQUOI une cible ne sort jamais.
+        "plancher": decideur.rest_report,
         "decisions": [(int(c), None if d is None else int(d)) for c, d in decisions],
         **_affichage,
         # Le verdict s'OUVRE sur le mot affiché en face : c'est l'invariant que
@@ -667,7 +695,8 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
                          f"la preuve du contraire — c'est un « on ne sait pas ». Rallonge la "
                          f"séance, ou reprends le montage.")
     return (phrase + f"Le décodage marche sur CETTE séance : le test binomial exact le distingue "
-                     f"du hasard ({texte_p(p)}). À comparer aux repères du 2026-07-27 — "
+                     f"du hasard ({texte_p(p)}). Repères du 2026-07-27, en ordre de grandeur "
+                     f"seulement (pris sur le trio du dépôt, sous une autre règle de rejet) — "
                      f"{REFERENCE_JUSTESSE * 100:.0f} % de justesse à l'émission pour "
                      f"{REFERENCE_EMISSION * 100:.0f} % d'émission.")
 
@@ -869,6 +898,79 @@ def _selftest():
     chk(plat["taux_emission"] < 0.3,
         f"sur du bruit pur, le moteur se TAIT plutôt que de deviner ({plat['taux_emission'] * 100:.0f} "
         f"% d'émission) — c'est le seuil z du mode, pas un seuil écrit ici")
+
+    # === I-3 : la DÉCISION est celle du RUNTIME DU MODE, rejet d'artefact compris ==============
+    # Le test réécrivait la règle du mode, avec UN écart connu : le σ du rejet d'artefact pris sur
+    # les 8 voies (`sigma_from_block`) là où le mode le prend sur les 4 occipitales FILTRÉES. Un
+    # clignement frontal fort faisait rejeter au test un essai que le mode décode (taux SOUS-estimé) ;
+    # un artefact de nuque sur PO7/PO8, dilué dans 8 voies, passait au test et pas au mode (taux
+    # SUR-estimé). Deux fixtures, calibrées pour tomber ENTRE les deux règles, et un `SsvepRuntime`
+    # qui décode EN DIRECT par son propre `tick` : le test doit rendre, essai par essai, SA décision.
+    import contextlib as _ctx
+    import io as _io
+
+    from core.modes.ssvep import SPEC as _SPEC_MODE
+    from core.modes.ssvep import SsvepRuntime as _SsvepRuntime
+
+    _rng3 = np.random.default_rng(31)
+    _repos3 = [_bruit(_rng3, BESOIN) for _ in range(30)]
+    _essais3, _genre = [], []
+    for _i in range(12):
+        _cible = _i % len(FREQS)
+        if _i < 6:                                            # propre
+            _x, _g = _ssvep(_rng3, BESOIN, FREQS[_cible], gain=6.0), "propre"
+        elif _i < 9:                                          # clignement FRONTAL (Fz/C3/Cz/C4)
+            _x = _ssvep(_rng3, BESOIN, FREQS[_cible], gain=6.0)
+            _x[:, :4] += _rng3.normal(0.0, 150.0, (BESOIN, 4))
+            _g = "frontal"
+        else:                                                 # artefact OCCIPITAL (nuque)
+            _x = _bruit(_rng3, BESOIN)
+            _x[:, 4:] += _rng3.normal(0.0, 45.0, (BESOIN, 4))
+            _g = "occipital"
+        _essais3.append((_x, _cible))
+        _genre.append(_g)
+
+    class _MoteurDirect:
+        def __init__(self):
+            self.acq, self.instance, self.recent = acq, "selftest", None
+
+    _md = _MoteurDirect()
+    _direct = _SsvepRuntime(_SPEC_MODE, {"freqs": tuple(FREQS)}, _md)
+    _direct._log = lambda *a, **k: None
+    _direct.begin_rest(now=0.0, warmup_s=0.0, duration_s=(len(_repos3) - 1) * 0.2 - 0.01)
+    _t, _sorties = 0.0, []
+    with _ctx.redirect_stdout(_io.StringIO()):
+        for _b in _repos3:
+            _md.recent = _b
+            _direct.tick(_md, _t, _t)
+            _t += 0.2
+        for _x, _cible in _essais3:
+            _md.recent = _x
+            _direct.tick(_md, _t, _t)
+            _t += 0.2
+            _o = _direct.output()
+            _sorties.append((_cible, None if _o["target_index"] < 0 else _o["target_index"],
+                             bool(_o["artifact"])))
+    chk(_direct.phase == "running" and len(_sorties) == 12,
+        f"le mode, EN DIRECT, a mesuré son plancher sur les {len(_repos3)} fenêtres de repos puis "
+        f"décodé les 12 essais ({_direct.phase})")
+    chk(any(d is not None and g == "frontal" for (_c, d, _a), g in zip(_sorties, _genre))
+        and any(a and g == "occipital" for (_c, _d, a), g in zip(_sorties, _genre)),
+        f"…et la fixture DISCRIMINE : le mode décode des essais à clignement frontal, et rejette "
+        f"des essais à artefact occipital ({[(g, d, a) for (_c, d, a), g in zip(_sorties, _genre)]})")
+    chk(all(getattr(_DecideurSSVEP, m) is getattr(_SsvepRuntime, m)
+            for m in ("_rest_step", "_run_step", "_publish", "_reset_rest", "_new_decoder")),
+        "le décideur EST le runtime du mode : plancher, décision, rejet et publication hérités, "
+        "seuls ses messages sont coupés")
+    _res3 = rejouer(_essais3, _repos3, FREQS, FS, acq=acq)
+    chk([(c, d) for c, d in _res3["decisions"]] == [(c, d) for c, d, _a in _sorties]
+        and _res3["n_artefacts"] == sum(a for _c, _d, a in _sorties),
+        f"🔴 le test décide EXACTEMENT comme le mode, essai par essai, rejet d'artefact compris — "
+        f"test {[d for _c, d in _res3['decisions']]} ({_res3['n_artefacts']} artefacts), mode "
+        f"{[d for _c, d, _a in _sorties]} ({sum(a for _c, _d, a in _sorties)} artefacts)")
+    chk("comparable" in _res3["honnetete"] and "2026-07-27" in _res3["honnetete"],
+        "…et la phrase d'honnêteté DIT que ces chiffres ne se comparent plus tels quels au "
+        "100 %/44 % du 2026-07-27, pris sous l'ancienne règle (σ sur 8 voies, trio du dépôt)")
 
     # === Le verdict : les DEUX chiffres, et l'effectif qui les porte ==========================
     chk("ESSAIS" in res["verdict"] and str(res["n_essais"]) in res["verdict"],

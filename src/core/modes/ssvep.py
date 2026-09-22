@@ -99,14 +99,14 @@ class SsvepRuntime(ModeRuntime):
             # changer en cours de route casserait le contrat. Les fenêtres arrivent à 5 Hz.
             if not self._warned:
                 self._warned = True
-                print(f"[ssvep] repos prolongé : {len(self._samples)} fenêtres, "
+                self._dire(f"[ssvep] repos prolongé : {len(self._samples)} fenêtres, "
                       f"pas encore de quoi mesurer un plancher fiable")
             return False
 
         self._sigma_ref = float(np.median(self._sigmas))
         line = "  ".join(f"{f:g}Hz: μ={m:.2f} σ={s:.2f}"
                          for f, (m, s) in self.decoder.baseline.items())
-        print(f"[ssvep] plancher de repos ({len(self._samples)} fenêtres) — {line}")
+        self._dire(f"[ssvep] plancher de repos ({len(self._samples)} fenêtres) — {line}")
 
         # Un plancher trop DISPERSÉ rend le seuil inatteignable, en silence : on décide sur
         # z=(ρ-μ)/σ, donc un σ gonflé exige un ρ que le SSVEP ne produit jamais en électrodes
@@ -115,12 +115,12 @@ class SsvepRuntime(ModeRuntime):
         for f, (mu, sd) in self.decoder.baseline.items():
             needed = mu + self.decoder.z_min * sd
             if needed > 0.85:
-                print(f"[ssvep] ⚠️  {f:g} Hz : plancher trop dispersé (μ={mu:.2f} σ={sd:.2f}) "
+                self._dire(f"[ssvep] ⚠️  {f:g} Hz : plancher trop dispersé (μ={mu:.2f} σ={sd:.2f}) "
                       f"-> il faudrait ρ={needed:.2f} pour détecter. Cible quasi INDÉTECTABLE : "
                       f"contact des électrodes occipitales, ou refaire le repos immobile.")
-        print(f"[ssvep] σ de référence {self._sigma_ref:.1f} -> rejet d'artefact au-delà "
+        self._dire(f"[ssvep] σ de référence {self._sigma_ref:.1f} -> rejet d'artefact au-delà "
               f"de {ARTIFACT_SIGMA_RATIO * self._sigma_ref:.0f}")
-        print(f"[ssvep] décodage en cours sur {stream_name('decoded_ssvep')} "
+        self._dire(f"[ssvep] décodage en cours sur {stream_name('decoded_ssvep')} "
               f"(échelle z, seuil {self.decoder.z_min}) — fixe une cible")
         self.rest_report = {
             "kind": "ssvep",
@@ -165,6 +165,13 @@ class SsvepRuntime(ModeRuntime):
             "threshold": float(self.decoder.z_min),
         }
         self._log(index, scores, artifact)
+
+    def _dire(self, texte):
+        """Les messages du REPOS (plancher, σ de référence, « décodage en cours »). Une méthode, et
+        pas des `print` épars, pour la même raison que `_log` : le TEST du SSVEP rejoue ce repos
+        par le code du mode (`ssvep_mesure._DecideurSSVEP`) et coupe ces lignes, qui feraient
+        croire au terminal que le mode tourne et publie."""
+        print(texte)
 
     def _log(self, index, scores, artifact):
         """Trace la décision en console ~1×/s.
