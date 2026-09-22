@@ -43,6 +43,7 @@ FENETRES = {
 MESURE_OPTIONS = {
     "ssvep": ("--guide",),
     "p300": ("--calibrer",),    # le TEST du P300 : il cercle une cible par manche et publie `cue`
+    "cvep": ("--calibrer",),    # le TEST du c-VEP : il cercle une cible par bloc, garde son HORLOGE
     # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
     # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
     # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option
@@ -89,7 +90,9 @@ FREQUENCES = {"ssvep": "--freqs"}
 # L'argument qui fixe la LONGUEUR d'une séance guidée, par fenêtre — et donc la durée d'un test.
 # ⚠️ Chaque fenêtre compte dans SA propre unité, et le `Param` de la mesure qui la sert doit être
 # exprimé dans la même : des essais PAR CIBLE pour le SSVEP, des MANCHES pour le P300, des ESSAIS
-# pour l'ErrP, des CYCLES par bloc pour le c-VEP. Une valeur passée dans la mauvaise unité ne lève
+# pour l'ErrP, des CYCLES enregistrés PAR CIBLE pour le c-VEP (répartis en trois blocs — et non
+# « par bloc », comme l'écrivait la première version de ce commentaire, relevée par l'auteur du
+# test c-VEP). Une valeur passée dans la mauvaise unité ne lève
 # rien : la séance est juste six fois trop courte, ou trop longue, que ce que l'écran annonce.
 #
 # Pourquoi ça existe : l'ErrP calibre en 200 essais, 5,7 minutes. Un bouton « Tester » qu'on refait

@@ -743,6 +743,7 @@ SPEC = ModeSpec(
     status="moteur",
     key_channels=tuple(CVEP_CHANNELS),   # Pz, PO7, Oz, PO8 — le filtre spatial fait le tri
     stimulus_id="cvep",   # la même fenêtre que sa calibration, mais la question est distincte
+    test_id="cvep_test",  # la séance d'entraînement rejouée, le moteur DÉCIDANT (`cvep_test.py`)
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=_modeles_disponibles,
