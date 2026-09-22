@@ -42,6 +42,7 @@ FENETRES = {
 # résultat est un verdict et pas un modèle.
 MESURE_OPTIONS = {
     "ssvep": ("--guide",),
+    "p300": ("--calibrer",),    # le TEST du P300 : il cercle une cible par manche et publie `cue`
     # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
     # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
     # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option

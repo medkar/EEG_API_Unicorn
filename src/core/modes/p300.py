@@ -533,6 +533,9 @@ SPEC = ModeSpec(
     status="moteur",
     key_channels=tuple(P300_MIDLINE),   # Fz, Cz, Pz — la ligne médiane, où le P300 culmine
     stimulus_id="p300",
+    # La mesure qui ÉPROUVE ce mode : la séance d'entraînement rejouée, le moteur décidant au lieu
+    # d'apprendre (`core/modes/p300_test.py`).
+    test_id="p300_test",
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: p300_models.modeles_disponibles(),

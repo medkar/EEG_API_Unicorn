@@ -15,7 +15,7 @@ from dataclasses import replace
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
 from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mesure  # noqa: E402
-from core.modes import mi_test  # noqa: E402
+from core.modes import mi_test, p300_test  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
 # ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
@@ -63,6 +63,7 @@ MESURES = (
     #                     Après la barrière, et jamais avant : un taux mesuré sur des occipitales
     #                     qui ne captent pas est un chiffre qui décrit le montage, pas le décodage.
     mi_test.SPEC,       # le « Tester » du Motor Imagery, désigné par `mi.SPEC.test_id`
+    p300_test.SPEC,     # le « Tester » du P300 : le protocole d'entraînement, le moteur DÉCIDE
 )
 
 

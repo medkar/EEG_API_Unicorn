@@ -3878,6 +3878,18 @@ def _smoke_vol_marqueurs():
         finally:
             _reg.MESURES = vraies
             srv.mesure = None
+
+        # Les VRAIS tests de mode, une fois branchés : le refus ne doit pas tenir au seul test
+        # factice ci-dessus. Chaque mesure désignée par le `test_id` d'un mode qui LIT des
+        # marqueurs doit être refusée pendant que ce mode décode — sinon il suffirait qu'un test
+        # déclare mal son `marker_mode_id` pour rouvrir la porte, sans qu'aucun test ne rougisse.
+        a_proteger = [s for s in registry.MODES if s.test_id and s.marker_epoch_s > 0]
+        non_couverts = [s.test_id for s in a_proteger
+                        if srv._refus_mesure_pendant_mode(registry.get_mesure(s.test_id),
+                                                          {s.id: _ModeFactice()}) is None]
+        chk(a_proteger and not non_couverts,
+            f"chaque VRAI test d'un mode à marqueurs est refusé pendant que ce mode décode "
+            f"({[s.test_id for s in a_proteger]} ; non couverts : {non_couverts or 'aucun'})")
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
 
