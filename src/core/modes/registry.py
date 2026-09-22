@@ -200,6 +200,9 @@ def serialize(spec, params=None):
         # d'afficher « Lancer le stimulus » — pas `calibration.stimulus_id`, qui ne répond pas à
         # la même question et laissait le SSVEP sans bouton.
         "stimulus_id": spec.stimulus_id,
+        # La MESURE qui éprouve ce mode. C'est ce champ que la console lit pour décider d'afficher
+        # « Tester » — elle ne tient aucune liste des modes testables, elle demande au contrat.
+        "test_id": spec.test_id,
         "calibration": None if spec.calibration is None else {
             "kind": spec.calibration.kind,
             "stimulus_id": spec.calibration.stimulus_id,

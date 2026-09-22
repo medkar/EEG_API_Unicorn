@@ -4436,6 +4436,27 @@ def _smoke_proposition():
     chk(not sans_stimulus,
         f"…et aucun mode ne déclare un stimulus sans publier de flux ({sans_stimulus or 'aucun'})")
 
+    # --- UN MODE DÉCLARE LA MESURE QUI L'ÉPROUVE -------------------------------------------
+    #
+    # `test_id` désigne une MESURE du registre, jamais un mode : ce sont deux catalogues distincts,
+    # et `registry.check` interdit déjà qu'un même mot serve aux deux. Une clé qui ne désigne rien
+    # donnerait un bouton « Tester » qui refuse au clic — c'est-à-dire un bouton cassé, la panne
+    # que tout ce projet combat.
+    mesures_connues = {m.id for m in registry.MESURES}
+    orphelins = [s.id for s in registry.MODES if s.test_id and s.test_id not in mesures_connues]
+    chk(not orphelins,
+        f"chaque `test_id` déclaré par un mode désigne une mesure du registre "
+        f"({orphelins or 'aucun orphelin'})")
+    chk("test_id" in registry.serialize(registry.get("ssvep")),
+        "…et le contrat SÉRIALISÉ le porte : sans lui la console ne peut pas savoir qui est "
+        "testable, et il lui faudrait une liste recopiée")
+    # ⚠️ Neuro et Brut n'ont AUCUNE vérité-terrain — il n'y a pas de bonne réponse à comparer.
+    # Leur donner un test annoncerait une justesse inventée.
+    testables_sans_raison = [s.id for s in registry.MODES if s.test_id and s.family == "brut"]
+    chk(not testables_sans_raison,
+        f"…et le BRUT n'est pas testable : il ne décide rien, il montre du signal "
+        f"({testables_sans_raison or 'aucun'})")
+
     # Un réglage sans effet sur le décodage ne reconstruit RIEN. On compare l'objet lui-même et
     # pas la phase : les deux chemins laissent le mode en « warmup » juste après un démarrage, donc
     # la phase ne prouverait rien. L'identité du runtime, si — et c'est elle qui porte le plancher

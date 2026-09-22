@@ -237,6 +237,16 @@ class ModeSpec:
                                # donc son bouton « Lancer le stimulus » était introuvable tant que
                                # le critère passait par `calibration`. Trouvé en séance casque le
                                # 2026-09-21, sur le seul mode déjà validé sur un cerveau.
+    test_id: str = ""          # la CLÉ de la MESURE qui ÉPROUVE ce mode, ou "" s'il n'est pas
+                               # testable. Même forme que `stimulus_id` : une clé, jamais une
+                               # classe — c'est `registry.MESURES` qui la résout, et `core` n'a
+                               # donc rien de neuf à nommer.
+                               # ⚠️ Un mode n'est testable que s'il existe une VÉRITÉ-TERRAIN à
+                               # comparer : on désigne quelque chose, le moteur décide, on
+                               # vérifie. Le Neuro (charge, somnolence, engagement) et le Brut
+                               # n'en ont AUCUNE — il n'y a pas de bonne réponse. Ils
+                               # s'OBSERVENT, et annoncer une justesse là où rien ne peut être
+                               # juste ou faux serait une mesure inventée.
     marker_epoch_s: float = 0.0   # tranche prélevée autour d'un marqueur (pré + post), 0 = ce
                                   # mode n'écoute pas les marqueurs. Dimensionne le tampon du
                                   # moteur : sous-dimensionné, CHAQUE époque serait tronquée en
