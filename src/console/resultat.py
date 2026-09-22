@@ -52,6 +52,7 @@ class BlocResultat(QWidget):
         super().__init__()
         self.corps_auto = corps_auto
         self._hotes = 0
+        self._dernier = None        # le dernier résultat montré : seul un NOUVEAU referme le repli
         self.verdict = QLabel("")
         self.chiffres = QLabel("")
         self.chiffres.setWordWrap(True)
@@ -111,10 +112,19 @@ class BlocResultat(QWidget):
         self.corps.setText("\n\n".join(morceaux) if self.corps_auto else "")
         self.corps.setVisible(self.corps_auto and bool(morceaux))
         self.details.setVisible((self.corps_auto and bool(morceaux)) or self._hotes > 0)
-        self.details.setChecked(False)
-        self._deplier(False)
+        # 🔴 Le repli ne se referme que sur un NOUVEAU résultat. La page appelle `montrer` à chaque
+        # rafraîchissement (dix fois par seconde) avec le MÊME résultat : le refermer à chaque
+        # appel, c'était refermer « Détails » 100 ms après qu'on l'a ouvert — la phrase
+        # d'honnêteté, le McNemar et le nom du modèle étaient donc ILLISIBLES, et « rangé, pas
+        # supprimé » ne tenait pas. Trouvé par la revue de branche ; le smoke restait vert parce
+        # qu'il cochait puis lisait sans rafraîchir entre les deux.
+        if resultat != self._dernier:
+            self.details.setChecked(False)
+            self._deplier(False)
+        self._dernier = resultat
 
     def effacer(self):
+        self._dernier = None
         for w in (self.verdict, self.chiffres, self.reserve, self.corps):
             w.setText("")
         self.details.setChecked(False)

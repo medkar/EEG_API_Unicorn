@@ -3588,9 +3588,17 @@ def _smoke():
         "McNemar, l'honnêteté et le fichier sont REPLIÉS par défaut — c'est eux qui noyaient "
         "le chiffre")
     bloc.details.setChecked(True)
+    # Le rafraîchissement suivant, avec le MÊME résultat — ce que la page fait dix fois par
+    # seconde. Sans cette ligne, l'assertion cochait puis lisait sans jamais rafraîchir, et ne
+    # voyait pas que le repli se refermait 100 ms plus tard (constat C3 de la revue de branche).
+    bloc.montrer(dict(faible))
     chk(bloc.corps.isVisibleTo(bloc) and "HORS LIGNE" in bloc.corps.text()
         and "McNemar" in bloc.corps.text() and "candidat_cvep" in bloc.corps.text(),
-        "…et un clic les ramène TOUS : rangés, pas supprimés")
+        "…et un clic les ramène TOUS, et ils RESTENT ouverts au rafraîchissement suivant : "
+        "rangés, pas supprimés")
+    bloc.montrer({**faible, "nom": "un_autre_modele.npz"})
+    chk(not bloc.corps.isVisibleTo(bloc),
+        "…tandis qu'un NOUVEAU résultat repart replié")
 
     # La couleur vient du NIVEAU publié par le moteur, jamais d'un pourcentage. Un résultat que le
     # moteur juge « moyen » reste ORANGE même avec 25 % : c'est le moteur qui connaît le hasard
