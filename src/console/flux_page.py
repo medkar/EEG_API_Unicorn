@@ -11,10 +11,10 @@ la panne qu'on vient regarder ici. La page ne tient donc aucune référence vers
 test le vérifie (`console/app.py --smoke`) : `update_from()` reçoit un état complet et n'en tire
 RIEN pour ce panneau ; seul `rafraichir()`, qui tire sur un inlet, le remplit.
 
-⚠️ **Elle ne recopie pas l'extrait « Brancher un client ».** `mode_page.py` le génère déjà depuis
-le contrat (`contract.client_snippet`) : cette page montre le FLUX, celle du mode montre le CODE
-qui le lit. Deux textes qui disent la même chose finissent toujours par diverger, et ce dépôt en a
-déjà payé le prix (`classement_relatif`, `span_correlation`).
+⚠️ **Elle ne recopie pas d'extrait de code client.** Le contrat le génère
+(`contract.client_snippet`) ; il a quitté la page du mode le 2026-09-22 et reviendra avec
+« Connecter ». Cette page montre le FLUX, pas le code qui le lit : deux textes qui disent la même
+chose finissent toujours par diverger (`classement_relatif`, `span_correlation`).
 
 Le patron de découverte est celui de `core/markers.flux_de_marqueurs_visibles`, avec ses raisons :
 on résout LARGEMENT (LSL répond une fois par interface réseau), on fond les doublons par NOM, on
@@ -221,8 +221,8 @@ class FluxPage(QWidget):
         explication = QLabel(
             "Ce panneau lit le réseau LSL <b>comme le ferait ton application</b> — il n'a aucun "
             "accès privilégié au moteur. Ce qui s'affiche ici, un client Unity, Python ou MATLAB "
-            "le reçoit aussi ; ce qui reste vide ici est vide pour lui aussi. Le code qui lit un "
-            "flux est sur la page du mode, bloc « Brancher un client ».")
+            "le reçoit aussi ; ce qui reste vide ici est vide pour lui aussi. Du code qui lit un "
+            "flux : le dossier « examples/ » du dépôt (Python, Unity).")
         explication.setWordWrap(True)
         explication.setStyleSheet("color: #8a8f9c; font-size: 11px;")
 

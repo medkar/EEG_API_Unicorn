@@ -1,24 +1,54 @@
-"""La page d'un mode : sortie en direct · réglages · brancher un client.
+"""La page d'un mode : des blocs NUMÉROTÉS, dans l'ordre où on les fait, et rien d'autre.
 
-Les trois blocs sont générés depuis le `ModeSpec`. Rien ici ne sait qu'un SSVEP a des fréquences
-ou qu'un neuro a un lissage : c'est le contrat qui le dit. C'est ce qui permettra aux chantiers 2
-et 3 d'enrichir les blocs sans toucher à la coquille.
+    ← Modes   SSVEP — quelle cible clignotante l'utilisateur regarde          arrêté
+
+    ┌ 1. Régler ──────────────────────────┐   tous les modes
+    ┌ 2. Entraîner ───────────────────────┐   si le contrat déclare une calibration
+    ┌ 3. Tester ──────────────────────────┐   si le contrat déclare un `test_id`
+    ☐ Décodage en direct                       replié : la vue en direct, toujours à jour
+
+    …ou, pour un mode sans vérité-terrain (le Neuro, le Brut) :
+
+    ┌ 1. Régler ──────────────────────────┐
+    ┌ 2. Observer ────────────────────────┐   la vue en direct, en face ; aucun score
+
+🔴 **Pourquoi cette forme (séance casque du 2026-09-22).** L'ancienne page mettait « Démarrer »,
+« Calibrer » et « Lancer le stimulus » à plat, comme trois gestes de même rang. Il existe pourtant
+un ORDRE, et en sauter un rend les autres inutiles sans que rien ne le dise : le stimulus a été
+lancé sur un mode arrêté, et dix minutes de fixation se sont perdues dans le vide. La boucle réelle
+est « régler → tester → ajuster → re-tester » ; « Tester » possède sa séquence entière (la mesure,
+le contrôle de liaison, la fenêtre, le verdict), donc il n'y a plus d'ordre à respecter.
+
+Ce qui a QUITTÉ la page — « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
+« Brancher un client » — reviendra avec « Connecter », le second chantier. La machinerie de la
+`Console` qui les servait (`demander_stimulus`, le journal de `_lancer_fenetre`, les boutons des
+tuiles de la grille) reste en place.
+
+Rien ici ne sait qu'un SSVEP a des fréquences ou qu'un MI s'entraîne : c'est le CONTRAT qui le dit
+(`calibration`, `test_id`).
 """
 
 import os
 import sys
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
-                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import PHASES_FR, live_views  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
-from stimulus import registry as stimulus_registry  # noqa: E402
-from core.lsl_io import stream_name  # noqa: E402
 from core.modes import registry  # noqa: E402
-from core.modes.contract import client_snippet  # noqa: E402
+
+GRIS = "color: #8a8f9c; font-size: 11px;"
+
+
+def _phrase(texte):
+    """Une ligne d'explication sous un geste : courte, grise. Pas un mur de texte."""
+    etiquette = QLabel(texte)
+    etiquette.setWordWrap(True)
+    etiquette.setStyleSheet(GRIS)
+    return etiquette
 
 
 class ModePage(QWidget):
@@ -33,132 +63,133 @@ class ModePage(QWidget):
         self.console = console
         self.mode_id = spec["id"]
         self._derniers_params = None
+        self._arrete = True
 
+        # --- l'en-tête : où l'on est, et rien d'autre ------------------------------------------
         entete = QHBoxLayout()
         self.bouton_retour = QPushButton("← Modes")
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
         entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
-        # 🔴 DÉMARRER/ARRÊTER DEPUIS LA PAGE (2026-09-21). Sans lui, la page était un cul-de-sac :
-        # elle affichait « arrêté » et « ce flux n'est pas publié en ce moment » sans offrir le
-        # moindre moyen d'y remédier — il fallait ressortir vers la grille, deviner laquelle des
-        # deux tuiles cliquer, et revenir. Le même signal que la tuile, à dessein : le sens vient
-        # de l'ÉTAT REÇU (`update_from`), jamais d'une bascule tenue ici, qui se désynchroniserait
-        # au premier refus du moteur.
-        self.bouton_marche = None
-        if spec.get("status") == "moteur" and spec.get("stream"):
-            self.bouton_marche = QPushButton("Démarrer")
-            self._arrete = True
-            self.bouton_marche.clicked.connect(
-                lambda: self.marche.emit(self.mode_id, self._arrete))
-            entete.addWidget(self.bouton_marche)
-        # --- les deux boutons qui SORTENT de la console ------------------------------------
-        # Rien ici ne sait qu'un MI s'entraîne, qu'un SSVEP non, ou qu'un P300 a besoin d'une
-        # fenêtre : c'est le CONTRAT qui le dit, par trois champs distincts.
-        #
-        # ⚠️ Le critère de « Calibrer » n'est PAS `kind` (qui dit seulement QUI mène le protocole,
-        # le moteur ou une fenêtre) mais `jouable` — le moteur a-t-il un runtime pour cette
-        # calibration. Le critère précédent, `kind == "console"`, désignait une valeur que le
-        # vocabulaire du contrat n'a plus depuis la tâche 2 : le bouton avait purement DISPARU de
-        # tous les modes, y compris du MI qui se calibre depuis toujours. Aucun test ne l'a vu —
-        # le smoke appelait `console.show_calibration()` directement, sans jamais cliquer.
-        calib = spec.get("calibration") or {}
-        self.bouton_calibrer = None
-        self.bouton_stimulus = None
-        self.journal = None
-        if calib:
-            self.bouton_calibrer = QPushButton("Calibrer")
-            self.bouton_calibrer.clicked.connect(
-                lambda: console.show_calibration(self.mode_id))
-            if not calib.get("jouable"):
-                # Une calibration DÉCLARÉE mais dont le runtime n'est pas livré. Le bouton reste
-                # visible — c'est ainsi qu'on apprend que ce mode se calibre — mais grisé, et il
-                # DIT pourquoi : la même honnêteté que les tuiles grisées de la grille.
-                self.bouton_calibrer.setEnabled(False)
-                self.bouton_calibrer.setToolTip(
-                    f"La calibration de « {spec['label']} » est déclarée mais le moteur ne sait "
-                    f"pas encore la jouer.")
-            entete.addWidget(self.bouton_calibrer)
-        # « Lancer le stimulus » : le même mécanisme, la même fenêtre, SANS `--calibrer`. Il
-        # n'existe que pour les modes qui ne décodent RIEN sans une fenêtre en face.
-        #
-        # ⚠️ Le critère est `spec["stimulus_id"]` — le stimulus DU MODE — et non
-        # `calibration.stimulus_id`, qui désigne la fenêtre du protocole d'ENTRAÎNEMENT. Les deux
-        # valent la même chose pour le P300, l'ErrP et le c-VEP, ce qui a caché le défaut : le
-        # SSVEP a un stimulus et AUCUNE calibration (la CCA n'apprend rien), donc son bouton
-        # n'existait nulle part. Trouvé en séance casque le 2026-09-21, sur le seul mode déjà
-        # validé sur un cerveau — on ne pouvait pas l'éprouver depuis l'application.
-        stimulus_id = spec.get("stimulus_id") or ""
-        if stimulus_id:
-            self.bouton_stimulus = QPushButton("Lancer le stimulus")
-            self.bouton_stimulus.setToolTip(
-                "Ouvre la fenêtre de stimulus dans un second processus. Elle n'ouvre PAS le "
-                "casque : elle dessine et publie des marqueurs, à côté du moteur.")
-            self.bouton_stimulus.clicked.connect(
-                lambda: console.demander_stimulus(self.mode_id))
-            entete.addWidget(self.bouton_stimulus)
-
-            # « Journal de séance », et elle est COCHÉE PAR DÉFAUT. La recette dit noir sur blanc
-            # qu'une séance c-VEP sans ce fichier NE SE DÉPOUILLE PAS (test 2.9) : décochée par
-            # défaut, ce serait une séance perdue par omission, et une séance casque ne se répète
-            # pas. La fenêtre choisit elle-même son nom horodaté — la console ne compose aucun
-            # chemin et n'écrit rien.
-            #
-            # ⚠️ La case n'apparaît que si la FENÊTRE sait le faire, et c'est le registre des
-            # stimulus qu'on interroge, pas une liste tenue ici : une case sur une fenêtre qui
-            # ignore l'option serait un réglage-décor, exactement ce que ce projet combat.
-            if stimulus_registry.sait_journaliser(stimulus_id):
-                self.journal = QCheckBox("Journal de séance")
-                self.journal.setChecked(True)
-                self.journal.setToolTip(
-                    "Écrit la vérité-terrain de la séance (une ligne par consigne, horodatée sur "
-                    "la même horloge que le flux décodé). Sans ce fichier, la séance ne se "
-                    "dépouille pas après coup : le terminal en est le seul autre exemplaire.")
-                entete.addWidget(self.journal)
         entete.addStretch(1)
         self.etat = QLabel("")
+        self.etat.setStyleSheet(GRIS)
         entete.addWidget(self.etat)
 
+        # --- 1. Régler ---------------------------------------------------------------------------
+        self.formulaire = ParamsForm(spec["params"])
+        self.formulaire.appliquer.connect(self._appliquer)
+        self.formulaire.proposer.connect(self._proposer)
+        numero = 1
+        self.bloc_regler = QGroupBox(f"{numero}. Régler")
+        QVBoxLayout(self.bloc_regler).addWidget(self.formulaire)
+        blocs = [self.bloc_regler]
+
+        # --- 2. Entraîner (si le contrat déclare une calibration) --------------------------------
+        # ⚠️ Le critère d'activation est `jouable` — le moteur a-t-il un runtime pour cette
+        # calibration — et non `kind` (qui dit seulement QUI mène le protocole). Le critère
+        # précédent désignait une valeur que le contrat n'a plus : le bouton avait DISPARU de tous
+        # les modes, MI compris, et aucun test ne l'a vu parce que le smoke ne cliquait jamais.
+        calib = spec.get("calibration") or {}
+        self.bloc_entrainer = self.bouton_entrainer = None
+        if calib:
+            numero += 1
+            self.bloc_entrainer = QGroupBox(f"{numero}. Entraîner")
+            self.bouton_entrainer = QPushButton("Entraîner")
+            self.bouton_entrainer.clicked.connect(lambda: console.show_calibration(self.mode_id))
+            if not calib.get("jouable"):
+                # Déclarée mais pas livrée : le bouton reste VISIBLE — c'est ainsi qu'on apprend
+                # que ce mode s'entraîne — mais grisé, et il DIT pourquoi.
+                self.bouton_entrainer.setEnabled(False)
+                self.bouton_entrainer.setToolTip(
+                    f"L'entraînement de « {spec['label']} » est déclaré mais le moteur ne sait "
+                    f"pas encore le jouer.")
+            dedans = QVBoxLayout(self.bloc_entrainer)
+            dedans.addWidget(_phrase("Produit un modèle à partir d'une séance guidée. Tu vois "
+                                     "son score AVANT de décider de le garder."))
+            dedans.addWidget(self.bouton_entrainer)
+            blocs.append(self.bloc_entrainer)
+
+        # --- 3. Tester (si le contrat déclare un `test_id`) --------------------------------------
+        # UN bouton, qui ouvre la page de la mesure désignée : elle porte déjà le briefing,
+        # « Commencer », le contrôle de liaison, la fenêtre et le verdict. La recopier ici serait
+        # un second écran de protocole à tenir d'accord avec le premier.
+        test_id = spec.get("test_id") or ""
+        self.bloc_tester = self.bouton_tester = None
+        if test_id:
+            numero += 1
+            self.bloc_tester = QGroupBox(f"{numero}. Tester")
+            self.bouton_tester = QPushButton("Tester")
+            self.bouton_tester.clicked.connect(
+                lambda: console.show_mesure(test_id, depuis=self))
+            if not (console.mesures.get(test_id) or {}).get("jouable"):
+                self.bouton_tester.setEnabled(False)
+                self.bouton_tester.setToolTip(
+                    f"Le test de « {spec['label']} » est déclaré mais le moteur ne sait pas "
+                    f"encore le jouer.")
+            dedans = QVBoxLayout(self.bloc_tester)
+            dedans.addWidget(_phrase("Une séance courte, sur TES réglages : on te dit quoi faire, "
+                                     "le décodage répond, on compare. Rend un score et son "
+                                     "niveau de hasard ; n'écrit rien."))
+            dedans.addWidget(self.bouton_tester)
+            blocs.append(self.bloc_tester)
+
+        # --- la vue en direct : en face (Observer) ou repliée ------------------------------------
         self.vue = live_views.build(spec["family"], spec["channels"])
         if hasattr(self.vue, "set_source") and console.engine is not None:
             # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`.
             self.vue.set_source(console.engine.recent_window)
-        bloc_sortie = QGroupBox("Sortie en direct")
-        QVBoxLayout(bloc_sortie).addWidget(self.vue)
+        self.vue.setMinimumHeight(200)
 
-        self.formulaire = ParamsForm(spec["params"])
-        self.formulaire.appliquer.connect(self._appliquer)
-        self.formulaire.proposer.connect(self._proposer)
-        self.reglages = QGroupBox("Réglages")
-        QVBoxLayout(self.reglages).addWidget(self.formulaire)
+        self.bloc_observer = self.bouton_observer = None
+        self.direct = self.pli_direct = None
+        if not calib and not test_id:
+            # Aucune vérité-terrain (le Neuro, le Brut) : rien à entraîner, rien à noter. On
+            # REGARDE, et on n'annonce aucun chiffre de justesse — il n'y a pas de bonne réponse.
+            numero += 1
+            self.bloc_observer = QGroupBox(f"{numero}. Observer")
+            dedans = QVBoxLayout(self.bloc_observer)
+            # Le bouton n'existe que si la vue a BESOIN que le mode tourne. Le Brut lit le tampon
+            # d'acquisition (`set_source`), pas la sortie de son mode : il n'y a rien à démarrer
+            # pour le regarder. Le libellé vient de l'ÉTAT REÇU (`_marche`), jamais d'une bascule
+            # tenue ici, qui se désynchroniserait au premier refus du moteur.
+            if not hasattr(self.vue, "set_source"):
+                self.bouton_observer = QPushButton("Observer")
+                self.bouton_observer.clicked.connect(
+                    lambda: self.marche.emit(self.mode_id, self._arrete))
+                haut = QHBoxLayout()
+                haut.addWidget(self.bouton_observer)
+                haut.addStretch(1)
+                dedans.addLayout(haut)
+            dedans.addWidget(self.vue, 1)
+            blocs.append(self.bloc_observer)
+        else:
+            # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille,
+            # et reviendra en face avec « Connecter ». Cachée SANS case pour l'ouvrir, elle serait
+            # un widget testé que personne ne peut voir — le motif que ce dépôt traque.
+            self.direct = QCheckBox("Décodage en direct")
+            self.direct.setToolTip("Ce que le décodage continu rend en ce moment, s'il tourne.")
+            self.pli_direct = QWidget()
+            pli = QVBoxLayout(self.pli_direct)
+            pli.setContentsMargins(0, 0, 0, 0)
+            pli.addWidget(_phrase("Vide tant que le décodage continu ne tourne pas : il se "
+                                  "démarre depuis la tuile du mode, sur l'accueil."))
+            pli.addWidget(self.vue, 1)
+            self.pli_direct.setVisible(False)
+            self.direct.toggled.connect(self.pli_direct.setVisible)
 
-        self.client = QGroupBox("Brancher un client")
-        self.extrait = QPlainTextEdit()
-        self.extrait.setReadOnly(True)
-        self.extrait.setMaximumHeight(220)
-        self.flux = QLabel("")
-        self.copier = QPushButton("Copier")
-        self.copier.clicked.connect(self._copier)
-        client_layout = QVBoxLayout(self.client)
-        client_layout.addWidget(self.flux)
-        client_layout.addWidget(self.extrait)
-        client_layout.addWidget(self.copier)
-
-        # ⚠️ Le corps de la page DÉFILE (2026-09-10). Sans ça, une page trop haute pour la fenêtre
-        # ne rétrécit pas : Qt écrase les blocs du bas et le contenu est purement TRONQUÉ, sans
-        # aucun moyen d'y accéder. C'est le constat 1.10 de la recette. Le c-VEP est le cas
-        # extrême — six réglages, chacun avec son aide qui s'enroule — mais tout mode y passe sur
-        # un écran de portable. L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable
-        # même quand on a fait défiler jusqu'en bas.
+        # ⚠️ Le corps DÉFILE (2026-09-10) : sans ça, une page plus haute que la fenêtre est
+        # TRONQUÉE — Qt écrase les blocs du bas, il ne les rend pas défilables (constat 1.10 de la
+        # recette). L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable du bas.
         corps = QWidget()
         dedans = QVBoxLayout(corps)
         dedans.setContentsMargins(0, 0, 0, 0)
-        # Le tracé ne doit pas se faire écraser par des réglages bavards : dans une zone de
-        # défilement, c'est ce plancher qui décide qui cède la place.
-        bloc_sortie.setMinimumHeight(200)
-        dedans.addWidget(bloc_sortie, 1)
-        dedans.addWidget(self.reglages)
-        dedans.addWidget(self.client)
+        for bloc in blocs:
+            dedans.addWidget(bloc, 1 if bloc is self.bloc_observer else 0)
+        if self.direct is not None:
+            dedans.addWidget(self.direct)
+            dedans.addWidget(self.pli_direct, 1)
+            dedans.addStretch(1)       # repliée, la vue ne prend rien : les blocs restent en haut
 
         self.defilement = QScrollArea()
         self.defilement.setWidget(corps)
@@ -168,8 +199,6 @@ class ModePage(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
         layout.addWidget(self.defilement, 1)
-
-        self._remplir_extrait(None)
 
     def _appliquer(self, values):
         """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.
@@ -224,32 +253,13 @@ class ModePage(QWidget):
             self.formulaire.remplir(cle_recue, valeur_recue)
         self.formulaire.show_avertissement(ack.get("warning", ""))
 
-    def _copier(self):
-        from PySide6.QtWidgets import QApplication
-        QApplication.clipboard().setText(self.extrait.toPlainText())
-
-    def _remplir_extrait(self, params):
-        """L'extrait est regénéré quand les réglages changent : les voies SSVEP en dépendent."""
-        spec = registry.get(self.mode_id)
-        texte = client_snippet(spec, params)
-        self.extrait.setPlainText(texte or "ce mode ne publie aucun flux")
-        voies = ", ".join(spec.channels_for(params or spec.defaults()))
-        # Le nom COMPLET, pas le suffixe : c'est celui-là qu'un `resolve_byprop` demande. Afficher
-        # « decoded_ssvep » enverrait l'étudiant chercher un flux qui n'existe pas sous ce nom.
-        self.flux.setText(f"{stream_name(self.spec['stream'])} · voies : {voies}"
-                          if self.spec["stream"] else "aucun flux publié")
-
     def update_from(self, state):
         mode_state = (state.get("modes_state") or {}).get(self.mode_id)
         self._marche(mode_state is not None)
         if mode_state is None:
             self.etat.setText("arrêté")
             self.vue.update_from(None)
-            # Le bloc « brancher un client » doit le dire AUSSI. L'extrait reste lisible — c'est
-            # ce qu'on vient copier — mais annoncer un nom de flux sans réserve enverrait
-            # l'étudiant s'abonner à quelque chose que plus personne ne publie.
-            self.flux.setText("mode ARRÊTÉ — ce flux n'est pas publié en ce moment")
-            # ⚠️ …mais les RÉGLAGES, eux, se montrent (2026-09-21). `modes_state` ne contient que
+            # ⚠️ Les RÉGLAGES RETENUS se montrent (2026-09-21). `modes_state` ne contient que
             # les modes actifs : sans cette branche, un réglage posé sur un mode arrêté était
             # accepté par le moteur, retenu, appliqué au démarrage — et INVISIBLE, le champ
             # gardant l'ancienne valeur. L'écran disait alors le contraire de la vérité, ce qui
@@ -258,8 +268,6 @@ class ModePage(QWidget):
             if retenus and retenus != self._derniers_params:
                 self._derniers_params = dict(retenus)
                 self.formulaire.set_values(retenus)
-                self._remplir_extrait(retenus)
-                self.flux.setText("mode ARRÊTÉ — ce flux n'est pas publié en ce moment")
             elif not retenus:
                 self._derniers_params = None   # forcer la régénération au redémarrage
             return
@@ -270,20 +278,18 @@ class ModePage(QWidget):
         params = mode_state.get("params") or {}
         if params != self._derniers_params:
             self._derniers_params = dict(params)
-            self._remplir_extrait(params)
             self.formulaire.set_values(params)
 
     def _marche(self, tourne):
-        """Le libellé du bouton vient de l'ÉTAT REÇU, jamais d'une bascule tenue ici.
+        """Le libellé de « Observer » vient de l'ÉTAT REÇU, jamais d'une bascule tenue ici.
 
         Même discipline que la tuile de la grille, et pour la même raison : une bascule locale se
         désynchronise au premier refus du moteur, et l'écran finit par proposer « Arrêter » sur un
         mode qui n'a jamais démarré.
         """
-        if self.bouton_marche is None:
-            return
         self._arrete = not tourne
-        self.bouton_marche.setText("Démarrer" if self._arrete else "Arrêter")
+        if self.bouton_observer is not None:
+            self.bouton_observer.setText("Observer" if self._arrete else "Arrêter")
 
     def rafraichir_choix(self):
         """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).

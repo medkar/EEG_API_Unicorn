@@ -151,6 +151,9 @@ class Console(QMainWindow):
         # le disque : `choices_fn` charge les modèles entraînés).
         self.catalogue = {spec["id"]: spec for spec in catalogue}
         self.mesures = {spec["id"]: spec for spec in mesures}
+        # La page d'où l'on a ouvert une mesure (« Tester », « Mesurer ») : son « ← » y ramène,
+        # parce que la boucle est « régler → tester → ajuster », pas un aller-retour par l'accueil.
+        self._origine_mesure = None
         # ⚠️ La grille ne porte que les mesures de SÉANCE (le contrôle alpha). Une mesure qui
         # ÉPROUVE un mode — celle que désigne son `test_id` — garde sa page, que le bouton
         # « Tester » de ce mode ouvre, mais n'a PAS de tuile : sinon chaque mode testable ajouterait
@@ -202,7 +205,7 @@ class Console(QMainWindow):
             if not spec.get("jouable"):
                 continue
             page = MesurePage(spec, self)
-            page.retour.connect(self.show_grid)
+            page.retour.connect(self._retour_de_mesure)
             self.mesure_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
@@ -783,8 +786,8 @@ class Console(QMainWindow):
         if page is not None:
             self.stack.setCurrentWidget(page)
 
-    def show_mesure(self, mesure_id):
-        """Ouvre la page d'une mesure.
+    def show_mesure(self, mesure_id, depuis=None):
+        """Ouvre la page d'une mesure. `depuis` : la page de mode d'où l'on vient, ou None.
 
         🔴 **Le « Tester » d'un mode doit tester TES réglages.** Sa page reçoit donc, pour chaque
         réglage qu'elle partage avec le mode (le modèle, les seuils du MI…), la valeur COURANTE du
@@ -796,6 +799,9 @@ class Console(QMainWindow):
         page = self.mesure_pages.get(mesure_id)
         if page is None:
             return
+        self._origine_mesure = depuis
+        page.bouton_retour.setText(f"← {depuis.spec['label']}" if depuis is not None
+                                   else "← Modes")
         mode_id = self._mode_teste_par(mesure_id)
         mesure = self._dernier_etat.get("mesure") or {}
         en_cours = (mesure.get("mode_id") == mesure_id
@@ -812,6 +818,13 @@ class Console(QMainWindow):
         page.update_from(self._dernier_etat)
         self.stack.setCurrentWidget(page)
 
+    def _retour_de_mesure(self):
+        """« ← » d'une page de mesure : vers la page de mode d'où l'on venait, sinon l'accueil."""
+        origine, self._origine_mesure = self._origine_mesure, None
+        if origine is None:
+            self.show_grid()
+        else:
+            self.show_mode(origine.mode_id)
 
     def show_flux(self):
         """Ouvre « Ce que voit ton application ». La découverte LSL se fait à l'ENTRÉE.
@@ -1182,16 +1195,17 @@ def _smoke():
     chk(f"{state['modes_state']['ssvep']['output']['threshold']:g}" in page.vue.seuil.text(),
         f"et le seuil CHIFFRÉ, à côté des scores ({page.vue.seuil.text()})")
     chk(len(page.vue._barres) == 3, "une barre par cible")
-    chk("score_15Hz" in page.extrait.toPlainText(),
-        "l'extrait client porte les voies réellement publiées")
-    chk("EEG_API_Unicorn_decoded_ssvep" in page.flux.text(),
-        f"et le nom COMPLET du flux, celui que resolve_byprop demande ({page.flux.text()})")
 
-    # « Copier » est le geste que fera l'étudiant : le smoke le CLIQUE, sinon le seul bouton qui
-    # sort de l'application n'est jamais exercé.
-    page.copier.click()
-    chk(QApplication.clipboard().text() == page.extrait.toPlainText(),
-        "cliquer « Copier » met l'extrait dans le presse-papiers")
+    # 🔴 LA VUE EN DIRECT EST REPLIÉE, PAS SUPPRIMÉE — et on peut l'OUVRIR. Les assertions juste
+    # au-dessus testent son rendu ; cachée sans chemin pour la voir, elle serait un widget testé
+    # que personne ne peut regarder, le motif exact que ce dépôt traque.
+    chk(not page.vue.isVisibleTo(page) and not page.direct.isChecked(),
+        "sur un mode TESTABLE, le décodage en direct est replié par défaut : la page commence "
+        "par « Régler », pas par un tracé")
+    page.direct.click()
+    chk(page.vue.isVisibleTo(page),
+        "…et la case « Décodage en direct » le rouvre d'un clic")
+    page.direct.click()
 
     # Retirer une fréquence retire sa barre : sinon la vue garderait le score d'une cible morte.
     moins = {**state, "modes_state": {**state["modes_state"], "ssvep": {
@@ -1200,17 +1214,7 @@ def _smoke():
     page.update_from(moins)
     chk(len(page.vue._barres) == 2,
         f"régler deux fréquences ne laisse que deux barres ({len(page.vue._barres)})")
-    chk("score_8.57Hz" not in page.extrait.toPlainText(),
-        "et l'extrait client est regénéré sur les nouvelles voies")
-
-    # Mode arrêté : le bloc « brancher un client » doit le DIRE. Sans ça il continue d'annoncer
-    # un nom de flux que plus personne ne publie, et l'étudiant s'abonne dans le vide.
-    page.update_from({"modes_state": {}})
-    chk("ARRÊTÉ" in page.flux.text(),
-        f"un mode arrêté ne laisse pas croire que son flux existe ({page.flux.text()})")
     page.update_from(state)
-    chk("EEG_API_Unicorn_decoded_ssvep" in page.flux.text(),
-        "et le redémarrage rétablit le nom du flux")
 
     # Un mode PASSIF ne se rend pas comme un mode actif.
     neuro_state = {**state, "modes_state": {**state["modes_state"], "neuro": {
@@ -1226,6 +1230,9 @@ def _smoke():
     chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
     chk("TENDANCE" in page.vue.avertissement.text(),
         "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
+    chk(page.vue.isVisibleTo(page) and page.direct is None,
+        "…vraiment SOUS LES YEUX : sans vérité-terrain, le mode s'OBSERVE, et sa vue est en face, "
+        "pas dans un repli")
 
     # L'APERÇU DE LA TUILE suit la même règle que la page : c'est la famille qui décide.
     # Un mode actif met en avant la cible que le MOTEUR a retenue ; un mode passif ne met rien
@@ -2410,15 +2417,16 @@ def _smoke():
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"...et `start_calibration` n'est JAMAIS soumise ({journal})")
 
-    # « Lancer le stimulus » : la même fenêtre, SANS `--calibrer`, depuis la page du mode.
+    # « Lancer le stimulus » : la même fenêtre, SANS `--calibrer`. ⚠️ Depuis le 2026-09-22 AUCUN
+    # bouton de page n'y mène : il a quitté la page du mode, et reviendra avec « Connecter ». La
+    # MACHINERIE reste (`Console.demander_stimulus`), et reste éprouvée ici par appel direct —
+    # une machinerie qu'on garde sans la tester pourrit en silence jusqu'au jour où on la rebranche.
     journal.clear()
     processus.clear()
     console.show_mode("p300")
     page_p3 = console.pages["p300"]
-    chk(page_p3.bouton_stimulus is not None and page_p3.bouton_calibrer is not None,
-        "la page du P300 porte « Calibrer » ET « Lancer le stimulus »")
     console.apply_state(p300_pret)
-    page_p3.bouton_stimulus.click()
+    console.demander_stimulus("p300")
     chk(console.stack.currentWidget() is console.contact,
         "« Lancer le stimulus » passe lui aussi par le contrôle de liaison")
     console.contact.bouton_lancer.click()
@@ -2434,27 +2442,46 @@ def _smoke():
     journal.clear()
     processus.clear()
     console.apply_state(p300_pret)
-    page_p3.bouton_stimulus.click()
+    console.demander_stimulus("p300")
     console.contact.bouton_retour.click()
     chk(console.stack.currentWidget() is page_p3 and not journal,
         f"« Annuler » revient sur la page d'origine sans rien lancer ({journal})")
 
-    # Les boutons sont posés par le CONTRAT, pas par une liste écrite ici — et les DEUX questions
-    # sont distinctes : « ce mode s'entraîne-t-il » (`calibration`) et « ce mode a-t-il un
-    # stimulus » (`stimulus_id`).
-    #
-    # 🔴 Le SSVEP est le cas qui a fait tomber l'ancienne règle. Il n'a AUCUNE calibration — la
-    # CCA n'apprend rien — mais il a bel et bien un stimulus : la fenêtre qui fait clignoter ses
-    # cibles. Tant que le bouton était conditionné à `calibration.stimulus_id`, il n'existait
-    # nulle part, donc le seul mode déjà validé sur un cerveau ne pouvait pas être éprouvé depuis
-    # l'application. Trouvé en séance casque le 2026-09-21, pas par un test.
-    chk(console.pages["ssvep"].bouton_calibrer is None
-        and console.pages["ssvep"].bouton_stimulus is not None,
-        "le SSVEP n'a pas de calibration (la CCA n'apprend rien) mais IL A un stimulus : un "
-        "bouton, pas deux")
-    chk(console.pages["neuro"].bouton_calibrer is None
-        and console.pages["neuro"].bouton_stimulus is None,
-        "…tandis qu'un mode PASSIF n'a ni l'un ni l'autre — la règle ne tire pas trop large")
+    # --- 🔴 UNE PAGE DE MODE = DES BLOCS NUMÉROTÉS, ET RIEN D'AUTRE (2026-09-22) ----------------
+    # Les blocs sont posés par le CONTRAT : « Entraîner » si `calibration`, « Tester » si
+    # `test_id`, « Observer » sinon. Le NUMÉRO suit : le SSVEP n'a rien à entraîner, donc son
+    # test est le 2 ; le MI s'entraîne, donc le sien est le 3.
+    def _titres(p):
+        return [b.title() for b in (p.bloc_regler, p.bloc_entrainer, p.bloc_tester,
+                                    p.bloc_observer) if b is not None]
+
+    chk(_titres(console.pages["ssvep"]) == ["1. Régler", "2. Tester"],
+        f"SSVEP : « 1. Régler » puis « 2. Tester » — la CCA n'apprend rien, rien à entraîner "
+        f"({_titres(console.pages['ssvep'])})")
+    chk(_titres(console.pages["mi"]) == ["1. Régler", "2. Entraîner", "3. Tester"],
+        f"MI : régler, entraîner, tester — dans cet ordre, numérotés "
+        f"({_titres(console.pages['mi'])})")
+    chk(_titres(console.pages["neuro"]) == ["1. Régler", "2. Observer"]
+        and console.pages["neuro"].bouton_tester is None
+        and console.pages["neuro"].bouton_entrainer is None,
+        f"Neuro : aucune vérité-terrain, donc ni « Entraîner » ni « Tester » — on OBSERVE "
+        f"({_titres(console.pages['neuro'])})")
+    chk(_titres(console.pages["raw"]) == ["1. Régler", "2. Observer"]
+        and console.pages["raw"].bouton_observer is None,
+        f"Brut : on observe aussi, SANS bouton — ses tracés lisent le tampon d'acquisition, il "
+        f"n'y a rien à démarrer ({_titres(console.pages['raw'])})")
+    # Ce qui a QUITTÉ la page — lu dans l'ARBRE des widgets, pas dans des attributs : un attribut
+    # mis à `None` n'empêcherait pas un bouton oublié de rester affiché.
+    from PySide6.QtWidgets import QAbstractButton
+    partis = {"Démarrer", "Arrêter", "Lancer le stimulus", "Copier", "Journal de séance",
+              "Calibrer"}
+    restes = sorted({(mid, b.text()) for mid, p in console.pages.items()
+                     for b in p.findChildren(QAbstractButton) if b.text() in partis
+                     and not (p.bouton_observer is b)})
+    chk(not restes,
+        f"…et plus AUCUNE page ne porte « Démarrer », « Lancer le stimulus », « Journal de "
+        f"séance », « Copier » ni « Calibrer » : ils reviendront avec « Connecter » ({restes})")
+
     # Et la réciproque, sur le contrat lui-même : aucune clé de stimulus ne sort de nulle part.
     orphelines = [s["id"] for s in registry.catalog()
                   if s.get("stimulus_id") and s["stimulus_id"] not in stim_registry.FENETRES]
@@ -2476,7 +2503,7 @@ def _smoke():
     console.apply_state(ssvep_qui_tourne)
     journal.clear()
     processus.clear()
-    console.pages["ssvep"].bouton_stimulus.click()
+    console.demander_stimulus("ssvep")      # machinerie sans bouton de page (cf. plus haut)
     console.contact.bouton_lancer.click()
     argv = [e[1] for e in journal if e[0] == "fenetre"]
     chk(argv and "--freqs" in argv[0],
@@ -2487,37 +2514,49 @@ def _smoke():
         f"…sans --calibrer : on décode, on n'entraîne pas ({argv[0][-3:]})")
     console.lanceur.arreter()
 
-    # --- 🔴 LA PAGE SAIT DÉMARRER SON MODE, ET MONTRE UN RÉGLAGE RETENU ---------------------
+    # --- 🔴 « OBSERVER » DÉMARRE LE NEURO, ET UNE PAGE MONTRE UN RÉGLAGE RETENU -------------
     #
     # Deux culs-de-sac trouvés en séance casque le 2026-09-21. La page affichait « arrêté » sans
     # offrir de quoi y remédier ; et un réglage posé sur un mode arrêté était accepté, retenu,
     # appliqué au démarrage — mais le champ gardait l'ancienne valeur, donc l'écran disait le
     # contraire de la vérité. Rapporté tel quel : « mon pic alpha n'a pas été reporté ».
-    page_ss = console.pages["ssvep"]
-    chk(page_ss.bouton_marche is not None and page_ss.bouton_marche.text() == "Arrêter",
-        f"mode qui TOURNE : la page propose « Arrêter » ({None if page_ss.bouton_marche is None else page_ss.bouton_marche.text()})")
+    # Depuis le 2026-09-22, seul un mode SANS vérité-terrain garde ce bouton : on ne peut rien
+    # regarder du neuro sans le faire tourner. Les autres se TESTENT.
+    page_ne = console.pages["neuro"]
+    console.show_mode("neuro")          # `apply_state` ne peint que la page COURANTE
+    console.apply_state(neuro_state)
+    chk(page_ne.bouton_observer is not None and page_ne.bouton_observer.text() == "Arrêter",
+        f"neuro qui TOURNE : « Observer » est devenu « Arrêter » "
+        f"({None if page_ne.bouton_observer is None else page_ne.bouton_observer.text()})")
     ssvep_arrete = {**state, "quality": qualite_saine, "calibration": None,
                     "modes_state": {}, "reglages": {"ssvep": {
                         "freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.5}}}
     console.apply_state(ssvep_arrete)
-    chk(page_ss.bouton_marche.text() == "Démarrer",
-        f"…mode ARRÊTÉ : elle propose « Démarrer », et le sens vient de l'état REÇU, jamais d'une "
-        f"bascule tenue dans l'interface ({page_ss.bouton_marche.text()})")
-    chk(abs(page_ss.formulaire.champs["alpha_hz"].value() - 10.5) < 1e-9,
-        f"…et le réglage RETENU s'affiche, alors que le mode ne tourne pas : sinon l'écran dit le "
-        f"contraire de la vérité ({page_ss.formulaire.champs['alpha_hz'].value()})")
+    chk(page_ne.bouton_observer.text() == "Observer",
+        f"…neuro ARRÊTÉ : « Observer », et le sens vient de l'état REÇU, jamais d'une bascule "
+        f"tenue dans l'interface ({page_ne.bouton_observer.text()})")
     journal.clear()
-    page_ss.bouton_marche.click()
-    chk([e for e in journal if e[0] == "commande"],
-        f"…et le bouton SOUMET vraiment, par le même chemin que la tuile ({journal})")
-    chk(console.pages["mi"].bouton_calibrer is not None
-        and console.pages["mi"].bouton_stimulus is None,
-        "le MI se calibre mais n'a AUCUNE fenêtre : le moteur mène seul son protocole")
+    moteur_faux.commandes.clear()
+    page_ne.bouton_observer.click()
+    chk(("start_mode", {"id": "neuro"}) in moteur_faux.commandes,
+        f"…et le bouton SOUMET vraiment, par le même chemin que la tuile ({moteur_faux.commandes})")
+    page_ss = console.pages["ssvep"]
+    console.show_mode("ssvep")
+    console.apply_state(ssvep_arrete)
+    chk(abs(page_ss.formulaire.champs["alpha_hz"].value() - 10.5) < 1e-9,
+        f"le réglage RETENU s'affiche, alors que le mode ne tourne pas : sinon l'écran dit le "
+        f"contraire de la vérité ({page_ss.formulaire.champs['alpha_hz'].value()})")
+    # « Entraîner » est CLIQUÉ, pas contourné : le smoke appelait `show_calibration()` en direct,
+    # et c'est ainsi que le bouton avait pu disparaître de TOUS les modes sans qu'un test le voie.
+    console.show_mode("mi")
+    console.pages["mi"].bouton_entrainer.click()
+    chk(console.stack.currentWidget() is console.calib_pages["mi"],
+        "« Entraîner » ouvre la page d'entraînement du mode")
     errp_calib = (console.pages["errp"].spec.get("calibration") or {})
-    chk(console.pages["errp"].bouton_calibrer.isEnabled() == bool(errp_calib.get("jouable")),
-        f"et « Calibrer » n'est actif que si le moteur sait JOUER la calibration "
+    chk(console.pages["errp"].bouton_entrainer.isEnabled() == bool(errp_calib.get("jouable")),
+        f"et « Entraîner » n'est actif que si le moteur sait JOUER l'entraînement "
         f"(errp jouable={errp_calib.get('jouable')})")
-    chk(bool(console.pages["errp"].bouton_calibrer.toolTip())
+    chk(bool(console.pages["errp"].bouton_entrainer.toolTip())
         or errp_calib.get("jouable"),
         "...un bouton grisé DIT pourquoi il l'est, il ne se contente pas de ne rien faire")
     console.show_grid()
@@ -2895,22 +2934,29 @@ def _smoke():
     # attend `CALIB_FENETRE_ATTENTE_S` puis abandonne en accusant un stimulus que personne n'a
     # lancé : trente secondes de casque pour un message faux.
     #
-    # 🔴 **« Tester » teste TA configuration (2026-09-22).** La tuile de l'accueil n'existe
-    # plus (`ssvep.SPEC.test_id`) ; la page s'ouvre ici en direct, sur un mode ARRÊTÉ dont
-    # les réglages RETENUS ne sont pas ceux du dépôt.
+    # 🔴 **Et c'est LE CRITÈRE D'ACCEPTATION du chantier « Régler · Entraîner · Tester »
+    # (2026-09-22).** On y arrive par le bouton « Tester » de la page SSVEP — la tuile de
+    # l'accueil n'existe plus —, sur un mode ARRÊTÉ dont les réglages RETENUS ne sont pas ceux du
+    # dépôt. En séance, le stimulus lancé sur un mode arrêté a fait fixer dix minutes dans le
+    # vide : « Tester » possède sa séquence entière, donc il n'y a plus d'ordre à respecter.
     console.lanceur.arreter()
     ssvep_regle = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
                    "modes_state": {k: v for k, v in state["modes_state"].items() if k != "ssvep"},
                    "reglages": {"ssvep": {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0,
                                           "alpha_hz": 10.0}}}
+    console.show_mode("ssvep")
     console.apply_state(ssvep_regle)
+    page_ss = console.pages["ssvep"]
+    chk(page_ss.bouton_tester is not None and getattr(page_ss, "bouton_marche", None) is None
+        and getattr(page_ss, "bouton_stimulus", None) is None,
+        "la page SSVEP a « Tester », et plus ni « Démarrer » ni « Lancer le stimulus »")
     journal.clear()
     moteur_faux.commandes.clear()
-    console.show_mesure("ssvep_taux")
+    page_ss.bouton_tester.click()
     mes_ssvep = console.stack.currentWidget()
     chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and not journal,
-        f"la page du test s'ouvre sans rien soumettre ni lancer : c'est « Commencer » qui "
-        f"part ({journal})")
+        f"« Tester » ouvre la page du test, sans rien soumettre ni lancer : c'est « Commencer » "
+        f"qui part ({journal})")
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
     chk(("start_mesure", {"id": "ssvep_taux", "params": {"stream_in": MARKER_STREAM_DEFAULT}})
@@ -3019,12 +3065,13 @@ def _smoke():
                 "reglages": {"mi": {"prob_min": 0.8}}}
     defaut_prob = next(p["default"] for p in console.mesures["mi_test"]["params"]
                        if p["key"] == "prob_min")
+    console.show_mode("mi")
     console.apply_state(mi_regle)
     moteur_faux.commandes.clear()
-    console.show_mesure("mi_test")
+    console.pages["mi"].bouton_tester.click()
     mes_mi = console.stack.currentWidget()
     chk(mes_mi is console.mesure_pages["mi_test"] and abs(defaut_prob - 0.8) > 1e-9,
-        f"la page du test du MI — et 0,8 n'est PAS son défaut ({defaut_prob}), sinon ce "
+        f"« Tester » ouvre le test du MI — et 0,8 n'est PAS son défaut ({defaut_prob}), sinon ce "
         f"qui suit serait vrai à vide")
     chk(abs(mes_mi.formulaire.values()["prob_min"] - 0.8) < 1e-9,
         f"…PRÉ-REMPLI avec le seuil RETENU du mode arrêté, pas avec le défaut "
@@ -3035,6 +3082,10 @@ def _smoke():
     chk(soumis and soumis[-1]["id"] == "mi_test"
         and abs(soumis[-1]["params"].get("prob_min", -1.0) - 0.8) < 1e-9,
         f"…et c'est CETTE valeur qui part avec `start_mesure` ({soumis[-1:] or 'rien'})")
+    mes_mi.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.pages["mi"],
+        "« ← » ramène sur la page du MI, d'où l'on venait : la boucle est « régler → tester → "
+        "ajuster », pas un détour par l'accueil")
 
     # --- 🔴 RIEN N'EST TRONQUÉ, ET L'AIDE N'EST PLUS UN MUR DE GRIS -------------------------
     #
@@ -3054,9 +3105,16 @@ def _smoke():
 
     corps = page_cvep.defilement.widget()
     barre = page_cvep.defilement.verticalScrollBar()
-    chk(corps.height() >= corps.sizeHint().height(),
+    # Ce que le corps DEMANDE à sa largeur réelle. `sizeHint()` ne le dit que si rien ne
+    # s'enroule : une phrase enroulée (les blocs « Entraîner », « Tester ») calcule son
+    # sizeHint à une largeur de convenance, plus étroite — mesuré : 910 px « demandés » pour un
+    # corps qui en occupe 897 SANS rien couper, soit exactement sa hauteur-pour-largeur.
+    lay = corps.layout()
+    demande = (lay.totalHeightForWidth(corps.width()) if lay.hasHeightForWidth()
+               else corps.sizeHint().height())
+    chk(corps.height() >= demande,
         f"dans une fenêtre trop courte, le corps de la page garde SA hauteur au lieu d'être "
-        f"écrasé ({corps.height()} px pour {corps.sizeHint().height()} px demandés)")
+        f"écrasé ({corps.height()} px pour {demande} px demandés à sa largeur)")
     chk(barre.maximum() > 0,
         f"...et le bas se rejoint en DÉFILANT, au lieu d'être tronqué "
         f"(course de la barre : {barre.maximum()} px)")
