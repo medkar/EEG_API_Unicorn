@@ -30,6 +30,10 @@ from core.modes.affichage import NIVEAUX  # noqa: E402
 # refus, l'ambre des avertissements, le vert des réglages retenus.
 COULEURS = {"bon": "#3fae5a", "moyen": "#b8860b", "faible": "#e2603f"}
 NEUTRE = "#8a8f9c"      # un résultat SANS niveau : on ne l'invente pas, on le laisse gris
+# La RÉSERVE a sa propre teinte, celle des avertissements de la console (« accepté, MAIS »), quel
+# que soit le verdict. Peinte de la couleur du verdict, elle se lisait en VERT sous un bon
+# résultat — comme un encouragement, alors qu'elle dit de quoi se méfier (constat M5).
+RESERVE = "#b8860b"
 
 assert set(COULEURS) == set(NIVEAUX), (
     f"la console doit savoir peindre CHAQUE niveau que le moteur publie, et aucun autre "
@@ -42,7 +46,7 @@ def couleur_du_niveau(niveau):
 
 
 class BlocResultat(QWidget):
-    """Trois lignes et un repli. `montrer(resultat)` à chaque résultat reçu, `effacer()` sinon."""
+    """Trois lignes et un repli. `montrer(resultat)` à chaque résultat reçu."""
 
     def __init__(self, corps_auto=True):
         """`corps_auto=False` : la page hôte range dans le repli ses PROPRES widgets détaillés
@@ -96,8 +100,10 @@ class BlocResultat(QWidget):
         self.verdict.setStyleSheet(f"color: {couleur}; font-size: 22px; font-weight: bold;")
         self.chiffres.setText(resultat.get("chiffres", ""))
         self.chiffres.setVisible(bool(resultat.get("chiffres")))
-        self.reserve.setText(resultat.get("reserve", ""))
-        self.reserve.setStyleSheet(f"color: {couleur};")
+        # « ⚠ » en tête, comme la maquette de la spec (§3) : c'est une mise en garde, pas une suite
+        # du verdict.
+        self.reserve.setText(f"⚠ {resultat['reserve']}" if resultat.get("reserve") else "")
+        self.reserve.setStyleSheet(f"color: {RESERVE};")
         self.reserve.setVisible(bool(resultat.get("reserve")))
 
         # Le repli. Ordre : la phrase de verdict complète d'abord — c'est elle qui porte les
@@ -122,13 +128,6 @@ class BlocResultat(QWidget):
             self.details.setChecked(False)
             self._deplier(False)
         self._dernier = resultat
-
-    def effacer(self):
-        self._dernier = None
-        for w in (self.verdict, self.chiffres, self.reserve, self.corps):
-            w.setText("")
-        self.details.setChecked(False)
-        self.details.setVisible(False)
 
     def _deplier(self, ouvert):
         self.pli.setVisible(bool(ouvert))

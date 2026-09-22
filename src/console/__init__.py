@@ -31,6 +31,19 @@ if "--smoke" in _sys.argv:
 # contredire — un mode annoncé « repos » ici et « rest » là.
 PHASES_FR = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
 
+
+def compter(n, unite):
+    """« 0 manche », « 1 manche », « 6 manches » — `unite` est celle que le MOTEUR publie.
+
+    ⚠️ L'unité n'est pas un détail d'affichage (constat I7 de la revue de branche). La page de test
+    comptait tout en « phase(s) enregistrée(s) » et en « fenêtre(s) prélevée(s) », le vocabulaire
+    du contrôle alpha : l'étudiant choisissait « Manches : 6 » et lisait ensuite « 12 phase(s)
+    enregistrée(s) sur 288 », sous un verdict « … sur 6 manches ». Le moteur publie désormais
+    l'unité de chaque protocole (`state()["unite"]`) ; la console n'en connaît aucune.
+    """
+    mot = unite if n <= 1 or unite.endswith(("s", "x", "z")) else unite + "s"
+    return f"{n} {mot}"
+
 # Jusqu'où va la barre d'un mode qui PUBLIE UN SEUIL. Une barre pleine à ras le seuil laisserait
 # croire qu'on est au maximum alors qu'on vient à peine de déclencher — d'où 2× le seuil, ce qui
 # place le déclenchement à mi-hauteur, un repère visuel immédiat. Ici et pas dans chaque écran :

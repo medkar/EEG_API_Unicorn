@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
                                QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import compter  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
@@ -38,10 +39,15 @@ def _diagnostic(calib_state):
     sur aucun identifiant de mode. Une clé absente vaut zéro : ce qui n'est pas compté ne
     s'affiche pas.
     """
+    # ⚠️ Dans les mots de l'étudiant, pas dans ceux du moteur (« marqueur », « époque »,
+    # « tampon », « mode calibration » — constat I7 de la revue) : il n'a lancé qu'un
+    # « Entraîner », et c'est la seule chose qu'il puisse vérifier.
     quoi = [(("refus_cible", "refus_etiquette", "refus_marqueur"),
-             "marqueur(s) REFUSÉ(s) — la fenêtre tourne-t-elle bien en mode calibration ?"),
-            (("epoques_perdues",), "époque(s) perdue(s) — le tampon n'était pas prêt"),
-            (("marqueurs_chauffe",), "marqueur(s) jeté(s) pendant la chauffe (normal au début)")]
+             "signal(s) de la fenêtre REFUSÉ(s) — a-t-elle bien été ouverte pour un "
+             "entraînement ?"),
+            (("epoques_perdues",), "essai(s) perdu(s) — le signal du casque n'était pas prêt"),
+            (("marqueurs_chauffe",),
+             "signal(s) jeté(s) pendant la stabilisation du casque (normal au début)")]
     morceaux = []
     for cles, phrase in quoi:
         n = sum(int(calib_state.get(c, 0) or 0) for c in cles)
@@ -315,11 +321,13 @@ class CalibPage(QWidget):
         self.formulaire.setEnabled(not en_cours)
         self.bouton_commencer.setEnabled(not en_cours)
 
+        # L'unité de `essai`/`total`, publiée par le moteur ; « essai » si elle manque.
+        unite = (calib_state or {}).get("unite") or "essai"
         if calib_state is not None:
             minutes = calib_state.get("duree_estimee_s", 0.0) / 60.0
             self.duree.setText(
-                f"Durée estimée de cette configuration (chauffe et échauffement compris) : "
-                f"≈ {minutes:.1f} min, pour {calib_state.get('total', 0)} essais enregistrés.")
+                f"Durée estimée (stabilisation du casque et échauffement compris) : "
+                f"≈ {minutes:.1f} min, pour {compter(int(calib_state.get('total', 0)), unite)}.")
         else:
             self.duree.setText("")
 
@@ -347,7 +355,7 @@ class CalibPage(QWidget):
             self.decompte.setText(f"{float(calib_state.get('restant_s', 0.0)):.1f} s")
             essai = int(calib_state.get("essai", 0))
             total = int(calib_state.get("total", 0))
-            self.progression.setText(f"essai {essai} sur {total}")
+            self.progression.setText(f"{unite} {essai} sur {total}")
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(essai, max(total, 1)))
             self.diagnostic.setText(_diagnostic(calib_state))
@@ -359,7 +367,7 @@ class CalibPage(QWidget):
             if resultat is not None:
                 self._montrer_resultat(resultat)
             else:
-                raison = (f"Calibration abandonnée : "
+                raison = (f"Entraînement abandonné : "
                           f"{calib_state.get('probleme', '') or 'aucun modèle produit'}")
                 # ⚠️ EN FACE, et en gris : pas de verdict, donc rien à peindre en couleur. Le
                 # repli « Détails » a d'abord avalé cette phrase — elle vivait dans

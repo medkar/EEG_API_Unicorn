@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
                                QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import compter  # noqa: E402
 from console.beeps import TOP_ETAPE, connait  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
@@ -83,7 +84,7 @@ class MesurePage(QWidget):
         # le verdict les nomme aussi, en toutes lettres.
         ("n_perdus", "{:d} joués mais perdus (EEG hors tampon)"),
         ("n_chauffe", "{:d} jetés (arrivés pendant la chauffe)"),
-        ("fenetres_repos", "plancher sur {:d} fenêtres de repos"),
+        ("fenetres_repos", "bruit de fond pris sur {:d} fenêtres au repos"),
     )
 
     def __init__(self, spec, console, mode=None):
@@ -193,7 +194,9 @@ class MesurePage(QWidget):
         avant.addWidget(self.avis)
 
         # --- écran 2 : pendant ----------------------------------------------------------------
-        self.bloc_pendant = QGroupBox("Mesure en cours")
+        # ⚠️ « Séance », pas « mesure » : le mot du moteur (spec §6). Un étudiant qui clique
+        # « Tester » ou « Vérifier le casque » ne lance pas « une mesure ».
+        self.bloc_pendant = QGroupBox("Séance en cours")
         self.consigne = QLabel("")
         self.consigne.setWordWrap(True)
         self.consigne.setStyleSheet("font-size: 22px; font-weight: bold;")
@@ -219,7 +222,7 @@ class MesurePage(QWidget):
         pendant.addWidget(self.bouton_abandon)
 
         # --- écran 3 : après ------------------------------------------------------------------
-        self.bloc_apres = QGroupBox("Verdict")
+        self.bloc_apres = QGroupBox("Résultat")
         # La BARRIÈRE, en tête et en gras. Elle passe AVANT le verdict détaillé parce que c'est la
         # seule chose à savoir quand elle n'est pas franchie : on s'arrête et on reprend le
         # montage. Un chiffre lu d'abord invite à négocier avec.
@@ -424,11 +427,14 @@ class MesurePage(QWidget):
             "« Entraîner »), puis reviens tester." if attend else "")
         self.candidat.setVisible(attend)
 
+        # L'unité de `essai`/`total`, publiée par le MOTEUR (« manche », « essai », « cycle »…) :
+        # la page n'en connaît aucune. « étape » si un protocole ne la publie pas.
+        unite = (etat or {}).get("unite") or "étape"
         if etat is not None:
             self.duree.setText(
-                f"Durée de cette mesure, stabilisation du casque comprise : "
+                f"Durée, stabilisation du casque comprise : "
                 f"≈ {etat.get('duree_estimee_s', 0.0):.0f} s, pour "
-                f"{etat.get('total', 0)} fenêtre(s) prélevée(s).")
+                f"{compter(int(etat.get('total', 0)), unite)}.")
         else:
             self.duree.setText("")
 
@@ -448,7 +454,7 @@ class MesurePage(QWidget):
             self.decompte.setText(f"{float(etat.get('restant_s', 0.0)):.1f} s")
             fait = int(etat.get("essai", 0))
             total = int(etat.get("total", 0))
-            self.progression.setText(f"{fait} phase(s) enregistrée(s) sur {total}")
+            self.progression.setText(f"{compter(fait, unite)} sur {total}")
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(fait, max(total, 1)))
         else:
@@ -464,7 +470,7 @@ class MesurePage(QWidget):
             # surtout pas de « barrière non franchie », qui accuserait le montage alors que la
             # mesure n'a simplement pas été jouée jusqu'au bout.
             self.barriere.setText("")
-            interruption = f"Mesure interrompue : {probleme or 'aucun verdict produit'}"
+            interruption = f"Séance interrompue : {probleme or 'aucun verdict produit'}"
             # En face et en gris : aucun verdict, donc aucune couleur à donner.
             self.bloc.montrer({"verdict": interruption})
             self.verdict.setText(interruption)
@@ -506,7 +512,7 @@ class MesurePage(QWidget):
         else:
             self.barriere.setText(
                 "🛑 BARRIÈRE NON FRANCHIE — ARRÊTE LA SÉANCE ICI. Tant que ce contrôle ne passe "
-                "pas, aucune autre mesure et aucun décodage ne veulent rien dire : ils lisent "
+                "pas, aucun test et aucun décodage ne veulent rien dire : ils lisent "
                 "tous ce même signal. Reprends le montage, puis relance CE contrôle.")
             self.barriere.setStyleSheet("font-size: 15px; font-weight: bold; color: #e2603f;")
 

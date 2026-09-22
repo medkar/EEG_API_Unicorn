@@ -436,8 +436,8 @@ class ModeGrid(QWidget):
             mesures_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
 
         self.titre_mesures = QLabel(
-            "<b>Contrôles et mesures</b> — à faire AVANT de décoder : ils disent si ce que le "
-            "casque envoie vaut quelque chose. Ils ne publient rien et n'écrivent rien.")
+            "<b>Avant tout</b> — vérifie que ce que le casque envoie vaut quelque chose. Rien "
+            "n'est publié, rien n'est écrit.")
         self.titre_mesures.setWordWrap(True)
         self.titre_mesures.setVisible(bool(mesures))
 

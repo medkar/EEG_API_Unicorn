@@ -376,7 +376,7 @@ class Console(QMainWindow):
         self._demande = {"quoi": "calibration", "mode_id": mode_id,
                          "params": dict(params or {}),
                          "retour": self.calib_pages.get(mode_id)}
-        self._montrer_contact(self.catalogue.get(mode_id), "Commencer la calibration")
+        self._montrer_contact(self.catalogue.get(mode_id), "Commencer l'entraînement")
 
     def demander_mesure(self, mesure_id, params):
         """« Commencer » sur une page de mesure : même chemin, et pour une raison de plus.
@@ -387,13 +387,20 @@ class Console(QMainWindow):
         plates rend un rapport de bruit d'arrondi, et le moteur ne peut le refuser qu'APRÈS
         37 secondes de casque. Autant le refuser avant.
 
-        ⚠️ Le `ContactPage` reçoit un `MesureSpec` sérialisé, qui n'a pas de `key_channels` — il
-        n'entoure donc aucune voie et refuse sur les huit, ce qui est exactement ce qu'on veut
-        ici : cette mesure lit quatre voies mais son verdict porte sur tout le montage.
+        ⚠️ Le `ContactPage` reçoit un `MesureSpec` sérialisé, qui n'a pas de `key_channels`. Pour
+        le TEST d'un mode, on lui prête ceux de CE mode (lus dans son contrat) : « Entraîner le
+        P300 » entourait Fz/Cz/Pz, « Tester le P300 » n'entourait rien (constat M2 de la revue).
+        Le contrôle alpha, qui ne teste aucun mode, n'entoure aucune voie ; le refus, lui, porte
+        toujours sur les huit.
         """
         self._demande = {"quoi": "mesure", "mode_id": mesure_id, "params": dict(params or {}),
                          "retour": self.mesure_pages.get(mesure_id)}
-        self._montrer_contact(self.mesures.get(mesure_id), "Commencer la mesure")
+        spec = self.mesures.get(mesure_id)
+        mode = self.catalogue.get(self._mode_teste_par(mesure_id))
+        if spec is not None and mode is not None:
+            spec = {**spec, "key_channels": mode.get("key_channels")}
+        # Le bouton dit ce qu'on lance, dans les mots de l'étudiant — jamais « la mesure ».
+        self._montrer_contact(spec, "Commencer le test" if mode is not None else "Commencer")
 
     def demander_stimulus(self, mode_id):
         """« Lancer le stimulus » sur une page de mode : même chemin, sans calibration.
@@ -455,15 +462,16 @@ class Console(QMainWindow):
             self.commande("stop_mode", id=a_arreter)
             self._attente = dict(demande, arreter=a_arreter,
                                  echeance=self._horloge() + DELAI_ARRET_S)
-            pourquoi = ("un mode ne se teste pas pendant qu'il décode"
-                        if demande["quoi"] == "mesure"
-                        else "un mode et sa calibration ne peuvent pas lire la même file "
-                             "de marqueurs")
+            quoi = "le test" if demande["quoi"] == "mesure" else "l'entraînement"
+            # ⚠️ Le décodage RESTE arrêté après (constat M6 de la revue) : le relancer tout seul
+            # referait son repos et recréerait son flux sans qu'on l'ait demandé. On le DIT, pour
+            # qu'une application branchée sur ce flux ne tombe pas en silence.
             self._avis_de(demande)(
                 demande["mode_id"],
-                f"arrêt de « {self._nom_du_mode(a_arreter)} » demandé — "
-                f"{'le test' if demande['quoi'] == 'mesure' else 'sa calibration'} démarrera "
-                f"dès qu'il aura rendu la main ({pourquoi}).", alerte=False)
+                f"arrêt du décodage de « {self._nom_du_mode(a_arreter)} » demandé — {quoi} "
+                f"démarrera dès qu'il aura rendu la main (on ne peut pas faire les deux à la "
+                f"fois). Il restera arrêté ensuite : relance-le depuis sa tuile si ton "
+                f"application en a besoin.", alerte=False)
             return
         self._demarrer_selon(demande)
 
@@ -526,7 +534,7 @@ class Console(QMainWindow):
         elif self._horloge() > self._attente["echeance"]:
             attente, self._attente = self._attente, None
             rien = ("le test n'a PAS été lancé" if attente["quoi"] == "mesure"
-                    else "la calibration n'a PAS été lancée")
+                    else "l'entraînement n'a PAS été lancé")
             self._avis_de(attente)(
                 attente["mode_id"],
                 f"« {self._nom_du_mode(a_arreter)} » ne s'est pas arrêté en "
@@ -564,7 +572,9 @@ class Console(QMainWindow):
             return          # le moteur mène tout seul le protocole (contrôle alpha)
         params = dict(demande["params"] or {})
         self._a_lancer_mesure = self._attente_depart(
-            mesure_id, "mesure", "la mesure", avis=self._avis_mesure,
+            mesure_id, "mesure",
+            "le test" if self._mode_teste_par(mesure_id) else "la vérification",
+            avis=self._avis_mesure,
             lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec, params))
 
     def _demarrer_calibration(self, demande):
@@ -582,7 +592,7 @@ class Console(QMainWindow):
         # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
         # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
         self._a_lancer = self._attente_depart(
-            mode_id, "calibration", "la calibration", avis=self._avis,
+            mode_id, "calibration", "l'entraînement", avis=self._avis,
             lancer=lambda: self._lancer_fenetre_calibration(mode_id))
 
     def _attente_depart(self, mode_id, cle, quoi, lancer, avis):
@@ -623,10 +633,9 @@ class Console(QMainWindow):
         if self._horloge() >= attente["echeance"]:
             attente["avis"](
                 attente["mode_id"],
-                f"le moteur n'a pas démarré {attente['quoi']} en {DELAI_DEMARRAGE_S:.0f} s — la "
-                f"fenêtre de stimulus n'a PAS été lancée. Sans ce garde-fou elle aurait joué le "
-                f"protocole entier dans le vide. Regarde le refus dans le bandeau, puis "
-                f"recommence.")
+                f"le moteur n'a pas démarré {attente['quoi']} en {DELAI_DEMARRAGE_S:.0f} s — sa "
+                f"fenêtre n'a PAS été ouverte. Sans ce garde-fou elle aurait joué tout son "
+                f"déroulé dans le vide. Regarde le refus dans le bandeau, puis recommence.")
             return None
         return attente
 
@@ -676,8 +685,8 @@ class Console(QMainWindow):
             return
         self._a_annuler = True
         self._avis(mode_id,
-                   f"{ouvert.get('reason', '')}\nLa calibration est annulée : sans sa fenêtre, le "
-                   f"moteur attendrait des marqueurs qui ne viendront jamais.")
+                   f"{ouvert.get('reason', '')}\nL'entraînement est annulé : sans sa fenêtre, "
+                   f"il n'y aurait rien à apprendre.")
 
     def _lancer_fenetre_mesure(self, mesure_id, spec, params=None):
         """La fenêtre guidée d'une mesure. Jumeau exact du cas calibration, ci-dessus.
@@ -710,8 +719,8 @@ class Console(QMainWindow):
         # ne fait que mettre en file).
         self._a_annuler_mesure = True
         self._avis_mesure(mesure_id,
-                          f"{ouvert.get('reason', '')}\nLa mesure est annulée : sans sa fenêtre, "
-                          f"le moteur attendrait des marqueurs qui ne viendront jamais.")
+                          f"{ouvert.get('reason', '')}\nLe test est annulé : sans sa fenêtre, "
+                          f"il n'y aurait rien à noter.")
 
     def _lancer_fenetre(self, mode_id, calibrer):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
@@ -723,7 +732,7 @@ class Console(QMainWindow):
         stimulus_id = ((spec.get("calibration") or {}).get("stimulus_id") if calibrer
                        else spec.get("stimulus_id"))
         if not stimulus_id:
-            quoi = "calibration" if calibrer else "stimulus"
+            quoi = "entraînement" if calibrer else "décodage"
             return {"accepted": False,
                     "reason": f"« {spec.get('label', mode_id)} » ne déclare aucune fenêtre de "
                               f"{quoi} : il n'y a rien à lancer."}
@@ -1902,11 +1911,15 @@ def _smoke():
     chk(console.contact.bouton_lancer.isEnabled() and not console.contact.refus.text(),
         "et sur un montage sain, le lancement est permis")
 
-    # Le clic qui lance pour de bon.
+    # Le clic qui lance pour de bon. Le bouton dit ce qu'on lance dans les mots de l'étudiant
+    # (constat I7 de la revue) : il n'a cliqué que sur « Entraîner ».
+    chk(console.contact.bouton_lancer.text() == "Commencer l'entraînement",
+        f"le contrôle de liaison d'un entraînement dit « Commencer l'entraînement » "
+        f"({console.contact.bouton_lancer.text()!r})")
     moteur_faux.commandes.clear()
     console.contact.bouton_lancer.click()
     chk(console.stack.currentWidget() is cal,
-        "cliquer « Commencer la calibration » ramène sur la page de calibration")
+        "cliquer « Commencer l'entraînement » ramène sur la page d'entraînement")
     envoyees = [c for c in moteur_faux.commandes if c[0] == "start_calibration"]
     chk(envoyees and envoyees[0][1]["id"] == "mi"
         and envoyees[0][1]["params"] == valeurs_formulaire,
@@ -1942,6 +1955,13 @@ def _smoke():
     # toujours « 7 » et « 42 » et passerait un test par `in`.
     chk(cal.progression.text() == "essai 7 sur 42",
         f"et la progression nomme les deux nombres, à l'identique ({cal.progression.text()!r})")
+    # …dans l'UNITÉ que le moteur publie (`unite`), « essai » quand il n'en publie pas.
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"],
+                                                     "unite": "manche"}})
+    chk(cal.progression.text() == "manche 7 sur 42" and "42 manches" in cal.duree.text(),
+        f"…dans l'unité PUBLIÉE par le moteur, pas une unité écrite ici "
+        f"({cal.progression.text()!r}, {cal.duree.text()[-20:]!r})")
+    console.apply_state(en_cours)
     chk(not cal.formulaire.isEnabled(),
         "le formulaire est verrouillé pendant la séance : le changer n'aurait aucun effet")
 
@@ -2014,9 +2034,10 @@ def _smoke():
     console.apply_state({**state, "calibration": {**_en_cours, "essai": 0, "refus_cible": 7}})
     chk("7" in cal_diag.diagnostic.text() and "REFUS" in cal_diag.diagnostic.text().upper(),
         f"les marqueurs refusés s'affichent PENDANT la séance ({cal_diag.diagnostic.text()!r})")
-    chk("calibration" in cal_diag.diagnostic.text().lower(),
-        "…et la ligne dit quoi VÉRIFIER, pas seulement un nombre — c'est la fenêtre lancée sans "
-        "`--calibrer`, la panne la plus banale de ce sous-système")
+    chk("entraînement" in cal_diag.diagnostic.text().lower()
+        and "marqueur" not in cal_diag.diagnostic.text().lower(),
+        f"…et la ligne dit quoi VÉRIFIER, dans les mots de l'étudiant — la fenêtre lancée sans "
+        f"`--calibrer`, la panne la plus banale de ce sous-système ({cal_diag.diagnostic.text()!r})")
     console.apply_state({**state, "calibration": {**_en_cours, "essai": 4}})
     chk(not cal_diag.diagnostic.text(),
         f"…et rien ne s'affiche quand le moteur ne refuse rien ({cal_diag.diagnostic.text()!r})")
@@ -2471,8 +2492,8 @@ def _smoke():
         "total": 12, "duree_estimee_s": 132.0, "params": {}, "resultat": None, "probleme": "",
         "candidat": None}}
     console.apply_state(en_chauffe)
-    chk("tourne déjà" in cal_p3.avis.text() and "annulée" in cal_p3.avis.text(),
-        f"une fenêtre indisponible annule la calibration, et le DIT ({cal_p3.avis.text()[:80]}…)")
+    chk("tourne déjà" in cal_p3.avis.text() and "annulé" in cal_p3.avis.text(),
+        f"une fenêtre indisponible annule l'entraînement, et le DIT ({cal_p3.avis.text()[:80]}…)")
     console.apply_state(en_chauffe)
     chk([e[1] for e in journal if e[0] == "commande"]
         == ["start_calibration", "cancel_calibration"],
@@ -2492,7 +2513,7 @@ def _smoke():
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"le mode qui décode est ARRÊTÉ d'abord, et rien d'autre n'est soumis ({journal})")
     chk(not processus, f"...et AUCUNE fenêtre n'est lancée tant qu'il décode ({processus})")
-    chk("arrêt de" in cal_p3.avis.text(),
+    chk("arrêt du décodage" in cal_p3.avis.text(),
         f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.avis.text()[:70]}…)")
     # Le mode a rendu la main : la calibration part, dans le bon ordre, sans autre clic.
     console.apply_state(p300_pret)
@@ -2538,8 +2559,8 @@ def _smoke():
     console.contact.bouton_lancer.click()
     horloge[0] += DELAI_ARRET_S + 1.0
     console.apply_state(p300_actif)          # il décode toujours
-    chk("PAS été lancée" in cal_p3.avis.text(),
-        f"un mode qui ne s'arrête pas fait renoncer la calibration, à l'écran "
+    chk("PAS été lancé" in cal_p3.avis.text(),
+        f"un mode qui ne s'arrête pas fait renoncer l'entraînement, à l'écran "
         f"({cal_p3.avis.text()[:80]}…)")
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"...et `start_calibration` n'est JAMAIS soumise ({journal})")
@@ -3210,10 +3231,14 @@ def _smoke():
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
     chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})]
-        and "arrêt de" in mes_ssvep.avis.text(),
+        and "arrêt du décodage" in mes_ssvep.avis.text(),
         f"mode testé qui TOURNE : `stop_mode` d'abord, et rien d'autre tant qu'il n'a pas rendu "
         f"la main — l'écran dit ce qu'on attend ({moteur_faux.commandes}, "
         f"{mes_ssvep.avis.text()[:40]}…)")
+    # …et il dit que le décodage RESTERA arrêté (constat M6) : une application branchée sur ce
+    # flux tomberait sinon en silence après le test.
+    chk("restera arrêté" in mes_ssvep.avis.text(),
+        f"…et qu'il RESTERA arrêté après le test ({mes_ssvep.avis.text()[-90:]!r})")
     console.apply_state(ssvep_regle)                          # il a rendu la main
     console.apply_state({**ssvep_regle, "mesure": en_cours})  # le test existe pour de bon
     suite = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
@@ -3401,11 +3426,27 @@ def _smoke():
         journal.clear()
         processus.clear()
         cliquer(mes_t.bouton_commencer, f"« Commencer » du test {mode_t}")
+        # Le contrôle de liaison d'un TEST : son bouton dit « Commencer le test » (jamais « la
+        # mesure », constat I7) et il entoure les voies clés du MODE testé, comme « Entraîner »
+        # le fait (constat M2) — lues dans le contrat du mode, pas écrites ici.
+        cles_t = [state["channels"][i] for i in registry.get(mode_t).key_channels]
+        chk(console.contact.bouton_lancer.text() == "Commencer le test"
+            and cles_t and all(n in console.contact.cles.text() for n in cles_t),
+            f"{mode_t} : le contrôle de liaison dit « Commencer le test » et entoure les voies "
+            f"clés du mode ({console.contact.bouton_lancer.text()!r}, "
+            f"{console.contact.cles.text()[:50]!r})")
         cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
-        en_cours_t = {"mode_id": test_t, "phase": "chauffe", "essai": 0, "total": 6,
-                      "restant_s": 15.0, "instruction": "", "classe": "", "resultat": None,
-                      "probleme": ""}
+        en_cours_t = {"mode_id": test_t, "phase": "chauffe", "essai": 2, "total": 6,
+                      "unite": "manche", "restant_s": 15.0, "instruction": "", "classe": "",
+                      "resultat": None, "probleme": ""}
         console.apply_state({**pret_t, "mesure": en_cours_t})
+        # L'avancement dans l'UNITÉ que le moteur publie (constat I7) : on choisit « Manches : 6 »,
+        # on lit « 2 manches sur 6 » — plus « 12 phase(s) enregistrée(s) sur 288 ».
+        chk(mes_t.progression.text() == "2 manches sur 6" and "6 manches" in mes_t.duree.text()
+            and "phase" not in mes_t.progression.text() + mes_t.duree.text()
+            and "fenêtre(s)" not in mes_t.duree.text(),
+            f"{mode_t} : l'avancement et la durée sont comptés dans l'unité PUBLIÉE par le moteur "
+            f"({mes_t.progression.text()!r}, {mes_t.duree.text()[-30:]!r})")
         lances_t = [list(e[1]) for e in journal if e[0] == "fenetre"]
         argv_t = lances_t[-1] if lances_t else []
         chk("--tester" in argv_t and "--calibrer" not in argv_t,
@@ -3428,6 +3469,12 @@ def _smoke():
             f"« interrompu » et qu'elle recouvre")
         chk("fermée" in mes_t.avis.text(),
             f"{mode_t} : …et la page dit pourquoi la fenêtre a disparu ({mes_t.avis.text()!r})")
+
+    # Un protocole qui ne publie pas son unité est compté en « étapes » — jamais dans l'unité d'un
+    # autre protocole.
+    console.apply_state({**pret_t, "mesure": {k: v for k, v in en_cours_t.items() if k != "unite"}})
+    chk(mes_t.progression.text() == "2 étapes sur 6",
+        f"sans unité publiée, « étapes » ({mes_t.progression.text()!r})")
 
     # …mais un test FINI, avec son résultat, laisse sa fenêtre conclure : la tuer effacerait le
     # bilan qu'elle imprime en dernier (« N frames, M sautées »).
@@ -3916,9 +3963,18 @@ def _smoke():
     chk("25 %" in bloc.chiffres.text() and "hasard 17 %" in bloc.chiffres.text(),
         f"…la mesure ET son hasard sur la même ligne, jamais un pourcentage seul "
         f"({bloc.chiffres.text()!r})")
-    chk(bloc.reserve.text().startswith("ré-essaie"),
-        f"…et une seule réserve : le CONSEIL, puisque le résultat est faible "
-        f"({bloc.reserve.text()[:40]!r})")
+    chk(bloc.reserve.text().startswith("⚠ ré-essaie"),
+        f"…et une seule réserve : le CONSEIL, puisque le résultat est faible, précédé du ⚠ de la "
+        f"maquette ({bloc.reserve.text()[:40]!r})")
+    # 🔴 La réserve n'a PAS la couleur du verdict (constat M5) : sous un BON résultat, peinte en
+    # vert, la phrase qui dit de quoi se méfier se lisait comme un encouragement.
+    bloc.montrer({"niveau": "bon", "mot": "AU NIVEAU DU REPÈRE", "chiffres": "x",
+                  "reserve": "mesuré hors ligne : en séance le moteur se tait souvent"})
+    chk(COULEURS["bon"] not in bloc.reserve.styleSheet() and bloc.reserve.text().startswith("⚠")
+        and COULEURS["bon"] in bloc.verdict.styleSheet(),
+        f"sous un verdict VERT, la réserve reste une mise en garde : ni verte, ni sans son ⚠ "
+        f"({bloc.reserve.styleSheet()!r})")
+    bloc.montrer(faible)
     chk(not bloc.corps.isVisibleTo(bloc) and "McNemar" not in bloc.verdict.text()
         + bloc.chiffres.text() + bloc.reserve.text(),
         "McNemar, l'honnêteté et le fichier sont REPLIÉS par défaut — c'est eux qui noyaient "
