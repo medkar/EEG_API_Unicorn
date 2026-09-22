@@ -49,6 +49,7 @@ MESURE_OPTIONS = {
     # lu qu'il entraînait un modèle — exactement le vocabulaire brouillé de la séance du 2026-09-22.
     "p300": ("--tester",),      # le TEST du P300 : il cercle une cible par manche et publie `cue`
     "cvep": ("--tester",),      # le TEST du c-VEP : il cercle une cible par bloc, garde son HORLOGE
+    "errp": ("--tester",),      # le TEST de l'ErrP : erreurs délibérées, `feedback` étiqueté
     # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
     # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
     # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option

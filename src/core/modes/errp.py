@@ -644,6 +644,9 @@ SPEC = ModeSpec(
     status="moteur",
     key_channels=tuple(ERRP_MIDLINE),   # Fz, Cz, Pz (xDAWN utilise les 8, mais le contact se juge là)
     stimulus_id="errp",
+    # La mesure qui ÉPROUVE ce mode (`errp_test.py`). Elle a besoin de l'étiquette pour NOTER et
+    # ne la laisse jamais atteindre le décodeur : c'est une BCI passive.
+    test_id="errp_test",
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: errp_models.modeles_disponibles(),
