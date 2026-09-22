@@ -231,7 +231,7 @@ def target_positions(n_targets, span):
 
 def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, seconds=None,
         smoke=False, stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0,
-        journal=None, calibrer=False, rounds=P300_CAL_ROUNDS, attente_moteur_s=None,
+        journal=None, calibrer=False, tester=False, rounds=P300_CAL_ROUNDS, attente_moteur_s=None,
         sonde_ecran=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
@@ -450,7 +450,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # fenêtre morte — la séance serait déclarée « complète » dès la première manche.
         epoques_annoncees = rounds * int(targets) * int(reps)
         emet({"mode": "p300", "event": "calib_start", "trials": epoques_annoncees})
-        print(f"[p300-stim] CALIBRATION : {rounds} manches × {targets} cibles × {reps} rép "
+        print(f"[p300-stim] {'TEST' if tester else 'CALIBRATION'} : {rounds} manches × {targets} cibles × {reps} rép "
               f"= {epoques_annoncees} époques annoncées")
         if attente_consommateur_s > 0 and not outlet.have_consumers():
             print(f"[p300-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
@@ -540,11 +540,12 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # serait déjà noir et le sujet aurait bougé. Même geste que le `settle` de l'ancienne
         # calibration (`research/p300_calibrate._collect`).
         cue_courant = None
-        ecran_statique(P300_EPOCH_S + 0.15, "Calibration terminée",
+        ecran_statique(P300_EPOCH_S + 0.15, "Test terminé" if tester else "Calibration terminée",
                        note="ne bouge plus — la dernière époque finit de s'enregistrer")
         emet({"mode": "p300", "event": "calib_end"})
-        print(f"[p300-stim] calibration terminée : {rounds} manches, « calib_end » envoyé — "
-              f"le moteur entraîne, le résultat s'affiche dans la console.")
+        print(f"[p300-stim] {'test' if tester else 'calibration'} terminé(e) : {rounds} manches, "
+              f"« calib_end » envoyé — le moteur "
+              f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur trois manches sur douze serait indiscernable d'un modèle
@@ -875,6 +876,10 @@ def _parse_args(argv):
                    help=f"nombre de cibles (défaut {P300_N_TARGETS} — le mode P300 du moteur "
                         f"n'accepte QUE cette valeur, cf. core/config.py P300_N_TARGETS)")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit après N secondes")
+    p.add_argument("--tester", action="store_true",
+                   help="comme --calibrer (même protocole, même vérité-terrain), mais pour un "
+                        "TEST : le moteur DÉCIDE et note au lieu d'entraîner. Seule la "
+                        "formulation change — c'est ce que lance le bouton « Tester »")
     p.add_argument("--calibrer", action="store_true",
                    help="séance de CALIBRATION : mêmes manches, plus calib_start / cue / "
                         "calib_end. C'est le moteur qui entraîne — la console lance cette fenêtre "
@@ -893,7 +898,8 @@ if __name__ == "__main__":
     use_utf8_console()
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, reps=args.reps, targets=args.targets,
-             seconds=args.seconds, smoke=args.smoke, calibrer=args.calibrer, rounds=args.rounds)
+             seconds=args.seconds, smoke=args.smoke, calibrer=args.calibrer or args.tester, tester=args.tester,
+             rounds=args.rounds)
     # Un réglage refusé (`valide_reglages`) doit sortir en 1 même hors smoke : lancé depuis un
     # script, « ça n'a rien affiché » et « ça a refusé » ne doivent pas se ressembler.
     sys.exit(0 if ok else 1)

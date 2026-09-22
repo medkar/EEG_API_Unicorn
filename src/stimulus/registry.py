@@ -42,8 +42,13 @@ FENETRES = {
 # résultat est un verdict et pas un modèle.
 MESURE_OPTIONS = {
     "ssvep": ("--guide",),
-    "p300": ("--calibrer",),    # le TEST du P300 : il cercle une cible par manche et publie `cue`
-    "cvep": ("--calibrer",),    # le TEST du c-VEP : il cercle une cible par bloc, garde son HORLOGE
+    # `--tester` : le protocole de `--calibrer` (qui désigne la cible et publie la vérité-terrain),
+    # mais une fenêtre qui dit « TEST » et « le moteur note » au lieu de « CALIBRATION » et « le
+    # moteur entraîne ». Relevé à l'écriture du test c-VEP : le bandeau de la console affiche ces
+    # lignes à la fermeture de la fenêtre, et un étudiant qui vient de cliquer « Tester » y aurait
+    # lu qu'il entraînait un modèle — exactement le vocabulaire brouillé de la séance du 2026-09-22.
+    "p300": ("--tester",),      # le TEST du P300 : il cercle une cible par manche et publie `cue`
+    "cvep": ("--tester",),      # le TEST du c-VEP : il cercle une cible par bloc, garde son HORLOGE
     # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
     # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
     # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option

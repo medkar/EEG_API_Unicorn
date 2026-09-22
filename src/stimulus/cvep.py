@@ -417,7 +417,7 @@ def _chemin_journal_auto():
 def run(windowed=False, refresh=None, seconds=None, smoke=False,
         stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
-        max_frames=None, log_path=None, calibrer=False, cycles_calib=CVEP_CAL_CYCLES,
+        max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
         settle=CVEP_CAL_SETTLE_CYCLES):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
@@ -564,7 +564,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                                              rng=random.Random(seed))
         epoques_promises = sum(1 for _b, role, _c in programme if role == "bloc")
         n_blocs = len({b for b, role, _c in programme if role == "bloc"})
-        print(f"[cvep-stim] CALIBRATION : {n_blocs} blocs entrelacés, {cycles_calib} cycles par "
+        print(f"[cvep-stim] {'TEST' if tester else 'CALIBRATION'} : {n_blocs} blocs entrelacés, {cycles_calib} cycles par "
               f"cible, {settle} cycle(s) JETÉ(S) à chaque changement de cible — "
               f"{epoques_promises} époques annoncées au moteur, "
               f"≈ {len(programme) * L / refresh / 60.0:.1f} min")
@@ -822,8 +822,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     if calibrer and seance_complete:
         emet({"mode": "cvep", "event": "calib_end"}, None)
-        print(f"[cvep-stim] calibration terminée : {epoques_promises} époques annoncées, "
-              f"« calib_end » envoyé — le moteur entraîne, le résultat s'affiche dans la console.")
+        print(f"[cvep-stim] {'test' if tester else 'calibration'} terminé(e) : "
+              f"{epoques_promises} époques annoncées, « calib_end » envoyé — le moteur "
+              f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
@@ -1713,6 +1714,10 @@ def _parse_args(argv):
     p.add_argument("--no-wait", action="store_true",
                    help=f"ne pas attendre le moteur (ni son bandeau de chauffe de "
                         f"~{ATTENTE_MOTEUR_S:g} s) : émetteur seul")
+    p.add_argument("--tester", action="store_true",
+                   help="comme --calibrer (même protocole, même vérité-terrain), mais pour un "
+                        "TEST : le moteur DÉCIDE et note au lieu d'entraîner. Seule la "
+                        "formulation change — c'est ce que lance le bouton « Tester »")
     p.add_argument("--calibrer", action="store_true",
                    help="séance de CALIBRATION : même stimulus, plus calib_start / cue / "
                         "block_end / calib_end autour, et un ordre de cibles ENTRELACÉ au lieu "
@@ -1733,6 +1738,7 @@ if __name__ == "__main__":
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
              smoke=args.smoke, seed=args.seed, log_path=args.log,
-             calibrer=args.calibrer, cycles_calib=args.cycles,
+             calibrer=args.calibrer or args.tester, tester=args.tester,
+             cycles_calib=args.cycles,
              attente_consommateur_s=0.0 if args.no_wait else 5.0)
     sys.exit(0 if ok else 1)

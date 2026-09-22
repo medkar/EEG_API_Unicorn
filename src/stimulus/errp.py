@@ -278,7 +278,7 @@ def marqueur_feedback(erreur, calibrer):
 def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP_ERROR_RATE,
         seconds=None, smoke=False, stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0,
         journal=None, seed=None, max_run_steps=ERRP_MAX_RUN_STEPS,
-        calibrer=False, essais=ERRP_CAL_TRIALS, attente_moteur_s=None, sonde_ecran=None):
+        calibrer=False, tester=False, essais=ERRP_CAL_TRIALS, attente_moteur_s=None, sonde_ecran=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
     ⚠️ Les deux modes partagent la MÊME boucle et la MÊME piste. Une séance de calibration est une
@@ -484,7 +484,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # unité n'empêcherait rien mais afficherait un avancement faux et ferait mal régler la
         # détection de fenêtre morte.
         emet({"mode": "errp", "event": "calib_start", "trials": essais}, None, False)
-        print(f"[errp-stim] CALIBRATION : {essais} pas annoncés — chaque feedback portera son "
+        print(f"[errp-stim] {'TEST' if tester else 'CALIBRATION'} : {essais} pas annoncés — chaque feedback portera son "
               f"étiquette `error`, ce que le décodage ne fait JAMAIS")
         if attente_consommateur_s > 0 and not outlet.have_consumers():
             print(f"[errp-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
@@ -579,10 +579,11 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # marqueur qu'une fois son post-stimulus écoulé (`markers_murs(post_s=…)`) : un `calib_end`
         # publié dans la foulée du dernier pas arriverait bien après lui, mais l'écran, lui, serait
         # déjà noir et le sujet aurait bougé. Même geste que chez le P300.
-        tenir(pos, cible, ERRP_EPOCH_S + 0.15, note="calibration terminée — ne bouge plus")
+        tenir(pos, cible, ERRP_EPOCH_S + 0.15, note=("test terminé" if tester else "calibration terminée") + " — ne bouge plus")
         emet({"mode": "errp", "event": "calib_end"}, None, False)
-        print(f"[errp-stim] calibration terminée : {pas_total} pas, « calib_end » envoyé — le "
-              f"moteur entraîne, le résultat s'affiche dans la console.")
+        print(f"[errp-stim] {'test' if tester else 'calibration'} terminé(e) : {pas_total} pas, "
+              f"« calib_end » envoyé — le moteur "
+              f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
@@ -1222,6 +1223,10 @@ def _parse_args(argv):
     p.add_argument("--no-wait", action="store_true",
                    help="ne pas attendre le moteur (ni sa chauffe : ~23 s en décodage, ~15 s en "
                         "calibration, qui n'a pas de repos) : émetteur seul")
+    p.add_argument("--tester", action="store_true",
+                   help="comme --calibrer (même protocole, même vérité-terrain), mais pour un "
+                        "TEST : le moteur DÉCIDE et note au lieu d'entraîner. Seule la "
+                        "formulation change — c'est ce que lance le bouton « Tester »")
     p.add_argument("--calibrer", action="store_true",
                    help="séance de CALIBRATION : même piste, plus calib_start / calib_end, et "
                         "chaque feedback porte son étiquette `error` (ce que le décodage ne fait "
@@ -1241,7 +1246,8 @@ if __name__ == "__main__":
     ok = run(windowed=args.windowed, refresh=args.refresh, n_cells=args.cells,
              taux_erreur=args.error_rate, seconds=args.seconds, smoke=args.smoke,
              seed=args.seed, attente_consommateur_s=0.0 if args.no_wait else 5.0,
-             calibrer=args.calibrer, essais=args.essais)
+             calibrer=args.calibrer or args.tester, tester=args.tester,
+             essais=args.essais)
     # Un réglage refusé (`--cells` trop petit) doit sortir en 1 même hors smoke : lancé depuis un
     # script, « ça n'a rien affiché » et « ça a refusé » ne doivent pas se ressembler.
     sys.exit(0 if ok else 1)
