@@ -98,6 +98,9 @@ def catalogue_mesures():
             # calibration : la tuile reste, et le bouton ne ment pas.
             "jouable": spec.runtime_cls is not None,
             "barriere": spec.barriere,
+            # Une partie du protocole se fait-elle les yeux FERMÉS ? La console n'avertit « sans
+            # top, tu ne sauras pas quand rouvrir » que si c'est vrai — elle ne le devine pas.
+            "yeux_fermes": spec.yeux_fermes,
             # La CLÉ de la fenêtre à ouvrir en même temps, ou "" — même champ et même rôle que
             # `calibration.stimulus_id` d'un mode. Sans lui dans le catalogue, la console ne
             # saurait pas qu'une mesure a besoin d'un stimulus, et le moteur attendrait 30 s des
@@ -478,6 +481,17 @@ def _selftest():
         f"le catalogue transmet `proposes` ({par_cle['refresh_hz'].get('proposes')!r})")
     chk("affecte_decodage" not in par_cle["freqs"],
         "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
+
+    # --- Le contrat avec la console : « yeux_fermes », dans le catalogue des mesures ---------
+    # Sans lui, la console avertissait « la seconde moitié se fait LES YEUX FERMÉS » sous les CINQ
+    # pages de test dès qu'il n'y avait pas de son — faux pour toutes, sauf le contrôle alpha. Le
+    # moteur le DÉCLARE ; la console le lit (`spec.get("yeux_fermes", False)`), elle ne le devine
+    # pas d'après un identifiant.
+    par_id = {m["id"]: m for m in catalogue_mesures()}
+    chk(par_id.get("alpha", {}).get("yeux_fermes") is True
+        and all(m.get("yeux_fermes") is False for i, m in par_id.items() if i != "alpha"),
+        f"le catalogue dit quelles mesures se font les yeux FERMÉS : le contrôle alpha, et lui "
+        f"seul ({ {i: m.get('yeux_fermes') for i, m in par_id.items()} })")
 
     # --- l'assouplissement des choix vides, sur un registre PIÉGÉ ---------------
     # Il n'était couvert par rien, alors que c'est l'état par défaut de tout dépôt fraîchement

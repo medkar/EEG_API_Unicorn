@@ -63,6 +63,7 @@ class MesureMarqueurs(MesureRuntime):
 
     marker_mode_id = ""
     runtime_cls_du_mode = None
+    unite = "essai"          # ce que compte `essai` ; la sous-classe le redéclare au besoin
     evenement_verite = "cue"
     champ_verite = "target"
     evenement_unite = "cue"

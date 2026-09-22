@@ -158,6 +158,7 @@ class MesureCVEP(MesureMarqueurs):
 
     marker_mode_id = "cvep"
     runtime_cls_du_mode = CVEPRuntime
+    unite = "cycle"          # `essai` compte les cycles ENREGISTRÉS — l'unité de `--cycles`
     # `trials` compte les cycles ENREGISTRÉS : l'unité est le `cycle` reçu dans un bloc ouvert.
     evenement_verite, champ_verite, evenement_unite = "cue", "target", "cycle"
     # Le tampon du moteur, pour le PIRE réglage : plus long vote, fenêtre à 60 Hz, marge de filtre.
@@ -662,6 +663,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             f"🔴 UN ESSAI = UN BLOC : effectif {res.get('n_essais')} — ni les {rt.total()} cycles "
             f"annoncés (la barre d'avancement), ni les {18 * valeurs['vote_len']} sorties rejouées")
         chk(abs(res.get("hasard", 0) - 1.0 / 6) < 1e-9, f"hasard rapporté 1/6 ({res.get('hasard')})")
+        chk(rt.state(now=0.0).get("unite") == "cycle",
+            f"l'avancement affiché compte des CYCLES — l'unité de `--cycles`, que l'étudiant a "
+            f"choisie ({rt.state(now=0.0).get('unite')!r})")
         muets = [res["decisions"][k] for k in (3, 11)]
         chk(all(d is None for _c, d, _k in muets) and res["n_emis"] < res["n_essais"],
             f"les blocs où le sujet ne regarde rien sont MUETS ({muets})")

@@ -177,6 +177,9 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
 
     # --- la ligne du temps ---------------------------------------------------
 
+    # `essai` compte les ÉPOQUES enregistrées (cf. `total`) : c'est ce mot que l'écran affiche.
+    unite = "époque"
+
     def total(self):
         """Le nombre d'essais que la FENÊTRE a annoncés. 0 tant qu'elle ne s'est pas annoncée.
 
@@ -797,7 +800,7 @@ def _selftest():
     # `console/calib_page.py` est GÉNÉRIQUE : elle ne connaît aucun mode et lit ces champs sans
     # jamais les tester. Un champ manquant ne lève RIEN — la page reste simplement vide.
     lus_par_la_console = {"mode_id", "phase", "etape", "classe", "instruction", "rappel",
-                          "essai", "total", "restant_s", "duree_estimee_s", "resultat",
+                          "essai", "total", "unite", "restant_s", "duree_estimee_s", "resultat",
                           "probleme"}
     etat = rt6.state(now=t0 + 20.0)
     chk(set(etat) >= lus_par_la_console,

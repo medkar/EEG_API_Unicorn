@@ -108,6 +108,11 @@ class MesureSpec:
     barriere: bool = False      # cette mesure ARRÊTE-t-elle la séance quand elle échoue ?
     #                             (le contrôle alpha, oui : sans alpha rien d'autre ne veut dire
     #                             quoi que ce soit. Le taux SSVEP, non : c'est un chiffre à lire.)
+    yeux_fermes: bool = False   # une partie du protocole se fait-elle les YEUX FERMÉS ? Le contrôle
+    #                             alpha, oui : sans son, la personne ne saura pas quand rouvrir, et
+    #                             la console doit le dire. Les tests, non — les avertir de même
+    #                             était faux cinq fois sur six. Sérialisé par
+    #                             `registry.catalogue_mesures()` sous la clé « yeux_fermes ».
     stimulus_id: str = ""       # la CLÉ de la fenêtre à ouvrir en même temps, ou "" si la mesure
     #                             se joue sans écran. Exactement la même clé et le même rôle que
     #                             `Calib.stimulus_id` : `core` ne nomme aucun fichier de fenêtre,
@@ -160,6 +165,11 @@ class MesureRuntime(CalibrationRuntime):
     # entraînement impossible » — un étudiant irait chercher un modèle que personne n'a demandé.
     _journal = "mesure"
     _nom_du_calcul = "calcul du verdict"
+
+    # Ce que compte `essai` par défaut : les étapes ENREGISTRÉES (cf. `total`). Chaque mesure le
+    # redéclare dans SON vocabulaire — « phase » pour le contrôle alpha, « essai », « manche »,
+    # « cycle » pour les tests — et `state()` (hérité) le publie sous « unite ».
+    unite = "étape"
 
     # Ce que cette mesure prélève AUTOUR D'UN MARQUEUR, en secondes. 0 = elle n'en prélève pas (le
     # contrôle alpha, dont les fenêtres viennent de sa propre ligne du temps).
@@ -648,7 +658,7 @@ def _selftest():
     # `console/calib_page.py` est GÉNÉRIQUE : elle lit ces champs sans jamais les tester. Un champ
     # manquant ne lève RIEN — la page reste simplement vide.
     lus_par_la_console = {"mode_id", "phase", "etape", "classe", "instruction", "rappel",
-                          "essai", "total", "restant_s", "duree_estimee_s", "resultat",
+                          "essai", "total", "unite", "restant_s", "duree_estimee_s", "resultat",
                           "probleme"}
     etat = rt.state(now=t)
     chk(set(etat) >= lus_par_la_console,
@@ -668,6 +678,15 @@ def _selftest():
     chk(set(reference) == set(etat),
         f"…et c'est EXACTEMENT celui d'une calibration : `state()` n'est pas redéfinie ici, elle "
         f"est héritée ({sorted(set(reference) ^ set(etat)) or 'aucun écart'})")
+    # L'UNITÉ de `essai`/`total`, publiée par le moteur : la console écrivait « phase(s)
+    # enregistrée(s) » sous TOUTES les mesures, et un test P300 de 6 manches s'affichait « 0 phase(s)
+    # enregistrée(s) sur 288 ». Le mot vient de celui qui compte, pas d'une table côté écran.
+    chk(etat.get("unite") == "étape" and milieu.get("unite") == "étape",
+        f"l'instantané NOMME l'unité de son avancement — « étape » par défaut ({etat.get('unite')!r})")
+    chk(getattr(SPEC, "yeux_fermes", None) is False
+        and getattr(MesureSpec(id="x", label="X"), "yeux_fermes", None) is False,
+        "une mesure ne se fait PAS les yeux fermés par défaut : seul le contrôle alpha le déclare, "
+        "et la console n'avertit « sans top, tu ne sauras pas quand rouvrir » que là")
     chk(etat["mode_id"] == SPEC.id and etat["label"] == SPEC.label,
         f"l'instantané se réclame de SA mesure — la page filtre dessus pour ne jamais présenter "
         f"la séance d'une autre comme la sienne ({etat['mode_id']}, {etat['label']!r})")

@@ -570,6 +570,9 @@ def _selftest():
         rt = _MesureEspionnee(SPEC, valeurs, moteur)
         res = jouer(rt, moteur)
         espion = rt._decideur
+        chk(rt.state(now=T0).get("unite") == "essai",
+            f"l'avancement affiché compte des ESSAIS — l'unité du réglage « Essais » "
+            f"({rt.state(now=T0).get('unite')!r})")
         appels = [a for nom, a in espion.vu if nom == "_traiter_feedback"]
         chk(len(appels) == len(verites) == 24,
             f"le décodeur a bien été appelé, une fois par feedback ({len(appels)} sur "

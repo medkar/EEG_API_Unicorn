@@ -187,6 +187,9 @@ class ControleAlpha(MesureRuntime):
     socle et n'est pas redéfini.
     """
 
+    # Deux PHASES enregistrées, yeux ouverts puis yeux fermés : l'unité de l'avancement affiché.
+    unite = "phase"
+
     # Le réglage que cette mesure sait REMPLIR : (mode, clé). C'est ce qui pose le bouton
     # « Mesurer » à côté du champ « Pic alpha » de la page SSVEP — la console le LIT ici, elle
     # n'écrit ni « alpha » ni « alpha_hz ». Même source que `reglage_propose` ci-dessous : la
@@ -355,6 +358,9 @@ SPEC = MesureSpec(
     params=(),
     runtime_cls=ControleAlpha,
     barriere=True,
+    # La seconde moitié se fait LES YEUX FERMÉS : sans top sonore, la personne ne saura pas quand
+    # rouvrir. C'est ce champ, et lui seul, qui fait avertir la console quand il n'y a pas de son.
+    yeux_fermes=True,
 )
 
 
@@ -446,6 +452,12 @@ def _selftest():
     rt, res = _jouer(_bruit(rng), _bruit_plus_alpha(rng, 10.5, gain=4.0))
     chk(rt.phase == "fini" and res is not None,
         f"la séance se termine ({rt.phase}, problème={rt.probleme!r})")
+    # Le contrat avec la console : l'unité de l'avancement, et « yeux fermés ». Le second est ce
+    # qui autorise l'avertissement « sans top, tu ne sauras pas quand rouvrir » — sur CETTE page
+    # seulement ; les cinq tests se font les yeux ouverts.
+    chk(rt.state(now=0.0).get("unite") == "phase" and getattr(SPEC, "yeux_fermes", None) is True,
+        f"le contrôle alpha compte des PHASES et se déclare « yeux fermés » "
+        f"({rt.state(now=0.0).get('unite')!r}, {getattr(SPEC, 'yeux_fermes', None)})")
     chk(res["ratio"] > RATIO_MIN,
         f"l'alpha monte à la fermeture des yeux : ratio {res['ratio']:.2f} "
         f"(repère > ~{RATIO_MIN:g})")

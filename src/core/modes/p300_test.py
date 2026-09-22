@@ -128,6 +128,9 @@ class MesureP300(MesureMarqueurs):
     evenement_verite, champ_verite = "cue", "target"
     evenement_unite = "flash"                  # la fenêtre annonce des FLASHS dans `trials`
     epoque_marqueur_s = SPEC_P300.marker_epoch_s
+    # ⚠️ L'avancement AFFICHÉ est en MANCHES (cf. `state`), pas dans l'unité de `trials` : la garde
+    # de silence du socle compte les flashs annoncés, l'écran compte ce que l'étudiant a choisi.
+    unite = "manche"
 
     def __init__(self, spec, params, engine, rng=None):
         super().__init__(spec, params, engine, rng=rng)
@@ -139,6 +142,7 @@ class MesureP300(MesureMarqueurs):
         self._manche_en_cours = False    # un `cue` a ouvert une manche que rien n'a encore fermée
         self._manches_sans_cue = 0       # `round_end` sans manche ouverte : jamais notées
         self._manches_sans_fin = 0       # `cue` arrivé avant le `round_end` d'avant : jamais notées
+        self._manches_jouees = 0         # `round_end` reçus pendant les essais : l'avancement affiché
 
     def _manches(self):
         try:
@@ -148,6 +152,15 @@ class MesureP300(MesureMarqueurs):
 
     def duree_estimee_s(self):
         return float(self.warmup_s) + duree_protocole_s(self._manches())
+
+    def state(self, now=None):
+        """L'instantané du socle, l'avancement en MANCHES : l'étudiant a choisi « Manches : 6 », il
+        lit « 2 sur 6 », pas « 36 sur 108 » flashs. Seuls `essai` et `total` changent — la garde de
+        silence (`_verifie_silence`) lit `_essais_vus` et `_essais_annonces`, en flashs, et
+        `total()` reste celui du socle."""
+        etat = super().state(now)
+        etat["essai"], etat["total"] = self._manches_jouees, self._manches()
+        return etat
 
     def _verite_lisible(self, valeur):
         """Un indice de cible entier, DANS la géométrie du mode : un `cue` hors plage n'ouvre rien."""
@@ -186,6 +199,7 @@ class MesureP300(MesureMarqueurs):
             return
         if event == "round_end":
             self._manche_en_cours = False
+            self._manches_jouees += 1
             if not self._essai_ouvert:
                 self._manches_sans_cue += 1
                 self._decideur._vider_manche()
@@ -572,6 +586,32 @@ def _selftest():
         chk(res.get("reglages", {}).get("model") == _os.path.basename(chemin)
             and res["reglages"].get("essais") == MANCHES_DEFAUT,
             f"le résultat dit sur quels réglages il a été mesuré ({res.get('reglages')})")
+
+        # === 3 bis. L'AVANCEMENT affiché est en MANCHES — la garde de silence, elle, en FLASHS ====
+        # L'étudiant choisit « Manches : 6 » ; il lisait « 12 phase(s) enregistrée(s) sur 288 »
+        # (des flashs, sous l'unité du contrôle alpha). L'instantané publie maintenant des manches
+        # ET leur nom ; la garde du socle continue de compter les flashs annoncés par `trials`.
+        etat = rt.state(now=0.0)
+        chk(etat.get("unite") == "manche" and (etat.get("essai"), etat.get("total")) == (6, 6),
+            f"en fin de test l'écran lit « 6 manches sur 6 », pas des flashs "
+            f"({etat.get('essai')} {etat.get('unite')!r} sur {etat.get('total')})")
+        fin_2e = [i for i, (_t, k) in enumerate(plan) if k["event"] == "round_end"][1]
+        moteur_mi = _Moteur(eeg, ts)
+        rt_mi = MesureP300(SPEC, valeurs, moteur_mi)
+        rt_mi.tick(moteur_mi, moteur_mi.t0)
+        rt_mi.encaisser(moteur_mi, moteur_mi.t0, m("calib_start", trials=rt.total()))
+        rt_mi.tick(moteur_mi, moteur_mi.t0 + rt_mi.warmup_s + 0.1)
+        with redirect_stdout(io.StringIO()):
+            for t, k in plan[:fin_2e + 1]:
+                rt_mi.encaisser(moteur_mi, t, k)
+        etat = rt_mi.state(now=0.0)
+        chk((etat.get("essai"), etat.get("total")) == (2, MANCHES_DEFAUT),
+            f"…et à mi-séance, « 2 manches sur {MANCHES_DEFAUT} » ({etat.get('essai')} sur "
+            f"{etat.get('total')})")
+        chk(rt_mi._essais_vus == 2 * REPS * P300_N_TARGETS
+            and rt_mi.total() == 6 * REPS * P300_N_TARGETS,
+            f"…pendant que la garde de silence du socle compte toujours les FLASHS annoncés "
+            f"({rt_mi._essais_vus} vus sur {rt_mi.total()}) — l'affichage ne la touche pas")
         try:
             json.dumps(rt.state(now=0.0))
             serialisable = True

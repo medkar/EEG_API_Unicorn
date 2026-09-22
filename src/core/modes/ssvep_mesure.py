@@ -187,6 +187,7 @@ class MesureSSVEP(MesureMarqueurs):
     # ces marqueurs décrivent un stimulus SSVEP, un étudiant qui lit `docs/markers.md` les cherche
     # sous ce nom-là, et le mode SSVEP lui-même ne consomme aucun marqueur — aucun vol possible.
     marker_mode_id = "ssvep"
+    unite = "essai"          # une fixation désignée = un essai = une époque
     # Un `cue` porte la cible désignée (la vérité) ET ouvre la fixation (l'unité de `trials`).
     evenement_verite, champ_verite, evenement_unite = "cue", "target", "cue"
 
@@ -1124,9 +1125,12 @@ def _selftest():
 
     # === Le contrat public ====================================================================
     lus_par_la_console = {"mode_id", "phase", "etape", "classe", "instruction", "rappel",
-                          "essai", "total", "restant_s", "duree_estimee_s", "resultat",
+                          "essai", "total", "unite", "restant_s", "duree_estimee_s", "resultat",
                           "probleme"}
     etat = rt.state(now=t0 + 40.0)
+    chk(etat.get("unite") == "essai",
+        f"l'avancement affiché compte des ESSAIS, pas des « fenêtres prélevées » "
+        f"({etat.get('unite')!r})")
     chk(set(etat) >= lus_par_la_console,
         f"l'instantané porte tout ce qu'un écran de protocole lit "
         f"({sorted(lus_par_la_console - set(etat)) or 'aucun champ manquant'})")

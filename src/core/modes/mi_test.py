@@ -114,6 +114,8 @@ class _Rejeu:
 class MesureMI(MesureRuntime):
     """Le protocole d'entraînement MI, rejoué ; le moteur décide à la fin de chaque essai."""
 
+    unite = "essai"          # une étape enregistrée = un essai entier (cf. `_essai`)
+
     def __init__(self, spec, params, engine, rng=None):
         # Retenue MAINTENANT : `cancel()` remet `self.engine` à None, et le calcul a besoin de
         # `motor_window`, le découpage exact du mode en direct.
@@ -504,6 +506,8 @@ def _selftest():
         res = _jouer(rt, moteur)
         chk(rt.phase == "fini" and res is not None,
             f"la séance se termine sur un verdict ({rt.phase}, {rt.probleme!r})")
+        chk(rt.state(now=0.0).get("unite") == "essai",
+            f"l'avancement affiché compte des ESSAIS ({rt.state(now=0.0).get('unite')!r})")
         chk(moteur.demandes == [MI_CUE_S + MI_IMAGERY_S] * 18,
             f"une fenêtre prélevée par essai, de la durée de l'essai ({len(moteur.demandes)})")
         chk(abs(res["hasard"] - 1 / 3) < 1e-9 and res["reglages"]["model"] == "mi_model_3c.joblib"

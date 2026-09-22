@@ -57,6 +57,12 @@ class CalibrationRuntime:
     _journal = "calib"
     _nom_du_calcul = "entraînement"
 
+    # Le NOM de ce que comptent `essai` et `total`, au singulier. Publié dans `state()` parce que
+    # c'est le moteur qui sait ce qu'il compte : la console écrivait « phase(s) enregistrée(s) »
+    # sous toutes les pages, et un test P300 de 6 manches s'affichait « sur 288 ». Une sous-classe
+    # qui compte autre chose (une époque, une manche, un cycle) le redéclare.
+    unite = "essai"
+
     def __init__(self, spec, params, engine, rng=None, dossier=None):
         """`spec` : le `ModeSpec` du mode calibré. `params` : les réglages VALIDÉS de la calibration.
 
@@ -297,6 +303,7 @@ class CalibrationRuntime:
             "rappel": self.rappel(),
             "essai": self.essai,
             "total": self.total(),
+            "unite": self.unite,
             "restant_s": round(self.restant_s(now), 1) if now is not None else 0.0,
             "duree_estimee_s": round(self.duree_estimee_s(), 1),
             "params": dict(self.params),
@@ -459,8 +466,8 @@ def _selftest():
         serialisable = False
     chk(serialisable, "l'état est sérialisable en JSON")
     etat = rt.state(now=t)
-    chk(set(etat) >= {"phase", "etape", "classe", "instruction", "essai", "total", "restant_s",
-                      "resultat", "probleme"},
+    chk(set(etat) >= {"phase", "etape", "classe", "instruction", "essai", "total", "unite",
+                      "restant_s", "resultat", "probleme"},
         f"et il porte tout ce que la console doit peindre ({sorted(etat)})")
 
     print(f"[calibration] VERDICT : {'OK' if ok else 'PROBLÈME'}")
