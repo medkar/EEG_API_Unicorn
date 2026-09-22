@@ -2053,9 +2053,29 @@ def _smoke():
     console.apply_state(fini)
     moteur_faux.refus["save_calibration"] = "rien à enregistrer : aucune calibration n'attend"
     cal.bouton_enregistrer.click()
-    chk("rien à enregistrer" in cal.decision.text(),
-        f"un refus d'enregistrement s'affiche mot pour mot ({cal.decision.text()[:60]}…)")
+    # 🔴 Le tour de `QTimer` SUIVANT, avant de lire (constat I2 de la revue de branche). Lu tout de
+    # suite après le clic, le refus était là ; 100 ms plus tard, le rafraîchissement l'avait
+    # remplacé par « ⚠ Pas encore enregistré », et l'étudiant recliquait sans savoir pourquoi.
+    console.apply_state(fini)
+    chk("rien à enregistrer" in cal.refus_decision.text()
+        and cal.refus_decision.isVisibleTo(cal),
+        f"un refus d'enregistrement s'affiche mot pour mot, et il SURVIT au rafraîchissement "
+        f"suivant ({cal.refus_decision.text()[:60]!r})")
+    chk("temporaire" in cal.decision.text(),
+        f"…à côté de ce qui reste vrai : le modèle n'est toujours pas enregistré "
+        f"({cal.decision.text()[:50]!r})")
     moteur_faux.refus.clear()
+    moteur_faux.refus["discard_calibration"] = "rien à jeter"
+    cal.bouton_refaire.click()
+    console.apply_state(fini)
+    chk("rien à jeter" in cal.refus_decision.text(),
+        f"…et un refus de « Refaire » aussi ({cal.refus_decision.text()!r})")
+    moteur_faux.refus.clear()
+    # Une NOUVELLE séance l'efface : il parlait d'une décision qui n'a plus cours.
+    console.apply_state(en_cours)
+    console.apply_state(fini)
+    chk(cal.refus_decision.text() == "",
+        f"…jusqu'à la séance suivante, qui l'efface ({cal.refus_decision.text()!r})")
 
     # --- le résultat d'un AUTRE mode : aucun chiffre fabriqué -----------------------------
     # Le P300 ne mesure ni « fenêtres d'entraînement » ni « classes » : il compte des manches et
@@ -2962,17 +2982,31 @@ def _smoke():
         in moteur_faux.commandes,
         f"« Appliquer » envoie le RÉGLAGE au moteur — la valeur ne se recopie plus à la main "
         f"d'un écran à l'autre ({moteur_faux.commandes})")
-    chk(mes.reponse_pic.text() and "SSVEP" in mes.reponse_pic.text(),
-        f"…et l'écran confirme où c'est parti ({mes.reponse_pic.text()[:50]}…)")
+    # 🔴 Le tour de `QTimer` SUIVANT, avant de lire (constat I2) : la confirmation était effacée
+    # 100 ms après le clic, et l'assertion la lisait dans l'intervalle.
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.reponse_pic.text() and "SSVEP" in mes.reponse_pic.text()
+        and "Proposer" in mes.reponse_pic.text(),
+        f"…et l'écran confirme où c'est parti, et ce que « Proposer » en fera — encore là au "
+        f"rafraîchissement suivant ({mes.reponse_pic.text()[:60]!r})")
 
     # Le refus du moteur s'AFFICHE : `set_params` n'atteint qu'un mode DÉMARRÉ, et c'est un refus
     # que l'étudiant rencontrera pour de vrai (le SSVEP n'a aucune raison de tourner pendant un
     # contrôle alpha). Un bouton qui échoue en silence est la panne que ce chantier répare.
     moteur_faux.refus["set_params"] = "« SSVEP » n'est pas démarré"
     mes.appliquer_pic.click()
+    console.apply_state({**state, "mesure": fini})
     chk("pas démarré" in mes.reponse_pic.text(),
-        f"un refus du moteur est montré tel quel ({mes.reponse_pic.text()})")
+        f"un refus du moteur est montré tel quel, et il SURVIT au rafraîchissement suivant "
+        f"({mes.reponse_pic.text()!r})")
     moteur_faux.refus.pop("set_params")
+    # …jusqu'à une NOUVELLE séance, dont il ne dit rien.
+    console.apply_state({**state, "mesure": {**base_m, "classe": mod_alpha.OUVERT,
+                                             "instruction": "x", "rappel": "", "restant_s": 3.0}})
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.reponse_pic.text() == "",
+        f"…et une nouvelle séance l'efface : il parlait de la précédente "
+        f"({mes.reponse_pic.text()!r})")
 
     # LA BARRIÈRE NON FRANCHIE : la phrase qui ARRÊTE, et AUCUN pic à appliquer.
     rate = _verdict_alpha(False)

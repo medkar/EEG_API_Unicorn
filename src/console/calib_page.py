@@ -175,6 +175,14 @@ class CalibPage(QWidget):
         self.decision = QLabel("")
         self.decision.setWordWrap(True)
         self.decision.setStyleSheet("font-weight: bold;")
+        # Le REFUS d'« Enregistrer » ou de « Refaire », sur SA propre ligne (constat I2 de la revue
+        # de branche). Il était écrit dans `decision`, que chaque rafraîchissement réécrit : un
+        # refus du moteur était remplacé en 100 ms par « ⚠ Pas encore enregistré », et l'étudiant,
+        # croyant que rien ne s'était passé, recliquait. Seuls un nouveau geste ou une nouvelle
+        # séance l'effacent.
+        self.refus_decision = QLabel("")
+        self.refus_decision.setWordWrap(True)
+        self.refus_decision.setStyleSheet("color: #e2603f; font-weight: bold;")
         self.bouton_enregistrer = QPushButton("Enregistrer le modèle")
         self.bouton_enregistrer.clicked.connect(self._enregistrer)
         self.bouton_refaire = QPushButton("Refaire")
@@ -192,6 +200,7 @@ class CalibPage(QWidget):
         self.bloc.ajouter_au_detail(self.resultat, self.details, self.honnetete)
         apres = QVBoxLayout(self.bloc_apres)
         apres.addWidget(self.bloc)
+        apres.addWidget(self.refus_decision)
         apres.addWidget(self.decision)
         apres.addLayout(gestes)
 
@@ -239,8 +248,8 @@ class CalibPage(QWidget):
         de balayer.
         """
         ack = self.console.commande("save_calibration")
-        self.decision.setText(self.decision.text() if ack.get("accepted")
-                              else ack.get("reason", ""))
+        self.refus_decision.setText("" if ack.get("accepted")
+                                    else f"Refusé : {ack.get('reason', '')}")
 
     def _refaire(self):
         """Émet `discard_calibration` : le candidat est supprimé et l'écran de verdict effacé.
@@ -249,8 +258,8 @@ class CalibPage(QWidget):
         l'écran « Avant » — cette page ne navigue pas, elle attend l'état comme pour le reste.
         """
         ack = self.console.commande("discard_calibration")
-        if not ack.get("accepted"):
-            self.decision.setText(ack.get("reason", ""))
+        self.refus_decision.setText("" if ack.get("accepted")
+                                    else f"Refusé : {ack.get('reason', '')}")
 
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le lanceur de fenêtre) a répondu à « Commencer ».
@@ -330,6 +339,7 @@ class CalibPage(QWidget):
             # Une séance TOURNE : le refus affiché avant elle parlait d'une tentative qui n'a plus
             # cours. Le laisser à l'écran ferait lire « ça n'a pas démarré » pendant que ça tourne.
             self.avis.setText("")
+            self.refus_decision.setText("")
             self._maybe_beep(calib_state)
             self.consigne.setText(calib_state.get("instruction") or "")
             self.classe_cuee.setText(calib_state.get("classe") or "")

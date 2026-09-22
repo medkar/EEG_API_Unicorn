@@ -259,11 +259,16 @@ class MesurePage(QWidget):
             return
         ack = self.console.commande("set_params", id=propose["mode"],
                                     params={propose["cle"]: propose["valeur"]})
+        # ⚠️ Ce message SURVIT aux rafraîchissements (constat I2 de la revue de branche) : la page
+        # est repeinte dix fois par seconde, et `_montrer_proposition` l'effaçait à chaque tour —
+        # la confirmation, comme un REFUS du moteur, disparaissaient en 100 ms. Seuls un nouveau
+        # geste, une nouvelle séance ou une nouvelle proposition le remplacent.
         if ack.get("accepted"):
+            mode = propose.get("mode_label", propose["mode"])
             self.reponse_pic.setText(
                 f"« {propose['label']} » = {propose['valeur']:g} {propose.get('unite', '')} "
-                f"appliqué à « {propose.get('mode_label', propose['mode'])} ». Ouvre sa page et "
-                f"clique « Proposer » pour en tirer un jeu de fréquences qui évite ton alpha.")
+                f"retenu pour « {mode} ». Sur la page « {mode} », bloc « 1. Régler », "
+                f"« Proposer » en tient compte pour choisir des fréquences qui évitent ton alpha.")
             self.reponse_pic.setStyleSheet("color: #3fae5a;")
         else:
             self.reponse_pic.setText(ack.get("reason", ""))
@@ -354,6 +359,8 @@ class MesurePage(QWidget):
         # et c'est justement après un abandon qu'on relance.
         if en_cours:
             self.avis.setText("")
+            # Une NOUVELLE séance : la réponse à « Appliquer » parlait de la précédente.
+            self.reponse_pic.setText("")
             self._maybe_beep(etat)
             self.consigne.setText(etat.get("instruction") or "")
             self.etape.setText(etat.get("classe") or "")
@@ -431,9 +438,13 @@ class MesurePage(QWidget):
         est le plus grand bin du bruit). Le tester ici serait une seconde règle de décision dans
         l'interface, et c'est exactement ce que cette console s'interdit.
         """
-        self._propose = propose or None
+        propose = propose or None
+        if propose != self._propose:
+            # Une AUTRE proposition : la réponse affichée parlait de la précédente. La même,
+            # repeinte au tour suivant, garde sa réponse — c'est tout le constat I2.
+            self.reponse_pic.setText("")
+        self._propose = propose
         self.appliquer_pic.setVisible(bool(propose))
-        self.reponse_pic.setText("")
         if propose:
             self.appliquer_pic.setText(
                 f"Appliquer « {propose['label']} » = {propose['valeur']:g} "
