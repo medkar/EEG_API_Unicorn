@@ -1997,8 +1997,13 @@ def _smoke():
     chk(not cal.resultat.isVisibleTo(cal) and not cal.honnetete.isVisibleTo(cal),
         "…et la phrase complète et l'honnêteté sont REPLIÉES : elles ne noient plus le chiffre")
     cal.bloc.details.setChecked(True)
+    # Le tour de `QTimer` SUIVANT, sur la VRAIE page, avant de lire (constats C3 et M4 de la revue).
+    # Le seul test du repli qui rafraîchissait éprouvait un `BlocResultat(corps_auto=True)` qu'aucune
+    # page n'utilise ; ici c'est la page d'entraînement, repeinte avec le même état.
+    console.apply_state(fini)
     chk(cal.resultat.isVisibleTo(cal) and cal.honnetete.isVisibleTo(cal),
-        "…mais un clic sur « Détails » les ramène : rangées, pas supprimées")
+        "…mais un clic sur « Détails » les ramène, et ils RESTENT au rafraîchissement suivant : "
+        "rangées, pas supprimées")
     cal.bloc.details.setChecked(False)
     chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
         f"l'accuracy affichée est l'HONNÊTE ({cal.resultat.text()})")
@@ -3014,6 +3019,11 @@ def _smoke():
         f"…le ratio avec son repère sur la même ligne ({mes.bloc.chiffres.text()!r})")
     chk(not mes.verdict.isVisibleTo(mes) and not mes.honnetete.isVisibleTo(mes),
         "…et la phrase complète comme l'honnêteté sont REPLIÉES sous « Détails »")
+    mes.bloc.details.setChecked(True)
+    console.apply_state({**state, "mesure": fini})       # le tour de `QTimer` suivant
+    chk(mes.verdict.isVisibleTo(mes) and mes.honnetete.isVisibleTo(mes),
+        "…qu'un clic RAMÈNE, et qui restent ouvertes au rafraîchissement suivant (C3, M4)")
+    mes.bloc.details.setChecked(False)
     chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
         f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
     chk(f"{reussi['ratio']:.2f}" in mes.details.text() and "Pz/PO7/Oz/PO8" in mes.details.text(),
