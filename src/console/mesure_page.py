@@ -42,6 +42,7 @@ from console import compter  # noqa: E402
 from console.beeps import TOP_ETAPE, connait  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
+from core.i18n import tr  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié — même geste que
 # `calib_page.py`. `mesure.PHASES_TERMINALES` EST l'objet de `calibration.py` (cf. son
 # commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de verdict.
@@ -66,25 +67,28 @@ class MesurePage(QWidget):
     # mesure. Le contrôle alpha publie un ratio et un pic ; le taux d'émission SSVEP publiera un
     # effectif et un intervalle de confiance. On n'affiche QUE ce qui est présent, jamais un zéro
     # fabriqué qui se lirait comme une mesure.
+    #
+    # Une fonction par ligne (valeur -> texte) : le NOMBRE se met en forme ici — `:d` garde son
+    # refus d'un effectif non entier —, le texte vient du fichier de langue.
     DETAILS = (
-        ("ratio", "ratio fermé/ouvert {:.2f}"),
-        ("repere_ratio", "repère > {:g}"),
-        ("pic_hz", "pic à {:.1f} Hz les yeux fermés"),
-        ("pic_ouvert_hz", "pic à {:.1f} Hz les yeux ouverts"),
+        ("ratio", lambda v: tr("pages.mesure.detail.ratio", r=f"{v:.2f}")),
+        ("repere_ratio", lambda v: tr("pages.mesure.detail.repere_ratio", r=f"{v:g}")),
+        ("pic_hz", lambda v: tr("pages.mesure.detail.pic_ferme", hz=f"{v:.1f}")),
+        ("pic_ouvert_hz", lambda v: tr("pages.mesure.detail.pic_ouvert", hz=f"{v:.1f}")),
         # Le taux d'émission SSVEP. ⚠️ `n_essais` porte son UNITÉ dans le libellé, et ce n'est pas
         # de la coquetterie : c'est le seul endroit de l'interface où l'on peut confondre un
         # nombre d'essais avec un nombre de fenêtres du moteur, et l'écart entre les deux vaut un
         # facteur 7 sur l'effectif (cf. `core/modes/ssvep_mesure.py`).
-        ("n_essais", "{:d} essais"),
-        ("n_emis", "{:d} avec décision"),
-        ("n_justes", "dont {:d} justes"),
-        ("n_artefacts", "{:d} rejetés (artefact)"),
+        ("n_essais", lambda v: tr("pages.mesure.detail.n_essais", n=f"{v:d}")),
+        ("n_emis", lambda v: tr("pages.mesure.detail.n_emis", n=f"{v:d}")),
+        ("n_justes", lambda v: tr("pages.mesure.detail.n_justes", n=f"{v:d}")),
+        ("n_artefacts", lambda v: tr("pages.mesure.detail.n_artefacts", n=f"{v:d}")),
         # ⚠️ Ces deux-là ne sont PAS dans `n_essais` — ils ont été joués et jetés avant le calcul.
         # Les afficher est ce qui empêche de citer « 26 essais » pour une séance qui en a joué 36 ;
         # le verdict les nomme aussi, en toutes lettres.
-        ("n_perdus", "{:d} joués mais perdus (EEG hors tampon)"),
-        ("n_chauffe", "{:d} jetés (arrivés pendant la chauffe)"),
-        ("fenetres_repos", "bruit de fond pris sur {:d} fenêtres au repos"),
+        ("n_perdus", lambda v: tr("pages.mesure.detail.n_perdus", n=f"{v:d}")),
+        ("n_chauffe", lambda v: tr("pages.mesure.detail.n_chauffe", n=f"{v:d}")),
+        ("fenetres_repos", lambda v: tr("pages.mesure.detail.fenetres_repos", n=f"{v:d}")),
     )
 
     def __init__(self, spec, console, mode=None):
@@ -108,14 +112,17 @@ class MesurePage(QWidget):
         self._propose = None
 
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton("← Modes")
+        self.bouton_retour = QPushButton(tr("pages.commun.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        entete.addWidget(QLabel(f"<b>{spec['label']}</b>"))
+        # Le titre vient du contrat ; le gras est du style, pas une balise à traduire.
+        titre = QLabel(spec["label"])
+        titre.setStyleSheet("font-weight: bold;")
+        entete.addWidget(titre)
         entete.addStretch(1)
 
         # --- écran 1 : avant (ou de nouveau, une fois la séance TERMINÉE) --------------------
-        self.bloc_avant = QGroupBox("Avant de commencer")
+        self.bloc_avant = QGroupBox(tr("pages.commun.avant_de_commencer"))
         self.briefing = QLabel("\n".join(spec.get("briefing") or ()))
         self.briefing.setWordWrap(True)
         self.audio_avertissement = QLabel("")
@@ -132,15 +139,10 @@ class MesurePage(QWidget):
                 # annonçaient sans son une « seconde moitié les yeux fermés » qui n'existe pas —
                 # on y fixe une fenêtre, ou on lit une consigne (constat I3 de la revue).
                 self.audio_avertissement.setText(
-                    f"⚠ Pas de son sur cette machine ({console.beeps.raison}). Or une partie de "
-                    f"cette séance se fait LES YEUX FERMÉS : sans top, tu ne sauras pas quand "
-                    f"rouvrir. Fais-toi accompagner par quelqu'un qui lit l'écran et te le dit à "
-                    f"voix haute, ou branche une sortie audio avant de commencer.")
+                    tr("pages.mesure.sans_son_yeux_fermes", raison=console.beeps.raison))
             else:
                 self.audio_avertissement.setText(
-                    f"⚠ Pas de son sur cette machine ({console.beeps.raison}) : les tops qui "
-                    f"annoncent chaque étape ne sonneront pas. La séance se déroule quand même "
-                    f"— suis la consigne écrite à l'écran.")
+                    tr("pages.mesure.sans_son", raison=console.beeps.raison))
         self.formulaire = ParamsForm(list(spec.get("params") or ()))
         # Cette page n'APPLIQUE aucun réglage en cours de route : une mesure se règle avant de
         # partir, et son formulaire est soumis avec `start_mesure`. Le bouton du formulaire
@@ -160,9 +162,7 @@ class MesurePage(QWidget):
             # séance, et Qt ne réactive pas un enfant qu'on a désactivé lui-même.
             self.formulaire.champs[cle].setEnabled(False)
         self.origine = QLabel(
-            f"Les réglages grisés sont ceux de la page « {mode['label']} » : ils se changent "
-            f"là-bas, bloc « 1. Régler », et ce test part avec eux. Ici, seule la longueur du "
-            f"test se règle." if self.depuis_le_mode else "")
+            tr("pages.mesure.origine", mode=mode["label"]) if self.depuis_le_mode else "")
         self.origine.setWordWrap(True)
         self.origine.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.origine.setVisible(bool(self.depuis_le_mode))
@@ -191,7 +191,7 @@ class MesurePage(QWidget):
         self.avis = QLabel("")
         self.avis.setWordWrap(True)
         self.avis.setStyleSheet("color: #e5484d;")
-        self.bouton_commencer = QPushButton("Commencer")
+        self.bouton_commencer = QPushButton(tr("pages.commun.commencer"))
         self.bouton_commencer.clicked.connect(self._commencer)
         avant = QVBoxLayout(self.bloc_avant)
         avant.addWidget(self.briefing)
@@ -207,7 +207,7 @@ class MesurePage(QWidget):
         # --- écran 2 : pendant ----------------------------------------------------------------
         # ⚠️ « Séance », pas « mesure » : le mot du moteur (spec §6). Un étudiant qui clique
         # « Tester » ou « Vérifier le casque » ne lance pas « une mesure ».
-        self.bloc_pendant = QGroupBox("Séance en cours")
+        self.bloc_pendant = QGroupBox(tr("pages.commun.seance_en_cours"))
         self.consigne = QLabel("")
         self.consigne.setWordWrap(True)
         self.consigne.setStyleSheet("font-size: 22px; font-weight: bold;")
@@ -221,7 +221,7 @@ class MesurePage(QWidget):
         self.progression = QLabel("")
         self.barre = QProgressBar()
         self.barre.setTextVisible(False)
-        self.bouton_abandon = QPushButton("Abandonner")
+        self.bouton_abandon = QPushButton(tr("pages.commun.abandonner"))
         self.bouton_abandon.clicked.connect(self._abandonner)
         pendant = QVBoxLayout(self.bloc_pendant)
         pendant.addWidget(self.consigne)
@@ -233,7 +233,7 @@ class MesurePage(QWidget):
         pendant.addWidget(self.bouton_abandon)
 
         # --- écran 3 : après ------------------------------------------------------------------
-        self.bloc_apres = QGroupBox("Résultat")
+        self.bloc_apres = QGroupBox(tr("pages.commun.resultat"))
         # La BARRIÈRE, en tête et en gras. Elle passe AVANT le verdict détaillé parce que c'est la
         # seule chose à savoir quand elle n'est pas franchie : on s'arrête et on reprend le
         # montage. Un chiffre lu d'abord invite à négocier avec.
@@ -268,9 +268,7 @@ class MesurePage(QWidget):
         # Un résultat retrouvé en REVENANT sur la page date d'avant : on a pu changer les réglages
         # entre-temps (« ← SSVEP », une autre fréquence, « Tester »), et le vert d'hier coiffait la
         # page comme s'il décrivait ceux d'aujourd'hui (constat M1 de la revue).
-        self.precedent = QLabel(
-            "Résultat d'une séance PRÉCÉDENTE : il ne décrit pas forcément tes réglages actuels. "
-            "« Commencer », plus bas, relance sur ceux-ci.")
+        self.precedent = QLabel(tr("pages.mesure.precedent"))
         self.precedent.setWordWrap(True)
         self.precedent.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.precedent.setVisible(False)
@@ -337,11 +335,10 @@ class MesurePage(QWidget):
         # la confirmation, comme un REFUS du moteur, disparaissaient en 100 ms. Seuls un nouveau
         # geste, une nouvelle séance ou une nouvelle proposition le remplacent.
         if ack.get("accepted"):
-            mode = propose.get("mode_label", propose["mode"])
-            self.reponse_pic.setText(
-                f"« {propose['label']} » = {propose['valeur']:g} {propose.get('unite', '')} "
-                f"retenu pour « {mode} ». Sur la page « {mode} », bloc « 1. Régler », "
-                f"« Proposer » en tient compte pour choisir des fréquences qui évitent ton alpha.")
+            self.reponse_pic.setText(tr(
+                "pages.mesure.applique", label=propose["label"],
+                valeur=f"{propose['valeur']:g}", unite=propose.get("unite", ""),
+                mode=propose.get("mode_label", propose["mode"])))
             self.reponse_pic.setStyleSheet("color: #3fae5a;")
         else:
             self.reponse_pic.setText(ack.get("reason", ""))
@@ -381,9 +378,11 @@ class MesurePage(QWidget):
         """
         if freqs:
             valeurs = " · ".join(f"{float(f):g}" for f in freqs)
-            origine = (f" — celles de la page « {self.mode['label']} », qui se changent là-bas"
-                       if self.mode else "")
-            self.frequences.setText(f"Fréquences testées : {valeurs} Hz{origine}.")
+            if self.mode:
+                self.frequences.setText(tr("pages.mesure.frequences_du_mode", valeurs=valeurs,
+                                           mode=self.mode["label"]))
+            else:
+                self.frequences.setText(tr("pages.mesure.frequences", valeurs=valeurs))
         else:
             self.frequences.setText("")
         self.frequences.setVisible(bool(freqs))
@@ -450,25 +449,22 @@ class MesurePage(QWidget):
         if en_cours:
             self._precedent = False
         self.precedent.setVisible(termine and self._precedent)
-        self.bloc_apres.setTitle("Résultat précédent" if self._precedent else "Résultat")
+        self.bloc_apres.setTitle(tr("pages.mesure.resultat_precedent") if self._precedent
+                                 else tr("pages.commun.resultat"))
 
         calib = (state or {}).get("calibration") or {}
         attend = (self.mode is not None and calib.get("mode_id") == self.mode.get("id")
                   and bool(calib.get("candidat")))
-        self.candidat.setText(
-            "⚠ Le modèle que tu viens d'entraîner n'est PAS encore enregistré : ce test porte sur "
-            "le modèle affiché ci-dessous, pas sur lui. « Enregistrer le modèle » d'abord (page "
-            "« Entraîner »), puis reviens tester." if attend else "")
+        self.candidat.setText(tr("pages.mesure.candidat") if attend else "")
         self.candidat.setVisible(attend)
 
         # L'unité de `essai`/`total`, publiée par le MOTEUR (« manche », « essai », « cycle »…) :
         # la page n'en connaît aucune. « étape » si un protocole ne la publie pas.
-        unite = (etat or {}).get("unite") or "étape"
+        unite = (etat or {}).get("unite") or tr("pages.mesure.unite_defaut")
         if etat is not None:
-            self.duree.setText(
-                f"Durée, stabilisation du casque comprise : "
-                f"≈ {etat.get('duree_estimee_s', 0.0):.0f} s, pour "
-                f"{compter(int(etat.get('total', 0)), unite)}.")
+            self.duree.setText(tr(
+                "pages.mesure.duree", secondes=f"{etat.get('duree_estimee_s', 0.0):.0f}",
+                compte=compter(int(etat.get("total", 0)), unite)))
         else:
             self.duree.setText("")
 
@@ -485,10 +481,12 @@ class MesurePage(QWidget):
             self.consigne.setText(etat.get("instruction") or "")
             self.etape.setText(etat.get("classe") or "")
             self.rappel.setText(etat.get("rappel") or "")
-            self.decompte.setText(f"{float(etat.get('restant_s', 0.0)):.1f} s")
+            self.decompte.setText(tr(
+                "pages.commun.decompte", s=f"{float(etat.get('restant_s', 0.0)):.1f}"))
             fait = int(etat.get("essai", 0))
             total = int(etat.get("total", 0))
-            self.progression.setText(f"{compter(fait, unite)} sur {total}")
+            self.progression.setText(tr("pages.mesure.progression",
+                                        compte=compter(fait, unite), total=total))
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(fait, max(total, 1)))
         else:
@@ -504,7 +502,8 @@ class MesurePage(QWidget):
             # surtout pas de « barrière non franchie », qui accuserait le montage alors que la
             # mesure n'a simplement pas été jouée jusqu'au bout.
             self.barriere.setText("")
-            interruption = f"Séance interrompue : {probleme or 'aucun verdict produit'}"
+            interruption = tr("pages.mesure.interrompue",
+                              raison=probleme or tr("pages.mesure.aucun_verdict"))
             # En face et en gris : aucun verdict, donc aucune couleur à donner.
             self.bloc.montrer({"verdict": interruption})
             self.verdict.setText(interruption)
@@ -517,12 +516,12 @@ class MesurePage(QWidget):
         self._montrer_barriere(resultat)
         self.verdict.setText(resultat.get("verdict", ""))
 
-        morceaux = [gabarit.format(resultat[cle]) for cle, gabarit in self.DETAILS
+        morceaux = [texte(resultat[cle]) for cle, texte in self.DETAILS
                     if resultat.get(cle) is not None]
         if resultat.get("voies"):
             # Les voies moyennées viennent du MOTEUR : l'écran d'origine imprimait « PO7/Oz/PO8 »
             # alors qu'il en moyennait quatre, et personne ne l'a vu pendant des mois.
-            morceaux.append("moyenne sur " + "/".join(resultat["voies"]))
+            morceaux.append(tr("pages.mesure.detail.voies", voies="/".join(resultat["voies"])))
         self.details.setText(" — ".join(morceaux))
         self.honnetete.setText(resultat.get("honnetete") or "")
         self._montrer_proposition(resultat.get("reglage_propose"))
@@ -541,13 +540,10 @@ class MesurePage(QWidget):
             self.barriere.setText("")
             return
         if franchie:
-            self.barriere.setText("BARRIÈRE FRANCHIE — la séance peut continuer.")
+            self.barriere.setText(tr("pages.mesure.barriere_franchie"))
             self.barriere.setStyleSheet("font-size: 15px; font-weight: bold; color: #3fae5a;")
         else:
-            self.barriere.setText(
-                "🛑 BARRIÈRE NON FRANCHIE — ARRÊTE LA SÉANCE ICI. Tant que ce contrôle ne passe "
-                "pas, aucun test et aucun décodage ne veulent rien dire : ils lisent "
-                "tous ce même signal. Reprends le montage, puis relance CE contrôle.")
+            self.barriere.setText(tr("pages.mesure.barriere_non_franchie"))
             self.barriere.setStyleSheet("font-size: 15px; font-weight: bold; color: #e5484d;")
 
     def _montrer_proposition(self, propose):
@@ -566,7 +562,7 @@ class MesurePage(QWidget):
         self._propose = propose
         self.appliquer_pic.setVisible(bool(propose))
         if propose:
-            self.appliquer_pic.setText(
-                f"Appliquer « {propose['label']} » = {propose['valeur']:g} "
-                f"{propose.get('unite', '')} à « "
-                f"{propose.get('mode_label', propose['mode'])} »")
+            self.appliquer_pic.setText(tr(
+                "pages.mesure.appliquer", label=propose["label"],
+                valeur=f"{propose['valeur']:g}", unite=propose.get("unite", ""),
+                mode=propose.get("mode_label", propose["mode"])))

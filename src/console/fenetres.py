@@ -29,6 +29,7 @@ from collections import deque
 from PySide6.QtCore import QObject, QProcess, Signal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 from stimulus import registry as stimulus_registry  # noqa: E402
 
 # Combien de lignes de sortie de la fenêtre on garde pour l'écran. Assez pour porter le message
@@ -82,7 +83,7 @@ class LanceurFenetre(QObject):
         if self.probleme:
             return self.probleme, True
         if self._proc is not None:
-            return f"fenêtre {self._quoi} en cours — ne la ferme pas à la main pendant la séance", False
+            return tr("pages.fenetre.en_cours", quoi=self._quoi), False
         # Ni problème ni fenêtre en cours : reste le BILAN de la dernière, s'il y en a un. Il
         # n'est PAS une alerte — une séance qui s'est bien passée le dit aussi, et c'est même
         # tout l'intérêt : « 0 sautée » doit se LIRE, pas se deviner.
@@ -99,10 +100,9 @@ class LanceurFenetre(QObject):
         fenêtre exactement comme un refus de commande, sans se demander lequel des deux il tient.
         """
         if self._proc is not None:
-            return self._refuser(
-                f"⚠ une fenêtre tourne déjà ({self._quoi}) — ferme-la avant d'en lancer une "
-                f"autre. Deux fenêtres publieraient les mêmes marqueurs sous le même nom, et le "
-                f"moteur mélangerait les deux séances sans rien signaler.")
+            # La raison reste DITE (deux fenêtres, deux séances mélangées en silence) : sans
+            # elle, « ferme-la » ressemble à une manie de l'interface.
+            return self._refuser(tr("pages.fenetre.deja_une", quoi=self._quoi))
         try:
             argv = stimulus_registry.commande(stimulus_id, calibrer=calibrer, options=options)
         except KeyError as e:
@@ -115,7 +115,8 @@ class LanceurFenetre(QObject):
         self.resume = ""          # le bilan de la PRÉCÉDENTE ne doit pas coiffer celle-ci
         self._lignes.clear()
         self._tue = False
-        self._quoi = f"{label or stimulus_id}{' (entraînement)' if calibrer else ''}"
+        self._quoi = (tr("pages.fenetre.quoi_entrainement", quoi=label or stimulus_id)
+                      if calibrer else (label or stimulus_id))
         self.numero += 1
         proc = self._fabrique()
         # Les deux canaux fusionnés : ce qu'on cherche à montrer est le message d'erreur d'un
@@ -206,10 +207,12 @@ class LanceurFenetre(QObject):
         if self._tue:
             # Nous l'avons tué (fermeture de la console, ou geste explicite) : rien à signaler.
             self._tue = False
-        elif code != 0 or brutal:
-            self.probleme = (f"⚠ la fenêtre {quoi} s'est arrêtée anormalement "
-                             f"(code {code}{', arrêt brutal' if brutal else ''}) — "
-                             f"{self._derniere_sortie()}")
+        elif brutal:
+            self.probleme = tr("pages.fenetre.anormale_brutale", quoi=quoi, code=code,
+                               sortie=self._derniere_sortie())
+        elif code != 0:
+            self.probleme = tr("pages.fenetre.anormale", quoi=quoi, code=code,
+                               sortie=self._derniere_sortie())
         else:
             # 🔴 UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance).
             # Les lignes étaient déjà retenues — et jetées, parce que seule une mort anormale les
@@ -223,7 +226,8 @@ class LanceurFenetre(QObject):
             # joignait les six lignes retenues, ce qui est juste pour une mort anormale (le
             # traceback a besoin de son contexte) et faux ici : en séance (2026-09-22), le bandeau
             # portait les journaux bloc par bloc de la séance avant d'arriver au chiffre utile.
-            self.resume = (f"fenêtre {quoi} fermée — {self._derniere_sortie(BILAN_LIGNES)}"
+            self.resume = (tr("pages.fenetre.fermee", quoi=quoi,
+                              bilan=self._derniere_sortie(BILAN_LIGNES))
                            if self._lignes else "")
         self.change.emit()
 
@@ -241,15 +245,14 @@ class LanceurFenetre(QObject):
             return
         quoi, self._quoi = self._quoi, ""
         self._proc = None
-        self.probleme = (f"⚠ la fenêtre {quoi} n'a pas DÉMARRÉ (exécutable introuvable ou "
-                         f"dépendance manquante) — {self._derniere_sortie()}")
+        self.probleme = tr("pages.fenetre.pas_demarre", quoi=quoi,
+                           sortie=self._derniere_sortie())
         self.change.emit()
 
     def _derniere_sortie(self, n=None):
         """Les dernières lignes du processus (`n` au plus), pour que le message dise QUOI réparer."""
         if not self._lignes:
-            return ("aucune sortie ; relance-la à la main dans un terminal pour voir son "
-                    "message : `python src/stimulus/<mode>.py`")
+            return tr("pages.fenetre.aucune_sortie")
         lignes = list(self._lignes)
         return " · ".join(lignes[-n:] if n else lignes)
 

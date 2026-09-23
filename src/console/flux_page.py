@@ -22,6 +22,7 @@ trie pour que la liste soit stable d'une ouverture à l'autre, et **on ne lève 
 casse de mille façons, aucune ne doit fermer la console.
 """
 
+import html
 import os
 import sys
 
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QPlain
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 # La borne de découverte vient du MOTEUR, importée plutôt que recopiée : elle a été MESURÉE
 # (cf. son commentaire dans `core/markers.py` — avec `minimum=32`, la borne EST le coût, pas le
 # pire cas), et deux valeurs pour la même décision finiraient par diverger.
@@ -53,6 +55,29 @@ ECHANTILLONS_PAR_TOUR = 64
 # mesuré d'une connexion locale et borne le pire cas.
 OUVERTURE_S = 2.0
 
+# Entre le nom, le type et les voies d'un flux dans la liste. Une constante, parce que
+# `chercher()` relit le NOM dans l'étiquette affichée en coupant sur elle.
+SEPARATEUR = "  ·  "
+
+
+def _bulle(texte):
+    """Une bulle « ⓘ » qui affiche `texte` au survol — la même forme que les aides des réglages.
+
+    Pour de l'EXPLICATION seulement (pourquoi la page existe, à quoi sert un fichier) : un
+    résultat, un refus ou un avertissement reste écrit en toutes lettres sur la page.
+    `<qt>` fait passer l'infobulle en texte riche, donc elle revient à la ligne au lieu de
+    s'étaler sur tout l'écran ; `html.escape` garde les « < » et « & » du texte tels quels.
+    """
+    bulle = QLabel("ⓘ")
+    bulle.setStyleSheet("color: #4c8dff;")
+    bulle.setCursor(Qt.WhatsThisCursor)
+    bulle.setToolTip(_riche(texte))
+    return bulle
+
+
+def _riche(texte):
+    return "<qt>" + html.escape(texte) + "</qt>"
+
 
 def _voies_de(info):
     """Les étiquettes de voies déclarées par le flux, ou des numéros. Ne lève jamais.
@@ -75,7 +100,7 @@ def _voies_de(info):
     except Exception:  # noqa: BLE001 - des métadonnées illisibles ne valent pas mieux qu'absentes
         voies = []
     if len(voies) != total or not all(voies):
-        return [f"voie {i}" for i in range(total)]
+        return [tr("pages.flux.voie_numero", i=i) for i in range(total)]
     return voies
 
 
@@ -212,25 +237,29 @@ class FluxPage(QWidget):
         self._diagnostic_enr = ""     # côté enregistrement : effacé par le clic suivant
 
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton("← Modes")
+        self.bouton_retour = QPushButton(tr("pages.commun.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        entete.addWidget(QLabel("<b>Ce que voit ton application</b>"))
+        titre = QLabel(tr("pages.flux.titre"))
+        titre.setStyleSheet("font-weight: bold;")
+        entete.addWidget(titre)
         entete.addStretch(1)
 
-        explication = QLabel(
-            "Ce panneau lit le réseau LSL <b>comme le ferait ton application</b> — il n'a aucun "
-            "accès privilégié au moteur. Ce qui s'affiche ici, un client Unity, Python ou MATLAB "
-            "le reçoit aussi ; ce qui reste vide ici est vide pour lui aussi. Du code qui lit un "
-            "flux : le dossier « examples/ » du dépôt (Python, Unity).")
+        # L'essentiel reste EN FACE — « ce qui est vide ici est vide pour ton application » est
+        # la clé de lecture de toute la page. Le détail (aucun accès privilégié, où trouver du
+        # code client) passe dans la bulle.
+        explication = QLabel(tr("pages.flux.explication"))
         explication.setWordWrap(True)
         explication.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        ligne_explication = QHBoxLayout()
+        ligne_explication.addWidget(explication, 1)
+        ligne_explication.addWidget(_bulle(tr("pages.flux.explication_bulle")))
 
-        self.bloc_flux = QGroupBox("Flux visibles sur le réseau")
+        self.bloc_flux = QGroupBox(tr("pages.flux.bloc_flux"))
         self.choix = QComboBox()
         self.choix.setMinimumWidth(340)
         self.choix.activated.connect(self._choisir_index)
-        self.bouton_chercher = QPushButton("Chercher les flux")
+        self.bouton_chercher = QPushButton(tr("pages.flux.chercher"))
         self.bouton_chercher.clicked.connect(self.chercher)
         ligne_choix = QHBoxLayout()
         ligne_choix.addWidget(self.choix, 1)
@@ -258,15 +287,16 @@ class FluxPage(QWidget):
         # touche jamais au disque, exactement comme pour `save_calibration`. Elle envoie
         # `start_enregistrement` / `stop_enregistrement` et LIT où ça écrit — elle ne compose
         # aucun chemin et n'ouvre aucun fichier.
-        self.bloc_enregistrement = QGroupBox("Enregistrer cette séance")
-        pourquoi = QLabel(
-            "Écrit les verdicts du moteur dans un fichier, une ligne par décision publiée, "
-            "horodatée sur la MÊME horloge que le « Journal de séance » de la fenêtre de "
-            "stimulus. C'est le second des deux fichiers qu'il faut pour dépouiller une séance "
-            "après coup : sans lui, il ne reste que ce qui a défilé à l'écran.")
+        self.bloc_enregistrement = QGroupBox(tr("pages.flux.bloc_enregistrement"))
+        # Ce que fait le bouton, en face ; pourquoi ce fichier compte (l'horloge commune avec le
+        # journal de la fenêtre), dans la bulle.
+        pourquoi = QLabel(tr("pages.flux.enregistrement_quoi"))
         pourquoi.setWordWrap(True)
         pourquoi.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-        self.bouton_enregistrer = QPushButton("Enregistrer les verdicts")
+        ligne_pourquoi = QHBoxLayout()
+        ligne_pourquoi.addWidget(pourquoi, 1)
+        ligne_pourquoi.addWidget(_bulle(tr("pages.flux.enregistrement_bulle")))
+        self.bouton_enregistrer = QPushButton(tr("pages.flux.enregistrer_verdicts"))
         self.bouton_enregistrer.clicked.connect(self._basculer_enregistrement)
         self.etat_enregistrement = QLabel("")
         self.etat_enregistrement.setWordWrap(True)
@@ -278,13 +308,13 @@ class FluxPage(QWidget):
         ligne_enr.addWidget(self.bouton_enregistrer)
         ligne_enr.addStretch(1)
         enr_layout = QVBoxLayout(self.bloc_enregistrement)
-        enr_layout.addWidget(pourquoi)
+        enr_layout.addLayout(ligne_pourquoi)
         enr_layout.addLayout(ligne_enr)
         enr_layout.addWidget(self.etat_enregistrement)
 
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
-        layout.addWidget(explication)
+        layout.addLayout(ligne_explication)
         layout.addWidget(self.bloc_flux, 1)
         layout.addWidget(self.bloc_enregistrement)
 
@@ -327,9 +357,10 @@ class FluxPage(QWidget):
                 self._ouvrir(self._infos[index])
                 return
             if courant:
-                nom = courant.split("  ·  ")[0]
-                self._dire_probleme(f"« {nom} » n'est plus visible sur le réseau (mode arrêté ou "
-                                    f"« publié » décoché ?) — choisis un flux dans la liste.")
+                # Le séparateur est posé par `_etiquette`, hors du texte traduit : le nom se
+                # relit donc quelle que soit la langue.
+                nom = courant.split(SEPARATEUR)[0]
+                self._dire_probleme(tr("pages.flux.plus_visible", nom=nom))
                 return
         self._dire_etat()
 
@@ -342,9 +373,10 @@ class FluxPage(QWidget):
         n'existe sous ce nom nulle part.
         """
         try:
-            return f"{info.name()}  ·  {info.type()}  ·  {info.channel_count()} voie(s)"
+            return SEPARATEUR.join((info.name(), info.type(),
+                                    tr("pages.flux.n_voies", n=info.channel_count())))
         except Exception:  # noqa: BLE001 - un StreamInfo illisible ne doit pas vider la liste
-            return "flux illisible"
+            return tr("pages.flux.illisible")
 
     def choisir(self, nom):
         """Ouvre le flux qui porte ce NOM. True si un inlet a été ouvert.
@@ -360,7 +392,7 @@ class FluxPage(QWidget):
             info = next((i for i in self._infos if i.name() == nom), None)
         if info is None:
             self._fermer()
-            self._dire_probleme(f"aucun flux nommé « {nom} » sur le réseau en ce moment.")
+            self._dire_probleme(tr("pages.flux.aucun_nomme", nom=nom))
             return False
         return self._ouvrir(info)
 
@@ -382,8 +414,8 @@ class FluxPage(QWidget):
         except Exception as e:  # noqa: BLE001 - un émetteur qui meurt pendant la connexion est le
             # cas NORMAL d'une séance (fenêtre fermée, moteur relancé), pas un incident de console.
             self._inlet = None
-            self._dire_probleme(f"« {info.name()} » n'a pas pu être ouvert "
-                                f"({type(e).__name__} : {e}). Reclique « Chercher les flux ».")
+            self._dire_probleme(tr("pages.flux.ouverture_ratee", nom=info.name(),
+                                   erreur=f"{type(e).__name__} : {e}"))
             return False
         self._derniers = []
         self.lignes.setPlainText("")
@@ -425,12 +457,12 @@ class FluxPage(QWidget):
             # ⚠️ **LE message de cette page**, celui qui distingue « mon appli ne reçoit plus »
             # de « mon appli n'a jamais reçu ». Sans `_dire_probleme`, le tour suivant — 100 ms
             # plus tard — le remplaçait par « N flux visible(s) — choisis-en un ».
-            self._dire_probleme(
-                f"« {nom} » a disparu du réseau ({type(e).__name__} : {e}). Le moteur a-t-il été "
-                f"arrêté, ou le mode dépublié ? Reclique « Chercher les flux » pour rouvrir.")
+            self._dire_probleme(tr("pages.flux.disparu", nom=nom,
+                                   erreur=f"{type(e).__name__} : {e}"))
             return
         voies = self._inlet.voies
-        self.entetes.setText("voies : " + (" · ".join(voies) if voies else "(non déclarées)"))
+        self.entetes.setText(tr("pages.flux.voies", liste=" · ".join(voies)) if voies
+                             else tr("pages.flux.voies_non_declarees"))
         for horodatage, valeurs in recus:
             self._derniers.append(_ligne(horodatage, valeurs))
         if recus:
@@ -455,9 +487,12 @@ class FluxPage(QWidget):
         plus le DIAGNOSTIC retenu, qui passe devant les deux phrases neutres.
         """
         if self._inlet is not None:
-            fin = (f"{recus} échantillon(s) au dernier tour" if recus
-                   else "rien depuis le dernier tour — ce mode est-il démarré et publié ?")
-            self.etat.setText(f"ouvert : {self._inlet.nom} ({self._inlet.type}) — {fin}")
+            if recus:
+                self.etat.setText(tr("pages.flux.ouvert_recoit", nom=self._inlet.nom,
+                                     type=self._inlet.type, n=recus))
+            else:
+                self.etat.setText(tr("pages.flux.ouvert_muet", nom=self._inlet.nom,
+                                     type=self._inlet.type))
             return
         if self._diagnostic:
             # Un flux OUVERT passe devant (ci-dessus) : il répond à la question mieux que
@@ -466,14 +501,9 @@ class FluxPage(QWidget):
             self.etat.setText(self._diagnostic)
             return
         if not self._infos:
-            self.etat.setText(
-                "Aucun flux visible sur le réseau. Démarre un mode dans la grille (et laisse la "
-                "case « publié » cochée), puis reclique « Chercher les flux ». Si rien n'apparaît "
-                "alors qu'un mode décode, c'est que la panne est côté RÉSEAU, pas côté décodage — "
-                "et c'est précisément ce que cette page sert à voir.")
+            self.etat.setText(tr("pages.flux.aucun_flux"))
             return
-        self.etat.setText(f"{len(self._infos)} flux visible(s) — choisis-en un dans la liste "
-                          f"pour voir ce qu'il envoie.")
+        self.etat.setText(tr("pages.flux.a_choisir", n=len(self._infos)))
 
     # --- enregistrer la séance : la console DEMANDE, le moteur écrit -------------------------
 
@@ -492,16 +522,14 @@ class FluxPage(QWidget):
         # Ce clic-ci reprend la question à zéro : le diagnostic du précédent a fait son temps.
         self._diagnostic_enr = ""
         if self.commande is None:
-            self._dire_probleme_enr("aucun moteur (mode test) : rien à enregistrer.")
+            self._dire_probleme_enr(tr("pages.flux.sans_moteur"))
             return
         if self._enregistre:
             ack = self.commande("stop_enregistrement")
         else:
             flux = self._inlet.nom if self._inlet is not None else ""
             if not flux:
-                self._dire_probleme_enr(
-                    "Choisis d'abord le flux à enregistrer dans la liste ci-dessus : le moteur "
-                    "enregistre les verdicts d'UN mode, pas tout le réseau.")
+                self._dire_probleme_enr(tr("pages.flux.choisir_avant"))
                 return
             ack = self.commande("start_enregistrement", stream=flux)
         if not ack.get("accepted"):
@@ -528,8 +556,8 @@ class FluxPage(QWidget):
         refuse de créer. Ce champ-là, lui, est écrit par le fil qui écrit le fichier.
         """
         self._enregistre = bool((etat or {}).get("actif"))
-        self.bouton_enregistrer.setText(
-            "Arrêter l'enregistrement" if self._enregistre else "Enregistrer les verdicts")
+        self.bouton_enregistrer.setText(tr("pages.flux.arreter_enregistrement") if self._enregistre
+                                        else tr("pages.flux.enregistrer_verdicts"))
         if (etat or {}).get("probleme"):
             # ⚠️ **Une INTERRUPTION passe devant un diagnostic retenu**, et c'est la seule chose
             # qui le fasse. C'est une nouvelle du moteur sur un fichier qui existe, elle annonce
@@ -537,9 +565,9 @@ class FluxPage(QWidget):
             # recliquant : le masquer un instant ne coûte rien, masquer celle-ci coûterait la
             # séance.
             self._diagnostic_enr = ""
-            self.etat_enregistrement.setText(
-                f"⚠ enregistrement INTERROMPU : {etat['probleme']} — {etat.get('lignes', 0)} "
-                f"verdict(s) tout de même sauvés dans {etat.get('chemin', '')}")
+            self.etat_enregistrement.setText(tr(
+                "pages.flux.enregistrement_interrompu", probleme=etat["probleme"],
+                n=etat.get("lignes", 0), chemin=etat.get("chemin", "")))
             self.etat_enregistrement.setStyleSheet("color: #e5484d;")
             return
         # Le BOUTON suit toujours le moteur (ci-dessus) : c'est lui qui dit ce que fera le clic
@@ -549,14 +577,13 @@ class FluxPage(QWidget):
             return
         self.etat_enregistrement.setStyleSheet("color: #8a8f9c;")
         if self._enregistre:
-            self.etat_enregistrement.setText(
-                f"en cours — {etat.get('lignes', 0)} verdict(s) écrits dans "
-                f"{etat.get('chemin', '')}")
+            self.etat_enregistrement.setText(tr(
+                "pages.flux.enregistrement_en_cours", n=etat.get("lignes", 0),
+                chemin=etat.get("chemin", "")))
         else:
-            self.etat_enregistrement.setText(
-                f"terminé — {etat.get('lignes', 0)} verdict(s) dans {etat.get('chemin', '')}. "
-                f"Pour dépouiller la séance, ce fichier se joint au journal de la fenêtre de "
-                f"stimulus sur la colonne « t ».")
+            self.etat_enregistrement.setText(tr(
+                "pages.flux.enregistrement_termine", n=etat.get("lignes", 0),
+                chemin=etat.get("chemin", "")))
 
     # --- le cycle de la page ------------------------------------------------------------------
 

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, Q
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import SPAN_SEUILS, classement_relatif, span_correlation  # noqa: E402
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
 
 
@@ -60,7 +61,7 @@ class TracesView(QWidget):
         self.plot.setMenuEnabled(False)
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.showGrid(x=True, y=False, alpha=0.2)
-        self.plot.setLabel("bottom", "secondes")
+        self.plot.setLabel("bottom", tr("pages.traces.axe_temps"))
         self.courbes = [self.plot.plot(pen=pg.mkPen(width=1)) for _ in self.ch_names]
         self._pose_axe()
 
@@ -96,11 +97,10 @@ class TracesView(QWidget):
         cacher, c'est le signal qu'on vient chercher ici — celle-là est bien plus agitée que les
         sept autres, donc son contact est suspect.
         """
-        texte = (f"signal BRUT, non filtré · un couloir = {self.ecart:g} µV "
-                 f"· {self.SECONDES:g} dernières secondes")
+        texte = tr("pages.traces.echelle", ecart=f"{self.ecart:g}",
+                   secondes=f"{self.SECONDES:g}")
         if rognees:
-            texte += (f"  ·  ⚠ hors couloir, tracé rogné : {', '.join(rognees)} — bien plus agité "
-                      f"que les autres voies (contact ? électrode décollée ?)")
+            texte += "  ·  " + tr("pages.traces.rognees", voies=", ".join(rognees))
         self.echelle.setText(texte)
 
     def _etendues(self, bloc):
@@ -201,7 +201,7 @@ class ActiveView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.verdict = QLabel("en attente")
+        self.verdict = QLabel(tr("pages.direct.en_attente"))
         self.verdict.setStyleSheet("font-size: 16px; font-weight: bold;")
         self.seuil = QLabel("")
         self.seuil.setStyleSheet("color: #8a8f9c;")
@@ -234,7 +234,8 @@ class ActiveView(QWidget):
     def update_from(self, mode_state):
         sortie = (mode_state or {}).get("output") or {}
         if not sortie:
-            self.verdict.setText(mode_state["instruction"] if mode_state else "en attente")
+            self.verdict.setText(mode_state["instruction"] if mode_state
+                                 else tr("pages.direct.en_attente"))
             return
         # L'ordre compte, et il va du plus SPÉCIFIQUE au plus prudent. `threshold` est la clé qui
         # autorise à parler de seuil : sans elle, aucun repli sur une constante — c'est
@@ -253,8 +254,8 @@ class ActiveView(QWidget):
         freqs = (mode_state.get("params") or {}).get("freqs") or []
         scores = sortie.get("scores") or []
         seuil = float(sortie.get("threshold", Z_MIN))
-        self._assure(len(scores), [f"{f:g} Hz" for f in freqs])
-        self.seuil.setText(f"échelle z · seuil {seuil:g} — un score au-dessus déclenche")
+        self._assure(len(scores), [tr("pages.direct.frequence", hz=f"{f:g}") for f in freqs])
+        self.seuil.setText(tr("pages.direct.ssvep.echelle", seuil=f"{seuil:g}"))
 
         # L'échelle du remplissage va jusqu'à `SPAN_SEUILS` (2×) fois le seuil : une barre
         # pleine à ras le seuil laisserait croire qu'on est au maximum alors qu'on vient à peine
@@ -266,11 +267,12 @@ class ActiveView(QWidget):
 
         index = sortie.get("target_index", -1)
         if sortie.get("artifact"):
-            self.verdict.setText("ARTEFACT — fenêtre rejetée (mouvement ou clignement)")
+            self.verdict.setText(tr("pages.direct.ssvep.artefact"))
         elif index < 0:
-            self.verdict.setText(f"aucune cible (rien au-dessus de z={seuil:g})")
+            self.verdict.setText(tr("pages.direct.ssvep.aucune_cible", seuil=f"{seuil:g}"))
         else:
-            self.verdict.setText(f"CIBLE {index} · {sortie.get('freq_hz', 0):g} Hz")
+            self.verdict.setText(tr("pages.direct.ssvep.cible", i=index,
+                                    hz=f"{sortie.get('freq_hz', 0):g}"))
 
     def _update_probas(self, mode_state, sortie):
         """Motor Imagery (et tout futur mode à vote de classe) : une probabilité par classe.
@@ -296,9 +298,11 @@ class ActiveView(QWidget):
         min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
         vote_connu = min_votes is not None and vote_len is not None
         self._assure(len(classes), classes)
-        regle = (f"puis {min_votes} fenêtres d'accord sur les {vote_len} dernières"
-                 if vote_connu else "puis un vote sur les fenêtres récentes")
-        self.seuil.setText(f"échelle probabilité · seuil {seuil:g} par fenêtre, {regle}")
+        if vote_connu:
+            self.seuil.setText(tr("pages.direct.mi.echelle", seuil=f"{seuil:g}",
+                                  min_votes=min_votes, vote_len=vote_len))
+        else:
+            self.seuil.setText(tr("pages.direct.mi.echelle_vote_inconnu", seuil=f"{seuil:g}"))
 
         for i, (_e, barre) in enumerate(self._barres):
             valeur = probas.get(classes[i], 0.0) if i < len(classes) else 0.0
@@ -306,15 +310,17 @@ class ActiveView(QWidget):
 
         index = sortie.get("intent_index", -1)
         if index < 0:
-            manque = (f"moins de {min_votes} des {vote_len} dernières fenêtres d'accord"
-                      if vote_connu else "pas assez de fenêtres récentes d'accord")
-            self.verdict.setText(f"— (vote non conclu : {manque})")
+            if vote_connu:
+                self.verdict.setText(tr("pages.direct.mi.non_conclu", min_votes=min_votes,
+                                        vote_len=vote_len))
+            else:
+                self.verdict.setText(tr("pages.direct.mi.non_conclu_vote_inconnu"))
         else:
             # « du vote » n'est pas décoratif : le moteur publie ici la moyenne des fenêtres qui
             # ont voté pour cette classe, pas la probabilité de la dernière fenêtre affichée
             # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
-            self.verdict.setText(f"INTENTION {sortie.get('label', '')} "
-                                 f"· confiance du vote {sortie.get('confidence', 0.0):.2f}")
+            self.verdict.setText(tr("pages.direct.mi.intention", label=sortie.get("label", ""),
+                                    confiance=f"{sortie.get('confidence', 0.0):.2f}"))
 
     def _update_correlations(self, mode_state, sortie):
         """c-VEP : une corrélation par cible, sur une échelle ABSOLUE bornée à 1.
@@ -347,11 +353,14 @@ class ActiveView(QWidget):
         min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
         vote_connu = min_votes is not None and vote_len is not None
 
-        self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
-        regle = (f", puis {min_votes} fenêtres d'accord sur les {vote_len} dernières"
-                 if vote_connu else ", puis un vote sur les fenêtres récentes")
-        self.seuil.setText(f"échelle corrélation (bornée à 1) · un gagnant doit dépasser "
-                           f"{corr_min:g} ET devancer le 2e de {marge:g}{regle}")
+        self._assure(len(scores), [tr("pages.direct.cible_score", i=i, score=f"{v:+.2f}")
+                                   for i, v in enumerate(scores)])
+        if vote_connu:
+            self.seuil.setText(tr("pages.direct.cvep.echelle", corr_min=f"{corr_min:g}",
+                                  marge=f"{marge:g}", min_votes=min_votes, vote_len=vote_len))
+        else:
+            self.seuil.setText(tr("pages.direct.cvep.echelle_vote_inconnu",
+                                  corr_min=f"{corr_min:g}", marge=f"{marge:g}"))
 
         # ⚠️ L'échelle vit dans `console/__init__.py`, PAS ici : la TUILE l'appliquait de son côté
         # (`grid.ModeTile._apercu_scores`) et les deux copies différaient déjà d'un repli dans le
@@ -366,10 +375,11 @@ class ActiveView(QWidget):
             # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et -1
             # n'est pas la cible 0. Le motif est le seul contenu utile de cette ligne — c'est lui
             # qui dit s'il faut relancer l'émetteur, vérifier le nom du flux, ou saliner.
-            self.verdict.setText(f"— ({sortie.get('motif') or 'pas de décision'})")
+            motif = sortie.get("motif") or tr("pages.direct.cvep.pas_de_decision")
+            self.verdict.setText(f"— ({motif})")
         else:
-            self.verdict.setText(f"CIBLE {index} · corrélation "
-                                 f"{sortie.get('confidence', 0.0):+.2f}")
+            self.verdict.setText(tr("pages.direct.cvep.cible", i=index,
+                                    correlation=f"{sortie.get('confidence', 0.0):+.2f}"))
 
     def _update_selection(self, mode_state, sortie):
         """P300 (et tout futur mode qui ACCUMULE des preuves) : un score par cible, sans seuil.
@@ -401,23 +411,24 @@ class ActiveView(QWidget):
         # fonction que la tuile de la grille appelle (cf. sa docstring : écrite deux fois, elle a
         # déjà divergé une fois, et c'est ce chantier-ci qui a dû les remettre d'accord).
         parts = classement_relatif(scores)
-        self._assure(len(scores), [f"cible {i} · {v:+.2f}" for i, v in enumerate(scores)])
+        self._assure(len(scores), [tr("pages.direct.cible_score", i=i, score=f"{v:+.2f}")
+                                   for i, v in enumerate(scores)])
         for i, (_e, barre) in enumerate(self._barres):
             barre.setValue(int(parts[i] * 100))
 
-        sur = "" if n_flashes is None else f" sur {n_flashes} flash(s)"
-        self.seuil.setText(f"log-odds moyens par cible{sur} · AUCUN seuil : le moteur prend "
-                           f"celle qui domine. Barres relatives entre elles, pas une échelle "
-                           f"absolue")
+        # Le nombre de flashs, quand la sortie le porte : un fragment glissé dans les trois
+        # phrases ci-dessous (« CIBLE 3 sur 48 flash(s) »), vide sinon.
+        sur = "" if n_flashes is None else " " + tr("pages.direct.p300.sur", n=n_flashes)
+        self.seuil.setText(tr("pages.direct.p300.echelle", sur=sur))
 
         if index < 0:
             # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et
             # surtout -1 n'est pas la cible 0. Cf. `no_decision_index` dans les métadonnées du
             # flux, que ce texte ne fait que rendre lisible.
-            self.verdict.setText(f"— (manche non conclue{sur} : aucune cible ne s'est détachée)")
+            self.verdict.setText(tr("pages.direct.p300.non_conclu", sur=sur))
         else:
-            self.verdict.setText(f"CIBLE {index}{sur} · log-odds moyens "
-                                 f"{sortie.get('confidence', 0.0):+.2f}")
+            self.verdict.setText(tr("pages.direct.p300.cible", i=index, sur=sur,
+                                    score=f"{sortie.get('confidence', 0.0):+.2f}"))
 
 
 # Les deux textes d'échelle de la famille « passif ». Ils sont posés par la BRANCHE qui a
@@ -431,10 +442,10 @@ class ActiveView(QWidget):
 # contre TON repos du jour ». C'est un log-odds comparé au seuil d'une calibration. Une phrase
 # fausse sur l'unité est pire qu'un silence : c'est la catégorie de défaut que ce fichier
 # combat (cf. le P300 rendu comme un SSVEP dans `ActiveView`).
-AVERTISSEMENT_Z = ("z contre TON repos du jour, mesuré au démarrage du mode. Ni comparable entre "
-                   "personnes, ni entre séances, ni absolu. À lire en TENDANCE.")
-AVERTISSEMENT_ATTENTE = ("aucune sortie décodée pour l'instant : l'unité et l'échelle de ce mode "
-                         "s'affichent avec le premier échantillon, jamais avant.")
+#
+# Lus dans le fichier de langue à l'IMPORT, comme les libellés des contrats.
+AVERTISSEMENT_Z = tr("pages.direct.passif.avertissement_z")
+AVERTISSEMENT_ATTENTE = tr("pages.direct.passif.avertissement_attente")
 
 
 class PassiveView(QWidget):
@@ -455,7 +466,7 @@ class PassiveView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.etat = QLabel("en attente")
+        self.etat = QLabel(tr("pages.direct.en_attente"))
         self.barres = QFormLayout()
         # Vide au départ : voir le commentaire d'`AVERTISSEMENT_Z` ci-dessus.
         self.avertissement = QLabel("")
@@ -493,7 +504,7 @@ class PassiveView(QWidget):
             # vient. Un écran vide se lit « ça ne marche pas ». On ne route PAS sur l'identifiant
             # du mode pour autant : la phrase est vraie pour n'importe quel mode qui attend.
             self.etat.setText((mode_state or {}).get("instruction")
-                              or "en attente du premier échantillon décodé")
+                              or tr("pages.direct.passif.attente_premier"))
             self.avertissement.setText(AVERTISSEMENT_ATTENTE)
             return
 
@@ -519,9 +530,7 @@ class PassiveView(QWidget):
                 # écrans du même produit qui disaient deux choses du même chiffre. Une barre sans
                 # son sens de montée ne dit pas si elle est bon signe.
                 nom, formule, sens = INDEX_DESCRIPTIONS.get(cle, (cle, "", ""))
-                etiquette = QLabel(f"<b>{nom}</b><br>"
-                                   f"<span style='color:#8a8f9c; font-size:10px'>"
-                                   f"{formule}<br>{sens}</span>" if formule else f"<b>{nom}</b>")
+                etiquette = QLabel(_etiquette_indice(nom, formule, sens))
                 self.barres.addRow(etiquette, barre)
             # ⚠️ Écrêtage LINÉAIRE, et c'est un choix, pas un oubli. L'écran pygame comprime en
             # `tanh(z / SPAN)` pour éviter un plafond brutal au-delà de ±SPAN. Le porter ici a été
@@ -534,10 +543,10 @@ class PassiveView(QWidget):
 
         artefacts = sortie.get("artifacts", 0)
         if sortie.get("artifact"):
-            self.etat.setText(f"fenêtre rejetée ({sortie.get('reason', 'artefact')}) — "
-                              f"les derniers z valides sont maintenus")
+            self.etat.setText(tr("pages.direct.passif.fenetre_rejetee",
+                                 raison=sortie.get("reason", tr("pages.direct.passif.artefact"))))
         else:
-            self.etat.setText(f"{artefacts} fenêtre(s) rejetée(s) depuis le début du mode")
+            self.etat.setText(tr("pages.direct.passif.rejets", n=artefacts))
 
     def _update_errp(self, mode_state, sortie):
         """ErrP : un verdict par feedback, jamais montré comme un interrupteur propre.
@@ -556,31 +565,29 @@ class PassiveView(QWidget):
         """
         error = sortie.get("error", -1)
         if sortie.get("artifact"):
-            self.etat.setText("— PAS DE VERDICT : fenêtre rejetée (artefact, σ au-dessus du repos)")
+            self.etat.setText(tr("pages.direct.errp.artefact"))
         elif error < 0:
-            self.etat.setText("— PAS DE VERDICT : époque hors du tampon")
+            self.etat.setText(tr("pages.direct.errp.perdu"))
         elif error == 1:
-            self.etat.setText("ERREUR détectée (score au-dessus du seuil)")
+            self.etat.setText(tr("pages.direct.errp.erreur"))
         else:
-            self.etat.setText("correct (score sous le seuil)")
+            self.etat.setText(tr("pages.direct.errp.correct"))
 
         sante = self._sante(mode_state)
         if error < 0:
-            self.avertissement.setText(
-                "aucune mesure sur ce feedback : époque perdue ou rejetée, score et seuil ne "
-                "comptent pas ici." + sante)
+            self.avertissement.setText(tr("pages.direct.errp.sans_mesure") + sante)
             return
-        score = float(sortie.get("score", 0.0))
-        seuil = float(sortie.get("threshold", 0.0))
+        score = f"{float(sortie.get('score', 0.0)):+.3f}"
+        seuil = f"{float(sortie.get('threshold', 0.0)):+.3f}"
         pdf = mode_state.get("point_de_fonctionnement") or {}
         if pdf:
-            self.avertissement.setText(
-                f"score {score:+.3f} contre seuil {seuil:+.3f} · détecteur IMPARFAIT : garde "
-                f"{pdf.get('tnr', 0.0):.0%} des bonnes commandes, attrape "
-                f"{pdf.get('tpr', 0.0):.0%} des erreurs (visé {pdf.get('tnr_target', 0.0):.0%}) "
-                f"— un verdict « erreur » est une pièce biaisée, pas une certitude." + sante)
+            self.avertissement.setText(tr(
+                "pages.direct.errp.score_et_fonctionnement", score=score, seuil=seuil,
+                tnr=f"{pdf.get('tnr', 0.0):.0%}", tpr=f"{pdf.get('tpr', 0.0):.0%}",
+                vise=f"{pdf.get('tnr_target', 0.0):.0%}") + sante)
         else:
-            self.avertissement.setText(f"score {score:+.3f} contre seuil {seuil:+.3f}{sante}")
+            self.avertissement.setText(tr("pages.direct.errp.score", score=score, seuil=seuil)
+                                       + sante)
 
     @staticmethod
     def _sante(mode_state):
@@ -605,8 +612,17 @@ class PassiveView(QWidget):
         vues = mode_state.get("epoques_vues") or 0
         if taux is None or not vues:
             return ""
-        return (f" · rejet artefact {taux:.0%} "
-                f"({mode_state.get('artefacts', 0)}/{vues} époques de ce repos)")
+        return " · " + tr("pages.direct.errp.sante", taux=f"{taux:.0%}",
+                          n=mode_state.get("artefacts", 0), vues=vues)
+
+
+def _etiquette_indice(nom, formule, sens):
+    """L'étiquette d'un indice passif : son nom en gras, et dessous, en petit, sa formule et le
+    sens de sa montée. Les trois textes viennent du MOTEUR ; ici, rien que de la mise en page."""
+    if not formule:
+        return f"<b>{nom}</b>"
+    return (f"<b>{nom}</b><br><span style='color:#8a8f9c; font-size:10px'>"
+            f"{formule}<br>{sens}</span>")
 
 
 def build(family, ch_names=()):
