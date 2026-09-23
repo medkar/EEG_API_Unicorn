@@ -492,18 +492,22 @@ moteur → fenêtre est un contrat testé) ; une fenêtre qui survit à « Aband
 
 Le plus court des modes à modèle. Page **P300**.
 
-1. **Avant tout entraînement**, sur un poste sans modèle P300 : **« Tester »**.
-   ✅ Refus sous « 1. Régler » (« Aucun modèle entraîné : dans la console, clique « Entraîner » … »), et le test ne
-   s'ouvre pas. C'est le moteur qui tient l'ordre Entraîner → Tester, pas l'écran.
-2. **« 2. Entraîner »** → **« Entraîner »**.
+1. **Le refus sans modèle se joue sur la page d'un mode qui n'en a AUCUN** — sur ce poste, le
+   **Motor Imagery** (le P300 a un modèle du 2026-08-17 dans `data/`, l'ErrP et le c-VEP aussi).
+   Page **Motor Imagery** → **« Tester »**.
+   ✅ Refus sous « 1. Régler » (« Aucun modèle entraîné : dans la console, clique « Entraîner » sur
+   la page du mode. »), et le test ne s'ouvre pas. C'est le moteur qui tient l'ordre Entraîner →
+   Tester, pas l'écran.
+2. Page **P300** → **« 2. Entraîner »** → **« Entraîner »**.
    ✅ La page **« Entraîner le P300 »**, retour **« ← P300 »** : briefing, **« Commencer »** →
-   contrôle de liaison → **« Commencer la calibration »**.
+   contrôle de liaison → **« Commencer l'entraînement »**.
    ✅ La console **lance elle-même la fenêtre P300**, **après** que le moteur a démarré.
    ✅ À la fin : trois lignes en face, une ligne ambre « ⚠ Pas encore enregistré — ce modèle est dans
    un dossier temporaire. … », et **« Enregistrer le modèle »** / **« Refaire »**.
 3. **« Refaire »** → rien n'a été écrit dans `data/` (empreinte). Relance, puis **« Enregistrer le
    modèle »** → « Modèle en place : … ».
-4. **« ← P300 »** → le modèle est dans la liste « Modèle entraîné », horodaté.
+4. **« ← P300 »** → le modèle est dans la liste « Modèle entraîné », horodaté, **en tête** et
+   sélectionné (la liste va du plus récent au plus ancien), sans redémarrer.
 5. **« 3. Tester »** → **« Tester »**.
    ✅ La page **« Tester le P300 »** est **pré-remplie** : même modèle que la page du mode, et
    « Manches » à **6**.
