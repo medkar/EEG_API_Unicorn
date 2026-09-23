@@ -19,6 +19,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from core.config import DATA_DIR, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 
 import glob as _glob  # noqa: E402
@@ -42,17 +43,17 @@ def charger(chemin):
         # la frame et rendu par une FENÊTRE de `src/stimulus/`, que la console lance elle-même
         # (`Calib(kind="fenetre")` du mode). Ce texte est celui du `help` du réglage « Modèle
         # entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le lit.
-        return None, ("aucun modèle désigné — ouvre la console, page P300, et clique "
-                      "« Entraîner » pour en produire un")
+        return None, tr("mode.modele.aucun", mode="P300")
     if not _os.path.isfile(chemin):
-        return None, f"modèle introuvable : {chemin}"
+        return None, tr("mode.modele.introuvable", chemin=chemin)
     try:
         import joblib
         modele = joblib.load(chemin)
     except Exception as e:      # noqa: BLE001 - pickle casse de mille façons, toutes équivalentes ici
-        return None, f"modèle illisible ({type(e).__name__}) : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.illisible", erreur=type(e).__name__,
+                        nom=_os.path.basename(chemin))
     if not hasattr(modele, "select") or not hasattr(modele, "scores"):
-        return None, f"ce n'est pas un modèle P300 : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.pas_un_modele", mode="P300", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
     # hérité (d'avant le déménagement du décodeur dans core/, 2026-08-17) porte "p300_decoder"
     # (module NU) — et RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`,
@@ -67,9 +68,8 @@ def charger(chemin):
     # on ne garde donc PAS ce modèle « en dépannage », on dit de ré-entraîner.
     module = type(modele).__module__
     if module != "core.p300_decoder":
-        return None, (f"modèle hérité (module {module!r}, attendu 'core.p300_decoder'), "
-                      f"abandonné délibérément — ré-entraîner depuis les époques de calibration "
-                      f"conservées (data/p300_calib_*.npz) : {_os.path.basename(chemin)}")
+        return None, tr("mode.p300.modele.herite", module=repr(module),
+                        attendu=repr("core.p300_decoder"), nom=_os.path.basename(chemin))
     return modele, None
 
 

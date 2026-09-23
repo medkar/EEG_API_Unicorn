@@ -64,11 +64,13 @@ from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_DECISION_CYCLES,  # noqa
                          CVEP_RCCA_CORR_MIN, CVEP_RCCA_ENC, CVEP_RCCA_EVENT,
                          CVEP_RCCA_MARGIN, CVEP_RCCA_MODEL_PATH, FS_UNICORN, use_utf8_console)
 from core.cvep_decoder import bandpass  # noqa: E402  (passe-bande zéro-phase partagé)
+from core.i18n import tr  # noqa: E402
 
 
-MSG_PYNTBCI = ("le décodeur c-VEP rCCA exige `pyntbci`, qui n'est pas installé : "
-               "`pip install -r requirements.txt` (ou `pip install \"pyntbci>=1.9\"`). "
-               "L'eCCA, lui, n'en dépend pas — les modèles eCCA restent utilisables.")
+# Affiché par la console (refus d'un modèle rCCA, entraînement c-VEP interrompu). Le paquet peut
+# aussi s'installer seul : `pip install "pyntbci>=1.9"`. ⚠️ `cvep_models.modeles_disponibles`
+# cherche CE texte dans les refus pour compter les modèles retirés faute de pyntbci.
+MSG_PYNTBCI = tr("mode.cvep.pyntbci_manquant")
 
 
 class PyntbciManquant(ImportError):

@@ -60,6 +60,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, P300_CAL_ROUNDS,  # noqa: E402
                          P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS,
                          P300_N_TARGETS, P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS,
                          use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
@@ -79,35 +80,27 @@ SOA_REFERENCE_S = (P300_FLASH_ON_FR + P300_FLASH_OFF_FR) / REFRESH_REFERENCE_HZ
 # Ce que l'étudiant lit AVANT de commencer, sur la page de la console. Le protocole lui-même
 # s'affiche dans la fenêtre de stimulus : ce qui est ici est ce qu'il faut avoir compris avant.
 BRIEFING = (
-    "Une cible est CERCLÉE en bleu : c'est celle qu'il faut fixer pendant toute la manche.",
-    "Les six cibles s'allument une à une, en bref éclair, dans le désordre.",
-    "Ce qui compte d'abord, c'est de la FIXER : c'est la fixation qui fait l'onde.",
-    "Compter mentalement ses éclairs AIDE à tenir l'attention, sans être indispensable",
-    "(vérifié au casque le 2026-09-22 : la sélection marche sur la fixation seule).",
-    "Reste immobile et cligne le moins possible PENDANT les éclairs — cligne entre les manches.",
-    "La cible à fixer change à chaque manche, et c'est la FENÊTRE de stimulus qui l'annonce.",
+    # « Compter ses éclairs aide, sans être indispensable » : vérifié au casque le 2026-09-22, la
+    # sélection marche sur la fixation seule.
+    tr("calib.p300.briefing.1"),
+    tr("calib.p300.briefing.2"),
+    tr("calib.p300.briefing.3"),
+    tr("calib.p300.briefing.4"),
+    tr("calib.p300.briefing.5"),
 )
 
 # La phrase d'honnêteté du P300 — PROPRE à ce mode. Celle du Motor Imagery parle de 40 % à trois
 # classes et de validation croisée par essai : la recopier ici serait faux deux fois (ni le même
-# nombre de classes, ni la même unité de regroupement).
-HONNETETE = (
-    "Deux chiffres, et ils ne disent pas la même chose. L'AUC cible/non-cible est mesurée par "
-    "validation croisée PAR MANCHE (GroupKFold) : aucune époque d'une manche ne sert à la fois à "
-    "entraîner et à tester. Repère du projet, mesuré sur une personne : 0,71 sur 576 époques — "
-    "c'est ce que VAUT un P300 mono-essai en électrodes sèches, pas un échec. Le chiffre qui "
-    "décide, lui, est la SÉLECTION en leave-one-round-out (« la cible désignée est-elle "
-    "retrouvée ? »), parce que c'est la question que l'utilisateur pose vraiment. Une ou deux "
-    "erreurs sur six sélections sont ATTENDUES : le P300 se lit par MOYENNAGE sur les "
-    "répétitions, pas par époque."
-)
+# nombre de classes, ni la même unité de regroupement). Les deux chiffres qu'elle distingue : la
+# SÉLECTION en leave-one-round-out (celui qui décide) et l'AUC cible/non-cible en validation
+# croisée PAR MANCHE (GroupKFold), dont le repère est 0,71 sur 576 époques.
+HONNETETE = tr("calib.p300.honnetete")
 
 # Les verdicts portent sur la SÉLECTION (hasard : 1/6 ≈ 17 %), jamais sur l'AUC. Un seuil sur
 # l'AUC dirait « faible » d'une séance dont toutes les sélections tombent juste — l'AUC mesure une
 # époque isolée, la sélection mesure ce qu'on en fait après moyennage.
-VERDICTS = ((0.80, "EXCELLENT"), (0.60, "UTILISABLE"),
-            (0.00, "FAIBLE — ré-essaie : saline les électrodes et FIXE la cible cerclée sans la "
-                   "quitter des yeux (compter ses éclairs aide à tenir l'attention)"))
+VERDICTS = ((0.80, tr("calib.p300.verdict.excellent")), (0.60, tr("calib.p300.verdict.utilisable")),
+            (0.00, tr("calib.p300.verdict.faible")))
 
 # Les deux planchers en dessous desquels on REFUSE d'entraîner, plutôt que de produire un modèle
 # que rien ne distingue d'un bon dans la liste de la console.
@@ -143,8 +136,7 @@ class Etiquette(namedtuple("Etiquette", "flashee manche attendue")):
 def verdict(selection):
     """Le verdict, depuis le TAUX DE SÉLECTION. None quand il n'a pas été mesuré."""
     if selection is None:
-        return ("justesse de sélection non mesurée : pas assez de manches pour en tenir une à "
-                "l'écart")
+        return tr("calib.p300.verdict.non_mesure")
     for seuil, texte in VERDICTS:
         if selection >= seuil:
             return texte
@@ -252,13 +244,9 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
     manches = sorted(set(groups.tolist()))
 
     if len(epochs) < MIN_EPOQUES or len(manches) < MIN_MANCHES or len(set(labels.tolist())) < 2:
-        raise ValueError(
-            f"séance trop pauvre pour entraîner : {len(epochs)} époque(s) sur "
-            f"{len(manches)} manche(s), {len(set(labels.tolist()))} classe(s) représentée(s) — "
-            f"il en faut au moins {MIN_EPOQUES} sur {MIN_MANCHES} manches, cible ET non-cible. "
-            f"Refais une séance plus longue, et vérifie la liaison du casque : des époques "
-            f"perdues en cours de route (le journal du moteur les compte) donnent exactement "
-            f"cette allure")
+        raise ValueError(tr("calib.p300.trop_pauvre", n=len(epochs), manches=len(manches),
+                            classes=len(set(labels.tolist())), min_epoques=MIN_EPOQUES,
+                            min_manches=MIN_MANCHES))
 
     modele = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs, labels, groups=groups,
                                                               compute_cv=evaluer)
@@ -300,11 +288,11 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         "hasard": hasard,
         "verdict": verdict_txt,
         # Ce qui s'affiche EN FACE : la SÉLECTION contre 1/6, jamais l'AUC (cf. VERDICTS).
-        **(non_mesure("pas assez de manches pour en tenir une à l'écart",
-                      "Refais une séance plus longue.") if selection is None
+        **(non_mesure(tr("calib.p300.non_mesure.raison"), tr("calib.p300.non_mesure.conseil"))
+           if selection is None
            else depuis_table(selection, VERDICTS,
-                             f"{pct(selection)} de cibles justes (hasard {pct(hasard)}) "
-                             f"sur {sel_tot} manches")),
+                             tr("calib.p300.chiffres", justesse=pct(selection),
+                                hasard=pct(hasard), n=sel_tot))),
         "honnetete": HONNETETE,
     }
 
@@ -396,7 +384,7 @@ class P300Calibration(MarkerCalibrationRuntime):
             self._manche += 1
             self._attendue = cible
             self._cues.append(cible)
-            self.classe = f"cible {cible}"
+            self.classe = tr("calib.p300.classe", cible=cible)
             return None
 
         if event == "round_end":

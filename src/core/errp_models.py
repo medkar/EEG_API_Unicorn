@@ -26,6 +26,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from core.config import DATA_DIR, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 
 import glob as _glob  # noqa: E402
@@ -54,17 +55,17 @@ def charger(chemin):
         # l'appli au lieu des horodatages LSL du moteur. C'est le texte du `help` du réglage
         # « Modèle entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le
         # lit. Même correction que `core/p300_models.charger`, où elle a déjà été faite.
-        return None, ("aucun modèle désigné — ouvre la console, page ErrP, et clique "
-                      "« Entraîner » pour en produire un")
+        return None, tr("mode.modele.aucun", mode="ErrP")
     if not _os.path.isfile(chemin):
-        return None, f"modèle introuvable : {chemin}"
+        return None, tr("mode.modele.introuvable", chemin=chemin)
     try:
         import joblib
         modele = joblib.load(chemin)
     except Exception as e:      # noqa: BLE001 - pickle casse de mille façons, toutes équivalentes ici
-        return None, f"modèle illisible ({type(e).__name__}) : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.illisible", erreur=type(e).__name__,
+                        nom=_os.path.basename(chemin))
     if not hasattr(modele, "score") or not hasattr(modele, "is_error"):
-        return None, f"ce n'est pas un modèle ErrP : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.pas_un_modele", mode="ErrP", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
     # hérité (d'avant le déménagement du décodeur dans core/, 2026-08-18) porte "errp_decoder"
     # (module NU) — et RESSUSCITE selon la commande de lancement, exactement le mécanisme déjà
@@ -89,9 +90,8 @@ def charger(chemin):
         # 18/08 a été fait par un script jetable, non versionné), et la branche « aucun modèle
         # désigné » 25 lignes plus haut disait déjà, elle, le vrai geste. Deux instructions
         # contradictoires pour la même panne : on garde celle qu'un étudiant peut suivre.
-        return None, (f"modèle hérité (module {module!r}, attendu {_MODULE_ATTENDU!r}), abandonné "
-                      f"délibérément — ré-entraîne (console, page ErrP, « Entraîner ») : "
-                      f"{_os.path.basename(chemin)}")
+        return None, tr("mode.modele.herite", module=repr(module), attendu=repr(_MODULE_ATTENDU),
+                        mode="ErrP", nom=_os.path.basename(chemin))
     # `ErrPModel` n'HÉRITE pas de `P300Model`, il le CONTIENT (`self.core`) : un pickle d'ErrP
     # porte donc DEUX chemins de module, et c'est le second qui SCORE (`score` -> `self.core.pipe`).
     # Le contrôle ci-dessus ne regarde que l'extérieur. La passerelle que ce chantier refuse
@@ -102,10 +102,8 @@ def charger(chemin):
     # EXTÉRIEUR. Ce serait le « pire des deux mondes » avec un tour de plus.
     noyau = type(getattr(modele, "core", None)).__module__
     if noyau != _NOYAU_ATTENDU:
-        return None, (f"le noyau P300 de ce modèle vient du module {noyau!r} (attendu "
-                      f"{_NOYAU_ATTENDU!r}) : sa coquille est neuve mais ce qui CALCULE les scores "
-                      f"est hérité — ré-entraîne (console, page ErrP, « Entraîner ») : "
-                      f"{_os.path.basename(chemin)}")
+        return None, tr("mode.errp.modele.noyau_herite", module=repr(noyau),
+                        attendu=repr(_NOYAU_ATTENDU), nom=_os.path.basename(chemin))
     # ⚠️ Correction de revue (tâche 3) : `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la
     # calibration a au moins 10 essais, 2 classes, et une classe minoritaire d'au moins 2 membres
     # (cf. sa garde, `errp_decoder.py`) — en dessous, ces deux attributs restent `None`. Rien
@@ -124,10 +122,8 @@ def charger(chemin):
         # Un étudiant qui venait d'en faire 200 était renvoyé en refaire davantage, pour rien.
         # On ne DEVINE donc plus : `ErrPModel.fit` enregistre ce qu'il a CONSTATÉ dans
         # `echec_oof_`, et on le cite tel quel.
-        cause = getattr(modele, "echec_oof_", None) or (
-            "cause non enregistrée — modèle produit avant que `fit` ne la note")
-        return None, (f"pas de scores hors-pli, donc aucun seuil réglable ({cause}) : ré-entraîne "
-                      f"(console, page ErrP, « Entraîner ») : {_os.path.basename(chemin)}")
+        cause = getattr(modele, "echec_oof_", None) or tr("mode.errp.modele.cause_inconnue")
+        return None, tr("mode.errp.modele.sans_oof", cause=cause, nom=_os.path.basename(chemin))
     return modele, None
 
 

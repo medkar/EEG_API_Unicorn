@@ -16,6 +16,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.
 from core.config import (NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH,  # noqa: E402
                          NEURO_KEY_CHANNELS, NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S,
                          json_float, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedNeuroPublisher, stream_name  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
@@ -137,24 +138,21 @@ class NeuroRuntime(ModeRuntime):
 
 SPEC = ModeSpec(
     id="neuro",
-    label="Neuro",
+    label=tr("mode.neuro.label"),
     family="passif",
-    summary="Charge mentale, somnolence et engagement, en écart au repos du jour.",
+    summary=tr("mode.neuro.summary"),
     status="moteur",
     key_channels=tuple(NEURO_KEY_CHANNELS),   # Fz et Pz portent les trois indices
     params=(
         Param(
-            key="smoothing", label="Lissage", kind="float",
+            key="smoothing", label=tr("mode.neuro.param.smoothing.label"), kind="float",
             default=NEURO_SMOOTH, min=0.0, max=0.99,
-            help="Moyenne glissante (EMA) sur les z. 0 = brut et très nerveux, 0,95 = très lisse "
-                 "et lent à réagir. Ces indices sont bruités : le défaut lisse beaucoup.",
+            help=tr("mode.neuro.param.smoothing.aide"),
         ),
         Param(
-            key="rebaseline_s", label="Re-calage du repos", kind="float", unit="s",
-            default=NEURO_REBASELINE_S, min=0.0, max=1800.0,
-            help="Constante de temps du re-calage LENT du zéro, contre la dérive des électrodes "
-                 "sèches sur plusieurs minutes. 0 = zéro figé. Trop court, ça effacerait les "
-                 "états mentaux eux-mêmes, qui sont plus rapides que la dérive.",
+            key="rebaseline_s", label=tr("mode.neuro.param.rebaseline_s.label"), kind="float",
+            unit="s", default=NEURO_REBASELINE_S, min=0.0, max=1800.0,
+            help=tr("mode.neuro.param.rebaseline_s.aide"),
         ),
     ),
     rest=Rest(
@@ -162,6 +160,7 @@ SPEC = ModeSpec(
         duration_s=NEURO_BASELINE_S,
         # Plus long que le SSVEP : les échelles sont calées sur une MÉDIANE et une MAD, qui
         # demandent plus de fenêtres qu'une moyenne.
+        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
         instruction="Repos : regarde l'écran, immobile et détendu — on cale TON zéro du jour.",
     ),
     calibration=None,

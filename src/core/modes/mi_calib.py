@@ -25,6 +25,7 @@ import numpy as np  # noqa: E402
 from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa: E402
                          MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S, MI_WARMUP_PER_CLASS,
                          MI_WINDOW_S, SSVEP_WARMUP_S, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
@@ -36,22 +37,23 @@ from core.modes.contract import Calib, Param  # noqa: E402
 # Les consignes, telles qu'elles ont été validées. La formulation compte : « SENTIR le serrement »
 # et non « se le représenter » est la différence entre de l'imagerie kinesthésique, qui produit
 # une ERD exploitable, et de l'imagerie visuelle, qui n'en produit pas.
+# Les clés du dictionnaire sont les ÉTIQUETTES des classes (celles du modèle et du `.npz`) : elles
+# ne se traduisent pas. Seul le texte affiché passe par `tr`.
 INSTRUCTIONS = {
-    "GAUCHE": "Imagine : SERRE le POING GAUCHE",
-    "DROITE": "Imagine : SERRE le POING DROIT",
-    "REPOS": "REPOS — détends-toi, ne rien imaginer",
+    "GAUCHE": tr("calib.mi.instruction.gauche"),
+    "DROITE": tr("calib.mi.instruction.droite"),
+    "REPOS": tr("calib.mi.instruction.repos"),
 }
-RAPPEL = "sens le serrement — NE BOUGE PAS"
+RAPPEL = tr("calib.mi.rappel")
 
 BRIEFING = (
-    "Un top au DÉBUT de chaque essai donne le côté : oreille GAUCHE = poing gauche,",
-    "oreille DROITE = poing droit, les DEUX oreilles (plus long) = repos.",
-    "Imagine dès le top et TIENS jusqu'à la fin du décompte.",
-    "Imagine le serrement en le SENTANT (tension dans l'avant-bras), sans bouger la main.",
-    "Maintiens ou pompe le serrement toute la durée — pas un seul clic.",
-    "Astuce : serre vraiment 3-4 fois AVANT de commencer, pour mémoriser la sensation.",
-    "Immobile, cligne le moins possible pendant l'imagerie.",
-    "REPOS = ne rien faire de spécial : relâche, respire normalement, aucune imagerie de main.",
+    tr("calib.mi.briefing.1"),
+    tr("calib.mi.briefing.2"),
+    tr("calib.mi.briefing.3"),
+    tr("calib.mi.briefing.4"),
+    tr("calib.mi.briefing.5"),
+    tr("calib.mi.briefing.6"),
+    tr("calib.mi.briefing.7"),
 )
 
 # Les verdicts sont calés sur l'échelle HONNÊTE, pas sur l'ancienne. Les seuils de l'écran pygame
@@ -60,9 +62,8 @@ BRIEFING = (
 # sur sa seule séance de référence : 40,0 % à 3 classes (p = 0,082, PAS significatif) et 63,3 % à
 # 2 classes (p = 0,038). Autrement dit : autour de 40 %, on est dans le NORMAL, et ça ne suffit
 # pas à piloter quoi que ce soit.
-VERDICTS = ((0.60, "EXCELLENT"), (0.45, "UTILISABLE"),
-            (0.00, "FAIBLE — ré-essaie : contact des électrodes, immobilité, imagerie "
-                   "kinesthésique (SENTIR, pas voir)"))
+VERDICTS = ((0.60, tr("calib.mi.verdict.excellent")), (0.45, tr("calib.mi.verdict.utilisable")),
+            (0.00, tr("calib.mi.verdict.faible")))
 
 # La phrase d'honnêteté du MI : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un
 # « 40 % » sans elle ne veut rien dire.
@@ -74,15 +75,7 @@ VERDICTS = ((0.60, "EXCELLENT"), (0.45, "UTILISABLE"),
 # classes », « niveau du hasard 33 % » — se serait affichée sous une SÉLECTION parmi six cibles,
 # où elle n'a aucun sens. Chaque calibration porte donc la sienne dans son résultat, comme le
 # P300 le fait déjà (`p300_calib.HONNETETE`).
-HONNETETE = (
-    "Ce chiffre est une validation croisée PAR ESSAI : il estime ce que le modèle fera sur un "
-    "essai qu'il n'a jamais vu. C'est plus bas — et plus vrai — que ce qu'affichait l'ancien "
-    "écran de calibration, qui mélangeait des fenêtres d'un même essai entre apprentissage et "
-    "test et se gonflait ainsi de 10 à 16 points.\n"
-    "Repère : sur la seule séance de référence du projet, mesurée honnêtement, 40 % à 3 classes "
-    "(pas significatif) et 63 % à 2 classes. Le Motor Imagery ne marche pas également bien chez "
-    "tout le monde, et une séance modeste est un résultat ordinaire, pas une faute."
-)
+HONNETETE = tr("calib.mi.honnetete")
 
 
 def horodatage(maintenant=None):
@@ -154,9 +147,11 @@ def verdict(cv, n_essais=None, hasard=None):
     NON SIGNIFICATIF au lieu d'« utilisable » — cf. `_non_significatif`."""
     if _non_significatif(cv, n_essais, hasard):
         p = p_hasard(int(round(cv * n_essais)), int(n_essais), hasard)
-        return (f"NON SIGNIFICATIF (test binomial exact sur {n_essais} essais, {texte_p(p)}) : un "
-                f"tirage au hasard fait aussi bien. Ce modèle ne se garde pas — refais la séance, "
-                f"reposé, avant de t'en servir")
+        # Le mot est passé en valeur, pas réécrit dans la phrase : `lignes_de` affiche le MÊME mot
+        # en face, et `affichage.verifier` exige que le verdict commence par lui — dans toutes les
+        # langues.
+        return tr("calib.mi.verdict.non_significatif", mot=tr("calib.mot.non_significatif"),
+                  n=n_essais, p=texte_p(p))
     for seuil, texte in VERDICTS:
         if cv >= seuil:
             return texte
@@ -166,13 +161,11 @@ def verdict(cv, n_essais=None, hasard=None):
 def lignes_de(cv, n_essais, hasard):
     """Les quatre clés d'affichage — du MÊME calcul que `verdict` (même porte, même table)."""
     if cv is None:
-        return non_mesure("pas assez d'essais distincts par classe pour une validation croisée",
-                          "Refais la séance avec plus d'essais par classe.")
-    chiffres = f"{pct(cv)} de classes justes (hasard {pct(hasard)}) sur {n_essais} essais"
+        return non_mesure(tr("calib.mi.non_mesure.raison"), tr("calib.mi.non_mesure.conseil"))
+    chiffres = tr("calib.mi.chiffres", justesse=pct(cv), hasard=pct(hasard), n=n_essais)
     if _non_significatif(cv, n_essais, hasard):
-        return lignes("faible", "NON SIGNIFICATIF", chiffres,
-                      "Indistinguable du hasard sur ce nombre d'essais : ne garde pas ce modèle, "
-                      "refais la séance.")
+        return lignes("faible", tr("calib.mot.non_significatif"), chiffres,
+                      tr("calib.mi.reserve.non_significatif"))
     return depuis_table(cv, VERDICTS, chiffres)
 
 
@@ -227,9 +220,7 @@ class MICalibration(CalibrationRuntime):
         # distinct : `cv_groupee_` redevient alors None (géré juste plus bas, jamais recopié depuis
         # la naïve). Commentaire jumeau dans `core/mi_decoder.py::MIModel.fit`.
         if not X or min(comptes.values()) < 5:
-            raise ValueError(
-                f"pas assez de données pour entraîner : {comptes} fenêtres par classe, il en faut "
-                f"au moins 5 — refais une séance plus longue")
+            raise ValueError(tr("calib.mi.trop_court", comptes=comptes, minimum=5))
 
         modele = MIModel(fs=fs).fit(np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
 
@@ -264,8 +255,7 @@ class MICalibration(CalibrationRuntime):
         cv = modele.cv_groupee_
         hasard = 1.0 / len(self.classes)
         if cv is None:
-            verdict_txt = ("justesse non mesurable : pas assez d'essais distincts par classe "
-                           "pour une validation croisée")
+            verdict_txt = tr("calib.mi.verdict.non_mesurable")
             print(f"[mi-calib] {verdict_txt}")
         else:
             verdict_txt = verdict(cv, len(enregistre), hasard)
@@ -297,20 +287,17 @@ class MICalibration(CalibrationRuntime):
 
 CALIB = Calib(
     kind="moteur",
-    label="Entraîner le Motor Imagery",
+    label=tr("calib.mi.label"),
     briefing=BRIEFING,
     epoch_s=MI_IMAGERY_S,
     params=(
         Param(
             key="trials_per_class",
-            label="Essais par classe",
+            label=tr("calib.mi.param.trials_per_class.label"),
             kind="choice",
             default=MI_SESSIONS[1],
             choices=MI_SESSIONS,
-            help="Combien d'essais par classe. Plus long n'est PAS forcément meilleur : le "
-                 "facteur limitant mesuré est la FATIGUE, pas la durée — sur la séance de "
-                 "référence du projet, la justesse à 3 classes tombe de 57 % à 33 % en deuxième "
-                 "moitié. Commence par la valeur par défaut.",
+            help=tr("calib.mi.param.trials_per_class.aide"),
         ),
     ),
     runtime_cls=MICalibration,

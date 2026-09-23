@@ -23,6 +23,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 # Les phases publiques, dans l'ordre où elles s'enchaînent. Elles sortent telles quelles dans
 # `snapshot()["calibration"]["phase"]` : la console les traduit, elle n'en invente aucune.
@@ -61,7 +62,7 @@ class CalibrationRuntime:
     # c'est le moteur qui sait ce qu'il compte : la console écrivait « phase(s) enregistrée(s) »
     # sous toutes les pages, et un test P300 de 6 manches s'affichait « sur 288 ». Une sous-classe
     # qui compte autre chose (une époque, une manche, un cycle) le redéclare.
-    unite = "essai"
+    unite = tr("calib.unite.essai")
 
     def __init__(self, spec, params, engine, rng=None, dossier=None):
         """`spec` : le `ModeSpec` du mode calibré. `params` : les réglages VALIDÉS de la calibration.
@@ -295,7 +296,7 @@ class CalibrationRuntime:
         """
         return {
             "mode_id": self.spec.id,
-            "label": self.calib.label or f"Calibration {self.spec.label}",
+            "label": self.calib.label or tr("calib.label_defaut", mode=self.spec.label),
             "phase": self.phase,
             "etape": self.etape,
             "classe": self.classe,

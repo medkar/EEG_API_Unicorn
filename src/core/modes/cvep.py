@@ -106,6 +106,7 @@ from core import cvep_models  # noqa: E402
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPDecoder, CVEPModel  # noqa: E402
 from core.cvep_rcca import RCCADecoder  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedCVEPPublisher, cvep_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
@@ -139,14 +140,12 @@ _PALIERS_REFUS = (1, 10, 100, 1000)
 # c'est voulu : un seul vocabulaire pour le terminal, l'écran et le rapport de séance. Chaque
 # phrase nomme le geste, parce que les trois causes en appellent trois DIFFÉRENTS — le compteur
 # dit combien de fois, cette table dit quoi faire.
+# (Le nom `_MOTIFS_FR` est resté : la table vient maintenant du fichier de la langue choisie.)
 _MOTIFS_FR = {
-    "sans_reference": "aucun marqueur d'horloge reçu — lance l'émetteur c-VEP, et vérifie qu'il "
-                      "publie sur le flux réglé",
-    "reference_perimee": "horloge PÉRIMÉE — l'émetteur s'est tu (planté ? fenêtre fermée ?)",
-    "sous_les_seuils": "corrélations trop faibles ou trop serrées — vérifie le contact, saline, "
-                      "et fixe UNE cible",
-    "vote_non_conclu": "les fenêtres récentes ne s'accordent pas — fixe UNE cible sans bouger "
-                       "les yeux",
+    "sans_reference": tr("mode.cvep.motif.sans_reference"),
+    "reference_perimee": tr("mode.cvep.motif.reference_perimee"),
+    "sous_les_seuils": tr("mode.cvep.motif.sous_les_seuils"),
+    "vote_non_conclu": tr("mode.cvep.motif.vote_non_conclu"),
 }
 
 # Tolérance flottante sur `age * refresh`, juste avant de tronquer en frame entière dans
@@ -281,10 +280,8 @@ class CVEPRuntime(ModeRuntime):
         et ne veut plus rien dire.
         """
         if self.model.code_len != len(self.code):
-            return (f"ce modèle a été calibré pour un code de {self.model.code_len} frames, la "
-                    f"config actuelle (CVEP_BITS={CVEP_BITS}) en construit un de "
-                    f"{len(self.code)} — ré-entraîne depuis la console (page c-VEP, bouton "
-                    f"« Entraîner »), ou restaure CVEP_BITS à sa valeur de calibration.")
+            return tr("mode.cvep.desaccord.code", modele=self.model.code_len, bits=CVEP_BITS,
+                      actuel=len(self.code))
         # ...et le NOMBRE DE CIBLES sur lequel il a été calibré. `CVEPModel.save` enregistre ce
         # champ « pour pouvoir prévenir » (sa propre docstring) : jusqu'ici personne ne prévenait.
         # Le template eCCA est COMMUN à tous les lags, donc un modèle calibré sur 3 cibles
@@ -295,11 +292,9 @@ class CVEPRuntime(ModeRuntime):
         # jetterait `data/cvep_model.npz`, le seul modèle réel du dépôt.
         cibles = int(getattr(self.model, "n_targets", 0) or 0)
         if cibles and cibles != len(self.plan):
-            return (f"ce modèle a été calibré sur {cibles} cible(s), le stimulus actuel en "
-                    f"affiche {len(self.plan)} (CVEP_N_TARGETS) — le template vaut pour tous les "
-                    f"lags, mais les cibles supplémentaires n'ont JAMAIS été validées et leurs "
-                    f"corrélations sont plausibles. Ré-entraîne depuis la console (page c-VEP) "
-                    f"sans interrompre, ou remets CVEP_N_TARGETS à {cibles}.")
+            # Le template vaut pour tous les lags : les cibles en plus « marchent » techniquement,
+            # avec des corrélations plausibles et jamais validées.
+            return tr("mode.cvep.desaccord.cibles", modele=cibles, actuel=len(self.plan))
         return None
 
     def maj_reference(self, ts, refresh):
@@ -739,77 +734,53 @@ def _channels(params):
 
 
 SPEC = ModeSpec(
-    id="cvep", label="c-VEP", family="actif",
-    summary="Cible fixée parmi N, par codes pseudo-aléatoires décalés (le plus rapide).",
+    id="cvep", label=tr("mode.cvep.label"), family="actif",
+    summary=tr("mode.cvep.summary"),
     status="moteur",
     key_channels=tuple(CVEP_CHANNELS),   # Pz, PO7, Oz, PO8 — le filtre spatial fait le tri
     stimulus_id="cvep",   # la même fenêtre que sa calibration, mais la question est distincte
     test_id="cvep_test",  # la séance d'entraînement rejouée, le moteur DÉCIDANT (`cvep_test.py`)
     params=(
-        Param(key="model", label="Modèle entraîné", kind="choice",
+        # Les DEUX décodeurs (eCCA et rCCA) figurent dans la même liste : c'est le fichier qui
+        # déclare le sien, la question posée ici est « quel modèle », pas « quel algorithme ».
+        Param(key="model", label=tr("mode.param.modele.label"), kind="choice",
               choices_fn=_modeles_disponibles,
               si_vide=SANS_MODELE,
-              help="Le modèle produit par une calibration c-VEP, propre à TA personne — celui "
-                   "de quelqu'un d'autre donne des corrélations plausibles et fausses. La liste "
-                   "va du plus récent au plus ancien, donc le défaut est celui que tu viens de "
-                   "calibrer. Les DEUX décodeurs (eCCA et rCCA) y figurent ensemble : c'est le "
-                   "fichier qui déclare le sien, la question posée ici est « quel modèle », pas "
-                   "« quel algorithme ». Aucun modèle dans la liste ? Clique "
-                   "« Entraîner » sur cette page."),
-        Param(key="corr_min", label="Corrélation minimale", kind="float",
+              help=tr("mode.cvep.param.model.aide")),
+        # Strict par défaut : un seuil trop permissif est la panne la plus coûteuse du projet, un
+        # décodage qui affiche avec assurance des corrélations d'apparence normale sur du bruit.
+        # En dessous, la fenêtre compte en « sous_les_seuils » (comme sous `margin`).
+        Param(key="corr_min", label=tr("mode.cvep.param.corr_min.label"), kind="float",
               default=CVEP_CORR_MIN, min=0.0, max=1.0, affecte_decodage=False,
-              help="Le gagnant doit dépasser cette corrélation pour être retenu — en dessous, la "
-                   "fenêtre compte en « sous_les_seuils » plutôt que d'émettre. Le produit part "
-                   "STRICT par défaut : un seuil trop permissif est la panne la plus coûteuse de "
-                   "ce projet, un décodage qui affiche avec assurance des corrélations "
-                   "d'apparence normale sur du bruit. DESCENDS cette valeur en séance si le mode "
-                   "reste muet malgré un bon contact — SANS risque : ce réglage est relu à CHAQUE "
-                   "décision, il ne recrée ni le flux ni la chauffe."),
-        Param(key="margin", label="Marge sur le second", kind="float",
+              help=tr("mode.cvep.param.corr_min.aide")),
+        Param(key="margin", label=tr("mode.cvep.param.margin.label"), kind="float",
               default=CVEP_MARGIN, min=0.0, max=1.0, affecte_decodage=False,
-              help="Le gagnant doit en plus devancer le deuxième candidat de cette marge, sinon "
-                   "la fenêtre compte en « sous_les_seuils » comme pour « Corrélation minimale » "
-                   "— les deux seuils forment UNE règle, desserrer l'un sans l'autre laisse "
-                   "l'autre trancher seul. TOURNABLE en pleine séance, comme lui."),
-        Param(key="stream_in", label="Flux de marqueurs", kind="choice",
+              help=tr("mode.cvep.param.margin.aide")),
+        # Une HORLOGE, pas un événement à épocher : sans elle, compteur « sans_reference ». Son
+        # aide dit que le changer en marche n'a AUCUN effet (l'inlet unique du moteur reste sur
+        # l'ancien nom) — cf. le commentaire de `affecte_decodage` dans `contract.py`.
+        Param(key="stream_in", label=tr("mode.param.stream_in.label"), kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
-              help="Le nom du flux LSL sur lequel l'émetteur c-VEP publie son marqueur de "
-                   "CYCLE — un par redémarrage du code, soit environ un par seconde. Ce n'est "
-                   "pas un événement à épocher comme un flash P300 : c'est une HORLOGE, et sans "
-                   "elle le moteur ne sait pas où en est le code affiché, donc il ne décode "
-                   "rien du tout (compteur « sans_reference »). La liste montre les flux de "
-                   "marqueurs VISIBLES au moment où tu ouvres cette page, plus le nom par "
-                   "défaut, toujours proposé — c'est le cas normal, puisqu'on lance le moteur "
-                   "avant l'émetteur. Ton émetteur n'y est pas ? Ressors de la page et reviens. "
-                   "Le changer pendant que le mode tourne n'a AUCUN effet : l'inlet ouvert reste "
-                   "sur l'ancien nom. ARRÊTER puis redémarrer ce mode suffit en revanche à "
-                   "reprendre le nouveau. Un seul inlet existe pour tout le moteur, partagé par "
-                   "tous les modes à marqueurs : deux modes actifs qui en réclameraient des noms "
-                   "différents sont signalés bruyamment, un seul nom gagne."),
-        Param(key="vote_len", label="Fenêtres du vote", kind="int",
+              help=tr("mode.cvep.param.stream_in.aide")),
+        Param(key="vote_len", label=tr("mode.param.vote_len.label"), kind="int",
               default=CVEP_VOTE_LEN, min=1, max=15,
-              help="Sur combien de fenêtres récentes on vote avant d'émettre une cible. Le "
-                   "décodage tourne à ~5 Hz, donc 3 fenêtres = 0,6 s de latence ajoutée. "
-                   "Le mettre à 1 supprime le vote : chaque fenêtre décide seule, le mode "
-                   "devient plus réactif ET nettement plus bruyant."),
-        Param(key="min_votes", label="Votes concordants", kind="int",
+              help=tr("mode.cvep.param.vote_len.aide")),
+        Param(key="min_votes", label=tr("mode.param.min_votes.label"), kind="int",
               default=CVEP_MIN_VOTES, min=1, max=15,
               constraints=("votes_atteignables",),
-              help="Combien de ces fenêtres doivent désigner la MÊME cible pour l'émettre. En "
-                   "demander plus retarde la décision et la rend plus sûre. Ne peut pas dépasser "
-                   "« Fenêtres du vote » : au-delà, aucun vote ne peut plus jamais aboutir et le "
-                   "mode ne décide plus rien — en silence."),
+              help=tr("mode.cvep.param.min_votes.aide")),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture
         duration_s=0.0,            # pas de plancher à mesurer : la décision se joue sur une
         #                            corrélation contre un template appris, pas sur un z-score
         #                            contre un repos du jour (contrairement au SSVEP/neuro/ErrP)
+        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
         instruction="Le casque se stabilise — reste immobile.",
     ),
     calibration=Calib(
-        kind="fenetre", stimulus_id="cvep", label="Entraîner le c-VEP",
+        kind="fenetre", stimulus_id="cvep", label=tr("calib.cvep.label"),
         briefing=BRIEFING_CALIB,
         runtime_cls=CVEPCalibration,
         # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`
