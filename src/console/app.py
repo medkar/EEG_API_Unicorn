@@ -387,17 +387,17 @@ class Console(QMainWindow):
         plates rend un rapport de bruit d'arrondi, et le moteur ne peut le refuser qu'APRÈS
         37 secondes de casque. Autant le refuser avant.
 
-        ⚠️ Le `ContactPage` reçoit un `MesureSpec` sérialisé, qui n'a pas de `key_channels`. Pour
-        le TEST d'un mode, on lui prête ceux de CE mode (lus dans son contrat) : « Entraîner le
-        P300 » entourait Fz/Cz/Pz, « Tester le P300 » n'entourait rien (constat M2 de la revue).
-        Le contrôle alpha, qui ne teste aucun mode, n'entoure aucune voie ; le refus, lui, porte
-        toujours sur les huit.
+        Les voies entourées sont celles que la MESURE déclare (`key_channels` du catalogue : le
+        contrôle alpha déclare ses occipitales, passe QA du 2026-09-23). Un TEST n'en déclare
+        pas : on lui prête celles du mode testé, lues dans son contrat — « Entraîner le P300 »
+        entourait Fz/Cz/Pz, « Tester le P300 » n'entourait rien (constat M2 de la revue). Le
+        refus, lui, porte toujours sur les huit.
         """
         self._demande = {"quoi": "mesure", "mode_id": mesure_id, "params": dict(params or {}),
                          "retour": self.mesure_pages.get(mesure_id)}
         spec = self.mesures.get(mesure_id)
         mode = self.catalogue.get(self._mode_teste_par(mesure_id))
-        if spec is not None and mode is not None:
+        if spec is not None and mode is not None and not spec.get("key_channels"):
             spec = {**spec, "key_channels": mode.get("key_channels")}
         # Le bouton dit ce qu'on lance, dans les mots de l'étudiant — jamais « la mesure ».
         self._montrer_contact(spec, "Commencer le test" if mode is not None else "Commencer")
@@ -462,16 +462,19 @@ class Console(QMainWindow):
             self.commande("stop_mode", id=a_arreter)
             self._attente = dict(demande, arreter=a_arreter,
                                  echeance=self._horloge() + DELAI_ARRET_S)
-            quoi = "le test" if demande["quoi"] == "mesure" else "l'entraînement"
+            quoi = "ce test" if demande["quoi"] == "mesure" else "cet entraînement"
             # ⚠️ Le décodage RESTE arrêté après (constat M6 de la revue) : le relancer tout seul
             # referait son repos et recréerait son flux sans qu'on l'ait demandé. On le DIT, pour
             # qu'une application branchée sur ce flux ne tombe pas en silence.
-            self._avis_de(demande)(
+            # ⚠️ Et on le dit dans la NOTE de la page, pas dans son avis : l'avis vit dans le
+            # bloc « Avant de commencer », qui disparaît dès que la séance démarre — une fraction
+            # de seconde plus tard. Passe QA du 2026-09-23 : « je ne vois pas de message ». La
+            # note, elle, reste jusqu'au prochain « Commencer ».
+            self._note_de(demande)(
                 demande["mode_id"],
-                f"arrêt du décodage de « {self._nom_du_mode(a_arreter)} » demandé — {quoi} "
-                f"démarrera dès qu'il aura rendu la main (on ne peut pas faire les deux à la "
-                f"fois). Il restera arrêté ensuite : relance-le depuis sa tuile si ton "
-                f"application en a besoin.", alerte=False)
+                f"Décodage de « {self._nom_du_mode(a_arreter)} » arrêté pour {quoi} — on ne "
+                f"peut pas faire les deux à la fois. Il restera arrêté ensuite : relance-le "
+                f"depuis sa tuile si ton application en a besoin.")
             return
         self._demarrer_selon(demande)
 
@@ -485,6 +488,17 @@ class Console(QMainWindow):
     def _avis_de(self, demande):
         """Où s'affiche ce qu'on a à dire d'une demande : sa page de mesure, ou de calibration."""
         return self._avis_mesure if demande["quoi"] == "mesure" else self._avis
+
+    def _note_de(self, demande):
+        """Où poser une note DURABLE sur une demande : sa page de mesure, ou de calibration."""
+        pages = self.mesure_pages if demande["quoi"] == "mesure" else self.calib_pages
+
+        def noter(page_id, texte):
+            print(f"[console] {page_id} : {texte}")
+            page = pages.get(page_id)
+            if page is not None:
+                page.montrer_note(texte)
+        return noter
 
     def _nom_du_mode(self, mode_id):
         return (self.catalogue.get(mode_id) or {}).get("label", mode_id)
@@ -1998,7 +2012,7 @@ def _smoke():
             "candidat": {"modele": "/tmp/calib/candidat_mi_model_20260730-141205.joblib"}}}
     console.apply_state(fini)
     # 🔴 EN FACE : trois lignes, et le mur de texte relevé en séance le 2026-09-22 est replié.
-    chk(cal.bloc.verdict.text() == "FAIBLE" and "#e2603f" in cal.bloc.verdict.styleSheet(),
+    chk(cal.bloc.verdict.text() == "FAIBLE" and "#e5484d" in cal.bloc.verdict.styleSheet(),
         f"la page de calibration montre UN mot, en rouge ({cal.bloc.verdict.text()!r})")
     chk("hasard 33 %" in cal.bloc.chiffres.text(),
         f"…la mesure avec son hasard ({cal.bloc.chiffres.text()!r})")
@@ -2526,8 +2540,8 @@ def _smoke():
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"le mode qui décode est ARRÊTÉ d'abord, et rien d'autre n'est soumis ({journal})")
     chk(not processus, f"...et AUCUNE fenêtre n'est lancée tant qu'il décode ({processus})")
-    chk("arrêt du décodage" in cal_p3.avis.text(),
-        f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.avis.text()[:70]}…)")
+    chk("arrêté pour cet entraînement" in cal_p3.note.text(),
+        f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.note.text()[:70]}…)")
     # Le mode a rendu la main : la calibration part, dans le bon ordre, sans autre clic.
     console.apply_state(p300_pret)
     noms = [e[0] for e in journal]
@@ -3123,6 +3137,13 @@ def _smoke():
         "« Commencer » montre d'abord le contrôle de liaison")
     chk(not moteur_faux.commandes,
         f"…et RIEN n'est soumis tant qu'il n'est pas passé ({moteur_faux.commandes})")
+    # Les voies que la mesure MOYENNE sont entourées — lues dans son contrat, pas écrites ici.
+    # Passe QA du 2026-09-23 : « on ne sait pas laquelle ou lesquelles sont utilisées ».
+    console.contact.update_from({**state, "quality": qualite_saine})
+    cles_a = [state["channels"][i] for i in mod_alpha.SPEC.key_channels]
+    chk(cles_a and all(n in console.contact.cles.text() for n in cles_a),
+        f"le contrôle de liaison de « Vérifier le casque » nomme ses voies ({cles_a}, "
+        f"{console.contact.cles.text()[:60]!r})")
     console.contact.bouton_lancer.click()
     chk(("start_mesure", {"id": "alpha", "params": {}}) in moteur_faux.commandes,
         f"…puis « Lancer » soumet `start_mesure` ({moteur_faux.commandes})")
@@ -3256,16 +3277,23 @@ def _smoke():
     mes_ssvep.bouton_commencer.click()
     console.contact.bouton_lancer.click()
     chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})]
-        and "arrêt du décodage" in mes_ssvep.avis.text(),
+        and "arrêté pour ce test" in mes_ssvep.note.text(),
         f"mode testé qui TOURNE : `stop_mode` d'abord, et rien d'autre tant qu'il n'a pas rendu "
         f"la main — l'écran dit ce qu'on attend ({moteur_faux.commandes}, "
-        f"{mes_ssvep.avis.text()[:40]}…)")
+        f"{mes_ssvep.note.text()[:40]}…)")
     # …et il dit que le décodage RESTERA arrêté (constat M6) : une application branchée sur ce
     # flux tomberait sinon en silence après le test.
-    chk("restera arrêté" in mes_ssvep.avis.text(),
-        f"…et qu'il RESTERA arrêté après le test ({mes_ssvep.avis.text()[-90:]!r})")
+    chk("restera arrêté" in mes_ssvep.note.text(),
+        f"…et qu'il RESTERA arrêté après le test ({mes_ssvep.note.text()[-90:]!r})")
     console.apply_state(ssvep_regle)                          # il a rendu la main
     console.apply_state({**ssvep_regle, "mesure": en_cours})  # le test existe pour de bon
+    # 🔴 …et la note est TOUJOURS LÀ, visible, une fois le test parti. Passe QA du 2026-09-23 :
+    # elle vivait dans le bloc « Avant de commencer », caché dès que la séance démarre, et
+    # l'avis était vidé au même tour — une fraction de seconde d'affichage, personne ne la lisait.
+    chk("restera arrêté" in mes_ssvep.note.text() and mes_ssvep.note.isVisibleTo(mes_ssvep)
+        and not mes_ssvep.bloc_avant.isVisibleTo(mes_ssvep),
+        f"…et la note RESTE lisible pendant le test, hors du bloc « Avant » caché "
+        f"({mes_ssvep.note.text()[:40]!r})")
     suite = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
     chk(suite == ["stop_mode", "start_mesure", "fenetre"],
         f"…puis `start_mesure` part tout seul, et la fenêtre après : arrêter, mesurer, montrer "

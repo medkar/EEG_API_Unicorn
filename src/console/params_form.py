@@ -113,7 +113,7 @@ class ParamsForm(QWidget):
             self.detail.toggled.connect(self._deplier)
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
-        self.refus.setStyleSheet("color: #e2603f;")
+        self.refus.setStyleSheet("color: #e5484d;")
         # Un avertissement dit qu'un réglage a été ACCEPTÉ, avec réserve — PAS refusé. Étiquette
         # séparée, couleur différente : le rouge de `refus` sur un succès ferait passer une
         # proposition acceptée pour une panne.

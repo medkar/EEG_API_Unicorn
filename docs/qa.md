@@ -157,6 +157,9 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 3. **Si le flux de marqueurs d'une application n'est pas visible à l'entrée d'une page de mode**,
    la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu. Antérieur au
    chantier ; relève de « Connecter ».
+4. **« Vérifier le casque » ne vérifie que l'alpha** (passe du 2026-09-23, point 1.2). Demandé :
+   que cet écran dise si le signal de CHAQUE électrode est bon (contact, bruit, saturation…), pas
+   seulement mesurer l'effet de Berger. À retravailler plus tard — chantier à part.
 
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
@@ -379,7 +382,8 @@ Page **SSVEP**, mode **arrêté**, dans cet ordre.
    ✅ **8,571 · 15 · 20**, le jeu accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu
    accordé au pic de la **population** (9,6 Hz).
 4. « Fréquences des cibles » à `15, 17` → **Appliquer**.
-   ✅ Un refus **en rouge** qui nomme le coupable et propose les voisins : « 17 Hz n'est pas un
+   ✅ Un refus **en rouge franc** (plus le corail qui se lisait orange, passe du 2026-09-23) qui
+   nomme le coupable et propose les voisins : « 17 Hz n'est pas un
    diviseur entier de 60 Hz […] Les plus proches sont 15 et 20 Hz ».
    ✅ La saisie fautive **reste dans le champ**, et le refus rappelle ce qui reste **en vigueur**.
    ❌ Régression : « « SSVEP » n'est pas démarré » au lieu du refus sur les fréquences (le
@@ -387,10 +391,12 @@ Page **SSVEP**, mode **arrêté**, dans cet ordre.
 5. Remets `12, 15, 20` → **Appliquer** → vert.
 6. Grille → tuile **Motor Imagery** (sans modèle sur ce poste) → **Démarrer**.
    ✅ Le refus apparaît **dans le bandeau**, en haut de la fenêtre — pas seulement dans la console
-   cmd — et il nomme le bouton **« Entraîner »**.
+   cmd — et il tient en **une ligne** : « Aucun modèle entraîné : dans la console, clique
+   « Entraîner » sur la page du mode. »
 
 ❌ Régression : (6) écran strictement immobile après le clic — le défaut 1.13, corrigé le
-2026-09-10 ; ou un refus qui dit encore « Calibrer » (corrigé par `c9701fa`).
+2026-09-10 ; un refus qui dit encore « Calibrer » (corrigé par `c9701fa`) ; ou le paragraphe d'aide
+du modèle recopié derrière « aucun choix disponible » (passe du 2026-09-23).
 
 → recette 1.8, 1.9, 1.13
 
@@ -401,13 +407,15 @@ aux points 1.8 à 1.10 ; regarde-le une fois pour lui-même.
 
 ✅ Un écran « Contrôle de la liaison casque » montre **le σ de chacune des huit voies**, un verdict par
 voie, et deux boutons : **« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance.
-✅ Sur « Entraîner » **et sur « Tester »**, les **voies clés du mode** sont nommées et surlignées
-(le test prend celles de son mode depuis `186510f`). Sur « Vérifier le casque », aucune. Le refus
-porte sur les huit dans tous les cas.
+✅ **Partout**, une phrase « Voies où ce geste lit son signal : … (encadrées) », et ces lignes-là
+**encadrées en bleu** : les voies du mode sur « Entraîner » et « Tester » (le test prend celles de
+son mode, `186510f`), et **Pz, PO7, Oz, PO8** sur « Vérifier le casque » — les quatre qu'elle
+moyenne (passe du 2026-09-23). Le refus porte sur les huit dans tous les cas.
 ✅ Sur board de test, les huit passent (σ mesurés de 7 à 73 µV) et on continue.
 ✅ « ← Annuler » ramène à la page d'où l'on venait.
 
-❌ Régression : l'écran n'apparaît pas, ou il laisse passer une voie hors de **[0,5 ; 500] µV**.
+❌ Régression : l'écran n'apparaît pas, ou il laisse passer une voie hors de **[0,5 ; 500] µV** ;
+« Vérifier le casque » sans aucune voie encadrée.
 ⚠️ **Il n'y a AUCUNE porte de sortie, et c'est délibéré** — un contournement à un clic est un
 contournement qu'on prend par réflexe. Si au casque une électrode refuse de descendre sous le
 seuil, **c'est une décision à prendre devant le casque**, pas un bug à corriger dans l'urgence.
@@ -439,7 +447,11 @@ supprimé).
 
 → recette 1.21, 2.1
 
-### ☐ 1.9 — « Tester » le SSVEP, de bout en bout (~3,6 min)
+### ☐ 1.9 — « Tester » le SSVEP : les gestes et l'ordre (~1 min)
+
+⚠️ **Ici on ne va PAS au bout** : sur le board de test il n'y a aucun SSVEP dans le signal, le verdict
+sort MUET à tous les coups (vu le 2026-09-23) et 3,6 min n'apprennent rien. **Le test complet et son
+verdict se jouent au casque, point 2.2.** Ce point-ci vérifie les gestes, l'ordre, et l'abandon.
 
 Pour vérifier qu'un test arrête le mode, **démarre d'abord le SSVEP** depuis sa tuile, puis ouvre sa
 page.
@@ -454,27 +466,25 @@ page.
    configuration impossible ne mesurerait rien.
 3. Remets `12, 15, 20` → **« Tester »** → **« Commencer »** → contrôle de liaison → **« Commencer
    la mesure »**.
-   ✅ La page dit « arrêt de « SSVEP » demandé — le test démarrera dès qu'il aura rendu la main (un
-   mode ne se teste pas pendant qu'il décode) », et la tuile passe à « arrêté ».
+   ✅ Sous l'en-tête de la page, en gris : « Décodage de « SSVEP » arrêté pour ce test — on ne peut
+   pas faire les deux à la fois. Il restera arrêté ensuite : relance-le depuis sa tuile si ton
+   application en a besoin. » **Elle reste affichée** pendant le test et après. ❌ Régression : elle
+   disparaît dès que le test démarre (le défaut du 2026-09-23 — elle vivait moins d'une seconde).
    ✅ **Puis** la fenêtre s'ouvre, plein écran : **trois** flèches étiquetées **12.00 · 15.00 ·
    20.00 Hz**, une croix pour le repos, puis une flèche **entourée de bleu** par essai. Le HUD affiche
    `… fps | sautées N | ESC = quitter`.
    ❌ Régression : `15 · 20 · 8,571` à l'écran — le trio du dépôt, pendant que le moteur corrèle
    sur 12 · 15 · 20.
    ✅ Pendant ce temps la page montre « Mesure en cours », le décompte et une barre d'avancement.
-4. **Ne ferme pas la fenêtre** : elle se ferme seule à la fin.
-   ✅ Le **bandeau** affiche les deux dernières lignes de la fenêtre : son bilan — « fin : N frames
-   affichées, M sautée(s) (x %) », suivi de l'alerte si trop d'images ont sauté —, pas le journal
-   essai par essai.
-   ✅ Le résultat : trois lignes en face — le mot, les chiffres (« … de cibles justes quand il
-   annonce … (hasard 33 %) · il annonce sur … des 36 essais », ou « aucune cible annoncée sur 36
-   essais » s'il s'est tu), une réserve —, le reste sous « Détails ».
-   ✅ Le SSVEP **reste arrêté** après le test : le décodage continu se relance depuis sa tuile.
+4. Après quelques essais, **« Abandonner »** sur la page.
+   ✅ La fenêtre se ferme **toute seule** (pas besoin d'Échap), et la page dit « La fenêtre du test
+   a été fermée : la séance s'est interrompue ».
+   ✅ Aucun verdict n'est inventé sur une séance coupée.
+   ✅ La tuile SSVEP dit **« arrêté »** et le reste : le décodage continu se relance depuis sa tuile.
    ✅ `data/` n'a rien gagné (empreinte du point 0.4).
 
 ❌ Régression : la fenêtre s'ouvre **avant** que la page ne passe à « Mesure en cours » (l'ordre
-moteur → fenêtre est un contrat testé) ; un effectif ~7× plus grand que 36 (les fenêtres glissantes
-comptées comme des essais) ; un fichier écrit.
+moteur → fenêtre est un contrat testé) ; une fenêtre qui survit à « Abandonner » ; un fichier écrit.
 
 → recette 1.20
 
@@ -483,7 +493,7 @@ comptées comme des essais) ; un fichier écrit.
 Le plus court des modes à modèle. Page **P300**.
 
 1. **Avant tout entraînement**, sur un poste sans modèle P300 : **« Tester »**.
-   ✅ Refus sous « 1. Régler » (« « Modèle entraîné » : aucun choix disponible — … »), et le test ne
+   ✅ Refus sous « 1. Régler » (« Aucun modèle entraîné : dans la console, clique « Entraîner » … »), et le test ne
    s'ouvre pas. C'est le moteur qui tient l'ordre Entraîner → Tester, pas l'écran.
 2. **« 2. Entraîner »** → **« Entraîner »**.
    ✅ La page **« Entraîner le P300 »**, retour **« ← P300 »** : briefing, **« Commencer »** →
@@ -550,8 +560,8 @@ sautées toutes les 10 s, périodiquement ». Périodique, ce n'est pas du jitte
 de processus**, et il y a trois suspects.
 
 **(a)** Relève d'abord le taux **EN SÉANCE**, console et moteur en marche : c'est le bilan que le
-bandeau affiche à la fermeture de la fenêtre d'un test (point 1.9, ou n'importe quel test du
-bloc 2).
+bandeau affiche à la fermeture de la fenêtre d'un test **mené à son terme** (point 2.2, ou
+n'importe quel test du bloc 2 — plus le 1.9, qui s'abandonne).
 **(b)** Puis **ferme la console** — rien d'autre du projet ne doit tourner — et lance la fenêtre
 SEULE. Elle n'ouvre pas le casque, donc il n'y a rien à démonter :
 
@@ -646,7 +656,13 @@ d'émission**. Le 2026-09-22 : 18 annonces sur 36, les 18 justes.
 ✅ Le mot : vert si justesse ≥ 90 % **et** émission ≥ 44 % ; orange au-dessus du hasard ; rouge si
 le **test binomial exact** ne rejette pas le hasard (p ≥ 0,05), ou **MUET** si le moteur n'a rien
 annoncé. ⚠️ Wilson reste l'intervalle AFFICHÉ ; depuis le 2026-09-22 il ne décide plus rien.
-✅ Bilan de la fenêtre au bandeau : relève le **% de frames sautées** (point 1.13).
+✅ La fenêtre se ferme **seule** à la fin. Le **bandeau** affiche ses deux dernières lignes — son
+bilan « fin : N frames affichées, M sautée(s) (x %) », et l'alerte si trop d'images ont sauté —, pas
+le journal essai par essai. **Relève le x %** (point 1.13).
+✅ Le résultat en trois lignes — le mot, les chiffres (« … de cibles justes quand il annonce …
+(hasard 33 %) · il annonce sur … des 36 essais »), une réserve —, le reste sous « Détails ».
+✅ La note grise « Décodage de « SSVEP » arrêté pour ce test… » est encore là, et le SSVEP reste
+arrêté. `data/` n'a rien gagné.
 
 ❌ Régression : la justesse s'effondre — c'est le **seul** mode déjà validé sur un cerveau : suspecte
 la séance (contact, saline, fatigue) avant le code.

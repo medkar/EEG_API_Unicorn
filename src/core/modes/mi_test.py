@@ -471,7 +471,7 @@ def _selftest():
         _os.makedirs(vide)
         mi_models.modeles_disponibles = lambda d=vide: vrai_dispo(d)
         _v, raison = validate(SPEC, {})
-        chk(raison is not None and "aucun choix disponible" in raison,
+        chk(raison is not None and "Aucun modèle entraîné" in raison,
             f"sans modèle, `contract.validate` REFUSE le test, avec une raison lisible ({raison})")
         mi_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
         valeurs, raison = validate(SPEC, {"model": m3})

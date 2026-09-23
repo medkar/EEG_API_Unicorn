@@ -108,7 +108,8 @@ from core.cvep_decoder import CVEPDecoder, CVEPModel  # noqa: E402
 from core.cvep_rcca import RCCADecoder  # noqa: E402
 from core.lsl_io import DecodedCVEPPublisher, cvep_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
-from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
+                                  validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `cvep_calib` ne nous importe pas en retour (il lit
 # `CVEPRuntime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
@@ -747,6 +748,7 @@ SPEC = ModeSpec(
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=_modeles_disponibles,
+              si_vide=SANS_MODELE,
               help="Le modèle produit par une calibration c-VEP, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des corrélations plausibles et fausses. La liste "
                    "va du plus récent au plus ancien, donc le défaut est celui que tu viens de "
@@ -928,7 +930,7 @@ def _selftest():
     # un refus au bon diagnostic mais au mauvais geste coûte plus cher qu'un silence — l'étudiant
     # fait ce qu'on lui dit, ça échoue, et il cherche la faute ailleurs. La seconde condition
     # INTERDIT donc l'ancien texte, elle ne se contente pas d'exiger le nouveau.
-    chk(raison is not None and "aucun choix disponible" in raison
+    chk(raison is not None and "Aucun modèle entraîné" in raison
         and "Entraîner" in raison and "research/app.py" not in raison,
         f"sans modèle, le mode refuse en envoyant vers la CONSOLE, pas vers l'appli supprimée "
         f"({raison})")

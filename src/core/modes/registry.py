@@ -106,6 +106,7 @@ def catalogue_mesures():
             # saurait pas qu'une mesure a besoin d'un stimulus, et le moteur attendrait 30 s des
             # marqueurs que personne n'enverrait.
             "stimulus_id": spec.stimulus_id,
+            "key_channels": list(spec.key_channels),
             "params": _params_serialises(spec.params),
         }
         for spec in MESURES

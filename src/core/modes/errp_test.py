@@ -790,7 +790,7 @@ def _selftest():
         _os.makedirs(vide)
         errp_models.modeles_disponibles = lambda d=vide: vrai_dispo(d)
         _v, raison = validate(SPEC, {})
-        chk(raison is not None and "aucun choix disponible" in raison,
+        chk(raison is not None and "Aucun modèle entraîné" in raison,
             f"sans modèle, le CONTRAT refuse le test, avec la raison du mode ({raison[:60]}…)")
         errp_models.modeles_disponibles = lambda d=dossier: vrai_dispo(d)
         v, raison = validate(SPEC, {"model": chemin})

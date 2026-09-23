@@ -498,7 +498,7 @@ class FluxPage(QWidget):
         """
         self._diagnostic_enr = texte
         self.etat_enregistrement.setText(texte)
-        self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+        self.etat_enregistrement.setStyleSheet("color: #e5484d;")
 
     def _montrer_enregistrement(self, etat):
         """Peint l'état de l'enregistrement TEL QUE LE MOTEUR le publie. Ne déduit rien.
@@ -521,7 +521,7 @@ class FluxPage(QWidget):
             self.etat_enregistrement.setText(
                 f"⚠ enregistrement INTERROMPU : {etat['probleme']} — {etat.get('lignes', 0)} "
                 f"verdict(s) tout de même sauvés dans {etat.get('chemin', '')}")
-            self.etat_enregistrement.setStyleSheet("color: #e2603f;")
+            self.etat_enregistrement.setStyleSheet("color: #e5484d;")
             return
         # Le BOUTON suit toujours le moteur (ci-dessus) : c'est lui qui dit ce que fera le clic
         # suivant, et le désynchroniser serait pire. Le TEXTE, lui, appartient au diagnostic tant

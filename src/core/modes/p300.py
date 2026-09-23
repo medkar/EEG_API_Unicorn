@@ -70,7 +70,8 @@ from core import p300_models  # noqa: E402
 from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
-from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
+                                  validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `p300_calib` ne nous importe pas en retour (il lit
 # `P300Runtime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
@@ -539,6 +540,7 @@ SPEC = ModeSpec(
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: p300_models.modeles_disponibles(),
+              si_vide=SANS_MODELE,
               help="Le modèle produit par une calibration P300, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
                    "dans la liste ? Ouvre la console, page P300, et clique « Entraîner » : "
@@ -784,7 +786,7 @@ def _selftest():
         # suivre coûte plus cher qu'un refus muet : l'étudiant fait ce qu'on lui dit, ça ne marche
         # pas, et il cherche la panne ailleurs. Même texte, même geste que
         # `core/p300_models.charger`, où cette phrase a déjà été fausse deux fois.
-        chk(raison is not None and "aucun choix disponible" in raison
+        chk(raison is not None and "Aucun modèle entraîné" in raison
             and "console" in raison and "Entraîner" in raison
             and "research/app.py" not in raison,
             f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")

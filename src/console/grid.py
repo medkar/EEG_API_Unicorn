@@ -389,7 +389,7 @@ class MesureTile(QFrame):
             self.detail.setStyleSheet(
                 "font-size: 11px; color: "
                 + ("#8a8f9c" if franchie is None else
-                   ("#3fae5a" if franchie else "#e2603f")))
+                   ("#3fae5a" if franchie else "#e5484d")))
             return
         self.etat.setText("en cours")
         self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")

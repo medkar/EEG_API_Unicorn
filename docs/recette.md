@@ -308,7 +308,8 @@ dernier. **Le moteur publie les six modes.** Le module qui portait les entrées 
 > de SON mode ; la règle est lue dans le `test_id` des modes, pas dans une liste).
 
 > **Sans modèle entraîné sur ce poste, c'est normal** : la tuile reste active, mais lancer le mode
-> sera refusé avec « aucun choix disponible » et l'aide qui dit de calibrer. Ça vaut pour les
+> sera refusé d'une ligne : « Aucun modèle entraîné : dans la console, clique « Entraîner » sur la
+> page du mode. » Ça vaut pour les
 > **quatre** modes à modèle : MI, P300, ErrP et c-VEP. `data/` est gitignoré, donc un dépôt
 > fraîchement cloné est toujours dans cet état.
 
@@ -493,7 +494,7 @@ pour changer l'ensemble des modes actifs.
       qu'il ait été nécessaire de fermer la console**.
 - [ ] La tuile **Motor Imagery** porte le même bouton **Démarrer** ; elle n'est grisée nulle part
       (cf. 1.2). Sans modèle entraîné sur ce poste, cliquer dessus redonne le refus déjà vu en
-      1.2 (« aucun choix disponible »), pas un bouton inactif.
+      1.2 (« Aucun modèle entraîné… »), pas un bouton inactif.
 
 > 🐛 **2026-08-17 — LE défaut du niveau 1, et le seul qui ne soit pas cosmétique.** Ce dernier point
 > échoue : le clic est **silencieux**. Le moteur refuse correctement, avec le message complet —
@@ -509,9 +510,10 @@ pour changer l'ensemble des modes actifs.
 > ✅ **Corrigé le 2026-09-10** (`c960e39`) : tout refus d'une commande s'affiche dans le **bandeau**,
 > visible depuis n'importe quelle page, et une commande acceptée l'efface. Vérifié par
 > `console/app.py --smoke` (clic « Démarrer » sur la tuile MI d'un moteur qui refuse). Attendu
-> désormais : le refus « « Modèle entraîné » : aucun choix disponible — … » **dans le bandeau**. ⚠️
-> Sa fin dit encore de cliquer « Calibrer », un bouton qui s'appelle « Entraîner » depuis le
-> 2026-09-22 (constat ouvert de `docs/qa.md`).
+> désormais : le refus **dans le bandeau**, en UNE ligne — « Aucun modèle entraîné : dans la
+> console, clique « Entraîner » sur la page du mode. » Il recopiait l'aide entière du réglage
+> derrière « aucun choix disponible », un paragraphe dans un bandeau : raccourci le 2026-09-23
+> (`Param.si_vide`, passe QA), après avoir dit « Calibrer » jusqu'au 2026-09-23 (`c9701fa`).
 
 ### 1.14 — Le P300 : le tuyau des marqueurs, sans casque
 

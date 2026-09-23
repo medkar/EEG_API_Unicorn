@@ -28,7 +28,7 @@ from core.modes.affichage import NIVEAUX  # noqa: E402
 
 # Le code couleur, et rien d'autre. Les mêmes teintes que le reste de la console : le rouge des
 # refus, l'ambre des avertissements, le vert des réglages retenus.
-COULEURS = {"bon": "#3fae5a", "moyen": "#b8860b", "faible": "#e2603f"}
+COULEURS = {"bon": "#3fae5a", "moyen": "#b8860b", "faible": "#e5484d"}
 NEUTRE = "#8a8f9c"      # un résultat SANS niveau : on ne l'invente pas, on le laisse gris
 # La RÉSERVE a sa propre teinte, celle des avertissements de la console (« accepté, MAIS »), quel
 # que soit le verdict. Peinte de la couleur du verdict, elle se lisait en VERT sous un bon

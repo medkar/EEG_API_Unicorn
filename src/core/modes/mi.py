@@ -30,7 +30,7 @@ import numpy as np  # noqa: E402
 from core import mi_models  # noqa: E402
 from core.lsl_io import DecodedMIPublisher, mi_channel_labels, stream_name  # noqa: E402
 from core.mi_decoder import MIDecoder  # noqa: E402
-from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
+from core.modes.contract import ModeSpec, Param, Rest, SANS_MODELE, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 from core.modes import mi_calib  # noqa: E402
 
@@ -232,6 +232,7 @@ SPEC = ModeSpec(
             # fonction directement figerait la référence à l'import, et l'autotest ne pourrait
             # plus rediriger la recherche vers un dossier temporaire sans toucher à `data/`.
             choices_fn=lambda: mi_models.modeles_disponibles(),
+            si_vide=SANS_MODELE,
             help="Le modèle produit par une calibration MI, propre à TA personne — celui de "
                  "quelqu'un d'autre donne des probabilités plausibles et fausses. Aucun modèle "
                  "dans la liste ? Lance une calibration depuis cette console : bouton "
@@ -356,8 +357,8 @@ def _selftest():
         _os.makedirs(vide, exist_ok=True)
         mi_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
         _v, raison = validate(SPEC, {})
-        chk(raison is not None and "aucun choix disponible" in raison
-            and "calibration" in raison,
+        chk(raison is not None and "Aucun modèle entraîné" in raison
+            and "Entraîner" in raison,
             f"sans modèle, le mode refuse en disant quoi faire ({raison})")
 
         # 2. Avec un modèle, les défauts sont valides et le plus récent est pris.

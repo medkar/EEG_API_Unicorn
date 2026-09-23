@@ -66,7 +66,7 @@ class ContactPage(QWidget):
         # réagit pas se lit comme une interface cassée — c'est la panne que ce chantier répare.
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
-        self.refus.setStyleSheet("color: #e2603f; font-weight: bold;")
+        self.refus.setStyleSheet("color: #e5484d; font-weight: bold;")
         self.conseil = QLabel(
             "Saliner les électrodes est le principal levier de qualité du signal, et une "
             "mastoïde décollée rend la séance entière inexploitable sans autre symptôme.")
@@ -150,8 +150,8 @@ class ContactPage(QWidget):
         if cles:
             libelles = ", ".join(noms[i] for i in sorted(cles) if i < len(noms))
             self.cles.setText(
-                f"Voies clés de ce mode : {libelles} — ce sont celles à saliner en priorité. "
-                f"Les autres comptent aussi : le refus ci-dessous porte sur les huit.")
+                f"Voies où ce geste lit son signal : {libelles} (encadrées) — à saliner en "
+                f"priorité. Les autres comptent aussi : le refus ci-dessous porte sur les huit.")
         else:
             self.cles.setText("")
 
@@ -163,7 +163,7 @@ class ContactPage(QWidget):
             barre.setValue(0 if sigma is None
                            else int(max(0.0, min(sigma / SPAN_SIGMA, 1.0)) * 100))
             verdict.setText("σ indisponible" if sigma is None else f"σ = {sigma:.1f} µV · {v}")
-            couleur = "#8a8f9c" if not v else ("#3fae5a" if v == "ok" else "#e2603f")
+            couleur = "#8a8f9c" if not v else ("#3fae5a" if v == "ok" else "#e5484d")
             verdict.setStyleSheet(f"color: {couleur};")
             ligne.setStyleSheet("border: 1px solid #4c8dff;" if i in cles else "")
 

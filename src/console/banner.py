@@ -18,7 +18,7 @@ class Banner(QWidget):
         self.liaison = QLabel("moteur non démarré")
         self.sigmas = QLabel("")
         self.alarme = QLabel("")
-        self.alarme.setStyleSheet("color: #e2603f; font-weight: bold;")
+        self.alarme.setStyleSheet("color: #e5484d; font-weight: bold;")
         # L'état de la FENÊTRE de stimulus, s'il y en a une. Ici et pas sur une page, pour la même
         # raison que le reste du bandeau : une fenêtre qui meurt pendant qu'on regarde la grille
         # doit se voir quand même. Et une fenêtre morte en silence, c'est un moteur qui attend des
@@ -37,13 +37,13 @@ class Banner(QWidget):
         # chantier a passé son temps à réparer ailleurs ; il vivait encore ici.
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
-        self.refus.setStyleSheet("color: #e2603f; font-weight: bold;")
+        self.refus.setStyleSheet("color: #e5484d; font-weight: bold;")
         # La MORT du fil du moteur. Ici, et pas sur une page, pour la raison de tout ce bandeau :
         # elle peut arriver pendant qu'on regarde n'importe quel écran, et elle rend faux tout ce
         # qui s'affiche ailleurs.
         self.moteur = QLabel("")
         self.moteur.setWordWrap(True)
-        self.moteur.setStyleSheet("color: #e2603f; font-weight: bold;")
+        self.moteur.setStyleSheet("color: #e5484d; font-weight: bold;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
         for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre, self.refus,
@@ -75,7 +75,7 @@ class Banner(QWidget):
         """Ce que devient la fenêtre de stimulus. Vient de `LanceurFenetre`, pas du moteur : le
         moteur ne sait pas qu'elle existe, et c'est délibéré (il tourne sans écran)."""
         self.fenetre.setText(texte or "")
-        self.fenetre.setStyleSheet("color: #e2603f; font-weight: bold;" if alerte
+        self.fenetre.setStyleSheet("color: #e5484d; font-weight: bold;" if alerte
                                    else "color: #8a8f9c;")
 
     def update_from(self, state):

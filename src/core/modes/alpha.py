@@ -361,6 +361,9 @@ SPEC = MesureSpec(
     # La seconde moitié se fait LES YEUX FERMÉS : sans top sonore, la personne ne saura pas quand
     # rouvrir. C'est ce champ, et lui seul, qui fait avertir la console quand il n'y a pas de son.
     yeux_fermes=True,
+    # Les voies MOYENNÉES par la mesure : le contrôle de liaison les entoure. Lues sur la même
+    # constante que le calcul, jamais recopiées.
+    key_channels=tuple(OCCIPITAL),
 )
 
 

@@ -67,6 +67,10 @@ class Param:
                                     # première condition livrerait un no-op silencieux en croyant
                                     # respecter le contrat.
     help: str = ""
+    si_vide: str = ""         # le refus ENTIER quand un `choice` n'a aucun choix, s'il en faut un
+    #                           plus court que « aucun choix disponible — <help> ». Passe QA du
+    #                           2026-09-23 : l'aide complète du modèle, recopiée dans un refus
+    #                           affiché au bandeau, était un paragraphe là où il fallait une ligne.
 
     def choices_status(self):
         """(choix, None) si la source a répondu, ((), raison) si elle a LEVÉ.
@@ -309,6 +313,11 @@ def _check_bounds(param, value):
     return None
 
 
+# Le refus d'un mode à modèle quand aucun modèle n'existe. UNE phrase, partagée par les quatre
+# (MI, P300, ErrP, c-VEP) et par leurs tests, qui reprennent les `Param` du mode.
+SANS_MODELE = "Aucun modèle entraîné : dans la console, clique « Entraîner » sur la page du mode."
+
+
 def _coerce(param, value):
     """(valeur convertie, None) ou (None, raison). Convertit AVANT de vérifier les bornes."""
     if param.kind == "bool":
@@ -319,6 +328,8 @@ def _coerce(param, value):
         if not choix:
             # Cas courant, pas exceptionnel : aucun modèle entraîné encore. Le refus doit dire
             # comment en obtenir un, sinon l'étudiant voit un champ vide et rien d'autre.
+            if param.si_vide:
+                return None, param.si_vide
             detail = f" — {param.help}" if param.help else ""
             return None, f"« {param.label} » : aucun choix disponible{detail}"
         if value not in choix:
@@ -713,6 +724,16 @@ def _selftest():
     chk(raison is not None and "aucun choix disponible" in raison
         and "Produit par une calibration." in raison,
         f"et le refus reprend l'aide du réglage ({raison})")
+    # …sauf si le réglage déclare son refus COURT (`si_vide`) : c'est lui, et lui seul, qui part
+    # — pas l'aide recopiée derrière (passe QA du 2026-09-23 : un paragraphe dans le bandeau).
+    spec_court = ModeSpec(
+        id="dyn2", label="Dyn2", family="actif", summary="", status="moteur",
+        params=(Param(key="modele", label="Modèle entraîné", kind="choice",
+                      choices_fn=lambda: [], si_vide=SANS_MODELE,
+                      help="Une aide longue qui ne doit PAS finir dans le refus."),),
+        stream="decoded_dyn2", channels=("x",))
+    _v, raison = validate(spec_court, {})
+    chk(raison == SANS_MODELE, f"un `si_vide` déclaré EST le refus, sans l'aide ({raison})")
 
     # « Liste vide » et « la source a LEVÉ » sont deux situations opposées : la première est
     # normale sur un dépôt fraîchement cloné, la seconde est un défaut de déclaration.

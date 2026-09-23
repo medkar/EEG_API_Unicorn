@@ -182,9 +182,15 @@ class MesurePage(QWidget):
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         # Ce que le MOTEUR a répondu quand on a essayé de commencer. Un refus qui ne s'affiche que
         # sur stdout est un bouton qui ne fait rien.
+        # Une NOTE sur le déroulé qui doit survivre au changement de bloc — « tel mode a été
+        # arrêté pour cette séance, et le restera ». Hors des trois blocs, sous l'en-tête : l'avis,
+        # lui, disparaît avec « Avant de commencer » dès que la séance démarre.
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("color: #8a8f9c;")
         self.avis = QLabel("")
         self.avis.setWordWrap(True)
-        self.avis.setStyleSheet("color: #e2603f;")
+        self.avis.setStyleSheet("color: #e5484d;")
         self.bouton_commencer = QPushButton("Commencer")
         self.bouton_commencer.clicked.connect(self._commencer)
         avant = QVBoxLayout(self.bloc_avant)
@@ -276,6 +282,7 @@ class MesurePage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
+        layout.addWidget(self.note)
         layout.addWidget(self.bloc_pendant)
         layout.addWidget(self.bloc_apres)
         layout.addWidget(self.bloc_avant)
@@ -297,6 +304,7 @@ class MesurePage(QWidget):
         le sujet au lieu du câble.
         """
         self.avis.setText("")
+        self.note.setText("")
         self.console.demander_mesure(self.mesure_id, self.formulaire.values())
 
     def _abandonner(self):
@@ -337,7 +345,7 @@ class MesurePage(QWidget):
             self.reponse_pic.setStyleSheet("color: #3fae5a;")
         else:
             self.reponse_pic.setText(ack.get("reason", ""))
-            self.reponse_pic.setStyleSheet("color: #e2603f;")
+            self.reponse_pic.setStyleSheet("color: #e5484d;")
 
     def rafraichir_choix(self, cles):
         """Recharge les listes de choix DYNAMIQUES des réglages `cles` (les modèles entraînés).
@@ -380,10 +388,14 @@ class MesurePage(QWidget):
             self.frequences.setText("")
         self.frequences.setVisible(bool(freqs))
 
+    def montrer_note(self, texte):
+        """Une note de déroulé qui RESTE jusqu'au prochain « Commencer » (cf. `self.note`)."""
+        self.note.setText(texte or "")
+
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le contrôle de liaison) a répondu à « Commencer »."""
         self.avis.setText(texte or "")
-        self.avis.setStyleSheet("color: #e2603f;" if alerte else "color: #8a8f9c;")
+        self.avis.setStyleSheet("color: #e5484d;" if alerte else "color: #8a8f9c;")
 
     # --- le top sonore ----------------------------------------------------------------------
 
@@ -536,7 +548,7 @@ class MesurePage(QWidget):
                 "🛑 BARRIÈRE NON FRANCHIE — ARRÊTE LA SÉANCE ICI. Tant que ce contrôle ne passe "
                 "pas, aucun test et aucun décodage ne veulent rien dire : ils lisent "
                 "tous ce même signal. Reprends le montage, puis relance CE contrôle.")
-            self.barriere.setStyleSheet("font-size: 15px; font-weight: bold; color: #e2603f;")
+            self.barriere.setStyleSheet("font-size: 15px; font-weight: bold; color: #e5484d;")
 
     def _montrer_proposition(self, propose):
         """Le bouton qui applique le réglage produit — visible seulement s'il y en a un.

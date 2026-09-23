@@ -113,6 +113,11 @@ class MesureSpec:
     #                             la console doit le dire. Les tests, non — les avertir de même
     #                             était faux cinq fois sur six. Sérialisé par
     #                             `registry.catalogue_mesures()` sous la clé « yeux_fermes ».
+    key_channels: tuple = ()    # les voies où CETTE mesure lit son signal, pour que le contrôle de
+    #                             liaison les entoure — même champ que `ModeSpec.key_channels`. Vide
+    #                             pour un TEST : la console prête alors celles du mode testé. Le
+    #                             contrôle alpha déclare ses occipitales (passe QA du 2026-09-23 :
+    #                             « on ne sait pas laquelle ou lesquelles sont utilisées »).
     stimulus_id: str = ""       # la CLÉ de la fenêtre à ouvrir en même temps, ou "" si la mesure
     #                             se joue sans écran. Exactement la même clé et le même rôle que
     #                             `Calib.stimulus_id` : `core` ne nomme aucun fichier de fenêtre,

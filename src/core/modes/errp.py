@@ -124,7 +124,8 @@ from core import errp_models  # noqa: E402
 from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
 from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
-from core.modes.contract import Calib, ModeSpec, Param, Rest, validate  # noqa: E402
+from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
+                                  validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `errp_calib` ne nous importe pas en retour (il lit
 # `ErrPRuntime` par un import TARDIF, dans une propriété — cf. sa docstring). Un import en tête
 # là-bas refermerait un cycle qui casse `python src/core/modes/errp.py`, mesuré côté P300.
@@ -650,6 +651,7 @@ SPEC = ModeSpec(
     params=(
         Param(key="model", label="Modèle entraîné", kind="choice",
               choices_fn=lambda: errp_models.modeles_disponibles(),
+              si_vide=SANS_MODELE,
               help="Le modèle produit par une calibration ErrP, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des verdicts plausibles et faux. Aucun modèle "
                    "dans la liste ? Ouvre la console, page ErrP, et clique « Entraîner » : "
@@ -815,7 +817,7 @@ def _selftest():
         # (l'horloge de l'appli, pas les horodatages LSL du moteur) — celui que ce chantier existe
         # pour retirer. Même geste, même texte que `p300.py`, où la phrase a déjà été fausse deux
         # fois. On exige donc le nouveau chemin ET l'absence de l'ancien.
-        chk(raison is not None and "aucun choix disponible" in raison
+        chk(raison is not None and "Aucun modèle entraîné" in raison
             and "console" in raison and "Entraîner" in raison
             and "research/app.py" not in raison,
             f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")

@@ -107,9 +107,15 @@ class CalibPage(QWidget):
         # Ce que le MOTEUR a répondu quand on a essayé de commencer. Un refus qui ne s'affiche que
         # sur stdout est un bouton qui ne fait rien : c'est le défaut que ce chantier répare (la
         # recette a relevé cinq clics d'affilée sur un bouton qui refusait, dans le terminal).
+        # Une NOTE sur le déroulé qui doit survivre au changement de bloc — « tel mode a été
+        # arrêté pour cette séance, et le restera ». Hors des trois blocs, sous l'en-tête : l'avis,
+        # lui, disparaît avec « Avant de commencer » dès que la séance démarre.
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("color: #8a8f9c;")
         self.avis = QLabel("")
         self.avis.setWordWrap(True)
-        self.avis.setStyleSheet("color: #e2603f;")
+        self.avis.setStyleSheet("color: #e5484d;")
         self.bouton_commencer = QPushButton("Commencer")
         self.bouton_commencer.clicked.connect(self._commencer)
         avant = QVBoxLayout(self.bloc_avant)
@@ -188,7 +194,7 @@ class CalibPage(QWidget):
         # séance l'effacent.
         self.refus_decision = QLabel("")
         self.refus_decision.setWordWrap(True)
-        self.refus_decision.setStyleSheet("color: #e2603f; font-weight: bold;")
+        self.refus_decision.setStyleSheet("color: #e5484d; font-weight: bold;")
         self.bouton_enregistrer = QPushButton("Enregistrer le modèle")
         self.bouton_enregistrer.clicked.connect(self._enregistrer)
         self.bouton_refaire = QPushButton("Refaire")
@@ -217,6 +223,7 @@ class CalibPage(QWidget):
         # étudiant qui revient sur cette page après une séance veut lire son résultat AVANT de
         # retomber sur le briefing d'une nouvelle séance.
         layout.addLayout(entete)
+        layout.addWidget(self.note)
         layout.addWidget(self.bloc_pendant)
         layout.addWidget(self.bloc_apres)
         layout.addWidget(self.bloc_avant)
@@ -238,6 +245,7 @@ class CalibPage(QWidget):
         `Console.demander_calibration`.
         """
         self.avis.setText("")
+        self.note.setText("")
         self.console.demander_calibration(self.mode_id, self.formulaire.values())
 
     def _abandonner(self):
@@ -267,6 +275,10 @@ class CalibPage(QWidget):
         self.refus_decision.setText("" if ack.get("accepted")
                                     else f"Refusé : {ack.get('reason', '')}")
 
+    def montrer_note(self, texte):
+        """Une note de déroulé qui RESTE jusqu'au prochain « Commencer » (cf. `self.note`)."""
+        self.note.setText(texte or "")
+
     def montrer_avis(self, texte, alerte=True):
         """Affiche ce que le moteur (ou le lanceur de fenêtre) a répondu à « Commencer ».
 
@@ -274,7 +286,7 @@ class CalibPage(QWidget):
         en rouge la ferait lire comme un échec, alors que c'est le début du succès.
         """
         self.avis.setText(texte or "")
-        self.avis.setStyleSheet("color: #e2603f;" if alerte else "color: #8a8f9c;")
+        self.avis.setStyleSheet("color: #e5484d;" if alerte else "color: #8a8f9c;")
 
     def _maybe_beep(self, calib_state):
         """Joue le top de la classe cuée sur le FRONT MONTANT de `etape` vers « cue », jamais de

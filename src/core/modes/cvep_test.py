@@ -645,7 +645,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         _os.makedirs(_os.path.join(dossier, "vide"))
         _cvep.CVEP_MODEL_PATH = _os.path.join(dossier, "vide", "cvep_model.npz")
         _v, raison = validate(SPEC, {})
-        chk(raison is not None and "aucun choix disponible" in raison,
+        chk(raison is not None and "Aucun modèle entraîné" in raison,
             f"sans modèle, `validate` REFUSE le test avec la raison du mode ({raison[:60]}…)")
         _cvep.CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model.npz"),
                                             n_targets=len(_PLAN))
