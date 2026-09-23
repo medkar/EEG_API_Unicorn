@@ -77,7 +77,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
                          P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
-from stimulus.garde import sous_garde_data  # noqa: E402
+from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -210,6 +210,16 @@ def valide_reglages(reps, targets):
 
 
 # --- Géométrie (cercle, angle 0 = haut, sens horaire — même convention que archive/ui.py) -
+
+def mots_ecran(tester):
+    """Les deux titres PLEIN ÉCRAN d'une séance : `(chauffe, fin)`.
+
+    ⚠️ Une seule écriture, et c'est le point : l'étudiant lance « Tester » depuis la console,
+    puis cette fenêtre prend tout l'écran. Si elle écrit « Calibration P300 », il croit s'être
+    trompé de bouton — c'est arrivé, et l'autotest lit désormais cette fonction.
+    """
+    return ("Test P300", "Test terminé") if tester else ("Entraînement P300", "Entraînement terminé")
+
 
 def target_positions(n_targets, span):
     """Centres (dx, dy) des `n_targets` cibles, relatifs au centre de l'écran.
@@ -442,6 +452,12 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
     rounds = int(rounds)
     seance_complete = False
+    # ⚠️ En `--tester`, TOUT ce que cette fenêtre montre ou imprime dit « test ». Elle jouait le
+    # même protocole sous le mot « calibration » : plein écran « Calibration P300 » pendant la
+    # chauffe de chaque test, et un ESC répondait « aucun modèle ne sera entraîné » alors qu'un
+    # test n'en entraîne jamais. L'étudiant croyait avoir lancé le mauvais geste.
+    geste = "le test" if tester else "l'entraînement"
+    titre_chauffe, titre_fin = mots_ecran(tester)
 
     if calibrer:
         # ⚠️ `trials` compte des ÉPOQUES, pas des manches : c'est l'unité que le moteur incrémente
@@ -453,13 +469,14 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         print(f"[p300-stim] {'TEST' if tester else 'CALIBRATION'} : {rounds} manches × {targets} cibles × {reps} rép "
               f"= {epoques_annoncees} époques annoncées")
         if attente_consommateur_s > 0 and not outlet.have_consumers():
-            print(f"[p300-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
-                  f"Lance la calibration depuis la console, ou ferme cette fenêtre.")
+            print(f"[p300-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
+                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste} depuis la "
+                  f"console, ou ferme cette fenêtre.")
         if attente_moteur_s > 0:
             print(f"[p300-stim] le moteur JETTE tout pendant sa chauffe (~{attente_moteur_s:g} s, "
                   f"cf. core/modes/marker_calib.py) : consigne à l'écran en attendant, la "
                   f"première manche démarre après.")
-            ecran_statique(attente_moteur_s, "Calibration P300",
+            ecran_statique(attente_moteur_s, titre_chauffe,
                            note="le casque se stabilise — installe-toi, ne bouge plus")
 
     while running:
@@ -540,19 +557,20 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # serait déjà noir et le sujet aurait bougé. Même geste que le `settle` de l'ancienne
         # calibration (`research/p300_calibrate._collect`).
         cue_courant = None
-        ecran_statique(P300_EPOCH_S + 0.15, "Test terminé" if tester else "Calibration terminée",
+        ecran_statique(P300_EPOCH_S + 0.15, titre_fin,
                        note="ne bouge plus — la dernière époque finit de s'enregistrer")
         emet({"mode": "p300", "event": "calib_end"})
-        print(f"[p300-stim] {'test' if tester else 'calibration'} terminé(e) : {rounds} manches, "
+        print(f"[p300-stim] {'test' if tester else 'entraînement'} terminé : {rounds} manches, "
               f"« calib_end » envoyé — le moteur "
               f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur trois manches sur douze serait indiscernable d'un modèle
         # complet dans la liste de la console, et donnerait ensuite des scores plausibles et faux.
-        print(f"[p300-stim] ⚠️ calibration INTERROMPUE à la manche {round_num}/{rounds} : AUCUN "
-              f"« calib_end » envoyé, donc aucun modèle ne sera entraîné. Le moteur attend — "
-              f"clique « Abandonner » dans la console, puis recommence.")
+        print(f"[p300-stim] ⚠️ {'test' if tester else 'entraînement'} INTERROMPU à la manche "
+              f"{round_num}/{rounds} : AUCUN « calib_end » envoyé, donc "
+              f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
+              f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
 
     pygame.quit()
     return True
@@ -770,6 +788,28 @@ def _smoke(reps, n_targets):
     chk("calib_start" in evenements_i and "calib_end" not in evenements_i,
         f"une séance INTERROMPUE ne publie AUCUN calib_end — un modèle appris sur trois manches "
         f"sur douze serait indiscernable d'un modèle complet dans la liste ({evenements_i})")
+
+    # --- D. `--tester` : LE MOT de la séance -------------------------------------
+    # Cette fenêtre joue le MÊME protocole pour entraîner et pour tester ; le mot est le seul
+    # repère de l'étudiant, et elle l'a eu faux jusqu'au 2026-09-23. Deux branches, donc deux
+    # séances : celle qui va au bout, et celle qu'on coupe — c'est la seconde qu'on lit quand on
+    # vient d'appuyer sur ESC sans comprendre, et elle répondait « aucun modèle ne sera entraîné ».
+    titre_chauffe, titre_fin = mots_ecran(True)
+    chk("test" in titre_chauffe.lower() and "test" in titre_fin.lower()
+        and "calibration" not in (titre_chauffe + titre_fin).lower()
+        and "entraîn" not in (titre_chauffe + titre_fin).lower(),
+        f"les titres PLEIN ÉCRAN d'un test disent « test » — c'est ce que l'étudiant a sous les "
+        f"yeux pendant toute la séance ({titre_chauffe} / {titre_fin})")
+
+    commun_test = dict(windowed=True, refresh=60.0, reps=P300_MIN_REPS, targets=P300_N_TARGETS,
+                       stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                       attente_moteur_s=0.0, calibrer=True, tester=True)
+    _fini, dit_fini = paroles_de_seance(run, rounds=1, **commun_test)
+    mot_du_geste(chk, dit_fini, "époques annoncées", "P300 (annonce)")
+    mot_du_geste(chk, dit_fini, "terminé", "P300 (fin)")
+    _coupe, dit_coupe = paroles_de_seance(run, rounds=3, seconds=P300_PAUSE_MANCHE_S / 2,
+                                          **commun_test)
+    mot_du_geste(chk, dit_coupe, "INTERROMPU", "P300 (abandon)")
 
     # ⚠️ Appelée SANS `ok and …` : `and` court-circuite, donc le bout-à-bout aurait été SAUTÉ dès
     # qu'une assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. Attrapé

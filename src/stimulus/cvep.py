@@ -155,7 +155,7 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
-from stimulus.garde import sous_garde_data  # noqa: E402
+from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -557,6 +557,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     # --- La SÉANCE DE CALIBRATION : son programme, et ce qu'elle annonce au moteur -------------
     programme, epoques_promises = None, 0
+    geste = "le test" if tester else "l'entraînement"
+
     if calibrer:
         # La graine sert ici à l'ENTRELACEMENT des blocs, pas au tirage des consignes : deux
         # calibrations à la même graine présentent les cibles dans le même ordre.
@@ -751,8 +753,12 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         emet({"mode": "cvep", "event": "calib_start", "trials": int(epoques_promises)}, None)
         print(f"[cvep-stim] « calib_start » envoyé : {epoques_promises} époques annoncées")
         if attente_consommateur_s > 0 and not outlet.have_consumers():
-            print(f"[cvep-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
-                  f"Lance la calibration depuis la console, ou ferme cette fenêtre.")
+            # ⚠️ En `--tester`, TOUT ce que cette fenêtre imprime dit « test » : elle joue le MÊME
+            # protocole que l'entraînement, et le mot est la seule chose qui les distingue à
+            # l'écran. Un ESC répondait « aucun modèle ne sera entraîné » — un test n'entraîne rien.
+            print(f"[cvep-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
+                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste} depuis la "
+                  f"console, ou ferme cette fenêtre.")
     while running:
         poll()
         if not running:
@@ -822,7 +828,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     if calibrer and seance_complete:
         emet({"mode": "cvep", "event": "calib_end"}, None)
-        print(f"[cvep-stim] {'test' if tester else 'calibration'} terminé(e) : "
+        print(f"[cvep-stim] {'test' if tester else 'entraînement'} terminé : "
               f"{epoques_promises} époques annoncées, « calib_end » envoyé — le moteur "
               f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
@@ -830,9 +836,10 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
         # dans la liste de la console, et donnerait ensuite des corrélations plausibles et fausses.
         faits = 0 if frame_prog0 is None else max(0, (frame - frame_prog0) // L)
-        print(f"[cvep-stim] ⚠️ calibration INTERROMPUE à {faits}/{len(programme or [])} cycles : "
-              f"AUCUN « calib_end » envoyé, donc aucun modèle ne sera entraîné. Le moteur "
-              f"attend — clique « Abandonner » dans la console, puis recommence.")
+        print(f"[cvep-stim] ⚠️ {'test' if tester else 'entraînement'} INTERROMPU à "
+              f"{faits}/{len(programme or [])} cycles : AUCUN « calib_end » envoyé, donc "
+              f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
+              f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
 
     # Un BILAN, toujours : « 0 cycle joué » doit se lire, pas se deviner. Et surtout la CADENCE
     # RÉELLE — c'est le seul chiffre de cette séance qui dise si le moteur a pu suivre l'horloge.
@@ -1672,6 +1679,20 @@ def _smoke():
         f"vraiment ({joue_s:.0f} s jouées, {annonce_s:.0f} s annoncées, tolérance un cycle de "
         f"garde) — un écart, et l'étudiant s'assoit pour une séance qui dure autre chose que ce "
         f"qu'on lui a dit")
+
+    # --- `--tester` : LE MOT de la séance ----------------------------------------
+    # Cette fenêtre joue le MÊME stimulus pour entraîner et pour tester, à la frame près ; le mot
+    # est la seule chose qui les distingue. Deux branches, donc deux séances : celle qui va au
+    # bout, et celle qu'on coupe — la seconde répondait « aucun modèle ne sera entraîné » alors
+    # qu'un test n'entraîne rien.
+    commun_test = dict(windowed=True, refresh=240.0, calibrer=True, tester=True, cycles_calib=2,
+                       settle=1, seed=3, attente_moteur_s=0.0, attente_consommateur_s=0.0,
+                       stream_name=MARKER_STREAM_DEFAULT + "_smoke")
+    _fini, dit_fini = paroles_de_seance(run, **commun_test)
+    mot_du_geste(chk, dit_fini, "blocs entrelacés", "c-VEP (annonce)")
+    mot_du_geste(chk, dit_fini, "terminé :", "c-VEP (fin)")
+    _coupe, dit_coupe = paroles_de_seance(run, max_frames=3 * L, **commun_test)
+    mot_du_geste(chk, dit_coupe, "INTERROMPU", "c-VEP (abandon)")
 
     n_cycles = len(journal)
     print(f"[cvep-stim] --smoke : {n_cycles} cycles RÉELS poussés (écran factice), consignes "

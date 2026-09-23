@@ -199,7 +199,7 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 # d'affirmer quoi que ce soit ici.
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
-from stimulus.garde import sous_garde_data  # noqa: E402
+from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 
 # Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
 # et en calibration, et les confondre a coûté une séance entière** (voir plus bas).
@@ -495,6 +495,10 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     n_pas_course = 0
     essais = int(essais)
     seance_complete = False
+    # ⚠️ En `--tester`, TOUT ce que cette fenêtre montre ou imprime dit « test » — elle joue le
+    # MÊME protocole que l'entraînement, et c'est justement pour ça que le mot doit changer :
+    # un ESC répondait « aucun modèle ne sera entraîné » alors qu'un test n'entraîne rien.
+    geste = "le test" if tester else "l'entraînement"
 
     if calibrer:
         # ⚠️ `trials` compte des ÉPOQUES, et ici une époque = un pas : c'est l'unité que le moteur
@@ -505,8 +509,9 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         print(f"[errp-stim] {'TEST' if tester else 'CALIBRATION'} : {essais} pas annoncés — chaque feedback portera son "
               f"étiquette `error`, ce que le décodage ne fait JAMAIS")
         if attente_consommateur_s > 0 and not outlet.have_consumers():
-            print(f"[errp-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira AUCUN modèle. "
-                  f"Lance la calibration depuis la console, ou ferme cette fenêtre.")
+            print(f"[errp-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
+                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste} depuis la "
+                  f"console, ou ferme cette fenêtre.")
         # La CHAUFFE du moteur (~15 s) : les pas joués pendant ce temps sont comptés et JETÉS
         # (`marker_calib::encaisser`, phase « chauffe »), donc la séance serait plus courte que ce
         # que l'écran annonce. Le `calib_start`, lui, est bien retenu par le moteur pendant sa
@@ -600,18 +605,20 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # marqueur qu'une fois son post-stimulus écoulé (`markers_murs(post_s=…)`) : un `calib_end`
         # publié dans la foulée du dernier pas arriverait bien après lui, mais l'écran, lui, serait
         # déjà noir et le sujet aurait bougé. Même geste que chez le P300.
-        tenir(pos, cible, ERRP_EPOCH_S + 0.15, note=("test terminé" if tester else "calibration terminée") + " — ne bouge plus")
+        tenir(pos, cible, ERRP_EPOCH_S + 0.15,
+              note=("test terminé" if tester else "entraînement terminé") + " — ne bouge plus")
         emet({"mode": "errp", "event": "calib_end"}, None, False)
-        print(f"[errp-stim] {'test' if tester else 'calibration'} terminé(e) : {pas_total} pas, "
+        print(f"[errp-stim] {'test' if tester else 'entraînement'} terminé : {pas_total} pas, "
               f"« calib_end » envoyé — le moteur "
               f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
     elif calibrer:
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
         # dans la liste de la console, et donnerait ensuite des scores plausibles et faux.
-        print(f"[errp-stim] ⚠️ calibration INTERROMPUE à {pas_total}/{essais} pas : AUCUN "
-              f"« calib_end » envoyé, donc aucun modèle ne sera entraîné. Le moteur attend — "
-              f"clique « Abandonner » dans la console, puis recommence.")
+        print(f"[errp-stim] ⚠️ {'test' if tester else 'entraînement'} INTERROMPU à "
+              f"{pas_total}/{essais} pas : AUCUN « calib_end » envoyé, donc "
+              f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
+              f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
 
     # Un BILAN, toujours : « 0 pas joué » doit se lire, pas se deviner. Une séance muette (fenêtre
     # fermée trop tôt, `--seconds` trop court) et une séance réussie se ressemblaient à l'écran
@@ -1129,6 +1136,22 @@ def _smoke(n_cells, taux_erreur):
     # attrapé par mutation côté P300 ; `chk` met `ok` à jour par `nonlocal`, la valeur de retour
     # n'a rien à faire ici.
     _smoke_bout_en_bout(chk, journal_c, journal)
+
+    # --- `--tester` : LE MOT de la séance ----------------------------------------
+    # Cette fenêtre joue le MÊME protocole pour entraîner et pour tester ; le mot est le seul
+    # repère de l'étudiant. Deux branches, donc deux séances : celle qui va au bout, et celle
+    # qu'on coupe — la seconde répondait « aucun modèle ne sera entraîné » alors qu'un test
+    # n'entraîne rien. `attente_moteur_s=0.0` court-circuite le repos du mode (I-4), qui n'a rien
+    # à voir avec le vocabulaire.
+    commun_test = dict(windowed=True, refresh=60.0, n_cells=n_cells, taux_erreur=taux_erreur,
+                       calibrer=True, tester=True, attente_moteur_s=0.0, seed=0,
+                       stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0)
+    _fini, dit_fini = paroles_de_seance(run, essais=3, max_run_steps=5, seconds=60.0,
+                                        **commun_test)
+    mot_du_geste(chk, dit_fini, "pas annoncés", "ErrP (annonce)")
+    mot_du_geste(chk, dit_fini, "terminé :", "ErrP (fin)")
+    _coupe, dit_coupe = paroles_de_seance(run, essais=6, seconds=0.1, **commun_test)
+    mot_du_geste(chk, dit_coupe, "INTERROMPU", "ErrP (abandon)")
 
     n_err_reel = sum(1 for _m, _ts, e, _d in journal if e)
     print(f"[errp-stim] --smoke : {len(journal)} pas RÉELS (écran factice), {n_err_reel} erreurs "

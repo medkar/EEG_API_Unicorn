@@ -81,8 +81,9 @@ SOA_REFERENCE_S = (P300_FLASH_ON_FR + P300_FLASH_OFF_FR) / REFRESH_REFERENCE_HZ
 BRIEFING = (
     "Une cible est CERCLÉE en bleu : c'est celle qu'il faut fixer pendant toute la manche.",
     "Les six cibles s'allument une à une, en bref éclair, dans le désordre.",
-    "COMPTE mentalement les éclairs de TA cible. Le comptage n'est pas un gadget : c'est la",
-    "tâche mentale qui rend le flash attendu saillant. Sans elle, l'onde s'effondre.",
+    "Ce qui compte d'abord, c'est de la FIXER : c'est la fixation qui fait l'onde.",
+    "Compter mentalement ses éclairs AIDE à tenir l'attention, sans être indispensable",
+    "(vérifié au casque le 2026-09-22 : la sélection marche sur la fixation seule).",
     "Reste immobile et cligne le moins possible PENDANT les éclairs — cligne entre les manches.",
     "La cible à fixer change à chaque manche, et c'est la FENÊTRE de stimulus qui l'annonce.",
 )
@@ -105,8 +106,8 @@ HONNETETE = (
 # l'AUC dirait « faible » d'une séance dont toutes les sélections tombent juste — l'AUC mesure une
 # époque isolée, la sélection mesure ce qu'on en fait après moyennage.
 VERDICTS = ((0.80, "EXCELLENT"), (0.60, "UTILISABLE"),
-            (0.00, "FAIBLE — ré-essaie : saline les électrodes, FIXE la cible cerclée et COMPTE "
-                   "ses éclairs (sans le comptage, l'onde s'effondre)"))
+            (0.00, "FAIBLE — ré-essaie : saline les électrodes et FIXE la cible cerclée sans la "
+                   "quitter des yeux (compter ses éclairs aide à tenir l'attention)"))
 
 # Les deux planchers en dessous desquels on REFUSE d'entraîner, plutôt que de produire un modèle
 # que rien ne distingue d'un bon dans la liste de la console.
