@@ -26,10 +26,19 @@ import sys as _sys
 if "--smoke" in _sys.argv:
     _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# Le vocabulaire de phase du moteur, rendu en français. UNE seule fois : la tuile de la grille et
-# la page du mode affichent la même phase du même mode, et deux tables séparées finiraient par se
-# contredire — un mode annoncé « repos » ici et « rest » là.
-PHASES_FR = {"warmup": "chauffe", "rest": "repos", "running": "décode"}
+from core.i18n import tr  # noqa: E402
+
+
+def nom_phase(phase):
+    """Le vocabulaire de phase du moteur (`warmup`, `rest`, `running`), dans la langue de l'écran.
+
+    UNE seule fois : la tuile de la grille et la page du mode affichent la même phase du même
+    mode, et deux tables séparées finiraient par se contredire — un mode annoncé « repos » ici et
+    « rest » là. Une phase inconnue s'affiche telle quelle plutôt que de disparaître.
+    """
+    noms = {"warmup": tr("console.phase.chauffe"), "rest": tr("console.phase.repos"),
+            "running": tr("console.phase.decode")}
+    return noms.get(phase, phase)
 
 
 def compter(n, unite):
@@ -40,9 +49,13 @@ def compter(n, unite):
     du contrôle alpha : l'étudiant choisissait « Manches : 6 » et lisait ensuite « 12 phase(s)
     enregistrée(s) sur 288 », sous un verdict « … sur 6 manches ». Le moteur publie désormais
     l'unité de chaque protocole (`state()["unite"]`) ; la console n'en connaît aucune.
+
+    La règle du pluriel appartient à la LANGUE, pas au code : son suffixe et les terminaisons qui
+    ne varient pas sont lus dans le catalogue (« s », et « s,x,z » en français).
     """
-    mot = unite if n <= 1 or unite.endswith(("s", "x", "z")) else unite + "s"
-    return f"{n} {mot}"
+    invariables = tuple(f for f in tr("console.pluriel.invariables").split(",") if f)
+    mot = unite if n <= 1 or unite.endswith(invariables) else unite + tr("console.pluriel.suffixe")
+    return tr("console.compte", n=n, unite=mot)
 
 # Jusqu'où va la barre d'un mode qui PUBLIE UN SEUIL. Une barre pleine à ras le seuil laisserait
 # croire qu'on est au maximum alors qu'on vient à peine de déclencher — d'où 2× le seuil, ce qui
