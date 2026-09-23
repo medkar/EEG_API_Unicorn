@@ -74,7 +74,7 @@ def analyze(path=None, permutations=10000, seed=0):
         print("[guidé] aucun run archivé (data/ssvep_run_*.npz).\n"
               "        Ces fichiers sont HISTORIQUES : la mesure du moteur n'écrit rien. Pour "
               "mesurer\n        le taux d'émission d'aujourd'hui, ouvre la console et lance la "
-              "tuile « Taux d'émission SSVEP ».")
+              "page SSVEP, bloc « Tester ».")
         return False
 
     d = np.load(path, allow_pickle=False)

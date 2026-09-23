@@ -9,7 +9,7 @@ des variantes sur les mêmes données.
 `research/live_ssvep.py --guided`, un écran de PILOTAGE parti dans `archive/` le 2026-09-09 : il
 ouvrait le casque et affichait un stimulus, deux gestes que `src/research/` n'a plus le droit de
 faire. La commande existe toujours (`python archive/live_ssvep.py --guided`), mais ce n'est plus
-le chemin normal — mesurer le SSVEP se fait depuis la console, tuile « Taux d'émission SSVEP ».
+le chemin normal — mesurer le SSVEP se fait depuis la console, page SSVEP, bloc « Tester ».
 Cet outil-ci reste ICI parce qu'il ne fait que CALCULER sur des fichiers déjà pris.
 
 ⚠️ **Le filtrage vient du MOTEUR**, via `ssvep_mesure.acquisition_de_reference()` : une

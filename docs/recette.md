@@ -1114,15 +1114,20 @@ briefing actuel ne compte pas les flèches.)*
 - [ ] Aucun avertissement « cible quasi INDÉTECTABLE » au démarrage. S'il apparaît, le plancher de
       repos est trop bruité : re-saliner, revérifier les mastoïdes, refaire la chauffe.
 
-> 🔴 **Un désaccord connu entre cette mesure et le mode, à connaître avant de citer un taux.** Le
-> σ du rejet d'artefact est pris sur les **8** voies par la mesure, et sur les **4 occipitales
-> filtrées** par le mode qui décode en direct. Le rejet ne tombe donc pas forcément sur les mêmes
-> essais, et il est vraisemblablement plus sensible aux artefacts **frontaux** (le clignement, que
-> Fz voit et qu'Oz voit peu) : le taux relevé ici est, sur ce point, légèrement **conservateur**.
-> ⚠️ **Cet écart est ANTÉRIEUR** — `ssvep_guided.py` mesurait déjà son σ ainsi, donc c'est la règle
-> sous laquelle le 100 %/44 % du 2026-07-27 a été obtenu. Il est laissé tel quel exprès : l'aligner
-> rendrait le prochain chiffre incomparable au seul dont on dispose. **Décision à prendre hors
-> séance.**
+> 🔴 **Ce test DÉCIDE PAR LE RUNTIME DU MODE depuis le 2026-09-22, et ça change ce qu'on peut
+> comparer.** Jusque-là il réécrivait la règle du mode, avec un écart : le σ du rejet d'artefact
+> pris sur les **8** voies ici, sur les **4 occipitales filtrées** par le mode qui décode en
+> direct. Un clignement frontal fort (que Fz voit et qu'Oz voit peu) faisait rejeter au test un
+> essai que le mode décode — taux **sous-estimé** ; un artefact de nuque, dilué dans 8 voies,
+> passait ici et pas dans le mode — **sur-estimé**. Il passe désormais par
+> `SsvepRuntime._rest_step` / `._run_step`, donc un correctif futur du mode est mesuré sans une
+> ligne à reporter.
+> ⚠️ **Le prix, à connaître AVANT de citer un taux** : l'écart était **antérieur**
+> (`ssvep_guided.py` mesurait déjà son σ ainsi), donc c'est sous l'ANCIENNE règle que le
+> 100 %/44 % du 2026-07-27 a été obtenu. **Les chiffres rendus aujourd'hui ne s'y comparent plus
+> tels quels.** La spec du chantier « Configurer · Entraîner · Tester » (§4, §9) a tranché dans ce
+> sens : un test décide comme le produit, la comparabilité est une note — elle est dans le texte
+> d'honnêteté du résultat, sous « Détails ».
 
 ### 2.3 — Le cumul sous charge réelle
 

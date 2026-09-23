@@ -153,10 +153,16 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     de seuils, qui peindrait un jour en vert ce que le moteur juge faible.
   - ⚠️ **Une seule activité minutée à la fois** : `server.submit` refuse une calibration pendant une
     mesure **et** l'inverse. Il n'y a qu'un casque, et deux protocoles se voleraient leurs fenêtres.
-  - 🔴 **Écart connu, DIT et non corrigé** : le σ du rejet d'artefact est pris sur les **8** voies
-    dans `ssvep_mesure` et sur les **4 occipitales filtrées** dans `modes/ssvep.py`. C'est la règle
-    sous laquelle les repères 100 %/44 % du 2026-07-27 ont été mesurés ; l'aligner rendrait le
-    prochain chiffre incomparable au seul dont on dispose. **Décision à prendre hors chantier.**
+  - 🔴 **Un « Tester » DÉCIDE PAR LE RUNTIME DE SON MODE**, il ne réécrit pas sa règle. Le test
+    SSVEP était le dernier à le faire, jusqu'au 2026-09-22 : il prenait le σ du rejet d'artefact
+    sur les **8** voies là où `modes/ssvep.py` le prend sur les **4 occipitales filtrées**. Un
+    clignement frontal fort faisait rejeter au test un essai que le mode décode (taux
+    sous-estimé) ; un artefact de nuque, dilué dans 8 voies, passait au test et pas au mode
+    (sur-estimé). Il passe désormais par `SsvepRuntime._rest_step` / `._run_step`.
+    ⚠️ **Le prix est assumé et il est dans le texte d'honnêteté** : les repères 100 %/44 % du
+    2026-07-27 ont été mesurés sous l'ANCIENNE règle, donc les chiffres de ce test ne s'y
+    comparent plus tels quels. La spec du chantier (§4, §9) tranche ainsi : un test décide comme
+    le produit, la comparabilité est une NOTE, pas une contrainte de protocole.
 - **`Calib.kind` dit QUI mène la ligne du temps, plus OÙ la calibration vit.** Deux valeurs, et le
   contrat refuse tout autre mot (l'ancien vocabulaire « console » / « natif » lève) :
   - `"moteur"` — le moteur mène : il tire les classes, affiche les consignes, décompte. C'est le
@@ -525,8 +531,8 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   « la séance a démarré » : corrigé pour l'enregistrement de séance et pour le lancement des
   fenêtres (elles attendent de VOIR la séance dans `snapshot()`, 2026-09-10), **pas audité
   ailleurs**. Les refus lancés depuis la GRILLE, eux, s'affichent dans le bandeau depuis
-  `c960e39` (2026-09-10). Et des refus/aides nomment
-  toujours un bouton « Calibrer » qui s'appelle « Entraîner » (constats ouverts de `docs/qa.md`).
+  `c960e39` (2026-09-10). Les refus et les aides du moteur qui nommaient encore un bouton
+  « Calibrer » disent « Entraîner » depuis le 2026-09-23, et leurs assertions avec eux.
 - 🔴 **Le contrôle de liaison peut BLOQUER une séance légitime.** Il refuse dès qu'**une seule** des
   huit voies sort de [0,5 ; 500] µV — pas seulement les voies clés du mode, qui sont surlignées mais
   ne restreignent pas le refus — et il n'offre **aucune porte de sortie**, là où

@@ -740,8 +740,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         if role == "fin":
             etat_calib = "séance terminée"
         else:
+            # ⚠️ Un TEST n'enregistre rien : le moteur NOTE. Le mot est à l'écran pendant toute la
+            # séance, et c'est le seul repère de l'étudiant entre les deux gestes.
             etat_calib = (f"bloc {bloc + 1}/{n_blocs} — "
-                          + ("ENREGISTRE" if role == "bloc" else "cherche la cible (jeté)"))
+                          + (("LE MOTEUR NOTE" if tester else "ENREGISTRE") if role == "bloc"
+                             else "cherche la cible (jeté)"))
 
     t_flip_precedent = None
     seance_complete = False

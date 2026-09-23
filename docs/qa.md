@@ -130,30 +130,33 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 - ~~Le bandeau déverse six lignes à la fermeture normale d'une fenêtre~~ → les deux dernières, son
   bilan (`b9b6529`).
 
+**Retirés aussi — passe de correction des 2026-09-22 et 23 :**
+
+- ~~Des refus et des aides nomment encore « Calibrer »~~ → ils disent « Entraîner », le nom du
+  bouton, et leurs assertions avec eux (`c9701fa`). « Recalibre » est parti de la même façon.
+- ~~Restes du vocabulaire d'expérience à l'écran~~ → « Commencer le test » au contrôle de liaison
+  (`186510f`), « LE MOTEUR NOTE » au lieu d'« ENREGISTRE » pendant un test c-VEP, réponse du pic
+  alpha reformulée (`0824088`), `research/ssvep_{analyze,guided}.py` pointent le bloc « Tester ».
+- ~~Le briefing du P300 dit le comptage mental indispensable~~ → c'est la FIXATION qui fait l'onde,
+  le comptage aide à tenir l'attention (`ad2d8e0`, point 2.4 du 2026-09-22).
+- ~~Le contrôle de liaison d'un TEST ne surligne aucune voie clé~~ → il prend les voies clés du
+  mode testé (`186510f`).
+- ~~Le test ErrP n'affiche pas la durée réelle de son repos~~ → elle est dans la phrase de verdict,
+  et le test REFUSE de conclure sur un repos écourté (`136583d`). ⚠️ Cette durée n'a toujours
+  jamais été mesurée au casque.
+- ~~Les fenêtres disent « calibration » pendant un test~~ → plein écran, fin de séance et abandon
+  disent « test », sous assertion (`ad2d8e0`).
+
 **Ouverts :**
 
-1. 🟠 **Des refus et des aides nomment encore « Calibrer »**, un bouton qui n'existe plus (c'est
-   « Entraîner »). Le cas le plus visible : « Tester » ou « Démarrer » sur un mode sans modèle
-   refuse avec l'aide du réglage « Modèle entraîné », qui dit de cliquer « Calibrer » (MI) ou
-   « Calibrer le P300 » / « Calibrer l'ErrP » / « Calibrer le c-VEP ». Textes dans
-   `core/modes/{mi,p300,errp,cvep}.py` et `core/{p300,errp,cvep}_models.py`.
-2. 🟠 **Restes du vocabulaire d'expérience à l'écran** : sur un test, le bouton du contrôle de
-   liaison dit « Commencer la mesure » ; pendant un test c-VEP, la fenêtre écrit « ENREGISTRE » à
-   chaque bloc ; après « Appliquer » le pic alpha, la réponse dit encore « Ouvre sa page et clique
-   « Proposer » » alors que « ← SSVEP » y ramène. (Côté développeur :
-   `research/ssvep_analyze.py` et `research/ssvep_guided.py` citent la tuile « Taux d'émission
-   SSVEP ».)
-3. 🟠 **Le briefing du P300 dit le comptage mental indispensable** (« sans elle, l'onde
-   s'effondre ») — entraînement ET test, qui le reprend mot pour mot. Au casque, le P300 a été
-   validé **sans** comptage (point 2.4). Les deux textes doivent bouger ensemble.
-4. **Le contrôle de liaison d'un TEST ne surligne aucune voie clé** : le contrat d'une mesure n'en
-   déclare pas. Le refus, lui, porte toujours sur les huit voies — seul le repère visuel manque par
-   rapport à « Entraîner ».
-5. **Le test ErrP calcule la durée réelle de son repos de référence** (`resultat["repos"]`) **mais
-   l'écran ne l'affiche nulle part** ; la phrase d'honnêteté dit seulement « 8 s au plus, souvent
-   moins ». Cette durée n'a jamais été mesurée (estimée à 2-5 s par son auteur).
-6. **La console ne descend pas sous ~1 650 px de large** (relevé par l'auteur de la page en blocs,
+1. **La console ne descend pas sous ~1 650 px de large** (relevé par l'auteur de la page en blocs,
    préexistant, non remesuré ici). À vérifier sur l'écran de la séance.
+2. **« Appliquer » sur la page d'un mode pendant son test change encore le magasin de réglages.**
+   Le bloquer côté interface serait recopier une règle que le moteur doit porter. Parqué avec
+   « Connecter ».
+3. **Si le flux de marqueurs d'une application n'est pas visible à l'entrée d'une page de mode**,
+   la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu. Antérieur au
+   chantier ; relève de « Connecter ».
 
 ## Deux mots de vocabulaire, et ils ne sont pas interchangeables
 
@@ -648,8 +651,9 @@ l'intervalle contient le hasard, ou **MUET** si le moteur n'a rien annoncé.
 la séance (contact, saline, fatigue) avant le code.
 ⚠️ **Un essai = UNE décision.** Un effectif ~7× plus grand que 36, c'est que les fenêtres glissantes
 ont été comptées comme indépendantes.
-⚠️ Le σ du rejet d'artefact est pris sur les **8 voies** ici et sur les **4 occipitales filtrées**
-dans le mode SSVEP. **Connu, dit, et laissé tel quel exprès.**
+⚠️ Depuis le 2026-09-22 ce test **décide par le runtime du mode** (l'écart de σ — 8 voies ici,
+4 occipitales filtrées dans le mode — est supprimé). **Le prix : ces chiffres ne se comparent plus
+tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est écrit dans « Détails ».
 
 → recette 2.2
 
