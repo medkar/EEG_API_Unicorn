@@ -183,7 +183,7 @@ class Calib:
         if self.kind == "fenetre" and not self.stimulus_id:
             raise ValueError(
                 "une calibration « fenetre » doit déclarer son stimulus_id : sans lui, le bouton "
-                "« Calibrer » n'a aucune fenêtre à lancer, et le clic reste SILENCIEUX — le défaut "
+                "« Entraîner » n'a aucune fenêtre à lancer, et le clic reste SILENCIEUX — le défaut "
                 "que ce chantier répare, réintroduit par le contrat lui-même")
         if self.kind == "moteur" and self.stimulus_id:
             raise ValueError(
@@ -608,7 +608,7 @@ def _selftest():
 
     # --- `kind` et `stimulus_id` vont par paire ------------------------------------
     # Les deux refus ci-dessous ferment la même porte par ses deux côtés, et chacun correspond à
-    # un défaut VISIBLE de l'interface : sans `stimulus_id`, le bouton « Calibrer » n'a aucune
+    # un défaut VISIBLE de l'interface : sans `stimulus_id`, le bouton « Entraîner » n'a aucune
     # fenêtre à lancer et le clic reste SILENCIEUX (le défaut que ce chantier répare — cf. le
     # test 1.13 de la recette, cinq clics d'affilée sur un bouton muet) ; avec un `stimulus_id`
     # de trop, un bouton « Lancer le stimulus » apparaît sur un mode qui n'a pas de stimulus.

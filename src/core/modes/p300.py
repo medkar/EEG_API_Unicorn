@@ -200,8 +200,8 @@ class P300Runtime(ModeRuntime):
         if not ecarts:
             return None
         return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
-                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Recalibre "
-                f"— recalibre (console, page P300, « Calibrer le P300 ») plutôt que de le forcer.")
+                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Ré-entraîne "
+                f"— ré-entraîne (console, page P300, « Entraîner ») plutôt que de le forcer.")
 
     def _open(self):
         # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
@@ -541,8 +541,8 @@ SPEC = ModeSpec(
               choices_fn=lambda: p300_models.modeles_disponibles(),
               help="Le modèle produit par une calibration P300, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
-                   "dans la liste ? Ouvre la console, page P300, et clique « Calibrer le "
-                   "P300 » : la fenêtre de stimulus mène la séance, le moteur entraîne."),
+                   "dans la liste ? Ouvre la console, page P300, et clique « Entraîner » : "
+                   "la fenêtre de stimulus mène la séance, le moteur entraîne."),
         Param(key="stream_in", label="Flux de marqueurs", kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
@@ -785,7 +785,7 @@ def _selftest():
         # pas, et il cherche la panne ailleurs. Même texte, même geste que
         # `core/p300_models.charger`, où cette phrase a déjà été fausse deux fois.
         chk(raison is not None and "aucun choix disponible" in raison
-            and "console" in raison and "Calibrer" in raison
+            and "console" in raison and "Entraîner" in raison
             and "research/app.py" not in raison,
             f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")
 

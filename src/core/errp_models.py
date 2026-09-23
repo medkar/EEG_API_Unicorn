@@ -55,7 +55,7 @@ def charger(chemin):
         # « Modèle entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le
         # lit. Même correction que `core/p300_models.charger`, où elle a déjà été faite.
         return None, ("aucun modèle désigné — ouvre la console, page ErrP, et clique "
-                      "« Calibrer l'ErrP » pour en produire un")
+                      "« Entraîner » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:
@@ -90,7 +90,7 @@ def charger(chemin):
         # désigné » 25 lignes plus haut disait déjà, elle, le vrai geste. Deux instructions
         # contradictoires pour la même panne : on garde celle qu'un étudiant peut suivre.
         return None, (f"modèle hérité (module {module!r}, attendu {_MODULE_ATTENDU!r}), abandonné "
-                      f"délibérément — recalibre (console, page ErrP, « Calibrer l'ErrP ») : "
+                      f"délibérément — ré-entraîne (console, page ErrP, « Entraîner ») : "
                       f"{_os.path.basename(chemin)}")
     # `ErrPModel` n'HÉRITE pas de `P300Model`, il le CONTIENT (`self.core`) : un pickle d'ErrP
     # porte donc DEUX chemins de module, et c'est le second qui SCORE (`score` -> `self.core.pipe`).
@@ -104,7 +104,7 @@ def charger(chemin):
     if noyau != _NOYAU_ATTENDU:
         return None, (f"le noyau P300 de ce modèle vient du module {noyau!r} (attendu "
                       f"{_NOYAU_ATTENDU!r}) : sa coquille est neuve mais ce qui CALCULE les scores "
-                      f"est hérité — recalibre (console, page ErrP, « Calibrer l'ErrP ») : "
+                      f"est hérité — ré-entraîne (console, page ErrP, « Entraîner ») : "
                       f"{_os.path.basename(chemin)}")
     # ⚠️ Correction de revue (tâche 3) : `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la
     # calibration a au moins 10 essais, 2 classes, et une classe minoritaire d'au moins 2 membres
@@ -118,7 +118,7 @@ def charger(chemin):
     if getattr(modele, "oof_scores_", None) is None or getattr(modele, "oof_y_", None) is None:
         # ⚠️ Correction de revue (tranche B) : ce message ÉNUMÉRAIT trois causes — « moins de 10
         # essais, une seule classe, ou une classe à moins de 2 membres » — et concluait
-        # « recalibre AVEC PLUS D'ESSAIS ». Or `fit` laisse `oof_scores_` à None dans DEUX
+        # « ré-entraîne AVEC PLUS D'ESSAIS ». Or `fit` laisse `oof_scores_` à None dans DEUX
         # situations, et la seconde (les trois nfilter tombés à la validation croisée : voie
         # plate, électrode décollée, dérive de version) n'a rien à voir avec le nombre d'essais.
         # Un étudiant qui venait d'en faire 200 était renvoyé en refaire davantage, pour rien.
@@ -126,8 +126,8 @@ def charger(chemin):
         # `echec_oof_`, et on le cite tel quel.
         cause = getattr(modele, "echec_oof_", None) or (
             "cause non enregistrée — modèle produit avant que `fit` ne la note")
-        return None, (f"pas de scores hors-pli, donc aucun seuil réglable ({cause}) : recalibre "
-                      f"(console, page ErrP, « Calibrer l'ErrP ») : {_os.path.basename(chemin)}")
+        return None, (f"pas de scores hors-pli, donc aucun seuil réglable ({cause}) : ré-entraîne "
+                      f"(console, page ErrP, « Entraîner ») : {_os.path.basename(chemin)}")
     return modele, None
 
 
@@ -262,8 +262,8 @@ class _ModeleP300Renomme:
 
     Ça arrive dès qu'on range `data/` : `p300_model.joblib` copié en `errp_model_vieux.joblib`.
     Sans le contrôle `hasattr(score/is_error)`, ce fichier tombait sur le contrôle de MODULE et
-    l'étudiant lisait « modèle hérité (module 'core.p300_decoder') — recalibre » : on l'envoyait
-    recalibrer le MAUVAIS mode. Aucune fixture ne présentait un objet dépourvu de l'interface —
+    l'étudiant lisait « modèle hérité (module 'core.p300_decoder') — ré-entraîne » : on l'envoyait
+    ré-entraîner le MAUVAIS mode. Aucune fixture ne présentait un objet dépourvu de l'interface —
     supprimer entièrement ce contrôle laissait tout l'autotest vert.
     """
 
@@ -370,7 +370,7 @@ def _selftest():
         # deux jumeaux (`p300_models`, `mi_models`) aussi pour cette branche-là. Deux modèles
         # hérités côte à côte (`errp_model.joblib` et une copie de sauvegarde) donnaient sinon
         # deux lignes de liste rigoureusement identiques, sans dire laquelle concerne quoi.
-        chk(_m is None and "recalibre" in (raison or "").lower()
+        chk(_m is None and "ré-entraîne" in (raison or "").lower()
             and "errp_model_etranger.joblib" in (raison or ""),
             f"un modèle hérité est refusé en disant quoi faire ET sur QUEL fichier ({raison})")
         chk(etranger not in modeles_disponibles(dossier),
@@ -378,7 +378,7 @@ def _selftest():
 
         # 1 quater. Ce n'est PAS un modèle ErrP : un P300 rangé sous un nom d'ErrP. Sans le
         # contrôle d'interface, il tombe sur le contrôle de module et on envoie l'étudiant
-        # recalibrer le MAUVAIS mode.
+        # ré-entraîner le MAUVAIS mode.
         renomme = _os.path.join(dossier, "errp_model_vieux.joblib")
         joblib.dump(_ModeleP300Renomme(), renomme)
         _m, raison = charger(renomme)
@@ -417,7 +417,7 @@ def _selftest():
         chk(_m is None and "'errp_decoder'" in (raison or ""),
             f"un modèle dont le pickle porte le module NU 'errp_decoder' est refusé, et la "
             f"raison NOMME ce module — c'est ce qui interdit la passerelle endswith() ({raison})")
-        chk(_m is None and "recalibre" in (raison or "").lower(),
+        chk(_m is None and "ré-entraîne" in (raison or "").lower(),
             f"...en disant quoi faire à la place ({raison})")
         chk(herite not in liste_avec_herite,
             f"...et il ne se glisse pas non plus dans la liste ({liste_avec_herite})")
@@ -468,7 +468,7 @@ def _selftest():
         modele_degenere.save(degenere)
         _m, raison = charger(degenere)
         chk(_m is None and "hors-pli" in (raison or "")
-            and "recalibre" in (raison or "").lower(),
+            and "ré-entraîne" in (raison or "").lower(),
             f"un modèle sans scores hors-pli est refusé EN LE NOMMANT, avec quoi faire ({raison})")
         # ...et la cause citée est celle que `fit` a CONSTATÉE, pas une liste de causes possibles
         # récitée de mémoire. C'est ce qui distingue « trop courte » de « validation croisée
@@ -490,7 +490,7 @@ def _selftest():
         # ajouté demain qui, sans ça, repartirait avec l'ancienne adresse.
         raisons = [charger(None)[1] or "", charger(etranger)[1] or "",
                    charger(noyau_etranger)[1] or "", charger(degenere)[1] or ""]
-        chk(all("console" in r and "Calibrer" in r for r in raisons)
+        chk(all("console" in r and "Entraîner" in r for r in raisons)
             and not any("research/app.py" in r for r in raisons),
             f"chacun des {len(raisons)} refus de `charger` envoie à la CONSOLE, jamais à l'appli "
             f"pygame — qui produirait bien un modèle, mais par l'autre chemin d'épochage "

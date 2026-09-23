@@ -43,7 +43,7 @@ def charger(chemin):
         # (`Calib(kind="fenetre")` du mode). Ce texte est celui du `help` du réglage « Modèle
         # entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le lit.
         return None, ("aucun modèle désigné — ouvre la console, page P300, et clique "
-                      "« Calibrer le P300 » pour en produire un")
+                      "« Entraîner » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     try:

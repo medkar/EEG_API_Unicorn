@@ -258,8 +258,8 @@ class ErrPRuntime(ModeRuntime):
         # l'étudiant fait ce qu'on lui dit, produit un modèle par le second chemin (celui dont
         # l'épochage n'est pas celui du décodage), et cherche la panne ailleurs.
         return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
-                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Recalibre "
-                f"(console, page ErrP, « Calibrer l'ErrP ») plutôt que de le forcer.")
+                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Ré-entraîne "
+                f"(console, page ErrP, « Entraîner ») plutôt que de le forcer.")
 
     def _sans_scores_oof(self):
         """La phrase à dire si le modèle n'a pas de scores hors-pli — None si tout va bien.
@@ -286,7 +286,7 @@ class ErrPRuntime(ModeRuntime):
             cause = getattr(self.model, "echec_oof_", None)
             return (f"ce modèle n'a pas de scores hors-pli "
                     f"({cause or 'calibration trop courte ou dégénérée'}) — impossible d'y régler "
-                    f"un seuil. Recalibre (console, page ErrP, « Calibrer l'ErrP ») plutôt que de "
+                    f"un seuil. Ré-entraîne (console, page ErrP, « Entraîner ») plutôt que de "
                     f"le forcer.")
         return None
 
@@ -652,7 +652,7 @@ SPEC = ModeSpec(
               choices_fn=lambda: errp_models.modeles_disponibles(),
               help="Le modèle produit par une calibration ErrP, propre à TA personne — celui "
                    "de quelqu'un d'autre donne des verdicts plausibles et faux. Aucun modèle "
-                   "dans la liste ? Ouvre la console, page ErrP, et clique « Calibrer l'ErrP » : "
+                   "dans la liste ? Ouvre la console, page ErrP, et clique « Entraîner » : "
                    "la fenêtre de stimulus mène la piste, le moteur entraîne."),
         Param(
             key="tnr_target",
@@ -816,7 +816,7 @@ def _selftest():
         # pour retirer. Même geste, même texte que `p300.py`, où la phrase a déjà été fausse deux
         # fois. On exige donc le nouveau chemin ET l'absence de l'ancien.
         chk(raison is not None and "aucun choix disponible" in raison
-            and "console" in raison and "Calibrer" in raison
+            and "console" in raison and "Entraîner" in raison
             and "research/app.py" not in raison,
             f"sans modèle, le mode refuse en envoyant là où l'on calibre VRAIMENT ({raison})")
 
@@ -936,7 +936,7 @@ def _selftest():
         finally:
             errp_models.charger = vrai_charger
         chk(refus_scores is not None and "hors-pli" in refus_scores
-            and "recalibre" in refus_scores.lower(),
+            and "ré-entraîne" in refus_scores.lower(),
             f"un modèle sans scores hors-pli est refusé au démarrage, EN LE NOMMANT, plutôt que "
             f"de laisser pick_threshold lever une exception numpy brute ({refus_scores})")
 

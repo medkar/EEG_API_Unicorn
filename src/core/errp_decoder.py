@@ -226,7 +226,7 @@ class ErrPModel:
                 # le premier : la garde est passée (assez d'essais, deux classes), mais les trois
                 # nfilter ont levé au CV et ont été avalés par le `except … continue` ci-dessus.
                 # Sans cette phrase, le refus en aval accusait « calibration trop courte » et
-                # ordonnait « recalibre avec plus d'essais » — un diagnostic INVENTÉ, qui renvoie
+                # ordonnait « ré-entraîne avec plus d'essais » — un diagnostic INVENTÉ, qui renvoie
                 # l'étudiant refaire une séance casque de 5 min pour rien.
                 self.echec_oof_ = (
                     f"validation croisée échouée pour TOUTES les valeurs de nfilter essayées "

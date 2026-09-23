@@ -126,7 +126,7 @@ def charger(chemin):
         # Ce texte est celui du `help` du réglage « Modèle entraîné » : le même geste dit du même
         # mot aux deux endroits où un étudiant peut le lire.
         return None, ("aucun modèle désigné — ouvre la console, page c-VEP, et clique "
-                      "« Calibrer le c-VEP » pour en produire un")
+                      "« Entraîner » pour en produire un")
     if not _os.path.isfile(chemin):
         return None, f"modèle introuvable : {chemin}"
     nom = _os.path.basename(chemin)
@@ -199,8 +199,8 @@ def charger(chemin):
                         "codes par lag croissant au lieu de l'ordre du plan. Un ordre permuté "
                         "ferait nommer la cible voisine, d'où le refus")
             return None, (f"ce modèle rCCA a été calibré sur d'AUTRES codes que ceux affichés "
-                          f"aujourd'hui : {quoi}. Recalibre depuis la console, page c-VEP, "
-                          f"bouton « Calibrer le c-VEP » : {nom}")
+                          f"aujourd'hui : {quoi}. Ré-entraîne depuis la console, page c-VEP, "
+                          f"bouton « Entraîner » : {nom}")
 
     try:
         modele = classe.load(chemin)
@@ -407,7 +407,7 @@ def _selftest():
         chemin_gold = _rcca(codes_etrangers).save(
             _os.path.join(dossier, "cvep_rcca_model_gold.npz"))
         _m, raison = charger(chemin_gold)
-        chk(_m is None and "réfut" in (raison or "") and "recalibre" in (raison or "").lower()
+        chk(_m is None and "réfut" in (raison or "") and "ré-entraîne" in (raison or "").lower()
             and "cvep_rcca_model_gold.npz" in (raison or ""),
             f"un modèle rCCA calibré sur d'AUTRES codes est refusé, en le nommant et en disant "
             f"quoi faire ({raison})")
@@ -441,7 +441,7 @@ def _selftest():
             _m, raison_rot = charger(chemin_permute)
         finally:
             CVEP_LAG_ROTATION = _rot_avant
-        chk("ATTENDU" not in (raison_rot or "") and "recalibre" in (raison_rot or "").lower()
+        chk("ATTENDU" not in (raison_rot or "") and "ré-entraîne" in (raison_rot or "").lower()
             and "CVEP_LAG_ROTATION" in (raison_rot or ""),
             f"...et à CVEP_LAG_ROTATION NON NUL ce refus reste présenté comme un VRAI défaut à "
             f"réparer, jamais comme un cas attendu : la calibration écrit ses codes dans l'ordre "

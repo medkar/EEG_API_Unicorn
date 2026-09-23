@@ -586,7 +586,7 @@ def _rejouer(chemin, n_bruit=300):
                   f"fichier — rien à mesurer à cette géométrie, et ce n'est pas une panne : "
                   f"`groupes_de_cycles` ÉCARTE (sans les rogner) les groupes à cheval sur un "
                   f"changement de cible, donc une séance courte ou très fragmentée n'en laisse "
-                  f"aucun. Recalibrer avec plus de cycles consécutifs par cible.")
+                  f"aucun. Ré-entraîner avec plus de cycles consécutifs par cible.")
             continue
         mesuree = True
 

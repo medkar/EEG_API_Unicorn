@@ -223,7 +223,7 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     # du plan ne coïncident qu'à rotation nulle. Un `sorted()` nu produisait donc, hors rotation
     # zéro, un modèle rCCA dont les lignes sont une PERMUTATION de celles du stimulus :
     # `cvep_models.charger` le refuse (à juste titre : permuté, il nommerait systématiquement la
-    # cible voisine), APRÈS que la calibration a annoncé « modèles sauvegardés ». Recalibrer
+    # cible voisine), APRÈS que la calibration a annoncé « modèles sauvegardés ». Ré-entraîner
     # reproduisait le même fichier refusé — une impasse permanente.
     presentes = sorted(set(labels), key=lambda l: lag_a_idx[l])
     codes_vus = np.stack([codes[lag_a_idx[l]] for l in presentes])
@@ -344,7 +344,7 @@ def verdict(acc, mn):
     if acc is None:
         return (f"justesse NON MESURÉE : aucune décision à la géométrie du moteur "
                 f"({CVEP_DECISION_CYCLES} cycles) — trop peu de cycles consécutifs de la même "
-                f"cible. Les modèles existent, mais rien ne dit ce qu'ils valent : recalibre sans "
+                f"cible. Les modèles existent, mais rien ne dit ce qu'ils valent : ré-entraîne sans "
                 f"interrompre la séance.")
     for seuil, texte in VERDICTS:
         if acc >= seuil:
@@ -513,7 +513,7 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
         # Ce qui s'affiche EN FACE. La comparaison des deux décodeurs (McNemar) reste dans
         # « Détails », via `verdict` : elle ne change pas la décision de garder ou de refaire.
         **(non_mesure("aucune décision à la géométrie du moteur : trop peu de cycles "
-                      "consécutifs de la même cible", "Recalibre sans interrompre la séance.")
+                      "consécutifs de la même cible", "Ré-entraîne sans interrompre la séance.")
            if meilleur is None
            # ⚠️ « sur N DÉCISIONS », pas « sur N essais » : la justesse est hors-pli sur des
            # GROUPES de `CVEP_DECISION_CYCLES` cycles (`groupes_de_cycles`) — 37 décisions pour

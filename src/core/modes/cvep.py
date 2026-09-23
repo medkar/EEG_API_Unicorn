@@ -282,8 +282,8 @@ class CVEPRuntime(ModeRuntime):
         if self.model.code_len != len(self.code):
             return (f"ce modèle a été calibré pour un code de {self.model.code_len} frames, la "
                     f"config actuelle (CVEP_BITS={CVEP_BITS}) en construit un de "
-                    f"{len(self.code)} — recalibre depuis la console (page c-VEP, bouton "
-                    f"« Calibrer le c-VEP »), ou restaure CVEP_BITS à sa valeur de calibration.")
+                    f"{len(self.code)} — ré-entraîne depuis la console (page c-VEP, bouton "
+                    f"« Entraîner »), ou restaure CVEP_BITS à sa valeur de calibration.")
         # ...et le NOMBRE DE CIBLES sur lequel il a été calibré. `CVEPModel.save` enregistre ce
         # champ « pour pouvoir prévenir » (sa propre docstring) : jusqu'ici personne ne prévenait.
         # Le template eCCA est COMMUN à tous les lags, donc un modèle calibré sur 3 cibles
@@ -297,7 +297,7 @@ class CVEPRuntime(ModeRuntime):
             return (f"ce modèle a été calibré sur {cibles} cible(s), le stimulus actuel en "
                     f"affiche {len(self.plan)} (CVEP_N_TARGETS) — le template vaut pour tous les "
                     f"lags, mais les cibles supplémentaires n'ont JAMAIS été validées et leurs "
-                    f"corrélations sont plausibles. Recalibre depuis la console (page c-VEP) "
+                    f"corrélations sont plausibles. Ré-entraîne depuis la console (page c-VEP) "
                     f"sans interrompre, ou remets CVEP_N_TARGETS à {cibles}.")
         return None
 
@@ -313,7 +313,7 @@ class CVEPRuntime(ModeRuntime):
         if abs(refresh - self.model.refresh) > 1.0:
             raise ValueError(
                 f"l'émetteur affiche à {refresh:.1f} Hz, le modèle a été calibré à "
-                f"{self.model.refresh:.1f} Hz — recalibre, ou lance l'émetteur avec "
+                f"{self.model.refresh:.1f} Hz — ré-entraîne, ou lance l'émetteur avec "
                 f"--refresh {self.model.refresh:.0f}")
         self._ref_ts = float(ts)
         self._ref_refresh = refresh
@@ -753,7 +753,7 @@ SPEC = ModeSpec(
                    "calibrer. Les DEUX décodeurs (eCCA et rCCA) y figurent ensemble : c'est le "
                    "fichier qui déclare le sien, la question posée ici est « quel modèle », pas "
                    "« quel algorithme ». Aucun modèle dans la liste ? Clique "
-                   "« Calibrer le c-VEP » sur cette page."),
+                   "« Entraîner » sur cette page."),
         Param(key="corr_min", label="Corrélation minimale", kind="float",
               default=CVEP_CORR_MIN, min=0.0, max=1.0, affecte_decodage=False,
               help="Le gagnant doit dépasser cette corrélation pour être retenu — en dessous, la "
@@ -929,7 +929,7 @@ def _selftest():
     # fait ce qu'on lui dit, ça échoue, et il cherche la faute ailleurs. La seconde condition
     # INTERDIT donc l'ancien texte, elle ne se contente pas d'exiger le nouveau.
     chk(raison is not None and "aucun choix disponible" in raison
-        and "Calibrer" in raison and "research/app.py" not in raison,
+        and "Entraîner" in raison and "research/app.py" not in raison,
         f"sans modèle, le mode refuse en envoyant vers la CONSOLE, pas vers l'appli supprimée "
         f"({raison})")
 
@@ -977,7 +977,7 @@ def _selftest():
     except ValueError as e:
         refus_refresh = str(e)
     chk(refus_refresh is not None and "75.0" in refus_refresh and "60" in refus_refresh
-        and "recalibre" in refus_refresh,
+        and "ré-entraîne" in refus_refresh,
         f"un émetteur qui affiche à un AUTRE rafraîchissement que le modèle est refusé, en "
         f"nommant les deux fréquences ({refus_refresh})")
     chk(rt2.phase_a(200.0) is None,
@@ -1025,7 +1025,7 @@ def _selftest():
         except ValueError as e:
             refus_cibles = str(e)
     chk(refus_cibles is not None and "2 cible" in refus_cibles
-        and str(CVEP_N_TARGETS) in refus_cibles and "recalibre" in refus_cibles.lower(),
+        and str(CVEP_N_TARGETS) in refus_cibles and "ré-entraîne" in refus_cibles.lower(),
         f"...et un modèle calibré sur MOINS de cibles que le stimulus n'en affiche est refusé, en "
         f"nommant les deux nombres — sinon les cibles jamais validées publient des corrélations "
         f"plausibles ({refus_cibles})")

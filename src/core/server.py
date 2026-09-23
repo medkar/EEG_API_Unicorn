@@ -3309,7 +3309,7 @@ def _smoke_calibration():
 def _smoke_calibration_refus():
     """Les quatre refus de `start_calibration`/`cancel_calibration`, et l'annulation de bout en
     bout — rien de tout ça n'était exercé, alors que ce sont les quatre premiers messages qu'un
-    étudiant voit s'il se trompe de mode ou clique « Calibrer » sans y penser.
+    étudiant voit s'il se trompe de mode ou clique « Entraîner » sans y penser.
 
     Coût délibérément bas pour les quatre premiers : `submit` ne dépend pas de la boucle (cf. sa
     docstring — la validité se vérifie tout de suite, l'application se fait plus tard), donc ils

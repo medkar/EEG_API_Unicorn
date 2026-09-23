@@ -337,8 +337,8 @@ def diagnostic_cadence(mesure_s, cycle_theorique_s, refresh, code_len, tolerance
         f"⚠️ l'écran ne tient PAS les {refresh:.0f} Hz publiés dans les marqueurs (il affiche "
         f"plutôt à {reel:.0f} Hz) : le moteur extrapole la phase à {refresh:.0f} Hz ENTRE deux "
         f"marqueurs, donc il décode contre un code qui a déjà glissé. Relance avec "
-        f"`--refresh {reel:.0f}` si c'est le vrai rafraîchissement — et RECALIBRE, un modèle est "
-        f"calibré à UN rafraîchissement — sinon cherche ce qui charge la machine.")
+        f"`--refresh {reel:.0f}` si c'est le vrai rafraîchissement — et RÉ-ENTRAÎNE, un modèle "
+        f"vaut pour UN rafraîchissement — sinon cherche ce qui charge la machine.")
 
 
 def bilan_de_seance(cycles, frames, sautees, onsets, refresh, code_len):
@@ -1175,8 +1175,8 @@ def _smoke():
             f"{'AVERTIT' if avert is not None else 'se tait'}, "
             f"{'attendu' if (avert is not None) == doit_avertir else 'ATTENDU LE CONTRAIRE'}")
     _d, avert_144 = diagnostic_cadence(L / 144.0, cyc60, 60.0, L)
-    chk(avert_144 is not None and "144" in avert_144 and "recalibre" in avert_144.lower(),
-        f"...et l'avertissement NOMME le rafraîchissement réellement affiché et dit de recalibrer "
+    chk(avert_144 is not None and "144" in avert_144 and "entraîne" in avert_144.lower(),
+        f"...et l'avertissement NOMME le rafraîchissement réellement affiché et dit de ré-entraîner "
         f"({(avert_144 or '')[:80]}…)")
 
     # --- `--refresh 0` : refusé AVANT d'ouvrir la fenêtre, pas un ZeroDivisionError nu ---------

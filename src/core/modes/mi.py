@@ -235,7 +235,7 @@ SPEC = ModeSpec(
             help="Le modèle produit par une calibration MI, propre à TA personne — celui de "
                  "quelqu'un d'autre donne des probabilités plausibles et fausses. Aucun modèle "
                  "dans la liste ? Lance une calibration depuis cette console : bouton "
-                 "« Calibrer » sur cette page.",
+                 "« Entraîner » sur cette page.",
         ),
         Param(
             key="prob_min",
