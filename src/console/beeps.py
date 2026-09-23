@@ -15,7 +15,13 @@ ne sert plus à rien. Court et centré, il ne se confond ni avec le « repos » 
 deux fois plus long) ni avec un côté.
 """
 
+import os
+import sys
+
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 
 FREQ_HZ = 880.0
 SR = 44100
@@ -71,7 +77,9 @@ class Beeps:
 
             sortie = QMediaDevices.defaultAudioOutput()
             if sortie is None or sortie.isNull():
-                self.raison = "aucune sortie audio sur cette machine"
+                # Affichée par les pages DANS « Pas de son sur cette machine (…) » : elle ne
+                # répète donc pas « sur cette machine ».
+                self.raison = tr("pages.son.aucune_sortie")
                 return
             fmt = QAudioFormat()
             fmt.setSampleRate(SR)

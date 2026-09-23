@@ -1350,7 +1350,7 @@ def _smoke():
     console.apply_state(neuro_state)
     page = console.pages["neuro"]
     chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
-    chk("TENDANCE" in page.vue.avertissement.text(),
+    chk("TENDANCE" in page.vue.avertissement.text().upper(),
         "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
     chk(page.vue.isVisibleTo(page) and page.direct is None,
         "…vraiment SOUS LES YEUX : sans vérité-terrain, le mode s'OBSERVE, et sa vue est en face, "
@@ -1477,7 +1477,7 @@ def _smoke():
         "le P300 a le rendu ACTIF, comme le SSVEP et le MI — même famille")
     chk(f"seuil {Z_MIN:g}" not in p3.seuil.text() and "échelle z" not in p3.seuil.text(),
         f"mais il n'annonce NI le z NI le seuil du SSVEP, qu'il n'a pas ({p3.seuil.text()})")
-    chk("log-odds" in p3.seuil.text() and "AUCUN seuil" in p3.seuil.text(),
+    chk("log-odds" in p3.seuil.text() and "aucun seuil" in p3.seuil.text().lower(),
         f"il nomme son échelle et dit qu'il n'y a pas de seuil ({p3.seuil.text()})")
     chk(len(p3._barres) == 6 and all(e.text() for e, _b in p3._barres),
         f"six barres, et chacune porte une ÉTIQUETTE — pas six barres muettes "
@@ -1599,7 +1599,7 @@ def _smoke():
         **errp_state["modes_state"]["errp"], "output": None}}}
     console.apply_state(errp_demarre)
     avant = errp_page.vue.avertissement.text()
-    chk("z contre" not in avant and "TENDANCE" not in avant,
+    chk("z contre" not in avant and "TENDANCE" not in avant.upper(),
         f"avant le premier feedback, la page ErrP ne parle JAMAIS d'un z contre le repos du "
         f"jour — c'est l'unité d'un AUTRE mode ({avant!r})")
     # ...et elle ne reste pas MUETTE pour autant. `ErrPRuntime.instruction()` rend "" une fois le
@@ -2448,7 +2448,7 @@ def _smoke():
         chk(not introuvable.get("accepted") and not vrai.en_cours(),
             f"un exécutable introuvable est rendu comme un REFUS, pas comme un succès qui "
             f"n'arrivera jamais ({introuvable})")
-        chk("n'a pas DÉMARRÉ" in vrai.probleme,
+        chk("n'a pas démarré" in vrai.probleme,
             f"...et il le dit à l'écran ({vrai.probleme[:60]}…)")
 
         # 🔴 ET UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance : « je
@@ -2913,7 +2913,7 @@ def _smoke():
     ferme_fab = MesurePage({**console.mesures["p300_test"], "yeux_fermes": True},
                            _ConsoleSansSon())
     ouvert_fab = MesurePage({**console.mesures["alpha"], "yeux_fermes": False}, _ConsoleSansSon())
-    chk("YEUX FERMÉS" in ferme_fab.audio_avertissement.text()
+    chk("YEUX FERMÉS" in ferme_fab.audio_avertissement.text().upper()
         and "YEUX FERMÉS" not in ouvert_fab.audio_avertissement.text().upper()
         and "ne sonneront pas" in ouvert_fab.audio_avertissement.text(),
         f"la page lit `yeux_fermes` dans le contrat, et rien d'autre : sans lui, un avertissement "
@@ -3402,7 +3402,7 @@ def _smoke():
     console.apply_state({**mi_regle, "mesure": mi_test_fini, "calibration": {
         "mode_id": "mi", "phase": "fini", "resultat": {"verdict": "x"},
         "candidat": {"modele": "/tmp/calib/candidat_mi_model.joblib"}}})
-    chk(mes_mi.candidat.isVisibleTo(mes_mi) and "PAS encore enregistré" in mes_mi.candidat.text(),
+    chk(mes_mi.candidat.isVisibleTo(mes_mi) and "pas encore enregistré" in mes_mi.candidat.text(),
         f"un modèle entraîné qui attend « Enregistrer » est SIGNALÉ sur la page de test : ce test "
         f"porterait sur le précédent ({mes_mi.candidat.text()[:60]!r})")
     console.apply_state({**mi_regle, "mesure": mi_test_fini})
@@ -4411,7 +4411,7 @@ def _smoke():
         "actif": False, "chemin": "seances/coupe.jsonl", "lignes": 3,
         "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep",
         "probleme": "OSError : disque plein"}})
-    chk("INTERROMPU" in page_flux.etat_enregistrement.text()
+    chk("INTERROMPU" in page_flux.etat_enregistrement.text().upper()
         and "coupe.jsonl" in page_flux.etat_enregistrement.text(),
         f"une interruption passe DEVANT le diagnostic retenu, avec ce qui a été sauvé "
         f"({page_flux.etat_enregistrement.text()[:60]}…)")

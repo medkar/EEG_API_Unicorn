@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import compter  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
+from core.i18n import tr  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
 # que CLAUDE.md interdit — renommer une phase côté moteur laisserait sinon cette page sans écran
 # de résultat, sans qu'aucun test ne le voie (`PHASES_TERMINALES` local aurait continué à valoir
@@ -42,17 +43,17 @@ def _diagnostic(calib_state):
     # ⚠️ Dans les mots de l'étudiant, pas dans ceux du moteur (« marqueur », « époque »,
     # « tampon », « mode calibration » — constat I7 de la revue) : il n'a lancé qu'un
     # « Entraîner », et c'est la seule chose qu'il puisse vérifier.
+    # Une fonction par ligne, pas une clé de texte rangée dans la table : `tr` exige une clé
+    # écrite en toutes lettres, pour que son existence se vérifie (cf. `core/i18n.py`).
     quoi = [(("refus_cible", "refus_etiquette", "refus_marqueur"),
-             "signal(s) de la fenêtre REFUSÉ(s) — a-t-elle bien été ouverte pour un "
-             "entraînement ?"),
-            (("epoques_perdues",), "essai(s) perdu(s) — le signal du casque n'était pas prêt"),
-            (("marqueurs_chauffe",),
-             "signal(s) jeté(s) pendant la stabilisation du casque (normal au début)")]
+             lambda n: tr("pages.calib.diag.refus", n=n)),
+            (("epoques_perdues",), lambda n: tr("pages.calib.diag.perdus", n=n)),
+            (("marqueurs_chauffe",), lambda n: tr("pages.calib.diag.chauffe", n=n))]
     morceaux = []
     for cles, phrase in quoi:
         n = sum(int(calib_state.get(c, 0) or 0) for c in cles)
         if n:
-            morceaux.append(f"{n} {phrase}")
+            morceaux.append(phrase(n))
     return " · ".join(morceaux)
 
 
@@ -80,14 +81,18 @@ class CalibPage(QWidget):
         self._etape_precedente = None
 
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton("← Modes")
+        self.bouton_retour = QPushButton(tr("pages.commun.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        entete.addWidget(QLabel(f"<b>{self.calib.get('label') or spec['label']}</b>"))
+        # Le titre vient du CONTRAT (le moteur l'écrit) ; le gras est une affaire de style, pas
+        # de texte : pas de balise `<b>` à traduire.
+        titre = QLabel(self.calib.get("label") or spec["label"])
+        titre.setStyleSheet("font-weight: bold;")
+        entete.addWidget(titre)
         entete.addStretch(1)
 
         # --- écran 1 : avant (ou de nouveau, une fois la séance TERMINÉE) --------------------
-        self.bloc_avant = QGroupBox("Avant de commencer")
+        self.bloc_avant = QGroupBox(tr("pages.commun.avant_de_commencer"))
         self.briefing = QLabel("\n".join(self.calib.get("briefing") or ()))
         self.briefing.setWordWrap(True)
         self.audio_avertissement = QLabel("")
@@ -98,8 +103,7 @@ class CalibPage(QWidget):
             # session. Le dire franchement plutôt que de laisser un top silencieux se faire
             # passer pour un départ manqué.
             self.audio_avertissement.setText(
-                f"⚠ pas de son sur cette machine ({console.beeps.raison}) — la séance se déroule "
-                f"quand même ; suis la consigne écrite à l'écran, sans les tops.")
+                tr("pages.calib.sans_son", raison=console.beeps.raison))
         self.formulaire = ParamsForm(list(self.calib.get("params") or ()))
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
@@ -116,7 +120,7 @@ class CalibPage(QWidget):
         self.avis = QLabel("")
         self.avis.setWordWrap(True)
         self.avis.setStyleSheet("color: #e5484d;")
-        self.bouton_commencer = QPushButton("Commencer")
+        self.bouton_commencer = QPushButton(tr("pages.commun.commencer"))
         self.bouton_commencer.clicked.connect(self._commencer)
         avant = QVBoxLayout(self.bloc_avant)
         avant.addWidget(self.briefing)
@@ -127,7 +131,7 @@ class CalibPage(QWidget):
         avant.addWidget(self.avis)
 
         # --- écran 2 : pendant ----------------------------------------------------------------
-        self.bloc_pendant = QGroupBox("Séance en cours")
+        self.bloc_pendant = QGroupBox(tr("pages.commun.seance_en_cours"))
         self.consigne = QLabel("")
         self.consigne.setWordWrap(True)
         self.consigne.setStyleSheet("font-size: 18px; font-weight: bold;")
@@ -154,7 +158,7 @@ class CalibPage(QWidget):
         self.diagnostic.setStyleSheet("color: #b8860b;")
         self.barre = QProgressBar()
         self.barre.setTextVisible(False)
-        self.bouton_abandon = QPushButton("Abandonner")
+        self.bouton_abandon = QPushButton(tr("pages.commun.abandonner"))
         self.bouton_abandon.clicked.connect(self._abandonner)
         pendant = QVBoxLayout(self.bloc_pendant)
         pendant.addWidget(self.consigne)
@@ -171,7 +175,7 @@ class CalibPage(QWidget):
         pendant.addWidget(self.bouton_abandon)
 
         # --- écran 3 : après ------------------------------------------------------------------
-        self.bloc_apres = QGroupBox("Résultat")
+        self.bloc_apres = QGroupBox(tr("pages.commun.resultat"))
         self.resultat = QLabel("")
         self.resultat.setWordWrap(True)
         self.resultat.setStyleSheet("font-size: 15px; font-weight: bold;")
@@ -195,9 +199,9 @@ class CalibPage(QWidget):
         self.refus_decision = QLabel("")
         self.refus_decision.setWordWrap(True)
         self.refus_decision.setStyleSheet("color: #e5484d; font-weight: bold;")
-        self.bouton_enregistrer = QPushButton("Enregistrer le modèle")
+        self.bouton_enregistrer = QPushButton(tr("pages.calib.enregistrer"))
         self.bouton_enregistrer.clicked.connect(self._enregistrer)
-        self.bouton_refaire = QPushButton("Refaire")
+        self.bouton_refaire = QPushButton(tr("pages.calib.refaire"))
         self.bouton_refaire.clicked.connect(self._refaire)
         gestes = QHBoxLayout()
         gestes.addWidget(self.bouton_enregistrer)
@@ -263,7 +267,7 @@ class CalibPage(QWidget):
         """
         ack = self.console.commande("save_calibration")
         self.refus_decision.setText("" if ack.get("accepted")
-                                    else f"Refusé : {ack.get('reason', '')}")
+                                    else tr("pages.commun.refuse", raison=ack.get("reason", "")))
 
     def _refaire(self):
         """Émet `discard_calibration` : le candidat est supprimé et l'écran de verdict effacé.
@@ -273,7 +277,7 @@ class CalibPage(QWidget):
         """
         ack = self.console.commande("discard_calibration")
         self.refus_decision.setText("" if ack.get("accepted")
-                                    else f"Refusé : {ack.get('reason', '')}")
+                                    else tr("pages.commun.refuse", raison=ack.get("reason", "")))
 
     def montrer_note(self, texte):
         """Une note de déroulé qui RESTE jusqu'au prochain « Commencer » (cf. `self.note`)."""
@@ -334,12 +338,12 @@ class CalibPage(QWidget):
         self.bouton_commencer.setEnabled(not en_cours)
 
         # L'unité de `essai`/`total`, publiée par le moteur ; « essai » si elle manque.
-        unite = (calib_state or {}).get("unite") or "essai"
+        unite = (calib_state or {}).get("unite") or tr("pages.calib.unite_defaut")
         if calib_state is not None:
             minutes = calib_state.get("duree_estimee_s", 0.0) / 60.0
-            self.duree.setText(
-                f"Durée estimée (stabilisation du casque et échauffement compris) : "
-                f"≈ {minutes:.1f} min, pour {compter(int(calib_state.get('total', 0)), unite)}.")
+            self.duree.setText(tr(
+                "pages.calib.duree", minutes=f"{minutes:.1f}",
+                compte=compter(int(calib_state.get("total", 0)), unite)))
         else:
             self.duree.setText("")
 
@@ -364,10 +368,12 @@ class CalibPage(QWidget):
             self.consigne.setText(calib_state.get("instruction") or "")
             self.classe_cuee.setText(calib_state.get("classe") or "")
             self.rappel.setText(calib_state.get("rappel") or "")
-            self.decompte.setText(f"{float(calib_state.get('restant_s', 0.0)):.1f} s")
+            self.decompte.setText(tr(
+                "pages.commun.decompte", s=f"{float(calib_state.get('restant_s', 0.0)):.1f}"))
             essai = int(calib_state.get("essai", 0))
             total = int(calib_state.get("total", 0))
-            self.progression.setText(f"{unite} {essai} sur {total}")
+            self.progression.setText(tr("pages.calib.progression", unite=unite, n=essai,
+                                        total=total))
             self.barre.setRange(0, max(total, 1))
             self.barre.setValue(min(essai, max(total, 1)))
             self.diagnostic.setText(_diagnostic(calib_state))
@@ -379,8 +385,9 @@ class CalibPage(QWidget):
             if resultat is not None:
                 self._montrer_resultat(resultat)
             else:
-                raison = (f"Entraînement abandonné : "
-                          f"{calib_state.get('probleme', '') or 'aucun modèle produit'}")
+                raison = tr("pages.calib.abandonne",
+                            raison=calib_state.get("probleme", "")
+                            or tr("pages.calib.aucun_modele"))
                 # ⚠️ EN FACE, et en gris : pas de verdict, donc rien à peindre en couleur. Le
                 # repli « Détails » a d'abord avalé cette phrase — elle vivait dans
                 # `self.resultat` — et le smoke restait vert, parce qu'il lisait le TEXTE du
@@ -413,42 +420,47 @@ class CalibPage(QWidget):
     # passe à la suivante, et s'il n'en reste aucune on n'affiche AUCUN chiffre — jamais un 0 %,
     # qui se lirait comme un diagnostic précis (« contact des électrodes ») sans rapport avec la
     # vraie cause.
+    #
+    # Les libellés sont lus dans le fichier de langue à l'IMPORT, comme les libellés des contrats
+    # (cf. `core/i18n.py` : changer de langue = relancer).
     MESURES = (
-        ("cv_groupee", "accuracy honnête (validation croisée par essai)"),
-        ("selection", "sélection en leave-one-round-out (la cible désignée est-elle retrouvée ?)"),
+        ("cv_groupee", tr("pages.calib.mesure.cv_groupee")),
+        ("selection", tr("pages.calib.mesure.selection")),
         # ⚠️ L'AUC vient EN DERNIER, et sa place dans cette liste est ce qui la rend correcte pour
         # les deux modes qui la publient. Le P300 la rend AUSSI, mais ce n'est pas chez lui le
         # chiffre qui décide (la sélection l'est) : la mettre plus haut lui ferait afficher la
         # mauvaise mesure. L'ErrP, lui, ne publie qu'elle — il n'a ni manche à retrouver ni classe
         # à choisir, il répond oui/non à chaque feedback, et son AUC hors-pli est le SEUL de ses
         # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
-        ("auc", "AUC erreur/correct (validation croisée hors-pli, par bloc)"),
+        ("auc", tr("pages.calib.mesure.auc")),
         # ⚠️ Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
         # qui décide est celle de l'eCCA — arbitrairement, et c'est assumé : les deux sont
         # INDISCERNABLES sur la seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt
         # que l'autre ici ne choisit rien. Celle du rCCA est en détail juste en dessous, et le
         # `verdict` porte le TEST qui dit s'il y a lieu de les départager.
-        ("acc_ecca", "justesse hors-pli eCCA (à la géométrie où le moteur décide)"),
+        ("acc_ecca", tr("pages.calib.mesure.acc_ecca")),
     )
     # Le détail, par clé présente elle aussi. `cv_naive` n'y est PAS et n'y sera jamais : elle est
     # gonflée de 10 à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
+    # Une fonction par ligne (valeur -> texte) : le NOMBRE se met en forme ici, le texte vient du
+    # fichier de langue, avec une clé écrite en toutes lettres.
     DETAILS = (
-        ("n_essais", "{} essais enregistrés"),
-        ("n_fenetres", "{} fenêtres d'entraînement"),
-        ("n_manches", "{} manches"),
-        ("n_erreurs", "dont {} erreurs"),
+        ("n_essais", lambda v: tr("pages.calib.detail.n_essais", n=v)),
+        ("n_fenetres", lambda v: tr("pages.calib.detail.n_fenetres", n=v)),
+        ("n_manches", lambda v: tr("pages.calib.detail.n_manches", n=v)),
+        ("n_erreurs", lambda v: tr("pages.calib.detail.n_erreurs", n=v)),
         # Le point de FONCTIONNEMENT de l'ErrP, en détail et jamais comme mesure qui décide : ces
         # deux taux sont mesurés au seuil qui les a choisis, donc optimistes par construction (sa
         # phrase d'honnêteté le dit au long, juste en dessous).
-        ("tpr", "attrape {:.0%} des erreurs"),
-        ("tnr", "garde {:.0%} des bonnes commandes"),
-        ("perm_p", "permutation p = {:.3f}"),
+        ("tpr", lambda v: tr("pages.calib.detail.tpr", pct=f"{v:.0%}")),
+        ("tnr", lambda v: tr("pages.calib.detail.tnr", pct=f"{v:.0%}")),
+        ("perm_p", lambda v: tr("pages.calib.detail.perm_p", p=f"{v:.3f}")),
         # Le SECOND décodeur du c-VEP, en détail et jamais comme mesure qui décide : afficher deux
         # pourcentages côte à côte invite à prendre le plus beau, et cinq points d'écart sur
         # 37 décisions sont du bruit. C'est `n_discordantes` qui porte l'information, et le
         # `verdict` qui rend le test de McNemar.
-        ("acc_rcca", "second décodeur (rCCA) {:.1%}"),
-        ("n_discordantes", "{} décision(s) discordante(s) entre les deux"),
+        ("acc_rcca", lambda v: tr("pages.calib.detail.acc_rcca", pct=f"{v:.1%}")),
+        ("n_discordantes", lambda v: tr("pages.calib.detail.n_discordantes", n=v)),
     )
 
     def _mesure(self, resultat):
@@ -473,21 +485,29 @@ class CalibPage(QWidget):
             hasard = resultat.get("hasard")
             # Le niveau du hasard À CÔTÉ : « 40 % » seul ne veut rien dire, et il ne vaut pas la
             # même chose à 3 classes (33 %) qu'à 6 cibles (17 %) qu'à une AUC (50 %).
-            repere = "" if hasard is None else f" (hasard {float(hasard)*100:.0f} %)"
-            self.resultat.setText(
-                f"{resultat.get('verdict', '')} — {libelle} : {valeur*100:.1f} %{repere}")
+            if hasard is None:
+                self.resultat.setText(tr(
+                    "pages.calib.ligne_mesure", verdict=resultat.get("verdict", ""),
+                    libelle=libelle, valeur=f"{valeur*100:.1f}"))
+            else:
+                self.resultat.setText(tr(
+                    "pages.calib.ligne_mesure_hasard", verdict=resultat.get("verdict", ""),
+                    libelle=libelle, valeur=f"{valeur*100:.1f}",
+                    hasard=f"{float(hasard)*100:.0f}"))
 
-        lignes = [f"Modèle : {resultat.get('nom', '')}"]
-        morceaux = [gabarit.format(resultat[cle]) for cle, gabarit in self.DETAILS
+        lignes = [tr("pages.calib.detail.modele", nom=resultat.get("nom", ""))]
+        morceaux = [texte(resultat[cle]) for cle, texte in self.DETAILS
                     if resultat.get(cle) is not None]
         # ⚠️ L'AUC ne figure en détail que quand elle n'est PAS la mesure qui décide — chez le P300,
         # où elle accompagne la sélection. Chez l'ErrP elle EST la mesure : la répéter afficherait
         # le même chiffre deux fois, la seconde fois sous un libellé (« cible/non-cible ») qui
         # appartient à un autre paradigme.
         if resultat.get("auc") is not None and (mesure is None or mesure[0] != "auc"):
-            morceaux.append(f"AUC cible/non-cible {float(resultat['auc'])*100:.0f} %")
+            morceaux.append(tr("pages.calib.detail.auc_cible",
+                               pct=f"{float(resultat['auc'])*100:.0f}"))
         if resultat.get("classes"):
-            morceaux.append("classes : " + ", ".join(resultat["classes"]))
+            morceaux.append(tr("pages.calib.detail.classes",
+                               liste=", ".join(resultat["classes"])))
         if morceaux:
             lignes.append(" — ".join(morceaux))
         self.details.setText("\n".join(lignes))
@@ -514,12 +534,11 @@ class CalibPage(QWidget):
             # UNE ligne, et elle garde le point d'honnêteté entier : un chiffre affiché n'est
             # pas un modèle enregistré. Les quatre lignes d'avant disaient la même chose, et
             # faisaient partie du mur de texte relevé en séance le 2026-09-22.
-            self.decision.setText(
-                "⚠ Pas encore enregistré — ce modèle est dans un dossier temporaire. "
-                "« Enregistrer le modèle » le met dans data/, « Refaire » le jette.")
+            self.decision.setText(tr("pages.calib.pas_encore_enregistre"))
             self.decision.setStyleSheet("color: #b8860b; font-weight: bold;")
         elif resultat is not None:
-            self.decision.setText(f"Modèle en place : {resultat.get('modele', '')}")
+            self.decision.setText(tr("pages.calib.modele_en_place",
+                                     chemin=resultat.get("modele", "")))
             self.decision.setStyleSheet("color: #3fae5a; font-weight: bold;")
         else:
             self.decision.setText("")
