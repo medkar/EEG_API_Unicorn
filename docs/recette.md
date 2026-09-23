@@ -1019,7 +1019,7 @@ verdict avec le même aplomb. C'est aussi pourquoi cette mesure **n'expose aucun
 python src/console/app.py
 ```
 
-Grille → seconde rangée, **« Contrôles et mesures »** → tuile **« Vérifier le casque »** (elle
+Grille → seconde rangée, **« Avant tout »** → tuile **« Vérifier le casque »** (elle
 s'appelait « Contrôle alpha » jusqu'au 2026-09-22), marquée **BARRIÈRE — à passer AVANT le reste**
 → **Ouvrir** → lire le briefing → **Commencer**. C'est aussi la page qu'ouvre **« Mesurer »**, à
 côté du « Pic alpha de la personne » de la page SSVEP : deux portes, un seul protocole — la première

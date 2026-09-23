@@ -296,7 +296,7 @@ Un repli silencieux fait enregistrer une séance entière de signal fabriqué en
 ErrP. Chacune porte sa case **« publié »**, **« Démarrer »** et **« Ouvrir »**.
 ✅ **Aucune n'est grisée**, même sans modèle entraîné : le manque de modèle se dit au clic, par un
 refus (point 1.6), pas par une tuile éteinte.
-✅ Dessous, **« Contrôles et mesures »** avec **une seule** tuile : **« Vérifier le casque »**,
+✅ Dessous, **« Avant tout »** avec **une seule** tuile : **« Vérifier le casque »**,
 marquée *BARRIÈRE — à passer AVANT le reste*.
 ✅ Tout en bas, **« La sortie »** et le bouton **« Ce que voit ton application »**.
 
