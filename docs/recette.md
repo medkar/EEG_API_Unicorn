@@ -417,9 +417,8 @@ n'affiche. Zéro détection, aucune erreur, rien à déboguer. Avant, c'était a
 - [ ] Taper `15, 17` → **Appliquer**.
 - [ ] Attendu : un refus **en rouge**, qui nomme le coupable et propose les deux voisins :
 
-  > « Fréquences des cibles » : 17 Hz n'est pas un diviseur entier de 60 Hz — l'affichage sauterait
-  > des cycles et le décodeur corrélerait contre une sinusoïde que personne n'affiche. Les plus
-  > proches sont 15 et 20 Hz
+  > « Fréquences des cibles » : 17 Hz n'est pas un diviseur entier de 60 Hz. L'écran sauterait des
+  > images et rien ne serait détecté. Les plus proches sont 15 et 20 Hz.
 
 ### 1.9 — Le bouton « Proposer » répond, et l'alpha change la réponse
 

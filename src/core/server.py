@@ -88,7 +88,7 @@ from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR, 
                     SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import message_erreur, tr  # noqa: E402
 from core.lsl_io import (STREAM_PREFIX, ClockBridge, DecodedNeuroPublisher,  # noqa: E402
                     QualityPublisher, StatusPublisher, default_instance_id, mi_channel_labels,
                     stream_name, verdict_from_sigma)
@@ -2286,7 +2286,7 @@ class EngineServer:
                             # reste. Marquer « annulé » avec sa raison est ce que `_terminer` fait
                             # déjà pour un entraînement qui lève ; un tick qui lève méritait le
                             # même traitement, pas un crash du processus entier.
-                            self.calibration.probleme = f"{type(e).__name__} : {e}"
+                            self.calibration.probleme = message_erreur(e)
                             self.calibration.phase = "annule"
                             print(f"[server] calibration interrompue par une exception : "
                                   f"{self.calibration.probleme}")
@@ -2305,7 +2305,7 @@ class EngineServer:
                         except Exception as e:  # noqa: BLE001 - un tick fautif ne doit tuer NI le
                             # moteur NI la séance des autres modes. Même traitement que la
                             # calibration juste au-dessus : « annulé » avec sa raison à l'écran.
-                            self.mesure.probleme = f"{type(e).__name__} : {e}"
+                            self.mesure.probleme = message_erreur(e)
                             self.mesure.phase = "annule"
                             print(f"[server] mesure interrompue par une exception : "
                                   f"{self.mesure.probleme}")
@@ -2528,6 +2528,7 @@ def _smoke():
         ok,
         integre,
         _smoke_frontiere(),
+        _smoke_textes(),
         _smoke_exemples(),
         _smoke_repos_partage(),
         _smoke_ssvep(),
@@ -4296,6 +4297,36 @@ def _smoke_frontiere():
           f"{len(fautes)} violation(s) de frontière")
     ok = ok and not fautes
     print(f"[smoke-frontiere] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_textes():
+    """Aucun texte affiché n'est écrit en dur : tout passe par `tr()` et `langues/<langue>/`.
+
+    Demandé le 2026-09-23, pour pouvoir ajouter des langues. Même idiome que la frontière : la
+    règle est tenue par un test, pas par la discipline. `core.i18n.controle` refuse une clé qui
+    n'existe pas, une clé calculée, des `{valeurs}` qui ne correspondent pas au texte, un texte
+    que plus rien n'affiche, une autre langue qui diverge du français — et tout texte passé EN DUR
+    à un widget de la console.
+
+    ⚠️ Le scanner des widgets ne voit que la console, et que les appels Qt directs : un texte en
+    dur qui passerait par une fonction intermédiaire, ou un texte du moteur écrit sans `tr`, lui
+    échappe. C'est la relecture qui les tient — ce test ferme la porte la plus large, pas toutes.
+    """
+    from core import i18n
+
+    racine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fautes = i18n.controle(racine)
+    for faute in fautes:
+        print(f"  ÉCHEC {faute}")
+    n_cles = len(i18n.catalogue(i18n.LANGUE_DEFAUT))
+    n_appels = len(i18n.appels_tr(racine))
+    # Des compteurs VISIBLES : « 0 faute » sur un catalogue vide ou sans un seul appel ne voudrait
+    # rien dire — la garde muette que `[smoke-frontiere]` rend visible de la même façon.
+    ok = not fautes and n_cles > 0 and n_appels > 0
+    print(f"[smoke-textes] {n_cles} textes en français, {n_appels} appels à tr(), "
+          f"{len(fautes)} faute(s)")
+    print(f"[smoke-textes] VERDICT : {'OK' if ok else 'ÉCHEC'}")
     return ok
 
 

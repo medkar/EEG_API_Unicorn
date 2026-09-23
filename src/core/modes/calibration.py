@@ -23,7 +23,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import message_erreur, tr  # noqa: E402
 
 # Les phases publiques, dans l'ordre où elles s'enchaînent. Elles sortent telles quelles dans
 # `snapshot()["calibration"]["phase"]` : la console les traduit, elle n'en invente aucune.
@@ -266,7 +266,7 @@ class CalibrationRuntime:
             self.resultat = self._entrainer(self._enregistre, float(engine.acq.fs))
             self.phase = "fini"
         except Exception as e:  # noqa: BLE001 - l'échec de l'entraînement ne tue pas le moteur
-            self.probleme = f"{type(e).__name__} : {e}"
+            self.probleme = message_erreur(e)
             self.phase = "annule"
             print(f"[{self._journal}] {self._nom_du_calcul} impossible : {self.probleme}")
         self.etape, self.classe, self._echeance = "", "", None

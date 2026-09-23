@@ -67,8 +67,11 @@ def catalogue(code):
     return textes
 
 
-def tr(cle, **valeurs):
+def tr(cle, /, **valeurs):
     """Le texte `cle` dans la langue courante, ses `{valeurs}` remplies.
+
+    `cle` est positionnel seulement : un texte peut donc avoir une valeur nommée `{cle}` sans
+    entrer en collision avec lui.
 
     Ne lève jamais : une clé introuvable s'affiche `⟦clé⟧`, visible à l'écran sans emporter le fil
     Qt. `controle()` garantit qu'aucune ne manque dans le dépôt.
@@ -81,6 +84,19 @@ def tr(cle, **valeurs):
             except (KeyError, IndexError, ValueError):
                 return texte
     return f"⟦{cle}⟧"
+
+
+def message_erreur(e):
+    """Ce qu'une exception montre à l'ÉCRAN.
+
+    Une `ValueError` levée par le code du projet porte une phrase déjà écrite pour l'utilisateur
+    (un refus, une séance trop pauvre) : on l'affiche seule, sans le « ValueError : » de Python,
+    qui n'est que du jargon à l'écran. Toute autre exception est un DÉFAUT : on le dit comme tel,
+    avec son type, pour qu'il se signale au lieu de passer pour une consigne.
+    """
+    if isinstance(e, ValueError) and str(e):
+        return str(e)
+    return tr("moteur.erreur_interne", type=type(e).__name__, detail=str(e))
 
 
 def champs(texte):
@@ -161,15 +177,16 @@ def appels_tr(racine_src):
     """[(fichier, ligne, clé ou None, {noms des valeurs})] : chaque `tr(…)` du dépôt."""
     appels = []
     for chemin in _fichiers_py(racine_src):
-        if _os.path.abspath(chemin) == _os.path.abspath(__file__):
-            continue          # ce fichier-ci ne fait que DÉFINIR `tr`, et ses exemples sont du texte
         with open(chemin, encoding="utf-8") as f:
             arbre = _ast.parse(f.read())
         for n in _hors_autotest(arbre):
             if isinstance(n, _ast.Call) and _nom_appel(n) == "tr":
                 cle = (n.args[0].value if n.args and isinstance(n.args[0], _ast.Constant)
                        and isinstance(n.args[0].value, str) else None)
-                appels.append((chemin, n.lineno, cle, {k.arg for k in n.keywords if k.arg}))
+                # `**valeurs` : `k.arg` est None — noté "**", pour que le contrôle le REFUSE (il
+                # ne peut pas savoir quelles valeurs un dict portera).
+                appels.append((chemin, n.lineno, cle,
+                               {k.arg if k.arg else "**" for k in n.keywords}))
     return appels
 
 
@@ -192,6 +209,10 @@ def controle(racine_src, exiger_zero_en_dur=True):
                           f"sinon rien ne peut vérifier qu'elle existe")
             continue
         utilisees.add(cle)
+        if "**" in noms:
+            fautes.append(f"{ou} : « {cle} » reçoit ses valeurs par `**` — écris-les une à une, "
+                          f"sinon rien ne peut vérifier qu'elles correspondent au texte")
+            continue
         if cle not in fr:
             fautes.append(f"{ou} : la clé « {cle} » n'existe pas en français")
             continue
@@ -257,6 +278,10 @@ def _selftest():
         del _os.environ["EEG_LANGUE"]
         chk(tr("x.absente") == "⟦x.absente⟧", "une clé introuvable se VOIT, sans lever")
         chk(tr("x.bonjour") == "Bonjour {nom}", "une valeur oubliée ne fait pas tomber l'écran")
+        with open(_os.path.join(tmp, "fr", "c.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.cle": "la clé {cle}"}, f)
+        _cache.clear()
+        chk(tr("x.cle", cle="k") == "la clé k", "une valeur peut s'appeler `cle`")
         with open(_os.path.join(tmp, "fr", "b.json"), "w", encoding="utf-8") as f:
             _json.dump({"x.seul": "doublon"}, f)
         _cache.clear()
@@ -277,6 +302,9 @@ def _selftest():
     vus = [n.lineno for n in _hors_autotest(arbre) if isinstance(n, _ast.Call)
            and _nom_appel(n) in (_WIDGETS | _METHODES) and n.args and _a_une_lettre(n.args[0])]
     chk(vus == [1, 2, 6], f"le scanner voit les textes en dur, pas les symboles ni `tr` ({vus})")
+    # …et `tr(…, **d)` est vu comme tel, pour que `controle` le refuse.
+    appel = _ast.parse('tr("x", **d)').body[0].value
+    chk([k.arg for k in appel.keywords] == [None], "un `**` dans `tr` est repérable")
     return ok
 
 

@@ -81,6 +81,17 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   ici.** Chaque fois elle a été traitée comme une fonctionnalité — on ajoutait un bouton — et le
   chantier suivant repartait sans elle, donc un nouveau trou apparaissait. C'est pour ça qu'elle
   est dans ce fichier ET dans un test : une contrainte tenue par la discipline n'est pas tenue.
+- 🔴 **AUCUN TEXTE AFFICHÉ N'EST ÉCRIT EN DUR** (2026-09-23), pour pouvoir ajouter des langues.
+  Tout ce qu'un utilisateur lit — la console, ET ce que le moteur lui fait afficher (aides des
+  réglages, briefings, verdicts, refus) — s'écrit `tr("zone.objet.quoi", valeur=…)` et vit dans
+  `src/core/langues/fr/*.json` (`console`, `pages`, `modes`, `mesures`, `moteur`). **Ajouter une
+  langue = copier `fr/`, traduire, lancer avec `EEG_LANGUE=en`** ; une clé absente retombe sur le
+  français. **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
+  `{valeurs}` exactes, aucun texte orphelin, aucun littéral passé à un widget de la console. Hors
+  règle : commentaires, `print()` du terminal, messages d'autotest, et le **contrat réseau** (noms
+  de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais. ⚠️ Les fenêtres pygame de
+  `src/stimulus/` ne sont PAS encore migrées. Une aide de réglage s'affiche dans une bulle
+  **« ⓘ »** au survol, jamais en texte gris sous le champ.
 - 🔴 **UNE PAGE DE MODE A SES GESTES NUMÉROTÉS, ET PAS UN DE PLUS ; « TESTER » POSSÈDE SA SÉQUENCE
   ENTIÈRE** (2026-09-22). Même rang que les deux règles ci-dessus. Une page = **1. Régler ·
   2. Entraîner** (si le contrat déclare une `calibration`) **· N. Tester** (s'il déclare un
@@ -349,13 +360,17 @@ python src/stimulus/cvep.py --calibrer     # blocs entrelacés, ~2,8 min (la con
 
 ```bash
 python src/core/server.py --smoke          # moteur : registre, FRONTIÈRE (les QUATRE paquets :
-                                           # core + stimulus + research + console), EXEMPLES,
+                                           # core + stimulus + research + console), TEXTES
+                                           # (aucun texte affiché en dur), EXEMPLES,
                                            # repos partagé, cumul, flux, vol de marqueurs,
                                            # save/discard, ENREGISTREMENT de séance
 python src/console/app.py --smoke          # console : grille, page de mode, réglages, contrôle de
                                            # liaison, lanceur de fenêtre, ORDRE, écran de départ,
                                            # page des mesures, page de flux, TRACÉS du brut
                                            # (Qt offscreen)
+python src/core/i18n.py                    # les TEXTES : autotest du chargeur + contrôle du dépôt
+                                           # (le même que [smoke-textes]) ; `--reste` liste ce qui
+                                           # reste écrit en dur dans la console
 ```
 
 ⚠️ **`examples/` n'était couvert par AUCUN test avant le 2026-09-10** — alors que c'est le seul

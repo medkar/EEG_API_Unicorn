@@ -782,6 +782,8 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
     divisibles = [f for _k, f in available_frequencies(refresh)
                   if BANDPASS[0] <= f <= BANDPASS[1] and abs(f - alpha) >= ALPHA_GARDE_HZ]
 
+    from core.i18n import tr   # ici et pas en tête : `config` est importé par tout le dépôt
+
     lo, hi = CONFORT_HZ
     jeu = _plus_ecartees([f for f in divisibles if lo <= f <= hi], n)
     if jeu is not None:
@@ -790,15 +792,14 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
     jeu = _plus_ecartees(divisibles, n)
     if jeu is not None:
         hors = [f for f in jeu if not lo <= f <= hi]
-        return jeu, (f"hors de la plage confortable {lo:g}-{hi:g} Hz : "
-                     + ", ".join(f"{f:g}" for f in hors)
-                     + " — scintillement plus pénible, réponse plus bruitée")
+        return jeu, tr("moteur.proposer.hors_plage", lo=f"{lo:g}", hi=f"{hi:g}",
+                       hors=", ".join(f"{f:g}" for f in hors))
 
     for k in range(n - 1, 1, -1):
         if _plus_ecartees(divisibles, k) is not None:
-            return [], (f"impossible : {k} cibles au maximum à {refresh:g} Hz avec un alpha à "
-                        f"{alpha:g} Hz — il faut un écran plus rapide")
-    return [], f"impossible : aucun jeu de {n} cibles à {refresh:g} Hz"
+            return [], tr("moteur.proposer.impossible_max", k=k, refresh=f"{refresh:g}",
+                          alpha=f"{alpha:g}")
+    return [], tr("moteur.proposer.impossible", n=n, refresh=f"{refresh:g}")
 
 
 def cvep_lags(n_targets, code_len):
@@ -1216,5 +1217,8 @@ def _selftest():
 
 
 if __name__ == "__main__":
+    # Lancé seul, ce fichier ne voit pas le paquet `core` (dont `core.i18n`, qui écrit les notes de
+    # `propose_frequencies`) : on lui donne `src/`, comme le font les autres modules du paquet.
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     use_utf8_console()
     _sys.exit(0 if _selftest() else 1)

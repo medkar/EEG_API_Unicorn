@@ -226,6 +226,9 @@ python src/console/app.py --smoke
 (`core` est le quatrième paquet, scanné en premier).
 ✅ `[smoke-exemples] … 0 faute(s)`, avec un nombre de fichiers **non nul** et au moins 5 noms de
 flux trouvés.
+✅ `[smoke-textes] N textes en français, M appels à tr(), 0 faute(s)` — N et M **non nuls** (≈ 700
+et ≈ 780 le 2026-09-23). Aucun texte affiché n'est écrit en dur : ils vivent dans
+`src/core/langues/fr/*.json`.
 
 ❌ Régression : un seul `ÉCHEC`, ou une sortie ≠ 0. Ne pas continuer : tout le reste de la feuille
 suppose ce bloc vert.
@@ -267,9 +270,10 @@ python src/core/modes/p300_test.py
 python src/core/modes/cvep_test.py
 python src/core/modes/errp_test.py
 python src/core/acquisition.py --synthetic
+python src/core/i18n.py
 ```
 
-✅ Treize sorties à 0.
+✅ Quatorze sorties à 0.
 
 ❌ Régression : n'importe lequel en rouge. Ceux dont l'échec compte le plus : `modes/p300.py` et
 `modes/cvep.py` (leur panne caractéristique fait décoder du bruit **avec une confiance élevée**),
