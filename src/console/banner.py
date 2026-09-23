@@ -7,7 +7,13 @@ rassurantes sur un signal vide. Ça a coûté 3,4 minutes d'enregistrement dans 
 2026-07-20, sans le moindre avertissement.
 """
 
+import os
+import sys
+
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 
 
 class Banner(QWidget):
@@ -15,7 +21,7 @@ class Banner(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.liaison = QLabel("moteur non démarré")
+        self.liaison = QLabel(tr("console.bandeau.moteur_non_demarre"))
         self.sigmas = QLabel("")
         self.alarme = QLabel("")
         self.alarme.setStyleSheet("color: #e5484d; font-weight: bold;")
@@ -63,7 +69,7 @@ class Banner(QWidget):
         """
         self.moteur.setText(texte or "")
         if texte:
-            self.sigmas.setText("σ : plus aucune mesure — le moteur est arrêté")
+            self.sigmas.setText(tr("console.bandeau.sigmas_moteur_arrete"))
             self.alarme.setText("")
 
     def set_refus(self, texte):
@@ -80,15 +86,17 @@ class Banner(QWidget):
 
     def update_from(self, state):
         board = state.get("board", "?")
-        casque = "board de test" if board == "synthetic" else "Unicorn"
+        source = (tr("console.bandeau.source_test") if board == "synthetic"
+                  else tr("console.bandeau.source_unicorn"))
         actifs = len(state.get("modes") or ())
-        self.liaison.setText(f"{casque} · {state.get('fs_hz', 0):.0f} Hz · "
-                             f"{actifs} mode{'s' if actifs > 1 else ''} actif"
-                             f"{'s' if actifs > 1 else ''}")
+        fs = f"{state.get('fs_hz', 0):.0f}"
+        self.liaison.setText(
+            tr("console.bandeau.liaison.plusieurs", source=source, fs=fs, n=actifs) if actifs > 1
+            else tr("console.bandeau.liaison.un", source=source, fs=fs, n=actifs))
 
         quality = state.get("quality")
         if not quality:
-            self.sigmas.setText("σ : en attente du tampon…")
+            self.sigmas.setText(tr("console.bandeau.sigmas_attente"))
             self.alarme.setText("")
             return
 
@@ -97,18 +105,19 @@ class Banner(QWidget):
         verdicts = quality.get("verdicts", [])
         mortes = sum(1 for v in verdicts if v == "morte")
         saturees = sum(1 for v in verdicts if v == "saturée")
-        detail = f"σ {min(valeurs):.1f}–{max(valeurs):.1f} µV sur {len(valeurs)} voies" \
-            if valeurs else "σ indisponible"
+        morceaux = [tr("console.bandeau.sigmas", min=f"{min(valeurs):.1f}",
+                       max=f"{max(valeurs):.1f}", n=len(valeurs))
+                    if valeurs else tr("console.bandeau.sigma_indisponible")]
         if mortes:
-            detail += f" · {mortes} morte{'s' if mortes > 1 else ''}"
+            morceaux.append(tr("console.bandeau.mortes.plusieurs", n=mortes) if mortes > 1
+                            else tr("console.bandeau.mortes.un", n=mortes))
         if saturees:
-            detail += f" · {saturees} saturée{'s' if saturees > 1 else ''}"
-        self.sigmas.setText(detail)
+            morceaux.append(tr("console.bandeau.saturees.plusieurs", n=saturees) if saturees > 1
+                            else tr("console.bandeau.saturees.un", n=saturees))
+        self.sigmas.setText(" · ".join(morceaux))
 
         if quality.get("reference_lost"):
-            self.alarme.setText(
-                f"⚠ RÉFÉRENCE DÉCROCHÉE (corrélation inter-voies "
-                f"{quality.get('common_mode')}) — remets les MASTOÏDES : "
-                f"tout ce qui suit est inexploitable")
+            self.alarme.setText(tr("console.bandeau.reference_decrochee",
+                                   correlation=quality.get("common_mode")))
         else:
             self.alarme.setText("")

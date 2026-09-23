@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushB
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import PHASES_FR, live_views  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.modes import registry  # noqa: E402
 
 GRIS = "color: #8a8f9c; font-size: 11px;"
@@ -67,10 +68,11 @@ class ModePage(QWidget):
 
         # --- l'en-tête : où l'on est, et rien d'autre ------------------------------------------
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton("← Modes")
+        self.bouton_retour = QPushButton(tr("console.nav.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        entete.addWidget(QLabel(f"<b>{spec['label']}</b> — {spec['summary']}"))
+        entete.addWidget(QLabel(tr("console.mode.entete", mode=spec["label"],
+                                   resume=spec["summary"])))
         entete.addStretch(1)
         # L'état du décodage (« arrêté », « décode »…). Placé UNE fois, plus bas, selon la page :
         # en tête quand la page l'observe, dans le repli « Décodage en direct » sinon.
@@ -89,16 +91,15 @@ class ModePage(QWidget):
             mesure_id = console.mesure_qui_remplit(self.mode_id, param["key"])
             if mesure_id is None:
                 continue
-            bouton = QPushButton("Mesurer")
-            bouton.setToolTip(f"Mesure cette valeur sur toi : « "
-                              f"{console.mesures[mesure_id]['label']} », puis « Appliquer » la "
-                              f"renvoie dans ce champ.")
+            bouton = QPushButton(tr("console.mode.mesurer"))
+            bouton.setToolTip(tr("console.mode.mesurer_aide",
+                                 mesure=console.mesures[mesure_id]["label"]))
             bouton.clicked.connect(lambda _c=False, m=mesure_id: self._mesurer(m))
             self.formulaire.ajouter_a_cote(param["key"], bouton)
             self.boutons_mesurer[param["key"]] = bouton
 
         numero = 1
-        self.bloc_regler = QGroupBox(f"{numero}. Régler")
+        self.bloc_regler = QGroupBox(tr("console.mode.bloc_regler", n=numero))
         QVBoxLayout(self.bloc_regler).addWidget(self.formulaire)
         blocs = [self.bloc_regler]
 
@@ -111,19 +112,17 @@ class ModePage(QWidget):
         self.bloc_entrainer = self.bouton_entrainer = None
         if calib:
             numero += 1
-            self.bloc_entrainer = QGroupBox(f"{numero}. Entraîner")
-            self.bouton_entrainer = QPushButton("Entraîner")
+            self.bloc_entrainer = QGroupBox(tr("console.mode.bloc_entrainer", n=numero))
+            self.bouton_entrainer = QPushButton(tr("console.mode.entrainer"))
             self.bouton_entrainer.clicked.connect(lambda: console.show_calibration(self.mode_id))
             if not calib.get("jouable"):
                 # Déclarée mais pas livrée : le bouton reste VISIBLE — c'est ainsi qu'on apprend
                 # que ce mode s'entraîne — mais grisé, et il DIT pourquoi.
                 self.bouton_entrainer.setEnabled(False)
                 self.bouton_entrainer.setToolTip(
-                    f"L'entraînement de « {spec['label']} » est déclaré mais le moteur ne sait "
-                    f"pas encore le jouer.")
+                    tr("console.mode.entrainer_pas_livre", mode=spec["label"]))
             dedans = QVBoxLayout(self.bloc_entrainer)
-            dedans.addWidget(_phrase("Produit un modèle à partir d'une séance guidée. Tu vois "
-                                     "son score AVANT de décider de le garder."))
+            dedans.addWidget(_phrase(tr("console.mode.entrainer_phrase")))
             dedans.addWidget(self.bouton_entrainer)
             blocs.append(self.bloc_entrainer)
 
@@ -135,18 +134,15 @@ class ModePage(QWidget):
         self.bloc_tester = self.bouton_tester = None
         if test_id:
             numero += 1
-            self.bloc_tester = QGroupBox(f"{numero}. Tester")
-            self.bouton_tester = QPushButton("Tester")
+            self.bloc_tester = QGroupBox(tr("console.mode.bloc_tester", n=numero))
+            self.bouton_tester = QPushButton(tr("console.mode.tester"))
             self.bouton_tester.clicked.connect(self._tester)
             if not (console.mesures.get(test_id) or {}).get("jouable"):
                 self.bouton_tester.setEnabled(False)
                 self.bouton_tester.setToolTip(
-                    f"Le test de « {spec['label']} » est déclaré mais le moteur ne sait pas "
-                    f"encore le jouer.")
+                    tr("console.mode.tester_pas_livre", mode=spec["label"]))
             dedans = QVBoxLayout(self.bloc_tester)
-            dedans.addWidget(_phrase("Une séance courte, sur TES réglages : on te dit quoi faire, "
-                                     "le décodage répond, on compare. Rend un score et son "
-                                     "niveau de hasard ; n'écrit rien."))
+            dedans.addWidget(_phrase(tr("console.mode.tester_phrase")))
             dedans.addWidget(self.bouton_tester)
             blocs.append(self.bloc_tester)
 
@@ -163,14 +159,14 @@ class ModePage(QWidget):
             # Aucune vérité-terrain (le Neuro, le Brut) : rien à entraîner, rien à noter. On
             # REGARDE, et on n'annonce aucun chiffre de justesse — il n'y a pas de bonne réponse.
             numero += 1
-            self.bloc_observer = QGroupBox(f"{numero}. Observer")
+            self.bloc_observer = QGroupBox(tr("console.mode.bloc_observer", n=numero))
             dedans = QVBoxLayout(self.bloc_observer)
             # Le bouton n'existe que si la vue a BESOIN que le mode tourne. Le Brut lit le tampon
             # d'acquisition (`set_source`), pas la sortie de son mode : il n'y a rien à démarrer
             # pour le regarder. Le libellé vient de l'ÉTAT REÇU (`_marche`), jamais d'une bascule
             # tenue ici, qui se désynchroniserait au premier refus du moteur.
             if not hasattr(self.vue, "set_source"):
-                self.bouton_observer = QPushButton("Observer")
+                self.bouton_observer = QPushButton(tr("console.mode.observer"))
                 self.bouton_observer.clicked.connect(
                     lambda: self.marche.emit(self.mode_id, self._arrete))
                 haut = QHBoxLayout()
@@ -184,13 +180,12 @@ class ModePage(QWidget):
             # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille,
             # et reviendra en face avec « Connecter ». Cachée SANS case pour l'ouvrir, elle serait
             # un widget testé que personne ne peut voir — le motif que ce dépôt traque.
-            self.direct = QCheckBox("Décodage en direct")
-            self.direct.setToolTip("Ce que le décodage continu rend en ce moment, s'il tourne.")
+            self.direct = QCheckBox(tr("console.mode.direct"))
+            self.direct.setToolTip(tr("console.mode.direct_aide"))
             self.pli_direct = QWidget()
             pli = QVBoxLayout(self.pli_direct)
             pli.setContentsMargins(0, 0, 0, 0)
-            pli.addWidget(_phrase("Vide tant que le décodage continu ne tourne pas : il se "
-                                  "démarre depuis la tuile du mode, sur l'accueil."))
+            pli.addWidget(_phrase(tr("console.mode.direct_vide")))
             # L'état du décodage (« arrêté », « décode »…) vit ICI, et plus dans l'en-tête : une
             # page testable ne démarre ni n'arrête rien, donc un « arrêté » en tête de page n'y
             # disait rien d'utile — il laissait croire qu'il fallait démarrer quelque chose avant
@@ -297,16 +292,18 @@ class ModePage(QWidget):
             # (La page ne démarre plus rien : ce sont « Tester » et le décodage continu qui
             # partiront avec — constat M14 de la revue.)
             self.formulaire.show_confirmation(
-                "réglage RETENU : « " + self.spec["label"] + " » est arrêté ; « Tester » et le "
-                "prochain décodage partiront avec." if ack.get("differe") else "")
+                tr("console.mode.reglage_retenu", mode=self.spec["label"])
+                if ack.get("differe") else "")
             return
         # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
         # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire
         # comme l'état du moteur, et l'étudiant croit décoder sur des réglages jamais appliqués.
         vigueur = self._derniers_params or {}
-        rappel = ("  ·  en vigueur : " + ", ".join(f"{c} = {v}" for c, v in vigueur.items())
-                  if vigueur else "")
-        self.formulaire.show_refus(ack.get("reason", "") + rappel)
+        raison = ack.get("reason", "")
+        self.formulaire.show_refus(
+            tr("console.mode.refus_en_vigueur", raison=raison,
+               valeurs=", ".join(f"{c} = {v}" for c, v in vigueur.items()))
+            if vigueur else raison)
 
     def _proposer(self, cle):
         """Demande une proposition au MOTEUR et la met dans le champ. La console ne calcule rien.
@@ -335,7 +332,7 @@ class ModePage(QWidget):
         mode_state = (state.get("modes_state") or {}).get(self.mode_id)
         self._marche(mode_state is not None)
         if mode_state is None:
-            self.etat.setText("arrêté")
+            self.etat.setText(tr("console.etat.arrete"))
             self.vue.update_from(None)
             # ⚠️ Les RÉGLAGES RETENUS se montrent (2026-09-21). `modes_state` ne contient que
             # les modes actifs : sans cette branche, un réglage posé sur un mode arrêté était
@@ -349,9 +346,9 @@ class ModePage(QWidget):
             elif not retenus:
                 self._derniers_params = None   # forcer la régénération au redémarrage
             return
-        libelle = PHASES_FR
-        self.etat.setText(libelle.get(mode_state["phase"], mode_state["phase"])
-                          + ("" if mode_state["published"] else " · non publié"))
+        phase = PHASES_FR.get(mode_state["phase"], mode_state["phase"])
+        self.etat.setText(phase if mode_state["published"]
+                          else tr("console.etat.non_publie", phase=phase))
         self.vue.update_from(mode_state)
         params = mode_state.get("params") or {}
         if params != self._derniers_params:
@@ -367,7 +364,8 @@ class ModePage(QWidget):
         """
         self._arrete = not tourne
         if self.bouton_observer is not None:
-            self.bouton_observer.setText("Observer" if self._arrete else "Arrêter")
+            self.bouton_observer.setText(tr("console.mode.observer") if self._arrete
+                                         else tr("console.mode.arreter"))
 
     def rafraichir_choix(self):
         """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).

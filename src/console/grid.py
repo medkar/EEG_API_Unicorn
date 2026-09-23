@@ -23,6 +23,7 @@ from console import PHASES_FR, SPAN_SEUILS, classement_relatif, span_correlation
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
 from core.config import NEURO_Z_SPAN  # noqa: E402
+from core.i18n import tr  # noqa: E402
 # Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
 # ici, qui vaudrait l'ancien nom le jour d'un renommage et laisserait la tuile sur « en cours »
 # pour toujours.
@@ -95,22 +96,23 @@ class ModeTile(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setMinimumHeight(130)
 
-        self.titre = QLabel(f"<b>{spec['label']}</b>")
+        self.titre = QLabel(spec["label"])
+        self.titre.setStyleSheet("font-weight: bold;")
         self.etat = QLabel("")
         self.detail = QLabel(spec["summary"])
         self.detail.setWordWrap(True)
         self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.apercu = MiniBars()
-        self.publie = QCheckBox("publié")
+        self.publie = QCheckBox(tr("console.grille.publie"))
         self._arrete = True
         # Démarrer / arrêter. Le moteur possède déjà les deux commandes et les valide (mode
         # inconnu, déjà démarré, réglages invalides) : la tuile ne fait que les poster. Elle
         # n'affiche AUCUN état déduit — c'est le prochain `snapshot()` qui dira ce qui s'est
         # réellement passé.
-        self.demarrage = QPushButton("Démarrer")
+        self.demarrage = QPushButton(tr("console.grille.demarrer"))
         self.demarrage.clicked.connect(
             lambda: self.demarrer.emit(self.spec["id"], self._arrete))
-        self.bouton = QPushButton("Ouvrir")
+        self.bouton = QPushButton(tr("console.grille.ouvrir"))
         self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
         self.publie.toggled.connect(lambda on: self.publier.emit(self.spec["id"], on))
 
@@ -134,7 +136,9 @@ class ModeTile(QFrame):
             # Grisée mais LISIBLE, et surtout : elle dit pourquoi.
             self.setEnabled(False)
             self.detail.setText(spec["unavailable"])
-            self.etat.setText({"appli_pygame": "appli pygame", "prevu": "prévu"}.get(spec["status"], spec["status"]))
+            statuts = {"appli_pygame": tr("console.grille.statut_appli_pygame"),
+                       "prevu": tr("console.grille.statut_prevu")}
+            self.etat.setText(statuts.get(spec["status"], spec["status"]))
             self.publie.hide()
             self.demarrage.hide()
             self.bouton.hide()
@@ -145,8 +149,8 @@ class ModeTile(QFrame):
             return
         if mode_state is None:
             self._arrete = True
-            self.demarrage.setText("Démarrer")
-            self.etat.setText("arrêté")
+            self.demarrage.setText(tr("console.grille.demarrer"))
+            self.etat.setText(tr("console.etat.arrete"))
             # ⚠️ `blockSignals` ICI AUSSI, et pour la même raison qu'en bas de cette méthode :
             # décocher la case ÉMET `set_published(id, False)`. Un mode qu'on vient d'arrêter
             # postait donc, à l'instant même où sa tuile se repeignait, une commande que personne
@@ -161,14 +165,13 @@ class ModeTile(QFrame):
             self.detail.setText(self.spec["summary"])
             return
 
-        libelle = PHASES_FR
-        self.etat.setText(libelle.get(mode_state["phase"], mode_state["phase"]))
+        self.etat.setText(PHASES_FR.get(mode_state["phase"], mode_state["phase"]))
         self.publie.setEnabled(True)
         self.publie.blockSignals(True)     # sinon régler la case RÉÉMET la commande, en boucle
         self.publie.setChecked(bool(mode_state["published"]))
         self.publie.blockSignals(False)
         self._arrete = False
-        self.demarrage.setText("Arrêter")
+        self.demarrage.setText(tr("console.grille.arreter"))
 
         if mode_state["instruction"]:
             self.detail.setText(mode_state["instruction"])
@@ -274,22 +277,26 @@ def _resume(mode_state):
             # Le motif vient du MOTEUR, en clair (`core/modes/cvep.py::_MOTIFS_FR`). La console ne
             # le traduit pas : trois causes appellent trois gestes opposés, et un second
             # vocabulaire côté interface finirait par ne plus dire la même chose que le terminal.
-            return sortie.get("motif") or "aucune cible"
-        return f"cible {index} · corrélation {sortie.get('confidence', 0.0):.2f}"
+            return sortie.get("motif") or tr("console.grille.resume.aucune_cible")
+        return tr("console.grille.resume.cible_correlation", cible=index,
+                  correlation=f"{sortie.get('confidence', 0.0):.2f}")
     if "scores" in sortie:
         # `.get` et pas `[...]` : cette ligne tourne 10 fois par seconde dans le rafraîchissement
         # de la grille. Un mode actif qui publierait des scores sans cible nommée y ferait tomber
         # TOUTE l'interface sur un KeyError, pas seulement sa propre tuile.
         index = sortie.get("target_index", -1)
         if sortie.get("artifact"):
-            return "artefact — fenêtre rejetée"
-        return "aucune cible" if index < 0 else f"cible {index} · {sortie.get('freq_hz', 0):g} Hz"
+            return tr("console.grille.resume.artefact")
+        return (tr("console.grille.resume.aucune_cible") if index < 0
+                else tr("console.grille.resume.cible_frequence", cible=index,
+                        hz=f"{sortie.get('freq_hz', 0):g}"))
     if "probas" in sortie:
         # Motor Imagery : pas de "cible", une INTENTION — les deux mots ne sont pas
         # interchangeables (cf. DecodedMIPublisher), donc pas le même résumé que le SSVEP.
         index = sortie.get("intent_index", -1)
-        return ("vote non conclu" if index < 0
-                else f"intention {sortie.get('label', '')} · {sortie.get('confidence', 0):.2f}")
+        return (tr("console.grille.resume.vote_non_conclu") if index < 0
+                else tr("console.grille.resume.intention", intention=sortie.get("label", ""),
+                        confiance=f"{sortie.get('confidence', 0):.2f}"))
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
     if "error" in sortie:
@@ -299,20 +306,25 @@ def _resume(mode_state):
         # n'attrape qu'une partie des erreurs, `pdf['tpr']` le rappelle à chaque ligne.
         error = sortie.get("error", -1)
         if sortie.get("artifact"):
-            return "artefact — fenêtre rejetée"
+            return tr("console.grille.resume.artefact")
         if error < 0:
-            return "pas de verdict (époque hors tampon)"
+            return tr("console.grille.resume.pas_de_verdict")
         pdf = mode_state.get("point_de_fonctionnement") or {}
-        verdict = "ERREUR détectée" if error == 1 else "correct"
+        verdict = (tr("console.grille.resume.erreur") if error == 1
+                   else tr("console.grille.resume.correct"))
         # `.get` ici aussi, comme vingt-cinq lignes plus haut : `if pdf` protège du dict VIDE,
         # pas du dict INCOMPLET. Un `point_de_fonctionnement` qui évoluerait (une clé `auc`
         # ajoutée, `tpr` renommé `tpr_oof`) ferait tomber `ModeGrid.update_from` sur un
         # KeyError — donc TOUTE la grille, pas seulement cette tuile, en pleine séance.
-        taux = f" · attrape {pdf.get('tpr', 0.0):.0%} des erreurs" if pdf else ""
-        return f"{verdict} · score {sortie.get('score', 0.0):+.2f}{taux}"
+        score = f"{sortie.get('score', 0.0):+.2f}"
+        if pdf:
+            return tr("console.grille.resume.errp_taux", verdict=verdict, score=score,
+                      taux=f"{pdf.get('tpr', 0.0):.0%}")
+        return tr("console.grille.resume.errp", verdict=verdict, score=score)
     params = mode_state.get("params") or {}
     if "freqs" in params:
-        return " · ".join(f"{f:g} Hz" for f in params["freqs"])
+        return " · ".join(tr("console.grille.resume.frequence", hz=f"{f:g}")
+                          for f in params["freqs"])
     return ""
 
 
@@ -333,7 +345,8 @@ class MesureTile(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setMinimumHeight(130)
 
-        self.titre = QLabel(f"<b>{spec['label']}</b>")
+        self.titre = QLabel(spec["label"])
+        self.titre.setStyleSheet("font-weight: bold;")
         self.etat = QLabel("")
         self.detail = QLabel(spec.get("summary") or "")
         self.detail.setWordWrap(True)
@@ -341,10 +354,10 @@ class MesureTile(QFrame):
         # Le mot BARRIÈRE est le seul de cette tuile qui change un comportement : il dit qu'un
         # échec ARRÊTE la séance. Il vient du contrat (`MesureSpec.barriere`), jamais d'une liste
         # d'identifiants écrite ici.
-        self.marque = QLabel("BARRIÈRE — à passer AVANT le reste" if spec.get("barriere") else "")
+        self.marque = QLabel(tr("console.grille.barriere") if spec.get("barriere") else "")
         self.marque.setWordWrap(True)
         self.marque.setStyleSheet("color: #b8860b; font-size: 11px; font-weight: bold;")
-        self.bouton = QPushButton("Ouvrir")
+        self.bouton = QPushButton(tr("console.grille.ouvrir"))
         self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
 
         haut = QHBoxLayout()
@@ -367,7 +380,7 @@ class MesureTile(QFrame):
             # raison. Une mesure décrite mais pas livrée doit se voir — sinon le produit paraît
             # se limiter à ce qui est chargé aujourd'hui.
             self.setEnabled(False)
-            self.etat.setText("pas livrée")
+            self.etat.setText(tr("console.grille.mesure_pas_livree"))
             self.bouton.hide()
 
     def update_from(self, etat):
@@ -380,7 +393,7 @@ class MesureTile(QFrame):
             return
         if etat.get("phase") in PHASES_TERMINALES:
             resultat = etat.get("resultat") or {}
-            self.etat.setText("terminée")
+            self.etat.setText(tr("console.grille.mesure_terminee"))
             # Le verdict du MOTEUR, en clair et jamais retraduit. `barriere_franchie` ne sert ici
             # qu'à la COULEUR : recomposer une phrase à partir du booléen ferait dire à la grille
             # autre chose qu'à la page, sur les mêmes données.
@@ -391,7 +404,7 @@ class MesureTile(QFrame):
                 + ("#8a8f9c" if franchie is None else
                    ("#3fae5a" if franchie else "#e5484d")))
             return
-        self.etat.setText("en cours")
+        self.etat.setText(tr("console.grille.mesure_en_cours"))
         self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.detail.setText(etat.get("instruction") or "")
 
@@ -435,9 +448,7 @@ class ModeGrid(QWidget):
             self.tuiles_mesure[spec["id"]] = tuile
             mesures_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
 
-        self.titre_mesures = QLabel(
-            "<b>Avant tout</b> — vérifie que ce que le casque envoie vaut quelque chose. Rien "
-            "n'est publié, rien n'est écrit.")
+        self.titre_mesures = QLabel(tr("console.grille.titre_avant_tout"))
         self.titre_mesures.setWordWrap(True)
         self.titre_mesures.setVisible(bool(mesures))
 
@@ -445,14 +456,11 @@ class ModeGrid(QWidget):
         # réseau —, donc pas une tuile de plus : une ligne à part, en bas, qui répond à la seule
         # question qu'un étudiant se pose une fois son décodage lancé (« est-ce que mon appli
         # reçoit quelque chose ? ») et à laquelle la console ne savait pas répondre.
-        self.bouton_flux = QPushButton("Ce que voit ton application")
-        self.bouton_flux.setToolTip(
-            "Ouvre les flux LSL du réseau et montre ce qui en sort, EN LISANT COMME UN CLIENT. "
-            "Si ce panneau reste vide alors qu'un mode décode, la panne est côté réseau.")
+        self.bouton_flux = QPushButton(tr("console.grille.flux"))
+        self.bouton_flux.setToolTip(tr("console.grille.flux_aide"))
         self.bouton_flux.clicked.connect(self.ouvrir_flux)
         ligne_flux = QHBoxLayout()
-        ligne_flux.addWidget(QLabel(
-            "<b>La sortie</b> — ce que ton application reçoit vraiment, lu sur le réseau."))
+        ligne_flux.addWidget(QLabel(tr("console.grille.titre_sortie")))
         ligne_flux.addStretch(1)
         ligne_flux.addWidget(self.bouton_flux)
 

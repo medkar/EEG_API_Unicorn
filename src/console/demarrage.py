@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QRadioButton, 
                                QVBoxLayout)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 
 UNICORN = "unicorn"
 SYNTHETIQUE = "synthetic"
@@ -32,13 +33,8 @@ SYNTHETIQUE = "synthetic"
 # volontairement dissuasif : le board de test produit un signal qui RESSEMBLE à de l'EEG, et c'est
 # précisément ce qui le rend dangereux si on oublie qu'on est dessus.
 DESCRIPTIONS = {
-    UNICORN: ("Casque Unicorn Hybrid Black",
-              "8 voies sèches à 250 Hz, par Bluetooth. Allume le casque et vérifie qu'il est "
-              "appairé avant de continuer."),
-    SYNTHETIQUE: ("Board de test, SANS casque",
-                  "Signal FABRIQUÉ par BrainFlow. Il sert à vérifier que le produit tourne — "
-                  "jamais à mesurer quoi que ce soit : aucun cerveau ne le produit, et il "
-                  "ressemble assez à de l'EEG pour qu'on l'oublie."),
+    UNICORN: (tr("console.demarrage.unicorn"), tr("console.demarrage.unicorn_aide")),
+    SYNTHETIQUE: (tr("console.demarrage.synthetique"), tr("console.demarrage.synthetique_aide")),
 }
 
 
@@ -52,12 +48,11 @@ class DialogueDemarrage(QDialog):
 
     def __init__(self, parent=None, defaut=UNICORN):
         super().__init__(parent)
-        self.setWindowTitle("EEG_API_Unicorn — sur quoi ouvrir la session ?")
+        self.setWindowTitle(tr("console.demarrage.titre"))
         self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
-        intro = QLabel("Ce choix ne se change pas en cours de séance : rouvrir la session "
-                       "redémarre l'amplificateur, et C3/Cz saturent à la réouverture.")
+        intro = QLabel(tr("console.demarrage.intro"))
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #8a8f9c;")
         layout.addWidget(intro)

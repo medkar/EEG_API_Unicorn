@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import SIGNAL_SAT_SIGMA  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 # Jusqu'où va la barre d'un σ. Pas le seuil de saturation (500 µV) : à cette échelle, un EEG
 # normal (5-20 µV) serait un trait invisible et l'écran ne montrerait plus rien. 40 µV est
@@ -48,10 +49,10 @@ class ContactPage(QWidget):
         self._lignes = []          # [(cadre, etiquette, barre, verdict)] — une par voie
 
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton("← Annuler")
+        self.bouton_retour = QPushButton(tr("console.contact.annuler"))
         self.bouton_retour.clicked.connect(self.annuler)
         entete.addWidget(self.bouton_retour)
-        self.titre = QLabel("<b>Contrôle de la liaison casque</b>")
+        self.titre = QLabel(tr("console.contact.titre"))
         entete.addWidget(self.titre)
         entete.addStretch(1)
 
@@ -59,7 +60,7 @@ class ContactPage(QWidget):
         self.cles.setWordWrap(True)
         self.cles.setStyleSheet("color: #4c8dff;")
 
-        self.bloc_voies = QGroupBox("σ par voie")
+        self.bloc_voies = QGroupBox(tr("console.contact.sigma_par_voie"))
         self.voies_layout = QVBoxLayout(self.bloc_voies)
 
         # Le refus est un TEXTE À L'ÉCRAN, pas seulement un bouton grisé. Un bouton qui ne
@@ -67,13 +68,11 @@ class ContactPage(QWidget):
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e5484d; font-weight: bold;")
-        self.conseil = QLabel(
-            "Saliner les électrodes est le principal levier de qualité du signal, et une "
-            "mastoïde décollée rend la séance entière inexploitable sans autre symptôme.")
+        self.conseil = QLabel(tr("console.contact.conseil"))
         self.conseil.setWordWrap(True)
         self.conseil.setStyleSheet("color: #8a8f9c; font-size: 11px;")
 
-        self.bouton_lancer = QPushButton("Lancer")
+        self.bouton_lancer = QPushButton(tr("console.contact.lancer"))
         self.bouton_lancer.clicked.connect(self.lancer)
 
         layout = QVBoxLayout(self)
@@ -89,7 +88,7 @@ class ContactPage(QWidget):
         # remplacera ce texte par le vrai verdict — mais un bouton actif avant toute mesure
         # laisserait passer un lancement à l'aveugle si l'état n'arrivait jamais.
         self.bouton_lancer.setEnabled(False)
-        self.refus.setText("en attente de la première mesure du moteur…")
+        self.refus.setText(tr("console.contact.attente_premiere_mesure"))
 
     def viser(self, spec, quoi):
         """Configure la page pour le mode `spec`. `quoi` nomme ce qu'on s'apprête à lancer.
@@ -99,7 +98,7 @@ class ContactPage(QWidget):
         sans qu'on y touche.
         """
         self.spec = spec
-        self.titre.setText(f"<b>Contrôle de la liaison casque</b> — {spec['label']} · {quoi}")
+        self.titre.setText(tr("console.contact.titre_vise", mode=spec["label"], geste=quoi))
         self.bouton_lancer.setText(quoi)
 
     def _cles(self):
@@ -143,15 +142,13 @@ class ContactPage(QWidget):
         if not noms:
             # Le moteur n'a pas encore publié ses voies : on nomme les lignes par leur indice
             # plutôt que de laisser un écran vide (qui se lit « ça ne marche pas »).
-            noms = [f"voie {i}" for i in range(len(sigmas))]
+            noms = [tr("console.contact.voie_numero", i=i) for i in range(len(sigmas))]
         if len(self._lignes) != len(noms):
             self._construire(noms)
 
         if cles:
             libelles = ", ".join(noms[i] for i in sorted(cles) if i < len(noms))
-            self.cles.setText(
-                f"Voies où ce geste lit son signal : {libelles} (encadrées) — à saliner en "
-                f"priorité. Les autres comptent aussi : le refus ci-dessous porte sur les huit.")
+            self.cles.setText(tr("console.contact.voies_cles", voies=libelles))
         else:
             self.cles.setText("")
 
@@ -159,10 +156,14 @@ class ContactPage(QWidget):
             sigma = sigmas[i] if i < len(sigmas) else None
             v = verdicts[i] if i < len(verdicts) else ""
             marque = " *" if i in cles else ""
-            etiquette.setText(f"<b>{noms[i]}{marque}</b>" if i in cles else f"{noms[i]}{marque}")
+            # Le gras d'une voie clé passe par le STYLE, pas par du balisage dans le texte.
+            etiquette.setText(noms[i] + marque)
+            etiquette.setStyleSheet("font-weight: bold;" if i in cles else "")
             barre.setValue(0 if sigma is None
                            else int(max(0.0, min(sigma / SPAN_SIGMA, 1.0)) * 100))
-            verdict.setText("σ indisponible" if sigma is None else f"σ = {sigma:.1f} µV · {v}")
+            verdict.setText(tr("console.contact.sigma_indisponible") if sigma is None
+                            else tr("console.contact.sigma_voie", sigma=f"{sigma:.1f}",
+                                    verdict=v))
             couleur = "#8a8f9c" if not v else ("#3fae5a" if v == "ok" else "#e5484d")
             verdict.setStyleSheet(f"color: {couleur};")
             ligne.setStyleSheet("border: 1px solid #4c8dff;" if i in cles else "")
@@ -174,21 +175,13 @@ class ContactPage(QWidget):
         """La raison de ne pas lancer, ou une chaîne vide. Aucun seuil n'est appliqué ici : on
         ne fait que RASSEMBLER des verdicts que le moteur a déjà rendus."""
         if not quality or not verdicts:
-            return ("en attente du tampon d'acquisition (≈ 2 s après le démarrage du moteur) — "
-                    "tant qu'aucun σ n'est mesuré, lancer reviendrait à enregistrer à l'aveugle, "
-                    "et c'est exactement ce qui a coûté 3,4 min de signal plat le 2026-07-20.")
+            return tr("console.contact.refus_attente")
         if quality.get("reference_lost"):
-            return (f"RÉFÉRENCE DÉCROCHÉE (corrélation inter-voies "
-                    f"{quality.get('common_mode')}) — les 8 voies mesurent la même chose. Remets "
-                    f"les électrodes MASTOÏDES : tout ce qui serait enregistré maintenant est "
-                    f"inexploitable, et les barres ci-dessus resteraient plausibles.")
+            return tr("console.contact.refus_reference", correlation=quality.get("common_mode"))
         fautives = [(noms[i] if i < len(noms) else str(i), v)
                     for i, v in enumerate(verdicts) if v and v != "ok"]
         if fautives:
             detail = ", ".join(f"{nom} {v}" for nom, v in fautives)
-            return (f"{len(fautives)} voie(s) en défaut : {detail}. Une voie plate est une "
-                    f"électrode décollée ou un câble débranché ; une voie saturée est un contact "
-                    f"instable. Saline, replace, et attends que la ligne repasse « ok » — cette "
-                    f"page se met à jour toute seule, il n'y a rien à recliquer. "
-                    f"(Seuil de saturation du moteur : σ > {SIGNAL_SAT_SIGMA:g} µV.)")
+            return tr("console.contact.refus_voies", n=len(fautives), detail=detail,
+                      seuil=f"{SIGNAL_SAT_SIGMA:g}")
         return ""

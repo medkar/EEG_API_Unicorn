@@ -64,6 +64,7 @@ from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 from core.server import EngineServer  # noqa: E402
@@ -100,7 +101,7 @@ class Console(QMainWindow):
     def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None):
         super().__init__()
         self.engine = engine
-        self.setWindowTitle("EEG_API_Unicorn — console d'expérimentation")
+        self.setWindowTitle(tr("console.fenetre.titre"))
         self.resize(1100, 720)
 
         # Le lanceur de fenêtres de stimulus. `fabrique_fenetre` est injectable pour que le smoke
@@ -206,7 +207,7 @@ class Console(QMainWindow):
             # « ← » ramène au MODE qu'on entraîne : on y est arrivé par son bouton « Entraîner »,
             # et la suite de la boucle — tester — se fait là. L'accueil obligeait à y revenir.
             page.retour.connect(lambda _c=False, m=spec["id"]: self.show_mode(m))
-            page.bouton_retour.setText(f"← {spec['label']}")
+            page.bouton_retour.setText(tr("console.nav.retour_vers", mode=spec["label"]))
             self.calib_pages[spec["id"]] = page
             self.stack.addWidget(page)
 
@@ -310,11 +311,7 @@ class Console(QMainWindow):
         """
         if self._moteur_vivant is None or self._moteur_vivant():
             return ""
-        return ("⛔ LE MOTEUR S'EST ARRÊTÉ — plus rien n'est acquis ni publié, et ce qui reste à "
-                "l'écran date de son dernier tour. Cause la plus fréquente : le casque n'a pas pu "
-                "s'ouvrir (éteint, non appairé, ou une session restée ouverte par un autre "
-                "programme). Le message exact est dans le terminal. Ferme la console, allume le "
-                "casque, relance.")
+        return tr("console.moteur_mort")
 
     def _publier(self, mode_id, on):
         """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
@@ -338,7 +335,7 @@ class Console(QMainWindow):
     def commande(self, name, **params):
         """Soumet une commande et retient le refus, s'il y en a un, pour l'afficher."""
         if self.engine is None:
-            return {"accepted": False, "reason": "aucun moteur (mode test)"}
+            return {"accepted": False, "reason": tr("console.refus.aucun_moteur")}
         ack = self.engine.submit(name, **params)
         if not ack.get("accepted"):
             # ⚠️ **À L'ÉCRAN, pas seulement dans le terminal.** C'est ce qui sépare « le refus est
@@ -376,7 +373,8 @@ class Console(QMainWindow):
         self._demande = {"quoi": "calibration", "mode_id": mode_id,
                          "params": dict(params or {}),
                          "retour": self.calib_pages.get(mode_id)}
-        self._montrer_contact(self.catalogue.get(mode_id), "Commencer l'entraînement")
+        self._montrer_contact(self.catalogue.get(mode_id),
+                              tr("console.geste.commencer_entrainement"))
 
     def demander_mesure(self, mesure_id, params):
         """« Commencer » sur une page de mesure : même chemin, et pour une raison de plus.
@@ -400,7 +398,8 @@ class Console(QMainWindow):
         if spec is not None and mode is not None and not spec.get("key_channels"):
             spec = {**spec, "key_channels": mode.get("key_channels")}
         # Le bouton dit ce qu'on lance, dans les mots de l'étudiant — jamais « la mesure ».
-        self._montrer_contact(spec, "Commencer le test" if mode is not None else "Commencer")
+        self._montrer_contact(spec, tr("console.geste.commencer_test") if mode is not None
+                              else tr("console.geste.commencer"))
 
     def demander_stimulus(self, mode_id):
         """« Lancer le stimulus » sur une page de mode : même chemin, sans calibration.
@@ -411,7 +410,7 @@ class Console(QMainWindow):
         """
         self._demande = {"quoi": "stimulus", "mode_id": mode_id, "params": {},
                          "retour": self.pages.get(mode_id)}
-        self._montrer_contact(self.catalogue.get(mode_id), "Lancer le stimulus")
+        self._montrer_contact(self.catalogue.get(mode_id), tr("console.geste.lancer_stimulus"))
 
     def _montrer_contact(self, spec, quoi):
         """`spec` : le contrat SÉRIALISÉ de ce qu'on s'apprête à lancer — un mode ou une mesure.
@@ -462,7 +461,6 @@ class Console(QMainWindow):
             self.commande("stop_mode", id=a_arreter)
             self._attente = dict(demande, arreter=a_arreter,
                                  echeance=self._horloge() + DELAI_ARRET_S)
-            quoi = "ce test" if demande["quoi"] == "mesure" else "cet entraînement"
             # ⚠️ Le décodage RESTE arrêté après (constat M6 de la revue) : le relancer tout seul
             # referait son repos et recréerait son flux sans qu'on l'ait demandé. On le DIT, pour
             # qu'une application branchée sur ce flux ne tombe pas en silence.
@@ -470,11 +468,11 @@ class Console(QMainWindow):
             # bloc « Avant de commencer », qui disparaît dès que la séance démarre — une fraction
             # de seconde plus tard. Passe QA du 2026-09-23 : « je ne vois pas de message ». La
             # note, elle, reste jusqu'au prochain « Commencer ».
+            nom = self._nom_du_mode(a_arreter)
             self._note_de(demande)(
                 demande["mode_id"],
-                f"Décodage de « {self._nom_du_mode(a_arreter)} » arrêté pour {quoi} — on ne "
-                f"peut pas faire les deux à la fois. Il restera arrêté ensuite : relance-le "
-                f"depuis sa tuile si ton application en a besoin.")
+                tr("console.note.arret_pour_test", mode=nom) if demande["quoi"] == "mesure"
+                else tr("console.note.arret_pour_entrainement", mode=nom))
             return
         self._demarrer_selon(demande)
 
@@ -547,13 +545,12 @@ class Console(QMainWindow):
             self._demarrer_selon(attente)
         elif self._horloge() > self._attente["echeance"]:
             attente, self._attente = self._attente, None
-            rien = ("le test n'a PAS été lancé" if attente["quoi"] == "mesure"
-                    else "l'entraînement n'a PAS été lancé")
+            nom, delai = self._nom_du_mode(a_arreter), f"{DELAI_ARRET_S:.0f}"
             self._avis_de(attente)(
                 attente["mode_id"],
-                f"« {self._nom_du_mode(a_arreter)} » ne s'est pas arrêté en "
-                f"{DELAI_ARRET_S:.0f} s : {rien}. Arrête-le depuis la grille, puis reclique "
-                f"« Commencer ».")
+                tr("console.avis.arret_trop_long_test", mode=nom, delai=delai)
+                if attente["quoi"] == "mesure"
+                else tr("console.avis.arret_trop_long_entrainement", mode=nom, delai=delai))
 
     def _demarrer_mesure(self, demande):
         """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE — et seulement quand elle EXISTE.
@@ -585,9 +582,11 @@ class Console(QMainWindow):
         if not spec.get("stimulus_id"):
             return          # le moteur mène tout seul le protocole (contrôle alpha)
         params = dict(demande["params"] or {})
+        delai = f"{DELAI_DEMARRAGE_S:.0f}"
         self._a_lancer_mesure = self._attente_depart(
             mesure_id, "mesure",
-            "le test" if self._mode_teste_par(mesure_id) else "la vérification",
+            tr("console.avis.depart_manque_test", delai=delai) if self._mode_teste_par(mesure_id)
+            else tr("console.avis.depart_manque_verification", delai=delai),
             avis=self._avis_mesure,
             lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec, params))
 
@@ -606,20 +605,24 @@ class Console(QMainWindow):
         # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
         # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
         self._a_lancer = self._attente_depart(
-            mode_id, "calibration", "l'entraînement", avis=self._avis,
+            mode_id, "calibration",
+            tr("console.avis.depart_manque_entrainement", delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+            avis=self._avis,
             lancer=lambda: self._lancer_fenetre_calibration(mode_id))
 
-    def _attente_depart(self, mode_id, cle, quoi, lancer, avis):
+    def _attente_depart(self, mode_id, cle, echec, lancer, avis):
         """La fiche d'une séance SOUMISE dont on attend de la VOIR démarrer.
 
-        `cle` : où la séance apparaît dans `snapshot()`. `quoi` : comment on la nomme à l'écran.
-        `lancer` : ce qu'on fait quand elle y est. `avis` : où le renoncement s'affiche.
+        `cle` : où la séance apparaît dans `snapshot()`. `echec` : la phrase à afficher si elle
+        n'apparaît pas à temps (une phrase ENTIÈRE, prise dans le fichier de langue : un morceau
+        de phrase recollé ici ne se traduirait pas). `lancer` : ce qu'on fait quand elle y est.
+        `avis` : où le renoncement s'affiche.
 
         Tout ce qui SÉPARE une calibration d'une mesure tient dans ces quatre valeurs ; le reste —
         la course, le délai, le renoncement — est écrit une seule fois, dans
         `_lancer_quand_partie`.
         """
-        return {"mode_id": mode_id, "cle": cle, "quoi": quoi, "lancer": lancer, "avis": avis,
+        return {"mode_id": mode_id, "cle": cle, "echec": echec, "lancer": lancer, "avis": avis,
                 "echeance": self._horloge() + DELAI_DEMARRAGE_S}
 
     def _lancer_quand_partie(self, state):
@@ -645,11 +648,7 @@ class Console(QMainWindow):
             attente["lancer"]()
             return None
         if self._horloge() >= attente["echeance"]:
-            attente["avis"](
-                attente["mode_id"],
-                f"le moteur n'a pas démarré {attente['quoi']} en {DELAI_DEMARRAGE_S:.0f} s — sa "
-                f"fenêtre n'a PAS été ouverte. Sans ce garde-fou elle aurait joué tout son "
-                f"déroulé dans le vide. Regarde le refus dans le bandeau, puis recommence.")
+            attente["avis"](attente["mode_id"], attente["echec"])
             return None
         return attente
 
@@ -686,10 +685,12 @@ class Console(QMainWindow):
         if seance is None or seance.get("resultat") is not None:
             return
         if self.lanceur.arreter_si(lien["numero"]):
-            quoi = "du test" if lien["cle"] == "mesure" else "de l'entraînement"
-            avis = self._avis_mesure if lien["cle"] == "mesure" else self._avis
-            avis(lien["id"], f"La fenêtre {quoi} a été fermée : la séance s'est interrompue "
-                             f"(la raison est affichée ci-dessus).", alerte=False)
+            if lien["cle"] == "mesure":
+                self._avis_mesure(lien["id"], tr("console.avis.fenetre_fermee_test"),
+                                  alerte=False)
+            else:
+                self._avis(lien["id"], tr("console.avis.fenetre_fermee_entrainement"),
+                           alerte=False)
 
     def _lancer_fenetre_calibration(self, mode_id):
         """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir."""
@@ -698,9 +699,8 @@ class Console(QMainWindow):
             self._attacher_fenetre("calibration", mode_id)
             return
         self._a_annuler = True
-        self._avis(mode_id,
-                   f"{ouvert.get('reason', '')}\nL'entraînement est annulé : sans sa fenêtre, "
-                   f"il n'y aurait rien à apprendre.")
+        self._avis(mode_id, tr("console.avis.entrainement_annule",
+                               raison=ouvert.get("reason", "")))
 
     def _lancer_fenetre_mesure(self, mesure_id, spec, params=None):
         """La fenêtre guidée d'une mesure. Jumeau exact du cas calibration, ci-dessus.
@@ -732,9 +732,8 @@ class Console(QMainWindow):
         # de s'ouvrir. On note l'annulation ; `_suivre_attente` la soumet au tour suivant (`submit`
         # ne fait que mettre en file).
         self._a_annuler_mesure = True
-        self._avis_mesure(mesure_id,
-                          f"{ouvert.get('reason', '')}\nLe test est annulé : sans sa fenêtre, "
-                          f"il n'y aurait rien à noter.")
+        self._avis_mesure(mesure_id, tr("console.avis.test_annule",
+                                        raison=ouvert.get("reason", "")))
 
     def _lancer_fenetre(self, mode_id, calibrer):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
@@ -746,10 +745,10 @@ class Console(QMainWindow):
         stimulus_id = ((spec.get("calibration") or {}).get("stimulus_id") if calibrer
                        else spec.get("stimulus_id"))
         if not stimulus_id:
-            quoi = "entraînement" if calibrer else "décodage"
+            nom = spec.get("label", mode_id)
             return {"accepted": False,
-                    "reason": f"« {spec.get('label', mode_id)} » ne déclare aucune fenêtre de "
-                              f"{quoi} : il n'y a rien à lancer."}
+                    "reason": tr("console.refus.aucune_fenetre_entrainement", mode=nom)
+                    if calibrer else tr("console.refus.aucune_fenetre_decodage", mode=nom)}
         # La case « Journal de séance » de la page, si la fenêtre sait la tenir. `--log` SANS
         # valeur : c'est la fenêtre qui choisit son nom horodaté, la console ne compose aucun
         # chemin — elle reste un client qui n'écrit jamais sur le disque.
@@ -900,8 +899,8 @@ class Console(QMainWindow):
         if page is None:
             return
         self._origine_mesure = depuis
-        page.bouton_retour.setText(f"← {depuis.spec['label']}" if depuis is not None
-                                   else "← Modes")
+        page.bouton_retour.setText(tr("console.nav.retour_vers", mode=depuis.spec["label"])
+                                   if depuis is not None else tr("console.nav.retour_modes"))
         mode_id = self._mode_teste_par(mesure_id)
         if mode_id is not None and not self.mesure_en_cours(mesure_id):
             # Les listes d'abord (un modèle fraîchement entraîné doit y être), puis les valeurs.
@@ -1914,7 +1913,7 @@ def _smoke():
         **qualite_saine, "reference_lost": True, "common_mode": 0.99}}
     console.apply_state(reference)
     chk(not console.contact.bouton_lancer.isEnabled()
-        and "MASTOÏDES" in console.contact.refus.text(),
+        and "mastoïdes" in console.contact.refus.text().lower(),
         f"une référence décrochée refuse elle aussi, en nommant le geste qui la répare "
         f"({console.contact.refus.text()[:70]}…)")
     # ...et un état SANS qualité (tampon pas encore rempli) refuse aussi : lancer là reviendrait à
@@ -2586,7 +2585,7 @@ def _smoke():
     console.contact.bouton_lancer.click()
     horloge[0] += DELAI_ARRET_S + 1.0
     console.apply_state(p300_actif)          # il décode toujours
-    chk("PAS été lancé" in cal_p3.avis.text(),
+    chk("n'a pas été lancé" in cal_p3.avis.text(),
         f"un mode qui ne s'arrête pas fait renoncer l'entraînement, à l'écran "
         f"({cal_p3.avis.text()[:80]}…)")
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
@@ -3606,10 +3605,15 @@ def _smoke():
     #
     # Le c-VEP est le cas extrême : six réglages, 2 719 caractères d'aide, et c'est le mode dont
     # la séance dépend le plus d'un réglage bien compris.
+    # ⚠️ Depuis que les aides sont passées en bulles « ⓘ » (2026-09-23), la page c-VEP repliée
+    # tient dans la plus petite fenêtre que la console accepte : le défilement ne serait plus
+    # éprouvé du tout. On l'éprouve donc sur la page la plus HAUTE qu'un étudiant obtienne en
+    # vrai — « Décodage en direct » déplié, ce qui ajoute la vue en direct sous les blocs.
     page_cvep = console.pages["cvep"]
     contrat_cvep = {p["key"]: p["help"] for p in registry.serialize(registry.get("cvep"))["params"]
                     if p["help"]}
     console.show_mode("cvep")
+    page_cvep.direct.setChecked(True)
     console.resize(1100, 420)               # un portable, ou une fenêtre pas maximisée
     app.processEvents()
 
@@ -3632,22 +3636,51 @@ def _smoke():
             page_cvep.bouton_retour),
         "l'en-tête, lui, ne défile pas : « ← Modes » reste atteignable depuis le bas de la page")
 
-    visible = sum(len(a.text()) for a, _ in page_cvep.formulaire.aides.values())
-    complet = sum(len(t) for t in contrat_cvep.values())
-    chk(visible * 2 < complet,
-        f"l'aide affichée par défaut est la première phrase de chaque réglage, pas le contrat "
-        f"entier ({visible} caractères contre {complet})")
-    chk(all(page_cvep.formulaire.aides[c][0].toolTip() == t for c, t in contrat_cvep.items()),
-        "mais RIEN n'est perdu : l'infobulle de chaque aide porte le texte entier du contrat")
-    page_cvep.formulaire.detail.setChecked(True)
-    chk(all(page_cvep.formulaire.aides[c][0].text() == t for c, t in contrat_cvep.items()),
-        "et « Aide détaillée » le remet à l'écran, mot pour mot")
-    page_cvep.formulaire.detail.setChecked(False)
-    chk(sum(len(a.text()) for a, _ in page_cvep.formulaire.aides.values()) == visible,
-        "puis le replie — la case est une bascule, pas un aller simple")
-    chk(console.pages["raw"].formulaire.detail is None,
-        "et là où il n'y a aucune aide à déplier — le brut n'a aucun réglage — la case "
-        "n'apparaît PAS : un bouton qui ne change rien à l'écran est un réglage-décor")
+    # 🔴 L'aide d'un réglage vit dans une bulle « ⓘ » à droite de son champ, lue au SURVOL
+    # (2026-09-23, demandé par l'utilisateur). Plus de ligne grise sous chaque champ, plus de case
+    # « Aide détaillée » : la page c-VEP en portait un mur de trente lignes. Rien n'est perdu pour
+    # autant — c'est ce que ces assertions tiennent : la bulle porte le texte ENTIER du contrat.
+    import html as _html
+    from PySide6.QtWidgets import QAbstractButton as _QAbstractButton, QLabel as _QLabel
+    form_cvep = page_cvep.formulaire
+    chk(set(form_cvep.aides) == set(contrat_cvep),
+        f"chaque réglage qui a une aide a SA bulle « ⓘ », et aucun autre "
+        f"({sorted(form_cvep.aides)} pour {sorted(contrat_cvep)})")
+    chk(all(form_cvep.aides[c][0].text() == "ⓘ"
+            and _html.escape(t, quote=False) in form_cvep.aides[c][0].toolTip()
+            and form_cvep.aides[c][1] == t
+            for c, t in contrat_cvep.items() if c in form_cvep.aides),
+        "…et l'infobulle de chaque bulle porte le texte ENTIER du contrat : rien n'est perdu")
+    chk(all(form_cvep.lignes[c].indexOf(form_cvep.aides[c][0])
+            > form_cvep.lignes[c].indexOf(form_cvep.champs[c]) >= 0 for c in form_cvep.aides),
+        "…posée DANS la ligne du champ, à sa droite — pas sous lui, où était la ligne grise")
+    chk(all(_html.escape(t, quote=False) in form_cvep.champs[c].toolTip()
+            for c, t in contrat_cvep.items() if c in form_cvep.champs),
+        "…et le champ lui-même porte la même infobulle")
+    en_clair = sorted({c for c, t in contrat_cvep.items()
+                       for lbl in page_cvep.findChildren(_QLabel) if t[:40] in lbl.text()})
+    chk(not en_clair,
+        f"…et AUCUNE aide n'est plus affichée en clair sur la page, pas même sa première phrase "
+        f"({en_clair or 'aucune'})")
+    chk(not [b for b in page_cvep.findChildren(_QAbstractButton) if b.text() == "Aide détaillée"]
+        and not hasattr(form_cvep, "detail"),
+        "…et la case « Aide détaillée » a disparu : il n'y a plus rien à déplier")
+    # Le rafraîchissement DÉTECTÉ de l'écran était une ligne grise sous « Rafraîchissement » : il
+    # rejoint l'infobulle de ce réglage, comme un paragraphe de plus.
+    form_ss = console.pages["ssvep"].formulaire
+    ecran = QApplication.primaryScreen()
+    if ecran is not None and ecran.refreshRate() > 0:
+        chk(f"{ecran.refreshRate():g} Hz" in form_ss.aides["refresh_hz"][0].toolTip(),
+            f"le rafraîchissement détecté de l'écran est dans la bulle de « Rafraîchissement » "
+            f"({ecran.refreshRate():g} Hz)")
+    chk(not [lbl.text() for lbl in console.pages["ssvep"].findChildren(_QLabel)
+             if "écran à" in lbl.text()],
+        "…et plus sur une ligne grise à part")
+    chk(not console.pages["raw"].formulaire.aides
+        and not [lbl for lbl in console.pages["raw"].findChildren(_QLabel) if lbl.text() == "ⓘ"],
+        "et le brut, qui n'a aucun réglage, n'a aucune bulle : une bulle sans aide serait un "
+        "réglage-décor")
+    page_cvep.direct.setChecked(False)
     console.resize(1100, 720)
     console.show_grid()
 

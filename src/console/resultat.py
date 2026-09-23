@@ -24,6 +24,7 @@ import sys
 from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import NIVEAUX  # noqa: E402
 
 # Le code couleur, et rien d'autre. Les mêmes teintes que le reste de la console : le rouge des
@@ -63,7 +64,7 @@ class BlocResultat(QWidget):
         self.chiffres.setStyleSheet("font-size: 15px;")
         self.reserve = QLabel("")
         self.reserve.setWordWrap(True)
-        self.details = QCheckBox("Détails")
+        self.details = QCheckBox(tr("console.resultat.details"))
         self.details.toggled.connect(self._deplier)
         self.corps = QLabel("")
         self.corps.setWordWrap(True)
@@ -114,7 +115,7 @@ class BlocResultat(QWidget):
         if resultat.get("honnetete"):
             morceaux.append(resultat["honnetete"])
         if resultat.get("nom"):
-            morceaux.append(f"Fichier : {resultat['nom']}")
+            morceaux.append(tr("console.resultat.fichier", nom=resultat["nom"]))
         self.corps.setText("\n\n".join(morceaux) if self.corps_auto else "")
         self.corps.setVisible(self.corps_auto and bool(morceaux))
         self.details.setVisible((self.corps_auto and bool(morceaux)) or self._hotes > 0)

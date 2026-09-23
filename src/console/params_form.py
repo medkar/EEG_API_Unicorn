@@ -8,31 +8,31 @@ rien — sans erreur, comme toujours avec ce genre de panne.
 Le formulaire envoie donc, et affiche la RAISON du refus telle que le moteur l'a formulée.
 """
 
-import re
+import html
+import os
+import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
                                QWidget)
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 
-def premiere_phrase(texte):
-    """La première phrase de `texte`, ou `texte` entier si la couper n'apporte rien.
+# La bulle « ⓘ » : la couleur d'accent de la console (celle des voies clés, des barres retenues).
+ACCENT = "#4c8dff"
 
-    Les aides du contrat sont écrites en deux temps : ce que le réglage FAIT, puis pourquoi il est
-    ainsi. La page c-VEP en porte 2 719 caractères sur six champs — un mur de gris de plus de
-    trente lignes, qui pousse le bloc « Brancher un client » hors de la fenêtre. C'est le constat
-    1.10 de la recette (2026-08-17) : « tronqué en bas, et trop verbeux pour un étudiant ».
 
-    On coupe donc au premier point, **et seulement si la coupe est franche** : trop courte (moins
-    de 30 caractères) elle ne dirait rien, trop tardive (plus de 60 % du texte) elle ne gagnerait
-    rien. Le texte entier ne disparaît jamais — il reste en infobulle, et le bouton « Aide
-    détaillée » le remet en place d'un clic.
+def infobulle(*paragraphes):
+    """Une infobulle en TEXTE RICHE, pour qu'elle passe à la ligne.
+
+    Qt n'enroule une infobulle que si elle est en texte riche : en texte brut, une aide de trois
+    phrases s'affiche sur une seule ligne qui traverse l'écran. Chaque paragraphe est échappé —
+    une aide qui contiendrait « < » ou « & » ne doit pas devenir du balisage.
     """
-    coupe = re.search(r"(?<=[.!?])\s", texte)
-    if coupe and 30 <= coupe.start() + 1 <= len(texte) * 0.6:
-        return texte[:coupe.start() + 1]
-    return texte
+    corps = "<br><br>".join(html.escape(p, quote=False) for p in paragraphes if p)
+    return "<qt>" + corps + "</qt>"
 
 
 class ParamsForm(QWidget):
@@ -46,7 +46,7 @@ class ParamsForm(QWidget):
         self.params = list(params)
         self.champs = {}
         self.boutons_proposer = {}      # {clé : bouton} — pour qu'un smoke puisse le CLIQUER
-        self.aides = {}                 # {clé : (QLabel, texte complet)}
+        self.aides = {}                 # {clé : (la bulle « ⓘ », le texte complet du contrat)}
         self.lignes = {}                # {clé : la ligne du champ} — cf. `ajouter_a_cote`
         self._params_par_cle = {p["key"]: p for p in self.params}
 
@@ -62,32 +62,35 @@ class ParamsForm(QWidget):
             self.lignes[param["key"]] = ligne
             formulaire.addRow(etiquette, ligne)
             if param.get("proposes"):
-                bouton = QPushButton(f"Proposer « {param['proposes']} »")
+                # Le LIBELLÉ du champ proposé, jamais sa clé : « freqs » est un nom de variable.
+                cible = (self._params_par_cle.get(param["proposes"], {}).get("label")
+                         or param["proposes"])
+                bouton = QPushButton(tr("console.formulaire.proposer", champ=cible))
                 bouton.clicked.connect(lambda _c=False, k=param["key"]: self.proposer.emit(k))
                 formulaire.addRow("", bouton)
                 self.boutons_proposer[param["key"]] = bouton
-            if param["key"] == "refresh_hz":
-                ecran = QApplication.primaryScreen()
-                if ecran is not None and ecran.refreshRate() > 0:
-                    detecte = QLabel(f"cette fenêtre est sur un écran à "
-                                     f"{ecran.refreshRate():g} Hz — mais c'est le rafraîchissement "
-                                     f"de l'écran qui AFFICHE les cibles qu'il faut mettre ici")
-                    detecte.setWordWrap(True)
-                    detecte.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-                    formulaire.addRow("", detecte)
             if param["help"]:
-                aide = QLabel(premiere_phrase(param["help"]))
-                aide.setWordWrap(True)
-                aide.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-                # L'infobulle porte le texte ENTIER, toujours : le bouton ci-dessous rend le
-                # détail visible pour qui le cherche, l'infobulle le rend accessible sans le
-                # chercher. Rien de ce que le contrat écrit n'est perdu par cet écran.
-                aide.setToolTip(param["help"])
-                champ.setToolTip(param["help"])
-                self.aides[param["key"]] = (aide, param["help"])
-                formulaire.addRow("", aide)
+                # L'aide vit dans une bulle « ⓘ » À DROITE du champ, lue au survol (2026-09-23).
+                # Elle était une ligne grise sous chaque réglage, plus une case « Aide détaillée »
+                # qui dépliait le reste : la page c-VEP en portait un mur de trente lignes. Rien
+                # n'est perdu — la bulle porte le texte ENTIER du contrat, et le champ aussi.
+                paragraphes = [param["help"]]
+                if param["key"] == "refresh_hz":
+                    # Ce que Qt sait de l'écran qui porte CETTE fenêtre. Pas forcément celui qui
+                    # affichera les cibles : c'est pour ça que c'est une indication, pas un défaut.
+                    ecran = QApplication.primaryScreen()
+                    if ecran is not None and ecran.refreshRate() > 0:
+                        paragraphes.append(tr("console.formulaire.ecran_detecte",
+                                              hz=f"{ecran.refreshRate():g}"))
+                bulle = QLabel("ⓘ")
+                bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+                bulle.setCursor(Qt.WhatsThisCursor)
+                bulle.setToolTip(infobulle(*paragraphes))
+                champ.setToolTip(infobulle(*paragraphes))
+                ligne.addWidget(bulle)
+                self.aides[param["key"]] = (bulle, param["help"])
 
-        self.bouton = QPushButton("Appliquer")
+        self.bouton = QPushButton(tr("console.formulaire.appliquer"))
         self.bouton.clicked.connect(lambda: self.appliquer.emit(self.values()))
         # ⚠️ Aucun réglage = rien à appliquer, donc pas de bouton (2026-09-21, trouvé en recette
         # 1.5). Il soumettait un dictionnaire VIDE : le moteur l'acceptait, rien ne changeait, et
@@ -102,15 +105,6 @@ class ParamsForm(QWidget):
         # aussi le cas où une mesure a des réglages.
         if not self.params:
             self.bouton.hide()
-        # « Aide détaillée » : présent seulement si au moins une aide a VRAIMENT été raccourcie.
-        # Un bouton qui ne changerait rien à l'écran est un réglage-décor, et ce projet en a déjà
-        # payé le prix. `None` quand il n'y a rien à déplier — jamais un widget caché sans parent.
-        self.detail = None
-        if any(premiere_phrase(t) != t for _, t in self.aides.values()):
-            self.detail = QCheckBox("Aide détaillée")
-            self.detail.setToolTip("Affiche le POURQUOI de chaque réglage, en plus de ce qu'il "
-                                   "fait. Le texte entier est aussi en infobulle.")
-            self.detail.toggled.connect(self._deplier)
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e5484d;")
@@ -132,8 +126,6 @@ class ParamsForm(QWidget):
 
         bas = QHBoxLayout()
         bas.addWidget(self.bouton)
-        if self.detail is not None:
-            bas.addWidget(self.detail)
         bas.addStretch(1)
 
         # `None` quand il y a des réglages : un QLabel construit sans parent serait une fenêtre
@@ -141,7 +133,7 @@ class ParamsForm(QWidget):
         # ⚠️ « ici » et pas « pour ce mode » : ce formulaire sert aussi les CALIBRATIONS et les
         # MESURES, qui ne sont pas des modes. Le contrôle alpha, qui n'expose délibérément aucun
         # réglage (ses durées font corps avec son repère chiffré), est le premier à l'afficher.
-        self.vide = None if self.params else QLabel("aucun réglage à changer ici")
+        self.vide = None if self.params else QLabel(tr("console.formulaire.aucun_reglage"))
         layout = QVBoxLayout(self)
         if self.vide is not None:
             layout.addWidget(self.vide)
@@ -156,11 +148,6 @@ class ParamsForm(QWidget):
         ligne = self.lignes.get(cle)
         if ligne is not None:
             ligne.addWidget(widget)
-
-    def _deplier(self, ouvert):
-        """Bascule les aides entre leur première phrase et le texte du contrat, mot pour mot."""
-        for aide, complet in self.aides.values():
-            aide.setText(complet if ouvert else premiere_phrase(complet))
 
     def _champ(self, param):
         kind = param["kind"]
@@ -187,8 +174,8 @@ class ParamsForm(QWidget):
             # ajoutant ou retirant une valeur — c'est ainsi qu'on choisit le nombre de cibles.
             champ = QLineEdit(", ".join(f"{float(v):g}" for v in (param["default"] or ())))
             bornes = param["count"] or [0, 0]
-            champ.setPlaceholderText(f"entre {bornes[0]} et {bornes[1]} valeurs, séparées "
-                                     f"par des virgules")
+            champ.setPlaceholderText(tr("console.formulaire.liste_indice",
+                                        min=bornes[0], max=bornes[1]))
             return champ
         champ = QSpinBox() if kind == "int" else QDoubleSpinBox()
         # Volontairement PLUS LARGES que les bornes du contrat, et pas seulement quand le contrat
