@@ -122,6 +122,7 @@ import numpy as np  # noqa: E402
 
 from core import errp_models  # noqa: E402
 from core.errp_decoder import epoch_from_stream, pick_threshold  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
@@ -250,7 +251,8 @@ class ErrPRuntime(ModeRuntime):
         for nom, attendu in attendus:
             valeur = getattr(self.model, nom, None)
             if valeur is None or abs(float(valeur) - attendu) > 1e-9:
-                ecarts.append(f"{nom} : modèle {valeur}, moteur {attendu:g}")
+                ecarts.append(tr("mode.geometrie.ecart", nom=nom, modele=valeur,
+                                 moteur=f"{attendu:g}"))
         if not ecarts:
             return None
         # ⚠️ La marche à suivre nomme la console, PLUS l'appli pygame : depuis le 2026-09-07 c'est
@@ -258,9 +260,7 @@ class ErrPRuntime(ModeRuntime):
         # bon diagnostic et la MAUVAISE marche à suivre coûte plus cher qu'un refus muet —
         # l'étudiant fait ce qu'on lui dit, produit un modèle par le second chemin (celui dont
         # l'épochage n'est pas celui du décodage), et cherche la panne ailleurs.
-        return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
-                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Ré-entraîne "
-                f"(console, page ErrP, « Entraîner ») plutôt que de le forcer.")
+        return tr("mode.geometrie.desaccord", ecarts=" ; ".join(ecarts), mode="ErrP")
 
     def _sans_scores_oof(self):
         """La phrase à dire si le modèle n'a pas de scores hors-pli — None si tout va bien.
@@ -285,10 +285,8 @@ class ErrPRuntime(ModeRuntime):
             # en silence à la première garde ajoutée. `getattr` parce qu'un modèle entraîné avant
             # que cet attribut existe n'en a pas : on retombe alors sur la formulation générale.
             cause = getattr(self.model, "echec_oof_", None)
-            return (f"ce modèle n'a pas de scores hors-pli "
-                    f"({cause or 'calibration trop courte ou dégénérée'}) — impossible d'y régler "
-                    f"un seuil. Ré-entraîne (console, page ErrP, « Entraîner ») plutôt que de "
-                    f"le forcer.")
+            return tr("mode.errp.sans_scores_oof",
+                      cause=cause or tr("mode.errp.sans_scores_oof.cause_defaut"))
         return None
 
     def _open(self):
@@ -640,8 +638,9 @@ class ErrPRuntime(ModeRuntime):
 
 
 SPEC = ModeSpec(
-    id="errp", label="ErrP", family="passif",   # passif : une RÉACTION observée, pas un choix fait
-    summary="Un verdict par feedback affiché : la machine vient-elle de se tromper (potentiel d'erreur).",
+    id="errp", label=tr("mode.errp.label"),
+    family="passif",   # passif : une RÉACTION observée, pas un choix fait
+    summary=tr("mode.errp.summary"),
     status="moteur",
     key_channels=tuple(ERRP_MIDLINE),   # Fz, Cz, Pz (xDAWN utilise les 8, mais le contact se juge là)
     stimulus_id="errp",
@@ -649,24 +648,19 @@ SPEC = ModeSpec(
     # ne la laisse jamais atteindre le décodeur : c'est une BCI passive.
     test_id="errp_test",
     params=(
-        Param(key="model", label="Modèle entraîné", kind="choice",
+        Param(key="model", label=tr("mode.param.modele.label"), kind="choice",
               choices_fn=lambda: errp_models.modeles_disponibles(),
               si_vide=SANS_MODELE,
-              help="Le modèle produit par une calibration ErrP, propre à TA personne — celui "
-                   "de quelqu'un d'autre donne des verdicts plausibles et faux. Aucun modèle "
-                   "dans la liste ? Ouvre la console, page ErrP, et clique « Entraîner » : "
-                   "la fenêtre de stimulus mène la piste, le moteur entraîne."),
+              help=tr("mode.errp.param.model.aide")),
         Param(
             key="tnr_target",
-            label="Bonnes commandes gardées",
+            label=tr("mode.errp.param.tnr_target.label"),
             kind="float",
             default=ERRP_TNR_TARGET,
             min=0.50, max=0.99,
-            help="La part des BONNES commandes que tu veux garder. Le moteur en déduit son seuil "
-                 "sur les données de TA calibration. Monter cette valeur annule moins de bonnes "
-                 "commandes mais attrape moins d'erreurs — mesuré sur la séance de référence : "
-                 "garder 95 % n'attrape que 24 % des erreurs, garder 85 % en attrape 50 %, "
-                 "garder 70 % en attrape 71 %. Il n'y a pas de repas gratuit.",
+            # Les trois couples (gardées, attrapées) de son aide sont ceux de la séance de
+            # référence : 95/24, 85/50, 70/71.
+            help=tr("mode.errp.param.tnr_target.aide"),
         ),
         # ⚠️ Le MÊME `Param` que `p300.py`, et il ne peut pas manquer ici (correction de revue) :
         # ce mode déclare `marker_epoch_s > 0`, donc le moteur le compte parmi ceux qui écoutent
@@ -684,30 +678,19 @@ SPEC = ModeSpec(
         # le moteur de B épochait l'EEG de B autour des feedbacks affichés chez A, en publiant
         # des verdicts parfaitement plausibles et faux. Le défaut reste toujours en tête de liste,
         # parce qu'on lance le moteur AVANT l'émetteur et qu'une liste vide serait refusée.
-        Param(key="stream_in", label="Flux de marqueurs", kind="choice",
+        Param(key="stream_in", label=tr("mode.param.stream_in.label"), kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
-              help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
-                   "feedback affiché. La liste montre les flux de marqueurs VISIBLES sur le "
-                   "réseau au moment où tu ouvres cette page, plus le nom par défaut, toujours "
-                   "proposé même quand rien ne publie encore — c'est le cas normal, puisqu'on "
-                   "lance le moteur avant l'émetteur. Ton émetteur n'y est pas ? Ressors de la "
-                   "page et reviens : la liste se refait à chaque entrée. Le moteur écoute par son "
-                   "NOM, résolu quand un mode qui consomme des marqueurs démarre — un seul inlet "
-                   "existe pour tout le moteur, partagé par tous ces modes. Le changer pendant que "
-                   "le mode tourne n'a AUCUN effet : l'inlet ouvert reste sur l'ancien nom. "
-                   "ARRÊTER puis redémarrer ce mode suffit en revanche à reprendre le nouveau — "
-                   "l'inlet est lâché dès que plus aucun mode actif ne l'écoute. Deux modes "
-                   "actifs qui en réclameraient des noms différents ne sont pas mélangés en "
-                   "silence : un désaccord est signalé bruyamment, un seul nom gagne."),
+              help=tr("mode.errp.param.stream_in.aide")),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture
         duration_s=8.0,            # même durée que le SSVEP : deux modes lancés ensemble PARTAGENT
+        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
         instruction="Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
     ),
     calibration=Calib(kind="fenetre", stimulus_id="errp",
-                      label="Entraîner l'ErrP",
+                      label=tr("calib.errp.label"),
                       briefing=BRIEFING_CALIB,
                       # La géométrie que la calibration PRÉLÈVE, écrite comme la somme que le
                       # runtime découpe — pas un nombre choisi à part, qui dériverait le jour où

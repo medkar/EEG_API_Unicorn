@@ -70,6 +70,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, CH_NAMES, CVEP_BAND,  # noqa: E
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 from core.cvep_rcca import SEUIL_MCNEMAR, RCCAModel, _mcnemar_p  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
@@ -88,37 +89,26 @@ _CODE_LEN = 2 ** CVEP_BITS - 1
 # Ce que l'étudiant lit AVANT de commencer, sur la page de la console. Le protocole lui-même
 # s'affiche dans la fenêtre de stimulus : ce qui est ici est ce qu'il faut avoir compris avant.
 BRIEFING = (
-    "Les cibles clignotent toutes selon le MÊME code pseudo-aléatoire, décalé pour chacune.",
-    "Ça « grésille » : c'est normal, c'est le stimulus.",
-    "Une cible est CERCLÉE en vert : fixe-la, sans bouger les yeux, jusqu'au changement.",
-    "PLANTE le regard sur le disque — ici le regard compte (contrairement au Motor Imagery).",
-    "Cligne le moins possible et reste immobile pendant l'enregistrement.",
-    "Le cercle change de cible régulièrement ; les premières secondes après chaque changement",
-    "sont jetées, le temps que ton regard trouve la nouvelle cible.",
+    tr("calib.cvep.briefing.1"),
+    tr("calib.cvep.briefing.2"),
+    tr("calib.cvep.briefing.3"),
+    tr("calib.cvep.briefing.4"),
+    tr("calib.cvep.briefing.5"),
 )
 
 # La phrase d'honnêteté du c-VEP — PROPRE à ce mode, et elle dit QUATRE choses (docs/recette.md
 # §2.9). Celle du P300 parle de sélection parmi six cibles et d'AUC, celle de l'ErrP d'un détecteur
-# binaire, celle du MI de trois classes : les recopier ici serait faux à chaque fois.
-HONNETETE = (
-    "À SIX cibles, le hasard est à 16,7 % — jamais 50 %. Le repère du projet est de 59,5 % (eCCA) "
-    "et 64,9 % (rCCA) sur la séance de référence, et ces deux chiffres sont HORS LIGNE : ils "
-    "viennent d'une validation croisée sur les époques d'une calibration, pas d'un décodage en "
-    "direct, encore moins à travers le réseau. ⚠️ Et ce n'est PAS le chiffre que tu relèveras en "
-    "séance : le moteur ajoute deux seuils et un vote glissant, donc il se tait souvent. Ce qu'il "
-    "produit, mesuré à k = 2 et aux seuils 0,26 / 0,09, est un COUPLE — environ 46 % d'émission "
-    "et 71 % de justesse PARMI les verdicts émis. Comparer ton relevé au 59,5 / 64,9 % fabrique "
-    "un verdict faux dans les deux sens. Enfin : le c-VEP n'a JAMAIS été décodé au casque par le "
-    "moteur, donc attends-toi à moins, pas à plus."
-)
+# binaire, celle du MI de trois classes : les recopier ici serait faux à chaque fois. Le couple
+# qu'elle cite (46 % d'émission, 71 % de justesse parmi les verdicts émis) a été mesuré à k = 2 et
+# aux seuils 0,26 / 0,09 ; le comparer au 59,5 / 64,9 % hors ligne fabrique un verdict faux dans
+# les deux sens.
+HONNETETE = tr("calib.cvep.honnetete")
 
 # Les verdicts portent sur la justesse HORS-PLI du meilleur des deux décodeurs, à la géométrie où
 # le moteur décide (`CVEP_DECISION_CYCLES` cycles). Le hasard est à 1/N cibles, pas à 50 %.
-VERDICTS = ((0.55, "AU NIVEAU DU REPÈRE DU PROJET (59,5 / 64,9 % sur la séance de référence)"),
-            (0.33, "UTILISABLE"),
-            (0.00, "FAIBLE — ré-essaie : saline Pz/PO7/Oz/PO8, et PLANTE le regard sur le disque "
-                   "cerclé sans le promener (ici le regard compte, contrairement au Motor "
-                   "Imagery)"))
+VERDICTS = ((0.55, tr("calib.cvep.verdict.repere")),
+            (0.33, tr("calib.cvep.verdict.utilisable")),
+            (0.00, tr("calib.cvep.verdict.faible")))
 
 # Les planchers en dessous desquels on REFUSE d'entraîner, plutôt que de produire un modèle que
 # rien ne distingue d'un bon dans la liste de la console.
@@ -325,14 +315,13 @@ def phrase_comparaison(mn):
     décisions DISCORDANTES — les seuls chiffres qui portent l'incertitude.
     """
     if mn["p"] is None:
-        return ("les deux décodeurs n'ont PAS pu être comparés : aucune décision à noter à la "
-                "géométrie du moteur")
-    detail = (f"McNemar p = {mn['p']:.3f} sur {mn['n_discordantes']} décision(s) discordante(s) "
-              f"({mn['b']} eCCA seul, {mn['c']} rCCA seul)")
+        # Aucune décision à noter à la géométrie du moteur.
+        return tr("calib.cvep.comparaison.impossible")
+    detail = tr("calib.cvep.comparaison.detail", p=mn["p"], n=mn["n_discordantes"],
+                b=mn["b"], c=mn["c"])
     if mn["gagnant"] is None:
-        return (f"les deux décodeurs sont INDISCERNABLES sur cette séance ({detail}) : ne choisis "
-                f"pas sur l'écart des deux pourcentages, il est dans le bruit")
-    return f"{mn['gagnant']} l'emporte, et l'écart est DÉFENDABLE ({detail})"
+        return tr("calib.cvep.comparaison.indiscernables", detail=detail)
+    return tr("calib.cvep.comparaison.gagnant", gagnant=mn["gagnant"], detail=detail)
 
 
 def verdict(acc, mn):
@@ -342,10 +331,7 @@ def verdict(acc, mn):
     None quand rien n'a pu être mesuré — et le dire est alors tout ce qu'il y a à dire.
     """
     if acc is None:
-        return (f"justesse NON MESURÉE : aucune décision à la géométrie du moteur "
-                f"({CVEP_DECISION_CYCLES} cycles) — trop peu de cycles consécutifs de la même "
-                f"cible. Les modèles existent, mais rien ne dit ce qu'ils valent : ré-entraîne sans "
-                f"interrompre la séance.")
+        return tr("calib.cvep.verdict.non_mesure", cycles=CVEP_DECISION_CYCLES)
     for seuil, texte in VERDICTS:
         if acc >= seuil:
             return f"{texte} — {phrase_comparaison(mn)}"
@@ -438,14 +424,10 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
     cibles_vues = sorted(set(labels))
 
     if len(epochs) < MIN_EPOQUES or len(cibles_vues) < MIN_CIBLES:
-        raise ValueError(
-            f"séance trop pauvre pour entraîner : {len(epochs)} époque(s) sur "
-            f"{len(cibles_vues)} cible(s) — il en faut au moins {MIN_EPOQUES} sur "
-            f"{MIN_CIBLES} cibles, sinon il n'y a rien à distinguer. "
-            + (f"{hors_bloc} marqueur(s) d'horloge sont arrivés HORS d'un bloc consigné : la "
-               f"fenêtre tourne-t-elle bien avec « --calibrer » ? " if hors_bloc else "")
-            + "Refais une séance, et vérifie la liaison du casque : des époques perdues en cours "
-              "de route (le journal du moteur les compte) donnent exactement cette allure")
+        raise ValueError(tr(
+            "calib.cvep.trop_pauvre", n=len(epochs), cibles=len(cibles_vues),
+            min_epoques=MIN_EPOQUES, min_cibles=MIN_CIBLES,
+            hors_bloc=tr("calib.cvep.hors_bloc", n=hors_bloc) if hors_bloc else ""))
 
     res = entraine_les_deux(epochs, labels, fs=fs, refresh=refresh, band=band,
                             channels=channels, n_cycles=n_cycles)
@@ -512,17 +494,17 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
         "verdict": verdict_txt,
         # Ce qui s'affiche EN FACE. La comparaison des deux décodeurs (McNemar) reste dans
         # « Détails », via `verdict` : elle ne change pas la décision de garder ou de refaire.
-        **(non_mesure("aucune décision à la géométrie du moteur : trop peu de cycles "
-                      "consécutifs de la même cible", "Ré-entraîne sans interrompre la séance.")
+        **(non_mesure(tr("calib.cvep.non_mesure.raison"), tr("calib.cvep.non_mesure.conseil"))
            if meilleur is None
            # ⚠️ « sur N DÉCISIONS », pas « sur N essais » : la justesse est hors-pli sur des
            # GROUPES de `CVEP_DECISION_CYCLES` cycles (`groupes_de_cycles`) — 37 décisions pour
            # 90 cycles à la séance de référence. Citer les cycles gonflait l'effectif ×2,4 sur la
            # seule ligne visible par défaut : « un essai = une décision », perdu par l'affichage.
            else depuis_table(meilleur, VERDICTS,
-                             f"{pct(meilleur)} de cibles justes (hasard {pct(1.0 / n_cibles)}) "
-                             f"sur {int(res['eCCA']['n_decisions'])} décisions "
-                             f"({len(epochs)} cycles)")),
+                             tr("calib.cvep.chiffres", justesse=pct(meilleur),
+                                hasard=pct(1.0 / n_cibles),
+                                n_decisions=int(res["eCCA"]["n_decisions"]),
+                                n_cycles=len(epochs)))),
         "honnetete": HONNETETE,
     }
 
@@ -1377,9 +1359,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     chk(mn_inverse["gagnant"] == "rCCA", f"…dans les deux sens ({mn_inverse})")
     mn_vide = gagnant({"eCCA": {"corrects": None}, "rCCA": {"corrects": None}})
     chk(mn_vide["gagnant"] is None and mn_vide["p"] is None
-        and "n'ont PAS pu être comparés" in phrase_comparaison(mn_vide),
+        and "n'ont pas pu être comparés" in phrase_comparaison(mn_vide),
         f"…et l'absence de mesure ne nomme personne non plus, sans lever ({mn_vide})")
-    chk("NON MESURÉE" in verdict(None, mn_vide),
+    chk("non mesurée" in verdict(None, mn_vide).lower(),
         f"…le verdict d'une séance sans aucune décision dit qu'il n'y a rien à mesurer, plutôt "
         f"que d'afficher un 0 % qui se lirait comme un diagnostic ({verdict(None, mn_vide)})")
 
@@ -1496,12 +1478,12 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     # --- La phrase d'honnêteté est celle du c-VEP, pas celle d'un autre mode ------------------
     chk("16,7" in HONNETETE and "hasard" in HONNETETE,
         "la phrase d'honnêteté donne le hasard à SIX cibles (16,7 %)")
-    chk("HORS LIGNE" in HONNETETE and "59,5" in HONNETETE and "64,9" in HONNETETE,
+    chk("hors ligne" in HONNETETE.lower() and "59,5" in HONNETETE and "64,9" in HONNETETE,
         "…dit que le 59,5 / 64,9 % est un chiffre HORS LIGNE, pas une justesse en direct")
     chk("46 %" in HONNETETE and "71 %" in HONNETETE,
         "…donne le COUPLE que le moteur produira vraiment (~46 % d'émission, ~71 % de justesse à "
         "l'émission), parce que comparer le mauvais dénominateur fabrique un verdict faux")
-    chk("JAMAIS été décodé au casque" in HONNETETE,
+    chk("jamais été décodé au casque" in HONNETETE.lower(),
         "…et dit que le c-VEP n'a jamais été décodé au casque par le moteur")
     chk("trois classes" not in HONNETETE and "sélection" not in HONNETETE
         and "0,776" not in HONNETETE,

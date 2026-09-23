@@ -18,6 +18,7 @@ from core.config import (SSVEP_BASELINE_S, SSVEP_WARMUP_S, ARTIFACT_SIGMA_RATIO,
 import numpy as np  # noqa: E402
 
 from core.cca_decoder import CCADecoder  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedSSVEPPublisher, ssvep_channel_labels, stream_name  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
@@ -202,9 +203,9 @@ def _channels(params):
 
 SPEC = ModeSpec(
     id="ssvep",
-    label="SSVEP",
+    label=tr("mode.ssvep.label"),
     family="actif",
-    summary="Quelle cible clignotante l'utilisateur regarde, ~5 fois par seconde.",
+    summary=tr("mode.ssvep.summary"),
     status="moteur",
     key_channels=tuple(OCCIPITAL),   # les 4 occipitales : le SSVEP y est maximal
     # La fenêtre qui fait clignoter les cibles PENDANT le décodage. Le SSVEP n'a aucune
@@ -217,54 +218,43 @@ SPEC = ModeSpec(
     params=(
         Param(
             key="freqs",
-            label="Fréquences des cibles",
+            label=tr("mode.ssvep.param.freqs.label"),
             kind="float_list",
             unit="Hz",
             default=FREQS_60HZ,
             count=(2, 8),
             constraints=("dans_la_bande", "separables", "divise_le_refresh"),
-            help="Les fréquences que TON application fait clignoter. Le nombre de cibles est la "
-                 "longueur de cette liste. Une fréquence n'est stable que si c'est un diviseur "
-                 "entier du refresh de ton écran (à 60 Hz : 30, 20, 15, 12, 10, 8,571…). Évite le "
-                 "voisinage de ton pic alpha : réglage « alpha_hz » ci-dessous — le fond de "
-                 "corrélation y est élevé au repos. Changer cette liste RECRÉE le flux — les "
-                 "clients doivent se réabonner.",
+            help=tr("mode.ssvep.param.freqs.aide"),
         ),
         Param(
             key="refresh_hz",
-            label="Rafraîchissement de l'écran du stimulus",
+            label=tr("mode.ssvep.param.refresh_hz.label"),
             kind="float",
             unit="Hz",
             default=60.0,
             min=20.0, max=480.0,
             proposes="freqs",
             affecte_decodage=False,
-            help="Le rafraîchissement de l'écran qui AFFICHE les cibles — pas celui de cette "
-                 "fenêtre : ton jeu tourne peut-être sur un autre écran, ou une autre machine. "
-                 "Les fréquences affichables sans saut de cycle en sont les diviseurs entiers. "
-                 "Le changer PROPOSE un nouveau jeu de fréquences ; il ne relance pas le repos, "
-                 "parce que le décodeur ne le lit jamais.",
+            help=tr("mode.ssvep.param.refresh_hz.aide"),
         ),
         Param(
             key="alpha_hz",
-            label="Pic alpha de la personne",
+            label=tr("mode.ssvep.param.alpha_hz.label"),
             kind="float",
             unit="Hz",
             default=ALPHA_DEFAUT_HZ,
             min=6.0, max=14.0,
             proposes="freqs",
             affecte_decodage=False,
-            help="Le pic alpha varie FORTEMENT d'une personne à l'autre (moyenne ~9,6 Hz, plage "
-                 "6-14 Hz) et il est stable chez chacun. Une cible posée dessus ne se distingue "
-                 "pas du fond au repos. La proposition s'en écarte. Pour mesurer le tien : le "
-                 "bouton « Mesurer » à côté de ce champ (ou « Vérifier le casque » sur "
-                 "l'accueil) — ~40 s, puis « Appliquer » le renvoie ICI, sans le retaper. Ne "
-                 "relance pas le repos.",
+            help=tr("mode.ssvep.param.alpha_hz.aide"),
         ),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
         duration_s=SSVEP_BASELINE_S,
+        # ⚠️ PAS de `tr()` ici, exprès : cette consigne part AUSSI sur le flux LSL `status` (champ
+        # `instruction`, cf. `server._state` et docs/SPEC.md), un contrat public qui ne doit changer
+        # ni de mots ni de langue avec l'écran. Même règle pour les quatre autres `Rest`.
         instruction="Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence.",
     ),
     calibration=None,   # la CCA n'apprend rien ; le repos est un étalonnage, pas un modèle

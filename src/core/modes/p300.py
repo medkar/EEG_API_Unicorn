@@ -67,6 +67,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_EPOCH_S, P300_MIN_REPS,  # 
 import numpy as np  # noqa: E402
 
 from core import p300_models  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
@@ -197,12 +198,11 @@ class P300Runtime(ModeRuntime):
         for nom, attendu in attendus:
             valeur = getattr(self.model, nom, None)
             if valeur is None or abs(float(valeur) - attendu) > 1e-9:
-                ecarts.append(f"{nom} : modèle {valeur}, moteur {attendu:g}")
+                ecarts.append(tr("mode.geometrie.ecart", nom=nom, modele=valeur,
+                                 moteur=f"{attendu:g}"))
         if not ecarts:
             return None
-        return (f"ce modèle n'a pas été entraîné sur la géométrie d'époque que ce mode prélève "
-                f"({' ; '.join(ecarts)}) — ses scores seraient plausibles et faux. Ré-entraîne "
-                f"— ré-entraîne (console, page P300, « Entraîner ») plutôt que de le forcer.")
+        return tr("mode.geometrie.desaccord", ecarts=" ; ".join(ecarts), mode="P300")
 
     def _open(self):
         # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
@@ -528,9 +528,9 @@ def _channels(params):
 
 SPEC = ModeSpec(
     id="p300",
-    label="P300",
+    label=tr("mode.p300.label"),
     family="actif",
-    summary="Sélection parmi 6 cibles par onde P300 (oddball attentionnel).",
+    summary=tr("mode.p300.summary"),
     status="moteur",
     key_channels=tuple(P300_MIDLINE),   # Fz, Cz, Pz — la ligne médiane, où le P300 culmine
     stimulus_id="p300",
@@ -538,30 +538,19 @@ SPEC = ModeSpec(
     # d'apprendre (`core/modes/p300_test.py`).
     test_id="p300_test",
     params=(
-        Param(key="model", label="Modèle entraîné", kind="choice",
+        Param(key="model", label=tr("mode.param.modele.label"), kind="choice",
               choices_fn=lambda: p300_models.modeles_disponibles(),
               si_vide=SANS_MODELE,
-              help="Le modèle produit par une calibration P300, propre à TA personne — celui "
-                   "de quelqu'un d'autre donne des scores plausibles et faux. Aucun modèle "
-                   "dans la liste ? Ouvre la console, page P300, et clique « Entraîner » : "
-                   "la fenêtre de stimulus mène la séance, le moteur entraîne."),
-        Param(key="stream_in", label="Flux de marqueurs", kind="choice",
+              help=tr("mode.p300.param.model.aide")),
+        # ⚠️ Son aide dit à l'étudiant que le changer pendant que le mode tourne n'a AUCUN effet
+        # (l'inlet unique du moteur reste sur l'ancien nom) : c'est le seul endroit où il
+        # l'apprend — cf. le commentaire de `affecte_decodage` dans `contract.py`.
+        Param(key="stream_in", label=tr("mode.param.stream_in.label"), kind="choice",
               choices_fn=flux_de_marqueurs_visibles, default=MARKER_STREAM_DEFAULT,
               affecte_decodage=False,
-              help="Le nom du flux LSL sur lequel ton application publie l'onset de chaque "
-                   "flash. La liste montre les flux de marqueurs VISIBLES sur le réseau au moment "
-                   "où tu ouvres cette page, plus le nom par défaut, toujours proposé même quand "
-                   "rien ne publie encore — c'est le cas normal, puisqu'on lance le moteur avant "
-                   "l'émetteur. Ton émetteur n'y est pas ? Ressors de la page et reviens : la "
-                   "liste se refait à chaque entrée. Le moteur écoute par son NOM, résolu quand un "
-                   "mode qui consomme des marqueurs démarre — un seul inlet existe pour tout le "
-                   "moteur, partagé par tous ces modes. Le changer pendant que le mode tourne n'a "
-                   "AUCUN effet : l'inlet ouvert reste sur l'ancien nom. ARRÊTER puis redémarrer "
-                   "ce mode suffit en revanche à reprendre le nouveau — l'inlet est lâché dès que "
-                   "plus aucun mode actif ne l'écoute, il n'y a plus besoin de relancer le moteur. "
-                   "Deux modes actifs qui en réclameraient des noms différents ne sont pas "
-                   "mélangés en silence : un désaccord est signalé bruyamment, un seul nom gagne."),
+              help=tr("mode.p300.param.stream_in.aide")),
     ),
+    # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
               instruction="Le casque se stabilise — reste immobile."),
     # ⚠️ `epoch_s` doit être > 0 (`registry.check()` l'exige), mais il ne dimensionne RIEN de plus
@@ -569,7 +558,7 @@ SPEC = ModeSpec(
     # `pre_s + post_s` du runtime. On y écrit donc la géométrie que cette calibration prélève
     # vraiment — c'est la seule valeur qui ne mente pas à un lecteur.
     calibration=Calib(kind="fenetre", stimulus_id="p300",
-                      label="Entraîner le P300",
+                      label=tr("calib.p300.label"),
                       briefing=BRIEFING_CALIB,
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),

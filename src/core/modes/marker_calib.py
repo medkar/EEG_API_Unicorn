@@ -43,6 +43,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (CALIB_FENETRE_ATTENTE_S, CALIB_FENETRE_SILENCE_S,  # noqa: E402
                          MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 
@@ -178,7 +179,7 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
     # --- la ligne du temps ---------------------------------------------------
 
     # `essai` compte les ÉPOQUES enregistrées (cf. `total`) : c'est ce mot que l'écran affiche.
-    unite = "époque"
+    unite = tr("calib.unite.epoque")
 
     def total(self):
         """Le nombre d'essais que la FENÊTRE a annoncés. 0 tant qu'elle ne s'est pas annoncée.
@@ -206,11 +207,11 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
         dire est le plus utile qu'on puisse faire ici : un étudiant qui cherche la consigne sur
         l'écran de la console pendant que le stimulus tourne ailleurs perd sa séance."""
         if self.phase == "chauffe":
-            return "Le casque se stabilise — la fenêtre de stimulus prend la main dans un instant."
+            return tr("calib.fenetre.chauffe")
         if self.phase == "essais":
-            return "La séance se déroule dans la fenêtre de stimulus : suis SES consignes."
+            return tr("calib.fenetre.essais")
         if self.phase == "entrainement":
-            return "Entraînement du modèle…"
+            return tr("calib.fenetre.entrainement")
         return ""
 
     def tick(self, engine, now):
@@ -259,10 +260,9 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
                 self._ouvrir_les_essais(now)
             elif not self._annonce_recue and now - self._debut >= CALIB_FENETRE_ATTENTE_S:
                 flux = self.params.get("stream_in") or MARKER_STREAM_DEFAULT
-                self._abandonne(
-                    f"aucun « calib_start » reçu en {CALIB_FENETRE_ATTENTE_S:.0f} s : la fenêtre "
-                    f"de stimulus ne s'est pas lancée, ou elle publie ses marqueurs sous un autre "
-                    f"nom que « {flux} »")
+                # La fenêtre n'a publié aucun « calib_start » : c'est ce marqueur qui l'annonce.
+                self._abandonne(tr("calib.fenetre.absente", attente=CALIB_FENETRE_ATTENTE_S,
+                                   flux=flux))
             return
 
         if self.phase == "essais":
@@ -319,11 +319,9 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
                       f"« calib_end » depuis {silence:.0f} s : la séance ATTEND. Si la fenêtre est "
                       f"morte, « Abandonner » dans la console — rien ne sera entraîné.")
             return
-        self._abandonne(
-            f"aucun marqueur depuis {silence:.0f} s (> {CALIB_FENETRE_SILENCE_S:.0f} s) : la "
-            f"fenêtre de stimulus s'est arrêtée en pleine séance. "
-            f"{self.essai} essai(s) enregistré(s) sur les "
-            f"{self._essais_annonces or '?'} annoncés — rien n'est entraîné ni sauvegardé")
+        # Aucun marqueur depuis plus de CALIB_FENETRE_SILENCE_S : la fenêtre s'est arrêtée.
+        self._abandonne(tr("calib.fenetre.muette", silence=silence, essai=self.essai,
+                           annonces=self._essais_annonces or "?"))
 
     def _abandonne(self, raison):
         """Jette la séance en le DISANT, par le MÊME geste que l'abandon depuis la console.

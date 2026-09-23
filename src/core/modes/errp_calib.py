@@ -63,6 +63,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_CAL_BLOCKS,  # noqa: E402
 from core.errp_decoder import CORRECT, ERROR, ErrPModel  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, lignes, non_mesure, pct  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
@@ -72,30 +73,22 @@ from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # Ce que l'étudiant lit AVANT de commencer, sur la page de la console. Le protocole lui-même
 # s'affiche dans la fenêtre de stimulus : ce qui est ici est ce qu'il faut avoir compris avant.
 BRIEFING = (
-    "Un POINT lumineux doit rejoindre la pastille verte : c'est le BUT.",
-    "À chaque pas il avance d'une case — le plus souvent VERS la pastille.",
-    "Parfois il part DANS LE MAUVAIS SENS : c'est une erreur, et c'est ce qu'on enregistre.",
-    "Tu n'as RIEN à faire d'autre que suivre le point et VOULOIR qu'il arrive.",
-    "N'ANTICIPE pas les erreurs : l'ErrP est une réaction à une SURPRISE. Si tu passes la séance",
-    "à guetter la prochaine bévue, il n'y a plus rien à détecter.",
-    "Reste immobile et cligne le moins possible à l'instant PRÉCIS où le point bouge.",
+    tr("calib.errp.briefing.1"),
+    tr("calib.errp.briefing.2"),
+    tr("calib.errp.briefing.3"),
+    tr("calib.errp.briefing.4"),
+    tr("calib.errp.briefing.5"),
+    tr("calib.errp.briefing.6"),
 )
 
 # La phrase d'honnêteté de l'ErrP — PROPRE à ce mode, et elle dit TROIS choses (docs/recette.md
-# §2.8, README) : ce que le détecteur attrape vraiment, que ces deux taux-là sont eux-mêmes
-# optimistes, et ce qu'il est normal d'observer en séance. Celle du MI parle de 40 % à trois
-# classes, celle du P300 de sélection parmi six cibles : les recopier ici serait faux deux fois.
-HONNETETE = (
-    "Au réglage par défaut, ce détecteur attrape UNE ERREUR SUR DEUX et annule une bonne commande "
-    "sur sept (TPR 0,50 / TNR 0,855 sur la séance de référence). Ce n'est pas un défaut de "
-    "réglage : c'est ce que vaut un ERP mono-essai en électrodes sèches. ⚠️ Et ces deux taux sont "
-    "eux-mêmes OPTIMISTES. L'AUC, elle, est honnête — elle vient de scores hors-pli (0,776, "
-    "p = 0,0099 sur 100 permutations, 200 essais, une personne) ; mais le SEUIL qui produit « une "
-    "sur deux / une sur sept » a été choisi en REGARDANT ces mêmes scores, donc le taux de bonnes "
-    "commandes gardées dépasse sa cible PAR CONSTRUCTION. En séance, attends-toi à en annuler "
-    "plus, pas moins. Donc : ne conclus rien d'un essai, ni de dix — sur dix erreurs délibérées, "
-    "EN ATTRAPER CINQ EST LE RÉSULTAT ATTENDU. Huit ou deux tiennent dans le bruit."
-)
+# §2.8, README) : ce que le détecteur attrape vraiment (TPR 0,50 / TNR 0,855 sur la séance de
+# référence : une erreur sur deux, une bonne commande annulée sur sept), que ces deux taux-là sont
+# eux-mêmes optimistes (le SEUIL a été choisi en regardant les scores qui les mesurent, donc le
+# taux de bonnes commandes gardées dépasse sa cible par construction), et ce qu'il est normal
+# d'observer en séance. Celle du MI parle de 40 % à trois classes, celle du P300 de sélection
+# parmi six cibles : les recopier ici serait faux deux fois.
+HONNETETE = tr("calib.errp.honnetete")
 
 # Le verdict porte sur l'AUC hors-pli, jamais sur le TPR/TNR : ces deux-là sont mesurés au seuil
 # qui les a choisis (cf. HONNETETE), donc un verdict calé dessus se féliciterait tout seul. Les
@@ -103,11 +96,9 @@ HONNETETE = (
 # vert à partir de 0,70 ET significatif), avec un mot de plus pour ne pas laisser croire qu'un
 # détecteur mono-essai à 0,78 est un décodeur fiable — c'est le repère du projet, et il reste
 # modeste.
-VERDICTS = ((0.75, "BON pour un ErrP mono-essai — au niveau du repère du projet (0,776)"),
-            (0.65, "UTILISABLE"),
-            (0.00, "FAIBLE — ré-essaie : saline Fz/Cz/Pz, et surtout n'ANTICIPE pas les erreurs "
-                   "(l'ErrP est une réaction à une surprise ; à guetter la prochaine bévue, il "
-                   "n'y a plus rien à détecter)"))
+VERDICTS = ((0.75, tr("calib.errp.verdict.bon")),
+            (0.65, tr("calib.errp.verdict.utilisable")),
+            (0.00, tr("calib.errp.verdict.faible")))
 
 # Au-delà, l'AUC observée n'est pas distinguable de ce que le hasard produit sur ce nombre
 # d'essais. C'est le seuil usuel, et c'est la règle de rigueur de ce projet : ne jamais conclure
@@ -147,12 +138,11 @@ def verdict(auc, perm_p=None):
     très bien.
     """
     if auc is None:
-        return ("AUC non mesurée : la séance n'avait pas de quoi faire une validation croisée "
-                "honnête (deux classes, assez d'essais de chacune)")
+        return tr("calib.errp.verdict.non_mesure")
     if perm_p is not None and perm_p >= PERM_ALPHA:
-        return (f"NON SIGNIFICATIF (permutation p = {perm_p:.3f}) : cette AUC est indistinguable "
-                f"de ce que le hasard produit sur ce nombre d'essais. Refais une séance plus "
-                f"longue avant de t'en servir — ce n'est pas un problème de contact")
+        # Le mot passé en valeur : `_lignes_errp` affiche le MÊME en face (cf. `mi_calib.verdict`).
+        return tr("calib.errp.verdict.non_significatif", mot=tr("calib.mot.non_significatif"),
+                  p=perm_p)
     for seuil, texte in VERDICTS:
         if auc >= seuil:
             return texte
@@ -167,15 +157,12 @@ def _lignes_errp(auc, perm_p, mesures, n, n_erreurs):
     pas — mais sa réserve dit de NE PAS resaliner.
     """
     if auc is None:
-        return non_mesure("pas de quoi faire une validation croisée honnête",
-                          "Refais une séance plus longue.")
-    chiffres = (f"AUC {auc:.2f} (hasard 0,50) · garde {pct(mesures['tnr'])} des bonnes "
-                f"commandes, attrape {pct(mesures['tpr'])} des erreurs "
-                f"({n} essais dont {n_erreurs} erreurs)").replace("AUC 0.", "AUC 0,")
+        return non_mesure(tr("calib.errp.non_mesure.raison"), tr("calib.errp.non_mesure.conseil"))
+    chiffres = tr("calib.errp.chiffres", auc=f"{auc:.2f}".replace(".", ","),
+                  tnr=pct(mesures["tnr"]), tpr=pct(mesures["tpr"]), n=n, n_erreurs=n_erreurs)
     if perm_p is not None and perm_p >= PERM_ALPHA:
-        return lignes("faible", "NON SIGNIFICATIF", chiffres,
-                      "Indistinguable du hasard sur ce nombre d'essais : refais une séance plus "
-                      "longue — ce n'est PAS un problème de contact.")
+        return lignes("faible", tr("calib.mot.non_significatif"), chiffres,
+                      tr("calib.errp.reserve.non_significatif"))
     return depuis_table(auc, VERDICTS, chiffres)
 
 
@@ -280,14 +267,11 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
     compte = np.bincount(labels, minlength=2)
     if (len(epochs) < MIN_EPOQUES or len(set(labels.tolist())) < 2
             or int(compte.min()) < MIN_PAR_CLASSE):
-        raise ValueError(
-            f"séance trop pauvre pour entraîner : {len(epochs)} époque(s), "
-            f"{int(compte[CORRECT])} correcte(s) et {int(compte[ERROR])} erreur(s) — il en faut "
-            f"au moins {MIN_EPOQUES} au total, des DEUX classes, et au moins {MIN_PAR_CLASSE} de "
-            f"chaque. En dessous, l'entraînement ne produit AUCUN score hors-pli, donc aucun seuil "
-            f"réglable, donc un modèle que le mode refusera au démarrage. Refais une séance plus "
-            f"longue, et vérifie la liaison du casque : des époques perdues en cours de route (le "
-            f"journal du moteur les compte) donnent exactement cette allure")
+        # En dessous, l'entraînement ne produit AUCUN score hors-pli, donc aucun seuil réglable,
+        # donc un modèle que le mode refuserait au démarrage.
+        raise ValueError(tr("calib.errp.trop_pauvre", n=len(epochs),
+                            corrects=int(compte[CORRECT]), erreurs=int(compte[ERROR]),
+                            min_total=MIN_EPOQUES, min_classe=MIN_PAR_CLASSE))
 
     groupes = np.asarray(groupes_contigus(len(labels), blocs), dtype=int)
     n_perm = ERRP_PERM_N if n_perm is None else int(n_perm)
@@ -436,7 +420,8 @@ class ErrPCalibration(MarkerCalibrationRuntime):
             self._refuse(f"« error: {etiquette!r} » n'est pas un booléen "
                          f"({type(etiquette).__name__}) : on ne DEVINE pas une vérité-terrain")
             return None
-        self.classe = "erreur" if etiquette else "correct"
+        self.classe = (tr("calib.errp.classe.erreur") if etiquette
+                       else tr("calib.errp.classe.correct"))
         return etiquette
 
     def _refuse(self, detail):

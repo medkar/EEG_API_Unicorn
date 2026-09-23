@@ -28,6 +28,7 @@ from core.config import (MI_MIN_VOTES, MI_PROB_MIN, MI_VOTE_LEN,  # noqa: E402
 import numpy as np  # noqa: E402
 
 from core import mi_models  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedMIPublisher, mi_channel_labels, stream_name  # noqa: E402
 from core.mi_decoder import MIDecoder  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, SANS_MODELE, validate  # noqa: E402
@@ -216,9 +217,9 @@ def _channels(params):
 
 SPEC = ModeSpec(
     id="mi",
-    label="Motor Imagery",
+    label=tr("mode.mi.label"),
     family="actif",
-    summary="Imagination d'un mouvement main gauche / main droite (CSP+LDA).",
+    summary=tr("mode.mi.summary"),
     status="moteur",
     key_channels=(1, 2, 3),   # C3, Cz, C4 — les voies motrices. ⚠️ Ce sont aussi
                               # les deux qui SATURENT quand on rouvre la session
@@ -226,52 +227,45 @@ SPEC = ModeSpec(
     params=(
         Param(
             key="model",
-            label="Modèle entraîné",
+            label=tr("mode.param.modele.label"),
             kind="choice",
             # Le lambda est délibéré : il résout `modeles_disponibles` À L'APPEL. Lier la
             # fonction directement figerait la référence à l'import, et l'autotest ne pourrait
             # plus rediriger la recherche vers un dossier temporaire sans toucher à `data/`.
             choices_fn=lambda: mi_models.modeles_disponibles(),
             si_vide=SANS_MODELE,
-            help="Le modèle produit par une calibration MI, propre à TA personne — celui de "
-                 "quelqu'un d'autre donne des probabilités plausibles et fausses. Aucun modèle "
-                 "dans la liste ? Lance une calibration depuis cette console : bouton "
-                 "« Entraîner » sur cette page.",
+            help=tr("mode.mi.param.model.aide"),
         ),
         Param(
             key="prob_min",
-            label="Probabilité minimale",
+            label=tr("mode.mi.param.prob_min.label"),
             kind="float",
             default=MI_PROB_MIN,
             min=0.34, max=0.99,
-            help="En dessous, la fenêtre ne vote pour personne. Monter ce seuil rend le mode "
-                 "plus prudent : moins d'intentions émises, mais moins de fausses.",
+            help=tr("mode.mi.param.prob_min.aide"),
         ),
         Param(
             key="vote_len",
-            label="Fenêtres du vote",
+            label=tr("mode.param.vote_len.label"),
             kind="int",
             default=MI_VOTE_LEN,
             min=1, max=15,
-            help="Sur combien de fenêtres récentes on vote. Le MI est plus bruité que le SSVEP, "
-                 "d'où un lissage un peu plus long. À 5 Hz, 5 fenêtres = 1 seconde.",
+            help=tr("mode.mi.param.vote_len.aide"),
         ),
         Param(
             key="min_votes",
-            label="Votes concordants",
+            label=tr("mode.param.min_votes.label"),
             kind="int",
             default=MI_MIN_VOTES,
             min=1, max=15,
             constraints=("votes_atteignables",),
-            help="Combien de ces fenêtres doivent être d'accord pour émettre une intention. "
-                 "En demander plus retarde la décision et la rend plus sûre. Ne peut pas "
-                 "dépasser « Fenêtres du vote » : au-delà, aucun vote ne peut plus jamais "
-                 "aboutir, et le mode ne décide plus rien — en silence.",
+            help=tr("mode.mi.param.min_votes.aide"),
         ),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
         duration_s=0.0,
+        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
         instruction="Le casque se stabilise — reste immobile.",
     ),
     calibration=mi_calib.CALIB,   # la calibration est jouée par le MOTEUR (moitié B)

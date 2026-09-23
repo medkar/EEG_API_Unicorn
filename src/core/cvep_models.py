@@ -76,6 +76,7 @@ import numpy as _np  # noqa: E402
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel  # noqa: E402
 from core.cvep_rcca import MSG_PYNTBCI, PyntbciManquant, RCCAModel  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 # Deux familles de noms, une par décodeur — d'où un TUPLE là où les trois jumeaux ont une seule
 # chaîne. Un motif unique élargi (`cvep*model*.npz`) attraperait la même chose aujourd'hui, mais
@@ -125,10 +126,9 @@ def charger(chemin):
         # FENÊTRE de `src/stimulus/`, que la console lance (cf. `Calib(kind="fenetre")` du mode).
         # Ce texte est celui du `help` du réglage « Modèle entraîné » : le même geste dit du même
         # mot aux deux endroits où un étudiant peut le lire.
-        return None, ("aucun modèle désigné — ouvre la console, page c-VEP, et clique "
-                      "« Entraîner » pour en produire un")
+        return None, tr("mode.modele.aucun", mode="c-VEP")
     if not _os.path.isfile(chemin):
-        return None, f"modèle introuvable : {chemin}"
+        return None, tr("mode.modele.introuvable", chemin=chemin)
     nom = _os.path.basename(chemin)
     try:
         # ⚠️ PAS d'`allow_pickle=True`, et c'est mesuré, pas une précaution en l'air : les trois
@@ -148,20 +148,19 @@ def charger(chemin):
     except Exception as e:      # noqa: BLE001 - un .npz casse de mille façons, toutes équivalentes
         # `np.load` refuse un fichier qui n'est pas une archive ; un `.npy` nu n'a pas de `.files`
         # (AttributeError). Les deux se disent de la même façon à l'étudiant.
-        return None, f"modèle illisible ({type(e).__name__}) : {nom}"
+        return None, tr("mode.modele.illisible", erreur=type(e).__name__, nom=nom)
 
     if decodeur not in _CLASSES:
-        return None, (f"ce fichier déclare un décodeur inconnu ({decodeur!r}, attendus "
-                      f"{' ou '.join(sorted(_CLASSES))}) — il vient d'une version plus récente du "
-                      f"produit, ou il a été bricolé : {nom}")
+        return None, tr("mode.cvep.modele.decodeur_inconnu", decodeur=repr(decodeur),
+                        attendus=tr("mode.cvep.modele.ou").join(sorted(_CLASSES)), nom=nom)
     classe, requises = _CLASSES[decodeur]
     manquantes = [c for c in requises if c not in presentes]
     if manquantes:
         # Le cas concret : un `cvep_calib_*.npz` (des époques de calibration) recopié sous un nom
         # de modèle. Sans ce contrôle, `load` lève un KeyError et on annonce « illisible », ce qui
         # envoie chercher une corruption de fichier là où il n'y a qu'un fichier mal rangé.
-        return None, (f"ce n'est pas un modèle c-VEP {decodeur} (il manque "
-                      f"{', '.join(manquantes)}) : {nom}")
+        return None, tr("mode.cvep.modele.incomplet", decodeur=decodeur,
+                        manquantes=", ".join(manquantes), nom=nom)
 
     # ⚠️ Le refus de STIMULUS, et il se pose AVANT `load` — pour un modèle rCCA, `load` ré-ajuste
     # pyntbci sur les époques stockées (~0,3 s), et il n'y a aucune raison de payer ça pour un
@@ -175,10 +174,10 @@ def charger(chemin):
             # ordre de lignes (CVEP_LAG_ROTATION). Un message qui affichait « 6x63 contre 6x63 »
             # ne disait rien à personne.
             if codes is None or codes.shape != attendus.shape:
-                forme = "aucun" if codes is None else "x".join(str(n) for n in codes.shape)
-                quoi = (f"il porte {forme} codes, le stimulus actuel en affiche "
-                        f"{'x'.join(str(n) for n in attendus.shape)} — la config a changé depuis "
-                        f"la calibration (CVEP_BITS, CVEP_TAPS, CVEP_N_TARGETS)")
+                forme = (tr("mode.cvep.modele.aucun_code") if codes is None
+                         else "x".join(str(n) for n in codes.shape))
+                quoi = tr("mode.cvep.modele.codes_dimensions", forme=forme,
+                          attendu="x".join(str(n) for n in attendus.shape))
             else:
                 # ⚠️ **Ce refus signale un VRAI défaut, à TOUTE rotation — et ce message a dit
                 # l'inverse.** Il expliquait qu'à `CVEP_LAG_ROTATION` non nul le désaccord était
@@ -189,18 +188,11 @@ def charger(chemin):
                 # autotest le vérifie à rotation = 2 (un modèle qu'on vient de calibrer est
                 # ACCEPTÉ, quelle que soit la rotation). Laisser la phrase revenait à apprendre à
                 # l'étudiant qu'un vrai défaut est normal — la pire des deux erreurs possibles
-                # ici. On NOMME donc les trois causes réelles, sans en excuser aucune.
-                quoi = ("mêmes dimensions, mais pas les mêmes codes ni le même ordre. Trois "
-                        "causes, toutes réelles : des codes Gold distincts (hypothèse mesurée, "
-                        "réfutée et retirée du produit — plus aucun émetteur ne les affiche) ; "
-                        f"un CVEP_LAG_ROTATION changé depuis la calibration (il vaut "
-                        f"{CVEP_LAG_ROTATION} aujourd'hui), qui PERMUTE les lignes ; ou un modèle "
-                        "calibré AVANT le 2026-08-21, quand la calibration empilait encore ses "
-                        "codes par lag croissant au lieu de l'ordre du plan. Un ordre permuté "
-                        "ferait nommer la cible voisine, d'où le refus")
-            return None, (f"ce modèle rCCA a été calibré sur d'AUTRES codes que ceux affichés "
-                          f"aujourd'hui : {quoi}. Ré-entraîne depuis la console, page c-VEP, "
-                          f"bouton « Entraîner » : {nom}")
+                # ici. On NOMME donc les trois causes réelles, sans en excuser aucune (un modèle
+                # d'avant le 2026-08-21 empilait ses codes par lag croissant, pas dans l'ordre du
+                # plan ; un CVEP_LAG_ROTATION changé PERMUTE les lignes).
+                quoi = tr("mode.cvep.modele.codes_contenu", rotation=CVEP_LAG_ROTATION)
+            return None, tr("mode.cvep.modele.autres_codes", quoi=quoi, nom=nom)
 
     try:
         modele = classe.load(chemin)
@@ -211,9 +203,9 @@ def charger(chemin):
         # étudiant qui part chercher une corruption là où il manque un `pip install`. Le message
         # complet dit quoi FAIRE (`pip install -r requirements.txt`) et que l'eCCA, lui, n'en
         # dépend pas : les modèles eCCA restent utilisables sans cette dépendance.
-        return None, f"{e} (fichier : {nom})"
+        return None, tr("mode.cvep.modele.pyntbci", message=str(e), nom=nom)
     except Exception as e:      # noqa: BLE001 - un modèle sur disque casse de mille façons
-        return None, f"modèle illisible ({type(e).__name__}) : {nom}"
+        return None, tr("mode.modele.illisible", erreur=type(e).__name__, nom=nom)
     return modele, None
 
 

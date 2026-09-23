@@ -14,6 +14,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from core.config import DATA_DIR, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 
 import glob as _glob  # noqa: E402
@@ -33,17 +34,17 @@ def charger(chemin):
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
     # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
     if not chemin:
-        return None, ("aucun modèle désigné — lance une calibration depuis la console pour en "
-                      "produire un")
+        return None, tr("mode.modele.aucun", mode="Motor Imagery")
     if not _os.path.isfile(chemin):
-        return None, f"modèle introuvable : {chemin}"
+        return None, tr("mode.modele.introuvable", chemin=chemin)
     try:
         import joblib
         modele = joblib.load(chemin)
     except Exception as e:      # noqa: BLE001 - pickle casse de mille façons, toutes équivalentes ici
-        return None, f"modèle illisible ({type(e).__name__}) : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.illisible", erreur=type(e).__name__,
+                        nom=_os.path.basename(chemin))
     if not hasattr(modele, "labels") or not hasattr(modele, "predict_proba"):
-        return None, f"ce n'est pas un modèle MI : {_os.path.basename(chemin)}"
+        return None, tr("mode.modele.pas_un_modele", mode="MI", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
     # hérité (d'avant le déménagement du décodeur dans core/) porte "mi_decoder" (racine) — et
     # RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`, le dossier
@@ -57,9 +58,8 @@ def charger(chemin):
     # quelqu'un d'autre, en silence.
     module = type(modele).__module__
     if module != "core.mi_decoder":
-        return None, (f"modèle hérité (module {module!r}, attendu 'core.mi_decoder'), "
-                      f"abandonné délibérément — refais une calibration : "
-                      f"{_os.path.basename(chemin)}")
+        return None, tr("mode.modele.herite", module=repr(module), attendu=repr("core.mi_decoder"),
+                        mode="Motor Imagery", nom=_os.path.basename(chemin))
     return modele, None
 
 
