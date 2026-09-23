@@ -226,7 +226,9 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
   désormais (l'en-tête, lui, reste fixe : « ← Modes » doit rester atteignable depuis le bas). Et
   l'aide grise n'affiche plus que la **première phrase** de chaque réglage — 838 caractères au lieu
   de 2 719 sur la page c-VEP —, le texte entier du contrat restant en **infobulle** et revenant à
-  l'écran par la case « Aide détaillée ». Rien n'est supprimé, tout est replié.
+  l'écran par la case « Aide détaillée ». Rien n'est supprimé, tout est replié. **Depuis le
+  2026-09-23**, plus aucune aide en clair : une bulle « ⓘ » à droite de chaque champ montre l'aide
+  complète au survol, et la case « Aide détaillée » a disparu.
 
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.
 
@@ -428,7 +430,7 @@ développeur. **Le distribuer tel quel à une promotion poserait une cible sur l
 partie des étudiants.**
 
 - [ ] Champ « Pic alpha » laissé à sa valeur par défaut **9,6** (la moyenne de population).
-- [ ] Cliquer **Proposer « freqs »**.
+- [ ] Cliquer **Proposer « Fréquences des cibles »**.
 - [ ] Attendu : le champ des fréquences se remplit avec **12, 15, 20**. Aucun avertissement.
 - [ ] Cliquer **Appliquer** → accepté. *(Ce que le moteur propose, il doit l'accepter — ça n'a pas
       toujours été vrai : la tolérance refusait la valeur que son propre message affichait.)*
@@ -442,8 +444,9 @@ Le blocage qui a été corrigé en fin de chantier : déclarer un écran 144 Hz 
 anciennes fréquences ne le divisent plus) **et** la proposition continuait de calculer sur 60 — sans
 porte de sortie.
 
-- [ ] Sous le champ « Rafraîchissement », lire l'aide grise : elle annonce le rafraîchissement de
-      **cette** fenêtre, et précise que c'est celui de l'écran qui **affiche les cibles** qui compte.
+- [ ] Survoler la bulle « ⓘ » de « Rafraîchissement » : son second paragraphe annonce le
+      rafraîchissement de **cette** fenêtre, et précise que c'est celui de l'écran qui **affiche les
+      cibles** qui compte.
       Vérifier qu'elle dit quelque chose de sensé sur ta machine.
 - [ ] Mettre « Rafraîchissement » à **144**, cliquer **Proposer**.
 - [ ] Attendu : **12 · 14,4 · 18**.
@@ -1025,7 +1028,7 @@ python src/console/app.py
 ```
 
 Grille → seconde rangée, **« Avant tout »** → tuile **« Vérifier le casque »** (elle
-s'appelait « Contrôle alpha » jusqu'au 2026-09-22), marquée **BARRIÈRE — à passer AVANT le reste**
+s'appelait « Contrôle alpha » jusqu'au 2026-09-22), marquée **BARRIÈRE — à passer avant tout le reste**
 → **Ouvrir** → lire le briefing → **Commencer**. C'est aussi la page qu'ouvre **« Mesurer »**, à
 côté du « Pic alpha de la personne » de la page SSVEP : deux portes, un seul protocole — la première
 dit si la séance peut continuer, la seconde sert à trouver un réglage. Ouverte par « Mesurer », son
@@ -1059,7 +1062,7 @@ dit si la séance peut continuer, la seconde sert à trouver un réglage. Ouvert
       *Jusque-là ce bouton échouait à tous les coups, par « « SSVEP » n'est pas démarré » — ce
       contrôle est le premier geste d'une séance. Trouvé par la QA du 2026-09-21.*
 - [ ] Sur la page SSVEP (« ← SSVEP » si tu es venu par « Mesurer »), le champ montre le pic
-      appliqué ; cliquer **Proposer « freqs »** et noter le jeu obtenu : ______ . S'il diffère de
+      appliqué ; cliquer **Proposer « Fréquences des cibles »** et noter le jeu obtenu : ______ . S'il diffère de
       8,571/15/20, c'est attendu et c'est tout l'intérêt du réglage.
 
 ### 2.2 — Non-régression du SSVEP
@@ -1302,8 +1305,8 @@ python src/console/app.py --mode p300      # page P300 -> « Entraîner » (« C
       chauffe pendant que pygame s'initialise. **Regarde le terminal** : s'il écrit « marqueur(s)
       reçus pendant la CHAUFFE : jetés », la fenêtre a pris de l'avance sur cette machine — la
       séance n'est pas perdue, mais elle est plus courte que ce que l'écran annonce. **Note-le.**
-- [ ] À la fin, l'écran montre **la sélection en leave-one-round-out** — « la cible désignée
-      est-elle retrouvée ? », la mesure qui décide pour ce mode, pas l'AUC (qui est publiée en
+- [ ] À la fin, l'écran montre **les cibles retrouvées (validation croisée par manche)** — « la
+      cible désignée est-elle retrouvée ? », la mesure qui décide pour ce mode, pas l'AUC (qui est publiée en
       détail) — et attend : **Enregistrer le modèle** ou **Refaire**. Rien n'est écrit avant le
       clic. La sauvegarde produit un fichier **horodaté**
       (`data/p300_model_AAAAMMJJ_HHMMSS.joblib`) : elle n'écrase jamais la précédente, et le moteur
@@ -1367,7 +1370,7 @@ python -u examples/receiver.py --stream decoded_p300
       les lire depuis un client.
 - [ ] Si tu ouvres la console sur la page P300, case « Décodage en direct » (⚠️ **pas en même temps
       que le moteur en terminal 1** — un seul programme à la fois), l'écran doit annoncer des
-      **log-odds** et « AUCUN
+      **log-odds** et « aucun
       seuil », jamais « échelle z ». Six barres étiquetées `cible 0 … cible 5`, et la cible retenue
       avec le nombre de flashs sur lequel elle repose.
 

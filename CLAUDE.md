@@ -104,8 +104,8 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   pas de validation côté interface, pas de catalogue de modes recopié.
 - **UN RÉGLAGE SE POSE SUR UN MODE ARRÊTÉ** (2026-09-21). `set_params` le VALIDE — c'est là qu'on
   apprend que 17 Hz ne divise pas 60 — puis le RETIENT dans `EngineServer.reglages`, et le prochain
-  démarrage part avec. L'accusé porte `differe: True`, que la console affiche en VERT (« réglage
-  RETENU : « SSVEP » est arrêté, il démarrera avec. ») : accepté est un succès, la nuance « pas
+  démarrage part avec. L'accusé porte `differe: True`, que la console affiche en VERT (« Réglage
+  RETENU : « SSVEP » est arrêté. « Tester » et le prochain décodage partiront avec. ») : accepté est un succès, la nuance « pas
   encore en vigueur » est dans le texte, et un « appliqué » nu ferait croire que le mode décode déjà.
   C'est le geste réel — on cale ses fréquences sur son écran et son pic alpha sur sa tête, **puis**
   on lance. Avant, il fallait démarrer sur des réglages qu'on savait faux, subir 23 s de repos,

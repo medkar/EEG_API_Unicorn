@@ -321,7 +321,7 @@ ErrP. Chacune porte sa case **« publié »**, **« Démarrer »** et **« Ouvri
 ✅ **Aucune n'est grisée**, même sans modèle entraîné : le manque de modèle se dit au clic, par un
 refus (point 1.6), pas par une tuile éteinte.
 ✅ Dessous, **« Avant tout »** avec **une seule** tuile : **« Vérifier le casque »**,
-marquée *BARRIÈRE — à passer AVANT le reste*.
+marquée *BARRIÈRE — à passer avant tout le reste*.
 ✅ Tout en bas, **« La sortie »** et le bouton **« Ce que voit ton application »**.
 
 ❌ Régression : une tuile de mode manquante ; une tuile « Taux d'émission SSVEP » ou « Tester le … »
@@ -333,8 +333,8 @@ sur l'accueil — un test vit sur la page de SON mode, pas sur la grille.
 
 Tuile **Brut** → « Ouvrir ».
 
-✅ Deux blocs : **« 1. Régler »**, qui dit « aucun réglage à changer ici » (ni « Appliquer », ni
-« Aide détaillée »), et **« 2. Observer »**, sans bouton — les tracés lisent le tampon
+✅ Deux blocs : **« 1. Régler »**, qui dit « Aucun réglage à changer ici. » (ni « Appliquer », ni
+bulle ⓘ), et **« 2. Observer »**, sans bouton — les tracés lisent le tampon
 d'acquisition, il n'y a rien à démarrer.
 ✅ Huit tracés qui défilent, une étiquette par voie (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8), et **qui
 restent séparés** quelle que soit l'amplitude.
@@ -374,15 +374,16 @@ Ouvre les sept pages une à une (tuile → « Ouvrir »).
 « Brancher un client » : ils reviendront avec « Connecter ».
 ✅ Sur les cinq pages qui ont « Tester », une case **« Décodage en direct »**, **décochée** : la
 cocher déplie la vue en direct et l'état (« arrêté » tant que le mode ne tourne pas), sous la phrase
-« Vide tant que le décodage continu ne tourne pas : il se démarre depuis la tuile du mode, sur
+« Vide tant que le décodage continu est arrêté. Il se démarre depuis la tuile du mode, sur
 l'accueil. » L'en-tête de ces pages, lui, n'affiche **aucun** état.
 ✅ **Neuro** : « Observer » démarre le mode ; le libellé ne passe à « Arrêter » qu'une fois le moteur
 d'accord (état reçu, pas une bascule locale). La vue défile en face, sans aucun chiffre de justesse.
-✅ **Page c-VEP** (le cas extrême : six réglages), **réduis la fenêtre en hauteur** : le corps défile,
-« 3. Tester » se rejoint en faisant défiler, et **« ← Modes » reste visible** (l'en-tête ne défile
-pas).
-✅ L'aide grise sous chaque réglage tient en **une phrase** ; la case **« Aide détaillée »** déplie le
-texte complet ; survoler un champ le montre en infobulle.
+✅ **Page c-VEP** (le cas extrême : six réglages), coche « Décodage en direct » puis **réduis la
+fenêtre en hauteur** : le corps défile, « 3. Tester » se rejoint en faisant défiler, et **« ← Modes »
+reste visible** (l'en-tête ne défile pas).
+✅ **Aucune aide en clair sous les réglages** : chaque réglage qui a une aide porte une bulle
+**« ⓘ »** bleue à droite de son champ ; la survoler (ou survoler le champ) montre l'aide complète,
+qui passe à la ligne. Plus de case « Aide détaillée » (2026-09-23).
 
 ❌ Régression : un bloc hors de cette table, ou dans un autre ordre ; un des quatre boutons partis
 revenu sur une page ; un score annoncé sous « Observer » (Neuro et Brut n'ont aucune bonne réponse
@@ -395,11 +396,12 @@ revenu sur une page ; un score annoncé sous « Observer » (Neuro et Brut n'ont
 Page **SSVEP**, mode **arrêté**, dans cet ordre.
 
 1. « Pic alpha de la personne » à `10,5` → **Appliquer**.
-   ✅ En **vert** : « réglage RETENU : « SSVEP » est arrêté, il démarrera avec. »
+   ✅ En **vert** : « Réglage RETENU : « SSVEP » est arrêté. « Tester » et le prochain décodage
+   partiront avec. »
 2. Reviens à la grille (« ← Modes »), puis rouvre la page SSVEP.
    ✅ Le champ affiche toujours **10,5**. ❌ Régression : retombé à 9,6 — l'écran dirait le contraire
    de ce que le moteur a retenu.
-3. **« Proposer « freqs » »** (l'un ou l'autre des deux boutons).
+3. **« Proposer « Fréquences des cibles » »** (l'un ou l'autre des deux boutons).
    ✅ **8,571 · 15 · 20**, le jeu accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu
    accordé au pic de la **population** (9,6 Hz).
 4. « Fréquences des cibles » à `15, 17` → **Appliquer**.
@@ -428,7 +430,7 @@ aux points 1.8 à 1.10 ; regarde-le une fois pour lui-même.
 
 ✅ Un écran « Contrôle de la liaison casque » montre **le σ de chacune des huit voies**, un verdict par
 voie, et deux boutons : **« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance.
-✅ **Partout**, une phrase « Voies où ce geste lit son signal : … (encadrées) », et ces lignes-là
+✅ **Partout**, une phrase « Voies clés : … (encadrées). Saline-les en priorité. … », et ces lignes-là
 **encadrées en bleu** : les voies du mode sur « Entraîner » et « Tester » (le test prend celles de
 son mode, `186510f`), et **Pz, PO7, Oz, PO8** sur « Vérifier le casque » — les quatre qu'elle
 moyenne (passe du 2026-09-23). Le refus porte sur les huit dans tous les cas.
@@ -487,9 +489,9 @@ page.
    configuration impossible ne mesurerait rien.
 3. Remets `12, 15, 20` → **« Tester »** → **« Commencer »** → contrôle de liaison → **« Commencer
    la mesure »**.
-   ✅ Sous l'en-tête de la page, en gris : « Décodage de « SSVEP » arrêté pour ce test — on ne peut
-   pas faire les deux à la fois. Il restera arrêté ensuite : relance-le depuis sa tuile si ton
-   application en a besoin. » **Elle reste affichée** pendant le test et après. ❌ Régression : elle
+   ✅ Sous l'en-tête de la page, en gris : « Décodage de « SSVEP » arrêté pour ce test : les deux ne
+   tournent pas ensemble. Il restera arrêté ensuite. Relance-le depuis sa tuile si ton application
+   en a besoin. » **Elle reste affichée** pendant le test et après. ❌ Régression : elle
    disparaît dès que le test démarre (le défaut du 2026-09-23 — elle vivait moins d'une seconde).
    ✅ **Puis** la fenêtre s'ouvre, plein écran : **trois** flèches étiquetées **12.00 · 15.00 ·
    20.00 Hz**, une croix pour le repos, puis une flèche **entourée de bleu** par essai. Le HUD affiche
@@ -523,7 +525,7 @@ Le plus court des modes à modèle. Page **P300**.
    ✅ La page **« Entraîner le P300 »**, retour **« ← P300 »** : briefing, **« Commencer »** →
    contrôle de liaison → **« Commencer l'entraînement »**.
    ✅ La console **lance elle-même la fenêtre P300**, **après** que le moteur a démarré.
-   ✅ À la fin : trois lignes en face, une ligne ambre « ⚠ Pas encore enregistré — ce modèle est dans
+   ✅ À la fin : trois lignes en face, une ligne ambre « ⚠ Pas encore enregistré : ce modèle est dans
    un dossier temporaire. … », et **« Enregistrer le modèle »** / **« Refaire »**.
 3. **« Refaire »** → rien n'a été écrit dans `data/` (empreinte). Relance, puis **« Enregistrer le
    modèle »** → « Modèle en place : … ».
@@ -669,7 +671,7 @@ jamais été vue sur un vrai signal**. Si elle sort, c'est une première : note 
 ### ☐ 2.2 — SSVEP : Tester, la référence du jour (~3,6 min)
 
 Page **SSVEP** → vérifie « 1. Régler » : ton **pic alpha** (point 2.1), et des fréquences dont
-**aucune** ne tombe dessus — sinon **« Proposer « freqs » »** et prends ce que le moteur propose.
+**aucune** ne tombe dessus — sinon **« Proposer « Fréquences des cibles » »** et prends ce que le moteur propose.
 Puis **« Tester »** → « Commencer ».
 
 ⚠️ **Pour comparer aux repères du 2026-07-27, teste sur le trio du dépôt : 15 · 20 · 8,571.** C'est
@@ -708,7 +710,7 @@ tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est 
 Page **c-VEP** → **« Entraîner »** (~3,1 min, chauffe comprise) → « Commencer ».
 
 ✅ La fenêtre c-VEP s'ouvre **toute seule**, blocs entrelacés.
-✅ Le chiffre : une **justesse hors-pli** contre **son** hasard (1/6 ≈ 17 %, jamais 50 %), et sous
+✅ Le chiffre : une **justesse eCCA (validation croisée)** contre **son** hasard (1/6 ≈ 17 %, jamais 50 %), et sous
 « Détails » le test **McNemar** qui compare les deux décodeurs — pas l'écart des deux pourcentages.
 Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 ✅ **« Enregistrer le modèle »** → « ← c-VEP » → **« Tester »** (3 cycles par cible, 18 blocs,
@@ -731,7 +733,7 @@ test ne les remplace pas — il ne dit rien de « réseau contre local ».
 
 Page **P300** → **« Entraîner »** (~2,2 min, 12 manches) → « Commencer ».
 
-✅ Le chiffre (sélection en leave-one-round-out, hasard 17 %) → **« Enregistrer le modèle »**.
+✅ Le chiffre (cibles retrouvées, validation croisée par manche, hasard 17 %) → **« Enregistrer le modèle »**.
 ✅ « ← P300 » → **« Tester »** (6 manches, ~1,2 min) → « Commencer ». À chaque manche la fenêtre
 **cercle** une cible : fixe-la.
 ✅ Le verdict : « … de cibles justes … (hasard 17 %) sur 6 manches ». Vert à 80 %, orange de 60 à
@@ -775,7 +777,7 @@ publie la réponse de chaque pas ; elle doit atteindre le CORRECTEUR et jamais l
 Page **Motor Imagery** → **« Entraîner »** (~7,1 min à 14 essais/classe) → « Commencer ». Le moteur
 mène : il tire les classes, affiche les consignes, décompte. Aucune fenêtre.
 
-✅ Le chiffre est une **accuracy honnête** (validation croisée **par essai**). Repères ré-mesurés :
+✅ Le chiffre est une **justesse honnête** (validation croisée **par essai**). Repères ré-mesurés :
 **40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en gauche/droite** (p = 0,038).
 ✅ « ← Motor Imagery » → **« Tester »** (6 essais/classe, ~2,8 min) → « Commencer ». Même consignes
 que l'entraînement, **même top latéralisé** (oreille gauche = poing gauche), et le moteur décide.
