@@ -197,8 +197,9 @@ python src/console/app.py --smoke
 ```
 
 ✅ Les deux finissent par `VERDICT : OK` et sortent en **0** (`echo $?` / `echo %ERRORLEVEL%`).
-✅ `[smoke-frontiere] … 0 violation(s) de frontière`, et la ligne annonce bien **quatre** paquets
-scannés (`core`, `stimulus`, `research`, `console`).
+✅ `[smoke-frontiere] … 0 violation(s) de frontière`, précédée de **trois** lignes « existe » —
+`src/stimulus/`, `src/research/`, `src/console/` — chacune suivie d'un compte de fichiers non nul
+(`core` est le quatrième paquet, scanné en premier).
 ✅ `[smoke-exemples] … 0 faute(s)`, avec un nombre de fichiers **non nul** et au moins 5 noms de
 flux trouvés.
 
@@ -386,12 +387,10 @@ Page **SSVEP**, mode **arrêté**, dans cet ordre.
 5. Remets `12, 15, 20` → **Appliquer** → vert.
 6. Grille → tuile **Motor Imagery** (sans modèle sur ce poste) → **Démarrer**.
    ✅ Le refus apparaît **dans le bandeau**, en haut de la fenêtre — pas seulement dans la console
-   cmd.
+   cmd — et il nomme le bouton **« Entraîner »**.
 
 ❌ Régression : (6) écran strictement immobile après le clic — le défaut 1.13, corrigé le
-2026-09-10.
-⚠️ Le texte de ce refus dit de cliquer « Calibrer » : le bouton s'appelle **« Entraîner »**. Connu,
-constat ouvert 1 — pas une régression.
+2026-09-10 ; ou un refus qui dit encore « Calibrer » (corrigé par `c9701fa`).
 
 → recette 1.8, 1.9, 1.13
 
@@ -402,8 +401,9 @@ aux points 1.8 à 1.10 ; regarde-le une fois pour lui-même.
 
 ✅ Un écran « Contrôle de la liaison casque » montre **le σ de chacune des huit voies**, un verdict par
 voie, et deux boutons : **« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance.
-✅ Sur « Entraîner », les **voies clés du mode** sont nommées et surlignées. Sur un test ou sur
-« Vérifier le casque », aucune (constat ouvert 4) — le refus porte sur les huit dans tous les cas.
+✅ Sur « Entraîner » **et sur « Tester »**, les **voies clés du mode** sont nommées et surlignées
+(le test prend celles de son mode depuis `186510f`). Sur « Vérifier le casque », aucune. Le refus
+porte sur les huit dans tous les cas.
 ✅ Sur board de test, les huit passent (σ mesurés de 7 à 73 µV) et on continue.
 ✅ « ← Annuler » ramène à la page d'où l'on venait.
 

@@ -4269,7 +4269,7 @@ def _smoke_frontiere():
     if os.path.isdir(racine_stim):
         fautes_stim, vus_stim = _scanner(racine_stim, "stimulus", _FRONTIERE_STIMULUS_INTERDITS,
                                          "", _FRONTIERE_STIMULUS_MODULES_INTERDITS)
-        chk(vus_stim >= 3, f"…et il contient au moins les trois fenêtres ({vus_stim} fichiers)")
+        chk(vus_stim >= 4, f"…et il contient au moins les quatre fenêtres ({vus_stim} fichiers)")
         fautes += fautes_stim
         fichiers_vus += vus_stim
 
