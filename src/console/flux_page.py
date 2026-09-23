@@ -301,6 +301,13 @@ class FluxPage(QWidget):
 
         Le flux DÉJÀ ouvert n'est pas refermé : chercher est un geste d'inventaire, pas un
         changement de source. Rater une découverte n'est jamais définitif — on reclique.
+
+        ⚠️ Mais si RIEN n'est ouvert, le flux que la liste AFFICHE s'ouvre : celui qu'on regardait
+        avant (on revient sur la page, qui l'avait lâché en sortant), sinon le premier. Passe QA
+        du 2026-09-23 : la liste montrait un flux, le panneau restait vide tant qu'on ne cliquait
+        pas dessus — un écran qui affiche un choix qu'il n'a pas fait. Et si le flux qu'on
+        regardait a DISPARU, on ne bascule pas en douce sur un autre : la liste reste sans choix
+        et la page le dit (sinon des valeurs défileraient — celles d'un autre flux).
         """
         courant = self.choix.currentText()
         # Le geste qui répond au diagnostic l'efface : c'est exactement ce que les trois messages
@@ -312,11 +319,18 @@ class FluxPage(QWidget):
         self.choix.clear()
         for info in self._infos:
             self.choix.addItem(self._etiquette(info))
+        index = self.choix.findText(courant) if courant else (0 if self._infos else -1)
+        self.choix.setCurrentIndex(index)
         self.choix.blockSignals(False)
-        if courant:
-            index = self.choix.findText(courant)
+        if self._inlet is None:
             if index >= 0:
-                self.choix.setCurrentIndex(index)
+                self._ouvrir(self._infos[index])
+                return
+            if courant:
+                nom = courant.split("  ·  ")[0]
+                self._dire_probleme(f"« {nom} » n'est plus visible sur le réseau (mode arrêté ou "
+                                    f"« publié » décoché ?) — choisis un flux dans la liste.")
+                return
         self._dire_etat()
 
     @staticmethod
@@ -373,6 +387,11 @@ class FluxPage(QWidget):
             return False
         self._derniers = []
         self.lignes.setPlainText("")
+        # La liste montre le flux OUVERT, quel que soit le chemin (`choisir` par nom, `chercher`).
+        if info in self._infos:
+            self.choix.blockSignals(True)
+            self.choix.setCurrentIndex(self._infos.index(info))
+            self.choix.blockSignals(False)
         # Un flux OUVERT règle la question : le diagnostic précédent n'a plus rien à dire.
         self._diagnostic = ""
         self._dire_etat()

@@ -789,7 +789,10 @@ python src/console/app.py
 
 ### 1.18 — « Ce que voit ton application », et l'enregistrement
 
-⚠️ **Nouveau le 2026-09-09, jamais joué à l'écran.** Cette page répond à la seule question qu'un
+✅ **Joué à l'écran le 2026-09-23** (QA 1.11, les trois étapes), après une trace du 2026-09-21 : un
+enregistrement de 45 verdicts dans `seances/`. La passe du 23 y a trouvé un défaut : le flux affiché
+dans la liste n'était pas ouvert, et le panneau restait vide jusqu'à un clic dessus. Corrigé le jour
+même, sous assertion. Cette page répond à la seule question qu'un
 étudiant se pose une fois son décodage lancé — *est-ce que mon appli reçoit quelque chose ?* — et à
 laquelle la console ne savait pas répondre.
 

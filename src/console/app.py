@@ -4186,8 +4186,20 @@ def _smoke():
         and "EEG_API_Unicorn_decoded_ssvep" in page_flux.choix.itemText(0),
         f"la liste porte les flux découverts, le NOM COMPLET en tête "
         f"({[page_flux.choix.itemText(i) for i in range(page_flux.choix.count())]})")
-    chk(page_flux.choisir("EEG_API_Unicorn_decoded_ssvep") and len(inlets) == 1,
-        "choisir un flux PAR SON NOM ouvre un inlet dessus")
+    # 🔴 Le flux AFFICHÉ est le flux OUVERT, sans clic dans la liste. Passe QA du 2026-09-23 : la
+    # liste montrait « decoded_ssvep », le panneau restait vide tant qu'on ne le re-choisissait
+    # pas. Aucun signal `activated` n'est émis ici — c'est `chercher()` seul qui doit ouvrir.
+    chk(len(inlets) == 1 and page_flux._inlet is inlets[-1]
+        and inlets[-1].nom == "EEG_API_Unicorn_decoded_ssvep"
+        and page_flux.choix.currentIndex() == 0,
+        f"…et le flux que la liste AFFICHE est OUVERT, sans clic ({len(inlets)} inlet(s), "
+        f"{page_flux.etat.text()[:50]!r})")
+    avant = len(inlets)
+    chk(page_flux.choisir("stim_du_voisin") and len(inlets) == avant + 1
+        and page_flux.choix.currentIndex() == 1,
+        "choisir un flux PAR SON NOM ouvre un inlet dessus, et la liste suit")
+    chk(page_flux.choisir("EEG_API_Unicorn_decoded_ssvep") and page_flux.choix.currentIndex() == 0,
+        "…dans les deux sens")
     page_flux.rafraichir()
     chk("0.81" in page_flux.lignes.toPlainText(),
         f"…et ce qui en sort défile ({page_flux.lignes.toPlainText()!r})")
@@ -4265,10 +4277,24 @@ def _smoke():
         f"…et il RESTE à l'écran aux tours suivants, au lieu d'être effacé par une phrase neutre "
         f"({page_flux.etat.text()[:60]})")
     # Il tient jusqu'au GESTE qui y répond — pas au-delà : rechercher, c'est reposer la question.
+    # (Le flux affiché étant revenu, `chercher()` le rouvre : le diagnostic cède la place.)
     page_flux.chercher()
-    chk("2 flux" in page_flux.etat.text(),
+    chk("disparu" not in page_flux.etat.text() and page_flux._inlet is not None,
         f"…jusqu'à « Chercher les flux », qui reprend la question à zéro "
         f"({page_flux.etat.text()})")
+    # Et si le flux qu'on regardait a VRAIMENT disparu (mode arrêté, « publié » décoché), on
+    # revient sur la page — qui avait lâché son inlet en sortant — et on ne bascule PAS en douce
+    # sur le voisin : ses valeurs défileraient à la place de celles qu'on vient chercher.
+    page_flux._fermer()
+    ouverts = len(inlets)
+    visibles = [_FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
+    page_flux.chercher()
+    chk(page_flux._inlet is None and len(inlets) == ouverts
+        and page_flux.choix.currentIndex() == -1
+        and "decoded_ssvep" in page_flux.etat.text() and "plus visible" in page_flux.etat.text(),
+        f"un flux DISPARU se dit, sans ouvrir le voisin à sa place ({page_flux.etat.text()[:70]})")
+    visibles = [_FauxInfo("EEG_API_Unicorn_decoded_ssvep", voies=6),
+                _FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
 
     # Les DEUX autres diagnostics, mêmes rétention et falsifiabilité : un nom introuvable, et un
     # inlet qui refuse de s'ouvrir. Les trois laissent `_inlet` à None, donc les trois tombaient

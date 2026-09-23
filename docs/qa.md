@@ -63,6 +63,27 @@ deux invisibles aux autotests :
 Ce que ça dit de la méthode : ce sont des **désaccords entre deux moitiés d'un même geste**, et aucun
 test ne les voyait parce que chaque moitié était testée sur son propre décor.
 
+**2026-09-23 — bloc 0 rejoué, bloc 1 rejoué sur la console du chantier « Configurer · Entraîner ·
+Tester ».** 19 autotests verts, `data/` intact. Au bloc 1, tout passe sauf le 1.12 et le 1.13, qui
+se jouent au casque, et le verdict du 1.9, passé au point 2.2 : sur le board de test il sort MUET à
+tous les coups. Six défauts, tous corrigés le jour même (`0e712cf`, puis la page des flux), aucun
+visible aux autotests :
+
+1. Le refus « sans modèle » recopiait l'aide entière du réglage : un paragraphe dans le bandeau.
+   Il tient maintenant en une ligne (`Param.si_vide`).
+2. Le « rouge » des refus (`#e2603f`) se lisait orange, à côté de l'ambre de « moyen ».
+3. « Vérifier le casque » n'encadrait aucune voie, alors qu'il en moyenne quatre.
+4. « Décodage de « SSVEP » arrêté pour ce test… » vivait moins d'une seconde : il était dans le
+   bloc « Avant de commencer », caché dès le démarrage du test.
+5. La page des flux affichait un flux dans sa liste sans l'ouvrir : panneau vide tant qu'on ne
+   cliquait pas dessus.
+6. La feuille elle-même : trois fenêtres de stimulus au lieu de quatre, une section renommée
+   (« Avant tout »), un refus P300 impossible sur un poste qui a un modèle P300 (il se joue sur le
+   MI), un bouton mal nommé.
+
+Et une demande, pas un défaut : « Vérifier le casque » devrait juger CHAQUE électrode, pas seulement
+l'alpha (constat ouvert n° 4).
+
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
 essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
@@ -529,10 +550,14 @@ test dit « CALIBRATION » ; un test qui écrit dans `data/`.
 Grille → tuile **SSVEP** → **« Démarrer »** ; attends ~23 s (chauffe + repos). Puis, en bas de la
 grille, **« Ce que voit ton application »**.
 
-✅ Les flux LSL **du réseau** apparaissent, avec leurs voies et des valeurs qui défilent.
+✅ Les flux LSL **du réseau** apparaissent, avec leurs voies et des valeurs qui défilent — **celles
+du flux affiché dans la liste, tout de suite, sans cliquer dessus**. ❌ Régression : un flux affiché
+dans la liste et un panneau vide tant qu'on ne le re-choisit pas (défaut du 2026-09-23).
 ✅ ⚠️ Le panneau lit **par LSL, comme un client** — pas l'état interne du moteur. Décoche « publié »
 sur la tuile SSVEP puis relance « Chercher les flux » : `decoded_ssvep` doit **disparaître**, et
-l'absence se **dire**. S'il défile encore, il regarde le mauvais endroit.
+l'absence se **dire**. S'il défile encore, il regarde le mauvais endroit. En revenant sur la page
+après l'avoir décoché, elle dit « « …decoded_ssvep » n'est plus visible sur le réseau » et **n'ouvre
+pas un autre flux à sa place**.
 ✅ **« Enregistrer les verdicts »** → un fichier `moteur_<flux>_AAAAMMJJ-HHMMSS.jsonl` dans
 `seances/`, **une ligne par décision publiée**, et l'écran dit **où et combien**. Le même bouton
 l'arrête.
