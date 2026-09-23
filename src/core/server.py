@@ -88,6 +88,7 @@ from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR, 
                     SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import (STREAM_PREFIX, ClockBridge, DecodedNeuroPublisher,  # noqa: E402
                     QualityPublisher, StatusPublisher, default_instance_id, mi_channel_labels,
                     stream_name, verdict_from_sigma)
@@ -113,36 +114,18 @@ _MARQUEUR_ERREUR_PERIODE_S = 10.0
 _SEUILS_MARQUEURS = (1, 10, 100, 1000, 10000)
 
 # ⚠️ LE VOL DE MARQUEURS. `markers_murs(mode_id)` ne tient qu'UN curseur par `mode_id`, et l'appel
-# le fait AVANCER. Un mode à marqueurs et sa calibration se réclament tous les deux du MÊME
-# `spec.id` : lancés ensemble, chacun n'obtient qu'une partie des marqueurs, l'autre partie
-# disparaît pour de bon. La phrase est écrite ICI, une fois, et sert aux deux sens du refus —
-# la même panne expliquée de deux façons finirait par n'en décrire qu'une.
-_VOL_DE_MARQUEURS = (
-    "un mode et sa calibration lisent la MÊME file de marqueurs sous le MÊME identifiant, et le "
-    "moteur n'y tient qu'UN curseur : chaque marqueur ne serait vu que par l'un des deux, au "
-    "hasard du tour de boucle. Aucune exception, aucun compteur — la calibration s'entraînerait "
-    "sur des époques trouées et le décodage raterait des flashs, les deux rendant des chiffres "
-    "plausibles et faux")
-
-# La même panne, quand le second lecteur est le TEST du mode et non sa calibration. Une phrase à
-# part plutôt qu'un « calibration ou test » : le refus s'affiche tel quel à l'écran, et un
-# étudiant qui vient de cliquer « Tester » ne doit pas lire qu'il a lancé une calibration.
-_VOL_DE_MARQUEURS_TEST = (
-    "un mode et son test lisent la MÊME file de marqueurs sous le MÊME identifiant, et le moteur "
-    "n'y tient qu'UN curseur : chaque marqueur ne serait vu que par l'un des deux, au hasard du "
-    "tour de boucle. Aucune exception, aucun compteur — le test noterait des essais troués, et "
-    "son score serait plausible et faux")
-
-# ⚠️ UN SEUL PROTOCOLE MINUTÉ À LA FOIS — calibrations et mesures confondues. Même forme que la
-# phrase ci-dessus, autre cause : ici rien n'est volé, c'est la PERSONNE qui ne peut pas obéir à
-# deux consignes. Écrite ICI, une fois, et servie aux deux sens du refus — la même panne expliquée
-# de deux façons finirait par n'en décrire qu'une.
-_UNE_SEULE_ACTIVITE = (
-    "il n'y a qu'UN casque et qu'une personne. Deux protocoles minutés qui tourneraient ensemble "
-    "prélèveraient leurs fenêtres dans le MÊME tampon glissant, chacun à ses propres instants, "
-    "pendant qu'un seul écran affiche une seule consigne : celui qui demande « ferme les yeux » et "
-    "celui qui demande « imagine ton poing » obtiendraient exactement le même signal. Aucune "
-    "exception, aucun compteur — les deux rendraient des chiffres plausibles et faux")
+# le fait AVANCER. Un mode à marqueurs et sa calibration (ou son TEST) se réclament tous les deux du
+# MÊME `spec.id` : lancés ensemble, chacun n'obtient qu'une partie des marqueurs, l'autre partie
+# disparaît pour de bon — aucune exception, aucun compteur, deux chiffres plausibles et faux.
+#
+# ⚠️ UN SEUL PROTOCOLE MINUTÉ À LA FOIS — calibrations et mesures confondues. Autre cause : ici
+# rien n'est volé, c'est la PERSONNE qui ne peut pas obéir à deux consignes. Deux protocoles
+# prélèveraient leurs fenêtres dans le MÊME tampon glissant pendant qu'un seul écran affiche une
+# seule consigne : « ferme les yeux » et « imagine ton poing » obtiendraient le même signal.
+#
+# Les refus qui l'expliquent à l'écran sont lus dans `core/langues/<langue>/moteur.json`
+# (`moteur.refus.*`) : UNE phrase par sens de chaque refus. Celui qui vient de cliquer « Tester »
+# lit « son test », jamais « sa calibration ».
 
 
 def _lit_les_marqueurs(rt):
@@ -301,7 +284,8 @@ class _Enregistrement:
             self._fichier.write(json.dumps(objet, ensure_ascii=False, default=float) + "\n")
             self._fichier.flush()
         except Exception as e:  # noqa: BLE001 - cf. docstring : jamais dans la boucle
-            self.probleme = f"écriture impossible ({type(e).__name__} : {e})"
+            self.probleme = tr("moteur.enregistrement.ecriture_impossible",
+                               erreur=f"{type(e).__name__} : {e}")
             self.actif = False
             print(f"[server] ⚠️ enregistrement INTERROMPU : {self.probleme} — "
                   f"{self.lignes} verdict(s) sauvés dans {self.chemin}")
@@ -368,9 +352,9 @@ class EngineServer:
         # modèle (le MI) rendrait sa propre calibration inatteignable.
         self.calibration = None
         # AU PLUS UNE mesure, et jamais en même temps qu'une calibration : c'est le même casque et
-        # la même personne (cf. `_UNE_SEULE_ACTIVITE`). Elle vit dans son propre emplacement, à
-        # côté de `self.calibration` et pour la même raison — un protocole minuté n'est pas un
-        # mode : il ne publie aucun flux, il rend un VERDICT qu'on lit à l'écran.
+        # la même personne (cf. « UN SEUL PROTOCOLE MINUTÉ », en tête). Elle vit dans son propre
+        # emplacement, à côté de `self.calibration` et pour la même raison — un protocole minuté
+        # n'est pas un mode : il ne publie aucun flux, il rend un VERDICT qu'on lit à l'écran.
         #
         # ⚠️ Ce qui la sépare vraiment d'une calibration : **elle n'écrit rien**. Pas de dossier
         # candidat, pas de `save_mesure`, aucun fichier — donc rien à nettoyer dans `close()`.
@@ -500,8 +484,8 @@ class EngineServer:
             if spec.id not in modes:
                 continue
             if spec.runtime_cls is None:
-                raise ValueError(f"« {spec.label} » ne tourne pas dans le moteur : "
-                                 f"{spec.unavailable}")
+                raise ValueError(tr("moteur.refus.pas_dans_le_moteur", mode=spec.label,
+                                    raison=spec.unavailable))
             values, reason = contract.validate(spec, params.get(spec.id, {}))
             if values is None:
                 raise ValueError(reason)
@@ -509,7 +493,7 @@ class EngineServer:
         inconnus = sorted(set(modes) - {s.id for s, _ in prepared})
         if inconnus:
             connus = ", ".join(s.id for s in registry.runnable())
-            raise ValueError(f"mode inconnu : {', '.join(inconnus)} (disponibles : {connus})")
+            raise ValueError(tr("moteur.refus.mode_inconnu", id=", ".join(inconnus), liste=connus))
         return prepared
 
     def stop(self):
@@ -536,8 +520,7 @@ class EngineServer:
             return None
         if not _calibration_lit_les_marqueurs(spec.calibration):
             return None
-        return (f"« {spec.label} » DÉCODE en ce moment : {_VOL_DE_MARQUEURS}. Arrête le mode "
-                f"« {spec.id} » avant de lancer sa calibration.")
+        return tr("moteur.refus.calibration_pendant_mode", mode=spec.label)
 
     def _refus_mode_pendant_calibration(self, spec, calibration):
         """Refuser de démarrer `spec` parce que SA calibration tourne ? La raison, ou None.
@@ -552,8 +535,7 @@ class EngineServer:
             return None
         if not isinstance(calibration, MarkerCalibrationRuntime):
             return None
-        return (f"la calibration de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS}. Attends "
-                f"qu'elle finisse, ou abandonne-la, avant de démarrer « {spec.id} ».")
+        return tr("moteur.refus.mode_pendant_calibration", mode=spec.label)
 
     # --- le même vol, entre un mode et son TEST ------------------------------------------------
     # Signalé par la revue de la tâche 2 du chantier « Configurer · Entraîner · Tester »
@@ -578,8 +560,7 @@ class EngineServer:
         mode = registry.get(cible)
         if mode is None or mode.marker_epoch_s <= 0:
             return None
-        return (f"« {mode.label} » DÉCODE en ce moment : {_VOL_DE_MARQUEURS_TEST}. Arrête le "
-                f"mode « {cible} » avant de le tester.")
+        return tr("moteur.refus.mesure_pendant_mode", mode=mode.label)
 
     def _refus_mode_pendant_mesure(self, spec, mesure):
         """Refuser de démarrer `spec` parce qu'une mesure lit SES marqueurs ? La raison, ou None.
@@ -591,8 +572,7 @@ class EngineServer:
             return None
         if getattr(mesure, "marker_mode_id", "") != spec.id:
             return None
-        return (f"le test de « {spec.label} » est EN COURS : {_VOL_DE_MARQUEURS_TEST}. Attends qu'il "
-                f"finisse, ou abandonne-le, avant de démarrer « {spec.id} ».")
+        return tr("moteur.refus.mode_pendant_mesure", mode=spec.label)
 
     # --- le refus d'une SECONDE ACTIVITÉ, dans ses DEUX sens -------------------
     # Même discipline que les deux méthodes ci-dessus : une RAISON ou None, sur une copie prise
@@ -613,8 +593,7 @@ class EngineServer:
         """
         if calibration is None or calibration.terminee:
             return None
-        return (f"une CALIBRATION est en cours ({calibration.spec.label}) : {_UNE_SEULE_ACTIVITE}. "
-                f"Attends qu'elle finisse, ou abandonne-la.")
+        return tr("moteur.refus.calibration_en_cours", mode=calibration.spec.label)
 
     def _refus_pour_mesure_en_cours(self, mesure):
         """Refuser une nouvelle activité parce qu'une MESURE tourne ? La raison, ou None.
@@ -623,8 +602,7 @@ class EngineServer:
         """
         if mesure is None or mesure.terminee:
             return None
-        return (f"une MESURE est en cours ({mesure.spec.label}) : {_UNE_SEULE_ACTIVITE}. "
-                f"Attends qu'elle finisse, ou abandonne-la.")
+        return tr("moteur.refus.mesure_en_cours", mesure=mesure.spec.label)
 
     def _start(self, ids, values, now):
         """Démarre des modes. Ceux lancés ENSEMBLE partagent une seule phase de repos."""
@@ -1161,13 +1139,12 @@ class EngineServer:
         for spec in registry.MODES:
             if spec.stream and spec.stream == suffixe:
                 if spec.id not in actifs:
-                    return None, (f"« {spec.label} » n'est pas démarré : il n'y a rien à "
-                                  f"enregistrer. Démarre-le depuis la grille, laisse-le décoder, "
-                                  f"puis reviens — un fichier vide se lit après coup comme une "
-                                  f"séance ratée, pas comme un mode qu'on a oublié de lancer.")
+                    # Refusé plutôt qu'un fichier vide : il se lirait après coup comme une séance
+                    # ratée, pas comme un mode qu'on a oublié de lancer.
+                    return None, tr("moteur.refus.enregistrement_mode_arrete", mode=spec.label)
                 return spec, ""
-        return None, (f"flux inconnu : {nom} (publiables : "
-                      f"{', '.join(stream_name(s) for s in publiables)})")
+        return None, tr("moteur.refus.flux_inconnu", flux=nom,
+                        liste=", ".join(stream_name(s) for s in publiables))
 
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
@@ -1180,8 +1157,8 @@ class EngineServer:
         """
         if command not in self.COMMANDS:
             return {"accepted": False,
-                    "reason": f"commande inconnue : {command} "
-                              f"(connues : {', '.join(self.COMMANDS)})"}
+                    "reason": tr("moteur.refus.commande_inconnue", commande=command,
+                                 liste=", ".join(self.COMMANDS))}
 
         if command == "stop":
             self._commands.put(("stop", {}))
@@ -1190,7 +1167,7 @@ class EngineServer:
         if command == "start_mode":
             ids = params.get("ids") or ([params["id"]] if params.get("id") else [])
             if not ids:
-                return {"accepted": False, "reason": "aucun mode demandé (id ou ids)"}
+                return {"accepted": False, "reason": tr("moteur.refus.aucun_mode_demande")}
             specs, reason = self._resolve(ids, doit_tourner=False)
             if specs is None:
                 return {"accepted": False, "reason": reason}
@@ -1233,11 +1210,12 @@ class EngineServer:
             if spec is None:
                 connus = ", ".join(s.id for s in registry.runnable())
                 return {"accepted": False,
-                        "reason": f"mode inconnu : {params.get('id')} (disponibles : {connus})"}
+                        "reason": tr("moteur.refus.mode_inconnu", id=params.get("id"),
+                                     liste=connus)}
             if spec.runtime_cls is None:
                 return {"accepted": False,
-                        "reason": f"« {spec.label} » ne tourne pas dans le moteur : "
-                                  f"{spec.unavailable}"}
+                        "reason": tr("moteur.refus.pas_dans_le_moteur", mode=spec.label,
+                                     raison=spec.unavailable)}
             # Une seule lecture de `self.active` : `submit` tourne sur le fil de l'APPELANT, la
             # boucle peut arrêter ce mode entre deux lignes, et `submit` promet de ne jamais lever.
             # Un mode arrêté entre-temps ne produit plus d'erreur — le réglage devient différé,
@@ -1269,14 +1247,15 @@ class EngineServer:
             if spec is None:
                 connus = ", ".join(s.id for s in registry.runnable())
                 return {"accepted": False,
-                        "reason": f"mode inconnu : {params.get('id')} (disponibles : {connus})"}
+                        "reason": tr("moteur.refus.mode_inconnu", id=params.get("id"),
+                                     liste=connus)}
             cle = params.get("key")
             source = next((p for p in spec.params if p.key == cle and p.proposes), None)
             if source is None:
                 proposeurs = [p.key for p in spec.params if p.proposes]
                 return {"accepted": False,
-                        "reason": f"« {cle} » ne propose aucun réglage pour « {spec.label} » "
-                                  f"(qui propose : {', '.join(proposeurs) or 'aucun'})"}
+                        "reason": tr("moteur.refus.ne_propose_rien", reglage=cle, mode=spec.label,
+                                     liste=", ".join(proposeurs) or tr("moteur.refus.aucun"))}
             runtime = self.active.get(spec.id)
             # ⚠️ Le MAGASIN, pas les défauts du contrat, quand le mode est arrêté. Sinon les deux
             # moitiés du même geste se contredisent une seconde fois : on applique son pic alpha à
@@ -1317,21 +1296,19 @@ class EngineServer:
             if spec is None:
                 connus = ", ".join(s.id for s in registry.MODES if s.calibration is not None)
                 return {"accepted": False,
-                        "reason": f"mode inconnu : {params.get('id')} "
-                                  f"(se calibrent : {connus})"}
+                        "reason": tr("moteur.refus.mode_inconnu_calibration", id=params.get("id"),
+                                     liste=connus)}
             calib = spec.calibration
             if calib is None:
                 return {"accepted": False,
-                        "reason": f"« {spec.label} » n'a pas de calibration — il n'apprend rien"}
+                        "reason": tr("moteur.refus.sans_calibration", mode=spec.label)}
             if calib.runtime_cls is None:
                 # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré. Ce refus
                 # existait pour le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans
                 # l'appli pygame ; il ne reste, depuis le 2026-09-07, que le temps d'un chantier
                 # en cours. Dire « pas encore livrée » plutôt que d'inventer une cause.
                 return {"accepted": False,
-                        "reason": f"la calibration de « {spec.label} » est déclarée mais son "
-                                  f"runtime n'est pas livré : le moteur ne sait pas encore la "
-                                  f"jouer"}
+                        "reason": tr("moteur.refus.calibration_pas_livree", mode=spec.label)}
             # ⚠️ LE VOL DE MARQUEURS, premier sens. `dict(self.active)` : une copie atomique, prise
             # une seule fois — `submit` tourne sur le fil de l'appelant pendant que la boucle
             # démarre et arrête des modes sur le sien.
@@ -1349,8 +1326,7 @@ class EngineServer:
             en_cours = self.calibration
             if en_cours is not None and not en_cours.terminee:
                 return {"accepted": False,
-                        "reason": f"une calibration est déjà en cours ({en_cours.spec.label}) — "
-                                  f"abandonne-la avant d'en lancer une autre"}
+                        "reason": tr("moteur.refus.calibration_deja", mode=en_cours.spec.label)}
             # ⚠️ Et le SECOND sens de la même porte, celui qu'on oublie : une MESURE tourne. Placé
             # ici, AVANT `contract.validate`, pour la même raison que le refus du vol de marqueurs
             # dix lignes plus haut — c'est une propriété de l'ÉTAT du moteur, pas des réglages
@@ -1368,7 +1344,7 @@ class EngineServer:
         if command == "cancel_calibration":
             en_cours = self.calibration   # même motif que start_calibration juste au-dessus
             if en_cours is None or en_cours.terminee:
-                return {"accepted": False, "reason": "aucune calibration en cours"}
+                return {"accepted": False, "reason": tr("moteur.refus.aucune_calibration")}
             self._commands.put(("cancel_calibration", {}))
             return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
@@ -1378,13 +1354,14 @@ class EngineServer:
             # en face de `save_calibration` : il n'y a aucun fichier à retenir ou à jeter.
             spec = registry.get_mesure(params.get("id"))
             if spec is None:
-                connus = ", ".join(s.id for s in registry.MESURES) or "aucune pour l'instant"
+                connus = (", ".join(s.id for s in registry.MESURES)
+                          or tr("moteur.refus.aucune_mesure_connue"))
                 return {"accepted": False,
-                        "reason": f"mesure inconnue : {params.get('id')} (connues : {connus})"}
+                        "reason": tr("moteur.refus.mesure_inconnue", id=params.get("id"),
+                                     liste=connus)}
             if spec.runtime_cls is None:
                 return {"accepted": False,
-                        "reason": f"la mesure « {spec.label} » est déclarée mais son runtime "
-                                  f"n'est pas livré : le moteur ne sait pas encore la jouer"}
+                        "reason": tr("moteur.refus.mesure_pas_livree", mesure=spec.label)}
             # ⚠️ LES DEUX SENS DU REFUS, sur des copies prises UNE fois chacune (la boucle peut
             # les remettre à `None` entre deux lectures, et `submit` promet en toutes lettres de
             # ne jamais lever). Le premier refuse une mesure pendant une calibration ; le second,
@@ -1403,7 +1380,7 @@ class EngineServer:
         if command == "cancel_mesure":
             en_cours = self.mesure   # même motif de copie que `cancel_calibration` plus haut
             if en_cours is None or en_cours.terminee:
-                return {"accepted": False, "reason": "aucune mesure en cours"}
+                return {"accepted": False, "reason": tr("moteur.refus.aucune_mesure")}
             self._commands.put(("cancel_mesure", {}))
             return {"accepted": True, "command": command, "id": en_cours.spec.id}
 
@@ -1417,10 +1394,9 @@ class EngineServer:
             # Une seule lecture, comme partout ici : la boucle peut le remettre à None entre deux.
             en_cours = self.enregistrement
             if en_cours is not None and en_cours.actif:
+                # Deux fichiers écrits en parallèle sur la même séance ne se distingueraient plus.
                 return {"accepted": False,
-                        "reason": f"un enregistrement est déjà en cours ({en_cours.chemin}) — "
-                                  f"arrête-le avant d'en ouvrir un autre. Deux fichiers écrits en "
-                                  f"parallèle sur la même séance ne se distinguent plus après coup."}
+                        "reason": tr("moteur.refus.enregistrement_deja", chemin=en_cours.chemin)}
             # ⚠️ **Aucun `chemin` dans cet accusé, et c'est délibéré.** Le nom du fichier est
             # décidé par la BOUCLE, et l'écran le lit dans `snapshot()["enregistrement"]`. Le
             # calculer ici pour le rendre tout de suite serait plus commode et FAUX : deux clics
@@ -1436,8 +1412,7 @@ class EngineServer:
         if command == "stop_enregistrement":
             en_cours = self.enregistrement
             if en_cours is None or not en_cours.actif:
-                return {"accepted": False,
-                        "reason": "aucun enregistrement en cours — il n'y a rien à arrêter."}
+                return {"accepted": False, "reason": tr("moteur.refus.aucun_enregistrement")}
             self._commands.put(("stop_enregistrement", {}))
             # Le chemin et le compte sont rendus TOUT DE SUITE, alors que la fermeture, elle,
             # attend la boucle : c'est ce que l'écran a besoin d'afficher, et `submit` ne promet
@@ -1451,11 +1426,12 @@ class EngineServer:
             # promet en toutes lettres de ne jamais lever.
             candidat = self.candidat
             if not candidat:
-                quoi = "enregistrer" if command == "save_calibration" else "jeter"
+                # Un candidat n'existe qu'entre la fin d'un entraînement et le clic qui le
+                # retient ou le jette.
                 return {"accepted": False,
-                        "reason": f"rien à {quoi} : aucune calibration n'attend de décision. Un "
-                                  f"candidat n'existe qu'entre la fin d'un entraînement et le "
-                                  f"clic qui le retient ou le jette."}
+                        "reason": (tr("moteur.refus.rien_a_enregistrer")
+                                   if command == "save_calibration"
+                                   else tr("moteur.refus.rien_a_jeter"))}
             self._commands.put((command, {}))
             return {"accepted": True, "command": command,
                     "modele": candidat.get("modele")}
@@ -1472,7 +1448,7 @@ class EngineServer:
         elif command == "recalibrate":
             if spec.rest is None:
                 return {"accepted": False,
-                        "reason": f"« {spec.label} » n'a pas de repos à refaire"}
+                        "reason": tr("moteur.refus.sans_repos", mode=spec.label)}
             self._commands.put(("recalibrate", {"id": spec.id}))
         return {"accepted": True, "command": command, "id": spec.id}
 
@@ -1491,16 +1467,16 @@ class EngineServer:
             spec = registry.get(mode_id)
             if spec is None:
                 connus = ", ".join(s.id for s in registry.runnable())
-                return None, f"mode inconnu : {mode_id} (disponibles : {connus})"
+                return None, tr("moteur.refus.mode_inconnu", id=mode_id, liste=connus)
             if spec.runtime_cls is None:
                 # C'est exactement ce que la tuile doit dire à l'étudiant : POURQUOI ça ne
                 # démarre pas, jamais un échec silencieux.
-                return None, f"« {spec.label} » ne tourne pas dans le moteur : {spec.unavailable}"
+                return None, tr("moteur.refus.pas_dans_le_moteur", mode=spec.label,
+                                raison=spec.unavailable)
             if not doit_tourner and spec.id in self.active:
-                return None, (f"« {spec.label} » est déjà démarré — utilise « refaire le repos » "
-                              f"pour le relancer")
+                return None, tr("moteur.refus.deja_demarre", mode=spec.label)
             if doit_tourner and spec.id not in self.active:
-                return None, f"« {spec.label} » n'est pas démarré"
+                return None, tr("moteur.refus.non_demarre", mode=spec.label)
         return [s for s in registry.MODES if s.id in ids], None
 
     def _one(self, mode_id):
@@ -1508,7 +1484,7 @@ class EngineServer:
         if specs is None:
             return None, reason
         if not specs:
-            return None, "aucun mode désigné (id manquant)"
+            return None, tr("moteur.refus.aucun_mode_designe")
         return specs[0], None
 
     def _apply(self, command, params):
@@ -3787,9 +3763,9 @@ def _smoke_vol_marqueurs():
         srv.active["p300"] = _ModeFactice()
         r = srv.submit("start_calibration", id="p300")
         raison = r.get("reason") or ""
-        chk(not r.get("accepted") and "DÉCODE" in raison,
+        chk(not r.get("accepted") and "décode en ce moment" in raison,
             f"sens 1 — calibrer un mode qui décode est REFUSÉ ({raison[:60]}…)")
-        chk("p300" in raison and "MÊME file de marqueurs" in raison,
+        chk("« P300 »" in raison and "même file de marqueurs" in raison,
             f"…en NOMMANT le mode à arrêter et en disant la panne ({raison})")
 
         # Le négatif qui prouve que le refus est ciblé : un AUTRE mode, dont la calibration ne
@@ -3827,9 +3803,9 @@ def _smoke_vol_marqueurs():
         finally:
             p300_models.modeles_disponibles = vrai_dispo
         raison = r.get("reason") or ""
-        chk(not r.get("accepted") and "EN COURS" in raison,
+        chk(not r.get("accepted") and "l'entraînement de « P300 » est en cours" in raison,
             f"sens 2 — démarrer un mode dont la calibration tourne est REFUSÉ ({raison[:60]}…)")
-        chk("MÊME file de marqueurs" in raison and "choix disponible" not in raison,
+        chk("même file de marqueurs" in raison and "choix disponible" not in raison,
             f"…pour LA bonne raison, et sans dépendre d'un modèle présent dans data/ ({raison})")
 
         # Le négatif, dans ce sens aussi : un AUTRE mode démarre pendant la calibration P300.
@@ -3855,7 +3831,7 @@ def _smoke_vol_marqueurs():
         # ci-dessus et interdirait le mode P300 pour le reste de la séance.
         srv.calibration.cancel()
         r = srv.submit("start_mode", id="p300")
-        chk((r.get("reason") or "").find("MÊME file de marqueurs") < 0,
+        chk((r.get("reason") or "").find("même file de marqueurs") < 0,
             f"une calibration TERMINÉE ne bloque plus rien — le refus porte sur « en cours », pas "
             f"sur « existe » ({r})")
 
@@ -3902,7 +3878,7 @@ def _smoke_vol_marqueurs():
             # Sens 1 : le mode DÉCODE, son test est refusé — à la soumission et dans la boucle.
             srv.active["p300"] = _ModeFactice()
             r = srv.submit("start_mesure", id="test_p300_factice")
-            chk(not r.get("accepted") and "DÉCODE" in (r.get("reason") or "")
+            chk(not r.get("accepted") and "décode en ce moment" in (r.get("reason") or "")
                 and "tester" in (r.get("reason") or "")
                 and "calibration" not in (r.get("reason") or ""),
                 f"sens 1 — tester un mode qui DÉCODE est refusé, en disant quoi arrêter "
@@ -3916,7 +3892,8 @@ def _smoke_vol_marqueurs():
             # Sens 2 : le test TOURNE, le mode est refusé — à la soumission et dans la boucle.
             srv.mesure = _MesureEnCours()
             r = srv.submit("start_mode", id="p300")
-            chk(not r.get("accepted") and "test de « P300 » est EN COURS" in (r.get("reason") or ""),
+            chk(not r.get("accepted")
+                and "test de « P300 » est en cours" in (r.get("reason") or ""),
                 f"sens 2 — démarrer un mode pendant que son TEST lit ses marqueurs est refusé "
                 f"({(r.get('reason') or '')[:70]}…)")
             srv._start(["p300"], {"p300": {}}, time.perf_counter())
@@ -3927,11 +3904,11 @@ def _smoke_vol_marqueurs():
             # cours, d'un mode qui lit des marqueurs » — pas sur « une mesure existe ».
             _MesureEnCours.terminee = True
             r = srv.submit("start_mode", id="p300")
-            chk("EN COURS" not in (r.get("reason") or ""),
+            chk("est en cours" not in (r.get("reason") or ""),
                 f"un test TERMINÉ ne bloque plus le mode ({(r.get('reason') or 'accepté')[:60]})")
             _MesureEnCours.terminee, _MesureEnCours.marker_mode_id = False, "errp"
             r = srv.submit("start_mode", id="p300")
-            chk("EN COURS" not in (r.get("reason") or ""),
+            chk("est en cours" not in (r.get("reason") or ""),
                 "…et le test d'un AUTRE mode ne bloque pas celui-ci : chacun a sa propre file")
             srv.mesure = None
             srv.active["ssvep"] = _ModeFactice()

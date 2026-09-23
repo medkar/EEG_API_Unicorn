@@ -34,6 +34,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 # L'ordre compte : c'est celui des tables `VERDICTS`, de la meilleure ligne à la pire. La console
 # importe ce tuple pour vérifier qu'elle sait peindre chacun des niveaux — elle n'en invente aucun.
@@ -43,8 +44,12 @@ NIVEAUX = ("bon", "moyen", "faible")
 # parce qu'elle change la décision suivante : le chiffre d'une calibration vient d'une validation
 # croisée sur les essais d'ENTRAÎNEMENT, et le moteur, en décodage, ajoute des seuils et un vote
 # qui le font se taire souvent. Sur le c-VEP : 59,5 % hors ligne, 46 % d'émission en direct.
-RESERVE_HORS_LIGNE = ("Chiffre calculé sur les essais d'entraînement : c'est « Tester » qui dira "
-                      "ce que le mode fait vraiment.")
+RESERVE_HORS_LIGNE = tr("mesure.affichage.reserve_hors_ligne")
+
+# Le mot de « rien n'a pu être mesuré ». Une CONSTANTE, parce qu'il sert aussi de valeur logique :
+# `verifier` l'exempte de la règle « le mot ouvre le verdict ». Comparer à une chaîne écrite ici
+# cesserait de marcher dans une autre langue ; comparer à la constante, jamais.
+MOT_NON_MESURE = tr("mesure.mot.non_mesure")
 
 
 # Le seuil d'un « au-dessus du hasard » : 5 %, UNILATÉRAL. Le seuil usuel, fixé AVANT de regarder
@@ -184,7 +189,7 @@ def non_mesure(raison, conseil):
     quoi calculer ». Les deux ne se corrigent pas pareil — l'un demande de resaliner, l'autre plus
     d'essais —, et les annoncer d'un même mot enverrait resaliner des électrodes qui vont très bien.
     """
-    return lignes("faible", "NON MESURÉ", raison, conseil)
+    return lignes("faible", MOT_NON_MESURE, raison, conseil)
 
 
 def verifier(resultat):
@@ -211,7 +216,7 @@ def verifier(resultat):
             and "repère" not in resultat["chiffres"]:
         defauts.append(f"un pourcentage SEUL, sans son point de comparaison : "
                        f"{resultat['chiffres']!r}")
-    if resultat["mot"] != "NON MESURÉ" and \
+    if resultat["mot"] != MOT_NON_MESURE and \
             not str(resultat["verdict"]).lower().startswith(resultat["mot"].lower()):
         defauts.append(f"le mot {resultat['mot']!r} n'ouvre pas le verdict "
                        f"{str(resultat['verdict'])[:50]!r} — deux calculs ont divergé")

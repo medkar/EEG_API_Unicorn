@@ -51,8 +51,9 @@ from core.config import (CH_NAMES, CVEP_CAL_BLOCKS, CVEP_CAL_SETTLE_CYCLES,  # n
                          CVEP_CORR_MIN, CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
                          CVEP_VOTE_LEN, FILTER_MARGIN_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets  # noqa: E402
-from core.modes.affichage import (au_dessus_du_hasard, lignes, non_mesure,  # noqa: E402
-                                  p_hasard, pct, texte_p, verifier)
+from core.i18n import tr  # noqa: E402
+from core.modes.affichage import (MOT_NON_MESURE, au_dessus_du_hasard, lignes,  # noqa: E402
+                                  non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.cvep import SPEC as SPEC_CVEP  # noqa: E402
 from core.modes.cvep import CVEPRuntime  # noqa: E402
@@ -83,8 +84,12 @@ ESSAIS_MIN = 6      # le plancher de `ssvep_mesure` et `mi_test`
 # la cause d'un -1 sans relire le texte du motif.
 _CAUSES =("decodages", "sans_reference", "reference_perimee", "sous_les_seuils", "vote_non_conclu")
 _CAUSES_HORLOGE = ("sans_reference", "reference_perimee")
-_CAUSES_FR = {"sans_reference": "horloge absente", "reference_perimee": "horloge périmée",
-              "sous_les_seuils": "sous les seuils", "vote_non_conclu": "vote non conclu"}
+# Les causes d'un bloc muet, telles qu'on les LIT dans le verdict. Les clés sont des identifiants.
+_CAUSES_FR = {"sans_reference": tr("mesure.cvep_test.cause.sans_reference"),
+              "reference_perimee": tr("mesure.cvep_test.cause.reference_perimee"),
+              "sous_les_seuils": tr("mesure.cvep_test.cause.sous_les_seuils"),
+              "vote_non_conclu": tr("mesure.cvep_test.cause.vote_non_conclu"),
+              "inconnue": tr("mesure.cvep_test.cause.inconnue")}
 
 _PLAN, _CODE = build_targets()
 _PERIODE_S = CVEPRuntime.period_s(None)     # 0,2 s : la cadence du mode, LUE (méthode non liée)
@@ -160,7 +165,7 @@ class MesureCVEP(MesureMarqueurs):
 
     marker_mode_id = "cvep"
     runtime_cls_du_mode = CVEPRuntime
-    unite = "cycle"          # `essai` compte les cycles ENREGISTRÉS — l'unité de `--cycles`
+    unite = tr("mesure.unite.cycle")   # `essai` compte les cycles ENREGISTRÉS : l'unité de `--cycles`
     # `trials` compte les cycles ENREGISTRÉS : l'unité est le `cycle` reçu dans un bloc ouvert.
     evenement_verite, champ_verite, evenement_unite = "cue", "target", "cycle"
     # Le tampon du moteur, pour le PIRE réglage : plus long vote, fenêtre à 60 Hz, marge de filtre.
@@ -173,8 +178,7 @@ class MesureCVEP(MesureMarqueurs):
         # Tout ceci AVANT le socle, qui lit `pre_s` pour vérifier le tampon.
         self._acq = getattr(engine, "acq", None)
         if self._acq is None:
-            raise ValueError("aucune acquisition : le test ne découperait pas les fenêtres comme "
-                             "le mode, donc il ne mesurerait pas la règle du produit")
+            raise ValueError(tr("mesure.commun.sans_acquisition"))
         # Un modèle effacé depuis la validation lève ICI, avec la raison de `cvep_models.charger`.
         self._decideur = _DecideurCVEP(SPEC_CVEP, reglages_du_decideur(SPEC_CVEP, params),
                                        _Rejeu(self._acq))
@@ -210,7 +214,7 @@ class MesureCVEP(MesureMarqueurs):
 
     def rappel(self):
         if self.phase == "essais":
-            return "fixe le disque CERCLÉ sans bouger les yeux — le moteur décide à la fin de chaque bloc"
+            return tr("mesure.cvep_test.rappel")
         return ""
 
     def _verite_lisible(self, valeur):
@@ -306,6 +310,19 @@ class MesureCVEP(MesureMarqueurs):
                      reglages=reglages)
 
 
+def _texte_perte(cle, n):
+    """Une perte de blocs, dite dans le verdict : « 2 bloc(s) joué(s) sans époque (…) »."""
+    if cle == "perdus":
+        return tr("mesure.cvep_test.perte.perdus", n=n)
+    if cle == "sans_fin":
+        return tr("mesure.cvep_test.perte.sans_fin", n=n)
+    if cle == "sans_verite":
+        return tr("mesure.cvep_test.perte.sans_verite", n=n)
+    if cle == "en_chauffe":
+        return tr("mesure.cvep_test.perte.en_chauffe", n=n)
+    return f"{n} {cle}"
+
+
 def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, reglages=None):
     """Le score. `decisions` : `[(cible cerclée, cible émise | None, cause | None), ...]`, **UNE
     par bloc**.
@@ -321,8 +338,7 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
     hasard = _hasard_de(n_cibles)
     n_essais = len(decisions)
     if n_essais < ESSAIS_MIN:
-        raise ValueError(f"{n_essais} bloc(s) retenu(s) : il n'y a pas de quoi conclure — "
-                         f"l'intervalle serait plus large que l'échelle.")
+        raise ValueError(tr("mesure.cvep_test.erreur.trop_peu", n=n_essais))
     emis = [(c, d) for c, d, _k in decisions if d is not None]
     n_emis = len(emis)
     n_justes = sum(1 for c, d in emis if d == c)
@@ -340,99 +356,79 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
     court = (essais or 0) < max(ESSAIS)
 
     if horloge_seule:
-        niveau, mot = "faible", "NON MESURÉ"
+        niveau, mot = "faible", MOT_NON_MESURE
     elif n_emis == 0:
-        niveau, mot = "faible", "MUET"
+        niveau, mot = "faible", tr("mesure.mot.muet")
     elif not au_dessus:
-        niveau, mot = "faible", "FAIBLE"
+        niveau, mot = "faible", tr("mesure.mot.faible")
     elif justesse >= REPERE_JUSTESSE and taux >= REPERE_EMISSION:
-        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+        niveau, mot = "bon", tr("mesure.mot.repere")
     else:
-        niveau, mot = "moyen", "UTILISABLE"
+        niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
     seuil, vote, marge = _label("corr_min"), _label("min_votes"), _label("margin")
     if horloge_seule:
-        chiffres = f"aucune décision possible : l'horloge du code n'a servi sur aucun des {n_essais} blocs"
+        chiffres = tr("mesure.cvep_test.chiffres.sans_horloge", n=n_essais)
         # Le DIAGNOSTIC du mode, pas sa fin (« lance l'émetteur avec --refresh… ») : ici, personne
         # ne tape de commande — c'est la console qui lance la fenêtre.
-        reserve = (f"L'horloge de la fenêtre a été refusée par le mode ("
-                   f"{refus_horloge.split(' — ')[0]}) : réentraîne sur CET écran."
-                   if refus_horloge else
-                   "Aucun marqueur « cycle » utilisable : la fenêtre de stimulus doit tourner "
-                   "jusqu'au bout — ne la ferme pas, ne la mets pas en arrière-plan.")
+        reserve = (tr("mesure.cvep_test.reserve.horloge_refusee",
+                      refus=refus_horloge.split(" — ")[0])
+                   if refus_horloge else tr("mesure.cvep_test.reserve.sans_cycle"))
     elif n_emis == 0:
-        chiffres = f"aucune cible émise sur {n_essais} blocs (hasard {pct(hasard)})"
+        chiffres = tr("mesure.cvep_test.chiffres.muet", n=n_essais, hasard=pct(hasard))
         dominante = silences.most_common(1)[0][0]
         if dominante == "vote_non_conclu":
-            reserve = (f"Les fenêtres ne s'accordent jamais : plante le regard sur le disque "
-                       f"cerclé, ou baisse « {vote} », puis re-teste.")
+            reserve = tr("mesure.cvep_test.reserve.vote", vote=vote)
         elif dominante in _CAUSES_HORLOGE:
-            reserve = ("L'horloge du code s'est perdue sur la plupart des blocs : la fenêtre de "
-                       "stimulus doit tourner sans interruption jusqu'à la fin.")
+            reserve = tr("mesure.cvep_test.reserve.horloge_perdue")
         else:
-            reserve = (f"Aucun bloc ne passe les seuils : saline Pz/PO7/Oz/PO8, puis baisse "
-                       f"« {seuil} » d'un cran et re-teste.")
+            reserve = tr("mesure.cvep_test.reserve.seuils", seuil=seuil)
     else:
-        chiffres = (f"{pct(justesse)} de cibles justes quand il émet (hasard {pct(hasard)}), "
-                    f"{pct(taux)} d'émission — {n_emis} blocs décidés sur {n_essais}")
+        chiffres = tr("mesure.cvep_test.chiffres", justesse=pct(justesse), hasard=pct(hasard),
+                      taux=pct(taux), emis=n_emis, n=n_essais)
         if niveau == "faible" and court:
-            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n_emis} blocs décidés on "
-                       f"ne peut pas conclure — refais le test à {max(ESSAIS)} cycles par cible "
-                       f"({len(_blocs(max(ESSAIS)))} blocs) avant de juger.")
+            reserve = tr("mesure.cvep_test.reserve.faible_court", p=texte_p(p), emis=n_emis,
+                         long=max(ESSAIS), blocs=len(_blocs(max(ESSAIS))))
         elif niveau == "faible":
-            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : réentraîne — saline "
-                       f"Pz/PO7/Oz/PO8, et PLANTE le regard sur le disque cerclé sans le promener.")
+            reserve = tr("mesure.cvep_test.reserve.faible", p=texte_p(p))
         elif taux < REPERE_EMISSION and justesse >= REPERE_JUSTESSE:
-            reserve = (f"Juste quand il parle, mais il ne parle que sur {pct(taux)} des blocs "
-                       f"(repère ~{pct(REPERE_EMISSION)}) : baisse « {seuil} » ou « {vote} » d'un "
-                       f"cran, puis re-teste.")
+            reserve = tr("mesure.cvep_test.reserve.silencieux", taux=pct(taux),
+                         repere=pct(REPERE_EMISSION), seuil=seuil, vote=vote)
         elif taux >= REPERE_EMISSION and justesse < REPERE_JUSTESSE:
-            reserve = (f"Il parle souvent mais se trompe sur {pct(1 - justesse)} de ce qu'il émet "
-                       f"(repère ~{pct(1 - REPERE_JUSTESSE)}) : remonte « {seuil} » ou « {marge} » "
-                       f"d'un cran, puis re-teste.")
+            reserve = tr("mesure.cvep_test.reserve.bavard", erreurs=pct(1 - justesse),
+                         repere=pct(1 - REPERE_JUSTESSE), seuil=seuil, marge=marge)
         elif niveau == "moyen":
-            reserve = ("Sous le repère sur les DEUX chiffres : resaline Pz/PO7/Oz/PO8 et réentraîne "
-                       "avant de toucher aux seuils.")
+            reserve = tr("mesure.cvep_test.reserve.moyen")
         else:
-            reserve = (f"Mesuré sur {n_essais} blocs de CETTE séance : l'intervalle reste large — "
-                       f"re-teste après une pause avant de transcrire ces réglages dans ton "
-                       f"application.")
+            reserve = tr("mesure.cvep_test.reserve.bon", n=n_essais)
 
-    verdict = (f"{mot} — sur {n_essais} BLOCS (une décision par bloc : ce que `decoded_cvep` "
-               f"publiait quand le bloc se fermait, jamais une par fenêtre), ")
+    verdict = tr("mesure.cvep_test.verdict.base", mot=mot, n=n_essais)
     if n_emis:
-        verdict += (f"le moteur a émis une cible {n_emis} fois — soit {pct(taux)} d'émission "
-                    f"[IC95 {em_bas * 100:.0f} ; {em_haut * 100:.0f}] — et il avait raison "
-                    f"{n_justes} fois sur {n_emis}, soit {pct(justesse)} de justesse à l'émission "
-                    f"[IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
-                    f"{pct(hasard)} ({n_cibles} cibles) — test binomial exact sur les blocs "
-                    f"décidés, {texte_p(p)} : "
-                    f"{'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. ")
+        verdict += tr("mesure.cvep_test.verdict.emis", emis=n_emis, taux=pct(taux),
+                      em_bas=f"{em_bas * 100:.0f}", em_haut=f"{em_haut * 100:.0f}",
+                      justes=n_justes, justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                      haut=f"{ic_haut * 100:.0f}", hasard=pct(hasard), k=n_cibles, p=texte_p(p),
+                      conclusion=(tr("mesure.commun.au_dessus") if au_dessus
+                                  else tr("mesure.commun.indistinguable")))
     else:
-        verdict += (f"le moteur n'a émis AUCUNE cible, soit {pct(0.0)} d'émission, pour un hasard "
-                    f"à {pct(hasard)} ({n_cibles} cibles). ")
+        verdict += tr("mesure.cvep_test.verdict.muet", taux=pct(0.0), hasard=pct(hasard),
+                      k=n_cibles)
     if silences:
-        verdict += (f"Les {sum(silences.values())} bloc(s) muets (-1) ne comptent pas comme des "
-                    f"erreurs : " + ", ".join(f"{n} {_CAUSES_FR.get(k, k)}"
-                                             for k, n in silences.most_common()) + ". ")
+        verdict += tr("mesure.cvep_test.verdict.silences", n=sum(silences.values()),
+                      liste=", ".join(f"{n} {_CAUSES_FR.get(k, k)}"
+                                      for k, n in silences.most_common()))
     if refus_horloge:
-        verdict += f"Horloge refusée par le mode : {refus_horloge}. "
-    textes = {"perdus": "joué(s) sans époque (l'EEG avait quitté le tampon)",
-              "sans_fin": "sans « block_end »", "sans_verite": "sans cible lisible",
-              "en_chauffe": "joué(s) pendant la CHAUFFE du moteur"}
+        verdict += tr("mesure.cvep_test.verdict.horloge", refus=refus_horloge)
     if pertes:
-        verdict += ("⚠️ Hors du calcul : " + " ; ".join(f"{n} bloc(s) {textes.get(k, k)}"
-                                                       for k, n in pertes.items())
-                    + f". L'effectif ci-dessus décrit {n_essais} blocs, pas davantage. ")
-    verdict += (f"Repère EN DIRECT du projet, aux défauts du mode : ~{pct(REPERE_EMISSION)} "
-                f"d'émission et ~{pct(REPERE_JUSTESSE)} de justesse à l'émission (hors ligne, par "
-                f"fenêtre votée, une séance) — pas le 59,5 / 64,9 % de l'entraînement, qui ignore "
-                f"seuils et vote.")
+        verdict += tr("mesure.cvep_test.verdict.pertes", n=n_essais,
+                      liste=" ; ".join(_texte_perte(k, n) for k, n in pertes.items()))
+    verdict += tr("mesure.cvep_test.verdict.repere", emission=pct(REPERE_EMISSION),
+                  justesse=pct(REPERE_JUSTESSE))
     ecarts = [k for k, v in _REGLAGES_DU_REPERE.items()
               if k in reglages and abs(float(reglages[k]) - float(v)) > 1e-9]
     if ecarts:
-        verdict += (" Tes réglages diffèrent de ceux du repère (" + ", ".join(_label(k) for k in ecarts)
-                    + ") : la comparaison n'est qu'indicative.")
+        verdict += tr("mesure.cvep_test.verdict.ecarts",
+                      liste=", ".join(_label(k) for k in ecarts))
 
     affichage = (non_mesure(chiffres, reserve) if horloge_seule
                  else lignes(niveau, mot, chiffres, reserve))
@@ -452,36 +448,20 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
     }
 
 
-HONNETETE = (
-    "Ce test mesure la règle du PRODUIT — ton modèle, ses seuils, son vote — sur les réglages du "
-    "lancement : UNE décision par bloc, celle que `decoded_cvep` publiait quand il se fermait. Le "
-    f"flux sort {1 / _PERIODE_S:.0f} décisions par seconde sur des fenêtres qui se chevauchent : "
-    "les compter rétrécirait l'intervalle sans rien apprendre.\n"
-    "Un bloc MUET (-1) compte dans le taux d'émission, jamais comme une erreur. Les deux chiffres "
-    "se lisent ENSEMBLE : « 71 % de justesse » sans « 46 % d'émission » décrit une BCI qu'on n'a "
-    "pas. Ce repère-là (hors ligne, par fenêtre votée, aux défauts du mode, UNE séance) est celui "
-    "qui se compare à ce test ; le 59,5 / 64,9 % de l'entraînement est un argmax sans seuils ni "
-    "vote, et l'y comparer fabrique un verdict faux dans les deux sens.\n"
-    f"Au plus {len(_blocs(max(ESSAIS)))} blocs par test : l'intervalle reste large. Et le c-VEP "
-    "n'a JAMAIS été décodé au casque à travers le moteur — attends-toi à moins, pas à plus. Ce "
-    "score décrit CETTE séance, sur CE montage."
-)
+HONNETETE = tr("mesure.cvep_test.honnetete", cadence=f"{1 / _PERIODE_S:.0f}",
+               blocs=len(_blocs(max(ESSAIS))))
 
 BRIEFING = (
-    "Ce test rejoue le protocole d'ENTRAÎNEMENT, mais le moteur DÉCIDE au lieu d'apprendre : à la "
-    "fin de chaque bloc, il dit quelle cible il voit avec ton modèle et tes réglages, et on "
-    "compare à la cible cerclée.",
+    tr("mesure.cvep_test.briefing.1"),
 ) + tuple(BRIEFING_CALIB) + (
-    "Le moteur se TAIT souvent, et c'est normal : un bloc muet n'est pas une erreur, il fait "
-    "baisser le taux d'émission — les deux chiffres se lisent ensemble.",
-    "Il faut un modèle entraîné : c'est lui qui décide. Rien n'est écrit sur le disque.",
+    tr("mesure.cvep_test.briefing.muet"),
+    tr("mesure.commun.modele_requis"),
 )
 
 SPEC = MesureSpec(
     id="cvep_test",
-    label="Tester le c-VEP",
-    summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et tes "
-            "réglages, bloc par bloc, et on compare à la cible cerclée.",
+    label=tr("mesure.cvep_test.label"),
+    summary=tr("mesure.cvep_test.summary"),
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
     # la raison du mode, et la console passe les réglages courants tels quels. SAUF le flux de
@@ -489,16 +469,17 @@ SPEC = MesureSpec(
     params=params_du_mode_pour_un_test(SPEC_CVEP) + (
         Param(
             key="essais",
-            label="Longueur : cycles enregistrés par cible",
+            label=tr("mesure.cvep_test.param.essais.label"),
             kind="choice",
             default=ESSAIS_DEFAUT,
             choices=ESSAIS,
-            help=(f"L'argument « --cycles » de la fenêtre, dans SON unité : des cycles ENREGISTRÉS "
-                  f"par cible, répartis en {CVEP_CAL_BLOCKS} blocs entrelacés. Le test rend UNE "
-                  f"décision par bloc : "
-                  + ", ".join(f"{n} → {len(_blocs(n))} blocs ≈ {_minutes(n)} min" for n in ESSAIS)
-                  + f". Au-delà de {max(ESSAIS)}, les blocs s'allongent sans qu'il y en ait "
-                  f"davantage : le test durerait plus sans gagner une seule décision."),
+            # L'aide de la bulle ⓘ, dans l'unité de `--cycles` de la fenêtre (sans la nommer : ici
+            # personne ne tape de commande), avec le nombre de décisions et la durée de chaque
+            # choix.
+            help=tr("mesure.cvep_test.param.essais.aide", blocs=CVEP_CAL_BLOCKS, max=max(ESSAIS),
+                    durees=", ".join(tr("mesure.cvep_test.param.duree", n=n,
+                                        blocs=len(_blocs(n)), minutes=_minutes(n))
+                                     for n in ESSAIS)),
         ),
     ),
     runtime_cls=MesureCVEP,
@@ -681,7 +662,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         chk(res["justesse"] == 1.0 and res["n_emis"] >= 14 and res["niveau"] == "bon",
             f"…et ne comptent pas comme des erreurs ({res['chiffres']}, {res['niveau']})")
         chk(not verifier(res), f"affichage cohérent avec le verdict ({verifier(res)})")
-        chk(rt._marqueurs_chauffe == 2 and "chauffe" not in res["verdict"].lower()
+        chk(rt._marqueurs_chauffe == 2 and "stabilisation" not in res["verdict"].lower()
             and not res["pertes"],
             f"⚠️ les {rt._marqueurs_chauffe} tics d'horloge de la chauffe ne sont PAS dits perdus")
         chk(all(m.get("event") == "cycle" and "target" not in m for _t, m in rt._horloge),
@@ -796,7 +777,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     chk(fab(0, 0, cause="sans_reference")["mot"] == "NON MESURÉ",
         "aucune horloge : NON MESURÉ, pas FAIBLE")
     r = fab(9, 7, pertes={"en_chauffe": 1, "perdus": 2})
-    chk("CHAUFFE" in r["verdict"] and "2 bloc(s) joué(s) sans époque" in r["verdict"],
+    chk("1 bloc(s) joué(s) pendant la stabilisation" in r["verdict"]
+        and "2 bloc(s) joué(s) sans époque" in r["verdict"],
         "les BLOCS perdus (chauffe, tampon) sont dits dans le verdict")
     chk("indicative" in fab(9, 7, reglages={"corr_min": 0.20})["verdict"],
         "un réglage différent du repère le dit")

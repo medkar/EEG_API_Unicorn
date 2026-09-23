@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import SSVEP_WARMUP_S, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.modes.calibration import PHASES_TERMINALES, CalibrationRuntime  # noqa: E402
 from core.modes.contract import _defaults_of  # noqa: E402
 
@@ -173,8 +174,9 @@ class MesureRuntime(CalibrationRuntime):
 
     # Ce que compte `essai` par défaut : les étapes ENREGISTRÉES (cf. `total`). Chaque mesure le
     # redéclare dans SON vocabulaire — « phase » pour le contrôle alpha, « essai », « manche »,
-    # « cycle » pour les tests — et `state()` (hérité) le publie sous « unite ».
-    unite = "étape"
+    # « cycle » pour les tests — et `state()` (hérité) le publie sous « unite ». C'est un TEXTE
+    # affiché (« 2 étapes sur 4 »), donc lu dans le fichier de langue, jamais comparé par du code.
+    unite = tr("mesure.unite.etape")
 
     # Ce que cette mesure prélève AUTOUR D'UN MARQUEUR, en secondes. 0 = elle n'en prélève pas (le
     # contrôle alpha, dont les fenêtres viennent de sa propre ligne du temps).
@@ -330,11 +332,11 @@ class MesureRuntime(CalibrationRuntime):
         texte se voit à la relecture.
         """
         if self.phase == "chauffe":
-            return "Le casque se stabilise — la mesure commence dans un instant."
+            return tr("mesure.socle.chauffe")
         if self.phase == "essais" and self._etape_courante is not None:
             return self._etape_courante.instruction
         if self.phase == "mesure":
-            return "Calcul du verdict…"
+            return tr("mesure.socle.calcul")
         return ""
 
     def rappel(self):

@@ -37,6 +37,7 @@ from brainflow.data_filter import DataFilter, DetrendOperations, NoiseTypes  # n
 
 from core.config import (CH_NAMES, OCCIPITAL, SIGNAL_DEAD_SIGMA,  # noqa: E402
                          signal_verdict, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import lignes, pct  # noqa: E402
 from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
@@ -68,8 +69,12 @@ RATIO_MIN = 1.5            # le repère : `alpha_check.py` affichait « attendu 
 # endroits : `protocole()` les pose sur ses `Etape`, `_mesurer()` les cherche dans ce qu'il reçoit.
 # Écrites deux fois, une faute de frappe donnerait « phase manquante » sur une séance parfaitement
 # jouée — 37 s de casque pour un message qui accuse le sujet.
-OUVERT = "yeux ouverts"
-FERME = "yeux fermés"
+# ⚠️ Ce sont AUSSI les textes affichés sous la consigne (`classe`), donc lus dans le fichier de
+# langue. La comparaison reste juste dans toutes les langues : les deux côtés lisent la MÊME
+# constante, résolue une fois à l'import.
+OUVERT = tr("mesure.alpha.etape.ouvert")
+FERME = tr("mesure.alpha.etape.ferme")
+PREPARATION = tr("mesure.alpha.etape.preparation")
 
 # Les voies moyennées, NOMMÉES. `OCCIPITAL` vaut [4, 5, 6, 7] : Pz est dedans depuis qu'une mesure
 # sur trois séances a montré qu'il aidait la projection SSVEP. ⚠️ L'écran d'origine imprimait
@@ -83,27 +88,20 @@ VOIES = [CH_NAMES[i] for i in OCCIPITAL]
 # retrouvera sur la page du SSVEP.
 PARAM_CIBLE = next(p for p in SPEC_SSVEP.params if p.key == "alpha_hz")
 
-HONNETETE = (
-    "Ce contrôle dit UNE chose : les voies occipitales captent un rythme alpha qui monte quand "
-    "tu fermes les yeux — donc les électrodes touchent, la référence tient, l'ordre des voies "
-    "est bon. Il ne PRÉDIT rien : ni la justesse du SSVEP, ni celle d'un mode à modèle. Il est "
-    "franchi ou il ne l'est pas ; un ratio de 6 ne vaut pas mieux qu'un ratio de 2.\n"
-    f"Le repère « ratio > {RATIO_MIN:g} » vient des séances de ce dépôt, sur ce casque et sur UNE "
-    f"personne : c'est un ordre de grandeur, pas un seuil validé. L'amplitude de l'alpha varie "
-    f"beaucoup d'une personne à l'autre."
-)
+def _virgule(texte):
+    """`"1.5"` -> `"1,5"` : les nombres de cet écran s'écrivent à la française, comme `pct`."""
+    return texte.replace(".", ",")
+
+
+HONNETETE = tr("mesure.alpha.honnetete", repere=_virgule(f"{RATIO_MIN:g}"))
 
 BRIEFING = (
-    "Ce contrôle est une BARRIÈRE : s'il échoue, aucun autre test de la séance ne veut rien "
-    "dire — c'est le montage qu'il faut reprendre, pas le test suivant.",
-    f"Déroulé : stabilisation du casque, puis {DUREE_PHASE_S:.0f} s les yeux OUVERTS, puis "
-    f"{DUREE_PHASE_S:.0f} s les yeux FERMÉS.",
-    "Un TOP SONORE annonce chaque changement. C'est indispensable : la moitié de la mesure se "
-    "passe les yeux fermés, où tu ne peux RIEN lire à l'écran.",
-    "Reste immobile, mâchoire relâchée : un serrement de dents noie la bande alpha sous de "
-    "l'EMG, et le ratio devient illisible.",
-    "Yeux ouverts : fixe un point devant toi, cligne le moins possible.",
-    "Yeux fermés : garde-les fermés jusqu'au TOP suivant, sans serrer les paupières.",
+    tr("mesure.alpha.briefing.1"),
+    tr("mesure.alpha.briefing.2", duree=f"{DUREE_PHASE_S:.0f}"),
+    tr("mesure.alpha.briefing.3"),
+    tr("mesure.alpha.briefing.4"),
+    tr("mesure.alpha.briefing.5"),
+    tr("mesure.alpha.briefing.6"),
 )
 
 
@@ -188,7 +186,7 @@ class ControleAlpha(MesureRuntime):
     """
 
     # Deux PHASES enregistrées, yeux ouverts puis yeux fermés : l'unité de l'avancement affiché.
-    unite = "phase"
+    unite = tr("mesure.unite.phase")
 
     # Le réglage que cette mesure sait REMPLIR : (mode, clé). C'est ce qui pose le bouton
     # « Mesurer » à côté du champ « Pic alpha » de la page SSVEP — la console le LIT ici, elle
@@ -206,18 +204,18 @@ class ControleAlpha(MesureRuntime):
         appliquerait pendant qu'on l'enregistre.
         """
         return (
-            Etape("préparation", DUREE_PREP_S, enregistre=False,
-                  instruction="Yeux OUVERTS — on commence dans un instant",
-                  rappel="installe-toi, immobile ; un TOP annoncera le départ"),
+            Etape(PREPARATION, DUREE_PREP_S, enregistre=False,
+                  instruction=tr("mesure.alpha.consigne.prep_ouvert"),
+                  rappel=tr("mesure.alpha.rappel.prep_ouvert")),
             Etape(OUVERT, DUREE_PHASE_S,
-                  instruction="YEUX OUVERTS — fixe un point devant toi",
-                  rappel="immobile, cligne le moins possible"),
-            Etape("préparation", DUREE_PREP_S, enregistre=False,
-                  instruction="FERME LES YEUX au prochain TOP",
-                  rappel="et garde-les fermés jusqu'au TOP suivant"),
+                  instruction=tr("mesure.alpha.consigne.ouvert"),
+                  rappel=tr("mesure.alpha.rappel.ouvert")),
+            Etape(PREPARATION, DUREE_PREP_S, enregistre=False,
+                  instruction=tr("mesure.alpha.consigne.prep_ferme"),
+                  rappel=tr("mesure.alpha.rappel.prep_ferme")),
             Etape(FERME, DUREE_PHASE_S,
-                  instruction="YEUX FERMÉS — immobile",
-                  rappel="un TOP dira quand rouvrir : d'ici là tu ne peux rien lire, c'est normal"),
+                  instruction=tr("mesure.alpha.consigne.ferme"),
+                  rappel=tr("mesure.alpha.rappel.ferme")),
         )
 
     def _mesurer(self, enregistre, fs):
@@ -227,10 +225,8 @@ class ControleAlpha(MesureRuntime):
             par_etape.setdefault(nom, []).append(fenetre)
         manquantes = [nom for nom in (OUVERT, FERME) if nom not in par_etape]
         if manquantes:
-            raise ValueError(
-                f"phase(s) manquante(s) : {', '.join(manquantes)}. Un rapport de puissances a "
-                f"besoin de SES DEUX termes — calculé sur une seule phase, il n'aurait aucun "
-                f"terme de comparaison, et rien ne distinguerait ce chiffre d'un chiffre complet.")
+            raise ValueError(tr("mesure.alpha.erreur.phase_manquante",
+                                phases=", ".join(manquantes)))
 
         freqs, psd_ouvert, sigmas_ouvert = _psd_occipitale(par_etape[OUVERT][-1], fs)
         _f, psd_ferme, sigmas_ferme = _psd_occipitale(par_etape[FERME][-1], fs)
@@ -245,12 +241,10 @@ class ControleAlpha(MesureRuntime):
         # finirait par contredire celle du bandeau, et ce jour-là c'est l'écran qu'on croirait.
         for etiquette, sigmas in ((OUVERT, sigmas_ouvert), (FERME, sigmas_ferme)):
             if all(signal_verdict(s) == "morte" for s in sigmas):
-                raise ValueError(
-                    f"les {len(VOIES)} voies occipitales ({', '.join(VOIES)}) sont PLATES "
-                    f"pendant « {etiquette} » : σ "
-                    f"{', '.join(f'{s:.2f}' for s in sigmas)} µV, sous le seuil de voie morte du "
-                    f"moteur ({SIGNAL_DEAD_SIGMA:g} µV). Ce n'est pas un résultat, c'est une "
-                    f"panne de liaison — câble, électrodes, ou casque éteint.")
+                raise ValueError(tr(
+                    "mesure.alpha.erreur.voies_plates", n=len(VOIES), voies=", ".join(VOIES),
+                    etape=etiquette, sigmas=", ".join(_virgule(f"{s:.2f}") for s in sigmas),
+                    seuil=_virgule(f"{SIGNAL_DEAD_SIGMA:g}")))
 
         p_ouvert = _puissance_bande(freqs, psd_ouvert, *BANDE_ALPHA)
         p_ferme = _puissance_bande(freqs, psd_ferme, *BANDE_ALPHA)
@@ -300,20 +294,16 @@ class ControleAlpha(MesureRuntime):
 
     def _lignes(self, ratio, pic_hz, monte, au_bon_endroit):
         """Le verdict en trois lignes. La réserve est le GESTE, jamais un rappel du chiffre."""
-        chiffres = (f"ratio yeux fermés / ouverts {ratio:.2f}".replace(".", ",")
-                    + f" (repère > {RATIO_MIN:g})".replace(".", ",")
-                    + f" · pic à {pic_hz:.1f} Hz".replace(".", ","))
+        chiffres = tr("mesure.alpha.chiffres", ratio=_virgule(f"{ratio:.2f}"),
+                      repere=_virgule(f"{RATIO_MIN:g}"), pic=_virgule(f"{pic_hz:.1f}"))
         if monte and au_bon_endroit:
-            return lignes("bon", "ALPHA NET", chiffres,
-                          "Le casque est bien posé : la séance peut commencer.")
+            return lignes("bon", tr("mesure.alpha.mot.net"), chiffres,
+                          tr("mesure.alpha.reserve.net"))
         if not monte:
-            return lignes("faible", "ARRÊTE ICI", chiffres,
-                          "L'alpha ne monte pas : reprends les électrodes occipitales, les "
-                          "mastoïdes, re-saline — rien d'autre de la séance ne voudra rien dire "
-                          "avant.")
-        return lignes("faible", "ARRÊTE ICI", chiffres,
-                      "Ça monte, mais hors de la bande alpha : probablement un mouvement. "
-                      "Reprends immobile, mâchoire relâchée.")
+            return lignes("faible", tr("mesure.alpha.mot.arrete"), chiffres,
+                          tr("mesure.alpha.reserve.ne_monte_pas"))
+        return lignes("faible", tr("mesure.alpha.mot.arrete"), chiffres,
+                      tr("mesure.alpha.reserve.hors_bande"))
 
     def _verdict(self, ratio, pic_hz, monte, au_bon_endroit):
         """LA phrase. Elle dit quoi faire, et quand s'arrêter — jamais un chiffre tout seul.
@@ -322,36 +312,29 @@ class ControleAlpha(MesureRuntime):
         monte pas est un problème de CONTACT ; un pic qui monte hors de la plage attendue est
         presque toujours un artefact (mouvement, dérive lente), donc un problème de POSTURE.
         """
+        # Le MOT (« ALPHA NET », « ARRÊTE ICI ») est passé à la phrase au lieu d'y être recopié :
+        # la phrase s'ouvre donc sur le mot affiché en face dans toutes les langues, ce que
+        # `affichage.verifier` exige.
         voies = "/".join(VOIES)
+        r, repere, pic = (_virgule(f"{ratio:.2f}"), _virgule(f"{RATIO_MIN:g}"),
+                          _virgule(f"{pic_hz:.1f}"))
         if monte and au_bon_endroit:
-            return (f"Alpha NET à la fermeture des yeux : ratio {ratio:.2f} (repère "
-                    f"> {RATIO_MIN:g}), pic à {pic_hz:.1f} Hz sur {voies}. Les électrodes "
-                    f"occipitales touchent, la référence tient, l'ordre des voies est bon — la "
-                    f"séance peut commencer.")
+            return tr("mesure.alpha.verdict.net", mot=tr("mesure.alpha.mot.net"), ratio=r,
+                      repere=repere, pic=pic, voies=voies)
         if not monte:
-            return (f"ARRÊTE ICI. L'alpha ne monte pas quand tu fermes les yeux : ratio "
-                    f"{ratio:.2f} pour un repère de {RATIO_MIN:g}. Tant que ce n'est pas réglé, "
-                    f"aucun autre test de cette séance ne voudra rien dire — tous lisent ce même "
-                    f"signal. À reprendre dans cet ordre : 1) les ÉLECTRODES occipitales "
-                    f"({voies}) touchent-elles le cuir chevelu, cheveux écartés ? 2) les "
-                    f"MASTOÏDES (la référence) tiennent-elles ? 3) re-saline — c'est le levier "
-                    f"le plus efficace mesuré sur ce casque. Vérifie aussi que les yeux étaient "
-                    f"bien fermés et que tu n'as pas bougé, puis relance.")
-        return (f"ARRÊTE ICI. Quelque chose monte à la fermeture des yeux (ratio {ratio:.2f}), "
-                f"mais son pic tombe à {pic_hz:.1f} Hz, hors de la plage de l'alpha "
-                f"({PIC_ATTENDU[0]:g}-{PIC_ATTENDU[1]:g} Hz) : ce n'est probablement pas de "
-                f"l'alpha mais une dérive lente ou un artefact de mouvement. Reprends immobile, "
-                f"mâchoire relâchée, et vérifie les ÉLECTRODES occipitales ({voies}) et les "
-                f"mastoïdes avant de relancer.")
+            return tr("mesure.alpha.verdict.ne_monte_pas", mot=tr("mesure.alpha.mot.arrete"),
+                      ratio=r, repere=repere, voies=voies)
+        return tr("mesure.alpha.verdict.hors_bande", mot=tr("mesure.alpha.mot.arrete"),
+                  ratio=r, pic=pic, voies=voies,
+                  bas=_virgule(f"{PIC_ATTENDU[0]:g}"), haut=_virgule(f"{PIC_ATTENDU[1]:g}"))
 
 
 SPEC = MesureSpec(
     id="alpha",
     # « Vérifier le casque » (2026-09-22) : nommé d'après son BUT, pas d'après sa métrique. C'est
     # le geste que l'étudiant fait — l'effet de Berger est le moyen, pas ce qu'il vient chercher.
-    label="Vérifier le casque",
-    summary="Yeux ouverts / yeux fermés : les électrodes occipitales captent-elles ? "
-            "À faire EN PREMIER — tout le reste de la séance en dépend.",
+    label=tr("mesure.alpha.label"),
+    summary=tr("mesure.alpha.summary"),
     briefing=BRIEFING,
     # Aucun réglage, et c'est un choix : cf. le commentaire des constantes du protocole. Les
     # durées sont celles sous lesquelles le repère 1,5 a été observé.
@@ -439,7 +422,7 @@ def _selftest():
     # === Le protocole : ce que la personne VIT ==============================================
     rt0 = ControleAlpha(SPEC, {}, None)
     etapes = rt0._etapes
-    chk([e.nom for e in etapes] == ["préparation", OUVERT, "préparation", FERME],
+    chk([e.nom for e in etapes] == [PREPARATION, OUVERT, PREPARATION, FERME],
         f"quatre étapes, ouvert AVANT fermé ({[e.nom for e in etapes]})")
     chk([e.enregistre for e in etapes] == [False, True, False, True],
         "…dont seules les deux phases sont enregistrées : le signal d'une préparation est celui "
@@ -471,7 +454,8 @@ def _selftest():
     # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
     chk(not _verifier_affichage(res),
         f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
-    chk("séance peut commencer" in res["verdict"] and f"{res['ratio']:.2f}" in res["verdict"],
+    chk("séance peut commencer" in res["verdict"]
+        and _virgule(f"{res['ratio']:.2f}") in res["verdict"],
         f"…et le verdict le DIT, avec son chiffre ({res['verdict'][:60]}…)")
     chk(res["voies"] == VOIES and "Pz" in res["voies"],
         f"les voies moyennées sont NOMMÉES par le moteur, pas devinées par l'écran — et Pz en "
@@ -519,7 +503,8 @@ def _selftest():
     chk(lent["ratio"] > RATIO_MIN and lent["barriere_franchie"] is False,
         f"un pic HORS de la plage de l'alpha ne franchit pas la barrière, même avec un ratio de "
         f"{lent['ratio']:.2f} — le ratio seul ne dit pas que c'est de l'alpha")
-    chk("arrête" in lent["verdict"].lower() and f"{lent['pic_hz']:.1f}" in lent["verdict"],
+    chk("arrête" in lent["verdict"].lower()
+        and _virgule(f"{lent['pic_hz']:.1f}") in lent["verdict"],
         f"…et le verdict nomme le pic fautif ({lent['verdict'][:70]}…)")
 
     # === L'OFFSET DC de l'Unicorn : 10⁵ µV, et le verdict ne doit pas bouger ==================
@@ -542,7 +527,7 @@ def _selftest():
         rt5._mesurer([(np.zeros((N, len(CH_NAMES))), OUVERT)], FS)
         chk(False, "un protocole amputé d'une phase doit être REFUSÉ")
     except ValueError as e:
-        chk(FERME in str(e) and "DEUX termes" in str(e),
+        chk(FERME in str(e) and "deux phases" in str(e),
             f"…en nommant la phase absente et pourquoi elle est indispensable ({str(e)[:60]}…)")
 
     # === LA LIAISON MORTE : quatre voies plates ne rendent PAS un verdict =====================
@@ -556,7 +541,8 @@ def _selftest():
         rt5._mesurer([(plat_signal, OUVERT), (plat_signal, FERME)], FS)
         chk(False, "quatre voies PLATES doivent être refusées, pas transformées en ratio")
     except ValueError as e:
-        chk("PLATES" in str(e) and "liaison" in str(e) and f"{SIGNAL_DEAD_SIGMA:g}" in str(e),
+        chk("plates" in str(e).lower() and "liaison" in str(e)
+            and _virgule(f"{SIGNAL_DEAD_SIGMA:g}") in str(e),
             f"…en disant que c'est une panne de liaison, au seuil de voie morte que le moteur "
             f"applique déjà à ses huit voies ({str(e)[:70]}…)")
 

@@ -43,8 +43,9 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_N_TARGETS,  # noqa: E402
                          P300_PAUSE_MANCHE_S, P300_REPS, use_utf8_console)
-from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, mot_de,  # noqa: E402
-                                  non_mesure, p_hasard, pct, texte_p, verifier)
+from core.i18n import tr  # noqa: E402
+from core.modes.affichage import (MOT_NON_MESURE, NIVEAUX, au_dessus_du_hasard,  # noqa: E402
+                                  lignes, mot_de, non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
 from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
@@ -84,6 +85,11 @@ PAR_MANCHE_S = P300_PAUSE_MANCHE_S + P300_REPS * P300_N_TARGETS * SOA_REFERENCE_
 def duree_protocole_s(manches):
     """La durée hors chauffe de `manches` manches — plus la dernière époque qui finit de s'écrire."""
     return float(manches) * PAR_MANCHE_S + P300_EPOCH_S
+
+
+def _minutes(manches):
+    """La durée d'un test de `manches` manches, chauffe comprise, en minutes (« 3,1 »)."""
+    return f"{(MesureMarqueurs.warmup_s + duree_protocole_s(manches)) / 60:.1f}".replace(".", ",")
 
 
 def _hasard_de(n_cibles):
@@ -133,7 +139,7 @@ class MesureP300(MesureMarqueurs):
     epoque_marqueur_s = SPEC_P300.marker_epoch_s
     # ⚠️ L'avancement AFFICHÉ est en MANCHES (cf. `state`), pas dans l'unité de `trials` : la garde
     # de silence du socle compte les flashs annoncés, l'écran compte ce que l'étudiant a choisi.
-    unite = "manche"
+    unite = tr("mesure.unite.manche")
 
     def __init__(self, spec, params, engine, rng=None):
         super().__init__(spec, params, engine, rng=rng)
@@ -247,8 +253,7 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     hasard = _hasard_de(n_cibles)
     n = len(decisions)
     if n < MANCHES_MIN:
-        raise ValueError(f"{n} manche(s) retenue(s) : il n'y a pas de quoi conclure — "
-                         f"l'intervalle serait plus large que l'échelle. Refais le test.")
+        raise ValueError(tr("mesure.p300_test.erreur.trop_peu", n=n))
     n_sans = sum(1 for _c, d in decisions if d is None)
     n_justes = sum(1 for c, d in decisions if d is not None and d == c)
     justesse = n_justes / n
@@ -258,64 +263,55 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     plus_long = max(MANCHES)
     court = (manches_demandees or 0) < plus_long
 
-    if n_sans == n:
-        niveau, mot = "faible", "NON MESURÉ"
+    non_mesure_ = n_sans == n
+    if non_mesure_:
+        niveau, mot = "faible", MOT_NON_MESURE
     elif not au_dessus or justesse < SEUIL_UTILISABLE:
-        niveau, mot = "faible", "FAIBLE"
+        niveau, mot = "faible", tr("mesure.mot.faible")
     elif justesse >= SEUIL_REPERE:
-        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+        niveau, mot = "bon", tr("mesure.mot.repere")
     else:
-        niveau, mot = "moyen", "UTILISABLE"
+        niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
-    chiffres = (f"{pct(justesse)} de cibles justes, entre {ic_bas * 100:.0f} et {pct(ic_haut)} "
-                f"(hasard {pct(hasard)}) sur {n} manches"
-                + (f", dont {n_sans} sans décision" if n_sans else ""))
-    reprendre = "reprends le contact de Fz/Cz/Pz et fixe franchement la cible cerclée"
+    chiffres = (tr("mesure.p300_test.chiffres_sans", justesse=pct(justesse),
+                   bas=f"{ic_bas * 100:.0f}", haut=pct(ic_haut), hasard=pct(hasard), n=n,
+                   sans=n_sans) if n_sans else
+                tr("mesure.p300_test.chiffres", justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                   haut=pct(ic_haut), hasard=pct(hasard), n=n))
     if n_sans:
-        reserve = (f"{n_sans} manche(s) sur {n} sans décision : le moteur a perdu des époques "
-                   f"(liaison, tampon) — ce n'est pas ton modèle ; vérifie le contact et re-teste.")
+        reserve = tr("mesure.p300_test.reserve.sans_decision", sans=n_sans, n=n)
     elif niveau == "faible" and not au_dessus:
-        reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n} manches on ne peut pas "
-                   f"conclure — refais le test à {plus_long} manches avant de juger." if court else
-                   f"Pas distinguable du hasard même sur {n} manches ({texte_p(p)}) : "
-                   f"{reprendre}, puis réentraîne.")
+        reserve = (tr("mesure.p300_test.reserve.faible_court", p=texte_p(p), n=n, long=plus_long)
+                   if court else tr("mesure.p300_test.reserve.faible_long", n=n, p=texte_p(p)))
     elif niveau == "faible":
-        reserve = (f"Sous le seuil d'utilisation ({pct(SEUIL_UTILISABLE)}) : {reprendre}, puis "
-                   f"réentraîne.")
+        reserve = tr("mesure.p300_test.reserve.sous_seuil", seuil=pct(SEUIL_UTILISABLE))
     elif niveau == "moyen":
-        reserve = (f"Au-dessus du hasard, sous le repère ({pct(SEUIL_REPERE)}) : {reprendre}, "
-                   f"ou réentraîne.")
+        reserve = tr("mesure.p300_test.reserve.moyen", repere=pct(SEUIL_REPERE))
     elif court:
-        reserve = (f"Sur {n} manches l'intervalle reste large : confirme à {plus_long} manches "
-                   f"avant de transcrire ces réglages dans ton application.")
+        reserve = tr("mesure.p300_test.reserve.bon_court", n=n, long=plus_long)
     else:
-        reserve = ("Mesuré sur CETTE séance : le P300 suit l'attention — re-teste après une pause "
-                   "avant de transcrire ces réglages dans ton application.")
-    affichage = (non_mesure(f"aucune des {n} manches n'a été sélectionnée (hasard "
-                            f"{pct(hasard)})", reserve) if mot == "NON MESURÉ"
+        reserve = tr("mesure.p300_test.reserve.bon")
+    affichage = (non_mesure(tr("mesure.p300_test.chiffres.non_mesure", n=n, hasard=pct(hasard)),
+                            reserve) if non_mesure_
                  else lignes(niveau, mot, chiffres, reserve))
 
     par_cible = {c: {"manches": sum(1 for k, _d in decisions if k == c),
                      "justes": sum(1 for k, d in decisions if k == c and d == c)}
                  for c in range(n_cibles)}
-    verdict = (
-        f"{mot} — sur {n} MANCHES (une décision par manche : la cible que `decoded_p300` publiait "
-        f"au `round_end`, jamais une par flash"
-        + (f" — {n_epoques} époques au total" if n_epoques else "") +
-        f"), la cible sélectionnée était la cible cerclée {n_justes} fois, soit {pct(justesse)} [IC95 "
-        f"{ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à {pct(hasard)} ({n_cibles} "
-        f"cibles) — test binomial exact, {texte_p(p)} : "
-        f"{'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. ")
+    verdict = tr("mesure.p300_test.verdict.base", mot=mot, n=n,
+                 epoques=tr("mesure.p300_test.verdict.epoques", n=n_epoques) if n_epoques else "",
+                 justes=n_justes, justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                 haut=f"{ic_haut * 100:.0f}", hasard=pct(hasard), k=n_cibles, p=texte_p(p),
+                 conclusion=(tr("mesure.commun.au_dessus") if au_dessus
+                             else tr("mesure.commun.indistinguable")))
     if n_sans:
-        verdict += (f"{n_sans} manche(s) sans décision (`target_index = -1`) comptent comme NON "
-                    f"sélectionnées : ton application n'aurait rien reçu. ")
+        verdict += tr("mesure.p300_test.verdict.sans_decision", n=n_sans)
     if hors_calcul:
-        verdict += (f"⚠️ {hors_calcul} manche(s) de plus ont été JOUÉES mais ne sont pas dans ce "
-                    f"calcul : leur `cue` ou leur `round_end` s'est perdu. ")
-    verdict += ("Par cible (justes / manches) : "
-                + ", ".join(f"{c} {v['justes']}/{v['manches']}" for c, v in par_cible.items())
-                + f". Seuils de l'entraînement : {pct(SEUIL_REPERE)} (repère), "
-                  f"{pct(SEUIL_UTILISABLE)} (utilisable).")
+        verdict += tr("mesure.p300_test.verdict.hors_calcul", n=hors_calcul)
+    verdict += tr("mesure.p300_test.verdict.par_cible",
+                  liste=", ".join(f"{c} {v['justes']}/{v['manches']}"
+                                  for c, v in par_cible.items()),
+                  repere=pct(SEUIL_REPERE), utilisable=pct(SEUIL_UTILISABLE))
 
     return {
         "n_essais": n, "n_justes": n_justes, "n_sans_decision": n_sans,
@@ -331,42 +327,23 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     }
 
 
-HONNETETE = (
-    "Ce test mesure la règle du PRODUIT — ton modèle, et la sélection du mode P300 (moyenne des "
-    "scores sur les répétitions de chaque cible, puis la meilleure) — sur le protocole "
-    "d'entraînement : une décision par MANCHE, celle que `decoded_p300` publiait au `round_end`. "
-    f"Les {P300_REPS * P300_N_TARGETS} flashs d'une manche ne sont pas autant d'observations : la "
-    f"sélection les MOYENNE, et les compter rétrécirait l'intervalle d'un facteur "
-    f"~{(P300_REPS * P300_N_TARGETS) ** 0.5:.0f} sans rien apprendre.\n"
-    "Une manche sans décision (`target_index = -1` : trop peu d'époques, ou une cible jamais "
-    "flashée) compte comme une sélection RATÉE — ton application n'aurait rien reçu. À marge de "
-    "sélection nulle, le mode tranche toujours une manche complète : un -1 est une PERTE, pas une "
-    "abstention.\n"
-    f"Repères : les seuils sont ceux de l'entraînement ({pct(SEUIL_REPERE)} excellent, "
-    f"{pct(SEUIL_UTILISABLE)} utilisable). Une ou deux "
-    "erreurs sur six sont ATTENDUES : l'AUC du projet, 0,71, mesure une époque isolée ; la "
-    "sélection se lit après moyennage. Aucun repère EN DIRECT : le P300 n'a jamais été décodé au "
-    "casque à travers le moteur. Un modèle est propre à UNE personne, et le P300 suit l'attention : "
-    "ce score décrit CETTE séance."
-)
+HONNETETE = tr("mesure.p300_test.honnetete", flashs=P300_REPS * P300_N_TARGETS,
+               facteur=f"{(P300_REPS * P300_N_TARGETS) ** 0.5:.0f}",
+               excellent=pct(SEUIL_REPERE), utilisable=pct(SEUIL_UTILISABLE))
 
 BRIEFING = (
-    "Ce test rejoue le protocole d'ENTRAÎNEMENT, mais le moteur SÉLECTIONNE au lieu d'apprendre : à "
-    "la fin de chaque manche, il choisit une cible avec ton modèle, et on compare à la cible "
-    "cerclée.",
-) + BRIEFING_CALIB + (
-    f"Déroulé : stabilisation du casque ({MesureMarqueurs.warmup_s:.0f} s), puis les manches, "
-    f"~{PAR_MANCHE_S:.0f} s chacune.",
-    "Il faut un modèle entraîné : c'est lui qui décide. Rien n'est écrit sur le disque — ce test "
-    "rend un score, pas un modèle.",
+    tr("mesure.p300_test.briefing.1"),
+) + tuple(BRIEFING_CALIB) + (
+    tr("mesure.p300_test.briefing.deroule", chauffe=f"{MesureMarqueurs.warmup_s:.0f}",
+       manche=f"{PAR_MANCHE_S:.0f}"),
+    tr("mesure.commun.modele_requis"),
 )
 
 
 SPEC = MesureSpec(
     id="p300_test",
-    label="Tester le P300",
-    summary="Le protocole d'entraînement, rejoué : la fenêtre cercle une cible par manche, le "
-            "moteur sélectionne avec ton modèle, et on compare.",
+    label=tr("mesure.p300_test.label"),
+    summary=tr("mesure.p300_test.summary"),
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
     # la raison du mode — pas l'interface. SAUF le flux de marqueurs : un test écoute toujours
@@ -374,17 +351,14 @@ SPEC = MesureSpec(
     params=params_du_mode_pour_un_test(SPEC_P300) + (
         Param(
             key="essais",
-            label="Manches",
+            label=tr("mesure.p300_test.param.essais.label"),
             kind="choice",
             default=MANCHES_DEFAUT,
             choices=MANCHES,
-            help=(f"Une manche = une sélection : la fenêtre cercle une cible, fait flasher les "
-                  f"{P300_N_TARGETS}, et le moteur choisit. Court par défaut (une manche par "
-                  f"cible), parce qu'on refait ce test à chaque réglage — mais un test court a un "
-                  f"intervalle LARGE : si le verdict dit « pas distinguable du hasard », prends "
-                  f"{max(MANCHES)}. À 60 Hz : "
-                  + ", ".join(f"{n} ≈ {(MesureMarqueurs.warmup_s + duree_protocole_s(n)) / 60:.1f}"
-                              f" min".replace(".", ",") for n in MANCHES) + "."),
+            # L'aide de la bulle ⓘ : ce qu'est une manche, quand allonger, la durée de chaque choix.
+            help=tr("mesure.p300_test.param.essais.aide", k=P300_N_TARGETS, long=max(MANCHES),
+                    durees=", ".join(tr("mesure.commun.duree", n=n, minutes=_minutes(n))
+                                     for n in MANCHES)),
         ),
     ),
     runtime_cls=MesureP300,
