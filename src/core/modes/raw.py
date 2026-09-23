@@ -10,6 +10,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import CH_NAMES, use_utf8_console  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import RawPublisher  # noqa: E402
 from core.modes.contract import ModeSpec  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
@@ -51,9 +52,9 @@ class RawRuntime(ModeRuntime):
 
 SPEC = ModeSpec(
     id="raw",
-    label="Brut",
+    label=tr("mode.raw.label"),
     family="brut",
-    summary="Les 8 voies EEG telles que le casque les rend, en µV à 250 Hz.",
+    summary=tr("mode.raw.summary"),
     status="moteur",
     params=(),          # rien à régler : « brut » veut dire brut
     rest=None,          # aucun plancher à mesurer : on ne décide de rien

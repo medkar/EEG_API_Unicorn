@@ -154,6 +154,8 @@
   "mode.param.modele.label": "Modèle entraîné",
   "mode.param.stream_in.label": "Flux de marqueurs",
   "mode.param.vote_len.label": "Fenêtres du vote",
+  "mode.raw.label": "Brut",
+  "mode.raw.summary": "Les 8 voies EEG telles que le casque les rend, en µV à 250 Hz.",
   "mode.ssvep.label": "SSVEP",
   "mode.ssvep.param.alpha_hz.aide": "Le pic alpha varie d'une personne à l'autre (6 à 14 Hz, 9,6 Hz en moyenne) : une cible posée dessus se confond avec le repos, et la proposition de fréquences s'en écarte. Pour mesurer le tien, clique « Mesurer » (~40 s) puis « Appliquer ». Le changer ne refait pas le repos.",
   "mode.ssvep.param.alpha_hz.label": "Pic alpha de la personne",
