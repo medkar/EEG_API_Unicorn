@@ -44,7 +44,8 @@ from core.config import (ERRP_EPOCH_S, ERRP_ERROR_RATE, ERRP_FEEDBACK_S,  # noqa
                          ERRP_TNR_TARGET, use_utf8_console)
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
-from core.modes.affichage import lignes, non_mesure, pct  # noqa: E402
+from core.i18n import tr  # noqa: E402
+from core.modes.affichage import MOT_NON_MESURE, lignes, non_mesure, pct, texte_p  # noqa: E402
 from core.modes.contract import Param  # noqa: E402
 from core.modes.errp import SPEC as SPEC_ERRP  # noqa: E402
 # Le seuil d'ALARME de rejet du mode (« plus un clignement occasionnel ») : repris, pas redéfini.
@@ -78,6 +79,11 @@ def _duree_protocole_s(essais):
             + (essais / _PAS_PAR_COURSE)
             * (PAUSE_FIN_COURSE_S + PAUSE_NOUVELLE_COURSE_S - PAUSE_INTER_PAS_S)
             + PAUSE_NOUVELLE_COURSE_S + ERRP_EPOCH_S)
+
+
+def _minutes(essais):
+    """La durée d'un test de `essais` pas, chauffe comprise, en minutes (« 2,4 »)."""
+    return f"{(MesureMarqueurs.warmup_s + _duree_protocole_s(essais)) / 60:.1f}".replace(".", ",")
 
 
 def _label(cle):
@@ -142,12 +148,12 @@ class MesureErrP(MesureMarqueurs):
 
     def instruction(self):
         if self.phase == "essais" and self._decideur._sigmas_repos is None:
-            return "Regarde la piste immobile, sans bouger : le moteur mesure ton bruit de fond."
+            return tr("mesure.errp_test.consigne.repos")
         return super().instruction()
 
     def rappel(self):
         if self.phase == "essais" and self._decideur._sigmas_repos is None:
-            return "ne cligne pas maintenant : c'est la référence du rejet d'artefact"
+            return tr("mesure.errp_test.rappel.repos")
         return super().rappel()
 
     # --- la référence d'artefact : le repos du MODE --------------------------------------
@@ -196,19 +202,14 @@ class MesureErrP(MesureMarqueurs):
             return None
         court = self._repos_trop_court()
         if court is not None:
-            return (f"la référence d'artefact n'a duré que {court:.1f} s sur les "
-                    f"{dec._rest_s:g} s du mode".replace(".", ",")
-                    + " : la fenêtre a commencé ses pas avant la fin du repos du moteur. Un seuil "
-                      "de rejet pris sur si peu se gonfle au premier clignement, et le test "
-                      "attraperait des erreurs que le mode n'attrapera pas. Relance « Tester » "
-                      "sans toucher à la fenêtre : elle attend elle-même la fin du repos.")
+            return tr("mesure.errp_test.erreur.repos_court",
+                      duree=f"{court:.1f}".replace(".", ","),
+                      mode=f"{dec._rest_s:g}".replace(".", ","))
         dec._rest_until = self._maintenant
         dec._rest_step(_VueEEG(engine), self._maintenant)
         if dec._sigmas_repos is None:
-            return ("la référence d'artefact n'a pas pu être mesurée sur la piste immobile : une "
-                    "voie a un σ NUL (électrode décollée, câble, amplificateur en butée — le "
-                    "journal du moteur la nomme). Le mode refuserait de décoder ainsi ; le test "
-                    "aussi. Vérifie le contact, puis relance le test.")
+            # Le journal du moteur (terminal) nomme la voie fautive ; l'écran dit quoi faire.
+            return tr("mesure.errp_test.erreur.voie_morte")
         self._repos_s = self._maintenant - self._repos_debut
         return None
 
@@ -240,10 +241,10 @@ class MesureErrP(MesureMarqueurs):
     def _mesurer(self, enregistre, fs):
         if not enregistre:
             if self._verites_illisibles:
-                raise ValueError(
-                    f"aucun essai noté : {self._verites_illisibles} feedback(s) sans étiquette "
-                    f"« error » lisible — la fenêtre tourne-t-elle avec « --calibrer » ?")
-            raise ValueError("aucun feedback reçu pendant les essais : rien à noter")
+                # Sans `--tester` (ou `--calibrer`), la fenêtre ne publie pas l'étiquette `error`.
+                raise ValueError(tr("mesure.errp_test.erreur.sans_etiquette",
+                                    n=self._verites_illisibles))
+            raise ValueError(tr("mesure.errp_test.erreur.sans_feedback"))
         dec = self._decideur
         vise = float(self.params["tnr_target"])
         resultat = noter([(verite, obs["error"]) for obs, verite in enregistre], vise,
@@ -276,7 +277,7 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
     essais = [(bool(v), int(d)) for v, d in essais]
     n = len(essais)
     if n == 0:
-        raise ValueError("aucun feedback noté : il n'y a rien à mesurer")
+        raise ValueError(tr("mesure.errp_test.erreur.vide"))
     jugees = [(v, d) for v, d in essais if d >= 0]       # 🔴 -1 : ni l'un, ni l'autre
     n_err = sum(1 for v, _d in jugees if v)
     n_ok = len(jugees) - n_err
@@ -295,17 +296,20 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
         "repere": {"tpr": REPERE_TPR, "tnr": REPERE_TNR, "ecart": round(REPERE_ECART, 3)},
         "honnetete": HONNETETE,
     }
-    sans_txt = (f"{n_sans} SANS VERDICT (-1 : {artefacts} artefact(s), {perdus} époque(s) perdue(s)) "
-                f"comptent à part — ni erreur attrapée, ni bonne commande gardée" if n_sans
-                else "aucun n'est resté sans verdict")
+    sans_txt = (tr("mesure.errp_test.sans_verdict", n=n_sans, artefacts=artefacts, perdus=perdus)
+                if n_sans else tr("mesure.errp_test.tous_juges"))
     if n_err == 0 or n_ok == 0:
-        raison = (f"aucun verdict sur {n} feedbacks" if not jugees else
-                  f"aucune {'ERREUR' if n_err == 0 else 'BONNE commande'} jugée sur {n} feedbacks")
-        conseil = ("Presque tout est resté sans verdict : vérifie le contact de Fz/Cz/Pz et cligne "
-                   "moins quand le point bouge, puis re-teste." if taux_sans >= REJET_MAX_BON
-                   else f"Refais le test à {plus_long} essais.")
+        if not jugees:
+            raison = tr("mesure.errp_test.raison.aucun_verdict", n=n)
+        elif n_err == 0:
+            raison = tr("mesure.errp_test.raison.sans_erreur", n=n)
+        else:
+            raison = tr("mesure.errp_test.raison.sans_bonne", n=n)
+        conseil = (tr("mesure.errp_test.conseil.rejet") if taux_sans >= REJET_MAX_BON
+                   else tr("mesure.errp_test.conseil.long", long=plus_long))
         return {**base, **non_mesure(raison, conseil),
-                "verdict": f"NON MESURÉ — {raison} : un taux sans effectif n'existe pas ; {sans_txt}."}
+                "verdict": tr("mesure.errp_test.verdict.non_mesure", mot=MOT_NON_MESURE,
+                              raison=raison, sans=sans_txt)}
 
     tpr, tnr = tp / n_err, tn / n_ok
     fpr = 1.0 - tnr
@@ -315,66 +319,56 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
     ecart = tpr - fpr
 
     if p >= PERM_ALPHA:
-        niveau, mot = "faible", "FAIBLE"
+        niveau, mot = "faible", tr("mesure.mot.faible")
     elif ecart >= REPERE_ECART and taux_sans < REJET_MAX_BON:
-        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+        niveau, mot = "bon", tr("mesure.mot.repere")
     else:
-        niveau, mot = "moyen", "UTILISABLE"
+        niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
     # Les DEUX taux, chacun à SA place, et le hasard d'un détecteur : la diagonale.
-    chiffres = (f"garde {pct(tnr)} des bonnes commandes, attrape {pct(tpr)} des erreurs (hasard : "
-                f"{pct(fpr)}, autant qu'il en annule) · {n_err} erreurs sur {len(jugees)} verdicts")
+    chiffres = tr("mesure.errp_test.chiffres", tnr=pct(tnr), tpr=pct(tpr), fpr=pct(fpr),
+                  erreurs=n_err, verdicts=len(jugees))
 
     label = _label("tnr_target")
     if niveau == "faible" and (essais_demandes or 0) < plus_long:
-        reserve = (f"À {n_err} erreurs jugées, on ne distingue pas ce détecteur du hasard : refais "
-                   f"le test à {plus_long} essais avant de juger.")
+        reserve = tr("mesure.errp_test.reserve.faible_court", erreurs=n_err, long=plus_long)
     elif niveau == "faible":
-        reserve = ("Indistinguable du hasard même sur un test long : réentraîne — saline Fz/Cz/Pz, "
-                   "et n'ANTICIPE pas les erreurs.")
+        reserve = tr("mesure.errp_test.reserve.faible_long")
     elif taux_sans >= REJET_MAX_BON:
-        reserve = (f"{pct(taux_sans)} des feedbacks sans verdict (artefact, époque perdue) : cligne "
-                   f"moins quand le point bouge, vérifie le contact, puis re-teste.")
+        reserve = tr("mesure.errp_test.reserve.rejet", taux=pct(taux_sans))
     elif tnr_haut < tnr_vise:
-        reserve = (f"Il garde moins de bonnes commandes que demandé ({pct(tnr)} pour "
-                   f"{pct(tnr_vise)}) : le seuil de l'entraînement est optimiste — monte « {label} "
-                   f"», puis re-teste.")
+        reserve = tr("mesure.errp_test.reserve.garde_peu", tnr=pct(tnr), vise=pct(tnr_vise),
+                     reglage=label)
     elif ecart < REPERE_ECART and abs(tnr_vise - ERRP_TNR_TARGET) > 0.05:
-        reserve = (f"Le repère est pris à « {label} » = {pct(ERRP_TNR_TARGET)} ; à {pct(tnr_vise)}, "
-                   f"même un bon détecteur sépare moins — re-teste à {pct(ERRP_TNR_TARGET)} avant "
-                   f"de réentraîner.")
+        reserve = tr("mesure.errp_test.reserve.extreme", reglage=label,
+                     defaut=pct(ERRP_TNR_TARGET), vise=pct(tnr_vise))
     elif ecart < REPERE_ECART:
-        reserve = (f"Mieux que le hasard, moins bien que le repère : réentraîne (saline Fz/Cz/Pz, "
-                   f"n'anticipe pas) — bouger « {label} » échange un taux contre l'autre, sans rien "
-                   f"gagner.")
+        reserve = tr("mesure.errp_test.reserve.sous_repere", reglage=label)
     else:
-        reserve = ("Mesuré sur des essais NEUFS de CETTE séance : re-teste après une pause avant de "
-                   "transcrire ce réglage dans ton application.")
+        reserve = tr("mesure.errp_test.reserve.bon")
 
-    verdict = (
-        f"{mot} — sur {n} FEEDBACKS (un essai = un feedback = une décision), le moteur en a jugé "
-        f"{len(jugees)} ; {sans_txt}. Parmi les {n_ok} BONNES commandes jugées, il en a gardé "
-        f"{tn}, soit {pct(tnr)} [IC95 {tnr_bas * 100:.0f} ; {tnr_haut * 100:.0f}] pour "
-        f"{pct(tnr_vise)} visées ; parmi les {n_err} ERREURS délibérées jugées, il en a attrapé "
-        f"{tp}, soit {pct(tpr)} [IC95 {tpr_bas * 100:.0f} ; {tpr_haut * 100:.0f}]. Au hasard, il "
-        f"attraperait autant d'erreurs qu'il annule de bonnes commandes ({pct(fpr)}) : test exact "
-        f"de Fisher, p = {p:.3f} — "
-        f"{'au-dessus du hasard' if p < PERM_ALPHA else 'indistinguable du hasard'}. ")
+    verdict = tr("mesure.errp_test.verdict.base", mot=mot, n=n, jugees=len(jugees), sans=sans_txt,
+                 bonnes=n_ok, gardees=tn, tnr=pct(tnr), tnr_bas=f"{tnr_bas * 100:.0f}",
+                 tnr_haut=f"{tnr_haut * 100:.0f}", vise=pct(tnr_vise), erreurs=n_err,
+                 attrapees=tp, tpr=pct(tpr), tpr_bas=f"{tpr_bas * 100:.0f}",
+                 tpr_haut=f"{tpr_haut * 100:.0f}", fpr=pct(fpr), p=texte_p(p),
+                 conclusion=(tr("mesure.commun.au_dessus") if p < PERM_ALPHA
+                             else tr("mesure.commun.indistinguable")))
     if promesse:
-        verdict += (f"Sur sa propre calibration, ce modèle promettait {pct(promesse['tnr'])} gardées "
-                    f"et {pct(promesse['tpr'])} attrapées à ce réglage — des taux OPTIMISTES, "
-                    f"mesurés sur les scores qui ont choisi le seuil. ")
+        verdict += tr("mesure.errp_test.verdict.promesse", tnr=pct(promesse["tnr"]),
+                      tpr=pct(promesse["tpr"]))
     if chauffe:
-        verdict += f"{chauffe} feedback(s) reçus pendant la stabilisation du casque ont été jetés. "
+        verdict += tr("mesure.errp_test.verdict.chauffe", n=chauffe)
     if repos:
         secondes, fenetres, du_mode = repos
-        verdict += (f"Référence du rejet d'artefact : {secondes:.1f} s de piste immobile".replace(
-                        ".", ",")
-                    + (f" ({fenetres} fenêtres)" if fenetres else "")
-                    + ", comme le mode (" + f"{du_mode:g}".replace(".", ",") + " s). ")
-    verdict += (f"Repère du projet (réglage {pct(ERRP_TNR_TARGET)}, une personne) : "
-                f"{pct(REPERE_TPR)} attrapées pour {pct(REPERE_TNR, 1)} gardées, un écart de "
-                f"{REPERE_ECART * 100:.0f} points ; ici {ecart * 100:.0f}.")
+        verdict += tr("mesure.errp_test.verdict.repos",
+                      secondes=f"{secondes:.1f}".replace(".", ","),
+                      fenetres=(tr("mesure.errp_test.verdict.repos_fenetres", n=fenetres)
+                                if fenetres else ""),
+                      mode=f"{du_mode:g}".replace(".", ","))
+    verdict += tr("mesure.errp_test.verdict.repere", defaut=pct(ERRP_TNR_TARGET),
+                  tpr=pct(REPERE_TPR), tnr=pct(REPERE_TNR, 1), ecart=f"{REPERE_ECART * 100:.0f}",
+                  ici=f"{ecart * 100:.0f}")
 
     return {**base,
             "tpr": round(tpr, 3), "tnr": round(tnr, 3), "fpr": round(fpr, 3),
@@ -384,42 +378,22 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
             **lignes(niveau, mot, chiffres, reserve), "verdict": verdict}
 
 
-HONNETETE = (
-    "Ce test mesure la règle du PRODUIT — ton modèle, le seuil que le moteur déduit de « Bonnes "
-    "commandes gardées » sur les scores de TA calibration, le rejet d'artefact contre ton repos — "
-    "sur des essais NEUFS : une décision par feedback, celle que `decoded_errp` publierait. La "
-    "fenêtre publie la réponse de chaque pas ; elle va au correcteur, jamais au décodeur.\n"
-    "Un feedback SANS VERDICT (-1 : artefact, ou époque perdue) compte à part : ni erreur "
-    "attrapée, ni bonne commande gardée.\n"
-    "Pas de hasard unique : c'est un DÉTECTEUR, pas un sélecteur. Au hasard, il attraperait autant "
-    "d'erreurs qu'il annule de bonnes commandes ; le test exact de Fisher dit si l'écart entre les "
-    "deux dépasse le bruit.\n"
-    f"Repère : {pct(REPERE_TPR)} d'erreurs attrapées pour {pct(REPERE_TNR, 1)} de bonnes commandes "
-    "gardées (réglage 85 %, 200 essais, une personne) — des taux OPTIMISTES, le seuil ayant été "
-    "choisi sur les scores qui les mesurent. C'est ce que ce test corrige : attends-toi à garder "
-    "MOINS de bonnes commandes que visé. Sur une dizaine d'erreurs, en attraper cinq est le "
-    "résultat attendu ; huit ou deux tiennent dans le bruit.\n"
-    "La référence d'artefact est mesurée sur la piste IMMOBILE, entre la stabilisation du casque et "
-    "le premier pas : 8 s, comme le mode — la fenêtre attend elle-même la fin de ce repos. Un repos "
-    "plus court ANNULE le test : un seuil de rejet pris sur deux secondes se gonfle au premier "
-    "clignement, et le test attraperait des erreurs que le mode n'attrapera pas."
-)
+# Le libellé du réglage que ce test met en jeu, LU dans le contrat du mode : renommé là-bas, le
+# briefing et la phrase d'honnêteté suivent.
+HONNETETE = tr("mesure.errp_test.honnetete", reglage=_label("tnr_target"), tpr=pct(REPERE_TPR),
+               tnr=pct(REPERE_TNR, 1))
 
 BRIEFING = (
-    ("Ce test rejoue l'ENTRAÎNEMENT, mais le moteur DÉCIDE au lieu d'apprendre : à chaque pas il "
-     "dit s'il a vu une erreur, et on compare aux erreurs que la fenêtre commet exprès."),
+    tr("mesure.errp_test.briefing.1"),
 ) + tuple(BRIEFING_ENTRAINEMENT) + (
-    "Au début, la piste reste IMMOBILE quelques secondes : ne bouge pas, le moteur mesure ton bruit "
-    "de fond.",
-    "Il faut un modèle entraîné : c'est lui qui décide, avec ton réglage « Bonnes commandes "
-    "gardées ». Rien n'est écrit sur le disque — ce test rend un score, pas un modèle.",
+    tr("mesure.errp_test.briefing.repos"),
+    tr("mesure.errp_test.briefing.modele", reglage=_label("tnr_target")),
 )
 
 SPEC = MesureSpec(
     id="errp_test",
-    label="Tester l'ErrP",
-    summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et ton réglage, "
-            "et on compare aux erreurs que la fenêtre commet exprès.",
+    label=tr("mesure.errp_test.label"),
+    summary=tr("mesure.errp_test.summary"),
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
     # la raison du mode — pas l'interface. La console passe les réglages courants tels quels. SAUF
@@ -427,18 +401,17 @@ SPEC = MesureSpec(
     params=params_du_mode_pour_un_test(SPEC_ERRP) + (
         Param(
             key="essais",
-            label="Essais",
+            label=tr("mesure.errp_test.param.essais.label"),
             kind="choice",
             default=ESSAIS_DEFAUT,
             choices=ESSAIS,
-            help=("Des pas de la piste, un verdict par pas. Court par défaut, parce qu'on refait ce "
-                  "test à chaque réglage — mais la part d'erreurs attrapées se mesure sur les seules "
-                  f"erreurs délibérées (~{pct(ERRP_ERROR_RATE)} des pas) : "
-                  + ", ".join(f"{n} ≈ {(MesureErrP.warmup_s + _duree_protocole_s(n)) / 60:.1f} "
-                              f"min (~{n * ERRP_ERROR_RATE:.0f} erreurs)".replace(".", ",")
-                              for n in ESSAIS)
-                  + f". {max(ESSAIS)} est la longueur de l'entraînement : prends-le pour TRANCHER "
-                    f"quand le verdict dit que l'intervalle est trop large."),
+            # L'aide de la bulle ⓘ : l'unité, pourquoi court, la durée et les erreurs de chaque
+            # choix.
+            help=tr("mesure.errp_test.param.essais.aide", taux=pct(ERRP_ERROR_RATE),
+                    max=max(ESSAIS),
+                    durees=", ".join(tr("mesure.errp_test.param.duree", n=n,
+                                        erreurs=f"{n * ERRP_ERROR_RATE:.0f}", minutes=_minutes(n))
+                                     for n in ESSAIS)),
         ),
     ),
     runtime_cls=MesureErrP,
@@ -730,7 +703,7 @@ def _selftest():
         moteur = _FauxMoteur(e_mort, t_mort, m_mort)
         rt_mort = MesureErrP(SPEC, valeurs, moteur)
         jouer(rt_mort, moteur)
-        chk(rt_mort.phase == "annule" and "σ NUL" in rt_mort.probleme and not rt_mort._enregistre,
+        chk(rt_mort.phase == "annule" and "σ nul" in rt_mort.probleme and not rt_mort._enregistre,
             f"une voie MORTE : le mode refuserait de conclure son repos, le test s'annule en le "
             f"disant, sans une seule décision ({rt_mort.phase}, {rt_mort.probleme[:50]}…)")
 

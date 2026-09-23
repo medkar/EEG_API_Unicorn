@@ -39,6 +39,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (CALIB_FENETRE_ATTENTE_S, CALIB_FENETRE_SILENCE_S,  # noqa: E402
                          MARKER_STREAM_DEFAULT, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.modes.mesure import MesureRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 
@@ -84,7 +85,7 @@ class MesureMarqueurs(MesureRuntime):
 
     marker_mode_id = ""
     runtime_cls_du_mode = None
-    unite = "essai"          # ce que compte `essai` ; la sous-classe le redéclare au besoin
+    unite = tr("mesure.unite.essai")   # ce que compte `essai` ; une sous-classe le redéclare
     evenement_verite = "cue"
     champ_verite = "target"
     evenement_unite = "cue"
@@ -251,11 +252,11 @@ class MesureMarqueurs(MesureRuntime):
     def instruction(self):
         """Le vrai protocole est dans l'AUTRE fenêtre, et le dire est le plus utile ici."""
         if self.phase == "chauffe":
-            return "Le casque se stabilise — la fenêtre de stimulus prend la main dans un instant."
+            return tr("mesure.fenetre.chauffe")
         if self.phase == "essais":
-            return "La séance se déroule dans la fenêtre de stimulus : suis SES consignes."
+            return tr("mesure.fenetre.essais")
         if self.phase == "mesure":
-            return "Calcul du verdict…"
+            return tr("mesure.socle.calcul")
         return ""
 
     def rappel(self):
@@ -294,10 +295,8 @@ class MesureMarqueurs(MesureRuntime):
                 self._ouvrir_les_essais(now)
             elif not self._annonce_recue and now - self._debut >= CALIB_FENETRE_ATTENTE_S:
                 flux = self.params.get("stream_in") or MARKER_STREAM_DEFAULT
-                self._abandonne(
-                    f"aucun « calib_start » reçu en {CALIB_FENETRE_ATTENTE_S:.0f} s : la fenêtre "
-                    f"de stimulus ne s'est pas lancée, ou elle publie ses marqueurs sous un autre "
-                    f"nom que « {flux} »")
+                self._abandonne(tr("mesure.fenetre.abandon.sans_annonce",
+                                   attente=f"{CALIB_FENETRE_ATTENTE_S:.0f}", flux=flux))
             return
 
         if self.phase == "essais":
@@ -346,12 +345,9 @@ class MesureMarqueurs(MesureRuntime):
                       f"fenêtre est morte, « Abandonner » dans la console — aucun verdict ne sera "
                       f"calculé.")
             return
-        self._abandonne(
-            f"aucun marqueur depuis {silence:.0f} s (> {CALIB_FENETRE_SILENCE_S:.0f} s) : la "
-            f"fenêtre de stimulus s'est arrêtée en pleine séance. {self._essais_vus} essai(s) "
-            f"reçu(s) — dont {self.essai} enregistré(s) — sur les "
-            f"{self._essais_annonces or '?'} annoncés ; aucun verdict n'est calculé, un score sur "
-            f"une séance tronquée serait indiscernable d'un score complet")
+        self._abandonne(tr("mesure.fenetre.abandon.silence", silence=f"{silence:.0f}",
+                           vus=self._essais_vus, annonces=self._essais_annonces or "?",
+                           retenus=self.essai))
 
     def _abandonne(self, raison):
         """Jette la séance en le DISANT, par le MÊME geste que l'abandon depuis la console."""

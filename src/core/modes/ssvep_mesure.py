@@ -75,6 +75,7 @@ from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa:
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, WINDOW_S,
                          use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  # noqa: E402
                                   texte_p)
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
@@ -134,36 +135,15 @@ def wilson(k, n, z=1.96):
 REFERENCE_JUSTESSE = 1.00      # 100 % de justesse QUAND le moteur émet (0 confusion sur 36)
 REFERENCE_EMISSION = 0.44      # …mais 44 % d'essais seulement produisent une décision
 
-HONNETETE = (
-    f"Ces deux chiffres se lisent ENSEMBLE. Le 2026-07-27, sur ce casque, le moteur était juste "
-    f"{REFERENCE_JUSTESSE * 100:.0f} % du temps QUAND il émettait — et il n'émettait que sur "
-    f"{REFERENCE_EMISSION * 100:.0f} % des essais. Un long silence entre deux verdicts justes est "
-    f"donc le régime NORMAL de ce mode, pas une panne : le seuil z est réglé pour se taire plutôt "
-    f"que pour deviner.\n"
-    "Ce que cette mesure ne dit PAS : rien du trajet réseau (publication LSL, horloges, deux "
-    "machines), validé séparément — et rien de demain. La variance entre séances est de l'ordre "
-    "d'un facteur 9 sur ce casque : un taux mesuré aujourd'hui décrit CETTE séance, avec CE "
-    "montage, sur CETTE personne.\n"
-    "Ces chiffres ne sont plus comparables TELS QUELS aux repères du 2026-07-27 : ceux-là ont été "
-    "mesurés sur le trio de fréquences du dépôt, avec un rejet d'artefact calculé sur les 8 voies. "
-    "Ce test décide comme le MODE — tes fréquences, son rejet sur les 4 occipitales — pour qu'il "
-    "décrive ce que ton application recevra. Les repères restent un ordre de grandeur, pas une "
-    "ligne d'arrivée."
-)
+HONNETETE = tr("mesure.ssvep_taux.honnetete", ref_justesse=pct(REFERENCE_JUSTESSE),
+               ref_emission=pct(REFERENCE_EMISSION))
 
 BRIEFING = (
-    "Cette mesure répond à une seule question : quand le moteur annonce une cible, est-ce la "
-    "bonne — et à quelle fréquence annonce-t-il quelque chose ?",
-    "Une seconde fenêtre s'ouvre et fait clignoter les cibles. Elle en DÉSIGNE une à "
-    "chaque essai : fixe celle qui est entourée de bleu, jusqu'à ce que l'écran passe à autre "
-    "chose.",
-    f"Déroulé : stabilisation du casque, puis {SSVEP_GUIDE_REPOS_S:.0f} s de REPOS (fixe la croix "
-    f"centrale, ne suis AUCUNE flèche — c'est là que le moteur mesure son fond de corrélation), "
-    f"puis les essais.",
-    "Reste immobile et cligne peu : une fenêtre dont l'amplitude explose est rejetée comme "
-    "artefact, et un essai rejeté est un essai perdu.",
-    "⚠️ Ne ferme pas la fenêtre de stimulus à la main pendant la séance : sans son marqueur de "
-    "fin, aucun verdict ne sera calculé.",
+    tr("mesure.ssvep_taux.briefing.1"),
+    tr("mesure.ssvep_taux.briefing.2"),
+    tr("mesure.ssvep_taux.briefing.3", repos=f"{SSVEP_GUIDE_REPOS_S:.0f}"),
+    tr("mesure.ssvep_taux.briefing.4"),
+    tr("mesure.ssvep_taux.briefing.5"),
 )
 
 
@@ -188,7 +168,7 @@ class MesureSSVEP(MesureMarqueurs):
     # ces marqueurs décrivent un stimulus SSVEP, un étudiant qui lit `docs/markers.md` les cherche
     # sous ce nom-là, et le mode SSVEP lui-même ne consomme aucun marqueur — aucun vol possible.
     marker_mode_id = "ssvep"
-    unite = "essai"          # une fixation désignée = un essai = une époque
+    unite = tr("mesure.unite.essai")     # une fixation désignée = un essai = une époque
     # Un `cue` porte la cible désignée (la vérité) ET ouvre la fixation (l'unité de `trials`).
     evenement_verite, champ_verite, evenement_unite = "cue", "target", "cue"
 
@@ -249,20 +229,20 @@ class MesureSSVEP(MesureMarqueurs):
         dire est le plus utile qu'on puisse faire ici : un étudiant qui cherche la consigne sur
         l'écran de la console pendant que le stimulus tourne à côté perd sa séance."""
         if self.phase == "chauffe":
-            return "Le casque se stabilise — la fenêtre de stimulus prend la main dans un instant."
+            return tr("mesure.fenetre.chauffe")
         if self.phase == "essais":
             if self._essais_vus == 0:
-                return "REPOS : fixe la croix centrale, ne suis AUCUNE flèche."
-            return "Fixe la flèche entourée de bleu, dans la fenêtre de stimulus."
+                return tr("mesure.ssvep_taux.consigne.repos")
+            return tr("mesure.ssvep_taux.consigne.essais")
         if self.phase == "mesure":
-            return "Calcul du taux d'émission…"
+            return tr("mesure.ssvep_taux.consigne.calcul")
         return ""
 
     def rappel(self):
         if self.phase == "essais" and self._essais_vus == 0:
-            return "le moteur mesure ici son fond de corrélation : suivre une flèche le fausserait"
+            return tr("mesure.ssvep_taux.rappel.repos")
         if self.phase == "essais":
-            return "immobile, cligne peu — une fenêtre trop agitée est rejetée comme artefact"
+            return tr("mesure.ssvep_taux.rappel.essais")
         return ""
 
     def _lire_annonce(self, marqueur):
@@ -337,7 +317,7 @@ class MesureSSVEP(MesureMarqueurs):
             # Un événement que ce protocole ne connaît pas est ignoré, pas refusé : le protocole
             # s'enrichira, et un moteur qui casserait au premier ajout serait inutilisable.
             return
-        self.classe = f"essai {self._essais_vus}"
+        self.classe = tr("mesure.ssvep_taux.classe", n=self._essais_vus)
         epoque = self._prelever(engine, ts)
         if epoque is not None:
             self._consigner(epoque)
@@ -376,14 +356,11 @@ class MesureSSVEP(MesureMarqueurs):
         """
         acq = self._acq
         if acq is None:
-            raise ValueError("aucune acquisition : la mesure ne peut pas reproduire le filtrage "
-                             "du mode, donc elle ne mesurerait pas la règle du produit")
+            raise ValueError(tr("mesure.commun.sans_acquisition"))
         if not self._freqs:
-            raise ValueError(
-                "la fenêtre de stimulus n'a annoncé aucune fréquence dans son « calib_start » : "
-                "le moteur ne sait pas contre quoi corréler. Les fréquences viennent de l'ÉCRAN — "
-                "il les déduit du rafraîchissement qu'il mesure — et les deviner ici reviendrait "
-                "à mesurer un décodeur que personne n'utilise.")
+            # Les fréquences viennent de l'ÉCRAN (il les déduit du rafraîchissement qu'il mesure) :
+            # les deviner ici reviendrait à mesurer un décodeur que personne n'utilise.
+            raise ValueError(tr("mesure.ssvep_taux.erreur.sans_frequence"))
 
         repos = [f for f, lab in enregistre if lab == REPOS]
         etiquetes = [(lab, f) for f, lab in enregistre if isinstance(lab, Essai)]
@@ -511,10 +488,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
                          f"{float(acq.fs):g} Hz : le mode corrélerait contre des sinusoïdes à la "
                          f"mauvaise cadence")
     if len(essais) < 6:
-        raise ValueError(
-            f"{len(essais)} essai(s) : il n'y a pas de quoi conclure. Un taux calculé sur si peu "
-            f"aurait un intervalle de confiance plus large que l'échelle elle-même, et serait "
-            f"cité comme s'il disait quelque chose.")
+        raise ValueError(tr("mesure.ssvep_taux.erreur.trop_peu", n=len(essais)))
 
     # --- Le plancher de repos, par le `_rest_step` du MODE -----------------------------------
     # Chaque bloc de repos est posé comme tampon, dans l'ordre ; l'échéance n'est atteinte qu'au
@@ -529,11 +503,8 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
         decideur._rest_until = 0.0 if i == len(repos) - 1 else float("inf")
         pret = decideur._rest_step(vue, 0.0)
     if not pret:
-        raise ValueError(
-            f"plancher de repos impossible : {len(decideur._samples)} fenêtre(s) de repos "
-            f"exploitables. Le SSVEP décide sur z = (ρ − μ) / σ, mesurés cible par cible "
-            f"pendant le repos ; sans lui il n'y a aucune décision à mesurer. La phase de "
-            f"repos a-t-elle été jouée, ou la fenêtre a-t-elle été lancée trop tard ?")
+        # Le SSVEP décide sur z = (ρ − μ) / σ, μ et σ mesurés cible par cible pendant le repos.
+        raise ValueError(tr("mesure.ssvep_taux.erreur.sans_repos", n=len(decideur._samples)))
 
     # --- UNE décision par essai, par le `_run_step` du MODE ------------------------------------
     # Rejet d'artefact compris : le mode prend son σ sur les 4 occipitales FILTRÉES, et c'est ce
@@ -619,32 +590,27 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
     n_justes = int(round(justesse * n_emis))
     p = p_hasard(n_justes, n_emis, hasard)
     if n_emis == 0 or not au_dessus_du_hasard(n_justes, n_emis, hasard):
-        niveau, mot = "faible", ("MUET" if n_emis == 0 else "FAIBLE")
+        niveau, mot = "faible", tr("mesure.mot.muet") if n_emis == 0 else tr("mesure.mot.faible")
     elif justesse >= JUSTESSE_MIN_BON and taux >= REFERENCE_EMISSION:
-        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+        niveau, mot = "bon", tr("mesure.mot.repere")
     else:
-        niveau, mot = "moyen", "UTILISABLE"
+        niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
     if n_emis == 0:
-        chiffres = (f"aucune cible annoncée sur {n_essais} essais (hasard {pct(hasard)})")
-        reserve = ("Le moteur s'est tu : plancher de repos trop dispersé. Vérifie le contact des "
-                   "occipitales et refais le test immobile pendant le repos.")
+        chiffres = tr("mesure.ssvep_taux.chiffres.muet", n=n_essais, hasard=pct(hasard))
+        reserve = tr("mesure.ssvep_taux.reserve.muet")
     else:
-        chiffres = (f"{pct(justesse)} de cibles justes quand il annonce, entre "
-                    f"{ic_bas * 100:.0f} et {pct(ic_haut)} (hasard {pct(hasard)}) · il annonce "
-                    f"sur {pct(taux)} des {n_essais} essais")
+        chiffres = tr("mesure.ssvep_taux.chiffres", justesse=pct(justesse),
+                      bas=f"{ic_bas * 100:.0f}", haut=pct(ic_haut), hasard=pct(hasard),
+                      taux=pct(taux), n=n_essais)
         if niveau == "faible":
-            reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à cet effectif on ne peut pas "
-                       f"conclure. Rallonge le test, ou reprends le montage.")
+            reserve = tr("mesure.ssvep_taux.reserve.faible", p=texte_p(p))
         elif taux < REFERENCE_EMISSION:
-            reserve = ("Il a raison quand il parle, mais se tait souvent : essaie un autre jeu de "
-                       "fréquences (« Proposer »), ou refais le repos immobile.")
+            reserve = tr("mesure.ssvep_taux.reserve.silencieux")
         elif niveau == "moyen":
-            reserve = ("Il parle assez, mais se trompe plus que le repère : vérifie qu'aucune "
-                       "cible n'est trop près de ton pic alpha (« Proposer »).")
+            reserve = tr("mesure.ssvep_taux.reserve.moyen")
         else:
-            reserve = ("Ta configuration tient sur cette séance : tu peux la reporter dans ton "
-                       "application.")
+            reserve = tr("mesure.ssvep_taux.reserve.bon")
     return lignes(niveau, mot, chiffres, reserve)
 
 
@@ -659,53 +625,35 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
     en entier.
     """
     hasard = 1.0 / n_cibles
-    phrase = (
-        f"Sur {n_essais} ESSAIS (une décision par essai, jamais une par fenêtre), le moteur a "
-        f"annoncé une cible {n_emis} fois — soit {taux * 100:.0f} % d'émission — et il avait "
-        f"raison {n_justes} fois sur {n_emis}, soit {justesse * 100:.0f} % "
-        f"[IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
-        f"{hasard * 100:.0f} %. ")
+    phrase = tr("mesure.ssvep_taux.verdict.base", n=n_essais, emis=n_emis, taux=pct(taux),
+                justes=n_justes, justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                haut=f"{ic_haut * 100:.0f}", hasard=pct(hasard))
     # ⚠️ AVANT les artefacts, parce que ces deux-là qualifient l'effectif lui-même : les artefacts
     # SONT dans `n_essais` (ils y comptent comme « aucune cible »), les perdus n'y sont PAS.
     if perdus:
-        phrase += (f"⚠️ {perdus} essai(s) de plus ont été JOUÉS mais ne sont pas dans ce calcul : "
-                   f"leur EEG avait quitté le tampon du moteur avant qu'on prélève l'époque. "
-                   f"L'effectif ci-dessus décrit {n_essais} essais, pas les {n_essais + perdus} "
-                   f"que la séance a joués. ")
+        phrase += tr("mesure.ssvep_taux.verdict.perdus", perdus=perdus, n=n_essais,
+                     total=n_essais + perdus)
     if chauffe:
-        phrase += (f"{chauffe} marqueur(s) de plus sont arrivés pendant la CHAUFFE du moteur et "
-                   f"ont été jetés : la fenêtre a pris de l'avance sur la stabilisation de "
-                   f"l'offset DC. ")
+        phrase += tr("mesure.ssvep_taux.verdict.chauffe", n=chauffe)
     if artefacts:
-        phrase += (f"{artefacts} essai(s) rejeté(s) comme artefact (amplitude > "
-                   f"{ARTIFACT_SIGMA_RATIO:g}× le repos) — ils comptent comme « aucune "
-                   f"cible ». ")
+        phrase += tr("mesure.ssvep_taux.verdict.artefacts", n=artefacts,
+                     ratio=f"{ARTIFACT_SIGMA_RATIO:g}")
     if n_emis == 0:
-        return (phrase + "Le moteur n'a RIEN émis : ce n'est pas un mauvais score, c'est "
-                         "l'absence de score. Le plancher de repos est probablement trop "
-                         "dispersé pour que le seuil z soit atteignable — contact des "
-                         "électrodes occipitales, ou repos refait immobile.")
+        return phrase + tr("mesure.ssvep_taux.verdict.muet")
     # ⚠️ La MÊME porte que `_lignes` (`affichage.au_dessus_du_hasard`), jamais une seconde : la
     # phrase disait « le décodage marche » sur 2 annonces justes, au-dessus d'un mot calculé autrement.
     p = p_hasard(n_justes, n_emis, hasard)
     if not au_dessus_du_hasard(n_justes, n_emis, hasard):
-        return (phrase + f"Le test binomial exact ne distingue pas ces {n_justes} annonce(s) "
-                         f"juste(s) sur {n_emis} du hasard ({texte_p(p)}) : à cet effectif, cette "
-                         f"séance ne permet pas de conclure que le décodage marche. Ce n'est pas "
-                         f"la preuve du contraire — c'est un « on ne sait pas ». Rallonge la "
-                         f"séance, ou reprends le montage.")
-    return (phrase + f"Le décodage marche sur CETTE séance : le test binomial exact le distingue "
-                     f"du hasard ({texte_p(p)}). Repères du 2026-07-27, en ordre de grandeur "
-                     f"seulement (pris sur le trio du dépôt, sous une autre règle de rejet) — "
-                     f"{REFERENCE_JUSTESSE * 100:.0f} % de justesse à l'émission pour "
-                     f"{REFERENCE_EMISSION * 100:.0f} % d'émission.")
+        return phrase + tr("mesure.ssvep_taux.verdict.faible", justes=n_justes, emis=n_emis,
+                           p=texte_p(p))
+    return phrase + tr("mesure.ssvep_taux.verdict.marche", p=texte_p(p),
+                       ref_justesse=pct(REFERENCE_JUSTESSE), ref_emission=pct(REFERENCE_EMISSION))
 
 
 SPEC = MesureSpec(
     id="ssvep_taux",
-    label="Tester le SSVEP",
-    summary="Quand le moteur annonce une cible, est-ce la bonne — et à quelle fréquence "
-            "annonce-t-il quelque chose ? Une fenêtre désigne la cible, le moteur mesure.",
+    label=tr("mesure.ssvep_taux.label"),
+    summary=tr("mesure.ssvep_taux.summary"),
     briefing=BRIEFING,
     # AUCUN réglage propre : les fréquences sont celles du MODE, que la console passe à la fenêtre
     # guidée et que celle-ci annonce dans `calib_start`. Et pas de « Flux de marqueurs » : un test
@@ -855,8 +803,9 @@ def _selftest():
     chk("44" in res["honnetete"] and "100" in res["honnetete"],
         "la phrase d'honnêteté porte les DEUX repères — 100 % de justesse à l'émission, mais "
         "44 % d'émission : le second sans le premier fait passer un silence normal pour une panne")
-    chk("100" in res["honnetete"].split("Ce que cette mesure ne dit PAS")[0]
-        and "44" in res["honnetete"].split("Ce que cette mesure ne dit PAS")[0],
+    chk("Ce que ce test ne dit pas" in res["honnetete"]
+        and "100" in res["honnetete"].split("Ce que ce test ne dit pas")[0]
+        and "44" in res["honnetete"].split("Ce que ce test ne dit pas")[0],
         "…et les deux dans la MÊME phrase, pas l'un en tête et l'autre en note de bas de page")
 
     # Le contrôle qui rend l'assertion précédente FALSIFIABLE : le même calcul sur des essais deux
@@ -973,7 +922,7 @@ def _selftest():
         "100 %/44 % du 2026-07-27, pris sous l'ancienne règle (σ sur 8 voies, trio du dépôt)")
 
     # === Le verdict : les DEUX chiffres, et l'effectif qui les porte ==========================
-    chk("ESSAIS" in res["verdict"] and str(res["n_essais"]) in res["verdict"],
+    chk(f"{res['n_essais']} essais" in res["verdict"],
         f"le verdict dit l'effectif et son UNITÉ ({res['verdict'][:80]}…)")
     # Les trois lignes affichées EN FACE viennent du même calcul que ce verdict, qui s'ouvre sur le
     # mot ; les chiffres portent leur hasard (`affichage.verifier`, tenu par chaque protocole).
@@ -1014,7 +963,7 @@ def _selftest():
     # Une séance où rien ne sort ne doit pas se lire comme un mauvais score : c'est l'ABSENCE de
     # score, et le verdict doit le dire autrement.
     muet = verdict(3, 24, 0, 0, 0.0, 0.0, 0.0, 0.0, 0)
-    chk("RIEN" in muet and "absence de score" in muet,
+    chk("n'a rien annoncé" in muet and "absence de score" in muet,
         f"zéro émission se lit comme une ABSENCE de score, pas comme un mauvais score ({muet[:70]}…)")
 
     # === Les essais JETÉS sont DANS le résultat, et NOMMÉS dans le verdict =====================
@@ -1038,20 +987,20 @@ def _selftest():
         f"({res_perdu['n_essais']} retenus, {res_perdu['n_perdus']} perdus, "
         f"{res_perdu['n_chauffe']} jetés à la chauffe) — comptés et imprimés ne suffit pas, la "
         f"console ne lit pas stdout")
-    chk("10 essai(s) de plus ont été JOUÉS" in res_perdu["verdict"]
+    chk("10 essai(s) de plus ont été joués" in res_perdu["verdict"]
         and "pas les 36 que la séance a joués" in res_perdu["verdict"],
         f"…et NOMMÉS dans la phrase de verdict, avec le total qu'ils reconstituent — la phrase "
         f"est la seule chose que la console affiche en entier ({res_perdu['verdict'][80:230]}…)")
     chk("4 marqueur(s) de plus" in res_perdu["verdict"]
-        and "CHAUFFE" in res_perdu["verdict"],
+        and "stabilisation du casque" in res_perdu["verdict"],
         f"…les marqueurs de la chauffe aussi, et pour une raison DIFFÉRENTE des perdus : la "
         f"fenêtre a pris de l'avance sur la stabilisation ({res_perdu['verdict'][-260:-120]}…)")
     # Ce qui rend les deux assertions ci-dessus falsifiables : une phrase CONSTANTE les passerait
     # toutes les deux. Sans perte, le verdict n'en dit rien — et `res` vient d'une séance jouée
     # sans perdre une seule époque.
     chk(res["n_perdus"] == 0 and res["n_chauffe"] == 0
-        and "de plus ont été JOUÉS" not in res["verdict"]
-        and "CHAUFFE" not in res["verdict"],
+        and "de plus ont été joués" not in res["verdict"]
+        and "stabilisation du casque" not in res["verdict"],
         f"…et une séance qui n'a RIEN perdu n'en parle pas : la phrase n'est pas un gabarit "
         f"constant ({res['n_perdus']}, {res['n_chauffe']})")
 

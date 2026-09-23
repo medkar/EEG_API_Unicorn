@@ -48,6 +48,7 @@ import numpy as np  # noqa: E402
 
 from core.config import (MI_CUE_S, MI_IMAGERY_S, MI_REST_S, MI_WINDOW_S,  # noqa: E402
                          use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.mi_decoder import MI_CONTROL  # noqa: E402
 from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, p_hasard,  # noqa: E402
                                   pct, texte_p, verifier)
@@ -76,8 +77,10 @@ EMISSION_MIN_BON = REFERENCE_EMISSION
 ESSAIS_MIN = 6
 
 # L'étape NON enregistrée. En minuscules : « REPOS » est une CLASSE, pas une pause, et `_mesurer`
-# ne compte que les étapes dont le nom est une classe du modèle.
-PAUSE = "pause"
+# ne compte que les étapes dont le nom est une classe du modèle. C'est aussi le texte affiché sous
+# la consigne, donc lu dans le fichier de langue ; les classes (GAUCHE, DROITE, REPOS), elles,
+# restent des identifiants — la console en tire le top latéralisé.
+PAUSE = tr("mesure.mi_test.etape.pause")
 
 # Essais PAR CLASSE. Défaut COURT, parce qu'on refait ce test à chaque réglage ; 10 = l'effectif de
 # la séance de référence (30 essais à 3 classes), pour TRANCHER quand l'intervalle est trop large.
@@ -115,7 +118,7 @@ class _Rejeu:
 class MesureMI(MesureRuntime):
     """Le protocole d'entraînement MI, rejoué ; le moteur décide à la fin de chaque essai."""
 
-    unite = "essai"          # une étape enregistrée = un essai entier (cf. `_essai`)
+    unite = tr("mesure.unite.essai")     # une étape enregistrée = un essai entier (cf. `_essai`)
 
     def __init__(self, spec, params, engine, rng=None):
         # Retenue MAINTENANT : `cancel()` remet `self.engine` à None, et le calcul a besoin de
@@ -136,10 +139,11 @@ class MesureMI(MesureRuntime):
         La pause AVANT : la première prépare, et le calcul suit le dernier essai sans attente.
         """
         return (Etape(PAUSE, MI_REST_S, enregistre=False,
-                      instruction="Pause — relâche, l'essai suivant arrive",
-                      rappel="au TOP, la consigne change : imagine dès qu'elle s'affiche"),
+                      instruction=tr("mesure.mi_test.consigne.pause"),
+                      rappel=tr("mesure.mi_test.rappel.pause")),
                 Etape(classe, MI_CUE_S + MI_IMAGERY_S,
-                      instruction=INSTRUCTIONS.get(classe, f"Imagine : {classe}"),
+                      instruction=INSTRUCTIONS.get(
+                          classe, tr("mesure.mi_test.consigne.defaut", classe=classe)),
                       rappel=RAPPEL if classe in MI_CONTROL else ""))
 
     def protocole(self):
@@ -197,16 +201,16 @@ class MesureMI(MesureRuntime):
     def _mesurer(self, enregistre, fs):
         """Une décision par essai, puis le score. Aucun fichier."""
         if self._acq is None:
-            raise ValueError("aucune acquisition : le test ne découperait pas les fenêtres comme "
-                             "le mode, donc il ne mesurerait pas la règle du produit")
+            raise ValueError(tr("mesure.commun.sans_acquisition"))
         decisions, fenetres = [], []
         for epoque, cible in enregistre:
             if cible not in self.classes:
                 continue
             sorties = self._sorties_de_l_essai(epoque, fs)
             if not sorties:
-                raise ValueError(f"un essai de {len(epoque) / fs:.1f} s ne porte aucune fenêtre de "
-                                 f"{MI_WINDOW_S:g} s : protocole et décodeur ne s'accordent plus")
+                raise ValueError(tr("mesure.mi_test.erreur.sans_fenetre",
+                                    duree=f"{len(epoque) / fs:.1f}".replace(".", ","),
+                                    fenetre=f"{MI_WINDOW_S:g}".replace(".", ",")))
             fenetres.append(len(sorties))
             decisions.append((cible, self._decision_de_l_essai(sorties)))
         reglages = dict(self.params, model=_os.path.basename(str(self.params.get("model", ""))))
@@ -233,8 +237,7 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     hasard = _hasard_de(classes)
     n_essais = len(decisions)
     if n_essais < ESSAIS_MIN:
-        raise ValueError(f"{n_essais} essai(s) retenu(s) : il n'y a pas de quoi conclure — "
-                         f"l'intervalle serait plus large que l'échelle.")
+        raise ValueError(tr("mesure.mi_test.erreur.trop_peu", n=n_essais))
     emis = [(c, d) for c, d in decisions if d is not None]
     n_emis = len(emis)
     n_justes = sum(1 for c, d in emis if d == c)
@@ -247,61 +250,52 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     repere = REPERES_JUSTESSE.get(len(classes))
 
     if n_emis == 0 or not au_dessus:
-        niveau, mot = "faible", ("MUET" if n_emis == 0 else "FAIBLE")
+        niveau, mot = "faible", tr("mesure.mot.muet") if n_emis == 0 else tr("mesure.mot.faible")
     elif repere is not None and justesse >= repere and taux >= EMISSION_MIN_BON:
-        niveau, mot = "bon", "AU NIVEAU DU REPÈRE"
+        niveau, mot = "bon", tr("mesure.mot.repere")
     else:
-        niveau, mot = "moyen", "UTILISABLE"
+        niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
     if n_emis == 0:
-        chiffres = f"aucune décision sur {n_essais} essais (hasard {pct(hasard)}) : le vote n'a jamais conclu"
+        chiffres = tr("mesure.mi_test.chiffres.muet", n=n_essais, hasard=pct(hasard))
     else:
-        chiffres = (f"{pct(justesse)} de classes justes, entre {ic_bas * 100:.0f} et "
-                    f"{pct(ic_haut)} (hasard {pct(hasard)}) sur {n_emis} essais décidés sur "
-                    f"{n_essais}")
+        chiffres = tr("mesure.mi_test.chiffres", justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                      haut=pct(ic_haut), hasard=pct(hasard), emis=n_emis, n=n_essais)
 
+    # La réserve NOMME les champs que l'étudiant a sous les yeux, lus dans le contrat du mode.
     plus_long = max(ESSAIS_PAR_CLASSE)
-    reglage = f"baisse « {_label('prob_min')} » ou « {_label('min_votes')} », puis re-teste."
+    prob, votes = _label("prob_min"), _label("min_votes")
     if n_emis == 0:
-        reserve = f"Le vote n'a jamais conclu : {reglage}"
+        reserve = tr("mesure.mi_test.reserve.muet", prob=prob, votes=votes)
     elif niveau == "faible" and (essais_par_classe or 0) < plus_long:
-        reserve = (f"Pas distinguable du hasard ({texte_p(p)}) : à {n_emis} essais décidés on ne "
-                   f"peut pas conclure — refais le test à {plus_long} essais par classe avant de "
-                   f"juger.")
+        reserve = tr("mesure.mi_test.reserve.faible_court", p=texte_p(p), emis=n_emis,
+                     long=plus_long)
     elif niveau == "faible":
-        reserve = (f"Pas distinguable du hasard même sur un test long ({texte_p(p)}) : réentraîne "
-                   f"— contact de C3/Cz/C4, immobilité, imagerie kinesthésique (SENTIR, pas voir).")
+        reserve = tr("mesure.mi_test.reserve.faible_long", p=texte_p(p))
     elif taux < EMISSION_MIN_BON:
-        reserve = f"Le moteur ne décide que sur {pct(taux)} des essais : {reglage}"
+        reserve = tr("mesure.mi_test.reserve.silencieux", taux=pct(taux), prob=prob, votes=votes)
     elif niveau == "moyen":
-        reserve = ("Au-dessus du hasard, mais sous le repère du projet : réentraîne, contact de "
-                   "C3/Cz/C4 et imagerie kinesthésique (SENTIR, pas voir).")
+        reserve = tr("mesure.mi_test.reserve.moyen")
     else:
-        reserve = ("Mesuré sur CETTE séance : le MI baisse avec la fatigue — re-teste après une "
-                   "pause avant de transcrire ces réglages dans ton application.")
+        reserve = tr("mesure.mi_test.reserve.bon")
 
     par_classe = {c: {"essais": sum(1 for k, _d in decisions if k == c),
                       "decides": sum(1 for k, d in decisions if k == c and d is not None),
                       "justes": sum(1 for k, d in decisions if k == c and d == c)}
                   for c in classes}
-    verdict = (
-        f"{mot} — sur {n_essais} ESSAIS (une décision par essai : ce que `decoded_mi` publiait à "
-        f"la fin de l'imagerie, jamais une par fenêtre), le moteur a conclu {n_emis} fois — soit "
-        f"{pct(taux)} d'émission — et il avait raison {n_justes} fois sur {n_emis}, soit "
-        f"{pct(justesse)} [IC95 {ic_bas * 100:.0f} ; {ic_haut * 100:.0f}] pour un hasard à "
-        f"{pct(hasard)} ({len(classes)} classes) — test binomial exact sur les essais décidés, "
-        f"{texte_p(p)} : {'au-dessus du hasard' if au_dessus else 'indistinguable du hasard'}. "
-        f"Les {n_essais - n_emis} essai(s) sans décision "
-        f"(vote non conclu) ne comptent ni comme une erreur ni comme REPOS. ")
+    verdict = tr("mesure.mi_test.verdict.base", mot=mot, n=n_essais, emis=n_emis, taux=pct(taux),
+                 justes=n_justes, justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
+                 haut=f"{ic_haut * 100:.0f}", hasard=pct(hasard), k=len(classes), p=texte_p(p),
+                 conclusion=(tr("mesure.commun.au_dessus") if au_dessus
+                             else tr("mesure.commun.indistinguable")),
+                 silences=n_essais - n_emis)
     if perdus:
-        verdict += (f"⚠️ {perdus} essai(s) de plus ont été JOUÉS mais ne sont pas dans ce calcul : "
-                    f"le tampon du moteur ne les couvrait pas. ")
-    verdict += ("Par classe (justes / décidés / essais) : "
-                + ", ".join(f"{c} {v['justes']}/{v['decides']}/{v['essais']}"
-                            for c, v in par_classe.items()) + ". ")
-    verdict += (f"Aucun repère du projet à {len(classes)} classes." if repere is None else
-                f"Repère du projet à {len(classes)} classes : {pct(repere)} (calibration hors "
-                f"ligne, une personne).")
+        verdict += tr("mesure.mi_test.verdict.perdus", n=perdus)
+    verdict += tr("mesure.mi_test.verdict.par_classe",
+                  liste=", ".join(f"{c} {v['justes']}/{v['decides']}/{v['essais']}"
+                                  for c, v in par_classe.items()))
+    verdict += (tr("mesure.mi_test.verdict.sans_repere", k=len(classes)) if repere is None else
+                tr("mesure.mi_test.verdict.repere", k=len(classes), repere=pct(repere)))
 
     return {
         "n_essais": n_essais, "n_emis": n_emis, "n_justes": n_justes,
@@ -320,22 +314,8 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
 # Le facteur dont l'effectif serait gonflé si on comptait les fenêtres, depuis les constantes.
 FENETRES_PAR_ESSAI = int(round((MI_CUE_S + MI_IMAGERY_S - MI_WINDOW_S) * MI_DECODE_HZ)) + 1
 
-HONNETETE = (
-    "Ce test mesure la règle du PRODUIT — ton modèle, sa probabilité minimale, son vote — sur les "
-    "réglages avec lesquels il a été lancé : une décision par essai, celle que `decoded_mi` "
-    f"publiait quand l'imagerie se terminait. Les {FENETRES_PAR_ESSAI} fenêtres glissantes d'un "
-    "essai ne sont pas autant d'observations : les compter rétrécirait l'intervalle d'un facteur "
-    f"~{FENETRES_PAR_ESSAI ** 0.5:.0f} sans rien apprendre.\n"
-    "Un essai SANS décision (vote non conclu, `intent_index = -1`) compte dans le taux d'émission, "
-    "jamais comme une erreur, et JAMAIS comme REPOS : REPOS est une classe que le modèle doit "
-    "reconnaître, « je ne sais pas » n'en est pas une.\n"
-    "Repères : la seule séance de référence du projet, mesurée honnêtement en CALIBRATION (hors "
-    "ligne), donnait 40 % à 3 classes (p = 0,082, PAS significatif) et 63 % à 2 classes "
-    "(p = 0,038). Aucun repère EN DIRECT : le Motor Imagery n'a jamais été décodé au casque à "
-    "travers le moteur. Un modèle est propre à UNE personne, et la justesse chute avec la fatigue "
-    "(57 % puis 33 % entre les deux moitiés de la séance de référence) : ce score décrit CETTE "
-    "séance."
-)
+HONNETETE = tr("mesure.mi_test.honnetete", fenetres=FENETRES_PAR_ESSAI,
+               facteur=f"{FENETRES_PAR_ESSAI ** 0.5:.0f}")
 
 
 def _duree_min(par_classe, n_classes):
@@ -345,41 +325,34 @@ def _duree_min(par_classe, n_classes):
 
 
 BRIEFING = (
-    "Ce test rejoue le protocole d'ENTRAÎNEMENT, mais le moteur DÉCIDE au lieu d'apprendre : à la "
-    "fin de chaque essai, il dit quelle classe il a reconnue avec ton modèle, et on compare à la "
-    "consigne.",
-    f"Déroulé : stabilisation du casque ({MesureRuntime.warmup_s:.0f} s), puis les essais, tirés au "
-    f"hasard : {MI_REST_S:g} s de pause, puis {MI_CUE_S + MI_IMAGERY_S:.0f} s d'imagerie sur la "
-    f"consigne affichée.",
-    "Un TOP sonore marque le début et la fin de chaque essai ; la consigne est écrite à l'écran.",
-    "Imagine EXACTEMENT comme à l'entraînement : dès la consigne, en SENTANT le serrement, sans "
-    "bouger la main, et tiens jusqu'à la pause. REPOS = ne rien imaginer.",
-    "Il faut un modèle entraîné : c'est lui qui décide. Rien n'est écrit sur le disque — ce test "
-    "rend un score, pas un modèle.",
+    tr("mesure.mi_test.briefing.1"),
+    tr("mesure.mi_test.briefing.2", chauffe=f"{MesureRuntime.warmup_s:.0f}",
+       pause=f"{MI_REST_S:g}".replace(".", ","), essai=f"{MI_CUE_S + MI_IMAGERY_S:.0f}"),
+    tr("mesure.mi_test.briefing.3"),
+    tr("mesure.mi_test.briefing.4"),
+    tr("mesure.commun.modele_requis"),
 )
 
 
 SPEC = MesureSpec(
     id="mi_test",
-    label="Tester le Motor Imagery",
-    summary="Le protocole d'entraînement, rejoué : le moteur décide avec ton modèle et tes "
-            "réglages, et on compare à la consigne.",
+    label=tr("mesure.mi_test.label"),
+    summary=tr("mesure.mi_test.summary"),
     briefing=BRIEFING,
     # Les `Param` du MODE, les MÊMES objets : sans modèle, `contract.validate` refuse le test avec
     # la raison du mode — pas l'interface.
     params=tuple(SPEC_MI.params) + (
         Param(
             key="trials_per_class",
-            label="Essais par classe",
+            label=tr("mesure.mi_test.param.essais.label"),
             kind="choice",
             default=ESSAIS_PAR_CLASSE_DEFAUT,
             choices=ESSAIS_PAR_CLASSE,
-            help=(f"Court par défaut, parce qu'on refait ce test à chaque réglage. Mais un test "
-                  f"court a un intervalle de confiance LARGE : si le verdict dit « pas distinguable "
-                  f"du hasard », prends {max(ESSAIS_PAR_CLASSE)} — l'effectif de la séance "
-                  f"de référence du projet. À 3 classes : "
-                  + ", ".join(f"{n} ≈ {_duree_min(n, 3):.1f} min".replace(".", ",")
-                              for n in ESSAIS_PAR_CLASSE) + "."),
+            # L'aide de la bulle ⓘ : ce que ça change, quand le changer, la durée de chaque choix.
+            help=tr("mesure.mi_test.param.essais.aide", long=max(ESSAIS_PAR_CLASSE),
+                    durees=", ".join(tr("mesure.commun.duree", n=n,
+                                        minutes=f"{_duree_min(n, 3):.1f}".replace(".", ","))
+                                     for n in ESSAIS_PAR_CLASSE)),
         ),
     ),
     runtime_cls=MesureMI,
@@ -636,7 +609,9 @@ def _selftest():
         chk(bon["niveau"] == "bon" and bon["mot"] == "AU NIVEAU DU REPÈRE",
             f"14/18 à 3 classes, intervalle au-dessus du hasard -> bon ({bon['chiffres']})")
         muet_souvent = noter(_dec(MI_LABELS, 24, 5, 5), MI_LABELS, essais_par_classe=8)
-        chk(muet_souvent["niveau"] == "moyen" and "Probabilité minimale" in muet_souvent["reserve"],
+        # Le libellé est LU dans le contrat du mode (comme la réserve le fait) : renommé là-bas,
+        # ce test suivrait, au lieu de rougir sur une chaîne recopiée ici.
+        chk(muet_souvent["niveau"] == "moyen" and _label("prob_min") in muet_souvent["reserve"],
             f"5/5 justes sur 5 décisions en 24 essais -> moyen, et la réserve dit quel réglage "
             f"toucher ({muet_souvent['reserve']})")
         sous_repere = noter(_dec(MI_LABELS, 400, 400, 156), MI_LABELS)

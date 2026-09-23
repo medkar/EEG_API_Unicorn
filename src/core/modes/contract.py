@@ -25,6 +25,9 @@ from dataclasses import dataclass
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (BANDPASS, TOLERANCE_DIVISEUR, WINDOW_S,  # noqa: E402
                          available_frequencies, use_utf8_console)
+# Les refus sont lus dans `core/langues/<langue>/moteur.json`. `core.i18n` n'importe rien du dépôt :
+# aucun cycle possible, alors que ce module-ci est importé par tous les modes.
+from core.i18n import tr  # noqa: E402
 from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
@@ -279,8 +282,8 @@ def validate(spec, params):
     known = {p.key: p for p in spec.params}
     inconnus = sorted(k for k in params if k not in known)
     if inconnus:
-        return None, (f"réglage inconnu pour « {spec.label} » : {', '.join(inconnus)} "
-                      f"(attendu : {', '.join(sorted(known)) or 'aucun réglage'})")
+        return None, tr("moteur.contrat.inconnu", mode=spec.label, cles=", ".join(inconnus),
+                        attendus=", ".join(sorted(known)) or tr("moteur.contrat.aucun_reglage"))
 
     values = spec.defaults()
     for key, param in known.items():
@@ -305,17 +308,17 @@ def _unit(param):
 
 def _check_bounds(param, value):
     if param.min is not None and value < param.min:
-        return (f"« {param.label} » : {value:g}{_unit(param)} est sous le minimum "
-                f"{param.min:g}{_unit(param)}")
+        return tr("moteur.contrat.sous_minimum", reglage=param.label,
+                  valeur=f"{value:g}{_unit(param)}", borne=f"{param.min:g}{_unit(param)}")
     if param.max is not None and value > param.max:
-        return (f"« {param.label} » : {value:g}{_unit(param)} dépasse le maximum "
-                f"{param.max:g}{_unit(param)}")
+        return tr("moteur.contrat.au_dessus_maximum", reglage=param.label,
+                  valeur=f"{value:g}{_unit(param)}", borne=f"{param.max:g}{_unit(param)}")
     return None
 
 
 # Le refus d'un mode à modèle quand aucun modèle n'existe. UNE phrase, partagée par les quatre
 # (MI, P300, ErrP, c-VEP) et par leurs tests, qui reprennent les `Param` du mode.
-SANS_MODELE = "Aucun modèle entraîné : dans la console, clique « Entraîner » sur la page du mode."
+SANS_MODELE = tr("moteur.contrat.sans_modele")
 
 
 def _coerce(param, value):
@@ -330,25 +333,29 @@ def _coerce(param, value):
             # comment en obtenir un, sinon l'étudiant voit un champ vide et rien d'autre.
             if param.si_vide:
                 return None, param.si_vide
-            detail = f" — {param.help}" if param.help else ""
-            return None, f"« {param.label} » : aucun choix disponible{detail}"
+            if param.help:
+                return None, tr("moteur.contrat.aucun_choix_aide", reglage=param.label,
+                                aide=param.help)
+            return None, tr("moteur.contrat.aucun_choix", reglage=param.label)
         if value not in choix:
-            return None, (f"« {param.label} » : {value!r} n'est pas un choix valide "
-                          f"({', '.join(str(c) for c in choix)})")
+            return None, tr("moteur.contrat.choix_invalide", reglage=param.label,
+                            valeur=repr(value), choix=", ".join(str(c) for c in choix))
         return value, None
 
     if param.kind == "float_list":
         if isinstance(value, (str, bytes)):
-            return None, f"« {param.label} » : liste de nombres attendue, reçu {value!r}"
+            return None, tr("moteur.contrat.liste_attendue", reglage=param.label,
+                            valeur=repr(value))
         try:
             values = tuple(float(v) for v in value)
         except (TypeError, ValueError):
-            return None, f"« {param.label} » : liste de nombres attendue, reçu {value!r}"
+            return None, tr("moteur.contrat.liste_attendue", reglage=param.label,
+                            valeur=repr(value))
         if param.count:
             lo, hi = param.count
             if not lo <= len(values) <= hi:
-                return None, (f"« {param.label} » : il en faut entre {lo} et {hi}, "
-                              f"il y en a {len(values)}")
+                return None, tr("moteur.contrat.nombre_elements", reglage=param.label,
+                                mini=lo, maxi=hi, n=len(values))
         for v in values:
             reason = _check_bounds(param, v)
             if reason:
@@ -358,7 +365,7 @@ def _coerce(param, value):
     try:
         converted = int(value) if param.kind == "int" else float(value)
     except (TypeError, ValueError):
-        return None, f"« {param.label} » : nombre attendu, reçu {value!r}"
+        return None, tr("moteur.contrat.nombre_attendu", reglage=param.label, valeur=repr(value))
     reason = _check_bounds(param, converted)
     return (None, reason) if reason else (converted, None)
 
@@ -374,9 +381,8 @@ def _check_constraints(param, values):
             lo, hi = BANDPASS
             hors = [v for v in _as_list(values.get(param.key)) if not lo <= v <= hi]
             if hors:
-                return (f"« {param.label} » : hors bande passante {lo:g}-{hi:g} Hz : "
-                        + ", ".join(f"{v:g}" for v in hors)
-                        + " — le filtre d'acquisition les supprime AVANT le décodage")
+                return tr("moteur.contrat.hors_bande", reglage=param.label,
+                          valeurs=", ".join(f"{v:g}" for v in hors), bas=f"{lo:g}", haut=f"{hi:g}")
 
         elif name == "separables":
             # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
@@ -385,9 +391,10 @@ def _check_constraints(param, values):
             ordonne = sorted(_as_list(values.get(param.key)))
             proches = [(a, b) for a, b in zip(ordonne, ordonne[1:]) if b - a < ecart_min]
             if proches:
-                return (f"« {param.label} » : cibles trop proches pour une fenêtre de "
-                        f"{WINDOW_S:g} s (écart minimum {ecart_min:.2f} Hz) : "
-                        + ", ".join(f"{a:g} et {b:g}" for a, b in proches))
+                return tr("moteur.contrat.trop_proches", reglage=param.label,
+                          paires=", ".join(tr("moteur.contrat.paire", a=f"{a:g}", b=f"{b:g}")
+                                           for a, b in proches),
+                          fenetre=f"{WINDOW_S:g}", ecart=f"{ecart_min:.2f}")
 
         elif name == "divise_le_refresh":
             # Une fréquence n'est affichable sans jitter que si c'est un diviseur ENTIER du
@@ -396,24 +403,24 @@ def _check_constraints(param, values):
             # juste zéro détection — donc on la refuse ICI plutôt que de la laisser en séance.
             refresh = float(values.get("refresh_hz") or 0.0)
             if refresh <= 0:
-                return (f"« {param.label} » : le rafraîchissement doit être strictement positif "
-                        f"({refresh:g} Hz est invalide)")
+                return tr("moteur.contrat.refresh_positif", reglage=param.label,
+                          valeur=f"{refresh:g}")
             for v in _as_list(values.get(param.key)):
                 if v <= 0:
-                    return (f"« {param.label} » : une fréquence doit être strictement positive "
-                            f"({v:g} Hz est invalide)")
+                    return tr("moteur.contrat.frequence_positive", reglage=param.label,
+                              valeur=f"{v:g}")
                 k = round(refresh / v)
                 exact = refresh / k if k >= 2 else 0.0
                 # k < 2 : soit la fréquence dépasse le refresh, soit elle l'égale — dans les
                 # deux cas il n'y a pas de clignotement du tout.
                 if k < 2 or abs(v - exact) > TOLERANCE_DIVISEUR * exact:
-                    proches = sorted((f for _n, f in available_frequencies(refresh)),
-                                     key=lambda f: abs(f - v))[:2]
-                    return (f"« {param.label} » : {v:g} Hz n'est pas un diviseur entier de "
-                            f"{refresh:g} Hz — l'affichage sauterait des cycles et le décodeur "
-                            f"corrélerait contre une sinusoïde que personne n'affiche. Les "
-                            f"plus proches sont "
-                            + " et ".join(f"{f:g}" for f in proches) + " Hz")
+                    proches = [f"{f:g}" for f in sorted(
+                        (f for _n, f in available_frequencies(refresh)),
+                        key=lambda f: abs(f - v))[:2]]
+                    return tr("moteur.contrat.pas_diviseur", reglage=param.label,
+                              valeur=f"{v:g}", refresh=f"{refresh:g}",
+                              proches=(tr("moteur.contrat.paire", a=proches[0], b=proches[1])
+                                       if len(proches) == 2 else ", ".join(proches)))
 
         elif name == "votes_atteignables":
             # Deux réglages numériques bornés INDÉPENDAMMENT (chacun dans sa propre plage),
@@ -431,16 +438,13 @@ def _check_constraints(param, values):
             vote_len = values.get("vote_len")
             if vote_len is None or min_votes is None:
                 manquante = "vote_len" if vote_len is None else param.key
-                return (f"« {param.label} » : contrainte « votes_atteignables » déclarée, mais "
-                        f"« {manquante} » n'a pas de valeur dans ce mode — la contrainte ne "
-                        f"pourrait jamais être vérifiée (défaut du contrat)")
+                return tr("moteur.contrat.votes_partenaire", reglage=param.label, champ=manquante)
             if min_votes > vote_len:
-                return (f"« {param.label} » : {min_votes} votes exigés sur seulement "
-                        f"{vote_len} fenêtres de vote — jamais atteignable, le mode ne "
-                        f"déciderait plus jamais rien")
+                return tr("moteur.contrat.votes_inatteignables", reglage=param.label,
+                          votes=min_votes, fenetres=vote_len)
 
         else:
-            return f"contrainte inconnue « {name} » sur « {param.label} » (défaut du contrat)"
+            return tr("moteur.contrat.contrainte_inconnue", nom=name, reglage=param.label)
     return None
 
 
