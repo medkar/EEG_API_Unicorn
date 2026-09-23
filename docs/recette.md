@@ -925,7 +925,7 @@ le score serait plausible et faux. Un mode qui ne lit aucun marqueur (le SSVEP) 
 **Les cinq tests** — la décision est toujours celle du **mode**, jamais réécrite ; les autotests du
 MI, du P300, du c-VEP et de l'ErrP la comparent, essai par essai, à celle d'un vrai runtime du mode :
 
-| Test | Un essai = | Hasard | Par défaut | Vert quand (sinon orange ; rouge si l'intervalle contient le hasard) |
+| Test | Un essai = | Hasard | Par défaut | Vert quand (sinon orange ; rouge si le binomial exact ne rejette pas le hasard à p < 0,05) |
 |---|---|---|---|---|
 | SSVEP (`ssvep_mesure.py`) | un essai guidé, UNE décision | 1 / nombre de cibles | 36 essais, ≈ 3,6 min | justesse ≥ 90 % **et** émission ≥ 44 % |
 | MI (`mi_test.py`) | un essai ; la DERNIÈRE sortie | 1 / classes du modèle | 6/classe, ≈ 2,8 min | justesse ≥ 40,0 % (3 cl.) ou 63,3 % (G/D) **et** émission ≥ 44 % |
@@ -1102,9 +1102,10 @@ briefing actuel ne compte pas les flèches.)*
       fait passer un régime parfaitement normal pour une panne ; la justesse seule fait croire à un
       sans-faute. Un long silence entre deux verdicts justes **est** le régime normal de ce mode.
 - [ ] **Le mot en face** (depuis le 2026-09-22, mêmes mots que le test du MI) : **AU NIVEAU DU
-      REPÈRE** (vert) si la justesse atteint 90 % **et** l'émission 44 %, l'intervalle au-dessus du
-      hasard ; **UTILISABLE** (orange) au-dessus du hasard sans les deux ; **FAIBLE** (rouge) si
-      l'intervalle contient le hasard ; **MUET** (rouge) si le moteur n'a rien annoncé. La séance
+      REPÈRE** (vert) si la justesse atteint 90 % **et** l'émission 44 %, le hasard étant rejeté ;
+      **UTILISABLE** (orange) au-dessus du hasard sans les deux ; **FAIBLE** (rouge) si le test
+      binomial exact ne rejette PAS le hasard (p ≥ 0,05) ; **MUET** (rouge) si le moteur n'a rien
+      annoncé. La séance
       du 2026-09-22 — 18 annonces sur 36, les 18 justes — se lirait en vert.
 - [ ] ⚠️ **L'effectif annoncé est un nombre d'ESSAIS, pas de fenêtres.** Les fenêtres du moteur se
       chevauchent (1,5 s toutes les 0,2 s), donc une fixation en contient sept ou huit ; les compter
@@ -1228,14 +1229,29 @@ python src/console/app.py --mode mi
       s'est terminée ; l'essai entier (7 s) est enregistré pour que le plus long vote permis ne
       manque jamais de fenêtres. Rien n'est écrit sur le disque.
       Justesse : ______ % · émission : ______ % · mot : ______ .
-      ⚠️ **Rouge est un résultat attendu, pas une panne de l'outil** : le rouge dit que l'intervalle
-      de confiance contient le hasard, et la séance de référence elle-même (40 % sur 30 essais,
-      Wilson [25 ; 58] contre un hasard à 33 %) sortirait rouge. Vert exige d'être au-dessus du
-      hasard, au repère (40,0 % / 63,3 %) **et** d'émettre au moins 44 % du temps — le seul repère
-      d'émission du projet, celui du SSVEP ; sans ce plancher, un moteur qui ne parle que sur 3
-      essais sur 24 et a raison 3 fois serait vert. **MUET** : le vote ne conclut jamais — baisse
-      « Probabilité minimale » ou « Votes concordants », ne resaline pas. Pour un chiffre qui
-      tranche, 10 essais par classe (≈ 4,5 min).
+      ⚠️ **Rouge est un résultat attendu ici, pas une panne de l'outil.** Depuis le 2026-09-22 la
+      porte « au-dessus du hasard » est un **test binomial EXACT unilatéral à p < 0,05** (Wilson
+      reste l'intervalle AFFICHÉ, il ne décide plus rien) — le changement vient d'un test c-VEP
+      peint orange sur UNE décision juste. Ce que ça donne au MI, calculé, pas mesuré :
+
+      ⚠️ La porte porte sur les essais **ANNONCÉS** (le vote a conclu), pas sur tous : un `-1` sort
+      du dénominateur. Le tableau suppose que tous annoncent — le cas le plus favorable.
+
+      | Longueur | Il faut, sur les essais annoncés | Le repère du projet |
+      |---|---|---|
+      | 6/classe, 3 classes (18 annoncés) | **10/18 = 56 %** (p = 0,043) | 40,0 % → p = 0,391, **rouge** |
+      | 10/classe, 3 classes (30 annoncés) | **15/30 = 50 %** (p = 0,043) | 40,0 % → p = 0,276, **rouge** |
+      | 6/classe, G/D (12 annoncés) | **10/12 = 83 %** (p = 0,019) | 63,3 % → **rouge** |
+      | 10/classe, G/D (20 annoncés) | **15/20 = 75 %** (p = 0,021) | 63,3 % → p = 0,100, **rouge** |
+
+      🔴 **Conséquence à connaître avant de s'asseoir : à ces longueurs, un système exactement au
+      repère du projet sort ROUGE, quelle que soit l'option choisie.** Ce n'est pas un défaut du
+      seuil — c'est que 18 à 30 essais ne séparent pas 40 % de 33 %. Le rouge du MI se lit donc
+      « pas de preuve », jamais « ça ne marche pas » ; le chiffre et sa p-value, eux, se notent.
+      Vert exige en plus d'émettre au moins 44 % du temps — le seul repère d'émission du projet,
+      celui du SSVEP ; sans ce plancher, un moteur qui ne parle que sur 3 essais sur 24 et a raison
+      3 fois serait vert. **MUET** : le vote ne conclut jamais — baisse « Probabilité minimale » ou
+      « Votes concordants », ne resaline pas.
 - [ ] **Le décodage continu, pour regarder** : grille → tuile **Motor Imagery** → **Démarrer**
       (la page n'a plus ce bouton depuis le 2026-09-22), puis page Motor Imagery → case
       **« Décodage en direct »**. Après la chauffe de 15 s, une barre par classe et un verdict qui
@@ -1303,10 +1319,12 @@ passent par le `_run_step` du mode lui-même (garde de cible, plafond par cible,
 - [ ] **Un essai = une manche** ; le hasard est **1/6** (`1 / n_targets` du runtime), jamais 50 %.
       Justes : ______ / 6 · mot : ______ .
 - [ ] Les seuils sont ceux de la table d'**entraînement** (`p300_calib.VERDICTS`), lus et non
-      recopiés : **vert à 80 %, orange de 60 à 80 %, rouge en dessous** — ou si l'intervalle de
-      Wilson contient le hasard. Donc **5/6 vert, 4/6 orange, 3/6 rouge** : une ou deux erreurs sur
-      six sont attendues (paragraphe suivant). Six manches donnent un intervalle LARGE ; si la
-      réserve le dit, refais à **24** (≈ 4,1 min).
+      recopiés : **vert à 80 %, orange de 60 à 80 %, rouge en dessous** — ou si le **test binomial
+      exact** ne rejette pas le hasard à p < 0,05 (la porte commune à tous les tests depuis le
+      2026-09-22 ; Wilson reste l'intervalle affiché, il ne décide plus). Donc **5/6 vert
+      (p < 0,001), 4/6 orange (p = 0,009), 3/6 rouge (p = 0,062 — la porte se ferme là)** : une ou
+      deux erreurs sur six sont attendues (paragraphe suivant). À **24** manches (≈ 4,1 min) la
+      porte s'ouvre dès **8/24** (p = 0,035) : plus d'essais, moins de justes exigés en proportion.
 - [ ] Une manche sans décision (`-1`) compte comme une sélection **ratée**, et la réserve en nomme
       la cause (liaison, tampon) — à marge nulle, le mode tranche toujours une manche complète, donc
       un `-1` est une perte, pas une abstention.

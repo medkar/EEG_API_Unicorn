@@ -417,11 +417,17 @@ réserve —, le reste replié sous « Détails » (`core/modes/affichage.py`).
   ⚠️ **UN ESSAI = UNE DÉCISION** : les fenêtres du moteur se chevauchent (1,5 s toutes les 0,2 s),
   les compter gonflerait l'effectif d'un facteur ~7 et rétrécirait l'intervalle de confiance de √7.
   L'effectif annoncé est un nombre d'essais.
-- 🔴 **Un désaccord CONSTATÉ et NON corrigé, à connaître avant de citer un taux** : le σ du rejet
-  d'artefact est pris sur les **8** voies par la mesure et sur les **4 occipitales filtrées** par le
-  mode. L'écart est **antérieur** — `ssvep_guided.py` faisait déjà ainsi — donc c'est la règle sous
-  laquelle les repères 100 %/44 % du 2026-07-27 ont été obtenus. L'aligner maintenant rendrait le
-  prochain chiffre incomparable au seul dont on dispose. **Décision à prendre hors chantier.**
+- 🔴 **Ce test DÉCIDE PAR LE RUNTIME DU MODE depuis le 2026-09-22** (`SsvepRuntime._rest_step` /
+  `._run_step`), il ne réécrit plus sa règle. Il prenait le σ du rejet d'artefact sur les **8**
+  voies là où le mode le prend sur les **4 occipitales filtrées** — écart **antérieur**,
+  `ssvep_guided.py` faisait déjà ainsi. Un clignement frontal fort faisait rejeter au test un essai
+  que le mode décode (taux sous-estimé) ; un artefact de nuque, dilué dans 8 voies, passait au test
+  et pas au mode (sur-estimé). Un correctif futur du mode est désormais mesuré ici sans une ligne à
+  reporter.
+  ⚠️ **Le prix, à connaître avant de citer un taux** : les repères 100 %/44 % du 2026-07-27 ont été
+  obtenus sous l'ANCIENNE règle, donc **les chiffres de ce test ne s'y comparent plus tels quels**.
+  §4 et §9 tranchent ainsi — un test décide comme le produit, la comparabilité est une NOTE (elle
+  est dans le texte d'honnêteté du résultat), pas une contrainte de protocole.
 - ⚠️ **Ni l'une ni l'autre n'a jamais vu un cerveau.** Elles ont été éprouvées sur du bruit blanc et
   des sinusoïdes posées à la main. Ce sont les tests 2.1 et 2.2 de la recette.
 

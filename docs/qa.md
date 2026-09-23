@@ -644,7 +644,8 @@ dans ton alpha — prends alors le jeu proposé, et **note que le chiffre n'est 
 lire ENSEMBLE. Repères du **2026-07-27** : **100 % de justesse** (0 confusion sur 36) pour **44 %
 d'émission**. Le 2026-09-22 : 18 annonces sur 36, les 18 justes.
 ✅ Le mot : vert si justesse ≥ 90 % **et** émission ≥ 44 % ; orange au-dessus du hasard ; rouge si
-l'intervalle contient le hasard, ou **MUET** si le moteur n'a rien annoncé.
+le **test binomial exact** ne rejette pas le hasard (p ≥ 0,05), ou **MUET** si le moteur n'a rien
+annoncé. ⚠️ Wilson reste l'intervalle AFFICHÉ ; depuis le 2026-09-22 il ne décide plus rien.
 ✅ Bilan de la fenêtre au bandeau : relève le **% de frames sautées** (point 1.13).
 
 ❌ Régression : la justesse s'effondre — c'est le **seul** mode déjà validé sur un cerveau : suspecte
@@ -689,9 +690,10 @@ Page **P300** → **« Entraîner »** (~2,2 min, 12 manches) → « Commencer �
 ✅ « ← P300 » → **« Tester »** (6 manches, ~1,2 min) → « Commencer ». À chaque manche la fenêtre
 **cercle** une cible : fixe-la.
 ✅ Le verdict : « … de cibles justes … (hasard 17 %) sur 6 manches ». Vert à 80 %, orange de 60 à
-80 %, rouge en dessous ou si l'intervalle contient le hasard : **5/6 vert, 4/6 orange, 3/6 rouge**.
-⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). Six manches donnent un
-intervalle LARGE : si la réserve le dit, refais à **24 manches** (~4,1 min).
+80 %, rouge en dessous ou si le binomial exact ne rejette pas le hasard : **5/6 vert (p < 0,001),
+4/6 orange (p = 0,009), 3/6 rouge (p = 0,062 — la porte se ferme là)**.
+⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). À **24 manches** (~4,1 min)
+la porte s'ouvre dès **8/24** (p = 0,035) : si la réserve le dit, refais à 24.
 ✅ ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit. Le
 briefing affirme le contraire : constat ouvert 3.
 
@@ -732,9 +734,12 @@ mène : il tire les classes, affiche les consignes, décompte. Aucune fenêtre.
 **40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en gauche/droite** (p = 0,038).
 ✅ « ← Motor Imagery » → **« Tester »** (6 essais/classe, ~2,8 min) → « Commencer ». Même consignes
 que l'entraînement, **même top latéralisé** (oreille gauche = poing gauche), et le moteur décide.
-✅ ⚠️ **Rouge est un résultat attendu, et il ne condamne pas l'outil** : même la séance de
-référence (40 % sur 30 essais) a un intervalle qui contient le hasard, donc elle sortirait rouge.
-Pour un chiffre qui tranche, refais à **10 essais/classe** (~4,5 min).
+🔴 **Rouge est le résultat ATTENDU ici, à toutes les longueurs.** Sur les essais **annoncés**
+(un `-1` sort du dénominateur), il faut **10/18** si les 18 annoncent, **15/30** à 10/classe,
+pour rejeter le hasard — le repère du projet est
+à 40 % (p = 0,391 et p = 0,276). 18 à 30 essais ne séparent pas 40 % de 33 %. Lis ce rouge
+« pas de preuve », jamais « ça ne marche pas », et **note le chiffre et sa p-value**. Rallonger à
+10 essais/classe (~4,5 min) ne suffit pas non plus : c'est un constat, pas un réglage.
 
 ❌ Échec : un chiffre d'entraînement nettement au-dessus des repères doit **éveiller un soupçon** —
 c'est ce que la fuite entre fenêtres produisait (79 % non reproductible).

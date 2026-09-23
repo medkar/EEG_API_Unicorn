@@ -523,10 +523,18 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   monte, mais ce n'est pas de l'alpha ») n'a jamais été vue sur un vrai signal.
 - **Le chantier « Configurer · Entraîner · Tester » (2026-09-22) n'a rien mesuré non plus**, et il
   ne change aucun chiffre du décodage. **Aucun des cinq « Tester » n'a vu un casque** (ils sont nés
-  après la séance). Leurs seuils de couleur sont argumentés sur UNE séance de référence chacun ; au
-  c-VEP, un système exactement au repère ne sort vert qu'environ une fois sur quatre à 18 blocs
-  (calcul binomial, pas une mesure) ; le repos de référence du test ErrP (estimé 2-5 s) n'a jamais
-  été mesuré et n'est affiché nulle part.
+  après la séance). Leurs seuils de couleur sont argumentés sur UNE séance de référence chacun, et
+  **deux tests rendent un ROUGE ATTENDU sur un système exactement au repère du projet** — ce qui se
+  sait avant de s'asseoir, sinon on cherche une panne qui n'existe pas :
+  - **c-VEP** : vert avec une probabilité de **0,22** à 18 blocs (une fois sur quatre ou cinq).
+  - **Motor Imagery** : **jamais** vert. Sur les essais ANNONCÉS (un `-1` sort du dénominateur)
+    il faut 10/18 à 6 essais/classe, 15/30 à 10/classe pour que le binomial exact rejette le
+    hasard ; le repère est à 40 % (p = 0,391 et p = 0,276). 18 à 30 essais ne séparent pas
+    40 % de 33 %.
+
+  Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
+  n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait
+  REFUSER de conclure.
 - 🟠 **Des constats de la revue du 2026-09-08 restent parqués.** La console prenait `accepted` pour
   « la séance a démarré » : corrigé pour l'enregistrement de séance et pour le lancement des
   fenêtres (elles attendent de VOIR la séance dans `snapshot()`, 2026-09-10), **pas audité
