@@ -84,6 +84,11 @@ visible aux autotests :
 Et une demande, pas un défaut : « Vérifier le casque » devrait juger CHAQUE électrode, pas seulement
 l'alpha (constat ouvert n° 4).
 
+Joués ensuite le même jour, sans casque : **1.12 ✅** (casque éteint → « ⛔ LE MOTEUR S'EST ARRÊTÉ »
+à l'écran) et **1.13 : 0,6 % de frames sautées en séance ET 0,6 % fenêtre seule.** Ce n'est donc pas
+la contention console + moteur : c'est la fenêtre ou le pilote. Sous le seuil de 2 % qui bloquerait
+le c-VEP ; premier suspect à tester, le ramasse-miettes de Python (point 1.13).
+
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
 essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
