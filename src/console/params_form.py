@@ -35,6 +35,30 @@ def infobulle(*paragraphes):
     return "<qt>" + corps + "</qt>"
 
 
+class _SansMolette:
+    """Un champ que la MOLETTE ne modifie pas : elle fait défiler la page, pas la valeur.
+
+    Demandé le 2026-09-24. Qt fait tourner la valeur d'une liste ou d'un champ numérique sous la
+    souris : en faisant défiler une page de réglages, on changeait en passant un seuil ou un
+    modèle, sans le voir. `ignore()` renvoie l'événement au parent — la zone qui défile.
+    """
+
+    def wheelEvent(self, event):  # noqa: N802 - nom imposé par Qt
+        event.ignore()
+
+
+class ListeSansMolette(_SansMolette, QComboBox):
+    pass
+
+
+class EntierSansMolette(_SansMolette, QSpinBox):
+    pass
+
+
+class DecimalSansMolette(_SansMolette, QDoubleSpinBox):
+    pass
+
+
 class ParamsForm(QWidget):
     """Un champ par `Param`, plus son aide, plus un bouton et une ligne de refus."""
 
@@ -169,7 +193,7 @@ class ParamsForm(QWidget):
             champ.setChecked(bool(param["default"]))
             return champ
         if kind == "choice":
-            champ = QComboBox()
+            champ = ListeSansMolette()
             champ.addItems([str(c) for c in param["choices"]])
             # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément —
             # c'était invisible tant que tous les « choice » du projet avaient leur défaut EN
@@ -190,7 +214,7 @@ class ParamsForm(QWidget):
             champ.setPlaceholderText(tr("console.formulaire.liste_indice",
                                         min=bornes[0], max=bornes[1]))
             return champ
-        champ = QSpinBox() if kind == "int" else QDoubleSpinBox()
+        champ = EntierSansMolette() if kind == "int" else DecimalSansMolette()
         # Volontairement PLUS LARGES que les bornes du contrat, et pas seulement quand le contrat
         # n'en donne pas. Un QSpinBox écrête en silence : réglé sur [0 ; 0.99], il transforme un
         # « 5 » saisi en « 0.99 » et l'envoie sans un mot. L'étudiant croit avoir demandé 5, le

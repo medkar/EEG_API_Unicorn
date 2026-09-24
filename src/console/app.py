@@ -3666,6 +3666,28 @@ def _smoke():
     chk(not en_clair,
         f"…et AUCUNE aide n'est plus affichée en clair sur la page, pas même sa première phrase "
         f"({en_clair or 'aucune'})")
+    # La MOLETTE ne change aucun réglage (2026-09-24) : elle fait défiler la page. Qt fait tourner
+    # la valeur d'une liste ou d'un champ numérique sous la souris — en parcourant la page, on
+    # modifiait un seuil ou un modèle sans le voir. Témoin : un QDoubleSpinBox ordinaire BOUGE.
+    from PySide6.QtCore import QPoint as _QPoint, QPointF as _QPointF, Qt as _Qt
+    from PySide6.QtGui import QWheelEvent as _QWheelEvent
+    from PySide6.QtWidgets import QApplication as _QApp, QDoubleSpinBox as _QDoubleSpinBox
+
+    def _molette(widget):
+        evenement = _QWheelEvent(_QPointF(5, 5), _QPointF(5, 5), _QPoint(0, 0), _QPoint(0, 120),
+                                 _Qt.NoButton, _Qt.NoModifier, _Qt.ScrollUpdate, False)
+        _QApp.sendEvent(widget, evenement)
+        return evenement.isAccepted()
+
+    temoin = _QDoubleSpinBox()
+    temoin.setValue(2.5)
+    _molette(temoin)
+    avant_molette = form_cvep.values()
+    acceptes = [cle for cle, champ in form_cvep.champs.items() if _molette(champ)]
+    chk(temoin.value() != 2.5 and form_cvep.values() == avant_molette and not acceptes,
+        f"la molette sur un champ ne change PAS sa valeur (un champ Qt ordinaire, lui, passe de "
+        f"2,5 à {temoin.value():g}) et l'événement remonte à la page, qui défile "
+        f"({acceptes or 'aucun champ ne le garde'})")
     chk(not [b for b in page_cvep.findChildren(_QAbstractButton) if b.text() == "Aide détaillée"]
         and not hasattr(form_cvep, "detail"),
         "…et la case « Aide détaillée » a disparu : il n'y a plus rien à déplier")
