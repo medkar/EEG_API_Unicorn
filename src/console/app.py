@@ -3636,7 +3636,7 @@ def _smoke():
             page_cvep.bouton_retour),
         "l'en-tête, lui, ne défile pas : « ← Modes » reste atteignable depuis le bas de la page")
 
-    # 🔴 L'aide d'un réglage vit dans une bulle « ⓘ » à droite de son champ, lue au SURVOL
+    # 🔴 L'aide d'un réglage vit dans une bulle « ⓘ » juste après son libellé, lue au SURVOL
     # (2026-09-23, demandé par l'utilisateur). Plus de ligne grise sous chaque champ, plus de case
     # « Aide détaillée » : la page c-VEP en portait un mur de trente lignes. Rien n'est perdu pour
     # autant — c'est ce que ces assertions tiennent : la bulle porte le texte ENTIER du contrat.
@@ -3651,9 +3651,13 @@ def _smoke():
             and form_cvep.aides[c][1] == t
             for c, t in contrat_cvep.items() if c in form_cvep.aides),
         "…et l'infobulle de chaque bulle porte le texte ENTIER du contrat : rien n'est perdu")
-    chk(all(form_cvep.lignes[c].indexOf(form_cvep.aides[c][0])
-            > form_cvep.lignes[c].indexOf(form_cvep.champs[c]) >= 0 for c in form_cvep.aides),
-        "…posée DANS la ligne du champ, à sa droite — pas sous lui, où était la ligne grise")
+    chk(all(form_cvep.titres[c].indexOf(form_cvep.aides[c][0]) == 1
+            and form_cvep.titres[c].itemAt(0).widget().text().startswith(
+                form_cvep._params_par_cle[c]["label"])
+            and form_cvep.lignes[c].indexOf(form_cvep.aides[c][0]) < 0
+            for c in form_cvep.aides),
+        "…posée JUSTE APRÈS le libellé du réglage — pas au bout de la ligne du champ, ni sous "
+        "lui, où était la ligne grise")
     chk(all(_html.escape(t, quote=False) in form_cvep.champs[c].toolTip()
             for c, t in contrat_cvep.items() if c in form_cvep.champs),
         "…et le champ lui-même porte la même infobulle")

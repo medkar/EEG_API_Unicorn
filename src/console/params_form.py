@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
                                QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 
 # La bulle « ⓘ » : la couleur d'accent de la console (celle des voies clés, des barres retenues).
 ACCENT = "#4c8dff"
@@ -48,6 +48,7 @@ class ParamsForm(QWidget):
         self.boutons_proposer = {}      # {clé : bouton} — pour qu'un smoke puisse le CLIQUER
         self.aides = {}                 # {clé : (la bulle « ⓘ », le texte complet du contrat)}
         self.lignes = {}                # {clé : la ligne du champ} — cf. `ajouter_a_cote`
+        self.titres = {}                # {clé : la ligne du libellé, suivi de sa bulle « ⓘ »}
         self._params_par_cle = {p["key"]: p for p in self.params}
 
         formulaire = QFormLayout()
@@ -60,7 +61,16 @@ class ParamsForm(QWidget):
             ligne = QHBoxLayout()
             ligne.addWidget(champ, 1)
             self.lignes[param["key"]] = ligne
-            formulaire.addRow(etiquette, ligne)
+            # Le libellé et sa bulle « ⓘ » forment UN bloc, la bulle collée au texte qu'elle
+            # explique (demandé le 2026-09-23 : « juste après les textes plutôt qu'au bout de la
+            # ligne »). Au bout de la ligne, elle se lisait comme une annexe du champ.
+            titre = QWidget()
+            rang = QHBoxLayout(titre)
+            rang.setContentsMargins(0, 0, 0, 0)
+            rang.setSpacing(4)
+            rang.addWidget(QLabel(etiquette))
+            self.titres[param["key"]] = rang
+            formulaire.addRow(titre, ligne)
             if param.get("proposes"):
                 # Le LIBELLÉ du champ proposé, jamais sa clé : « freqs » est un nom de variable.
                 cible = (self._params_par_cle.get(param["proposes"], {}).get("label")
@@ -70,25 +80,28 @@ class ParamsForm(QWidget):
                 formulaire.addRow("", bouton)
                 self.boutons_proposer[param["key"]] = bouton
             if param["help"]:
-                # L'aide vit dans une bulle « ⓘ » À DROITE du champ, lue au survol (2026-09-23).
+                # L'aide vit dans une bulle « ⓘ » juste APRÈS le libellé, lue au survol (2026-09-23).
                 # Elle était une ligne grise sous chaque réglage, plus une case « Aide détaillée »
                 # qui dépliait le reste : la page c-VEP en portait un mur de trente lignes. Rien
                 # n'est perdu — la bulle porte le texte ENTIER du contrat, et le champ aussi.
                 paragraphes = [param["help"]]
                 if param["key"] == "refresh_hz":
-                    # Ce que Qt sait de l'écran qui porte CETTE fenêtre. Pas forcément celui qui
-                    # affichera les cibles : c'est pour ça que c'est une indication, pas un défaut.
+                    # L'écran PRINCIPAL, lu une fois au lancement — pas forcément celui où est la
+                    # console. C'est le bon : les fenêtres de stimulus que lance la console s'ouvrent
+                    # sans choisir d'écran, donc sur l'écran n° 0 de Windows, en général le principal.
+                    # Une indication, pas un défaut : l'application peut afficher ailleurs.
                     ecran = QApplication.primaryScreen()
                     if ecran is not None and ecran.refreshRate() > 0:
                         paragraphes.append(tr("console.formulaire.ecran_detecte",
-                                              hz=f"{ecran.refreshRate():g}"))
+                                              hz=nombre(ecran.refreshRate())))
                 bulle = QLabel("ⓘ")
                 bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
                 bulle.setCursor(Qt.WhatsThisCursor)
                 bulle.setToolTip(infobulle(*paragraphes))
                 champ.setToolTip(infobulle(*paragraphes))
-                ligne.addWidget(bulle)
+                rang.addWidget(bulle)
                 self.aides[param["key"]] = (bulle, param["help"])
+            rang.addStretch(1)
 
         self.bouton = QPushButton(tr("console.formulaire.appliquer"))
         self.bouton.clicked.connect(lambda: self.appliquer.emit(self.values()))

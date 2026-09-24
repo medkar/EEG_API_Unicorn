@@ -227,7 +227,7 @@ mécaniquement sans avoir jamais été *vu*. Trois défauts en sont sortis, dont
   l'aide grise n'affiche plus que la **première phrase** de chaque réglage — 838 caractères au lieu
   de 2 719 sur la page c-VEP —, le texte entier du contrat restant en **infobulle** et revenant à
   l'écran par la case « Aide détaillée ». Rien n'est supprimé, tout est replié. **Depuis le
-  2026-09-23**, plus aucune aide en clair : une bulle « ⓘ » à droite de chaque champ montre l'aide
+  2026-09-23**, plus aucune aide en clair : une bulle « ⓘ » juste après chaque libellé montre l'aide
   complète au survol, et la case « Aide détaillée » a disparu.
 
 Les défauts d'affichage sont groupés et traités en dernier ; le refus invisible de 1.13 ne l'est pas.

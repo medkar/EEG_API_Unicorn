@@ -782,7 +782,7 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
     divisibles = [f for _k, f in available_frequencies(refresh)
                   if BANDPASS[0] <= f <= BANDPASS[1] and abs(f - alpha) >= ALPHA_GARDE_HZ]
 
-    from core.i18n import tr   # ici et pas en tête : `config` est importé par tout le dépôt
+    from core.i18n import nombre, tr   # ici et pas en tête : `config` est importé partout
 
     lo, hi = CONFORT_HZ
     jeu = _plus_ecartees([f for f in divisibles if lo <= f <= hi], n)
@@ -792,14 +792,14 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
     jeu = _plus_ecartees(divisibles, n)
     if jeu is not None:
         hors = [f for f in jeu if not lo <= f <= hi]
-        return jeu, tr("moteur.proposer.hors_plage", lo=f"{lo:g}", hi=f"{hi:g}",
-                       hors=", ".join(f"{f:g}" for f in hors))
+        return jeu, tr("moteur.proposer.hors_plage", lo=nombre(lo), hi=nombre(hi),
+                       hors=", ".join(nombre(f) for f in hors))
 
     for k in range(n - 1, 1, -1):
         if _plus_ecartees(divisibles, k) is not None:
-            return [], tr("moteur.proposer.impossible_max", k=k, refresh=f"{refresh:g}",
-                          alpha=f"{alpha:g}")
-    return [], tr("moteur.proposer.impossible", n=n, refresh=f"{refresh:g}")
+            return [], tr("moteur.proposer.impossible_max", k=k, refresh=nombre(refresh),
+                          alpha=nombre(alpha))
+    return [], tr("moteur.proposer.impossible", n=n, refresh=nombre(refresh))
 
 
 def cvep_lags(n_targets, code_len):

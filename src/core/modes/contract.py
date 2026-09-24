@@ -27,7 +27,7 @@ from core.config import (BANDPASS, TOLERANCE_DIVISEUR, WINDOW_S,  # noqa: E402
                          available_frequencies, use_utf8_console)
 # Les refus sont lus dans `core/langues/<langue>/moteur.json`. `core.i18n` n'importe rien du dépôt :
 # aucun cycle possible, alors que ce module-ci est importé par tous les modes.
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
@@ -309,10 +309,10 @@ def _unit(param):
 def _check_bounds(param, value):
     if param.min is not None and value < param.min:
         return tr("moteur.contrat.sous_minimum", reglage=param.label,
-                  valeur=f"{value:g}{_unit(param)}", borne=f"{param.min:g}{_unit(param)}")
+                  valeur=nombre(value) + _unit(param), borne=nombre(param.min) + _unit(param))
     if param.max is not None and value > param.max:
         return tr("moteur.contrat.au_dessus_maximum", reglage=param.label,
-                  valeur=f"{value:g}{_unit(param)}", borne=f"{param.max:g}{_unit(param)}")
+                  valeur=nombre(value) + _unit(param), borne=nombre(param.max) + _unit(param))
     return None
 
 
@@ -382,7 +382,7 @@ def _check_constraints(param, values):
             hors = [v for v in _as_list(values.get(param.key)) if not lo <= v <= hi]
             if hors:
                 return tr("moteur.contrat.hors_bande", reglage=param.label,
-                          valeurs=", ".join(f"{v:g}" for v in hors), bas=f"{lo:g}", haut=f"{hi:g}")
+                          valeurs=", ".join(nombre(v) for v in hors), bas=nombre(lo), haut=nombre(hi))
 
         elif name == "separables":
             # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
@@ -392,9 +392,9 @@ def _check_constraints(param, values):
             proches = [(a, b) for a, b in zip(ordonne, ordonne[1:]) if b - a < ecart_min]
             if proches:
                 return tr("moteur.contrat.trop_proches", reglage=param.label,
-                          paires=", ".join(tr("moteur.contrat.paire", a=f"{a:g}", b=f"{b:g}")
+                          paires=", ".join(tr("moteur.contrat.paire", a=nombre(a), b=nombre(b))
                                            for a, b in proches),
-                          fenetre=f"{WINDOW_S:g}", ecart=f"{ecart_min:.2f}")
+                          fenetre=nombre(WINDOW_S), ecart=nombre(ecart_min, ".2f"))
 
         elif name == "divise_le_refresh":
             # Une fréquence n'est affichable sans jitter que si c'est un diviseur ENTIER du
@@ -404,21 +404,21 @@ def _check_constraints(param, values):
             refresh = float(values.get("refresh_hz") or 0.0)
             if refresh <= 0:
                 return tr("moteur.contrat.refresh_positif", reglage=param.label,
-                          valeur=f"{refresh:g}")
+                          valeur=nombre(refresh))
             for v in _as_list(values.get(param.key)):
                 if v <= 0:
                     return tr("moteur.contrat.frequence_positive", reglage=param.label,
-                              valeur=f"{v:g}")
+                              valeur=nombre(v))
                 k = round(refresh / v)
                 exact = refresh / k if k >= 2 else 0.0
                 # k < 2 : soit la fréquence dépasse le refresh, soit elle l'égale — dans les
                 # deux cas il n'y a pas de clignotement du tout.
                 if k < 2 or abs(v - exact) > TOLERANCE_DIVISEUR * exact:
-                    proches = [f"{f:g}" for f in sorted(
+                    proches = [nombre(f) for f in sorted(
                         (f for _n, f in available_frequencies(refresh)),
                         key=lambda f: abs(f - v))[:2]]
                     return tr("moteur.contrat.pas_diviseur", reglage=param.label,
-                              valeur=f"{v:g}", refresh=f"{refresh:g}",
+                              valeur=nombre(v), refresh=nombre(refresh),
                               proches=(tr("moteur.contrat.paire", a=proches[0], b=proches[1])
                                        if len(proches) == 2 else ", ".join(proches)))
 

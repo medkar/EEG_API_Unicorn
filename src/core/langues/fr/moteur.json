@@ -21,6 +21,7 @@
   "moteur.contrat.votes_partenaire": "« {reglage} » : contrainte « votes_atteignables » déclarée, mais « {champ} » n'a pas de valeur dans ce mode (défaut du contrat).",
   "moteur.enregistrement.ecriture_impossible": "écriture impossible ({erreur})",
   "moteur.erreur_interne": "Erreur interne ({type}) : {detail}. Ce n'est pas ta séance : signale-le avec le terminal.",
+  "moteur.format.decimale": ",",
   "moteur.proposer.hors_plage": "hors de la plage confortable ({lo}-{hi} Hz) : {hors}. Scintillement plus pénible, réponse plus bruitée.",
   "moteur.proposer.impossible": "impossible : aucun jeu de {n} cibles à {refresh} Hz.",
   "moteur.proposer.impossible_max": "impossible : {k} cibles au maximum à {refresh} Hz avec un alpha à {alpha} Hz. Il faut un écran plus rapide.",

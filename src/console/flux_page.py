@@ -60,19 +60,28 @@ OUVERTURE_S = 2.0
 SEPARATEUR = "  ·  "
 
 
-def _bulle(texte):
-    """Une bulle « ⓘ » qui affiche `texte` au survol — la même forme que les aides des réglages.
+def _phrase_et_bulle(phrase, bulle):
+    """Une phrase grise terminée par une bulle « ⓘ » qui affiche `bulle` au survol.
 
     Pour de l'EXPLICATION seulement (pourquoi la page existe, à quoi sert un fichier) : un
     résultat, un refus ou un avertissement reste écrit en toutes lettres sur la page.
-    `<qt>` fait passer l'infobulle en texte riche, donc elle revient à la ligne au lieu de
-    s'étaler sur tout l'écran ; `html.escape` garde les « < » et « & » du texte tels quels.
+
+    La bulle est DANS le texte, collée au dernier mot (demandé le 2026-09-23 : « juste après les
+    textes »). Un QLabel « ⓘ » à côté ne le permet pas : sans étirement la phrase se replie sur
+    trois lignes étroites, avec étirement la bulle part au bout de la ligne. Le survol de la
+    phrase entière montre l'aide — la bulle en est le signe visible. `<qt>` fait passer
+    l'infobulle en texte riche, donc elle revient à la ligne ; `html.escape` garde les « < » et
+    « & » des textes tels quels.
     """
-    bulle = QLabel("ⓘ")
-    bulle.setStyleSheet("color: #4c8dff;")
-    bulle.setCursor(Qt.WhatsThisCursor)
-    bulle.setToolTip(_riche(texte))
-    return bulle
+    etiquette = QLabel()
+    etiquette.setWordWrap(True)
+    etiquette.setTextFormat(Qt.RichText)
+    etiquette.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+    balise = f'{html.escape(phrase)} <span style="color: #4c8dff;">ⓘ</span>'
+    etiquette.setText(balise)
+    etiquette.setToolTip(_riche(bulle))
+    etiquette.setCursor(Qt.WhatsThisCursor)
+    return etiquette
 
 
 def _riche(texte):
@@ -248,12 +257,8 @@ class FluxPage(QWidget):
         # L'essentiel reste EN FACE — « ce qui est vide ici est vide pour ton application » est
         # la clé de lecture de toute la page. Le détail (aucun accès privilégié, où trouver du
         # code client) passe dans la bulle.
-        explication = QLabel(tr("pages.flux.explication"))
-        explication.setWordWrap(True)
-        explication.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-        ligne_explication = QHBoxLayout()
-        ligne_explication.addWidget(explication, 1)
-        ligne_explication.addWidget(_bulle(tr("pages.flux.explication_bulle")))
+        explication = _phrase_et_bulle(tr("pages.flux.explication"),
+                                       tr("pages.flux.explication_bulle"))
 
         self.bloc_flux = QGroupBox(tr("pages.flux.bloc_flux"))
         self.choix = QComboBox()
@@ -290,12 +295,8 @@ class FluxPage(QWidget):
         self.bloc_enregistrement = QGroupBox(tr("pages.flux.bloc_enregistrement"))
         # Ce que fait le bouton, en face ; pourquoi ce fichier compte (l'horloge commune avec le
         # journal de la fenêtre), dans la bulle.
-        pourquoi = QLabel(tr("pages.flux.enregistrement_quoi"))
-        pourquoi.setWordWrap(True)
-        pourquoi.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-        ligne_pourquoi = QHBoxLayout()
-        ligne_pourquoi.addWidget(pourquoi, 1)
-        ligne_pourquoi.addWidget(_bulle(tr("pages.flux.enregistrement_bulle")))
+        pourquoi = _phrase_et_bulle(tr("pages.flux.enregistrement_quoi"),
+                                    tr("pages.flux.enregistrement_bulle"))
         self.bouton_enregistrer = QPushButton(tr("pages.flux.enregistrer_verdicts"))
         self.bouton_enregistrer.clicked.connect(self._basculer_enregistrement)
         self.etat_enregistrement = QLabel("")
@@ -308,13 +309,13 @@ class FluxPage(QWidget):
         ligne_enr.addWidget(self.bouton_enregistrer)
         ligne_enr.addStretch(1)
         enr_layout = QVBoxLayout(self.bloc_enregistrement)
-        enr_layout.addLayout(ligne_pourquoi)
+        enr_layout.addWidget(pourquoi)
         enr_layout.addLayout(ligne_enr)
         enr_layout.addWidget(self.etat_enregistrement)
 
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
-        layout.addLayout(ligne_explication)
+        layout.addWidget(explication)
         layout.addWidget(self.bloc_flux, 1)
         layout.addWidget(self.bloc_enregistrement)
 

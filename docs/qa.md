@@ -91,6 +91,13 @@ le c-VEP. **Le ramasse-miettes de Python est écarté** : coupé (`gc.disable()`
 sauté 0,4 % puis 0,7 % des images — autant qu'avec lui. Reste le pilote graphique ou Windows, hors
 de portée du code ; 0,6 % est acceptable pour le SSVEP comme pour le c-VEP.
 
+**2026-09-24 — les textes réécrits, validés sur pièce.** Après le passage des textes dans
+`src/core/langues/` et leur simplification, les textes des écrans du bloc 1 (Brut, pages de mode,
+réglages et refus, contrôle de liaison, « Vérifier le casque », Entraîner et Tester le P300) ont été
+relus et validés par l'utilisateur, texte par texte. Retouches demandées et faites : les bulles
+« ⓘ » collées au libellé plutôt qu'en bout de ligne, l'écran détecté dit « écran principal », une
+virgule décimale dans les messages, les « Détails » des quatre tests sans jargon.
+
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
 essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
@@ -393,7 +400,7 @@ d'accord (état reçu, pas une bascule locale). La vue défile en face, sans auc
 fenêtre en hauteur** : le corps défile, « 3. Tester » se rejoint en faisant défiler, et **« ← Modes »
 reste visible** (l'en-tête ne défile pas).
 ✅ **Aucune aide en clair sous les réglages** : chaque réglage qui a une aide porte une bulle
-**« ⓘ »** bleue à droite de son champ ; la survoler (ou survoler le champ) montre l'aide complète,
+**« ⓘ »** bleue juste après son libellé ; la survoler (ou survoler le champ) montre l'aide complète,
 qui passe à la ligne. Plus de case « Aide détaillée » (2026-09-23).
 
 ❌ Régression : un bloc hors de cette table, ou dans un autre ordre ; un des quatre boutons partis
@@ -718,7 +725,7 @@ tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est 
 
 ### ☐ 2.3 — c-VEP : Entraîner puis Tester
 
-Page **c-VEP** → **« Entraîner »** (~3,1 min, chauffe comprise) → « Commencer ».
+Page **c-VEP** → **« Entraîner »** (~3,1 min, stabilisation du casque comprise) → « Commencer ».
 
 ✅ La fenêtre c-VEP s'ouvre **toute seule**, blocs entrelacés.
 ✅ Le chiffre : une **justesse eCCA (validation croisée)** contre **son** hasard (1/6 ≈ 17 %, jamais 50 %), et sous
@@ -752,8 +759,9 @@ Page **P300** → **« Entraîner »** (~2,2 min, 12 manches) → « Commencer �
 4/6 orange (p = 0,009), 3/6 rouge (p = 0,062 — la porte se ferme là)**.
 ⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). À **24 manches** (~4,1 min)
 la porte s'ouvre dès **8/24** (p = 0,035) : si la réserve le dit, refais à 24.
-✅ ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit. Le
-briefing affirme le contraire : constat ouvert 3.
+✅ ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit, et le
+briefing le dit (« Compter les éclairs de ta cible aide à rester attentif, mais ce n'est pas
+obligatoire »).
 
 ❌ Échec : la cible retenue systématiquement décalée d'une position, ou une confiance élevée sur une
 cible fausse — la signature d'un décalage à l'épochage, la panne qui rend tous les autres tests

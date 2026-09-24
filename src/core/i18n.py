@@ -99,6 +99,15 @@ def message_erreur(e):
     return tr("moteur.erreur_interne", type=type(e).__name__, detail=str(e))
 
 
+def nombre(x, format_="g"):
+    """Un nombre écrit dans la langue de l'écran : `1.5` -> « 1,5 » en français.
+
+    Le séparateur décimal appartient à la LANGUE, pas au code : il est lu dans le catalogue.
+    Seulement pour du texte affiché — jamais pour une valeur qu'un champ de saisie relira.
+    """
+    return f"{x:{format_}}".replace(".", tr("moteur.format.decimale"))
+
+
 def champs(texte):
     """Les noms des `{valeurs}` qu'un texte attend."""
     return {nom for _, nom, _, _ in _string.Formatter().parse(texte) if nom}

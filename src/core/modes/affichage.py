@@ -34,7 +34,7 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 
 # L'ordre compte : c'est celui des tables `VERDICTS`, de la meilleure ligne à la pire. La console
 # importe ce tuple pour vérifier qu'elle sait peindre chacun des niveaux — elle n'en invente aucun.
@@ -93,15 +93,15 @@ def au_dessus_du_hasard(n_justes, n, hasard):
 def texte_p(p):
     """`0.111` -> `"p = 0,111"` ; sous le millième, `"p < 0,001"` — trois décimales, pas plus."""
     if p < 0.001:
-        return "p < 0,001"
-    return f"p = {p:.3f}".replace(".", ",")
+        return "p < " + nombre(0.001, ".3f")
+    return "p = " + nombre(p, ".3f")
 
 
 def pct(x, decimales=0):
     """`0.385` -> `"38 %"`. Virgule décimale et espace : c'est un écran pour des étudiants
     francophones, pas un journal. Zéro décimale par défaut — sur 90 essais, l'intervalle de
     confiance fait ±10 points, et une décimale de plus afficherait une précision qu'on n'a pas."""
-    return f"{x * 100:.{decimales}f}".replace(".", ",") + " %"
+    return nombre(x * 100, f".{decimales}f") + " %"
 
 
 def lignes(niveau, mot, chiffres, reserve):

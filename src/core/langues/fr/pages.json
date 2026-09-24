@@ -116,7 +116,7 @@
   "pages.mesure.candidat": "⚠ Ton nouveau modèle n'est pas encore enregistré : ce test porte sur le modèle affiché ci-dessous. Clique d'abord « Enregistrer le modèle » (page « Entraîner »), puis reviens tester.",
   "pages.mesure.detail.fenetres_repos": "bruit de fond pris sur {n} fenêtres au repos",
   "pages.mesure.detail.n_artefacts": "{n} rejetés (artefact)",
-  "pages.mesure.detail.n_chauffe": "{n} jetés (arrivés pendant la chauffe)",
+  "pages.mesure.detail.n_chauffe": "{n} jetés (arrivés pendant la stabilisation du casque)",
   "pages.mesure.detail.n_emis": "{n} avec décision",
   "pages.mesure.detail.n_essais": "{n} essais",
   "pages.mesure.detail.n_justes": "dont {n} justes",
