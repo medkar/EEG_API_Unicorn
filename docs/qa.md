@@ -87,7 +87,9 @@ l'alpha (constat ouvert n° 4).
 Joués ensuite le même jour, sans casque : **1.12 ✅** (casque éteint → « ⛔ LE MOTEUR S'EST ARRÊTÉ »
 à l'écran) et **1.13 : 0,6 % de frames sautées en séance ET 0,6 % fenêtre seule.** Ce n'est donc pas
 la contention console + moteur : c'est la fenêtre ou le pilote. Sous le seuil de 2 % qui bloquerait
-le c-VEP ; premier suspect à tester, le ramasse-miettes de Python (point 1.13).
+le c-VEP. **Le ramasse-miettes de Python est écarté** : coupé (`gc.disable()`), la fenêtre seule a
+sauté 0,4 % puis 0,7 % des images — autant qu'avec lui. Reste le pilote graphique ou Windows, hors
+de portée du code ; 0,6 % est acceptable pour le SSVEP comme pour le c-VEP.
 
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
@@ -614,7 +616,7 @@ python src/stimulus/ssvep.py --seconds 60 --freqs 12,15,20
 | (a) en séance | (b) isolée | Conclusion |
 |---|---|---|
 | ~0,7 % | **~0 %** | **Contention** : le moteur décode à ~5 Hz et la console sonde à 10 Hz sur la même machine. Levier réel, et il ne touche pas la fenêtre. |
-| ~0,7 % | **~0,7 %** | La fenêtre ou le pilote. Premier suspect : le **GC générationnel de Python**, qui produit exactement ce genre de pause régulière — il se teste en une ligne (`gc.freeze()` après l'init, `gc.disable()` dans la boucle). |
+| ~0,7 % | **~0,7 %** | La fenêtre ou le pilote. ⚠️ Le **GC de Python** a été testé et **écarté** le 2026-09-23 (0,4 % puis 0,7 % avec `gc.disable()`) : c'est le pilote graphique ou Windows. |
 | **> 2 %** partout | — | 🔴 À traiter AVANT toute séance c-VEP : à ce niveau, la phase ne se résorbe plus entre deux cycles. |
 
 ⚠️ **Le seuil qui compte n'est pas le même selon le mode.** Pour le SSVEP, 0,7 % est négligeable —
