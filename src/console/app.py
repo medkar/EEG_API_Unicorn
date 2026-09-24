@@ -2212,7 +2212,7 @@ def _smoke():
     # est le prix assumé de cet alignement-là.
     chk("attrape 50%" in cal_errp.details.text()
         and "garde 86%" in cal_errp.details.text()
-        and "permutation p = 0.010" in cal_errp.details.text(),
+        and "permutation p = 0,010" in cal_errp.details.text(),
         f"...son point de fonctionnement et sa p-value, en DÉTAIL — jamais comme mesure qui "
         f"décide : ces deux taux sont mesurés au seuil qui les a choisis "
         f"({cal_errp.details.text()!r})")
@@ -3047,7 +3047,8 @@ def _smoke():
     mes.bloc.details.setChecked(False)
     chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
         f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
-    chk(f"{reussi['ratio']:.2f}" in mes.details.text() and "Pz/PO7/Oz/PO8" in mes.details.text(),
+    chk(f"{reussi['ratio']:.2f}".replace(".", ",") in mes.details.text()
+        and "Pz/PO7/Oz/PO8" in mes.details.text(),
         f"le détail porte le ratio et les voies RÉELLEMENT moyennées ({mes.details.text()})")
     chk(mes.honnetete.text() == reussi["honnetete"] and mes.honnetete.text(),
         "la phrase d'honnêteté vient du résultat, comme pour une calibration")
@@ -3718,8 +3719,9 @@ def _smoke():
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
-    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz"},
-        f"le SSVEP expose ses trois réglages ({sorted(page.formulaire.champs)})")
+    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz", "z_min"},
+        f"le SSVEP expose ses quatre réglages, seuil de détection compris "
+        f"({sorted(page.formulaire.champs)})")
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
 
@@ -4059,7 +4061,7 @@ def _smoke():
     # verbeux ». Le chiffre utile — 25 % pour un hasard à 17 % — était enterré au milieu d'une
     # phrase. Le résultat est construit ici par la VRAIE table du c-VEP (`cvep_calib.VERDICTS`),
     # via le même appel que le moteur : ce test ne fabrique pas un verdict à sa convenance.
-    from console.resultat import BlocResultat, COULEURS
+    from console.resultat import BlocResultat, COULEURS, RESERVE
     from core.modes.cvep_calib import VERDICTS as VERDICTS_CVEP
 
     bloc = BlocResultat()
@@ -4085,8 +4087,17 @@ def _smoke():
                   "reserve": "mesuré hors ligne : en séance le moteur se tait souvent"})
     chk(COULEURS["bon"] not in bloc.reserve.styleSheet() and bloc.reserve.text().startswith("⚠")
         and COULEURS["bon"] in bloc.verdict.styleSheet(),
-        f"sous un verdict VERT, la réserve reste une mise en garde : ni verte, ni sans son ⚠ "
+        f"sous un verdict VERT, une MISE EN GARDE reste une mise en garde : ni verte, ni sans son ⚠ "
         f"({bloc.reserve.styleSheet()!r})")
+    # …mais une CONCLUSION (« Le casque est bien posé », déclarée par le moteur) s'écrit sans ⚠
+    # ni ambre : un panneau orange sous « tu peux la reporter » se lisait « attention » (casque,
+    # 2026-09-24). Le drapeau vient du résultat — l'écran ne devine pas d'après le niveau.
+    bloc.montrer({"niveau": "bon", "mot": "ALPHA NET", "chiffres": "x", "conclusion": True,
+                  "reserve": "Le casque est bien posé : la séance peut commencer."})
+    chk(not bloc.reserve.text().startswith("⚠") and RESERVE not in bloc.reserve.styleSheet()
+        and COULEURS["bon"] not in bloc.reserve.styleSheet(),
+        f"une CONCLUSION sous un vert s'écrit sans ⚠ ni ambre ({bloc.reserve.text()[:30]!r}, "
+        f"{bloc.reserve.styleSheet()!r})")
     bloc.montrer(faible)
     chk(not bloc.corps.isVisibleTo(bloc) and "McNemar" not in bloc.verdict.text()
         + bloc.chiffres.text() + bloc.reserve.text(),

@@ -72,7 +72,7 @@ class MesurePage(QWidget):
     # refus d'un effectif non entier —, le texte vient du fichier de langue.
     DETAILS = (
         ("ratio", lambda v: tr("pages.mesure.detail.ratio", r=nombre(v, ".2f"))),
-        ("repere_ratio", lambda v: tr("pages.mesure.detail.repere_ratio", r=f"{v:g}")),
+        ("repere_ratio", lambda v: tr("pages.mesure.detail.repere_ratio", r=nombre(v))),
         ("pic_hz", lambda v: tr("pages.mesure.detail.pic_ferme", hz=nombre(v, ".1f"))),
         ("pic_ouvert_hz", lambda v: tr("pages.mesure.detail.pic_ouvert", hz=nombre(v, ".1f"))),
         # Le taux d'émission SSVEP. ⚠️ `n_essais` porte son UNITÉ dans le libellé, et ce n'est pas

@@ -298,7 +298,7 @@ class ControleAlpha(MesureRuntime):
                       repere=_virgule(f"{RATIO_MIN:g}"), pic=_virgule(f"{pic_hz:.1f}"))
         if monte and au_bon_endroit:
             return lignes("bon", tr("mesure.alpha.mot.net"), chiffres,
-                          tr("mesure.alpha.reserve.net"))
+                          tr("mesure.alpha.reserve.net"), conclusion=True)
         if not monte:
             return lignes("faible", tr("mesure.alpha.mot.arrete"), chiffres,
                           tr("mesure.alpha.reserve.ne_monte_pas"))

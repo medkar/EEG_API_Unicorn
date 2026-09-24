@@ -612,7 +612,10 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
             reserve = tr("mesure.ssvep_taux.reserve.moyen")
         else:
             reserve = tr("mesure.ssvep_taux.reserve.bon")
-    return lignes(niveau, mot, chiffres, reserve)
+    # « Ta configuration tient » CONCLUT : sans ⚠ à l'écran. Toutes les autres réserves mettent en
+    # garde, y compris « trop silencieux » sous un vert.
+    return lignes(niveau, mot, chiffres, reserve,
+                  conclusion=reserve == tr("mesure.ssvep_taux.reserve.bon"))
 
 
 def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_haut, artefacts,

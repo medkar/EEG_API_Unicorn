@@ -104,17 +104,23 @@ def pct(x, decimales=0):
     return nombre(x * 100, f".{decimales}f") + " %"
 
 
-def lignes(niveau, mot, chiffres, reserve):
-    """Les quatre clés d'affichage, VÉRIFIÉES. Un niveau hors vocabulaire lève tout de suite.
+def lignes(niveau, mot, chiffres, reserve, conclusion=False):
+    """Les clés d'affichage, VÉRIFIÉES. Un niveau hors vocabulaire lève tout de suite.
 
     Lever plutôt que tolérer : un niveau inconnu arriverait à la console, qui ne saurait pas le
     peindre et le laisserait gris — un résultat affiché sans couleur, donc sans jugement, sans
     que rien ne dise pourquoi.
+
+    `conclusion` : la dernière ligne CONCLUT (« Le casque est bien posé »), elle ne met pas en
+    garde. La console l'écrit alors sans ⚠ ni ambre (passe au casque du 2026-09-24 : un panneau
+    orange sous « tu peux la reporter dans ton application » se lisait « attention »). C'est le
+    PRODUCTEUR qui le déclare, parce que le niveau seul ne suffit pas : un bon score
+    d'entraînement porte une VRAIE mise en garde (« hors ligne : teste avant d'y croire »).
     """
     if niveau not in NIVEAUX:
         raise ValueError(f"niveau inconnu : {niveau!r} (connus : {', '.join(NIVEAUX)})")
     return {"niveau": niveau, "mot": str(mot), "chiffres": str(chiffres),
-            "reserve": str(reserve or "")}
+            "reserve": str(reserve or ""), "conclusion": bool(conclusion)}
 
 
 def niveau_par_seuils(valeur, table):
@@ -220,6 +226,9 @@ def verifier(resultat):
             not str(resultat["verdict"]).lower().startswith(resultat["mot"].lower()):
         defauts.append(f"le mot {resultat['mot']!r} n'ouvre pas le verdict "
                        f"{str(resultat['verdict'])[:50]!r} — deux calculs ont divergé")
+    if resultat.get("conclusion") and resultat["niveau"] != "bon":
+        defauts.append(f"une CONCLUSION (sans ⚠) sous un niveau « {resultat['niveau']} » : seul un "
+                       f"bon résultat conclut, les autres mettent en garde")
     return defauts
 
 
