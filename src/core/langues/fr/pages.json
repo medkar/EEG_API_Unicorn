@@ -130,7 +130,7 @@
   "pages.mesure.frequences": "Fréquences testées : {valeurs} Hz.",
   "pages.mesure.frequences_du_mode": "Fréquences testées : {valeurs} Hz, celles de la page « {mode} » (elles se changent là-bas).",
   "pages.mesure.interrompue": "Séance interrompue : {raison}",
-  "pages.mesure.origine": "Les réglages grisés viennent de la page « {mode} » (bloc « 1. Régler ») et ce test part avec eux : change-les là-bas. Ici, seule la longueur du test se règle.",
+  "pages.mesure.origine": "Les réglages grisés viennent de la page « {mode} » (bloc « 1. Régler ») et ce test part avec eux : change-les là-bas.",
   "pages.mesure.precedent": "Résultat d'une séance précédente : il ne décrit peut-être pas tes réglages actuels. « Commencer », plus bas, relance avec ceux-ci.",
   "pages.mesure.progression": "{compte} sur {total}",
   "pages.mesure.resultat_precedent": "Résultat précédent",

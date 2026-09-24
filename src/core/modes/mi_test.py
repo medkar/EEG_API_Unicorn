@@ -259,8 +259,8 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     if n_emis == 0:
         chiffres = tr("mesure.mi_test.chiffres.muet", n=n_essais, hasard=pct(hasard))
     else:
-        chiffres = tr("mesure.mi_test.chiffres", justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
-                      haut=pct(ic_haut), hasard=pct(hasard), emis=n_emis, n=n_essais)
+        chiffres = tr("mesure.mi_test.chiffres", justesse=pct(justesse), hasard=pct(hasard),
+                      emis=n_emis, n=n_essais, justes=n_justes, muets=n_essais - n_emis)
 
     # La réserve NOMME les champs que l'étudiant a sous les yeux, lus dans le contrat du mode.
     plus_long = max(ESSAIS_PAR_CLASSE)
@@ -606,7 +606,7 @@ def _selftest():
                     for i in range(n)]
 
         bon = noter(_dec(MI_LABELS, 18, 18, 14), MI_LABELS, essais_par_classe=6)
-        chk(bon["niveau"] == "bon" and bon["mot"] == "AU NIVEAU DU REPÈRE",
+        chk(bon["niveau"] == "bon" and bon["mot"] == "BON",
             f"14/18 à 3 classes, intervalle au-dessus du hasard -> bon ({bon['chiffres']})")
         muet_souvent = noter(_dec(MI_LABELS, 24, 5, 5), MI_LABELS, essais_par_classe=8)
         # Le libellé est LU dans le contrat du mode (comme la réserve le fait) : renommé là-bas,

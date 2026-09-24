@@ -13,10 +13,21 @@ import numpy as np
 from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import SPAN_SEUILS, classement_relatif, span_correlation  # noqa: E402
+from console import (SPAN_SEUILS, classement_relatif, decompte,  # noqa: E402
+                     span_correlation)
 from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
+
+
+def _avec_decompte(texte, mode_state):
+    """La consigne du repos, suivie du temps qu'il reste avant le décodage (s'il n'a pas commencé).
+
+    Sans lui, la stabilisation puis le repos (40 s pour le Neuro) défilaient sans une seule
+    indication de temps — relevé au casque le 2026-09-24.
+    """
+    attente = decompte(mode_state)
+    return f"{texte}\n{attente}" if attente else texte
 
 
 class TracesView(QWidget):
@@ -234,8 +245,8 @@ class ActiveView(QWidget):
     def update_from(self, mode_state):
         sortie = (mode_state or {}).get("output") or {}
         if not sortie:
-            self.verdict.setText(mode_state["instruction"] if mode_state
-                                 else tr("pages.direct.en_attente"))
+            self.verdict.setText(_avec_decompte(mode_state["instruction"], mode_state)
+                                 if mode_state else tr("pages.direct.en_attente"))
             return
         # L'ordre compte, et il va du plus SPÉCIFIQUE au plus prudent. `threshold` est la clé qui
         # autorise à parler de seuil : sans elle, aucun repli sur une constante — c'est
@@ -503,8 +514,9 @@ class PassiveView(QWidget):
             # c'est un écran blanc pendant tout le temps où l'étudiant cherche pourquoi rien ne
             # vient. Un écran vide se lit « ça ne marche pas ». On ne route PAS sur l'identifiant
             # du mode pour autant : la phrase est vraie pour n'importe quel mode qui attend.
-            self.etat.setText((mode_state or {}).get("instruction")
-                              or tr("pages.direct.passif.attente_premier"))
+            self.etat.setText(_avec_decompte((mode_state or {}).get("instruction")
+                                             or tr("pages.direct.passif.attente_premier"),
+                                             mode_state))
             self.avertissement.setText(AVERTISSEMENT_ATTENTE)
             return
 

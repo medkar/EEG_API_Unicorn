@@ -17,7 +17,7 @@
   "calib.cvep.trop_pauvre": "Séance trop pauvre pour entraîner : {n} époque(s) sur {cibles} cible(s), il en faut au moins {min_epoques} sur {min_cibles} cibles. {hors_bloc}Refais une séance et vérifie le contact : des époques perdues donnent ce résultat.",
   "calib.cvep.verdict.faible": "FAIBLE — ré-essaie : saline Pz/PO7/Oz/PO8 et plante ton regard sur le disque cerclé, sans le promener.",
   "calib.cvep.verdict.non_mesure": "Justesse non mesurée : une décision demande {cycles} cycles consécutifs sur une même cible, et la séance n'en a pas. Les modèles existent, mais rien ne dit ce qu'ils valent : ré-entraîne sans interrompre la séance.",
-  "calib.cvep.verdict.repere": "AU NIVEAU DU REPÈRE DU PROJET (59,5 / 64,9 % sur la séance de référence)",
+  "calib.cvep.verdict.repere": "BON, comme la séance de référence du projet (59,5 / 64,9 %)",
   "calib.cvep.verdict.utilisable": "UTILISABLE",
   "calib.errp.briefing.1": "Un point doit rejoindre la pastille verte : c'est le but.",
   "calib.errp.briefing.2": "À chaque pas, il avance d'une case, le plus souvent vers la pastille.",
@@ -34,7 +34,7 @@
   "calib.errp.non_mesure.raison": "Pas assez d'essais de chaque classe pour une validation croisée honnête.",
   "calib.errp.reserve.non_significatif": "Indistinguable du hasard sur ce nombre d'essais : refais une séance plus longue. Ce n'est pas un problème de contact.",
   "calib.errp.trop_pauvre": "Séance trop pauvre pour entraîner : {n} époque(s), {corrects} correcte(s) et {erreurs} erreur(s). Il en faut au moins {min_total} au total, dont {min_classe} de chaque classe : sinon le mode ne pourrait pas régler son seuil. Refais une séance plus longue et vérifie le contact : des époques perdues donnent ce résultat.",
-  "calib.errp.verdict.bon": "BON pour un ErrP mono-essai — au niveau du repère du projet (AUC 0,776)",
+  "calib.errp.verdict.bon": "BON pour un ErrP mono-essai — comme la séance de référence du projet (AUC 0,776)",
   "calib.errp.verdict.faible": "FAIBLE — ré-essaie : saline Fz/Cz/Pz, et surtout n'anticipe pas les erreurs (l'ErrP est une réaction à une surprise).",
   "calib.errp.verdict.non_mesure": "AUC non mesurée : pas assez d'essais de chaque classe pour une validation croisée honnête.",
   "calib.errp.verdict.non_significatif": "{mot} (permutation p = {p:.3f}) : le hasard donne une AUC aussi bonne sur ce nombre d'essais. Refais une séance plus longue avant de t'en servir ; ce n'est pas un problème de contact.",
@@ -163,5 +163,7 @@
   "mode.ssvep.param.freqs.label": "Fréquences des cibles",
   "mode.ssvep.param.refresh_hz.aide": "Le rafraîchissement de l'écran qui affiche les cibles, pas forcément celui-ci : ton application tourne peut-être ailleurs. Les fréquences possibles en sont les diviseurs entiers : le changer propose un nouveau jeu de fréquences, sans refaire le repos.",
   "mode.ssvep.param.refresh_hz.label": "Rafraîchissement de l'écran du stimulus",
+  "mode.ssvep.param.z_min.aide": "De combien le score d'une cible doit dépasser le bruit de fond mesuré au repos (en écarts-types) pour être annoncée. Plus bas : plus de détections, mais plus d'erreurs. Plus haut : moins de détections, plus sûres. Défaut 2,5 : règle-le, puis clique « Tester » pour voir l'effet.",
+  "mode.ssvep.param.z_min.label": "Seuil de détection",
   "mode.ssvep.summary": "Quelle cible clignotante l'utilisateur regarde, environ 5 fois par seconde."
 }

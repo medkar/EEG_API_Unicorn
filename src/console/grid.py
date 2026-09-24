@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import SPAN_SEUILS, classement_relatif, nom_phase, span_correlation  # noqa: E402
+from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # noqa: E402
+                     span_correlation)
 # `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
 # repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
 # réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
@@ -165,7 +166,8 @@ class ModeTile(QFrame):
             self.detail.setText(self.spec["summary"])
             return
 
-        self.etat.setText(nom_phase(mode_state["phase"]))
+        attente = decompte(mode_state)
+        self.etat.setText(nom_phase(mode_state["phase"]) + (f" · {attente}" if attente else ""))
         self.publie.setEnabled(True)
         self.publie.blockSignals(True)     # sinon régler la case RÉÉMET la commande, en boucle
         self.publie.setChecked(bool(mode_state["published"]))

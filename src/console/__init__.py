@@ -41,6 +41,21 @@ def nom_phase(phase):
     return noms.get(phase, phase)
 
 
+def decompte(mode_state):
+    """« décodage dans ≈ 32 s », « encore un instant… », ou "" quand le mode décode déjà.
+
+    Le temps vient du MOTEUR (`avant_decodage_s`), qui connaît ses échéances ; la console ne
+    fait que l'écrire. À zéro, le repos se prolonge peut-être (le SSVEP attend d'avoir assez de
+    fenêtres) : on ne l'affiche pas en négatif, on dit qu'il faut encore un instant.
+    """
+    avant = (mode_state or {}).get("avant_decodage_s")
+    if avant is None:
+        return ""
+    if avant < 0.5:
+        return tr("console.decompte.instant")
+    return tr("console.decompte.secondes", s=int(round(avant)))
+
+
 def compter(n, unite):
     """« 0 manche », « 1 manche », « 6 manches » — `unite` est celle que le MOTEUR publie.
 

@@ -1447,7 +1447,7 @@ n'est écrit sur le disque.
       hasard attrape autant d'erreurs qu'il annule de bonnes commandes, et c'est un test exact de
       Fisher unilatéral qui dit si l'écart dépasse le bruit.
       Gardées : ______ % · attrapées : ______ % · mot : ______ .
-- [ ] Le mot : **FAIBLE** si Fisher ne passe pas (p ≥ 0,05) ; **AU NIVEAU DU REPÈRE** (vert) si
+- [ ] Le mot : **FAIBLE** si Fisher ne passe pas (p ≥ 0,05) ; **BON** (vert, « AU NIVEAU DU REPÈRE » jusqu'au 2026-09-24) si
       l'écart TPR − (1 − TNR) atteint **0,355** (le repère 0,500 − 0,145) et que moins de 50 % des
       feedbacks sont restés sans verdict ; **UTILISABLE** sinon ; **NON MESURÉ** si aucune erreur
       ou aucune bonne commande n'a été jugée. Un `-1` (artefact, époque perdue) est compté À PART.
@@ -1650,7 +1650,7 @@ gagnant. Elle écrit **deux** fichiers horodatés (`data/cvep_model_AAAAMMJJ-HHM
       bloc s'est fermé — une fenêtre votée, l'unité même du repère EN DIRECT ; le rejeu passe par
       le `CVEPRuntime` du mode et ne calcule aucune phase. Rien n'est écrit sur le disque.
       Justesse à l'émission : ______ % · émission : ______ % · mot : ______ .
-      Le mot : **AU NIVEAU DU REPÈRE** (vert) au-dessus du hasard **et** à 71 % de justesse **et**
+      Le mot : **BON** (vert, « AU NIVEAU DU REPÈRE » jusqu'au 2026-09-24) au-dessus du hasard **et** à 71 % de justesse **et**
       46 % d'émission — le couple de l'encadré 1, jamais le 59,5/64,9 % ; **UTILISABLE** (orange)
       sous l'un des deux ; **FAIBLE** si l'intervalle contient 1/6 ; **MUET** s'il n'a rien émis,
       **NON MESURÉ** si l'horloge n'a servi sur aucun bloc — et la réserve nomme la cause dominante

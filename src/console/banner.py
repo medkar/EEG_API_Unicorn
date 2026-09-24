@@ -13,7 +13,7 @@ import sys
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 
 
 class Banner(QWidget):
@@ -105,8 +105,8 @@ class Banner(QWidget):
         verdicts = quality.get("verdicts", [])
         mortes = sum(1 for v in verdicts if v == "morte")
         saturees = sum(1 for v in verdicts if v == "saturée")
-        morceaux = [tr("console.bandeau.sigmas", min=f"{min(valeurs):.1f}",
-                       max=f"{max(valeurs):.1f}", n=len(valeurs))
+        morceaux = [tr("console.bandeau.sigmas", min=nombre(min(valeurs), ".1f"),
+                       max=nombre(max(valeurs), ".1f"), n=len(valeurs))
                     if valeurs else tr("console.bandeau.sigma_indisponible")]
         if mortes:
             morceaux.append(tr("console.bandeau.mortes.plusieurs", n=mortes) if mortes > 1
@@ -114,6 +114,12 @@ class Banner(QWidget):
         if saturees:
             morceaux.append(tr("console.bandeau.saturees.plusieurs", n=saturees) if saturees > 1
                             else tr("console.bandeau.saturees.un", n=saturees))
+        # La corrélation inter-voies, TOUJOURS visible (passe au casque du 2026-09-24 : la QA
+        # demandait de la lire au montage, et elle ne s'affichait que dans l'alarme, au-delà de
+        # 0,90). C'est le signe d'une référence qui flotte : ~0,3-0,5 sur un montage sain.
+        if quality.get("common_mode") is not None:
+            morceaux.append(tr("console.bandeau.correlation",
+                               correlation=nombre(float(quality["common_mode"]), ".2f")))
         self.sigmas.setText(" · ".join(morceaux))
 
         if quality.get("reference_lost"):

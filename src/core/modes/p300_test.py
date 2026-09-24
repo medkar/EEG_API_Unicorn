@@ -273,11 +273,10 @@ def noter(decisions, n_cibles, n_epoques=0, manches_demandees=None, hors_calcul=
     else:
         niveau, mot = "moyen", tr("mesure.mot.utilisable")
 
-    chiffres = (tr("mesure.p300_test.chiffres_sans", justesse=pct(justesse),
-                   bas=f"{ic_bas * 100:.0f}", haut=pct(ic_haut), hasard=pct(hasard), n=n,
-                   sans=n_sans) if n_sans else
-                tr("mesure.p300_test.chiffres", justesse=pct(justesse), bas=f"{ic_bas * 100:.0f}",
-                   haut=pct(ic_haut), hasard=pct(hasard), n=n))
+    chiffres = (tr("mesure.p300_test.chiffres_sans", justesse=pct(justesse), hasard=pct(hasard),
+                   n=n, sans=n_sans, justes=n_justes) if n_sans else
+                tr("mesure.p300_test.chiffres", justesse=pct(justesse), hasard=pct(hasard), n=n,
+                   justes=n_justes))
     if n_sans:
         reserve = tr("mesure.p300_test.reserve.sans_decision", sans=n_sans, n=n)
     elif niveau == "faible" and not au_dessus:

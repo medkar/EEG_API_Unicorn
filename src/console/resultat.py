@@ -103,8 +103,14 @@ class BlocResultat(QWidget):
         self.chiffres.setVisible(bool(resultat.get("chiffres")))
         # « ⚠ » en tête, comme la maquette de la spec (§3) : c'est une mise en garde, pas une suite
         # du verdict.
-        self.reserve.setText(f"⚠ {resultat['reserve']}" if resultat.get("reserve") else "")
-        self.reserve.setStyleSheet(f"color: {RESERVE};")
+        # ⚠ et ambre seulement quand le résultat n'est PAS bon : sur un vert, la dernière ligne
+        # est une conclusion (« tu peux la reporter dans ton application »), pas une réserve. Un
+        # panneau d'avertissement orange sous un mot vert se lisait « ça va, mais attention » —
+        # passe QA au casque du 2026-09-24. C'est le NIVEAU du moteur qui décide, pas l'écran.
+        bon = resultat.get("niveau") == "bon"
+        texte = resultat.get("reserve") or ""
+        self.reserve.setText(texte if bon or not texte else f"⚠ {texte}")
+        self.reserve.setStyleSheet("" if bon else f"color: {RESERVE};")
         self.reserve.setVisible(bool(resultat.get("reserve")))
 
         # Le repli. Ordre : la phrase de verdict complète d'abord — c'est elle qui porte les

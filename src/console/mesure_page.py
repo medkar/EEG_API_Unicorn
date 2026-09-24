@@ -42,7 +42,7 @@ from console import compter  # noqa: E402
 from console.beeps import TOP_ETAPE, connait  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié — même geste que
 # `calib_page.py`. `mesure.PHASES_TERMINALES` EST l'objet de `calibration.py` (cf. son
 # commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de verdict.
@@ -71,10 +71,10 @@ class MesurePage(QWidget):
     # Une fonction par ligne (valeur -> texte) : le NOMBRE se met en forme ici — `:d` garde son
     # refus d'un effectif non entier —, le texte vient du fichier de langue.
     DETAILS = (
-        ("ratio", lambda v: tr("pages.mesure.detail.ratio", r=f"{v:.2f}")),
+        ("ratio", lambda v: tr("pages.mesure.detail.ratio", r=nombre(v, ".2f"))),
         ("repere_ratio", lambda v: tr("pages.mesure.detail.repere_ratio", r=f"{v:g}")),
-        ("pic_hz", lambda v: tr("pages.mesure.detail.pic_ferme", hz=f"{v:.1f}")),
-        ("pic_ouvert_hz", lambda v: tr("pages.mesure.detail.pic_ouvert", hz=f"{v:.1f}")),
+        ("pic_hz", lambda v: tr("pages.mesure.detail.pic_ferme", hz=nombre(v, ".1f"))),
+        ("pic_ouvert_hz", lambda v: tr("pages.mesure.detail.pic_ouvert", hz=nombre(v, ".1f"))),
         # Le taux d'émission SSVEP. ⚠️ `n_essais` porte son UNITÉ dans le libellé, et ce n'est pas
         # de la coquetterie : c'est le seul endroit de l'interface où l'on peut confondre un
         # nombre d'essais avec un nombre de fenêtres du moteur, et l'écart entre les deux vaut un

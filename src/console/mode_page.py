@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushB
                                QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from console import live_views, nom_phase  # noqa: E402
+from console import decompte, live_views, nom_phase  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from core.modes import registry  # noqa: E402
@@ -346,7 +346,8 @@ class ModePage(QWidget):
             elif not retenus:
                 self._derniers_params = None   # forcer la régénération au redémarrage
             return
-        phase = nom_phase(mode_state["phase"])
+        attente = decompte(mode_state)
+        phase = nom_phase(mode_state["phase"]) + (f" · {attente}" if attente else "")
         self.etat.setText(phase if mode_state["published"]
                           else tr("console.etat.non_publie", phase=phase))
         self.vue.update_from(mode_state)

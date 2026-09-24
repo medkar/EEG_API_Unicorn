@@ -18,6 +18,7 @@ Autotest :
 
 import os as _os
 import sys as _sys
+import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
@@ -133,8 +134,29 @@ class ModeRuntime:
         """
         return list(self.spec.channels_for(self.params))
 
+    def avant_decodage_s(self, now=None):
+        """Secondes avant que le décodage commence, ou None s'il a commencé (ou s'il n'y a pas de
+        repos). Une ESTIMATION, et elle le dit : le repos peut se prolonger au-delà (le SSVEP
+        attend d'avoir assez de fenêtres), et son décompte ne part qu'à la première fenêtre
+        exploitable — d'où les deux branches. À 0, la console dit « encore un instant ».
+
+        Demandé au casque le 2026-09-24 : la stabilisation puis le repos du Neuro durent 40 s
+        « sans indication de temps à l'écran ». Même horloge que la boucle (`perf_counter`).
+        """
+        if self.phase not in ("warmup", "rest") or self.spec.rest is None:
+            return None
+        now = _time.perf_counter() if now is None else now
+        rest_s = float(getattr(self, "_rest_s", self.spec.rest.duration_s))
+        if self.phase == "warmup":
+            fin = self._warmup_until if self._warmup_until is not None else now
+            return max(0.0, fin - now) + rest_s
+        if self._rest_until is None:
+            return rest_s
+        return max(0.0, self._rest_until - now)
+
     def state(self):
         """L'état de ce mode, en dictionnaire JSON-able. Sûr depuis un autre fil."""
+        avant = self.avant_decodage_s()
         return {
             "id": self.spec.id,
             "label": self.spec.label,
@@ -144,6 +166,8 @@ class ModeRuntime:
             "params": {k: (list(v) if isinstance(v, tuple) else v)
                        for k, v in self.params.items()},
             "instruction": self.instruction(),
+            # Pas dans le flux `status` (contrat public) : seulement dans `snapshot()`.
+            "avant_decodage_s": None if avant is None else round(avant, 1),
             "stream": self.spec.stream,
             "channels": self.channels(),
             "rest_report": self.rest_report,
@@ -237,15 +261,24 @@ def _selftest():
     chk(rt.remises_a_zero == 1, "le début de repos remet l'état du mode à zéro")
 
     rt.tick(None, 0.0, now=105.0)     # encore dans la chauffe (10 s)
+    # Le temps avant le décodage (2026-09-24) : le reste de la chauffe PLUS tout le repos.
+    chk(rt.avant_decodage_s(now=105.0) == 25.0,
+        f"pendant la chauffe, le décodage est à « reste de chauffe + repos » "
+        f"({rt.avant_decodage_s(now=105.0)} s au lieu de 5 + 20)")
     chk(rt.phase == "warmup" and rt.vus == 0,
         "pendant la chauffe on ne collecte RIEN (la dérive DC fausserait le plancher)")
 
     rt.tick(None, 0.0, now=111.0)     # chauffe finie -> repos, 1re fenêtre
     chk(rt.phase == "rest" and rt.vus == 1, f"la chauffe finie, le repos commence (vus={rt.vus})")
+    chk(rt.avant_decodage_s(now=116.0) == 15.0 and rt.avant_decodage_s(now=140.0) == 0.0,
+        f"pendant le repos, il décompte depuis la 1re fenêtre, sans jamais passer sous zéro "
+        f"({rt.avant_decodage_s(now=116.0)}, {rt.avant_decodage_s(now=140.0)})")
 
     rt.tick(None, 0.0, now=112.0)
     rt.tick(None, 0.0, now=113.0)     # 3e fenêtre -> le plancher tient
     chk(rt.phase == "running", f"le plancher mesuré, on décode (phase={rt.phase})")
+    chk(rt.avant_decodage_s() is None and rt.state()["avant_decodage_s"] is None,
+        "une fois le décodage commencé, plus de décompte — ni dans l'état publié")
     chk(rt.rest_report == {"windows": 3}, f"le repos laisse un compte-rendu ({rt.rest_report})")
     chk(rt.decisions == 0, "aucune décision n'a été publiée avant la fin du repos")
 

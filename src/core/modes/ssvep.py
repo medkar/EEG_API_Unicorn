@@ -14,7 +14,7 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (SSVEP_BASELINE_S, SSVEP_WARMUP_S, ARTIFACT_SIGMA_RATIO,  # noqa: E402
-                         ALPHA_DEFAUT_HZ, OCCIPITAL, use_utf8_console, choose_frequencies)
+                         ALPHA_DEFAUT_HZ, OCCIPITAL, Z_MIN, use_utf8_console, choose_frequencies)
 import numpy as np  # noqa: E402
 
 from core.cca_decoder import CCADecoder  # noqa: E402
@@ -53,7 +53,11 @@ class SsvepRuntime(ModeRuntime):
         self._new_decoder()
 
     def _new_decoder(self):
-        self.decoder = CCADecoder(list(self.params["freqs"]), fs=self.engine.acq.fs)
+        # Le seuil de détection est un RÉGLAGE (2026-09-24) : lu dans les paramètres, jamais dans
+        # la constante seule. `.get` parce qu'un appelant du banc d'essai peut ne passer que les
+        # fréquences — il retombe alors sur le défaut du réglage, qui EST `Z_MIN`.
+        self.decoder = CCADecoder(list(self.params["freqs"]), fs=self.engine.acq.fs,
+                                  z_min=float(self.params.get("z_min", Z_MIN)))
 
     def _open(self):
         # Le flux est créé TOUT DE SUITE, avant même la mesure du repos, et reste silencieux
@@ -248,6 +252,20 @@ SPEC = ModeSpec(
             affecte_decodage=False,
             help=tr("mode.ssvep.param.alpha_hz.aide"),
         ),
+        # Le seuil de détection (2026-09-24, demandé au casque : « un réglage pour augmenter ou
+        # diminuer la détection »). UN seul réglage, exprès : la marge sur le 2e (`Z_MARGIN`, à 0)
+        # et un vote glissant jouent sur le MÊME compromis et se compenseraient. Il affecte le
+        # décodage (défaut de `Param`) : le seuil est annoncé dans les métadonnées du flux
+        # `decoded_ssvep`, un contrat public ; le changer pendant que le mode tourne recrée donc
+        # le flux, pour que ce qu'il annonce reste vrai. On le règle mode ARRÊTÉ, puis « Tester ».
+        Param(
+            key="z_min",
+            label=tr("mode.ssvep.param.z_min.label"),
+            kind="float",
+            default=Z_MIN,
+            min=1.0, max=6.0,
+            help=tr("mode.ssvep.param.z_min.aide"),
+        ),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
@@ -309,6 +327,19 @@ def _selftest():
     rt._opened = True
     chk(rt.phase == "warmup", "le SSVEP commence par une chauffe")
     chk(len(rt.params["freqs"]) == 3, f"3 cibles par défaut ({rt.params['freqs']})")
+
+    # Le SEUIL DE DÉTECTION est un réglage (2026-09-24) : lu dans les paramètres, et relu quand le
+    # repos refait un décodeur neuf — sinon « Refaire le repos » ramènerait en douce la constante.
+    chk(values["z_min"] == Z_MIN and rt.decoder.z_min == Z_MIN,
+        f"le seuil par défaut est {Z_MIN} écarts-types ({values['z_min']}, {rt.decoder.z_min})")
+    v17, _r = validate(SPEC, {"z_min": 1.7})
+    rt17 = SsvepRuntime(SPEC, v17, moteur)
+    rt17._reset_rest()
+    chk(rt17.decoder.z_min == 1.7, f"un seuil réglé atteint le décodeur, repos refait compris "
+        f"({rt17.decoder.z_min})")
+    _v, refus = validate(SPEC, {"z_min": 0.5})
+    chk(_v is None and "Seuil de détection" in (refus or ""),
+        f"un seuil hors bornes est refusé, en nommant le réglage ({refus})")
 
     # Repos : on force des durées courtes, comme le fait `--baseline` / `--warmup`.
     rt.begin_rest(now=0.0, warmup_s=0.0, duration_s=1.0)

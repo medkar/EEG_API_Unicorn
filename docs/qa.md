@@ -98,6 +98,22 @@ relus et validés par l'utilisateur, texte par texte. Retouches demandées et fa
 « ⓘ » collées au libellé plutôt qu'en bout de ligne, l'écran détecté dit « écran principal », une
 virgule décimale dans les messages, les « Détails » des quatre tests sans jargon.
 
+**2026-09-24 — bloc 2 au casque, sur la console « Configurer · Entraîner · Tester ».** Première
+fois que les « Tester » voient un casque. 2.0 ✅ · 2.1 ✅ · **2.2 : 16 justes sur 17 détections,
+17 détections sur 36 essais** (94 % [73 ; 99] à l'émission, 47 % d'émission ; repères : 100 %/44 %,
+puis 18/18 le 22/09) · 2.3 ✅ · 2.4 ✅ · 2.5 ✅ · 2.6 **reporté** (pièce trop bruyante pour de
+l'imagerie motrice) · 2.7 ✅. Chiffres détaillés du c-VEP, du P300 et de l'ErrP non relevés.
+Retours d'écran, tous traités le jour même (visibles au lancement suivant) :
+1. la **corrélation inter-voies** n'était affichée nulle part hors alarme → dans le bandeau ;
+2. un bon résultat portait un **⚠ orange** sur sa conclusion → ⚠ seulement s'il y a une réserve ;
+3. **« AU NIVEAU DU REPÈRE »** ne se comprenait pas → « BON » ;
+4. la ligne des chiffres (« 94 % … entre 73 et 99 % … il annonce sur 47 % ») → « Cible détectée
+   dans 17 essais sur 36 (47 %) ; rien d'annoncé dans les 19 autres. Sur ces 17 détections, la
+   bonne cible 16 fois : 94 % (hasard 33 %). » ;
+5. demandé : un réglage pour régler la détection du SSVEP → **« Seuil de détection »** ;
+6. la stabilisation puis le repos du Neuro (40 s) sans **indication de temps** → un compte à
+   rebours (« décodage dans ≈ 32 s ») sur la tuile, la page du mode et la vue en direct.
+
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
 essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
@@ -369,9 +385,10 @@ appliquer.
 ### ☐ 1.4 — Le bandeau vit
 
 ✅ Les σ se mettent à jour (~1 Hz), une valeur par voie.
-✅ ⚠️ Sur board de test, la corrélation inter-voies monte à ~0,80-0,83 : c'est **normal** (signal
-artificiel corrélé), le seuil d'alarme est à 0,90. **N'en tire aucune conclusion.** Sur casque réel
-c'est 0,31-0,50.
+✅ La **corrélation inter-voies** est affichée en permanence (« corrélation inter-voies 0,38 (sain :
+0,3 à 0,5) ») — depuis le 2026-09-24 ; avant, elle n'apparaissait que dans l'alarme au-delà de 0,90.
+⚠️ Sur board de test, elle monte à ~0,80-0,83 : c'est **normal** (signal artificiel corrélé), le
+seuil d'alarme est à 0,90. **N'en tire aucune conclusion.** Sur casque réel c'est 0,31-0,50.
 
 ❌ Régression : les σ restent figés, ou le bandeau alarme sur un montage sain.
 
@@ -661,8 +678,10 @@ le c-VEP).
 signal qui *ressemble* à du signal.
 ✅ Casque bien serré, câble dégagé, sujet assis et calé.
 
-❌ Échec : une corrélation inter-voies à **+1,000** au bandeau = la référence flotte. Ne rien
-enregistrer, reprendre le montage.
+✅ Au bandeau, la corrélation inter-voies autour de **0,3 à 0,5**.
+
+❌ Échec : une corrélation qui monte vers **1** (alarme rouge « RÉFÉRENCE DÉCROCHÉE » au-delà de
+0,90) = la référence flotte. Ne rien enregistrer, reprendre le montage.
 
 ### ☐ 2.1 — Vérifier le casque — **BARRIÈRE** (à faire en PREMIER)
 
@@ -691,6 +710,12 @@ jamais été vue sur un vrai signal**. Si elle sort, c'est une première : note 
 Page **SSVEP** → vérifie « 1. Régler » : ton **pic alpha** (point 2.1), et des fréquences dont
 **aucune** ne tombe dessus — sinon **« Proposer « Fréquences des cibles » »** et prends ce que le moteur propose.
 Puis **« Tester »** → « Commencer ».
+
+✅ **« Seuil de détection »** (depuis le 2026-09-24, défaut 2,5) : de combien le score d'une cible
+doit dépasser le bruit de fond du repos. Plus bas = plus de détections et plus d'erreurs ; plus haut
+= l'inverse. La page de test le montre **grisé**, avec la valeur réglée ici : le test part avec. La
+boucle : régler → « Tester » → comparer. ⚠️ Deux tests de 36 essais ont des intervalles larges : lis
+les deux intervalles (sous « Détails ») avant de dire qu'un seuil fait mieux qu'un autre.
 
 ⚠️ **Pour comparer aux repères du 2026-07-27, teste sur le trio du dépôt : 15 · 20 · 8,571.** C'est
 sur lui qu'ils ont été mesurés. Mais si ton pic alpha est sous ~10,5 Hz, la cible à 8,571 Hz tombe
@@ -817,6 +842,9 @@ d'émission, pas comme une erreur.
 ### ☐ 2.7 — Neuro : le mode dont le CONTENU n'a jamais été validé
 
 Page **Neuro** → **« Observer »**. Repos de 25 s, puis les indices défilent.
+
+✅ Pendant la stabilisation et le repos, un **compte à rebours** : « décodage dans ≈ 32 s » (tuile,
+page du mode et vue en direct), puis « décodage dans un instant… » si le repos se prolonge.
 
 ✅ Les trois indices bougent, et aucun chiffre de justesse n'est annoncé — il n'y a pas de bonne
 réponse.

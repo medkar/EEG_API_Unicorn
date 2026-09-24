@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import compter  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
 # que CLAUDE.md interdit — renommer une phase côté moteur laisserait sinon cette page sans écran
 # de résultat, sans qu'aucun test ne le voie (`PHASES_TERMINALES` local aurait continué à valoir
@@ -454,7 +454,7 @@ class CalibPage(QWidget):
         # phrase d'honnêteté le dit au long, juste en dessous).
         ("tpr", lambda v: tr("pages.calib.detail.tpr", pct=f"{v:.0%}")),
         ("tnr", lambda v: tr("pages.calib.detail.tnr", pct=f"{v:.0%}")),
-        ("perm_p", lambda v: tr("pages.calib.detail.perm_p", p=f"{v:.3f}")),
+        ("perm_p", lambda v: tr("pages.calib.detail.perm_p", p=nombre(v, ".3f"))),
         # Le SECOND décodeur du c-VEP, en détail et jamais comme mesure qui décide : afficher deux
         # pourcentages côte à côte invite à prendre le plus beau, et cinq points d'écart sur
         # 37 décisions sont du bruit. C'est `n_discordantes` qui porte l'information, et le

@@ -385,7 +385,8 @@ def noter(decisions, n_cibles, *, pertes=None, refus_horloge="", essais=None, re
             reserve = tr("mesure.cvep_test.reserve.seuils", seuil=seuil)
     else:
         chiffres = tr("mesure.cvep_test.chiffres", justesse=pct(justesse), hasard=pct(hasard),
-                      taux=pct(taux), emis=n_emis, n=n_essais)
+                      taux=pct(taux), emis=n_emis, n=n_essais, justes=n_justes,
+                      muets=n_essais - n_emis)
         if niveau == "faible" and court:
             reserve = tr("mesure.cvep_test.reserve.faible_court", p=texte_p(p), emis=n_emis,
                          long=max(ESSAIS), blocs=len(_blocs(max(ESSAIS))))

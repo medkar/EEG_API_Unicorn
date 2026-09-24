@@ -73,7 +73,7 @@ import numpy as np  # noqa: E402
 from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa: E402
                          CALIB_FENETRE_SILENCE_S, FILTER_MARGIN_S, MARKER_STREAM_DEFAULT,
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
-                         SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, WINDOW_S,
+                         SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, WINDOW_S, Z_MIN,
                          use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  # noqa: E402
@@ -382,7 +382,8 @@ class MesureSSVEP(MesureMarqueurs):
         # séance de 36. C'est le même geste que `n_artefacts`, qui est publié ET nommé dans la
         # phrase depuis toujours. Trouvé par la revue de branche du 2026-09-10.
         resultat = rejouer(essais, repos, self._freqs, fs, acq=acq,
-                           perdus=self._epoques_perdues, chauffe=self._marqueurs_chauffe)
+                           perdus=self._epoques_perdues, chauffe=self._marqueurs_chauffe,
+                           z_min=float(self.params.get("z_min", Z_MIN)))
         resultat["refresh_hz"] = self._refresh_hz
         return resultat
 
@@ -450,7 +451,7 @@ def longueur_bloc_attendue(acq=None):
     return int(acq.window_n + acq.margin_n)
 
 
-def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
+def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN):
     """**La règle du moteur, rejouée sur des fenêtres — une décision par essai.** Rend le verdict.
 
     `essais`  : `[(fenêtre BRUTE (n, 8), indice de la cible fixée), ...]`, **une par essai**.
@@ -496,7 +497,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0):
     # repos est celle qui le clôt. La médiane du σ (sur la fenêtre occipitale filtrée) et la CCA
     # calée cible par cible sont celles du mode : rien n'est recalculé ici.
     vue = _Vue(acq)
-    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs)}, vue)
+    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs), "z_min": float(z_min)}, vue)
     pret = False
     for i, bloc in enumerate(repos):
         vue.recent = bloc
@@ -600,9 +601,9 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
         chiffres = tr("mesure.ssvep_taux.chiffres.muet", n=n_essais, hasard=pct(hasard))
         reserve = tr("mesure.ssvep_taux.reserve.muet")
     else:
-        chiffres = tr("mesure.ssvep_taux.chiffres", justesse=pct(justesse),
-                      bas=f"{ic_bas * 100:.0f}", haut=pct(ic_haut), hasard=pct(hasard),
-                      taux=pct(taux), n=n_essais)
+        chiffres = tr("mesure.ssvep_taux.chiffres", justesse=pct(justesse), hasard=pct(hasard),
+                      taux=pct(taux), n=n_essais, emis=n_emis, justes=n_justes,
+                      muets=n_essais - n_emis)
         if niveau == "faible":
             reserve = tr("mesure.ssvep_taux.reserve.faible", p=texte_p(p))
         elif taux < REFERENCE_EMISSION:
@@ -655,10 +656,12 @@ SPEC = MesureSpec(
     label=tr("mesure.ssvep_taux.label"),
     summary=tr("mesure.ssvep_taux.summary"),
     briefing=BRIEFING,
-    # AUCUN réglage propre : les fréquences sont celles du MODE, que la console passe à la fenêtre
-    # guidée et que celle-ci annonce dans `calib_start`. Et pas de « Flux de marqueurs » : un test
-    # écoute toujours la fenêtre qu'il lance, sur le flux par défaut (`mesure_marqueurs.CLE_FLUX`).
-    params=(),
+    # Les fréquences sont celles du MODE, que la console passe à la fenêtre guidée et que celle-ci
+    # annonce dans `calib_start`. Le SEUIL DE DÉTECTION, lui, est le `Param` du mode — le MÊME
+    # objet —, que la console pré-remplit (grisé) avec la valeur réglée sur la page SSVEP : c'est
+    # le motif de tous les autres tests. Pas de « Flux de marqueurs » : un test écoute toujours
+    # la fenêtre qu'il lance, sur le flux par défaut (`mesure_marqueurs.CLE_FLUX`).
+    params=tuple(p for p in SPEC_SSVEP.params if p.key == "z_min"),
     runtime_cls=MesureSSVEP,
     # Pas une BARRIÈRE : c'est un chiffre à lire, pas un feu rouge. Le contrôle alpha, lui, arrête
     # la séance — sans alpha, plus rien ne veut dire quoi que ce soit. Un taux d'émission bas ne
@@ -712,7 +715,8 @@ def _selftest():
         return x
 
     # === LE TEST : l'effectif est le nombre d'ESSAIS ==========================================
-    def _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7, gain=4.0, sur_trois=2, graine=0):
+    def _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7, gain=4.0, sur_trois=2, graine=0,
+                            params=None):
         """Joue `_mesurer` sur `n_essais` essais, chacun assez LONG pour contenir
         `fenetres_par_essai` fenêtres de décision chevauchantes.
 
@@ -736,7 +740,7 @@ def _selftest():
         # différentes tirerait deux bruits différents, et l'écart observé ne dirait plus si c'est
         # l'effectif qui a bougé ou le tirage.
         maximum = BESOIN + 20 * pas
-        rt = MesureSSVEP(SPEC, {}, _FauxMoteur())
+        rt = MesureSSVEP(SPEC, dict(params or {}), _FauxMoteur())
         rt._freqs = list(FREQS)
         enregistre = [(_bruit(rng, BESOIN), REPOS) for _ in range(40)]
         for i in range(1, n_essais + 1):
@@ -835,6 +839,20 @@ def _selftest():
     chk(fort["n_emis"] > 0 and fort["justesse_emission"] > 0.8,
         f"sur un SSVEP synthétique franc, le moteur émet et a raison ({fort['n_emis']} émissions, "
         f"{fort['justesse_emission'] * 100:.0f} % justes)")
+
+    # === Le SEUIL DE DÉTECTION est un réglage, et le test le reçoit du mode (2026-09-24) ==========
+    # Mêmes essais, deux seuils : un seuil bas doit annoncer PLUS de cibles qu'un seuil haut. C'est
+    # la seule preuve que le réglage atteint la décision — un seuil perdu en chemin (le test qui
+    # retombe sur la constante) rendrait deux résultats identiques, et tout le reste resterait vert.
+    chk([p.key for p in SPEC.params] == ["z_min"] and SPEC.params[0] is SPEC_SSVEP.params[-1],
+        "le test déclare le « Seuil de détection » du MODE — le même objet —, que la console "
+        "pré-remplit avec la valeur réglée sur la page SSVEP")
+    _bas_seuil, _l, _p = _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7, params={"z_min": 1.0})
+    _haut_seuil, _l, _p = _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7,
+                                              params={"z_min": 6.0})
+    chk(_bas_seuil["n_emis"] > _haut_seuil["n_emis"],
+        f"un seuil de détection plus BAS fait annoncer plus de cibles, sur les mêmes essais "
+        f"({_bas_seuil['n_emis']} à z=1,0 contre {_haut_seuil['n_emis']} à z=6,0)")
 
     rng = np.random.default_rng(7)
     rt_bruit = MesureSSVEP(SPEC, {}, _FauxMoteur())
