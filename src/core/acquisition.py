@@ -213,10 +213,27 @@ class UnicornAcquisition:
         return self
 
     def stop(self):
+        """Arrête le flux, puis LIBÈRE la session — chaque geste dans son propre `try`.
+
+        ⚠️ Ils étaient dans le MÊME `try` jusqu'au 2026-09-25, et c'est ce qui empêchait le casque
+        de revenir après une coupure : sur une liaison morte, `stop_stream()` lève, la libération
+        était SAUTÉE en silence, BrainFlow gardait l'ancienne session, et chaque réouverture se
+        heurtait à `ANOTHER_BOARD_IS_CREATED_ERROR:16` — vu au casque, 81 essais d'affilée.
+        La vérification `is_prepared()` reste, elle : BrainFlow PARTAGE la session entre boards
+        aux mêmes paramètres, et libérer à l'aveugle pourrait fermer celle d'un autre moteur.
+        """
         try:
-            if self.board.is_prepared():
-                self.board.stop_stream()
-                self.board.release_session()
+            prepare = self.board.is_prepared()
+        except Exception:  # noqa: BLE001 - l'arrêt ne doit jamais masquer l'erreur d'origine
+            return
+        if not prepare:
+            return
+        try:
+            self.board.stop_stream()
+        except Exception:  # noqa: BLE001 - liaison morte : l'arrêt du flux échoue, on libère quand même
+            pass
+        try:
+            self.board.release_session()
         except Exception:  # noqa: BLE001 - l'arrêt ne doit jamais masquer l'erreur d'origine
             pass
 

@@ -731,7 +731,10 @@ class EngineServer:
         if self.synthetic:
             return {"batterie_pc": None, "perte_pc": None, "signal_barres": None,
                     "perdus_total": 0}
-        batterie = self.acq.batterie
+        # Liaison coupée : la batterie est INCONNUE, pas « la dernière lue ». Vu au casque le
+        # 2026-09-25 : figée à 0 % au moment de la coupure, elle affichait « recharge le casque »
+        # sur un casque allumé et chargé.
+        batterie = None if self._liaison == "perdue" else self.acq.batterie
         return {
             "batterie_pc": None if batterie is None else round(float(batterie)),
             "perte_pc": perte,
@@ -3663,6 +3666,46 @@ def _smoke_casque():
         and barres_liaison(None) is None and barres_liaison(0.0, perdue=True) == 0,
         "les barres de liaison : 4 sans perte, 3 jusqu'au seuil d'alerte, 2, puis 1 ; 0 quand "
         "la liaison est perdue ; rien tant qu'on ne sait pas")
+    # La RÉOUVERTURE libère l'ancienne session même quand l'arrêt du flux lève — le cas d'une
+    # liaison morte. Vu au casque le 2026-09-25 : la libération sautée, 81 réouvertures refusées
+    # (`ANOTHER_BOARD_IS_CREATED_ERROR:16`). Un faux board rejoue exactement ce cas.
+    from core.acquisition import UnicornAcquisition
+
+    class _BoardMort:
+        def __init__(self):
+            self.gestes = []
+
+        def is_prepared(self):
+            return True
+
+        def stop_stream(self):
+            self.gestes.append("stop_stream")
+            raise RuntimeError("UNICORN_StopAcquisition : liaison morte")
+
+        def release_session(self):
+            self.gestes.append("release_session")
+
+        def prepare_session(self):
+            self.gestes.append("prepare_session")
+
+        def start_stream(self):
+            self.gestes.append("start_stream")
+
+    acq = UnicornAcquisition(synthetic=True)
+    acq.board = _BoardMort()
+    acq.reouvrir()
+    chk(acq.board.gestes == ["stop_stream", "release_session", "prepare_session", "start_stream"],
+        f"une liaison morte dont l'arrêt de flux LÈVE est quand même LIBÉRÉE avant d'être "
+        f"rouverte ({acq.board.gestes})")
+    import collections as _collections
+    import types as _types
+    coupe = _types.SimpleNamespace(synthetic=False, _paquets=_collections.deque(),
+                                   _liaison="perdue",
+                                   acq=_types.SimpleNamespace(batterie=0.0, paquets_perdus=0))
+    etat_coupe = EngineServer._etat_casque(coupe)
+    chk(etat_coupe["batterie_pc"] is None and etat_coupe["signal_barres"] == 0,
+        f"liaison coupée : batterie INCONNUE (pas la dernière lue, figée à 0 %), et 0 barre "
+        f"({etat_coupe})")
     chk(compter_paquets([254, 255, 0, 1], None) == (4, 0, 1)
         and compter_paquets([1, 2], 2490) == (2, 0, 2),
         "un compteur qui REPART (bouclage du board de test, réouverture du casque) n'est PAS "
