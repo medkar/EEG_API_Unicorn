@@ -76,6 +76,24 @@ BATTERIE_FAIBLE_PC = 20.0
 FENETRE_PAQUETS_S = 10.0
 PERTE_PAQUETS_PC = 1.0
 
+# Les BARRES de l'icône de liaison (2026-09-25), comme celles d'un téléphone : le taux de perte
+# maximal (en %) pour 4, 3 et 2 barres ; au-delà, 1 barre ; liaison perdue, 0. Décidées ICI, par
+# le moteur, et non par la console : une seconde table de seuils côté écran finirait par peindre
+# 4 barres sur une liaison que l'alerte du moteur dit dégradée.
+BARRES_LIAISON = ((0.1, 4), (PERTE_PAQUETS_PC, 3), (5.0, 2))
+
+
+def barres_liaison(perte_pc, perdue=False):
+    """0 à 4 barres pour un taux de perte en %, ou None si on ne sait pas (pas encore de taux)."""
+    if perdue:
+        return 0
+    if perte_pc is None:
+        return None
+    for maximum, barres in BARRES_LIAISON:
+        if perte_pc <= maximum:
+            return barres
+    return 1
+
 
 def reference_lost(common_mode):
     """True si la corrélation inter-voies trahit une référence décrochée. None -> False."""

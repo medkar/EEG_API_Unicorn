@@ -87,7 +87,8 @@ from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
                     DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
                     MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S,
-                    SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
+                    SEANCES_DIR, TOLERANCE_DIVISEUR, barres_liaison, chemin_libre,
+                    choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
 from core.i18n import message_erreur, tr  # noqa: E402
@@ -725,10 +726,16 @@ class EngineServer:
             perdus = historique[-1][2] - historique[0][2]
             if recus + perdus > 0:
                 perte = round(100.0 * perdus / (recus + perdus), 2)
-        batterie = None if self.synthetic else self.acq.batterie
+        # Le board de test n'a ni batterie (la sienne est tirée au hasard) ni liaison radio : ni
+        # l'une ni l'autre ne s'affiche, plutôt que 4 barres sur un signal fabriqué.
+        if self.synthetic:
+            return {"batterie_pc": None, "perte_pc": None, "signal_barres": None,
+                    "perdus_total": 0}
+        batterie = self.acq.batterie
         return {
             "batterie_pc": None if batterie is None else round(float(batterie)),
             "perte_pc": perte,
+            "signal_barres": barres_liaison(perte, perdue=self._liaison == "perdue"),
             "perdus_total": int(getattr(self.acq, "paquets_perdus", 0)),
         }
 
@@ -3651,6 +3658,11 @@ def _smoke_casque():
         "un saut de 2 à 5 : DEUX échantillons perdus (3 et 4)")
     chk(compter_paquets([9, 10], 6) == (2, 2, 10),
         "…et un saut à la JOINTURE de deux blocs en est un aussi (6 puis 9 : 7 et 8 perdus)")
+    from core.config import barres_liaison
+    chk([barres_liaison(p) for p in (0.0, 0.1, 0.5, 1.0, 3.0, 5.0, 12.0)] == [4, 4, 3, 3, 2, 2, 1]
+        and barres_liaison(None) is None and barres_liaison(0.0, perdue=True) == 0,
+        "les barres de liaison : 4 sans perte, 3 jusqu'au seuil d'alerte, 2, puis 1 ; 0 quand "
+        "la liaison est perdue ; rien tant qu'on ne sait pas")
     chk(compter_paquets([254, 255, 0, 1], None) == (4, 0, 1)
         and compter_paquets([1, 2], 2490) == (2, 0, 2),
         "un compteur qui REPART (bouclage du board de test, réouverture du casque) n'est PAS "
@@ -3665,11 +3677,12 @@ def _smoke_casque():
         while time.perf_counter() - t0 < 3.0 and fil.is_alive():
             time.sleep(0.1)
         casque = srv.snapshot().get("casque") or {}
-        chk(casque.get("batterie_pc") is None,
-            f"le board de test n'a PAS de batterie à l'écran : la sienne est tirée au hasard "
-            f"({casque})")
-        chk(casque.get("perte_pc") == 0.0 and casque.get("perdus_total") == 0,
-            f"…et son compteur, qui boucle à 255, ne fabrique AUCUNE fausse perte ({casque})")
+        chk(casque.get("batterie_pc") is None and casque.get("signal_barres") is None,
+            f"le board de test n'a NI batterie NI barres de liaison à l'écran : sa batterie est "
+            f"tirée au hasard, et il n'a pas de liaison radio ({casque})")
+        chk(srv.acq.paquets_recus > 0 and srv.acq.paquets_perdus == 0,
+            f"…et son compteur, qui boucle à 255, ne fabrique AUCUNE fausse perte "
+            f"({srv.acq.paquets_recus} reçus, {srv.acq.paquets_perdus} perdus)")
         srv.stop()
         fil.join(timeout=5.0)
     finally:

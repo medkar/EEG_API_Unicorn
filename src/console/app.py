@@ -4294,22 +4294,46 @@ def _smoke():
         "…et cette ligne s'efface une fois les repos refaits")
     console.banner.update_from(fake_state())
 
-    # --- L'état du casque au bandeau : batterie, paquets perdus (2026-09-25) --------------------
-    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": 80, "perte_pc": 0.0,
-                                                           "perdus_total": 0}})
-    chk(console.banner.casque.text() == "batterie 80 %" and not console.banner.casque.styleSheet(),
-        f"la batterie s'affiche, sans alerte quand tout va bien ({console.banner.casque.text()!r})")
-    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": 12, "perte_pc": 4.2,
-                                                           "perdus_total": 105}})
-    chk("12 %" in console.banner.casque.text() and "recharge" in console.banner.casque.text()
-        and "4,2 %" in console.banner.casque.text() and "b8860b" in console.banner.casque.styleSheet(),
-        f"batterie faible et liaison dégradée PRÉVIENNENT, avant la coupure "
-        f"({console.banner.casque.text()!r})")
-    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": None, "perte_pc": None,
-                                                           "perdus_total": 0}})
-    chk(not console.banner.casque.text(),
-        "…et rien n'est affiché de ce que le moteur ne sait pas (board de test : pas de batterie)")
-    console.banner.update_from(fake_state())
+    # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------
+    # (2026-09-25, demandé à l'écran : « des icônes évolutives, tout à droite, et le texte
+    # informatif sur la ligne du dessous »).
+    ban = console.banner
+    # Un bandeau VIDE de messages d'abord : les étapes précédentes de ce smoke y ont laissé un
+    # refus et une fenêtre morte, qui occupent légitimement la seconde ligne.
+    ban.set_refus("")
+    ban.set_fenetre("")
+    ban.set_moteur("")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": 73, "perte_pc": 0.0,
+                                                "signal_barres": 4, "perdus_total": 0}})
+    chk(ban.batterie.niveau == 73 and ban.batterie_pc.text() == "73 %"
+        and not ban.batterie.isHidden() and ban.signal.barres == 4 and not ban.signal.isHidden()
+        and "0,0 %" in ban.signal.toolTip(),
+        f"la batterie et les barres de liaison s'affichent en ICÔNES, le taux de perte au survol "
+        f"({ban.batterie.niveau}, {ban.batterie_pc.text()!r}, {ban.signal.barres} barres)")
+    haut = ban.layout().itemAt(0).layout()
+    ordre = [haut.itemAt(i).widget() for i in range(haut.count())]
+    chk(ordre.index(ban.signal) > ordre.index(ban.batterie) > ordre.index(ban.sigmas),
+        "…TOUT À DROITE de la première ligne, après les σ")
+    chk(ban.messages.isHidden(),
+        "…et quand tout va bien, la seconde ligne — celle des messages — n'existe pas")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": 12, "perte_pc": 4.2,
+                                                "signal_barres": 2, "perdus_total": 105}})
+    chk(ban.batterie.niveau == 12 and ban.signal.barres == 2 and not ban.messages.isHidden()
+        and "recharge" in ban.alerte_casque.text() and "4,2 %" in ban.alerte_casque.text()
+        and ban.ligne_messages.indexOf(ban.alerte_casque) >= 0,
+        f"batterie faible et liaison dégradée : les icônes baissent ET un message PRÉVIENT, sur "
+        f"la seconde ligne, avant la coupure ({ban.alerte_casque.text()!r})")
+    ban.update_from({**fake_state(), "quality": {**fake_state()["quality"], "common_mode": 1.0,
+                                                 "reference_lost": True}})
+    chk(ban.ligne_messages.indexOf(ban.alarme) >= 0 and "1,00" in ban.alarme.text()
+        and not ban.messages.isHidden(),
+        f"« référence décrochée » passe sur la ligne du DESSOUS ({ban.alarme.text()[:40]!r}…)")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": None, "perte_pc": None,
+                                                "signal_barres": None, "perdus_total": 0}})
+    chk(ban.batterie.isHidden() and ban.batterie_pc.isHidden() and ban.signal.isHidden(),
+        "…et rien n'est affiché de ce que le moteur ne sait pas (board de test : ni batterie, ni "
+        "liaison radio)")
+    ban.update_from(fake_state())
 
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
     console.refresh()

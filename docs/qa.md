@@ -901,19 +901,24 @@ casque s'est coupée pendant la séance… ».
 ⚠️ Après la reconnexion, **regarde C3 et Cz** au bandeau : la réouverture redémarre
 l'amplificateur, et elles saturaient à chaque réouverture. Note combien de temps.
 
-### ☐ 2.10 — Batterie et paquets perdus au bandeau
+### ☐ 2.10 — Batterie et liaison : les icônes du bandeau
 
 Console ouverte sur le casque.
 
-✅ Le bandeau affiche « **batterie N %** » (73 % lu sur le casque le 2026-09-25, 80 % une heure
-avant). Sur le board de test, **aucune** batterie : la sienne est fabriquée.
-✅ Éloigne le casque du PC (autre pièce) : avant la coupure, « ⚠ liaison dégradée : N % des
-échantillons perdus (10 dernières s) — rapproche le casque du PC » apparaît en orange. **Note à
-quelle distance, et quel taux**, s'il apparaît : aucune perte n'a encore été observée (0 sur 2 490).
-✅ Sous 20 %, « ⚠ batterie N % : recharge le casque avant ta prochaine séance ».
+✅ **Tout à droite de la première ligne** : une **pile** qui se remplit selon la batterie, suivie de
+« 73 % » (lu sur le casque le 2026-09-25), puis **4 barres** de liaison. Au survol des barres :
+« N % des échantillons perdus sur les 10 dernières secondes ».
+✅ Les **messages** (référence décrochée, liaison perdue, refus…) sont sur une **seconde ligne**, qui
+n'apparaît que s'il y a quelque chose à dire.
+✅ Éloigne le casque du PC (autre pièce) : les barres **baissent** (3 jusqu'à 1 % de pertes, 2
+jusqu'à 5 %, puis 1), et dès 1 % un message orange « liaison dégradée… rapproche le casque ».
+**Note à quelle distance, et quel taux** : aucune perte n'a encore été observée (0 sur 2 490).
+✅ Liaison perdue : 0 barre, barrée d'une croix rouge. Sous 20 % de batterie, la pile rougit et
+« recharge le casque avant ta prochaine séance » apparaît en dessous.
+✅ Sur le board de test : **ni pile ni barres** (sa batterie est fabriquée, il n'a pas de liaison
+radio).
 
-❌ Échec : une batterie affichée sur le board de test ; un taux de perte sur le board de test (son
-compteur boucle à 255 : ce n'est pas une perte).
+❌ Échec : une pile ou des barres sur le board de test ; des barres pleines pendant une coupure.
 
 ---
 
