@@ -84,7 +84,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
-                    MARKER_LATE_S, MARKER_STREAM_DEFAULT, MI_WINDOW_S, NEURO_WINDOW_S,
+                    DECROCHAGE_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT, MI_WINDOW_S,
+                    NEURO_WINDOW_S, REESSAI_S,
                     SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
@@ -324,6 +325,19 @@ class EngineServer:
         # de s'ouvrir tue ce fil avant que l'indicateur ne passe, et l'écran de départ peut alors
         # reposer la question au lieu d'afficher une console déjà morte.
         self.acquisition_ouverte = False
+        # La SURVEILLANCE DE LA LIAISON (2026-09-25, cf. `DECROCHAGE_S`). `_liaison` : « ok » ou
+        # « perdue » ; les instants sont en `perf_counter`, l'horloge de la boucle. Attributs
+        # d'instance pour que les tests les raccourcissent sans attendre 2 s réelles.
+        self.decrochage_s = DECROCHAGE_S
+        self.reessai_s = REESSAI_S
+        self._liaison = "ok"
+        self._dernier_echantillon = None
+        self._perdue_depuis = None
+        self._tentatives = 0
+        self._erreur_liaison = ""
+        self._retablie_a = None
+        self._coupure_s = None
+        self._prochain_essai = 0.0
         self.clock = ClockBridge()
         self.instance = instance or default_instance_id(serial, synthetic)
         self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
@@ -637,6 +651,74 @@ class EngineServer:
                 print(f"[server] {runtime.spec.label} démarré — flux "
                       f"{stream_name(runtime.spec.stream)}"
                       + (" (silencieux pendant le repos)" if runtime.spec.rest else ""))
+
+    def _surveille_liaison(self, now):
+        """Appelée quand un tour n'a apporté AUCUN échantillon. True si la liaison est perdue.
+
+        Au-delà de `decrochage_s` sans échantillon, la liaison est déclarée perdue : les séances
+        minutées en cours sont annulées (leurs données auraient un trou), puis la session est
+        ROUVERTE, un essai toutes les `reessai_s` — chaque essai bloque ce fil le temps que
+        BrainFlow cherche le casque ; la console, elle, continue de lire `snapshot()`, qui ne
+        prend aucun verrou. Au retour, le tampon repart vide et les modes refont leur repos : leur
+        plancher a été mesuré sur un signal d'avant la coupure, et la réouverture redémarre
+        l'amplificateur.
+        """
+        if self._dernier_echantillon is None:
+            self._dernier_echantillon = now          # la chauffe de BrainFlow n'est pas une coupure
+            return False
+        if self._liaison == "ok":
+            if now - self._dernier_echantillon < self.decrochage_s:
+                return False
+            self._liaison = "perdue"
+            self._perdue_depuis = now
+            self._tentatives = 0
+            self._erreur_liaison = ""
+            self._prochain_essai = now
+            print(f"[server] ⚠️ liaison PERDUE : aucun échantillon depuis "
+                  f"{now - self._dernier_echantillon:.1f} s — reconnexion")
+            self._interrompt_seances(tr("moteur.liaison.seance_annulee"))
+        if now < self._prochain_essai:
+            return True
+        self._tentatives += 1
+        try:
+            self.acq.reouvrir()
+        except Exception as e:  # noqa: BLE001 - un casque éteint est l'attendu, pas un incident
+            self._erreur_liaison = str(e) or type(e).__name__
+            self._prochain_essai = time.perf_counter() + self.reessai_s
+            print(f"[server] reconnexion {self._tentatives} échouée : {self._erreur_liaison}")
+            return True
+        retour = time.perf_counter()
+        self._coupure_s = retour - self._perdue_depuis
+        self._liaison = "ok"
+        self._retablie_a = retour
+        self._dernier_echantillon = retour
+        self.recent = np.zeros((0, len(CH_NAMES)))
+        self.recent_ts = np.zeros((0,))
+        print(f"[server] liaison RÉTABLIE après {self._coupure_s:.1f} s "
+              f"({self._tentatives} tentative(s)) — les modes refont leur repos")
+        self._begin_shared_rest(list(self.active.values()), retour)
+        return True
+
+    def _interrompt_seances(self, raison):
+        """Annule l'entraînement et le test en cours, en disant pourquoi. Rien n'est entraîné."""
+        for seance in (self.calibration, self.mesure):
+            if seance is not None and not seance.terminee:
+                seance.probleme = raison
+                seance.cancel()
+
+    def _etat_liaison(self):
+        """La liaison avec le casque, pour la console. Durées calculées maintenant."""
+        now = time.perf_counter()
+        return {
+            "etat": self._liaison,
+            "depuis_s": (None if self._perdue_depuis is None or self._liaison == "ok"
+                         else round(now - self._perdue_depuis, 1)),
+            "tentatives": self._tentatives,
+            "erreur": self._erreur_liaison,
+            "retablie_depuis_s": (None if self._retablie_a is None
+                                  else round(now - self._retablie_a, 1)),
+            "coupure_s": None if self._coupure_s is None else round(self._coupure_s, 1),
+        }
 
     def _begin_shared_rest(self, runtimes, now):
         """Un seul repos pour tous ceux qui en demandent un, si on les lance ensemble.
@@ -1727,6 +1809,9 @@ class EngineServer:
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
             "modes_state": {mid: r.state() for mid, r in active.items()},
+            # La liaison avec le casque (2026-09-25) : dans `snapshot()` seulement, pas dans le
+            # flux `status`, contrat public.
+            "liaison": self._etat_liaison(),
             # `now` est passé pour que le décompte affiché soit celui de MAINTENANT, pas celui du
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
@@ -2257,6 +2342,19 @@ class EngineServer:
                         self.new_block = (eeg, ts_lsl)
                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
                         self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
+                        self._dernier_echantillon = now
+                    elif self._surveille_liaison(now):
+                        # Liaison PERDUE : aucun mode ne décode, aucune séance ne tourne. Décoder
+                        # le tampon figé republierait la dernière décision en boucle — un SSVEP
+                        # qui annonce la même cible pendant toute la coupure, et une application
+                        # qui continue d'agir dessus. On ne fait que les commandes et le statut —
+                        # et la PAUSE : sans elle, la boucle tournerait à vide entre deux essais.
+                        due = now - last_status >= STATUS_PERIOD_S
+                        if self.status_out.push(self._state(True, calibration=self.calibration),
+                                                key=self._status_key(True), force=due) and due:
+                            last_status = now
+                        time.sleep(POLL_S)
+                        continue
 
                     self._tire_marqueurs()
 
@@ -2545,6 +2643,7 @@ def _smoke():
         _smoke_oreille_calibration(),
         _smoke_vol_marqueurs(),
         _smoke_mesure(),
+        _smoke_liaison(),
         _smoke_enregistrement(),
         _smoke_cumul(),
         _smoke_proposition(),
@@ -3496,6 +3595,136 @@ def _smoke_oreille_calibration():
         shutil.rmtree(dossier, ignore_errors=True)
 
     print(f"[smoke-oreille-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_liaison():
+    """Un casque qui DÉCROCHE : détecté, rien n'est décodé pendant la coupure, et il revient.
+
+    Constaté en séance (2026-09-25) : une déconnexion d'une seconde figeait tout jusqu'à relancer
+    la console. BrainFlow ne lève rien — les échantillons cessent d'arriver —, donc ce test coupe
+    les échantillons d'un VRAI moteur (board de test) et fait échouer la réouverture tant qu'il
+    ne l'a pas décidé : c'est la seule façon de voir la coupure DURER, et de vérifier ce que le
+    moteur fait pendant.
+    """
+    import threading
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    freqs = [c["actual_hz"] for c in choose_frequencies(60.0)]
+    srv = EngineServer(synthetic=True, instance="smoke-liaison", modes=("raw", "ssvep"),
+                       params={"ssvep": {"freqs": freqs}})
+    srv.decrochage_s = 0.5
+    srv.reessai_s = 0.3
+    coupe, retour, essais = {"on": False}, {"ok": False}, []
+    lire, rouvrir = srv.acq.get_new_data, srv.acq.reouvrir
+
+    def lire_coupe():
+        donnees = lire()                      # on VIDE quand même le tampon de BrainFlow
+        return (None, None) if coupe["on"] else donnees
+
+    def rouvrir_si_permis():
+        essais.append(time.perf_counter())
+        if not retour["ok"]:
+            raise RuntimeError("UNABLE_TO_OPEN_PORT_ERROR (simulé)")
+        coupe["on"] = False
+        return rouvrir()
+
+    srv.acq.get_new_data = lire_coupe
+    srv.acq.reouvrir = rouvrir_si_permis
+    tours = {"n": 0}
+    vider = srv._drain_commands
+
+    def vider_compte():
+        tours["n"] += 1
+        return vider()
+
+    srv._drain_commands = vider_compte
+    fil = threading.Thread(target=srv.run,
+                           kwargs={"duration_s": 25.0, "baseline_s": 1.0, "warmup_s": 0.5},
+                           daemon=True)
+    fil.start()
+    try:
+        t0 = time.perf_counter()
+        while srv.phase != "decoding" and time.perf_counter() - t0 < 10.0 and fil.is_alive():
+            time.sleep(0.05)
+        ssvep = srv.active.get("ssvep")
+        decisions = {"n": 0}
+        if ssvep is not None:
+            tick = ssvep.tick
+
+            def tick_compte(*a, **k):
+                decisions["n"] += 1
+                return tick(*a, **k)
+
+            ssvep.tick = tick_compte
+        chk(srv.snapshot()["liaison"]["etat"] == "ok" and ssvep is not None,
+            f"au départ la liaison est « ok » ({srv.snapshot()['liaison']})")
+        # Un test en cours au moment de la coupure : il doit être ANNULÉ, avec sa raison.
+        srv.submit("start_mesure", id="alpha")
+        t0 = time.perf_counter()
+        while srv.snapshot().get("mesure") is None and time.perf_counter() - t0 < 3.0:
+            time.sleep(0.05)
+
+        coupe["on"] = True
+        t0 = time.perf_counter()
+        while (srv.snapshot()["liaison"]["etat"] != "perdue" and time.perf_counter() - t0 < 3.0
+               and fil.is_alive()):
+            time.sleep(0.05)
+        liaison = srv.snapshot()["liaison"]
+        chk(liaison["etat"] == "perdue",
+            f"sans échantillon depuis plus de {srv.decrochage_s} s, la liaison est déclarée "
+            f"PERDUE ({liaison})")
+
+        avant, tours_avant = decisions["n"], tours["n"]
+        time.sleep(1.0)
+        liaison = srv.snapshot()["liaison"]
+        chk(decisions["n"] == avant,
+            f"pendant la coupure, le SSVEP ne décode PLUS : sinon il republierait sa dernière "
+            f"cible en boucle sur un tampon figé ({decisions['n'] - avant} décision(s))")
+        chk(len(essais) >= 2 and "simulé" in liaison["erreur"] and liaison["tentatives"] >= 2
+            and liaison["depuis_s"] and liaison["depuis_s"] > 0.5,
+            f"…il RÉESSAIE de rouvrir le casque, et l'état dit depuis quand et pourquoi ça échoue "
+            f"({liaison})")
+        n_tours = tours["n"] - tours_avant
+        chk(0 < n_tours <= 1.0 / POLL_S * 1.5 + 5,
+            f"…la boucle continue de servir les commandes, mais en marquant sa PAUSE — pas une "
+            f"boucle à vide entre deux essais ({n_tours} tours en 1 s)")
+        mesure = srv.snapshot().get("mesure") or {}
+        chk(mesure.get("phase") == "annule"
+            and mesure.get("probleme") == tr("moteur.liaison.seance_annulee"),
+            f"…et le test en cours est ANNULÉ, en disant pourquoi : ses données auraient un trou "
+            f"({mesure.get('phase')}, {mesure.get('probleme')!r})")
+
+        retour["ok"] = True
+        t0 = time.perf_counter()
+        while (srv.snapshot()["liaison"]["etat"] != "ok" and time.perf_counter() - t0 < 3.0
+               and fil.is_alive()):
+            time.sleep(0.05)
+        liaison = srv.snapshot()["liaison"]
+        chk(liaison["etat"] == "ok" and liaison["coupure_s"] and liaison["coupure_s"] > 1.0
+            and liaison["retablie_depuis_s"] is not None,
+            f"le casque revenu, la liaison est RÉTABLIE, et l'état dit combien de temps elle a "
+            f"été coupée ({liaison})")
+        chk(ssvep.phase in ("warmup", "rest"),
+            f"…et le SSVEP REFAIT son repos : son plancher datait d'avant la coupure, et la "
+            f"réouverture redémarre l'amplificateur ({ssvep.phase})")
+        t0 = time.perf_counter()
+        while len(srv.recent) == 0 and time.perf_counter() - t0 < 3.0:
+            time.sleep(0.05)
+        chk(len(srv.recent) > 0 and fil.is_alive(),
+            f"…les échantillons arrivent de nouveau, sans relancer la console "
+            f"({len(srv.recent)} dans le tampon)")
+    finally:
+        srv.stop()
+        fil.join(timeout=5.0)
+        srv.close()
+    print(f"[smoke-liaison] VERDICT : {'OK' if ok else 'ÉCHEC'}")
     return ok
 
 

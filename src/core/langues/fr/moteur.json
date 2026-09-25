@@ -22,6 +22,7 @@
   "moteur.enregistrement.ecriture_impossible": "écriture impossible ({erreur})",
   "moteur.erreur_interne": "Erreur interne ({type}) : {detail}. Ce n'est pas ta séance : signale-le avec le terminal.",
   "moteur.format.decimale": ",",
+  "moteur.liaison.seance_annulee": "La liaison avec le casque s'est coupée pendant la séance : ses données ont un trou, elle est annulée. Refais-la une fois le casque revenu.",
   "moteur.proposer.hors_plage": "hors de la plage confortable ({lo}-{hi} Hz) : {hors}. Scintillement plus pénible, réponse plus bruitée.",
   "moteur.proposer.impossible": "impossible : aucun jeu de {n} cibles à {refresh} Hz.",
   "moteur.proposer.impossible_max": "impossible : {k} cibles au maximum à {refresh} Hz avec un alpha à {alpha} Hz. Il faut un écran plus rapide.",

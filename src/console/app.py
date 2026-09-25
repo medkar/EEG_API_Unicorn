@@ -4267,6 +4267,33 @@ def _smoke():
         "`--synthetic` saute le dialogue, et le board de test n'entre pas dans la mémoire des "
         "casques")
 
+    # --- Un casque qui DÉCROCHE, dit par le bandeau (2026-09-25) -----------------------------
+    # Le moteur réessaie seul (`server.py`, `[smoke-liaison]`) ; l'écran doit le DIRE — sinon il
+    # montre des σ figés, l'écran « où plus rien ne bouge » qu'on fermait pour relancer.
+    perdue = {**fake_state(), "liaison": {"etat": "perdue", "depuis_s": 4.2, "tentatives": 2,
+                                           "erreur": "UNABLE_TO_OPEN_PORT_ERROR",
+                                           "retablie_depuis_s": None, "coupure_s": None}}
+    console.banner.update_from(perdue)
+    chk("LIAISON PERDUE" in console.banner.alarme.text()
+        and "UNABLE_TO_OPEN_PORT_ERROR" in console.banner.alarme.text()
+        and "fermer" in console.banner.alarme.text()
+        and "aucun échantillon" in console.banner.sigmas.text(),
+        f"une liaison perdue se DIT au bandeau, avec la raison, et qu'il est inutile de fermer la "
+        f"console — les σ ne restent pas figés sur le dernier tampon "
+        f"({console.banner.alarme.text()[:60]!r}…, {console.banner.sigmas.text()!r})")
+    retablie = {**fake_state(), "liaison": {"etat": "ok", "depuis_s": None, "tentatives": 3,
+                                             "erreur": "", "retablie_depuis_s": 5.0,
+                                             "coupure_s": 7.4}}
+    console.banner.update_from(retablie)
+    chk(not console.banner.alarme.text() and "rétablie" in console.banner.reprise.text()
+        and "repos" in console.banner.reprise.text(),
+        f"…puis son retour, et que les modes refont leur repos ({console.banner.reprise.text()!r})")
+    console.banner.update_from({**retablie, "liaison": {**retablie["liaison"],
+                                                        "retablie_depuis_s": 120.0}})
+    chk(not console.banner.reprise.text(),
+        "…et cette ligne s'efface une fois les repos refaits")
+    console.banner.update_from(fake_state())
+
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
     console.refresh()
     chk(moteur_faux.appels == 1,

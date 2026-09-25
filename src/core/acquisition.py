@@ -97,6 +97,19 @@ class UnicornAcquisition:
         self.board.start_stream()
         return self
 
+    def reouvrir(self):
+        """Ferme la session (sans lever), puis la rouvre. Lève si le casque ne répond toujours pas.
+
+        Le geste qu'il fallait faire à la main — fermer et relancer la console — quand le casque a
+        décroché : BrainFlow garde alors une session dont la lecture échoue en boucle, sans
+        jamais lever, et seule une réouverture rétablit le flux. Même `BoardShim`, mêmes
+        paramètres (numéro de série compris) : on rouvre CE casque, jamais un autre.
+        """
+        self.stop()
+        self.board.prepare_session()
+        self.board.start_stream()
+        return self
+
     def stop(self):
         try:
             if self.board.is_prepared():

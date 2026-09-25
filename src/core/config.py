@@ -53,6 +53,19 @@ SIGNAL_SAT_SIGMA = 500.0
 COMMON_MODE_MAX = 0.90
 
 
+# --- Une liaison qui DÉCROCHE (2026-09-25) --------------------------------------------------
+# Constaté en séance : le casque se déconnecte une seconde, et plus rien ne bouge jusqu'à relancer
+# la console. BrainFlow ne lève RIEN dans ce cas — sa boucle de lecture réessaie `GetData` à
+# l'infini (`gtec/unicorn_board.cpp`) —, les échantillons cessent simplement d'arriver. Le
+# moteur surveille donc leur arrivée lui-même : au-delà de `DECROCHAGE_S` sans un seul
+# échantillon, la liaison est déclarée perdue et la session ROUVERTE, un essai toutes les
+# `REESSAI_S`. 2 s et pas moins : le casque livre ses échantillons en continu à 250 Hz, et un
+# hoquet d'une seconde qui se rétablirait seul ne doit pas coûter une réouverture (qui redémarre
+# l'amplificateur et fait saturer C3/Cz un moment).
+DECROCHAGE_S = 2.0
+REESSAI_S = 3.0
+
+
 def reference_lost(common_mode):
     """True si la corrélation inter-voies trahit une référence décrochée. None -> False."""
     return common_mode is not None and common_mode > COMMON_MODE_MAX

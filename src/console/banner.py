@@ -16,6 +16,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import nombre, tr  # noqa: E402
 
 
+# Combien de temps la ligne « liaison rétablie » reste affichée après le retour du casque : le
+# temps que la stabilisation et le repos des modes se refassent (15 + 25 s pour le plus long).
+REPRISE_VISIBLE_S = 60.0
+
+
 class Banner(QWidget):
     """Une ligne, trois informations, jamais masquée."""
 
@@ -50,10 +55,14 @@ class Banner(QWidget):
         self.moteur = QLabel("")
         self.moteur.setWordWrap(True)
         self.moteur.setStyleSheet("color: #e5484d; font-weight: bold;")
+        # Après une coupure du casque : la minute qui suit son retour (2026-09-25).
+        self.reprise = QLabel("")
+        self.reprise.setWordWrap(True)
+        self.reprise.setStyleSheet("color: #b8860b;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        for widget in (self.liaison, self.sigmas, self.alarme, self.fenetre, self.refus,
-                       self.moteur):
+        for widget in (self.liaison, self.sigmas, self.alarme, self.reprise, self.fenetre,
+                       self.refus, self.moteur):
             layout.addWidget(widget)
         layout.addStretch(1)
 
@@ -127,3 +136,27 @@ class Banner(QWidget):
                                    correlation=quality.get("common_mode")))
         else:
             self.alarme.setText("")
+        self._montrer_liaison(state.get("liaison") or {})
+
+    def _montrer_liaison(self, liaison):
+        """Le casque a-t-il décroché ? (2026-09-25) Prioritaire sur tout le reste du bandeau.
+
+        Pendant la coupure, le moteur ne décode plus rien et réessaie seul : l'écran doit le dire,
+        sinon il montre des σ figés sur le dernier tampon — l'écran « où plus rien ne bouge » que
+        l'on fermait pour relancer. Après le retour, une minute d'avertissement : les modes
+        refont leur repos, et la réouverture redémarre l'amplificateur (C3/Cz saturent un moment).
+        """
+        if liaison.get("etat") == "perdue":
+            self.alarme.setText(tr("console.bandeau.liaison_perdue",
+                                   depuis=int(liaison.get("depuis_s") or 0),
+                                   tentatives=liaison.get("tentatives", 0),
+                                   raison=liaison.get("erreur") or "…"))
+            self.sigmas.setText(tr("console.bandeau.sigmas_liaison_perdue"))
+            self.reprise.setText("")
+            return
+        retablie = liaison.get("retablie_depuis_s")
+        if retablie is not None and retablie < REPRISE_VISIBLE_S:
+            self.reprise.setText(tr("console.bandeau.liaison_retablie",
+                                    coupure=nombre(float(liaison.get("coupure_s") or 0.0), ".0f")))
+        else:
+            self.reprise.setText("")
