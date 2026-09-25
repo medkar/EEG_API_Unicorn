@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -53,7 +54,8 @@ from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
 from console.calib_page import CalibPage  # noqa: E402
-from console.demarrage import SYNTHETIQUE, choisir_source  # noqa: E402
+from console.demarrage import (SYNTHETIQUE, UNICORN, Memoire,  # noqa: E402
+                               attendre_ouverture, choisir_source)
 from stimulus import registry as stimulus_registry  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
@@ -4180,6 +4182,91 @@ def _smoke():
         f"…et `run()` branche VRAIMENT le prédicat sur le fil du moteur "
         f"({[ast.unparse(kw.value) for kw in appel.keywords]})")
 
+    # --- L'OUVERTURE de la session : un casque qui refuse, et la question REPOSÉE (2026-09-25) --
+    # `ouvrir_session` rejouée sans casque : ses quatre dépendances sont injectées. Le scénario est
+    # celui d'une salle de TP — un casque éteint (ou le mauvais numéro), puis le bon.
+    import argparse as _argparse
+
+    ordre = []
+
+    class _FauxFil:
+        def __init__(self, vivant):
+            self.vivant = vivant
+
+        def is_alive(self):
+            return self.vivant
+
+        def join(self, timeout=None):
+            ordre.append("join")
+
+    class _FauxMoteurOuverture:
+        def __init__(self, numero):
+            self.numero = numero
+
+        def stop(self):
+            ordre.append(f"stop {self.numero}")
+
+        def close(self):
+            ordre.append(f"close {self.numero}")
+
+    class _FausseMemoire:
+        def __init__(self):
+            self.retenus = []
+
+        def retenir(self, numero):
+            self.retenus.append(numero)
+
+    def _scenario(issues, reponses, synthetic=False):
+        """Rejoue `ouvrir_session` : `issues` = ce que rend l'attente à chaque essai, `reponses` =
+        ce que choisit l'étudiant à chaque fois que la question lui est posée."""
+        ordre.clear()
+        questions, memoire = [], _FausseMemoire()
+        issues, reponses = list(issues), list(reponses)
+
+        def choisir(**kw):
+            questions.append(kw)
+            return reponses.pop(0)
+
+        def lancer(_args, _modes, synth, numero):
+            ordre.append(f"lancer {numero or 'test'}")
+            return (_FauxMoteurOuverture(numero), _FauxFil(True),
+                    {"raison": "UNABLE_TO_OPEN_PORT_ERROR"})
+
+        def attendre(_engine, _vivant, _texte):
+            return issues.pop(0)
+
+        args = _argparse.Namespace(synthetic=synthetic, serial=None)
+        rendu = ouvrir_session(args, ["raw"], lancer=lancer, choisir=choisir, attendre=attendre,
+                               memoire=memoire)
+        return rendu, questions, memoire.retenus
+
+    rendu, questions, retenus = _scenario(["echec", "ouvert"],
+                                          [(UNICORN, "UN-ETEINT"), (UNICORN, "UN-BON")])
+    chk(rendu is not None and rendu[0].numero == "UN-BON" and len(questions) == 2,
+        f"un casque qui refuse de s'ouvrir REPOSE la question, et la session s'ouvre sur le "
+        f"casque choisi ensuite ({len(questions)} question(s))")
+    chk("UN-ETEINT" in questions[1]["erreur"] and "UNABLE_TO_OPEN_PORT_ERROR" in questions[1]["erreur"]
+        and questions[1]["defaut"] == UNICORN and questions[1]["numero"] == "UN-ETEINT",
+        f"…avec la RAISON du refus, et le casque toujours choisi : aucun repli sur le board de test "
+        f"({questions[1]['defaut']}, {questions[1]['erreur'][:50]!r}…)")
+    chk(ordre == ["lancer UN-ETEINT", "stop UN-ETEINT", "join", "close UN-ETEINT", "lancer UN-BON"],
+        f"…le moteur mort est arrêté et fermé AVANT qu'un autre ne soit construit — ses flux LSL "
+        f"portent les mêmes noms ({ordre})")
+    chk(retenus == ["UN-BON"],
+        f"…et seul le casque OUVERT est retenu pour la prochaine fois, pas celui qui a échoué "
+        f"({retenus})")
+    rendu, _q, retenus = _scenario(["abandon"], [(UNICORN, "UN-LENT")])
+    chk(rendu is None and "close UN-LENT" in ordre and not retenus,
+        f"« Abandonner » pendant l'attente : pas de console, et le moteur est quand même fermé "
+        f"({ordre})")
+    rendu, _q, _r = _scenario([], [None])
+    chk(rendu is None and not ordre,
+        "fermer le dialogue sans choisir n'ouvre RIEN — pas même un moteur")
+    rendu, questions, retenus = _scenario(["ouvert"], [], synthetic=True)
+    chk(rendu is not None and not questions and not retenus,
+        "`--synthetic` saute le dialogue, et le board de test n'entre pas dans la mémoire des "
+        "casques")
+
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
     console.refresh()
     chk(moteur_faux.appels == 1,
@@ -4513,6 +4600,85 @@ def _smoke():
     return ok
 
 
+def _lancer_moteur(args, modes, synthetic, numero):
+    """Construit le moteur et démarre SON fil. Rend `(engine, thread, issue)`.
+
+    `issue["raison"]` est rempli par le fil s'il meurt sur une exception — typiquement le casque
+    qui refuse de s'ouvrir (`prepare_session()`) : c'est cette raison que l'écran de départ
+    affichera en reposant la question. La trace complète part quand même au terminal.
+    """
+    engine = EngineServer(serial=numero, synthetic=synthetic, verbose=args.verbose,
+                          modes=modes, instance=args.instance)
+    issue = {}
+
+    def cible():
+        try:
+            engine.run(baseline_s=args.baseline, warmup_s=args.warmup)
+        except Exception as e:  # noqa: BLE001 - la raison est rendue à l'écran, la trace au terminal
+            issue["raison"] = str(e) or type(e).__name__
+            traceback.print_exc()
+
+    # Le moteur tourne dans SON fil et possède seul la session BrainFlow. Le fil Qt ne fait que
+    # lire `snapshot()` et poser des commandes en file.
+    thread = threading.Thread(target=cible, daemon=True)
+    thread.start()
+    return engine, thread, issue
+
+
+def ouvrir_session(args, modes, lancer=_lancer_moteur, choisir=choisir_source,
+                   attendre=attendre_ouverture, memoire=None):
+    """Demande la source, ouvre le casque, et REPOSE la question tant qu'il refuse de s'ouvrir.
+
+    Rend `(engine, thread)` quand le casque (ou le board de test) est ouvert, ou None si
+    l'utilisateur ferme le dialogue ou abandonne l'attente. Jusqu'au 2026-09-25, un casque éteint
+    tuait le fil du moteur et la console s'affichait quand même, figée, avec pour seule issue de
+    la fermer et la relancer. Désormais on attend l'ouverture AVANT d'afficher la console.
+
+    ⚠️ **Aucun repli.** Après un échec, la question est reposée avec la raison, et la source reste
+    celle que l'étudiant avait choisie (cf. `console/demarrage.py`) : jamais le board de test à
+    sa place. Les dépendances s'injectent pour que le smoke rejoue un échec sans casque.
+    """
+    memoire = memoire if memoire is not None else Memoire()
+    source = SYNTHETIQUE if args.synthetic else None
+    numero = args.serial
+    erreur = ""
+    while True:
+        # `--synthetic` reste accepté et SAUTE le dialogue : c'est le raccourci du développeur et
+        # des smokes, pas le chemin normal. Mais un ÉCHEC repose la question, même alors.
+        if source is None or erreur:
+            choix = choisir(defaut=source or UNICORN, numero=numero, erreur=erreur,
+                            memoire=memoire)
+            if choix is None:
+                print("[console] aucune source choisie — la console ne démarre pas.")
+                return None
+            source, numero = choix
+        synthetic = source == SYNTHETIQUE
+        # `EngineServer` valide les modes demandés dans son constructeur et lève un `ValueError`
+        # déjà rédigé pour être lu (cf. core/server.py) — sans modèle MI entraîné, par exemple,
+        # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Il ne dépend PAS
+        # du casque : le reposer ne servirait à rien, on le laisse remonter à `run()`.
+        engine, thread, issue = lancer(args, modes, synthetic, numero)
+        texte = (tr("console.demarrage.attente_test") if synthetic
+                 else tr("console.demarrage.attente_casque", numero=numero))
+        etat = attendre(engine, thread.is_alive, texte)
+        if etat == "ouvert":
+            if not synthetic:
+                memoire.retenir(numero)     # seulement APRÈS une ouverture réussie
+            return engine, thread
+        # Un moteur mort (ou abandonné) libère ce qu'il a créé AVANT qu'un autre ne soit
+        # construit : ses deux flux LSL portent les mêmes noms que ceux du suivant.
+        engine.stop()
+        thread.join(timeout=5.0)
+        engine.close()
+        del engine
+        if etat == "abandon":
+            print("[console] ouverture abandonnée — la console ne démarre pas.")
+            return None
+        raison = issue.get("raison") or "?"
+        erreur = (tr("console.demarrage.echec_test", raison=raison) if synthetic
+                  else tr("console.demarrage.echec", numero=numero, raison=raison))
+
+
 def run(args):
     modes = [m.strip() for m in (args.mode or "").split(",") if m.strip()]
     if not args.no_raw:
@@ -4527,29 +4693,14 @@ def run(args):
     # vivante avant que quoi que ce soit n'ouvre le casque.
     app = QApplication([])
 
-    synthetic = args.synthetic
-    if not args.synthetic:
-        # `--synthetic` reste accepté et SAUTE le dialogue : c'est le raccourci du développeur et
-        # des smokes, pas le chemin normal. Ne pas le passer ouvre la question.
-        choix = choisir_source()
-        if choix is None:
-            print("[console] aucune source choisie — la console ne démarre pas.")
-            sys.exit(0)
-        synthetic = (choix == SYNTHETIQUE)
-
     try:
-        engine = EngineServer(serial=args.serial, synthetic=synthetic, verbose=args.verbose,
-                              modes=modes, instance=args.instance)
+        ouverte = ouvrir_session(args, modes)
     except ValueError as refus:
         print(f"[console] {refus}")
         sys.exit(2)
-
-    # Le moteur tourne dans SON fil et possède seul la session BrainFlow. Le fil Qt ne fait que
-    # lire `snapshot()` et poser des commandes en file.
-    thread = threading.Thread(
-        target=engine.run,
-        kwargs={"baseline_s": args.baseline, "warmup_s": args.warmup}, daemon=True)
-    thread.start()
+    if ouverte is None:
+        sys.exit(0)
+    engine, thread = ouverte
 
     try:
         # ⚠️ `thread.is_alive` PASSÉ à la console, et c'est le correctif du 2026-09-10 : c'est le

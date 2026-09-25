@@ -271,17 +271,19 @@ python src/console/app.py --synthetic      # RACCOURCI DE DÉVELOPPEUR : saute l
 python src/console/app.py --mode ssvep     # + décodage SSVEP démarré au lancement
 ```
 
-**Elle commence par demander sur quoi ouvrir la session** (2026-09-09) : casque Unicorn ou board de
-test BrainFlow. ⚠️ **Aucun repli automatique** — basculer en douce ferait enregistrer une séance
-entière de signal fabriqué en croyant tenir du vrai. Le bandeau répète la source tant que la
-console tourne.
+**Elle commence par demander sur quoi ouvrir la session** (2026-09-09) : casque Unicorn — **et
+lequel, par son numéro de série** (2026-09-25 : chaque étudiant vient avec son casque ; la console
+retient les derniers ouverts sur le poste) — ou board de test BrainFlow. ⚠️ **Aucun repli
+automatique** — basculer en douce ferait enregistrer une séance entière de signal fabriqué en
+croyant tenir du vrai. Le bandeau répète la source tant que la console tourne.
 
-⚠️ **Ce que la console fait vraiment quand le casque refuse de s'ouvrir, depuis le 2026-09-10** :
-elle le **DIT**, à l'écran. Elle ne **repropose pas** le choix — cette phrase-ci l'a affirmé, et
-`docs/recette.md` §1.17 aussi, alors que ce n'était implémenté nulle part. La revue de branche l'a
-trouvé. Reproposer exigerait de sortir le cycle de vie du fil du moteur de `run()` : c'est un
-chantier, pas un correctif, et **une promesse écrite non tenue coûte plus qu'une absence** —
-l'étudiant attend un écran qui ne viendra jamais.
+**Quand le casque refuse de s'ouvrir, la question est REPOSÉE** (2026-09-25,
+`console/app.py:ouvrir_session`) : la console attend l'ouverture AVANT de s'afficher (« Connexion
+au casque… », avec « Abandonner »), et un échec rouvre l'écran de départ avec la raison de
+BrainFlow, le casque toujours choisi. Tenu par le smoke (un échec rejoué, et une mutation « repli
+sur le board de test » qui rougit). ⚠️ Du 2026-09-10 au 2026-09-25, elle affichait seulement
+« LE MOTEUR S'EST ARRÊTÉ » sur une console figée ; ce message ne sert plus qu'à une liaison perdue
+EN COURS de séance.
 
 Dans la console (depuis le 2026-09-22) :
 

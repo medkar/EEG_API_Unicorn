@@ -339,8 +339,10 @@ raccourci de développeur qui saute l'écran de départ ; ici on veut justement 
 La console s'ouvre sur une question : sur quoi ouvrir la session ?
 
 ✅ Deux choix explicites : **« Casque Unicorn Hybrid Black »** et **« Board de test, SANS casque »**.
-✅ Choisir le board de test → la grille s'ouvre, et **le bandeau du haut répète la source** tant que
-la console tourne.
+✅ Sous le casque, un champ **« Numéro de série du casque »** (liste modifiable), grisé quand le
+board de test est coché. Vide + OK → refus en rouge, le dialogue reste ouvert.
+✅ Choisir le board de test → un bref « Démarrage du board de test… », puis la grille s'ouvre, et
+**le bandeau du haut répète la source** tant que la console tourne.
 
 ❌ Régression : la console ouvre directement la grille sans demander ; ou le bandeau ne dit pas la
 source ; ou — le plus grave — un casque introuvable **bascule tout seul** sur le board de test.
@@ -605,16 +607,21 @@ affiché.
 
 → recette 1.18
 
-### ☐ 1.12 — La mort du moteur se dit à l'écran
+### ☐ 1.12 — Un casque qui refuse de s'ouvrir : la question est reposée
 
-Difficile à provoquer proprement sans casque ; le cas réel est un casque éteint ou non appairé.
-À rejouer au bloc 2, à froid : **choisir « Casque Unicorn » avec le casque ÉTEINT**.
+Il suffit d'un casque **éteint** (ou d'un numéro faux) : **choisir « Casque Unicorn »** → OK.
 
-✅ La console **DIT à l'écran** que le moteur n'a pas démarré (« ⛔ LE MOTEUR S'EST ARRÊTÉ »).
-⚠️ **Elle ne repropose PAS le choix de la source** — c'est connu, écrit, et assumé.
+✅ Une fenêtre « Connexion au casque « … »… » avec **« Abandonner »**, pendant l'ouverture Bluetooth.
+✅ Puis l'**écran de départ revient**, avec en rouge « Le casque « … » ne s'est pas ouvert (raison
+de BrainFlow)… », le **casque toujours coché** et son numéro dans le champ. Allume le casque (ou
+corrige le numéro) → OK → la console s'ouvre.
+✅ Le numéro qui a réussi est proposé en premier au lancement suivant ; celui qui a échoué, non.
 
-❌ Régression : la fenêtre reste là, vide et muette, avec le traceback dans une console cmd que
-personne ne regarde.
+❌ Régression : la console s'affiche figée avec « ⛔ LE MOTEUR S'EST ARRÊTÉ » (le comportement
+d'avant le 2026-09-25) ; ou — le plus grave — l'écran revient avec le **board de test** coché à la
+place du casque, ou s'ouvre dessus tout seul.
+⚠️ « ⛔ LE MOTEUR S'EST ARRÊTÉ » existe toujours, mais seulement pour une liaison perdue EN COURS de
+séance (batterie, distance) — difficile à provoquer volontairement.
 
 → recette 1.17
 

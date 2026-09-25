@@ -849,9 +849,10 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
          **n'a mesuré strictement rien** : aucun repère chiffré du projet n'a bougé, aucun n'a été
          produit. Les deux mesures neuves n'ont vu que du bruit blanc et des sinusoïdes posées à la
          main. Ce sont les tests **2.1** et **2.2** de la recette, devenus des clics.
-       - **[à faire]** trancher le **désaccord de σ** entre `modes/ssvep.py` (4 voies occipitales
-         filtrées) et `core/modes/ssvep_mesure.py` (8 voies), documenté au §6.2. Les deux choix se
-         défendent ; ce qui ne se défend pas, c'est de continuer sans le savoir.
+       - **[fait 2026-09-23, `b618035`]** le **désaccord de σ** entre `modes/ssvep.py` (4 voies
+         occipitales filtrées) et `core/modes/ssvep_mesure.py` (8 voies) est TRANCHÉ : le test
+         décide par le runtime du mode (§6.2). Le prix, écrit dans le verdict : ses chiffres ne se
+         comparent plus tels quels au 100 %/44 % du 2026-07-27.
        - **[à faire]** le **dépouillement** du test 2.9 reste manuel. Les deux fichiers existent
          désormais côte à côte dans `seances/` et portent le même `local_clock()`, donc la jointure
          est purement numérique — mais **rien n'a été écrit qui la fasse**.
@@ -874,9 +875,10 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
    `research/` (détail et règles en **§3.1**). Les 8 tests headless passent aux nouveaux chemins.
    - **[fait]** vocabulaire « Waffle / robot » purgé du code et de la doc ; l'émetteur UDP est
      devenu `examples/actuator_udp.py`, `WAFFLE.md` est devenu `docs/robot_testbed.md`.
-   - **[à faire]** sortir `UNICORN_SERIAL` et l'hôte de sortie du code → configuration (chaque
-     élève a son casque). Aujourd'hui encore en dur dans `core/config.py`, contournable par
-     `--serial` en ligne de commande.
+   - **[fait 2026-09-25 pour le casque]** le **numéro de série se choisit dans l'écran de
+     départ** de la console (chaque élève a son casque) ; les derniers ouverts sont retenus par
+     poste. `UNICORN_SERIAL` (`core/config.py`) n'est plus qu'une valeur proposée la première fois,
+     et `--serial` pré-remplit le champ. **[à faire]** l'hôte de sortie, toujours en dur.
 4. Couche **LSL** : `eeg_raw` + `quality` + `SSVEP_decoded` (MVP).
    → **tester tôt** : `pip install pylsl` + découverte multicast **sur un poste et le réseau de l'école**
    (pare-feu). C'est le risque technique n°1 du choix tout-LSL : le lever avant de construire dessus.

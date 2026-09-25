@@ -319,6 +319,11 @@ class EngineServer:
         """
         self.synthetic = synthetic
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
+        # Passe à True dès que le casque (ou le board de test) est OUVERT, dans le fil de `run()`.
+        # C'est ce que la console attend avant de s'afficher (2026-09-25) : un casque qui refuse
+        # de s'ouvrir tue ce fil avant que l'indicateur ne passe, et l'écran de départ peut alors
+        # reposer la question au lieu d'afficher une console déjà morte.
+        self.acquisition_ouverte = False
         self.clock = ClockBridge()
         self.instance = instance or default_instance_id(serial, synthetic)
         self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
@@ -2214,6 +2219,7 @@ class EngineServer:
         last_quality = last_status = 0.0
 
         with self.acq:
+            self.acquisition_ouverte = True
             print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz "
                   f"instance={self.instance}")
             for suffix in ("quality", "status"):

@@ -784,10 +784,11 @@ python src/console/app.py
       cause la plus fréquente, et **les σ cessent d'annoncer un tampon qui ne viendra jamais**. Le
       message exact de BrainFlow, lui, est dans le terminal.
 
-      ⚠️ La console **ne repropose PAS** le choix : il faut la **fermer et la relancer**, casque
-      allumé. Reproposer demanderait de reconstruire le moteur, son fil et la fenêtre entière —
-      c'est une amélioration possible, ce n'est pas ce que le code fait aujourd'hui.
-      **Note ce qui s'est passé.**
+      ⚠️ ~~La console ne repropose PAS le choix~~ → **depuis le 2026-09-25, elle le repropose** :
+      elle attend l'ouverture du casque AVANT de s'afficher, et un échec rouvre l'écran de départ
+      avec la raison, le casque toujours coché (`console/app.py:ouvrir_session`, tenu par le
+      smoke). Le bandeau rouge ne sert plus qu'à une liaison perdue en cours de séance. Le numéro
+      de série se choisit dans ce même écran. **Note ce qui s'est passé.**
 
 ### 1.18 — « Ce que voit ton application », et l'enregistrement
 
