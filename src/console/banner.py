@@ -13,6 +13,7 @@ import sys
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.config import BATTERIE_FAIBLE_PC, PERTE_PAQUETS_PC  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
 
 
@@ -55,14 +56,16 @@ class Banner(QWidget):
         self.moteur = QLabel("")
         self.moteur.setWordWrap(True)
         self.moteur.setStyleSheet("color: #e5484d; font-weight: bold;")
+        # L'état du CASQUE : batterie et paquets perdus (2026-09-25).
+        self.casque = QLabel("")
         # Après une coupure du casque : la minute qui suit son retour (2026-09-25).
         self.reprise = QLabel("")
         self.reprise.setWordWrap(True)
         self.reprise.setStyleSheet("color: #b8860b;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        for widget in (self.liaison, self.sigmas, self.alarme, self.reprise, self.fenetre,
-                       self.refus, self.moteur):
+        for widget in (self.liaison, self.casque, self.sigmas, self.alarme, self.reprise,
+                       self.fenetre, self.refus, self.moteur):
             layout.addWidget(widget)
         layout.addStretch(1)
 
@@ -137,6 +140,31 @@ class Banner(QWidget):
         else:
             self.alarme.setText("")
         self._montrer_liaison(state.get("liaison") or {})
+        self._montrer_casque(state.get("casque") or {})
+
+    def _montrer_casque(self, casque):
+        """Batterie et paquets perdus, en une courte ligne ; en couleur seulement si ça va mal.
+
+        La batterie PRÉVIENT : un casque à plat refuse de s'ouvrir et décroche en pleine séance
+        (vu le 2026-09-25). Les paquets perdus aussi : un casque qui s'éloigne en perd AVANT de
+        décrocher. Rien n'est affiché de ce que le moteur ne sait pas (board de test : pas de
+        batterie ; avant les premières secondes : pas de taux).
+        """
+        morceaux, alerte = [], False
+        batterie = casque.get("batterie_pc")
+        if batterie is not None:
+            if batterie < BATTERIE_FAIBLE_PC:
+                morceaux.append(tr("console.bandeau.batterie_faible", pc=batterie))
+                alerte = True
+            else:
+                morceaux.append(tr("console.bandeau.batterie", pc=batterie))
+        perte = casque.get("perte_pc")
+        if perte is not None and perte >= PERTE_PAQUETS_PC:
+            morceaux.append(tr("console.bandeau.paquets_perdus",
+                               pc=nombre(float(perte), ".1f")))
+            alerte = True
+        self.casque.setText(" · ".join(morceaux))
+        self.casque.setStyleSheet("color: #b8860b; font-weight: bold;" if alerte else "")
 
     def _montrer_liaison(self, liaison):
         """Le casque a-t-il décroché ? (2026-09-25) Prioritaire sur tout le reste du bandeau.

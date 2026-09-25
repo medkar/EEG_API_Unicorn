@@ -4294,6 +4294,23 @@ def _smoke():
         "…et cette ligne s'efface une fois les repos refaits")
     console.banner.update_from(fake_state())
 
+    # --- L'état du casque au bandeau : batterie, paquets perdus (2026-09-25) --------------------
+    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": 80, "perte_pc": 0.0,
+                                                           "perdus_total": 0}})
+    chk(console.banner.casque.text() == "batterie 80 %" and not console.banner.casque.styleSheet(),
+        f"la batterie s'affiche, sans alerte quand tout va bien ({console.banner.casque.text()!r})")
+    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": 12, "perte_pc": 4.2,
+                                                           "perdus_total": 105}})
+    chk("12 %" in console.banner.casque.text() and "recharge" in console.banner.casque.text()
+        and "4,2 %" in console.banner.casque.text() and "b8860b" in console.banner.casque.styleSheet(),
+        f"batterie faible et liaison dégradée PRÉVIENNENT, avant la coupure "
+        f"({console.banner.casque.text()!r})")
+    console.banner.update_from({**fake_state(), "casque": {"batterie_pc": None, "perte_pc": None,
+                                                           "perdus_total": 0}})
+    chk(not console.banner.casque.text(),
+        "…et rien n'est affiché de ce que le moteur ne sait pas (board de test : pas de batterie)")
+    console.banner.update_from(fake_state())
+
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
     console.refresh()
     chk(moteur_faux.appels == 1,

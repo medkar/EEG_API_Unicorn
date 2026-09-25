@@ -68,6 +68,7 @@ chaque flash sur `EEG_API_Unicorn_stim`) et qu'un modèle entraîné est exigé 
 """
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -84,8 +85,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
-                    DECROCHAGE_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT, MI_WINDOW_S,
-                    NEURO_WINDOW_S, REESSAI_S,
+                    DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
+                    MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S,
                     SEANCES_DIR, TOLERANCE_DIVISEUR, chemin_libre, choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
@@ -338,6 +339,10 @@ class EngineServer:
         self._retablie_a = None
         self._coupure_s = None
         self._prochain_essai = 0.0
+        # L'historique des cumuls de paquets (instant, reçus, perdus), pour un taux de perte sur
+        # les `FENETRE_PAQUETS_S` dernières secondes — pas depuis l'ouverture, où une vieille
+        # perte diluée dans une heure de séance ne dirait rien de la liaison MAINTENANT.
+        self._paquets = collections.deque()
         self.clock = ClockBridge()
         self.instance = instance or default_instance_id(serial, synthetic)
         self.quality_out = QualityPublisher(ch_names=CH_NAMES, instance=self.instance)
@@ -705,6 +710,27 @@ class EngineServer:
             if seance is not None and not seance.terminee:
                 seance.probleme = raison
                 seance.cancel()
+
+    def _etat_casque(self):
+        """Batterie et paquets perdus, lus dans les voies de service du casque (2026-09-25).
+
+        ⚠️ La batterie du board de TEST est FABRIQUÉE (tirée entre 80 et 100 %, vérifié) : elle
+        n'est pas rendue, un « batterie 93 % » sur du signal synthétique serait une invention de
+        plus sur un écran qui en porte déjà une.
+        """
+        historique = list(self._paquets)
+        perte = None
+        if len(historique) >= 2:
+            recus = historique[-1][1] - historique[0][1]
+            perdus = historique[-1][2] - historique[0][2]
+            if recus + perdus > 0:
+                perte = round(100.0 * perdus / (recus + perdus), 2)
+        batterie = None if self.synthetic else self.acq.batterie
+        return {
+            "batterie_pc": None if batterie is None else round(float(batterie)),
+            "perte_pc": perte,
+            "perdus_total": int(getattr(self.acq, "paquets_perdus", 0)),
+        }
 
     def _etat_liaison(self):
         """La liaison avec le casque, pour la console. Durées calculées maintenant."""
@@ -1812,6 +1838,7 @@ class EngineServer:
             # La liaison avec le casque (2026-09-25) : dans `snapshot()` seulement, pas dans le
             # flux `status`, contrat public.
             "liaison": self._etat_liaison(),
+            "casque": self._etat_casque(),
             # `now` est passé pour que le décompte affiché soit celui de MAINTENANT, pas celui du
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
@@ -2343,6 +2370,10 @@ class EngineServer:
                         self.recent = np.vstack([self.recent, eeg])[-self.keep:]
                         self.recent_ts = np.concatenate([self.recent_ts, ts_lsl])[-self.keep:]
                         self._dernier_echantillon = now
+                        self._paquets.append((now, self.acq.paquets_recus,
+                                              self.acq.paquets_perdus))
+                        while self._paquets and now - self._paquets[0][0] > FENETRE_PAQUETS_S:
+                            self._paquets.popleft()
                     elif self._surveille_liaison(now):
                         # Liaison PERDUE : aucun mode ne décode, aucune séance ne tourne. Décoder
                         # le tampon figé republierait la dernière décision en boucle — un SSVEP
@@ -2644,6 +2675,7 @@ def _smoke():
         _smoke_vol_marqueurs(),
         _smoke_mesure(),
         _smoke_liaison(),
+        _smoke_casque(),
         _smoke_enregistrement(),
         _smoke_cumul(),
         _smoke_proposition(),
@@ -3598,6 +3630,54 @@ def _smoke_oreille_calibration():
     return ok
 
 
+def _smoke_casque():
+    """L'état du casque : paquets perdus comptés sur le compteur, batterie non inventée.
+
+    Le compteur du casque monte de 1 à chaque échantillon (mesuré le 2026-09-25) ; un saut = des
+    échantillons perdus en route. Deux pièges : un compteur qui REPART (réouverture, bouclage du
+    board de test à 255) n'est pas une perte ; et un saut à la JOINTURE de deux blocs en est une.
+    """
+    from core.acquisition import compter_paquets
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    chk(compter_paquets([1, 2, 3, 4], None) == (4, 0, 4), "un compteur continu : aucune perte")
+    chk(compter_paquets([1, 2, 5, 6], None) == (4, 2, 6),
+        "un saut de 2 à 5 : DEUX échantillons perdus (3 et 4)")
+    chk(compter_paquets([9, 10], 6) == (2, 2, 10),
+        "…et un saut à la JOINTURE de deux blocs en est un aussi (6 puis 9 : 7 et 8 perdus)")
+    chk(compter_paquets([254, 255, 0, 1], None) == (4, 0, 1)
+        and compter_paquets([1, 2], 2490) == (2, 0, 2),
+        "un compteur qui REPART (bouclage du board de test, réouverture du casque) n'est PAS "
+        "une perte")
+
+    srv = EngineServer(synthetic=True, instance="smoke-casque", modes=("raw",))
+    try:
+        import threading
+        fil = threading.Thread(target=srv.run, kwargs={"duration_s": 4.0}, daemon=True)
+        fil.start()
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < 3.0 and fil.is_alive():
+            time.sleep(0.1)
+        casque = srv.snapshot().get("casque") or {}
+        chk(casque.get("batterie_pc") is None,
+            f"le board de test n'a PAS de batterie à l'écran : la sienne est tirée au hasard "
+            f"({casque})")
+        chk(casque.get("perte_pc") == 0.0 and casque.get("perdus_total") == 0,
+            f"…et son compteur, qui boucle à 255, ne fabrique AUCUNE fausse perte ({casque})")
+        srv.stop()
+        fil.join(timeout=5.0)
+    finally:
+        srv.close()
+    print(f"[smoke-casque] VERDICT : {'OK' if ok else 'ÉCHEC'}")
+    return ok
+
+
 def _smoke_liaison():
     """Un casque qui DÉCROCHE : détecté, rien n'est décodé pendant la coupure, et il revient.
 
@@ -3648,6 +3728,7 @@ def _smoke_liaison():
     fil = threading.Thread(target=srv.run,
                            kwargs={"duration_s": 25.0, "baseline_s": 1.0, "warmup_s": 0.5},
                            daemon=True)
+    ssvep = None
     fil.start()
     try:
         t0 = time.perf_counter()
@@ -3724,6 +3805,22 @@ def _smoke_liaison():
         srv.stop()
         fil.join(timeout=5.0)
         srv.close()
+        # 🔴 DÉFAIRE les remplacements, puis détruire le moteur MAINTENANT. Chacun (`lire_coupe`,
+        # `rouvrir_si_permis`, `vider_compte`, `tick_compte`) garde une méthode liée du moteur ou
+        # de son acquisition : un CYCLE, que seul le ramasse-miettes défait, plus tard, au hasard.
+        # Et ce jour-là, `BoardShim.__del__` libère la session du board de test — que BrainFlow
+        # PARTAGE entre tous les boards de test aux mêmes paramètres, donc celle du moteur d'un
+        # AUTRE test. Mesuré le 2026-09-25 : un fil orphelin (`BOARD_NOT_CREATED_ERROR:15`) et
+        # `[smoke-cumul]` rouge à chaque passage complet, vert seul. Le piège du `finally` de
+        # `run()`, reproduit par un test.
+        for nom in ("get_new_data", "reouvrir"):
+            srv.acq.__dict__.pop(nom, None)
+        srv.__dict__.pop("_drain_commands", None)
+        if ssvep is not None:
+            ssvep.__dict__.pop("tick", None)
+        del srv, fil, ssvep, lire, rouvrir, vider
+        import gc
+        gc.collect()
     print(f"[smoke-liaison] VERDICT : {'OK' if ok else 'ÉCHEC'}")
     return ok
 

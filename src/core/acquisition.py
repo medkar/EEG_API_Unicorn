@@ -104,6 +104,24 @@ def casques_appaires():
             for i in range(min(nombre.value, place))]
 
 
+def compter_paquets(compteurs, dernier):
+    """`(reçus, perdus, dernier)` pour un bloc de compteurs d'échantillons.
+
+    Le casque numérote chaque échantillon (voie « compteur », +1 à chaque fois ; MESURÉ le
+    2026-09-25 : de 1 à 2 490 en 10 s, aucun saut). Un saut de `d > 1` = `d - 1` échantillons
+    PERDUS en route. Un pas `d <= 0` n'est PAS une perte : le compteur est reparti (il redémarre à
+    1 à chaque ouverture, et celui du board de test boucle à 255). `dernier` est le dernier
+    compteur du bloc PRÉCÉDENT (None au premier bloc), pour ne pas rater un saut à la jointure.
+    """
+    perdus = 0
+    for valeur in compteurs:
+        valeur = int(valeur)
+        if dernier is not None and valeur - dernier > 1:
+            perdus += valeur - dernier - 1
+        dernier = valeur
+    return len(compteurs), perdus, dernier
+
+
 def fonction_liste_unicorn():
     """`UNICORN_GetAvailableDevices`, chargée depuis la `Unicorn.dll` de BrainFlow et typée.
 
@@ -152,6 +170,16 @@ class UnicornAcquisition:
         # Canal timestamp BrainFlow (temps Unix par échantillon) : sert au P300 à découper les
         # époques calées sur chaque flash SANS dérive d'horloge (cf. get_raw).
         self.ts_row = BoardShim.get_timestamp_channel(self.board_id)
+        # Les voies de SERVICE du casque (2026-09-25) : son niveau de batterie et le compteur de
+        # ses échantillons, qui dit combien se sont perdus en route. BrainFlow les expose pour
+        # l'Unicorn (voies 14 et 15, cf. `unicorn.h`) ; un board qui n'en a pas rend None.
+        self.batt_row = self._voie_ou_none(BoardShim.get_battery_channel)
+        self.cpt_row = self._voie_ou_none(BoardShim.get_package_num_channel)
+        self.batterie = None             # dernier niveau lu (en %, 80 le jour de la mesure)
+        self.paquets_recus = 0           # cumuls depuis l'ouverture
+        self.paquets_perdus = 0
+        self._dernier_compteur = None
+        self.synthetic = synthetic
 
         params = BrainFlowInputParams()
         if serial:
@@ -164,6 +192,12 @@ class UnicornAcquisition:
         self.board.start_stream()
         return self
 
+    def _voie_ou_none(self, accesseur):
+        try:
+            return accesseur(self.board_id)
+        except Exception:  # noqa: BLE001 - BrainFlow lève pour un board qui n'a pas cette voie
+            return None
+
     def reouvrir(self):
         """Ferme la session (sans lever), puis la rouvre. Lève si le casque ne répond toujours pas.
 
@@ -173,6 +207,7 @@ class UnicornAcquisition:
         paramètres (numéro de série compris) : on rouvre CE casque, jamais un autre.
         """
         self.stop()
+        self._dernier_compteur = None    # le compteur du casque repart à 1 à chaque ouverture
         self.board.prepare_session()
         self.board.start_stream()
         return self
@@ -385,6 +420,15 @@ class UnicornAcquisition:
         data = self.board.get_board_data()
         if data.shape[1] < 1:
             return None, None
+        # Les voies de service passent ICI, et pas dans un second appel : cette méthode VIDE le
+        # tampon de BrainFlow, rien ne pourrait les relire après.
+        if self.batt_row is not None:
+            self.batterie = float(data[self.batt_row, -1])
+        if self.cpt_row is not None:
+            recus, perdus, self._dernier_compteur = compter_paquets(data[self.cpt_row, :],
+                                                                    self._dernier_compteur)
+            self.paquets_recus += recus
+            self.paquets_perdus += perdus
         return data[self.eeg_rows, :].T, data[self.ts_row, :]
 
     def get_raw(self, seconds):

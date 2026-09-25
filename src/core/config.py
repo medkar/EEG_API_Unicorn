@@ -65,6 +65,17 @@ COMMON_MODE_MAX = 0.90
 DECROCHAGE_S = 2.0
 REESSAI_S = 3.0
 
+# L'ÉTAT DU CASQUE (2026-09-25), lu dans ses voies de service. La batterie est en % (80 le jour
+# de la mesure, valeur ronde et stable). Sous `BATTERIE_FAIBLE_PC`, le bandeau prévient : un
+# casque à plat refuse de s'ouvrir (`BOARD_NOT_READY`) et décroche en pleine séance. Les
+# paquets perdus se comptent sur les `FENETRE_PAQUETS_S` dernières secondes ; au-delà de
+# `PERTE_PAQUETS_PC`, la liaison se dégrade — un casque qui s'éloigne perd des paquets AVANT de
+# décrocher. Des seuils de PRUDENCE, pas des mesures : aucune perte n'a encore été observée
+# (0 sur 2 490 échantillons, casque à côté du PC).
+BATTERIE_FAIBLE_PC = 20.0
+FENETRE_PAQUETS_S = 10.0
+PERTE_PAQUETS_PC = 1.0
+
 
 def reference_lost(common_mode):
     """True si la corrélation inter-voies trahit une référence décrochée. None -> False."""

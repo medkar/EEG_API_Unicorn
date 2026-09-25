@@ -901,6 +901,20 @@ casque s'est coupée pendant la séance… ».
 ⚠️ Après la reconnexion, **regarde C3 et Cz** au bandeau : la réouverture redémarre
 l'amplificateur, et elles saturaient à chaque réouverture. Note combien de temps.
 
+### ☐ 2.10 — Batterie et paquets perdus au bandeau
+
+Console ouverte sur le casque.
+
+✅ Le bandeau affiche « **batterie N %** » (73 % lu sur le casque le 2026-09-25, 80 % une heure
+avant). Sur le board de test, **aucune** batterie : la sienne est fabriquée.
+✅ Éloigne le casque du PC (autre pièce) : avant la coupure, « ⚠ liaison dégradée : N % des
+échantillons perdus (10 dernières s) — rapproche le casque du PC » apparaît en orange. **Note à
+quelle distance, et quel taux**, s'il apparaît : aucune perte n'a encore été observée (0 sur 2 490).
+✅ Sous 20 %, « ⚠ batterie N % : recharge le casque avant ta prochaine séance ».
+
+❌ Échec : une batterie affichée sur le board de test ; un taux de perte sur le board de test (son
+compteur boucle à 255 : ce n'est pas une perte).
+
 ---
 
 # Bloc 3 — le réseau, vu d'une application cliente
