@@ -25,12 +25,14 @@ de TP — et ne dit pas ce qu'il fait SANS lui. On ne promet donc rien sur un ch
 
 import os
 import sys
+import threading
 
 from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
-from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QLabel,  # noqa: E402
-                               QProgressDialog, QRadioButton, QVBoxLayout)
+from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,  # noqa: E402
+                               QLabel, QProgressDialog, QPushButton, QRadioButton, QVBoxLayout)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.acquisition import casques_detectes  # noqa: E402
 from core.config import UNICORN_SERIAL  # noqa: E402
 from core.i18n import tr  # noqa: E402
 
@@ -88,8 +90,12 @@ class DialogueDemarrage(QDialog):
     `erreur` : la raison du refus PRÉCÉDENT, affichée en tête quand la question est reposée.
     """
 
-    def __init__(self, parent=None, defaut=UNICORN, numero=None, erreur="", memoire=None):
+    def __init__(self, parent=None, defaut=UNICORN, numero=None, erreur="", memoire=None,
+                 chercher=casques_detectes, recherche_auto=True):
         super().__init__(parent)
+        self._chercher = chercher
+        self._recherche = None            # {"fil", "resultat", "erreur"} pendant une recherche
+        self._accepter_apres = False      # « OK » cliqué pendant une recherche : on attend sa fin
         self.setWindowTitle(tr("console.demarrage.titre"))
         self.setMinimumWidth(560)
         memoire = memoire if memoire is not None else Memoire()
@@ -131,14 +137,33 @@ class DialogueDemarrage(QDialog):
                 aide_numero.setWordWrap(True)
                 aide_numero.setStyleSheet("color: #8a8f9c; font-size: 11px; margin-left: 20px;")
                 layout.addWidget(QLabel(tr("console.demarrage.numero")))
-                layout.addWidget(self.champ_numero)
+                ligne = QHBoxLayout()
+                ligne.addWidget(self.champ_numero, 1)
+                # La DÉTECTION (2026-09-25) : chaque étudiant choisit SON casque parmi ceux que
+                # la bibliothèque du casque trouve, au lieu de taper un numéro de mémoire.
+                self.bouton_chercher = QPushButton(tr("console.demarrage.chercher"))
+                self.bouton_chercher.clicked.connect(self.chercher)
+                ligne.addWidget(self.bouton_chercher)
+                layout.addLayout(ligne)
+                self.detection = QLabel("")
+                self.detection.setWordWrap(True)
+                self.detection.setStyleSheet("font-size: 11px; margin-left: 20px;")
+                layout.addWidget(self.detection)
                 layout.addWidget(aide_numero)
 
         self.manquant = QLabel("")
         self.manquant.setStyleSheet("color: #e5484d;")
         layout.addWidget(self.manquant)
         self.boutons[UNICORN].toggled.connect(self.champ_numero.setEnabled)
+        self.boutons[UNICORN].toggled.connect(self.bouton_chercher.setEnabled)
         self.champ_numero.setEnabled(self.boutons[UNICORN].isChecked())
+        self.bouton_chercher.setEnabled(self.boutons[UNICORN].isChecked())
+        self._sondage = QTimer(self)
+        self._sondage.timeout.connect(self._suivre_recherche)
+        # Au départ, AUCUNE liaison n'est ouverte : c'est le moment où chercher ne dérange rien.
+        # (Pendant une séance, un balayage Bluetooth peut gêner la liaison d'un casque ouvert.)
+        if recherche_auto and self.boutons[UNICORN].isChecked():
+            QTimer.singleShot(0, self.chercher)
 
         actions = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         actions.accepted.connect(self.accept)
@@ -148,10 +173,74 @@ class DialogueDemarrage(QDialog):
     def numero(self):
         return self.champ_numero.currentText().strip()
 
+    # --- la détection des casques ---------------------------------------------------------------
+
+    def chercher(self):
+        """Lance la recherche dans un fil : elle peut bloquer une dizaine de secondes."""
+        if self._recherche is not None:
+            return
+        recherche = {"resultat": None, "erreur": None}
+
+        def travail():
+            try:
+                recherche["resultat"] = list(self._chercher())
+            except Exception as e:  # noqa: BLE001 - dit à l'écran, jamais fatal : on peut taper
+                recherche["erreur"] = str(e) or type(e).__name__
+
+        recherche["fil"] = threading.Thread(target=travail, daemon=True)
+        self._recherche = recherche
+        self.bouton_chercher.setEnabled(False)
+        self.detection.setStyleSheet("color: #8a8f9c; font-size: 11px; margin-left: 20px;")
+        self.detection.setText(tr("console.demarrage.recherche_en_cours"))
+        recherche["fil"].start()
+        self._sondage.start(100)
+
+    def _suivre_recherche(self):
+        recherche = self._recherche
+        if recherche is None or recherche["fil"].is_alive():
+            return
+        self._sondage.stop()
+        self._recherche = None
+        self.bouton_chercher.setEnabled(self.boutons[UNICORN].isChecked())
+        if self._accepter_apres:
+            self._accepter_apres = False
+            self.manquant.setText("")
+            QTimer.singleShot(0, self.accept)
+        if recherche["erreur"] is not None:
+            self.detection.setStyleSheet("color: #e5484d; font-size: 11px; margin-left: 20px;")
+            self.detection.setText(tr("console.demarrage.recherche_impossible",
+                                      raison=recherche["erreur"]))
+            return
+        trouves = recherche["resultat"] or []
+        if not trouves:
+            self.detection.setStyleSheet("color: #b8860b; font-size: 11px; margin-left: 20px;")
+            self.detection.setText(tr("console.demarrage.aucun_casque"))
+            return
+        # Les casques TROUVÉS en tête de liste, puis ceux dont on se souvenait. Le premier trouvé
+        # est sélectionné — sauf si le numéro déjà choisi en fait partie : on ne change pas un
+        # choix que la recherche confirme.
+        choisi = self.numero()
+        connus = [self.champ_numero.itemText(i) for i in range(self.champ_numero.count())]
+        self.champ_numero.clear()
+        self.champ_numero.addItems(trouves + [c for c in connus if c not in trouves])
+        self.champ_numero.setCurrentText(choisi if choisi in trouves else trouves[0])
+        self.detection.setStyleSheet("color: #3fae5a; font-size: 11px; margin-left: 20px;")
+        self.detection.setText(tr("console.demarrage.casques_trouves", n=len(trouves),
+                                  liste=", ".join(trouves)))
+
     def accept(self):
-        """Refuse un casque SANS numéro : cf. la docstring du module."""
+        """Refuse un casque SANS numéro : cf. la docstring du module.
+
+        ⚠️ Et n'ouvre RIEN pendant une recherche : BrainFlow appellerait la bibliothèque du casque
+        (pour l'ouvrir) pendant que notre fil l'interroge encore, et rien ne dit qu'elle supporte
+        deux appels à la fois. Le clic est retenu, et honoré à la fin de la recherche.
+        """
         if self.boutons[UNICORN].isChecked() and not self.numero():
             self.manquant.setText(tr("console.demarrage.numero_manquant"))
+            return
+        if self._recherche is not None:
+            self._accepter_apres = True
+            self.manquant.setText(tr("console.demarrage.attente_fin_recherche"))
             return
         super().accept()
 
@@ -166,9 +255,14 @@ class DialogueDemarrage(QDialog):
 
 
 def choisir_source(defaut=UNICORN, numero=None, erreur="", memoire=None, parent=None):
-    """Ouvre le dialogue ; rend `(source, numéro)`, ou None s'il a été fermé sans choisir."""
+    """Ouvre le dialogue ; rend `(source, numéro)`, ou None s'il a été fermé sans choisir.
+
+    La recherche automatique ne se relance pas quand la question est REPOSÉE après un échec :
+    l'étudiant vient de choisir un casque, la liste de la première recherche est toujours là
+    dans sa mémoire, et le bouton « Rechercher » reste à portée.
+    """
     dlg = DialogueDemarrage(parent=parent, defaut=defaut, numero=numero, erreur=erreur,
-                            memoire=memoire)
+                            memoire=memoire, recherche_auto=not erreur)
     dlg.exec()
     source = dlg.source()
     return None if source is None else (source, dlg.numero() if source == UNICORN else None)
@@ -236,7 +330,10 @@ def _selftest():
             self[cle] = valeur
 
     memoire = Memoire(_Reglages())
-    dlg = DialogueDemarrage(defaut=UNICORN, memoire=memoire)
+    # Aucun VRAI balayage dans un autotest : un casque est peut-être ouvert ailleurs sur ce poste,
+    # et une recherche Bluetooth peut gêner sa liaison. Le chercheur est injecté.
+    rien = dict(chercher=lambda: [], recherche_auto=False)
+    dlg = DialogueDemarrage(defaut=UNICORN, memoire=memoire, **rien)
     chk(dlg.boutons[UNICORN].isChecked() and not dlg.boutons[SYNTHETIQUE].isChecked(),
         "le défaut proposé est le CASQUE : c'est ce qu'on veut faire le plus souvent, et le "
         "board de test doit rester un geste délibéré")
@@ -254,14 +351,14 @@ def _selftest():
     dlg.accept()
     chk(dlg.source() == UNICORN, f"après acceptation, la source choisie est rendue ({dlg.source()})")
 
-    dlg2 = DialogueDemarrage(defaut=SYNTHETIQUE, memoire=memoire)
+    dlg2 = DialogueDemarrage(defaut=SYNTHETIQUE, memoire=memoire, **rien)
     chk(not dlg2.champ_numero.isEnabled(),
         "le numéro de série est grisé tant que le board de test est choisi")
     dlg2.accept()
     chk(dlg2.source() == SYNTHETIQUE, f"…et l'autre aussi ({dlg2.source()})")
 
     # Un casque SANS numéro est refusé, et le dialogue le dit au lieu de se fermer.
-    vide = DialogueDemarrage(defaut=UNICORN, memoire=memoire)
+    vide = DialogueDemarrage(defaut=UNICORN, memoire=memoire, **rien)
     vide.champ_numero.setCurrentText("  ")
     vide.accept()
     chk(vide.result() != QDialog.Accepted and vide.manquant.text(),
@@ -274,7 +371,7 @@ def _selftest():
     chk(memoire.casques() == ["UN-F", "UN-E", "UN-D", "UN-C", "UN-A"],
         f"les derniers casques ouverts, du plus récent au plus ancien, sans doublon, "
         f"{CASQUES_RETENUS} au plus ({memoire.casques()})")
-    rappel = DialogueDemarrage(defaut=UNICORN, memoire=memoire)
+    rappel = DialogueDemarrage(defaut=UNICORN, memoire=memoire, **rien)
     chk(rappel.numero() == "UN-F" and rappel.champ_numero.count() == CASQUES_RETENUS,
         f"…et le dialogue propose le DERNIER casque ouvert, les autres dans la liste "
         f"({rappel.numero()}, {rappel.champ_numero.count()})")
@@ -282,11 +379,66 @@ def _selftest():
     # Quand la question est REPOSÉE après un échec, la raison est affichée — et la source reste
     # celle que l'étudiant avait choisie : on ne bascule pas pour lui sur le board de test.
     reposee = DialogueDemarrage(defaut=UNICORN, numero="UN-X", erreur="le casque ne répond pas",
-                                memoire=memoire)
+                                memoire=memoire, **rien)
     chk(reposee.erreur.isVisibleTo(reposee) and "ne répond pas" in reposee.erreur.text()
         and reposee.boutons[UNICORN].isChecked() and reposee.numero() == "UN-X",
         "après un échec, la raison est affichée, et le casque et son numéro restent choisis — "
         "aucun repli sur le board de test")
+
+    # La DÉTECTION : elle tourne dans un fil, puis remplit la liste — les casques TROUVÉS en tête.
+    def attendre_recherche(dialogue):
+        fin = __import__("time").monotonic() + 5.0
+        while dialogue._recherche is not None and __import__("time").monotonic() < fin:
+            app.processEvents()
+            __import__("time").sleep(0.02)
+
+    def lent():
+        __import__("time").sleep(0.3)
+        return ["UN-2024.01.01", "UN-F"]
+
+    trouve = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=lent, recherche_auto=True)
+    app.processEvents()
+    chk(trouve._recherche is not None and not trouve.bouton_chercher.isEnabled()
+        and trouve.detection.text(),
+        f"à l'ouverture, la recherche part d'elle-même, en arrière-plan, et le DIT "
+        f"({trouve.detection.text()!r})")
+    attendre_recherche(trouve)
+    items = [trouve.champ_numero.itemText(i) for i in range(trouve.champ_numero.count())]
+    chk(items[:2] == ["UN-2024.01.01", "UN-F"] and items.count("UN-F") == 1
+        and trouve.numero() == "UN-F" and "2" in trouve.detection.text()
+        and trouve.bouton_chercher.isEnabled(),
+        f"les casques TROUVÉS passent en tête, sans doublon avec ceux qu'on connaissait, et le "
+        f"choix en cours est gardé s'il fait partie des trouvés ({items}, {trouve.numero()})")
+    # « OK » PENDANT une recherche : rien ne s'ouvre avant sa fin, puis le clic est honoré.
+    presse = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=lent, recherche_auto=True)
+    app.processEvents()
+    presse.accept()
+    chk(presse.result() != QDialog.Accepted and presse._accepter_apres,
+        "« OK » pendant la recherche n'ouvre rien tout de suite : BrainFlow interrogerait la "
+        "bibliothèque du casque en même temps que notre fil")
+    attendre_recherche(presse)
+    app.processEvents()
+    chk(presse.result() == QDialog.Accepted and presse.source() == UNICORN,
+        f"…et le clic est honoré dès la fin de la recherche ({presse.result()})")
+
+    aucun = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=lambda: [],
+                              recherche_auto=True)
+    app.processEvents()
+    attendre_recherche(aucun)
+    chk("allum" in aucun.detection.text().lower() and aucun.numero(),
+        f"aucun casque trouvé : la page dit quoi vérifier, et le champ garde un numéro à tenter "
+        f"({aucun.detection.text()!r})")
+
+    def casse():
+        raise OSError("Unicorn.dll introuvable")
+
+    sans_dll = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=casse,
+                                 recherche_auto=True)
+    app.processEvents()
+    attendre_recherche(sans_dll)
+    chk("Unicorn.dll introuvable" in sans_dll.detection.text() and sans_dll.numero(),
+        f"une recherche impossible le DIT, sans empêcher de taper un numéro "
+        f"({sans_dll.detection.text()!r})")
 
     # L'ATTENTE de l'ouverture : les trois issues.
     class _Moteur:

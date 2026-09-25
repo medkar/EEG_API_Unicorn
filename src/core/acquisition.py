@@ -55,6 +55,50 @@ def _median_offdiag(filtered):
     return float(np.median(c[~np.eye(c.shape[0], dtype=bool)]))
 
 
+# La longueur d'un numéro de série dans l'API du casque (`UNICORN_SERIAL_LENGTH_MAX`, unicorn.h).
+_LONGUEUR_NUMERO = 14
+
+
+def casques_detectes(recherche=True):
+    """Les numéros de série des casques Unicorn que la bibliothèque du CASQUE trouve.
+
+    Pas une recherche Bluetooth générique : on appelle `UNICORN_GetAvailableDevices` dans
+    `Unicorn.dll`, que BrainFlow installe avec lui et qu'il appelle lui-même pour trouver le
+    casque à ouvrir (`gtec/unicorn_board.cpp`, avec `TRUE`). Ne rend donc que des Unicorn.
+
+    ⚠️ **Ce que `recherche` veut dire exactement n'est pas documenté pour Windows.** L'en-tête
+    Linux de l'API appelle ce drapeau `rescan` : TRUE = balayage complet (« environ 10 s »), FALSE =
+    résultat du balayage précédent. La page Windows n'a pas pu être lue (2026-09-25). On passe
+    TRUE, comme BrainFlow ; ce qu'il trouve — casques ALLUMÉS à portée, ou seulement APPAIRÉS —
+    est à vérifier au casque, allumé puis éteint (cf. `docs/qa.md`).
+
+    Bloquant (jusqu'à ~10 s) : à appeler hors du fil de l'interface. Lève si la bibliothèque
+    manque (hors Windows, BrainFlow sans Unicorn) ou si l'API rend un code d'erreur.
+    """
+    import ctypes
+
+    import brainflow
+
+    dll = ctypes.CDLL(_os.path.join(_os.path.dirname(brainflow.__file__), "lib", "Unicorn.dll"))
+    lister = dll.UNICORN_GetAvailableDevices
+    lister.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_int]
+    lister.restype = ctypes.c_int
+    nombre = ctypes.c_uint32(0)
+    code = lister(None, ctypes.byref(nombre), 1 if recherche else 0)
+    if code != 0:
+        raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
+    if nombre.value == 0:
+        return []
+    numeros = (ctypes.c_char * _LONGUEUR_NUMERO * nombre.value)()
+    # Le second appel relit le résultat du premier (FALSE) : refaire un balayage complet
+    # doublerait l'attente, et pourrait rendre une liste d'une autre longueur que le tampon.
+    code = lister(numeros, ctypes.byref(nombre), 0)
+    if code != 0:
+        raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
+    return [bytes(numeros[i]).split(b"\0")[0].decode("ascii", "replace")
+            for i in range(nombre.value)]
+
+
 class UnicornAcquisition:
     """Session BrainFlow + extraction de la fenêtre occipitale la plus récente.
 
