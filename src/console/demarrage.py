@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout
                                QLabel, QProgressDialog, QPushButton, QRadioButton, QVBoxLayout)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.acquisition import casques_detectes  # noqa: E402
+from core.acquisition import casques_detectes, fonction_liste_unicorn  # noqa: E402
 from core.config import UNICORN_SERIAL  # noqa: E402
 from core.i18n import tr  # noqa: E402
 
@@ -439,6 +439,17 @@ def _selftest():
     chk("Unicorn.dll introuvable" in sans_dll.detection.text() and sans_dll.numero(),
         f"une recherche impossible le DIT, sans empêcher de taper un numéro "
         f"({sans_dll.detection.text()!r})")
+
+    # La VRAIE bibliothèque du casque se charge — sans être appelée (un appel lance un balayage).
+    # Sans ce contrôle, une faute dans le chargement n'apparaissait qu'à l'écran : tous les
+    # autres tests de ce fichier remplacent la recherche entière (vu le 2026-09-25 : `_os`).
+    if sys.platform == "win32":
+        try:
+            charge, raison = callable(fonction_liste_unicorn()), ""
+        except Exception as e:  # noqa: BLE001 - l'échec EST le résultat à dire
+            charge, raison = False, f"{type(e).__name__} : {e}"
+        chk(charge, f"la bibliothèque du casque (Unicorn.dll de BrainFlow) se charge, et sa "
+                    f"fonction de recherche existe ({raison or 'ok'})")
 
     # L'ATTENTE de l'ouverture : les trois issues.
     class _Moteur:

@@ -77,26 +77,43 @@ def casques_detectes(recherche=True):
     """
     import ctypes
 
-    import brainflow
-
-    dll = ctypes.CDLL(_os.path.join(_os.path.dirname(brainflow.__file__), "lib", "Unicorn.dll"))
-    lister = dll.UNICORN_GetAvailableDevices
-    lister.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_int]
-    lister.restype = ctypes.c_int
+    lister = fonction_liste_unicorn()
+    drapeau = 1 if recherche else 0
     nombre = ctypes.c_uint32(0)
-    code = lister(None, ctypes.byref(nombre), 1 if recherche else 0)
+    code = lister(None, ctypes.byref(nombre), drapeau)
     if code != 0:
         raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
     if nombre.value == 0:
         return []
-    numeros = (ctypes.c_char * _LONGUEUR_NUMERO * nombre.value)()
-    # Le second appel relit le résultat du premier (FALSE) : refaire un balayage complet
-    # doublerait l'attente, et pourrait rendre une liste d'une autre longueur que le tampon.
-    code = lister(numeros, ctypes.byref(nombre), 0)
+    place = nombre.value
+    numeros = (ctypes.c_char * _LONGUEUR_NUMERO * place)()
+    # Le MÊME drapeau aux deux appels, comme BrainFlow : on ne sait pas ce qu'il veut dire sous
+    # Windows (cf. plus haut), donc on ne suppose pas qu'un autre rendrait la même liste.
+    code = lister(numeros, ctypes.byref(nombre), drapeau)
     if code != 0:
         raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
+    # Un casque apparu entre les deux appels ne doit pas faire lire hors du tampon.
+    nombre.value = min(nombre.value, place)
     return [bytes(numeros[i]).split(b"\0")[0].decode("ascii", "replace")
             for i in range(nombre.value)]
+
+
+def fonction_liste_unicorn():
+    """`UNICORN_GetAvailableDevices`, chargée depuis la `Unicorn.dll` de BrainFlow et typée.
+
+    À part pour qu'un autotest la charge SANS l'appeler : l'appeler lance un balayage Bluetooth,
+    qui peut gêner un casque ouvert ailleurs. Le 2026-09-25, une faute de nom dans ce chargement
+    (`_os`) n'a été vue qu'à l'écran — les tests remplaçaient la recherche entière.
+    """
+    import ctypes
+
+    import brainflow
+
+    dll = ctypes.CDLL(os.path.join(os.path.dirname(brainflow.__file__), "lib", "Unicorn.dll"))
+    lister = dll.UNICORN_GetAvailableDevices
+    lister.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_int]
+    lister.restype = ctypes.c_int
+    return lister
 
 
 class UnicornAcquisition:
