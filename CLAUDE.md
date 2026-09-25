@@ -594,6 +594,11 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   à la réouverture (redémarrage de l'amplificateur). Garder une seule session ouverte — c'est
   exactement ce que le point d'entrée unique rend possible : entraîner et tester sans jamais fermer
   la fenêtre qui tient le casque.
+- **Un casque qui décroche une seconde figeait tout** (BrainFlow ne lève rien : les échantillons
+  cessent d'arriver). Depuis le 2026-09-25, le moteur le détecte après 2 s de silence
+  (`DECROCHAGE_S`), cesse de décoder, annule la séance minutée en cours, rouvre la session tout
+  seul et fait refaire le repos aux modes (`[smoke-liaison]`). **Jamais vu sur un vrai casque** :
+  QA 2.9.
 - **Saliner les électrodes** est le principal levier de qualité du signal (gain mesuré très net).
 - Vérifier le contact **avant** d'enregistrer : une électrode ou une référence décollée produit une
   séance entière inexploitable, sans autre signal d'alerte que l'écran de contrôle de liaison.

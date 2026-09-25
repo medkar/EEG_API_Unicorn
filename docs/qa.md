@@ -862,6 +862,42 @@ sert à vérifier qu'il *fonctionne*, pas qu'il *dit vrai*.
 
 → recette 2.5
 
+### ☐ 2.8 — Trouver son casque (« Rechercher les casques »)
+
+Console fermée. Casque **allumé**, puis lance la console.
+
+✅ À l'ouverture de l'écran de départ, « Recherche des casques… » ; en quelques secondes, « 1
+casque(s) trouvé(s) : UN-… », et ce numéro en tête de la liste.
+✅ **Éteins le casque** → « Rechercher les casques » → **note ce qui sort** : « Aucun casque
+trouvé », ou le numéro quand même.
+⚠️ **C'est une question ouverte, pas un échec** : la documentation Windows de l'API du casque n'a pas
+pu être lue. Si le casque éteint est encore listé, la recherche trouve les casques APPAIRÉS, pas
+ceux qui sont ALLUMÉS — c'est ce qu'on veut savoir, et note aussi la DURÉE de la recherche.
+✅ « OK » pendant la recherche : « La recherche des casques se termine… », puis la session s'ouvre.
+
+❌ Échec : la console se fige pendant la recherche ; ou la recherche plante sans rien dire.
+
+### ☐ 2.9 — Le casque décroche en pleine séance, et revient
+
+Console ouverte sur le casque, un mode qui décode (le SSVEP par exemple). **Éteins le casque**
+(ou éloigne-le hors de portée) ~10 s, puis rallume-le.
+
+✅ En ~2 s, le bandeau : « ⚠ LIAISON PERDUE avec le casque depuis N s : plus rien n'est décodé.
+Reconnexion en cours (essai n)… inutile de fermer la console. » ; les σ disent « plus aucun
+échantillon ».
+✅ Pendant la coupure, le flux décodé se TAIT (« Ce que voit ton application ») : aucune cible
+répétée en boucle.
+✅ Casque rallumé : en quelques secondes, « Liaison rétablie après N s : les modes refont leur
+repos… » ; le mode repasse par la stabilisation puis le repos, et décode de nouveau **sans avoir
+relancé la console**.
+✅ Un test ou un entraînement en cours pendant la coupure est **annulé**, avec « La liaison avec le
+casque s'est coupée pendant la séance… ».
+
+❌ Régression : l'écran se fige et il faut relancer la console (le comportement d'avant le
+2026-09-25) ; ou le flux décodé continue d'annoncer une cible pendant la coupure.
+⚠️ Après la reconnexion, **regarde C3 et Cz** au bandeau : la réouverture redémarre
+l'amplificateur, et elles saturaient à chaque réouverture. Note combien de temps.
+
 ---
 
 # Bloc 3 — le réseau, vu d'une application cliente
