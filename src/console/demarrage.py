@@ -27,14 +27,19 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer
+from PySide6.QtCore import QEventLoop, QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,  # noqa: E402
                                QLabel, QProgressDialog, QPushButton, QRadioButton, QVBoxLayout)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.acquisition import casques_detectes, fonction_liste_unicorn  # noqa: E402
+from core.acquisition import casques_appaires, fonction_liste_unicorn  # noqa: E402
 from core.config import UNICORN_SERIAL  # noqa: E402
 from core.i18n import tr  # noqa: E402
+
+# La page Bluetooth des Paramètres de Windows : l'Unicorn s'y appaire, la bibliothèque du casque
+# n'ayant aucune fonction d'appairage (vérifié le 2026-09-25).
+REGLAGES_BLUETOOTH = "ms-settings:bluetooth"
 
 UNICORN = "unicorn"
 SYNTHETIQUE = "synthetic"
@@ -91,9 +96,10 @@ class DialogueDemarrage(QDialog):
     """
 
     def __init__(self, parent=None, defaut=UNICORN, numero=None, erreur="", memoire=None,
-                 chercher=casques_detectes, recherche_auto=True):
+                 chercher=casques_appaires, recherche_auto=True, ouvrir_url=None):
         super().__init__(parent)
         self._chercher = chercher
+        self._ouvrir_url = ouvrir_url or (lambda url: QDesktopServices.openUrl(QUrl(url)))
         self._recherche = None            # {"fil", "resultat", "erreur"} pendant une recherche
         self._accepter_apres = False      # « OK » cliqué pendant une recherche : on attend sa fin
         self.setWindowTitle(tr("console.demarrage.titre"))
@@ -139,11 +145,18 @@ class DialogueDemarrage(QDialog):
                 layout.addWidget(QLabel(tr("console.demarrage.numero")))
                 ligne = QHBoxLayout()
                 ligne.addWidget(self.champ_numero, 1)
-                # La DÉTECTION (2026-09-25) : chaque étudiant choisit SON casque parmi ceux que
-                # la bibliothèque du casque trouve, au lieu de taper un numéro de mémoire.
-                self.bouton_chercher = QPushButton(tr("console.demarrage.chercher"))
+                # La liste des casques APPAIRÉS (2026-09-25) : chaque étudiant choisit SON casque
+                # au lieu de taper un numéro de mémoire. Pas une détection — cf.
+                # `core.acquisition.casques_appaires` : rien ne dit qu'un casque appairé est
+                # allumé sans l'ouvrir, et l'écran ne le prétend pas.
+                self.bouton_chercher = QPushButton(tr("console.demarrage.actualiser"))
                 self.bouton_chercher.clicked.connect(self.chercher)
                 ligne.addWidget(self.bouton_chercher)
+                self.bouton_appairer = QPushButton(tr("console.demarrage.appairer"))
+                self.bouton_appairer.setToolTip(tr("console.demarrage.appairer_aide"))
+                self.bouton_appairer.clicked.connect(
+                    lambda: self._ouvrir_url(REGLAGES_BLUETOOTH))
+                ligne.addWidget(self.bouton_appairer)
                 layout.addLayout(ligne)
                 self.detection = QLabel("")
                 self.detection.setWordWrap(True)
@@ -156,12 +169,15 @@ class DialogueDemarrage(QDialog):
         layout.addWidget(self.manquant)
         self.boutons[UNICORN].toggled.connect(self.champ_numero.setEnabled)
         self.boutons[UNICORN].toggled.connect(self.bouton_chercher.setEnabled)
+        self.boutons[UNICORN].toggled.connect(self.bouton_appairer.setEnabled)
         self.champ_numero.setEnabled(self.boutons[UNICORN].isChecked())
         self.bouton_chercher.setEnabled(self.boutons[UNICORN].isChecked())
+        self.bouton_appairer.setEnabled(self.boutons[UNICORN].isChecked())
         self._sondage = QTimer(self)
         self._sondage.timeout.connect(self._suivre_recherche)
-        # Au départ, AUCUNE liaison n'est ouverte : c'est le moment où chercher ne dérange rien.
-        # (Pendant une séance, un balayage Bluetooth peut gêner la liaison d'un casque ouvert.)
+        # Lire la liste des appairés est instantané (mesuré : 0,0 s) et ne balaie pas le Bluetooth.
+        # Elle passe quand même par un fil : c'est un appel dans une DLL, et une DLL qui se bloque
+        # ne doit pas figer l'écran de départ.
         if recherche_auto and self.boutons[UNICORN].isChecked():
             QTimer.singleShot(0, self.chercher)
 
@@ -176,7 +192,7 @@ class DialogueDemarrage(QDialog):
     # --- la détection des casques ---------------------------------------------------------------
 
     def chercher(self):
-        """Lance la recherche dans un fil : elle peut bloquer une dizaine de secondes."""
+        """Lit la liste des casques appairés, dans un fil (cf. le commentaire du constructeur)."""
         if self._recherche is not None:
             return
         recherche = {"resultat": None, "erreur": None}
@@ -211,22 +227,26 @@ class DialogueDemarrage(QDialog):
             self.detection.setText(tr("console.demarrage.recherche_impossible",
                                       raison=recherche["erreur"]))
             return
-        trouves = recherche["resultat"] or []
-        if not trouves:
+        appaires = recherche["resultat"] or []
+        if not appaires:
             self.detection.setStyleSheet("color: #b8860b; font-size: 11px; margin-left: 20px;")
-            self.detection.setText(tr("console.demarrage.aucun_casque"))
+            self.detection.setText(tr("console.demarrage.aucun_appaire"))
             return
-        # Les casques TROUVÉS en tête de liste, puis ceux dont on se souvenait. Le premier trouvé
-        # est sélectionné — sauf si le numéro déjà choisi en fait partie : on ne change pas un
-        # choix que la recherche confirme.
+        # L'ORDRE : les appairés déjà utilisés sur ce poste d'abord (le dernier en tête), puis les
+        # autres appairés, puis les casques dont on se souvient mais que Windows ne connaît plus.
+        # Le choix en cours est gardé s'il est appairé : on ne change pas un choix que la liste
+        # confirme.
         choisi = self.numero()
         connus = [self.champ_numero.itemText(i) for i in range(self.champ_numero.count())]
+        ordre = ([c for c in connus if c in appaires] + [a for a in appaires if a not in connus]
+                 + [c for c in connus if c not in appaires])
         self.champ_numero.clear()
-        self.champ_numero.addItems(trouves + [c for c in connus if c not in trouves])
-        self.champ_numero.setCurrentText(choisi if choisi in trouves else trouves[0])
-        self.detection.setStyleSheet("color: #3fae5a; font-size: 11px; margin-left: 20px;")
-        self.detection.setText(tr("console.demarrage.casques_trouves", n=len(trouves),
-                                  liste=", ".join(trouves)))
+        self.champ_numero.addItems(ordre)
+        self.champ_numero.setCurrentText(choisi if choisi in appaires else ordre[0])
+        # Gris et non vert : APPAIRÉ ne veut pas dire allumé, et un vert le laisserait croire.
+        self.detection.setStyleSheet("color: #8a8f9c; font-size: 11px; margin-left: 20px;")
+        self.detection.setText(tr("console.demarrage.casques_appaires", n=len(appaires),
+                                  liste=", ".join(appaires)))
 
     def accept(self):
         """Refuse un casque SANS numéro : cf. la docstring du module.
@@ -385,7 +405,7 @@ def _selftest():
         "après un échec, la raison est affichée, et le casque et son numéro restent choisis — "
         "aucun repli sur le board de test")
 
-    # La DÉTECTION : elle tourne dans un fil, puis remplit la liste — les casques TROUVÉS en tête.
+    # La LISTE DES APPAIRÉS : lue dans un fil, puis l'ordre — les déjà utilisés d'abord.
     def attendre_recherche(dialogue):
         fin = __import__("time").monotonic() + 5.0
         while dialogue._recherche is not None and __import__("time").monotonic() < fin:
@@ -400,15 +420,28 @@ def _selftest():
     app.processEvents()
     chk(trouve._recherche is not None and not trouve.bouton_chercher.isEnabled()
         and trouve.detection.text(),
-        f"à l'ouverture, la recherche part d'elle-même, en arrière-plan, et le DIT "
+        f"à l'ouverture, la liste des appairés est lue d'elle-même, en arrière-plan, et le DIT "
         f"({trouve.detection.text()!r})")
     attendre_recherche(trouve)
     items = [trouve.champ_numero.itemText(i) for i in range(trouve.champ_numero.count())]
-    chk(items[:2] == ["UN-2024.01.01", "UN-F"] and items.count("UN-F") == 1
+    chk(items[:2] == ["UN-F", "UN-2024.01.01"] and items.count("UN-F") == 1
         and trouve.numero() == "UN-F" and "2" in trouve.detection.text()
         and trouve.bouton_chercher.isEnabled(),
-        f"les casques TROUVÉS passent en tête, sans doublon avec ceux qu'on connaissait, et le "
-        f"choix en cours est gardé s'il fait partie des trouvés ({items}, {trouve.numero()})")
+        f"le dernier casque utilisé ET appairé passe en tête, puis les autres appairés, sans "
+        f"doublon, et le choix en cours est gardé ({items}, {trouve.numero()})")
+    # 🔴 « Appairé » n'est pas « allumé » : ni « trouvé », ni vert — c'est ce que l'écran a
+    # prétendu le 2026-09-25, casque éteint dans la liste.
+    chk("trouv" not in trouve.detection.text().lower() and "appair" in trouve.detection.text()
+        and "3fae5a" not in trouve.detection.styleSheet(),
+        f"…et le message dit APPAIRÉ, jamais « trouvé », et n'est pas vert : rien ne dit que le "
+        f"casque est allumé tant qu'on ne l'a pas ouvert ({trouve.detection.text()!r})")
+    urls = []
+    appairer = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=lambda: [],
+                                 recherche_auto=False, ouvrir_url=urls.append)
+    appairer.bouton_appairer.click()
+    chk(urls == [REGLAGES_BLUETOOTH],
+        f"« Appairer un casque… » ouvre la page Bluetooth des Paramètres de Windows — la "
+        f"bibliothèque du casque ne sait pas appairer ({urls})")
     # « OK » PENDANT une recherche : rien ne s'ouvre avant sa fin, puis le clic est honoré.
     presse = DialogueDemarrage(defaut=UNICORN, memoire=memoire, chercher=lent, recherche_auto=True)
     app.processEvents()
@@ -425,9 +458,9 @@ def _selftest():
                               recherche_auto=True)
     app.processEvents()
     attendre_recherche(aucun)
-    chk("allum" in aucun.detection.text().lower() and aucun.numero(),
-        f"aucun casque trouvé : la page dit quoi vérifier, et le champ garde un numéro à tenter "
-        f"({aucun.detection.text()!r})")
+    chk("appair" in aucun.detection.text().lower() and aucun.numero(),
+        f"aucun casque appairé : la page dit d'en appairer un, et le champ garde un numéro à "
+        f"tenter ({aucun.detection.text()!r})")
 
     def casse():
         raise OSError("Unicorn.dll introuvable")

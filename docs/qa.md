@@ -862,20 +862,22 @@ sert à vérifier qu'il *fonctionne*, pas qu'il *dit vrai*.
 
 → recette 2.5
 
-### ☐ 2.8 — Trouver son casque (« Rechercher les casques »)
+### ☐ 2.8 — Choisir son casque parmi les casques APPAIRÉS
 
-Console fermée. Casque **allumé**, puis lance la console.
+⚠️ **Mesuré le 2026-09-25 : aucune recherche ne dit qu'un casque est allumé.** La bibliothèque du
+casque liste les casques APPAIRÉS à ce PC, instantanément, allumés ou non ; sa recherche Bluetooth
+(6,4 s) ne trouve RIEN, casque éteint comme allumé — un appareil déjà appairé n'est pas en mode
+visible. Seule l'ouverture (« OK ») dit s'il répond. L'écran ne promet donc rien d'autre.
 
-✅ À l'ouverture de l'écran de départ, « Recherche des casques… » ; en quelques secondes, « 1
-casque(s) trouvé(s) : UN-… », et ce numéro en tête de la liste.
-✅ **Éteins le casque** → « Rechercher les casques » → **note ce qui sort** : « Aucun casque
-trouvé », ou le numéro quand même.
-⚠️ **C'est une question ouverte, pas un échec** : la documentation Windows de l'API du casque n'a pas
-pu être lue. Si le casque éteint est encore listé, la recherche trouve les casques APPAIRÉS, pas
-ceux qui sont ALLUMÉS — c'est ce qu'on veut savoir, et note aussi la DURÉE de la recherche.
-✅ « OK » pendant la recherche : « La recherche des casques se termine… », puis la session s'ouvre.
+✅ À l'ouverture : « 1 casque(s) appairé(s) à ce PC : UN-…. Allume le tien, puis OK : la console te
+dira s'il répond. » — en **gris**, jamais « trouvé », jamais vert. Le dernier casque utilisé est en
+tête de liste.
+✅ « **Appairer un casque…** » ouvre la page Bluetooth des Paramètres de Windows (un casque neuf s'y
+appaire, une fois par PC) ; « **Actualiser la liste** » la relit.
+✅ Casque éteint + OK → l'écran revient avec la raison (point 1.12) ; casque allumé + OK → la console
+s'ouvre.
 
-❌ Échec : la console se fige pendant la recherche ; ou la recherche plante sans rien dire.
+❌ Échec : un message qui dit « trouvé » ou un vert pour un casque éteint ; l'écran qui se fige.
 
 ### ☐ 2.9 — Le casque décroche en pleine séance, et revient
 

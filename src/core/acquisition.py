@@ -59,51 +59,55 @@ def _median_offdiag(filtered):
 _LONGUEUR_NUMERO = 14
 
 
-def casques_detectes(recherche=True):
-    """Les numéros de série des casques Unicorn que la bibliothèque du CASQUE trouve.
+def casques_appaires():
+    """Les numéros de série des casques Unicorn APPAIRÉS à ce PC — allumés ou non.
 
-    Pas une recherche Bluetooth générique : on appelle `UNICORN_GetAvailableDevices` dans
-    `Unicorn.dll`, que BrainFlow installe avec lui et qu'il appelle lui-même pour trouver le
-    casque à ouvrir (`gtec/unicorn_board.cpp`, avec `TRUE`). Ne rend donc que des Unicorn.
+    C'est tout ce que la bibliothèque du casque sait dire sans l'ouvrir, et c'est MESURÉ
+    (2026-09-25, Windows, `Unicorn.dll` de BrainFlow, API 4.0) :
 
-    ⚠️ **Ce que `recherche` veut dire exactement n'est pas documenté pour Windows.** L'en-tête
-    Linux de l'API appelle ce drapeau `rescan` : TRUE = balayage complet (« environ 10 s »), FALSE =
-    résultat du balayage précédent. La page Windows n'a pas pu être lue (2026-09-25). On passe
-    TRUE, comme BrainFlow ; ce qu'il trouve — casques ALLUMÉS à portée, ou seulement APPAIRÉS —
-    est à vérifier au casque, allumé puis éteint (cf. `docs/qa.md`).
+      `UNICORN_GetAvailableDevices(…, TRUE)`  instantané (0,0 s) -> les casques appairés, y compris
+                                              ÉTEINTS : il lit la liste de Windows, il ne cherche
+                                              rien. C'est l'appel de BrainFlow pour ouvrir le casque.
+      `UNICORN_GetAvailableDevices(…, FALSE)` 6,4 s de recherche Bluetooth -> RIEN, casque éteint
+                                              comme ALLUMÉ : un appareil déjà appairé n'est pas en
+                                              mode visible, on le joint par son adresse sans le
+                                              voir passer.
 
-    Bloquant (jusqu'à ~10 s) : à appeler hors du fil de l'interface. Lève si la bibliothèque
-    manque (hors Windows, BrainFlow sans Unicorn) ou si l'API rend un code d'erreur.
+    ⚠️ Aucune recherche ne dit donc qu'un casque appairé est ALLUMÉ : seule une tentative
+    d'ouverture le dit (« OK » sur l'écran de départ, qui revient avec la raison en cas d'échec).
+    Un écran qui écrirait « casque trouvé » sur ce résultat mentirait — il l'a fait, relevé à
+    l'écran le jour même. La bibliothèque n'a pas non plus de fonction d'APPAIRAGE : un casque
+    neuf s'appaire dans les réglages Bluetooth de Windows.
+
+    Lève si la bibliothèque manque (hors Windows, BrainFlow sans Unicorn) ou si l'API rend un
+    code d'erreur.
     """
     import ctypes
 
     lister = fonction_liste_unicorn()
-    drapeau = 1 if recherche else 0
+    appaires = 1              # TRUE : la liste des appairés, comme BrainFlow (cf. plus haut)
     nombre = ctypes.c_uint32(0)
-    code = lister(None, ctypes.byref(nombre), drapeau)
+    code = lister(None, ctypes.byref(nombre), appaires)
     if code != 0:
         raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
     if nombre.value == 0:
         return []
     place = nombre.value
     numeros = (ctypes.c_char * _LONGUEUR_NUMERO * place)()
-    # Le MÊME drapeau aux deux appels, comme BrainFlow : on ne sait pas ce qu'il veut dire sous
-    # Windows (cf. plus haut), donc on ne suppose pas qu'un autre rendrait la même liste.
-    code = lister(numeros, ctypes.byref(nombre), drapeau)
+    code = lister(numeros, ctypes.byref(nombre), appaires)
     if code != 0:
         raise RuntimeError(f"UNICORN_GetAvailableDevices : code d'erreur {code}")
-    # Un casque apparu entre les deux appels ne doit pas faire lire hors du tampon.
-    nombre.value = min(nombre.value, place)
+    # Un casque appairé entre les deux appels ne doit pas faire lire hors du tampon.
     return [bytes(numeros[i]).split(b"\0")[0].decode("ascii", "replace")
-            for i in range(nombre.value)]
+            for i in range(min(nombre.value, place))]
 
 
 def fonction_liste_unicorn():
     """`UNICORN_GetAvailableDevices`, chargée depuis la `Unicorn.dll` de BrainFlow et typée.
 
-    À part pour qu'un autotest la charge SANS l'appeler : l'appeler lance un balayage Bluetooth,
-    qui peut gêner un casque ouvert ailleurs. Le 2026-09-25, une faute de nom dans ce chargement
-    (`_os`) n'a été vue qu'à l'écran — les tests remplaçaient la recherche entière.
+    À part pour qu'un autotest la charge SANS l'appeler : un autotest ne touche pas au Bluetooth.
+    Le 2026-09-25, une faute de nom dans ce chargement (`_os`) n'a été vue qu'à l'écran — les
+    tests remplaçaient la recherche entière.
     """
     import ctypes
 
