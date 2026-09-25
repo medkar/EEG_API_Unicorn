@@ -150,7 +150,8 @@ class ModePage(QWidget):
         self.vue = live_views.build(spec["family"], spec["channels"])
         if hasattr(self.vue, "set_source") and console.engine is not None:
             # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`.
-            self.vue.set_source(console.engine.recent_window)
+            self.vue.set_source(console.engine.recent_window,
+                                getattr(getattr(console.engine, "acq", None), "fs", None))
         self.vue.setMinimumHeight(200)
 
         self.bloc_observer = self.bouton_observer = None

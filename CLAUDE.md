@@ -291,6 +291,10 @@ Dans la console (depuis le 2026-09-22) :
   **« Démarrer »** — le seul bouton qui démarre le décodage continu, hormis l'« Observer » du
   Neuro — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
   (marquée *BARRIÈRE*).
+- **La page Brut a un filtre d'AFFICHAGE** (2026-09-25) : aucun, passe-haut 0,1-2 Hz, passe-bande,
+  coupe-bande 50 Hz — défaut passe-haut 1 Hz. ⚠️ Il ne filtre QUE la copie dessinée : le tampon
+  du moteur (`recent_window`) reste brut, parce que le MI s'entraîne dessus, et le flux publié
+  aussi.
 - **Une page par mode, en blocs numérotés** (règle 🔴 plus haut). La vue en direct des modes
   testables y est repliée sous **« Décodage en direct »**. **Ont quitté la page, et reviendront
   avec « Connecter »** : « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
@@ -373,6 +377,9 @@ python src/console/app.py --smoke          # console : grille, page de mode, ré
 python src/core/i18n.py                    # les TEXTES : autotest du chargeur + contrôle du dépôt
                                            # (le même que [smoke-textes]) ; `--reste` liste ce qui
                                            # reste écrit en dur dans la console
+python src/core/filtres_affichage.py       # les filtres d'AFFICHAGE du Brut : la dérive retirée (le
+                                           # détrend AVANT le passe-haut), le 50 Hz, un tracé qui
+                                           # ne tremble pas d'une image à l'autre
 ```
 
 ⚠️ **`examples/` n'était couvert par AUCUN test avant le 2026-09-10** — alors que c'est le seul

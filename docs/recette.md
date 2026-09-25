@@ -335,6 +335,30 @@ dernier. **Le moteur publie les six modes.** Le module qui portait les entrées 
 > ici (contact suspect), pas un défaut à cacher. Vérifié par `console/app.py --smoke`, quatre
 > mutations rouges (rognage retiré, échelle refixée, maximum au lieu du 75e centile, zone morte
 > retirée).
+>
+> 🐛 **2026-09-25, au casque** : « les courbes ont une allure bizarre… certaines voies ont une
+> dérive en y ». Ça a toujours été le cas : le tracé est le signal BRUT, et l'offset de l'Unicorn
+> rampe. ✅ **Un filtre d'affichage au choix**, comme dans la Unicorn Suite
+> (`core/filtres_affichage.py`) : aucun, passe-haut 0,1 / 0,5 / 1 / 2 Hz, passe-bande 1–30 /
+> 1–40 / 5–40 Hz, plus un coupe-bande 50 Hz à part. Défaut : passe-haut 1 Hz, coupe-bande
+> décoché — un 50 Hz sur une seule voie est un contact à reprendre, le cacher par défaut
+> retirerait un diagnostic. Trois choix à connaître :
+>
+> - **Il ne filtre que le tracé.** Le tampon du moteur reste brut (le MI s'entraîne dessus), le
+>   flux publié aussi. Vérifié : le tampon est comparé avant/après dans le smoke.
+> - **Causal**, comme un oscilloscope. Un `filtfilt` (zéro phase) a été essayé et écarté : il
+>   invente la suite du bloc pour en filtrer le bord droit — le plus récent, celui qu'on regarde —
+>   et, sur la dernière demi-seconde, laissait passer jusqu'à **33 µV** crête d'un 50 Hz de 20 µV
+>   que le coupe-bande devait retirer. Ici : 0,00.
+> - **La rampe est retirée avant le filtre** (droite ajustée sur le bloc). Sans ça, un passe-haut
+>   0,1 Hz démarré au milieu de la rampe laissait **180 µV** de sursaut à l'écran, amorce de 4 s
+>   comprise (dérive de 500 µV/s) ; avec, 0,1 µV. La mutation qui retire ce détrend fait rougir
+>   `filtres_affichage.py`.
+>
+> Changer de filtre **recale l'échelle aussitôt**, même d'une seule graduation : sans ça, cocher
+> le coupe-bande laissait les tracés à mi-couloir (mutation vue rouge). La liste des filtres de la
+> Unicorn Suite n'a **pas** été vérifiée — elle est faite de mémoire, à comparer au point 2.11 de
+> `qa.md`.
 
 ### 1.4 — Le bandeau vit
 

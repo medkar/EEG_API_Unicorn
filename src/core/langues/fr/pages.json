@@ -138,7 +138,15 @@
   "pages.mesure.sans_son_yeux_fermes": "⚠ Pas de son sur cette machine ({raison}). Une partie de la séance se fait les yeux fermés : sans top, tu ne sauras pas quand rouvrir. Branche une sortie audio, ou fais-toi lire l'écran à voix haute.",
   "pages.mesure.unite_defaut": "étape",
   "pages.son.aucune_sortie": "aucune sortie audio détectée",
+  "pages.traces.aucun_filtre": "Aucun (signal brut)",
+  "pages.traces.avec_secteur": "{filtre} + coupe-bande {hz} Hz",
   "pages.traces.axe_temps": "secondes",
-  "pages.traces.echelle": "Signal brut, non filtré · un couloir = {ecart} µV · {secondes} dernières secondes",
-  "pages.traces.rognees": "⚠ hors couloir, tracé rogné : {voies}. Bien plus agité que les autres voies : contact ? électrode décollée ?"
+  "pages.traces.echelle": "{filtre} · un couloir = {ecart} µV · {secondes} dernières secondes",
+  "pages.traces.filtre": "Filtre d'affichage",
+  "pages.traces.filtre_aide": "Ne change que ce tracé : le flux publié sur le réseau et ce que décodent les modes restent inchangés. Un passe-haut retire la dérive lente des voies ; plus il coupe haut, plus il déforme un clignement (plus petit, suivi d'un rebond). 5–40 Hz est la bande du décodage SSVEP.",
+  "pages.traces.passe_bande": "Passe-bande {bas}–{haut} Hz",
+  "pages.traces.passe_haut": "Passe-haut {hz} Hz",
+  "pages.traces.rognees": "⚠ hors couloir, tracé rogné : {voies}. Bien plus agité que les autres voies : contact ? électrode décollée ?",
+  "pages.traces.secteur": "Coupe-bande {hz} Hz",
+  "pages.traces.secteur_aide": "Retire le bourdonnement du secteur électrique ({hz} Hz). Laisse-le décoché pour vérifier le contact : une voie qui bourdonne nettement plus que les autres est une électrode mal posée."
 }

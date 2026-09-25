@@ -247,6 +247,11 @@ BANDPASS = (5.0, 40.0)   # passe-bande acquisition (Hz)
 # déjà les bords, et surtout leur template/modèle est appris sur des époques filtrées SANS marge :
 # en ajouter en ligne créerait un décalage entre calibration et usage, pour un gain nul.
 FILTER_MARGIN_S = 1.0
+# Les TRACÉS du Brut (2026-09-25) : les secondes affichées, et celles demandées EN PLUS pour que
+# le filtre d'affichage (`core/filtres_affichage.py`) ait fini son régime transitoire avant le
+# bord gauche de l'écran. Le tampon du moteur (`EngineServer.keep`) tient la somme des deux.
+TRACES_AFFICHAGE_S = 4.0
+TRACES_AMORCE_S = 4.0
 N_HARMONICS = 3          # harmoniques (fondamentale incluse) des références CCA
 
 # --- Proposition de fréquences SSVEP (chantier 2) ------------------------------------------

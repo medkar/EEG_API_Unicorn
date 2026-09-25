@@ -3980,6 +3980,21 @@ def _smoke():
     chk(len(page.vue.courbes) == 8, f"huit courbes, une par voie ({len(page.vue.courbes)})")
     chk(page.vue.courbes[0].xData is not None and len(page.vue.courbes[0].xData) > 100,
         "et elles portent des données après un rafraîchissement")
+    from console.live_views import nom_filtre
+    from console.params_form import ListeSansMolette
+    from core import filtres_affichage
+    from core.i18n import nombre
+
+    chk(page.vue.filtre == filtres_affichage.FILTRE_DEFAUT and not page.vue.case_secteur.isChecked()
+        and page.vue.choix_filtre.currentText() == nom_filtre(filtres_affichage.FILTRE_DEFAUT)
+        and page.vue.echelle.text().startswith(nom_filtre(filtres_affichage.FILTRE_DEFAUT)),
+        f"les tracés s'ouvrent sur le filtre d'affichage par défaut, et l'étiquette le NOMME "
+        f"(« {page.vue.echelle.text()[:40]}… »)")
+    chk(isinstance(page.vue.choix_filtre, ListeSansMolette)
+        and page.vue.choix_filtre.count() == len(filtres_affichage.FILTRES)
+        and page.vue.fs == moteur.acq.fs,
+        f"la liste propose les {len(filtres_affichage.FILTRES)} filtres, ignore la molette, et "
+        f"filtre à la fréquence du casque ({page.vue.fs:g} Hz)")
 
     # --- 🔴 LES HUIT TRACÉS NE SE CHEVAUCHENT PLUS, ET C'EST GARANTI ------------------------
     #
@@ -4017,6 +4032,10 @@ def _smoke():
     _phase = 2 * np.pi * 8.0 * np.arange(1000) / 1000.0 * 4.0
     def _sinus(amplitudes):
         return np.stack([a * np.sin(_phase + i) for i, a in enumerate(amplitudes)], axis=1)
+
+    # Ces trois épreuves portent sur l'ÉCHELLE du signal brut : on retire le filtre d'affichage,
+    # qui n'est pas leur sujet (il a les siennes plus bas).
+    vue.choix_filtre.setCurrentIndex(filtres_affichage.FILTRES.index((None, None)))
 
     # (1) Un brut qui respire fort : l'écart MONTE. Il valait 100 µV en dur — c'est la panne.
     _redessine(_sinus([300.0] * 8))
@@ -4056,6 +4075,48 @@ def _smoke():
     chk("rogné" not in vue.echelle.text(),
         f"et sur un signal calme, plus aucune voie n'est annoncée rognée "
         f"(« {vue.echelle.text()[:70]}… »)")
+
+    # --- 🔴 LE FILTRE D'AFFICHAGE (2026-09-25) ---------------------------------------------
+    #
+    # Relevé au casque : « certaines voies ont une dérive en y ». L'offset de l'Unicorn rampe, et
+    # sur le brut la rampe écrase l'EEG. Ce qui est vérifié : un passe-haut rend l'alpha lisible
+    # sous la dérive, sans toucher au tampon du moteur — le MI s'entraîne dessus.
+    chk(moteur.keep >= int(round((vue.SECONDES + vue.AMORCE) * moteur.acq.fs)),
+        f"le tampon du moteur tient ce qu'on affiche PLUS l'amorce du filtre ({moteur.keep} "
+        f"échantillons)")
+    duree_n = int(round((vue.SECONDES + vue.AMORCE) * moteur.acq.fs))
+    temps = np.arange(duree_n) / moteur.acq.fs
+    alpha_10 = 10.0 * np.sin(2 * np.pi * 10.0 * temps)
+    _redessine(np.stack([1e5 + (100.0 + 50.0 * i) * temps + alpha_10 for i in range(8)], axis=1))
+    chk(vue.ecart >= 1000.0,
+        f"sans filtre, la dérive (100 à 450 µV/s) impose son échelle : {vue.ecart:g} µV par "
+        f"couloir, l'alpha de 10 µV y est un trait plat")
+    garde = moteur.recent.copy()
+    vue.choix_filtre.setCurrentIndex(
+        filtres_affichage.FILTRES.index(filtres_affichage.FILTRE_DEFAUT))
+    residus = [float(np.max(np.abs(c.yData + i * vue.ecart))) for i, c in enumerate(vue.courbes)]
+    chk(vue.ecart == 50.0 and max(residus) < 12.0,
+        f"passe-haut : la dérive disparaît et l'alpha remplit son couloir — {vue.ecart:g} µV par "
+        f"couloir, chaque voie à ±{max(residus):.1f} µV")
+    chk(np.array_equal(moteur.recent, garde),
+        "…et le tampon du moteur n'est PAS filtré : seule la copie dessinée l'est")
+
+    # Le coupe-bande, et le RECALAGE : 30 µV de secteur sur 10 µV d'alpha. Retirer le secteur
+    # fait passer l'échelle de 100 à 50 µV — une seule graduation, que la zone morte aurait
+    # gardée : le choix qu'on vient de faire doit se voir tout de suite.
+    secteur_30 = 30.0 * np.sin(2 * np.pi * filtres_affichage.SECTEUR_HZ * temps)
+    _redessine(np.stack([alpha_10 + secteur_30] * 8, axis=1))
+    avant = vue.ecart
+    vue.case_secteur.setChecked(True)
+    reste = float(np.ptp(vue.courbes[0].yData[len(temps) // 4:]))
+    chk(avant == 100.0 and vue.ecart == 50.0 and reste < 25.0,
+        f"coupe-bande : le secteur part ({reste:.0f} µV crête à crête pour 20 d'alpha) et "
+        f"l'échelle se recale aussitôt ({avant:g} → {vue.ecart:g} µV)")
+    avec = tr("pages.traces.avec_secteur", filtre=nom_filtre(filtres_affichage.FILTRE_DEFAUT),
+              hz=nombre(filtres_affichage.SECTEUR_HZ))
+    chk(vue.echelle.text().startswith(avec),
+        f"…et l'étiquette le dit (« {vue.echelle.text()[:50]}… »)")
+    vue.case_secteur.setChecked(False)
 
     # --- 🔴 LE BLOC DE RÉSULTAT : TROIS LIGNES, LE RESTE RANGÉ -----------------------------
     #

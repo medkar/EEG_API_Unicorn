@@ -10,13 +10,18 @@ import os
 import sys
 
 import numpy as np
-from PySide6.QtWidgets import (QFormLayout, QLabel, QProgressBar, QVBoxLayout, QWidget)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QCheckBox, QFormLayout, QHBoxLayout, QLabel, QProgressBar,
+                               QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import (SPAN_SEUILS, classement_relatif, decompte,  # noqa: E402
                      span_correlation)
-from core.config import NEURO_Z_SPAN, Z_MIN  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from console.params_form import ACCENT, ListeSansMolette, infobulle  # noqa: E402
+from core import filtres_affichage  # noqa: E402
+from core.config import (FS_UNICORN, NEURO_Z_SPAN, TRACES_AFFICHAGE_S,  # noqa: E402
+                         TRACES_AMORCE_S, Z_MIN)
+from core.i18n import nombre, tr  # noqa: E402
 from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
 
 
@@ -28,6 +33,25 @@ def _avec_decompte(texte, mode_state):
     """
     attente = decompte(mode_state)
     return f"{texte}\n{attente}" if attente else texte
+
+
+def nom_filtre(filtre):
+    """Le libellé d'un filtre d'affichage : « Passe-haut 1 Hz », « Passe-bande 1–30 Hz »…"""
+    bas, haut = filtre
+    if bas is not None and haut is not None:
+        return tr("pages.traces.passe_bande", bas=nombre(bas), haut=nombre(haut))
+    if bas is not None:
+        return tr("pages.traces.passe_haut", hz=nombre(bas))
+    return tr("pages.traces.aucun_filtre")
+
+
+def _bulle(texte):
+    """Une bulle « ⓘ » qui montre `texte` au survol — à poser juste APRÈS ce qu'elle explique."""
+    bulle = QLabel("ⓘ")
+    bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+    bulle.setCursor(Qt.WhatsThisCursor)
+    bulle.setToolTip(infobulle(texte))
+    return bulle
 
 
 class TracesView(QWidget):
@@ -53,9 +77,17 @@ class TracesView(QWidget):
     ce qu'aucun test ne peut vérifier. Le prix est que les pointes des 4 % extrêmes sont écrêtées ;
     c'est le bon prix ici, où l'on cherche « cette voie est-elle plus agitée que les autres », pas
     l'amplitude exacte d'un clignement.
+
+    **Un filtre d'AFFICHAGE au choix** (2026-09-25, relevé au casque : « certaines voies ont une
+    dérive en y »). Aucun, plusieurs passe-haut, quelques passe-bande, plus un coupe-bande
+    secteur, comme dans la Unicorn Suite ; le calcul vit dans `core/filtres_affichage.py`. Il ne
+    filtre que la COPIE qu'on dessine : le tampon du moteur reste brut, parce que le Motor
+    Imagery s'entraîne dessus. On demande `AMORCE` secondes de plus que ce qu'on montre, pour que
+    le démarrage du filtre tombe hors de l'écran.
     """
 
-    SECONDES = 4.0
+    SECONDES = TRACES_AFFICHAGE_S
+    AMORCE = TRACES_AMORCE_S
     #: Graduations rondes. L'écart se pose sur l'une d'elles pour que l'étiquette reste lisible et
     #: que l'échelle ne se remette pas à un chiffre différent à chaque rafraîchissement.
     GRADUATIONS_UV = (20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
@@ -66,8 +98,12 @@ class TracesView(QWidget):
         import pyqtgraph as pg
 
         self.source = None
+        self.fs = FS_UNICORN
         self.ch_names = list(ch_names)
         self.ecart = self.ECART_DEPART_UV
+        self.filtre = filtres_affichage.FILTRE_DEFAUT
+        self.coupe_bande = False
+        self._recaler = False
         self.plot = pg.PlotWidget()
         self.plot.setMenuEnabled(False)
         self.plot.setMouseEnabled(x=False, y=False)
@@ -80,13 +116,55 @@ class TracesView(QWidget):
         self.echelle.setWordWrap(True)
         self.echelle.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self._dis_echelle(())
+
+        # Le choix du filtre, au-dessus du tracé. La liste ignore la molette, comme tous les
+        # champs de la console : on fait défiler la page sans changer de filtre en passant.
+        self.choix_filtre = ListeSansMolette()
+        for filtre in filtres_affichage.FILTRES:
+            self.choix_filtre.addItem(nom_filtre(filtre))
+        self.choix_filtre.setCurrentIndex(filtres_affichage.FILTRES.index(self.filtre))
+        self.choix_filtre.currentIndexChanged.connect(self._choisit_filtre)
+        secteur = nombre(filtres_affichage.SECTEUR_HZ)
+        self.case_secteur = QCheckBox(tr("pages.traces.secteur", hz=secteur))
+        self.case_secteur.toggled.connect(self._choisit_secteur)
+        rang = QHBoxLayout()
+        rang.setSpacing(4)
+        rang.addWidget(QLabel(tr("pages.traces.filtre")))
+        rang.addWidget(_bulle(tr("pages.traces.filtre_aide")))
+        rang.addWidget(self.choix_filtre)
+        rang.addSpacing(16)
+        rang.addWidget(self.case_secteur)
+        rang.addWidget(_bulle(tr("pages.traces.secteur_aide", hz=secteur)))
+        rang.addStretch(1)
+
         layout = QVBoxLayout(self)
+        layout.addLayout(rang)
         layout.addWidget(self.plot, 1)
         layout.addWidget(self.echelle)
 
-    def set_source(self, source):
-        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`."""
+    def set_source(self, source, fs=None):
+        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`, et la
+        fréquence d'échantillonnage de son casque (celle de l'Unicorn si on ne la donne pas)."""
         self.source = source
+        if fs:
+            self.fs = float(fs)
+
+    def _choisit_filtre(self, index):
+        self.filtre = filtres_affichage.FILTRES[index]
+        self._change()
+
+    def _choisit_secteur(self, coche):
+        self.coupe_bande = bool(coche)
+        self._change()
+
+    def _change(self):
+        """Un autre filtre change l'amplitude : l'échelle se recale TOUT DE SUITE, même d'une
+        seule graduation. La zone morte sert à ne pas faire clignoter l'échelle sur un signal qui
+        ondule, pas à ignorer un choix qu'on vient de faire : sans ce recalage, cocher le
+        coupe-bande laissait des tracés à mi-couloir, au lieu de les montrer plus grands."""
+        self._recaler = True
+        self._dis_echelle(())
+        self.update_from(None)
 
     def _pose_axe(self):
         """Replace les étiquettes de voies et fige la vue sur les couloirs de l'écart courant.
@@ -108,8 +186,12 @@ class TracesView(QWidget):
         cacher, c'est le signal qu'on vient chercher ici — celle-là est bien plus agitée que les
         sept autres, donc son contact est suspect.
         """
-        texte = tr("pages.traces.echelle", ecart=f"{self.ecart:g}",
-                   secondes=f"{self.SECONDES:g}")
+        filtre = nom_filtre(self.filtre)
+        if self.coupe_bande:
+            filtre = tr("pages.traces.avec_secteur", filtre=filtre,
+                        hz=nombre(filtres_affichage.SECTEUR_HZ))
+        texte = tr("pages.traces.echelle", filtre=filtre, ecart=f"{self.ecart:g}",
+                   secondes=nombre(self.SECONDES))
         if rognees:
             texte += "  ·  " + tr("pages.traces.rognees", voies=", ".join(rognees))
         self.echelle.setText(texte)
@@ -141,19 +223,24 @@ class TracesView(QWidget):
     def update_from(self, _mode_state):
         if self.source is None:
             return
-        bloc = self.source(self.SECONDES)
+        bloc = self.source(self.SECONDES + self.AMORCE)
         if bloc is None or len(bloc) < 2:
             return
+        # Filtré sur TOUT le bloc, amorce comprise, puis coupé : le démarrage du filtre reste
+        # hors de l'écran. `filtrer` rend une copie — le bloc n'est déjà lui-même qu'une copie.
+        bloc = filtres_affichage.filtrer(bloc, self.fs, self.filtre, self.coupe_bande)
+        bloc = bloc[-int(round(self.SECONDES * self.fs)):]
         etendues = self._etendues(bloc)
         utile = self._echelle_utile(etendues)
         # On MONTE dès que c'est trop serré, on ne DESCEND qu'à deux graduations d'écart. Les
         # graduations sont espacées d'un facteur 2 à 2,5 : sans cette zone morte, une amplitude
         # qui oscille autour d'une borne ferait clignoter l'échelle dix fois par seconde.
-        if utile > self.ecart or utile * 4.0 <= self.ecart:
+        if self._recaler or utile > self.ecart or utile * 4.0 <= self.ecart:
             self.ecart = utile
+            self._recaler = False
             self._pose_axe()
 
-        t = np.arange(len(bloc)) / max(len(bloc) / self.SECONDES, 1e-9)
+        t = np.arange(len(bloc)) / self.fs
         demi = self.ecart / 2.0
         rognees = [self.ch_names[i] for i, e in enumerate(etendues)
                    if i < len(self.ch_names) and e > self.ecart]

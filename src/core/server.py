@@ -87,7 +87,8 @@ from core.acquisition import UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
                     DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
                     MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S,
-                    SEANCES_DIR, TOLERANCE_DIVISEUR, barres_liaison, chemin_libre,
+                    SEANCES_DIR, TOLERANCE_DIVISEUR, TRACES_AFFICHAGE_S, TRACES_AMORCE_S,
+                    barres_liaison, chemin_libre,
                     choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
@@ -477,6 +478,8 @@ class EngineServer:
                         int(round((epoque_marqueur + MARKER_LATE_S) * self.acq.fs)),
                         int(round(epoque_mesure * self.acq.fs)),
                         int(round(etape_mesure * self.acq.fs)),
+                        # Les tracés du Brut : ce qu'ils affichent, plus l'amorce de leur filtre.
+                        int(round((TRACES_AFFICHAGE_S + TRACES_AMORCE_S) * self.acq.fs)),
                         self.acq.window_n) + self.acq.margin_n
 
         # Les DERNIERS réglages connus de chaque mode, qu'il tourne ou non. C'est ce qui permet de

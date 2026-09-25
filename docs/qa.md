@@ -300,10 +300,11 @@ python src/core/modes/p300_test.py
 python src/core/modes/cvep_test.py
 python src/core/modes/errp_test.py
 python src/core/acquisition.py --synthetic
+python src/core/filtres_affichage.py
 python src/core/i18n.py
 ```
 
-✅ Quatorze sorties à 0.
+✅ Quinze sorties à 0.
 
 ❌ Régression : n'importe lequel en rouge. Ceux dont l'échec compte le plus : `modes/p300.py` et
 `modes/cvep.py` (leur panne caractéristique fait décoder du bruit **avec une confiance élevée**),
@@ -376,11 +377,18 @@ d'acquisition, il n'y a rien à démarrer.
 restent séparés** quelle que soit l'amplitude.
 ✅ La ligne grise sous le graphe annonce l'écart **en vigueur** (« un couloir = … µV ») et **ce
 chiffre change** quand l'amplitude du signal change.
+✅ Au-dessus du graphe : **« Filtre d'affichage ⓘ »** sur **« Passe-haut 1 Hz »**, et une case
+**« Coupe-bande 50 Hz ⓘ »** décochée. La ligne grise **commence par le filtre en vigueur**
+(« Passe-haut 1 Hz · un couloir = … »).
+✅ La liste propose : Aucun (signal brut) · Passe-haut 0,1 / 0,5 / 1 / 2 Hz · Passe-bande 1–30 /
+1–40 / 5–40 Hz. Choisir un autre filtre : la ligne grise le nomme **aussitôt**. Cocher la case :
+elle ajoute « + coupe-bande 50 Hz ».
+✅ La molette sur la liste fait défiler la page, **pas** le filtre.
 ✅ « ← Modes » revient à la grille.
 
 ❌ Régression : les tracés se chevauchent ; l'écart annoncé ne bouge jamais ; une voie hors échelle
 est rognée **sans que la ligne grise la nomme** ; un bouton « Appliquer » qui n'aurait rien à
-appliquer.
+appliquer ; un filtre choisi que la ligne grise ne nomme pas ; la molette qui change le filtre.
 
 → recette 1.3
 
@@ -923,6 +931,26 @@ jusqu'à 5 %, puis 1), et dès 1 % un message orange « liaison dégradée… ra
 radio).
 
 ❌ Échec : une pile ou des barres sur le board de test ; des barres pleines pendant une coupure.
+
+### ☐ 2.11 — Les filtres d'affichage du Brut, sur un vrai signal
+
+Console ouverte sur le casque, depuis au moins une minute. Tuile **Brut** → « Ouvrir ».
+
+✅ Sur **« Aucun (signal brut) »** : certaines voies **dérivent** en y (relevé le 2026-09-25) — c'est
+le point de départ, pas un défaut.
+✅ Sur **« Passe-haut 1 Hz »** (le défaut) : plus aucune dérive, les huit tracés sont centrés dans
+leur couloir, et l'écart (« un couloir = … µV ») baisse nettement.
+✅ Cligne des yeux : une **bosse sur Fz**, suivie d'un petit rebond (le prix d'un passe-haut, dit
+dans la bulle ⓘ). Elle est plus haute à 0,1 Hz qu'à 2 Hz.
+✅ Coupe-bande **décoché** : si une voie est nettement plus « épaisse » que les autres, c'est du
+50 Hz — un contact à reprendre. Coche-le : l'épaisseur disparaît.
+✅ Pendant qu'on change de filtre, **« Ce que voit ton application »** montre toujours le même flux
+brut : le filtre ne touche **que** le tracé.
+**Compare avec la Unicorn Suite** si tu l'as sous la main : la liste est une proposition, faite de
+mémoire. Note ce qui manque.
+
+❌ Échec : une dérive qui reste à 0,5, 1 ou 2 Hz ; des tracés qui **tremblent** à chaque
+rafraîchissement ; le flux publié qui change avec le filtre.
 
 ---
 
