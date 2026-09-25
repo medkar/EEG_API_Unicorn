@@ -69,9 +69,11 @@ def casques_appaires():
                                               ÉTEINTS : il lit la liste de Windows, il ne cherche
                                               rien. C'est l'appel de BrainFlow pour ouvrir le casque.
       `UNICORN_GetAvailableDevices(…, FALSE)` 6,4 s de recherche Bluetooth -> RIEN, casque éteint
-                                              comme ALLUMÉ : un appareil déjà appairé n'est pas en
-                                              mode visible, on le joint par son adresse sans le
-                                              voir passer.
+                                              comme ALLUMÉ. Non parce qu'il serait invisible : cette
+                                              recherche ne rend QUE les casques NON appairés — c'est
+                                              l'en-tête Windows de g.tec (`onlyPaired` : « only paired
+                                              devices or only unpaired devices »). Elle sert à trouver
+                                              un casque NEUF, pas à dire qu'un casque connu est là.
 
     ⚠️ Aucune recherche ne dit donc qu'un casque appairé est ALLUMÉ : seule une tentative
     d'ouverture le dit (« OK » sur l'écran de départ, qui revient avec la raison en cas d'échec).

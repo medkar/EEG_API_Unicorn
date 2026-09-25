@@ -866,8 +866,9 @@ sert à vérifier qu'il *fonctionne*, pas qu'il *dit vrai*.
 
 ⚠️ **Mesuré le 2026-09-25 : aucune recherche ne dit qu'un casque est allumé.** La bibliothèque du
 casque liste les casques APPAIRÉS à ce PC, instantanément, allumés ou non ; sa recherche Bluetooth
-(6,4 s) ne trouve RIEN, casque éteint comme allumé — un appareil déjà appairé n'est pas en mode
-visible. Seule l'ouverture (« OK ») dit s'il répond. L'écran ne promet donc rien d'autre.
+(6,4 s) ne rend que les casques NON appairés (en-tête Windows de g.tec) — elle trouve un casque
+neuf, jamais le tien une fois appairé. Seule l'ouverture (« OK ») dit s'il répond. L'écran ne
+promet donc rien d'autre.
 
 ✅ À l'ouverture : « 1 casque(s) appairé(s) à ce PC : UN-…. Allume le tien, puis OK : la console te
 dira s'il répond. » — en **gris**, jamais « trouvé », jamais vert. Le dernier casque utilisé est en
