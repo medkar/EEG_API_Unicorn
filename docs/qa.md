@@ -897,7 +897,11 @@ relancé la console**.
 casque s'est coupée pendant la séance… ».
 
 ❌ Régression : l'écran se fige et il faut relancer la console (le comportement d'avant le
-2026-09-25) ; ou le flux décodé continue d'annoncer une cible pendant la coupure.
+2026-09-25) ; ou le flux décodé continue d'annoncer une cible pendant la coupure ; ou les essais de
+reconnexion s'enchaînent avec `ANOTHER_BOARD_IS_CREATED_ERROR:16` (l'ancienne session n'a pas été
+libérée — le défaut corrigé le 2026-09-25).
+✅ **Joué au casque le 2026-09-25 : la liaison se rétablit seule.** Le premier passage avait échoué
+(81 essais refusés), le correctif `6f61db4` l'a réglé.
 ⚠️ Après la reconnexion, **regarde C3 et Cz** au bandeau : la réouverture redémarre
 l'amplificateur, et elles saturaient à chaque réouverture. Note combien de temps.
 
