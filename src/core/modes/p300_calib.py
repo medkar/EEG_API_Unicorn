@@ -9,6 +9,13 @@ avant celui-ci). Elle ne fournit que les trois choses que le socle réclame :
   3. `_entrainer(enregistre, fs)` — xDAWN + Riemann, la sélection en leave-one-round-out, et une
      sauvegarde HORODATÉE.
 
+⚠️ **LE FILTRE SE RÈGLE ICI, ET PAS AU DÉCODAGE** (2026-09-30). La bande (`bande_bas`/`bande_haut`,
+les réglages de « Entraîner ») et le secteur du poste (`engine.secteur_hz`) partent dans le modèle,
+qui décodera toujours avec. Les changer au décodage ferait décoder un modèle sur un autre filtre que
+celui qu'il a appris, sans la moindre erreur. Et ils partent aussi dans CHAQUE modèle de la
+validation (`selection_loro`) : un modèle de CV filtré autrement que le modèle final mesurerait
+autre chose que lui — le chiffre affiché serait celui d'un modèle qu'on n'enregistre pas.
+
 ⚠️ **Ce qui change par rapport à l'ancien chemin**, et c'est le point du chantier : les époques
 d'entraînement étaient découpées par `research/p300_calibrate.py` (l'horloge de l'appli pygame) et
 celles du décodage par le moteur (marqueurs LSL, `time_correction`). Deux chemins, aucun test pour
@@ -56,13 +63,14 @@ from collections import namedtuple
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (CALIB_CANDIDAT_PREFIXE, P300_CAL_ROUNDS,  # noqa: E402
+from core.config import (CALIB_CANDIDAT_PREFIXE, P300_BAND, P300_CAL_ROUNDS,  # noqa: E402
                          P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS,
                          P300_N_TARGETS, P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS,
-                         use_utf8_console)
+                         SECTEUR_HZ, use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
+from core.modes.contract import bande_de  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 from core.p300_decoder import NONTARGET, TARGET, P300Model  # noqa: E402
 # ⚠️ `core.modes.p300` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
@@ -182,7 +190,7 @@ def chemins_libres(dossier, n_manches, prefixe=""):
         maintenant += 1.0
 
 
-def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s):
+def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s, band, secteur_hz):
     """Justesse de SÉLECTION en leave-one-round-out : pour chaque manche tenue à l'écart, le
     modèle appris sur les autres retrouve-t-il la cible désignée ? Rend `(ok, total)`.
 
@@ -191,6 +199,11 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s):
 
     Montée telle quelle depuis `research/p300_calibrate.py` (elle y était déjà écrite et validée
     au casque) : `core` en a besoin maintenant que c'est le moteur qui entraîne.
+
+    ⚠️ `band` et `secteur_hz` sont EXIGÉS, sans défaut : ce sont ceux du modèle FINAL (`entrainer`
+    les relit sur lui). Un modèle de validation construit avec les défauts de `P300Model`
+    mesurerait un AUTRE filtre que celui qu'on enregistre — le chiffre affiché serait celui d'un
+    modèle que personne ne garde, et rien ne le signalerait tant que la bande reste par défaut.
     """
     epochs, flashed, groups = np.asarray(epochs), np.asarray(flashed), np.asarray(groups)
     y = np.array([TARGET if flashed[i] == cues[groups[i]] else NONTARGET
@@ -200,7 +213,8 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s):
         tr = groups != r
         if len(set(y[tr].tolist())) < 2:
             continue
-        m = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs[tr], y[tr], compute_cv=False)
+        m = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s,
+                      secteur_hz=secteur_hz).fit(epochs[tr], y[tr], compute_cv=False)
         te = np.where(groups == r)[0]
         by = {}
         for i in te:
@@ -212,7 +226,7 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s):
 
 
 def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_npz=None,
-              evaluer=True, *, pre_s, post_s):
+              evaluer=True, *, pre_s, post_s, band=P300_BAND, secteur_hz=None):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
 
@@ -236,6 +250,14 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
     `P300Runtime.pre_s` — et le jour où quelqu'un y touche, le mode refuserait le modèle qu'on
     vient tout juste de calibrer, en accusant le modèle. L'appelant qui a découpé les époques est
     le seul à savoir avec quoi.
+
+    `band` / `secteur_hz` : le FILTRE que le modèle apprend, et avec lequel il décodera toujours
+    (2026-09-30). La calibration du moteur passe la bande réglée dans « Entraîner » et le secteur
+    du poste. Les défauts sont ceux des écrans archivés (`archive/p300_calibrate.py`), qui
+    entraînent comme avant ce réglage : la bande de toujours, sans coupe-bande. Ils ne sont pas
+    un piège comme le serait un défaut de géométrie : le modèle PORTE son filtre et décode avec,
+    il ne peut donc pas être appliqué sur un autre — au pire, le réglage de l'étudiant est ignoré,
+    et c'est ce que l'autotest de ce fichier fait rougir.
     """
     epochs = np.asarray(epochs, dtype=float)
     labels = np.asarray(labels, dtype=int)
@@ -248,19 +270,31 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
                             classes=len(set(labels.tolist())), min_epoques=MIN_EPOQUES,
                             min_manches=MIN_MANCHES))
 
-    modele = P300Model(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs, labels, groups=groups,
-                                                              compute_cv=evaluer)
+    band = (float(band[0]), float(band[1]))
+    secteur_hz = float(secteur_hz) if secteur_hz else None
+    modele = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s,
+                       secteur_hz=secteur_hz).fit(epochs, labels, groups=groups,
+                                                  compute_cv=evaluer)
+    # Le filtre de la validation est RELU sur le modèle final, pas repassé à côté : les modèles
+    # du leave-one-round-out filtrent donc comme celui qu'on enregistre, par construction.
     sel_ok, sel_tot = (selection_loro(epochs, flashed, groups, cues, fs,
-                                      pre_s=pre_s, post_s=post_s)
+                                      pre_s=pre_s, post_s=post_s,
+                                      band=modele.band, secteur_hz=modele.secteur_hz)
                        if evaluer else (0, 0))
     selection = (sel_ok / sel_tot) if sel_tot else None
 
     _os.makedirs(_os.path.dirname(chemin_modele) or ".", exist_ok=True)
     if chemin_npz:
         # `pre_s`/`post_s` sont ARCHIVÉS avec les époques : sans eux, un ré-entraînement futur ne
-        # saurait pas où tombe l'onset dans les échantillons qu'il relit.
+        # saurait pas où tombe l'onset dans les échantillons qu'il relit. La bande et le secteur
+        # aussi : ce sont les époques BRUTES, et un ré-entraînement qui voudrait refaire CE
+        # modèle doit savoir avec quel filtre. `secteur_hz = 0` veut dire « pas de coupe-bande »
+        # (la convention de `core/filtrage.py`, qui ne coupe que si le secteur est vrai) : un
+        # None ferait un tableau d'objets, illisible sans `allow_pickle`.
         np.savez(chemin_npz, epochs=epochs, labels=labels, flashed=flashed, groups=groups,
-                 cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s)
+                 cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s,
+                 band=np.asarray(modele.band, dtype=float),
+                 secteur_hz=float(modele.secteur_hz or 0.0))
     modele.save(chemin_modele)
 
     auc = modele.cv_auc_
@@ -298,16 +332,17 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
 
 def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True,
-                   *, pre_s, post_s, prefixe=""):
+                   *, pre_s, post_s, prefixe="", band=P300_BAND, secteur_hz=None):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés
     et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
 
-    `prefixe` passe tel quel à `chemins_libres` — voir sa docstring.
+    `prefixe` passe tel quel à `chemins_libres` — voir sa docstring. `band`/`secteur_hz` passent
+    tels quels à `entrainer` — voir la sienne.
     """
     chemin_modele, chemin_npz = chemins_libres(dossier, len(cues), prefixe=prefixe)
     return entrainer(epochs, labels, flashed, groups, cues, fs,
                      chemin_modele=chemin_modele, chemin_npz=chemin_npz, evaluer=evaluer,
-                     pre_s=pre_s, post_s=post_s)
+                     pre_s=pre_s, post_s=post_s, band=band, secteur_hz=secteur_hz)
 
 
 class P300Calibration(MarkerCalibrationRuntime):
@@ -447,9 +482,14 @@ class P300Calibration(MarkerCalibrationRuntime):
         # compare à la sienne avant d'accepter de décoder (`p300.py::_desaccord_geometrie`).
         # `CALIB_CANDIDAT_PREFIXE` : ce qui sort d'ici est un CANDIDAT, invisible à
         # `p300_model*.joblib` tant que personne ne l'a retenu (cf. `core/config.py`).
+        # La bande : celle que l'étudiant a réglée dans « Entraîner » (validée par le contrat du
+        # `Calib`, dans ses bornes). Le secteur : celui du POSTE, que le moteur porte — un moteur
+        # qui ne le dit pas (un autotest, un moteur d'avant ce réglage) prend celui par défaut.
         return entrainer_dans(self.dossier_ou_lever(), epochs, labels, flashed, groups, cues, fs,
                               pre_s=self.pre_s, post_s=self.post_s,
-                              prefixe=CALIB_CANDIDAT_PREFIXE)
+                              prefixe=CALIB_CANDIDAT_PREFIXE,
+                              band=bande_de(self.params, P300_BAND),
+                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -716,6 +756,81 @@ def _selftest():
                                   and decodeur.model.fs == _FausseAcq.fs),
             f"...parce qu'il PORTE la géométrie avec laquelle ses époques ont été découpées, pas "
             f"un défaut de configuration ({getattr(decodeur, 'model', None)})")
+
+        # --- 6ter. Le FILTRE : la bande réglée et le secteur du poste, jusque dans la CV -------
+        # Le modèle PORTE son filtre et décode avec (`P300Model._prep`) : un réglage ignoré ne
+        # lève donc rien, il entraîne simplement sur la bande de toujours. Et un modèle de
+        # validation filtré autrement que le modèle final mesurerait AUTRE CHOSE que lui — le
+        # chiffre affiché serait celui d'un modèle que personne n'enregistre, et il resterait
+        # plausible. On espionne donc CHAQUE filtrage fait pendant l'entraînement, pas seulement
+        # le modèle écrit : c'est le seul endroit où un modèle de CV mal construit se voit.
+        from core import p300_decoder as _p3dec
+        from core.modes.contract import validate
+
+        defauts, _raison = validate(calib, {})
+        chk(defauts is not None
+            and (defauts.get("bande_bas"), defauts.get("bande_haut")) == tuple(P300_BAND),
+            f"« Entraîner » règle une bande, et par défaut c'est celle de toujours ({defauts})")
+        refus_b, raison_b = validate(calib, {"bande_bas": 8.0, "bande_haut": 30.0})
+        chk(refus_b is None and tr("moteur.bande.bas") in (raison_b or ""),
+            f"une bande qui retirerait le P300 (8-30 Hz, celle du Motor Imagery) est REFUSÉE à "
+            f"l'entrée, en nommant la coupure fautive ({raison_b})")
+        nominal = P300Model.load(res["modele"])
+        chk(tuple(nominal.band) == tuple(P300_BAND) and nominal.secteur_hz == SECTEUR_HZ,
+            f"sans réglage, le modèle apprend la bande de toujours, et le secteur PAR DÉFAUT du "
+            f"poste quand le moteur ne dit pas le sien — jamais « pas de coupe-bande » "
+            f"({nominal.band}, {nominal.secteur_hz})")
+
+        BANDE, SECTEUR = (0.5, 20.0), 60.0
+        reglages, raison_r = validate(calib, {"bande_bas": BANDE[0], "bande_haut": BANDE[1]})
+        chk(reglages is not None, f"une bande 0,5-20 Hz est dans les bornes ({raison_r})")
+        moteur_f = _MoteurFactice(eeg, ts)
+        moteur_f.secteur_hz = SECTEUR              # un poste aux Amériques
+        filtrages = []
+        vrai_bandpass = _p3dec.bandpass
+
+        def _bandpass_espion(x, fs, band=P300_BAND, order=4, secteur_hz=None):
+            filtrages.append((tuple(float(b) for b in band), secteur_hz))
+            return vrai_bandpass(x, fs, band, order=order, secteur_hz=secteur_hz)
+
+        _p3dec.bandpass = _bandpass_espion
+        try:
+            # Un SOUS-dossier : la section 7 compte les modèles du dossier principal.
+            rt_f = P300Calibration(_p300.SPEC, reglages or {}, moteur_f,
+                                   dossier=_os.path.join(dossier, "filtre"))
+            joue(rt_f, moteur_f, plan)
+        finally:
+            _p3dec.bandpass = vrai_bandpass
+        res_f = rt_f.resultat or {}
+        chk(rt_f.phase == "fini" and res_f.get("selection_total") == ROUNDS,
+            f"la séance filtrée 0,5-20 Hz à 60 Hz aboutit, sélection comprise ({rt_f.phase}, "
+            f"{rt_f.probleme!r})")
+        autres = sorted(set(filtrages) - {(BANDE, SECTEUR)})
+        chk(len(filtrages) > 1 + ROUNDS and not autres,
+            f"CHAQUE filtrage de l'entraînement — modèle final, AUC par manche, et chacun des "
+            f"{ROUNDS} modèles du leave-one-round-out — porte la bande réglée et le secteur du "
+            f"moteur ({len(filtrages)} filtrages ; autres : {autres or 'aucun'})")
+        modele_f = P300Model.load(res_f["modele"]) if res_f.get("modele") else None
+        chk(modele_f is not None and tuple(modele_f.band) == BANDE
+            and modele_f.secteur_hz == SECTEUR,
+            f"...et le modèle ENREGISTRÉ les porte : c'est avec eux qu'il décodera "
+            f"({getattr(modele_f, 'band', None)}, {getattr(modele_f, 'secteur_hz', None)})")
+        try:
+            accepte_f = _p300.P300Runtime(_p300.SPEC, {"model": res_f["modele"], "stream_in": "x"},
+                                          _MoteurDuMode())
+        except (KeyError, ValueError):
+            accepte_f = None
+        chk(accepte_f is not None and tuple(accepte_f.model.band) == BANDE,
+            "...et le mode l'ACCEPTE : une bande réglée ne fait pas refuser le modèle au démarrage")
+        try:
+            with np.load(res_f["enregistrement"], allow_pickle=False) as archive_f:
+                archive_lu = (tuple(float(b) for b in archive_f["band"]),
+                              float(archive_f["secteur_hz"]))
+        except (KeyError, OSError, TypeError, ValueError) as e:
+            archive_lu = f"{type(e).__name__}: {e}"
+        chk(archive_lu == (BANDE, SECTEUR),
+            f"les époques BRUTES archivées disent avec quel filtre elles ont appris : un "
+            f"ré-entraînement futur doit pouvoir refaire CE modèle ({archive_lu})")
 
         # --- 7. Une séance trop pauvre est REFUSÉE, en disant quoi faire -----------------------
         plan_court, eeg_c, ts_c, _cues_c = seance(rounds=1, reps=1, graine=1)

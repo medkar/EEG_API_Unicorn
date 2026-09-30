@@ -61,8 +61,8 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import (MARKER_STREAM_DEFAULT, P300_EPOCH_S, P300_MIN_REPS,  # noqa: E402
-                         P300_N_TARGETS, P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S,
+from core.config import (MARKER_STREAM_DEFAULT, P300_BAND, P300_EPOCH_S,  # noqa: E402
+                         P300_MIN_REPS, P300_N_TARGETS, P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S,
                          P300_MIDLINE, P300_SELECT_MARGIN, SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
@@ -72,7 +72,7 @@ from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
-                                  validate)
+                                  params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `p300_calib` ne nous importe pas en retour (il lit
 # `P300Runtime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
@@ -560,6 +560,12 @@ SPEC = ModeSpec(
     calibration=Calib(kind="fenetre", stimulus_id="p300",
                       label=tr("calib.p300.label"),
                       briefing=BRIEFING_CALIB,
+                      # La BANDE se règle à l'ENTRAÎNEMENT, jamais au décodage : le modèle
+                      # l'enregistre et décode avec (`p300_calib._entrainer`). Les bornes gardent
+                      # toujours 2-8 Hz, le cœur du P300 : une bande qui le retirerait décoderait du
+                      # bruit avec des scores plausibles, sans lever quoi que ce soit.
+                      params=params_bande(P300_BAND, (0.1, 2.0), (8.0, 40.0),
+                                          tr("calib.p300.param.bande.aide")),
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrivait à

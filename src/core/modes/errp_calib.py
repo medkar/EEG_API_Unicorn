@@ -8,6 +8,13 @@ avant celui-ci), après `p300_calib.py`. Elle ne fournit que les trois choses qu
   3. `_entrainer(enregistre, fs)` — xDAWN + Riemann, l'AUC hors-pli groupée par bloc, le test de
      permutation, et une sauvegarde HORODATÉE.
 
+⚠️ **LE FILTRE SE RÈGLE ICI, ET PAS AU DÉCODAGE** (2026-09-30), comme chez le P300 : la bande de
+« Entraîner » et le secteur du poste partent dans le modèle, qui décode toujours avec. Toute la
+validation — le balayage de nfilter, l'AUC hors-pli, la permutation, la baseline sLDA — travaille
+sur les époques filtrées UNE fois par ce même modèle (`ErrPModel.fit` : `self.core._prep`) : elle
+mesure donc le filtre qu'on enregistre, par construction. L'autotest le vérifie filtrage par
+filtrage.
+
 ⚠️⚠️ **CE MODE N'A PAS DE `cue`, ET C'EST LA CHOSE À COMPRENDRE EN PREMIER.** Chez le P300 et le
 c-VEP, un marqueur ANNONCE la cible puis d'autres délimitent les époques : la vérité-terrain est
 donnée d'avance et vaut pour toute la manche. Ici l'étiquette voyage sur l'événement `feedback`
@@ -57,15 +64,17 @@ import time as _time
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_CAL_BLOCKS,  # noqa: E402
+from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_BAND, ERRP_CAL_BLOCKS,  # noqa: E402
                          ERRP_CAL_TRIALS, ERRP_EPOCH_S, ERRP_ERROR_RATE, ERRP_FEEDBACK_S,
-                         ERRP_MAX_RUN_STEPS, ERRP_PERM_N, ERRP_TRACK_CELLS, use_utf8_console)
+                         ERRP_MAX_RUN_STEPS, ERRP_PERM_N, ERRP_TRACK_CELLS, SECTEUR_HZ,
+                         use_utf8_console)
 from core.errp_decoder import CORRECT, ERROR, ErrPModel  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, lignes, non_mesure, pct  # noqa: E402
+from core.modes.contract import bande_de  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # ⚠️ `core.modes.errp` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
 # `ErrPCalibration.runtime_cls_du_mode`, une fois le programme lancé.
@@ -228,7 +237,7 @@ def groupes_contigus(n, blocs=ERRP_CAL_BLOCKS):
 
 
 def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=None,
-              n_perm=None, blocs=ERRP_CAL_BLOCKS):
+              n_perm=None, blocs=ERRP_CAL_BLOCKS, band=ERRP_BAND, secteur_hz=None):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
 
@@ -261,6 +270,13 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
     `n_perm` : None -> `ERRP_PERM_N` (100), la valeur du protocole. 0 saute la permutation, donc
     rend `perm_p = None` — un autotest de câblage peut le vouloir ; une séance réelle, jamais : sans
     p-value, rien ne distingue une AUC de 0,80 sur 20 essais d'un tirage chanceux.
+
+    `band` / `secteur_hz` : le FILTRE que le modèle apprend, et avec lequel il décodera toujours
+    (2026-09-30). La calibration du moteur passe la bande réglée dans « Entraîner » et le secteur
+    du poste. Les défauts sont ceux de l'écran archivé (`archive/errp_calibrate.py`), qui entraîne
+    comme avant ce réglage : la bande de toujours, sans coupe-bande. Contrairement à la géométrie,
+    un défaut ici ne fabrique pas de modèle faux : le modèle PORTE son filtre et décode avec — au
+    pire, le réglage de l'étudiant est ignoré, et c'est ce que l'autotest de ce fichier fait rougir.
     """
     epochs = np.asarray(epochs, dtype=float)
     labels = np.asarray(labels, dtype=int)
@@ -275,15 +291,22 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
 
     groupes = np.asarray(groupes_contigus(len(labels), blocs), dtype=int)
     n_perm = ERRP_PERM_N if n_perm is None else int(n_perm)
-    modele = ErrPModel(fs=fs, pre_s=pre_s, post_s=post_s).fit(epochs, labels, groups=groupes,
-                                                              n_perm=n_perm)
+    band = (float(band[0]), float(band[1]))
+    secteur_hz = float(secteur_hz) if secteur_hz else None
+    modele = ErrPModel(fs=fs, band=band, pre_s=pre_s, post_s=post_s,
+                       secteur_hz=secteur_hz).fit(epochs, labels, groups=groupes, n_perm=n_perm)
 
     _os.makedirs(_os.path.dirname(chemin_modele) or ".", exist_ok=True)
     if chemin_npz:
         # `pre_s`/`post_s` sont ARCHIVÉS avec les époques : sans eux, un ré-entraînement futur ne
-        # saurait pas où tombe l'onset du feedback dans les échantillons qu'il relit.
+        # saurait pas où tombe l'onset du feedback dans les échantillons qu'il relit. La bande et
+        # le secteur aussi, pour refaire CE modèle depuis ces époques brutes. `secteur_hz = 0` veut
+        # dire « pas de coupe-bande » (la convention de `core/filtrage.py`) : un None ferait un
+        # tableau d'objets, illisible sans `allow_pickle`.
         np.savez(chemin_npz, epochs=epochs, labels=labels, groups=groupes, fs=fs,
-                 pre_s=modele.pre_s, post_s=modele.post_s)
+                 pre_s=modele.pre_s, post_s=modele.post_s,
+                 band=np.asarray(modele.band, dtype=float),
+                 secteur_hz=float(modele.secteur_hz or 0.0))
     modele.save(chemin_modele)
 
     mesures = modele.metrics_ or {"tpr": 0.0, "tnr": 0.0, "bal_acc": 0.0}
@@ -321,16 +344,18 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
 
 
 def entrainer_dans(dossier, epochs, labels, fs, *, pre_s, post_s, n_perm=None,
-                   blocs=ERRP_CAL_BLOCKS, prefixe=""):
+                   blocs=ERRP_CAL_BLOCKS, prefixe="", band=ERRP_BAND, secteur_hz=None):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés et
     garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
 
     `pre_s`/`post_s` sont EXIGÉS ici aussi, et pour la même raison — cf. `entrainer`. Un défaut
     posé sur ce passe-plat suffirait à rouvrir le trou qu'on vient de fermer un cran plus bas.
+    `band`/`secteur_hz` passent tels quels à `entrainer` — voir la sienne.
     """
     chemin_modele, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe)
     return entrainer(epochs, labels, fs, chemin_modele=chemin_modele, chemin_npz=chemin_npz,
-                     pre_s=pre_s, post_s=post_s, n_perm=n_perm, blocs=blocs)
+                     pre_s=pre_s, post_s=post_s, n_perm=n_perm, blocs=blocs,
+                     band=band, secteur_hz=secteur_hz)
 
 
 class ErrPCalibration(MarkerCalibrationRuntime):
@@ -441,9 +466,14 @@ class ErrPCalibration(MarkerCalibrationRuntime):
         """
         epochs = [e for e, _lab in enregistre]
         labels = [ERROR if lab else CORRECT for _e, lab in enregistre]
+        # La bande : celle que l'étudiant a réglée dans « Entraîner » (validée par le contrat du
+        # `Calib`, dans ses bornes). Le secteur : celui du POSTE, que le moteur porte — un moteur
+        # qui ne le dit pas (un autotest, un moteur d'avant ce réglage) prend celui par défaut.
         return entrainer_dans(self.dossier_ou_lever(), epochs, labels, fs,
                               pre_s=self.pre_s, post_s=self.post_s, n_perm=self.n_perm,
-                              prefixe=CALIB_CANDIDAT_PREFIXE)
+                              prefixe=CALIB_CANDIDAT_PREFIXE,
+                              band=bande_de(self.params, ERRP_BAND),
+                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -756,6 +786,86 @@ def _selftest():
             f"omettre la géométrie est refusé AU POINT D'APPEL, en nommant les deux arguments "
             f"manquants — pas vingt lignes plus bas dans un produit par None "
             f"({refus_geo or 'AUCUN refus : un modèle a été écrit sans géométrie'})")
+
+        # --- 6ter. Le FILTRE : la bande réglée et le secteur du poste, validation comprise -----
+        # Le modèle PORTE son filtre et décode avec (`ErrPModel.core._prep`) : un réglage ignoré
+        # ne lève donc rien, il entraîne simplement sur la bande de toujours. Et une validation
+        # filtrée autrement que le modèle final mesurerait AUTRE CHOSE que lui. Ici, aucun modèle
+        # de validation n'est construit à côté : le balayage de nfilter, l'AUC hors-pli, la
+        # permutation et la sLDA travaillent sur les époques filtrées UNE fois par le modèle
+        # (`ErrPModel.fit`). On espionne quand même CHAQUE filtrage de l'entraînement : c'est ce
+        # qui rougira le jour où une validation refiltrera de son côté, avec les défauts.
+        from core import p300_decoder as _p3dec
+        from core.modes.contract import validate
+
+        defauts, _raison = validate(calib, {})
+        chk(defauts is not None
+            and (defauts.get("bande_bas"), defauts.get("bande_haut")) == tuple(ERRP_BAND),
+            f"« Entraîner » règle une bande, et par défaut c'est celle de toujours ({defauts})")
+        refus_b, raison_b = validate(calib, {"bande_bas": 8.0, "bande_haut": 30.0})
+        chk(refus_b is None and tr("moteur.bande.bas") in (raison_b or ""),
+            f"une bande qui retirerait l'ErrP (8-30 Hz, celle du Motor Imagery) est REFUSÉE à "
+            f"l'entrée, en nommant la coupure fautive ({raison_b})")
+        nominal = ErrPModel.load(res["modele"])
+        chk(tuple(nominal.core.band) == tuple(ERRP_BAND) and nominal.core.secteur_hz == SECTEUR_HZ
+            and nominal.secteur_hz == SECTEUR_HZ,
+            f"sans réglage, le modèle apprend la bande de toujours, et le secteur PAR DÉFAUT du "
+            f"poste quand le moteur ne dit pas le sien — jamais « pas de coupe-bande » "
+            f"({nominal.core.band}, {nominal.core.secteur_hz})")
+
+        BANDE, SECTEUR = (0.5, 20.0), 60.0
+        reglages, raison_r = validate(calib, {"bande_bas": BANDE[0], "bande_haut": BANDE[1]})
+        chk(reglages is not None, f"une bande 0,5-20 Hz est dans les bornes ({raison_r})")
+        moteur_f = _MoteurFactice(eeg, ts)
+        moteur_f.secteur_hz = SECTEUR              # un poste aux Amériques
+        filtrages = []
+        vrai_bandpass = _p3dec.bandpass
+
+        def _bandpass_espion(x, fs, band=ERRP_BAND, order=4, secteur_hz=None):
+            filtrages.append((tuple(float(b) for b in band), secteur_hz))
+            return vrai_bandpass(x, fs, band, order=order, secteur_hz=secteur_hz)
+
+        _p3dec.bandpass = _bandpass_espion
+        try:
+            # Un SOUS-dossier : la section 7 compte les modèles du dossier principal.
+            rt_f = _CalibRapide(_errp.SPEC, reglages or {}, moteur_f,
+                                dossier=_os.path.join(dossier, "filtre"))
+            joue(rt_f, moteur_f, plan)
+        finally:
+            _p3dec.bandpass = vrai_bandpass
+        res_f = rt_f.resultat or {}
+        chk(rt_f.phase == "fini" and res_f.get("auc") is not None
+            and res_f.get("perm_p") is not None,
+            f"la séance filtrée 0,5-20 Hz à 60 Hz aboutit, AUC hors-pli et permutation comprises "
+            f"({rt_f.phase}, {rt_f.probleme!r})")
+        autres = sorted(set(filtrages) - {(BANDE, SECTEUR)})
+        chk(filtrages and not autres,
+            f"CHAQUE filtrage de l'entraînement — modèle final, balayage de nfilter, permutation — "
+            f"porte la bande réglée et le secteur du moteur ({len(filtrages)} filtrage(s) ; "
+            f"autres : {autres or 'aucun'})")
+        modele_f = ErrPModel.load(res_f["modele"]) if res_f.get("modele") else None
+        chk(modele_f is not None and tuple(modele_f.core.band) == BANDE
+            and modele_f.core.secteur_hz == SECTEUR
+            and tuple(modele_f.band) == BANDE and modele_f.secteur_hz == SECTEUR,
+            f"...et le modèle ENREGISTRÉ les porte, dans la partie qui FILTRE (`core`) comme dans "
+            f"celle qui le décrit ({getattr(getattr(modele_f, 'core', None), 'band', None)}, "
+            f"{getattr(getattr(modele_f, 'core', None), 'secteur_hz', None)})")
+        try:
+            accepte_f = _errp.ErrPRuntime(_errp.SPEC, {"model": res_f["modele"], "stream_in": "x",
+                                                       "tnr_target": 0.85}, _MoteurDuMode())
+        except (KeyError, ValueError):
+            accepte_f = None
+        chk(accepte_f is not None and tuple(accepte_f.model.core.band) == BANDE,
+            "...et le mode l'ACCEPTE : une bande réglée ne fait pas refuser le modèle au démarrage")
+        try:
+            with np.load(res_f["enregistrement"], allow_pickle=False) as archive_f:
+                archive_lu = (tuple(float(b) for b in archive_f["band"]),
+                              float(archive_f["secteur_hz"]))
+        except (KeyError, OSError, TypeError, ValueError) as e:
+            archive_lu = f"{type(e).__name__}: {e}"
+        chk(archive_lu == (BANDE, SECTEUR),
+            f"les époques BRUTES archivées disent avec quel filtre elles ont appris : un "
+            f"ré-entraînement futur doit pouvoir refaire CE modèle ({archive_lu})")
 
         # --- 7. Une séance trop pauvre est REFUSÉE, en disant quoi faire -----------------------
         plan_court, eeg_c, ts_c, _v = seance(n_pas=6, graine=1)

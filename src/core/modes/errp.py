@@ -115,7 +115,7 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import (ERRP_ARTIFACT_RATIO, ERRP_EPOCH_S, ERRP_PRE_S,  # noqa: E402
+from core.config import (ERRP_ARTIFACT_RATIO, ERRP_BAND, ERRP_EPOCH_S, ERRP_PRE_S,  # noqa: E402
                          ERRP_MIDLINE, ERRP_TNR_TARGET, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
                          use_utf8_console)
 import numpy as np  # noqa: E402
@@ -126,7 +126,7 @@ from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedErrPPublisher, errp_channel_labels  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
-                                  validate)
+                                  params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `errp_calib` ne nous importe pas en retour (il lit
 # `ErrPRuntime` par un import TARDIF, dans une propriété — cf. sa docstring). Un import en tête
 # là-bas refermerait un cycle qui casse `python src/core/modes/errp.py`, mesuré côté P300.
@@ -692,6 +692,12 @@ SPEC = ModeSpec(
     calibration=Calib(kind="fenetre", stimulus_id="errp",
                       label=tr("calib.errp.label"),
                       briefing=BRIEFING_CALIB,
+                      # La BANDE se règle à l'ENTRAÎNEMENT, jamais au décodage : le modèle
+                      # l'enregistre et décode avec (`errp_calib._entrainer`). Les bornes gardent
+                      # toujours 2-8 Hz, le cœur de l'ErrP (N250/P320) : une bande qui le retirerait
+                      # décoderait du bruit avec des scores plausibles, sans lever quoi que ce soit.
+                      params=params_bande(ERRP_BAND, (0.1, 2.0), (8.0, 40.0),
+                                          tr("calib.errp.param.bande.aide")),
                       # La géométrie que la calibration PRÉLÈVE, écrite comme la somme que le
                       # runtime découpe — pas un nombre choisi à part, qui dériverait le jour où
                       # l'une des deux bornes bouge.
