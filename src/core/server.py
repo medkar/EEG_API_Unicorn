@@ -1293,6 +1293,61 @@ class EngineServer:
         return None, tr("moteur.refus.flux_inconnu", flux=nom,
                         liste=", ".join(stream_name(s) for s in publiables))
 
+    def _calibration_de(self, mode_id):
+        """(spec, None) si ce mode a une calibration que le moteur sait jouer, sinon (None, raison)."""
+        spec = registry.get(mode_id)
+        if spec is None:
+            connus = ", ".join(s.id for s in registry.MODES if s.calibration is not None)
+            return None, tr("moteur.refus.mode_inconnu_calibration", id=mode_id, liste=connus)
+        if spec.calibration is None:
+            return None, tr("moteur.refus.sans_calibration", mode=spec.label)
+        if spec.calibration.runtime_cls is None:
+            # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré. Ce refus
+            # existait pour le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans l'appli
+            # pygame ; il ne reste, depuis le 2026-09-07, que le temps d'un chantier en cours.
+            # Dire « pas encore livrée » plutôt que d'inventer une cause.
+            return None, tr("moteur.refus.calibration_pas_livree", mode=spec.label)
+        return spec, None
+
+    def valider_calibration(self, mode_id, params=None):
+        """(réglages complets, None) si `start_calibration` accepterait cet entraînement, sinon
+        (None, raison) — sans RIEN changer : ni file, ni état, ni disque.
+
+        La console l'appelle au clic sur « Commencer », AVANT le contrôle de liaison et avant
+        d'arrêter le décodage du mode (passe C1, 2026-09-30). Sans elle, une coupure haute à 50 Hz
+        sur un MI plafonné à 40 n'était refusée qu'au `start_calibration` : le décodage était déjà
+        arrêté, la page disait « décodage arrêté pour cet entraînement », et le flux de
+        l'application de l'étudiant était coupé pour rien. Aucune validation n'est recopiée côté
+        interface : c'est CETTE méthode que `submit("start_calibration")` appelle aussi.
+
+        ⚠️ Un seul refus n'y est PAS : le vol de marqueurs (le mode décode pendant sa propre
+        calibration). La console le lève elle-même en arrêtant le mode — le refuser ici
+        interdirait justement le geste qu'elle s'apprête à faire. `submit` le fait avant d'appeler
+        cette méthode.
+        """
+        spec, raison = self._calibration_de(mode_id)
+        if spec is None:
+            return None, raison
+        # ⚠️ Ce mode n'a PAS besoin d'être démarré : c'est même le cas normal. Le mode MI refuse de
+        # démarrer sans modèle, or c'est justement la calibration qui en produit un.
+        # Copie LOCALE de `self.calibration`, prise UNE fois : la boucle peut la remettre à `None`
+        # entre deux lectures (arrêt du moteur, cf. le `finally` de `run()`) — `submit` promet en
+        # toutes lettres de ne JAMAIS lever, y compris depuis le fil de l'interface pendant que la
+        # boucle tourne sur le sien. Trois lectures de `self.calibration` de suite (`is not None`,
+        # `.terminee`, `.spec.label`) couraient ce risque ; une seule variable locale l'élimine par
+        # construction, comme le fait déjà `_status_key`.
+        en_cours = self.calibration
+        if en_cours is not None and not en_cours.terminee:
+            return None, tr("moteur.refus.calibration_deja", mode=en_cours.spec.label)
+        # ⚠️ Et le SECOND sens de la même porte, celui qu'on oublie : une MESURE tourne. Placé ici,
+        # AVANT `contract.validate`, pour la même raison que le refus du vol de marqueurs dans
+        # `submit` — c'est une propriété de l'ÉTAT du moteur, pas des réglages soumis, et le faire
+        # passer après ferait dépendre le message de l'existence d'un modèle dans `data/`.
+        refus_mesure = self._refus_pour_mesure_en_cours(self.mesure)
+        if refus_mesure:
+            return None, refus_mesure
+        return contract.validate(spec.calibration, params or {})
+
     def submit(self, command, **params):
         """Met une commande en file. Retourne un accusé, PAS le résultat (appliqué plus tard).
 
@@ -1458,50 +1513,21 @@ class EngineServer:
                     "key": cible, "value": valeurs, "warning": note}
 
         if command == "start_calibration":
-            spec = registry.get(params.get("id"))
+            spec, reason = self._calibration_de(params.get("id"))
             if spec is None:
-                connus = ", ".join(s.id for s in registry.MODES if s.calibration is not None)
-                return {"accepted": False,
-                        "reason": tr("moteur.refus.mode_inconnu_calibration", id=params.get("id"),
-                                     liste=connus)}
-            calib = spec.calibration
-            if calib is None:
-                return {"accepted": False,
-                        "reason": tr("moteur.refus.sans_calibration", mode=spec.label)}
-            if calib.runtime_cls is None:
-                # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré. Ce refus
-                # existait pour le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans
-                # l'appli pygame ; il ne reste, depuis le 2026-09-07, que le temps d'un chantier
-                # en cours. Dire « pas encore livrée » plutôt que d'inventer une cause.
-                return {"accepted": False,
-                        "reason": tr("moteur.refus.calibration_pas_livree", mode=spec.label)}
+                return {"accepted": False, "reason": reason}
             # ⚠️ LE VOL DE MARQUEURS, premier sens. `dict(self.active)` : une copie atomique, prise
             # une seule fois — `submit` tourne sur le fil de l'appelant pendant que la boucle
-            # démarre et arrête des modes sur le sien.
+            # démarre et arrête des modes sur le sien. C'est le SEUL refus que
+            # `valider_calibration` ne fait pas : la console le lève elle-même, en arrêtant le mode.
             refus = self._refus_calibration_pendant_mode(spec, dict(self.active))
             if refus:
                 return {"accepted": False, "reason": refus}
-            # ⚠️ Ce mode n'a PAS besoin d'être démarré : c'est même le cas normal. Le mode MI
-            # refuse de démarrer sans modèle, or c'est justement la calibration qui en produit un.
-            # Copie LOCALE de `self.calibration`, prise UNE fois : la boucle peut la remettre à
-            # `None` entre deux lectures (arrêt du moteur, cf. le `finally` de `run()`) — `submit`
-            # promet en toutes lettres de ne JAMAIS lever, y compris depuis le fil de l'interface
-            # pendant que la boucle tourne sur le sien. Trois lectures de `self.calibration` de
-            # suite (`is not None`, `.terminee`, `.spec.label`) couraient ce risque ; une seule
-            # variable locale l'élimine par construction, comme le fait déjà `_status_key`.
-            en_cours = self.calibration
-            if en_cours is not None and not en_cours.terminee:
-                return {"accepted": False,
-                        "reason": tr("moteur.refus.calibration_deja", mode=en_cours.spec.label)}
-            # ⚠️ Et le SECOND sens de la même porte, celui qu'on oublie : une MESURE tourne. Placé
-            # ici, AVANT `contract.validate`, pour la même raison que le refus du vol de marqueurs
-            # dix lignes plus haut — c'est une propriété de l'ÉTAT du moteur, pas des réglages
-            # soumis, et le faire passer après ferait dépendre le message de l'existence d'un
-            # modèle dans `data/`.
-            refus_mesure = self._refus_pour_mesure_en_cours(self.mesure)
-            if refus_mesure:
-                return {"accepted": False, "reason": refus_mesure}
-            values, reason = contract.validate(calib, params.get("params") or {})
+            # Tout le reste — une autre séance minutée en cours, les réglages — par LA méthode que
+            # la console appelle au clic, avant le contrôle de liaison. Une seule écriture : un refus
+            # que « Commencer » ne verrait pas au clic serait rendu ici, APRÈS que la console a
+            # arrêté le décodage pour rien.
+            values, reason = self.valider_calibration(spec.id, params.get("params"))
             if values is None:
                 return {"accepted": False, "reason": reason}
             self._commands.put(("start_calibration", {"id": spec.id, "params": values}))
@@ -3557,6 +3583,24 @@ def _smoke_calibration_refus():
         chk(not r.get("accepted") and mot in (r.get("reason") or "")
             and "aucune calibration" in (r.get("reason") or ""),
             f"« {commande} » sans candidat : refusé, en disant ce qui manque ({r.get('reason')})")
+
+    # 4ter. La validation AU CLIC (passe C1, 2026-09-30). La console demande au moteur, AVANT le
+    # contrôle de liaison et avant d'arrêter le décodage, si l'entraînement serait accepté. Sans
+    # elle, une coupure haute à 50 Hz sur le MI (maximum 40) n'était refusée qu'au
+    # `start_calibration` — le flux de l'application de l'étudiant déjà coupé pour rien.
+    v_ok, r_ok = froid.valider_calibration("mi", {})
+    chk(v_ok is not None and r_ok is None and {"bande_bas", "bande_haut"} <= set(v_ok),
+        f"un entraînement valide est validé, réglages COMPLETS rendus ({r_ok or sorted(v_ok)})")
+    v_ko, r_ko = froid.valider_calibration("mi", {"bande_haut": 50.0})
+    s_ko = froid.submit("start_calibration", id="mi", params={"bande_haut": 50.0})
+    chk(v_ko is None and r_ko and "maximum" in r_ko and r_ko == s_ko.get("reason"),
+        f"une coupure haute à 50 Hz sur le MI est refusée AU CLIC, avec la raison exacte que "
+        f"`start_calibration` donnerait ({r_ko})")
+    chk(froid.valider_calibration("bogus", {})[1] == r1.get("reason")
+        and froid.valider_calibration("ssvep", {})[1] == r2.get("reason"),
+        "…et les refus de mode (inconnu, sans calibration) sont les mêmes que ceux de `submit`")
+    chk(froid._commands.empty() and froid.calibration is None,
+        "…et valider ne met RIEN en file, ne construit RIEN : c'est une question, pas un geste")
     chk(froid.calib_dir is None,
         f"…et un moteur qui n'a jamais calibré n'a créé AUCUN dossier temporaire "
         f"({froid.calib_dir})")
@@ -4310,6 +4354,16 @@ def _smoke_vol_marqueurs():
             f"sens 1 — calibrer un mode qui décode est REFUSÉ ({raison[:60]}…)")
         chk("« P300 »" in raison and "même file de marqueurs" in raison,
             f"…en NOMMANT le mode à arrêter et en disant la panne ({raison})")
+        # …mais la validation AU CLIC (passe C1) ne refuse PAS pour ça : c'est le refus que la
+        # console lève elle-même, en arrêtant le mode avant l'entraînement. Le refuser ici
+        # interdirait le geste qu'elle s'apprête à faire.
+        v_clic, r_clic = srv.valider_calibration("p300", {})
+        chk(v_clic is not None and r_clic is None,
+            f"…alors que la validation au clic l'ACCEPTE : la console arrête le mode d'abord "
+            f"({r_clic})")
+        v_clic, r_clic = srv.valider_calibration("p300", {"bande_haut": 50.0})
+        chk(v_clic is None and r_clic and "maximum" in r_clic and "décode" not in r_clic,
+            f"…et une bande invalide y est refusée pour ELLE-MÊME, mode actif ou pas ({r_clic})")
 
         # Le négatif qui prouve que le refus est ciblé : un AUTRE mode, dont la calibration ne
         # lit aucun marqueur (le MI est endogène), n'est pas concerné par ce refus-là.
@@ -4334,6 +4388,11 @@ def _smoke_vol_marqueurs():
             and not srv.calibration.terminee,
             f"une VRAIE calibration P300 tourne ({type(srv.calibration).__name__}, "
             f"phase={srv.calibration.phase})")
+        # La validation au clic refuse un SECOND entraînement : la console n'arrêtera pas un
+        # décodage pour un refus certain.
+        v_clic, r_clic = srv.valider_calibration("mi", {})
+        chk(v_clic is None and "déjà en cours" in (r_clic or ""),
+            f"pendant un entraînement, la validation au clic en refuse un second ({r_clic})")
 
         # ⚠️ La liste de modèles est VIDÉE le temps de l'appel. Sans ça, ce test passerait pour la
         # mauvaise raison sur un dépôt fraîchement cloné (« aucun choix disponible ») et

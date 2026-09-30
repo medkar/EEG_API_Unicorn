@@ -372,16 +372,50 @@ class Console(QMainWindow):
     # qui s'est bien passé.
 
     def demander_calibration(self, mode_id, params):
-        """« Commencer » sur une page de calibration : on passe d'abord par le contrôle de liaison.
+        """« Commencer » sur une page de calibration : le MOTEUR juge les réglages, puis le
+        contrôle de liaison.
 
         Rien n'est soumis ici. Le lancement réel est dans `_contact_lance`, et il n'a lieu que si
         le contrôle de liaison ne refuse pas.
+
+        🔴 Les réglages sont jugés AVANT tout le reste (passe C1, 2026-09-30), par le moteur
+        (`EngineServer.valider_calibration`, la méthode que `start_calibration` appelle aussi — la
+        console ne recopie aucune règle). Ils ne l'étaient qu'au `start_calibration`, donc APRÈS le
+        contrôle de liaison et APRÈS l'arrêt du décodage : une coupure haute à 50 Hz sur un MI
+        plafonné à 40 coupait le flux de l'application de l'étudiant, affichait « décodage arrêté
+        pour cet entraînement », et seulement ensuite le refus. Un refus s'affiche maintenant en
+        rouge sur la page, et rien d'autre ne se passe.
         """
+        _valeurs, raison = self._valider_calibration(mode_id, params)
+        if raison:
+            self._avis(mode_id, raison)
+            return
         self._demande = {"quoi": "calibration", "mode_id": mode_id,
                          "params": dict(params or {}),
                          "retour": self.calib_pages.get(mode_id)}
         self._montrer_contact(self.catalogue.get(mode_id),
                               tr("console.geste.commencer_entrainement"))
+
+    def _valider_calibration(self, mode_id, params):
+        """(réglages, None) ou (None, raison), selon le MOTEUR. Une question : rien n'est soumis."""
+        if self.engine is None:
+            return None, tr("console.refus.aucun_moteur")
+        return self.engine.valider_calibration(mode_id, dict(params or {}))
+
+    def entrainement_en_route(self, mode_id):
+        """Un « Commencer » de l'entraînement de ce mode est-il EN ROUTE : cliqué, ni parti ni refusé ?
+
+        Vrai du clic jusqu'à ce que la séance apparaisse dans l'état, ou qu'on y renonce — au
+        contrôle de liaison, à l'arrêt du mode, au départ. C'est ce qui FIGE le formulaire de la
+        page (`CalibPage`) : les réglages sont déjà copiés dans la demande, donc une valeur changée
+        entre-temps ne partirait pas, et la séance démarrerait avec l'ancienne, sans un mot. Lu
+        dans les trois fiches que la console tient déjà, jamais dans un drapeau de plus qui
+        pourrait leur survivre.
+        """
+        for fiche in (self._demande, self._attente):
+            if fiche and fiche.get("quoi") == "calibration" and fiche.get("mode_id") == mode_id:
+                return True
+        return bool(self._a_lancer) and self._a_lancer.get("mode_id") == mode_id
 
     def demander_mesure(self, mesure_id, params):
         """« Commencer » sur une page de mesure : même chemin, et pour une raison de plus.
@@ -607,7 +641,17 @@ class Console(QMainWindow):
         spec = self.catalogue.get(mode_id) or {}
         stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
         if not stimulus_id:
-            return          # le moteur mène tout seul le protocole (Motor Imagery)
+            # Le moteur mène tout seul le protocole (Motor Imagery) : aucune fenêtre à lancer. On
+            # attend QUAND MÊME de voir la séance (passe C1, 2026-09-30) : c'est jusque-là que la
+            # page garde son formulaire figé (`entrainement_en_route`), et une séance que la
+            # boucle aurait refusée en silence le dit au bout du délai, au lieu de laisser la page
+            # figée pour toujours.
+            self._a_lancer = self._attente_depart(
+                mode_id, "calibration",
+                tr("console.avis.depart_manque_entrainement_moteur",
+                   delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+                avis=self._avis, lancer=lambda: None)
+            return
         # ⚠️ **On ne lance PAS la fenêtre ici.** L'accusé qu'on vient de recevoir dit « mise en
         # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
         # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
@@ -643,7 +687,11 @@ class Console(QMainWindow):
         fixation guidée. Un second corps recopié serait un correctif à refaire deux fois, et la
         deuxième fois serait affaire de mémoire.
         """
-        self._a_lancer = self._un_tour_d_attente(self._a_lancer, state)
+        # La fiche est RETIRÉE pendant son tour, puis rendue si l'attente continue : un renoncement
+        # s'affiche alors sur une page qui ne se croit plus « en route », et dont le formulaire se
+        # dégèle avec l'avis au lieu d'un tour de `QTimer` plus tard (`CalibPage.montrer_avis`).
+        attente, self._a_lancer = self._a_lancer, None
+        self._a_lancer = self._un_tour_d_attente(attente, state)
         self._a_lancer_mesure = self._un_tour_d_attente(self._a_lancer_mesure, state)
 
     def _un_tour_d_attente(self, attente, state):
@@ -1025,6 +1073,22 @@ def _smoke():
             # lequel a précédé l'autre — or c'est exactement là qu'est le piège de cette page.
             self.journal = journal
             self.refus = {}       # {nom de commande : raison} — pour éprouver le chemin du refus
+            # Les QUESTIONS posées à `valider_calibration`, chacune avec une copie du journal À
+            # CET INSTANT : c'est ce qui prouve qu'elle précède le contrôle de liaison et
+            # `stop_mode`. Hors du journal partagé, exprès : ce n'est ni une commande ni une
+            # fenêtre, et les assertions d'ordre existantes y comptent des rangs.
+            self.validations = []
+
+        def valider_calibration(self, mode_id, params=None):
+            """Le jumeau de `EngineServer.valider_calibration` : une question, sans effet.
+
+            Refuse si `refus["valider_calibration"]` est posé — la vraie règle (les bornes du
+            contrat) est éprouvée contre le VRAI moteur plus bas, et dans `server.py --smoke`.
+            """
+            self.validations.append((mode_id, dict(params or {}), list(self.journal)))
+            if "valider_calibration" in self.refus:
+                return None, self.refus["valider_calibration"]
+            return dict(params or {}), None
 
         def snapshot(self):
             self.appels += 1
@@ -1896,11 +1960,21 @@ def _smoke():
     # valeur supposée — un formulaire qui soumettrait 999 en dur, peu importe ce qu'il affiche,
     # doit faire échouer la comparaison plus bas.
     valeurs_formulaire = cal.formulaire.values()
+    moteur_faux.validations.clear()
     cal.bouton_commencer.click()
     chk(console.stack.currentWidget() is console.contact,
         "« Commencer » passe D'ABORD par le contrôle de la liaison casque")
     chk(not moteur_faux.commandes,
         f"et RIEN n'est encore soumis au moteur à ce stade ({moteur_faux.commandes})")
+    # …mais le MOTEUR a déjà jugé les réglages (passe C1) : une question, pas une commande.
+    chk([(m, p) for m, p, _j in moteur_faux.validations] == [("mi", valeurs_formulaire)],
+        f"…le moteur a JUGÉ les réglages à l'écran avant le contrôle de liaison "
+        f"({moteur_faux.validations})")
+    # 🔴 Et le formulaire est FIGÉ dès le clic (passe C1) : les valeurs sont copiées dans la
+    # demande, une valeur changée maintenant ne partirait pas.
+    chk(not cal.formulaire.isEnabled() and not cal.bouton_commencer.isEnabled(),
+        "…et le formulaire est FIGÉ dès le clic, avec « Commencer » : ce qui partira est déjà "
+        "copié")
 
     # Une voie MORTE : le lancement doit être refusé, et le refus doit se LIRE. Un bouton
     # simplement grisé se lit comme une interface cassée — c'est la panne que ce chantier répare
@@ -1956,6 +2030,19 @@ def _smoke():
     chk(not processus,
         f"le MI ne lance AUCUNE fenêtre : son contrat ne déclare pas de stimulus, le moteur mène "
         f"seul son protocole ({processus})")
+    # Accepté, mais la séance n'est pas encore dans l'état : le formulaire RESTE figé — c'est
+    # jusqu'à la séance qu'il l'est, pas jusqu'à l'accusé (passe C1).
+    console.apply_state(mi_sain)
+    chk(not cal.formulaire.isEnabled(),
+        "l'entraînement ACCEPTÉ mais pas encore vu dans l'état : le formulaire reste figé")
+    # …et si la séance n'apparaît JAMAIS (la boucle peut la refuser en silence), on renonce en le
+    # DISANT au bout du délai, et le formulaire se rouvre — sans quoi il resterait figé à jamais.
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(mi_sain)
+    chk("n'a pas démarré l'entraînement" in cal.avis.text() and cal.formulaire.isEnabled()
+        and cal.bouton_commencer.isEnabled(),
+        f"…une séance MI jamais apparue fait renoncer au bout de {DELAI_DEMARRAGE_S:.0f} s, À "
+        f"L'ÉCRAN, et rouvre le formulaire dans le même tour ({cal.avis.text()[:60]!r})")
 
     # Un refus du moteur DOIT s'afficher sur la page, pas seulement sur stdout.
     moteur_faux.refus["start_calibration"] = "une calibration est déjà en cours (P300)"
@@ -1964,7 +2051,19 @@ def _smoke():
     console.contact.bouton_lancer.click()
     chk("déjà en cours" in cal.avis.text(),
         f"un refus du moteur est AFFICHÉ sur la page, mot pour mot ({cal.avis.text()!r})")
+    chk(cal.formulaire.isEnabled() and cal.bouton_commencer.isEnabled(),
+        "…et le refus ROUVRE le formulaire tout de suite, pour corriger et recommencer")
     moteur_faux.refus.clear()
+    # « Annuler » sur le contrôle de liaison rouvre aussi le formulaire : rien n'est plus en route.
+    # (Un clic sur un « Commencer » resté figé n'ouvre rien : on ne clique alors pas « Annuler »,
+    # qui ramènerait à l'accueil et ferait tomber toutes les assertions qui suivent.)
+    cal.bouton_commencer.click()
+    ouvert = console.stack.currentWidget() is console.contact
+    if ouvert:
+        console.contact.bouton_retour.click()
+    console.apply_state(mi_sain)
+    chk(ouvert and console.stack.currentWidget() is cal and cal.formulaire.isEnabled(),
+        "« Annuler » au contrôle de liaison ramène sur la page, formulaire rouvert")
 
     # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
     en_cours = {**mi_state, "calibration": {
@@ -2546,14 +2645,57 @@ def _smoke():
     journal.clear()
     processus.clear()
     p300_actif = {**p300_state, "calibration": None, "quality": qualite_saine}
+
+    # 🔴 UN RÉGLAGE INVALIDE EST REFUSÉ AU CLIC, AVANT TOUT LE RESTE (passe C1, 2026-09-30). Il ne
+    # l'était qu'au `start_calibration` : le contrôle de liaison passait, `stop_mode` partait, la
+    # note disait « décodage arrêté pour cet entraînement » — et SEULEMENT ENSUITE venait le refus.
+    # Le flux de l'application de l'étudiant était coupé pour rien. L'espion : le P300 DÉCODE, la
+    # coupure haute à l'écran est hors bornes, et le moteur (factice ici ; le vrai plus bas) refuse.
+    console.apply_state(p300_actif)
+    moteur_faux.commandes.clear()
+    moteur_faux.validations.clear()
+    moteur_faux.refus["valider_calibration"] = "« Coupure haute » : 50 Hz dépasse le maximum (40 Hz)"
+    # `.get` : une page sans ce champ ROUGIT plus bas (les quatre pages portent la bande), elle ne
+    # fait pas tomber tout le smoke sur un `KeyError`.
+    haut_p3 = cal_p3.formulaire.champs.get("bande_haut")
+    if haut_p3 is not None:
+        haut_p3.setValue(50.0)
+    cal_p3.bouton_commencer.click()
+    chk(console.stack.currentWidget() is cal_p3,
+        "un réglage refusé par le moteur n'ouvre PAS le contrôle de liaison")
+    chk(not moteur_faux.commandes and not [e for e in journal if e[0] == "commande"],
+        f"…et rien ne part : ni `stop_mode` — le décodage continue, le flux de l'application "
+        f"aussi —, ni `start_calibration` ({moteur_faux.commandes})")
+    chk("50 Hz dépasse le maximum" in cal_p3.avis.text() and "e5484d" in cal_p3.avis.styleSheet()
+        and cal_p3.note.text() == "",
+        f"…le refus s'affiche EN ROUGE sur la page, sans note « décodage arrêté » "
+        f"({cal_p3.avis.text()!r}, note {cal_p3.note.text()!r})")
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire reste ouvert, pour corriger la valeur")
+    chk([p.get("bande_haut") for _m, p, _j in moteur_faux.validations] == [50.0],
+        f"…le moteur a jugé la valeur À L'ÉCRAN ({moteur_faux.validations})")
+    moteur_faux.refus.pop("valider_calibration")
+    if haut_p3 is not None:
+        haut_p3.setValue(cal_p3.formulaire._params_par_cle["bande_haut"]["default"])
+    journal.clear()
+    moteur_faux.validations.clear()
+
     console.apply_state(p300_actif)
     cal_p3.bouton_commencer.click()
+    chk(not cal_p3.formulaire.isEnabled(),
+        "(P300 qui décode) le formulaire est figé dès le clic, contrôle de liaison ouvert")
     console.contact.bouton_lancer.click()
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"le mode qui décode est ARRÊTÉ d'abord, et rien d'autre n'est soumis ({journal})")
+    chk(len(moteur_faux.validations) == 1 and not moteur_faux.validations[0][2],
+        f"…et la validation a eu lieu AVANT tout : le journal était vide quand le moteur a été "
+        f"interrogé ({moteur_faux.validations})")
     chk(not processus, f"...et AUCUNE fenêtre n'est lancée tant qu'il décode ({processus})")
     chk("arrêté pour cet entraînement" in cal_p3.note.text(),
         f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.note.text()[:70]}…)")
+    console.apply_state(p300_actif)          # il n'a pas encore rendu la main
+    chk(not cal_p3.formulaire.isEnabled() and not cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire RESTE figé pendant qu'on attend l'arrêt du mode (passe C1)")
     # Le mode a rendu la main : la calibration part, dans le bon ordre, sans autre clic.
     console.apply_state(p300_pret)
     noms = [e[0] for e in journal]
@@ -2561,6 +2703,9 @@ def _smoke():
         f"dès qu'il a rendu la main, la calibration part toute seule ({journal})")
     chk(not processus,
         f"...et la fenêtre attend encore : la commande n'est que MISE EN FILE ({processus})")
+    console.apply_state(p300_pret)
+    chk(not cal_p3.formulaire.isEnabled(),
+        "…et figé encore tant que la séance soumise n'apparaît pas dans l'état")
     # Un tour de plus, la séance existe : la fenêtre part, et forcément après.
     console.apply_state({**p300_pret, "calibration": {
         "mode_id": "p300", "phase": "chauffe", "restant_s": 15.0, "instruction": "", "essai": 0,
@@ -2569,6 +2714,9 @@ def _smoke():
     chk(0 <= rang(noms, "commande", 1) < rang(noms, "fenetre"),
         f"...et la fenêtre vient encore APRÈS `start_calibration` ({journal})")
     console.lanceur.arreter()
+    console.apply_state(p300_pret)
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et plus rien n'est en route ni ne tourne : le formulaire se rouvre")
 
     # 🔴 **Et si le moteur n'A JAMAIS démarré la séance ?** C'est le cas que ce garde-fou existe
     # pour couvrir, et il n'est pas théorique : `_start_calibration` peut sortir sans rien créer
@@ -2589,6 +2737,10 @@ def _smoke():
     chk(not processus and "n'a pas démarré" in cal_p3.avis.text(),
         f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
         f"jouer un protocole entier dans le vide ({cal_p3.avis.text()[:80]}…)")
+    # Le renoncement rouvre le formulaire DANS LE MÊME TOUR que l'avis (passe C1) : la fiche
+    # d'attente est retirée avant son tour, donc la page ne se croit plus « en route ».
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire se rouvre avec l'avis, pas un tour plus tard")
 
     # ...et si le mode ne s'arrête JAMAIS, on renonce en le DISANT. Sans ce délai, l'écran
     # attendrait en silence — indiscernable d'une chauffe qui démarre.
@@ -2603,6 +2755,8 @@ def _smoke():
         f"({cal_p3.avis.text()[:80]}…)")
     chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
         f"...et `start_calibration` n'est JAMAIS soumise ({journal})")
+    chk(cal_p3.formulaire.isEnabled(),
+        "…et ce renoncement-là rouvre aussi le formulaire")
 
     # « Lancer le stimulus » : la même fenêtre, SANS `--calibrer`. ⚠️ Depuis le 2026-09-22 AUCUN
     # bouton de page n'y mène : il a quitté la page du mode, et reviendra avec « Connecter ». La
@@ -3956,6 +4110,32 @@ def _smoke():
     chk(not avec_bouton,
         f"…et aucune page d'entraînement ne montre « Appliquer » : ses réglages partent avec "
         f"« Commencer » ({avec_bouton or 'aucune ne le montre'})")
+    # Les QUATRE pages portent la bande réglable (passe C1). Seule la page du MI était regardée :
+    # un entraînement à fenêtre qui perdrait ses deux champs réglerait sa bande… nulle part.
+    sans_bande = [m for m in ("mi", "p300", "errp", "cvep")
+                  if not {"bande_bas", "bande_haut"} <= set(reelle.calib_pages[m].formulaire.champs)]
+    chk(not sans_bande,
+        f"…et les QUATRE pages d'entraînement — P300, ErrP et c-VEP compris — portent les deux "
+        f"coupures de leur bande ({sans_bande or 'toutes les portent'})")
+    # 🔴 La validation au clic contre le VRAI moteur (passe C1) : le faux moteur ci-dessus refuse
+    # sur commande, celui-ci par les bornes du contrat. Une coupure haute à 50 Hz sur le MI
+    # (maximum 40) est refusée SUR la page : ni contrôle de liaison, ni commande.
+    cal_r = reelle.calib_pages["mi"]
+    reelle.show_calibration("mi")
+    reelle.apply_state(moteur.snapshot())
+    haut_r = cal_r.formulaire.champs.get("bande_haut")
+    if haut_r is not None:
+        haut_r.setValue(50.0)
+        en_file_avant = moteur._commands.qsize()
+        cal_r.bouton_commencer.click()
+    chk(haut_r is not None and reelle.stack.currentWidget() is cal_r
+        and "40" in cal_r.avis.text() and "maximum" in cal_r.avis.text()
+        and moteur._commands.qsize() == en_file_avant and cal_r.formulaire.isEnabled(),
+        f"contre le VRAI moteur, une coupure haute hors bornes est refusée AU CLIC, avec la raison "
+        f"du contrat, rien en file, formulaire ouvert ({cal_r.avis.text()[:70]!r})")
+    if haut_r is not None:
+        haut_r.setValue(cal_r.formulaire._params_par_cle["bande_haut"]["default"])
+    reelle.show_grid()
     chk(reelle.calib_pages["mi"].formulaire.champs,
         "…la calibration MI a pourtant des réglages : le bouton est caché exprès, pas faute de "
         "réglage")

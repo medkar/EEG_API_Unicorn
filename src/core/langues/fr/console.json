@@ -2,6 +2,7 @@
   "console.avis.arret_trop_long_entrainement": "« {mode} » ne s'est pas arrêté en {delai} s : l'entraînement n'a pas été lancé. Arrête-le depuis sa tuile, puis reclique « Commencer ».",
   "console.avis.arret_trop_long_test": "« {mode} » ne s'est pas arrêté en {delai} s : le test n'a pas été lancé. Arrête-le depuis sa tuile, puis reclique « Commencer ».",
   "console.avis.depart_manque_entrainement": "Le moteur n'a pas démarré l'entraînement en {delai} s : sa fenêtre n'a pas été ouverte. Lis le refus dans le bandeau, puis recommence.",
+  "console.avis.depart_manque_entrainement_moteur": "Le moteur n'a pas démarré l'entraînement en {delai} s. Lis le refus dans le bandeau, puis recommence.",
   "console.avis.depart_manque_test": "Le moteur n'a pas démarré le test en {delai} s : sa fenêtre n'a pas été ouverte. Lis le refus dans le bandeau, puis recommence.",
   "console.avis.depart_manque_verification": "Le moteur n'a pas démarré la vérification en {delai} s : sa fenêtre n'a pas été ouverte. Lis le refus dans le bandeau, puis recommence.",
   "console.avis.entrainement_annule": "{raison}\nEntraînement annulé : sans sa fenêtre, il n'y a rien à apprendre.",

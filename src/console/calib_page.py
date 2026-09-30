@@ -243,6 +243,25 @@ class CalibPage(QWidget):
         self.bloc_avant.setVisible(True)
         self.bloc_pendant.setVisible(False)
         self.bloc_apres.setVisible(False)
+        # La séance de CE mode tournait-elle au dernier `update_from` ? Retenu pour `_geler`, que
+        # `montrer_avis` appelle entre deux rafraîchissements.
+        self._en_cours = False
+
+    def _geler(self):
+        """Fige le formulaire et « Commencer » pendant la séance ET entre le clic et son départ.
+
+        Pendant la séance : changer un réglage n'aurait aucun effet sur une séance déjà lancée, et
+        un champ actif sans effet est un mensonge. ENTRE le clic et le départ (passe C1,
+        2026-09-30) : les valeurs sont déjà copiées dans la demande de la console, qui passe par
+        le contrôle de liaison, l'arrêt du mode, puis l'attente de la séance — une valeur changée
+        pendant ce temps ne partirait pas, et la séance démarrerait avec l'ancienne, sans un mot.
+        Le « en route » est lu dans la CONSOLE (`entrainement_en_route`), jamais tenu ici : un
+        drapeau de page survivrait à une demande abandonnée. Tout se dégèle dès que la séance est
+        TERMINÉE (pas seulement absente), pour en relancer une autre sans naviguer ailleurs.
+        """
+        fige = self._en_cours or self.console.entrainement_en_route(self.mode_id)
+        self.formulaire.setEnabled(not fige)
+        self.bouton_commencer.setEnabled(not fige)
 
     def _commencer(self):
         """Demande une calibration à la CONSOLE, qui l'orchestre. Cette page n'envoie plus
@@ -257,6 +276,9 @@ class CalibPage(QWidget):
         self.avis.setText("")
         self.note.setText("")
         self.console.demander_calibration(self.mode_id, self.formulaire.values())
+        # Figé DÈS le clic — sauf si le moteur a refusé les réglages sur-le-champ : il n'y a
+        # alors rien en route, et le formulaire reste ouvert pour les corriger.
+        self._geler()
 
     def _abandonner(self):
         """Émet `cancel_calibration`. Aucun `id` à fournir : le moteur ne tient qu'UNE
@@ -297,6 +319,9 @@ class CalibPage(QWidget):
         """
         self.avis.setText(texte or "")
         self.avis.setStyleSheet("color: #e5484d;" if alerte else "color: #8a8f9c;")
+        # Un avis clôt souvent une demande (refus, renoncement) : dégeler TOUT DE SUITE ce qui n'est
+        # plus en route, plutôt qu'au rafraîchissement suivant.
+        self._geler()
 
     def _maybe_beep(self, calib_state):
         """Joue le top de la classe cuée sur le FRONT MONTANT de `etape` vers « cue », jamais de
@@ -337,11 +362,8 @@ class CalibPage(QWidget):
         self.bloc_avant.setVisible(not en_cours)
         self.bloc_pendant.setVisible(en_cours)
         self.bloc_apres.setVisible(termine)
-        # Changer la durée en cours de route n'aurait aucun effet sur une séance déjà lancée :
-        # un champ actif sans effet est un mensonge. Réactivé dès que la séance est TERMINÉE
-        # (pas seulement absente), pour permettre d'en relancer une autre sans naviguer ailleurs.
-        self.formulaire.setEnabled(not en_cours)
-        self.bouton_commencer.setEnabled(not en_cours)
+        self._en_cours = en_cours
+        self._geler()
 
         # L'unité de `essai`/`total`, publiée par le moteur ; « essai » si elle manque.
         unite = (calib_state or {}).get("unite") or tr("pages.calib.unite_defaut")
