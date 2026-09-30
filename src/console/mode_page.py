@@ -149,9 +149,12 @@ class ModePage(QWidget):
         # --- la vue en direct : en face (Observer) ou repliée ------------------------------------
         self.vue = live_views.build(spec["family"], spec["channels"])
         if hasattr(self.vue, "set_source") and console.engine is not None:
-            # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`.
+            # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`. Et le
+            # SECTEUR du poste qu'il porte (2026-09-30) : le coupe-bande des tracés est le sien,
+            # fixé à sa construction, pas le défaut du dépôt.
             self.vue.set_source(console.engine.recent_window,
-                                getattr(getattr(console.engine, "acq", None), "fs", None))
+                                getattr(getattr(console.engine, "acq", None), "fs", None),
+                                getattr(console.engine, "secteur_hz", None))
         self.vue.setMinimumHeight(200)
 
         self.bloc_observer = self.bouton_observer = None

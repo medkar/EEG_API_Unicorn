@@ -103,6 +103,9 @@ class TracesView(QWidget):
         self.ecart = self.ECART_DEPART_UV
         self.filtre = filtres_affichage.FILTRE_DEFAUT
         self.coupe_bande = False
+        # Le secteur que coupe la case « Coupe-bande » : celui du MOTEUR, donné par `set_source`
+        # (2026-09-30). Le défaut n'est que celui du dépôt, le temps qu'un moteur soit branché.
+        self.secteur_hz = filtres_affichage.SECTEUR_HZ
         self._recaler = False
         self.plot = pg.PlotWidget()
         self.plot.setMenuEnabled(False)
@@ -124,9 +127,10 @@ class TracesView(QWidget):
             self.choix_filtre.addItem(nom_filtre(filtre))
         self.choix_filtre.setCurrentIndex(filtres_affichage.FILTRES.index(self.filtre))
         self.choix_filtre.currentIndexChanged.connect(self._choisit_filtre)
-        secteur = nombre(filtres_affichage.SECTEUR_HZ)
-        self.case_secteur = QCheckBox(tr("pages.traces.secteur", hz=secteur))
+        self.case_secteur = QCheckBox("")
         self.case_secteur.toggled.connect(self._choisit_secteur)
+        self.bulle_secteur = _bulle("")
+        self._nomme_secteur()
         rang = QHBoxLayout()
         rang.setSpacing(4)
         rang.addWidget(QLabel(tr("pages.traces.filtre")))
@@ -134,7 +138,7 @@ class TracesView(QWidget):
         rang.addWidget(self.choix_filtre)
         rang.addSpacing(16)
         rang.addWidget(self.case_secteur)
-        rang.addWidget(_bulle(tr("pages.traces.secteur_aide", hz=secteur)))
+        rang.addWidget(self.bulle_secteur)
         rang.addStretch(1)
 
         layout = QVBoxLayout(self)
@@ -142,12 +146,23 @@ class TracesView(QWidget):
         layout.addWidget(self.plot, 1)
         layout.addWidget(self.echelle)
 
-    def set_source(self, source, fs=None):
-        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`, et la
-        fréquence d'échantillonnage de son casque (celle de l'Unicorn si on ne la donne pas)."""
+    def set_source(self, source, fs=None, secteur_hz=None):
+        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`, la
+        fréquence d'échantillonnage de son casque (celle de l'Unicorn si on ne la donne pas), et
+        le SECTEUR du poste que porte le moteur — celui que la case « Coupe-bande » retire."""
         self.source = source
         if fs:
             self.fs = float(fs)
+        if secteur_hz:
+            self.secteur_hz = float(secteur_hz)
+            self._nomme_secteur()
+            self._dis_echelle(())
+
+    def _nomme_secteur(self):
+        """Le libellé de la case et sa bulle disent le secteur QU'ELLE COUPE, jamais le défaut."""
+        secteur = nombre(self.secteur_hz)
+        self.case_secteur.setText(tr("pages.traces.secteur", hz=secteur))
+        self.bulle_secteur.setToolTip(infobulle(tr("pages.traces.secteur_aide", hz=secteur)))
 
     def _choisit_filtre(self, index):
         self.filtre = filtres_affichage.FILTRES[index]
@@ -188,8 +203,7 @@ class TracesView(QWidget):
         """
         filtre = nom_filtre(self.filtre)
         if self.coupe_bande:
-            filtre = tr("pages.traces.avec_secteur", filtre=filtre,
-                        hz=nombre(filtres_affichage.SECTEUR_HZ))
+            filtre = tr("pages.traces.avec_secteur", filtre=filtre, hz=nombre(self.secteur_hz))
         texte = tr("pages.traces.echelle", filtre=filtre, ecart=f"{self.ecart:g}",
                    secondes=nombre(self.SECONDES))
         if rognees:
@@ -228,7 +242,8 @@ class TracesView(QWidget):
             return
         # Filtré sur TOUT le bloc, amorce comprise, puis coupé : le démarrage du filtre reste
         # hors de l'écran. `filtrer` rend une copie — le bloc n'est déjà lui-même qu'une copie.
-        bloc = filtres_affichage.filtrer(bloc, self.fs, self.filtre, self.coupe_bande)
+        bloc = filtres_affichage.filtrer(bloc, self.fs, self.filtre, self.coupe_bande,
+                                         self.secteur_hz)
         bloc = bloc[-int(round(self.SECONDES * self.fs)):]
         etendues = self._etendues(bloc)
         utile = self._echelle_utile(etendues)

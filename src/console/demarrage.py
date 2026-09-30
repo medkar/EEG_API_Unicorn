@@ -33,8 +33,9 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout
                                QLabel, QProgressDialog, QPushButton, QRadioButton, QVBoxLayout)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console.params_form import ACCENT, ListeSansMolette, infobulle  # noqa: E402
 from core.acquisition import casques_appaires, fonction_liste_unicorn  # noqa: E402
-from core.config import UNICORN_SERIAL  # noqa: E402
+from core.config import SECTEUR_HZ, SECTEURS_HZ, UNICORN_SERIAL  # noqa: E402
 from core.i18n import tr  # noqa: E402
 
 # La page Bluetooth des Paramètres de Windows : l'Unicorn s'y appaire, la bibliothèque du casque
@@ -56,9 +57,19 @@ DESCRIPTIONS = {
     SYNTHETIQUE: (tr("console.demarrage.synthetique"), tr("console.demarrage.synthetique_aide")),
 }
 
+# Le SECTEUR électrique (2026-09-30), un réglage du POSTE : le coupe-bande de tous les décodeurs,
+# que chaque modèle entraîné ENREGISTRE. Un libellé par valeur de `config.SECTEURS_HZ` — une
+# valeur ajoutée là sans libellé ici lève à l'ouverture du dialogue, plutôt que d'afficher un
+# choix muet.
+SECTEURS = {
+    50.0: tr("console.demarrage.secteur_50"),
+    60.0: tr("console.demarrage.secteur_60"),
+}
+
 
 class Memoire:
-    """Les derniers numéros de casque OUVERTS AVEC SUCCÈS, du plus récent au plus ancien.
+    """Les derniers numéros de casque OUVERTS AVEC SUCCÈS, du plus récent au plus ancien — et le
+    SECTEUR électrique du poste.
 
     Dans les préférences de l'utilisateur (`QSettings` : la base de registre sous Windows), pas
     dans le dépôt : c'est une commodité d'écran, propre à un poste, qui n'a rien à faire à côté
@@ -83,6 +94,30 @@ class Memoire:
         liste = [numero] + [c for c in self.casques() if c != numero]
         self._reglages.setValue("casques", liste[:CASQUES_RETENUS])
 
+    # --- le secteur électrique du poste (2026-09-30) -------------------------------------------
+    # Retenu dès que le dialogue est VALIDÉ, et non après une ouverture réussie comme un casque :
+    # c'est une propriété de la prise murale, qu'un casque éteint ne rend pas moins vraie.
+
+    def secteur(self):
+        """Le secteur retenu sur ce poste, en Hz — le défaut du dépôt si rien, ou rien de valide.
+
+        `QSettings` rend une CHAÎNE sous Windows (« 60 ») : lu en float, et une valeur que le
+        moteur refuserait (base de registre éditée, version future) retombe sur le défaut plutôt
+        que d'empêcher la console de s'ouvrir.
+        """
+        try:
+            valeur = float(self._reglages.value("secteur_hz", SECTEUR_HZ))
+        except (TypeError, ValueError):
+            return SECTEUR_HZ
+        return valeur if valeur in SECTEURS_HZ else SECTEUR_HZ
+
+    def retenir_secteur(self, secteur_hz):
+        valeur = float(secteur_hz)
+        if valeur not in SECTEURS_HZ:
+            raise ValueError(tr("moteur.refus.secteur_inconnu", valeur=secteur_hz,
+                                liste=", ".join(f"{s:g}" for s in SECTEURS_HZ)))
+        self._reglages.setValue("secteur_hz", valeur)
+
 
 class DialogueDemarrage(QDialog):
     """Le choix de la source — et du casque —, avant que le moteur n'ouvre quoi que ce soit.
@@ -93,10 +128,14 @@ class DialogueDemarrage(QDialog):
     numéro de série saisi.
 
     `erreur` : la raison du refus PRÉCÉDENT, affichée en tête quand la question est reposée.
+
+    `secteur` : le secteur électrique à présélectionner, en Hz ; None = celui que retient la
+    mémoire du poste. Il est ÉCRIT dans la mémoire quand on valide — c'est là que `ouvrir_session`
+    le lit, et `secteur_hz()` le rend aussi.
     """
 
     def __init__(self, parent=None, defaut=UNICORN, numero=None, erreur="", memoire=None,
-                 chercher=casques_appaires, recherche_auto=True, ouvrir_url=None):
+                 chercher=casques_appaires, recherche_auto=True, ouvrir_url=None, secteur=None):
         super().__init__(parent)
         self._chercher = chercher
         self._ouvrir_url = ouvrir_url or (lambda url: QDesktopServices.openUrl(QUrl(url)))
@@ -105,6 +144,7 @@ class DialogueDemarrage(QDialog):
         self.setWindowTitle(tr("console.demarrage.titre"))
         self.setMinimumWidth(560)
         memoire = memoire if memoire is not None else Memoire()
+        self._memoire = memoire
 
         layout = QVBoxLayout(self)
         self.erreur = QLabel(erreur or "")
@@ -164,6 +204,26 @@ class DialogueDemarrage(QDialog):
                 layout.addWidget(self.detection)
                 layout.addWidget(aide_numero)
 
+        # Le SECTEUR électrique (2026-09-30), pour les DEUX sources : le board de test passe par
+        # le même filtre d'acquisition, et un modèle entraîné dessus l'enregistre aussi.
+        self.choix_secteur = ListeSansMolette()
+        for hz in SECTEURS_HZ:
+            self.choix_secteur.addItem(SECTEURS[hz], hz)
+        voulu = memoire.secteur() if secteur is None else float(secteur)
+        self.choix_secteur.setCurrentIndex(max(0, self.choix_secteur.findData(voulu)))
+        self.bulle_secteur = QLabel("ⓘ")
+        self.bulle_secteur.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+        self.bulle_secteur.setCursor(Qt.WhatsThisCursor)
+        self.bulle_secteur.setToolTip(infobulle(tr("console.demarrage.secteur_aide")))
+        ligne_secteur = QHBoxLayout()
+        ligne_secteur.setSpacing(4)
+        ligne_secteur.addWidget(QLabel(tr("console.demarrage.secteur")))
+        ligne_secteur.addWidget(self.bulle_secteur)
+        ligne_secteur.addWidget(self.choix_secteur)
+        ligne_secteur.addStretch(1)
+        layout.addSpacing(8)
+        layout.addLayout(ligne_secteur)
+
         self.manquant = QLabel("")
         self.manquant.setStyleSheet("color: #e5484d;")
         layout.addWidget(self.manquant)
@@ -188,6 +248,10 @@ class DialogueDemarrage(QDialog):
 
     def numero(self):
         return self.champ_numero.currentText().strip()
+
+    def secteur_hz(self):
+        """Le secteur choisi dans la liste, en Hz."""
+        return float(self.choix_secteur.currentData())
 
     # --- la détection des casques ---------------------------------------------------------------
 
@@ -262,6 +326,9 @@ class DialogueDemarrage(QDialog):
             self._accepter_apres = True
             self.manquant.setText(tr("console.demarrage.attente_fin_recherche"))
             return
+        # Le secteur part dans la mémoire du poste au moment où l'on VALIDE : c'est là que
+        # `ouvrir_session` le lit. « Annuler » ne retient rien.
+        self._memoire.retenir_secteur(self.secteur_hz())
         super().accept()
 
     def source(self):
@@ -274,15 +341,20 @@ class DialogueDemarrage(QDialog):
         return None
 
 
-def choisir_source(defaut=UNICORN, numero=None, erreur="", memoire=None, parent=None):
+def choisir_source(defaut=UNICORN, numero=None, erreur="", memoire=None, parent=None,
+                   secteur=None):
     """Ouvre le dialogue ; rend `(source, numéro)`, ou None s'il a été fermé sans choisir.
 
     La recherche automatique ne se relance pas quand la question est REPOSÉE après un échec :
     l'étudiant vient de choisir un casque, la liste de la première recherche est toujours là
     dans sa mémoire, et le bouton « Rechercher » reste à portée.
+
+    Le SECTEUR n'est pas dans ce qui est rendu : le dialogue l'écrit dans `memoire` quand on
+    valide, et l'appelant l'y relit. `secteur` le présélectionne (`--secteur`), à la place de
+    celui que la mémoire retient.
     """
     dlg = DialogueDemarrage(parent=parent, defaut=defaut, numero=numero, erreur=erreur,
-                            memoire=memoire, recherche_auto=not erreur)
+                            memoire=memoire, recherche_auto=not erreur, secteur=secteur)
     dlg.exec()
     source = dlg.source()
     return None if source is None else (source, dlg.numero() if source == UNICORN else None)
@@ -395,6 +467,48 @@ def _selftest():
     chk(rappel.numero() == "UN-F" and rappel.champ_numero.count() == CASQUES_RETENUS,
         f"…et le dialogue propose le DERNIER casque ouvert, les autres dans la liste "
         f"({rappel.numero()}, {rappel.champ_numero.count()})")
+
+    # Le SECTEUR électrique (2026-09-30) : une liste, retenue sur le poste, écrite à la VALIDATION.
+    mem_s = Memoire(_Reglages())
+    chk(mem_s.secteur() == SECTEUR_HZ,
+        f"un poste neuf retient le secteur par défaut du dépôt ({mem_s.secteur()})")
+    neuf = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, **rien)
+    donnees = [neuf.choix_secteur.itemData(i) for i in range(neuf.choix_secteur.count())]
+    chk(donnees == list(SECTEURS_HZ) and neuf.secteur_hz() == SECTEUR_HZ
+        and neuf.choix_secteur.currentText() == SECTEURS[SECTEUR_HZ]
+        and isinstance(neuf.choix_secteur, ListeSansMolette),
+        f"l'écran de départ propose les secteurs du poste, sur le défaut, et la molette ne le "
+        f"change pas en passant ({donnees}, « {neuf.choix_secteur.currentText()} »)")
+    chk("modèle" in neuf.bulle_secteur.toolTip() and "AVANT" in neuf.bulle_secteur.toolTip(),
+        "…avec une bulle ⓘ qui dit à quoi il sert : le coupe-bande de tout, ENREGISTRÉ dans "
+        "chaque modèle — donc à régler avant d'entraîner")
+    neuf.choix_secteur.setCurrentIndex(neuf.choix_secteur.findData(60.0))
+    neuf.reject()
+    chk(mem_s.secteur() == SECTEUR_HZ,
+        f"« Annuler » ne retient RIEN, même un secteur changé ({mem_s.secteur()})")
+    choisi = DialogueDemarrage(defaut=SYNTHETIQUE, memoire=mem_s, **rien)
+    choisi.choix_secteur.setCurrentIndex(choisi.choix_secteur.findData(60.0))
+    choisi.accept()
+    chk(choisi.result() == QDialog.Accepted and mem_s.secteur() == 60.0,
+        f"VALIDER retient le secteur choisi dans la mémoire du poste — c'est là que "
+        f"`ouvrir_session` le lit, board de test compris ({mem_s.secteur()})")
+    rouvert = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, **rien)
+    chk(rouvert.secteur_hz() == 60.0
+        and rouvert.choix_secteur.currentText() == SECTEURS[60.0],
+        f"…et la liste l'AFFICHE à l'ouverture suivante (« {rouvert.choix_secteur.currentText()} »)")
+    impose = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, secteur=50, **rien)
+    chk(impose.secteur_hz() == 50.0,
+        f"`--secteur` présélectionne SA valeur à la place de celle retenue ({impose.secteur_hz()})")
+    for brut, attendu in (("60", 60.0), ("55", SECTEUR_HZ), ("abc", SECTEUR_HZ)):
+        chk(Memoire(_Reglages(secteur_hz=brut)).secteur() == attendu,
+            f"une valeur retenue {brut!r} se relit {attendu:g} Hz : QSettings rend une chaîne, et "
+            f"une valeur que le moteur refuserait retombe sur le défaut")
+    try:
+        mem_s.retenir_secteur(55)
+        chk(False, "retenir un secteur à 55 Hz doit lever")
+    except ValueError as refus:
+        chk("55" in str(refus) and mem_s.secteur() == 60.0,
+            f"…et retenir un secteur inconnu lève sans rien écrire ({refus})")
 
     # Quand la question est REPOSÉE après un échec, la raison est affichée — et la source reste
     # celle que l'étudiant avait choisie : on ne bascule pas pour lui sur le board de test.

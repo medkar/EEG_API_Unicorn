@@ -23,9 +23,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _parse_args(argv):
+    from core.config import SECTEURS_HZ
+
     p = argparse.ArgumentParser(description="EEG_API_Unicorn — console d'expérimentation.")
     p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
     p.add_argument("--serial", default=None, help="numéro de série Unicorn")
+    p.add_argument("--secteur", type=int, choices=[int(s) for s in SECTEURS_HZ], default=None,
+                   help="secteur électrique du poste, en Hz — l'emporte sur celui que retient "
+                        "l'écran de départ (qui le présélectionne alors)")
     p.add_argument("--mode", default=None, help="modes à démarrer, séparés par des virgules")
     p.add_argument("--no-raw", action="store_true", help="ne pas diffuser le signal brut")
     p.add_argument("--id", dest="instance", default=None, help="identité de cette instance")
@@ -3728,8 +3733,10 @@ def _smoke():
     # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
     # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
     # soumission, sans avoir besoin de la boucle.
+    # Au secteur des AMÉRIQUES (2026-09-30) : le coupe-bande des tracés du Brut doit être celui du
+    # MOTEUR. Au défaut (50 Hz), une page qui lirait le défaut du dépôt passerait inaperçue.
     moteur = EngineServer(synthetic=True, modes=("raw", "ssvep", "neuro"),
-                          instance="console-smoke")
+                          instance="console-smoke", secteur_hz=60.0)
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
@@ -4122,7 +4129,14 @@ def _smoke():
     # Le coupe-bande, et le RECALAGE : 30 µV de secteur sur 10 µV d'alpha. Retirer le secteur
     # fait passer l'échelle de 100 à 50 µV — une seule graduation, que la zone morte aurait
     # gardée : le choix qu'on vient de faire doit se voir tout de suite.
-    secteur_30 = 30.0 * np.sin(2 * np.pi * filtres_affichage.SECTEUR_HZ * temps)
+    # ⚠️ Le secteur est celui du MOTEUR, 60 Hz ici (cf. sa construction) : la case le NOMME, et
+    # c'est lui qui part — un 50 Hz, lui, resterait.
+    chk(vue.secteur_hz == moteur.secteur_hz == 60.0
+        and vue.case_secteur.text() == tr("pages.traces.secteur", hz=nombre(60.0))
+        and nombre(60.0) in vue.bulle_secteur.toolTip(),
+        f"sur un moteur réglé à 60 Hz, la case du coupe-bande et sa bulle disent 60 Hz, pas le "
+        f"défaut du dépôt (« {vue.case_secteur.text()} »)")
+    secteur_30 = 30.0 * np.sin(2 * np.pi * moteur.secteur_hz * temps)
     _redessine(np.stack([alpha_10 + secteur_30] * 8, axis=1))
     avant = vue.ecart
     vue.case_secteur.setChecked(True)
@@ -4131,9 +4145,14 @@ def _smoke():
         f"coupe-bande : le secteur part ({reste:.0f} µV crête à crête pour 20 d'alpha) et "
         f"l'échelle se recale aussitôt ({avant:g} → {vue.ecart:g} µV)")
     avec = tr("pages.traces.avec_secteur", filtre=nom_filtre(filtres_affichage.FILTRE_DEFAUT),
-              hz=nombre(filtres_affichage.SECTEUR_HZ))
+              hz=nombre(moteur.secteur_hz))
     chk(vue.echelle.text().startswith(avec),
         f"…et l'étiquette le dit (« {vue.echelle.text()[:50]}… »)")
+    _redessine(np.stack([alpha_10 + 30.0 * np.sin(2 * np.pi * 50.0 * temps)] * 8, axis=1))
+    reste_50 = float(np.ptp(vue.courbes[0].yData[len(temps) // 4:]))
+    chk(reste_50 > 60.0,
+        f"…et c'est bien 60 Hz qui part, pas 50 : un bourdonnement à 50 Hz traverse le "
+        f"coupe-bande d'un poste à 60 Hz ({reste_50:.0f} µV crête à crête)")
     vue.case_secteur.setChecked(False)
 
     # --- 🔴 LE BLOC DE RÉSULTAT : TROIS LIGNES, LE RESTE RANGÉ -----------------------------
@@ -4267,6 +4286,7 @@ def _smoke():
     import argparse as _argparse
 
     ordre = []
+    lances = []         # (numéro, secteur) de chaque moteur construit
 
     class _FauxFil:
         def __init__(self, vivant):
@@ -4289,32 +4309,46 @@ def _smoke():
             ordre.append(f"close {self.numero}")
 
     class _FausseMemoire:
-        def __init__(self):
+        def __init__(self, secteur_hz=50.0):
             self.retenus = []
+            self.secteur_hz = secteur_hz        # le secteur que retient le poste
 
         def retenir(self, numero):
             self.retenus.append(numero)
 
-    def _scenario(issues, reponses, synthetic=False):
+        def secteur(self):
+            return self.secteur_hz
+
+        def retenir_secteur(self, hz):
+            self.secteur_hz = float(hz)
+
+    def _scenario(issues, reponses, synthetic=False, secteur_poste=50.0, secteur_cli=None,
+                  secteur_valide=None):
         """Rejoue `ouvrir_session` : `issues` = ce que rend l'attente à chaque essai, `reponses` =
-        ce que choisit l'étudiant à chaque fois que la question lui est posée."""
+        ce que choisit l'étudiant à chaque fois que la question lui est posée. `secteur_valide` :
+        le secteur que le faux dialogue écrit dans la mémoire en validant, comme le vrai."""
         ordre.clear()
-        questions, memoire = [], _FausseMemoire()
+        lances.clear()
+        questions, memoire = [], _FausseMemoire(secteur_poste)
         issues, reponses = list(issues), list(reponses)
 
         def choisir(**kw):
             questions.append(kw)
-            return reponses.pop(0)
+            reponse = reponses.pop(0)
+            if reponse is not None and secteur_valide is not None:
+                memoire.retenir_secteur(secteur_valide)
+            return reponse
 
-        def lancer(_args, _modes, synth, numero):
+        def lancer(_args, _modes, synth, numero, secteur_hz):
             ordre.append(f"lancer {numero or 'test'}")
+            lances.append((numero, secteur_hz))
             return (_FauxMoteurOuverture(numero), _FauxFil(True),
                     {"raison": "UNABLE_TO_OPEN_PORT_ERROR"})
 
         def attendre(_engine, _vivant, _texte):
             return issues.pop(0)
 
-        args = _argparse.Namespace(synthetic=synthetic, serial=None)
+        args = _argparse.Namespace(synthetic=synthetic, serial=None, secteur=secteur_cli)
         rendu = ouvrir_session(args, ["raw"], lancer=lancer, choisir=choisir, attendre=attendre,
                                memoire=memoire)
         return rendu, questions, memoire.retenus
@@ -4345,6 +4379,66 @@ def _smoke():
     chk(rendu is not None and not questions and not retenus,
         "`--synthetic` saute le dialogue, et le board de test n'entre pas dans la mémoire des "
         "casques")
+
+    # --- Le SECTEUR du poste jusqu'au moteur (2026-09-30) -----------------------------------
+    # Le dialogue l'écrit dans la mémoire en validant ; `ouvrir_session` l'y relit et le passe à
+    # CHAQUE moteur construit — celui d'après un échec compris. 60 Hz, pas le défaut : un
+    # secteur perdu en route retomberait sur 50 sans rien casser.
+    _scenario(["echec", "ouvert"], [(UNICORN, "UN-ETEINT"), (UNICORN, "UN-BON")],
+              secteur_poste=50.0, secteur_valide=60.0)
+    chk(lances == [("UN-ETEINT", 60.0), ("UN-BON", 60.0)],
+        f"le secteur VALIDÉ dans l'écran de départ part au moteur, et au suivant après un échec "
+        f"({lances})")
+    _rendu, questions, _r = _scenario(["echec", "ouvert"], [(UNICORN, "A"), (UNICORN, "B")],
+                                      secteur_poste=50.0, secteur_valide=60.0)
+    chk([q.get("secteur") for q in questions] == [None, 60.0],
+        f"…et la question REPOSÉE présélectionne le secteur qu'on vient de choisir, pas un autre "
+        f"({[q.get('secteur') for q in questions]})")
+    _scenario(["ouvert"], [], synthetic=True, secteur_poste=60.0)
+    chk(lances == [(None, 60.0)],
+        f"`--synthetic` saute le dialogue et prend le secteur que RETIENT le poste ({lances})")
+    memoire_cli = _FausseMemoire(60.0)
+    lances.clear()
+
+    def lancer_cli(_args, _modes, _synth, numero, secteur_hz):
+        lances.append((numero, secteur_hz))
+        return _FauxMoteurOuverture(numero), _FauxFil(True), {}
+
+    ouvrir_session(_argparse.Namespace(synthetic=True, serial=None, secteur=50), ["raw"],
+                   lancer=lancer_cli, choisir=lambda **kw: None, attendre=lambda *_: "ouvert",
+                   memoire=memoire_cli)
+    chk(lances == [(None, 50.0)] and memoire_cli.secteur_hz == 60.0,
+        f"`--secteur` l'emporte sur la mémoire, SANS y être écrit : un drapeau de développeur ne "
+        f"règle pas le poste de l'étudiant suivant ({lances}, mémoire {memoire_cli.secteur_hz})")
+    _rendu, questions, _r = _scenario(["ouvert"], [(UNICORN, "UN-BON")], secteur_cli=60,
+                                      secteur_poste=50.0, secteur_valide=50.0)
+    chk(questions and questions[0].get("secteur") == 60.0 and lances == [("UN-BON", 50.0)],
+        f"…et sans `--synthetic`, il PRÉSÉLECTIONNE sa valeur dans l'écran de départ — mais le "
+        f"choix VALIDÉ à l'écran l'emporte sur le drapeau ({questions and questions[0].get('secteur')}"
+        f" présélectionné, {lances} lancé)")
+    # Le DERNIER maillon, que les scénarios ci-dessus remplacent : le vrai `_lancer_moteur` passe
+    # le secteur au constructeur du moteur. Un espion à la place d'`EngineServer`, qui n'ouvre rien.
+    recu = {}
+
+    class _MoteurEspion:
+        def __init__(self, **kw):
+            recu.update(kw)
+
+        def run(self, **_kw):
+            pass
+
+    vrai_moteur = globals()["EngineServer"]
+    globals()["EngineServer"] = _MoteurEspion
+    try:
+        _e, fil_espion, _i = _lancer_moteur(
+            _argparse.Namespace(verbose=False, instance="smoke", baseline=None, warmup=None),
+            ["raw"], True, None, 60.0)
+        fil_espion.join(timeout=5.0)
+    finally:
+        globals()["EngineServer"] = vrai_moteur
+    chk(recu.get("secteur_hz") == 60.0,
+        f"…jusqu'au constructeur du moteur, par le vrai `_lancer_moteur` "
+        f"({recu.get('secteur_hz')!r})")
 
     # --- Un casque qui DÉCROCHE, dit par le bandeau (2026-09-25) -----------------------------
     # Le moteur réessaie seul (`server.py`, `[smoke-liaison]`) ; l'écran doit le DIRE — sinon il
@@ -4747,15 +4841,18 @@ def _smoke():
     return ok
 
 
-def _lancer_moteur(args, modes, synthetic, numero):
+def _lancer_moteur(args, modes, synthetic, numero, secteur_hz):
     """Construit le moteur et démarre SON fil. Rend `(engine, thread, issue)`.
 
     `issue["raison"]` est rempli par le fil s'il meurt sur une exception — typiquement le casque
     qui refuse de s'ouvrir (`prepare_session()`) : c'est cette raison que l'écran de départ
     affichera en reposant la question. La trace complète part quand même au terminal.
+
+    `secteur_hz` : le secteur électrique du poste (cf. `ouvrir_session`), que le moteur coupe et
+    que chaque entraînement enregistre dans son modèle.
     """
     engine = EngineServer(serial=numero, synthetic=synthetic, verbose=args.verbose,
-                          modes=modes, instance=args.instance)
+                          modes=modes, instance=args.instance, secteur_hz=secteur_hz)
     issue = {}
 
     def cible():
@@ -4784,27 +4881,36 @@ def ouvrir_session(args, modes, lancer=_lancer_moteur, choisir=choisir_source,
     ⚠️ **Aucun repli.** Après un échec, la question est reposée avec la raison, et la source reste
     celle que l'étudiant avait choisie (cf. `console/demarrage.py`) : jamais le board de test à
     sa place. Les dépendances s'injectent pour que le smoke rejoue un échec sans casque.
+
+    Le SECTEUR électrique (2026-09-30) : celui que le dialogue vient d'écrire dans `memoire` en
+    validant. `--secteur` le présélectionne dans le dialogue, et quand `--synthetic` saute le
+    dialogue, il l'emporte sur la mémoire — sans y être écrit : un drapeau de développeur ne
+    change pas le réglage du poste pour l'étudiant suivant.
     """
     memoire = memoire if memoire is not None else Memoire()
     source = SYNTHETIQUE if args.synthetic else None
     numero = args.serial
+    secteur = None if args.secteur is None else float(args.secteur)
     erreur = ""
     while True:
         # `--synthetic` reste accepté et SAUTE le dialogue : c'est le raccourci du développeur et
         # des smokes, pas le chemin normal. Mais un ÉCHEC repose la question, même alors.
         if source is None or erreur:
             choix = choisir(defaut=source or UNICORN, numero=numero, erreur=erreur,
-                            memoire=memoire)
+                            memoire=memoire, secteur=secteur)
             if choix is None:
                 print("[console] aucune source choisie — la console ne démarre pas.")
                 return None
             source, numero = choix
+            secteur = memoire.secteur()     # écrit par le dialogue, à la validation
+        if secteur is None:
+            secteur = memoire.secteur()     # `--synthetic` sans `--secteur`
         synthetic = source == SYNTHETIQUE
         # `EngineServer` valide les modes demandés dans son constructeur et lève un `ValueError`
         # déjà rédigé pour être lu (cf. core/server.py) — sans modèle MI entraîné, par exemple,
         # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Il ne dépend PAS
         # du casque : le reposer ne servirait à rien, on le laisse remonter à `run()`.
-        engine, thread, issue = lancer(args, modes, synthetic, numero)
+        engine, thread, issue = lancer(args, modes, synthetic, numero, secteur)
         texte = (tr("console.demarrage.attente_test") if synthetic
                  else tr("console.demarrage.attente_casque", numero=numero))
         etat = attendre(engine, thread.is_alive, texte)
