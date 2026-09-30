@@ -298,6 +298,14 @@ def verifie_freqs(freqs, refresh):
 
     Le seul refus qui appartienne à la FENÊTRE est le nombre de places. Le moteur accepte jusqu'à
     8 cibles ; cet écran a quatre directions et ne sait pas en dessiner davantage.
+
+    ⚠️ **La BANDE n'est pas l'affaire de la fenêtre** (passe C1, 2026-09-30). Elle ne la reçoit
+    pas, et `validate` complète ce qu'on ne lui passe pas avec les DÉFAUTS du contrat : la fenêtre
+    jugeait donc les fréquences contre 5-40 Hz, en parlant de « la bande RÉGLÉE ». Aux boutons :
+    coupure basse à 3 Hz, « Proposer » rend 3 · 12 · 20 · 30, « Appliquer » accepte, « Tester »
+    lance cette fenêtre… qui refuse. On juge donc contre la bande la PLUS LARGE que les réglages
+    du mode permettent : aucune bande que le moteur accepte n'en sort, et tout le reste — les
+    diviseurs du rafraîchissement, la séparabilité — est jugé comme avant, par le contrat.
     """
     # Import TARDIF : la fenêtre doit rester importable et lançable sans traîner le décodeur du
     # mode derrière elle. Même geste que `stimulus/cvep.py` pour `core.modes`.
@@ -311,7 +319,10 @@ def verifie_freqs(freqs, refresh):
                 + ", ".join(e["name"] for e in EMPLACEMENTS)
                 + "). Le moteur, lui, en accepte davantage : c'est la GÉOMÉTRIE qui borne, pas le "
                   "décodage.")
-    _valides, raison = validate(SPEC, {"freqs": freqs, "refresh_hz": float(refresh)})
+    par_cle = {p.key: p for p in SPEC.params}
+    la_plus_large = {"bande_bas": par_cle["bande_bas"].min, "bande_haut": par_cle["bande_haut"].max}
+    _valides, raison = validate(SPEC, {"freqs": freqs, "refresh_hz": float(refresh),
+                                       **la_plus_large})
     return raison
 
 
@@ -1072,6 +1083,30 @@ def _smoke():
     chk(trop is not None,
         f"…et cinq cibles sont refusées par la FENÊTRE : le moteur en accepte 8, cet écran a "
         f"quatre directions et ne sait pas en dessiner plus ({(trop or 'AUCUN REFUS')[:50]}…)")
+
+    # --- H bis. LA BANDE N'EST PAS L'AFFAIRE DE LA FENÊTRE (passe C1, 2026-09-30) ----------
+    #
+    # Le parcours aux boutons : coupure basse à 3 Hz dans « Régler », « Proposer », « Appliquer »,
+    # « Tester ». Le moteur accepte le jeu ; la fenêtre le jugeait contre la bande PAR DÉFAUT
+    # (5-40 Hz) et refusait de s'ouvrir. Le jeu est celui que le moteur propose VRAIMENT, par la
+    # même fonction que `propose_params`.
+    from core.config import propose_frequencies
+    from core.modes.contract import validate as _valider
+    from core.modes.ssvep import SPEC as _SPEC_SSVEP
+    propose, _note = propose_frequencies(60.0, 4, bande=(3.0, 40.0))
+    moteur_v, moteur_r = _valider(_SPEC_SSVEP, {"freqs": propose, "bande_bas": 3.0})
+    chk(propose and min(propose) < 5.0 and moteur_v is not None,
+        f"(précondition) sous une coupure basse à 3 Hz, le moteur propose une cible sous 5 Hz et "
+        f"l'accepte ({[round(f, 3) for f in propose]}, {moteur_r or 'accepté'})")
+    raison_fenetre = verifie_freqs(propose, 60.0)
+    chk(raison_fenetre is None,
+        f"…et la FENÊTRE l'affiche : elle ne juge plus la bande, qu'elle ne reçoit pas "
+        f"({raison_fenetre or 'accepté'})")
+    # …mais elle ne juge pas « rien » : ce qu'AUCUNE bande réglable ne contient reste refusé.
+    raison_hors = verifie_freqs([50.0, 20.0], 100.0)
+    chk(raison_hors is not None and "50" in raison_hors,
+        f"…alors que 50 Hz, au-dessus de TOUTE coupure haute que le mode accepte, est refusé "
+        f"({(raison_hors or 'AUCUN REFUS')[:70]}…)")
 
     # --- I. LE COMPTEUR DE FRAMES SAUTÉES COMPTE, ET NE CORRIGE RIEN ---------------
     #
