@@ -158,9 +158,10 @@ class MesurePage(QWidget):
         cles_du_mode = {p["key"] for p in (mode or {}).get("params") or ()}
         self.depuis_le_mode = [cle for cle in self.formulaire.champs if cle in cles_du_mode]
         for cle in self.depuis_le_mode:
-            # Désactivé EXPLICITEMENT : `update_from` réactive le formulaire entier après une
-            # séance, et Qt ne réactive pas un enfant qu'on a désactivé lui-même.
-            self.formulaire.champs[cle].setEnabled(False)
+            # `figer` le désactive EXPLICITEMENT (`update_from` réactive le formulaire entier après
+            # une séance, et Qt ne réactive pas un enfant qu'on a désactivé lui-même), et
+            # « Rétablir les valeurs par défaut » le laisse tel quel.
+            self.formulaire.figer(cle)
         self.origine = QLabel(
             tr("pages.mesure.origine", mode=mode["label"]) if self.depuis_le_mode else "")
         self.origine.setWordWrap(True)

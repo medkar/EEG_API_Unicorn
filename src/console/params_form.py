@@ -73,6 +73,7 @@ class ParamsForm(QWidget):
         self.aides = {}                 # {clé : (la bulle « ⓘ », le texte complet du contrat)}
         self.lignes = {}                # {clé : la ligne du champ} — cf. `ajouter_a_cote`
         self.titres = {}                # {clé : la ligne du libellé, suivi de sa bulle « ⓘ »}
+        self.lecture_seule = set()      # les clés figées par la page (cf. `figer`)
         self._params_par_cle = {p["key"]: p for p in self.params}
 
         formulaire = QFormLayout()
@@ -162,9 +163,21 @@ class ParamsForm(QWidget):
         self.confirmation.setWordWrap(True)
         self.confirmation.setStyleSheet("color: #3fae5a;")
 
+        # « Rétablir les valeurs par défaut », en bas à droite (demandé le 2026-09-30 : « partout
+        # où il y a des réglages »). Les défauts sont ceux que le MOTEUR déclare dans son contrat
+        # (`param["default"]`) : la console n'en tient aucune copie. Il REMPLIT les champs, il
+        # n'applique rien — comme « Proposer » : ce qui part au moteur part avec « Appliquer » ou
+        # « Commencer », pour que l'étudiant voie ce qui change avant que ça change.
+        self.bouton_defauts = QPushButton(tr("console.formulaire.defauts"))
+        self.bouton_defauts.setToolTip(infobulle(tr("console.formulaire.defauts_aide")))
+        self.bouton_defauts.clicked.connect(self.retablir_defauts)
+
         bas = QHBoxLayout()
         bas.addWidget(self.bouton)
         bas.addStretch(1)
+        bas.addWidget(self.bouton_defauts)
+        self.ligne_bas = bas
+        self._montrer_defauts()
 
         # `None` quand il y a des réglages : un QLabel construit sans parent serait une fenêtre
         # de premier niveau en Qt, pas un widget inerte.
@@ -180,6 +193,40 @@ class ParamsForm(QWidget):
         layout.addWidget(self.refus)
         layout.addWidget(self.avertissement)
         layout.addWidget(self.confirmation)
+
+    def figer(self, cle):
+        """Rend le champ `cle` non modifiable : il MONTRE une valeur qui se règle ailleurs.
+
+        La page de test y range les réglages qui viennent du mode : les rétablir ici afficherait
+        des défauts qui ne sont pas en vigueur. `retablir_defauts` les laisse donc tels quels, et le
+        bouton disparaît s'il ne reste rien à rétablir.
+        """
+        champ = self.champs.get(cle)
+        if champ is None:
+            return
+        # Désactivé EXPLICITEMENT : une page qui réactive le formulaire entier après une séance
+        # ne réactive pas un enfant qu'on a désactivé lui-même.
+        champ.setEnabled(False)
+        self.lecture_seule.add(cle)
+        self._montrer_defauts()
+
+    def _montrer_defauts(self):
+        """Pas de bouton quand il n'y a rien à rétablir : un bouton sans effet est un mensonge."""
+        self.bouton_defauts.setVisible(
+            any(p["key"] not in self.lecture_seule for p in self.params))
+
+    def retablir_defauts(self):
+        """Remet chaque champ MODIFIABLE à son défaut. N'applique rien."""
+        for param in self.params:
+            cle = param["key"]
+            if cle in self.lecture_seule:
+                continue
+            if param["kind"] == "choice" and param["default"] is None:
+                # Un choix sans défaut déclaré (les modèles) : le moteur prend le PREMIER de la
+                # liste, le plus récent — `Param.default_now`. Même règle ici.
+                self.champs[cle].setCurrentIndex(0)
+            elif param["default"] is not None:
+                self.remplir(cle, param["default"])
 
     def ajouter_a_cote(self, cle, widget):
         """Pose `widget` à droite du champ `cle`. Ne fait rien si ce formulaire n'a pas ce champ."""

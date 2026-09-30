@@ -141,6 +141,7 @@
   "pages.traces.aucun_filtre": "Aucun (signal brut)",
   "pages.traces.avec_secteur": "{filtre} + coupe-bande {hz} Hz",
   "pages.traces.axe_temps": "secondes",
+  "pages.traces.defauts_aide": "Revient au filtre d'affichage de départ (passe-haut 1 Hz, coupe-bande décoché). Ne touche que le tracé.",
   "pages.traces.echelle": "{filtre} · un couloir = {ecart} µV · {secondes} dernières secondes",
   "pages.traces.filtre": "Filtre d'affichage",
   "pages.traces.filtre_aide": "Ne change que ce tracé : le flux publié sur le réseau et ce que décodent les modes restent inchangés. Un passe-haut retire la dérive lente des voies ; plus il coupe haut, plus il déforme un clignement (plus petit, suivi d'un rebond). 5–40 Hz est la bande du décodage SSVEP.",

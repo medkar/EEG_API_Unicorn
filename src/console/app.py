@@ -4140,6 +4140,62 @@ def _smoke():
         "…la calibration MI a pourtant des réglages : le bouton est caché exprès, pas faute de "
         "réglage")
 
+    # --- « Rétablir les valeurs par défaut », partout où il y a des réglages (2026-09-30) -------
+    # Demandé en QA. Les défauts viennent du CATALOGUE du moteur ; le bouton REMPLIT les champs et
+    # n'applique rien — même règle que « Proposer ».
+    f_ss = reelle.pages["ssvep"].formulaire
+    defauts_ss = {p["key"]: p["default"] for p in f_ss.params}
+    emis = []
+    f_ss.appliquer.connect(emis.append)
+    # Le texte AFFICHÉ au départ (8,571… s'y écrit « 8.57143 ») : c'est lui qu'on doit retrouver.
+    freqs_depart = f_ss.champs["freqs"].text()
+    f_ss.champs["z_min"].setValue(5.0)
+    f_ss.champs["bande_haut"].setValue(25.0)
+    f_ss.champs["freqs"].setText("12, 20")
+    f_ss.bouton_defauts.click()
+    remis = f_ss.values()
+    chk(remis["z_min"] == defauts_ss["z_min"] and remis["bande_haut"] == defauts_ss["bande_haut"]
+        and f_ss.champs["freqs"].text() == freqs_depart,
+        f"« Rétablir les valeurs par défaut » remet les champs du SSVEP aux défauts du contrat "
+        f"({remis['z_min']}, {remis['bande_haut']}, {remis['freqs']})")
+    chk(not emis, "…sans rien appliquer : ce qui part au moteur part avec « Appliquer »")
+    f_ss.appliquer.disconnect(emis.append)
+    bas_ss = f_ss.ligne_bas
+    chk(bas_ss.indexOf(f_ss.bouton_defauts) == bas_ss.count() - 1
+        and bas_ss.itemAt(bas_ss.count() - 2).spacerItem() is not None,
+        "…et il est EN BAS À DROITE du formulaire, après l'espace qui pousse")
+    f_p3 = reelle.calib_pages["p300"].formulaire
+    f_p3.champs["bande_bas"].setValue(0.7)
+    f_p3.bouton_defauts.click()
+    chk(f_p3.values()["bande_bas"] == 1.0 and not f_p3.bouton_defauts.isHidden(),
+        f"…sur une page d'ENTRAÎNEMENT aussi ({f_p3.values()['bande_bas']})")
+    f_t3 = reelle.mesure_pages["p300_test"].formulaire
+    defaut_essais = {p["key"]: p["default"] for p in f_t3.params}["essais"]
+    f_t3.champs["essais"].setCurrentIndex(
+        (f_t3.champs["essais"].currentIndex() + 1) % f_t3.champs["essais"].count())
+    f_t3.bouton_defauts.click()
+    chk(f_t3.values()["essais"] == defaut_essais and "model" in f_t3.lecture_seule,
+        f"…sur une page de TEST, pour ses réglages PROPRES ({f_t3.values()['essais']}), et le "
+        f"modèle, qui vient du mode, reste figé")
+    f_ts = reelle.mesure_pages["ssvep_taux"].formulaire
+    chk(f_ts.bouton_defauts.isHidden() and set(f_ts.lecture_seule) == set(f_ts.champs),
+        "…mais PAS sur le test SSVEP, dont tous les réglages viennent du mode : un bouton qui ne "
+        "rétablirait rien serait un mensonge")
+    f_ts.champs["z_min"].setValue(4.5)      # la valeur du MODE, pas le défaut
+    f_ts.retablir_defauts()
+    chk(f_ts.values()["z_min"] == 4.5,
+        f"…et même appelé à la main, il ne touche aucun champ figé : il montre la valeur du mode, "
+        f"pas le défaut ({f_ts.values()['z_min']})")
+    chk(reelle.pages["raw"].formulaire.bouton_defauts.isHidden(),
+        "…ni sur le formulaire du Brut, qui n'a aucun réglage")
+    vue_brut = reelle.pages["raw"].vue
+    vue_brut.choix_filtre.setCurrentIndex(0)
+    vue_brut.case_secteur.setChecked(True)
+    vue_brut.bouton_defauts.click()
+    from core import filtres_affichage as _filtres
+    chk(vue_brut.filtre == _filtres.FILTRE_DEFAUT and not vue_brut.case_secteur.isChecked(),
+        "…et les filtres d'AFFICHAGE du Brut ont le leur : passe-haut 1 Hz, coupe-bande décoché")
+
     # --- régression : un « choice » NUMÉRIQUE round-trip son TYPE, contre le VRAI validateur ----
     # Trouvé en écrivant cette page, AVANT tout écran : `trials_per_class` (calibration MI) est le
     # premier « choice » du projet dont le défaut n'est PAS le premier choix (MI_SESSIONS[1] = 14,

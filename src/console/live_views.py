@@ -12,7 +12,7 @@ import sys
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QFormLayout, QHBoxLayout, QLabel, QProgressBar,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import (SPAN_SEUILS, classement_relatif, decompte,  # noqa: E402
@@ -140,6 +140,12 @@ class TracesView(QWidget):
         rang.addWidget(self.case_secteur)
         rang.addWidget(self.bulle_secteur)
         rang.addStretch(1)
+        # Le même « Rétablir les valeurs par défaut » que les formulaires, au bout de la ligne de
+        # ces deux réglages (demandé le 2026-09-30 : « partout où il y a des réglages »).
+        self.bouton_defauts = QPushButton(tr("console.formulaire.defauts"))
+        self.bouton_defauts.setToolTip(infobulle(tr("pages.traces.defauts_aide")))
+        self.bouton_defauts.clicked.connect(self.retablir_defauts)
+        rang.addWidget(self.bouton_defauts)
 
         layout = QVBoxLayout(self)
         layout.addLayout(rang)
@@ -163,6 +169,13 @@ class TracesView(QWidget):
         secteur = nombre(self.secteur_hz)
         self.case_secteur.setText(tr("pages.traces.secteur", hz=secteur))
         self.bulle_secteur.setToolTip(infobulle(tr("pages.traces.secteur_aide", hz=secteur)))
+
+    def retablir_defauts(self):
+        """Le filtre par défaut (`filtres_affichage.FILTRE_DEFAUT`), coupe-bande décoché. Ce sont
+        des réglages d'AFFICHAGE : ils prennent effet tout de suite, il n'y a rien à appliquer."""
+        self.choix_filtre.setCurrentIndex(
+            filtres_affichage.FILTRES.index(filtres_affichage.FILTRE_DEFAUT))
+        self.case_secteur.setChecked(False)
 
     def _choisit_filtre(self, index):
         self.filtre = filtres_affichage.FILTRES[index]

@@ -80,6 +80,8 @@
   "console.fenetre.titre": "EEG_API_Unicorn — console d'expérimentation",
   "console.formulaire.appliquer": "Appliquer",
   "console.formulaire.aucun_reglage": "Aucun réglage à changer ici.",
+  "console.formulaire.defauts": "Rétablir les valeurs par défaut",
+  "console.formulaire.defauts_aide": "Remet chaque champ modifiable à la valeur prévue par le moteur. Rien ne part tant que tu n'as pas validé (« Appliquer » ou « Commencer »).",
   "console.formulaire.ecran_detecte": "Ton écran principal est à {hz} Hz : c'est là que s'ouvrent les fenêtres de stimulus de la console. Si ton application affiche les cibles sur un autre écran, mets ici la fréquence de celui-là.",
   "console.formulaire.liste_indice": "de {min} à {max} valeurs, séparées par des virgules",
   "console.formulaire.proposer": "Proposer « {champ} »",
