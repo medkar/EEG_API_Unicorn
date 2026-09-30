@@ -699,6 +699,20 @@ tomber dans le coupe-bande secteur).
 ❌ Régression : une fréquence hors de la bande réglée acceptée ; « Proposer » qui propose hors de
 la bande à l'écran ; une valeur hors bornes corrigée en silence au lieu d'être refusée.
 
+### ☐ 1.16 — « Rétablir les valeurs par défaut », partout où il y a des réglages
+
+✅ Page **SSVEP**, « 1. Régler » : change le seuil et la coupure haute → **« Rétablir les valeurs
+par défaut »**, **en bas à droite** du bloc : les champs reviennent aux défauts, et **rien n'est
+appliqué** (pas de message vert ; il faut encore cliquer « Appliquer »).
+✅ Même bouton sur une page **« Entraîner »** (ex. P300 : coupure basse à 0,7 → bouton → 1).
+✅ Page **« Tester »** du P300 : il remet le nombre d'essais, mais **pas** le modèle, grisé, qui
+vient du mode. Page **« Tester »** du SSVEP : **pas de bouton**, tous ses réglages viennent du mode.
+✅ **Brut** : au bout de la ligne des filtres, le même bouton remet « Passe-haut 1 Hz » et
+décoche le coupe-bande. **Pas** de bouton dans son bloc « 1. Régler », qui n'a aucun réglage.
+
+❌ Régression : le bouton applique tout seul ; il touche un champ grisé ; il apparaît là où il n'y
+a rien à rétablir.
+
 ---
 
 # Bloc 2 — au casque
