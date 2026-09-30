@@ -210,11 +210,13 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s, band, se
                   for i in range(len(groups))])
     ok = tot = 0
     for r in sorted(set(groups.tolist())):
-        tr = groups != r
-        if len(set(y[tr].tolist())) < 2:
+        # `appris` et pas `tr` : ce nom-là masquerait `tr()` (les textes affichés) dans toute la
+        # fonction, et le premier message traduit ajouté ici appellerait un tableau de booléens.
+        appris = groups != r
+        if len(set(y[appris].tolist())) < 2:
             continue
         m = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s,
-                      secteur_hz=secteur_hz).fit(epochs[tr], y[tr], compute_cv=False)
+                      secteur_hz=secteur_hz).fit(epochs[appris], y[appris], compute_cv=False)
         te = np.where(groups == r)[0]
         by = {}
         for i in te:
@@ -290,7 +292,9 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         # aussi : ce sont les époques BRUTES, et un ré-entraînement qui voudrait refaire CE
         # modèle doit savoir avec quel filtre. `secteur_hz = 0` veut dire « pas de coupe-bande »
         # (la convention de `core/filtrage.py`, qui ne coupe que si le secteur est vrai) : un
-        # None ferait un tableau d'objets, illisible sans `allow_pickle`.
+        # None ferait un tableau d'objets, illisible sans `allow_pickle`. Et leur ABSENCE, dans
+        # un `.npz` d'avant le 2026-09-30, a un sens précis : cf. la docstring de
+        # `core/p300_models.py`.
         np.savez(chemin_npz, epochs=epochs, labels=labels, flashed=flashed, groups=groups,
                  cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s,
                  band=np.asarray(modele.band, dtype=float),
@@ -767,7 +771,11 @@ def _selftest():
         # chiffre affiché serait celui d'un modèle que personne n'enregistre, et il resterait
         # plausible. On espionne donc CHAQUE filtrage fait pendant l'entraînement, pas seulement
         # le modèle écrit : c'est le seul endroit où un modèle de CV mal construit se voit.
-        from core import p300_decoder as _p3dec
+        # ⚠️ L'espion est posé sur `core.filtrage.sections`, et sur rien de plus haut : c'est le
+        # SEUL point par lequel passent tous les chemins. `passe_bande` le cherche dans son module
+        # à chaque appel ; un `bandpass` importé PAR SON NOM ailleurs (`errp_decoder` le fait), ou un
+        # appel direct à `passe_bande`, échappaient à l'espion de `p300_decoder.bandpass` d'avant.
+        from core import filtrage as _filtrage
         from core.modes.contract import validate
 
         defauts, _raison = validate(calib, {})
@@ -778,11 +786,32 @@ def _selftest():
         chk(refus_b is None and tr("moteur.bande.bas") in (raison_b or ""),
             f"une bande qui retirerait le P300 (8-30 Hz, celle du Motor Imagery) est REFUSÉE à "
             f"l'entrée, en nommant la coupure fautive ({raison_b})")
+        # Les bornes, des DEUX côtés de CHAQUE coupure : basse de 0,5 à 1 Hz (l'onde vit en partie
+        # sous 2 Hz ; plus bas que 0,5, un filtre sur une époque d'1 s ne fait plus que ses bords),
+        # haute de 8 à 40 Hz. Le seul refus testé avant (8-30 Hz) laissait survivre des bornes
+        # (0,1 ; 7,9) ou (2,5 ; 40) : chaque cas ci-dessous en tue au moins une.
+        cas_bornes = (((0.5, 12.0), None), ((1.0, 8.0), None), ((1.0, 40.0), None),
+                      ((0.4, 12.0), "moteur.bande.bas"), ((1.2, 12.0), "moteur.bande.bas"),
+                      ((1.0, 7.8), "moteur.bande.haut"), ((1.0, 41.0), "moteur.bande.haut"))
+        ecarts = []
+        for (bas_b, haut_b), fautive in cas_bornes:
+            val_b, raison_bb = validate(calib, {"bande_bas": bas_b, "bande_haut": haut_b})
+            if fautive is None and val_b is None:
+                ecarts.append(f"{bas_b}-{haut_b} refusée ({raison_bb})")
+            elif fautive is not None and (val_b is not None
+                                          or tr(fautive) not in (raison_bb or "")):
+                ecarts.append(f"{bas_b}-{haut_b} acceptée ou mal nommée ({raison_bb})")
+        chk(not ecarts,
+            f"bornes : coupure basse de 0,5 à 1 Hz, haute de 8 à 40 Hz, les quatre bords acceptés "
+            f"et chaque dépassement refusé en nommant SA coupure ({ecarts or 'aucun écart'})")
         nominal = P300Model.load(res["modele"])
         chk(tuple(nominal.band) == tuple(P300_BAND) and nominal.secteur_hz == SECTEUR_HZ,
             f"sans réglage, le modèle apprend la bande de toujours, et le secteur PAR DÉFAUT du "
             f"poste quand le moteur ne dit pas le sien — jamais « pas de coupe-bande » "
             f"({nominal.band}, {nominal.secteur_hz})")
+        chk(res.get("filtre") == texte_filtre(P300_BAND, SECTEUR_HZ),
+            f"...et « Détails » le DIT : la ligne `filtre` du résultat nomme cette bande et ce "
+            f"secteur ({res.get('filtre')!r})")
 
         BANDE, SECTEUR = (0.5, 20.0), 60.0
         reglages, raison_r = validate(calib, {"bande_bas": BANDE[0], "bande_haut": BANDE[1]})
@@ -790,20 +819,20 @@ def _selftest():
         moteur_f = _MoteurFactice(eeg, ts)
         moteur_f.secteur_hz = SECTEUR              # un poste aux Amériques
         filtrages = []
-        vrai_bandpass = _p3dec.bandpass
+        vraies_sections = _filtrage.sections
 
-        def _bandpass_espion(x, fs, band=P300_BAND, order=4, secteur_hz=None):
-            filtrages.append((tuple(float(b) for b in band), secteur_hz))
-            return vrai_bandpass(x, fs, band, order=order, secteur_hz=secteur_hz)
+        def _sections_espion(fs, bande, secteur_hz=None, ordre=_filtrage.ORDRE):
+            filtrages.append((tuple(float(b) for b in bande), secteur_hz))
+            return vraies_sections(fs, bande, secteur_hz, ordre)
 
-        _p3dec.bandpass = _bandpass_espion
+        _filtrage.sections = _sections_espion
         try:
             # Un SOUS-dossier : la section 7 compte les modèles du dossier principal.
             rt_f = P300Calibration(_p300.SPEC, reglages or {}, moteur_f,
                                    dossier=_os.path.join(dossier, "filtre"))
             joue(rt_f, moteur_f, plan)
         finally:
-            _p3dec.bandpass = vrai_bandpass
+            _filtrage.sections = vraies_sections
         res_f = rt_f.resultat or {}
         chk(rt_f.phase == "fini" and res_f.get("selection_total") == ROUNDS,
             f"la séance filtrée 0,5-20 Hz à 60 Hz aboutit, sélection comprise ({rt_f.phase}, "
@@ -818,13 +847,21 @@ def _selftest():
             and modele_f.secteur_hz == SECTEUR,
             f"...et le modèle ENREGISTRÉ les porte : c'est avec eux qu'il décodera "
             f"({getattr(modele_f, 'band', None)}, {getattr(modele_f, 'secteur_hz', None)})")
+        chk(res_f.get("filtre") == texte_filtre(BANDE, SECTEUR),
+            f"...et « Détails » dit CE filtre-là, pas celui par défaut ({res_f.get('filtre')!r})")
         try:
             accepte_f = _p300.P300Runtime(_p300.SPEC, {"model": res_f["modele"], "stream_in": "x"},
                                           _MoteurDuMode())
         except (KeyError, ValueError):
             accepte_f = None
-        chk(accepte_f is not None and tuple(accepte_f.model.band) == BANDE,
-            "...et le mode l'ACCEPTE : une bande réglée ne fait pas refuser le modèle au démarrage")
+        # La bande ET le secteur : un runtime qui remettrait l'un des deux à son défaut au
+        # chargement décoderait avec un autre filtre que celui appris, sans rien lever.
+        chk(accepte_f is not None and tuple(accepte_f.model.band) == BANDE
+            and accepte_f.model.secteur_hz == SECTEUR,
+            f"...et le mode l'ACCEPTE tel quel : une bande réglée ne fait pas refuser le modèle au "
+            f"démarrage, et il décode avec SA bande et SON secteur "
+            f"({getattr(getattr(accepte_f, 'model', None), 'band', None)}, "
+            f"{getattr(getattr(accepte_f, 'model', None), 'secteur_hz', None)})")
         try:
             with np.load(res_f["enregistrement"], allow_pickle=False) as archive_f:
                 archive_lu = (tuple(float(b) for b in archive_f["band"]),

@@ -696,7 +696,12 @@ SPEC = ModeSpec(
                       # l'enregistre et décode avec (`errp_calib._entrainer`). Les bornes gardent
                       # toujours 2-8 Hz, le cœur de l'ErrP (N250/P320) : une bande qui le retirerait
                       # décoderait du bruit avec des scores plausibles, sans lever quoi que ce soit.
-                      params=params_bande(ERRP_BAND, (0.1, 2.0), (8.0, 40.0),
+                      # La coupure basse monte jusqu'à 2 Hz, plus haut que celle du P300 : ses
+                      # composantes sont plus thêta (~15 % de l'énergie de l'onde synthétique sous
+                      # 2 Hz, contre ~70 % pour la bosse du P300). Elle part de 0,5 Hz : le filtre
+                      # agit sur chaque ÉPOQUE (~0,9 s, après la ligne de base), et plus bas ce qu'il
+                      # fait tient surtout aux bords de l'époque (2026-09-30).
+                      params=params_bande(ERRP_BAND, (0.5, 2.0), (8.0, 40.0),
                                           tr("calib.errp.param.bande.aide")),
                       # La géométrie que la calibration PRÉLÈVE, écrite comme la somme que le
                       # runtime découpe — pas un nombre choisi à part, qui dériverait le jour où

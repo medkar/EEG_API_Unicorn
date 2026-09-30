@@ -562,9 +562,15 @@ SPEC = ModeSpec(
                       briefing=BRIEFING_CALIB,
                       # La BANDE se règle à l'ENTRAÎNEMENT, jamais au décodage : le modèle
                       # l'enregistre et décode avec (`p300_calib._entrainer`). Les bornes gardent
-                      # toujours 2-8 Hz, le cœur du P300 : une bande qui le retirerait décoderait du
+                      # toujours 1-8 Hz, le cœur du P300 : une bande qui le retirerait décoderait du
                       # bruit avec des scores plausibles, sans lever quoi que ce soit.
-                      params=params_bande(P300_BAND, (0.1, 2.0), (8.0, 40.0),
+                      # Coupure basse 1 Hz AU PLUS : l'onde vit en partie sous 2 Hz (~70 % de
+                      # l'énergie d'une bosse de σ = 60 ms), et le filtre à zéro phase coupe deux
+                      # fois (−6 dB à la coupure) — mesuré sur une époque, le pic garde 67 % à
+                      # 1 Hz, 44 % à 2 Hz. 0,5 Hz AU MOINS : le filtre agit sur chaque ÉPOQUE
+                      # (~0,95 s, après la ligne de base), et plus bas ce qu'il fait tient surtout
+                      # aux bords de l'époque, plus à la fréquence de coupure (2026-09-30).
+                      params=params_bande(P300_BAND, (0.5, 1.0), (8.0, 40.0),
                                           tr("calib.p300.param.bande.aide")),
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),

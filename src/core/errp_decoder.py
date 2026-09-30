@@ -170,11 +170,11 @@ class ErrPModel:
 
     def __init__(self, fs=250.0, band=ERRP_BAND, pre_s=ERRP_PRE_S, post_s=ERRP_EPOCH_S,
                  nfilter=ERRP_XDAWN_NFILTER, tnr_target=ERRP_TNR_TARGET, secteur_hz=None):
-        # Le filtre (bande + secteur) vit dans `self.core` : c'est son `_prep` qui filtre.
+        # Le filtre (bande + secteur) vit dans `self.core`, et LÀ SEULEMENT : c'est son `_prep`
+        # qui filtre. `self.band` / `self.secteur_hz` sont des PROPRIÉTÉS qui le lisent (plus bas).
         self.core = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s, nfilter=nfilter,
                               secteur_hz=secteur_hz)
-        self.fs, self.band, self.pre_s, self.post_s = fs, band, pre_s, post_s
-        self.secteur_hz = secteur_hz
+        self.fs, self.pre_s, self.post_s = fs, pre_s, post_s
         self.nfilter, self.tnr_target = nfilter, tnr_target
         self.threshold_ = 0.0
         self.cv_auc_ = None       # AUC OOF du nfilter retenu
@@ -187,6 +187,40 @@ class ErrPModel:
         self.oof_y_ = None        # étiquettes alignées sur oof_scores_ (recalcul TPR/TNR à tout seuil)
         self.n_epoques_ = None    # nombre d'époques d'entraînement (parité avec P300Model)
         self.echec_oof_ = None    # POURQUOI il n'y a pas de scores hors-pli (None si tout va bien)
+
+    # --- Le filtre : UNE seule copie, celle du noyau qui filtre (2026-09-30) ----------------------
+    # ⚠️ Ils étaient posés DEUX fois, ici et sur `self.core`. Rien ne les tenait d'accord : une
+    # écriture sur `modele.band` aurait changé la description sans changer le filtre, et le modèle
+    # se serait décrit avec une bande qu'il n'applique pas. Lire et écrire passent donc par le noyau.
+
+    @property
+    def band(self):
+        """La bande du filtre : celle de `self.core`, dont `_prep` filtre les époques."""
+        return self.core.band
+
+    @band.setter
+    def band(self, valeur):
+        self.core.band = valeur
+
+    @property
+    def secteur_hz(self):
+        """Le secteur du coupe-bande, lu sur le noyau. None pour un modèle d'avant le 2026-09-30
+        (son noyau n'a pas l'attribut) : il décode sans coupe-bande, comme il a appris."""
+        return getattr(self.core, "secteur_hz", None)
+
+    @secteur_hz.setter
+    def secteur_hz(self, valeur):
+        self.core.secteur_hz = valeur
+
+    def __setstate__(self, etat):
+        """Un modèle enregistré avant le 2026-09-30 porte encore `band` (et, un temps, `secteur_hz`)
+        dans son dictionnaire extérieur. Les propriétés les masqueraient de toute façon ; on les
+        retire au chargement pour qu'il ne reste qu'UNE copie, celle du noyau — qui a toujours
+        été celle qui filtre, donc le modèle décode exactement comme avant."""
+        etat = dict(etat)
+        etat.pop("band", None)
+        etat.pop("secteur_hz", None)
+        self.__dict__.update(etat)
 
     def fit(self, epochs, y, groups=None, n_perm=None):
         """Entraîne le détecteur. BALAIE ERRP_XDAWN_NFILTER_CANDIDATES et retient le nfilter au
@@ -411,6 +445,43 @@ def _gardes():
     except Exception as e:      # noqa: BLE001 - c'est l'exception elle-même qu'on teste
         leve = f"{type(e).__name__}: {e}"
     chk(leve is None, f"le rapport d'un modèle SANS AUC ni p-value s'imprime au lieu de lever ({leve})")
+
+    # 5. Le filtre n'a qu'UNE copie, celle du noyau qui FILTRE (`self.core._prep`). Deux copies
+    #    que rien ne tient d'accord finissent par diverger : le modèle se décrirait alors avec une
+    #    bande qu'il n'applique pas.
+    filtre = ErrPModel(fs=fs, band=(0.5, 20.0), secteur_hz=60.0)
+    chk(filtre.band == filtre.core.band == (0.5, 20.0)
+        and filtre.secteur_hz == filtre.core.secteur_hz == 60.0,
+        f"`band`/`secteur_hz` se LISENT sur le noyau ({filtre.band}, {filtre.secteur_hz})")
+    filtre.band, filtre.secteur_hz = (2.0, 8.0), None
+    chk(filtre.core.band == (2.0, 8.0) and filtre.core.secteur_hz is None,
+        f"...s'y ÉCRIVENT aussi : changer la bande change le filtre, pas une description à côté "
+        f"({filtre.core.band}, {filtre.core.secteur_hz})")
+    chk("band" not in vars(filtre) and "secteur_hz" not in vars(filtre),
+        f"...et il n'en existe aucune seconde copie "
+        f"({sorted(k for k in vars(filtre) if k in ('band', 'secteur_hz'))})")
+
+    # Un modèle enregistré AVANT : `band` dans le dictionnaire extérieur, aucun `secteur_hz` nulle
+    # part (c'est l'état exact de `data/errp_model_20260924_120032.joblib`). La copie extérieure est
+    # rendue DIVERGENTE exprès : si c'est elle qu'on relisait, ça se verrait.
+    import io
+
+    ancien = ErrPModel(fs=fs).fit(epochs, y, groups=groups, n_perm=0)
+    avant = ancien.score(epochs[:6])
+    del ancien.core.secteur_hz
+    ancien.__dict__["band"] = (8.0, 30.0)
+    chk(ancien.band == ERRP_BAND,
+        f"une copie extérieure PÉRIMÉE (8-30 Hz) ne se lit jamais : la bande dite est celle que le "
+        f"noyau applique ({ancien.band})")
+    tampon = io.BytesIO()
+    joblib.dump(ancien, tampon)
+    tampon.seek(0)
+    relu = joblib.load(tampon)
+    chk(relu.band == ERRP_BAND and relu.secteur_hz is None and "band" not in vars(relu),
+        f"un modèle d'avant se charge avec la bande de son NOYAU et sans coupe-bande, sa copie "
+        f"extérieure retirée ({relu.band}, {relu.secteur_hz}, {sorted(vars(relu))[:3]}…)")
+    chk(np.allclose(relu.score(epochs[:6]), avant),
+        "...et il décode EXACTEMENT comme avant d'être enregistré")
 
     print(f"[errp-gardes] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

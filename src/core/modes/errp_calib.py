@@ -303,7 +303,8 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
         # saurait pas où tombe l'onset du feedback dans les échantillons qu'il relit. La bande et
         # le secteur aussi, pour refaire CE modèle depuis ces époques brutes. `secteur_hz = 0` veut
         # dire « pas de coupe-bande » (la convention de `core/filtrage.py`) : un None ferait un
-        # tableau d'objets, illisible sans `allow_pickle`.
+        # tableau d'objets, illisible sans `allow_pickle`. Et leur ABSENCE, dans un `.npz` d'avant
+        # le 2026-09-30, a un sens précis : cf. la docstring de `core/errp_models.py`.
         np.savez(chemin_npz, epochs=epochs, labels=labels, groups=groupes, fs=fs,
                  pre_s=modele.pre_s, post_s=modele.post_s,
                  band=np.asarray(modele.band, dtype=float),
@@ -799,7 +800,12 @@ def _selftest():
         # permutation et la sLDA travaillent sur les époques filtrées UNE fois par le modèle
         # (`ErrPModel.fit`). On espionne quand même CHAQUE filtrage de l'entraînement : c'est ce
         # qui rougira le jour où une validation refiltrera de son côté, avec les défauts.
-        from core import p300_decoder as _p3dec
+        # ⚠️ L'espion est posé sur `core.filtrage.sections`, le SEUL point par lequel passent tous
+        # les chemins (`passe_bande` le cherche dans son module à chaque appel). Celui d'avant
+        # remplaçait `p300_decoder.bandpass` : or `errp_decoder` importe `bandpass` PAR SON NOM, et
+        # le garde lié à la vraie fonction — un re-filtrage ajouté dans `ErrPModel.fit` (balayage,
+        # permutation, sLDA) lui échappait, comme tout appel direct à `passe_bande`.
+        from core import filtrage as _filtrage
         from core.modes.contract import validate
 
         defauts, _raison = validate(calib, {})
@@ -810,12 +816,32 @@ def _selftest():
         chk(refus_b is None and tr("moteur.bande.bas") in (raison_b or ""),
             f"une bande qui retirerait l'ErrP (8-30 Hz, celle du Motor Imagery) est REFUSÉE à "
             f"l'entrée, en nommant la coupure fautive ({raison_b})")
+        # Les bornes, des DEUX côtés de CHAQUE coupure : basse de 0,5 à 2 Hz, haute de 8 à 40 Hz.
+        # Le seul refus testé avant (8-30 Hz) laissait survivre des bornes (0,1 ; 7,9) ou
+        # (2,5 ; 40) : chaque cas ci-dessous en tue au moins une.
+        cas_bornes = (((0.5, 10.0), None), ((2.0, 8.0), None), ((2.0, 40.0), None),
+                      ((0.4, 10.0), "moteur.bande.bas"), ((2.2, 10.0), "moteur.bande.bas"),
+                      ((1.0, 7.8), "moteur.bande.haut"), ((1.0, 41.0), "moteur.bande.haut"))
+        ecarts = []
+        for (bas_b, haut_b), fautive in cas_bornes:
+            val_b, raison_bb = validate(calib, {"bande_bas": bas_b, "bande_haut": haut_b})
+            if fautive is None and val_b is None:
+                ecarts.append(f"{bas_b}-{haut_b} refusée ({raison_bb})")
+            elif fautive is not None and (val_b is not None
+                                          or tr(fautive) not in (raison_bb or "")):
+                ecarts.append(f"{bas_b}-{haut_b} acceptée ou mal nommée ({raison_bb})")
+        chk(not ecarts,
+            f"bornes : coupure basse de 0,5 à 2 Hz, haute de 8 à 40 Hz, les quatre bords acceptés "
+            f"et chaque dépassement refusé en nommant SA coupure ({ecarts or 'aucun écart'})")
         nominal = ErrPModel.load(res["modele"])
         chk(tuple(nominal.core.band) == tuple(ERRP_BAND) and nominal.core.secteur_hz == SECTEUR_HZ
             and nominal.secteur_hz == SECTEUR_HZ,
             f"sans réglage, le modèle apprend la bande de toujours, et le secteur PAR DÉFAUT du "
             f"poste quand le moteur ne dit pas le sien — jamais « pas de coupe-bande » "
             f"({nominal.core.band}, {nominal.core.secteur_hz})")
+        chk(res.get("filtre") == texte_filtre(ERRP_BAND, SECTEUR_HZ),
+            f"...et « Détails » le DIT : la ligne `filtre` du résultat nomme cette bande et ce "
+            f"secteur ({res.get('filtre')!r})")
 
         BANDE, SECTEUR = (0.5, 20.0), 60.0
         reglages, raison_r = validate(calib, {"bande_bas": BANDE[0], "bande_haut": BANDE[1]})
@@ -823,20 +849,20 @@ def _selftest():
         moteur_f = _MoteurFactice(eeg, ts)
         moteur_f.secteur_hz = SECTEUR              # un poste aux Amériques
         filtrages = []
-        vrai_bandpass = _p3dec.bandpass
+        vraies_sections = _filtrage.sections
 
-        def _bandpass_espion(x, fs, band=ERRP_BAND, order=4, secteur_hz=None):
-            filtrages.append((tuple(float(b) for b in band), secteur_hz))
-            return vrai_bandpass(x, fs, band, order=order, secteur_hz=secteur_hz)
+        def _sections_espion(fs, bande, secteur_hz=None, ordre=_filtrage.ORDRE):
+            filtrages.append((tuple(float(b) for b in bande), secteur_hz))
+            return vraies_sections(fs, bande, secteur_hz, ordre)
 
-        _p3dec.bandpass = _bandpass_espion
+        _filtrage.sections = _sections_espion
         try:
             # Un SOUS-dossier : la section 7 compte les modèles du dossier principal.
             rt_f = _CalibRapide(_errp.SPEC, reglages or {}, moteur_f,
                                 dossier=_os.path.join(dossier, "filtre"))
             joue(rt_f, moteur_f, plan)
         finally:
-            _p3dec.bandpass = vrai_bandpass
+            _filtrage.sections = vraies_sections
         res_f = rt_f.resultat or {}
         chk(rt_f.phase == "fini" and res_f.get("auc") is not None
             and res_f.get("perm_p") is not None,
@@ -854,13 +880,21 @@ def _selftest():
             f"...et le modèle ENREGISTRÉ les porte, dans la partie qui FILTRE (`core`) comme dans "
             f"celle qui le décrit ({getattr(getattr(modele_f, 'core', None), 'band', None)}, "
             f"{getattr(getattr(modele_f, 'core', None), 'secteur_hz', None)})")
+        chk(res_f.get("filtre") == texte_filtre(BANDE, SECTEUR),
+            f"...et « Détails » dit CE filtre-là, pas celui par défaut ({res_f.get('filtre')!r})")
         try:
             accepte_f = _errp.ErrPRuntime(_errp.SPEC, {"model": res_f["modele"], "stream_in": "x",
                                                        "tnr_target": 0.85}, _MoteurDuMode())
         except (KeyError, ValueError):
             accepte_f = None
-        chk(accepte_f is not None and tuple(accepte_f.model.core.band) == BANDE,
-            "...et le mode l'ACCEPTE : une bande réglée ne fait pas refuser le modèle au démarrage")
+        # La bande ET le secteur, lus sur le noyau qui FILTRE : un runtime qui remettrait l'un des
+        # deux à son défaut au chargement décoderait avec un autre filtre que celui appris.
+        noyau_f = getattr(getattr(accepte_f, "model", None), "core", None)
+        chk(noyau_f is not None and tuple(noyau_f.band) == BANDE
+            and noyau_f.secteur_hz == SECTEUR,
+            f"...et le mode l'ACCEPTE tel quel : une bande réglée ne fait pas refuser le modèle au "
+            f"démarrage, et il décode avec SA bande et SON secteur "
+            f"({getattr(noyau_f, 'band', None)}, {getattr(noyau_f, 'secteur_hz', None)})")
         try:
             with np.load(res_f["enregistrement"], allow_pickle=False) as archive_f:
                 archive_lu = (tuple(float(b) for b in archive_f["band"]),

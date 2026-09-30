@@ -10,6 +10,16 @@ de calibration ayant survécu (`data/p300_calib_*.npz`), un modèle se ré-entra
 en quelques secondes. C'est ce qui manquait au MI, dont les époques avaient été écrasées — et ce
 qui a coûté ses 4 modèles.
 
+⚠️ **Le filtre d'un `.npz` d'époques, et ce que veut dire son ABSENCE.** Depuis le 2026-09-30,
+`core/modes/p300_calib.entrainer` archive avec les époques BRUTES le filtre du modèle qui a appris
+dessus : `band` (Hz) et `secteur_hz`, où `0` veut dire « pas de coupe-bande » (un None ferait un
+tableau d'objets, illisible sans `allow_pickle`). Un `.npz` plus ancien n'a NI l'un NI l'autre, et
+cette absence a un sens précis : **la bande de toujours (`config.P300_BAND`, 1-12 Hz), SANS
+coupe-bande** — c'est avec ce filtre qu'ont appris tous les modèles d'avant (vérifié le 2026-09-30
+sur chaque modèle P300 de `data/`, ceux du 22 juillet compris : tous portent 1-12 Hz, aucun de
+secteur). Ré-entraîner un tel fichier en y ajoutant le secteur du poste, ou la bande réglée du
+moment, produirait un AUTRE modèle que celui de la séance.
+
 Autotest :
     python src/core/p300_models.py
 """
