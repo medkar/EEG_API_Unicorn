@@ -19,9 +19,10 @@ au stimulus. (Les tracés du Brut, eux, filtrent au fil de l'eau : `core/filtres
 
 ⚠️ **Des sections (`sos`), pas des coefficients (b, a).** Aux bandes par défaut, les deux formes
 rendent le même signal à 3·10⁻⁵ µV près (mesuré le 2026-09-30) : rien ne change pour un modèle
-existant. Mais la bande se règle maintenant jusqu'à 0,1 Hz, là où la forme (b, a) d'un ordre 8
-devient mal conditionnée (elle s'écarte déjà de 0,01 µV à 0,1 Hz) — les sections sont la forme
-que la documentation de scipy recommande pour cette raison.
+existant. Mais la bande se règle maintenant (jusqu'à 0,5 Hz pour le P300 et l'ErrP), et plus la
+coupure descend, plus la forme (b, a) d'un ordre 8 se conditionne mal (elle s'écarte déjà de
+0,01 µV à 0,1 Hz) — les sections sont la forme que la documentation de scipy recommande pour
+cette raison.
 
     python src/core/filtrage.py     # autotest
 """
