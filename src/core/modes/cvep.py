@@ -92,7 +92,7 @@ import sys as _sys
 import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-from core.config import (CVEP_BITS, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
+from core.config import (CVEP_BAND, CVEP_BITS, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
                          CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
                          CVEP_MODEL_PATH, CVEP_N_TARGETS, CVEP_PEREMPTION_CYCLES,
                          CVEP_VOTE_LEN, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
@@ -110,7 +110,7 @@ from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedCVEPPublisher, cvep_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
-                                  validate)
+                                  params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `cvep_calib` ne nous importe pas en retour (il lit
 # `CVEPRuntime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
@@ -512,7 +512,8 @@ class CVEPRuntime(ModeRuntime):
         `n_cycles` cycles ENTIERS (ce que le décodeur va replier) plus la marge de filtrage, qui
         reste en TÊTE : le transitoire d'établissement du passe-bande y est confiné, et `fold`
         l'écarte en ne gardant que la queue. ⚠️ **Non filtrée**, exprès — `CVEPModel.scores`
-        applique son propre passe-bande `CVEP_BAND` (2-45 Hz, LARGE, ≠ SSVEP). Filtrer ici
+        applique le passe-bande DU MODÈLE (celui de son entraînement, `CVEP_BAND` = 2-45 Hz par
+        défaut, LARGE, ≠ SSVEP), coupe-bande secteur compris. Filtrer ici
         filtrerait deux fois : phase décalée et amplitudes modifiées, donc une corrélation
         calculée contre autre chose que ce que le template a appris. Même piège, même formulation
         que `acquisition.motor_window` — c'est le défaut qui a déjà coûté un décodage au MI.
@@ -783,6 +784,13 @@ SPEC = ModeSpec(
         kind="fenetre", stimulus_id="cvep", label=tr("calib.cvep.label"),
         briefing=BRIEFING_CALIB,
         runtime_cls=CVEPCalibration,
+        # La BANDE se règle ICI, à l'entraînement, et jamais dans les réglages du mode : le modèle
+        # l'enregistre (avec le secteur du poste), et le décodage la relit dans le fichier. La
+        # changer au décodage ferait corréler un template contre un signal filtré autrement que
+        # celui qu'il a appris — sans la moindre erreur. Les bornes gardent toujours 5-20 Hz, le
+        # cœur de la réponse ; la coupure haute monte à 60 Hz parce que la réponse est LARGE bande.
+        params=params_bande(CVEP_BAND, (0.5, 5.0), (20.0, 60.0),
+                            tr("calib.cvep.param.bande.aide", haut=CVEP_BAND[1])),
         # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`
         # juste en dessous. Celui-ci dimensionne le tampon du moteur pour ce que la CALIBRATION
         # prélève : `CVEPCalibration` découpe `code_len / refresh` secondes JUSTE AVANT chaque

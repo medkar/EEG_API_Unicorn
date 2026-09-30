@@ -66,13 +66,14 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, CH_NAMES, CVEP_BAND,  # noqa: E
                          CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,
                          CVEP_CAL_SETTLE_CYCLES, CVEP_CHANNELS, CVEP_DECISION_CYCLES,
                          CVEP_LAG_ROTATION, CVEP_MODEL_PATH, CVEP_N_TARGETS, FS_UNICORN,
-                         use_utf8_console)
+                         SECTEUR_HZ, use_utf8_console)
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 from core.cvep_rcca import SEUIL_MCNEMAR, RCCAModel, _mcnemar_p  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
+from core.modes.contract import bande_de  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # ⚠️ `core.modes.cvep` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
 # `CVEPCalibration.runtime_cls_du_mode`, une fois le programme lancé.
@@ -141,7 +142,7 @@ def _fit_et_compte(modele, epochs, labels, **kw):
 
 
 def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_HZ, band=CVEP_BAND,
-                      channels=None, n_cycles=CVEP_DECISION_CYCLES):
+                      channels=None, n_cycles=CVEP_DECISION_CYCLES, secteur_hz=None):
     """Entraîne eCCA ET rCCA sur les MÊMES époques de calibration, PARMI LE MÊME JEU DE CIBLES,
     les note HORS-PLI sur les MÊMES groupes de validation croisée, et rend
     `{"eCCA": {...}, "rCCA": {...}}`.
@@ -173,6 +174,16 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     décodeurs : sans ça, un montage différent d'un décodeur à l'autre biaiserait la comparaison
     (vérifié par un garde qui REFUSE plutôt que de comparer si jamais ça divergeait).
     `labels` : le LAG (frames) fixé à chaque époque.
+
+    `band` / `secteur_hz` : le FILTRE (passe-bande, puis coupe-bande secteur ; `secteur_hz=None`
+    = pas de coupe-bande, comme avant le 2026-09-30). Les DEUX modèles sont construits avec, et
+    ils le portent dans leur fichier : le décodage filtrera exactement comme cet entraînement.
+    ⚠️ **La validation croisée ne construit AUCUN autre modèle** : elle passe par `hors_pli` des
+    deux objets construits ici, qui filtrent avec LEUR `band`/`secteur_hz`. C'est ce qui garantit
+    que la justesse affichée mesure le modèle écrit, et pas un voisin filtré autrement. Une CV qui
+    construirait ses propres modèles aux valeurs par défaut rendrait un chiffre plausible sur un
+    autre filtre que celui du fichier, sans rien lever — l'autotest l'épie
+    (`python src/core/modes/cvep_calib.py`, partie E).
 
     Chaque valeur du dict rendu porte :
       `modele`      — l'objet entraîné (CVEPModel ou RCCAModel), prêt pour `.save(...)` ;
@@ -220,8 +231,10 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     idx_local = {l: i for i, l in enumerate(presentes)}
     idx = [idx_local[l] for l in labels]     # RCCAModel indexe ses cibles 0..n-1, pas par lag
 
-    ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code), band=band, channels=channels)
-    rcca = RCCAModel(codes_vus, fs=fs, refresh=refresh, band=band, channels=list(ecca.channels))
+    ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code), band=band, channels=channels,
+                     secteur_hz=secteur_hz)
+    rcca = RCCAModel(codes_vus, fs=fs, refresh=refresh, band=band, channels=list(ecca.channels),
+                     secteur_hz=secteur_hz)
 
     # Réduits UNE fois, puis donnés aux DEUX décodeurs — c'est cette identité qui garantit
     # « les mêmes époques », pas une conviction qu'elles seront construites pareil deux fois.
@@ -391,7 +404,8 @@ def chemin_modele_horodate(decodeur, dossier=None):
 
 
 def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=None,
-              band=CVEP_BAND, channels=None, n_cycles=CVEP_DECISION_CYCLES, hors_bloc=0):
+              band=CVEP_BAND, channels=None, n_cycles=CVEP_DECISION_CYCLES, hors_bloc=0,
+              secteur_hz=None):
     """Entraîne les DEUX décodeurs, écrit ce qui est écrivable, et rend le dict que la console
     affiche. LÈVE si la séance est trop pauvre pour valoir un modèle.
 
@@ -417,6 +431,10 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
     `hors_bloc` : le nombre de marqueurs d'horloge reçus HORS d'un bloc consigné. Purement
     informatif, mais il nomme la panne la plus banale — une fenêtre lancée SANS `--calibrer`, qui
     publie son horloge et aucune consigne.
+
+    `band` / `secteur_hz` : le filtre des DEUX modèles, qu'ils enregistrent (cf.
+    `entraine_les_deux`). L'archive des époques les note aussi : ses époques sont BRUTES, et un
+    ré-entraînement futur doit pouvoir savoir avec quel filtre ce modèle-ci a été appris.
     """
     plan, _code = build_targets()
     epochs = [np.asarray(e, dtype=float) for e in epochs]
@@ -430,7 +448,7 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
             hors_bloc=tr("calib.cvep.hors_bloc", n=hors_bloc) if hors_bloc else ""))
 
     res = entraine_les_deux(epochs, labels, fs=fs, refresh=refresh, band=band,
-                            channels=channels, n_cycles=n_cycles)
+                            channels=channels, n_cycles=n_cycles, secteur_hz=secteur_hz)
     mn = gagnant(res)
     cv_e, cv_r = res["eCCA"]["justesse"], res["rCCA"]["justesse"]
     n_cibles = res["eCCA"]["n_cibles"] or len(cibles_vues)
@@ -442,6 +460,11 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
                  refresh=float(refresh), n_targets=len(plan), rotation=CVEP_LAG_ROTATION,
                  channels=np.asarray(res["eCCA"]["modele"].channels, dtype=int),
                  ch_names=np.asarray(CH_NAMES),
+                 # Le filtre des modèles (les époques, elles, restent BRUTES). Lu sur le modèle
+                 # écrit, pas sur l'argument : c'est ce qu'il a RÉELLEMENT appris qui compte.
+                 # 0 = pas de coupe-bande, même convention que `CVEPModel.save`.
+                 band=np.asarray(res["eCCA"]["modele"].band, dtype=float),
+                 secteur_hz=float(res["eCCA"]["modele"].secteur_hz or 0.0),
                  sigma=float(np.asarray(epochs).std()))
 
     # ⚠️ **`n_targets` = ce que la séance a RÉELLEMENT présenté, jamais `len(plan)`.** Le template
@@ -468,6 +491,10 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
           f"(hasard {100.0 / n_cibles:.0f}%), décision = {res['eCCA']['n_cycles']} cycle(s) : "
           f"{acc_txt}")
     print(f"[cvep-calib] {phrase_comparaison(mn)}")
+    appris = res["eCCA"]["modele"]
+    print(f"[cvep-calib] filtre enregistré dans les modèles : "
+          f"{appris.band[0]:g}-{appris.band[1]:g} Hz, "
+          + (f"coupe-bande {appris.secteur_hz:g} Hz" if appris.secteur_hz else "sans coupe-bande"))
     print(f"[cvep-calib] modèle eCCA : {chemin_ecca}")
     print(f"[cvep-calib] modèle rCCA : "
           + (chemin_rcca if chemin_rcca else
@@ -812,11 +839,19 @@ class CVEPCalibration(MarkerCalibrationRuntime):
 
         `CALIB_CANDIDAT_PREFIXE` : ce qui sort d'ici est un CANDIDAT, invisible aux motifs
         `cvep_model*.npz` / `cvep_rcca_model*.npz` tant que personne ne l'a retenu.
+
+        Le FILTRE (2026-09-30) suit la même règle que `fs`/`refresh` : la bande vient des réglages
+        de CET entraînement (`bande_bas`/`bande_haut`, déclarés par le `Calib` du mode), le
+        secteur vient du MOTEUR — c'est un réglage du poste, pas du mode. Les laisser aux défauts
+        d'`entraine_les_deux` écrirait un modèle filtré autrement que ce que l'étudiant a réglé,
+        et la console afficherait sa justesse comme si c'était la sienne.
         """
         epochs = [e for e, _lag in enregistre]
         labels = [lag for _e, lag in enregistre]
         return entrainer_dans(self.dossier_ou_lever(), epochs, labels, float(fs), self.refresh,
-                              prefixe=CALIB_CANDIDAT_PREFIXE, hors_bloc=self._hors_bloc)
+                              prefixe=CALIB_CANDIDAT_PREFIXE, hors_bloc=self._hors_bloc,
+                              band=bande_de(self.params, CVEP_BAND),
+                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -850,6 +885,11 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
 
     **C. Les refus et la comparaison** : marqueurs mal formés, séance trop pauvre, et le McNemar
     sur les chiffres RÉELS de la séance de référence.
+
+    **D. et E.** : `entraine_les_deux` compare honnêtement (mêmes époques, mêmes groupes, même
+    hasard), et TOUT son filtrage — validation croisée comprise — se fait avec la bande et le
+    secteur des modèles qu'il rend (un espion sur le filtre partagé). La partie B, elle, vérifie
+    que les deux FICHIERS portent la bande réglée et le secteur du moteur (§5 bis).
 
     Aucun casque, aucune fenêtre, aucune attente réelle : l'horloge est FABRIQUÉE (`tick` reçoit
     `now`) et le tampon EEG est synthétique mais HORODATÉ, comme celui du vrai moteur.
@@ -1082,6 +1122,24 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"« ≈ 0 min » pour une séance de presque trois minutes "
             f"({CVEPCalibration.duree_protocole_s:.0f} s)")
 
+        # La BANDE se règle à l'entraînement (2026-09-30) : deux réglages, la bande de toujours
+        # par défaut, et des bornes qui gardent le cœur de la réponse (5-20 Hz) dedans.
+        from core.modes.contract import validate as _valider
+
+        cles_calib = {p.key: p for p in calib_spec.params}
+        defauts_calib, raison_calib = _valider(calib_spec, {})
+        chk({"bande_bas", "bande_haut"} <= set(cles_calib) and raison_calib is None
+            and bande_de(defauts_calib, (0.0, 0.0)) == tuple(CVEP_BAND)
+            and all(cles_calib[k].help for k in ("bande_bas", "bande_haut")),
+            f"l'entraînement déclare une bande RÉGLABLE, par défaut celle de toujours, avec son "
+            f"aide ({sorted(cles_calib)}, {raison_calib}, "
+            f"{defauts_calib and bande_de(defauts_calib, (0.0, 0.0))})")
+        _v, refus_bas = _valider(calib_spec, {"bande_bas": 8.0})
+        _v, refus_haut = _valider(calib_spec, {"bande_haut": 15.0})
+        chk(refus_bas is not None and refus_haut is not None,
+            f"…et une bande qui couperait le cœur de la réponse (5-20 Hz) est REFUSÉE, des deux "
+            f"côtés ({refus_bas} / {refus_haut})")
+
         # --- 2. La géométrie de l'époque suit l'ÉMETTEUR, pas une constante -------------------
         marqueurs, eeg, ts, attendues = seance()
         moteur = _MoteurFactice(eeg, ts)
@@ -1216,6 +1274,57 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk(_d60 is None and "80" in (refus60 or ""),
             f"…tandis qu'un émetteur à 60 Hz est REFUSÉ, en nommant les deux chiffres : c'est ce "
             f"refus qui rend le test précédent falsifiable ({refus60})")
+
+        # --- 5 bis. LE FILTRE : les DEUX fichiers portent la bande et le secteur (2026-09-30) ---
+        # Relus par `cvep_models.charger`, le chemin par lequel le moteur les chargera : un
+        # attribut juste sur l'objet en mémoire mais perdu à l'écriture ne compterait pas.
+        # Sans réglage, et sur un moteur qui ne déclare aucun secteur : la bande de toujours, et
+        # le secteur PAR DÉFAUT du poste.
+        for nom, cle in (("eCCA", "modele"), ("rCCA", "modele_rcca")):
+            relu, raison_relu = cvep_models.charger(res.get(cle) or "")
+            chk(relu is not None and tuple(relu.band) == tuple(CVEP_BAND)
+                and relu.secteur_hz == SECTEUR_HZ,
+                f"sans réglage, le modèle {nom} relu porte la bande de toujours et le secteur par "
+                f"défaut ({relu and (tuple(float(f) for f in relu.band), relu.secteur_hz)}, "
+                f"{raison_relu})")
+
+        # Une bande RÉGLÉE et un secteur du MOTEUR, tous deux différents de leurs défauts : sinon
+        # rien ne distinguerait « transmis » de « retombé sur la constante ». Dans un SOUS-dossier,
+        # pour que le compte des modèles écrits à la racine (plus bas) reste celui qu'il vérifie.
+        reglee, secteur_poste = (1.0, 30.0), 60.0
+        chk(reglee != tuple(CVEP_BAND) and secteur_poste != SECTEUR_HZ,
+            "fixture : la bande réglée et le secteur du moteur diffèrent de leurs défauts")
+        valeurs_b, raison_b = _valider(calib_spec, {"bande_bas": reglee[0],
+                                                    "bande_haut": reglee[1]})
+        dossier_b = _os.path.join(dossier, "bande")
+        _os.makedirs(dossier_b, exist_ok=True)
+        marq_b, eeg_b, ts_b, att_b = seance(graine=3)
+        moteur_b = _MoteurFactice(eeg_b, ts_b)
+        moteur_b.secteur_hz = secteur_poste      # ce que `EngineServer` porte : le réglage du POSTE
+        rt_bande = CVEPCalibration(_cvep.SPEC, valeurs_b or {}, moteur_b, dossier=dossier_b)
+        joue(rt_bande, moteur_b, marq_b, att_b)
+        res_b = rt_bande.resultat or {}
+        chk(raison_b is None and rt_bande.phase == "fini",
+            f"une séance à bande réglée ({reglee[0]:g}-{reglee[1]:g} Hz) aboutit "
+            f"({raison_b}, {rt_bande.phase}, {rt_bande.probleme!r})")
+        for nom, cle in (("eCCA", "modele"), ("rCCA", "modele_rcca")):
+            relu, raison_relu = cvep_models.charger(res_b.get(cle) or "")
+            chk(relu is not None and relu.decoder == nom and tuple(relu.band) == reglee
+                and relu.secteur_hz == secteur_poste,
+                f"le modèle {nom} ÉCRIT porte la bande RÉGLÉE et le secteur du MOTEUR, relus tels "
+                f"quels par `cvep_models.charger` — sinon le décodage filtrerait autrement que "
+                f"l'entraînement, sans rien lever "
+                f"({relu and (tuple(float(f) for f in relu.band), relu.secteur_hz)}, "
+                f"{raison_relu})")
+        try:
+            with np.load(res_b.get("enregistrement") or "") as archive:
+                archive_filtre = (tuple(float(f) for f in archive["band"]),
+                                  float(archive["secteur_hz"]))
+        except (OSError, KeyError, ValueError) as e:
+            archive_filtre = repr(e)
+        chk(archive_filtre == (reglee, secteur_poste),
+            f"…et l'archive des époques BRUTES les note aussi, pour un ré-entraînement futur "
+            f"({archive_filtre})")
 
         # --- 6. Les marqueurs mal formés sont refusés, pas étiquetés au hasard ------------------
         moteur_r = _MoteurFactice(eeg, ts)
@@ -1460,6 +1569,43 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     chk(_fit_et_compte(mf, [1, 2, 3], ["a", "b"]) == 3,
         "…et il compte les ÉPOQUES reçues, pas les étiquettes — sinon un tronquage appliqué à un "
         "seul des deux côtés passerait inaperçu")
+
+    # =====================================================================================
+    # E. LE FILTRE de la validation croisée est celui des modèles écrits (2026-09-30)
+    # =====================================================================================
+    # La partie B vérifie ce que les FICHIERS portent. Elle ne voit pas une CV qui construirait
+    # ses propres modèles aux valeurs par défaut : les fichiers seraient justes, et la justesse
+    # affichée mesurerait un AUTRE filtre que le leur — plausible, et fausse. On épie donc le
+    # filtre partagé des deux décodeurs (`cvep_rcca` appelle `cvep_decoder.bandpass`, qui délègue
+    # à `passe_bande` : un seul point par où TOUT filtrage passe).
+    import core.cvep_decoder as _dec
+
+    vrai_filtre = _dec.passe_bande
+    filtres_vus = []
+
+    def _espion(x, fs, bande, secteur_hz=None, axis=-1, ordre=4):
+        filtres_vus.append((tuple(float(b) for b in bande),
+                            None if secteur_hz is None else float(secteur_hz)))
+        return vrai_filtre(x, fs, bande, secteur_hz=secteur_hz, axis=axis, ordre=ordre)
+
+    _dec.passe_bande = _espion
+    try:
+        res_f = entraine_les_deux(epochs_d, labels_d, fs=fs_d, refresh=ref_d, channels=voies_d,
+                                  band=(1.0, 30.0), secteur_hz=60.0)
+    finally:
+        _dec.passe_bande = vrai_filtre
+    # Au moins 4 filtrages par époque : l'ajustement ET la CV, pour chacun des deux décodeurs.
+    # Sans ce plancher, un espion qui ne verrait que les deux `fit` passerait sans rien prouver
+    # de la validation croisée.
+    chk(set(filtres_vus) == {((1.0, 30.0), 60.0)} and len(filtres_vus) >= 4 * len(epochs_d),
+        f"TOUT filtrage de l'entraînement, validation croisée comprise, se fait avec la bande et "
+        f"le secteur DEMANDÉS — sinon la justesse affichée mesurerait un autre filtre que celui des "
+        f"fichiers ({len(filtres_vus)} filtrages pour {len(epochs_d)} époques, "
+        f"{sorted(set(filtres_vus), key=str)})")
+    chk(all(tuple(res_f[n]["modele"].band) == (1.0, 30.0) and res_f[n]["modele"].secteur_hz == 60.0
+            for n in ("eCCA", "rCCA")),
+        f"…et les deux modèles rendus portent ce filtre "
+        f"({[(tuple(res_f[n]['modele'].band), res_f[n]['modele'].secteur_hz) for n in res_f]})")
 
     # Les chemins de l'appli pygame : horodatés, jamais les noms FIXES (qui s'écrasent), et
     # reconnus par les motifs de découverte — chacun sous LE SIEN.
