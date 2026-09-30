@@ -14,6 +14,7 @@
   "moteur.contrat.liste_attendue": "« {reglage} » : liste de nombres attendue (reçu : {valeur})",
   "moteur.contrat.nombre_attendu": "« {reglage} » : nombre attendu (reçu : {valeur})",
   "moteur.contrat.nombre_elements": "« {reglage} » : il en faut entre {mini} et {maxi}, il y en a {n}",
+  "moteur.contrat.nombre_non_fini": "« {reglage} » : nombre fini attendu (reçu : {valeur})",
   "moteur.contrat.paire": "{a} et {b}",
   "moteur.contrat.pas_diviseur": "« {reglage} » : {valeur} Hz n'est pas un diviseur entier de {refresh} Hz. L'écran sauterait des images et rien ne serait détecté. Les plus proches sont {proches} Hz.",
   "moteur.contrat.refresh_positif": "« {reglage} » : le rafraîchissement doit être strictement positif ({valeur} Hz est invalide)",

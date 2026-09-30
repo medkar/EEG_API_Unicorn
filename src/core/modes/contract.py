@@ -18,6 +18,7 @@ Autotest :
     python src/core/modes/contract.py
 """
 
+import math as _math
 import os as _os
 import sys as _sys
 from dataclasses import dataclass
@@ -357,17 +358,44 @@ def _coerce(param, value):
                 return None, tr("moteur.contrat.nombre_elements", reglage=param.label,
                                 mini=lo, maxi=hi, n=len(values))
         for v in values:
-            reason = _check_bounds(param, v)
+            reason = _refus_non_fini(param, v) or _check_bounds(param, v)
             if reason:
                 return None, reason
         return values, None
 
     try:
         converted = int(value) if param.kind == "int" else float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # `OverflowError` : `int(float("inf"))` lève CELLE-LÀ, pas `ValueError` — et `submit`
+        # promet de ne jamais lever.
         return None, tr("moteur.contrat.nombre_attendu", reglage=param.label, valeur=repr(value))
-    reason = _check_bounds(param, converted)
+    reason = _refus_non_fini(param, converted) or _check_bounds(param, converted)
     return (None, reason) if reason else (converted, None)
+
+
+def _refus_non_fini(param, valeur):
+    """La raison de refuser NaN ou l'infini, ou None.
+
+    ⚠️ `_check_bounds` ne les voit pas : `nan < min` et `nan > max` sont FAUX tous les deux, donc
+    un NaN traverse n'importe quelles bornes. Et l'infini traverse un réglage sans `max` : un
+    rafraîchissement infini faisait lever `divise_le_refresh` (`round(inf)`) et tourner sans fin
+    la boucle des diviseurs de `config.available_frequencies`.
+    """
+    if _math.isfinite(valeur):
+        return None
+    return tr("moteur.contrat.nombre_non_fini", reglage=param.label, valeur=nombre(valeur))
+
+
+def valider_un(param, valeur):
+    """(valeur convertie, None) ou (None, raison) — un réglage SEUL : son type et ses bornes.
+
+    Sans les contraintes CROISÉES, exprès : c'est ce qu'il faut à « Proposer », qui lit le
+    rafraîchissement, l'alpha et la bande À L'ÉCRAN pour calculer les fréquences — les
+    fréquences, elles, sont ce qu'on va remplacer, et juger leur accord avec le reste refuserait
+    la proposition pour la raison même qu'on la demande. Le refus est celui de `validate`, mot
+    pour mot : c'est la même fonction.
+    """
+    return _coerce(param, valeur)
 
 
 def _check_constraints(param, values):
@@ -476,13 +504,16 @@ def params_bande(defaut, bas, haut, aide):
     plausibles. Elle est donc refusée ICI, bornes comprises dans le refus.
 
     Et comme `bas[1] < haut[0]`, une bande acceptée n'est jamais vide ni inversée : les bornes
-    suffisent, sans contrainte croisée à écrire ni à tenir d'accord.
+    suffisent, sans contrainte croisée à écrire ni à tenir d'accord. Et comme `bas[0] > 0`, la
+    coupure basse n'est jamais nulle : `config.available_frequencies` refuse une fréquence minimale
+    nulle ou négative (sans ce refus, sa boucle ne s'arrêterait jamais).
 
     `aide` : la bulle des deux réglages — ce que ce mode cherche dans cette bande, dit par lui.
     """
-    if not bas[0] <= float(defaut[0]) <= bas[1] < haut[0] <= float(defaut[1]) <= haut[1]:
+    if not 0 < bas[0] <= float(defaut[0]) <= bas[1] < haut[0] <= float(defaut[1]) <= haut[1]:
         raise ValueError(f"bande mal déclarée : défaut {defaut}, coupure basse dans {bas}, "
-                         f"coupure haute dans {haut} — la basse doit rester sous la haute")
+                         f"coupure haute dans {haut} — la basse doit rester strictement "
+                         f"positive, et strictement sous la haute")
     return (
         Param(key="bande_bas", label=tr("moteur.bande.bas"), kind="float", unit="Hz",
               default=float(defaut[0]), min=float(bas[0]), max=float(bas[1]), help=aide),
@@ -839,6 +870,57 @@ def _selftest():
         chk(False, "une déclaration où la coupure basse peut dépasser la haute doit lever")
     except ValueError:
         chk(True, "une déclaration où la coupure basse peut dépasser la haute lève à l'import")
+    # Les deux BORDS de la déclaration (passe C1, 2026-09-30). Le cas croisé ci-dessus ne tient pas
+    # le `<` strict : écrit `<=`, une coupure basse maxi ÉGALE à la coupure haute mini passerait, et
+    # la bande 8-8 Hz — vide — serait réglable. Ni la coupure basse nulle ou négative, que
+    # `config.available_frequencies` refuse (sa boucle des diviseurs ne s'arrêterait jamais).
+    for bas_d, haut_d, quoi in (((0.5, 8.0), (8.0, 40.0),
+                                 "coupure basse maxi ÉGALE à la coupure haute mini (bande vide)"),
+                                ((0.0, 2.0), (8.0, 40.0), "coupure basse mini NULLE"),
+                                ((-1.0, 2.0), (8.0, 40.0), "coupure basse mini NÉGATIVE")):
+        try:
+            params_bande((1.0, 12.0), bas_d, haut_d, "aide")
+            leve = False
+        except ValueError:
+            leve = True
+        chk(leve, f"une déclaration à {quoi} lève à l'import (bas {bas_d}, haut {haut_d})")
+
+    # --- NaN et l'infini sont REFUSÉS (passe C1, 2026-09-30) -----------------------------------
+    # `nan < min` et `nan > max` sont faux tous les deux : un NaN traversait n'importe quelles
+    # bornes. Et l'infini traversait un réglage sans `max`. Le refus dit « nombre fini ».
+    # (Un jeu à part : `spec` a été réaffecté par la boucle du registre plus haut.)
+    finis = ModeSpec(
+        id="finis", label="Finis", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),
+                Param("gain", "Gain", "float", default=1.0, min=0.0, max=10.0)))
+    for brut in (float("nan"), "nan", float("inf"), "-inf"):
+        _v, raison = validate(finis, {"gain": brut})
+        chk(_v is None and raison and "fini" in raison,
+            f"« Gain » = {brut!r} est refusé comme nombre NON FINI, pas jugé contre ses bornes "
+            f"({raison})")
+    _v, raison = validate(finis, {"freqs": [15.0, float("nan")]})
+    chk(_v is None and raison and "fini" in raison,
+        f"…un NaN dans une LISTE aussi, avant toute contrainte ({raison})")
+    # Deux exceptions que `submit` ne doit jamais laisser remonter jusqu'au fil de l'interface :
+    # `int(inf)` lève `OverflowError` (pas `ValueError`), et un rafraîchissement infini faisait
+    # lever `round(inf / f)` dans `divise_le_refresh` (réglage SANS `max`).
+    for jeu, cas, attendu in ((vote, {"vote_len": float("inf")}, "nombre attendu"),
+                              (ecran, {"refresh_hz": float("inf")}, "fini")):
+        try:
+            _v, raison = validate(jeu, cas)
+            leve = None
+        except Exception as e:  # noqa: BLE001 - c'est précisément ce qu'on vérifie
+            _v, raison, leve = None, None, e
+        chk(leve is None and _v is None and raison and attendu in raison,
+            f"{cas} est REFUSÉ, sans lever ({raison or repr(leve)})")
+    # `valider_un` (« Proposer ») rend le refus de `validate` MOT POUR MOT : c'est la même fonction.
+    bas_bande = bande.params[0]
+    chk(valider_un(bas_bande, 0.0)[1] == validate(bande, {"bande_bas": 0.0})[1]
+        and valider_un(bas_bande, 0.0)[0] is None
+        and valider_un(bas_bande, "1.5") == (1.5, None),
+        f"un réglage SEUL se juge comme dans `validate`, refus identique "
+        f"({valider_un(bas_bande, 0.0)[1]})")
 
     # --- `dans_la_bande` juge contre la bande RÉGLÉE, pas contre BANDPASS (2026-09-30) ---------
     # Le SSVEP règle sa bande. Si la contrainte de ses fréquences restait sur 5-40 Hz, 30 Hz
@@ -886,6 +968,17 @@ def _selftest():
     _v, raison = validate(_ssvep.SPEC, {"freqs": [15.0, 24.0]})
     chk(_v is None and raison and "30" in raison,
         f"…alors qu'à la bande par défaut, 30 Hz est bien le voisin proposé ({raison})")
+    # Le côté BAS de la même suggestion (passe C1). Les trois contrôles ci-dessus ne regardent
+    # que la coupure haute : `available_frequencies(refresh)` appelée SANS la bande (donc bornée
+    # en bas par 5 Hz) les passait tous. 8,2 Hz sous une coupure basse à 8 : le plus proche est
+    # 8,571, puis 7,5 — que le clic suivant refuserait (hors bande) ; 10 est le bon second voisin.
+    # (Une cible SOUS la coupure, 7,9 Hz, n'atteint jamais cette suggestion : `dans_la_bande`,
+    # évaluée avant, la refuse la première.)
+    _v, raison = validate(_ssvep.SPEC, {"bande_bas": 8.0, "freqs": [8.2, 15.0]})
+    chk(_v is None and raison and "diviseur" in raison and "10" in raison
+        and nombre(7.5) not in raison,
+        f"…et sous une coupure BASSE réglée à 8 Hz, 8,2 Hz se voit proposer 8,571 et 10, jamais "
+        f"7,5 qui est sous la bande ({raison})")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
