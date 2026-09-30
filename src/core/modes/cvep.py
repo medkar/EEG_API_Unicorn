@@ -734,6 +734,33 @@ def _channels(params):
     return cvep_channel_labels(CVEP_N_TARGETS)
 
 
+# Les BORNES de la bande réglable à l'entraînement (mini, maxi de chaque coupure), révisées après
+# la revue du 2026-09-30 — elles valaient (0,5, 5) et (20, 60). Chacune a sa raison :
+#
+# • Coupure basse, pas sous 2 Hz. Une époque d'ENTRAÎNEMENT fait UN cycle (262 échantillons,
+#   1,05 s à 60 Hz) et se filtre SEULE, sans marge (`CVEPModel.fit`), alors que la fenêtre DÉCODÉE
+#   fait 2 cycles plus `acq.margin_n` (774 échantillons) et jette son transitoire en tête
+#   (`CVEPRuntime._fenetre`). Plus la coupure est basse, plus le transitoire du passe-haut s'étend
+#   sur l'époque d'entraînement — à 0,5 Hz il la couvre entière —, et le template apprend un bord
+#   de filtre que le décodage ne verra jamais. Pire, `_align` est un `np.roll` : une pente
+#   résiduelle devient une MARCHE au milieu de l'époque recalée. Il n'y a pas de seuil net : 2 Hz
+#   est la coupure de toujours, celle sous laquelle les seuils ont été mesurés, et on ne descend
+#   pas plus bas. (Mesuré sur un signal synthétique à forte dérive : l'époque filtrée seule
+#   s'écarte du même segment pris dans un long signal filtré de 77 % de son σ à 0,5 Hz, 43 % à
+#   2 Hz, 24 % à 5 Hz — indicatif, l'écart dépend de la dérive réelle.)
+# • Coupure haute, pas sous 30 Hz. `corr_min`/`margin` (« Régler ») ont été mesurés en 2-45 Hz, et
+#   une bande ÉTROITE déplace la distribution de ρ sous le bruit (≈ 2·B·T degrés de liberté : moins
+#   de bande, moins de degrés, des corrélations fortuites plus hautes). Mesuré sur du bruit blanc
+#   contre un modèle eCCA synthétique, aux seuils livrés 0,26/0,09 : 8,5 % de fenêtres émises
+#   (avant le vote) en 2-45 Hz, 10,5 % en 5-30 Hz, 24,8 % en 5-20 Hz. Toute bande autre que
+#   2-45 Hz se revérifie avec « Tester » : l'aide le dit.
+# • 60 Hz au plus : la réponse est LARGE bande (le code peut basculer à chaque image), et le
+#   secteur qui tomberait dans la bande est retiré par le coupe-bande du poste, enregistré avec
+#   elle.
+_COUPURE_BASSE = (2.0, 5.0)
+_COUPURE_HAUTE = (30.0, 60.0)
+
+
 SPEC = ModeSpec(
     id="cvep", label=tr("mode.cvep.label"), family="actif",
     summary=tr("mode.cvep.summary"),
@@ -787,10 +814,10 @@ SPEC = ModeSpec(
         # La BANDE se règle ICI, à l'entraînement, et jamais dans les réglages du mode : le modèle
         # l'enregistre (avec le secteur du poste), et le décodage la relit dans le fichier. La
         # changer au décodage ferait corréler un template contre un signal filtré autrement que
-        # celui qu'il a appris — sans la moindre erreur. Les bornes gardent toujours 5-20 Hz, le
-        # cœur de la réponse ; la coupure haute monte à 60 Hz parce que la réponse est LARGE bande.
-        params=params_bande(CVEP_BAND, (0.5, 5.0), (20.0, 60.0),
-                            tr("calib.cvep.param.bande.aide", haut=CVEP_BAND[1])),
+        # celui qu'il a appris — sans la moindre erreur. Les bornes (`_COUPURE_BASSE`,
+        # `_COUPURE_HAUTE`, juste au-dessus de `SPEC`) gardent toujours 5-30 Hz dedans.
+        params=params_bande(CVEP_BAND, _COUPURE_BASSE, _COUPURE_HAUTE,
+                            tr("calib.cvep.param.bande.aide", plancher=_COUPURE_BASSE[0])),
         # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`
         # juste en dessous. Celui-ci dimensionne le tampon du moteur pour ce que la CALIBRATION
         # prélève : `CVEPCalibration` découpe `code_len / refresh` secondes JUSTE AVANT chaque

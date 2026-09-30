@@ -243,9 +243,15 @@ BANDPASS = (5.0, 40.0)   # passe-bande acquisition (Hz)
 # PASSE UNIQUE : il met ~50 échantillons à s'établir, soit 13 % d'une fenêtre de 375 (1,5 s),
 # contaminés à chaque décodage. On récupère donc `WINDOW_S + FILTER_MARGIN_S`, on filtre, et on
 # ne garde que la fin — le transitoire tombe dans la partie jetée. Coût : ~1 s au démarrage.
-# NB : ne s'applique PAS au c-VEP ni au MI, qui filtrent avec `scipy.filtfilt` — celui-ci pade
-# déjà les bords, et surtout leur template/modèle est appris sur des époques filtrées SANS marge :
-# en ajouter en ligne créerait un décalage entre calibration et usage, pour un gain nul.
+# NB : ne s'applique PAS au MI, qui filtre à zéro phase (`core/filtrage.py`) — celui-ci pade déjà
+# les bords, et surtout son modèle est appris sur des époques filtrées SANS marge : en ajouter en
+# ligne créerait un décalage entre calibration et usage, pour un gain nul.
+# ⚠️ Le c-VEP, lui, DÉCODE AVEC cette marge : `CVEPRuntime._fenetre` prend `n_cycles` cycles PLUS
+# `acq.margin_n` (774 échantillons), filtre, puis ne garde que les derniers cycles — alors que ses
+# époques d'ENTRAÎNEMENT font un seul cycle (262 échantillons), filtré SEUL, sans marge. Le même
+# filtre ne produit donc pas le même signal aux bords des deux côtés. C'est ce décalage qui borne
+# la coupure basse réglable du c-VEP à 2 Hz (`_COUPURE_BASSE`, `core/modes/cvep.py`) : plus bas,
+# le transitoire du passe-haut couvre toute l'époque d'entraînement.
 FILTER_MARGIN_S = 1.0
 # Le SECTEUR électrique (2026-09-30) : 50 Hz en Europe, 60 Hz aux Amériques. UN réglage du POSTE,
 # pas d'un mode : l'écran de départ le choisit (et le retient), le moteur le reçoit

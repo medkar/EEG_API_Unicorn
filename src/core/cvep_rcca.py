@@ -116,8 +116,8 @@ class RCCAModel:
         self.code_len = int(self.codes.shape[1])
         self.band = tuple(band)
         # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
-        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
-        # d'avant ce réglage, qui doit décoder comme il a appris.
+        # avec le MÊME filtre que l'entraînement. None = pas de coupe-bande — c'est ce que rend un
+        # modèle d'avant ce réglage, qui doit décoder comme il a appris.
         self.secteur_hz = secteur_hz
         self.channels = list(CVEP_CHANNELS if channels is None else channels)
         self.event = event
@@ -564,16 +564,28 @@ def _rejouer(chemin, n_bruit=300):
               f"porte d'autres. Rien à rejouer : même refus que `core.cvep_models.charger`.")
         return False
 
-    rcca = RCCAModel(codes, fs=fs, refresh=refresh,
+    # ⚠️ Le FILTRE est celui de l'ARCHIVE, pas `CVEP_BAND` sans coupe-bande. Depuis le
+    # 2026-09-30 la bande se règle à l'entraînement et le secteur suit le poste : une archive
+    # `cvep_calib_*.npz` porte `band` et `secteur_hz` (0 = pas de coupe-bande), ceux avec
+    # lesquels ses modèles ont appris. Rejouer avec un autre filtre mesurerait d'autres
+    # décodeurs que les siens — et poserait des seuils pour eux. Une archive d'avant ne porte ni
+    # l'un ni l'autre : elle a appris sur `CVEP_BAND`, sans coupe-bande — c'est ce qu'on rejoue.
+    band = (tuple(float(f) for f in d["band"]) if "band" in d.files else tuple(CVEP_BAND))
+    secteur_hz = (float(d["secteur_hz"]) or None) if "secteur_hz" in d.files else None
+
+    rcca = RCCAModel(codes, fs=fs, refresh=refresh, band=band, secteur_hz=secteur_hz,
                      channels=list(range(len(voies)))).fit(epochs, y, compute_cv=False)
-    ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code),
-                     channels=list(range(len(voies))))
+    ecca = CVEPModel(fs=fs, refresh=refresh, code_len=len(code), band=band,
+                     secteur_hz=secteur_hz, channels=list(range(len(voies))))
     ecca.fit(epochs, lags)
     uniq = sorted(set(lags))
-    sigma = float(np.std([_bp(e, fs, rcca.band) for e in epochs]))
+    # Le σ du bruit de référence, filtré comme les époques que les décodeurs voient.
+    sigma = float(np.std([_bp(e, fs, band, secteur_hz=secteur_hz) for e in epochs]))
 
     print(f"[seuils] {os.path.basename(chemin)} : {len(y)} cycles, {rcca.n_targets} cibles, "
           f"voies {voies}, {fs:.0f} Hz / {refresh:.0f} Hz")
+    print(f"[seuils] filtre de l'archive : {band[0]:g}-{band[1]:g} Hz, "
+          + (f"coupe-bande {secteur_hz:g} Hz" if secteur_hz else "sans coupe-bande"))
     print(f"[seuils] ⚠️ UNE personne, UNE séance : ces chiffres ne valent que pour CE fichier, et "
           f"les justesses portent sur peu de décisions — lire les écarts avec prudence.")
     print(f"[seuils] ⚠️ Et le couple de seuils que vous retiendrez EN LISANT le tableau ci-dessous "
@@ -1099,6 +1111,43 @@ def _selftest():
         chk("OPTIMISTE" in txt_c and "choisi sur ces décisions" in txt_c,
             "...et le tableau dit, LÀ OÙ IL EST LU, que le couple qu'on y choisira aura un point "
             "de fonctionnement optimiste — sélectionné sur les décisions qui le mesurent")
+
+        # (d) Le FILTRE rejoué est celui de l'ARCHIVE (revue du 2026-09-30). `_rejouer` rebâtissait
+        #     les deux décodeurs sur `CVEP_BAND` sans coupe-bande, et le σ du bruit aussi, alors
+        #     qu'une archive récente porte `band` et `secteur_hz` : il mesurait d'autres décodeurs
+        #     que ceux de la séance, et leur posait des seuils. Espion sur `core.filtrage.sections`,
+        #     par où passe TOUT filtrage des deux décodeurs (ajustement, hors-pli, bruit, σ).
+        import core.filtrage as _filtrage
+
+        def _filtres_du_rejeu(chemin):
+            vrai, vus = _filtrage.sections, []
+
+            def _espion(fs_, bande, secteur_hz=None, ordre=_filtrage.ORDRE):
+                vus.append((tuple(float(b) for b in bande), secteur_hz))
+                return vrai(fs_, bande, secteur_hz, ordre)
+
+            _filtrage.sections = _espion
+            try:
+                rendu, txt = _rejoue_capture(chemin)
+            finally:
+                _filtrage.sections = vrai
+            return rendu, txt, vus
+
+        avec_filtre = _ecrire_calib("cvep_calib_filtre.npz", alternes,
+                                    band=np.asarray([3.0, 30.0]), secteur_hz=60.0)
+        rendu_d, txt_d, vus_d = _filtres_du_rejeu(avec_filtre)
+        chk(rendu_d is True and len(vus_d) >= len(alternes)
+            and set(vus_d) == {((3.0, 30.0), 60.0)} and "3-30 Hz, coupe-bande 60 Hz" in txt_d,
+            f"--seuils rejoue une archive avec SON filtre (bande et coupe-bande qu'elle porte), et "
+            f"le dit ({len(vus_d)} filtrages, {sorted(set(vus_d), key=str)})")
+        # ...et une archive d'AVANT (ni `band` ni `secteur_hz`) avec celui qu'elle a appris :
+        # `CVEP_BAND`, SANS coupe-bande — pas le secteur du poste.
+        rendu_e, txt_e, vus_e = _filtres_du_rejeu(sans_paire)
+        chk(rendu_e is True and len(vus_e) >= len(alternes)
+            and set(vus_e) == {(tuple(float(b) for b in CVEP_BAND), None)}
+            and "sans coupe-bande" in txt_e,
+            f"...et une archive SANS filtre noté est rejouée sur CVEP_BAND, sans coupe-bande, "
+            f"comme elle a appris ({len(vus_e)} filtrages, {sorted(set(vus_e), key=str)})")
     finally:
         shutil.rmtree(tmp6, ignore_errors=True)
 

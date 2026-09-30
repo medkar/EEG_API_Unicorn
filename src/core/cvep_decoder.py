@@ -118,8 +118,8 @@ class CVEPModel:
         self.code_len = int(code_len)
         self.band = tuple(band)
         # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
-        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
-        # d'avant ce réglage, qui doit décoder comme il a appris.
+        # avec le MÊME filtre que l'entraînement. None = pas de coupe-bande — c'est ce que rend un
+        # modèle d'avant ce réglage, qui doit décoder comme il a appris.
         self.secteur_hz = secteur_hz
         # Indices (dans CH_NAMES) des voies sur lesquelles le filtre spatial est appris. On
         # ENREGISTRE toujours les 8, mais on n'en ajuste qu'un sous-ensemble : donner 8 voies à

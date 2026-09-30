@@ -112,8 +112,14 @@ def analyze(path=DEFAULT_FILE, max_offset=50, step=5, max_k=4):
         epochs_raw = epochs_raw[:, :, fit_ch]
     n_ep, n_cyc, n_ch = epochs_raw.shape
     code_len = int(round(n_cyc * refresh / fs))
-    model = CVEPModel(fs=fs, refresh=refresh, code_len=code_len, band=CVEP_BAND)
-    epochs = [bandpass(e, fs, CVEP_BAND) for e in epochs_raw]
+    # Le FILTRE de l'archive (2026-09-30) : une calibration récente porte `band` et `secteur_hz`
+    # (0 = pas de coupe-bande), ceux avec lesquels ses modèles ont appris — rejouer autrement
+    # analyserait un autre décodeur que celui de la séance. Une archive d'avant n'a ni l'un ni
+    # l'autre : elle a appris sur `CVEP_BAND`, sans coupe-bande.
+    band = tuple(float(f) for f in d["band"]) if "band" in d else tuple(CVEP_BAND)
+    secteur_hz = (float(d["secteur_hz"]) or None) if "secteur_hz" in d else None
+    model = CVEPModel(fs=fs, refresh=refresh, code_len=code_len, band=band, secteur_hz=secteur_hz)
+    epochs = [bandpass(e, fs, band, secteur_hz=secteur_hz) for e in epochs_raw]
     per_lag = {l: lags.count(l) for l in sorted(set(lags))}
     uniq = sorted(set(lags))
     # Amplitude APRÈS filtrage = ce que voit réellement le décodeur, et le seul indicateur de
@@ -126,6 +132,8 @@ def analyze(path=DEFAULT_FILE, max_offset=50, step=5, max_k=4):
     print(f"   {n_ep} cycles de {n_cyc} éch. x {n_ch} voies · fs={fs:.0f}Hz · écran={refresh:.0f}Hz"
           + (f" · rotation={int(d['rotation'])}" if "rotation" in d else ""))
     print(f"   cycles par cible : {per_lag}   (hasard = {100/len(per_lag):.0f}%)")
+    print(f"   filtre de l'archive : {band[0]:g}-{band[1]:g} Hz, "
+          + (f"coupe-bande {secteur_hz:g} Hz" if secteur_hz else "sans coupe-bande"))
     print("   amplitude filtrée par voie (σ) : " + "  ".join(f"{v:5.1f}" for v in amp)
           + f"   [dérive brute : {'  '.join(f'{v:.0f}' for v in drift)}]")
 

@@ -310,7 +310,7 @@ def _selftest():
     import tempfile
 
     from core.cvep_code import m_sequence
-    from core.config import CVEP_CHANNELS
+    from core.config import CVEP_BAND, CVEP_CHANNELS
 
     ok = True
 
@@ -384,6 +384,62 @@ def _selftest():
             and isinstance(charger(chemin_ecca)[0], CVEPModel)
             and isinstance(charger(chemin_herite)[0], CVEPModel),
             "...et c'est bien la CLASSE correspondante qui est rendue, pas juste l'étiquette")
+
+        # --- 1 bis. Un modèle d'AVANT le coupe-bande (2026-09-30) décode comme il a appris. ---
+        # Aucun fichier écrit avant ce jour ne porte `secteur_hz` : il a appris SANS coupe-bande,
+        # et doit décoder sans. Un `load` qui retomberait sur le secteur du poste
+        # (`... else SECTEUR_HZ`) ferait corréler son template contre un signal filtré autrement
+        # que celui qu'il a appris — plausible, et faux. Vérifié sur l'ATTRIBUT et sur le FILTRE
+        # réellement appliqué (espion sur `core.filtrage.sections`, par où passe tout filtrage des
+        # décodeurs), au chargement (le rCCA se ré-ajuste) comme au décodage (`scores`).
+        import core.filtrage as _filtrage
+
+        @_contextlib.contextmanager
+        def _filtrages():
+            vrai, vus = _filtrage.sections, []
+
+            def _espion(fs, bande, secteur_hz=None, ordre=_filtrage.ORDRE):
+                vus.append((tuple(float(b) for b in bande), secteur_hz))
+                return vrai(fs, bande, secteur_hz, ordre)
+
+            _filtrage.sections = _espion
+            try:
+                yield vus
+            finally:
+                _filtrage.sections = vrai
+
+        # Le rCCA hérité : écrit comme `RCCAModel.save` l'écrivait AVANT le coupe-bande — avec
+        # `decoder`, sans `secteur_hz`. Dans un sous-dossier : la section 5 compte la liste EXACTE.
+        dossier_herite = _os.path.join(dossier, "herite")
+        _os.makedirs(dossier_herite)
+        vieux_r = _rcca(codes_du_jour)
+        chemin_rcca_herite = _os.path.join(dossier_herite, "cvep_rcca_model_herite.npz")
+        _np.savez(chemin_rcca_herite, codes=vieux_r.codes, epochs=_np.asarray(vieux_r._epochs),
+                  labels=vieux_r._labels, fs=vieux_r.fs, refresh=vieux_r.refresh,
+                  band=_np.asarray(vieux_r.band), channels=_np.asarray(vieux_r.channels, dtype=int),
+                  event=vieux_r.event, enc=vieux_r.enc, decoder="rCCA", cv=0.5)
+        for chemin_h in (chemin_herite, chemin_rcca_herite):
+            with _np.load(chemin_h) as d:
+                chk("secteur_hz" not in d.files,
+                    f"fixture : {_os.path.basename(chemin_h)} n'a VRAIMENT pas `secteur_hz`")
+
+        plan_h, _code_h = build_targets()
+        fen_h = _np.random.default_rng(2).normal(0.0, 1.0, (2 * 262 + 250, len(CVEP_CHANNELS)))
+        for chemin_h in (chemin_herite, chemin_rcca_herite):
+            nom_h = _os.path.basename(chemin_h)
+            with _filtrages() as vus_h:
+                herite, raison_h = charger(chemin_h)
+                if herite is not None:
+                    if herite.decoder == "eCCA":
+                        herite.scores(fen_h, 0, [c["lag"] for c in plan_h], n_cycles=2)
+                    else:
+                        herite.scores(fen_h, 0, 2)
+            chk(herite is not None and herite.secteur_hz is None,
+                f"{nom_h} : un modèle SANS `secteur_hz` se charge SANS coupe-bande, pas avec le "
+                f"secteur du poste ({getattr(herite, 'secteur_hz', raison_h)})")
+            chk(len(vus_h) >= 1 and set(vus_h) == {(tuple(float(b) for b in CVEP_BAND), None)},
+                f"{nom_h} : ...et il FILTRE sans, au chargement comme au décodage, sur sa bande "
+                f"d'origine ({len(vus_h)} filtrage(s), {sorted(set(vus_h), key=str)})")
 
         # --- 2. Le refus de STIMULUS : les codes Gold restent dehors. -------------------------
         # `data/cvep_rcca_model.npz` est calibré sur des codes Gold distincts — hypothèse mesurée,
