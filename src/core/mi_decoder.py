@@ -26,7 +26,6 @@ import sys
 import joblib
 import numpy as np
 from scipy.linalg import eigh
-from scipy.signal import butter, filtfilt
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,
@@ -35,6 +34,7 @@ from sklearn.pipeline import Pipeline
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import MI_METHOD, MI_REREF, use_utf8_console  # noqa: E402
+from core.filtrage import passe_bande  # noqa: E402
 
 MI_BAND = (8.0, 30.0)                       # mu (8-12) + beta (13-30) = rythmes sensorimoteurs
 MI_CONTROL = ("GAUCHE", "DROITE")           # classes actives (hors REPOS)
@@ -55,11 +55,10 @@ def reref(epochs, mode=MI_REREF):
     raise ValueError(f"re-ref MI inconnu : {mode!r} (attendu 'none' ou 'car')")
 
 
-def bandpass(epochs, fs, band=MI_BAND, order=4):
-    """Filtre 0-phase (filtfilt) le long du temps. epochs : (..., n_samples)."""
-    lo, hi = band
-    b, a = butter(order, [lo / (fs / 2), hi / (fs / 2)], btype="band")
-    return filtfilt(b, a, np.asarray(epochs, dtype=float), axis=-1)
+def bandpass(epochs, fs, band=MI_BAND, order=4, secteur_hz=None):
+    """Filtre 0-phase le long du temps, puis coupe-bande `secteur_hz` s'il est donné.
+    epochs : (..., n_samples). Le calcul vit dans `core/filtrage.py`, partagé par les décodeurs."""
+    return passe_bande(epochs, fs, band, secteur_hz=secteur_hz, axis=-1, ordre=order)
 
 
 class CSP(BaseEstimator, TransformerMixin):
@@ -125,10 +124,14 @@ class MIModel:
     """Pipeline entraînable (CSP+LDA ou Riemannien) + (dé)sérialisation. `cv_` = accuracy CV."""
 
     def __init__(self, labels=MI_LABELS, fs=250.0, band=MI_BAND, method=MI_METHOD,
-                 n_per_class=2, reref_mode=MI_REREF):
+                 n_per_class=2, reref_mode=MI_REREF, secteur_hz=None):
         self.labels = list(labels)
         self.fs = fs
         self.band = band
+        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
+        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
+        # d'avant ce réglage, qui doit décoder comme il a appris.
+        self.secteur_hz = secteur_hz
         self.method = method
         self.reref_mode = reref_mode
         self.pipe = build_pipe(method, n_per_class)
@@ -148,7 +151,7 @@ class MIModel:
         # décoder sans re-ref aussi (sinon incohérence train/predict). Les modèles récents portent
         # l'attribut et utilisent leur propre mode.
         epochs = reref(epochs, getattr(self, "reref_mode", "none"))
-        return bandpass(epochs, self.fs, self.band)
+        return bandpass(epochs, self.fs, self.band, secteur_hz=getattr(self, "secteur_hz", None))
 
     def fit(self, epochs, y, groups=None):
         """Entraîne. `groups` = l'indice d'ESSAI de chaque fenêtre — c'est lui qui rend la CV honnête.

@@ -109,12 +109,16 @@ class RCCAModel:
     decoder = "rCCA"
 
     def __init__(self, codes, fs=FS_UNICORN, refresh=60.0, band=CVEP_BAND,
-                 channels=None, event=CVEP_RCCA_EVENT, enc=CVEP_RCCA_ENC):
+                 channels=None, event=CVEP_RCCA_EVENT, enc=CVEP_RCCA_ENC, secteur_hz=None):
         self.codes = np.asarray(codes, dtype=int)         # (n_targets, code_len)
         self.fs = float(fs)
         self.refresh = float(refresh)
         self.code_len = int(self.codes.shape[1])
         self.band = tuple(band)
+        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
+        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
+        # d'avant ce réglage, qui doit décoder comme il a appris.
+        self.secteur_hz = secteur_hz
         self.channels = list(CVEP_CHANNELS if channels is None else channels)
         self.event = event
         self.enc = float(enc)
@@ -166,7 +170,7 @@ class RCCAModel:
         """
         self._epochs = [np.asarray(e, float) for e in epochs]
         self._labels = np.asarray(labels, dtype=int)
-        X = np.stack([bandpass(e, self.fs, self.band).T
+        X = np.stack([bandpass(e, self.fs, self.band, secteur_hz=self.secteur_hz).T
                       for e in self._epochs])           # (n_trials, n_ch, n_cyc)
         self.clf = self._fit_clf(X, self._labels)
         if compute_cv:
@@ -223,7 +227,8 @@ class RCCAModel:
         """
         from core.cvep_decoder import groupes_de_cycles
 
-        X = np.stack([bandpass(np.asarray(e, float), self.fs, self.band).T for e in epochs])
+        X = np.stack([bandpass(np.asarray(e, float), self.fs, self.band,
+                               secteur_hz=self.secteur_hz).T for e in epochs])
         y = np.asarray(labels, dtype=int)
         return self._hors_pli(X, y, groupes_de_cycles(y, n_cycles))
 
@@ -253,7 +258,8 @@ class RCCAModel:
         rCCA a donc été jugée en séance à travers un alignement retourné. C'est une raison de
         plus de ne pas prendre pour acquis le verdict « le rCCA est moins bon ».
         """
-        avg = self._fold(bandpass(window, self.fs, self.band), n_cycles)   # (n_cyc x n_ch) réduit
+        avg = self._fold(bandpass(window, self.fs, self.band, secteur_hz=self.secteur_hz),
+                         n_cycles)   # (n_cyc x n_ch) réduit
         aligned = np.roll(avg, self._shift(phase), axis=0)
         X = aligned.T[None]                               # (1, n_ch, n_cyc)
         return np.ravel(self.clf.decision_function(X))    # (n_targets,)
@@ -271,6 +277,8 @@ class RCCAModel:
                  labels=self._labels, fs=self.fs, refresh=self.refresh,
                  band=np.asarray(self.band), channels=np.asarray(self.channels, dtype=int),
                  event=self.event, enc=self.enc,
+                 # 0 = pas de coupe-bande (un tableau npz ne porte pas de None).
+                 secteur_hz=float(self.secteur_hz or 0.0),
                  # Le fichier DÉCLARE son décodeur : `cvep_models.charger` lit ce champ pour
                  # savoir quelle classe instancier. Deviner d'après les clés présentes marcherait
                  # aujourd'hui et casserait au premier champ ajouté.
@@ -287,7 +295,9 @@ class RCCAModel:
         d = np.load(path)
         m = cls(codes=d["codes"], fs=float(d["fs"]), refresh=float(d["refresh"]),
                 band=tuple(d["band"]), channels=[int(c) for c in d["channels"]],
-                event=str(d["event"]), enc=float(d["enc"]))
+                event=str(d["event"]), enc=float(d["enc"]),
+                # Absent = un modèle d'avant le coupe-bande : il décode comme il a appris, sans.
+                secteur_hz=(float(d["secteur_hz"]) or None) if "secteur_hz" in d else None)
         m.fit([e for e in d["epochs"]], d["labels"], compute_cv=False)   # refit rapide (pas de LOO)
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])           # cv_ déjà mesuré à la calib
         return m

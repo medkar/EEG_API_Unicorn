@@ -26,21 +26,20 @@ import os
 import sys
 
 import numpy as np
-from scipy.signal import butter, filtfilt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BAND, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
                     CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MODEL_PATH, FS_UNICORN,
                     use_utf8_console)
 from core.cvep_code import build_targets, m_sequence  # noqa: E402
+from core.filtrage import passe_bande  # noqa: E402
 
 
-def bandpass(x, fs, band=CVEP_BAND, order=4):
-    """Passe-bande zéro-phase (filtfilt) sur (n_samp x n_ch). Le zéro-phase est ESSENTIEL
-    ici : un filtre à phase non nulle décalerait la réponse et casserait l'alignement."""
-    lo, hi = band
-    b, a = butter(order, [lo / (fs / 2), min(hi, fs / 2 - 1) / (fs / 2)], btype="band")
-    return filtfilt(b, a, np.asarray(x, dtype=float), axis=0)
+def bandpass(x, fs, band=CVEP_BAND, order=4, secteur_hz=None):
+    """Passe-bande zéro-phase sur (n_samp x n_ch), puis coupe-bande `secteur_hz` s'il est donné.
+    Le zéro-phase est ESSENTIEL ici : un filtre à phase non nulle décalerait la réponse et
+    casserait l'alignement. Le calcul vit dans `core/filtrage.py`, partagé par les décodeurs."""
+    return passe_bande(x, fs, band, secteur_hz=secteur_hz, axis=0, ordre=order)
 
 
 def cca_weights(X, Y, reg=1e-6):
@@ -113,11 +112,15 @@ class CVEPModel:
     decoder = "eCCA"
 
     def __init__(self, fs=FS_UNICORN, refresh=60.0, code_len=63, band=CVEP_BAND,
-                 channels=None):
+                 channels=None, secteur_hz=None):
         self.fs = float(fs)
         self.refresh = float(refresh)
         self.code_len = int(code_len)
         self.band = tuple(band)
+        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
+        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
+        # d'avant ce réglage, qui doit décoder comme il a appris.
+        self.secteur_hz = secteur_hz
         # Indices (dans CH_NAMES) des voies sur lesquelles le filtre spatial est appris. On
         # ENREGISTRE toujours les 8, mais on n'en ajuste qu'un sous-ensemble : donner 8 voies à
         # une CCA calibrée sur peu de cycles surapprend (mesuré : 3-4 composantes canoniques
@@ -147,7 +150,7 @@ class CVEPModel:
 
     def fit(self, epochs, lags):
         """epochs : liste de (n_cyc x n_ch) BRUTES ; lags : lag (frames) fixé pour chacune."""
-        filt = [bandpass(e, self.fs, self.band) for e in epochs]
+        filt = [bandpass(e, self.fs, self.band, secteur_hz=self.secteur_hz) for e in epochs]
         aligned = [self._align(e, l) for e, l in zip(filt, lags)]
         self.w, self.template = self._solve(aligned)
         self.cv_ = self._loo(filt, lags)
@@ -189,7 +192,7 @@ class CVEPModel:
         `python src/core/cvep_rcca.py --seuils <calib.npz>` l'imprime, pour les deux décodeurs et
         les deux géométries.
         """
-        filt = [bandpass(e, self.fs, self.band) for e in epochs]
+        filt = [bandpass(e, self.fs, self.band, secteur_hz=self.secteur_hz) for e in epochs]
         lags = [int(l) for l in lags]
         uniq = sorted(set(lags))
         scores, y = [], []
@@ -236,7 +239,8 @@ class CVEPModel:
         On filtre AVANT de replier, pour que la marge joue son rôle.
         """
         return self._scores_filtered(
-            self.fold(bandpass(window, self.fs, self.band), n_cycles), phase, lags)
+            self.fold(bandpass(window, self.fs, self.band, secteur_hz=self.secteur_hz),
+                      n_cycles), phase, lags)
 
     # --- persistance -----------------------------------------------------
     def save(self, path=CVEP_MODEL_PATH, n_targets=0):
@@ -246,6 +250,8 @@ class CVEPModel:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         np.savez(path, w=self.w, template=self.template, fs=self.fs, refresh=self.refresh,
                  code_len=self.code_len, band=np.asarray(self.band), n_targets=int(n_targets),
+                 # 0 = pas de coupe-bande (un tableau npz ne porte pas de None).
+                 secteur_hz=float(self.secteur_hz or 0.0),
                  channels=np.asarray(self.channels, dtype=int),
                  # Le fichier DÉCLARE son décodeur : `cvep_models.charger` lit ce champ pour
                  # savoir quelle classe instancier. Un fichier SANS le champ est un eCCA d'avant
@@ -259,7 +265,9 @@ class CVEPModel:
         d = np.load(path)
         m = cls(fs=float(d["fs"]), refresh=float(d["refresh"]),
                 code_len=int(d["code_len"]), band=tuple(d["band"]),
-                channels=([int(c) for c in d["channels"]] if "channels" in d else None))
+                channels=([int(c) for c in d["channels"]] if "channels" in d else None),
+                # Absent = un modèle d'avant le coupe-bande : il décode comme il a appris, sans.
+                secteur_hz=(float(d["secteur_hz"]) or None) if "secteur_hz" in d else None)
         m.w, m.template = d["w"], d["template"]
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])
         m.n_targets = int(d["n_targets"]) if "n_targets" in d else 0   # 0 = modèle antérieur

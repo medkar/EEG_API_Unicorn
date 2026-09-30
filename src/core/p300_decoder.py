@@ -22,7 +22,6 @@ import sys
 
 import joblib
 import numpy as np
-from scipy.signal import butter, filtfilt
 from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -30,15 +29,15 @@ from sklearn.pipeline import Pipeline
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (P300_BAND, P300_EPOCH_S, P300_PRE_S, P300_XDAWN_NFILTER,  # noqa: E402
                     use_utf8_console)
+from core.filtrage import passe_bande  # noqa: E402
 
 TARGET, NONTARGET = 1, 0
 
 
-def bandpass(x, fs, band=P300_BAND, order=4):
-    """Filtre 0-phase (filtfilt) le long du temps. x : (..., n_samples)."""
-    lo, hi = band
-    b, a = butter(order, [lo / (fs / 2), hi / (fs / 2)], btype="band")
-    return filtfilt(b, a, np.asarray(x, dtype=float), axis=-1)
+def bandpass(x, fs, band=P300_BAND, order=4, secteur_hz=None):
+    """Filtre 0-phase le long du temps, puis coupe-bande `secteur_hz` s'il est donné.
+    x : (..., n_samples). Le calcul vit dans `core/filtrage.py`, partagé par les décodeurs."""
+    return passe_bande(x, fs, band, secteur_hz=secteur_hz, axis=-1, ordre=order)
 
 
 def epoch_from_stream(eeg, ts, flash_ts, fs, pre_s=P300_PRE_S, post_s=P300_EPOCH_S):
@@ -72,9 +71,13 @@ class P300Model:
     (GroupKFold) ; `n_epoques_` = nombre d'époques d'entraînement (lu par `p300_models.decrire`)."""
 
     def __init__(self, fs=250.0, band=P300_BAND, pre_s=P300_PRE_S, post_s=P300_EPOCH_S,
-                 nfilter=P300_XDAWN_NFILTER):
+                 nfilter=P300_XDAWN_NFILTER, secteur_hz=None):
         self.fs = fs
         self.band = band
+        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
+        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
+        # d'avant ce réglage, qui doit décoder comme il a appris.
+        self.secteur_hz = secteur_hz
         self.pre_s = pre_s
         self.post_s = post_s
         self.nfilter = nfilter
@@ -92,7 +95,7 @@ class P300Model:
         if n_pre > 0:
             X = X - X[:, :n_pre, :].mean(axis=1, keepdims=True)   # ligne de base pré-stimulus
         X = np.transpose(X, (0, 2, 1))                            # -> (n_trials, n_ch, n_samp)
-        return bandpass(X, self.fs, self.band)
+        return bandpass(X, self.fs, self.band, secteur_hz=getattr(self, "secteur_hz", None))
 
     def fit(self, epochs, y, groups=None, compute_cv=True):
         Xf, y = self._prep(epochs), np.asarray(y).astype(int)

@@ -169,9 +169,12 @@ class ErrPModel:
     """
 
     def __init__(self, fs=250.0, band=ERRP_BAND, pre_s=ERRP_PRE_S, post_s=ERRP_EPOCH_S,
-                 nfilter=ERRP_XDAWN_NFILTER, tnr_target=ERRP_TNR_TARGET):
-        self.core = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s, nfilter=nfilter)
+                 nfilter=ERRP_XDAWN_NFILTER, tnr_target=ERRP_TNR_TARGET, secteur_hz=None):
+        # Le filtre (bande + secteur) vit dans `self.core` : c'est son `_prep` qui filtre.
+        self.core = P300Model(fs=fs, band=band, pre_s=pre_s, post_s=post_s, nfilter=nfilter,
+                              secteur_hz=secteur_hz)
         self.fs, self.band, self.pre_s, self.post_s = fs, band, pre_s, post_s
+        self.secteur_hz = secteur_hz
         self.nfilter, self.tnr_target = nfilter, tnr_target
         self.threshold_ = 0.0
         self.cv_auc_ = None       # AUC OOF du nfilter retenu

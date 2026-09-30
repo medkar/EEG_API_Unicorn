@@ -247,6 +247,15 @@ BANDPASS = (5.0, 40.0)   # passe-bande acquisition (Hz)
 # déjà les bords, et surtout leur template/modèle est appris sur des époques filtrées SANS marge :
 # en ajouter en ligne créerait un décalage entre calibration et usage, pour un gain nul.
 FILTER_MARGIN_S = 1.0
+# Le SECTEUR électrique (2026-09-30) : 50 Hz en Europe, 60 Hz aux Amériques. UN réglage du POSTE,
+# pas d'un mode : l'écran de départ le choisit (et le retient), le moteur le reçoit
+# (`EngineServer.secteur_hz`), et chaque décodeur y pose un coupe-bande (`core/filtrage.py`),
+# enregistré dans le modèle avec sa bande. `SECTEUR_HZ` n'est que la valeur par défaut.
+SECTEURS_HZ = (50.0, 60.0)
+SECTEUR_HZ = 50.0
+# La finesse du coupe-bande : Q = 30, soit ±~0,8 Hz autour du secteur — l'EEG voisin n'est pas
+# touché. La même pour les décodeurs et pour les tracés du Brut.
+SECTEUR_Q = 30.0
 # Les TRACÉS du Brut (2026-09-25) : les secondes affichées, et celles demandées EN PLUS pour que
 # le filtre d'affichage (`core/filtres_affichage.py`) ait fini son régime transitoire avant le
 # bord gauche de l'écran. Le tampon du moteur (`EngineServer.keep`) tient la somme des deux.

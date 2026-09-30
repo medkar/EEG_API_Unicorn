@@ -452,6 +452,38 @@ def _as_list(value):
     return list(value) if isinstance(value, (list, tuple)) else [value]
 
 
+def params_bande(defaut, bas, haut, aide):
+    """Les deux réglages d'une BANDE de fréquences : `bande_bas` et `bande_haut` (2026-09-30).
+
+    `defaut` : la bande de toujours du mode. `bas` et `haut` : les bornes (mini, maxi) de chaque
+    coupure. Elles sont choisies pour que la bande contienne TOUJOURS le cœur du signal du
+    paradigme — tout ce qui va de `bas[1]` à `haut[0]`. Une bande qui retirerait le signal (8-30 Hz
+    pour un P300, qui vit sous 8 Hz) ne lève rien : elle décode du bruit avec des scores
+    plausibles. Elle est donc refusée ICI, bornes comprises dans le refus.
+
+    Et comme `bas[1] < haut[0]`, une bande acceptée n'est jamais vide ni inversée : les bornes
+    suffisent, sans contrainte croisée à écrire ni à tenir d'accord.
+
+    `aide` : la bulle des deux réglages — ce que ce mode cherche dans cette bande, dit par lui.
+    """
+    if not bas[0] <= float(defaut[0]) <= bas[1] < haut[0] <= float(defaut[1]) <= haut[1]:
+        raise ValueError(f"bande mal déclarée : défaut {defaut}, coupure basse dans {bas}, "
+                         f"coupure haute dans {haut} — la basse doit rester sous la haute")
+    return (
+        Param(key="bande_bas", label=tr("moteur.bande.bas"), kind="float", unit="Hz",
+              default=float(defaut[0]), min=float(bas[0]), max=float(bas[1]), help=aide),
+        Param(key="bande_haut", label=tr("moteur.bande.haut"), kind="float", unit="Hz",
+              default=float(defaut[1]), min=float(haut[0]), max=float(haut[1]), help=aide),
+    )
+
+
+def bande_de(params, defaut):
+    """La bande `(bas, haut)` de ces réglages validés, ou `defaut` s'ils n'en déclarent pas."""
+    if "bande_bas" not in params or "bande_haut" not in params:
+        return tuple(defaut)
+    return float(params["bande_bas"]), float(params["bande_haut"])
+
+
 def _selftest():
     """Contrôle la validation : ce qui passe, ce qui est refusé, et avec quelle raison.
 
@@ -775,6 +807,24 @@ def _selftest():
     _v, raison = validate(no_default, {})
     chk(raison is not None and "nombre attendu" in raison,
         f"un défaut None pour un nombre est refusé ({raison})")
+
+    # --- une bande réglable (2026-09-30) ------------------------------------------------------
+    bande = ModeSpec(id="bande", label="Bande", family="actif", summary="test", status="moteur",
+                     params=params_bande((1.0, 12.0), (0.1, 2.0), (8.0, 40.0), "aide"))
+    valeurs, raison = validate(bande, {})
+    chk(raison is None and bande_de(valeurs, (9.0, 9.0)) == (1.0, 12.0),
+        f"une bande se règle, et par défaut c'est celle de toujours ({raison})")
+    _v, raison = validate(bande, {"bande_bas": 8.0, "bande_haut": 30.0})
+    chk(raison is not None and "2" in raison,
+        f"une bande qui retirerait le signal du paradigme est REFUSÉE, borne dans le refus "
+        f"({raison})")
+    chk(bande_de({"autre": 1}, (5.0, 40.0)) == (5.0, 40.0),
+        "un mode sans bande réglable garde la sienne")
+    try:
+        params_bande((1.0, 12.0), (0.1, 9.0), (8.0, 40.0), "aide")
+        chk(False, "une déclaration où la coupure basse peut dépasser la haute doit lever")
+    except ValueError:
+        chk(True, "une déclaration où la coupure basse peut dépasser la haute lève à l'import")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

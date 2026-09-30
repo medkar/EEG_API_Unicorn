@@ -1,4 +1,6 @@
 {
+  "moteur.bande.bas": "Coupure basse",
+  "moteur.bande.haut": "Coupure haute",
   "moteur.contrat.au_dessus_maximum": "« {reglage} » : {valeur} dépasse le maximum ({borne})",
   "moteur.contrat.aucun_choix": "« {reglage} » : aucun choix disponible.",
   "moteur.contrat.aucun_choix_aide": "« {reglage} » : aucun choix disponible. {aide}",

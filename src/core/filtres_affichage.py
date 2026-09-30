@@ -31,7 +31,7 @@ import numpy as np
 from scipy.signal import butter, detrend, iirnotch, sosfilt, sosfilt_zi, tf2sos
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import TRACES_AMORCE_S  # noqa: E402
+from core.config import SECTEUR_HZ, SECTEUR_Q, TRACES_AMORCE_S  # noqa: E402
 
 #: Les filtres proposés, en (bas, haut) Hz ; None = pas de coupure de ce côté. `(None, None)` est
 #: le signal brut. Les passe-haut vont du plus doux (0,1 Hz : garde les ondes lentes, laisse
@@ -43,16 +43,16 @@ FILTRES = ((None, None),
 #: Par défaut : assez pour retirer la dérive, pas assez pour déformer un clignement.
 FILTRE_DEFAUT = (1.0, None)
 
-#: Le secteur, en Europe. Aux Amériques ce serait 60.
-SECTEUR_HZ = 50.0
-#: La finesse du coupe-bande : ±~0,8 Hz autour du secteur, l'EEG voisin n'est pas touché.
-SECTEUR_Q = 30.0
 #: L'ordre des Butterworth — celui du filtre d'acquisition (`UnicornAcquisition.order`).
 ORDRE = 4
 
 
-def sections(fs, filtre=FILTRE_DEFAUT, coupe_bande=False):
-    """Les sections du filtre (`sos` de scipy), ou None s'il n'y a rien à filtrer."""
+def sections(fs, filtre=FILTRE_DEFAUT, coupe_bande=False, secteur_hz=SECTEUR_HZ):
+    """Les sections du filtre (`sos` de scipy), ou None s'il n'y a rien à filtrer.
+
+    `secteur_hz` : le secteur du POSTE (50 ou 60 Hz, `config.SECTEURS_HZ`), que la console lit
+    sur le moteur ; le défaut n'est que celui de `config.SECTEUR_HZ`.
+    """
     bas, haut = filtre
     parties = []
     if bas is not None and haut is not None:
@@ -62,11 +62,11 @@ def sections(fs, filtre=FILTRE_DEFAUT, coupe_bande=False):
     elif haut is not None:
         parties.append(butter(ORDRE, haut, "lowpass", fs=fs, output="sos"))
     if coupe_bande:
-        parties.append(tf2sos(*iirnotch(SECTEUR_HZ, SECTEUR_Q, fs=fs)))
+        parties.append(tf2sos(*iirnotch(secteur_hz, SECTEUR_Q, fs=fs)))
     return np.vstack(parties) if parties else None
 
 
-def filtrer(bloc, fs, filtre=FILTRE_DEFAUT, coupe_bande=False):
+def filtrer(bloc, fs, filtre=FILTRE_DEFAUT, coupe_bande=False, secteur_hz=SECTEUR_HZ):
     """Une COPIE filtrée de `bloc` (n, voies). `bloc` n'est jamais modifié.
 
     Chaque voie est d'abord centrée sur sa médiane : l'offset de l'Unicorn (10⁵ µV) ne sert à
@@ -76,7 +76,7 @@ def filtrer(bloc, fs, filtre=FILTRE_DEFAUT, coupe_bande=False):
     if sortie.ndim != 2 or len(sortie) == 0:
         return sortie
     sortie -= np.median(sortie, axis=0)
-    sos = sections(fs, filtre, coupe_bande)
+    sos = sections(fs, filtre, coupe_bande, secteur_hz)
     if sos is None or len(sortie) < 2:
         return sortie
     if filtre[0] is not None:
