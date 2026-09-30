@@ -1418,24 +1418,38 @@ def _selftest():
         _quatre = [15.0, 20.0, 60.0 / 7.0, 12.0]
         _avant = srv.submit("propose_params", id="ssvep", key="refresh_hz",
                             params={"freqs": _quatre})
+        # La PRÉCONDITION, à part : sous la bande par défaut, la proposition DÉPASSE 20 Hz. Sans
+        # elle, la propriété qui suit (« rien au-dessus de 20 une fois la coupure réglée à 20 »)
+        # serait vraie à vide, et un « Proposer » qui ignorerait la bande la passerait.
+        chk(_avant.get("accepted") and max(_avant.get("value") or [0.0]) > 20.0,
+            f"(précondition) sous la bande par défaut, « Proposer » monte au-dessus de 20 Hz "
+            f"({[round(f, 3) for f in _avant.get('value', [])]})")
         _regle = srv.submit("set_params", id="ssvep", params={"bande_haut": 20.0})
         _apres = srv.submit("propose_params", id="ssvep", key="refresh_hz",
                             params={"freqs": _quatre})
-        chk(_avant.get("accepted") and max(_avant["value"]) > 20.0
-            and _regle.get("accepted") and _regle.get("differe")
+        chk(_regle.get("accepted") and _regle.get("differe")
             and _apres.get("accepted") and len(_apres["value"]) == 4
             and max(_apres["value"]) <= 20.0,
-            f"« Proposer » suit la bande réglée : {[round(f, 3) for f in _avant.get('value', [])]} "
-            f"sous 5-40 Hz, {[round(f, 3) for f in _apres.get('value', [])]} une fois la coupure "
-            f"haute réglée à 20 Hz ({_regle.get('reason', 'réglage retenu')})")
-        # Une saisie absurde EN COURS d'édition est ramenée dans les bornes du réglage : une coupure
-        # basse négative ferait tourner `available_frequencies` sans fin, sur le fil de l'interface.
-        _absurde = srv.submit("propose_params", id="ssvep", key="refresh_hz",
-                              params={"freqs": _quatre, "bande_bas": -3.0, "bande_haut": "?"})
-        chk(_absurde.get("accepted")
-            and min(_absurde["value"]) >= _du_mode["bande_bas"].min,
-            f"…et une bande saisie hors bornes est ramenée DANS les bornes au lieu de faire boucler "
-            f"le moteur ({[round(f, 3) for f in _absurde.get('value', [])]})")
+            f"« Proposer » suit la bande réglée : "
+            f"{[round(f, 3) for f in _apres.get('value', [])]} une fois la coupure haute réglée à "
+            f"20 Hz ({_regle.get('reason', 'réglage retenu')})")
+        # Une bande saisie hors bornes EN COURS d'édition est REFUSÉE, avec la raison du contrat —
+        # celle qu'« Appliquer » donnerait pour la même saisie (passe C1, 2026-09-30). Elle était
+        # auparavant ramenée en silence dans les bornes (-3 → 3, « ? » → 40, NaN traversait) :
+        # « Proposer » répondait sur une bande que l'écran ne montrait pas.
+        from core.modes.contract import valider_un as _valider_un
+        for _saisie in ({"bande_bas": -3.0}, {"bande_haut": "?"},
+                        {"bande_bas": float("nan")}, {"bande_haut": 60.0}):
+            (_cle, _val), = _saisie.items()
+            _absurde = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+                                  params={"freqs": _quatre, **_saisie})
+            _appliquer = srv.submit("set_params", id="ssvep", params=_saisie)
+            _attendu = _valider_un(_du_mode[_cle], _val)[1]
+            chk(not _absurde.get("accepted") and _attendu
+                and _absurde.get("reason") == _attendu == _appliquer.get("reason"),
+                f"…une bande saisie hors bornes ({_saisie}) est REFUSÉE, avec la raison du contrat, "
+                f"celle d'« Appliquer » — plus ramenée dans les bornes en silence "
+                f"({_absurde.get('reason') or _absurde.get('value')})")
     finally:
         srv.close()
 

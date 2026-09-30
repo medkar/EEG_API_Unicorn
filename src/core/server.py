@@ -1417,35 +1417,40 @@ class EngineServer:
             courant.update(params.get("params") or {})
             cible = source.proposes
 
-            def _nombre(valeur, repli):
-                """Convertit en float avec un repli : `submit` ne doit JAMAIS lever — il tourne
-                sur le fil de l'interface, et une saisie illisible ne doit pas le faire planter."""
-                try:
-                    return float(valeur) if valeur else repli
-                except (TypeError, ValueError):
-                    return repli
-
             # `courant[cible]` peut être une CHAÎNE si l'étudiant a mal tapé la liste : `len()`
             # rendrait alors le nombre de CARACTÈRES, pas de fréquences. On ne compte que sur une
             # vraie liste, sinon on retombe sur le nombre de cibles par défaut du contrat.
             valeur_cible = courant.get(cible)
             n = (len(valeur_cible) if isinstance(valeur_cible, (list, tuple))
                  else len(spec.defaults().get(cible) or ()))
-            # La BANDE réglée du mode (2026-09-30) : « Proposer » ne propose jamais ce que son
-            # filtre supprime — et que « Appliquer » refuserait au clic suivant. Ce qui est à
-            # l'écran prime, comme pour le refresh et l'alpha, mais RAMENÉ dans les bornes du
-            # réglage : `submit` ne lève jamais, et `available_frequencies` refuse une coupure
-            # basse nulle ou négative (sans ce refus, elle bouclerait sans fin, sur le fil de
-            # l'interface). Un mode sans bande réglable garde la bande de l'acquisition (le défaut
-            # de `propose_frequencies`).
+            # Les ENTRÉES du calcul — rafraîchissement, pic alpha et BANDE réglée (2026-09-30) —
+            # telles qu'elles sont à l'écran, JUGÉES par le contrat, un réglage à la fois
+            # (`contract.valider_un`) : le refus est celui qu'« Appliquer » rendrait, mot pour mot.
+            # Les fréquences, elles, ne sont PAS jugées : c'est ce qu'on remplace.
+            # ⚠️ Plus d'écrêtage (passe C1). Une bande saisie hors bornes était RAMENÉE en silence
+            # dans les bornes (0 → 5, « ? » → 40, NaN traversait) : « Proposer » répondait sur une
+            # bande que l'écran ne montrait pas, et « Appliquer » refusait ensuite la saisie. Et le
+            # rafraîchissement n'était borné par RIEN : « inf » faisait tourner sans fin la boucle
+            # des diviseurs de `available_frequencies`, sur le fil de l'interface (et 10⁹ Hz la
+            # faisait tourner des minutes). `submit` promet de ne jamais lever ; il doit aussi
+            # rendre la main.
             par_cle = {p.key: p for p in spec.params}
-            bande = {}
-            if "bande_bas" in par_cle and "bande_haut" in par_cle:
-                bornes = [min(max(_nombre(courant.get(k), par_cle[k].default), par_cle[k].min),
-                              par_cle[k].max) for k in ("bande_bas", "bande_haut")]
-                bande = {"bande": tuple(bornes)}
-            valeurs, note = propose_frequencies(_nombre(courant.get("refresh_hz"), 60.0), n,
-                                                _nombre(courant.get("alpha_hz"), ALPHA_DEFAUT_HZ),
+            entrees = {}
+            for cle in ("refresh_hz", "alpha_hz", "bande_bas", "bande_haut"):
+                if cle not in par_cle:
+                    continue
+                valeur, raison = contract.valider_un(
+                    par_cle[cle], courant.get(cle, par_cle[cle].default_now()))
+                if raison:
+                    return {"accepted": False, "reason": raison}
+                entrees[cle] = valeur
+            # Un mode sans bande réglable garde la bande de l'acquisition (le défaut de
+            # `propose_frequencies`). Avec une, « Proposer » ne propose jamais ce que son filtre
+            # supprime — et que « Appliquer » refuserait au clic suivant.
+            bande = ({"bande": (entrees["bande_bas"], entrees["bande_haut"])}
+                     if "bande_bas" in entrees and "bande_haut" in entrees else {})
+            valeurs, note = propose_frequencies(entrees.get("refresh_hz", 60.0), n,
+                                                entrees.get("alpha_hz", ALPHA_DEFAUT_HZ),
                                                 **bande)
             if not valeurs:
                 return {"accepted": False, "reason": note}
@@ -5255,6 +5260,67 @@ def _smoke_proposition():
     ack4 = arrete.submit("propose_params", id="ssvep", key="refresh_hz")
     chk(ack4.get("accepted") and ack4.get("value"),
         f"on peut demander une proposition sur un mode PAS ENCORE démarré ({ack4.get('reason')})")
+
+    # --- 🔴 « PROPOSER » LIT LA BANDE À L'ÉCRAN, SES DEUX COUPURES, ET REFUSE L'ABSURDE ----------
+    # (passe C1, 2026-09-30) Ces gardes n'existaient que dans `modes/ssvep_mesure.py`, que ce smoke
+    # n'exécute pas. Quatre cibles à 60 Hz, pic alpha par défaut : sous 5-40 Hz le moteur propose
+    # 5 · 12 · 20 · 30 — une cible sous 8 Hz ET une au-dessus de 20, ce qui rend les deux
+    # coupures observables.
+    quatre = [15.0, 20.0, 60.0 / 7, 12.0]
+
+    def proposer(**ecran):
+        ack = arrete.submit("propose_params", id="ssvep", key="refresh_hz",
+                            params={"freqs": quatre, **ecran})
+        return ack, list(ack.get("value") or [])
+
+    retenu = arrete.submit("set_params", id="ssvep", params={"bande_haut": 20.0})
+    _ack, du_magasin = proposer()
+    chk(retenu.get("differe") and du_magasin and max(du_magasin) <= 20.0,
+        f"(précondition) coupure haute RETENUE à 20 Hz, rien à l'écran : « Proposer » lit le "
+        f"magasin ({[round(f, 3) for f in du_magasin]})")
+    # (a) Ce qui est à l'écran PRIME sur le magasin — la bande comme le rafraîchissement : la
+    #     console envoie tout le formulaire, et c'est lui que l'étudiant regarde.
+    _ack, de_l_ecran = proposer(bande_haut=40.0)
+    chk(de_l_ecran and max(de_l_ecran) > 20.0,
+        f"la coupure haute À L'ÉCRAN (40 Hz) prime sur celle du magasin (20 Hz) "
+        f"({[round(f, 3) for f in de_l_ecran]})")
+    chk(min(de_l_ecran or [99.0]) < 8.0,
+        f"(précondition) sous une coupure basse à 5 Hz, la proposition descend sous 8 Hz "
+        f"({[round(f, 3) for f in de_l_ecran]})")
+    # (b) La coupure BASSE compte aussi — et la proposition reste acceptée par « Appliquer ».
+    _ack, sous_8 = proposer(bande_bas=8.0, bande_haut=40.0)
+    applique = arrete.submit("set_params", id="ssvep",
+                             params={"freqs": sous_8, "bande_bas": 8.0, "bande_haut": 40.0})
+    chk(sous_8 and min(sous_8) >= 8.0 and applique.get("accepted"),
+        f"la coupure BASSE à l'écran (8 Hz) borne la proposition, et « Appliquer » accepte ce "
+        f"qu'elle rend ({[round(f, 3) for f in sous_8]}, {applique.get('reason', 'accepté')})")
+    # (c) Une saisie absurde est REFUSÉE, avec la raison d'« Appliquer » — jamais écrêtée en
+    #     silence (0 → 5, « ? » → 40, NaN traversait), et jamais une boucle sans fin : un
+    #     rafraîchissement infini faisait tourner `available_frequencies` à jamais, sur le fil de
+    #     l'interface. D'où le délai : un « Proposer » qui ne rend pas la main est un ROUGE ici,
+    #     pas un smoke figé.
+    import threading as _threading
+
+    par_cle = {p.key: p for p in registry.get("ssvep").params}
+    for saisie in ({"bande_bas": 0.0}, {"bande_haut": "?"}, {"bande_bas": float("nan")},
+                   {"refresh_hz": 1e9}, {"refresh_hz": float("nan")}, {"alpha_hz": 50.0},
+                   {"refresh_hz": float("inf")}):
+        (cle, valeur), = saisie.items()
+        boite = {}
+        fil = _threading.Thread(target=lambda s=saisie: boite.update(r=proposer(**s)[0]),
+                                daemon=True)
+        fil.start()
+        fil.join(5.0)
+        rendu = boite.get("r") or {}
+        attendu = contract.valider_un(par_cle[cle], valeur)[1]
+        applique = arrete.submit("set_params", id="ssvep", params=saisie)
+        vu = ("TOUJOURS EN COURS après 5 s" if fil.is_alive()
+              else rendu.get("reason") or rendu.get("value"))
+        chk(not fil.is_alive() and not rendu.get("accepted") and attendu
+            and rendu.get("reason") == attendu == applique.get("reason"),
+            f"« Proposer » avec {saisie} à l'écran rend la main et REFUSE, avec la raison "
+            f"d'« Appliquer » ({vu})")
+    arrete.close()
 
     # Ce moteur n'est jamais passé par `run()` : on casse le cycle à la main, comme les autres
     # smokes de ce fichier, sinon un `__del__` tardif du BoardShim libère la session BrainFlow.
