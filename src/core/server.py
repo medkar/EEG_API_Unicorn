@@ -1410,8 +1410,22 @@ class EngineServer:
             valeur_cible = courant.get(cible)
             n = (len(valeur_cible) if isinstance(valeur_cible, (list, tuple))
                  else len(spec.defaults().get(cible) or ()))
+            # La BANDE réglée du mode (2026-09-30) : « Proposer » ne propose jamais ce que son
+            # filtre supprime — et que « Appliquer » refuserait au clic suivant. Ce qui est à
+            # l'écran prime, comme pour le refresh et l'alpha, mais RAMENÉ dans les bornes du
+            # réglage : `submit` ne lève jamais, et `available_frequencies` refuse une coupure
+            # basse nulle ou négative (sans ce refus, elle bouclerait sans fin, sur le fil de
+            # l'interface). Un mode sans bande réglable garde la bande de l'acquisition (le défaut
+            # de `propose_frequencies`).
+            par_cle = {p.key: p for p in spec.params}
+            bande = {}
+            if "bande_bas" in par_cle and "bande_haut" in par_cle:
+                bornes = [min(max(_nombre(courant.get(k), par_cle[k].default), par_cle[k].min),
+                              par_cle[k].max) for k in ("bande_bas", "bande_haut")]
+                bande = {"bande": tuple(bornes)}
             valeurs, note = propose_frequencies(_nombre(courant.get("refresh_hz"), 60.0), n,
-                                                _nombre(courant.get("alpha_hz"), ALPHA_DEFAUT_HZ))
+                                                _nombre(courant.get("alpha_hz"), ALPHA_DEFAUT_HZ),
+                                                **bande)
             if not valeurs:
                 return {"accepted": False, "reason": note}
             return {"accepted": True, "command": command, "id": spec.id,

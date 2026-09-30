@@ -70,7 +70,7 @@ from dataclasses import dataclass
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (ARTIFACT_SIGMA_RATIO, CALIB_FENETRE_ATTENTE_S,  # noqa: E402
+from core.config import (ARTIFACT_SIGMA_RATIO, BANDPASS, CALIB_FENETRE_ATTENTE_S,  # noqa: E402
                          CALIB_FENETRE_SILENCE_S, FILTER_MARGIN_S, MARKER_STREAM_DEFAULT,
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, WINDOW_S, Z_MIN,
@@ -79,6 +79,7 @@ from core.i18n import tr  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  # noqa: E402
                                   texte_p)
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.contract import bande_de  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
 from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
 # La cadence de décodage du MODE, importée et jamais recopiée : c'est elle qui dit combien de
@@ -381,9 +382,13 @@ class MesureSSVEP(MesureMarqueurs):
         # pas — donc un verdict « Sur 26 ESSAIS… » se citait ensuite comme s'il décrivait la
         # séance de 36. C'est le même geste que `n_artefacts`, qui est publié ET nommé dans la
         # phrase depuis toujours. Trouvé par la revue de branche du 2026-09-10.
+        # Le seuil ET la bande du MODE (la console les pré-remplit, grisés, depuis « Régler ») : un
+        # test qui filtrerait sur 5-40 Hz un mode réglé sur 8-25 mesurerait un décodage que
+        # personne n'utilise, et son verdict partirait avec la configuration de l'étudiant.
         resultat = rejouer(essais, repos, self._freqs, fs, acq=acq,
                            perdus=self._epoques_perdues, chauffe=self._marqueurs_chauffe,
-                           z_min=float(self.params.get("z_min", Z_MIN)))
+                           z_min=float(self.params.get("z_min", Z_MIN)),
+                           bande=bande_de(self.params, BANDPASS))
         resultat["refresh_hz"] = self._refresh_hz
         return resultat
 
@@ -451,7 +456,8 @@ def longueur_bloc_attendue(acq=None):
     return int(acq.window_n + acq.margin_n)
 
 
-def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN):
+def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN,
+            bande=BANDPASS):
     """**La règle du moteur, rejouée sur des fenêtres — une décision par essai.** Rend le verdict.
 
     `essais`  : `[(fenêtre BRUTE (n, 8), indice de la cible fixée), ...]`, **une par essai**.
@@ -459,6 +465,8 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
     `freqs`   : les fréquences AFFICHÉES, dans l'ordre des indices de cible.
     `perdus`  : essais JOUÉS mais absents de `essais` — leur époque a débordé du tampon.
     `chauffe` : marqueurs reçus pendant la chauffe du moteur, jetés avant la mesure.
+    `bande`   : la bande `(bas, haut)` du MODE (2026-09-30). Elle est remise au runtime du mode,
+                qui en tire son filtre ET la coupure de ses références — rien n'est filtré ici.
 
     ⚠️ **`perdus` et `chauffe` ne changent aucun calcul : ils rendent le dénominateur HONNÊTE.**
     L'effectif reste `len(essais)`, parce qu'un essai sans époque ne peut produire aucune décision
@@ -497,7 +505,9 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
     # repos est celle qui le clôt. La médiane du σ (sur la fenêtre occipitale filtrée) et la CCA
     # calée cible par cible sont celles du mode : rien n'est recalculé ici.
     vue = _Vue(acq)
-    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs), "z_min": float(z_min)}, vue)
+    bas, haut = float(bande[0]), float(bande[1])
+    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs), "z_min": float(z_min),
+                                           "bande_bas": bas, "bande_haut": haut}, vue)
     pret = False
     for i, bloc in enumerate(repos):
         vue.recent = bloc
@@ -553,6 +563,8 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
         "hasard": round(1.0 / len(freqs), 3),
         "p_hasard": round(p_hasard(n_justes, n_emis, 1.0 / len(freqs)), 4),
         "freqs_hz": [round(f, 3) for f in freqs],
+        # La bande sous laquelle le runtime a DÉCIDÉ — relue sur lui, pas recopiée de l'argument.
+        "bande_hz": [float(b) for b in decideur.bande()],
         "refresh_hz": 0.0,
         "fenetres_repos": len(decideur._samples),
         # Le compte-rendu du plancher, celui que le mode imprime : μ, σ et le ρ qu'il faudrait
@@ -660,11 +672,12 @@ SPEC = MesureSpec(
     summary=tr("mesure.ssvep_taux.summary"),
     briefing=BRIEFING,
     # Les fréquences sont celles du MODE, que la console passe à la fenêtre guidée et que celle-ci
-    # annonce dans `calib_start`. Le SEUIL DE DÉTECTION, lui, est le `Param` du mode — le MÊME
-    # objet —, que la console pré-remplit (grisé) avec la valeur réglée sur la page SSVEP : c'est
-    # le motif de tous les autres tests. Pas de « Flux de marqueurs » : un test écoute toujours
-    # la fenêtre qu'il lance, sur le flux par défaut (`mesure_marqueurs.CLE_FLUX`).
-    params=tuple(p for p in SPEC_SSVEP.params if p.key == "z_min"),
+    # annonce dans `calib_start`. Le SEUIL DE DÉTECTION et la BANDE (2026-09-30), eux, sont les
+    # `Param` du mode — les MÊMES objets —, que la console pré-remplit (grisés) avec les valeurs
+    # réglées sur la page SSVEP : c'est le motif de tous les autres tests. Pas de « Flux de
+    # marqueurs » : un test écoute toujours la fenêtre qu'il lance, sur le flux par défaut
+    # (`mesure_marqueurs.CLE_FLUX`).
+    params=tuple(p for p in SPEC_SSVEP.params if p.key in ("z_min", "bande_bas", "bande_haut")),
     runtime_cls=MesureSSVEP,
     # Pas une BARRIÈRE : c'est un chiffre à lire, pas un feu rouge. Le contrôle alpha, lui, arrête
     # la séance — sans alpha, plus rien ne veut dire quoi que ce soit. Un taux d'émission bas ne
@@ -847,15 +860,125 @@ def _selftest():
     # Mêmes essais, deux seuils : un seuil bas doit annoncer PLUS de cibles qu'un seuil haut. C'est
     # la seule preuve que le réglage atteint la décision — un seuil perdu en chemin (le test qui
     # retombe sur la constante) rendrait deux résultats identiques, et tout le reste resterait vert.
-    chk([p.key for p in SPEC.params] == ["z_min"] and SPEC.params[0] is SPEC_SSVEP.params[-1],
-        "le test déclare le « Seuil de détection » du MODE — le même objet —, que la console "
-        "pré-remplit avec la valeur réglée sur la page SSVEP")
+    _du_mode = {p.key: p for p in SPEC_SSVEP.params}
+    chk([p.key for p in SPEC.params] == ["z_min", "bande_bas", "bande_haut"]
+        and all(p is _du_mode[p.key] for p in SPEC.params),
+        f"le test déclare le « Seuil de détection » et la BANDE du MODE — les mêmes objets —, que "
+        f"la console pré-remplit avec les valeurs réglées sur la page SSVEP "
+        f"({[p.key for p in SPEC.params]})")
     _bas_seuil, _l, _p = _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7, params={"z_min": 1.0})
     _haut_seuil, _l, _p = _mesurer_sur_essais(n_essais=24, fenetres_par_essai=7,
                                               params={"z_min": 6.0})
     chk(_bas_seuil["n_emis"] > _haut_seuil["n_emis"],
         f"un seuil de détection plus BAS fait annoncer plus de cibles, sur les mêmes essais "
         f"({_bas_seuil['n_emis']} à z=1,0 contre {_haut_seuil['n_emis']} à z=6,0)")
+
+    # === La BANDE est un réglage du mode, et le test DÉCIDE sous elle (2026-09-30) ===============
+    # Le calcul est refait ICI, à la main, par les deux briques publiques du chemin — le filtre de
+    # l'acquisition (`occipital_window`) et la CCA bornée à la coupure haute (`max_freq`) —, puis
+    # comparé au plancher que le runtime du MODE a mesuré dans le test. Égalité EXACTE : une bande
+    # perdue en chemin (le runtime qui filtre sur 5-40 Hz, la CCA qui garde l'harmonique à 30 Hz,
+    # ou le test qui ne transmet pas ses réglages) change chaque ρ, sans rien lever d'autre.
+    from core.cca_decoder import CCADecoder as _CCA
+    from core.config import OCCIPITAL
+
+    _bande = (8.0, 25.0)
+    _rngb = np.random.default_rng(5)
+    _repos_b = [_bruit(_rngb, BESOIN) for _ in range(12)]
+    _enr_b = [(b, REPOS) for b in _repos_b] + [
+        (_ssvep(_rngb, BESOIN, FREQS[i % 3], gain=6.0), Essai(i + 1, i % 3)) for i in range(6)]
+    _rt_b = MesureSSVEP(SPEC, {"bande_bas": _bande[0], "bande_haut": _bande[1]}, _FauxMoteur())
+    _rt_b._freqs = list(FREQS)
+    _res_b = _rt_b._mesurer(_enr_b, FS)
+
+    def _plancher_a_la_main(bande):
+        cca = _CCA(FREQS, fs=FS, max_freq=bande[1])
+        rhos = [cca.scores(acq.occipital_window(b, bande=bande)) for b in _repos_b]
+        return [round(float(np.mean([r[f] for r in rhos])), 3) for f in FREQS]
+
+    _mu_test = [c["mu"] for c in _res_b["plancher"]["targets"]]
+    chk(_res_b["bande_hz"] == list(_bande) and _mu_test == _plancher_a_la_main(_bande),
+        f"🔴 le test décide sous la bande RÉGLÉE du mode, filtre ET harmoniques : son plancher "
+        f"{_mu_test} est celui qu'on recalcule à la main sous {_bande[0]:g}-{_bande[1]:g} Hz "
+        f"({_plancher_a_la_main(_bande)})")
+    chk(_mu_test != _plancher_a_la_main(BANDPASS),
+        f"…et la comparaison MORD : sous la bande par défaut, le même repos donne un autre plancher "
+        f"({_plancher_a_la_main(BANDPASS)})")
+
+    # Le plancher ne passe que par le REPOS (`_rest_step`). La DÉCISION (`_run_step`) lit sa
+    # fenêtre ailleurs : le runtime du MODE, en direct, doit publier les scores z qu'on recalcule
+    # à la main sous la même bande — repos et décision sous le MÊME filtre, sinon chaque z compare
+    # une fenêtre à un bruit de fond mesuré autrement.
+    import contextlib as _ctx_b
+    import io as _io_b
+
+    from core.modes.ssvep import SPEC as _SPEC_MODE_B
+    from core.modes.ssvep import SsvepRuntime as _SsvepRuntime_B
+
+    class _MoteurBande:
+        def __init__(self):
+            self.acq, self.instance, self.recent = acq, "selftest", None
+
+    _mb = _MoteurBande()
+    _rt_mode = _SsvepRuntime_B(_SPEC_MODE_B, {"freqs": tuple(FREQS), "bande_bas": _bande[0],
+                                              "bande_haut": _bande[1]}, _mb)
+    _rt_mode.begin_rest(now=0.0, warmup_s=0.0, duration_s=(len(_repos_b) - 1) * 0.2 - 0.01)
+    _t_b = 0.0
+    with _ctx_b.redirect_stdout(_io_b.StringIO()):
+        for _b in _repos_b:
+            _mb.recent = _b
+            _rt_mode.tick(_mb, _t_b, _t_b)
+            _t_b += 0.2
+        _essai_b = _enr_b[-1][0]
+        _mb.recent = _essai_b
+        _rt_mode.tick(_mb, _t_b, _t_b)
+    _main = _CCA(FREQS, fs=FS, max_freq=_bande[1])
+    _main.fit_baseline([_main.scores(acq.occipital_window(b, bande=_bande)) for b in _repos_b])
+    _z_main = _main.z_scores(_main.scores(acq.occipital_window(_essai_b, bande=_bande)))
+    _sortie_b = _rt_mode.output() or {}
+    chk(_rt_mode.phase == "running" and not _sortie_b.get("artifact")
+        and _sortie_b.get("scores") == [round(float(_z_main[f]), 2) for f in FREQS],
+        f"🔴 et le mode DÉCIDE sous sa bande : les z qu'il publie {_sortie_b.get('scores')} sont "
+        f"ceux qu'on recalcule à la main sous {_bande[0]:g}-{_bande[1]:g} Hz "
+        f"({[round(float(_z_main[f]), 2) for f in FREQS]})")
+
+    # Les deux comparaisons ci-dessus passent par `acq.occipital_window` des DEUX côtés : un filtre
+    # de l'acquisition qui ignorerait sa bande les laisserait vertes. Il se vérifie donc lui-même,
+    # sur un signal dont on connaît la réponse : 30 Hz passe sous 5-40 Hz, et pas sous 8-25 Hz.
+    _t30 = np.arange(BESOIN) / FS
+    _x30 = np.zeros((BESOIN, 8))
+    _x30[:, OCCIPITAL] = 20.0 * np.sin(2 * np.pi * 30.0 * _t30)[:, None]
+    _amp_defaut = float(acq.occipital_window(_x30).std(axis=0).mean())
+    _amp_bande = float(acq.occipital_window(_x30, bande=_bande).std(axis=0).mean())
+    chk(_amp_bande < 0.5 * _amp_defaut,
+        f"le filtre de l'acquisition suit la bande qu'on lui passe : une sinusoïde à 30 Hz garde "
+        f"σ = {_amp_defaut:.1f} µV sous {BANDPASS[0]:g}-{BANDPASS[1]:g} Hz, "
+        f"{_amp_bande:.1f} µV sous {_bande[0]:g}-{_bande[1]:g} Hz")
+
+    # === La coupure basse la plus basse que le mode accepte ne laisse pas passer le transitoire ==
+    # Le filtre de la fenêtre est à PASSE UNIQUE et ne dispose que de la marge (`FILTER_MARGIN_S`)
+    # pour s'établir ; son transitoire s'éteint d'autant plus lentement que la coupure est basse.
+    # Sur un offset qui dérive (l'Unicorn : 10⁵ µV en rampe pendant des dizaines de secondes, soit
+    # ~2000 µV/s), trop bas, la fenêtre mesure le transitoire du filtre au lieu de l'EEG. On compare
+    # le σ de la fenêtre à celui du MÊME filtrage en régime établi (30 s de signal).
+    _plancher_bas = _du_mode["bande_bas"].min
+
+    def _sigma_relatif(coupure_basse):
+        rng_t = np.random.default_rng(9)
+        t = np.arange(int(30 * FS)) / FS
+        x = 1e5 + 2000.0 * t[:, None] + rng_t.normal(0.0, 8.0, (len(t), 8))
+        bande = (coupure_basse, BANDPASS[1])
+        fen = acq.occipital_window(x, bande=bande)
+        regime = acq._filter(x[:, OCCIPITAL], bande=bande)[-acq.window_n:]
+        return float(fen.std(axis=0).mean() / regime.std(axis=0).mean())
+
+    chk(_sigma_relatif(_plancher_bas) < 1.1,
+        f"à la coupure basse minimale du mode ({_plancher_bas:g} Hz), la fenêtre mesure l'EEG et "
+        f"pas le filtre : σ = {_sigma_relatif(_plancher_bas):.2f} × celui du régime établi, sous "
+        f"une dérive de 2000 µV/s")
+    chk(_sigma_relatif(1.0) > 2.0,
+        f"…et la mesure MORD : à 1 Hz, le σ de la fenêtre vaut {_sigma_relatif(1.0):.1f} × celui "
+        f"du régime établi — c'est le transitoire du filtre qu'on décoderait")
 
     rng = np.random.default_rng(7)
     rt_bruit = MesureSSVEP(SPEC, {}, _FauxMoteur())
@@ -1287,6 +1410,32 @@ def _selftest():
             f"{int(round(MesureSSVEP.epoque_marqueur_s * srv.acq.fs))} + "
             f"{srv.acq.margin_n} de marge) — sans ce terme NOMMÉ dans `keep`, chaque époque serait "
             f"tronquée en silence le jour où la calibration MI raccourcirait la sienne")
+
+        # « Proposer » — le bouton de « Régler » qu'on clique AVANT ce test — ne sort pas de la
+        # bande RÉGLÉE (2026-09-30). Vérifié ici parce que c'est le MOTEUR qui propose
+        # (`propose_params`) et que cet autotest est celui du SSVEP qui en construit un. Le mode
+        # est ARRÊTÉ : c'est le geste réel, on règle avant de lancer quoi que ce soit.
+        _quatre = [15.0, 20.0, 60.0 / 7.0, 12.0]
+        _avant = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+                            params={"freqs": _quatre})
+        _regle = srv.submit("set_params", id="ssvep", params={"bande_haut": 20.0})
+        _apres = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+                            params={"freqs": _quatre})
+        chk(_avant.get("accepted") and max(_avant["value"]) > 20.0
+            and _regle.get("accepted") and _regle.get("differe")
+            and _apres.get("accepted") and len(_apres["value"]) == 4
+            and max(_apres["value"]) <= 20.0,
+            f"« Proposer » suit la bande réglée : {[round(f, 3) for f in _avant.get('value', [])]} "
+            f"sous 5-40 Hz, {[round(f, 3) for f in _apres.get('value', [])]} une fois la coupure "
+            f"haute réglée à 20 Hz ({_regle.get('reason', 'réglage retenu')})")
+        # Une saisie absurde EN COURS d'édition est ramenée dans les bornes du réglage : une coupure
+        # basse négative ferait tourner `available_frequencies` sans fin, sur le fil de l'interface.
+        _absurde = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+                              params={"freqs": _quatre, "bande_bas": -3.0, "bande_haut": "?"})
+        chk(_absurde.get("accepted")
+            and min(_absurde["value"]) >= _du_mode["bande_bas"].min,
+            f"…et une bande saisie hors bornes est ramenée DANS les bornes au lieu de faire boucler "
+            f"le moteur ({[round(f, 3) for f in _absurde.get('value', [])]})")
     finally:
         srv.close()
 

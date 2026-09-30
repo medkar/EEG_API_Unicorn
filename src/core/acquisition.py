@@ -243,8 +243,13 @@ class UnicornAcquisition:
     def __exit__(self, *exc):
         self.stop()
 
-    def _filter(self, sig):
+    def _filter(self, sig, bande=None):
         """Detrend + bandpass + notch 50 Hz. Rend un NOUVEAU tableau, sans toucher à `sig`.
+
+        `bande` : `(bas, haut)` en Hz, ou None pour la bande de l'acquisition (`self.bandpass`).
+        Seul le SSVEP en passe une — la sienne, réglable depuis le 2026-09-30. Le σ du bandeau et
+        le contrôle de liaison n'en passent pas, exprès : ce ne sont pas des choix de décodage, et
+        un σ qui changerait avec le réglage d'un mode ne se comparerait plus d'une séance à l'autre.
 
         ⚠️ Ne jamais remplacer ce `np.array(..., copy=True)` par `np.ascontiguousarray` :
         celui-ci rend l'objet TEL QUEL quand il est déjà float64 C-contigu, et le filtrage
@@ -257,7 +262,7 @@ class UnicornAcquisition:
         ajoutés — σ mesuré 40 000 µV pour un EEG à 5 µV.
         """
         out = np.array(sig, dtype=np.float64, order="C")
-        lo, hi = self.bandpass
+        lo, hi = self.bandpass if bande is None else (float(bande[0]), float(bande[1]))
         for c in range(out.shape[1]):
             col = np.ascontiguousarray(out[:, c])
             DataFilter.detrend(col, DetrendOperations.CONSTANT.value)
@@ -342,7 +347,7 @@ class UnicornAcquisition:
         source = self.sigma_source(data[rows, :].T)
         return source.std(axis=0), _median_offdiag(source)
 
-    def occipital_window(self, block):
+    def occipital_window(self, block, bande=None):
         """Fenêtre SSVEP (window_n x len(OCCIPITAL)) depuis un bloc DÉJÀ collecté (n x 8).
 
         Même résultat que `get_window()`, mais sur un tampon que l'appelant possède au lieu
@@ -350,13 +355,16 @@ class UnicornAcquisition:
         qui vide le tampon avec `get_new_data`) de DÉCODER en même temps : il tient son
         propre historique et le passe ici.
 
+        `bande` : la bande du SSVEP, `(bas, haut)` en Hz — un RÉGLAGE du mode depuis le
+        2026-09-30. None = la bande de l'acquisition (`BANDPASS`), celle de toujours.
+
         `block` indexe les 8 voies dans l'ordre de `CH_NAMES` — pas les rows du board.
         Retourne None tant que le bloc est trop court.
         """
         need = self.window_n + self.margin_n
         if block is None or len(block) < need:
             return None
-        return self._filter(block[-need:][:, OCCIPITAL])[-self.window_n:]
+        return self._filter(block[-need:][:, OCCIPITAL], bande=bande)[-self.window_n:]
 
     def motor_window(self, block, seconds=MI_WINDOW_S):
         """Fenêtre MI (n x 8) depuis un bloc possédé par l'appelant. **Non filtrée**, exprès.

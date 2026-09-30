@@ -759,16 +759,24 @@ def cvep_targets(n=None, speed=0.6):
     return out
 
 
-def available_frequencies(refresh, fmin=None):
+def available_frequencies(refresh, fmin=None, bande=BANDPASS):
     """Toutes les fréquences affichables SANS jitter à ce refresh = diviseurs entiers
-    `refresh/n`. Bornée en bas par le passe-bande (une fondamentale sous BANDPASS[0] serait
+    `refresh/n`. Bornée en bas par le passe-bande (une fondamentale sous sa coupure basse serait
     filtrée). Retourne [(frames_per_cycle, freq_hz), ...] de la plus HAUTE à la plus basse.
+
+    `bande` : le passe-bande du SSVEP, un réglage du mode depuis le 2026-09-30 (`BANDPASS` par
+    défaut). Seule sa coupure BASSE sert ici, et seulement si `fmin` n'est pas donné. Le haut
+    n'est PAS borné, exprès : c'est à l'appelant de le faire (`propose_frequencies` le fait).
 
     Sert au sélecteur manuel de l'appli SSVEP : on veut pouvoir tester TOUTES ces fréquences,
     y compris celles qui entrent en conflit d'harmoniques — le tri se fait à l'œil, pas ici.
     À 60 Hz : 30 · 20 · 15 · 12 · 10 · 8,571 · 7,5 · 6,667 · 6 · 5,455 · 5 Hz (n = 2..12).
     """
-    fmin = BANDPASS[0] if fmin is None else fmin
+    fmin = float(bande[0]) if fmin is None else float(fmin)
+    if fmin <= 0:
+        # Sans ce refus, la boucle ci-dessous ne s'arrête JAMAIS (`refresh / n` reste > 0) — et
+        # elle tourne sur le fil de l'interface quand on clique « Proposer ».
+        raise ValueError(f"fréquence minimale {fmin:g} Hz : elle doit être strictement positive")
     out = []
     n = 2                       # n=1 = refresh entier => pas de clignotement
     while refresh / n >= fmin:
@@ -822,7 +830,7 @@ def _plus_ecartees(candidats, n):
     return None
 
 
-def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
+def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ, bande=BANDPASS):
     """`(fréquences, note)` : `n` cibles affichables à ce refresh ET décodables pour cet alpha.
 
     `note` est vide si tout va bien, porte un avertissement si l'on a dû sortir de la plage
@@ -832,11 +840,16 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
 
     L'alpha est un PARAMÈTRE, jamais une constante : le pic varie fortement d'une personne à
     l'autre, et le jeu accordé à quelqu'un pose une cible sur le pic de quelqu'un d'autre.
+
+    `bande` : le passe-bande RÉGLÉ du SSVEP (2026-09-30). Une fréquence proposée hors de lui serait
+    supprimée par le filtre avant le décodage — et REFUSÉE par le contrat au clic suivant : le
+    bouton proposerait ce que « Appliquer » refuse.
     """
+    lo_bande, hi_bande = float(bande[0]), float(bande[1])
     # ⚠️ `available_frequencies` ne borne QUE le bas (son `fmin`) : à 100 Hz elle rend 50 Hz, que
-    # le passe-bande d'acquisition supprime AVANT le décodage. Le haut se borne donc ici.
-    divisibles = [f for _k, f in available_frequencies(refresh)
-                  if BANDPASS[0] <= f <= BANDPASS[1] and abs(f - alpha) >= ALPHA_GARDE_HZ]
+    # le passe-bande supprime AVANT le décodage. Le haut se borne donc ici.
+    divisibles = [f for _k, f in available_frequencies(refresh, bande=bande)
+                  if lo_bande <= f <= hi_bande and abs(f - alpha) >= ALPHA_GARDE_HZ]
 
     from core.i18n import nombre, tr   # ici et pas en tête : `config` est importé partout
 
@@ -851,11 +864,14 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ):
         return jeu, tr("moteur.proposer.hors_plage", lo=nombre(lo), hi=nombre(hi),
                        hors=", ".join(nombre(f) for f in hors))
 
+    # La bande est NOMMÉE dans les deux refus : depuis qu'elle se règle, elle peut être la cause —
+    # et « il faut un écran plus rapide » serait alors un conseil faux.
     for k in range(n - 1, 1, -1):
         if _plus_ecartees(divisibles, k) is not None:
             return [], tr("moteur.proposer.impossible_max", k=k, refresh=nombre(refresh),
-                          alpha=nombre(alpha))
-    return [], tr("moteur.proposer.impossible", n=n, refresh=nombre(refresh))
+                          alpha=nombre(alpha), bas=nombre(lo_bande), haut=nombre(hi_bande))
+    return [], tr("moteur.proposer.impossible", n=n, refresh=nombre(refresh),
+                  bas=nombre(lo_bande), haut=nombre(hi_bande))
 
 
 def cvep_lags(n_targets, code_len):
@@ -1225,6 +1241,37 @@ def _selftest():
     jeu, note = propose_frequencies(60.0, 1, 9.6)
     chk(len(jeu) == 1 and note == "",
         f"n=1 : une seule fréquence retournée ({jeu[0] if jeu else 'ÉCHOUÉ'})")
+
+    # 7. La BANDE réglée du SSVEP (2026-09-30) : « Proposer » ne sort jamais du filtre. Une
+    # fréquence proposée hors de lui serait supprimée avant le décodage, et le contrat la
+    # refuserait au clic suivant — le bouton proposerait ce que « Appliquer » refuse.
+    jeu_defaut, _n = propose_frequencies(60.0, 4, 9.6)
+    jeu_20, _n = propose_frequencies(60.0, 4, 9.6, bande=(5.0, 20.0))
+    chk(max(jeu_defaut) > 20.0 and len(jeu_20) == 4 and max(jeu_20) <= 20.0,
+        f"à 60 Hz et 4 cibles, la bande par défaut propose {[round(f, 3) for f in jeu_defaut]} ; "
+        f"sous une coupure haute à 20 Hz, {[round(f, 3) for f in jeu_20]} — rien au-dessus")
+    hors_bande = []
+    for bande in ((3.0, 20.0), (8.0, 25.0), (5.0, 60.0), (6.0, 30.0)):
+        for refresh in (60.0, 75.0, 120.0, 144.0):
+            for alpha in (8.5, 9.6, 11.5):
+                for n in range(2, 7):
+                    jeu, note = propose_frequencies(refresh, n, alpha, bande=bande)
+                    hors_bande += [(bande, refresh, alpha, n, round(f, 3)) for f in jeu
+                                   if not bande[0] <= f <= bande[1]]
+    chk(not hors_bande, f"4 bandes x 4 refresh x 3 alpha x 5 nombres de cibles : aucune "
+                        f"fréquence proposée hors de sa bande ({hors_bande[:3]})")
+    chk(min(f for _k, f in available_frequencies(60.0, bande=(8.0, 40.0))) >= 8.0
+        and min(f for _k, f in available_frequencies(60.0)) < 8.0,
+        "les fréquences affichables partent de la coupure BASSE de la bande donnée")
+    jeu, note = propose_frequencies(60.0, 5, 9.6, bande=(8.0, 20.0))
+    chk(jeu == [] and "8-20" in note,
+        f"une impossibilité NOMME la bande, qui peut en être la cause ({note})")
+    try:
+        available_frequencies(60.0, bande=(0.0, 40.0))
+        chk(False, "une coupure basse nulle doit être REFUSÉE : la boucle ne s'arrêterait jamais")
+    except ValueError as e:
+        chk("positive" in str(e),
+            f"une coupure basse nulle est refusée au lieu de boucler sans fin ({e})")
 
     # --- le nom d'un CANDIDAT : réversible, et le suffixe anti-écrasement ---------------------
     # ⚠️ Ce qu'on ne peut PAS vérifier ici, et qui est le verrou de la tâche « data/ écrit à un

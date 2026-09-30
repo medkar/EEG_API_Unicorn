@@ -14,18 +14,32 @@ import time as _time
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (SSVEP_BASELINE_S, SSVEP_WARMUP_S, ARTIFACT_SIGMA_RATIO,  # noqa: E402
-                         ALPHA_DEFAUT_HZ, OCCIPITAL, Z_MIN, use_utf8_console, choose_frequencies)
+                         ALPHA_DEFAUT_HZ, BANDPASS, OCCIPITAL, Z_MIN, use_utf8_console,
+                         choose_frequencies)
 import numpy as np  # noqa: E402
 
 from core.cca_decoder import CCADecoder  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.lsl_io import DecodedSSVEPPublisher, ssvep_channel_labels, stream_name  # noqa: E402
-from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
+from core.modes.contract import ModeSpec, Param, Rest, bande_de, params_bande, validate  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Le défaut vient de `choose_frequencies`, la MÊME fonction que le stimulus : passer le même
 # refresh des deux côtés garantit l'accord sans recopier des décimales à la main.
 FREQS_60HZ = tuple(c["actual_hz"] for c in choose_frequencies(60))   # 15 · 20 · 8,571 Hz
+
+# Les bornes de la BANDE réglable (2026-09-30). Défaut : `BANDPASS`, la bande de toujours.
+# ⚠️ La coupure basse ne descend PAS sous 3 Hz, et c'est MESURÉ, pas choisi : le filtre de la
+# fenêtre (`acquisition._filter`, Butterworth à PASSE UNIQUE) ne dispose que de `FILTER_MARGIN_S`
+# (1 s) pour s'établir, et son transitoire s'éteint d'autant plus lentement que la coupure est
+# basse. Sur un offset qui dérive de 2000 µV/s (l'Unicorn le fait, cf. `Rest.warmup_s`), le σ de
+# la fenêtre vaut 1,00 × celui du régime établi à 5 Hz, 1,01 × à 3 Hz, 1,5 × à 2 Hz et 15,6 × à
+# 1 Hz : sous 3 Hz, le mode décoderait le transitoire de son propre filtre. L'autotest de
+# `modes/ssvep_mesure.py` rejoue cette mesure à la borne déclarée ici.
+# La coupure haute ne descend pas sous 20 Hz : c'est la plus haute cible du trio du dépôt, et les
+# bornes garantissent ainsi que les réglages par défaut restent valides quelle que soit la bande.
+SSVEP_BANDE_BAS = (3.0, 8.0)
+SSVEP_BANDE_HAUT = (20.0, 60.0)
 
 SSVEP_DECODE_HZ = 5.0            # cadence de décodage (fenêtres glissantes de WINDOW_S)
 SSVEP_BASELINE_SAMPLE_HZ = 5.0   # cadence d'échantillonnage du plancher de repos
@@ -52,12 +66,24 @@ class SsvepRuntime(ModeRuntime):
         self._last_log = 0.0
         self._new_decoder()
 
+    def bande(self):
+        """La bande `(bas, haut)` de CE décodage : le réglage du mode, sinon `BANDPASS`.
+
+        Un appelant du banc d'essai peut ne passer que les fréquences : il retombe alors sur la
+        bande de toujours, qui est le défaut du réglage.
+        """
+        return bande_de(self.params, BANDPASS)
+
     def _new_decoder(self):
         # Le seuil de détection est un RÉGLAGE (2026-09-24) : lu dans les paramètres, jamais dans
         # la constante seule. `.get` parce qu'un appelant du banc d'essai peut ne passer que les
         # fréquences — il retombe alors sur le défaut du réglage, qui EST `Z_MIN`.
+        # `max_freq` = la coupure HAUTE réglée (2026-09-30) : une harmonique au-dessus, le filtre
+        # l'a supprimée, et la garder dans la référence n'ajouterait que du bruit au ρ de SA cible
+        # (cf. `cca_decoder.reference_signals`) — exactement ce qui se passait déjà à 40 Hz.
         self.decoder = CCADecoder(list(self.params["freqs"]), fs=self.engine.acq.fs,
-                                  z_min=float(self.params.get("z_min", Z_MIN)))
+                                  z_min=float(self.params.get("z_min", Z_MIN)),
+                                  max_freq=self.bande()[1])
 
     def _open(self):
         # Le flux est créé TOUT DE SUITE, avant même la mesure du repos, et reste silencieux
@@ -89,7 +115,9 @@ class SsvepRuntime(ModeRuntime):
         return self._decoded
 
     def _rest_step(self, engine, now):
-        window = engine.acq.occipital_window(engine.recent)
+        # SA bande, au repos comme en décodage : un plancher mesuré sous un autre filtre que les
+        # fenêtres qu'on lui compare décalerait tous les z, sans rien lever.
+        window = engine.acq.occipital_window(engine.recent, bande=self.bande())
         if window is None:
             return False
 
@@ -137,7 +165,7 @@ class SsvepRuntime(ModeRuntime):
         return True
 
     def _run_step(self, engine, lsl_ts):
-        window = engine.acq.occipital_window(engine.recent)
+        window = engine.acq.occipital_window(engine.recent, bande=self.bande())
         if window is None:
             return
         freqs = list(self.params["freqs"])
@@ -266,6 +294,14 @@ SPEC = ModeSpec(
             min=1.0, max=6.0,
             help=tr("mode.ssvep.param.z_min.aide"),
         ),
+        # La BANDE du filtre qui précède le décodage (2026-09-30). Réglée dans « Régler », parce
+        # que le SSVEP n'a pas de modèle : aucun apprentissage ne dépend d'elle, contrairement aux
+        # quatre modes à modèle, qui la règlent à l'entraînement. Elle affecte le décodage (défaut
+        # de `Param`) : le plancher de repos est mesuré PAR fréquence SOUS ce filtre, il est donc
+        # refait quand elle change. La contrainte `dans_la_bande` des fréquences la lit.
+        *params_bande(BANDPASS, SSVEP_BANDE_BAS, SSVEP_BANDE_HAUT,
+                      tr("mode.ssvep.param.bande.aide", bas=nombre(BANDPASS[0]),
+                         haut=nombre(BANDPASS[1]), plancher=nombre(SSVEP_BANDE_BAS[0]))),
     ),
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,

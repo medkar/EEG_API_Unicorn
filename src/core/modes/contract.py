@@ -378,11 +378,21 @@ def _check_constraints(param, values):
     """
     for name in param.constraints:
         if name == "dans_la_bande":
-            lo, hi = BANDPASS
+            # La bande EN VIGUEUR : celle que le mode règle (`params_bande`, le SSVEP depuis le
+            # 2026-09-30), sinon celle de l'acquisition. Juger contre `BANDPASS` un mode qui filtre
+            # sur 8-20 Hz laisserait passer 30 Hz — que son filtre supprime avant le décodage.
+            lo, hi = bande_de(values, BANDPASS)
             hors = [v for v in _as_list(values.get(param.key)) if not lo <= v <= hi]
             if hors:
+                valeurs = ", ".join(nombre(v) for v in hors)
+                if "bande_bas" in values and "bande_haut" in values:
+                    # Le refus dit où la bande se change : elle est réglable, sur la même page.
+                    return tr("moteur.contrat.hors_bande_reglee", reglage=param.label,
+                              valeurs=valeurs, bas=nombre(lo), haut=nombre(hi),
+                              reglage_bas=tr("moteur.bande.bas"),
+                              reglage_haut=tr("moteur.bande.haut"))
                 return tr("moteur.contrat.hors_bande", reglage=param.label,
-                          valeurs=", ".join(nombre(v) for v in hors), bas=nombre(lo), haut=nombre(hi))
+                          valeurs=valeurs, bas=nombre(lo), haut=nombre(hi))
 
         elif name == "separables":
             # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
@@ -414,8 +424,12 @@ def _check_constraints(param, values):
                 # k < 2 : soit la fréquence dépasse le refresh, soit elle l'égale — dans les
                 # deux cas il n'y a pas de clignotement du tout.
                 if k < 2 or abs(v - exact) > TOLERANCE_DIVISEUR * exact:
+                    # Les plus proches DANS la bande en vigueur : suggérer un diviseur que
+                    # `dans_la_bande` refuserait au clic suivant serait une porte qui se referme.
+                    lo_b, hi_b = bande_de(values, BANDPASS)
                     proches = [nombre(f) for f in sorted(
-                        (f for _n, f in available_frequencies(refresh)),
+                        (f for _n, f in available_frequencies(refresh, bande=(lo_b, hi_b))
+                         if f <= hi_b),
                         key=lambda f: abs(f - v))[:2]]
                     return tr("moteur.contrat.pas_diviseur", reglage=param.label,
                               valeur=nombre(v), refresh=nombre(refresh),
@@ -825,6 +839,53 @@ def _selftest():
         chk(False, "une déclaration où la coupure basse peut dépasser la haute doit lever")
     except ValueError:
         chk(True, "une déclaration où la coupure basse peut dépasser la haute lève à l'import")
+
+    # --- `dans_la_bande` juge contre la bande RÉGLÉE, pas contre BANDPASS (2026-09-30) ---------
+    # Le SSVEP règle sa bande. Si la contrainte de ses fréquences restait sur 5-40 Hz, 30 Hz
+    # passerait sous une coupure haute à 20 — et le filtre la supprimerait avant le décodage :
+    # zéro détection, aucune erreur, « l'utilisateur fixe mal ». Les DEUX sens sont vérifiés : une
+    # contrainte figée sur BANDPASS rougit au premier (30 accepté), une contrainte figée sur une
+    # autre bande au second (45 refusé alors que la bande réglée le contient).
+    reglee = ModeSpec(
+        id="bande_reglee", label="Bande réglée", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),
+                *params_bande(BANDPASS, (1.0, 8.0), (20.0, 60.0), "aide")))
+    _v, raison = validate(reglee, {"freqs": [15.0, 30.0], "bande_haut": 20.0})
+    chk(_v is None and raison and "30" in raison and "5-20" in raison
+        and tr("moteur.bande.haut") in raison,
+        f"30 Hz sous une coupure haute RÉGLÉE à 20 Hz est refusé, en nommant la bande en vigueur "
+        f"et le réglage qui la change ({raison})")
+    _v, raison = validate(reglee, {"freqs": [15.0, 45.0], "bande_haut": 50.0})
+    chk(raison is None,
+        f"…et 45 Hz, hors de {nombre(BANDPASS[0])}-{nombre(BANDPASS[1])} Hz mais DANS une bande "
+        f"réglée à 50 Hz, passe ({raison})")
+    _v, raison = validate(reglee, {"freqs": [6.0, 15.0], "bande_bas": 8.0})
+    chk(_v is None and raison and "6" in raison and "8-40" in raison,
+        f"la coupure BASSE réglée compte aussi ({raison})")
+    sans_bande = ModeSpec(
+        id="sans_bande", label="Sans bande", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),))
+    _v, raison = validate(sans_bande, {"freqs": [15.0, 60.0]})
+    chk(_v is None and raison and "hors bande passante" in raison
+        and tr("moteur.bande.haut") not in raison,
+        f"un mode SANS bande réglable garde le refus d'origine, sans renvoyer à un réglage qu'il "
+        f"n'a pas ({raison})")
+
+    # Le vrai contrat du SSVEP, et la suggestion de `divise_le_refresh` : les diviseurs proposés
+    # en remplacement restent DANS la bande réglée — sinon le refus conseillerait une fréquence
+    # que le clic suivant refuserait.
+    _v, raison = validate(_ssvep.SPEC, {"bande_haut": 20.0, "freqs": [15.0, 30.0]})
+    chk(_v is None and raison and "30" in raison and "5-20" in raison,
+        f"SSVEP : 30 Hz est refusé sous une bande réglée à 5-20 Hz ({raison})")
+    _v, raison = validate(_ssvep.SPEC, {"bande_haut": 25.0, "freqs": [15.0, 24.0]})
+    chk(_v is None and raison and "diviseur" in raison and "20" in raison and "30" not in raison,
+        f"…et 24 Hz (pas un diviseur de 60) se voit proposer 20 et 15, pas 30 qui est hors de la "
+        f"bande réglée ({raison})")
+    _v, raison = validate(_ssvep.SPEC, {"freqs": [15.0, 24.0]})
+    chk(_v is None and raison and "30" in raison,
+        f"…alors qu'à la bande par défaut, 30 Hz est bien le voisin proposé ({raison})")
 
     print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
