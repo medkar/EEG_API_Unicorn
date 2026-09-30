@@ -33,9 +33,10 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
-from brainflow.data_filter import DataFilter, DetrendOperations, NoiseTypes  # noqa: E402
+from brainflow.data_filter import DataFilter, DetrendOperations  # noqa: E402
 
-from core.config import (CH_NAMES, OCCIPITAL, SIGNAL_DEAD_SIGMA,  # noqa: E402
+from core.acquisition import NOTCH_SECTEUR  # noqa: E402
+from core.config import (CH_NAMES, OCCIPITAL, SECTEUR_HZ, SIGNAL_DEAD_SIGMA,  # noqa: E402
                          signal_verdict, use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
@@ -127,8 +128,13 @@ def _welch(x, fs, seg_s=SEGMENT_S):
     return np.fft.rfftfreq(seg, 1 / fs), np.mean(powers, axis=0)
 
 
-def _nettoyer(sig, fs):
-    """Détrend (constant) + notch 50 Hz, voie par voie. Le large bande est GARDÉ.
+def _nettoyer(sig, fs, secteur_hz=SECTEUR_HZ):
+    """Détrend (constant) + notch du SECTEUR, voie par voie. Le large bande est GARDÉ.
+
+    `secteur_hz` : celui du POSTE, que le moteur porte (`EngineServer.secteur_hz`) — 60 Hz aux
+    Amériques. Un notch à 50 y laisserait tout le secteur dans le spectre : sans effet sur la
+    bande alpha (loin de 60 Hz), mais une mesure qui prétend nettoyer le secteur doit couper
+    CELUI de la prise murale.
 
     ⚠️ Le détrend n'est pas une politesse : l'Unicorn sort un offset DC de l'ordre de 10⁵ µV
     (mesuré le 2026-07-27). Une fenêtre non détrendue le fait FUIR à travers la fenêtre de Hann
@@ -139,16 +145,17 @@ def _nettoyer(sig, fs):
     Et surtout : on ne filtre PAS en passe-bande. Le verdict a besoin de VOIR où tombe le pic —
     couper hors 8-12 Hz garantirait de trouver un pic dans 8-12 Hz, y compris sur du bruit.
     """
+    notch = NOTCH_SECTEUR[float(secteur_hz)]
     out = np.ascontiguousarray(sig, dtype=np.float64)
     for c in range(out.shape[1]):
         col = np.ascontiguousarray(out[:, c])
         DataFilter.detrend(col, DetrendOperations.CONSTANT.value)
-        DataFilter.remove_environmental_noise(col, int(round(fs)), NoiseTypes.FIFTY.value)
+        DataFilter.remove_environmental_noise(col, int(round(fs)), notch.value)
         out[:, c] = col
     return out
 
 
-def _psd_occipitale(fenetre, fs):
+def _psd_occipitale(fenetre, fs, secteur_hz=SECTEUR_HZ):
     """(freqs, PSD moyennée sur les voies occipitales, σ par voie) d'une fenêtre BRUTE (n, 8).
 
     Les σ sortent d'ici parce qu'ils sont mesurés sur le MÊME signal nettoyé que la PSD : c'est
@@ -159,7 +166,7 @@ def _psd_occipitale(fenetre, fs):
         raise ValueError(
             f"fenêtre de forme {getattr(fenetre, 'shape', '?')} : le contrôle alpha attend les "
             f"{len(CH_NAMES)} voies du casque pour y prendre {VOIES}")
-    sig = _nettoyer(np.asarray(fenetre, dtype=np.float64)[:, OCCIPITAL], fs)
+    sig = _nettoyer(np.asarray(fenetre, dtype=np.float64)[:, OCCIPITAL], fs, secteur_hz)
     freqs, psds = None, []
     for c in range(sig.shape[1]):
         freqs, psd = _welch(sig[:, c], fs)
@@ -228,8 +235,11 @@ class ControleAlpha(MesureRuntime):
             raise ValueError(tr("mesure.alpha.erreur.phase_manquante",
                                 phases=", ".join(manquantes)))
 
-        freqs, psd_ouvert, sigmas_ouvert = _psd_occipitale(par_etape[OUVERT][-1], fs)
-        _f, psd_ferme, sigmas_ferme = _psd_occipitale(par_etape[FERME][-1], fs)
+        # Le secteur du POSTE, que porte le moteur (2026-09-30). `getattr` avec le défaut : un
+        # autotest joue la mesure sans moteur (`self.engine` vaut None).
+        secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
+        freqs, psd_ouvert, sigmas_ouvert = _psd_occipitale(par_etape[OUVERT][-1], fs, secteur)
+        _f, psd_ferme, sigmas_ferme = _psd_occipitale(par_etape[FERME][-1], fs, secteur)
 
         # ⚠️ LA LIAISON MORTE, avant tout calcul. Quatre voies plates donnent une puissance de
         # l'ordre de 10⁻²⁷ des DEUX côtés, et leur rapport est alors du bruit d'arrondi : il vaut
@@ -400,15 +410,20 @@ def _selftest():
             nom = self.rt.classe
             return self.fenetres.get(nom, np.zeros((N, len(CH_NAMES))))
 
-    def _jouer(ouvert, ferme):
+    def _jouer(ouvert, ferme, secteur_hz=None):
         """Joue le protocole ENTIER et rend (runtime, résultat). Pas d'appel direct à `_mesurer`.
 
         ⚠️ Passer par la ligne du temps est le point : les noms d'étapes que `protocole()` pose
         et ceux que `_mesurer()` cherche doivent être les MÊMES. Appeler `_mesurer` avec des
         étiquettes écrites dans le test prouverait le calcul et laisserait passer la faute de
         frappe qui rend « phase manquante » après 37 s de casque.
+
+        `secteur_hz` : posé sur le faux moteur comme `EngineServer` le porte. Absent, le faux
+        moteur n'en déclare aucun — la mesure retombe sur le défaut du dépôt.
         """
         moteur = _FauxMoteur({OUVERT: ouvert, FERME: ferme})
+        if secteur_hz is not None:
+            moteur.secteur_hz = secteur_hz
         rt = ControleAlpha(SPEC, {}, moteur)
         moteur.rt = rt
         t = 0.0
@@ -520,6 +535,59 @@ def _selftest():
         and abs(avec_dc["ratio"] - res["ratio"]) < 0.05 * res["ratio"],
         f"un offset DC de 10⁵ µV ne change pas le verdict ({avec_dc['ratio']:.2f} contre "
         f"{res['ratio']:.2f} sans lui) — c'est le détrend qui tient ça, et rien d'autre")
+
+    # === Le SECTEUR du POSTE (2026-09-30) : à 60 Hz, c'est le 60 Hz qui part =================
+    # 20 µV à 50 Hz ET 20 µV à 60 Hz sur les occipitales, et le protocole ENTIER joué par un
+    # moteur qui porte son secteur. Un espion lit ce que le nettoyage rend réellement : c'est le
+    # SIGNAL qu'on regarde, pas l'argument passé. Deux pannes le font rougir, à deux endroits :
+    # `_mesurer` qui ne lit pas le secteur du moteur, `_nettoyer` qui coupe 50 Hz en dur.
+    def _amplitude(x, f_hz):
+        """Amplitude max (sur les voies) de la composante à `f_hz`, au MILIEU du bloc — loin des
+        bords, où le coupe-bande s'établit."""
+        n = x.shape[0]
+        milieu = slice(n // 4, 3 * n // 4)
+        onde = np.exp(-2j * np.pi * f_hz * np.arange(n)[milieu] / FS)
+        return float(np.max(2.0 * np.abs(onde @ x[milieu]) / len(onde)))
+
+    t_s = np.arange(N) / FS
+    secteurs = 20.0 * (np.sin(2 * np.pi * 50.0 * t_s) + np.sin(2 * np.pi * 60.0 * t_s))
+
+    def _avec_secteurs(x):
+        x = x.copy()
+        for c in OCCIPITAL:
+            x[:, c] += secteurs
+        return x
+
+    vrai_nettoyer = globals()["_nettoyer"]
+    vus = []
+
+    def _espion(sig, fs, secteur_hz=SECTEUR_HZ):
+        propre = vrai_nettoyer(sig, fs, secteur_hz)
+        vus.append((secteur_hz, _amplitude(propre, 60.0), _amplitude(propre, 50.0)))
+        return propre
+
+    globals()["_nettoyer"] = _espion
+    try:
+        rng3 = np.random.default_rng(20260930)
+        ouvert_s = _avec_secteurs(_bruit(rng3))
+        ferme_s = _avec_secteurs(_bruit_plus_alpha(rng3, 10.5, gain=4.0))
+        _rt, res_60 = _jouer(ouvert_s, ferme_s, secteur_hz=60.0)
+        a_60 = list(vus)
+        vus.clear()
+        _jouer(ouvert_s, ferme_s)
+        a_50 = list(vus)
+    finally:
+        globals()["_nettoyer"] = vrai_nettoyer
+    chk(len(a_60) == 2 and all(r60 < 2.0 and r50 > 15.0 for _s, r60, r50 in a_60),
+        f"un moteur réglé à 60 Hz : le nettoyage retire le 60 Hz et laisse le 50 — "
+        f"{[(round(r60, 2), round(r50, 1)) for _s, r60, r50 in a_60]} µV restants (60 Hz, "
+        f"50 Hz) pour 20 posés")
+    chk(len(a_50) == 2 and all(r50 < 2.0 and r60 > 15.0 for _s, r60, r50 in a_50),
+        f"…et un moteur qui ne déclare aucun secteur retombe sur le défaut du dépôt (50 Hz) "
+        f"{[(round(r60, 1), round(r50, 2)) for _s, r60, r50 in a_50]}")
+    chk(res_60 and res_60["barriere_franchie"] is True,
+        f"…sans rien changer au verdict : l'alpha reste net, le secteur est loin de 8-12 Hz "
+        f"(ratio {res_60 and res_60['ratio']})")
 
     # === Une phase manquante : un refus lisible, pas un chiffre calculé sur une moitié ========
     rt5 = ControleAlpha(SPEC, {}, None)

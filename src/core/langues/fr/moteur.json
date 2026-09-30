@@ -62,5 +62,6 @@
   "moteur.refus.rien_a_enregistrer": "rien à enregistrer : aucune calibration n'attend de décision.",
   "moteur.refus.rien_a_jeter": "rien à jeter : aucune calibration n'attend de décision.",
   "moteur.refus.sans_calibration": "« {mode} » n'a pas de calibration : il n'apprend rien, il n'y a rien à entraîner.",
-  "moteur.refus.sans_repos": "« {mode} » n'a pas de repos à refaire"
+  "moteur.refus.sans_repos": "« {mode} » n'a pas de repos à refaire",
+  "moteur.refus.secteur_inconnu": "secteur électrique inconnu : « {valeur} ». Le coupe-bande ne connaît que {liste} Hz — 50 en Europe, 60 aux Amériques."
 }

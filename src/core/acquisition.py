@@ -10,8 +10,8 @@ même session :
   que veut le moteur, qui doit diffuser un flux sans trou ni doublon — et c'est pourquoi
   `server.py` tient son propre tampon glissant à partir de ce qu'il en tire.
 
-Filtrage : detrend + passe-bande + notch 50 Hz, appliqué sur une fenêtre ÉLARGIE de
-`FILTER_MARGIN_S` de chaque côté puis rognée. Sans cette marge, le transitoire d'établissement
+Filtrage : detrend + passe-bande + notch secteur (50 ou 60 Hz, `NOTCH_SECTEUR`), appliqué sur
+une fenêtre ÉLARGIE de `FILTER_MARGIN_S` de chaque côté puis rognée. Sans cette marge, le transitoire d'établissement
 du filtre reste dans la fenêtre et se fait passer pour du signal (il avait fait mesurer un σ de
 40 000 µV sur de l'EEG à 5 µV).
 
@@ -36,6 +36,13 @@ from brainflow.data_filter import DataFilter, DetrendOperations, FilterTypes, No
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))      # -> src/
 from core.config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, MI_WINDOW_S,  # noqa: E402
                     OCCIPITAL, UNICORN_SERIAL, WINDOW_S, use_utf8_console)
+
+# Le coupe-bande de BrainFlow pour chaque secteur de `config.SECTEURS_HZ` (2026-09-30). UNE table,
+# lue par le moteur (le filtre d'acquisition : σ du bandeau, contrôle de liaison, SSVEP) et par le
+# contrôle alpha : deux écritures de la même correspondance finiraient par couper 50 Hz sur un
+# poste réglé à 60, sans rien casser — le secteur resterait simplement dans le signal.
+# `[smoke-secteur]` vérifie qu'elle couvre exactement `SECTEURS_HZ`.
+NOTCH_SECTEUR = {50.0: NoiseTypes.FIFTY, 60.0: NoiseTypes.SIXTY}
 
 
 def _median_offdiag(filtered):
@@ -244,7 +251,10 @@ class UnicornAcquisition:
         self.stop()
 
     def _filter(self, sig, bande=None):
-        """Detrend + bandpass + notch 50 Hz. Rend un NOUVEAU tableau, sans toucher à `sig`.
+        """Detrend + bandpass + notch secteur (`self.notch`). Rend un NOUVEAU tableau.
+
+        `sig` n'est jamais touché. Le notch est celui du POSTE, que le moteur choisit dans
+        `NOTCH_SECTEUR` ; le défaut du constructeur (50 Hz) ne sert qu'aux outils hors moteur.
 
         `bande` : `(bas, haut)` en Hz, ou None pour la bande de l'acquisition (`self.bandpass`).
         Seul le SSVEP en passe une — la sienne, réglable depuis le 2026-09-30. Le σ du bandeau et

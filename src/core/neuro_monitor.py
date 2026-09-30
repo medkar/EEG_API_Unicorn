@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (FS_UNICORN, NEURO_ARTIFACT_RATIO, NEURO_BANDS,  # noqa: E402
                     NEURO_EMG_RATIO, NEURO_ENGAGEMENT_CH, NEURO_FRONTAL,
                     NEURO_HIGHPASS_HZ, NEURO_PARIETAL, NEURO_REBASELINE_S,
-                    NEURO_SMOOTH, NEURO_UPDATE_HZ, use_utf8_console)
+                    NEURO_SMOOTH, NEURO_UPDATE_HZ, SECTEUR_HZ, use_utf8_console)
 
 INDEX_KEYS = ("charge", "somnolence", "engagement")
 
@@ -84,7 +84,7 @@ def highpass_filter(x, fs, cutoff):
     return filtfilt(b, a, x, axis=0)
 
 
-def artifact_sigma(window, fs, band=(1.0, 30.0), notch_hz=50.0):
+def artifact_sigma(window, fs, band=(1.0, 30.0), notch_hz=SECTEUR_HZ):
     """σ PAR VOIE pour le rejet d'artefact — sur un signal BANDE-LIMITÉ + NOTCH secteur, PAS le
     signal quasi-brut utilisé pour la PSD des indices.
 
@@ -94,9 +94,16 @@ def artifact_sigma(window, fs, band=(1.0, 30.0), notch_hz=50.0):
     volatil minute à minute que celui utilisé ailleurs dans l'app (SSVEP compare son ratio ×4 sur un
     signal DÉJÀ passe-bande+notch). Comparer un σ non filtré à un seuil ×4 mesuré sur seulement 25 s
     de repos déclenche donc de faux rejets même sans bouger. Ici : passe-bande 1-30 Hz (coupe la
-    dérive très lente ET l'EMG >30 Hz, cf. bande "emg" du veto séparé) + notch 50 Hz, comme
+    dérive très lente ET l'EMG >30 Hz, cf. bande "emg" du veto séparé) + notch secteur, comme
     `acquisition.UnicornAcquisition._filter`. Cette version filtrée sert UNIQUEMENT à juger la
-    qualité de la fenêtre ; les indices restent calculés sur le signal large-bande (highpass_filter)."""
+    qualité de la fenêtre ; les indices restent calculés sur le signal large-bande (highpass_filter).
+
+    `notch_hz` : le secteur du POSTE (50 ou 60 Hz), que `NeuroDecoder` reçoit du moteur. Son effet
+    est MINCE, et c'est mesuré (2026-09-30) : le passe-bande coupe déjà à 30 Hz, donc à 50 comme à
+    60 Hz il ne reste guère que le transitoire des bords de `filtfilt`, que le notch ne touche pas
+    (1000 µV de secteur à 50 Hz sur 4 s : σ 107,45 avec le notch à 50 Hz, 107,55 à 60, 107,55
+    sans). Il suit le poste pour que « le secteur coupé » ait partout le même sens, pas parce
+    qu'il changerait le rejet."""
     x = np.asarray(window, dtype=np.float64)
     b, a = butter(4, [band[0] / (fs / 2.0), band[1] / (fs / 2.0)], btype="band")
     xf = filtfilt(b, a, x, axis=0)
@@ -258,8 +265,11 @@ class NeuroDecoder:
     d'appel. Ils appartiennent à la boucle appelante, qui seule sait afficher un décompte.
     """
 
-    def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S, smoothing=NEURO_SMOOTH):
+    def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S, smoothing=NEURO_SMOOTH,
+                 secteur_hz=SECTEUR_HZ):
         self.fs = float(fs)
+        # Le secteur du POSTE (2026-09-30) : le notch du σ de contrôle (cf. `artifact_sigma`).
+        self.secteur_hz = float(secteur_hz)
         self.norm = None
         self.sigma_ref = None      # σ par voie au repos -> rejet par voie
         self.emg_ref = None        # puissance 30-45 Hz au repos -> veto EMG
@@ -290,7 +300,7 @@ class NeuroDecoder:
         wf = highpass_filter(w, self.fs, NEURO_HIGHPASS_HZ)
         bp = band_powers(wf, self.fs, NEURO_BANDS, highpass=None)   # wf déjà passe-hauté
         return {"idx": indices_from_bp(bp), "emg": emg_power(bp),
-                "sig": artifact_sigma(w, self.fs)}
+                "sig": artifact_sigma(w, self.fs, notch_hz=self.secteur_hz)}
 
     def fit_baseline(self, samples, min_samples=3):
         """Cale les échelles du jour sur des échantillons de REPOS. False si trop peu."""
@@ -401,6 +411,21 @@ def _demo():
     for _ in range(50):
         norm.creep(indices(_synth(fs, theta=1.0, alpha=1.0, beta=3.0, seed=99), fs), 0.05)
     chk(norm.mu["engagement"] > mu0, "le re-calage lent (creep) ne déplace pas le zéro")
+
+    # Le SECTEUR du poste (2026-09-30) : le σ de contrôle coupe celui que le décodeur a REÇU, pas
+    # 50 Hz en dur. Comparé à l'appel direct, au bit près : l'effet du notch sur ce σ est mince
+    # (cf. `artifact_sigma`), donc un écart de valeur ne prouverait rien — c'est le filtre DEMANDÉ
+    # qu'on vérifie, et qu'il diffère bien de l'autre secteur.
+    t_s = np.arange(int(4 * fs)) / fs
+    w = _synth(fs, theta=1.0, alpha=1.0, beta=1.0, seed=11) + 5.0 * np.sin(2 * np.pi * 60.0 * t_s)[:, None]
+    d60 = NeuroDecoder(fs, secteur_hz=60.0)
+    s60 = d60.sample(w)["sig"]
+    print(f"  secteur : défaut {NeuroDecoder(fs).secteur_hz:g} Hz, décodeur réglé à {d60.secteur_hz:g} Hz")
+    chk(NeuroDecoder(fs).secteur_hz == SECTEUR_HZ,
+        "sans réglage, le décodeur ne coupe pas le secteur par défaut du dépôt")
+    chk(d60.secteur_hz == 60.0 and np.array_equal(s60, artifact_sigma(w, fs, notch_hz=60.0))
+        and not np.array_equal(s60, artifact_sigma(w, fs, notch_hz=50.0)),
+        "un décodeur réglé à 60 Hz ne coupe pas 60 Hz dans son σ de contrôle")
 
     print("[neuro] auto-test OK" if ok[0] else "[neuro] auto-test ÉCHOUÉ")
     return ok[0]

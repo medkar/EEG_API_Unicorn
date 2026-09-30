@@ -15,7 +15,7 @@ import time as _time
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (NEURO_BASELINE_S, NEURO_REBASELINE_S, NEURO_SMOOTH,  # noqa: E402
                          NEURO_KEY_CHANNELS, NEURO_WARMUP_S, NEURO_UPDATE_HZ, NEURO_WINDOW_S,
-                         json_float, use_utf8_console)
+                         SECTEUR_HZ, json_float, use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedNeuroPublisher, stream_name  # noqa: E402
 from core.modes.contract import ModeSpec, Param, Rest, validate  # noqa: E402
@@ -43,9 +43,12 @@ class NeuroRuntime(ModeRuntime):
         self._new_decoder()
 
     def _new_decoder(self):
+        # Le secteur du POSTE (2026-09-30), que porte le moteur : le notch du σ de rejet
+        # d'artefact. Refait à chaque repos avec le décodeur, donc jamais perdu en route.
         self.decoder = NeuroDecoder(self.engine.acq.fs,
                                     rebaseline_s=self.params["rebaseline_s"],
-                                    smoothing=self.params["smoothing"])
+                                    smoothing=self.params["smoothing"],
+                                    secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
 
     def _open(self):
         self._out = DecodedNeuroPublisher(instance=self.engine.instance,
@@ -243,6 +246,47 @@ def _selftest():
     chk(all(v is None or math.isfinite(v) for v in sortie["z"].values())
         and all(v is None or math.isfinite(v) for v in sortie["raw"].values()),
         f"la sortie pour l'affichage ne contient ni NaN ni infini ({sortie['z']})")
+
+    # === Le SECTEUR du POSTE (2026-09-30) : le rejet d'artefact coupe celui du MOTEUR ========
+    # Un espion sur `artifact_sigma`, là où le décodeur l'appelle : c'est le notch DEMANDÉ qu'on
+    # vérifie, pas une valeur de σ (son effet sur ce σ est mince, cf. `neuro_monitor`). Et
+    # après un repos REFAIT : `_reset_rest` construit un décodeur neuf, qui ne doit pas oublier
+    # le secteur en route.
+    chk(rt.decoder.secteur_hz == SECTEUR_HZ,
+        f"un moteur qui ne déclare aucun secteur : le défaut du dépôt ({rt.decoder.secteur_hz})")
+    import core.neuro_monitor as neuro_monitor
+
+    vrai_sigma = neuro_monitor.artifact_sigma
+    notchs = []
+
+    def _espion(window, fs, band=(1.0, 30.0), notch_hz=SECTEUR_HZ):   # les défauts du vrai
+        notchs.append(notch_hz)
+        return vrai_sigma(window, fs, band=band, notch_hz=notch_hz)
+
+    moteur60 = _FauxMoteur()
+    moteur60.secteur_hz = 60.0
+    neuro_monitor.artifact_sigma = _espion
+    try:
+        rt60 = NeuroRuntime(SPEC, values, moteur60)
+        rt60._out = _FauxPublieur()
+        rt60._opened = True
+        now = 0.0
+        for repos in range(2):              # le repos, puis un repos REFAIT
+            rt60.begin_rest(now=now, warmup_s=0.0, duration_s=1.0)
+            for _ in range(15):
+                now += 0.2
+                moteur60.recent = rng.normal(0.0, 10.0, (int(4.0 * 250), 8))
+                rt60.tick(moteur60, lsl_ts=now, now=now)
+            if repos == 0:
+                premiers = list(notchs)
+    finally:
+        neuro_monitor.artifact_sigma = vrai_sigma
+    chk(premiers and set(premiers) == {60.0},
+        f"un moteur réglé à 60 Hz : le σ de rejet d'artefact coupe 60 Hz ({len(premiers)} "
+        f"appels, notch {sorted(set(premiers), key=str)})")
+    chk(len(notchs) > len(premiers) and set(notchs) == {60.0},
+        f"…et toujours après un repos refait, sur le décodeur neuf "
+        f"({len(notchs) - len(premiers)} appels, notch {sorted(set(notchs), key=str)})")
 
     print(f"[neuro] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

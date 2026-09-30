@@ -83,10 +83,10 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.acquisition import UnicornAcquisition  # noqa: E402
+from core.acquisition import NOTCH_SECTEUR, UnicornAcquisition  # noqa: E402
 from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
                     DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
-                    MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S,
+                    MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S, SECTEUR_HZ, SECTEURS_HZ,
                     SEANCES_DIR, TOLERANCE_DIVISEUR, TRACES_AFFICHAGE_S, TRACES_AMORCE_S,
                     barres_liaison, chemin_libre,
                     choose_frequencies,
@@ -306,7 +306,8 @@ class EngineServer:
     """
 
     def __init__(self, serial=None, synthetic=False, verbose=False, modes=("raw",),
-                 params=None, instance=None, data_dir=None, seances_dir=None):
+                 params=None, instance=None, data_dir=None, seances_dir=None,
+                 secteur_hz=SECTEUR_HZ):
         """`modes` : les identifiants à démarrer. `params` : {mode_id: {clé: valeur}}, facultatif.
 
         Un identifiant inconnu ou un réglage invalide lève ici, au démarrage — bruyamment et
@@ -320,9 +321,29 @@ class EngineServer:
         de `data_dir`, et injectable pour la même raison — à ceci près que le risque est inverse :
         ici on ne craint pas d'élire un fichier de test, on craint de semer dans le dossier d'un
         utilisateur des séances qui n'en sont pas.
+
+        `secteur_hz` : le SECTEUR électrique du poste, 50 Hz (Europe) ou 60 Hz (Amériques) —
+        `config.SECTEURS_HZ`. Un réglage du POSTE, pas d'un mode : l'écran de départ le choisit,
+        `--secteur` le donne au moteur seul. Tout ce qui coupe le secteur le lit ICI : le filtre
+        d'acquisition (σ du bandeau, contrôle de liaison, SSVEP), le contrôle alpha, le rejet
+        d'artefact du Neuro, les tracés du Brut, et chaque entraînement, qui l'ENREGISTRE dans son
+        modèle. Une autre valeur est refusée ici, avant d'ouvrir quoi que ce soit : un coupe-bande
+        à 55 Hz ne couperait aucun secteur, et chaque modèle entraîné le porterait.
         """
+        try:
+            secteur = float(secteur_hz)
+        except (TypeError, ValueError):
+            secteur = None
+        if secteur not in SECTEURS_HZ:
+            raise ValueError(tr("moteur.refus.secteur_inconnu", valeur=secteur_hz,
+                                liste=", ".join(f"{s:g}" for s in SECTEURS_HZ)))
+        # Lu par attribut, `getattr(engine, "secteur_hz", SECTEUR_HZ)`, par chaque entraînement
+        # et par les mesures : ⚠️ un nom différent ici ne lèverait rien, tout retomberait en
+        # silence sur le défaut. `[smoke-calib]` entraîne donc sur un moteur à 60 Hz.
+        self.secteur_hz = secteur
         self.synthetic = synthetic
-        self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose)
+        self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose,
+                                      notch=NOTCH_SECTEUR[secteur])
         # Passe à True dès que le casque (ou le board de test) est OUVERT, dans le fil de `run()`.
         # C'est ce que la console attend avant de s'afficher (2026-09-25) : un casque qui refuse
         # de s'ouvrir tue ce fil avant que l'indicateur ne passe, et l'écran de départ peut alors
@@ -1866,6 +1887,10 @@ class EngineServer:
             # flux `status`, contrat public.
             "liaison": self._etat_liaison(),
             "casque": self._etat_casque(),
+            # Le secteur du POSTE (2026-09-30), fixé à la construction : ce que le moteur coupe,
+            # et ce que chaque entraînement enregistre. Pas dans le flux `status` : ce n'est pas
+            # un état qui change, et le contrat public n'a pas à grossir pour le dire.
+            "secteur_hz": self.secteur_hz,
             # `now` est passé pour que le décompte affiché soit celui de MAINTENANT, pas celui du
             # dernier tick. La console sonde à 10 Hz, le moteur tourne à sa propre cadence : sans
             # ça le décompte avancerait par à-coups.
@@ -2360,7 +2385,7 @@ class EngineServer:
         with self.acq:
             self.acquisition_ouverte = True
             print(f"[server] board={self.acq.board_id.name} fs={self.acq.fs} Hz "
-                  f"instance={self.instance}")
+                  f"secteur={self.secteur_hz:g} Hz instance={self.instance}")
             for suffix in ("quality", "status"):
                 print(f"[server] flux LSL publie : {stream_name(suffix)}")
             try:
@@ -2703,6 +2728,7 @@ def _smoke():
         _smoke_mesure(),
         _smoke_liaison(),
         _smoke_casque(),
+        _smoke_secteur(),
         _smoke_enregistrement(),
         _smoke_cumul(),
         _smoke_proposition(),
@@ -3084,8 +3110,11 @@ def _smoke_calibration():
         mi_calib.MICalibration.window_s = 0.16
         mi_calib.MICalibration.step_s = 0.08
 
+        # Un moteur au secteur des AMÉRIQUES, exprès (`[smoke-secteur]`) : chaque entraînement le
+        # lit par `getattr(engine, "secteur_hz", SECTEUR_HZ)`, donc un attribut mal nommé ou mal
+        # posé retomberait EN SILENCE sur 50 Hz — et seul un moteur qui n'est PAS au défaut le voit.
         server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-calib",
-                              data_dir=data_dir)
+                              data_dir=data_dir, secteur_hz=60.0)
         # 120 s, pas 60 : la séance mesure ~27 s mais le PAS de boucle (POLL_S, plus la latence
         # des E/S) ajoute couramment ~8,5 s de plus sur ce poste, et un dépassement de
         # `duration_s` arrête le moteur EN PLEINE séance — un échec de timing du test, pas de la
@@ -3208,6 +3237,15 @@ def _smoke_calibration():
             chk(os.listdir(data_dir) == [],
                 f"…et une calibration TERMINÉE n'a rien écrit dans data/ : le chiffre s'affiche "
                 f"AVANT que quoi que ce soit ne soit retenu ({os.listdir(data_dir)})")
+            # [smoke-secteur] L'entraînement joué par CE moteur (60 Hz) produit un modèle à 60 Hz :
+            # dans le résultat affiché ET dans le FICHIER, relu tel que le décodage le relira.
+            relu, raison_relu = mi_models.charger(res.get("modele"))
+            relu_secteur = getattr(relu, "secteur_hz", None) if relu is not None else raison_relu
+            chk(server.secteur_hz == 60.0 and res.get("secteur_hz") == 60.0
+                and relu_secteur == 60.0,
+                f"[smoke-secteur] l'entraînement joué par un moteur réglé à 60 Hz produit un "
+                f"modèle à 60 Hz — résultat {res.get('secteur_hz')!r}, fichier relu "
+                f"{relu_secteur!r} ; 50 dirait que le secteur du poste n'atteint pas le modèle")
 
             # 2. Aucun des QUATRE catalogues ne découvre le candidat. Sans ça, un candidat
             #    orphelin (nettoyage sauté, dossier rouvert) redeviendrait « le modèle chargeable
@@ -3657,6 +3695,92 @@ def _smoke_oreille_calibration():
     return ok
 
 
+def _smoke_secteur():
+    """Le SECTEUR du poste (2026-09-30) : ce que le moteur coupe, et ce qu'il refuse.
+
+    Un secteur mal transmis ne casse RIEN : le bourdonnement reste dans le signal, un peu plus de
+    σ au bandeau, un modèle qui apprend avec un coupe-bande à côté du secteur. Aucune exception,
+    aucun chiffre aberrant — d'où des assertions sur le FILTRE lui-même, pas sur un score.
+
+    L'ENTRAÎNEMENT à 60 Hz est vérifié dans `[smoke-calib]`, qui joue une vraie calibration MI
+    par la boucle d'un moteur construit à 60 Hz — la rejouer ici coûterait 30 s pour la même
+    preuve. La RÉOUVERTURE du casque, dans `[smoke-liaison]`, sur le vrai chemin de reconnexion.
+    """
+    from brainflow.data_filter import NoiseTypes
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    chk(set(NOTCH_SECTEUR) == set(SECTEURS_HZ),
+        f"la table des coupe-bandes BrainFlow couvre exactement les secteurs du poste "
+        f"({sorted(NOTCH_SECTEUR)} pour {list(SECTEURS_HZ)}) : un secteur ajouté à `config` sans "
+        f"son coupe-bande serait accepté puis coupé par personne")
+    defaut = EngineServer(synthetic=True, instance="smoke-secteur-50")
+    chk(defaut.secteur_hz == SECTEUR_HZ == 50.0 and defaut.acq.notch is NoiseTypes.FIFTY,
+        f"sans réglage, le moteur coupe le secteur par défaut du dépôt : 50 Hz ({defaut.secteur_hz}, "
+        f"{defaut.acq.notch.name})")
+    srv = EngineServer(synthetic=True, instance="smoke-secteur", secteur_hz=60)
+    chk(srv.secteur_hz == 60.0 and isinstance(srv.secteur_hz, float)
+        and srv.acq.notch is NoiseTypes.SIXTY,
+        f"un moteur réglé à 60 Hz le porte (en float, comme `SECTEURS_HZ`) et son acquisition "
+        f"coupe 60 Hz ({srv.secteur_hz!r}, {srv.acq.notch.name})")
+    etat = srv.snapshot()
+    chk(etat.get("secteur_hz") == 60.0,
+        f"…et `snapshot()` le dit : c'est là que la console le lit ({etat.get('secteur_hz')!r})")
+
+    # Le FILTRE, pas l'étiquette : 20 µV de secteur à 60 Hz, filtrés par l'acquisition de chacun
+    # des deux moteurs. Mesuré au milieu du bloc, loin des bords où le filtre s'établit : ~0 µV
+    # rms à 60 Hz, ~1,2 µV à 50 (le passe-bande 5-40 Hz n'en retire qu'une partie).
+    fs = srv.acq.fs
+    temps = np.arange(int(10 * fs)) / fs
+    bourdon = np.stack([20.0 * np.sin(2 * np.pi * 60.0 * temps)] * 4, axis=1)
+    milieu = slice(len(temps) // 4, 3 * len(temps) // 4)
+
+    def residu(acq):
+        return float(np.sqrt(np.mean(acq._filter(bourdon)[milieu] ** 2)))
+
+    reste_60, reste_50 = residu(srv.acq), residu(defaut.acq)
+    chk(reste_60 < 0.05 and reste_50 > 0.5,
+        f"le filtre d'acquisition du moteur à 60 Hz retire un secteur à 60 Hz ({reste_60:.3f} µV "
+        f"rms restants pour 14,1), celui du moteur à 50 Hz le laisse ({reste_50:.2f} µV) — ce "
+        f"filtre fait le σ du bandeau, le contrôle de liaison et le SSVEP")
+
+    for mauvais in (55, "60 Hz", None):
+        try:
+            EngineServer(synthetic=True, instance="smoke-secteur-refus", secteur_hz=mauvais)
+            chk(False, f"un secteur à {mauvais!r} doit être REFUSÉ")
+        except Exception as refus:  # noqa: BLE001 - un KeyError plus loin est aussi un échec à dire
+            chk(isinstance(refus, ValueError) and str(mauvais) in str(refus)
+                and all(f"{s:g}" in str(refus) for s in SECTEURS_HZ),
+                f"un secteur à {mauvais!r} est refusé à la construction, en disant lesquels "
+                f"existent ({type(refus).__name__} : {refus})")
+    chk(_parse_args([]).secteur == int(SECTEUR_HZ) and _parse_args(["--secteur", "60"]).secteur == 60,
+        "le moteur seul prend `--secteur`, 50 par défaut")
+    import contextlib
+    import io
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            _parse_args(["--secteur", "55"])
+            refuse = False
+        except SystemExit:
+            refuse = True
+    chk(refuse, "…et `--secteur 55` est refusé dès la ligne de commande")
+    srv.close()
+    defaut.close()
+    # Détruits MAINTENANT, pendant qu'aucune session n'est ouverte : `BoardShim.__del__` libère la
+    # session du board de test que BrainFlow PARTAGE entre boards aux mêmes paramètres — celle du
+    # moteur d'un autre test, si le ramasse-miettes passait plus tard (cf. `[smoke-liaison]`).
+    del srv, defaut
+    import gc
+    gc.collect()
+    print(f"[smoke-secteur] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
 def _smoke_casque():
     """L'état du casque : paquets perdus comptés sur le compteur, batterie non inventée.
 
@@ -3770,8 +3894,11 @@ def _smoke_liaison():
         ok = ok and bool(cond)
 
     freqs = [c["actual_hz"] for c in choose_frequencies(60.0)]
+    # À 60 Hz (`[smoke-secteur]`) : le casque ROUVERT doit garder le coupe-bande du poste, pas
+    # retomber sur celui par défaut de `UnicornAcquisition` (50 Hz).
     srv = EngineServer(synthetic=True, instance="smoke-liaison", modes=("raw", "ssvep"),
-                       params={"ssvep": {"freqs": freqs}})
+                       params={"ssvep": {"freqs": freqs}}, secteur_hz=60.0)
+    acq_avant = srv.acq
     srv.decrochage_s = 0.5
     srv.reessai_s = 0.3
     coupe, retour, essais = {"on": False}, {"ok": False}, []
@@ -3874,6 +4001,10 @@ def _smoke_liaison():
         chk(len(srv.recent) > 0 and fil.is_alive(),
             f"…les échantillons arrivent de nouveau, sans relancer la console "
             f"({len(srv.recent)} dans le tampon)")
+        from brainflow.data_filter import NoiseTypes
+        chk(srv.acq is acq_avant and srv.acq.notch is NoiseTypes.SIXTY,
+            f"[smoke-secteur] …et le casque rouvert coupe toujours le secteur du POSTE (60 Hz), "
+            f"pas le défaut de l'acquisition ({srv.acq.notch.name})")
     finally:
         srv.stop()
         fil.join(timeout=5.0)
@@ -3891,7 +4022,7 @@ def _smoke_liaison():
         srv.__dict__.pop("_drain_commands", None)
         if ssvep is not None:
             ssvep.__dict__.pop("tick", None)
-        del srv, fil, ssvep, lire, rouvrir, vider
+        del srv, fil, ssvep, lire, rouvrir, vider, acq_avant
         import gc
         gc.collect()
     print(f"[smoke-liaison] VERDICT : {'OK' if ok else 'ÉCHEC'}")
@@ -6170,6 +6301,11 @@ def _parse_args(argv):
     p.add_argument("--id", dest="instance", default=None,
                    help="identité de cette instance (défaut : n° de série du casque). Distingue "
                         "les moteurs quand plusieurs tournent sur le même réseau — une salle de TP")
+    p.add_argument("--secteur", type=int, choices=[int(s) for s in SECTEURS_HZ],
+                   default=int(SECTEUR_HZ),
+                   help="secteur électrique du poste, en Hz : 50 (Europe) ou 60 (Amériques). Le "
+                        "coupe-bande de l'acquisition, du contrôle alpha, du Neuro et de chaque "
+                        "entraînement, qui l'enregistre dans son modèle")
     p.add_argument("--smoke", action="store_true", help="test headless de bout en bout, puis quitte")
     p.add_argument("--verbose", action="store_true", help="logs BrainFlow détaillés")
     return p.parse_args(argv)
@@ -6202,7 +6338,8 @@ if __name__ == "__main__":
     # pas un plantage. Code de sortie 2 : « la commande est mal formée », comme argparse.
     try:
         engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
-                              modes=modes, params=params, instance=args.instance)
+                              modes=modes, params=params, instance=args.instance,
+                              secteur_hz=float(args.secteur))
     except ValueError as refus:
         print(f"[server] {refus}")
         sys.exit(2)
