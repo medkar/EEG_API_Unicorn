@@ -3705,10 +3705,16 @@ def _smoke():
     chk(not [lbl.text() for lbl in console.pages["ssvep"].findChildren(_QLabel)
              if "écran à" in lbl.text()],
         "…et plus sur une ligne grise à part")
-    chk(not console.pages["raw"].formulaire.aides
-        and not [lbl for lbl in console.pages["raw"].findChildren(_QLabel) if lbl.text() == "ⓘ"],
-        "et le brut, qui n'a aucun réglage, n'a aucune bulle : une bulle sans aide serait un "
-        "réglage-décor")
+    # Depuis le 2026-09-25, la page du brut porte DEUX bulles, celles de son filtre d'AFFICHAGE
+    # (dans la vue des tracés). Son formulaire « Régler », lui, reste sans réglage, donc sans bulle.
+    page_brut = console.pages["raw"]
+    bulles_brut = [lbl for lbl in page_brut.findChildren(_QLabel) if lbl.text() == "ⓘ"]
+    chk(not page_brut.formulaire.aides
+        and len(bulles_brut) == 2
+        and all(page_brut.vue.isAncestorOf(b) and b.toolTip() for b in bulles_brut),
+        f"le brut n'a aucun réglage, donc son formulaire n'a aucune bulle : une bulle sans aide "
+        f"serait un réglage-décor. Les {len(bulles_brut)} bulles de la page sont celles du filtre "
+        f"d'affichage, et chacune porte son aide")
     page_cvep.direct.setChecked(False)
     console.resize(1100, 720)
     console.show_grid()
