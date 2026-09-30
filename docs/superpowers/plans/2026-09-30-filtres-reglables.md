@@ -175,3 +175,66 @@ bouton de la calibration MI est retournée (aucune page d'entraînement ne le mo
 Tranches ≤ 40 Ko. Doc : `CLAUDE.md`, `docs/qa.md` (points nouveaux : bande à l'entraînement,
 FBCSP, secteur à l'écran de départ), `docs/recette.md`, README si la section des modes cite les
 bandes.
+
+## Passe de correction (après la revue de la vague 1, 2026-09-30)
+
+Sept relecteurs par sous-système : 0 critique, ~13 importants. Les constats détaillés sont dans
+`.superpowers/sdd/2026-09-30-filtres-reglables/progress.md`. Décisions du coordinateur :
+
+**Bornes révisées** (remplacent la table de la décision 5) :
+
+| mode | coupure basse | coupure haute | pourquoi |
+|---|---|---|---|
+| MI | 4 à 10 | 20 à 40 | sous 4 Hz et au-dessus de 40 : dérive et EMG, que le FBCSP irait sélectionner |
+| P300 | 0,5 à 1 | 8 à 40 | l'onde vit en partie sous 2 Hz ; sous 0,5 Hz, un filtre sur une époque d'1 s n'agit plus |
+| ErrP | 0,5 à 2 | 8 à 40 | idem (composantes plus thêta, moins exposées) |
+| c-VEP | 2 à 5 | 30 à 60 | les époques d'entraînement durent un cycle (1,05 s) sans marge : sous 2 Hz, le transitoire les couvre ; une bande étroite fausse `corr_min`/`margin` |
+| SSVEP | 3 à 8 | 20 à 45 | 3 : mesuré (filtre à passe unique, 1 s de marge) ; 45 : une cible ou une harmonique ne doit jamais tomber dans le coupe-bande secteur |
+
+- **C1 — Validation, « Proposer », console** (`contract.py`, `server.py`, `stimulus/ssvep.py`,
+  `console/app.py`, `console/calib_page.py`, `console/params_form.py`) :
+  - un réglage d'entraînement est VALIDÉ PAR LE MOTEUR avant le contrôle de liaison et avant
+    l'arrêt du mode (méthode pure, sans effet de bord) ;
+  - le formulaire se fige dès le clic ;
+  - `propose_params` REFUSE une bande ou un rafraîchissement invalides avec la raison du contrat,
+    au lieu de les écrêter (« inf » faisait boucler) ;
+  - `contract._coerce` refuse NaN et l'infini ;
+  - `verifie_freqs` de la fenêtre SSVEP ne juge plus la bande, qui n'est pas son affaire ;
+  - le smoke moteur teste « Proposer » (écran prioritaire sur le magasin, deux coupures) ;
+  - le smoke console vérifie les champs de bande des trois pages d'entraînement à fenêtre ;
+  - le commentaire de `params_form.py:132` est corrigé ;
+  - `params_bande` : garde `bas[0] > 0`, et un test qui tue le mutant `<=`.
+- **C2 — SSVEP** (`modes/ssvep.py`) :
+  - la bande est FIGÉE avec le décodeur (plancher, σ et `max_freq` se mesurent sous la même) ;
+  - un `chk` sur `affecte_decodage` des deux clés ;
+  - les bornes du tableau ;
+  - un test du côté bas de la suggestion de diviseurs (dans `contract.py` : C1 s'en charge).
+- **C3 — c-VEP** (`modes/cvep.py`, `cvep_calib.py`, `cvep_rcca.py`, `research/cvep_*.py`,
+  `config.py:246`) :
+  - les bornes du tableau ;
+  - l'aide dit que `corr_min`/`margin` ont été mesurés en 2-45 Hz et qu'une autre bande se
+    revérifie avec « Tester » ;
+  - l'espion couvre `charger` + `scores` des deux modèles, ré-ajustement rCCA compris ;
+  - un test du modèle hérité (npz sans `secteur_hz` → None) ;
+  - `--seuils` et les outils de `research/` rejouent avec le filtre de l'archive ;
+  - le commentaire faux de `config.py` est corrigé.
+- **C4 — P300/ErrP** :
+  - espionner `core.filtrage.sections` (le seul point commun à tous les chemins) ;
+  - les bornes du tableau ;
+  - l'aide dit « 1-8 Hz » (comme `config`) et que le filtre agit sur chaque ÉPOQUE (~1 s) ;
+  - bornes testées des deux côtés ;
+  - « le mode l'accepte » vérifie aussi le secteur ;
+  - `ErrPModel.band`/`secteur_hz` deviennent des propriétés qui lisent `self.core` ;
+  - la convention d'absence du `.npz` est écrite ;
+  - un test du champ `filtre` des résultats P300, ErrP et c-VEP (le c-VEP chez C3).
+- **C5 — MI** :
+  - sélection par `f_classif` (ANOVA F) au lieu de l'information mutuelle par plus proches
+    voisins, que les fenêtres sœurs d'un même essai biaisent ; le nommer « variante » ;
+  - l'aide ne promet plus que « Tester » tranche CSP contre FBCSP ;
+  - tests : effet du secteur dans le banc, CAR gardé sous FBCSP, espion sur l'ajustement du banc
+    par pli ;
+  - `mi_compare` : secteur et bande 4-40 pour FBCSP ;
+  - arrondi de `sous_bandes` ;
+  - mesurer et dire la durée d'un entraînement FBCSP.
+- **C6 — filtrage.py** (coordinateur) : tester à la longueur des époques et rendre les mutants
+  (b, a), `ordre` ignoré et Q changé rouges.
