@@ -55,8 +55,6 @@
   "calib.mi.briefing.6": "Reste immobile et cligne le moins possible pendant l'imagerie.",
   "calib.mi.briefing.7": "Repos : ne fais rien de spécial, relâche-toi et respire normalement.",
   "calib.mi.chiffres": "{justesse} de classes justes (hasard {hasard}) sur {n} essais",
-  "calib.mi.filtre": "Appris par {methode} sur la bande {bas}-{haut} Hz, coupe-bande {secteur} Hz.",
-  "calib.mi.filtre_sans_secteur": "Appris par {methode} sur la bande {bas}-{haut} Hz, sans coupe-bande secteur.",
   "calib.mi.honnetete": "Ce chiffre est une validation croisée par essai : il estime ce que le modèle fera sur un essai qu'il n'a jamais vu. Repère : sur la séance de référence du projet, 40 % à 3 classes (pas significatif) et 63 % à 2 classes. Le Motor Imagery ne marche pas aussi bien chez tout le monde : une séance modeste est un résultat ordinaire, pas une faute.",
   "calib.mi.instruction.droite": "Imagine : serre le poing droit",
   "calib.mi.instruction.gauche": "Imagine : serre le poing gauche",

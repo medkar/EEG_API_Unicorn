@@ -104,6 +104,19 @@ def pct(x, decimales=0):
     return nombre(x * 100, f".{decimales}f") + " %"
 
 
+def texte_filtre(bande, secteur_hz, methode=None):
+    """AVEC QUOI un modèle a appris : sa bande, son coupe-bande, et sa méthode quand il en a une.
+
+    Une ligne du repli « Détails » d'un entraînement (2026-09-30). Deux séances à 40 % ne se
+    comparent pas si l'une a appris sur 8-30 Hz et l'autre sur 4-40 Hz : c'est ici qu'on le lit.
+    Les valeurs viennent du MODÈLE entraîné, jamais des réglages qu'on croit lui avoir donnés.
+    """
+    bas, haut = nombre(float(bande[0])), nombre(float(bande[1]))
+    filtre = (tr("moteur.filtre.avec_secteur", bas=bas, haut=haut, secteur=nombre(secteur_hz))
+              if secteur_hz else tr("moteur.filtre.sans_secteur", bas=bas, haut=haut))
+    return tr("moteur.filtre.methode", methode=methode, filtre=filtre) if methode else filtre
+
+
 def lignes(niveau, mot, chiffres, reserve, conclusion=False):
     """Les clés d'affichage, VÉRIFIÉES. Un niveau hors vocabulaire lève tout de suite.
 

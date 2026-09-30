@@ -105,6 +105,12 @@ class CalibPage(QWidget):
             self.audio_avertissement.setText(
                 tr("pages.calib.sans_son", raison=console.beeps.raison))
         self.formulaire = ParamsForm(list(self.calib.get("params") or ()))
+        # Les réglages d'un entraînement partent AVEC « Commencer » (`start_calibration`) : le
+        # bouton « Appliquer » du formulaire générique n'est branché à rien ici. Il s'affichait
+        # pourtant sur l'entraînement du MI depuis toujours — un bouton sans effet, qu'on cliquait
+        # en croyant régler quelque chose. `mesure_page` cachait déjà le sien pour cette raison.
+        # Trouvé le 2026-09-30, quand les quatre entraînements ont gagné une bande réglable.
+        self.formulaire.bouton.hide()
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
@@ -496,6 +502,10 @@ class CalibPage(QWidget):
                     hasard=f"{float(hasard)*100:.0f}"))
 
         lignes = [tr("pages.calib.detail.modele", nom=resultat.get("nom", ""))]
+        # AVEC QUOI il a appris — bande, coupe-bande, méthode. Un texte déjà rédigé par le moteur
+        # (`affichage.texte_filtre`) : la page ne connaît ni les bandes ni les méthodes.
+        if resultat.get("filtre"):
+            lignes.append(resultat["filtre"])
         morceaux = [texte(resultat[cle]) for cle, texte in self.DETAILS
                     if resultat.get(cle) is not None]
         # ⚠️ L'AUC ne figure en détail que quand elle n'est PAS la mesure qui décide — chez le P300,

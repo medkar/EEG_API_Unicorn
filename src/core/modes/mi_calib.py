@@ -26,12 +26,12 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa
                          MI_METHOD, MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S,
                          MI_WARMUP_PER_CLASS, MI_WINDOW_S, SECTEUR_HZ, SSVEP_WARMUP_S,
                          use_utf8_console)
-from core.i18n import nombre, tr  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from core.mi_decoder import MI_BAND, MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
-                                  niveau_par_seuils, non_mesure, p_hasard, pct, texte_p,
-                                  verifier)
+                                  niveau_par_seuils, non_mesure, p_hasard, pct, texte_filtre,
+                                  texte_p, verifier)
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.modes.contract import Calib, Param, bande_de, params_bande  # noqa: E402
 
@@ -90,15 +90,11 @@ METHODES = {
 def filtre_de(methode, bande, secteur_hz):
     """La phrase qui dit AVEC QUOI ce chiffre a été obtenu : méthode, bande, coupe-bande.
 
-    Elle ouvre la phrase d'honnêteté du résultat (repli « Détails ») : deux séances à 40 % ne se
-    comparent pas si l'une a appris sur 8-30 Hz en CSP et l'autre sur 4-40 Hz en FBCSP.
+    Son champ `filtre` dans le résultat, lu par le repli « Détails » comme celui des trois autres
+    entraînements : deux séances à 40 % ne se comparent pas si l'une a appris sur 8-30 Hz en CSP
+    et l'autre sur 4-40 Hz en FBCSP.
     """
-    nom = METHODES.get(methode, methode)
-    if not secteur_hz:
-        return tr("calib.mi.filtre_sans_secteur", methode=nom, bas=nombre(bande[0]),
-                  haut=nombre(bande[1]))
-    return tr("calib.mi.filtre", methode=nom, bas=nombre(bande[0]), haut=nombre(bande[1]),
-              secteur=nombre(secteur_hz))
+    return texte_filtre(bande, secteur_hz, METHODES.get(methode, methode))
 
 
 def horodatage(maintenant=None):
@@ -318,12 +314,13 @@ class MICalibration(CalibrationRuntime):
             "verdict": verdict_txt,
             # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`) — même calcul que le verdict.
             **lignes_de(cv, len(enregistre), hasard),
+            # AVEC QUOI ce modèle a appris (méthode, bande, coupe-bande) : une ligne du repli
+            # « Détails », la même pour les quatre entraînements.
+            "filtre": filtre,
             # La phrase qui dit ce que ce chiffre vaut. Elle voyage AVEC le résultat, parce que
             # l'écran qui l'affiche est générique et ne connaît aucun mode : celle du P300 parle
-            # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes. Elle
-            # s'ouvre sur le filtre et la méthode : c'est la ligne du repli « Détails » que la page
-            # générique affiche pour tout mode, sans avoir à connaître celui-ci.
-            "honnetete": f"{filtre} {HONNETETE}",
+            # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes.
+            "honnetete": HONNETETE,
         }
 
 
@@ -626,11 +623,11 @@ def _selftest():
             and res_r.get("secteur_hz") == 60.0,
             f"le résultat les rapporte, relus du modèle ({res_r.get('methode')}, "
             f"{res_r.get('bande')}, {res_r.get('secteur_hz')})")
-        chk(METHODES["fbcsp"] in res_r.get("honnetete", "")
-            and "4-40 Hz" in res_r.get("honnetete", "") and "60 Hz" in res_r.get("honnetete", "")
-            and "3 classes" in res_r.get("honnetete", ""),
-            f"et le repli « Détails » NOMME la méthode et la bande, avant la phrase d'honnêteté "
-            f"({res_r.get('honnetete', '')[:70]}…)")
+        chk(METHODES["fbcsp"] in res_r.get("filtre", "")
+            and "4–40 Hz" in res_r.get("filtre", "") and "60 Hz" in res_r.get("filtre", "")
+            and res_r.get("honnetete") == HONNETETE,
+            f"et le repli « Détails » NOMME la méthode et la bande, sur sa propre ligne "
+            f"({res_r.get('filtre', '')!r})")
 
         # --- `_chemins_libres` seule, avant l'intégration complète --------------------------
         # Une collision sur le premier essai force une avance d'exactement 1 s, sur les DEUX

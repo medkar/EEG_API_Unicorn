@@ -69,7 +69,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, P300_BAND, P300_CAL_ROUNDS,  # 
                          SECTEUR_HZ, use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
-from core.modes.affichage import depuis_table, non_mesure, pct  # noqa: E402
+from core.modes.affichage import depuis_table, non_mesure, pct, texte_filtre  # noqa: E402
 from core.modes.contract import bande_de  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 from core.p300_decoder import NONTARGET, TARGET, P300Model  # noqa: E402
@@ -320,6 +320,9 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         "selection_ok": int(sel_ok),
         "selection_total": int(sel_tot),
         "hasard": hasard,
+        # AVEC QUOI ce modèle a appris (bande, coupe-bande), relu du MODÈLE : une ligne du repli
+        # « Détails », la même pour les quatre entraînements (`affichage.texte_filtre`).
+        "filtre": texte_filtre(modele.band, modele.secteur_hz),
         "verdict": verdict_txt,
         # Ce qui s'affiche EN FACE : la SÉLECTION contre 1/6, jamais l'AUC (cf. VERDICTS).
         **(non_mesure(tr("calib.p300.non_mesure.raison"), tr("calib.p300.non_mesure.conseil"))

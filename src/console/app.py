@@ -2002,6 +2002,8 @@ def _smoke():
                          "n_essais": 42, "n_fenetres": 126, "cv_groupee": 0.401,
                          "cv_naive": 0.556, "hasard": 1 / 3,
                          "classes": ["GAUCHE", "DROITE", "REPOS"],
+                         # Rédigé par le MOTEUR, par la même fonction que ses entraînements.
+                         "filtre": mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0),
                          "honnetete": mi_calib.HONNETETE,
                          "verdict": "FAIBLE — ré-essaie",
                          # Les trois lignes d'affichage, par la VRAIE table du MI et le même
@@ -2036,6 +2038,10 @@ def _smoke():
         f"le niveau du hasard est à côté — sans lui, 40 % ne veut rien dire ({cal.resultat.text()})")
     chk("mi_model_20260730-141205.joblib" in cal.details.text(),
         f"le nom du modèle produit est donné ({cal.details.text()})")
+    chk(mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0) in cal.details.text()
+        and "FBCSP" in cal.details.text() and "60 Hz" in cal.details.text(),
+        f"…et AVEC QUOI il a appris : méthode, bande, coupe-bande (2026-09-30) "
+        f"({cal.details.text()!r})")
     # ⚠️ La phrase d'honnêteté vient du RÉSULTAT DU MOTEUR, plus d'une constante de la page. Elle
     # vivait dans `calib_page.py` — donc affichée sous TOUS les résultats de calibration, la page
     # ne connaissant aucun mode. Depuis que le P300 se calibre lui aussi ici, ce « 40 % à trois
@@ -3727,8 +3733,9 @@ def _smoke():
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
-    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz", "z_min"},
-        f"le SSVEP expose ses quatre réglages, seuil de détection compris "
+    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz", "z_min",
+                                        "bande_bas", "bande_haut"},
+        f"le SSVEP expose ses six réglages, seuil de détection et bande de filtrage compris "
         f"({sorted(page.formulaire.champs)})")
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
@@ -3932,14 +3939,19 @@ def _smoke():
         "…et surtout AUCUN bouton « Appliquer » : il soumettrait un dictionnaire vide")
     chk(not reelle.pages["ssvep"].formulaire.bouton.isHidden(),
         "…alors qu'une page QUI a des réglages le garde — la règle ne tire pas trop large")
-    # Les trois calibrations menées par une FENÊTRE déclarent zéro réglage : mêmes quatre pages,
-    # même bouton fantôme. C'est pour ça que la règle vit dans `ParamsForm` et pas chez l'appelant.
-    sans_reglage = [m for m in ("p300", "errp", "cvep")
-                    if not reelle.calib_pages[m].formulaire.bouton.isHidden()]
-    chk(not sans_reglage,
-        f"…et les calibrations sans réglage non plus ({sans_reglage or 'aucune ne le montre'})")
-    chk(not reelle.calib_pages["mi"].formulaire.bouton.isHidden(),
-        "…tandis que la calibration MI, qui a « Essais par classe », garde le sien")
+    # ⚠️ Les pages d'ENTRAÎNEMENT n'ont AUCUN bouton « Appliquer », réglages ou pas : leurs
+    # réglages partent avec « Commencer ». Cette assertion EXIGEAIT le bouton de la calibration MI
+    # (« elle a des réglages, elle garde le sien ») — or rien ne le branchait : c'était le bouton
+    # fantôme même que la règle ci-dessus combat, protégé par le test. Retournée le 2026-09-30,
+    # quand les quatre entraînements ont gagné une bande réglable.
+    avec_bouton = [m for m in ("mi", "p300", "errp", "cvep")
+                   if not reelle.calib_pages[m].formulaire.bouton.isHidden()]
+    chk(not avec_bouton,
+        f"…et aucune page d'entraînement ne montre « Appliquer » : ses réglages partent avec "
+        f"« Commencer » ({avec_bouton or 'aucune ne le montre'})")
+    chk(reelle.calib_pages["mi"].formulaire.champs,
+        "…la calibration MI a pourtant des réglages : le bouton est caché exprès, pas faute de "
+        "réglage")
 
     # --- régression : un « choice » NUMÉRIQUE round-trip son TYPE, contre le VRAI validateur ----
     # Trouvé en écrivant cette page, AVANT tout écran : `trials_per_class` (calibration MI) est le

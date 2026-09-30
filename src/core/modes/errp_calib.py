@@ -73,7 +73,8 @@ from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E40
                              PAUSE_NOUVELLE_COURSE_S)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
-from core.modes.affichage import depuis_table, lignes, non_mesure, pct  # noqa: E402
+from core.modes.affichage import (depuis_table, lignes, non_mesure, pct,  # noqa: E402
+                                  texte_filtre)
 from core.modes.contract import bande_de  # noqa: E402
 from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
 # ⚠️ `core.modes.errp` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
@@ -335,6 +336,9 @@ def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=No
         # Le niveau du hasard d'une AUC, affiché à côté d'elle par la console : 0,5, et pas 1/6
         # comme la sélection du P300. « 0,68 » ne veut rien dire sans lui.
         "hasard": 0.5,
+        # AVEC QUOI ce modèle a appris (bande, coupe-bande), relu du MODÈLE : une ligne du repli
+        # « Détails », la même pour les quatre entraînements (`affichage.texte_filtre`).
+        "filtre": texte_filtre(modele.band, modele.secteur_hz),
         "verdict": verdict_txt,
         # Ce qui s'affiche EN FACE. Un DÉTECTEUR se lit par son couple — bonnes commandes gardées,
         # erreurs attrapées —, et l'AUC seule laisserait croire à un sélecteur.
