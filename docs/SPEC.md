@@ -594,7 +594,8 @@ flux LSL publiés (noms/état).
    comparerait le ρ d'une cible au bruit de fond d'une autre.
 
 C'est aussi la seule commande **validée à la soumission** plutôt qu'à l'application : un jeu de
-fréquences hors bande passante, ou dont deux cibles sont plus proches que la résolution `1/WINDOW_S`,
+fréquences hors de la bande réglée du mode (un réglage depuis le 2026-09-30, 5-40 Hz par défaut),
+ou dont deux cibles sont plus proches que la résolution `1/WINDOW_S`,
 est refusé **avec sa raison**. Sans ça, le mode de panne serait le pire du SSVEP — aucune erreur,
 seulement un décodage qui ne détecte jamais rien, indiscernable d'un utilisateur qui fixe mal.
 

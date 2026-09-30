@@ -195,9 +195,9 @@ EEG recording, and `data/` keeps its single writer.
 Changing the frequencies **recreates the `decoded_ssvep` stream**: they name its channels
 (`score_15Hz`) and LSL metadata is fixed at creation, so keeping the old stream would publish labels
 that lie. Connected clients must re-resolve — the stream name itself does not change. The rest floor
-restarts too, since it is measured per frequency. A frequency set outside the acquisition band, or
-with two targets closer than the `1/WINDOW_S` resolution, is rejected with a reason rather than
-accepted and decoded into the void.
+restarts too, since it is measured per frequency. A frequency set outside the SSVEP's filter band
+(a setting, 5–40 Hz by default), or with two targets closer than the `1/WINDOW_S` resolution, is
+rejected with a reason rather than accepted and decoded into the void.
 
 Frequencies must be **integer divisors of the refresh rate of the screen showing the targets** — at
 60 Hz: 30, 20, 15, 12, 10, 8.571. Anything else makes the display skip cycles, and the decoder
@@ -209,6 +209,26 @@ mean ≈ 9.6 Hz, range 7–13). A target sitting on someone's peak does not stan
 resting background — so the set that works for one person can fail for the next. Set `alpha_hz` per
 person: the **Alpha check** tile measures it and offers to apply it, so the value never has to be
 copied between two screens.
+
+### Filter bands and the mains notch
+
+Each decoding mode filters its signal in a band that suits its paradigm, and that band is a
+**setting**. For the four modes that learn a model (Motor Imagery, P300, ErrP, c-VEP), it is set
+**on the training page**, never while decoding: the model stores its band and its mains notch, and
+decoding reads them back, so a model is never decoded through a filter it did not learn on. For the
+SSVEP, which learns nothing, it sits with the other settings, and changing it restarts the rest.
+Each band has bounds that keep the paradigm's core inside: a band that would filter the signal away
+(8–30 Hz for a P300, which lives below 8 Hz) is refused with a reason.
+
+Every decoder also applies a narrow **mains notch**. The mains frequency (50 Hz in Europe, 60 Hz in
+the Americas) is a per-station setting, picked on the start screen and remembered (`--secteur` for
+the headless engine). A caveat, measured on synthetic data: on a short epoch filtered on its own,
+mains leaks at the edges whatever the notch (about 5 µV of 20 on a one-second P300 epoch), so the
+notch mostly helps the c-VEP, whose band reaches 45 Hz.
+
+The Motor Imagery training also offers **FBCSP** (a filter bank: one CSP per ~4 Hz sub-band, the
+most discriminant features kept by an ANOVA F-test), unchecked by default: it has never been
+measured on this headset.
 
 ### Motor Imagery
 
@@ -557,6 +577,8 @@ python src/core/server.py --smoke        # engine: registry, package boundary (c
 python src/console/app.py --smoke        # console: grid, mode page, settings, link check, window
                                          #   launcher, launch ORDER, startup screen, measurement
                                          #   page, stream page (Qt offscreen)
+python src/core/filtrage.py              # the decoders' filter: band-pass + mains notch, and the
+                                         #   edge leak on short epochs, measured
 python src/core/lsl_io.py                # stream contract: channel names, round-trip, clock bridge
 python src/core/cca_decoder.py           # CCA accuracy on synthetic SSVEP
 python src/core/acquisition.py --synthetic  # acquisition alone, on the test board

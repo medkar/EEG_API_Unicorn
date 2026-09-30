@@ -344,6 +344,8 @@ La console s'ouvre sur une question : sur quoi ouvrir la session ?
 board de test est coché. Vide + OK → refus en rouge, le dialogue reste ouvert.
 ✅ Choisir le board de test → un bref « Démarrage du board de test… », puis la grille s'ouvre, et
 **le bandeau du haut répète la source** tant que la console tourne.
+✅ Une liste **« Secteur électrique ⓘ »** : 50 Hz — Europe (le défaut) / 60 Hz — Amériques.
+Choisis 60, OK, ferme la console, rouvre-la : **60 est resté choisi**. Remets 50.
 
 ❌ Régression : la console ouvre directement la grille sans demander ; ou le bandeau ne dit pas la
 source ; ou — le plus grave — un casque introuvable **bascule tout seul** sur le board de test.
@@ -664,6 +666,39 @@ phase jusqu'au marqueur de cycle suivant (~1/s) qui la résorbe : à 0,7 % ça f
 d'erreur par cycle, tolérable. Au-delà de ~2 %, l'erreur ne se résorbe plus et le mode **ne décode
 plus rien, en silence** — sa panne caractéristique.
 
+### ☐ 1.14 — La bande d'un modèle se règle à l'ENTRAÎNEMENT (P300, ErrP, c-VEP, MI)
+
+Page **P300** → **« Entraîner »**.
+
+✅ Dans « Avant de commencer », deux réglages : **« Coupure basse (Hz) ⓘ »** à 1 et **« Coupure
+haute (Hz) ⓘ »** à 12. **Aucun bouton « Appliquer »** : les réglages partent avec « Commencer ».
+✅ Mets la coupure basse à **3** → « Commencer » : **refus en rouge TOUT DE SUITE**, qui donne la
+borne (1 Hz), **avant** le contrôle de liaison, et le mode P300 n'est pas arrêté s'il tournait.
+Remets 1.
+✅ Même chose sur les pages « Entraîner » de l'**ErrP** (1–10), du **c-VEP** (2–45) et du **MI**
+(8–30, plus une case **« FBCSP (banc de filtres) »** décochée).
+✅ Après un entraînement P300 sur board de test (~2,2 min, comme au 1.10) : sous « Détails », une
+ligne **« Filtre 1–12 Hz, coupe-bande 50 Hz »**.
+
+❌ Régression : un réglage de bande dans « 1. Régler » d'un mode à modèle (il ferait décoder un
+modèle sur un autre filtre que celui qu'il a appris) ; un refus qui n'arrive qu'après le contrôle
+de liaison ; un « Appliquer » sur une page d'entraînement.
+
+### ☐ 1.15 — La bande du SSVEP se règle dans « Régler »
+
+Page **SSVEP**, bloc « 1. Régler ».
+
+✅ **« Coupure basse (Hz) ⓘ »** à 5 et **« Coupure haute (Hz) ⓘ »** à 40.
+✅ Fréquences **« 12, 20, 30 »** et coupure haute à **25**, « Appliquer » : **refus** qui nomme la
+fréquence hors bande (30 Hz) et la bande réglée. (Avec les fréquences par défaut, 8,571 / 15 /
+20 Hz, aucune bande permise n'en exclut une : c'est voulu.) Remets les défauts.
+✅ Coupure haute à **50** : **refus** (maximum 45 : une cible ou une harmonique ne doit jamais
+tomber dans le coupe-bande secteur).
+✅ Coupure haute à 25 puis **« Proposer »** : le jeu proposé reste **sous 25 Hz**. Remets 40.
+
+❌ Régression : une fréquence hors de la bande réglée acceptée ; « Proposer » qui propose hors de
+la bande à l'écran ; une valeur hors bornes corrigée en silence au lieu d'être refusée.
+
 ---
 
 # Bloc 2 — au casque
@@ -846,6 +881,12 @@ pour rejeter le hasard — le repère du projet est
 à 40 % (p = 0,391 et p = 0,276). 18 à 30 essais ne séparent pas 40 % de 33 %. Lis ce rouge
 « pas de preuve », jamais « ça ne marche pas », et **note le chiffre et sa p-value**. Rallonger à
 10 essais/classe (~4,5 min) ne suffit pas non plus : c'est un constat, pas un réglage.
+
+🟡 **Facultatif, si le temps le permet : FBCSP.** Refais un entraînement avec la case **« FBCSP »**
+cochée et la bande à **4–40 Hz**, puis « Tester ». Note les deux chiffres et « Détails » (qui dit
+la méthode). ⚠️ **Ce n'est PAS une comparaison** : deux séances différentes, et le test MI ne
+sépare même pas 40 % de 33 %. C'est un premier relevé ; la comparaison honnête se fait sur UNE
+séance, par validation croisée (`research/mi_compare.py`).
 
 ❌ Échec : un chiffre d'entraînement nettement au-dessus des repères doit **éveiller un soupçon** —
 c'est ce que la fuite entre fenêtres produisait (79 % non reproductible).

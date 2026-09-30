@@ -239,3 +239,25 @@ Sept relecteurs par sous-système : 0 critique, ~13 importants. Les constats dé
   - mesurer et dire la durée d'un entraînement FBCSP.
 - **C6 — filtrage.py** (coordinateur) : tester à la longueur des époques et rendre les mutants
   (b, a), `ordre` ignoré et Q changé rouges.
+
+## Bilan (2026-09-30)
+
+Livré : T1-T7 et la passe de correction C1-C6. Détail des commits, mutations et comptes de `chk`
+dans `.superpowers/sdd/2026-09-30-filtres-reglables/progress.md`.
+
+**Parqué, en connaissance de cause :**
+- **La fuite du secteur aux bords des époques courtes** (mesurée, `filtrage.py` (7)) : le remède
+  est de filtrer le signal continu AVANT la découpe. Chantier à part, qui touche l'épochage des
+  trois modes à marqueurs.
+- **« Tester » ne valide pas ses propres réglages avant le contrôle de liaison** (le trou que C1 a
+  fermé pour « Entraîner ») : risque faible, ses réglages sont des listes et ceux du mode sont en
+  lecture seule.
+- **La liste des modèles ne montre pas leur filtre** : `decrire()` le rend, mais la console ne
+  l'affiche nulle part — on le lit dans « Détails » à la fin de l'entraînement, pas au moment de
+  choisir un modèle.
+- **FBCSP** : l'ANOVA F est elle aussi gonflée par les fenêtres sœurs (F ≈ 2,8 pour une
+  caractéristique d'essai, contre 1 pour du bruit) ; un F calculé sur les moyennes par essai serait
+  plus strict, mais demande de faire passer les groupes jusqu'au sélecteur.
+- `ErrPModel` garde deux copies de `fs`/`pre_s`/`post_s` (la bande et le secteur n'en ont plus
+  qu'une) ; une fenêtre SSVEP lancée à la main avec `--freqs` hors 3-45 Hz reçoit un refus qui
+  parle de « bande réglée ».

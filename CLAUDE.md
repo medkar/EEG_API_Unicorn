@@ -125,6 +125,34 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   `propose_params` acceptait un mode arrêté depuis toujours, `set_params` le refusait. Le moteur
   proposait un jeu de fréquences, le mettait dans le champ, et refusait de l'appliquer. Aucun test
   ne le voyait — les deux commandes étaient testées séparément, chacune sur son propre décor.
+- **LE FILTRE D'UN MODE SE RÈGLE, ET LE MODÈLE LE PORTE** (2026-09-30). Un seul filtre de décodage,
+  `core/filtrage.py:passe_bande` (Butterworth ordre 4 en sections, zéro phase, puis coupe-bande
+  secteur Q 30), que les quatre modes à modèle appellent. Sa BANDE est un réglage :
+  - **dans « Entraîner »** pour le MI, le P300, l'ErrP et le c-VEP — jamais dans « Régler » :
+    changée au décodage, elle ferait décoder un modèle sur un autre filtre que celui qu'il a
+    appris, sans erreur. Le modèle enregistre sa bande ET son secteur (`secteur_hz`), le décodage
+    les relit, et « Détails » les nomme (`affichage.texte_filtre`). Un modèle d'avant n'a pas de
+    secteur : il décode sans coupe-bande, comme il a appris ;
+  - **dans « Régler »** pour le SSVEP (pas de modèle ; la changer refait le repos).
+  Les bornes (`contract.params_bande`) gardent TOUJOURS le cœur du signal du paradigme dans la
+  bande, donc une bande qui le retirerait est REFUSÉE par le moteur : MI 4-10 / 20-40 Hz,
+  P300 0,5-1 / 8-40, ErrP 0,5-2 / 8-40, c-VEP 2-5 / 30-60, SSVEP 3-8 / 20-45. Chaque borne a sa
+  raison dans `docs/superpowers/plans/2026-09-30-filtres-reglables.md` (passe de correction).
+  Un réglage d'entraînement est **validé par le moteur au clic** (`valider_calibration`, pure),
+  AVANT le contrôle de liaison et avant l'arrêt du mode — sinon une faute de frappe coupait le flux
+  de l'application pour un entraînement qui n'avait pas lieu —, et le formulaire se fige jusqu'au
+  départ. « Proposer » REFUSE une saisie invalide avec la raison d'« Appliquer » : il l'écrêtait en
+  silence (« inf » en rafraîchissement faisait boucler le moteur).
+  **Le secteur (50/60 Hz) est un réglage du POSTE**, choisi sur l'écran de départ et retenu
+  (`--secteur` pour le moteur seul) ; le suivent chaque entraînement, le filtre d'acquisition (σ
+  du bandeau, SSVEP), le contrôle alpha, le Neuro et les tracés du Brut.
+  **FBCSP** (une variante : banc de filtres + CSP par sous-bande + sélection par ANOVA F) est une
+  case de l'entraînement MI, **décochée par défaut** : jamais mesuré sur ce casque.
+  ⚠️ **Mesuré sur synthétique : sur une ÉPOQUE COURTE filtrée seule, le secteur fuit aux bords,
+  coupe-bande ou pas** (P300 : 20 µV de 50 Hz en laissent ~5 ; les « −114 dB » d'une bande 1-12 Hz
+  ne valent qu'en régime établi). Parmi les quatre modes à modèle, le coupe-bande n'aide vraiment
+  que le c-VEP (fenêtre décodée ~4 → ~2 µV) ; le SSVEP a toujours eu le sien (filtre d'acquisition
+  BrainFlow). Le remède — filtrer le signal continu AVANT la découpe — n'est pas fait.
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
   c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. ⚠️ **Publié ≠ validé** : seul le
   SSVEP a été décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300,
@@ -273,7 +301,8 @@ python src/console/app.py --mode ssvep     # + décodage SSVEP démarré au lanc
 
 **Elle commence par demander sur quoi ouvrir la session** (2026-09-09) : casque Unicorn — **et
 lequel, par son numéro de série** (2026-09-25 : chaque étudiant vient avec son casque ; la console
-retient les derniers ouverts sur le poste) — ou board de test BrainFlow. ⚠️ **Aucun repli
+retient les derniers ouverts sur le poste) — ou board de test BrainFlow ; **et le secteur
+électrique, 50 ou 60 Hz** (2026-09-30), retenu lui aussi. ⚠️ **Aucun repli
 automatique** — basculer en douce ferait enregistrer une séance entière de signal fabriqué en
 croyant tenir du vrai. Le bandeau répète la source tant que la console tourne.
 
@@ -380,6 +409,9 @@ python src/core/i18n.py                    # les TEXTES : autotest du chargeur +
 python src/core/filtres_affichage.py       # les filtres d'AFFICHAGE du Brut : la dérive retirée (le
                                            # détrend AVANT le passe-haut), le 50 Hz, un tracé qui
                                            # ne tremble pas d'une image à l'autre
+python src/core/filtrage.py                # le filtre des DÉCODEURS : sections, ordre, coupe-bande
+                                           # Q 30, et ce qu'il ne fait PAS (la fuite aux bords des
+                                           # époques courtes, mesurée)
 ```
 
 ⚠️ **`examples/` n'était couvert par AUCUN test avant le 2026-09-10** — alors que c'est le seul
@@ -559,6 +591,12 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
   n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait
   REFUSER de conclure.
+- **Le chantier « Filtres réglables » (2026-09-30) n'a rien mesuré au casque non plus.** Ni l'effet
+  du coupe-bande sur un décodage réel, ni FBCSP contre CSP (une seule séance MI archivée, à 40 %
+  à 3 classes), ni les bornes : elles sont argumentées sur du synthétique et le calcul (la coupure
+  basse du SSVEP à 3 Hz vient d'une rampe de 2000 µV/s posée à la main). ⚠️ **Tout modèle
+  entraîné depuis porte un coupe-bande** que les modèles d'avant n'avaient pas : aux bandes par
+  défaut l'effet attendu est nul (MI, P300, ErrP) ou favorable (c-VEP), mais c'est une attente.
 - 🟠 **Des constats de la revue du 2026-09-08 restent parqués.** La console prenait `accepted` pour
   « la séance a démarré » : corrigé pour l'enregistrement de séance et pour le lancement des
   fenêtres (elles attendent de VOIR la séance dans `snapshot()`, 2026-09-10), **pas audité

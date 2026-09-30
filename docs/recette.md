@@ -1029,6 +1029,45 @@ pourcentage ne soit seul. Trois mots ne se confondent pas, parce qu'ils ne se co
 > spec : les pages d'entraînement et de test n'ont PAS été fusionnées en une seule (refactor
 > invisible, gros risque) ; ce que l'étudiant voit — une seule façon de lire un résultat — est livré.
 
+### 1.22 — Les filtres se règlent, et le modèle les porte (2026-09-30)
+
+Exécuté par `docs/qa.md` 1.1 (secteur), 1.14 (bande à l'entraînement) et 1.15 (bande SSVEP).
+
+**Pourquoi.** La question de départ : « le coupe-bande 50 Hz devrait-il servir aux autres modes ? »
+Un passe-bande n'écrase le secteur que s'il coupe loin en dessous (−114 dB pour le P300, bord à
+12 Hz) ; le c-VEP monte à 45 Hz, et 20 µV de secteur y passaient à 5 µV — autant que l'EEG. Et
+une bande est un choix, pas une vérité : celle du MI, surtout, varie d'une personne à l'autre.
+
+**Ce qui a été fait.**
+- Un seul filtre de décodage (`core/filtrage.py`), et le **coupe-bande partout**, parce qu'une
+  bande réglable peut monter près du secteur.
+- La bande se règle **à l'entraînement**, jamais au décodage, et le **modèle la porte avec son
+  secteur**.
+- Le **secteur (50/60 Hz) est un réglage du poste**.
+- **FBCSP** en option pour le MI.
+
+**Ce que la revue par sous-système a trouvé et fait corriger** (7 relecteurs, 0 critique) :
+- **Les bornes du plan retiraient parfois le signal.** P300 jusqu'à 2 Hz en coupure basse : ~71 %
+  de l'énergie de la bosse synthétique est dessous. c-VEP à 0,5 Hz : ses époques d'entraînement
+  durent un cycle (1,05 s) sans marge, et le transitoire les couvrait. SSVEP à 60 Hz en coupure
+  haute : une cible pouvait tomber dans le coupe-bande, et « Proposer » la proposait. Bornes
+  révisées : MI 4-10 / 20-40, P300 0,5-1 / 8-40, ErrP 0,5-2 / 8-40, c-VEP 2-5 / 30-60,
+  SSVEP 3-8 / 20-45.
+- **La sélection FBCSP par information mutuelle était biaisée.** L'estimateur par plus proches
+  voisins voyait les trois fenêtres d'un même essai comme voisines, et favorisait ce qui
+  identifie l'ESSAI plutôt que la classe. Elle passe à l'ANOVA F.
+- **Un réglage d'entraînement invalide n'était refusé qu'après le contrôle de liaison ET l'arrêt
+  du décodage en cours**, et « Proposer » corrigeait en silence une bande mal saisie.
+- **Un bouton « Appliquer » s'affichait sur la page « Entraîner » du MI depuis toujours, branché
+  à rien**, et le smoke EXIGEAIT sa présence.
+
+**Mesuré sur synthétique, et c'est la limite du chantier.** Sur une ÉPOQUE COURTE filtrée seule, le
+secteur fuit aux bords, coupe-bande ou pas : sur une époque P300, 20 µV de 50 Hz en laissent ~5.
+Parmi les modes à modèle, le coupe-bande n'aide vraiment que le c-VEP (fenêtre décodée ~4 → ~2 µV).
+Filtrer le signal continu AVANT la découpe réduirait cette fuite ; ce n'est pas fait.
+
+**Rien de tout ça n'a vu un casque** : ni l'effet du coupe-bande, ni FBCSP, ni les bornes.
+
 ---
 
 ## Niveau 2 — au casque
