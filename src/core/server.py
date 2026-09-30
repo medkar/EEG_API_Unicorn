@@ -3730,7 +3730,8 @@ def _smoke_secteur():
         f"coupe 60 Hz ({srv.secteur_hz!r}, {srv.acq.notch.name})")
     etat = srv.snapshot()
     chk(etat.get("secteur_hz") == 60.0,
-        f"…et `snapshot()` le dit : c'est là que la console le lit ({etat.get('secteur_hz')!r})")
+        f"…et `snapshot()` le dit, pour un afficheur qui ne lit que l'état "
+        f"({etat.get('secteur_hz')!r})")
 
     # Le FILTRE, pas l'étiquette : 20 µV de secteur à 60 Hz, filtrés par l'acquisition de chacun
     # des deux moteurs. Mesuré au milieu du bloc, loin des bords où le filtre s'établit : ~0 µV
