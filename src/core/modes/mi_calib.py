@@ -23,16 +23,17 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.
 import numpy as np  # noqa: E402
 
 from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa: E402
-                         MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S, MI_WARMUP_PER_CLASS,
-                         MI_WINDOW_S, SSVEP_WARMUP_S, use_utf8_console)
-from core.i18n import tr  # noqa: E402
-from core.mi_decoder import MI_LABELS, MIModel  # noqa: E402
+                         MI_METHOD, MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S,
+                         MI_WARMUP_PER_CLASS, MI_WINDOW_S, SECTEUR_HZ, SSVEP_WARMUP_S,
+                         use_utf8_console)
+from core.i18n import nombre, tr  # noqa: E402
+from core.mi_decoder import MI_BAND, MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
                                   niveau_par_seuils, non_mesure, p_hasard, pct, texte_p,
                                   verifier)
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
-from core.modes.contract import Calib, Param  # noqa: E402
+from core.modes.contract import Calib, Param, bande_de, params_bande  # noqa: E402
 
 # Les consignes, telles qu'elles ont été validées. La formulation compte : « SENTIR le serrement »
 # et non « se le représenter » est la différence entre de l'imagerie kinesthésique, qui produit
@@ -76,6 +77,28 @@ VERDICTS = ((0.60, tr("calib.mi.verdict.excellent")), (0.45, tr("calib.mi.verdic
 # où elle n'a aucun sens. Chaque calibration porte donc la sienne dans son résultat, comme le
 # P300 le fait déjà (`p300_calib.HONNETETE`).
 HONNETETE = tr("calib.mi.honnetete")
+
+# Le nom de chaque méthode, tel que le résultat l'affiche. Les CLÉS sont les identifiants de
+# `mi_decoder.build_pipe` (ceux que le modèle enregistre) : elles ne se traduisent pas.
+METHODES = {
+    "csp": tr("calib.mi.methode.csp"),
+    "fbcsp": tr("calib.mi.methode.fbcsp"),
+    "riemann": tr("calib.mi.methode.riemann"),
+}
+
+
+def filtre_de(methode, bande, secteur_hz):
+    """La phrase qui dit AVEC QUOI ce chiffre a été obtenu : méthode, bande, coupe-bande.
+
+    Elle ouvre la phrase d'honnêteté du résultat (repli « Détails ») : deux séances à 40 % ne se
+    comparent pas si l'une a appris sur 8-30 Hz en CSP et l'autre sur 4-40 Hz en FBCSP.
+    """
+    nom = METHODES.get(methode, methode)
+    if not secteur_hz:
+        return tr("calib.mi.filtre_sans_secteur", methode=nom, bas=nombre(bande[0]),
+                  haut=nombre(bande[1]))
+    return tr("calib.mi.filtre", methode=nom, bas=nombre(bande[0]), haut=nombre(bande[1]),
+              secteur=nombre(secteur_hz))
 
 
 def horodatage(maintenant=None):
@@ -199,7 +222,13 @@ class MICalibration(CalibrationRuntime):
         return RAPPEL if self.classe in ("GAUCHE", "DROITE") else ""
 
     def _entrainer(self, enregistre, fs):
-        """CSP + LDA sur les fenêtres, CV honnête par essai, puis sauvegarde horodatée."""
+        """CSP + LDA (ou FBCSP) sur les fenêtres, CV honnête par essai, puis sauvegarde horodatée.
+
+        La bande, la méthode et le secteur sont ceux de CETTE séance (réglages « Entraîner », et
+        secteur du poste que porte le moteur). Ils partent DANS le modèle : le décodage les relit
+        et filtre exactement comme l'entraînement — c'est pour ça que la bande se règle ici et
+        jamais dans « Régler » (un modèle décodé sur un autre filtre ne lève rien, il se trompe).
+        """
         n = int(round(self.window_s * fs))
         pas = int(round(self.step_s * fs))
         X, y, groupes = [], [], []
@@ -222,7 +251,13 @@ class MICalibration(CalibrationRuntime):
         if not X or min(comptes.values()) < 5:
             raise ValueError(tr("calib.mi.trop_court", comptes=comptes, minimum=5))
 
-        modele = MIModel(fs=fs).fit(np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
+        bande = bande_de(self.params, MI_BAND)
+        methode = "fbcsp" if self.params.get("fbcsp") else MI_METHOD
+        secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
+        modele = MIModel(fs=fs, band=bande, method=methode, secteur_hz=secteur).fit(
+            np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
+        # Relus du MODÈLE, pas des réglages : la phrase dit ce que le modèle a VRAIMENT appris.
+        filtre = filtre_de(modele.method, modele.band, modele.secteur_hz)
 
         dossier = self.dossier_ou_lever()
         _os.makedirs(dossier, exist_ok=True)
@@ -263,6 +298,7 @@ class MICalibration(CalibrationRuntime):
                   f"— hasard {hasard*100:.0f}% — {verdict_txt}")
         print(f"[mi-calib] (pour mémoire, la CV naïve, fenêtres mélangées : "
               f"{modele.cv_*100:.1f}% — gonflée, ne pas s'y fier)")
+        print(f"[mi-calib] {filtre}")
         print(f"[mi-calib] modèle : {chemin_modele}")
         print(f"[mi-calib] enregistrement : {chemin_npz}")
         return {
@@ -275,13 +311,19 @@ class MICalibration(CalibrationRuntime):
             "cv_naive": float(modele.cv_),
             "hasard": hasard,
             "classes": list(self.classes),
+            # Avec quoi ce chiffre a été obtenu — les valeurs que le modèle PORTE, relues de lui.
+            "methode": modele.method,
+            "bande": [float(modele.band[0]), float(modele.band[1])],
+            "secteur_hz": modele.secteur_hz,
             "verdict": verdict_txt,
             # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`) — même calcul que le verdict.
             **lignes_de(cv, len(enregistre), hasard),
             # La phrase qui dit ce que ce chiffre vaut. Elle voyage AVEC le résultat, parce que
             # l'écran qui l'affiche est générique et ne connaît aucun mode : celle du P300 parle
-            # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes.
-            "honnetete": HONNETETE,
+            # d'AUC et de sélection parmi six cibles, celle-ci de 40 % à trois classes. Elle
+            # s'ouvre sur le filtre et la méthode : c'est la ligne du repli « Détails » que la page
+            # générique affiche pour tout mode, sans avoir à connaître celui-ci.
+            "honnetete": f"{filtre} {HONNETETE}",
         }
 
 
@@ -298,6 +340,19 @@ CALIB = Calib(
             default=MI_SESSIONS[1],
             choices=MI_SESSIONS,
             help=tr("calib.mi.param.trials_per_class.aide"),
+        ),
+        # La bande (2026-09-30), réglée À L'ENTRAÎNEMENT et enregistrée dans le modèle. Les bornes
+        # gardent toujours 10-20 Hz dedans (le haut du mu, le bas du bêta) : une bande qui
+        # retirerait le rythme moteur est refusée, elle ne décoderait que du bruit sans rien dire.
+        *params_bande(MI_BAND, (1.0, 10.0), (20.0, 45.0), tr("calib.mi.param.bande.aide")),
+        # FBCSP : une OPTION, décochée — jamais mesurée sur ce casque (la seule séance MI archivée
+        # est à 40 % à 3 classes). « Tester » dit si elle fait mieux pour cette personne.
+        Param(
+            key="fbcsp",
+            label=tr("calib.mi.param.fbcsp.label"),
+            kind="bool",
+            default=False,
+            help=tr("calib.mi.param.fbcsp.aide"),
         ),
     ),
     runtime_cls=MICalibration,
@@ -508,6 +563,74 @@ def _selftest():
         chk(refus_dossier is not None and "data/" in refus_dossier,
             f"sans dossier, la calibration REFUSE au lieu de retomber sur data/ "
             f"({(refus_dossier or 'aucun refus')[:70]}…)")
+
+        # --- la bande, la méthode et le secteur de l'entraînement (2026-09-30) ---------------
+        # Ils partent DANS le modèle, et c'est le modèle qu'on relit ici — pas le résultat, qui
+        # pourrait les annoncer sans que `_entrainer` les ait passés à `MIModel`. Un modèle appris
+        # sur 8-30 Hz qui se dirait appris sur 4-40 Hz ne lèverait rien : il décoderait moins bien.
+        import joblib
+
+        from core.mi_decoder import sous_bandes
+        from core.modes.contract import validate
+
+        defaut = joblib.load(res["modele"])
+        chk(tuple(defaut.band) == MI_BAND and defaut.method == MI_METHOD
+            and defaut.secteur_hz == SECTEUR_HZ,
+            f"sans réglage, et sans secteur annoncé par le moteur, le modèle porte la bande de "
+            f"toujours, la méthode du dépôt et le secteur par défaut ({defaut.band}, "
+            f"{defaut.method}, {defaut.secteur_hz})")
+
+        valeurs, raison = validate(CALIB, {})
+        chk(raison is None and bande_de(valeurs, (0.0, 0.0)) == MI_BAND
+            and valeurs.get("fbcsp") is False,
+            f"les réglages d'« Entraîner » : la bande de toujours et FBCSP décoché par défaut "
+            f"({raison or valeurs})")
+        _v, raison = validate(CALIB, {"bande_bas": 12.0})
+        chk(raison is not None,
+            f"une coupure basse au-dessus de 10 Hz est REFUSÉE : elle couperait le mu ({raison})")
+        valeurs, raison = validate(CALIB, {"trials_per_class": 10, "bande_bas": 4.0,
+                                           "bande_haut": 40.0, "fbcsp": True})
+        chk(raison is None, f"une bande large avec FBCSP est acceptée ({raison})")
+
+        # Une séance jouée avec ces réglages, par un moteur réglé sur le secteur des Amériques.
+        # Dossier À PART : le décompte des fichiers de modèle, plus bas, porte sur `dossier`.
+        dossier_regle = _os.path.join(dossier, "reglee")
+        reglee = MICalibration(_mi.SPEC, {**valeurs, "trials_per_class": 6}, None,
+                               rng=_random.Random(4), dossier=dossier_regle)
+        reglee.engine = _FauxMoteur(reglee, rng)
+        reglee.engine.secteur_hz = 60.0
+        t = 0.0
+        for _ in range(20000):
+            reglee.tick(reglee.engine, t)
+            if reglee.terminee:
+                break
+            t += 0.25
+        res_r = reglee.resultat or {}
+        chk(reglee.phase == "fini" and res_r.get("modele"),
+            f"une séance réglée (4-40 Hz, FBCSP, secteur 60 Hz) aboutit "
+            f"({reglee.phase} ; problème={reglee.probleme!r})")
+        appris = joblib.load(res_r["modele"]) if res_r.get("modele") else None
+        chk(appris is not None and tuple(appris.band) == (4.0, 40.0),
+            f"le modèle ÉCRIT porte la bande réglée ({getattr(appris, 'band', None)})")
+        banc = appris.pipe.named_steps.get("banc") if appris is not None else None
+        chk(appris is not None and appris.method == "fbcsp" and banc is not None
+            and banc.sous_bandes == sous_bandes((4.0, 40.0)),
+            f"...la méthode réglée, dont le banc découpe CETTE bande "
+            f"({getattr(appris, 'method', None)}, "
+            f"{len(banc.sous_bandes) if banc is not None else 0} sous-bandes)")
+        chk(appris is not None and appris.secteur_hz == 60.0 and banc is not None
+            and banc.secteur_hz == 60.0,
+            f"...et le secteur du MOTEUR, jusque dans le banc qui filtre "
+            f"({getattr(appris, 'secteur_hz', None)})")
+        chk(res_r.get("methode") == "fbcsp" and res_r.get("bande") == [4.0, 40.0]
+            and res_r.get("secteur_hz") == 60.0,
+            f"le résultat les rapporte, relus du modèle ({res_r.get('methode')}, "
+            f"{res_r.get('bande')}, {res_r.get('secteur_hz')})")
+        chk(METHODES["fbcsp"] in res_r.get("honnetete", "")
+            and "4-40 Hz" in res_r.get("honnetete", "") and "60 Hz" in res_r.get("honnetete", "")
+            and "3 classes" in res_r.get("honnetete", ""),
+            f"et le repli « Détails » NOMME la méthode et la bande, avant la phrase d'honnêteté "
+            f"({res_r.get('honnetete', '')[:70]}…)")
 
         # --- `_chemins_libres` seule, avant l'intégration complète --------------------------
         # Une collision sur le premier essai force une avance d'exactement 1 s, sur les DEUX
