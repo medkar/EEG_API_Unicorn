@@ -18,24 +18,26 @@ OPPOSÉ à la main imaginée (main droite -> baisse sur C3 ; main gauche -> sur 
 les filtres spatiaux qui maximisent ce contraste de variance.
 
 Trois méthodes (`build_pipe`) : "csp" (le défaut), "riemann", et "fbcsp" (2026-09-30, option
-d'entraînement décochée par défaut — Ang et al. 2008, JAMAIS mesurée sur ce casque). Le FBCSP
-découpe la bande en sous-bandes d'~4 Hz, apprend un CSP par sous-bande et laisse une sélection
-par information mutuelle garder celles qui séparent les classes de CETTE personne : son pic mu
-n'est pas forcément à 10 Hz.
+d'entraînement décochée par défaut, JAMAIS mesurée sur ce casque). Le FBCSP découpe la bande en
+sous-bandes d'~4 Hz, apprend un CSP par sous-bande, puis une sélection de CARACTÉRISTIQUES (ANOVA
+F) garde celles qui séparent les classes de CETTE personne : son pic mu n'est pas forcément à
+10 Hz. C'est une VARIANTE du FBCSP d'Ang et al. (2008), pas sa copie : eux filtrent en Chebyshev
+II et sélectionnent par information mutuelle, par paires de filtres (MIBIF) ; ici, Butterworth
+(le filtre commun des décodeurs), sélection caractéristique par caractéristique, ANOVA F — cf.
+`build_pipe` pour le pourquoi.
 
 Validé ici sur ERD SYNTHÉTIQUE (pas de casque).   python src/core/mi_decoder.py
 """
 
 import os
 import sys
-from functools import partial
 
 import joblib
 import numpy as np
 from scipy.linalg import eigh
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
@@ -112,15 +114,30 @@ class CSP(BaseEstimator, TransformerMixin):
 
 
 def sous_bandes(bande):
-    """Les sous-bandes du FBCSP : la bande découpée en `max(2, round(largeur / 4))` morceaux égaux.
+    """Les sous-bandes du FBCSP : la bande découpée en `largeur / 4` morceaux égaux, arrondi à la
+    demi-unité SUPÉRIEURE (au moins 2).
 
     8-30 Hz -> 6 sous-bandes de 3,67 Hz ; 4-40 Hz -> 9 de 4 Hz. Contiguës, et elles recouvrent
     EXACTEMENT la bande réglée : le FBCSP ne regarde ni plus ni moins que ce que l'étudiant a choisi.
-    ~4 Hz est la largeur de Ang et al. (2008) : assez étroite pour isoler un pic mu d'une personne,
-    assez large pour qu'un Butterworth d'ordre 4 y reste stable sur une fenêtre de 2 s.
+
+    ~4 Hz est la largeur d'Ang et al. (2008) : assez étroite pour isoler le pic mu d'une personne.
+    Pas plus étroite, parce qu'un passe-bande étroit SONNE longtemps — sa réponse dure environ
+    l'inverse de sa largeur. Mesuré sur le filtre commun (Butterworth d'ordre 4, 250 Hz, une
+    passe) : 99 % de l'énergie de la réponse tient en ~0,17 s pour 8-30 Hz, ~0,6 s pour 4 Hz de
+    large, ~1,1 s pour 2 Hz. Chaque fenêtre de 2 s est filtrée SEULE, et `sosfiltfilt` ne la
+    prolonge que d'~0,1 s de chaque côté : ce transitoire de bord pollue donc une part de la
+    fenêtre qui grandit quand la sous-bande rétrécit. (La STABILITÉ numérique, elle, ne dépend pas
+    de la largeur : les sections `sos` la garantissent, cf. `core/filtrage.py`.)
+
+    ⚠️ Pourquoi pas `round()` : Python arrondit les demis au nombre PAIR (10 Hz / 4 = 2,5 -> 2,
+    14 / 4 = 3,5 -> 4). À égalité, la règle changeait de sens d'une largeur à l'autre ; arrondir
+    vers le haut choisit TOUJOURS le découpage le plus proche de 4 Hz (10 Hz : 3 × 3,33 plutôt que
+    2 × 5). La largeur est d'abord arrondie au millionième : 14,3 − 4,3 ne vaut pas exactement 10
+    en virgule flottante, et la même largeur doit donner le même découpage quelle que soit sa
+    coupure basse.
     """
     bas, haut = float(bande[0]), float(bande[1])
-    n = max(2, int(round((haut - bas) / 4.0)))
+    n = max(2, int(np.floor(round(haut - bas, 6) / 4.0 + 0.5)))
     bords = np.linspace(bas, haut, n + 1)
     return tuple((float(bords[i]), float(bords[i + 1])) for i in range(n))
 
@@ -166,13 +183,25 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
     `fs`, `band` et `secteur_hz` ne servent qu'au FBCSP, qui filtre lui-même : les deux autres
     reçoivent un signal déjà filtré par `MIModel._prep`.
 
-    ⚠️ FBCSP : la sélection par information mutuelle vit DANS le pipeline, donc elle est refaite
-    dans CHAQUE pli de la validation croisée, sur les seules lignes d'apprentissage du pli. Faite
-    une fois sur tout le jeu avant la CV, elle aurait choisi les sous-bandes en regardant les essais
-    de test : une CV optimiste, sans rien casser. `k` = la dimension d'UN CSP (2 × n_per_class ×
-    n_classes) : le FBCSP ne garde pas plus de caractéristiques qu'un CSP simple, il les choisit
-    dans plus de sous-bandes. `random_state=0` : l'estimateur de l'information mutuelle bruite
-    légèrement les données, et un modèle doit se réentraîner à l'identique.
+    ⚠️ FBCSP : le banc (un CSP par sous-bande) ET la sélection vivent DANS le pipeline, donc ils
+    sont refaits dans CHAQUE pli de la validation croisée, sur les seules lignes d'apprentissage du
+    pli. Ajustés une fois sur tout le jeu avant la CV, ils auraient choisi leurs filtres et leurs
+    caractéristiques en regardant les essais de test : une CV optimiste, sans rien casser. `k` = la
+    dimension d'UN CSP (2 × n_per_class × n_classes) : le FBCSP ne garde pas plus de
+    caractéristiques qu'un CSP simple, il les choisit parmi celles de toutes les sous-bandes.
+
+    ⚠️ La sélection est une ANOVA F (`f_classif`), PAS l'information mutuelle (2026-09-30, revue).
+    Les lignes sont des fenêtres qui se chevauchent : trois par essai, même étiquette. L'estimateur
+    de l'information mutuelle compte des plus proches voisins (3) — et les deux plus proches d'une
+    fenêtre sont souvent ses SŒURS du même essai. Toute caractéristique qui reconnaît l'ESSAI
+    (dérive, bouffée d'EMG, puissance qui varie d'un essai à l'autre) paraît alors informative,
+    sans rien savoir de la classe. Le F ne regarde que l'écart ENTRE les moyennes de classe. Il
+    n'est pas immunisé : les sœurs gonflent aussi le F d'une caractéristique d'essai (~2,8 au lieu
+    de ~1 pour du bruit, 234 fenêtres simulées), mais bien moins qu'elles ne trompent l'estimateur
+    à voisins. Mesuré sur ces caractéristiques simulées (10 de classe, 10 d'essai, 10 de bruit,
+    top-10) : à effet de classe modeste, 4,3 caractéristiques d'essai retenues en moyenne avec
+    l'information mutuelle contre 2,0 avec F ; à effet net, 3,3 contre 0,4. `_test_fbcsp` garde
+    ce comportement. Le F est aussi déterministe : un modèle se réentraîne à l'identique.
     """
     if method == "csp":
         return Pipeline([("csp", CSP(n_per_class)),
@@ -185,10 +214,11 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
                          ("ts", TangentSpace()),
                          ("lr", LogisticRegression(max_iter=1000))])
     if method == "fbcsp":
-        # `partial` et non `lambda` : le modèle se sérialise par joblib, et un lambda ne se picke pas.
+        # `f_classif` est lu dans les globales du module À LA CONSTRUCTION : c'est ce qui permet à
+        # `_test_fbcsp` d'y glisser un espion. Une fonction de module, pas un lambda : le modèle se
+        # sérialise par joblib, et un lambda ne se picke pas.
         return Pipeline([("banc", FilterBankCSP(fs, sous_bandes(band), n_per_class, secteur_hz)),
-                         ("selection", SelectKBest(partial(mutual_info_classif, random_state=0),
-                                                   k=2 * n_per_class * n_classes)),
+                         ("selection", SelectKBest(f_classif, k=2 * n_per_class * n_classes)),
                          ("lda", LinearDiscriminantAnalysis())])
     raise ValueError(f"méthode MI inconnue : {method!r} (attendu 'csp', 'riemann' ou 'fbcsp')")
 
@@ -512,17 +542,20 @@ def _test_n_splits_insuffisant():
 
 
 def _test_fbcsp():
-    """Le FBCSP (2026-09-30) : il sépare, il choisit la bonne sous-bande, sa sélection ne fuit pas,
-    il se relit.
+    """Le FBCSP (2026-09-30) : il sépare, il choisit la bonne sous-bande, ni son banc ni sa
+    sélection ne fuient, sa sélection ne se laisse pas prendre aux fenêtres sœurs, il filtre avec
+    le coupe-bande et après le CAR, il se relit.
 
-    ⚠️ La panne qu'on garde ici ne lève RIEN : une sélection des sous-bandes faite UNE fois sur
-    tout le jeu, avant la validation croisée, choisit ses caractéristiques en regardant les essais
-    de test. La CV sort plus belle, le modèle est le même, et l'étudiant garde un modèle sur un
-    chiffre gonflé. Un score ne peut pas la voir (il serait seulement un peu meilleur) : on
-    ESPIONNE ce que reçoit l'information mutuelle dans chaque pli, comme `_test_cv_honnete`
-    espionne le découpage.
+    ⚠️ Les pannes qu'on garde ici ne lèvent RIEN. Un banc ou une sélection ajustés UNE fois sur
+    tout le jeu, avant la validation croisée, choisissent leurs filtres et leurs caractéristiques
+    en regardant les essais de test : la CV sort plus belle, le modèle est le même, et l'étudiant
+    garde un modèle sur un chiffre gonflé. Un score ne peut pas la voir (il serait seulement un peu
+    meilleur) : on ESPIONNE ce que reçoivent, dans chaque pli, le CSP de chaque sous-bande et
+    l'ANOVA F, comme `_test_cv_honnete` espionne le découpage.
     """
     import tempfile
+
+    from sklearn.base import clone
 
     ok = True
 
@@ -539,6 +572,43 @@ def _test_fbcsp():
         and b[0][0] == 4.0 and b[-1][1] == 40.0
         and all(b[i][1] == b[i + 1][0] for i in range(len(b) - 1)),
         f"4-40 Hz -> 9 sous-bandes contiguës de 4 Hz, qui recouvrent la bande exactement ({b})")
+    # L'arrondi : à égalité (largeur = 4n + 2), TOUJOURS vers le haut. `round()` arrondit au pair :
+    # 10 Hz donnait 2 sous-bandes de 5 Hz, 14 Hz en donnait 4 de 3,5 Hz.
+    egalites = {10.0: 3, 14.0: 4, 18.0: 5, 22.0: 6, 26.0: 7, 30.0: 8, 34.0: 9}
+    obtenu = {w: len(sous_bandes((4.0, 4.0 + w))) for w in egalites}
+    chk(obtenu == egalites,
+        f"à égalité, le découpage arrondit TOUJOURS vers le haut, au plus près de 4 Hz ({obtenu})")
+    # La même largeur, tapée avec n'importe quelle coupure basse permise : 14,3 − 4,3 ne vaut pas
+    # 10 en virgule flottante, et le découpage ne doit pas en dépendre.
+    decoupes = {len(sous_bandes((b0, round(b0 + 10.0, 1))))
+                for b0 in np.round(np.arange(4.0, 10.05, 0.1), 1)}
+    chk(decoupes == {3},
+        f"10 Hz de large donnent 3 sous-bandes quelle que soit la coupure basse ({decoupes})")
+
+    # --- la sélection ne se laisse pas prendre aux fenêtres SŒURS ---------------------------
+    # Des caractéristiques simulées, rangées comme celles d'une séance : 26 essais × 3 classes,
+    # 3 fenêtres par essai. 10 portent un écart de classe ; 10 ne portent que l'identité de
+    # l'ESSAI (la même valeur, à peu de chose près, dans les trois fenêtres sœurs — une dérive, une
+    # bouffée d'EMG), aucune classe ; 10 sont du bruit. La sélection du VRAI pipeline, réglée pour
+    # en garder 10, ne doit pas faire entrer les caractéristiques d'essai. L'information mutuelle
+    # par plus proches voisins en fait entrer 2 à 5 (30 graines) ; l'ANOVA F, 0 ou 1.
+    rng_s = np.random.default_rng(0)
+    y_essai = np.repeat(np.arange(3), 26)
+    y_s = np.repeat(y_essai, 3)
+    colonnes = []
+    for i in range(10):
+        t = rng_s.normal(size=len(y_essai)) * np.sqrt(0.3) + 0.8 * (y_essai == i % 3)
+        colonnes.append(np.repeat(t, 3) + rng_s.normal(size=len(y_s)) * np.sqrt(0.7))
+    for _ in range(10):
+        t = rng_s.normal(size=len(y_essai)) * np.sqrt(0.9)
+        colonnes.append(np.repeat(t, 3) + rng_s.normal(size=len(y_s)) * np.sqrt(0.1))
+    colonnes += [rng_s.normal(size=len(y_s)) for _ in range(10)]
+    selection_seule = clone(build_pipe("fbcsp").named_steps["selection"]).set_params(k=10)
+    retenues_s = np.flatnonzero(selection_seule.fit(np.column_stack(colonnes), y_s).get_support())
+    intruses = int(np.sum((retenues_s >= 10) & (retenues_s < 20)))
+    chk(intruses <= 1,
+        f"la sélection ne retient pas ce qui reconnaît seulement l'ESSAI : {intruses} "
+        f"caractéristique(s) d'essai parmi les 10 retenues ({retenues_s.tolist()})")
 
     # Un jeu d'essais dans un ordre MÉLANGÉ : la suite des étiquettes des lignes d'apprentissage
     # devient alors l'EMPREINTE d'un pli — deux plis différents n'ont pas la même. C'est ce qui
@@ -557,30 +627,38 @@ def _test_fbcsp():
             groupes.append(indice)
     X, y, groupes = np.asarray(X), np.asarray(y), np.asarray(groupes)
 
-    # --- les espions : l'information mutuelle, et le VRAI découpage de la CV groupée ---------
-    # `build_pipe` lit `mutual_info_classif` dans les globales de CE module au moment où il
-    # construit le pipeline : le remplacer ici, avant `MIModel(...)`, met l'espion DANS le
-    # pipeline — donc dans chacun de ses clones, pli par pli.
-    appels, plis = [], []
-    vraie_mi = globals()["mutual_info_classif"]
+    # --- les espions : l'ANOVA F, le CSP de chaque sous-bande, le VRAI découpage de la CV -----
+    # `build_pipe` lit `f_classif` dans les globales de CE module au moment où il construit le
+    # pipeline : le remplacer ici, avant `MIModel(...)`, met l'espion DANS le pipeline — donc dans
+    # chacun de ses clones, pli par pli. Le CSP, lui, s'espionne sur sa CLASSE : c'est ce que le
+    # banc ajuste, sous-bande par sous-bande, quelle que soit la façon dont le banc s'y prend.
+    appels, appels_csp, plis = [], [], []
+    vraie_f = globals()["f_classif"]
+    vrai_csp_fit = CSP.fit
     vraie_split = StratifiedGroupKFold.split
 
-    def _mi_espion(X_arg, y_arg, **kw):
-        appels.append((len(y_arg), tuple(y_arg), kw.get("random_state")))
-        return vraie_mi(X_arg, y_arg, **kw)
+    def _f_espion(X_arg, y_arg):
+        appels.append((len(y_arg), tuple(y_arg)))
+        return vraie_f(X_arg, y_arg)
+
+    def _csp_espion(self, X_arg, y_arg):
+        appels_csp.append(tuple(y_arg))
+        return vrai_csp_fit(self, X_arg, y_arg)
 
     def _split_espion(self, X_arg, y_arg=None, groups=None):
         for train_idx, test_idx in vraie_split(self, X_arg, y_arg, groups=groups):
             plis.append(np.array(train_idx))
             yield train_idx, test_idx
 
-    globals()["mutual_info_classif"] = _mi_espion
+    globals()["f_classif"] = _f_espion
+    CSP.fit = _csp_espion
     StratifiedGroupKFold.split = _split_espion
     try:
         modele = MIModel(fs=fs, band=bande, method="fbcsp", reref_mode="none",
                          secteur_hz=50.0).fit(X, y, groups=groupes)
     finally:
-        globals()["mutual_info_classif"] = vraie_mi
+        globals()["f_classif"] = vraie_f
+        CSP.fit = vrai_csp_fit
         StratifiedGroupKFold.split = vraie_split
 
     # (a) il sépare — l'ERD synthétique est à 10 Hz, dans une bande large exprès.
@@ -603,20 +681,28 @@ def _test_fbcsp():
         f"...et va les chercher dans la sous-bande du mu : la plus informative est "
         f"{meilleure[0]:g}-{meilleure[1]:g} Hz, et {dans_le_mu} des {dim} retenues y sont")
 
-    # (b) l'espion : dans CHAQUE pli de la CV groupée, la sélection n'a vu QUE ses lignes
-    # d'apprentissage. L'empreinte (la suite des étiquettes) désigne les lignes exactes.
+    # (b) les espions : dans CHAQUE pli de la CV groupée, le banc et la sélection n'ont vu QUE
+    # leurs lignes d'apprentissage. L'empreinte (la suite des étiquettes) désigne les lignes
+    # exactes.
     n = len(y)
     empreintes = {a[1] for a in appels}
     chk(len(plis) >= 2, f"la CV groupée a bien découpé au moins 2 plis ({len(plis)})")
     chk(all(len(t) < n and tuple(y[t]) in empreintes for t in plis),
-        f"dans CHAQUE pli, l'information mutuelle a reçu EXACTEMENT les lignes d'apprentissage "
-        f"du pli, moins que le total ({[len(t) for t in plis]} sur {n}) — la sélection est "
-        f"refaite pli par pli, elle ne voit jamais les essais de test")
+        f"dans CHAQUE pli, l'ANOVA F a reçu EXACTEMENT les lignes d'apprentissage du pli, moins "
+        f"que le total ({[len(t) for t in plis]} sur {n}) — la sélection est refaite pli par pli, "
+        f"elle ne voit jamais les essais de test")
     chk(sum(1 for a in appels if a[0] == n) == 1,
         f"et elle n'a vu TOUTES les lignes qu'une fois : l'entraînement final, après la CV "
         f"({[a[0] for a in appels]})")
-    chk(all(a[2] == 0 for a in appels),
-        "avec `random_state=0` à chaque appel : un modèle se réentraîne à l'identique")
+    n_bandes = len(sous_bandes(bande))
+    par_pli = [appels_csp.count(tuple(y[t])) for t in plis]
+    chk(par_pli and all(c == n_bandes for c in par_pli),
+        f"dans CHAQUE pli, le CSP de chacune des {n_bandes} sous-bandes a été ajusté sur les "
+        f"lignes d'apprentissage du pli, et sur elles seules ({par_pli} ajustements par pli) — "
+        f"le banc n'est pas appris une fois pour toutes avant la CV")
+    chk(sum(1 for a in appels_csp if len(a) == n) == n_bandes,
+        f"et le banc n'a vu TOUTES les lignes qu'une fois, sous-bande par sous-bande : "
+        f"l'entraînement final ({sum(1 for a in appels_csp if len(a) == n)} ajustements)")
 
     # (c) le modèle PORTE son filtre, et c'est le banc qui filtre — pas `_prep`.
     banc = modele.pipe.named_steps["banc"]
@@ -629,6 +715,38 @@ def _test_fbcsp():
     chk(not np.allclose(MIModel(fs=fs, band=bande)._prep(fenetre)[0],
                         reref(fenetre, MI_REREF)),
         "(le CSP simple, lui, filtre toujours dans `_prep`)")
+    # ...mais le CAR, si. Le test du dessus est en "none" : un FBCSP qui sauterait AUSSI le
+    # re-référencement (le `return` remonté au-dessus de `reref`) y passerait sans un mot.
+    car = MIModel(fs=fs, band=bande, method="fbcsp", reref_mode="car")
+    chk(np.array_equal(car._prep(fenetre)[0], reref(fenetre, "car"))
+        and not np.allclose(reref(fenetre, "car"), fenetre),
+        "FBCSP en CAR : `_prep` re-référence quand même — seul le passe-bande global est sauté")
+
+    # (c') le coupe-bande agit DANS le banc : ses CSP et ses caractéristiques sont ceux du filtre
+    # commun AVEC le secteur. Recalculés ici à la main, par `passe_bande`, sur une sous-bande qui
+    # contient le 50 Hz — là où le coupe-bande change vraiment le signal. Vérifier l'attribut
+    # `secteur_hz` ne suffisait pas : un banc qui l'ignorerait en filtrant le portait quand même.
+    t = np.arange(X.shape[-1]) / fs
+    motif = np.random.default_rng(1).uniform(0.5, 3.0, X.shape[1])[:, None]
+    X50 = X[:60] + motif * 5.0 * np.sin(2 * np.pi * 50.0 * t)
+    y50 = y[:60]
+    b50 = ((8.0, 12.0), (44.0, 56.0))
+    banc50 = FilterBankCSP(fs, b50, secteur_hz=50.0).fit(X50, y50)
+
+    def _a_la_main(secteur):
+        csps = [CSP(2).fit(passe_bande(X50, fs, sb, secteur_hz=secteur), y50) for sb in b50]
+        return csps, np.hstack([c.transform(passe_bande(X50, fs, sb, secteur_hz=secteur))
+                                for c, sb in zip(csps, b50)])
+
+    csps_avec, attendu = _a_la_main(50.0)
+    _csps_sans, sans_coupe = _a_la_main(None)
+    chk(all(np.allclose(c.filters_, r.filters_) for c, r in zip(banc50.csps_, csps_avec))
+        and np.allclose(banc50.transform(X50), attendu),
+        "le banc apprend ET transforme sur le filtre commun AVEC le coupe-bande secteur")
+    ecart = float(np.max(np.abs(attendu - sans_coupe)))
+    chk(ecart > 0.1,
+        f"...et ce coupe-bande change bien ce que le banc voit : sans lui, les caractéristiques "
+        f"de la sous-bande 44-56 Hz s'écartent jusqu'à {ecart:.2f} (log-variance)")
 
     # (d) aller-retour joblib. Un modèle FRAIS : celui du dessus porte l'espion dans sa sélection,
     # et c'est justement le genre d'objet (une fonction locale) qu'un pickle refuse.

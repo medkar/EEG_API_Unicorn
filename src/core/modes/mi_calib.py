@@ -272,11 +272,17 @@ class MICalibration(CalibrationRuntime):
         # MODÈLE sur le disque, visible dans la liste de la console, sans enregistrement ni
         # provenance : exactement ce que « l'échec ne produit AUCUN fichier » interdit. Un `.npz`
         # orphelin, lui, est inoffensif — rien ne le liste, rien ne le propose.
+        # Avec la géométrie, le FILTRE du modèle (2026-09-30) : `research/mi_compare.py` rejoue une
+        # séance avec le secteur où elle a été enregistrée. `secteur_hz = 0` veut dire « pas de
+        # coupe-bande » (la convention de `core/filtrage.py`, comme le `.npz` du P300) ; un `.npz`
+        # d'avant ce champ n'a ni bande ni secteur, et l'outil le dit.
         np.savez(chemin_npz,
                  epochs=np.asarray([e for e, _l in enregistre]),
                  labels=np.asarray([l for _e, l in enregistre]),
                  fs=fs, window_s=self.window_s, step_s=self.step_s,
-                 imagery_s=self.imagery_s)
+                 imagery_s=self.imagery_s,
+                 bande=np.asarray(modele.band, dtype=float),
+                 secteur_hz=float(modele.secteur_hz or 0.0), methode=modele.method)
         modele.save(chemin_modele)
 
         # `None` PROPAGÉ, jamais recopié en 0.0 : un 0 % afficherait « FAIBLE — contact des
@@ -341,9 +347,16 @@ CALIB = Calib(
         # La bande (2026-09-30), réglée À L'ENTRAÎNEMENT et enregistrée dans le modèle. Les bornes
         # gardent toujours 10-20 Hz dedans (le haut du mu, le bas du bêta) : une bande qui
         # retirerait le rythme moteur est refusée, elle ne décoderait que du bruit sans rien dire.
-        *params_bande(MI_BAND, (1.0, 10.0), (20.0, 45.0), tr("calib.mi.param.bande.aide")),
+        # Et elles s'arrêtent à 4 et 40 Hz (revue du 2026-09-30) : les fenêtres Unicorn sont
+        # BRUTES, et sous 4 Hz vivent la dérive et le regard, au-dessus de 40 Hz l'EMG d'une
+        # mâchoire crispée. Le FBCSP en ferait des sous-bandes à part — et les SÉLECTIONNERAIT si
+        # elles covarient avec la consigne : un modèle qui décode la crispation, pas l'imagerie.
+        *params_bande(MI_BAND, (4.0, 10.0), (20.0, 40.0), tr("calib.mi.param.bande.aide")),
         # FBCSP : une OPTION, décochée — jamais mesurée sur ce casque (la seule séance MI archivée
-        # est à 40 % à 3 classes). « Tester » dit si elle fait mieux pour cette personne.
+        # est à 40 % à 3 classes). ⚠️ « Tester » ne dit PAS s'il fait mieux que le CSP : à 18-30
+        # essais, ce test ne sépare même pas 40 % de 33 %, et deux entraînements distincts
+        # mêlent la différence de méthode à celle entre deux séances. La comparaison honnête se
+        # fait sur UNE même séance, par validation croisée : `src/research/mi_compare.py`.
         Param(
             key="fbcsp",
             label=tr("calib.mi.param.fbcsp.label"),
@@ -585,6 +598,13 @@ def _selftest():
         _v, raison = validate(CALIB, {"bande_bas": 12.0})
         chk(raison is not None,
             f"une coupure basse au-dessus de 10 Hz est REFUSÉE : elle couperait le mu ({raison})")
+        # Les deux bords EXTÉRIEURS (revue du 2026-09-30) : sous 4 Hz la dérive et le regard,
+        # au-dessus de 40 Hz l'EMG — ce que le FBCSP isolerait en sous-bandes et sélectionnerait.
+        _v, refus_bas = validate(CALIB, {"bande_bas": 3.5})
+        _v, refus_haut = validate(CALIB, {"bande_haut": 41.0})
+        chk(refus_bas is not None and refus_haut is not None,
+            f"une coupure basse sous 4 Hz et une haute au-dessus de 40 Hz sont REFUSÉES : dérive "
+            f"et EMG ({refus_bas} | {refus_haut})")
         valeurs, raison = validate(CALIB, {"trials_per_class": 10, "bande_bas": 4.0,
                                            "bande_haut": 40.0, "fbcsp": True})
         chk(raison is None, f"une bande large avec FBCSP est acceptée ({raison})")
@@ -623,6 +643,14 @@ def _selftest():
             and res_r.get("secteur_hz") == 60.0,
             f"le résultat les rapporte, relus du modèle ({res_r.get('methode')}, "
             f"{res_r.get('bande')}, {res_r.get('secteur_hz')})")
+        archive = {}
+        if res_r.get("enregistrement"):
+            with np.load(res_r["enregistrement"]) as npz:
+                archive = {k: npz[k].tolist() for k in ("bande", "secteur_hz", "methode")
+                           if k in npz.files}
+        chk(archive == {"bande": [4.0, 40.0], "secteur_hz": 60.0, "methode": "fbcsp"},
+            f"et l'ENREGISTREMENT les archive avec les époques : `research/mi_compare.py` rejoue "
+            f"la séance avec son secteur ({archive})")
         chk(METHODES["fbcsp"] in res_r.get("filtre", "")
             and "4–40 Hz" in res_r.get("filtre", "") and "60 Hz" in res_r.get("filtre", "")
             and res_r.get("honnetete") == HONNETETE,
