@@ -134,12 +134,13 @@ class ParamsForm(QWidget):
         # l'étudiant avait cliqué sur quelque chose qui avait l'air de faire quelque chose. C'est
         # la définition du réglage-décor que ce projet combat ailleurs.
         #
-        # La règle vit ICI et pas chez les appelants, parce que QUATRE pages sont concernées et
-        # qu'aucune ne le savait : le mode « Brut », et les trois calibrations menées par une
-        # fenêtre (P300, ErrP, c-VEP), dont le `Calib.params` est vide. `console/mesure_page.py`
-        # cachait déjà ce bouton, mais pour une AUTRE raison — une mesure se règle avant de
-        # partir, son formulaire part avec `start_mesure` — donc son geste reste, et il couvre
-        # aussi le cas où une mesure a des réglages.
+        # Cette règle-ci ne couvre QUE le formulaire vide — aujourd'hui la page du mode « Brut ».
+        # Les deux autres familles de pages cachent le bouton ELLES-MÊMES, sans condition, et pour
+        # une autre raison : leurs réglages partent avec « Commencer », jamais avec « Appliquer ».
+        # `console/calib_page.py` (les quatre entraînements, qui ont tous une bande réglable
+        # depuis le 2026-09-30 — le formulaire n'y est donc plus jamais vide) et
+        # `console/mesure_page.py` (une mesure se règle avant de partir, son formulaire part avec
+        # `start_mesure`).
         if not self.params:
             self.bouton.hide()
         self.refus = QLabel("")

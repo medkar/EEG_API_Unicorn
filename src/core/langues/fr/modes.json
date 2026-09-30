@@ -173,7 +173,7 @@
   "mode.ssvep.param.freqs.label": "Fréquences des cibles",
   "mode.ssvep.param.refresh_hz.aide": "Le rafraîchissement de l'écran qui affiche les cibles, pas forcément celui-ci : ton application tourne peut-être ailleurs. Les fréquences possibles en sont les diviseurs entiers : le changer propose un nouveau jeu de fréquences, sans refaire le repos.",
   "mode.ssvep.param.refresh_hz.label": "Rafraîchissement de l'écran du stimulus",
-  "mode.ssvep.param.z_min.aide": "De combien le score d'une cible doit dépasser le bruit de fond mesuré au repos (en écarts-types) pour être annoncée. Plus bas : plus de détections, mais plus d'erreurs. Plus haut : moins de détections, plus sûres. Défaut 2,5 : règle-le, puis clique « Tester » pour voir l'effet.",
+  "mode.ssvep.param.z_min.aide": "De combien le score d'une cible doit dépasser le bruit de fond mesuré au repos (en écarts-types) pour être annoncée. Plus bas : plus de détections, mais plus d'erreurs. Plus haut : moins de détections, plus sûres. Défaut 2,5. Il se règle dans le bloc « 1. Régler » du mode ; « Tester » part avec lui, c'est là que tu vois son effet.",
   "mode.ssvep.param.z_min.label": "Seuil de détection",
   "mode.ssvep.summary": "Quelle cible clignotante l'utilisateur regarde, environ 5 fois par seconde."
 }
