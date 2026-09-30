@@ -38,7 +38,8 @@ coordinateur et annoncées à l'utilisateur.
 7. **FBCSP** (Ang et al. 2008) pour le MI, **option d'entraînement, décochée par défaut** (non
    mesurée ici ; la seule séance MI archivée est à 40 % à 3 classes). Le banc découpe la BANDE
    réglée en sous-bandes d'~4 Hz, un CSP par sous-bande, sélection des caractéristiques par
-   information mutuelle, LDA. La sélection vit DANS le pipeline, donc dans chaque pli de la CV.
+   ANOVA F (information mutuelle au départ, abandonnée à la revue : biaisée par les fenêtres
+   sœurs d'un même essai), LDA. La sélection vit DANS le pipeline, donc dans chaque pli de la CV.
 8. **Bouton fantôme** : `calib_page` montre le bouton « Appliquer » du formulaire générique, que
    rien ne branche (la calibration MI l'a depuis toujours, et le smoke l'EXIGE). Il se cache,
    comme sur `mesure_page` : les réglages d'un entraînement partent avec « Commencer ».
