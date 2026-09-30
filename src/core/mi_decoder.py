@@ -17,17 +17,25 @@ Signal : ERD (désynchronisation) mu/beta du cortex moteur — la puissance chut
 OPPOSÉ à la main imaginée (main droite -> baisse sur C3 ; main gauche -> sur C4). Le CSP apprend
 les filtres spatiaux qui maximisent ce contraste de variance.
 
+Trois méthodes (`build_pipe`) : "csp" (le défaut), "riemann", et "fbcsp" (2026-09-30, option
+d'entraînement décochée par défaut — Ang et al. 2008, JAMAIS mesurée sur ce casque). Le FBCSP
+découpe la bande en sous-bandes d'~4 Hz, apprend un CSP par sous-bande et laisse une sélection
+par information mutuelle garder celles qui séparent les classes de CETTE personne : son pic mu
+n'est pas forcément à 10 Hz.
+
 Validé ici sur ERD SYNTHÉTIQUE (pas de casque).   python src/core/mi_decoder.py
 """
 
 import os
 import sys
+from functools import partial
 
 import joblib
 import numpy as np
 from scipy.linalg import eigh
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
 from sklearn.model_selection import (StratifiedGroupKFold, cross_val_score,
                                      train_test_split)
 from sklearn.pipeline import Pipeline
@@ -103,10 +111,69 @@ class CSP(BaseEstimator, TransformerMixin):
         return np.asarray(out)
 
 
-def build_pipe(method=MI_METHOD, n_per_class=2):
+def sous_bandes(bande):
+    """Les sous-bandes du FBCSP : la bande découpée en `max(2, round(largeur / 4))` morceaux égaux.
+
+    8-30 Hz -> 6 sous-bandes de 3,67 Hz ; 4-40 Hz -> 9 de 4 Hz. Contiguës, et elles recouvrent
+    EXACTEMENT la bande réglée : le FBCSP ne regarde ni plus ni moins que ce que l'étudiant a choisi.
+    ~4 Hz est la largeur de Ang et al. (2008) : assez étroite pour isoler un pic mu d'une personne,
+    assez large pour qu'un Butterworth d'ordre 4 y reste stable sur une fenêtre de 2 s.
+    """
+    bas, haut = float(bande[0]), float(bande[1])
+    n = max(2, int(round((haut - bas) / 4.0)))
+    bords = np.linspace(bas, haut, n + 1)
+    return tuple((float(bords[i]), float(bords[i + 1])) for i in range(n))
+
+
+class FilterBankCSP(BaseEstimator, TransformerMixin):
+    """Un CSP par sous-bande ; les log-variances de toutes les sous-bandes, mises bout à bout.
+
+    Chaque sous-bande est filtrée par `bandpass` — le filtre commun des décodeurs, coupe-bande
+    secteur COMPRIS : dans un modèle FBCSP, c'est ce banc qui filtre, et lui seul (`MIModel._prep`
+    ne pose aucun passe-bande global pour cette méthode).
+
+    Picklable par joblib : que des attributs simples et des `CSP`, aucune fonction anonyme — un
+    modèle enregistré doit se relire dans un autre processus (le moteur).
+    """
+
+    def __init__(self, fs, sous_bandes, n_per_class=2, secteur_hz=None):
+        self.fs = fs
+        self.sous_bandes = sous_bandes
+        self.n_per_class = n_per_class
+        self.secteur_hz = secteur_hz
+
+    def _filtrer(self, X, bande):
+        return bandpass(X, self.fs, bande, secteur_hz=self.secteur_hz)
+
+    def fit(self, X, y):  # X : (n_trials, n_ch, n_samples), NON filtré
+        X = np.asarray(X, dtype=float)
+        self.csps_ = [CSP(self.n_per_class).fit(self._filtrer(X, b), y)
+                      for b in self.sous_bandes]
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=float)
+        return np.hstack([csp.transform(self._filtrer(X, b))
+                          for csp, b in zip(self.csps_, self.sous_bandes)])
+
+
+def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_hz=None,
+               n_classes=len(MI_LABELS)):
     """Pipeline de classification MI. 'csp' = CSP+LDA ; 'riemann' = covariances + espace
     tangent + régression logistique (géométrie riemannienne : robuste, efficace avec peu
-    de données — recommandé)."""
+    de données) ; 'fbcsp' = banc de CSP par sous-bande + sélection + LDA.
+
+    `fs`, `band` et `secteur_hz` ne servent qu'au FBCSP, qui filtre lui-même : les deux autres
+    reçoivent un signal déjà filtré par `MIModel._prep`.
+
+    ⚠️ FBCSP : la sélection par information mutuelle vit DANS le pipeline, donc elle est refaite
+    dans CHAQUE pli de la validation croisée, sur les seules lignes d'apprentissage du pli. Faite
+    une fois sur tout le jeu avant la CV, elle aurait choisi les sous-bandes en regardant les essais
+    de test : une CV optimiste, sans rien casser. `k` = la dimension d'UN CSP (2 × n_per_class ×
+    n_classes) : le FBCSP ne garde pas plus de caractéristiques qu'un CSP simple, il les choisit
+    dans plus de sous-bandes. `random_state=0` : l'estimateur de l'information mutuelle bruite
+    légèrement les données, et un modèle doit se réentraîner à l'identique.
+    """
     if method == "csp":
         return Pipeline([("csp", CSP(n_per_class)),
                          ("lda", LinearDiscriminantAnalysis())])
@@ -117,11 +184,18 @@ def build_pipe(method=MI_METHOD, n_per_class=2):
         return Pipeline([("cov", Covariances(estimator="oas")),
                          ("ts", TangentSpace()),
                          ("lr", LogisticRegression(max_iter=1000))])
-    raise ValueError(f"méthode MI inconnue : {method!r} (attendu 'csp' ou 'riemann')")
+    if method == "fbcsp":
+        # `partial` et non `lambda` : le modèle se sérialise par joblib, et un lambda ne se picke pas.
+        return Pipeline([("banc", FilterBankCSP(fs, sous_bandes(band), n_per_class, secteur_hz)),
+                         ("selection", SelectKBest(partial(mutual_info_classif, random_state=0),
+                                                   k=2 * n_per_class * n_classes)),
+                         ("lda", LinearDiscriminantAnalysis())])
+    raise ValueError(f"méthode MI inconnue : {method!r} (attendu 'csp', 'riemann' ou 'fbcsp')")
 
 
 class MIModel:
-    """Pipeline entraînable (CSP+LDA ou Riemannien) + (dé)sérialisation. `cv_` = accuracy CV."""
+    """Pipeline entraînable (CSP+LDA, Riemannien ou FBCSP) + (dé)sérialisation. `cv_` = accuracy
+    CV. Le modèle PORTE son filtre (`band`, `secteur_hz`) et sa méthode : le décodage les relit."""
 
     def __init__(self, labels=MI_LABELS, fs=250.0, band=MI_BAND, method=MI_METHOD,
                  n_per_class=2, reref_mode=MI_REREF, secteur_hz=None):
@@ -134,7 +208,8 @@ class MIModel:
         self.secteur_hz = secteur_hz
         self.method = method
         self.reref_mode = reref_mode
-        self.pipe = build_pipe(method, n_per_class)
+        self.pipe = build_pipe(method, n_per_class, fs=fs, band=band, secteur_hz=secteur_hz,
+                               n_classes=len(self.labels))
         self.cv_ = None
         # La CV HONNÊTE (par essai) et le nombre d'essais. `None` tant qu'on n'a pas dit à `fit`
         # à quel essai appartient chaque fenêtre — voir `fit`. `mi_models.decrire()` les lit et
@@ -151,6 +226,11 @@ class MIModel:
         # décoder sans re-ref aussi (sinon incohérence train/predict). Les modèles récents portent
         # l'attribut et utilisent leur propre mode.
         epochs = reref(epochs, getattr(self, "reref_mode", "none"))
+        # FBCSP : AUCUN passe-bande global — le banc filtre lui-même, sous-bande par sous-bande,
+        # coupe-bande compris. Filtrer aussi ici ferait passer chaque sous-bande dans DEUX filtres
+        # en cascade, et le modèle n'apprendrait plus sur la bande qu'il annonce.
+        if getattr(self, "method", MI_METHOD) == "fbcsp":
+            return epochs
         return bandpass(epochs, self.fs, self.band, secteur_hz=getattr(self, "secteur_hz", None))
 
     def fit(self, epochs, y, groups=None):
@@ -431,6 +511,144 @@ def _test_n_splits_insuffisant():
     return ok
 
 
+def _test_fbcsp():
+    """Le FBCSP (2026-09-30) : il sépare, il choisit la bonne sous-bande, sa sélection ne fuit pas,
+    il se relit.
+
+    ⚠️ La panne qu'on garde ici ne lève RIEN : une sélection des sous-bandes faite UNE fois sur
+    tout le jeu, avant la validation croisée, choisit ses caractéristiques en regardant les essais
+    de test. La CV sort plus belle, le modèle est le même, et l'étudiant garde un modèle sur un
+    chiffre gonflé. Un score ne peut pas la voir (il serait seulement un peu meilleur) : on
+    ESPIONNE ce que reçoit l'information mutuelle dans chaque pli, comme `_test_cv_honnete`
+    espionne le découpage.
+    """
+    import tempfile
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    chk(sous_bandes((8.0, 30.0)) == tuple((8.0 + i * 22.0 / 6, 8.0 + (i + 1) * 22.0 / 6)
+                                          for i in range(6)),
+        "8-30 Hz -> 6 sous-bandes égales de 3,67 Hz")
+    b = sous_bandes((4.0, 40.0))
+    chk(len(b) == 9 and all(abs((h - l) - 4.0) < 1e-9 for l, h in b)
+        and b[0][0] == 4.0 and b[-1][1] == 40.0
+        and all(b[i][1] == b[i + 1][0] for i in range(len(b) - 1)),
+        f"4-40 Hz -> 9 sous-bandes contiguës de 4 Hz, qui recouvrent la bande exactement ({b})")
+
+    # Un jeu d'essais dans un ordre MÉLANGÉ : la suite des étiquettes des lignes d'apprentissage
+    # devient alors l'EMPREINTE d'un pli — deux plis différents n'ont pas la même. C'est ce qui
+    # permet à l'espion de dire « ces lignes-là exactement », pas seulement « ce nombre de lignes ».
+    rng = np.random.default_rng(0)
+    fs, bande = 250.0, (4.0, 40.0)
+    n_fen, pas = int(round(2.0 * fs)), int(round(1.0 * fs))
+    essais = [lab for lab in MI_LABELS for _ in range(20)]
+    rng.shuffle(essais)
+    X, y, groupes = [], [], []
+    for indice, label in enumerate(essais):
+        epoque = synth_mi_trial(label, n_samp=int(4.0 * fs), fs=fs, rng=rng)
+        for debut in range(0, epoque.shape[1] - n_fen + 1, pas):
+            X.append(epoque[:, debut:debut + n_fen])
+            y.append(label)
+            groupes.append(indice)
+    X, y, groupes = np.asarray(X), np.asarray(y), np.asarray(groupes)
+
+    # --- les espions : l'information mutuelle, et le VRAI découpage de la CV groupée ---------
+    # `build_pipe` lit `mutual_info_classif` dans les globales de CE module au moment où il
+    # construit le pipeline : le remplacer ici, avant `MIModel(...)`, met l'espion DANS le
+    # pipeline — donc dans chacun de ses clones, pli par pli.
+    appels, plis = [], []
+    vraie_mi = globals()["mutual_info_classif"]
+    vraie_split = StratifiedGroupKFold.split
+
+    def _mi_espion(X_arg, y_arg, **kw):
+        appels.append((len(y_arg), tuple(y_arg), kw.get("random_state")))
+        return vraie_mi(X_arg, y_arg, **kw)
+
+    def _split_espion(self, X_arg, y_arg=None, groups=None):
+        for train_idx, test_idx in vraie_split(self, X_arg, y_arg, groups=groups):
+            plis.append(np.array(train_idx))
+            yield train_idx, test_idx
+
+    globals()["mutual_info_classif"] = _mi_espion
+    StratifiedGroupKFold.split = _split_espion
+    try:
+        modele = MIModel(fs=fs, band=bande, method="fbcsp", reref_mode="none",
+                         secteur_hz=50.0).fit(X, y, groups=groupes)
+    finally:
+        globals()["mutual_info_classif"] = vraie_mi
+        StratifiedGroupKFold.split = vraie_split
+
+    # (a) il sépare — l'ERD synthétique est à 10 Hz, dans une bande large exprès.
+    hasard = 1.0 / len(MI_LABELS)
+    chk(modele.cv_groupee_ is not None and modele.cv_groupee_ > 0.5,
+        f"FBCSP sur une bande large (4-40 Hz) sépare l'ERD : CV groupée "
+        f"{(modele.cv_groupee_ or 0) * 100:.1f} % pour un hasard à {hasard * 100:.0f} % "
+        f"({modele.n_essais_} essais)")
+    # (a') ...et pour la bonne raison : la sélection va chercher la sous-bande du mu.
+    dim = 2 * 2 * len(MI_LABELS)          # la dimension d'UN CSP = le `k` de la sélection
+    selection = modele.pipe.named_steps["selection"]
+    bandes = modele.pipe.named_steps["banc"].sous_bandes
+    meilleure = bandes[int(np.argmax(selection.scores_)) // dim]
+    retenues = np.flatnonzero(selection.get_support()) // dim
+    dans_le_mu = int(np.sum([bandes[i][0] <= 10.0 < bandes[i][1] for i in retenues]))
+    chk(selection.k == dim and len(retenues) == dim,
+        f"la sélection garde la dimension d'UN CSP ({len(retenues)} sur "
+        f"{len(bandes) * dim} caractéristiques)")
+    chk(meilleure[0] <= 10.0 < meilleure[1] and dans_le_mu > dim // 2,
+        f"...et va les chercher dans la sous-bande du mu : la plus informative est "
+        f"{meilleure[0]:g}-{meilleure[1]:g} Hz, et {dans_le_mu} des {dim} retenues y sont")
+
+    # (b) l'espion : dans CHAQUE pli de la CV groupée, la sélection n'a vu QUE ses lignes
+    # d'apprentissage. L'empreinte (la suite des étiquettes) désigne les lignes exactes.
+    n = len(y)
+    empreintes = {a[1] for a in appels}
+    chk(len(plis) >= 2, f"la CV groupée a bien découpé au moins 2 plis ({len(plis)})")
+    chk(all(len(t) < n and tuple(y[t]) in empreintes for t in plis),
+        f"dans CHAQUE pli, l'information mutuelle a reçu EXACTEMENT les lignes d'apprentissage "
+        f"du pli, moins que le total ({[len(t) for t in plis]} sur {n}) — la sélection est "
+        f"refaite pli par pli, elle ne voit jamais les essais de test")
+    chk(sum(1 for a in appels if a[0] == n) == 1,
+        f"et elle n'a vu TOUTES les lignes qu'une fois : l'entraînement final, après la CV "
+        f"({[a[0] for a in appels]})")
+    chk(all(a[2] == 0 for a in appels),
+        "avec `random_state=0` à chaque appel : un modèle se réentraîne à l'identique")
+
+    # (c) le modèle PORTE son filtre, et c'est le banc qui filtre — pas `_prep`.
+    banc = modele.pipe.named_steps["banc"]
+    chk(banc.secteur_hz == 50.0 and banc.sous_bandes == sous_bandes(bande) and banc.fs == fs,
+        f"le banc reçoit la bande, le secteur et fs du modèle ({banc.secteur_hz}, "
+        f"{len(banc.sous_bandes)} sous-bandes, {banc.fs})")
+    fenetre = X[0]
+    chk(np.array_equal(modele._prep(fenetre)[0], reref(fenetre, "none")),
+        "FBCSP : `_prep` ne pose AUCUN passe-bande global — le banc filtre seul")
+    chk(not np.allclose(MIModel(fs=fs, band=bande)._prep(fenetre)[0],
+                        reref(fenetre, MI_REREF)),
+        "(le CSP simple, lui, filtre toujours dans `_prep`)")
+
+    # (d) aller-retour joblib. Un modèle FRAIS : celui du dessus porte l'espion dans sa sélection,
+    # et c'est justement le genre d'objet (une fonction locale) qu'un pickle refuse.
+    reel = MIModel(fs=fs, band=bande, method="fbcsp", secteur_hz=60.0).fit(X, y, groups=groupes)
+    with tempfile.TemporaryDirectory() as dossier:
+        chemin = os.path.join(dossier, "mi_model_fbcsp.joblib")
+        reel.save(chemin)
+        relu = MIModel.load(chemin)
+    p_avant, p_apres = reel.predict_proba(fenetre), relu.predict_proba(fenetre)
+    chk(relu.method == "fbcsp" and tuple(relu.band) == bande and relu.secteur_hz == 60.0,
+        f"relu par joblib, le modèle porte sa méthode, sa bande et son secteur "
+        f"({relu.method}, {relu.band}, {relu.secteur_hz})")
+    chk(set(p_apres) == set(MI_LABELS)
+        and all(abs(p_avant[c] - p_apres[c]) < 1e-12 for c in MI_LABELS),
+        f"et il décode À L'IDENTIQUE après relecture ({ {c: round(v, 3) for c, v in p_apres.items()} })")
+
+    print(f"[mi-fbcsp] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
 def _demo():
     # Le synthétique = 8 oscillateurs INDÉPENDANTS (pas de conduction volumique ni de mode commun) :
     # il valide la MÉCANIQUE du classifieur (CSP+LDA sépare-t-il l'ERD ?), PAS le re-référencement.
@@ -452,7 +670,7 @@ def _demo():
     print("== Validation du classifieur (ERD synthétique propre, re-ref 'none') ==")
     print("méthode  | CV 5-fold | G/D test | repos->None")
     ok = False
-    for m in ("csp", "riemann"):
+    for m in ("csp", "riemann", "fbcsp"):
         cv, ctrl, rest = _eval(m, Xtr, ytr, Xte, yte, reref_mode="none")
         star = "  <- défaut" if m == MI_METHOD else ""
         print(f"{m:<8} |   {cv*100:5.1f}% |  {ctrl*100:5.1f}% |   {rest*100:5.1f}%{star}")
@@ -467,5 +685,6 @@ if __name__ == "__main__":
     use_utf8_console()
     ok_cv = _test_cv_honnete()
     ok_n_splits = _test_n_splits_insuffisant()
+    ok_fbcsp = _test_fbcsp()
     ok_demo = _demo()
-    sys.exit(0 if (ok_cv and ok_n_splits and ok_demo) else 1)
+    sys.exit(0 if (ok_cv and ok_n_splits and ok_fbcsp and ok_demo) else 1)

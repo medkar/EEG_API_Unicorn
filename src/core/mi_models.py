@@ -82,6 +82,10 @@ def decrire(chemin):
     `cv_groupee` est la validation croisée HONNÊTE (par essai). Elle vaut None pour tout modèle
     entraîné avant la moitié B : on l'affiche absente plutôt que de recopier `cv_naive`, qui est
     gonflée de 10 à 16 points par la fuite entre fenêtres d'un même essai.
+
+    `methode`, `bande`, `secteur_hz` (2026-09-30) : avec quoi le modèle a appris — « csp »,
+    « riemann » ou « fbcsp », sa bande en Hz, son coupe-bande (None : aucun, c'est le cas de tout
+    modèle d'avant ce réglage). Deux justesses ne se comparent qu'à méthode et bande connues.
     """
     modele, raison = charger(chemin)
     horodatage = _os.path.getmtime(chemin) if _os.path.isfile(chemin) else 0.0
@@ -93,6 +97,9 @@ def decrire(chemin):
         "cv_naive": None,
         "cv_groupee": None,
         "n_essais": None,
+        "methode": None,
+        "bande": None,
+        "secteur_hz": None,
         "probleme": raison,
     }
     if modele is None:
@@ -104,6 +111,10 @@ def decrire(chemin):
     infos["cv_groupee"] = float(groupee) if groupee is not None else None
     essais = getattr(modele, "n_essais_", None)
     infos["n_essais"] = int(essais) if essais is not None else None
+    infos["methode"] = getattr(modele, "method", None)
+    bande = getattr(modele, "band", None)
+    infos["bande"] = (float(bande[0]), float(bande[1])) if bande is not None else None
+    infos["secteur_hz"] = getattr(modele, "secteur_hz", None)
     return infos
 
 
@@ -203,6 +214,19 @@ def _selftest():
         chk(d["cv_groupee"] is None,
             "la CV honnête est absente d'un modèle entraîné avant la moitié B — dit, pas inventé")
         chk(d["date"], f"et une date lisible ({d['date']})")
+        chk(d["methode"] == "csp" and d["bande"] == (8.0, 30.0) and d["secteur_hz"] is None,
+            f"et AVEC QUOI il a appris : méthode, bande, coupe-bande (aucun ici, comme un modèle "
+            f"d'avant ce réglage) ({d['methode']}, {d['bande']}, {d['secteur_hz']})")
+        fb = MIModel(fs=250.0, band=(4.0, 40.0), method="fbcsp", secteur_hz=50.0).fit(
+            np.asarray(epochs), np.asarray(y))
+        chemin_fb = _os.path.join(dossier, "mi_model_fbcsp.joblib")
+        fb.save(chemin_fb)
+        d_fb = decrire(chemin_fb)
+        chk(d_fb["probleme"] is None and d_fb["methode"] == "fbcsp"
+            and d_fb["bande"] == (4.0, 40.0) and d_fb["secteur_hz"] == 50.0,
+            f"un modèle FBCSP se charge et se décrit comme tel ({d_fb['methode']}, "
+            f"{d_fb['bande']}, {d_fb['secteur_hz']}, problème={d_fb['probleme']})")
+        _os.remove(chemin_fb)
 
         # Le plus récent d'abord : c'est ce qui rend le défaut du réglage « le dernier entraîné ».
         # On renomme ainsi pour que le tri alphabétique et chronologique divergent : si on oublie

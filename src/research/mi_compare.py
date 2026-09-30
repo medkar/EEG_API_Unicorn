@@ -1,7 +1,12 @@
-"""Compare les méthodes MI (CSP vs Riemannien) sur une calibration enregistrée.
+"""Compare les méthodes MI (CSP, Riemannien, FBCSP) sur une calibration enregistrée.
 
 CV « par essai » (GroupKFold : les fenêtres d'un même essai restent ensemble -> pas de fuite
 -> estimation honnête). Sert à choisir la méthode sur TES données réelles après calibration.
+
+Chaque méthode reçoit ce que `MIModel._prep` lui donnerait en vrai : le signal re-référencé, puis
+filtré dans MI_BAND pour CSP et Riemann, NON filtré pour FBCSP — son banc filtre lui-même, sous-bande
+par sous-bande. Lui passer un signal déjà filtré le comparerait sur une cascade de deux filtres que
+le produit n'applique jamais.
 
     python src/research/mi_compare.py                    # le mi_calib_*.npz le PLUS RÉCENT de data/
     python src/research/mi_compare.py --drop 10           # ignore les 10 premiers essais (échauffement)
@@ -37,6 +42,7 @@ def plus_recent(dossier=DATA_DIR):
 
 
 def _windows(epochs, labels, fs):
+    """Les fenêtres RE-RÉFÉRENCÉES et NON filtrées : le filtre dépend de la méthode (cf. `_cv`)."""
     n, step = int(MI_WINDOW_S * fs), int(1.0 * fs)
     X, y, g = [], [], []
     for gi, (ep, lab) in enumerate(zip(epochs, labels)):
@@ -44,25 +50,30 @@ def _windows(epochs, labels, fs):
             X.append(ep[i:i + n].T)          # (n_ch, n_samp)
             y.append(str(lab))
             g.append(gi)
-    Xf = bandpass(reref(np.asarray(X), MI_REREF), fs, MI_BAND)   # même re-ref que le pipeline réel
-    return Xf, np.asarray(y), np.asarray(g)
+    Xr = reref(np.asarray(X), MI_REREF)      # même re-ref que le pipeline réel
+    return Xr, np.asarray(y), np.asarray(g)
 
 
-def _cv(Xf, y, g, method, k):
-    return cross_val_score(build_pipe(method), Xf, y,
+def _cv(Xr, y, g, method, k, fs):
+    # Le filtre de `MIModel._prep` : passe-bande global pour CSP/Riemann, aucun pour FBCSP.
+    X = Xr if method == "fbcsp" else bandpass(Xr, fs, MI_BAND)
+    pipe = build_pipe(method, fs=fs, band=MI_BAND, n_classes=len(np.unique(y)))
+    return cross_val_score(pipe, X, y,
                            cv=GroupKFold(min(k, len(np.unique(g)))), groups=g).mean()
 
 
 def _row(epochs, labels, fs, tag, k=5):
-    Xf, y, g = _windows(epochs, labels, fs)
-    print(f"{tag:<20} n={len(epochs):>3}  csp={_cv(Xf, y, g, 'csp', k)*100:5.1f}%  "
-          f"riemann={_cv(Xf, y, g, 'riemann', k)*100:5.1f}%")
+    Xr, y, g = _windows(epochs, labels, fs)
+    print(f"{tag:<20} n={len(epochs):>3}  csp={_cv(Xr, y, g, 'csp', k, fs)*100:5.1f}%  "
+          f"riemann={_cv(Xr, y, g, 'riemann', k, fs)*100:5.1f}%  "
+          f"fbcsp={_cv(Xr, y, g, 'fbcsp', k, fs)*100:5.1f}%")
 
 
 def compare(path, drop=0):
     d = np.load(path, allow_pickle=True)
     fs = float(d["fs"])
-    print(f"{os.path.basename(path)} — CV par essai (chance 3 classes = 33%) — re-ref={MI_REREF}")
+    print(f"{os.path.basename(path)} — CV par essai (chance 3 classes = 33%) — re-ref={MI_REREF} "
+          f"— bande {MI_BAND[0]:g}-{MI_BAND[1]:g} Hz")
     _row(d["epochs"][drop:], d["labels"][drop:], fs, f"drop {drop} premiers")
 
 
