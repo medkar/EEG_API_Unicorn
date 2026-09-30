@@ -130,6 +130,51 @@ def _selftest():
     # (5) Un bord haut au-delà de Nyquist est borné au lieu de faire lever scipy.
     chk(np.all(np.isfinite(passe_bande(bruit, 100.0, (1.0, 60.0)))),
         "un bord haut au-dessus de Nyquist est borné, pas refusé en plein entraînement")
+
+    # (6) L'écriture elle-même : des SECTIONS, à l'ordre demandé, avec un coupe-bande de Q 30.
+    # Trois mutants survivaient aux contrôles ci-dessus (revue du 2026-09-30) : revenir à (b, a)
+    # — le contrôle (1) exige justement l'égalité avec (b, a) —, ignorer `ordre`, changer `Q`.
+    from scipy.signal import sosfiltfilt as _sosfiltfilt
+    from scipy.signal import sosfreqz
+    exact = _sosfiltfilt(sections(fs, (0.5, 12.0), 50.0), bruit, axis=-1)
+    chk(np.array_equal(passe_bande(bruit, fs, (0.5, 12.0), secteur_hz=50.0), exact),
+        "le filtre est EXACTEMENT `sosfiltfilt(sections(...))` — pas une forme (b, a), qui "
+        "s'écarte à basse coupure")
+    doux = passe_bande(10.0 * np.sin(2 * np.pi * 45.0 * t), fs, (1.0, 30.0), ordre=2)
+    ferme = passe_bande(10.0 * np.sin(2 * np.pi * 45.0 * t), fs, (1.0, 30.0), ordre=4)
+    chk(amplitude(doux) > 3.0 * amplitude(ferme),
+        f"l'ordre demandé est appliqué : 45 Hz passe à {amplitude(doux):.2f} µV à l'ordre 2, "
+        f"{amplitude(ferme):.2f} µV à l'ordre 4")
+    _w, h = sosfreqz(sections(fs, (2.0, 100.0), 50.0), worN=[49.0], fs=fs)
+    _w, h_pb = sosfreqz(sections(fs, (2.0, 100.0)), worN=[49.0], fs=fs)
+    gain_49 = float(abs(h[0]) / abs(h_pb[0])) ** 2          # au carré : zéro phase
+    chk(0.45 < gain_49 < 0.75,
+        f"la largeur du coupe-bande est celle de Q = 30 : à 49 Hz, gain {gain_49:.2f} (Q 15 "
+        f"donnerait 0,27, Q 100 : 0,94)")
+
+    # (7) ⚠️ CE QUE LE COUPE-BANDE NE FAIT PAS, mesuré le 2026-09-30 : sur une ÉPOQUE COURTE filtrée
+    # seule, le secteur fuit aux BORDS, coupe-bande ou pas. Le prolongement impair d'une sinusoïde
+    # est une sinusoïde d'une autre phase, et un filtre étroit met ~50 échantillons à s'y refaire.
+    # Les chiffres « −114 dB à 50 Hz » d'une bande 1-12 Hz ne valent qu'en régime établi : sur une
+    # époque P300 (238 échantillons), 20 µV de secteur en laissent ~5 µV en moyenne, AVEC OU SANS
+    # coupe-bande. Le coupe-bande n'aide vraiment que là où la bande laisse passer 50 Hz — le c-VEP
+    # (fenêtre décodée : ~4 → ~2 µV). C'est une caractérisation : si un jour le filtrage se fait
+    # sur le signal continu AVANT la découpe, ces chiffres baisseront et ce contrôle sera à revoir.
+    def _residu(n, bande, garde, secteur):
+        tt = np.arange(n) / fs
+        return float(np.mean([np.sqrt(np.mean(passe_bande(
+            20.0 * np.sin(2 * np.pi * 50.0 * tt + phase), fs, bande, secteur)[garde] ** 2))
+            for phase in np.linspace(0, 2 * np.pi, 12, endpoint=False)]))
+    p300_sans = _residu(238, (1.0, 12.0), slice(None), None)
+    p300_avec = _residu(238, (1.0, 12.0), slice(None), 50.0)
+    cvep_sans = _residu(774, (2.0, 45.0), slice(250, None), None)
+    cvep_avec = _residu(774, (2.0, 45.0), slice(250, None), 50.0)
+    chk(p300_sans > 2.0 and abs(p300_avec - p300_sans) < 0.2 * p300_sans,
+        f"époque P300 (~1 s) : 20 µV de secteur laissent {p300_sans:.1f} µV sans coupe-bande, "
+        f"{p300_avec:.1f} µV avec — les bords dominent, le coupe-bande n'y change presque rien")
+    chk(cvep_avec < 0.7 * cvep_sans,
+        f"fenêtre c-VEP décodée : {cvep_sans:.1f} µV sans coupe-bande, {cvep_avec:.1f} µV avec — "
+        f"là, il aide")
     print("filtrage des décodeurs :", "OK" if ok else "ÉCHEC")
     return ok
 
