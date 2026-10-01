@@ -713,6 +713,26 @@ décoche le coupe-bande. **Pas** de bouton dans son bloc « 1. Régler », qui n
 ❌ Régression : le bouton applique tout seul ; il touche un champ grisé ; il apparaît là où il n'y
 a rien à rétablir.
 
+### ☐ 1.17 — Le retour en direct, sur le board de test
+
+Les décisions du board de test sont du bruit : on vérifie la MÉCANIQUE, pas la justesse.
+
+✅ Page **SSVEP** → **« Tester »** : après chaque essai, la flèche décodée est **entourée** — en
+**vert** si c'est celle qui était désignée, en **rouge** sinon, rien si le moteur s'est abstenu.
+L'anneau reste jusqu'à l'essai suivant. Même chose au **P300** (l'anneau apparaît dans la pause
+après la manche, s'efface au premier flash suivant) et au **c-VEP** (à la fin de chaque bloc).
+✅ Pendant le test, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne par essai**.
+✅ Page **SSVEP**, bloc Tester → **« Essayer librement ⓘ »** : la page dit qu'on attend la fin du
+repos (consigne + compte à rebours), **puis** la fenêtre s'ouvre ; l'anneau **ambre** suit les
+décisions, sans consigne ni score. Ferme la fenêtre : la page dit que le SSVEP est arrêté.
+✅ Même bouton sur c-VEP et P300 ; **absent** sur ErrP, MI, Neuro et Brut.
+✅ SSVEP **démarré depuis la grille**, puis « Tester » : **refus**, le test et le mode publieraient
+sur le même flux.
+
+❌ Échec : la fenêtre s'ouvre pendant le repos ; un anneau sur une cible qui n'est pas celle
+décodée (compare à « Ce que voit ton application ») ; un anneau qui déborde sur une cible ; le
+mode qui continue de tourner après un essai libre qu'il n'avait pas commencé.
+
 ---
 
 # Bloc 2 — au casque
@@ -812,6 +832,10 @@ tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est 
 
 → recette 2.2
 
+✅ (2026-10-01) **Retour en direct** : après chaque essai, la flèche décodée est entourée, vert si
+juste, rouge sinon, rien si le moteur s'est abstenu. ⚠️ Le test SSVEP décide désormais essai par
+essai pendant la séance (pour publier en direct) — par le même chemin que le verdict.
+
 ### ☐ 2.3 — c-VEP : Entraîner puis Tester
 
 Page **c-VEP** → **« Entraîner »** (~3,1 min, stabilisation du casque comprise) → « Commencer ».
@@ -826,6 +850,10 @@ Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 **EN DIRECT** du dépôt — **~46 % d'émission, ~71 % de justesse** —, jamais au 59,5/64,9 %.
 ⚠️ **Orange est le résultat attendu d'un système AU repère** : à 18 blocs, il ne sort vert qu'environ
 une fois sur quatre (calculé, pas mesuré). La réserve nomme le réglage à tourner.
+
+✅ (2026-10-01) **Retour en direct** : à la fin de chaque bloc, le disque décodé est entouré, vert
+si juste, rouge sinon. Note si l'anneau arrive **trop tard** (après le début du bloc suivant, il est
+perdu) et si le voir change ta façon de fixer.
 
 ❌ Échec : **MUET** ou « NON MESURÉ » sans autre explication. ⚠️ **C'est la panne caractéristique
 du c-VEP** : une phase fausse de quelques frames ne lève rien, les corrélations baissent juste assez
@@ -852,9 +880,12 @@ la porte s'ouvre dès **8/24** (p = 0,035) : si la réserve le dit, refais à 24
 briefing le dit (« Compter les éclairs de ta cible aide à rester attentif, mais ce n'est pas
 obligatoire »).
 
+✅ (2026-10-01) **Retour en direct** : après chaque manche, la cible retenue est entourée, vert si
+juste, rouge sinon.
+
 ❌ Échec : la cible retenue systématiquement décalée d'une position, ou une confiance élevée sur une
 cible fausse — la signature d'un décalage à l'épochage, la panne qui rend tous les autres tests
-verts.
+verts. Avec le retour, ça se VOIT : l'anneau toujours sur la voisine de la cible désignée.
 
 → recette 2.7
 
@@ -991,6 +1022,20 @@ jusqu'à 5 %, puis 1), et dès 1 % un message orange « liaison dégradée… ra
 radio).
 
 ❌ Échec : une pile ou des barres sur le board de test ; des barres pleines pendant une coupure.
+
+### ☐ 2.12 — « Essayer librement », au casque (c-VEP, SSVEP, P300)
+
+Page du mode → bloc Tester → **« Essayer librement »**. Attends la fin du repos (ne fixe rien),
+puis la fenêtre s'ouvre.
+
+✅ Fixe la cible de ton choix : l'anneau **ambre** vient sur elle en quelques secondes, et la suit
+quand tu changes. Au P300, il apparaît à la fin de chaque manche.
+✅ Regarde ailleurs (entre les cibles) : l'anneau **disparaît** — le mode s'abstient.
+✅ Ferme la fenêtre : le mode s'arrête s'il ne tournait pas avant, et la page le dit.
+**Note** le délai entre « je fixe » et « l'anneau arrive », par mode.
+
+❌ Échec : l'anneau ne suit jamais la cible fixée alors que « Tester » est bon ; ou il reste sur
+une cible quand tu regardes ailleurs.
 
 ### ☐ 2.11 — Les filtres d'affichage du Brut, sur un vrai signal
 

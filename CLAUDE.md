@@ -18,9 +18,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   le **2026-09-09 il n'y a plus une seule commande d'usage réel à taper**. Le parcours d'un
   étudiant — choisir la source, vérifier le casque et le contact, régler, entraîner, **tester**,
   décoder, **regarder le flux sortant, enregistrer les verdicts** — s'y fait aux boutons, dans une
-  seule fenêtre qu'on n'a plus à fermer. ⚠️ **Deux trous, datés du 2026-09-22 et connus** : la
-  séance c-VEP avec journal (recette 2.9) et le décodage continu avec NOTRE fenêtre de stimulus
-  n'ont plus de bouton — ils reviennent avec « Connecter », le second chantier (pas fait).
+  seule fenêtre qu'on n'a plus à fermer. ⚠️ **Un trou, daté du 2026-09-22 et connu** : la séance
+  c-VEP avec journal (recette 2.9) n'a plus de bouton — elle revient avec « Connecter », le second
+  chantier (pas fait). Le décodage continu avec NOTRE fenêtre de stimulus, l'autre trou de cette
+  date, est revenu le 2026-10-01 sous la forme d'« Essayer librement » (c-VEP, SSVEP, P300).
   `outils/Console EEG.bat` l'ouvre par un double-clic, sans terminal. `src/core/server.py` reste
   lançable seul : c'est l'accès *headless*, pour une machine sans écran ou un montage à deux
   terminaux, et c'est lui que consomme un client LSL.
@@ -202,6 +203,22 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     2026-07-27 ont été mesurés sous l'ANCIENNE règle, donc les chiffres de ce test ne s'y
     comparent plus tels quels. La spec du chantier (§4, §9) tranche ainsi : un test décide comme
     le produit, la comparabilité est une NOTE, pas une contrainte de protocole.
+- **RETOUR EN DIRECT** (2026-10-01, demandé au casque : « que le logiciel entoure la cible qu'il pense
+  qu'on regarde »). Pour le c-VEP, le SSVEP et le P300 :
+  - **« Tester »** publie chaque décision du test (un bloc, une fixation, une manche) sur le flux
+    décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une application : anneau VERT
+    si la décision est la cible désignée, ROUGE sinon, rien sur −1 (s'abstenir n'est pas se
+    tromper). Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
+    verdict (`decider`/`caler`), et le smoke vérifie que publié == noté.
+  - **« Essayer librement »**, second bouton du bloc Tester : le mode tourne, sa fenêtre (`--libre`
+    pour le c-VEP, `--retour`) entoure en ambre la dernière décision, **aucun score**. Elle ne
+    s'ouvre qu'APRÈS le repos (le plancher du SSVEP se mesure « sans fixer aucune cible »), et la
+    console arrête le mode à la fermeture si c'est elle qui l'a démarré.
+  - ⚠️ **Pendant un test, une application branchée sur `decoded_<mode>` reçoit les décisions du
+    test.** C'est voulu et dit dans le README. Un test et son mode ne publient jamais ensemble : le
+    moteur refuse l'un pendant l'autre, dans les deux sens, SSVEP compris.
+  - L'anneau ne touche JAMAIS les pixels d'une cible : les tests de phase c-VEP et de cible SSVEP les
+    lisent toujours, zéro écart exigé.
 - **`Calib.kind` dit QUI mène la ligne du temps, plus OÙ la calibration vit.** Deux valeurs, et le
   contrat refuse tout autre mot (l'ancien vocabulaire « console » / « natif » lève) :
   - `"moteur"` — le moteur mène : il tire les classes, affiche les consignes, décompte. C'est le
@@ -257,7 +274,8 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, écran archivé. Le casque
   n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
   sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
-  **Les quatre fenêtres de `src/stimulus/` sont l'exception** : elles n'ouvrent PAS le casque, elles
+  **Les quatre fenêtres de `src/stimulus/` sont l'exception** (depuis le 2026-10-01, celles du c-VEP,
+  du SSVEP et du P300 LISENT aussi le flux décodé de leur mode, avec `--retour`) : elles n'ouvrent PAS le casque, elles
   dessinent et publient des marqueurs — c'est exactement pour ça qu'elles se lancent à côté du
   moteur, dans un second terminal, **ou que la console les lance elle-même** quand on entraîne ou
   qu'on teste.
@@ -318,7 +336,7 @@ Dans la console (depuis le 2026-09-22) :
 
 - **La grille** : **sept tuiles** (les six modes plus le brut), chacune avec « publié »,
   **« Démarrer »** — le seul bouton qui démarre le décodage continu, hormis l'« Observer » du
-  Neuro — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
+  Neuro et « Essayer librement » (le temps de l'essai) — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
   (marquée *BARRIÈRE*).
 - **La page Brut a un filtre d'AFFICHAGE** (2026-09-25) : aucun, passe-haut 0,1-2 Hz, passe-bande,
   coupe-bande 50 Hz — défaut passe-haut 1 Hz. ⚠️ Il ne filtre QUE la copie dessinée : le tampon
@@ -326,8 +344,9 @@ Dans la console (depuis le 2026-09-22) :
   aussi.
 - **Une page par mode, en blocs numérotés** (règle 🔴 plus haut). La vue en direct des modes
   testables y est repliée sous **« Décodage en direct »**. **Ont quitté la page, et reviendront
-  avec « Connecter »** : « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
-  « Brancher un client ».
+  avec « Connecter »** : « Démarrer/Arrêter », « Journal de séance », « Brancher un client ».
+  « Lancer le stimulus » est revenu autrement : **« Essayer librement »**, dans le bloc Tester
+  (2026-10-01).
 - **« Entraîner »** et **« Tester »** ouvrent chacun une page (briefing, réglages, « Commencer »,
   « ← » qui ramène au mode). « Commencer » passe par un **contrôle de liaison** (σ par voie) qui
   **REFUSE** dès qu'une seule des huit voies sort de [0,5 ; 500] µV. Un entraînement fini attend
@@ -591,6 +610,11 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
   n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait
   REFUSER de conclure.
+- **Le retour en direct (2026-10-01) n'a jamais vu un casque.** Deux inconnues : la latence réelle
+  d'une décision face aux pauses entre essais (une décision arrivée après le début de l'essai suivant
+  est perdue, pas d'anneau), et l'effet du retour sur l'attention — voir sa réussite ou son échec en
+  direct peut changer la façon de fixer. Les chiffres des tests ne se comparent donc plus tels quels
+  aux repères d'avant.
 - **Le chantier « Filtres réglables » (2026-09-30) n'a rien mesuré au casque non plus.** Ni l'effet
   du coupe-bande sur un décodage réel, ni FBCSP contre CSP (une seule séance MI archivée, à 40 %
   à 3 classes), ni les bornes : elles sont argumentées sur du synthétique et le calcul (la coupure

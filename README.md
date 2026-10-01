@@ -343,6 +343,13 @@ python src/stimulus/cvep.py --calibrer     # the same, wrapped in a calibration 
 python src/stimulus/cvep.py --log s.jsonl  # ground truth to a FILE — required to score a session
 ```
 
+**Live feedback** (2026-10-01): with `--retour`, a window listens to its mode's PUBLIC decoded
+stream (`decoded_cvep`, `decoded_ssvep`, `decoded_p300`), exactly as your app would, and circles the
+target the engine decoded. During a guided test the ring is green when the decision is right and red
+when it is wrong; in free use (`--libre` for the c-VEP, which otherwise designates targets) it
+follows the latest decision. The ring never touches a target's pixels: the c-VEP phase and SSVEP
+target checks still read the screen and still demand zero error.
+
 You normally never type these: the console launches them for you, with `--calibrer` when you press
 **Calibrate**, with `--guide` when you start the SSVEP emission-rate measurement, and bare when you
 press **Launch stimulus**. Type them when you need an option the buttons do not pass — the launcher
@@ -375,6 +382,12 @@ Read `archive/README.md` before reaching for any of them.
 timestamps of incoming markers. For a session that matters, go through the console.
 
 ## Consume the stream
+
+> **During a test** (c-VEP, SSVEP, P300), the mode's decoded stream carries the TEST's decisions,
+> one per trial (a block, a fixation, a round), with the mode's own channels. An app connected to
+> `decoded_<mode>` therefore receives them; that is how our own stimulus window draws its live
+> feedback. A test and its mode never publish at the same time: the engine refuses one while the
+> other runs.
 
 The client depends on `pylsl` and nothing else — not on this repository.
 
