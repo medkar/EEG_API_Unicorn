@@ -17,6 +17,10 @@ même temps que le moteur : l'Unicorn n'accepte qu'une connexion. Elle dessine, 
 marqueurs, et c'est tout. Le jour où l'une d'elles a besoin de lire l'EEG, la réponse n'est pas
 d'ouvrir une seconde session — c'est que le calcul voulu appartient au moteur.
 
+Une seule chose qu'elles LISENT, depuis le 2026-10-01 : le flux DÉCODÉ public de leur mode
+(`--retour`, `retour.py`), pour entourer la cible décodée — comme l'application d'un étudiant, par
+le nom du flux. Jamais l'EEG : ce que le moteur a décidé, pas ce que le casque a mesuré.
+
 ⚠️ **L'horodatage se prend APRÈS `pygame.display.flip()`**, jamais avant. Le prendre avant décale
 tous les marqueurs d'une frame, ce qui ne lève aucune exception et dégrade le décodage juste assez
 pour ressembler à quelqu'un qui fixe mal.

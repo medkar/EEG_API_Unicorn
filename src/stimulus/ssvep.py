@@ -81,8 +81,20 @@ même seuil, même façon de mesurer l'écart entre deux flips, et la même honn
 AFFICHÉ, jamais corrigé**. Il tourne dans les DEUX modes, s'affiche au HUD en direct, et
 `bilan_de_seance` l'imprime en fin de séance.
 
+--- Le RETOUR (`--retour`) ------------------------------------------------------------------------
+
+La fenêtre lit `decoded_ssvep` comme l'application d'un étudiant, en tâche de fond, et entoure la
+flèche décodée d'un anneau (`stimulus/retour.py` porte la règle). L'anneau passe AU-DELÀ de la
+pointe et de la queue de la flèche, liseré bleu compris (`rayon_anneau`) : il ne touche aucun pixel
+que les sondes de `--smoke` relisent. En libre (sans `--guide`) il suit la dernière décision, ambre.
+En `--guide`, la décision d'un essai arrive pendant le retour à la croix : VERT si c'est la flèche
+désignée, ROUGE sinon, jusqu'au début de la FIXATION suivante. Sans `--guide`, cette fenêtre
+n'affiche déjà que ses flèches : elle n'a pas besoin d'un `--libre`.
+
 Lancer :
     python src/stimulus/ssvep.py                 # plein écran, ESC pour quitter
+    python src/stimulus/ssvep.py --retour        # ESSAYER LIBREMENT : l'anneau dit ce que le
+                                                 # moteur décode (lancé par la console)
     python src/stimulus/ssvep.py --windowed      # fenêtre 1000x700 (dev)
     python src/stimulus/ssvep.py --refresh 60    # forcer le refresh (sinon auto-mesuré)
     python src/stimulus/ssvep.py --seconds 20    # auto-quit après 20 s
@@ -134,6 +146,11 @@ DIM = (110, 110, 130)
 # utilisation de ce bleu déplacerait le centroïde et le test chercherait la mauvaise flèche.
 CUE = (60, 130, 255)
 CUE_EPAISSEUR_PX = 8    # épaisseur du liseré de désignation, en pixels
+
+# L'anneau de RETOUR (`--retour`). La flèche s'étend jusqu'à 1,05 × sa demi-taille (les coins de sa
+# queue : √(0,32² + 1²)), et le liseré bleu déborde d'une demi-épaisseur : l'anneau passe 8 px
+# au-delà, dans le noir. `--smoke` le prouve pixel par pixel (aucun pixel non-fond sous l'anneau).
+ANNEAU_MARGE_PX = 8
 
 # La fenêtre de dev (`--windowed`) et l'écran factice de `--smoke`. Nommée plutôt qu'écrite deux
 # fois : `--smoke` relit des PIXELS à des coordonnées calculées sur cette taille, et deux valeurs
@@ -243,6 +260,12 @@ def positions_cibles(plan, size, dist_ratio=DIST_RATIO):
     par_direction = {"up": (cx, cy - dist), "down": (cx, cy + dist),
                      "left": (cx - dist, cy), "right": (cx + dist, cy)}
     return [par_direction[c["dir"]] for c in plan]
+
+
+def rayon_anneau(demi_taille):
+    """Le rayon de l'anneau de RETOUR autour d'une flèche de demi-taille `demi_taille`. Une
+    écriture : le rendu et `--smoke` (qui le relit dans les pixels) l'appellent tous les deux."""
+    return int(demi_taille * 1.05) + CUE_EPAISSEUR_PX + ANNEAU_MARGE_PX
 
 
 # --- Les fréquences AFFICHÉES : celles du mode, ou rien ---------------------
@@ -384,6 +407,7 @@ def bilan_de_seance(frames, sautees, refresh):
 # `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 from stimulus.garde import sous_garde_data  # noqa: E402
+from stimulus.retour import Retour, SourceDecisions  # noqa: E402
 
 
 # --- L'ordre des essais du run guidé (fonction PURE, testable sans écran) ---
@@ -431,8 +455,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         per_target=SSVEP_GUIDE_TRIALS_PER_TARGET, seed=None, freqs=None,
         stream=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, attente_moteur_s=None,
         journal=None, bilan=None, sonde_ecran=None,
-        cue_s=None, fix_s=None, gap_s=None, repos_s=None):
+        cue_s=None, fix_s=None, gap_s=None, repos_s=None, retour=False, source_retour=None):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
+
+    `retour` (`--retour`) entoure la flèche décodée ; `source_retour` n'existe que pour `--smoke`
+    (une source de décisions FACTICE à la place de `decoded_ssvep`, cf. `stimulus/retour.py`).
 
     ⚠️ Les deux modes partagent le MÊME rendu du clignotement, le MÊME compteur de frames et le
     MÊME compteur de frames SAUTÉES. Écrire une seconde boucle « pour le mode guidé » rouvrirait la
@@ -518,6 +545,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     # dictionnaire par direction ferait alors décrire la cible 1 par la flèche d'une autre.
     positions = positions_cibles(plan, size)
     polys = [arrow_polygon(px, py, asize, c["dir"]) for (px, py), c in zip(positions, plan)]
+    rayon_retour = rayon_anneau(asize)
+    # Le RETOUR cherche `decoded_ssvep` dès maintenant, dans son fil. Par essai en guidé (une
+    # décision par fixation), continu en libre (le mode décide à ~5 Hz).
+    anneau = (Retour(source_retour or SourceDecisions(stimulus_id="ssvep"), len(plan),
+                     par_essai=guide) if retour else None)
 
     font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
     hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
@@ -582,6 +614,10 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             win.blit(label, label.get_rect(center=(px, py + asize * 1.35)))
         if designee is not None:
             pygame.draw.polygon(win, CUE, polys[designee], CUE_EPAISSEUR_PX)
+        # L'anneau de RETOUR : après les flèches et la désignation, AVANT le texte — au-delà de la
+        # flèche et de son liseré (cf. `rayon_anneau`).
+        if anneau is not None:
+            anneau.dessiner(pygame, win, positions, rayon_retour)
         if croix:
             pygame.draw.line(win, DIM, (cx - 14, cy), (cx + 14, cy), 3)
             pygame.draw.line(win, DIM, (cx, cy - 14), (cx, cy + 14), 3)
@@ -645,7 +681,14 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
                     if sonde and sonde_ecran is not None:
                         sonde_ecran(win, list(positions))
             apres_flip()
+            lit_le_retour()
         return running
+
+    def lit_le_retour():
+        """⚠️ En fin de tour : APRÈS le flip, le marqueur et la mesure de cadence de l'image. Lu
+        avant le flip, il retarderait l'image que le marqueur horodate ; `--smoke` le vérifie."""
+        if anneau is not None:
+            anneau.lire()
 
     seance_complete = False
     try:
@@ -656,14 +699,18 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
                 dessine()
                 pygame.display.flip()
                 apres_flip()
+                lit_le_retour()
                 if smoke and frame >= 30:
                     running = False
         else:
             seance_complete = _guide(
                 plan, per_target, seed, phase, emet, refresh,
                 cue_s, fix_s, gap_s, repos_s, attente_moteur_s,
-                outlet, attente_consommateur_s)
+                outlet, attente_consommateur_s, anneau)
     finally:
+        if anneau is not None:
+            anneau.bilan("[ssvep-stim]")
+            anneau.fermer()
         pygame.quit()
 
     # Un BILAN, toujours, et dans les DEUX modes : « 0 frame sautée » doit se LIRE, pas se
@@ -678,12 +725,17 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
 
 def _guide(plan, per_target, seed, phase, emet, refresh,
-           cue_s, fix_s, gap_s, repos_s, attente_moteur_s, outlet, attente_consommateur_s):
+           cue_s, fix_s, gap_s, repos_s, attente_moteur_s, outlet, attente_consommateur_s,
+           anneau=None):
     """La ligne du temps du run guidé. Rend True si la séance est allée jusqu'au `calib_end`.
 
     Chauffe -> plancher de repos -> essais entrelacés -> fin. Le clignotement TOURNE du début à la
     fin, plancher de repos COMPRIS : celui-ci doit être mesuré dans les mêmes conditions visuelles
     que les essais, sinon le moteur soustrait un fond qui n'est pas celui du test.
+
+    `anneau` (le RETOUR) est découpé en essais sur la FIXATION : effacé quand elle commence, ouvert
+    à la décision de l'essai quand elle finit — le moteur décide sur sa dernière fenêtre, donc sa
+    réponse arrive pendant le retour à la croix (cf. `stimulus/retour.py`).
     """
     noms = [c["name"] for c in plan]
     freqs = [float(c["actual_hz"]) for c in plan]
@@ -732,11 +784,15 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
             return _interrompu(i - 1, len(ordre))
         # 2. La fixation. Le `cue` part ICI, au premier flip : c'est l'instant à partir duquel le
         #    moteur compte `SSVEP_GUIDE_FIX_S` pour prélever la DERNIÈRE fenêtre de la fixation.
+        if anneau is not None:
+            anneau.mesure_commence()
         if not phase(fix_s, designee=cible, titre=noms[cible], sous="fixe la flèche entourée",
                      marqueur={"mode": "ssvep", "event": "cue", "target": int(cible),
                                "freq_hz": freqs[cible]},
                      sonde=True):
             return _interrompu(i - 1, len(ordre))
+        if anneau is not None:
+            anneau.mesure_finie(verite=cible)
         # 3. Le retour à la croix, pour que deux essais consécutifs ne se recouvrent pas.
         if not phase(gap_s, titre="—", croix=True, sous="repose les yeux sur la croix"):
             return _interrompu(i, len(ordre))
@@ -1121,8 +1177,128 @@ def _smoke():
         f"…et 37 sauts sur 1000 frames donnent 3,7 %, le compte BRUT — jamais corrigé, jamais "
         f"lissé ({abime['sautees']}, {abime['part_sautees']:.3f})")
 
+    # --- J. `--retour` ----------------------------------------------------------------
+    _smoke_retour(chk)
+
     print(f"[ssvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def _smoke_retour(chk):
+    """J. L'ANNEAU DE RETOUR, sur l'écran factice, avec une source de décisions FACTICE.
+
+    Un run GUIDÉ, où un moteur factice répond à chaque `cue` par la décision de son script une
+    fixation plus tard (comme le vrai, qui prélève sa dernière fenêtre en fin de fixation) ; puis
+    le décodage LIBRE, où la source rend des décisions à des lectures fixées. Tout est lu dans les
+    PIXELS, et la désignation bleue — LE test de la moitié guidée — est relue anneau affiché."""
+    import pygame
+    import pylsl
+
+    from stimulus import retour as rt
+
+    plan = plan_du_stimulus(60.0)
+    positions = positions_cibles(plan, TAILLE_FENETRE)
+    rayon = rayon_anneau(min(TAILLE_FENETRE) * TAILLE_RATIO)
+    trace, source = [], [None]
+    vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
+
+    def flip(*a, **k):
+        r = vrai_flip(*a, **k)
+        s = pygame.display.get_surface()
+        trace.append(("flip", rt.anneaux_a_l_ecran(s, positions, rayon),
+                      _cible_designee_a_l_ecran(s, positions)))
+        return r
+
+    def push(self, *a, **k):
+        m = json.loads(a[0][0])
+        trace.append(("push", m.get("event"), m))
+        if hasattr(source[0], "marqueur"):
+            source[0].marqueur(m)
+        return vrai_push(self, *a, **k)
+
+    duree = 0.3
+    moteur = rt.MoteurFactice(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
+                              depart="cue", ouverture="cue", delai=duree + 0.1, secondes=True,
+                              trace=trace)
+    pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
+    try:
+        with rt.Instrumentation(trace) as garde_guide:
+            source[0] = moteur
+            fait = run(windowed=True, refresh=60.0, guide=True, per_target=2, seed=5,
+                       stream=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                       attente_moteur_s=0.0, cue_s=duree, fix_s=duree, gap_s=duree,
+                       repos_s=_SMOKE_REPOS_S, retour=True, source_retour=moteur)
+            trace_g = list(trace)
+            trace.clear()
+        with rt.Instrumentation(trace) as garde_libre:
+            source[0] = rt.SourceScriptee({5: 1, 15: -1, 20: 2}, trace=trace)
+            run(smoke=True, refresh=60.0, retour=True, source_retour=source[0])
+            trace_l = list(trace)
+    finally:
+        pygame.display.flip, pylsl.StreamOutlet.push_sample = vrai_flip, vrai_push
+
+    images = [e for e in trace_g if e[0] == "flip"]
+    n, cues, cibles = -1, [], []
+    for e in trace_g:
+        if e[0] == "flip":
+            n += 1
+        elif e[0] == "push" and e[1] == "cue":
+            cues.append(n)
+            cibles.append(e[2]["target"])
+    chk(fait and len(cues) == 6 and len(moteur.attendues) == 6,
+        f"[J] le run guidé avec retour va au bout : 6 fixations, 6 décisions scriptées "
+        f"({len(cues)}, {len(moteur.attendues)})")
+    fins = [c - 1 for c in cues[1:]] + [len(images) - 1]
+    vus = [images[i][1] for i in fins]
+    attendus = [rt.anneau_attendu(*a) for a in moteur.attendues]
+    chk(vus == attendus,
+        f"[J] l'anneau entoure la flèche DÉCIDÉE, VERT si c'est la désignée, ROUGE sinon, rien "
+        f"sur −1 ni pour une décision arrivée pendant la fixation suivante — lu dans les PIXELS "
+        f"(vus {vus}, attendus {attendus})")
+    chk(any(a and a[0][1] == rt.COULEUR_JUSTE for a in vus)
+        and any(a and a[0][1] == rt.COULEUR_FAUX for a in vus),
+        "[J] …et les deux couleurs ont réellement été vues")
+    # Pendant une fixation, la flèche est désignée (bleu) ; le retour à la croix ne l'est plus.
+    pendant = []
+    for c in cues:
+        i = c
+        while i < len(images) and images[i][2] != -1:
+            if images[i][1]:
+                pendant.append(i)
+            i += 1
+    chk(not pendant,
+        f"[J] AUCUN anneau pendant une fixation — ni celui de l'essai précédent, ni la décision "
+        f"tardive ({len(pendant)} image(s) fautive(s))")
+    # LE test de la moitié guidée, relu là où l'anneau est AFFICHÉ : la consigne de l'essai
+    # suivant, juste avant sa fixation.
+    relues = [(images[c - 1][2], cible) for c, cible in zip(cues[1:], cibles[1:]) if images[c - 1][1]]
+    chk(len(relues) >= 2 and all(a == b for a, b in relues),
+        f"[J] anneau affiché, la flèche DÉSIGNÉE se relit toujours dans les pixels "
+        f"({relues})")
+    chk(garde_guide.traces > 10 and garde_guide.violations == 0,
+        f"[J] l'anneau ne recouvre AUCUN pixel non-fond — ni flèche, ni liseré, ni étiquette : "
+        f"{garde_guide.violations} pixel(s) touché(s) sur {garde_guide.traces} tracés")
+    fautes = rt.ordre_de_lecture(trace_g, {"repos", "cue"})
+    lectures = sum(1 for e in trace_g if e[0] == "lecture")
+    chk(not fautes and lectures == len(images),
+        f"[J] le retour se lit UNE fois par image, APRÈS son flip et son marqueur ({lectures} "
+        f"lectures pour {len(images)} images, fautes {fautes[:3]})")
+
+    anneaux_l = [e[1] for e in trace_l if e[0] == "flip"]
+    attendus_l = ([[]] * 5 + [[(1, rt.COULEUR_LIBRE)]] * 10 + [[]] * 5
+                  + [[(2, rt.COULEUR_LIBRE)]] * (len(anneaux_l) - 20))
+    chk(len(anneaux_l) == 30 and anneaux_l == attendus_l and garde_libre.violations == 0,
+        f"[J] libre : l'anneau AMBRE suit la dernière décision dès l'image suivante, disparaît "
+        f"sur −1, et ne touche aucun pixel non-fond (images "
+        f"{[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} en "
+        f"désaccord, {garde_libre.violations} pixel(s) touché(s))")
+
+    nom = rt.flux_decode_de("ssvep")
+    chk(nom == "EEG_API_Unicorn_decoded_ssvep",
+        f"le retour écoute le flux PUBLIC du mode, lu dans son contrat — le nom que "
+        f"l'application d'un étudiant résout ({nom})")
+    rt.autotest_etat(chk)
+    rt.autotest_source(chk)
 
 
 # Les durées du smoke : courtes, parce qu'on teste la LIGNE DU TEMPS et pas la physiologie. Elles
@@ -1172,6 +1348,9 @@ def _parse_args(argv):
                         f"--guide, ce réglage ne sert à rien")
     p.add_argument("--seed", type=int, default=None,
                    help="graine du tirage de l'ordre des essais (rejouer le même ordre)")
+    p.add_argument("--retour", action="store_true",
+                   help="entoure la flèche que le moteur DÉCODE, lue sur le flux public "
+                        "decoded_ssvep en tâche de fond. Avec --guide : vert si juste, rouge sinon")
     p.add_argument("--smoke", action="store_true", help="test headless (SDL dummy), n'affiche rien")
     return p.parse_args(argv)
 
@@ -1202,7 +1381,8 @@ if __name__ == "__main__":
             _refuse(raison)
     try:
         fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
-                   guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs)
+                   guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs,
+                   retour=args.retour)
     except FreqsRefusees as refus:
         # ⚠️ Le refus ne peut tomber qu'ICI, et pas plus tôt : sans `--refresh`, le
         # rafraîchissement est MESURÉ, donc on ne sait qu'après l'ouverture de l'écran si ces

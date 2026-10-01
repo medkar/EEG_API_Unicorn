@@ -44,8 +44,18 @@ flashs — celui qui fermerait complètement la contamination entre manches, cf.
 §4(a) — ne peut rien détecter tant qu'il n'y a aucune frontière temporelle à détecter. Cette pause
 est donc ce qui rend ce garde-fou possible.
 
+⚠️ **`--retour` entoure la cible que le moteur a SÉLECTIONNÉE** (`stimulus/retour.py` porte la
+règle). Le P300 décide UNE fois par manche, après le `round_end` : l'anneau apparaît donc pendant
+la pause qui suit, et s'efface au premier flash de la manche suivante — un repère statique pendant
+les flashs ferait concurrence à l'oddball. En test (`--tester`), VERT si c'est la cible désignée,
+ROUGE sinon ; en décodage, ambre. Il est tracé au-delà du cercle de désignation
+(`ANNEAU_ECART_PX`), dans le noir. Sans option, cette fenêtre ne désigne déjà rien (« choisis ta
+cible ») : elle n'a pas besoin d'un `--libre`.
+
 Lancer :
     python src/stimulus/p300.py                  # plein écran, ESC pour quitter
+    python src/stimulus/p300.py --retour         # ESSAYER LIBREMENT : l'anneau dit ce que le
+                                                  # moteur a sélectionné (lancé par la console)
     python src/stimulus/p300.py --windowed       # fenêtre 1000x700 (dev)
     python src/stimulus/p300.py --reps 8         # répétitions par manche (défaut P300_REPS)
     python src/stimulus/p300.py --targets 6      # nombre de cibles (défaut P300_N_TARGETS)
@@ -78,6 +88,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus.retour import Retour, SourceDecisions  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -95,6 +106,10 @@ CUE = (60, 130, 255)     # le cercle de DÉSIGNATION, en calibration : « c'est 
 #                          sujet à qui l'on demande de compter les éclairs le compterait.
 CUE_MARGE_PX = 8         # de combien le cercle de désignation déborde la cible
 CUE_EPAISSEUR_PX = 4
+# L'anneau de RETOUR (`--retour`) : ce nombre de pixels AU-DELÀ du cercle de désignation, tracé vers
+# l'intérieur sur 4 px — il laisse 6 px de noir entre les deux, et ne touche ni la cible ni la
+# désignation. `--smoke` le prouve pixel par pixel (aucun pixel non-fond sous l'anneau).
+ANNEAU_ECART_PX = 10
 
 # ⚠️ La durée de la pause entre deux manches est LUE dans `core/config.py`, jamais recopiée ici.
 # Elle y a été hissée le 2026-09-07 parce que DEUX programmes en dépendent et qu'aucun ne peut
@@ -237,13 +252,30 @@ def target_positions(n_targets, span):
             for c in p300_targets(int(n_targets))]
 
 
+def geometrie(size, n_targets):
+    """`(spots, rad, rayon_cue, rayon_anneau)` pour un écran `size` : les centres ENTIERS des cibles,
+    leur rayon, celui du cercle de désignation et celui de l'anneau de retour.
+
+    Une seule écriture pour le rendu ET pour `--smoke`, qui relit les deux cercles dans les pixels :
+    recalculé de son côté, le test chercherait à un rayon voisin et ne trouverait rien."""
+    w, h = size
+    span = min(w, h)
+    rad = span * 0.075
+    rayon_cue = int(rad) + CUE_MARGE_PX
+    spots = [(int(w / 2 + dx), int(h / 2 + dy)) for dx, dy in target_positions(n_targets, span)]
+    return spots, rad, rayon_cue, rayon_cue + ANNEAU_ECART_PX
+
+
 # --- Boucle principale ------------------------------------------------------
 
 def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, seconds=None,
         smoke=False, stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0,
         journal=None, calibrer=False, tester=False, rounds=P300_CAL_ROUNDS, attente_moteur_s=None,
-        sonde_ecran=None):
+        sonde_ecran=None, retour=False, source_retour=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
+
+    `retour` (`--retour`) entoure la cible sélectionnée ; `source_retour` n'existe que pour
+    `--smoke` (une source de décisions FACTICE à la place de `decoded_p300`).
 
     ⚠️ Les deux modes partagent la MÊME boucle et la MÊME séquence de flashs (`build_markers`).
     Une manche de calibration est une manche normale, précédée d'un `cue` : écrire une seconde
@@ -306,6 +338,11 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     info = StreamInfo(stream_name, "Markers", 1, IRREGULAR_RATE, "string",
                       f"p300-stim-{os.getpid()}")
     outlet = StreamOutlet(info)
+    # Le RETOUR cherche `decoded_p300` dès maintenant, dans son fil — l'attente du moteur juste
+    # en dessous dure jusqu'à 5 s, autant qu'elle serve. Toujours PAR ESSAI : une manche, une
+    # décision, en test comme en décodage.
+    anneau = (Retour(source_retour or SourceDecisions(stimulus_id="p300"), int(targets),
+                     par_essai=True) if retour else None)
 
     print(f"[p300-stim] refresh écran   : {refresh:.0f} Hz")
     print(f"[p300-stim] {targets} cibles, {reps} répétitions/manche, "
@@ -330,13 +367,11 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     w, h = size
     cx, cy = w / 2, h / 2
     span = min(w, h)
-    rad = span * 0.075
-    # ENTIER, et calculé une seule fois : c'est le rayon exact auquel le cercle de désignation est
-    # tracé, donc celui auquel `--smoke` va le RELIRE dans les pixels. Recalculé de son côté, le
-    # test chercherait à un rayon voisin et ne trouverait rien — un test qui échoue pour la
-    # mauvaise raison est pire qu'un test absent.
-    rayon_cue = int(rad) + CUE_MARGE_PX
-    spots = [(int(cx + dx), int(cy + dy)) for dx, dy in target_positions(targets, span)]
+    # ENTIERS, et calculés une seule fois (`geometrie`) : ce sont les rayons exacts auxquels le
+    # cercle de désignation et l'anneau de retour sont tracés, donc ceux auxquels `--smoke` va les
+    # RELIRE dans les pixels. Recalculés de son côté, le test chercherait à un rayon voisin et ne
+    # trouverait rien — un test qui échoue pour la mauvaise raison est pire qu'un test absent.
+    spots, rad, rayon_cue, rayon_retour = geometrie(size, targets)
 
     font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
     hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
@@ -397,6 +432,16 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
             pygame.draw.circle(win, FIX_DOT, (x, y), FIX_DOT_R)   # ancre le regard
             lab = font.render(str(i), True, LABEL)
             win.blit(lab, lab.get_rect(center=(x, y + int(rad * 1.9))))
+        # L'anneau de RETOUR : après les cibles, AVANT tout texte — au-delà de la désignation.
+        if anneau is not None:
+            anneau.dessiner(pygame, win, spots, rayon_retour)
+
+    def fin_d_image():
+        """Après CHAQUE flip et son marqueur : la cadence, puis le retour. ⚠️ Lu avant le flip, il
+        retarderait l'image dont le marqueur porte l'horodatage ; `--smoke` le vérifie."""
+        clock.tick(int(refresh) + 5)
+        if anneau is not None:
+            anneau.lire()
 
     def draw(allumee):
         """`allumee` : indice de la cible ON, ou -1 si aucune (phase OFF / entre deux flashs)."""
@@ -447,7 +492,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                         # `run` : c'est ce qui permet à `--smoke` de LIRE la cible désignée au lieu
                         # de croire le compteur de cet émetteur.
                         sonde_ecran(win, list(spots), rayon_cue)
-            clock.tick(int(refresh) + 5)
+            fin_d_image()
 
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
     rounds = int(rounds)
@@ -499,6 +544,10 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                 break
             if m["event"] == "flash":
                 cible = m["target"]
+                if flashs_manche == 0 and anneau is not None:
+                    # La manche commence sa MESURE : l'anneau de la précédente s'efface avant
+                    # le premier flash, et sa décision, si elle arrive encore, sera ignorée.
+                    anneau.mesure_commence()
                 for f in range(on_fr):
                     poll()
                     if not running:
@@ -516,7 +565,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                         if dernier_onset is not None:
                             soa_mesures.append(onset - dernier_onset)
                         dernier_onset = onset
-                    clock.tick(int(refresh) + 5)
+                    fin_d_image()
                 if not running:
                     break
                 for _ in range(off_fr):               # gap éteint avant le flash suivant
@@ -525,9 +574,13 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                         break
                     draw(-1)
                     pygame.display.flip()
-                    clock.tick(int(refresh) + 5)
+                    fin_d_image()
             else:  # round_end : pas de rendu associé, juste le marqueur de fin de manche
                 emet(m)
+                if anneau is not None:
+                    # La manche est FERMÉE : la prochaine décision du moteur est la sienne. En
+                    # test, comparée à la cible désignée ; en décodage, ambre.
+                    anneau.mesure_finie(verite=cue_courant)
                 mesure = (f"{statistics.median(soa_mesures) * 1000:.0f} ms mesuré"
                           if soa_mesures else "SOA non mesurable")
                 print(f"[p300-stim] manche {round_num} : {flashs_manche} flashs envoyés, "
@@ -572,6 +625,9 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
               f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
               f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
 
+    if anneau is not None:
+        anneau.bilan("[p300-stim]")
+        anneau.fermer()
     pygame.quit()
     return True
 
@@ -817,8 +873,124 @@ def _smoke(reps, n_targets):
     # `chk` met à jour `ok` par `nonlocal` : la valeur de retour n'a rien à faire ici.
     _smoke_bout_en_bout(chk, journal_c, designees)
 
+    # --- E. `--retour` ----------------------------------------------------------------
+    _smoke_retour(chk)
+
     print(f"[p300-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
+
+
+def _smoke_retour(chk):
+    """E. L'ANNEAU DE RETOUR, sur l'écran factice, avec une source de décisions FACTICE.
+
+    Un TEST de quatre manches, où un moteur factice répond à chaque `round_end` par la décision de
+    son script (comme le vrai, qui décide une fois la dernière époque mûre) ; puis le décodage
+    LIBRE. Tout est lu dans les PIXELS, et la désignation bleue — le garde-fou de la moitié C — est
+    relue anneau affiché."""
+    import pygame
+    import pylsl
+
+    from stimulus import retour as rt
+
+    spots, _rad, rayon_cue, rayon = geometrie((1000, 700), P300_N_TARGETS)
+    trace, source = [], [None]
+    vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
+
+    def flip(*a, **k):
+        r = vrai_flip(*a, **k)
+        s = pygame.display.get_surface()
+        trace.append(("flip", rt.anneaux_a_l_ecran(s, spots, rayon),
+                      _cible_designee_a_l_ecran(s, spots, rayon_cue)))
+        return r
+
+    def push(self, *a, **k):
+        m = json.loads(a[0][0])
+        trace.append(("push", m.get("event"), m))
+        if hasattr(source[0], "marqueur"):
+            source[0].marqueur(m)
+        return vrai_push(self, *a, **k)
+
+    commun = dict(windowed=True, refresh=240.0, reps=P300_MIN_REPS, targets=P300_N_TARGETS,
+                  stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                  retour=True)
+    # 20 lectures après le `round_end` : dans la pause de la manche suivante (2,5 s). « tard » part
+    # 2 lectures après le premier flash SUIVANT, donc pendant la mesure de la manche d'après.
+    moteur = rt.MoteurFactice(P300_N_TARGETS, ["juste", "faux", "tard", "juste"],
+                              depart="round_end", ouverture="flash", delai=20, trace=trace)
+    libre = rt.MoteurFactice(P300_N_TARGETS, [2, -1, 4], depart="round_end", ouverture="flash",
+                             delai=20, trace=trace)
+    pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
+    try:
+        with rt.Instrumentation(trace) as garde_test:
+            source[0] = moteur
+            fait = run(calibrer=True, tester=True, rounds=4, attente_moteur_s=0.0,
+                       source_retour=moteur, **commun)
+            trace_t = list(trace)
+            trace.clear()
+        with rt.Instrumentation(trace) as garde_libre:
+            source[0] = libre
+            run(seconds=2 * (P300_PAUSE_MANCHE_S + 1.0) + 1.5, source_retour=libre, **commun)
+            trace_l = list(trace)
+    finally:
+        pygame.display.flip, pylsl.StreamOutlet.push_sample = vrai_flip, vrai_push
+
+    def decoupe(tr):
+        """(images, premiers flashs de chaque manche, round_end) — en rangs d'image."""
+        n, ouvertures, fermetures, attend = -1, [], [], True
+        for e in tr:
+            if e[0] == "flip":
+                n += 1
+            elif e[0] == "push" and e[1] == "flash" and attend:
+                ouvertures.append(n)
+                attend = False
+            elif e[0] == "push" and e[1] == "round_end":
+                fermetures.append(n)
+                attend = True
+        return [e for e in tr if e[0] == "flip"], ouvertures, fermetures
+
+    images, ouv, ferm = decoupe(trace_t)
+    chk(fait and len(ouv) == 4 and len(ferm) == 4 and len(moteur.attendues) == 4,
+        f"[E] le test avec retour va au bout : 4 manches ouvertes, 4 fermées, 4 décisions "
+        f"scriptées ({len(ouv)}, {len(ferm)}, {len(moteur.attendues)})")
+    fins = [o - 1 for o in ouv[1:]] + [len(images) - 1]
+    vus = [images[i][1] for i in fins]
+    attendus = [rt.anneau_attendu(*a) for a in moteur.attendues]
+    chk(vus == attendus,
+        f"[E] l'anneau entoure la cible SÉLECTIONNÉE, VERT si c'est la désignée, ROUGE sinon, rien "
+        f"pour une décision arrivée pendant la manche suivante — lu dans les PIXELS "
+        f"(vus {vus}, attendus {attendus})")
+    chk(any(a and a[0][1] == rt.COULEUR_JUSTE for a in vus)
+        and any(a and a[0][1] == rt.COULEUR_FAUX for a in vus),
+        "[E] …et les deux couleurs ont réellement été vues")
+    pendant = [i for o, f in zip(ouv, ferm) for i in range(o, f + 1) if images[i][1]]
+    chk(not pendant,
+        f"[E] AUCUN anneau pendant les flashs d'une manche — ni le précédent, ni la décision "
+        f"tardive : un repère statique y ferait concurrence à l'oddball ({len(pendant)} image(s))")
+    cues = [e[2]["target"] for e in trace_t if e[0] == "push" and e[1] == "cue"]
+    relues = [(images[o - 1][2], c) for o, c in zip(ouv[1:], cues[1:]) if images[o - 1][1]]
+    chk(len(relues) >= 2 and all(a == b for a, b in relues),
+        f"[E] anneau affiché, la cible DÉSIGNÉE se relit toujours dans les pixels ({relues})")
+    chk(garde_test.traces > 10 and garde_test.violations == 0,
+        f"[E] l'anneau ne recouvre AUCUN pixel non-fond — ni cible, ni désignation, ni étiquette : "
+        f"{garde_test.violations} pixel(s) touché(s) sur {garde_test.traces} tracés")
+    fautes = rt.ordre_de_lecture(trace_t, {"flash", "cue"})
+    lectures = sum(1 for e in trace_t if e[0] == "lecture")
+    chk(not fautes and lectures == len(images),
+        f"[E] le retour se lit UNE fois par image, APRÈS son flip et son marqueur ({lectures} "
+        f"lectures pour {len(images)} images, fautes {fautes[:3]})")
+
+    images_l, ouv_l, _ferm_l = decoupe(trace_l)
+    vus_l = [images_l[o - 1][1] for o in ouv_l[1:3]]
+    chk(len(ouv_l) >= 3 and vus_l == [[(2, rt.COULEUR_LIBRE)], []] and garde_libre.violations == 0,
+        f"[E] libre : l'anneau AMBRE montre la sélection pendant la pause, et rien sur −1 "
+        f"({vus_l}, {len(ouv_l)} manches, {garde_libre.violations} pixel(s) touché(s))")
+
+    nom = rt.flux_decode_de("p300")
+    chk(nom == "EEG_API_Unicorn_decoded_p300",
+        f"le retour écoute le flux PUBLIC du mode, lu dans son contrat — le nom que "
+        f"l'application d'un étudiant résout ({nom})")
+    rt.autotest_etat(chk)
+    rt.autotest_source(chk)
 
 
 def _smoke_bout_en_bout(chk, journal, designees):
@@ -929,6 +1101,10 @@ def _parse_args(argv):
                         f"{P300_CAL_ROUNDS // P300_N_TARGETS}× à {P300_N_TARGETS} cibles). Sans "
                         f"--calibrer, ce réglage ne sert à rien : le décodage enchaîne les manches "
                         f"jusqu'à ESC")
+    p.add_argument("--retour", action="store_true",
+                   help="entoure la cible que le moteur a SÉLECTIONNÉE, lue sur le flux public "
+                        "decoded_p300 en tâche de fond, pendant la pause qui suit chaque manche. "
+                        "En test : vert si juste, rouge sinon")
     p.add_argument("--smoke", action="store_true",
                    help="test headless (CI) : la séquence ET la boucle réelle, sur écran factice")
     return p.parse_args(argv)
@@ -939,7 +1115,7 @@ if __name__ == "__main__":
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, reps=args.reps, targets=args.targets,
              seconds=args.seconds, smoke=args.smoke, calibrer=args.calibrer or args.tester, tester=args.tester,
-             rounds=args.rounds)
+             rounds=args.rounds, retour=args.retour)
     # Un réglage refusé (`valide_reglages`) doit sortir en 1 même hors smoke : lancé depuis un
     # script, « ça n'a rien affiché » et « ça a refusé » ne doivent pas se ressembler.
     sys.exit(0 if ok else 1)
