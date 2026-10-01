@@ -283,7 +283,14 @@ class Console(QMainWindow):
 
     def apply_state(self, state):
         self._dernier_etat = state or {}
-        self.banner.update_from(state)
+        # Le fil du moteur est-il mort ? Décidé AVANT de peindre le bandeau (2026-10-01). Avant,
+        # chaque rafraîchissement peignait l'état FIGÉ d'un moteur mort — icônes de batterie et
+        # de liaison visibles — puis `set_moteur` les effaçait : Qt recalcule la mise en page dès
+        # qu'un widget apparaît, donc le bandeau grandissait puis rétrécissait, et tout ce qui est
+        # dessous sautait de haut en bas une fois par seconde (vu au casque).
+        mort = self._moteur_mort()
+        if not mort:
+            self.banner.update_from(state)
         # L'état de la fenêtre de stimulus est poussé À CHAQUE rafraîchissement, et dans le
         # bandeau : une fenêtre qui meurt pendant qu'on regarde une autre page doit se voir quand
         # même — et le moteur, lui, ne sait pas qu'elle existe.
@@ -293,9 +300,9 @@ class Console(QMainWindow):
         page = self.stack.currentWidget()
         if page is not self.grid:
             page.update_from(state)
-        # APRÈS le reste du bandeau, délibérément : quand le fil est mort, ce message écrase les
-        # champs que `update_from` vient de peindre depuis un état qui ne bougera plus.
-        self.banner.set_moteur(self._moteur_mort())
+        # Quand le fil est mort, ce message prend la place des champs d'un état qui ne bougera
+        # plus — que le bandeau n'a, du coup, même pas repeints ci-dessus.
+        self.banner.set_moteur(mort)
         self._suivre_attente(state)
 
     def _moteur_mort(self):
@@ -4704,6 +4711,94 @@ def _smoke():
         "…et cette ligne s'efface une fois les repos refaits")
     console.banner.update_from(fake_state())
 
+    # --- 🔴 LE CONTENU NE SAUTE PAS (2026-10-01, relevé au casque) --------------------------------
+    # « La fenêtre saute de haut en bas, juste ce qui est sous « Unicorn · 250 Hz… » », moteur
+    # arrêté, sur le casque. Cause : chaque rafraîchissement peignait l'état FIGÉ du moteur mort —
+    # icônes de batterie et de liaison VISIBLES, ce qui agrandit le bandeau sur-le-champ (Qt
+    # recalcule la mise en page dès qu'un widget apparaît) — puis « moteur arrêté » les cachait.
+    # Un aller-retour par seconde. Mesuré avant le correctif : 8 déplacements ou redimensionnements
+    # en 3 rafraîchissements (moteur mort après une coupure), 4 pour une batterie qui bascule. On compte ici les déplacements et redimensionnements SYNCHRONES, sans
+    # rendre la main à Qt entre deux rafraîchissements : c'est exactement ce que l'œil voyait.
+    from PySide6.QtCore import QEvent as _QEvent
+    from PySide6.QtCore import QObject as _QObject
+
+    class _Mouvements(_QObject):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def eventFilter(self, _obj, evenement):  # noqa: N802 - nom imposé par Qt
+            if evenement.type() in (_QEvent.Move, _QEvent.Resize):
+                self.n += 1
+            return False
+
+    class _Fige:
+        """Un moteur dont `snapshot()` rend toujours le même état — ce que rend un moteur mort."""
+
+        def __init__(self, etat):
+            self.etat = etat
+
+        def snapshot(self):
+            return self.etat
+
+        def submit(self, *_a, **_k):
+            return {"accepted": True}
+
+        def recent_window(self, _s):
+            return None
+
+        def close(self):
+            pass
+
+        def stop(self):
+            pass
+
+    def _sauts(etat, vivant, entre=None):
+        """Les déplacements du contenu pendant trois rafraîchissements. `entre(i)` change l'état
+        entre deux (pour éprouver une icône qui apparaît et disparaît)."""
+        fige = _Fige(etat)
+        fenetre = Console(fige, moteur_vivant=vivant)
+        fenetre.timer.stop()
+        fenetre.resize(1400, 900)
+        fenetre.show()
+        fenetre.refresh()
+        for _ in range(5):
+            app.processEvents()
+        espion = _Mouvements()
+        fenetre.stack.installEventFilter(espion)
+        fenetre.banner.installEventFilter(espion)
+        for i in range(3):
+            if entre is not None:
+                fige.etat = entre(i)
+            fenetre.refresh()
+        for _ in range(5):
+            app.processEvents()
+        n = espion.n
+        fenetre.close()
+        return n
+
+    sur_casque = {**fake_state(), "board": "unicorn",
+                  "casque": {"batterie_pc": 73, "perte_pc": 0.0, "signal_barres": 4,
+                             "perdus_total": 0}}
+    # L'état figé RÉALISTE : un moteur qui meurt après une coupure garde son alarme « liaison
+    # perdue » — peinte, elle ouvre la ligne des messages, que « moteur arrêté » refermait.
+    fige_coupure = {**sur_casque, "liaison": {"etat": "perdue", "depuis_s": 12, "tentatives": 4,
+                                              "erreur": "BOARD_NOT_READY"}}
+    n_mort = _sauts(fige_coupure, lambda: False)
+    chk(n_mort == 0,
+        f"moteur MORT sur le casque : le contenu ne bouge plus à chaque rafraîchissement "
+        f"({n_mort} déplacement(s) en 3 rafraîchissements ; 8 avant le correctif)")
+    # Et une icône qui APPARAÎT ou DISPARAÎT (batterie inconnue pendant une coupure, puis
+    # revenue) ne déplace rien non plus : les icônes gardent leur place, vides quand le moteur
+    # ne sait pas. Sinon chaque coupure ferait sauter la fenêtre deux fois.
+    sans_batterie = {**sur_casque, "casque": {"batterie_pc": None, "perte_pc": None,
+                                              "signal_barres": None, "perdus_total": 0}}
+    n_icones = _sauts(sur_casque, lambda: True,
+                      entre=lambda i: sans_batterie if i % 2 == 0 else sur_casque)
+    chk(n_icones == 0,
+        f"…et une batterie qui devient inconnue puis revient ne déplace rien non plus "
+        f"({n_icones} déplacement(s) ; 4 avant le correctif)")
+
     # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------
     # (2026-09-25, demandé à l'écran : « des icônes évolutives, tout à droite, et le texte
     # informatif sur la ligne du dessous »).
@@ -4740,9 +4835,10 @@ def _smoke():
         f"« référence décrochée » passe sur la ligne du DESSOUS ({ban.alarme.text()[:40]!r}…)")
     ban.update_from({**fake_state(), "casque": {"batterie_pc": None, "perte_pc": None,
                                                 "signal_barres": None, "perdus_total": 0}})
-    chk(ban.batterie.isHidden() and ban.batterie_pc.isHidden() and ban.signal.isHidden(),
+    chk(ban.batterie.niveau is None and not ban.batterie_pc.text() and ban.signal.barres is None
+        and not ban.batterie.toolTip() and not ban.signal.toolTip(),
         "…et rien n'est affiché de ce que le moteur ne sait pas (board de test : ni batterie, ni "
-        "liaison radio)")
+        "liaison radio) — les icônes restent à leur place, VIDES, pour ne rien déplacer")
     ban.update_from(fake_state())
 
     # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.

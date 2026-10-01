@@ -277,21 +277,23 @@ class Banner(QWidget):
         de décrocher. Le board de test n'a ni l'une ni les autres (sa batterie est fabriquée, il
         n'a pas de liaison radio) : le moteur rend None, et rien ne s'affiche.
         """
+        # ⚠️ Les icônes ne se CACHENT jamais : une icône « inconnue » reste à sa place, vide (son
+        # `paintEvent` ne dessine rien). La cacher puis la remontrer change la hauteur de la ligne,
+        # donc fait sauter tout ce qui est dessous — vu au casque le 2026-10-01 : la batterie
+        # devient inconnue pendant une coupure, puis revient.
         batterie = casque.get("batterie_pc")
         self.batterie.montrer(batterie)
-        self.batterie.setVisible(batterie is not None)
         self.batterie_pc.setText("" if batterie is None
                                  else tr("console.bandeau.batterie", pc=batterie))
-        self.batterie_pc.setVisible(batterie is not None)
-        self.batterie.setToolTip(tr("console.bandeau.batterie_aide"))
-        self.batterie_pc.setToolTip(tr("console.bandeau.batterie_aide"))
+        aide_batterie = "" if batterie is None else tr("console.bandeau.batterie_aide")
+        self.batterie.setToolTip(aide_batterie)
+        self.batterie_pc.setToolTip(aide_batterie)
 
         barres = casque.get("signal_barres")
         perte = casque.get("perte_pc")
         self.signal.montrer(barres)
-        self.signal.setVisible(barres is not None)
-        self.signal.setToolTip(tr("console.bandeau.signal_aide",
-                                  pc=nombre(float(perte or 0.0), ".1f")))
+        self.signal.setToolTip("" if barres is None else tr("console.bandeau.signal_aide",
+                                                            pc=nombre(float(perte or 0.0), ".1f")))
 
         alertes = []
         if batterie is not None and batterie < BATTERIE_FAIBLE_PC:
