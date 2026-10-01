@@ -41,14 +41,18 @@ FENETRES = {
 # `--calibrer` et le décodage pour les trois autres fenêtres, sous un autre mot parce que le
 # résultat est un verdict et pas un modèle.
 MESURE_OPTIONS = {
-    "ssvep": ("--guide",),
+    # `--retour` (2026-10-01) : la fenêtre entoure la cible que le moteur DÉCIDE pour chaque essai,
+    # lue sur le flux décodé public du mode (le moteur y publie les décisions du test) — vert si
+    # juste, rouge sinon. Pas pour l'ErrP : il n'y a pas de cible à entourer, la décision est
+    # « erreur ou non » sur un feedback que la fenêtre a elle-même choisi.
+    "ssvep": ("--guide", "--retour"),
     # `--tester` : le protocole de `--calibrer` (qui désigne la cible et publie la vérité-terrain),
     # mais une fenêtre qui dit « TEST » et « le moteur note » au lieu de « CALIBRATION » et « le
     # moteur entraîne ». Relevé à l'écriture du test c-VEP : le bandeau de la console affiche ces
     # lignes à la fermeture de la fenêtre, et un étudiant qui vient de cliquer « Tester » y aurait
     # lu qu'il entraînait un modèle — exactement le vocabulaire brouillé de la séance du 2026-09-22.
-    "p300": ("--tester",),      # le TEST du P300 : il cercle une cible par manche et publie `cue`
-    "cvep": ("--tester",),      # le TEST du c-VEP : il cercle une cible par bloc, garde son HORLOGE
+    "p300": ("--tester", "--retour"),   # le TEST du P300 : une cible cerclée par manche, `cue`
+    "cvep": ("--tester", "--retour"),   # le TEST du c-VEP : une cible par bloc, garde son HORLOGE
     "errp": ("--tester",),      # le TEST de l'ErrP : erreurs délibérées, `feedback` étiqueté
     # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
     # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
@@ -60,6 +64,27 @@ MESURE_OPTIONS = {
 def options_de_mesure(stimulus_id):
     """Les arguments à ajouter pour lancer la fenêtre AU SERVICE d'une mesure. () par défaut."""
     return tuple(MESURE_OPTIONS.get(stimulus_id, ()))
+
+
+# Les arguments de l'ESSAI LIBRE (« Essayer librement », 2026-10-01) : le mode tourne, la fenêtre
+# affiche ses cibles SANS rien désigner, et entoure ce que le moteur décode. Ce que chaque fenêtre
+# exige pour ça, et pas un mot de plus :
+#   • c-VEP : `--libre` — sans option elle DÉSIGNE des cibles (le protocole de dépouillement de la
+#     recette 2.9), et un essai libre ne doit rien désigner ;
+#   • SSVEP et P300 : rien — sans option, elles n'affichent déjà que leurs cibles (« choisis ta
+#     cible » pour le P300). Un `--libre` sans effet chez elles serait une option-décor.
+# L'ErrP n'y figure pas : sa fenêtre choisit elle-même ses erreurs, il n'y a pas de cible libre.
+LIBRE = {
+    "cvep": ("--libre", "--retour"),
+    "ssvep": ("--retour",),
+    "p300": ("--retour",),
+}
+
+
+def option_libre(stimulus_id):
+    """Les arguments qui lancent la fenêtre en ESSAI LIBRE. `()` si elle ne sait pas — la console
+    n'offre alors pas le bouton (elle le DEMANDE, elle ne le sait pas)."""
+    return tuple(LIBRE.get(stimulus_id, ()))
 
 
 # Quelles fenêtres savent tenir un JOURNAL DE SÉANCE, et sous quel argument. Déclaré ICI, comme
@@ -172,6 +197,7 @@ def _selftest():
     inconnus = [(k, a) for table in (COMPTES, FREQUENCES) for k, a in table.items()
                 if not _declare(k, a)]
     inconnus += [(k, a) for k, args in MESURE_OPTIONS.items() for a in args if not _declare(k, a)]
+    inconnus += [(k, a) for k, args in LIBRE.items() for a in args if not _declare(k, a)]
     chk(not inconnus,
         f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
         f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
@@ -244,8 +270,30 @@ def _selftest():
         f"les options de mesure ne visent que des fenêtres RÉCLAMÉES par une mesure "
         f"({sorted(set(MESURE_OPTIONS) - mesures_avec_fenetre) or 'aucune orpheline'})")
     argv_guide = commande("ssvep", options=options_de_mesure("ssvep"))
-    chk(argv_guide[-1] == "--guide" and argv_guide[2].endswith("ssvep.py"),
-        f"…et la commande du run guidé porte bien son option ({argv_guide[-2:]})")
+    chk("--guide" in argv_guide and argv_guide[2].endswith("ssvep.py"),
+        f"…et la commande du run guidé porte bien son option ({argv_guide[3:]})")
+
+    # --- Le RETOUR et l'ESSAI LIBRE (2026-10-01) ---------------------------------------
+    # Un test des trois fenêtres à cible entoure la décision du moteur ; l'ErrP n'a pas de cible.
+    chk(all("--retour" in options_de_mesure(k) for k in ("cvep", "ssvep", "p300"))
+        and "--retour" not in options_de_mesure("errp"),
+        f"les tests c-VEP, SSVEP et P300 lancent leur fenêtre AVEC le retour, pas l'ErrP "
+        f"({ {k: options_de_mesure(k) for k in sorted(MESURE_OPTIONS)} })")
+    chk(option_libre("cvep") == ("--libre", "--retour") and option_libre("ssvep") == ("--retour",)
+        and option_libre("p300") == ("--retour",) and option_libre("errp") == ()
+        and option_libre("inconnue") == (),
+        f"l'essai libre : `--libre` là où la fenêtre désigne sinon des cibles (c-VEP), `--retour` "
+        f"partout, et RIEN pour une fenêtre qui ne sait pas — la console n'offre alors pas le "
+        f"bouton ({ {k: option_libre(k) for k in sorted(FENETRES)} })")
+    # Un essai libre DÉCODE : il lui faut un mode qui affiche CETTE fenêtre et publie un flux
+    # décodé à entourer. Lu dans le contrat, dans le sens fenêtre -> mode.
+    sans_flux = sorted(k for k in LIBRE
+                       if not any(s.stimulus_id == k and s.stream for s in modes.MODES))
+    chk(set(LIBRE) <= set(FENETRES) and not sans_flux,
+        f"chaque fenêtre d'essai libre est celle d'un MODE qui publie un flux décodé "
+        f"({sans_flux or 'aucune orpheline'}) — sinon l'anneau n'aurait rien à lire")
+    chk(not any("--libre" in a for a in MESURE_OPTIONS.values()),
+        "…et `--libre` n'est JAMAIS passé à un test : il retire la vérité-terrain que le test note")
 
     print(f"[stim-registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
