@@ -66,6 +66,10 @@ class LanceurFenetre(QObject):
         # numéro de la fenêtre qu'une séance a ouverte, et ne ferme que CELLE-LÀ quand la séance
         # meurt — jamais une fenêtre lancée entre-temps pour autre chose.
         self.numero = 0
+        # (numéro, message) de la dernière fenêtre morte ANORMALEMENT. Rangé par numéro, et non lu
+        # dans `probleme` : celui-ci reçoit aussi les REFUS d'un autre lancement (« une fenêtre
+        # tourne déjà »), qui ne disent rien de la fin de celle qui tournait. Cf. `echec_de`.
+        self._echec = (None, "")
 
     # --- lecture ----------------------------------------------------------------
 
@@ -76,6 +80,16 @@ class LanceurFenetre(QObject):
     def quoi(self):
         """Ce qui tourne, en clair, ou une chaîne vide."""
         return self._quoi
+
+    def echec_de(self, numero):
+        """Le message d'échec de la fenêtre n° `numero` si elle est morte ANORMALEMENT, sinon "".
+
+        Une fenêtre tuée par nous, ou fermée normalement (code 0), rend "". C'est ce qui permet à
+        l'essai libre de dire « erreur » plutôt que « terminé » (constat F1-M2) sans confondre la
+        mort de SA fenêtre avec le refus d'une autre.
+        """
+        n, message = self._echec
+        return message if numero is not None and n == numero else ""
 
     def etat_texte(self):
         """(texte à afficher, est-ce une alerte). Chaîne vide = rien à dire.
@@ -226,9 +240,11 @@ class LanceurFenetre(QObject):
         elif brutal:
             self.probleme = tr("pages.fenetre.anormale_brutale", quoi=quoi, code=code,
                                sortie=self._derniere_sortie())
+            self._echec = (self.numero, self.probleme)
         elif code != 0:
             self.probleme = tr("pages.fenetre.anormale", quoi=quoi, code=code,
                                sortie=self._derniere_sortie())
+            self._echec = (self.numero, self.probleme)
         else:
             # 🔴 UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance).
             # Les lignes étaient déjà retenues — et jetées, parce que seule une mort anormale les
@@ -264,6 +280,7 @@ class LanceurFenetre(QObject):
         self._proc = None
         self.probleme = tr("pages.fenetre.pas_demarre", quoi=quoi,
                            sortie=self._derniere_sortie())
+        self._echec = (self.numero, self.probleme)
         self.change.emit()
 
     def _derniere_sortie(self, n=None):

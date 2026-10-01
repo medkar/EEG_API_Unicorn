@@ -168,9 +168,9 @@ class ModePage(QWidget):
                 rang.addWidget(self.bouton_essayer, 1)
                 rang.addWidget(_bulle(tr("console.mode.essayer_aide")))
                 dedans.addLayout(rang)
-                # Où l'essai DIT ce qu'il fait : la consigne du repos et son décompte pendant
-                # l'attente, puis « en cours », puis comment il s'est terminé. Vide et caché tant
-                # qu'aucun essai n'a été demandé.
+                # Où l'essai DIT ce qu'il fait : le démarrage, puis « en cours » (et la croix du
+                # repos à respecter), puis comment il s'est terminé — ou pourquoi il est refusé.
+                # Vide et caché tant qu'aucun essai n'a été demandé.
                 self.essai = QLabel("")
                 self.essai.setWordWrap(True)
                 self.essai.setVisible(False)
@@ -304,8 +304,10 @@ class ModePage(QWidget):
         « Régler » et rien ne démarre. Accepté, le réglage est RETENU par le moteur : le
         `start_mode` qui suit part avec, sans en porter aucun lui-même.
 
-        Le reste — démarrer le mode, attendre qu'il DÉCODE, ouvrir la fenêtre, l'arrêter à la
-        fermeture — est la séquence de la console (`Console.essayer_librement`), pas de la page.
+        Le reste — refuser pendant un entraînement ou un test, le contrôle de liaison, démarrer
+        le mode, ouvrir la fenêtre DÈS qu'il tourne (elle montre une croix pendant le repos), la
+        surveiller, arrêter le mode à la fermeture — est la séquence de la console
+        (`Console.essayer_librement`), pas de la page.
         """
         parti, reglages = self._appliquer_avant_de_partir()
         if parti:
