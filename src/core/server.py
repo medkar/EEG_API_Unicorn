@@ -359,6 +359,7 @@ class EngineServer:
         self._perdue_depuis = None
         self._tentatives = 0
         self._erreur_liaison = ""
+        self._erreur_lecture = ""       # la dernière erreur de LECTURE dite au terminal (`_lire`)
         self._retablie_a = None
         self._coupure_s = None
         self._prochain_essai = 0.0
@@ -682,6 +683,31 @@ class EngineServer:
                       f"{stream_name(runtime.spec.stream)}"
                       + (" (silencieux pendant le repos)" if runtime.spec.rest else ""))
 
+    def _lire(self):
+        """La lecture d'un tour : `(eeg, ts)`, ou `(None, None)` — JAMAIS une exception.
+
+        🔴 Deux règles, trouvées au casque le 2026-10-01 : une batterie à plat a TUÉ le fil du
+        moteur (« LE MOTEUR S'EST ARRÊTÉ »), au lieu de la coupure attendue, reprise toute seule.
+        1. **Pendant une coupure, on ne lit PAS la session.** `reouvrir()` la LIBÈRE avant de
+           rouvrir ; si le casque ne répond pas (éteint, à plat), elle reste libérée, et BrainFlow
+           LÈVE sur une session libérée (`BOARD_NOT_CREATED_ERROR:15`). Le fil mourait au tour
+           qui suivait la première réouverture ratée. C'est `_surveille_liaison` qui réessaie.
+        2. **Une lecture qui lève compte comme « aucun échantillon ».** C'est la surveillance de
+           la liaison qui en juge ensuite (`DECROCHAGE_S`), jamais un traceback qui arrête tout.
+           Le message part une fois au terminal, pour qu'on sache ce que BrainFlow a dit.
+        """
+        if self._liaison == "perdue":
+            return None, None
+        try:
+            return self.acq.get_new_data()
+        except Exception as e:  # noqa: BLE001 - une session morte casse de plusieurs façons
+            raison = message_erreur(e)
+            if raison != self._erreur_lecture:
+                print(f"[server] ⚠️ lecture du casque impossible : {raison} — traité comme une "
+                      f"coupure")
+                self._erreur_lecture = raison
+            return None, None
+
     def _surveille_liaison(self, now):
         """Appelée quand un tour n'a apporté AUCUN échantillon. True si la liaison est perdue.
 
@@ -722,6 +748,7 @@ class EngineServer:
         self._liaison = "ok"
         self._retablie_a = retour
         self._dernier_echantillon = retour
+        self._erreur_lecture = ""            # une prochaine erreur de lecture sera de nouveau dite
         self.recent = np.zeros((0, len(CH_NAMES)))
         self.recent_ts = np.zeros((0,))
         print(f"[server] liaison RÉTABLIE après {self._coupure_s:.1f} s "
@@ -2445,7 +2472,7 @@ class EngineServer:
                     # UNE seule lecture par tour, quels que soient les modes actifs :
                     # `get_new_data()` VIDE le tampon de BrainFlow. C'est l'invariant central du
                     # moteur — c'est aussi pourquoi le tampon glissant est tenu ICI et pas là-bas.
-                    eeg, ts_unix = self.acq.get_new_data()
+                    eeg, ts_unix = self._lire()
                     self.new_block = None
                     if eeg is not None and len(eeg):
                         ts_lsl = self.clock.to_lsl(ts_unix)
@@ -3951,16 +3978,29 @@ def _smoke_liaison():
     acq_avant = srv.acq
     srv.decrochage_s = 0.5
     srv.reessai_s = 0.3
-    coupe, retour, essais = {"on": False}, {"ok": False}, []
+    coupe, retour, essais, leve = {"on": False}, {"ok": False}, [], {"on": False}
     lire, rouvrir = srv.acq.get_new_data, srv.acq.reouvrir
 
+    lectures_coupees = {"n": 0}
+
     def lire_coupe():
+        if srv._liaison == "perdue":
+            lectures_coupees["n"] += 1
+        if leve["on"]:
+            # Une session morte en pleine séance : BrainFlow LÈVE au lieu de rendre un bloc vide.
+            raise RuntimeError("BOARD_NOT_CREATED_ERROR:15 (simulé)")
         donnees = lire()                      # on VIDE quand même le tampon de BrainFlow
         return (None, None) if coupe["on"] else donnees
 
     def rouvrir_si_permis():
         essais.append(time.perf_counter())
         if not retour["ok"]:
+            # FIDÈLE au vrai `reouvrir` sur un casque éteint (2026-10-01) : il LIBÈRE d'abord la
+            # session (`stop()`), PUIS l'ouverture échoue. Ce faux levait sans rien libérer, et
+            # la session restait lisible — or BrainFlow LÈVE (`BOARD_NOT_CREATED_ERROR:15`) sur
+            # une session libérée. Au casque, une batterie à plat a tué le moteur exactement là :
+            # au tour qui suit la première réouverture ratée.
+            srv.acq.stop()
             raise RuntimeError("UNABLE_TO_OPEN_PORT_ERROR (simulé)")
         coupe["on"] = False
         return rouvrir()
@@ -4018,6 +4058,13 @@ def _smoke_liaison():
         chk(decisions["n"] == avant,
             f"pendant la coupure, le SSVEP ne décode PLUS : sinon il republierait sa dernière "
             f"cible en boucle sur un tampon figé ({decisions['n'] - avant} décision(s))")
+        chk(fil.is_alive(),
+            "🔴 le moteur SURVIT à une réouverture ratée, qui a libéré la session (une batterie à "
+            "plat le tuait là, au casque, le 2026-10-01)")
+        chk(lectures_coupees["n"] == 0,
+            f"…parce qu'il ne LIT plus la session pendant la coupure : elle peut être libérée, et "
+            f"la relire à chaque tour ne ferait que faire lever BrainFlow "
+            f"({lectures_coupees['n']} lecture(s) pendant la coupure)")
         chk(len(essais) >= 2 and "simulé" in liaison["erreur"] and liaison["tentatives"] >= 2
             and liaison["depuis_s"] and liaison["depuis_s"] > 0.5,
             f"…il RÉESSAIE de rouvrir le casque, et l'état dit depuis quand et pourquoi ça échoue "
@@ -4051,6 +4098,25 @@ def _smoke_liaison():
         chk(len(srv.recent) > 0 and fil.is_alive(),
             f"…les échantillons arrivent de nouveau, sans relancer la console "
             f"({len(srv.recent)} dans le tampon)")
+        # 🔴 Règle 2 de `_lire` : une lecture qui LÈVE en pleine séance compte comme « aucun
+        # échantillon ». La liaison est déclarée perdue, le moteur rouvre — le fil ne meurt pas.
+        # La réouverture est permise ici (`retour`), donc l'état « perdue » ne dure qu'un tour :
+        # on compte les RÉOUVERTURES — c'est elles qui prouvent que la lecture qui lève a été prise
+        # pour une coupure.
+        essais_avant = len(essais)
+        leve["on"] = True
+        time.sleep(1.0)
+        leve["on"] = False
+        chk(fil.is_alive() and len(essais) > essais_avant,
+            f"🔴 une lecture qui LÈVE en pleine séance ne tue pas le moteur : elle compte comme "
+            f"« aucun échantillon », la coupure est déclarée et le casque rouvert "
+            f"({len(essais) - essais_avant} réouverture(s), fil vivant : {fil.is_alive()})")
+        t0 = time.perf_counter()
+        while (srv.snapshot()["liaison"]["etat"] != "ok" and time.perf_counter() - t0 < 3.0
+               and fil.is_alive()):
+            time.sleep(0.05)
+        chk(srv.snapshot()["liaison"]["etat"] == "ok",
+            f"…puis elle revient, comme après une coupure ({srv.snapshot()['liaison']['etat']})")
         from brainflow.data_filter import NoiseTypes
         chk(srv.acq is acq_avant and srv.acq.notch is NoiseTypes.SIXTY,
             f"[smoke-secteur] …et le casque rouvert coupe toujours le secteur du POSTE (60 Hz), "

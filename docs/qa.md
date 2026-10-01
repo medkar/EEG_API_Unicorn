@@ -965,6 +965,11 @@ reconnexion s'enchaînent avec `ANOTHER_BOARD_IS_CREATED_ERROR:16` (l'ancienne s
 libérée — le défaut corrigé le 2026-09-25).
 ✅ **Joué au casque le 2026-09-25 : la liaison se rétablit seule.** Le premier passage avait échoué
 (81 essais refusés), le correctif `6f61db4` l'a réglé.
+✅ **À rejouer (2026-10-01) : casque éteint LONGTEMPS** (une minute, ou batterie à plat). Le
+2026-09-25, la première réouverture avait réussi ; quand elle échoue, le moteur MOURAIT (« LE MOTEUR
+S'EST ARRÊTÉ », vu avec une batterie à plat). Attendu : le bandeau compte les essais (n, n+1…)
+toute la minute, la console reste vivante, et le casque rallumé (ou rechargé) revient seul.
+❌ Échec : « LE MOTEUR S'EST ARRÊTÉ » pendant une coupure, quelle que soit sa durée.
 ⚠️ Après la reconnexion, **regarde C3 et Cz** au bandeau : la réouverture redémarre
 l'amplificateur, et elles saturaient à chaque réouverture. Note combien de temps.
 

@@ -645,7 +645,12 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   seul et fait refaire le repos aux modes (`[smoke-liaison]`). **Validé au casque le 2026-09-25**
   (QA 2.9) — après un correctif : la fermeture de la session morte sautait sa libération quand
   l'arrêt du flux levait, et BrainFlow refusait ensuite toute réouverture
-  (`ANOTHER_BOARD_IS_CREATED`, 81 essais).
+  (`ANOTHER_BOARD_IS_CREATED`, 81 essais). ⚠️ **Ce passage n'avait vu qu'une première réouverture
+  RÉUSSIE.** Le 2026-10-01, une batterie à plat a TUÉ le moteur : la réouverture ratée laisse la
+  session libérée, et le tour suivant la LISAIT — BrainFlow lève alors
+  (`BOARD_NOT_CREATED_ERROR:15`), et rien ne rattrapait. Depuis (`EngineServer._lire`), le moteur
+  ne lit plus la session pendant une coupure, et une lecture qui lève compte comme « aucun
+  échantillon ». Le faux du smoke libère désormais la session avant d'échouer, comme le vrai.
 - **Saliner les électrodes** est le principal levier de qualité du signal (gain mesuré très net).
 - Vérifier le contact **avant** d'enregistrer : une électrode ou une référence décollée produit une
   séance entière inexploitable, sans autre signal d'alerte que l'écran de contrôle de liaison.
