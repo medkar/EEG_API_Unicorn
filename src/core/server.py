@@ -2644,15 +2644,24 @@ class EngineServer:
                 #
                 # Une calibration en cours ne survit pas à l'arrêt du moteur : elle tient des
                 # époques en mémoire et une référence vers `self` — le même cycle que les modes.
+                # ⚠️ Les deux `cancel()` sont GARDÉS : un qui lève sauterait tout ce qui suit —
+                # `close()`, le cycle rompu, l'inlet de marqueurs libéré —, c'est-à-dire
+                # exactement ce que ce `finally` existe pour garantir.
                 if self.calibration is not None:
-                    self.calibration.cancel()
+                    try:
+                        self.calibration.cancel()
+                    except Exception as e:  # noqa: BLE001 - cf. ci-dessus
+                        print(f"[server] abandon de la calibration à l'arrêt, ignoré : {e!r}")
                     self.calibration = None
                 # Une mesure non plus : elle tient les mêmes fenêtres de signal et la même
                 # référence vers `self`, donc le même cycle. Le verdict disparaît avec elle, et
                 # c'est sans conséquence : le moteur ne s'arrête que quand la console se ferme,
                 # et il n'y a aucun fichier à récupérer.
                 if self.mesure is not None:
-                    self.mesure.cancel()
+                    try:
+                        self.mesure.cancel()
+                    except Exception as e:  # noqa: BLE001 - cf. ci-dessus
+                        print(f"[server] abandon de la mesure à l'arrêt, ignoré : {e!r}")
                     self.mesure = None
                 # ⚠️ INCONDITIONNEL, dans le `finally` : si le moteur s'arrête entre
                 # l'entraînement et la décision — console fermée, Ctrl+C, exception BrainFlow —
