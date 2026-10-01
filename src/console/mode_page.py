@@ -5,6 +5,7 @@
     ┌ 1. Régler ──────────────────────────┐   tous les modes
     ┌ 2. Entraîner ───────────────────────┐   si le contrat déclare une calibration
     ┌ 3. Tester ──────────────────────────┐   si le contrat déclare un `test_id`
+    │ [Tester] [Essayer librement] ⓘ      │   le second si la fenêtre sait l'essai libre
     ☐ Décodage en direct                       replié : la vue en direct, toujours à jour
 
     …ou, pour un mode sans vérité-terrain (le Neuro, le Brut) :
@@ -31,17 +32,18 @@ Rien ici ne sait qu'un SSVEP a des fréquences ou qu'un MI s'entraîne : c'est l
 import os
 import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import decompte, live_views, nom_phase  # noqa: E402
-from console.params_form import ParamsForm  # noqa: E402
+from console.params_form import ACCENT, ParamsForm, infobulle  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from core.modes import registry  # noqa: E402
 
 GRIS = "color: #8a8f9c; font-size: 11px;"
+ROUGE = "color: #e5484d;"
 
 
 def _phrase(texte):
@@ -50,6 +52,15 @@ def _phrase(texte):
     etiquette.setWordWrap(True)
     etiquette.setStyleSheet(GRIS)
     return etiquette
+
+
+def _bulle(texte):
+    """Une bulle « ⓘ » qui montre `texte` au survol, posée juste APRÈS le geste qu'elle explique."""
+    bulle = QLabel("ⓘ")
+    bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+    bulle.setCursor(Qt.WhatsThisCursor)
+    bulle.setToolTip(infobulle(texte))
+    return bulle
 
 
 class ModePage(QWidget):
@@ -127,11 +138,13 @@ class ModePage(QWidget):
             blocs.append(self.bloc_entrainer)
 
         # --- 3. Tester (si le contrat déclare un `test_id`) --------------------------------------
-        # UN bouton, qui ouvre la page de la mesure désignée : elle porte déjà le briefing,
+        # « Tester » ouvre la page de la mesure désignée : elle porte déjà le briefing,
         # « Commencer », le contrôle de liaison, la fenêtre et le verdict. La recopier ici serait
-        # un second écran de protocole à tenir d'accord avec le premier.
+        # un second écran de protocole à tenir d'accord avec le premier. « Essayer librement », à
+        # côté, n'a ni protocole ni verdict : sa séquence vit dans la console (`essayer_librement`).
         test_id = spec.get("test_id") or ""
         self.bloc_tester = self.bouton_tester = None
+        self.bouton_essayer = self.essai = None
         if test_id:
             numero += 1
             self.bloc_tester = QGroupBox(tr("console.mode.bloc_tester", n=numero))
@@ -143,7 +156,27 @@ class ModePage(QWidget):
                     tr("console.mode.tester_pas_livre", mode=spec["label"]))
             dedans = QVBoxLayout(self.bloc_tester)
             dedans.addWidget(_phrase(tr("console.mode.tester_phrase")))
-            dedans.addWidget(self.bouton_tester)
+            # « Essayer librement » (2026-10-01) : DANS le bloc « Tester », à côté de son bouton —
+            # c'est la même boucle (régler -> essayer -> ajuster), sans score. Il n'existe que si
+            # la fenêtre du mode SAIT tenir un essai libre : la page le DEMANDE à la console, qui
+            # le demande au registre des fenêtres. Aucune liste de modes ici.
+            if console.sait_essayer(self.mode_id):
+                self.bouton_essayer = QPushButton(tr("console.mode.essayer"))
+                self.bouton_essayer.clicked.connect(self._essayer)
+                rang = QHBoxLayout()
+                rang.addWidget(self.bouton_tester, 1)
+                rang.addWidget(self.bouton_essayer, 1)
+                rang.addWidget(_bulle(tr("console.mode.essayer_aide")))
+                dedans.addLayout(rang)
+                # Où l'essai DIT ce qu'il fait : la consigne du repos et son décompte pendant
+                # l'attente, puis « en cours », puis comment il s'est terminé. Vide et caché tant
+                # qu'aucun essai n'a été demandé.
+                self.essai = QLabel("")
+                self.essai.setWordWrap(True)
+                self.essai.setVisible(False)
+                dedans.addWidget(self.essai)
+            else:
+                dedans.addWidget(self.bouton_tester)
             blocs.append(self.bloc_tester)
 
         # --- la vue en direct : en face (Observer) ou repliée ------------------------------------
@@ -261,6 +294,36 @@ class ModePage(QWidget):
         # Les valeurs VALIDÉES par le moteur, pour pré-remplir le test tout de suite : l'état
         # sondé n'aura rattrapé ce réglage qu'au prochain tour de `QTimer`.
         self.console.show_mesure(self.spec["test_id"], depuis=self, reglages=reglages)
+
+    def _essayer(self):
+        """« Essayer librement » essaie, lui aussi, CE QUI EST À L'ÉCRAN.
+
+        Même premier geste que « Tester », et pour la même raison : on change une fréquence, on
+        clique sans passer par « Appliquer », et l'essai tournerait sur l'ANCIENNE configuration
+        sans que rien ne le dise. Refusé (17 Hz ne divise pas 60) -> le refus s'affiche dans
+        « Régler » et rien ne démarre. Accepté, le réglage est RETENU par le moteur : le
+        `start_mode` qui suit part avec, sans en porter aucun lui-même.
+
+        Le reste — démarrer le mode, attendre qu'il DÉCODE, ouvrir la fenêtre, l'arrêter à la
+        fermeture — est la séquence de la console (`Console.essayer_librement`), pas de la page.
+        """
+        parti, reglages = self._appliquer_avant_de_partir()
+        if parti:
+            self.console.essayer_librement(self.mode_id, reglages)
+
+    def montrer_essai(self, texte, alerte=False, en_cours=False):
+        """Ce que l'essai libre a à dire, et si le bouton doit attendre qu'il se termine.
+
+        `en_cours` grise « Essayer librement » : un second clic pendant l'attente démarrerait un
+        second essai sur le même mode, et la console n'en tient qu'un. Le texte, lui, RESTE après
+        la fin — c'est là qu'on lit si le décodage a été arrêté ou s'il continue.
+        """
+        if self.essai is None:
+            return
+        self.essai.setText(texte or "")
+        self.essai.setStyleSheet(ROUGE if alerte else "")
+        self.essai.setVisible(bool(texte))
+        self.bouton_essayer.setEnabled(not en_cours)
 
     def _mesurer(self, mesure_id):
         """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester » (constat I4).

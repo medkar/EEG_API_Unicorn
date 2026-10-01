@@ -68,7 +68,7 @@ from console.flux_page import FluxPage  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mesure_page import MesurePage  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
-from console import live_views  # noqa: E402
+from console import decompte, live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.i18n import tr  # noqa: E402
@@ -100,6 +100,17 @@ DELAI_ARRET_S = 5.0
 # cmd que `outils/Console EEG.bat` laisse derrière la fenêtre Qt. C'est-à-dire le
 # refus-dans-le-terminal du test 1.13 de la recette, sur le chemin le plus cher du produit.
 DELAI_DEMARRAGE_S = 5.0
+
+# « Essayer librement » : combien de temps, AU-DELÀ de la chauffe et du repos que le contrat du mode
+# déclare, la console attend de le voir DÉCODER avant de renoncer. Le repos du SSVEP peut se
+# prolonger (il attend assez de fenêtres pour un plancher fiable) : la marge le couvre. Au-delà,
+# c'est une panne, et la page le DIT au lieu d'annoncer pour toujours une fenêtre qui ne vient pas.
+MARGE_DECODAGE_S = 30.0
+
+
+def _a_plat(valeurs):
+    """Des réglages COMPARABLES : `state()` rend des listes là où le contrat valide des tuples."""
+    return {k: list(v) if isinstance(v, (list, tuple)) else v for k, v in (valeurs or {}).items()}
 
 
 class Console(QMainWindow):
@@ -145,6 +156,10 @@ class Console(QMainWindow):
         # lien qui permet de fermer la fenêtre — sans lui, elle continue plein écran à désigner des
         # cibles pour une séance qui n'existe plus, devant une console qu'elle recouvre.
         self._fenetre_de = None
+        # L'ESSAI LIBRE en cours (« Essayer librement », 2026-10-01), ou None. Une fiche, tenue
+        # du clic à la fermeture de sa fenêtre : quel mode, si c'est l'essai qui l'a démarré (donc
+        # s'il faudra l'arrêter), et le numéro de sa fenêtre une fois ouverte. Cf. `_suivre_essai`.
+        self._essai = None
 
         self.banner = Banner()
         self.stack = QStackedWidget()
@@ -585,6 +600,10 @@ class Console(QMainWindow):
         #           ouverte — le jumeau, côté moteur, de « Abandonner ».
         self._fermer_fenetre_abandonnee(state)
 
+        # 1 quinquies. L'essai libre : le mode décode-t-il ENFIN (on ouvre sa fenêtre), sa
+        #              fenêtre s'est-elle fermée (on arrête ce qu'on avait démarré) ?
+        self._suivre_essai(state)
+
         if self._attente is None:
             return
         a_arreter = self._attente["arreter"]
@@ -797,8 +816,12 @@ class Console(QMainWindow):
         self._avis_mesure(mesure_id, tr("console.avis.test_annule",
                                         raison=ouvert.get("reason", "")))
 
-    def _lancer_fenetre(self, mode_id, calibrer):
-        """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`."""
+    def _lancer_fenetre(self, mode_id, calibrer, libre=False):
+        """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`.
+
+        `libre` : la fenêtre de DÉCODAGE en essai libre — ses arguments sont ceux que le registre
+        déclare (`option_libre`), ajoutés à ceux du décodage ordinaire, fréquences comprises.
+        """
         spec = self.catalogue.get(mode_id) or {}
         # ⚠️ DEUX clés distinctes, et c'est tout le correctif du 2026-09-21 : la fenêtre du
         # PROTOCOLE d'entraînement (`calibration.stimulus_id`) n'est pas celle du DÉCODAGE
@@ -830,8 +853,176 @@ class Console(QMainWindow):
         # ce qu'il demande.
         options.extend(stimulus_registry.option_frequences(
             stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        # L'ESSAI LIBRE ajoute ce que le registre déclare (`--retour`, et `--libre` pour la fenêtre
+        # qui désigne sinon des cibles). APRÈS les fréquences, jamais à leur place : sans elles,
+        # la fenêtre du SSVEP afficherait le trio du dépôt, et l'indice décodé qu'elle entoure
+        # désignerait une autre flèche que celle que le moteur a vue.
+        if libre and not calibrer:
+            options.extend(stimulus_registry.option_libre(stimulus_id))
         return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
-                                   label=spec.get("label", mode_id), options=options)
+                                   label=spec.get("label", mode_id), options=options,
+                                   libre=libre and not calibrer)
+
+    # --- « Essayer librement » (2026-10-01) ------------------------------------------------
+    #
+    # Demandé au casque : « on regarde une cible, et le logiciel entoure celle qu'il pense qu'on
+    # regarde ». Le mode DÉCODE, sa fenêtre affiche ses cibles sans rien désigner, et entoure ce
+    # que le moteur publie sur le flux décodé du mode — celui que lit l'application d'un étudiant.
+    # Aucun score, rien d'écrit.
+    #
+    # 🔴 **La fenêtre ne s'ouvre qu'une fois le mode EN DÉCODAGE**, vu dans `snapshot()`. Le
+    # plancher du SSVEP se mesure au repos sous la consigne « Ne fixe AUCUNE cible » : des cibles
+    # qui clignotent pendant ce temps le fausseraient, et tout l'essai avec — sans rien lever.
+    # Même discipline que `_lancer_quand_partie` : un accusé ne prouve rien, l'état si.
+    #
+    # ⚠️ La console ne tient AUCUNE table de conflits. Un mode qui ne peut pas tourner (pas de
+    # modèle, son test ou son entraînement en cours), c'est le MOTEUR qui le refuse, à `start_mode`.
+    # Deux fenêtres à la fois, c'est le LANCEUR qui le refuse. La console affiche ce qu'on lui dit.
+
+    def sait_essayer(self, mode_id):
+        """La fenêtre de ce mode sait-elle tenir un essai libre ? Demandé au REGISTRE des fenêtres."""
+        stimulus_id = (self.catalogue.get(mode_id) or {}).get("stimulus_id") or ""
+        return bool(stimulus_registry.option_libre(stimulus_id))
+
+    def essayer_librement(self, mode_id, reglages=None):
+        """Démarre le mode s'il ne tourne pas, puis attend qu'il DÉCODE pour ouvrir sa fenêtre.
+
+        `reglages` : ce que « Appliquer » vient de faire valider (la page applique ce qui est à
+        l'écran avant d'appeler). Sur un mode qui TOURNE, `set_params` n'est que mis en FILE : le
+        dernier état peut encore montrer l'ancien runtime « en décodage », alors que la boucle va
+        le reconstruire et refaire son repos. On attend donc de voir CES réglages en vigueur —
+        sans ça, la fenêtre s'ouvrirait juste avant un repos, cibles clignotantes comprises.
+
+        Sur un mode ARRÊTÉ, rien de tel : le réglage est retenu sur-le-champ, et le `start_mode`
+        qui suit — sans aucun réglage — part avec.
+        """
+        if self._essai is not None:
+            return                      # un seul essai à la fois ; le bouton est d'ailleurs grisé
+        tourne = mode_id in ((self._dernier_etat or {}).get("modes_state") or {})
+        if not tourne:
+            ack = self.commande("start_mode", id=mode_id)
+            if not ack.get("accepted"):
+                # Le refus du moteur, tel quel (pas de modèle, son test ou son entraînement en
+                # cours…) : sur la page, ET dans le bandeau (`commande` l'y a déjà mis).
+                print(f"[console] {mode_id} : essai libre refusé — {ack.get('reason')}")
+                self._dire_essai(mode_id, ack.get("reason", ""), alerte=True)
+                return
+        repos = (self.catalogue.get(mode_id) or {}).get("rest") or {}
+        delai = (float(repos.get("warmup_s") or 0.0) + float(repos.get("duration_s") or 0.0)
+                 + MARGE_DECODAGE_S)
+        maintenant = self._horloge()
+        self._essai = {
+            "mode_id": mode_id,
+            # C'est l'ESSAI qui l'a démarré : c'est donc à lui de l'arrêter. Un mode qui tournait
+            # avant (lancé depuis sa tuile, pour une application) continue après.
+            "demarre": not tourne,
+            "vu": tourne,
+            "attendus": _a_plat(reglages) if tourne and reglages else None,
+            "numero": None,             # celui de la fenêtre, une fois ouverte
+            "delai": delai,
+            "echeance_vu": maintenant + DELAI_DEMARRAGE_S,
+            "echeance": maintenant + delai,
+        }
+        self._suivre_essai(self._dernier_etat)
+
+    def _suivre_essai(self, state):
+        """Un tour de l'essai libre. Appelée à chaque rafraîchissement, et tout de suite au clic."""
+        essai = self._essai
+        if essai is None:
+            return
+        mode_id = essai["mode_id"]
+        nom = self._nom_du_mode(mode_id)
+        mode = ((state or {}).get("modes_state") or {}).get(mode_id)
+
+        # --- la fenêtre est ouverte : l'essai dure tant qu'elle vit -----------------------------
+        if essai["numero"] is not None:
+            if self.lanceur.en_cours() and self.lanceur.numero == essai["numero"]:
+                if mode is not None:
+                    return
+                # Le mode s'est arrêté SOUS la fenêtre (sa tuile, un test qu'on lance). Elle
+                # continuerait d'afficher des cibles que plus rien ne décode, sans anneau :
+                # indiscernable d'un regard qui ne fixe pas. On la ferme, et on le dit.
+                self.lanceur.arreter_si(essai["numero"])
+                self._finir_essai(tr("console.essai.mode_arrete_fenetre", mode=nom),
+                                  alerte=True, tourne=False)
+                return
+            # Elle s'est fermée — à la main (Échap), le cas normal, ou par un autre geste.
+            self._finir_essai(tr("console.essai.termine"), alerte=False, tourne=mode is not None)
+            return
+
+        # --- on attend que le mode DÉCODE -------------------------------------------------------
+        if mode is None:
+            if essai["vu"]:
+                self._finir_essai(tr("console.essai.mode_arrete_attente", mode=nom),
+                                  alerte=True, tourne=False)
+            elif self._horloge() >= essai["echeance_vu"]:
+                # `start_mode` accepté, mais la boucle n'a rien créé (exception avalée…).
+                self._finir_essai(tr("console.essai.pas_demarre", mode=nom,
+                                     delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+                                  alerte=True, tourne=False)
+            else:
+                self._dire_essai(mode_id, "\n".join((tr("console.essai.demarrage", mode=nom),
+                                                     tr("console.essai.attente"))),
+                                 en_cours=True)
+            return
+        essai["vu"] = True
+        attendus = essai["attendus"]
+        decode = (mode.get("phase") == "running"
+                  and (attendus is None or _a_plat(mode.get("params")) == attendus))
+        if not decode:
+            if self._horloge() >= essai["echeance"]:
+                self._finir_essai(tr("console.essai.pas_de_decodage", mode=nom,
+                                     delai=f"{essai['delai']:.0f}"),
+                                  alerte=True, tourne=True)
+                return
+            # La consigne du repos et son décompte, ceux que le moteur publie déjà — puis ce qui
+            # suivra. Sans la consigne, l'étudiant regarderait n'importe où pendant le plancher.
+            lignes = (mode.get("instruction") or "", decompte(mode), tr("console.essai.attente"))
+            self._dire_essai(mode_id, "\n".join(ligne for ligne in lignes if ligne),
+                             en_cours=True)
+            return
+
+        if not mode.get("published", True):
+            # L'anneau se lit sur le flux décodé PUBLIC du mode. Un mode qui décode pour
+            # l'affichage seul (« publié » décoché sur sa tuile) n'a pas de flux : la fenêtre
+            # afficherait ses cibles sans jamais rien entourer, indiscernable d'un regard qui ne
+            # fixe pas. On le dit plutôt que d'ouvrir.
+            self._finir_essai(tr("console.essai.non_publie", mode=nom), alerte=True, tourne=True)
+            return
+        ouvert = self._lancer_fenetre(mode_id, calibrer=False, libre=True)
+        if not ouvert.get("accepted"):
+            # Une autre fenêtre occupe la place (un test d'un autre mode…) : l'essai n'a pas lieu,
+            # et le mode qu'il avait démarré pour rien s'arrête.
+            self._finir_essai(tr("console.essai.annule", raison=ouvert.get("reason", "")),
+                              alerte=True, tourne=True)
+            return
+        essai["numero"] = self.lanceur.numero
+        self._dire_essai(mode_id, tr("console.essai.en_cours"), en_cours=True)
+
+    def _finir_essai(self, texte, alerte, tourne):
+        """Clôt l'essai : arrête le mode SI c'est l'essai qui l'a démarré, et le dit sur la page.
+
+        `tourne` : le mode est-il encore là ? Arrêter un mode déjà arrêté ferait refuser
+        `stop_mode` et afficher un refus dans le bandeau, pour rien.
+        """
+        essai, self._essai = self._essai, None
+        mode_id = essai["mode_id"]
+        nom = self._nom_du_mode(mode_id)
+        suite = ""
+        if tourne and essai["demarre"]:
+            self.commande("stop_mode", id=mode_id)
+            suite = tr("console.essai.arrete", mode=nom)
+        elif tourne:
+            suite = tr("console.essai.continue", mode=nom)
+        message = "\n".join(t for t in (texte, suite) if t)
+        print(f"[console] {mode_id} : {message}")
+        self._dire_essai(mode_id, message, alerte=alerte)
+
+    def _dire_essai(self, mode_id, texte, alerte=False, en_cours=False):
+        """Ce que l'essai a à dire, sur la page de SON mode (dans le bloc « Tester »)."""
+        page = self.pages.get(mode_id)
+        if page is not None:
+            page.montrer_essai(texte, alerte=alerte, en_cours=en_cours)
 
     def _reglages_du_mode(self, mode_id):
         """Les réglages d'un mode tels que le MOTEUR les tient : en vigueur s'il tourne, sinon
@@ -5146,6 +5337,300 @@ def _smoke():
         and "coupe.jsonl" in page_flux.etat_enregistrement.text(),
         f"une interruption passe DEVANT le diagnostic retenu, avec ce qui a été sauvé "
         f"({page_flux.etat_enregistrement.text()[:60]}…)")
+
+    # --- 🔴 « ESSAYER LIBREMENT » (2026-10-01) ----------------------------------------------
+    #
+    # Demandé au casque : regarder une cible, et voir le logiciel entourer celle qu'il décode. Le
+    # bouton vit DANS le bloc « Tester », et il possède sa séquence : démarrer le mode s'il ne
+    # tourne pas, attendre qu'il DÉCODE, ouvrir la fenêtre, l'arrêter à la fermeture s'il l'avait
+    # démarré. Le piège de cette séquence est le même que celui du 2026-09-22, retourné : des
+    # cibles qui clignotent PENDANT le repos du SSVEP (consigne « Ne fixe AUCUNE cible »)
+    # fausseraient son plancher, donc toutes ses décisions — sans rien lever.
+    console.lanceur.arreter()
+    moteur_faux.refus.clear()
+
+    def _fenetres_lancees():
+        return [list(e[1]) for e in journal if e[0] == "fenetre"]
+
+    def _remise_a_zero():
+        console.lanceur.arreter()
+        console._essai = None
+        for p in console.pages.values():
+            p.montrer_essai("")          # rend le bouton, sans quoi un clic ne ferait RIEN
+        journal.clear()
+        processus.clear()
+        moteur_faux.commandes.clear()
+
+    def _avec_mode(base, mid, phase, avant=None, params=None, instruction=""):
+        """`base` où le mode `mid` tourne, dans la `phase` donnée — la forme de `state()`."""
+        spec_m = console.catalogue[mid]
+        return {**base, "modes_state": {**(base.get("modes_state") or {}), mid: {
+            "id": mid, "label": spec_m["label"], "family": spec_m["family"], "phase": phase,
+            "published": True, "params": dict(params or {}), "instruction": instruction,
+            "avant_decodage_s": avant, "stream": spec_m.get("stream"), "channels": [],
+            "rest_report": None, "output": None}}}
+
+    def _sans_mode(base, mid):
+        return {**base, "modes_state": {k: v for k, v in (base.get("modes_state") or {}).items()
+                                        if k != mid}}
+
+    # 1. LE BOUTON : présent là où la fenêtre sait l'essai libre, et seulement là. La liste
+    #    attendue est écrite ici exprès (c'est la décision du chantier), et la règle qui la
+    #    produit est vérifiée juste après, dans le registre.
+    avec_essai = sorted(mid for mid, p in console.pages.items() if p.bouton_essayer is not None)
+    chk(avec_essai == ["cvep", "p300", "ssvep"],
+        f"« Essayer librement » est sur les pages c-VEP, P300 et SSVEP ({avec_essai})")
+    sans_essai = [mid for mid in ("errp", "mi", "neuro", "raw")
+                  if mid in console.pages and console.pages[mid].bouton_essayer is None]
+    chk(sans_essai == ["errp", "mi", "neuro", "raw"],
+        f"…et ABSENT des pages ErrP, MI, Neuro et Brut : rien à entourer ({sans_essai})")
+    chk(all((p.bouton_essayer is not None)
+            == bool(stim_registry.option_libre(p.spec.get("stimulus_id") or ""))
+            for p in console.pages.values()),
+        "…et c'est le REGISTRE des fenêtres qui en décide (`option_libre`), pas une liste de "
+        "l'interface")
+    bulles_essai = {
+        mid: [lbl.toolTip() for lbl in console.pages[mid].bloc_tester.findChildren(_QLabel)
+              if lbl.text() == "ⓘ"] for mid in avec_essai}
+    chk(all(console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_essayer)
+            and console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_tester)
+            and console.pages[mid].bouton_essayer.text() == "Essayer librement"
+            and any("Aucun score" in b and "fermes la fenêtre" in b for b in bulles_essai[mid])
+            for mid in avec_essai),
+        f"…DANS le bloc « Tester », à côté de son bouton, avec sa bulle « ⓘ » : ce qu'on fait, "
+        f"aucun score, et l'arrêt à la fermeture ({ {m: len(b) for m, b in bulles_essai.items()} })")
+
+    # 2. L'ORDRE, sur le SSVEP ARRÊTÉ — le cas qui a un repos à protéger.
+    _remise_a_zero()
+    reglages_ss = {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.0}
+    ss_arrete = {**_sans_mode(state, "ssvep"), "quality": qualite_saine, "calibration": None,
+                 "mesure": None, "reglages": {"ssvep": dict(reglages_ss)}}
+    consigne_ss = "Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence."
+    page_ess = console.pages["ssvep"]
+    console.show_mode("ssvep")
+    console.apply_state(ss_arrete)
+    cliquer(page_ess.bouton_essayer, "« Essayer librement » du SSVEP")
+    chk(("start_mode", {"id": "ssvep"}) in moteur_faux.commandes and not _fenetres_lancees(),
+        f"le clic DÉMARRE le mode — `start_mode` sans aucun réglage, le moteur part avec ceux "
+        f"qu'il a retenus — et n'ouvre RIEN ({journal})")
+    console.apply_state(ss_arrete)                       # pas encore visible dans l'état
+    chauffe_ss = _avec_mode(ss_arrete, "ssvep", "warmup", avant=20.0, params=reglages_ss,
+                            instruction=consigne_ss)
+    console.apply_state(chauffe_ss)
+    repos_ss = _avec_mode(ss_arrete, "ssvep", "rest", avant=6.0, params=reglages_ss,
+                          instruction=consigne_ss)
+    console.apply_state(repos_ss)
+    chk(not _fenetres_lancees(),
+        f"🔴 …et RIEN ne s'ouvre pendant la chauffe ni le REPOS : des cibles qui clignotent "
+        f"fausseraient le plancher du SSVEP ({_fenetres_lancees()})")
+    texte_attente = page_ess.essai.text()
+    chk(consigne_ss in texte_attente
+        and decompte(repos_ss["modes_state"]["ssvep"]) in texte_attente
+        and "s'ouvrira" in texte_attente and page_ess.essai.isVisibleTo(page_ess)
+        and not page_ess.bouton_essayer.isEnabled(),
+        f"…pendant l'attente, la page montre la consigne du repos, son décompte, et que la "
+        f"fenêtre s'ouvrira ensuite — bouton grisé ({texte_attente!r})")
+    decode_ss = _avec_mode(ss_arrete, "ssvep", "running", params=reglages_ss)
+    avant_decodage = len(journal)       # tout ce qui précède l'état « en décodage »
+    console.apply_state(decode_ss)
+    suite_ess = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
+    chk(suite_ess == ["set_params", "start_mode", "fenetre"]
+        and rang(suite_ess, "fenetre") >= avant_decodage,
+        f"L'ORDRE : ce qui est à l'écran est appliqué, le mode démarré, PUIS la fenêtre — au "
+        f"tour où le mode est vu EN DÉCODAGE, pas avant, et rien d'autre ({suite_ess}, fenêtre "
+        f"au rang {rang(suite_ess, 'fenetre')}, décodage vu à partir du rang {avant_decodage})")
+    argv_ess = (_fenetres_lancees() or [[]])[-1]
+    chk(argv_ess[:3] == stim_registry.commande("ssvep")
+        and all(o in argv_ess for o in stim_registry.option_libre("ssvep"))
+        and not {"--guide", "--calibrer", "--tester"} & set(argv_ess),
+        f"…la fenêtre de DÉCODAGE du mode, avec les options de l'essai libre que le registre "
+        f"déclare, sans consigne ni protocole ({argv_ess[3:]})")
+    chk("--freqs" in argv_ess and argv_ess[argv_ess.index("--freqs") + 1:][:1] == ["12,15,20"],
+        f"…et les FRÉQUENCES du mode : sans elles, l'indice entouré désignerait une autre flèche "
+        f"que celle que le moteur a décodée ({argv_ess[3:]})")
+    chk("en cours" in page_ess.essai.text() and not page_ess.bouton_essayer.isEnabled(),
+        f"…la page dit que l'essai est en cours ({page_ess.essai.text()[:50]!r})")
+    texte_bandeau, _alerte = console.lanceur.etat_texte()
+    chk("ferme-la" in texte_bandeau and "ne la ferme pas" not in texte_bandeau,
+        f"…et le BANDEAU ne contredit pas la page : une fenêtre d'essai libre se ferme à la main, "
+        f"c'est même le seul moyen de finir ({texte_bandeau!r})")
+    restes_essai = sorted({(mid, b.text()) for mid, p in console.pages.items()
+                           for b in p.findChildren(QAbstractButton) if b.text() in partis
+                           and not (p.bouton_observer is b)})
+    chk(not restes_essai,
+        f"…et PENDANT l'essai, aucune page ne porte « Démarrer », « Arrêter », « Lancer le "
+        f"stimulus »… : le geste n'a pas ramené ce qui a quitté la page ({restes_essai})")
+    moteur_faux.commandes.clear()
+    processus[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)       # Échap
+    console.apply_state(decode_ss)
+    chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})],
+        f"la fenêtre FERMÉE, la console arrête le mode qu'elle avait démarré pour l'essai "
+        f"({moteur_faux.commandes})")
+    chk("arrêté" in page_ess.essai.text() and page_ess.bouton_essayer.isEnabled()
+        and console._essai is None,
+        f"…le DIT sur la page, et rend le bouton ({page_ess.essai.text()!r})")
+
+    # 3. Le c-VEP et le P300 : même séquence, et LEURS options d'essai libre (`--libre` pour le
+    #    c-VEP, qui désigne sinon des cibles).
+    for mid_e in ("cvep", "p300"):
+        _remise_a_zero()
+        arrete_e = {**_sans_mode(state, mid_e), "quality": qualite_saine, "calibration": None,
+                    "mesure": None}
+        console.show_mode(mid_e)
+        console.apply_state(arrete_e)
+        cliquer(console.pages[mid_e].bouton_essayer, f"« Essayer librement » du {mid_e}")
+        console.apply_state(_avec_mode(arrete_e, mid_e, "warmup", avant=10.0))
+        chk(("start_mode", {"id": mid_e}) in moteur_faux.commandes and not _fenetres_lancees(),
+            f"{mid_e} : `start_mode`, et pas de fenêtre pendant la chauffe ({journal})")
+        console.apply_state(_avec_mode(arrete_e, mid_e, "running"))
+        argv_e = (_fenetres_lancees() or [[]])[-1]
+        stim_e = console.catalogue[mid_e]["stimulus_id"]
+        chk(argv_e[:3] == stim_registry.commande(stim_e)
+            and all(o in argv_e for o in stim_registry.option_libre(stim_e))
+            and ("--libre" in argv_e) == (mid_e == "cvep")
+            and not {"--calibrer", "--tester"} & set(argv_e),
+            f"{mid_e} : en décodage, sa fenêtre s'ouvre avec `option_libre` "
+            f"({stim_registry.option_libre(stim_e)}) et sans protocole ({argv_e[3:]})")
+        moteur_faux.commandes.clear()
+        processus[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)
+        console.apply_state(_avec_mode(arrete_e, mid_e, "running"))
+        chk(moteur_faux.commandes == [("stop_mode", {"id": mid_e})],
+            f"{mid_e} : …et la fermeture arrête le mode démarré pour l'essai "
+            f"({moteur_faux.commandes})")
+
+    # 4. Un mode qui TOURNAIT DÉJÀ (lancé depuis sa tuile, pour une application) : rien à
+    #    démarrer, la fenêtre s'ouvre tout de suite, et il CONTINUE après.
+    _remise_a_zero()
+    console.show_mode("ssvep")
+    console.apply_state(decode_ss)
+    cliquer(page_ess.bouton_essayer, "« Essayer librement » sur un SSVEP qui décode")
+    chk(not [c for c in moteur_faux.commandes if c[0] == "start_mode"] and _fenetres_lancees(),
+        f"mode qui décode déjà : aucun `start_mode`, la fenêtre s'ouvre au clic ({journal})")
+    moteur_faux.commandes.clear()
+    processus[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)
+    console.apply_state(decode_ss)
+    chk(not moteur_faux.commandes and "continue" in page_ess.essai.text(),
+        f"…et la fermeture n'envoie RIEN : il tournait avant, il tourne après, et la page le dit "
+        f"({moteur_faux.commandes}, {page_ess.essai.text()!r})")
+
+    # 4 bis. …et si CE QUI EST À L'ÉCRAN vient de changer ses réglages, `set_params` n'est que
+    #        mis en file : le dernier état montre encore l'ANCIEN runtime « en décodage », que la
+    #        boucle va reconstruire (repos refait). On attend de voir LES NOUVEAUX en vigueur.
+    _remise_a_zero()
+    anciens = _avec_mode(ss_arrete, "ssvep", "running",
+                         params={"freqs": [15.0, 20.0, 8.571], "refresh_hz": 60.0,
+                                 "alpha_hz": 10.0})
+    console.apply_state(anciens)
+    console.essayer_librement("ssvep", reglages={"freqs": (12.0, 15.0, 20.0),
+                                                  "refresh_hz": 60.0, "alpha_hz": 10.0})
+    console.apply_state(anciens)
+    chk(not _fenetres_lancees(),
+        f"réglages tout juste appliqués à un mode qui tourne : PAS de fenêtre tant que l'état "
+        f"montre l'ancien runtime ({_fenetres_lancees()})")
+    console.apply_state(decode_ss)
+    chk(len(_fenetres_lancees()) == 1,
+        f"…elle s'ouvre quand les réglages appliqués SONT en vigueur ({_fenetres_lancees()})")
+
+    # 5. Un REFUS du moteur (pas de modèle…) s'affiche, et n'ouvre RIEN.
+    _remise_a_zero()
+    arrete_cv = {**_sans_mode(state, "cvep"), "quality": qualite_saine, "calibration": None,
+                 "mesure": None}
+    page_ecv = console.pages["cvep"]
+    console.show_mode("cvep")
+    console.apply_state(arrete_cv)
+    moteur_faux.refus["start_mode"] = "« Modèle entraîné » : aucun choix disponible"
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » du c-VEP, sans modèle")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    chk(not _fenetres_lancees() and console._essai is None,
+        f"`start_mode` refusé : aucune fenêtre, même si l'état bougeait ensuite ({journal})")
+    chk("aucun choix disponible" in page_ecv.essai.text()
+        and "aucun choix disponible" in console.banner.refus.text()
+        and page_ecv.bouton_essayer.isEnabled(),
+        f"…et le refus du MOTEUR se lit sur la page ET dans le bandeau, bouton rendu "
+        f"({page_ecv.essai.text()!r})")
+    moteur_faux.refus.pop("start_mode")
+
+    # 6. Un mode qui ne DÉCODE jamais doit le DIRE au lieu d'attendre pour toujours — trois
+    #    façons de ne jamais y arriver.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (le moteur ne démarre rien)")
+    console.apply_state(arrete_cv)
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(arrete_cv)
+    chk(console._essai is None and "n'a pas démarré" in page_ecv.essai.text()
+        and not _fenetres_lancees() and ("stop_mode", {"id": "cvep"}) not in moteur_faux.commandes,
+        f"`start_mode` accepté mais le mode n'apparaît jamais : renoncement DIT au bout de "
+        f"{DELAI_DEMARRAGE_S:.0f} s ({page_ecv.essai.text()!r})")
+
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (le mode reste en chauffe)")
+    coince = _avec_mode(arrete_cv, "cvep", "warmup", avant=0.0,
+                        instruction="Le casque se stabilise — reste immobile.")
+    console.apply_state(coince)
+    repos_cv = console.catalogue["cvep"].get("rest") or {}
+    horloge[0] += (repos_cv.get("warmup_s", 0.0) + repos_cv.get("duration_s", 0.0)
+                   + MARGE_DECODAGE_S + 1.0)
+    console.apply_state(coince)
+    chk(console._essai is None and "ne décode toujours pas" in page_ecv.essai.text()
+        and "arrêté" in page_ecv.essai.text() and not _fenetres_lancees()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes,
+        f"un mode qui ne passe JAMAIS en décodage : renoncement dit, fenêtre jamais ouverte, et "
+        f"le mode démarré pour l'essai est arrêté ({page_ecv.essai.text()!r})")
+
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (le mode s'arrête en chauffe)")
+    console.apply_state(coince)
+    console.apply_state(arrete_cv)
+    chk(console._essai is None and "s'est arrêté avant" in page_ecv.essai.text()
+        and not _fenetres_lancees() and ("stop_mode", {"id": "cvep"}) not in moteur_faux.commandes,
+        f"un mode qui s'ARRÊTE pendant l'attente (sa tuile, un test lancé) : l'essai le dit et "
+        f"n'ouvre rien ({page_ecv.essai.text()!r})")
+
+    # 7. La fenêtre REFUSE de s'ouvrir (une autre occupe la place) : l'essai est annulé, et le
+    #    mode qu'il avait démarré pour rien s'arrête.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    console.lanceur.lancer("errp", label="ErrP")          # une autre fenêtre tourne
+    journal.clear()
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (une fenêtre occupe la place)")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    chk(console._essai is None and "Essai annulé" in page_ecv.essai.text()
+        and "Une fenêtre tourne déjà" in page_ecv.essai.text()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes and not _fenetres_lancees(),
+        f"fenêtre refusée : essai annulé, raison dite, mode arrêté ({page_ecv.essai.text()!r})")
+
+    # 7 bis. Un mode qui décode SANS publier (« publié » décoché sur sa tuile) n'a pas de flux
+    #        décodé : l'anneau n'aurait rien à lire. On le dit au lieu d'ouvrir une fenêtre muette.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (mode non publié)")
+    muet = _avec_mode(arrete_cv, "cvep", "running")
+    muet["modes_state"]["cvep"]["published"] = False
+    console.apply_state(muet)
+    chk(console._essai is None and not _fenetres_lancees()
+        and "publié" in page_ecv.essai.text()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes,
+        f"mode qui décode sans publier : pas de fenêtre muette, la page dit quoi cocher, et le "
+        f"mode démarré pour l'essai est arrêté ({page_ecv.essai.text()!r})")
+
+    # 8. Le mode s'arrête SOUS la fenêtre ouverte : elle afficherait des cibles que plus rien ne
+    #    décode, sans anneau — indiscernable d'un regard qui ne fixe pas. On la ferme.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    cliquer(page_ecv.bouton_essayer, "« Essayer librement » (le mode s'arrêtera sous la fenêtre)")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    fenetre_essai = processus[-1] if processus else None
+    moteur_faux.commandes.clear()
+    console.apply_state(arrete_cv)
+    chk(fenetre_essai is not None and fenetre_essai.tue and not console.lanceur.en_cours()
+        and "pendant l'essai" in page_ecv.essai.text() and not moteur_faux.commandes,
+        f"mode arrêté sous la fenêtre : elle est FERMÉE, et la page le dit "
+        f"({page_ecv.essai.text()!r}, {moteur_faux.commandes})")
+    _remise_a_zero()
+    console.show_grid()
 
     # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
     # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet

@@ -55,6 +55,9 @@ class LanceurFenetre(QObject):
         self._fabrique = fabrique if fabrique is not None else QProcess
         self._proc = None
         self._quoi = ""            # ce qui tourne, en clair : « P300 (entraînement) »
+        # Une fenêtre d'ESSAI LIBRE se ferme à la main, c'est même le seul moyen de finir l'essai.
+        # Le bandeau ne doit donc pas lui dire « ne la ferme pas » (cf. `etat_texte`).
+        self._libre = False
         self._tue = False          # c'est NOUS qui l'avons arrêté -> sa mort n'est pas anormale
         self._lignes = deque(maxlen=LIGNES_RETENUES)
         self.probleme = ""         # non vide = quelque chose à AFFICHER, tel quel
@@ -83,6 +86,11 @@ class LanceurFenetre(QObject):
         if self.probleme:
             return self.probleme, True
         if self._proc is not None:
+            # ⚠️ Deux consignes OPPOSÉES. Une séance minutée (entraînement, test) fermée à la main
+            # est perdue ; un essai libre, lui, ne se termine QUE comme ça. Lui afficher « ne la
+            # ferme pas » contredirait la page du mode, qui dit « ferme-la pour terminer ».
+            if self._libre:
+                return tr("pages.fenetre.en_cours_libre", quoi=self._quoi), False
             return tr("pages.fenetre.en_cours", quoi=self._quoi), False
         # Ni problème ni fenêtre en cours : reste le BILAN de la dernière, s'il y en a un. Il
         # n'est PAS une alerte — une séance qui s'est bien passée le dit aussi, et c'est même
@@ -93,11 +101,14 @@ class LanceurFenetre(QObject):
 
     # --- écriture ---------------------------------------------------------------
 
-    def lancer(self, stimulus_id, calibrer=False, label="", options=()):
+    def lancer(self, stimulus_id, calibrer=False, label="", options=(), libre=False):
         """Démarre la fenêtre. Rend le MÊME accusé que le moteur : `{accepted, reason}`.
 
         La forme est celle de `EngineServer.submit` délibérément : l'appelant traite un refus de
         fenêtre exactement comme un refus de commande, sans se demander lequel des deux il tient.
+
+        `libre` ne change PAS la ligne de commande (ses arguments viennent du registre, dans
+        `options`) : il dit seulement au bandeau que cette fenêtre-là se ferme à la main.
         """
         if self._proc is not None:
             # La raison reste DITE (deux fenêtres, deux séances mélangées en silence) : sans
@@ -116,7 +127,10 @@ class LanceurFenetre(QObject):
         self._lignes.clear()
         self._tue = False
         self._quoi = (tr("pages.fenetre.quoi_entrainement", quoi=label or stimulus_id)
-                      if calibrer else (label or stimulus_id))
+                      if calibrer else
+                      tr("pages.fenetre.quoi_essai", quoi=label or stimulus_id)
+                      if libre else (label or stimulus_id))
+        self._libre = bool(libre)
         self.numero += 1
         proc = self._fabrique()
         # Les deux canaux fusionnés : ce qu'on cherche à montrer est le message d'erreur d'un
@@ -170,6 +184,7 @@ class LanceurFenetre(QObject):
         if hasattr(proc, "waitForFinished"):
             proc.waitForFinished(2000)
         self._quoi = ""
+        self._libre = False
         self.change.emit()
 
     def arreter_si(self, numero):
@@ -203,6 +218,7 @@ class LanceurFenetre(QObject):
         self._encaisser_sortie()
         self._proc = None
         quoi, self._quoi = self._quoi, ""
+        self._libre = False
         brutal = statut == QProcess.ExitStatus.CrashExit
         if self._tue:
             # Nous l'avons tué (fermeture de la console, ou geste explicite) : rien à signaler.
@@ -244,6 +260,7 @@ class LanceurFenetre(QObject):
             # qu'on a déjà lâché (`_proc is None`) ne doit rien annoncer du tout.
             return
         quoi, self._quoi = self._quoi, ""
+        self._libre = False
         self._proc = None
         self.probleme = tr("pages.fenetre.pas_demarre", quoi=quoi,
                            sortie=self._derniere_sortie())
