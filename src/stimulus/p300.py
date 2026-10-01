@@ -46,11 +46,14 @@ est donc ce qui rend ce garde-fou possible.
 
 ⚠️ **`--retour` entoure la cible que le moteur a SÉLECTIONNÉE** (`stimulus/retour.py` porte la
 règle). Le P300 décide UNE fois par manche, après le `round_end` : l'anneau apparaît donc pendant
-la pause qui suit, et s'efface au premier flash de la manche suivante — un repère statique pendant
-les flashs ferait concurrence à l'oddball. En test (`--tester`), VERT si c'est la cible désignée,
-ROUGE sinon ; en décodage, ambre. Il est tracé au-delà du cercle de désignation
-(`ANNEAU_ECART_PX`), dans le noir. Sans option, cette fenêtre ne désigne déjà rien (« choisis ta
-cible ») : elle n'a pas besoin d'un `--libre`.
+la pause qui suit, et s'efface `EFFACE_AVANT_FLASH_S` AVANT le premier flash de la manche
+suivante — pas sur lui : un repère statique pendant les flashs ferait concurrence à l'oddball, et
+sa disparition calée sur le premier flash s'imprimerait dans sa ligne de base. En test
+(`--tester`), MAGENTA si c'est la cible désignée, ROUGE sinon ; en décodage, ambre. Il est tracé
+au-delà du cercle de désignation (`ANNEAU_ECART_PX`), dans le noir. La DERNIÈRE manche d'un test
+a aussi le sien : l'écran final attend sa décision (au plus `ATTENTE_DERNIERE_DECISION_S`) avant
+d'envoyer `calib_end`. Sans option, cette fenêtre ne désigne déjà rien (« choisis ta cible ») :
+elle n'a pas besoin d'un `--libre`.
 
 Lancer :
     python src/stimulus/p300.py                  # plein écran, ESC pour quitter
@@ -110,6 +113,13 @@ CUE_EPAISSEUR_PX = 4
 # l'intérieur sur 4 px — il laisse 6 px de noir entre les deux, et ne touche ni la cible ni la
 # désignation. `--smoke` le prouve pixel par pixel (aucun pixel non-fond sous l'anneau).
 ANNEAU_ECART_PX = 10
+# L'anneau s'efface ce délai AVANT le premier flash suivant : sa disparition évoque ~0,3 s de
+# réponse, à tenir hors de la ligne de base du flash (`P300_PRE_S`). Il reste ~1 s d'affichage.
+EFFACE_AVANT_FLASH_S = 0.5
+# L'écran final d'un test guette la décision de la DERNIÈRE manche (au plus ce délai), puis la
+# montre : la fenêtre se fermait avant, et la dernière manche n'avait jamais d'anneau (revue E-I3).
+ATTENTE_DERNIERE_DECISION_S = 3.0
+AFFICHE_DERNIERE_S = 1.0
 
 # ⚠️ La durée de la pause entre deux manches est LUE dans `core/config.py`, jamais recopiée ici.
 # Elle y a été hissée le 2026-09-07 parce que DEUX programmes en dépendent et qu'aucun ne peut
@@ -305,6 +315,12 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         print(f"[p300-stim] REFUSÉ — {raison}")
         return False
 
+    # Le flux du RETOUR, construit AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
+    # modes (1 à 2 s d'import), qui volait le GIL au rendu depuis un fil (revue C-M5).
+    source_dec = source_retour
+    if retour and source_dec is None:
+        source_dec = SourceDecisions(stimulus_id="p300")
+
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
     from stimulus.refresh import measure_refresh  # même mesure que le SSVEP, pas réinventée
@@ -341,8 +357,9 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     # Le RETOUR cherche `decoded_p300` dès maintenant, dans son fil — l'attente du moteur juste
     # en dessous dure jusqu'à 5 s, autant qu'elle serve. Toujours PAR ESSAI : une manche, une
     # décision, en test comme en décodage.
-    anneau = (Retour(source_retour or SourceDecisions(stimulus_id="p300"), int(targets),
-                     par_essai=True) if retour else None)
+    anneau = Retour(source_dec, int(targets), par_essai=True) if retour else None
+    # Le geste qui éteint l'anneau `EFFACE_AVANT_FLASH_S` avant le premier flash (cf. sa constante).
+    efface = None if anneau is None else (EFFACE_AVANT_FLASH_S, anneau.mesure_commence)
 
     print(f"[p300-stim] refresh écran   : {refresh:.0f} Hz")
     print(f"[p300-stim] {targets} cibles, {reps} répétitions/manche, "
@@ -454,10 +471,16 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                               f"|  {ecoute}  |  ESC = quitter", True, HUD)
         win.blit(hud, (12, 10))
 
-    def ecran_statique(secondes, titre, note=None, marqueur_cue=False):
-        """Un écran où RIEN ne clignote. Les TROIS attentes du programme passent par ici :
-        l'entre-manches du décodage, la consigne d'une manche de calibration, et l'attente de la
-        chauffe du moteur au lancement d'une calibration.
+    def ecran_statique(secondes, titre, note=None, marqueur_cue=False, avant_la_fin=None,
+                       jusqu_a=None):
+        """Un écran où RIEN ne clignote. Les attentes du programme passent par ici :
+        l'entre-manches du décodage, la consigne d'une manche de calibration, l'attente de la
+        chauffe du moteur au lancement d'une calibration, et l'écran final.
+
+        `avant_la_fin = (secondes, geste)` : `geste()` une fois, AVANT de dessiner la première image
+        à moins de `secondes` de la fin — c'est ce qui éteint l'anneau avant le premier flash.
+        `jusqu_a` : l'écran s'arrête dès que ce prédicat est vrai (l'écran final qui guette la
+        dernière décision), `secondes` restant la borne.
 
         ⚠️ Cette pause n'est pas du confort. Sans elle, la frontière entre deux manches est
         visuellement identique à un intervalle entre deux flashs (~150 ms) : l'étudiant n'a aucun
@@ -474,7 +497,12 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         t0 = time.perf_counter()
         premiere = True
         while running and (time.perf_counter() - t0) < secondes:
+            if jusqu_a is not None and jusqu_a():
+                break
             poll()
+            if avant_la_fin is not None and secondes - (time.perf_counter() - t0) <= avant_la_fin[0]:
+                avant_la_fin[1]()
+                avant_la_fin = None
             dessine_cibles()
             grand = big_font.render(titre, True, PAUSE)
             win.blit(grand, grand.get_rect(center=(int(cx), int(cy))))
@@ -493,6 +521,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                         # de croire le compteur de cet émetteur.
                         sonde_ecran(win, list(spots), rayon_cue)
             fin_d_image()
+        if avant_la_fin is not None and running:
+            avant_la_fin[1]()       # une image plus longue que la marge : le geste n'est pas perdu
 
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
     rounds = int(rounds)
@@ -538,15 +568,15 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
             ecran_statique(P300_PAUSE_MANCHE_S,
                            f"FIXE la cible {cue_courant} et COMPTE ses éclairs",
                            note=f"manche {round_num}/{rounds} — ne bouge pas, cligne peu",
-                           marqueur_cue=True)
+                           marqueur_cue=True, avant_la_fin=efface)
         for m in build_markers(targets, reps, rng):
             if not running:
                 break
             if m["event"] == "flash":
                 cible = m["target"]
                 if flashs_manche == 0 and anneau is not None:
-                    # La manche commence sa MESURE : l'anneau de la précédente s'efface avant
-                    # le premier flash, et sa décision, si elle arrive encore, sera ignorée.
+                    # Filet : la pause l'a déjà éteint `EFFACE_AVANT_FLASH_S` plus tôt. Sans pause
+                    # devant (la toute première manche du décodage), c'est ici qu'il s'éteint.
                     anneau.mesure_commence()
                 for f in range(on_fr):
                     poll()
@@ -591,7 +621,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                     # En calibration, la pause est jouée EN TÊTE de la manche suivante, avec la
                     # consigne : la jouer aussi ici en ferait deux d'affilée (5 s d'écran fixe) et
                     # rien ne le dirait, sinon une séance deux fois plus longue qu'annoncée.
-                    ecran_statique(P300_PAUSE_MANCHE_S, "choisis ta cible et fixe-la")
+                    ecran_statique(P300_PAUSE_MANCHE_S, "choisis ta cible et fixe-la",
+                                   avant_la_fin=efface)
 
         # ⚠️ Sortir en pleine manche (ESC, fenêtre fermée, `--seconds` atteint) laissait le
         # moteur avec des flashs orphelins : il attend 10 s puis ABANDONNE la manche. Émettre le
@@ -610,8 +641,14 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # serait déjà noir et le sujet aurait bougé. Même geste que le `settle` de l'ancienne
         # calibration (`research/p300_calibrate._collect`).
         cue_courant = None
-        ecran_statique(P300_EPOCH_S + 0.15, titre_fin,
-                       note="ne bouge plus — la dernière époque finit de s'enregistrer")
+        note_fin = "ne bouge plus — la dernière époque finit de s'enregistrer"
+        ecran_statique(P300_EPOCH_S + 0.15, titre_fin, note=note_fin)
+        if anneau is not None:
+            # La DERNIÈRE manche a son anneau (revue E-I3) — AVANT `calib_end`, test encore ouvert.
+            ecran_statique(ATTENTE_DERNIERE_DECISION_S, titre_fin, note=note_fin,
+                           jusqu_a=lambda: not anneau.attend)
+            if anneau.anneau is not None:
+                ecran_statique(AFFICHE_DERNIERE_S, titre_fin, note=note_fin)
         emet({"mode": "p300", "event": "calib_end"})
         print(f"[p300-stim] {'test' if tester else 'entraînement'} terminé : {rounds} manches, "
               f"« calib_end » envoyé — le moteur "
@@ -884,9 +921,9 @@ def _smoke_retour(chk):
     """E. L'ANNEAU DE RETOUR, sur l'écran factice, avec une source de décisions FACTICE.
 
     Un TEST de quatre manches, où un moteur factice répond à chaque `round_end` par la décision de
-    son script (comme le vrai, qui décide une fois la dernière époque mûre) ; puis le décodage
-    LIBRE. Tout est lu dans les PIXELS, et la désignation bleue — le garde-fou de la moitié C — est
-    relue anneau affiché."""
+    son script ~1 s plus tard (comme le vrai, qui décide une fois la dernière époque mûre) ; puis
+    le décodage LIBRE. Tout est lu dans les PIXELS, et la désignation bleue — le garde-fou de la
+    moitié C — est relue anneau affiché."""
     import pygame
     import pylsl
 
@@ -900,7 +937,7 @@ def _smoke_retour(chk):
         r = vrai_flip(*a, **k)
         s = pygame.display.get_surface()
         trace.append(("flip", rt.anneaux_a_l_ecran(s, spots, rayon),
-                      _cible_designee_a_l_ecran(s, spots, rayon_cue)))
+                      _cible_designee_a_l_ecran(s, spots, rayon_cue), time.perf_counter()))
         return r
 
     def push(self, *a, **k):
@@ -913,10 +950,13 @@ def _smoke_retour(chk):
     commun = dict(windowed=True, refresh=240.0, reps=P300_MIN_REPS, targets=P300_N_TARGETS,
                   stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
                   retour=True)
-    # 20 lectures après le `round_end` : dans la pause de la manche suivante (2,5 s). « tard » part
-    # 2 lectures après le premier flash SUIVANT, donc pendant la mesure de la manche d'après.
+    # La décision arrive `P300_EPOCH_S + 0,3` s après le `round_end`, comme celle du vrai moteur
+    # (la dernière époque doit mûrir) : PLUS tard que l'écran final de base (`P300_EPOCH_S + 0,15`)
+    # — c'est ce qui prouve que la dernière manche a son anneau. « tard » part 2 lectures après le
+    # premier flash SUIVANT, donc pendant la mesure de la manche d'après.
     moteur = rt.MoteurFactice(P300_N_TARGETS, ["juste", "faux", "tard", "juste"],
-                              depart="round_end", ouverture="flash", delai=20, trace=trace)
+                              depart="round_end", ouverture="flash", delai=P300_EPOCH_S + 0.3,
+                              secondes=True, trace=trace)
     libre = rt.MoteurFactice(P300_N_TARGETS, [2, -1, 4], depart="round_end", ouverture="flash",
                              delai=20, trace=trace)
     pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
@@ -948,28 +988,45 @@ def _smoke_retour(chk):
                 attend = True
         return [e for e in tr if e[0] == "flip"], ouvertures, fermetures
 
+    def fenetres(images, ouv, ferm):
+        """La fenêtre de retour de chaque manche : de son `round_end` au 1er flash suivant (ou la
+        fin), et l'ensemble des anneaux qu'on y voit."""
+        bornes = [range(f, ouv[k + 1] if k + 1 < len(ouv) else len(images))
+                  for k, f in enumerate(ferm)]
+        return bornes, [sorted({tuple(images[i][1]) for i in w} - {()}) for w in bornes]
+
     images, ouv, ferm = decoupe(trace_t)
     chk(fait and len(ouv) == 4 and len(ferm) == 4 and len(moteur.attendues) == 4,
         f"[E] le test avec retour va au bout : 4 manches ouvertes, 4 fermées, 4 décisions "
         f"scriptées ({len(ouv)}, {len(ferm)}, {len(moteur.attendues)})")
-    fins = [o - 1 for o in ouv[1:]] + [len(images) - 1]
-    vus = [images[i][1] for i in fins]
-    attendus = [rt.anneau_attendu(*a) for a in moteur.attendues]
+    bornes, vus = fenetres(images, ouv, ferm)
+    attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[E] l'anneau entoure la cible SÉLECTIONNÉE, VERT si c'est la désignée, ROUGE sinon, rien "
-        f"pour une décision arrivée pendant la manche suivante — lu dans les PIXELS "
+        f"[E] l'anneau entoure la cible SÉLECTIONNÉE, MAGENTA si c'est la désignée, ROUGE sinon, "
+        f"rien pour une décision arrivée pendant la manche suivante — et la DERNIÈRE manche a le "
+        f"sien : l'écran final attend sa décision — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
-    chk(any(a and a[0][1] == rt.COULEUR_JUSTE for a in vus)
-        and any(a and a[0][1] == rt.COULEUR_FAUX for a in vus),
+    couleurs = {a[0][1] for v in vus for a in v}
+    chk({rt.COULEUR_JUSTE, rt.COULEUR_FAUX} <= couleurs,
         "[E] …et les deux couleurs ont réellement été vues")
     pendant = [i for o, f in zip(ouv, ferm) for i in range(o, f + 1) if images[i][1]]
     chk(not pendant,
         f"[E] AUCUN anneau pendant les flashs d'une manche — ni le précédent, ni la décision "
         f"tardive : un repère statique y ferait concurrence à l'oddball ({len(pendant)} image(s))")
+    # Éteint AVANT le premier flash, pas sur lui : aucune image à anneau dans les
+    # `EFFACE_AVANT_FLASH_S` qui le précèdent (à une image près : 20 ms à 240 Hz).
+    tout_pres = [i for o in ouv for i in range(o)
+                 if images[i][1] and images[o][3] - images[i][3] < EFFACE_AVANT_FLASH_S - 0.02]
+    chk(not tout_pres,
+        f"[E] l'anneau s'éteint {EFFACE_AVANT_FLASH_S:g} s AVANT le premier flash de la manche "
+        f"suivante, jamais sur lui : sa disparition ne tombe pas dans la ligne de base "
+        f"({len(tout_pres)} image(s) fautive(s))")
     cues = [e[2]["target"] for e in trace_t if e[0] == "push" and e[1] == "cue"]
-    relues = [(images[o - 1][2], c) for o, c in zip(ouv[1:], cues[1:]) if images[o - 1][1]]
+    relues = [(images[i][2], cues[k + 1]) for k, w in enumerate(bornes[:-1]) for i in w
+              if images[i][1]]
     chk(len(relues) >= 2 and all(a == b for a, b in relues),
-        f"[E] anneau affiché, la cible DÉSIGNÉE se relit toujours dans les pixels ({relues})")
+        f"[E] anneau affiché, la cible DÉSIGNÉE se relit toujours dans les pixels "
+        f"({sorted(set(relues))}, {len(relues)} images)")
     chk(garde_test.traces > 10 and garde_test.violations == 0,
         f"[E] l'anneau ne recouvre AUCUN pixel non-fond — ni cible, ni désignation, ni étiquette : "
         f"{garde_test.violations} pixel(s) touché(s) sur {garde_test.traces} tracés")
@@ -979,11 +1036,12 @@ def _smoke_retour(chk):
         f"[E] le retour se lit UNE fois par image, APRÈS son flip et son marqueur ({lectures} "
         f"lectures pour {len(images)} images, fautes {fautes[:3]})")
 
-    images_l, ouv_l, _ferm_l = decoupe(trace_l)
-    vus_l = [images_l[o - 1][1] for o in ouv_l[1:3]]
-    chk(len(ouv_l) >= 3 and vus_l == [[(2, rt.COULEUR_LIBRE)], []] and garde_libre.violations == 0,
+    images_l, ouv_l, ferm_l = decoupe(trace_l)
+    _bornes_l, vus_l = fenetres(images_l, ouv_l, ferm_l)
+    chk(len(ouv_l) >= 3 and vus_l[:2] == [[((2, rt.COULEUR_LIBRE),)], []]
+        and garde_libre.violations == 0,
         f"[E] libre : l'anneau AMBRE montre la sélection pendant la pause, et rien sur −1 "
-        f"({vus_l}, {len(ouv_l)} manches, {garde_libre.violations} pixel(s) touché(s))")
+        f"({vus_l[:2]}, {len(ouv_l)} manches, {garde_libre.violations} pixel(s) touché(s))")
 
     nom = rt.flux_decode_de("p300")
     chk(nom == "EEG_API_Unicorn_decoded_p300",
@@ -991,6 +1049,8 @@ def _smoke_retour(chk):
         f"l'application d'un étudiant résout ({nom})")
     rt.autotest_etat(chk)
     rt.autotest_source(chk)
+    rt.autotest_couleurs(chk)
+    rt.autotest_resolution(chk, run, "p300")
 
 
 def _smoke_bout_en_bout(chk, journal, designees):

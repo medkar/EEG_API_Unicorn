@@ -5,26 +5,34 @@ qu'on regarde ». Trois fenêtres le proposent — `cvep.py`, `ssvep.py`, `p300.
 leur SEULE écriture du geste, comme `garde.py` l'est pour leurs gardes : trois copies d'un fil
 réseau et d'une règle de rattachement divergeraient au premier correctif.
 
-Trois morceaux :
+Quatre morceaux :
 
 1. **`SourceDecisions` — la fenêtre écoute le flux DÉCODÉ PUBLIC de son mode**, exactement comme
    l'application d'un étudiant : par son NOM (`core.lsl_io.stream_name`, suffixe LU dans le
    `ModeSpec` du mode qui déclare cette fenêtre). Aucun flux nouveau, aucun contrat nouveau : notre
    propre fenêtre devient un client du contrat public, et l'éprouve à chaque séance. Voie 0 =
    `target_index`, −1 = « pas de décision ».
-   ⚠️ **La résolution vit dans un FIL, jamais dans la boucle de rendu.** `resolve_byprop` attend
+   ⚠️ **La recherche vit dans un FIL, jamais dans la boucle de rendu.** `resolve_byprop` attend
    jusqu'à son délai quand le flux n'existe pas encore ; dans la boucle, c'est une image figée — et
    une image figée est une cible qui cesse de clignoter (SSVEP) ou une phase qui glisse (c-VEP).
-   La boucle ne fait que `pull_chunk(timeout=0.0)` : jamais une attente.
+   La boucle ne fait que `pull_chunk(timeout=0.0)` : jamais une attente. Le NOM, lui, se lit dans
+   le constructeur, que la fenêtre appelle AVANT `pygame.init()` : il importe le catalogue des modes
+   (1 à 2 s de calcul), qui dans un fil voisin volait le GIL au rendu (revue C-M5).
+   🔴 **Seulement un flux de CETTE machine** (revues C-I1, E-I1). En salle, chaque étudiant fait
+   tourner son moteur sous les MÊMES noms de flux : un homonyme d'une autre machine est ignoré, et
+   le fil cherche jusqu'à trouver celui d'ici. Le nom d'hôte est celui que liblsl publie
+   (`StreamInfo.hostname()`), comparé sans casse à `socket.gethostname()` — égaux sur le poste,
+   vérifié le 2026-10-01.
 
 2. **`Retour` — l'état de l'anneau**, en pur (ni pygame, ni réseau : testable sans écran).
    Deux régimes :
-   - **continu** (c-VEP et SSVEP en libre, ~5 Hz) : l'anneau suit la DERNIÈRE décision, disparaît
-     sur −1, et s'efface si plus rien n'arrive depuis `PERIME_S` (un mode arrêté ne doit pas
-     laisser un anneau figé qui aurait l'air d'une décision) ;
+   - **continu** (c-VEP et SSVEP en libre, ~5 Hz) : l'anneau suit la DERNIÈRE décision VALIDE, et
+     s'efface `PERIME_S` après elle (un mode arrêté ne doit pas laisser un anneau figé qui aurait
+     l'air d'une décision). ⚠️ Un −1 ne l'efface PAS : un anneau qui clignote à 5 Hz à côté de la
+     cible fixée est un stimulus, et le SSVEP s'abstient une fenêtre sur deux (revue C-I3) ;
    - **par essai** (les tests guidés, et le P300 qui décide une fois par manche) : la fenêtre dit
      quand un essai se FERME (`mesure_finie`) et quand le suivant COMMENCE sa mesure
-     (`mesure_commence`). En test, elle connaît la cible désignée : VERT si juste, ROUGE sinon.
+     (`mesure_commence`). En test, elle connaît la cible désignée : MAGENTA si juste, ROUGE sinon.
 
    ⚠️ **Le RATTACHEMENT d'une décision à son essai — la règle, et pourquoi.** Le moteur ne décide
    un essai qu'APRÈS sa fermeture (il attend le marqueur de fin et la maturité de la dernière
@@ -39,23 +47,39 @@ Trois morceaux :
    une décision trop tardive est perdue (un essai sans anneau), elle ne décale jamais les
    suivantes — là où « la plus ancienne en attente » ferait colorier TOUTE la suite à contretemps
    après une seule décision manquante.
-   Pourquoi l'effacer au début de la mesure suivante : un anneau coloré autour d'une AUTRE cible
-   pendant qu'on enregistre la suivante est un distracteur placé exactement où il ne faut pas.
+   Pourquoi l'effacer BIEN AVANT la mesure suivante (revue D-I1) : un anneau autour d'une AUTRE
+   cible pendant qu'on enregistre la suivante est un distracteur, et sa DISPARITION est un
+   transitoire visuel — calée sur un flash ou une frame 0 de cycle, elle s'imprime dans les données
+   notées. Chaque fenêtre appelle donc `mesure_commence()` avec la marge de son paradigme.
 
 3. **`dessine_anneau` / `anneaux_a_l_ecran`** — le dessin, et sa relecture dans les PIXELS pour les
    `--smoke` (même famille de sonde que la phase c-VEP ou la cible SSVEP).
    ⚠️ **L'anneau ne touche JAMAIS un pixel de cible.** Chaque fenêtre le trace dans une bande VIDE
    de sa géométrie, et ses `--smoke` le vérifient à chaque image par `pixels_non_fond_sous_anneau` :
    tout pixel que l'anneau va couvrir doit être du FOND au moment où il est tracé. Les tests qui
-   lisent la phase ou la consigne dans les pixels restent donc vrais anneau affiché.
+   lisent la phase ou la consigne dans les pixels restent donc vrais anneau affiché. Même garde
+   pour la croix (`dessine_croix`).
+
+4. **`ReposDuMoteur` — la croix de l'essai LIBRE.** La console ouvre la fenêtre dès que le mode
+   démarre : le plancher du SSVEP se mesure AVEC les cibles qui clignotent, sans en fixer aucune
+   (`ssvep.py`, `_guide`). La fenêtre lit le flux PUBLIC `status` du moteur d'ici et montre une
+   croix tant que sa `phase` dit chauffe ou plancher — de nouveau si le moteur REFAIT son repos.
+   Pourquoi `status` et pas le silence du flux décodé : il dit la phase en toutes lettres (contrat
+   public), à chaque changement ET toutes les `STATUS_PERIOD_S` (2 s, `core/server.py`) — un
+   abonné tardif l'apprend en 2 s ; un silence, lui, ne se distingue pas d'un mode qui ne
+   publierait qu'au changement. Sans aucun `status` : croix (on s'ouvre en chauffe), qui tombe
+   après `STATUT_ABSENT_S` — une croix éternelle bloquerait l'essai.
 
 ⚠️ `−1` en test guidé : AUCUN anneau. Le moteur s'est abstenu ; ce n'est ni juste ni faux — c'est
 la règle des tests (« −1 = silence, jamais une erreur »), et la peindre en rouge mentirait.
 
-Pas d'autotest propre : les trois `--smoke` de fenêtre appellent `autotest_etat` et
-`autotest_source` d'ici, en plus de leurs gardes de câblage.
+Pas d'autotest propre : les trois `--smoke` de fenêtre appellent les `autotest_*` d'ici, en plus
+de leurs gardes de câblage.
 """
 
+import colorsys
+import json
+import math
 import os
 import socket
 import threading
@@ -66,15 +90,25 @@ from pylsl import StreamInlet, resolve_byprop
 # --- Couleurs : chacune n'existe NULLE PART ailleurs dans les trois fenêtres -------------------
 # C'est ce qui permet aux `--smoke` de relire l'anneau dans les pixels à la couleur EXACTE (aucun
 # lissage : `pygame.draw.circle` ne lisse pas). Une couleur partagée avec un décor ferait trouver un
-# anneau là où il n'y en a pas.
+# anneau là où il n'y en a pas. ⚠️ Et aucune ne RESSEMBLE à une consigne (revue D-I2) : le c-VEP
+# cercle en vert, le SSVEP et le P300 en bleu — le « juste » est donc MAGENTA, pas vert ;
+# `autotest_couleurs` compare les TEINTES aux couleurs de consigne lues dans les trois fenêtres.
 COULEUR_LIBRE = (255, 170, 0)    # ambre : « voici ce que le moteur décode », sans jugement
-COULEUR_JUSTE = (0, 230, 0)      # test : la décision est la cible désignée
+COULEUR_JUSTE = (255, 0, 255)    # test : la décision est la cible désignée
 COULEUR_FAUX = (255, 40, 40)     # test : la décision est une AUTRE cible
 COULEURS = (COULEUR_LIBRE, COULEUR_JUSTE, COULEUR_FAUX)
 EPAISSEUR_PX = 4                 # tracée vers l'INTÉRIEUR du rayon donné (convention de pygame)
+ECART_TEINTE_MIN = 45.0          # degrés ; l'ancien vert « juste » était à 13° du vert de consigne
+CROIX_PX, CROIX_EPAISSEUR_PX = 14, 3   # la croix du repos : demi-branche, épaisseur
 
-# Régime continu : passé ce délai sans décision, l'anneau s'efface. 5 publications manquées à 5 Hz.
+# Régime continu : passé ce délai sans décision VALIDE, l'anneau s'efface. 5 publications à 5 Hz.
 PERIME_S = 1.0
+
+# `status.phase` pendant le repos du moteur : ce que `core/server.py:EngineServer._PHASES_PUBLIQUES`
+# publie pour « warmup » et « rest » (copie : importer le moteur coûterait brainflow — l'accord est
+# tenu par `autotest_statut`). Sans un seul `status` en `STATUT_ABSENT_S`, la croix tombe.
+PHASES_DE_REPOS = ("warmup", "baseline")
+STATUT_ABSENT_S = 10.0
 
 # Une passe de résolution. Courte : avec `minimum=32`, chaque passe consomme tout son délai (on ne
 # trouvera jamais 32 flux), et c'est aussi le temps que met `fermer()` à arrêter le fil.
@@ -88,7 +122,8 @@ def flux_decode_de(stimulus_id):
 
     Lu dans le `ModeSpec` du mode dont `stimulus_id` est cette fenêtre — jamais écrit ici : le nom
     d'un flux est du contrat public, et une seconde écriture dériverait. Import TARDIF (le
-    catalogue des modes coûte ~2 s) : la fenêtre l'appelle dans son fil, pas avant d'ouvrir.
+    catalogue des modes coûte ~2 s) : appelé par le constructeur de `SourceDecisions`, que la
+    fenêtre construit AVANT de s'ouvrir — jamais dans un fil pendant le rendu.
     """
     from core.lsl_io import stream_name
     from core.modes import registry as modes
@@ -100,6 +135,12 @@ def flux_decode_de(stimulus_id):
     return stream_name(suffixes[0])
 
 
+def flux_de_cette_machine(flux, hote):
+    """Les flux publiés par la machine `hote` (nom d'hôte SANS casse), triés par `source_id`."""
+    return sorted((f for f in flux if (f.hostname() or "").casefold() == hote.casefold()),
+                  key=lambda f: f.source_id() or "")
+
+
 class SourceDecisions:
     """Le flux décodé du mode, résolu en tâche de fond. `tirer()` ne bloque JAMAIS.
 
@@ -108,20 +149,26 @@ class SourceDecisions:
     sous une autre identité ne reviendrait jamais. Ici une disparition LÈVE dans `tirer()`, l'inlet
     est lâché, et le fil re-résout tout seul.
 
-    Plusieurs flux du même nom (une salle de TP) : on préfère celui de CETTE machine — c'est la
-    console d'ici qui a lancé cette fenêtre, et son moteur tourne ici — puis le `source_id`, pour
-    un choix reproductible ; et on le DIT.
+    🔴 Seulement un flux de CETTE machine (cf. la docstring du module) : un homonyme d'ailleurs est
+    compté dans `etrangers`, dit, et le fil continue de chercher. `hote` n'existe que pour
+    l'autotest, qui fait passer le flux d'ici pour celui d'un autre poste.
     """
 
-    def __init__(self, stimulus_id=None, nom=None, passe_s=PASSE_S):
-        self._stimulus_id = stimulus_id
+    def __init__(self, stimulus_id=None, nom=None, passe_s=PASSE_S, hote=None):
         self.nom = nom
         self.passe_s = float(passe_s)
+        self.hote = socket.gethostname() if hote is None else hote
         self._inlet = None
         self._verrou = threading.Lock()
         self._arret = threading.Event()
         self.refus = ""
-        self.connexions = 0
+        self.connexions = self.etrangers = 0
+        if self.nom is None:
+            try:   # ⚠️ ICI, dans le fil de la fenêtre : cf. `flux_decode_de`
+                self.nom = flux_decode_de(stimulus_id)
+            except Exception as e:  # noqa: BLE001 - une fenêtre sans anneau vaut mieux qu'aucune
+                self.refus = f"{type(e).__name__} : {e}"
+                print(f"[retour] ⚠️ pas de retour : {self.refus}")
         self._fil = threading.Thread(target=self._boucle, daemon=True,
                                      name=f"retour-{stimulus_id or nom}")
         self._fil.start()
@@ -132,12 +179,7 @@ class SourceDecisions:
 
     def _boucle(self):
         if self.nom is None:
-            try:
-                self.nom = flux_decode_de(self._stimulus_id)
-            except Exception as e:  # noqa: BLE001 - un fil qui meurt en silence serait pire
-                self.refus = f"{type(e).__name__} : {e}"
-                print(f"[retour] ⚠️ pas de retour : {self.refus}")
-                return
+            return
         attente_dite = False
         while not self._arret.is_set():
             if self._inlet is None:
@@ -150,10 +192,10 @@ class SourceDecisions:
                         self._inlet = inlet
                     self.connexions += 1
                     attente_dite = False
-                    print(f"[retour] branché sur « {self.nom} » : la cible décodée sera entourée")
+                    print(f"[retour] branché sur « {self.nom} » de cette machine")
                 elif not attente_dite:
                     attente_dite = True
-                    print(f"[retour] « {self.nom} » n'existe pas encore sur le réseau — je le "
+                    print(f"[retour] « {self.nom} » n'existe pas encore sur cette machine — je le "
                           f"cherche en tâche de fond (le mode est-il démarré ?)")
             self._arret.wait(0.1)
 
@@ -163,17 +205,16 @@ class SourceDecisions:
         except Exception as e:  # noqa: BLE001 - le réseau casse de mille façons
             self.refus = f"recherche impossible ({type(e).__name__} : {e})"
             return None
-        if not flux:
+        locaux = flux_de_cette_machine(flux, self.hote)
+        if len(flux) - len(locaux) > self.etrangers:
+            self.etrangers = len(flux) - len(locaux)
+            print(f"[retour] {self.etrangers} flux « {self.nom} » d'une AUTRE machine ignoré(s) : "
+                  f"seul celui de « {self.hote} » compte")
+        if not locaux:
             return None
-        ici = socket.gethostname()
-        flux = sorted(flux, key=lambda f: (f.hostname() != ici, f.source_id() or "",
-                                           f.hostname() or ""))
-        if len(flux) > 1:
-            print(f"[retour] ⚠️ {len(flux)} flux s'appellent « {self.nom} » : j'écoute "
-                  f"« {flux[0].source_id()} » sur {flux[0].hostname()} (cette machine d'abord)")
         inlet = None
         try:
-            inlet = StreamInlet(flux[0], max_buflen=6, recover=False)
+            inlet = StreamInlet(locaux[0], max_buflen=6, recover=False)
             # Obligatoire AVANT la première lecture : un inlet ne se connecte qu'à la première
             # lecture, et ne rejoue rien de ce qui précède (même piège que `MarkerInlet.resolve`).
             inlet.open_stream(timeout=OUVERTURE_S)
@@ -183,6 +224,12 @@ class SourceDecisions:
             self.refus = f"connexion impossible ({type(e).__name__} : {e})"
             return None
         return inlet
+
+    def _valeur(self, ligne):
+        """`target_index`, ou None si illisible : NaN et ±inf sautent (`int(inf)` lèverait dans la
+        boucle de rendu, revue C-M7)."""
+        v = float(ligne[0])
+        return int(round(v)) if math.isfinite(v) else None
 
     def tirer(self):
         """Les décisions arrivées depuis l'appel précédent : `[(horodatage, target_index), ...]`.
@@ -199,11 +246,8 @@ class SourceDecisions:
             _referme(inlet)
             print(f"[retour] flux « {self.nom} » perdu ({type(e).__name__}) — je le re-cherche")
             return []
-        sortie = []
-        for ligne, ts in zip(valeurs, horodatages):
-            if ligne and ligne[0] == ligne[0]:          # NaN != NaN : une valeur illisible saute
-                sortie.append((float(ts), int(round(float(ligne[0])))))
-        return sortie
+        lues = [(float(ts), self._valeur(ligne)) for ligne, ts in zip(valeurs, horodatages) if ligne]
+        return [(ts, v) for ts, v in lues if v is not None]
 
     def fermer(self):
         """Arrête le fil et lâche l'inlet. Ne lève jamais."""
@@ -213,6 +257,49 @@ class SourceDecisions:
         if inlet is not None:
             _referme(inlet)
         self._fil.join(timeout=self.passe_s + 1.0)
+
+
+class StatutDuMoteur(SourceDecisions):
+    """Le flux PUBLIC `status` du moteur de CETTE machine : `tirer()` → `[(horodatage, phase)]`."""
+
+    def __init__(self, nom=None, passe_s=PASSE_S, hote=None):
+        from core.lsl_io import stream_name   # léger : pylsl et config, pas le catalogue
+        super().__init__(nom=nom or stream_name("status"), passe_s=passe_s, hote=hote)
+
+    def _valeur(self, ligne):
+        try:
+            phase = json.loads(ligne[0]).get("phase")
+        except (ValueError, TypeError, AttributeError):
+            return None
+        return phase if isinstance(phase, str) else None
+
+
+class ReposDuMoteur:
+    """`en_repos` : vrai tant que le moteur chauffe ou mesure son plancher (cf. le point 4 de la
+    docstring du module). Pur : `source` = `StatutDuMoteur`, ou une source factice en `--smoke`."""
+
+    def __init__(self, source, absent_s=STATUT_ABSENT_S, horloge=time.perf_counter):
+        self.source, self.absent_s, self._horloge = source, float(absent_s), horloge
+        self._t0, self.phase, self.recus = horloge(), None, 0
+
+    def lire(self):
+        """APRÈS le flip et le marqueur de l'image, comme `Retour.lire`."""
+        for _ts, phase in self.source.tirer():
+            self.phase, self.recus = phase, self.recus + 1
+
+    @property
+    def en_repos(self):
+        if self.phase is None:
+            return self._horloge() - self._t0 < self.absent_s
+        return self.phase in PHASES_DE_REPOS
+
+    def bilan(self, prefixe):
+        if self.recus == 0:
+            print(f"{prefixe} repos : le flux « status » n'a JAMAIS été lu — croix retirée après "
+                  f"{self.absent_s:g} s sans savoir si le repos était fini")
+
+    def fermer(self):
+        self.source.fermer()
 
 
 def _referme(inlet):
@@ -247,12 +334,19 @@ class Retour:
     def anneau(self):
         return None if self.cible is None else (self.cible, self.couleur)
 
+    @property
+    def attend(self):
+        """Vrai tant qu'un essai FERMÉ attend encore sa décision — ce que l'écran final du P300
+        guette pour que la dernière manche ait son anneau."""
+        return self._attente
+
     def _efface(self):
         self.cible = self.couleur = None
 
     def mesure_commence(self):
-        """L'essai suivant commence sa MESURE : l'anneau s'efface, et une décision qui arriverait
-        encore pour l'essai précédent sera ignorée (cf. la règle de rattachement)."""
+        """L'essai suivant va commencer sa MESURE : l'anneau s'efface, et une décision qui
+        arriverait encore pour l'essai précédent sera ignorée (cf. la règle de rattachement). La
+        fenêtre l'appelle avec une MARGE avant les données que la décision suivante lira."""
         self._attente, self._verite = False, None
         self._efface()
 
@@ -275,8 +369,12 @@ class Retour:
         self.recues += 1
         valide = 0 <= indice < self.n_cibles
         if not self.par_essai:
-            self._t_derniere = maintenant
-            self.cible, self.couleur = (indice, COULEUR_LIBRE) if valide else (None, None)
+            # ⚠️ Un −1 ne touche à rien : l'anneau tient jusqu'à `PERIME_S` après la dernière
+            # décision VALIDE (cf. la docstring du module — un anneau qui clignote à 5 Hz à côté
+            # de la cible fixée est un stimulus).
+            if valide:
+                self._t_derniere = maintenant
+                self.cible, self.couleur = indice, COULEUR_LIBRE
             return
         if not self._attente:
             self.ignorees += 1
@@ -302,8 +400,11 @@ class Retour:
         """Une ligne au terminal : combien de décisions, combien rattachées, combien ignorées."""
         connu = getattr(self.source, "connexions", None)
         if connu == 0:
-            print(f"{prefixe} retour : le flux décodé n'a JAMAIS été trouvé — aucun anneau n'a pu "
-                  f"être dessiné. Le mode était-il démarré ?")
+            ailleurs = getattr(self.source, "etrangers", 0)
+            print(f"{prefixe} retour : le flux décodé n'a JAMAIS été trouvé sur cette machine — "
+                  f"aucun anneau n'a pu être dessiné. Le mode était-il démarré ?"
+                  + (f" ({ailleurs} flux du même nom, publiés par une AUTRE machine, ignorés)"
+                     if ailleurs else ""))
         elif self.par_essai:
             print(f"{prefixe} retour : {self.recues} décision(s) reçue(s), {self.rattachees} "
                   f"rattachée(s) à un essai, {self.ignorees} ignorée(s) (hors de la fenêtre de "
@@ -342,18 +443,54 @@ def anneaux_a_l_ecran(surface, centres, rayon):
     return vus
 
 
+def dessine_croix(pygame, surface, centre, couleur):
+    """La croix de fixation : celle du repos du SSVEP guidé, et celle de l'essai libre tant que le
+    moteur se repose. UN geste de dessin, instrumenté comme l'anneau par les `--smoke` — d'où
+    l'appel par le MODULE dans les fenêtres (`_retour.dessine_croix`), jamais un nom importé."""
+    _trace_croix(pygame, surface, centre, couleur)
+
+
+def _trace_croix(pygame, surface, centre, couleur):
+    x, y = int(centre[0]), int(centre[1])
+    pygame.draw.line(surface, couleur, (x - CROIX_PX, y), (x + CROIX_PX, y), CROIX_EPAISSEUR_PX)
+    pygame.draw.line(surface, couleur, (x, y - CROIX_PX), (x, y + CROIX_PX), CROIX_EPAISSEUR_PX)
+
+
+def croix_a_l_ecran(surface, centre, couleur):
+    """La croix est-elle RÉELLEMENT affichée ? Lue dans les PIXELS, aux bouts de ses branches (le
+    centre suffirait, mais un bout tient compte d'une croix tronquée)."""
+    x, y = int(centre[0]), int(centre[1])
+    return all(tuple(surface.get_at(p))[:3] == tuple(couleur)
+               for p in ((x, y), (x - CROIX_PX + 1, y), (x, y + CROIX_PX - 1)))
+
+
 def pixels_non_fond_sous_anneau(pygame, surface, centre, rayon, fond=(0, 0, 0)):
     """Combien des pixels que l'anneau VA couvrir ne sont pas du fond. 0 = il ne touche rien.
 
     Appelée par les `--smoke` JUSTE AVANT le tracé, sur l'image composée jusque-là (cibles,
     contours, consigne, étiquettes) : c'est la preuve, image par image, que l'anneau ne recouvre
     aucun pixel de cible. Le masque est celui du MÊME tracé, sur une surface vierge."""
+    r = int(rayon)
+    return _pixels_non_fond_sous(
+        pygame, surface, centre, r, fond,
+        lambda tampon: pygame.draw.circle(tampon, (255, 255, 255), (r, r), r, EPAISSEUR_PX))
+
+
+def pixels_non_fond_sous_croix(pygame, surface, centre, fond=(0, 0, 0)):
+    """Le jumeau pour la croix : combien des pixels qu'elle VA couvrir ne sont pas du fond."""
+    r = CROIX_PX + CROIX_EPAISSEUR_PX
+    return _pixels_non_fond_sous(
+        pygame, surface, centre, r, fond,
+        lambda tampon: _trace_croix(pygame, tampon, (r, r), (255, 255, 255)))
+
+
+def _pixels_non_fond_sous(pygame, surface, centre, r, fond, trace):
     import numpy as np
 
-    cx, cy, r = int(centre[0]), int(centre[1]), int(rayon)
+    cx, cy = int(centre[0]), int(centre[1])
     tampon = pygame.Surface((2 * r + 1, 2 * r + 1))
     tampon.fill((0, 0, 0))
-    pygame.draw.circle(tampon, (255, 255, 255), (r, r), r, EPAISSEUR_PX)
+    trace(tampon)
     masque = pygame.surfarray.array3d(tampon)[:, :, 0] > 0
     zone = pygame.Rect(cx - r, cy - r, 2 * r + 1, 2 * r + 1).clip(surface.get_rect())
     if zone.width == 0 or zone.height == 0:
@@ -404,6 +541,22 @@ class SourceScriptee(SourceFactice):
         if self.lectures in self.script:
             sortie.append((0.0, int(self.script[self.lectures])))
         return sortie
+
+
+class StatutScripte:
+    """Un flux `status` FACTICE : rend la phase `script[n]` à la n-ième lecture (même convention
+    que `SourceScriptee` : la croix change à l'image n). Aucune trace : seule la lecture des
+    DÉCISIONS est comptée par `ordre_de_lecture`, et celle-ci la suit dans le même geste."""
+
+    def __init__(self, script):
+        self.script, self.lectures, self.fermee = dict(script), 0, False
+
+    def tirer(self):
+        self.lectures += 1
+        return [(0.0, self.script[self.lectures])] if self.lectures in self.script else []
+
+    def fermer(self):
+        self.fermee = True
 
 
 class MoteurFactice(SourceFactice):
@@ -473,17 +626,20 @@ class Instrumentation:
       lecture par rapport au flip (cf. `ordre_de_lecture`) ;
     • `dessine_anneau` compte, AVANT chaque tracé, les pixels non-fond qu'il va couvrir
       (`violations`) — la preuve image par image qu'aucune cible n'est touchée ; `traces` dit que
-      l'anneau a bien été tracé (une garde qui ne voit aucun anneau ne prouve rien)."""
+      l'anneau a bien été tracé (une garde qui ne voit aucun anneau ne prouve rien) ;
+    • `dessine_croix`, de même : ses pixels non-fond comptent dans `violations`, ses tracés dans
+      `croix`."""
 
     def __init__(self, trace, fond=(0, 0, 0)):
         self.trace, self.fond = trace, fond
-        self.violations = self.traces = 0
+        self.violations = self.traces = self.croix = 0
 
     def __enter__(self):
         import sys
 
         self._mod = sys.modules[__name__]
         self._vrai_trace, self._vrai_dessiner = self._mod.dessine_anneau, Retour.dessiner
+        self._vraie_croix = self._mod.dessine_croix
 
         def trace_garde(pygame, surface, centre, rayon, couleur):
             self.violations += pixels_non_fond_sous_anneau(pygame, surface, centre, rayon,
@@ -491,15 +647,22 @@ class Instrumentation:
             self.traces += 1
             return self._vrai_trace(pygame, surface, centre, rayon, couleur)
 
+        def croix_gardee(pygame, surface, centre, couleur):
+            self.violations += pixels_non_fond_sous_croix(pygame, surface, centre, self.fond)
+            self.croix += 1
+            return self._vraie_croix(pygame, surface, centre, couleur)
+
         def dessiner(retour, *a, **k):
             self.trace.append(("dessin",))
             return self._vrai_dessiner(retour, *a, **k)
 
         self._mod.dessine_anneau, Retour.dessiner = trace_garde, dessiner
+        self._mod.dessine_croix = croix_gardee
         return self
 
     def __exit__(self, *_exc):
         self._mod.dessine_anneau, Retour.dessiner = self._vrai_trace, self._vrai_dessiner
+        self._mod.dessine_croix = self._vraie_croix
         return False
 
 
@@ -543,12 +706,22 @@ def autotest_etat(chk):
     r.lire()
     chk(r.anneau == (4, COULEUR_LIBRE),
         f"[retour] …la DERNIÈRE d'un paquet, pas la première ({r.anneau})")
+    t[0] += PERIME_S * 0.5
     src.donne(-1)
     r.lire()
-    chk(r.anneau is None, f"[retour] …et disparaît sur −1 ({r.anneau})")
+    chk(r.anneau == (4, COULEUR_LIBRE),
+        f"[retour] …un −1 ne l'efface PAS : il tient (un anneau qui clignote à 5 Hz à côté de la "
+        f"cible fixée serait un stimulus) ({r.anneau})")
     src.donne(9)
     r.lire()
-    chk(r.anneau is None, f"[retour] …comme sur un indice hors des cibles ({r.anneau})")
+    chk(r.anneau == (4, COULEUR_LIBRE),
+        f"[retour] …ni un indice hors des cibles ({r.anneau})")
+    t[0] += PERIME_S * 0.6
+    src.donne(-1)
+    r.lire()
+    chk(r.anneau is None,
+        f"[retour] …mais il s'efface {PERIME_S:g} s après la dernière décision VALIDE, même sous "
+        f"une pluie de −1 : un −1 ne le prolonge pas ({r.anneau})")
     src.donne(2)
     r.lire()
     t[0] += PERIME_S * 0.9
@@ -557,8 +730,8 @@ def autotest_etat(chk):
     t[0] += PERIME_S * 0.2
     r.lire()
     chk(tient == (2, COULEUR_LIBRE) and r.anneau is None,
-        f"[retour] …et s'efface quand plus rien n'arrive depuis {PERIME_S:g} s : un mode arrêté "
-        f"ne laisse pas un anneau figé ({tient} puis {r.anneau})")
+        f"[retour] …et quand plus rien n'arrive depuis {PERIME_S:g} s : un mode arrêté ne laisse "
+        f"pas un anneau figé ({tient} puis {r.anneau})")
 
     src = SourceFactice()
     r = Retour(src, 6, par_essai=True, horloge=lambda: t[0])
@@ -571,7 +744,8 @@ def autotest_etat(chk):
     src.donne(5)
     r.lire()
     chk(r.anneau == (2, COULEUR_JUSTE) and r.ignorees == 2,
-        f"[retour] juste = VERT, et UNE décision par essai, la seconde est ignorée ({r.anneau})")
+        f"[retour] juste = MAGENTA, et UNE décision par essai, la seconde est ignorée ({r.anneau})")
+    chk(r.attend is False, "[retour] …et l'essai n'attend plus rien une fois sa décision reçue")
     t[0] += 30.0
     r.lire()
     chk(r.anneau == (2, COULEUR_JUSTE),
@@ -595,9 +769,43 @@ def autotest_etat(chk):
         f"d'après reçoit la sienne ({r.anneau}, {r.rattachees} rattachées)")
     r.mesure_commence()
     r.mesure_finie(verite=3)
+    chk(r.attend, "[retour] un essai fermé ATTEND sa décision (ce que guette l'écran final P300)")
     src.donne(-1)
     r.lire()
     chk(r.anneau is None, "[retour] −1 en test : AUCUN anneau — s'abstenir n'est pas se tromper")
+
+    # La croix de repos : `ReposDuMoteur`, en pur.
+    class _Phases:
+        def __init__(self):
+            self.file = []
+
+        def tirer(self):
+            sortie, self.file = self.file, []
+            return sortie
+
+        def fermer(self):
+            pass
+
+    t = [0.0]
+    ph = _Phases()
+    rep = ReposDuMoteur(ph, absent_s=10.0, horloge=lambda: t[0])
+    chk(rep.en_repos, "[repos] avant tout `status` : croix (la fenêtre s'ouvre en chauffe)")
+    vus = []
+    for phase in ("warmup", "baseline", "decoding", "baseline", "decoding", "calibrating"):
+        ph.file.append((0.0, phase))
+        rep.lire()
+        vus.append(rep.en_repos)
+    chk(vus == [True, True, False, True, False, False],
+        f"[repos] croix en chauffe et au plancher, aucune en décodage — et de NOUVEAU quand le "
+        f"moteur refait son repos ({vus})")
+    t2 = [0.0]
+    muet = ReposDuMoteur(_Phases(), absent_s=10.0, horloge=lambda: t2[0])
+    t2[0] = 9.0
+    avant = muet.en_repos
+    t2[0] = 11.0
+    chk(avant and not muet.en_repos,
+        "[repos] sans un seul `status` en 10 s, la croix TOMBE : une croix éternelle bloquerait "
+        "l'essai")
 
 
 def autotest_source(chk):
@@ -624,12 +832,47 @@ def autotest_source(chk):
         chk(src.connecte, "[retour] le fil trouve, PAR SON NOM, un flux apparu après lui")
         chk(pire < 0.05, f"[retour] …sans qu'une lecture n'attende jamais (pire {pire * 1000:.1f} ms)")
         recu, fin = [], time.perf_counter() + 5.0
-        sortie.push_sample([2.0, 0.0, 0.0])
-        sortie.push_sample([-1.0, 0.0, 0.0])
+        for v in (float("inf"), float("nan"), 2.0, float("-inf"), -1.0):
+            sortie.push_sample([v, 0.0, 0.0])
         while len(recu) < 2 and time.perf_counter() < fin:
             recu += src.tirer()
             time.sleep(0.01)
-        chk([i for _t, i in recu] == [2, -1], f"[retour] la voie 0 est lue comme `target_index` ({recu})")
+        time.sleep(0.1)
+        recu += src.tirer()
+        chk([i for _t, i in recu] == [2, -1],
+            f"[retour] la voie 0 est lue comme `target_index`, et ±inf/NaN sautent SANS lever dans "
+            f"la boucle de rendu ({recu})")
+
+        # 🔴 Un flux homonyme d'une AUTRE machine : simulé en se déclarant ailleurs — le flux de ce
+        # processus devient alors, pour cette source, celui d'un autre poste de la salle.
+        ailleurs = SourceDecisions(nom=nom, passe_s=0.2, hote="poste-voisin-smoke")
+        try:
+            fin = time.perf_counter() + 2.0
+            while time.perf_counter() < fin and not ailleurs.connecte:
+                time.sleep(0.05)
+            chk(not ailleurs.connecte and ailleurs.connexions == 0 and ailleurs.etrangers >= 1
+                and ailleurs._fil.is_alive(),
+                f"[retour] un flux du même nom publié par une AUTRE machine est IGNORÉ, et le fil "
+                f"continue de chercher un flux d'ici (branché {ailleurs.connecte}, "
+                f"{ailleurs.etrangers} étranger(s) vu(s))")
+        finally:
+            ailleurs.fermer()
+
+        class _Info:
+            def __init__(self, hote, sid):
+                self._h, self._s = hote, sid
+
+            def hostname(self):
+                return self._h
+
+            def source_id(self):
+                return self._s
+
+        choix = flux_de_cette_machine([_Info("autre", "a"), _Info("Ici", "c"), _Info("ICI", "b")],
+                                      "ici")
+        chk([f.source_id() for f in choix] == ["b", "c"],
+            "[retour] `flux_de_cette_machine` garde ceux d'ici (nom d'hôte SANS casse), triés par "
+            "source_id")
 
         class _Morte:
             def pull_chunk(self, **_k):
@@ -651,3 +894,96 @@ def autotest_source(chk):
         src.fermer()
         del sortie
     chk(not src._fil.is_alive(), "[retour] `fermer()` arrête le fil de résolution")
+
+
+def autotest_resolution(chk, run, stimulus_id):
+    """C-M5 : le NOM du flux se résout dans le fil APPELANT, et la fenêtre construit sa source
+    AVANT `pygame.init()` — jamais un import du catalogue dans un fil pendant le rendu.
+
+    Deux preuves : le constructeur rend une source dont le nom est DÉJÀ connu (résolu par lui, pas
+    par son fil) ; et dans le texte de `run`, la construction précède l'ouverture de l'écran. La
+    source se déclare d'une autre machine : elle cherche le flux de production sans jamais s'y
+    brancher, donc sans rien perturber d'une console ouverte ici."""
+    import inspect
+
+    src = SourceDecisions(stimulus_id=stimulus_id, passe_s=0.2, hote="poste-voisin-smoke")
+    try:
+        nom = src.nom
+    finally:
+        src.fermer()
+    chk(nom == flux_decode_de(stimulus_id),
+        f"[retour] le nom du flux est connu dès le CONSTRUCTEUR (résolu dans le fil de la fenêtre, "
+        f"pas dans le fil réseau) ({nom})")
+    texte = inspect.getsource(run)
+    ici, ecran = texte.find(f'SourceDecisions(stimulus_id="{stimulus_id}")'), texte.find(
+        "pygame.init()")
+    chk(0 <= ici < ecran,
+        f"[retour] …et `run` construit sa source AVANT `pygame.init()` : l'import du catalogue ne "
+        f"tombe jamais pendant le rendu (rangs {ici} < {ecran})")
+
+
+def _teinte(rgb):
+    return colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))[0] * 360.0
+
+
+def _ecart_teinte(a, b):
+    d = abs(_teinte(a) - _teinte(b)) % 360.0
+    return min(d, 360.0 - d)
+
+
+def autotest_couleurs(chk):
+    """D-I2 : aucun anneau ne ressemble à une CONSIGNE. Les couleurs de consigne sont LUES dans
+    les trois fenêtres (import tardif : elles importent ce module), jamais recopiées ici."""
+    from stimulus import cvep, p300, ssvep
+
+    consignes = {"cercle c-VEP": cvep.ACCENT, "liseré SSVEP": ssvep.CUE, "cercle P300": p300.CUE}
+    anneaux = {"juste": COULEUR_JUSTE, "faux": COULEUR_FAUX, "libre": COULEUR_LIBRE}
+    ecarts = {(a, c): round(_ecart_teinte(ca, cc)) for a, ca in anneaux.items()
+              for c, cc in consignes.items()}
+    chk(min(ecarts.values()) >= ECART_TEINTE_MIN,
+        f"[retour] aucune couleur d'anneau n'est à moins de {ECART_TEINTE_MIN:g}° de teinte d'une "
+        f"couleur de CONSIGNE des trois fenêtres — un « juste » vert à côté du cercle vert du c-VEP "
+        f"se lisait comme une consigne (écarts {ecarts})")
+    chk(_ecart_teinte(COULEUR_JUSTE, COULEUR_FAUX) >= ECART_TEINTE_MIN,
+        f"[retour] …et « juste » se distingue de « faux » "
+        f"({_ecart_teinte(COULEUR_JUSTE, COULEUR_FAUX):.0f}°)")
+    partagees = [(m.__name__, k) for m in (cvep, p300, ssvep) for k, v in vars(m).items()
+                 if isinstance(v, tuple) and v in COULEURS]
+    chk(not partagees,
+        f"[retour] …et aucune n'est employée par une fenêtre pour autre chose : la lecture des "
+        f"anneaux dans les pixels se fait à la couleur EXACTE ({partagees})")
+
+
+def autotest_statut(chk):
+    """La croix de repos sur un VRAI flux `status` (JSON, sous un nom de TEST), et l'accord de
+    `PHASES_DE_REPOS` avec la table du moteur — la seule copie de ce module, gardée ici."""
+    from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet
+
+    from core.server import EngineServer
+
+    table = EngineServer._PHASES_PUBLIQUES
+    chk({table["warmup"], table["rest"]} == set(PHASES_DE_REPOS)
+        and table["running"] not in PHASES_DE_REPOS,
+        f"[repos] `PHASES_DE_REPOS` {PHASES_DE_REPOS} = ce que le moteur publie pour sa chauffe et "
+        f"son plancher, et pas pour son décodage ({table})")
+    nom = f"EEG_API_Unicorn_statut_smoke_{os.getpid()}"
+    sortie = StreamOutlet(StreamInfo(nom, "Markers", 1, IRREGULAR_RATE, "string",
+                                     f"statut-smoke-{os.getpid()}"))
+    src = StatutDuMoteur(nom=nom, passe_s=0.2)
+    try:
+        fin = time.perf_counter() + 10.0
+        while not src.connecte and time.perf_counter() < fin:
+            time.sleep(0.02)
+        for message in ('{"phase":"baseline","running":true}', "pas du json", '{"phase":3}',
+                        '[1, 2]', '{"phase":"decoding"}'):
+            sortie.push_sample([message])
+        recu, fin = [], time.perf_counter() + 5.0
+        while len(recu) < 2 and time.perf_counter() < fin:
+            recu += src.tirer()
+            time.sleep(0.01)
+        chk(src.connecte and [p for _t, p in recu] == ["baseline", "decoding"],
+            f"[repos] le flux `status` RÉEL se lit : la `phase` de chaque message JSON, un message "
+            f"illisible ou sans phase saute sans lever ({recu})")
+    finally:
+        src.fermer()
+        del sortie

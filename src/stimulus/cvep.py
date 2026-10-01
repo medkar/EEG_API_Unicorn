@@ -131,14 +131,18 @@ la fenêtre lit `decoded_cvep` comme le ferait l'application d'un étudiant, en 
 trace un anneau à `RATIO_ANNEAU` × le rayon — dans la bande VIDE entre le disque et le cercle de
 consigne, donc sans toucher un seul pixel que les sondes de `--smoke` relisent. Il se trace dans
 l'image et se lit APRÈS le flip et le marqueur : le geste flip→horodatage ci-dessus n'en est pas
-retardé d'une instruction. En test (`--tester`), VERT si la décision du bloc est la cible
-cerclée, ROUGE sinon ; en décodage, ambre, il suit la dernière décision.
+retardé d'une instruction. En test (`--tester`), MAGENTA si la décision du bloc est la cible
+cerclée, ROUGE sinon — jamais vert, la couleur du cercle de consigne ; en décodage, ambre, il suit
+la dernière décision. ⚠️ En test, il ne vit qu'UN cycle par bloc : il s'éteint
+`CVEP_DECISION_CYCLES + 1` cycles avant chaque `cue` (`silence_avant_cue`), parce que la décision
+suivante lit déjà ce settle-là.
 
 ⚠️ **`--libre` : les cibles et l'horloge, rien d'autre.** Sans option, cette fenêtre DÉSIGNE des
 cibles (le cercle vert, les lignes `t=`, `--log`) : c'est le protocole de dépouillement de la
 recette 2.9, pas un essai libre. `--libre` retire la consigne et refuse `--log` (il n'y a aucune
 vérité-terrain à écrire) ; le marqueur `cycle` continue de partir — c'est une HORLOGE, sans elle
-le moteur ne décode rien.
+le moteur ne décode rien. Tant que le moteur chauffe (son flux public `status`), une croix au
+centre et « ne fixe aucune cible » : la fenêtre s'ouvre dès que le mode démarre.
 
 Lancer :
     python src/stimulus/cvep.py                  # plein écran, ESC pour quitter
@@ -172,7 +176,9 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
-from stimulus.retour import Retour, SourceDecisions  # noqa: E402
+from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
+from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
+                             StatutDuMoteur)
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage ---------------------------------------------------
@@ -187,6 +193,8 @@ ACCENT = (60, 200, 90)      # le cercle de consigne, LARGEMENT à l'extérieur d
 LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
+CROIX = LABEL               # la croix de repos de `--libre` (`retour.ReposDuMoteur`), au centre
+TEXTE_REPOS = "ne fixe aucune cible"   # …et le bandeau qui l'accompagne
 
 # Rayon du point de fixation, en PIXELS et non proportionnel — la MÊME valeur que
 # `archive/ui.py:FIX_DOT_R`, celle sous laquelle les modèles c-VEP ont été calibrés. Quelques
@@ -307,14 +315,25 @@ def rayon_anneau(r):
     return int(r * RATIO_ANNEAU)
 
 
+def silence_avant_cue(programme, c, n=CVEP_DECISION_CYCLES + 1):
+    """Vrai si un bloc ENREGISTRÉ s'ouvre (`cue`) dans les `n` bords de cycle à venir, celui-ci
+    compris : l'anneau de retour doit alors être ÉTEINT.
+
+    ⚠️ Revue D-I1 : la décision d'un bloc lit ~2,5 s avant son `block_end` (cycles repliés, vote),
+    plus la marge de filtre — à un cycle par bloc (les tests), cela commence DANS le settle. Un
+    anneau encore là, ou éteint sur la frame 0 d'un cycle noté, est un transitoire calé en phase qui
+    baisse les corrélations en silence. Au settle du dépôt (4), il ne vit qu'un cycle par bloc."""
+    return any(bornes_de_bloc(programme, k)[1]
+               for k in range(c, min(c + int(n) + 1, len(programme))))
+
+
 def bornes_de_bloc(programme, c):
     """`(cible_fermee, ouvre)` au bord du cycle `c` du programme : la cible du bloc qui vient de se
     FERMER (None sinon), et si un bloc ENREGISTRÉ commence ici.
 
-    Les mêmes conditions que les marqueurs de `annonce_bloc` — `block_end` ferme, `cue` ouvre — et
-    `--smoke` vérifie que l'anneau s'efface exactement à l'image du `cue`. C'est ce qui découpe le
-    retour en essais : la décision d'un bloc arrive pendant le settle du suivant, elle est montrée
-    jusqu'à ce que ce suivant commence d'enregistrer (cf. `stimulus/retour.py`)."""
+    Les mêmes conditions que les marqueurs de `annonce_bloc` — `block_end` ferme, `cue` ouvre. C'est
+    ce qui découpe le retour en essais : la décision d'un bloc arrive au début du settle du
+    suivant, elle est montrée jusqu'à `silence_avant_cue` (cf. `stimulus/retour.py`)."""
     bloc, role, _cible = programme[c]
     prec = programme[c - 1] if c > 0 else (None, None, None)
     ferme = prec[2] if prec[1] == "bloc" and (role != "bloc" or bloc != prec[0]) else None
@@ -460,12 +479,14 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
         max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
-        settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None):
+        settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None,
+        source_statut=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
-    `libre` (`--libre`) retire la consigne ; `retour` (`--retour`) entoure la cible décodée.
-    `source_retour` n'existe que pour `--smoke` : une source de décisions FACTICE à la place du
-    vrai flux `decoded_cvep` (cf. `stimulus/retour.py`).
+    `libre` (`--libre`) retire la consigne et montre la croix de repos tant que le moteur chauffe ;
+    `retour` (`--retour`) entoure la cible décodée. `source_retour` et `source_statut` n'existent
+    que pour `--smoke` : des sources FACTICES à la place des vrais flux `decoded_cvep` et `status`
+    (cf. `stimulus/retour.py`).
 
     ⚠️ **`--calibrer` joue EXACTEMENT le même stimulus**, à la frame près : même code, même
     couronne, même géométrie, même geste flip→horodatage, même marqueur `cycle`. C'est la
@@ -548,6 +569,15 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         fichier_log.write(json.dumps(objet, ensure_ascii=False) + "\n")
         fichier_log.flush()
 
+    # Les flux du RETOUR, construits AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
+    # modes (1 à 2 s d'import), qui volait le GIL au clignotement depuis un fil (revue C-M5/D-M4).
+    source_dec = source_retour
+    if retour and source_dec is None:
+        source_dec = SourceDecisions(stimulus_id="cvep")
+    source_rep = source_statut
+    if libre and source_rep is None:
+        source_rep = StatutDuMoteur()
+
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
     from stimulus.refresh import measure_refresh  # même mesure que les autres stimuli
@@ -586,13 +616,12 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     info = StreamInfo(stream_name, "Markers", 1, IRREGULAR_RATE, "string",
                       f"cvep-stim-{os.getpid()}")
     outlet = StreamOutlet(info)
-    # Le RETOUR se met à chercher `decoded_cvep` TOUT DE SUITE, dans son fil : l'attente du moteur
+    # Le RETOUR cherche `decoded_cvep` depuis l'ouverture, dans son fil : l'attente du moteur
     # ci-dessous dure jusqu'à 5 s, autant qu'elle serve. Par essai en calibration/test (un bloc,
     # une décision), continu sinon (le mode décide à ~5 Hz).
-    anneau = None
-    if retour:
-        anneau = Retour(source_retour or SourceDecisions(stimulus_id="cvep"), len(plan),
-                        par_essai=calibrer)
+    anneau = Retour(source_dec, len(plan), par_essai=calibrer) if retour else None
+    # La croix de REPOS de l'essai libre : tant que le moteur chauffe, d'après son flux `status`.
+    repos = ReposDuMoteur(source_rep) if libre else None
 
     print(f"[cvep-stim] refresh écran   : {refresh:.0f} Hz")
     if libre:
@@ -772,8 +801,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # entre le disque et le cercle de consigne (cf. `RATIO_ANNEAU`).
         if anneau is not None:
             anneau.dessiner(pygame, win, centres, rayon_retour)
-        if note is not None:
-            txt = note_font.render(note, True, NOTE)
+        # La croix de REPOS (`--libre`), au centre, vide : les disques sont sur la couronne.
+        bandeau = note
+        if repos is not None and repos.en_repos:
+            _retour.dessine_croix(pygame, win, (size[0] // 2, size[1] // 2), CROIX)
+            bandeau = TEXTE_REPOS if note is None else f"{note} — {TEXTE_REPOS}"
+        if bandeau is not None:
+            txt = note_font.render(bandeau, True, NOTE)
             win.blit(txt, txt.get_rect(center=(int(size[0] / 2), int(size[1] * 0.93))))
         # L'indicateur d'écoute, en direct : c'est la seule chose de cet écran qui distingue
         # « ça marche » de « ça a l'air de marcher ».
@@ -848,14 +882,14 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                 seance_complete = True
                 break
             i_cible = None if c_prog is None else programme[c_prog][2]
-            # Le RETOUR est découpé en essais AVANT de dessiner l'image du bord : celle du `cue`
-            # n'a plus d'anneau (la mesure du bloc suivant commence), celle du `block_end` ouvre
-            # la fenêtre où la décision du bloc fermé sera montrée.
+            # Le RETOUR est découpé en essais AVANT de dessiner l'image du bord : celle du
+            # `block_end` ouvre la fenêtre où la décision du bloc fermé sera montrée, et l'anneau
+            # est éteint `CVEP_DECISION_CYCLES + 1` cycles avant le `cue` (`silence_avant_cue`).
             if anneau is not None and c_prog is not None and (frame - frame_prog0) % L == 0:
-                fermee, ouvre = bornes_de_bloc(programme, c_prog)
+                fermee, _ouvre = bornes_de_bloc(programme, c_prog)
                 if fermee is not None:
                     anneau.mesure_finie(verite=fermee)
-                if ouvre:
+                if silence_avant_cue(programme, c_prog):
                     anneau.mesure_commence()
         elif not libre and frame % (L * cycles_par_cible) == 0:
             i_cible = tirage_cible(rng, len(plan), i_cible)
@@ -915,10 +949,15 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # geste que ce fichier existe pour enseigner. `--smoke` le vérifie sur l'ordre des appels.
         if anneau is not None:
             anneau.lire()
+        if repos is not None:
+            repos.lire()
 
     if anneau is not None:
         anneau.bilan("[cvep-stim]")
         anneau.fermer()
+    if repos is not None:
+        repos.bilan("[cvep-stim]")
+        repos.fermer()
 
     if calibrer and seance_complete:
         emet({"mode": "cvep", "event": "calib_end"}, None)
@@ -1815,7 +1854,8 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     n'apparaît pas sur −1 ni pour une décision tardive. Et, surtout, que les DEUX tests de ce
     fichier qui lisent l'écran — la phase à zéro frame près, la consigne cerclée — restent vrais
     anneau affiché, que l'anneau ne recouvre aucun pixel non-fond, et que la lecture vient APRÈS
-    le flip et le marqueur de son image."""
+    le flip et le marqueur de son image. Revues D-I1 (extinction avant le settle lu), C-I3 (−1)
+    et croix de repos (`status` factice) en plus."""
     import pygame
     import pylsl
 
@@ -1824,9 +1864,10 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     spots = positions_cibles(plan, TAILLE_FENETRE)
     centres = [(x, y) for x, y, _r in spots]
     rayon = rayon_anneau(spots[0][2])
+    milieu = (TAILLE_FENETRE[0] // 2, TAILLE_FENETRE[1] // 2)
     sondes = [point_de_sonde(x, y, r) for x, y, r in spots]
     sondes_cercle = [point_de_sonde_cercle(x, y, r) for x, y, r in spots]
-    trace = []            # ("dessin",) ("flip", état, consigne, anneaux) ("push", évén.) ("lecture",)
+    trace = []            # ("dessin",) ("flip", état, consigne, anneaux, croix) ("push", évén.) …
     source = [None]
     vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
 
@@ -1834,7 +1875,7 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
         r = vrai_flip(*a, **k)
         s = pygame.display.get_surface()
         trace.append(("flip", _etat_ecran(pygame, sondes), _consigne_ecran(pygame, sondes_cercle),
-                      rt.anneaux_a_l_ecran(s, centres, rayon)))
+                      rt.anneaux_a_l_ecran(s, centres, rayon), rt.croix_a_l_ecran(s, milieu, CROIX)))
         return r
 
     def push(self, *a, **k):
@@ -1846,26 +1887,29 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
 
     commun = dict(windowed=True, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
                   attente_consommateur_s=0.0, retour=True)
-    # 6 blocs d'un cycle, 2 cycles de settle : la décision (10 lectures après `block_end`) tombe
-    # dans le settle ; « tard » part 2 lectures après le `cue` SUIVANT, donc pendant sa mesure.
+    # 6 blocs d'un cycle, settle du dépôt : la décision (10 lectures après `block_end`) tombe dans
+    # le 1er cycle de settle, le seul où l'anneau vit ; « tard », 2 lectures après le `cycle` où il
+    # s'éteint.
     moteur = rt.MoteurFactice(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
-                              depart="block_end", ouverture="cue", delai=10, trace=trace)
+                              depart="block_end", ouverture="cycle", delai=10, trace=trace)
     # Le mode republie ~5 Hz : la cible 5 revient toutes les 30 images, sous `PERIME_S`.
-    script_libre = {10: 3, 50: -1, 80: 5, 110: 5, 140: 5, 170: 5}
+    script_libre = {10: 3, 30: -1, 40: -1, 50: 5, 80: 5, 110: 5, 140: 5, 170: 5}
+    statut = rt.StatutScripte({1: "warmup", 20: "decoding", 100: "baseline", 120: "decoding"})
     pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
     try:
         with rt.Instrumentation(trace) as garde_test:
             source[0] = moteur
             journal_t = []
-            fait_t = run(refresh=240.0, calibrer=True, tester=True, cycles_calib=1, settle=2,
-                         seed=3, journal=journal_t, source_retour=moteur, **commun)
+            fait_t = run(refresh=240.0, calibrer=True, tester=True, cycles_calib=1,
+                         settle=CVEP_CAL_SETTLE_CYCLES, seed=3, journal=journal_t,
+                         source_retour=moteur, **commun)
             trace_t = list(trace)
             trace.clear()
         with rt.Instrumentation(trace) as garde_libre:
             source[0] = rt.SourceScriptee(script_libre, trace=trace)
             journal_l = []
             fait_l = run(refresh=120.0, libre=True, max_frames=3 * L, seed=3, journal=journal_l,
-                         source_retour=source[0], **commun)
+                         source_retour=source[0], source_statut=statut, **commun)
             trace_l = list(trace)
     finally:
         pygame.display.flip, pylsl.StreamOutlet.push_sample = vrai_flip, vrai_push
@@ -1890,23 +1934,30 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     chk(fait_t and len(cues) == 6 and len(fins) == 6 and len(moteur.attendues) == 6,
         f"[C8] le test avec retour va au bout : 6 blocs ouverts, 6 fermés, 6 décisions scriptées "
         f"({len(cues)}, {len(fins)}, {len(moteur.attendues)})")
-    # À la fin de la fenêtre de retour de chaque bloc — l'image AVANT le `cue` suivant, ou la
-    # dernière image pour le dernier bloc — l'écran montre la décision du script.
-    fins_fenetre = [c - 1 for c in cues[1:]] + [len(im_t) - 1]
-    vus = [anneaux_t[i] for i in fins_fenetre]
-    attendus = [rt.anneau_attendu(*a) for a in moteur.attendues]
+    # Ce que montre la fenêtre de retour de chaque bloc, du `block_end` au `cue` suivant (ou la fin).
+    fenetres = [range(f, cues[k + 1] if k + 1 < len(cues) else len(im_t))
+                for k, f in enumerate(fins)]
+    vus = [sorted({tuple(anneaux_t[i]) for i in w} - {()}) for w in fenetres]
+    attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[C8] l'anneau entoure la cible DÉCIDÉE, VERT si c'est la cible cerclée, ROUGE sinon, rien "
-        f"sur −1 ni pour une décision arrivée après le début du bloc suivant — lu dans les PIXELS "
+        f"[C8] l'anneau entoure la cible DÉCIDÉE, MAGENTA si c'est la cible cerclée, ROUGE sinon, "
+        f"rien sur −1 ni pour une décision arrivée après son extinction — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
-    chk(any(a and a[0][1] == rt.COULEUR_JUSTE for a in vus)
-        and any(a and a[0][1] == rt.COULEUR_FAUX for a in vus),
-        "[C8] …et les deux couleurs ont réellement été vues (un test qui ne voit que du vert ne "
-        "prouve rien sur le rouge)")
+    couleurs = {a[0][1] for v in vus for a in v}
+    chk({rt.COULEUR_JUSTE, rt.COULEUR_FAUX} <= couleurs,
+        "[C8] …et les deux couleurs ont réellement été vues (un test qui ne voit que l'une ne "
+        "prouve rien sur l'autre)")
     pendant = [i for c, f in zip(cues, fins) for i in range(c, f + 1) if anneaux_t[i]]
     chk(not pendant,
         f"[C8] AUCUN anneau pendant qu'un bloc s'enregistre, de l'image du `cue` à celle du "
         f"`block_end` — ni le précédent, ni la décision tardive ({len(pendant)} image(s) fautive(s))")
+    # 🔴 D-I1 : la décision SUIVANTE lit déjà le settle (cf. `silence_avant_cue`).
+    n_silence = (CVEP_DECISION_CYCLES + 1) * L
+    avant = [i for c in cues for i in range(max(0, c - n_silence), c + 1) if anneaux_t[i]]
+    chk(not avant and any(anneaux_t),
+        f"[C8] aucun anneau dans les {CVEP_DECISION_CYCLES + 1} cycles ({n_silence} images) qui "
+        f"précèdent chaque `cue` : la décision suivante lit ce settle-là "
+        f"({len(avant)} image(s) fautive(s))")
 
     # Les deux sondes en pixels du fichier, rejouées ANNEAU AFFICHÉ.
     def phases(tr):
@@ -1942,12 +1993,20 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     # --- l'essai LIBRE ------------------------------------------------------------------------
     im_l = images(trace_l)
     anneaux_l = [e[3] for e in im_l]
-    attendus_l = ([[]] * 10 + [[(3, rt.COULEUR_LIBRE)]] * 40 + [[]] * 30
-                  + [[(5, rt.COULEUR_LIBRE)]] * (len(im_l) - 80))
+    attendus_l = ([[]] * 10 + [[(3, rt.COULEUR_LIBRE)]] * 40
+                  + [[(5, rt.COULEUR_LIBRE)]] * (len(im_l) - 50))
     chk(fait_l and len(im_l) == 3 * L and anneaux_l == attendus_l,
-        f"[C8] libre : l'anneau AMBRE suit la dernière décision dès l'image suivante, et disparaît "
-        f"sur −1 (images {[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} "
-        f"en désaccord sur {len(im_l)})")
+        f"[C8] libre : l'anneau AMBRE suit la dernière décision dès l'image suivante, et un −1 ne "
+        f"l'éteint PAS (images "
+        f"{[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} en désaccord "
+        f"sur {len(im_l)})")
+    croix_l = [e[4] for e in im_l]
+    croix_attendue = [i < 20 or 100 <= i < 120 for i in range(len(im_l))]
+    chk(croix_l == croix_attendue and garde_libre.croix > 0,
+        f"[C8] libre : croix de repos au centre tant que le `status` du moteur dit chauffe ou "
+        f"plancher, et de NOUVEAU quand il refait son repos (images "
+        f"{[i for i, (a, b) in enumerate(zip(croix_l, croix_attendue)) if a != b][:5]} en "
+        f"désaccord, {garde_libre.croix} tracés)")
     evts_l = {m["event"] for m, _ts, _f, _c in journal_l}
     chk(evts_l == {"cycle"} and all(c is None for _m, _ts, _f, c in journal_l)
         and all(e[2] is None for e in im_l),
@@ -1956,8 +2015,9 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     lues_l = phases(trace_l)
     chk(len(lues_l) >= 2 and all(p == 0 for p in lues_l) and garde_libre.violations == 0
         and garde_libre.traces > 0,
-        f"[C8] libre : phase à zéro frame près ({sorted(set(lues_l))}) et aucun pixel non-fond "
-        f"touché ({garde_libre.violations} sur {garde_libre.traces} tracés)")
+        f"[C8] libre : phase à zéro frame près, croix affichée ({sorted(set(lues_l))}), et ni "
+        f"l'anneau ni la croix ne touchent un pixel non-fond ({garde_libre.violations} sur "
+        f"{garde_libre.traces} + {garde_libre.croix} tracés)")
     refus = [run(windowed=True, refresh=60.0, libre=True, attente_consommateur_s=0.0, **k)
              for k in ({"calibrer": True}, {"log_path": "inutile.jsonl"})]
     chk(refus == [False, False] and not os.path.exists("inutile.jsonl"),
@@ -1969,6 +2029,9 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
         f"l'application d'un étudiant résout ({nom})")
     rt.autotest_etat(chk)
     rt.autotest_source(chk)
+    rt.autotest_couleurs(chk)
+    rt.autotest_resolution(chk, run, "cvep")
+    rt.autotest_statut(chk)
 
 
 def _parse_args(argv):
