@@ -142,6 +142,13 @@ def _lit_les_marqueurs(rt):
     return bool(getattr(rt, "marker_mode_id", ""))
 
 
+def _publie_le_flux_du_mode(test):
+    """Ce test (sa CLASSE, ou l'objet qui tourne) publie-t-il ses décisions sur le flux décodé de son
+    mode (`decoded_<marker_mode_id>`) ? Déduit par `MesureMarqueurs.publie_le_flux_du_mode`."""
+    publie = getattr(test, "publie_le_flux_du_mode", None)
+    return bool(callable(publie) and publie())
+
+
 def _calibration_lit_les_marqueurs(calib):
     """La calibration DÉCLARÉE par un mode consomme-t-elle la file de marqueurs du moteur ?
 
@@ -600,29 +607,42 @@ class EngineServer:
         """Refuser la mesure parce que le mode dont elle lit les marqueurs DÉCODE ? La raison, ou None.
 
         Lu sur la CLASSE du runtime (`marker_mode_id`), la seule chose connue avant construction.
-        Une mesure sans marqueurs (le contrôle alpha, le test du MI) n'est jamais concernée ; un
-        mode qui n'en lit pas (`marker_epoch_s == 0`, le SSVEP) non plus — le taux d'émission
-        SSVEP tourne très bien pendant que le mode SSVEP décode.
+        Une mesure sans marqueurs (le contrôle alpha, le test du MI) n'est jamais concernée.
+
+        ⚠️ **Deux raisons, pas une** (2026-10-01). Un test peut voler les marqueurs de son mode
+        (`marker_epoch_s > 0`), OU publier sur son flux : le c-VEP, le P300 et le SSVEP publient
+        leurs décisions de test sur `decoded_<mode>` (`_publie_le_flux_du_mode`). Deux publieurs,
+        même nom, même instance : un client reçoit leurs décisions mêlées, ou se rattache au
+        mauvais. C'est la seconde raison qui ferme la porte au SSVEP, qui ne lit aucun marqueur.
         """
-        cible = getattr(getattr(mesure_spec, "runtime_cls", None), "marker_mode_id", "") or ""
+        cls = getattr(mesure_spec, "runtime_cls", None)
+        cible = getattr(cls, "marker_mode_id", "") or ""
         if not cible or cible not in actifs:
             return None
         mode = registry.get(cible)
-        if mode is None or mode.marker_epoch_s <= 0:
+        if mode is None:
             return None
-        return tr("moteur.refus.mesure_pendant_mode", mode=mode.label)
+        if mode.marker_epoch_s > 0:
+            return tr("moteur.refus.mesure_pendant_mode", mode=mode.label)
+        if _publie_le_flux_du_mode(cls):
+            return tr("moteur.refus.mesure_pendant_mode_flux", mode=mode.label)
+        return None
 
     def _refus_mode_pendant_mesure(self, spec, mesure):
         """Refuser de démarrer `spec` parce qu'une mesure lit SES marqueurs ? La raison, ou None.
 
         Ici on interroge l'OBJET qui tourne, comme `_refus_mode_pendant_calibration` : c'est lui
-        qui appelle `markers_murs`, donc lui qui vole.
+        qui appelle `markers_murs`, donc lui qui vole — ou lui qui publie sur le flux du mode.
         """
-        if spec is None or mesure is None or mesure.terminee or spec.marker_epoch_s <= 0:
+        if spec is None or mesure is None or mesure.terminee:
             return None
         if getattr(mesure, "marker_mode_id", "") != spec.id:
             return None
-        return tr("moteur.refus.mode_pendant_mesure", mode=spec.label)
+        if spec.marker_epoch_s > 0:
+            return tr("moteur.refus.mode_pendant_mesure", mode=spec.label)
+        if _publie_le_flux_du_mode(mesure):
+            return tr("moteur.refus.mode_pendant_mesure_flux", mode=spec.label)
+        return None
 
     # --- le refus d'une SECONDE ACTIVITÉ, dans ses DEUX sens -------------------
     # Même discipline que les deux méthodes ci-dessus : une RAISON ou None, sur une copie prise
@@ -2552,6 +2572,10 @@ class EngineServer:
                             # calibration juste au-dessus : « annulé » avec sa raison à l'écran.
                             self.mesure.probleme = message_erreur(e)
                             self.mesure.phase = "annule"
+                            # …et ABANDONNÉE pour de bon : un test qui publiait sur le flux de
+                            # son mode le ferme ici, sinon l'outlet survivrait au test et
+                            # doublerait celui du mode qu'on démarrera ensuite.
+                            self.mesure.cancel()
                             print(f"[server] mesure interrompue par une exception : "
                                   f"{self.mesure.probleme}")
 
@@ -2784,6 +2808,7 @@ def _smoke():
         _smoke_oreille_calibration(),
         _smoke_vol_marqueurs(),
         _smoke_mesure(),
+        _smoke_retour_en_direct(),
         _smoke_liaison(),
         _smoke_casque(),
         _smoke_secteur(),
@@ -4163,6 +4188,22 @@ def _smoke_mesure():
     return _selftest_mesure()
 
 
+def _smoke_retour_en_direct():
+    """Le retour en direct (2026-10-01) : un TEST publie ses décisions sur le flux de son mode.
+
+    Sur un VRAI moteur et un VRAI test SSVEP : un client LSL qui résout `decoded_ssvep` reçoit,
+    pendant le test, une décision par essai — celle que le verdict note — ; et le refus croisé
+    test SSVEP ↔ mode SSVEP, dans les DEUX sens, à la soumission comme dans la boucle.
+
+    ⚠️ **DÉLÉGUÉ, pas recopié**, comme `_smoke_mesure` : la séance est jouée par
+    `core/modes/ssvep_mesure.py`, qui sait fabriquer un repos et des fixations ; l'écrire deux
+    fois la laisserait diverger.
+    """
+    from core.modes.ssvep_mesure import _selftest_retour_en_direct
+
+    return _selftest_retour_en_direct()
+
+
 def _smoke_enregistrement():
     """Enregistrer une séance : le MOTEUR tient la plume, et JAMAIS au-dessus de `data/`.
 
@@ -4579,11 +4620,14 @@ def _smoke_vol_marqueurs():
             chk("est en cours" not in (r.get("reason") or ""),
                 "…et le test d'un AUTRE mode ne bloque pas celui-ci : chacun a sa propre file")
             srv.mesure = None
+            # Le SSVEP ne lit AUCUN marqueur, mais son test publie sur `decoded_ssvep` depuis le
+            # 2026-10-01 : refusé pour CETTE raison-là, pas pour un vol (cf. `_smoke_retour_en_direct`).
             srv.active["ssvep"] = _ModeFactice()
-            chk(srv._refus_mesure_pendant_mode(_reg.get_mesure("ssvep_taux"), dict(srv.active))
-                is None,
-                "…et un mode qui ne lit AUCUN marqueur (le SSVEP) se teste pendant qu'il décode : "
-                "le taux d'émission SSVEP n'a jamais volé personne")
+            refus_ssvep = srv._refus_mesure_pendant_mode(_reg.get_mesure("ssvep_taux"),
+                                                         dict(srv.active)) or ""
+            chk("même flux" in refus_ssvep and "file de marqueurs" not in refus_ssvep,
+                f"…et le test SSVEP, qui ne vole rien, est refusé pour le FLUX qu'il partage avec "
+                f"son mode ({refus_ssvep[:70]}…)")
             srv.active.pop("ssvep", None)
         finally:
             _reg.MESURES = vraies
@@ -4593,13 +4637,17 @@ def _smoke_vol_marqueurs():
         # factice ci-dessus. Chaque mesure désignée par le `test_id` d'un mode qui LIT des
         # marqueurs doit être refusée pendant que ce mode décode — sinon il suffirait qu'un test
         # déclare mal son `marker_mode_id` pour rouvrir la porte, sans qu'aucun test ne rougisse.
-        a_proteger = [s for s in registry.MODES if s.test_id and s.marker_epoch_s > 0]
+        a_proteger = [s for s in registry.MODES if s.test_id and (
+            s.marker_epoch_s > 0
+            or _publie_le_flux_du_mode(registry.get_mesure(s.test_id).runtime_cls))]
         non_couverts = [s.test_id for s in a_proteger
                         if srv._refus_mesure_pendant_mode(registry.get_mesure(s.test_id),
                                                           {s.id: _ModeFactice()}) is None]
-        chk(a_proteger and not non_couverts,
-            f"chaque VRAI test d'un mode à marqueurs est refusé pendant que ce mode décode "
-            f"({[s.test_id for s in a_proteger]} ; non couverts : {non_couverts or 'aucun'})")
+        chk({"ssvep_taux", "cvep_test", "p300_test"} <= {s.test_id for s in a_proteger}
+            and not non_couverts,
+            f"chaque VRAI test d'un mode à marqueurs, ou qui publie sur le flux de son mode, est "
+            f"refusé pendant que ce mode décode ({[s.test_id for s in a_proteger]} ; non "
+            f"couverts : {non_couverts or 'aucun'})")
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
 

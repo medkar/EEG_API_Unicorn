@@ -28,6 +28,10 @@ l'épochage viennent du socle (`modes/mesure_marqueurs.py`, à lire avant).
 4. **LE HASARD EST 1 / NOMBRE DE CIBLES DU MODE** — 1/6, 17 %. Jamais 1/2 : se tromper de hasard
    rend un verdict faux sans rien casser (8 manches sur 12 battent 1/6, pas 1/2).
 
+5. **CE QUI EST NOTÉ EST CE QUI EST PUBLIÉ** : à chaque `round_end`, la sélection part sur
+   `decoded_p300` (cf. `mesure_marqueurs.py`) — la ligne que `_publish` du mode a composée, captée
+   sur le décideur ; -1 pour une manche que le test n'a pas pu décider (son `cue` perdu).
+
 ⚠️ **Les réglages sont ceux du MODE** : la `SPEC` déclare les `Param` du mode P300 eux-mêmes (sans
 modèle, `contract.validate` refuse le test avec la raison du mode), plus `essais` = le nombre de
 MANCHES — l'unité de `--rounds`, que la console transmet par `stimulus/registry.option_compte`.
@@ -48,8 +52,9 @@ from core.modes.affichage import (MOT_NON_MESURE, NIVEAUX, au_dessus_du_hasard, 
                                   lignes, mot_de, non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
-from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
-                                         params_du_mode_pour_un_test, reglages_du_decideur)
+from core.modes.mesure_marqueurs import (CapteurDePublication, MesureMarqueurs,  # noqa: E402
+                                         params_du_mode_pour_un_test, publieur_du_mode,
+                                         reglages_du_decideur)
 from core.modes.p300 import SPEC as SPEC_P300  # noqa: E402
 from core.modes.p300 import P300Runtime  # noqa: E402
 # Les consignes, la durée d'une manche et les seuils de l'ENTRAÎNEMENT, importés : le test rejoue
@@ -147,6 +152,8 @@ class MesureP300(MesureMarqueurs):
         # géométrie d'époque étrangère, lèvent ici avec la raison du mode.
         self._decideur = _DecideurP300(SPEC_P300, reglages_du_decideur(SPEC_P300, self.params),
                                        _Vue(getattr(engine, "acq", None)))
+        self._capteur = CapteurDePublication()     # ce que `_publish` du mode compose (n°5)
+        self._decideur._out = self._capteur
         self._manche_en_cours = False    # un `cue` a ouvert une manche que rien n'a encore fermée
         self._manches_sans_cue = 0       # `round_end` sans manche ouverte : jamais notées
         self._manches_sans_fin = 0       # `cue` arrivé avant le `round_end` d'avant : jamais notées
@@ -176,6 +183,13 @@ class MesureP300(MesureMarqueurs):
         if valeur is None or not 0 <= valeur < self._decideur.n_targets:
             return None
         return valeur
+
+    def _publieur_du_mode(self, instance):
+        return publieur_du_mode(self._decideur, instance)
+
+    def _ligne_muette(self, ts):
+        """La ligne d'une manche sans décision : celle du mode quand il refuse une manche."""
+        return (-1, 0.0, 0, [0.0] * self._decideur.n_targets, float(ts))
 
     def _rejouer(self, engine, ts, marqueur):
         """UN marqueur, dans le `_run_step` du MODE — rien n'est décidé ailleurs."""
@@ -211,12 +225,15 @@ class MesureP300(MesureMarqueurs):
             if not self._essai_ouvert:
                 self._manches_sans_cue += 1
                 self._decideur._vider_manche()
+                self._publier_decision(None, ts)
                 return
             self._consigner(self._decision(engine, ts, marqueur))
+            self._publier_decision(self._capteur.prendre(), ts)
 
     def _decision(self, engine, ts, marqueur):
         """**LA décision de la manche : ce que `decoded_p300` publiait à ce `round_end`.** La cible,
         ou None — `-1` n'est jamais une cible (invariant n°3)."""
+        self._capteur.prendre()
         avant = self._decideur.output()
         self._rejouer(engine, ts, marqueur)
         sortie = self._decideur.output()
@@ -377,6 +394,7 @@ def _selftest():
 
     from core import p300_models
     from core.config import DATA_DIR, empreinte_dossier
+    from core.lsl_io import p300_channel_labels, stream_name
     from core.modes.contract import validate
     from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream, synth_p300_epoch
 
@@ -480,6 +498,26 @@ def _selftest():
         return [(i % 6, i % 6 if i < justes else None if i < justes + sans else (i + 1) % 6)
                 for i in range(n)]
 
+    # Le flux du mode est ESPIONNÉ pendant l'autotest : pas un vrai `decoded_p300` par séance jouée.
+    class _Espion:
+        def __init__(self, instance):
+            self.instance, self.lignes = instance, []
+
+        def push(self, *args):
+            self.lignes.append(args)
+
+    def _espionne(self, instance):
+        self.espion = _Espion(instance)
+        return self.espion
+
+    def publies(rt):
+        return [int(ligne[0]) for ligne in rt.espion.lignes]
+
+    def notes(res):
+        return [-1 if d is None else d for _c, d in res.get("decisions", [])]
+
+    vrai_publieur = MesureP300._publieur_du_mode
+    MesureP300._publieur_du_mode = _espionne
     vrai_dispo = p300_models.modeles_disponibles
     dossier = tempfile.mkdtemp(prefix="p300_test_")
     try:
@@ -587,6 +625,34 @@ def _selftest():
             and res["reglages"].get("essais") == MANCHES_DEFAUT,
             f"le résultat dit sur quels réglages il a été mesuré ({res.get('reglages')})")
 
+        # === 3 ter. CE QUI EST NOTÉ EST CE QUI EST PUBLIÉ (invariant n°5) =====================
+        fins = [t for t, k in plan if k["event"] == "round_end"]
+        chk(publies(rt) == notes(res) and len(publies(rt)) == 6,
+            f"🔴 UNE sélection publiée sur `decoded_p300` par manche, celle qui est NOTÉE "
+            f"({publies(rt)} contre {notes(res)})")
+        chk([float(ligne[-1]) for ligne in rt.espion.lignes] == fins
+            and rt.espion.instance == "selftest" and rt._flux is None,
+            f"…horodatée au `round_end` comme le mode, sous l'instance du MOTEUR (jamais "
+            f"« p300_test »), et fermé à la fin ({rt.espion.instance!r})")
+        sonde = MesureP300(SPEC, valeurs, _Moteur(eeg, ts))
+        vrai = vrai_publieur(sonde, "selftest-p300-test")
+        info = vrai.outlet.get_info()
+        chk(info.name() == stream_name(SPEC_P300.stream)
+            and info.source_id().endswith("@selftest-p300-test")
+            and info.channel_count() == len(p300_channel_labels(P300_N_TARGETS))
+            and sonde._decideur._out is sonde._capteur,
+            f"le vrai publieur est celui du MODE, sous l'instance du moteur "
+            f"({info.name()}, {info.source_id()}, {info.channel_count()} voies)")
+        del vrai, info
+        # Une manche dont le `cue` s'est perdu n'est pas NOTÉE, mais la fenêtre attend sa réponse.
+        sans_cue = [(t, k) for t, k in plan if not (k["event"] == "cue" and k["target"] == 1)]
+        with redirect_stdout(io.StringIO()):
+            rt_nc = jouer(valeurs, sans_cue, eeg, ts)
+        chk(len(publies(rt_nc)) == 6 and publies(rt_nc)[1] == -1
+            and (rt_nc.resultat or {}).get("n_essais") == 5,
+            f"une manche sans `cue` publie -1 — le test n'a pas pu la décider — sans entrer dans "
+            f"l'effectif ({publies(rt_nc)}, {(rt_nc.resultat or {}).get('n_essais')} notées)")
+
         # === 3 bis. L'AVANCEMENT affiché est en MANCHES — la garde de silence, elle, en FLASHS ====
         # L'étudiant choisit « Manches : 6 » ; il lisait « 12 phase(s) enregistrée(s) sur 288 »
         # (des flashs, sous l'unité du contrôle alpha). L'instantané publie maintenant des manches
@@ -641,6 +707,9 @@ def _selftest():
             f"sélection — les gardes du MODE, pas une réécriture ({decisions_g})")
         chk(decisions_g == en_direct(chemin, plan_g, eeg_g, ts_g),
             "…exactement comme le mode en direct, manche par manche")
+        chk(publies(rt_g) == notes(res_g) and publies(rt_g)[1:4] == [-1, -1, -1],
+            f"…et chaque refus du mode PUBLIE son -1 : la fenêtre ne garde pas l'anneau d'avant "
+            f"({publies(rt_g)})")
 
         # === 5. -1 = PAS DE DÉCISION, une sélection RATÉE =======================================
         chk(res_g.get("n_hors_calcul") == 0,
@@ -666,6 +735,7 @@ def _selftest():
             and sorted(_os.listdir(dossier)) == fichiers_avant,
             "des séances complètes n'ont RIEN écrit — ni dans `data/`, ni à côté du modèle")
     finally:
+        MesureP300._publieur_du_mode = vrai_publieur
         p300_models.modeles_disponibles = vrai_dispo
         shutil.rmtree(dossier, ignore_errors=True)
 

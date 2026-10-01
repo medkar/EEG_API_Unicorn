@@ -29,12 +29,22 @@ aurait mis la fuite de l'ErrP à une ligne d'inattention.
 🔴 **La décision passe par le décodeur RÉEL du mode, jamais par une réécriture** : une règle
 locale mesurerait un décodeur que personne n'utilise, cité comme s'il décrivait le produit.
 
+**Un test décide comme le produit ET PUBLIE COMME LUI** (2026-10-01, « retour en direct ») : le
+c-VEP, le SSVEP et le P300 publient chaque décision de test — UNE par essai, -1 quand l'essai n'a
+pas pu être décidé — sur le flux décodé PUBLIC de leur mode, par le publieur que le mode ouvre
+lui-même (`publieur_du_mode`), sous l'instance du VRAI moteur. La fenêtre du test lit ce flux pour
+entourer la cible décodée ; une application branchée sur `decoded_<mode>` le reçoit aussi. Ouvert
+au premier tour (ou à l'annonce, si le publieur en a besoin), fermé à la fin, abandon compris. Un
+test et son mode ne publient donc jamais ensemble : le moteur refuse l'un pendant l'autre
+(`server._refus_mesure_pendant_mode`, qui lit `publie_le_flux_du_mode`).
+
 Autotest :
     python src/core/modes/mesure_marqueurs.py
 """
 
 import os as _os
 import sys as _sys
+from types import SimpleNamespace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (CALIB_FENETRE_ATTENTE_S, CALIB_FENETRE_SILENCE_S,  # noqa: E402
@@ -62,6 +72,46 @@ def reglages_du_decideur(spec_du_mode, params):
     """Les réglages que reçoit le runtime du MODE dans un test : ceux du test, flux PAR DÉFAUT."""
     return {p.key: (MARKER_STREAM_DEFAULT if p.key == CLE_FLUX else params.get(p.key))
             for p in spec_du_mode.params}
+
+
+class CapteurDePublication:
+    """Se branche à la place du publieur (`_out`) du runtime du MODE qu'un test fait décider : il
+    garde les arguments du dernier `push` et n'émet RIEN.
+
+    Le décideur rejoue parfois plusieurs fenêtres pour UNE décision (le c-VEP, `vote_len` par bloc)
+    : les publier toutes rendrait sept échantillons pour un essai. Le test reprend donc le DERNIER
+    `push` — la ligne exacte que le mode aurait publiée, composée par SON `_publish` — et la publie
+    une fois, à la fin de l'essai.
+    """
+
+    def __init__(self):
+        self.dernier = None
+
+    def push(self, *args):
+        self.dernier = args
+
+    def prendre(self):
+        """Le dernier `push` (ses arguments), ou None ; et le capteur repart vide."""
+        dernier, self.dernier = self.dernier, None
+        return dernier
+
+
+def publieur_du_mode(runtime, instance):
+    """Le publieur `decoded_<mode>` que le runtime du MODE ouvre lui-même (`_open`) — mêmes voies,
+    mêmes métadonnées, mêmes réglages —, mais sous l'instance du VRAI moteur.
+
+    ⚠️ Le décideur d'un test a reçu une VUE de rejeu en guise de moteur (« cvep_test »,
+    « p300_test », « ssvep_taux ») : son `_open` publierait sous ce nom-là, un `source_id` qu'aucun
+    client ne rattache au moteur. On lui prête le temps de l'appel un moteur qui ne porte que
+    l'instance, puis on lui rend sa vue et son `_out`.
+    """
+    vue, out = runtime.engine, getattr(runtime, "_out", None)
+    runtime.engine = SimpleNamespace(instance=instance)
+    try:
+        runtime._open()
+        return runtime._out
+    finally:
+        runtime.engine, runtime._out = vue, out
 
 
 # Paliers auxquels une perte se DIT. Même motif que `marker_calib._PALIERS` : une séance P300 fait
@@ -99,6 +149,12 @@ class MesureMarqueurs(MesureRuntime):
 
     def __init__(self, spec, params, engine, rng=None):
         super().__init__(spec, params, engine, rng=rng)
+        # L'instance du VRAI moteur, retenue maintenant : `cancel()` met `self.engine` à None, et
+        # c'est elle que porte le `source_id` du flux où ce test publie ses décisions.
+        self._instance = getattr(engine, "instance", "") or ""
+        self._flux = None                # le publieur `decoded_<mode>` ouvert, ou None
+        self._decisions_publiees = 0
+        self._echec_publication_dit = False
         self._annonce_recue = False      # un `calib_start` est arrivé : la fenêtre est VIVANTE
         self._essais_annonces = 0        # le champ `trials` de cette annonce ; 0 = inconnu
         self._debut = None               # instant du premier tick (horloge de l'appelant)
@@ -165,7 +221,54 @@ class MesureMarqueurs(MesureRuntime):
     def _pendant_les_essais(self, engine, now):
         """Appelée à chaque tour de la phase « essais », avant la garde de silence."""
 
+    def _publieur_du_mode(self, instance):
+        """Le publieur du flux décodé PUBLIC du mode (`publieur_du_mode`), ou None — rien n'est
+        publié. Défaut : None (l'ErrP n'a pas de retour en direct). Le REDÉFINIR fait de ce test un
+        publieur de `decoded_<mode>`, et le moteur le refuse alors pendant que son mode tourne."""
+        return None
+
+    def _ligne_muette(self, ts):
+        """Les arguments de `push` d'un essai que le test n'a pas pu décider : -1, scores nuls,
+        comme le mode quand il ne décide pas. À fournir par qui redéfinit `_publieur_du_mode`."""
+        raise NotImplementedError
+
+    @classmethod
+    def publie_le_flux_du_mode(cls):
+        """Ce test publie-t-il sur le flux de son mode ? DÉDUIT de la redéfinition, jamais déclaré à
+        part : un drapeau oublié rouvrirait en silence la porte « test et mode publient ensemble »."""
+        return cls._publieur_du_mode is not MesureMarqueurs._publieur_du_mode
+
     # --- les outils offerts à la sous-classe ----------------------------------
+
+    def _ouvrir_flux(self):
+        """Ouvre le flux décodé du mode, une fois. Appelée au premier tour et à l'annonce."""
+        if self._flux is not None or self.terminee:
+            return
+        try:
+            self._flux = self._publieur_du_mode(self._instance)
+        except Exception as e:  # noqa: BLE001 - même règle que `_publier_decision`
+            print(f"[{self._prefixe}] flux du mode non ouvert, le test continue sans : {e}")
+
+    def _fermer_flux(self):
+        """Lâcher la référence ferme l'outlet : le flux du test DISPARAÎT du réseau."""
+        self._flux = None
+
+    def _publier_decision(self, ligne, ts):
+        """UNE décision d'essai sur le flux du mode : `ligne` = les arguments du `push` que le
+        runtime du mode a composés (`CapteurDePublication`), ou None -> -1 (`_ligne_muette`).
+
+        ⚠️ Une publication qui échoue est DITE, jamais propagée : le verdict du test n'en dépend
+        pas, et un test qui s'annulerait parce que le réseau tousse perdrait des minutes de signal.
+        """
+        if self._flux is None:
+            return
+        try:
+            self._flux.push(*(ligne if ligne is not None else self._ligne_muette(ts)))
+            self._decisions_publiees += 1
+        except Exception as e:  # noqa: BLE001 - le flux est un retour, pas la mesure
+            if not self._echec_publication_dit:
+                self._echec_publication_dit = True
+                print(f"[{self._prefixe}] décision non publiée sur le flux du mode : {e}")
 
     def _geometrie(self):
         """La classe du runtime de DÉCODAGE. Lève avec une phrase lisible si elle manque."""
@@ -263,8 +366,14 @@ class MesureMarqueurs(MesureRuntime):
         return ""
 
     def cancel(self):
+        self._fermer_flux()
         super().cancel()
         self.__verite = None
+
+    def _terminer(self, engine):
+        """Le calcul du verdict. Plus aucun essai ne viendra : le flux se ferme AVANT."""
+        self._fermer_flux()
+        super()._terminer(engine)
 
     # --- la ligne du temps, menée par la fenêtre ---------------------------------
 
@@ -281,6 +390,7 @@ class MesureMarqueurs(MesureRuntime):
             self._demarre = True
             self._debut = now
             self._echeance = now + self.warmup_s
+            self._ouvrir_flux()
             return
 
         phase_avant = self.phase
@@ -420,6 +530,7 @@ class MesureMarqueurs(MesureRuntime):
         else:
             self._essais_annonces = max(0, int(trials))
         self._lire_annonce(marqueur)
+        self._ouvrir_flux()     # le SSVEP n'a ses fréquences — donc ses voies — qu'ici
         if self._annonce_recue:
             print(f"[{self._prefixe}] ⚠️ second « calib_start » sans « calib_end » : les "
                   f"{self.essai} essai(s) déjà enregistrés RESTENT dans le calcul. Si la fenêtre a "
@@ -429,6 +540,9 @@ class MesureMarqueurs(MesureRuntime):
 
 def _selftest():
     """Le socle sur une horloge FABRIQUÉE et un tampon HORODATÉ. Aucun casque, aucune fenêtre."""
+    import io
+    from contextlib import redirect_stdout
+
     import numpy as np
 
     from core.config import DATA_DIR, empreinte_dossier
@@ -701,6 +815,83 @@ def _selftest():
     chk(rt._essais_vus == 6,
         f"…et leurs flashs, hors de tout essai ouvert, ne sont pas des unités annoncées "
         f"({rt._essais_vus})")
+
+    # === Le flux décodé du mode : ouvert sous l'instance du MOTEUR, rien pendant la chauffe ====
+    class _Espion:
+        def __init__(self, instance):
+            self.instance, self.lignes = instance, []
+
+        def push(self, *args):
+            self.lignes.append(args)
+
+    class _MesurePubliee(_MesureManches):
+        def _publieur_du_mode(self, instance):
+            return _Espion(instance)
+
+        def _ligne_muette(self, ts):
+            return (-1, float(ts))
+
+        def _encaisser_protocole(self, engine, ts, marqueur):
+            super()._encaisser_protocole(engine, ts, marqueur)
+            if marqueur.get("event") == "round_end":
+                self._publier_decision(None, ts)
+
+    chk(not _MesureManches.publie_le_flux_du_mode() and _MesurePubliee.publie_le_flux_du_mode(),
+        "« publie sur le flux du mode » se DÉDUIT de la redéfinition de `_publieur_du_mode` : le "
+        "moteur le lit sur la classe pour refuser test et mode ensemble")
+    moteur = _Moteur()
+    moteur.instance = "moteur-reel"
+    rt = _MesurePubliee(SPEC, {}, moteur)
+    rt.tick(moteur, moteur.t0)
+    chk(rt._flux is not None and rt._flux.instance == "moteur-reel",
+        f"le flux s'ouvre au premier tour, sous l'instance du MOTEUR "
+        f"({getattr(rt._flux, 'instance', None)!r})")
+    espion = rt._flux
+    moteur.file([(moteur.t0 + 1.0, m("calib_start", trials=6)), (moteur.t0 + 2.0, m("round_end"))])
+    rt.tick(moteur, moteur.t0 + 3.0)
+    rt.tick(moteur, moteur.t0 + rt.warmup_s + 0.1)
+    rt.encaisser(moteur, moteur.t0 + 5.0, m("round_end"))
+    chk(espion.lignes == [(-1, moteur.t0 + 5.0)],
+        f"rien n'est publié pendant la chauffe ; un essai, une ligne ({espion.lignes})")
+    rt._publier_decision((3, 9.0), 9.0)
+    chk(espion.lignes[-1] == (3, 9.0) and rt._decisions_publiees == 2,
+        "une ligne composée par le runtime du mode part TELLE QUELLE")
+
+    class _Casse:
+        def push(self, *args):
+            raise RuntimeError("le réseau tousse")
+
+    rt._flux = _Casse()
+    with redirect_stdout(io.StringIO()):
+        rt._publier_decision(None, 10.0)
+    rt._flux = espion
+    rt.cancel()
+    chk(rt._flux is None and rt.phase == "annule",
+        "une publication qui échoue ne tue pas le test, et l'abandon FERME le flux")
+    moteur = _Moteur()
+    rt = demarree(moteur, 6, cls=_MesurePubliee)
+    rt.encaisser(moteur, moteur.t0 + 7.5, m("calib_end"))
+    rt.tick(moteur, moteur.t0 + rt.warmup_s + 1.0)
+    chk(rt.phase == "fini" and rt._flux is None,
+        f"la fin du test ferme le flux, avant le calcul ({rt.phase})")
+
+    class _RuntimeDuMode:
+        def __init__(self):
+            self.engine, self._out = SimpleNamespace(instance="vue-de-rejeu"), "capteur"
+
+        def _open(self):
+            self._out = ("publieur", self.engine.instance)
+
+    r = _RuntimeDuMode()
+    chk(publieur_du_mode(r, "moteur-reel") == ("publieur", "moteur-reel")
+        and r.engine.instance == "vue-de-rejeu" and r._out == "capteur",
+        "`publieur_du_mode` ouvre par le `_open` du MODE sous l'instance du moteur — jamais celle de "
+        "la vue de rejeu —, puis rend au décideur sa vue et son capteur")
+    capteur = CapteurDePublication()
+    capteur.push(1, 2)
+    capteur.push(3, 4)
+    chk(capteur.prendre() == (3, 4) and capteur.prendre() is None,
+        "le capteur garde le DERNIER `push`, et repart vide une fois pris")
 
     # === La séance NOMINALE, par la vraie porte ==============================================
     moteur = _Moteur()

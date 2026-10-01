@@ -81,7 +81,8 @@ from core.modes.affichage import (au_dessus_du_hasard, lignes, p_hasard, pct,  #
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.contract import bande_de  # noqa: E402
 from core.modes.mesure import MesureSpec  # noqa: E402
-from core.modes.mesure_marqueurs import MesureMarqueurs  # noqa: E402
+from core.modes.mesure_marqueurs import (CapteurDePublication, MesureMarqueurs,  # noqa: E402
+                                         publieur_du_mode)
 # La cadence de décodage du MODE, importée et jamais recopiée : c'est elle qui dit combien de
 # fenêtres chevauchantes une fixation contient, donc de combien l'effectif serait gonflé si on les
 # comptait. Le test s'en sert pour fabriquer un essai réaliste.
@@ -211,6 +212,13 @@ class MesureSSVEP(MesureMarqueurs):
         # (`sigma_from_block`) — or `cancel()` met `self.engine` à None, et une mesure abandonnée
         # puis relancée ne doit pas dépendre de l'ordre des deux.
         self._acq = getattr(engine, "acq", None)
+        # La décision EN DIRECT, publiée sur `decoded_ssvep` à chaque essai : le runtime du MODE
+        # (construit à l'annonce, qui porte les fréquences), calé UNE fois au premier essai — le
+        # repos précède tous les essais, `_echantillonne_le_repos` s'arrête au premier. Mêmes
+        # fonctions que `rejouer`, donc la décision publiée est celle que le verdict note.
+        self._direct = None              # (décideur, vue), ou None
+        self._direct_cale = None         # None : pas encore tenté ; True / False : le plancher
+        self._capteur = CapteurDePublication()
 
     # --- ce que le socle attend --------------------------------------------------
 
@@ -256,8 +264,42 @@ class MesureSSVEP(MesureMarqueurs):
         """
         freqs = marqueur.get("freqs")
         if isinstance(freqs, (list, tuple)) and freqs:
+            if self._direct is not None and [float(f) for f in freqs] != self._freqs:
+                self._fermer_flux()       # d'autres fréquences, d'autres voies : le socle rouvre
             self._freqs = [float(f) for f in freqs]
+            if self._acq is not None:
+                self._direct = decideur_du_mode(
+                    self._freqs, self._acq, z_min=float(self.params.get("z_min", Z_MIN)),
+                    bande=bande_de(self.params, BANDPASS))
+                self._direct[0]._out = self._capteur
+                self._direct_cale = None
         self._refresh_hz = float(marqueur.get("refresh_hz") or 0.0)
+
+    def _publieur_du_mode(self, instance):
+        """`decoded_ssvep` sur les fréquences ANNONCÉES : sans elles, ni voies ni publieur."""
+        return None if self._direct is None else publieur_du_mode(self._direct[0], instance)
+
+    def _ligne_muette(self, ts):
+        """La ligne d'un essai sans décision : celle du mode quand il rejette une fenêtre."""
+        return (-1, 0.0, 0.0, [0.0] * len(self._freqs), float(ts))
+
+    def _decision_en_direct(self, epoque, ts_fin):
+        """La ligne que le mode publierait sur la DERNIÈRE fenêtre de cette fixation, ou None."""
+        if epoque is None or self._flux is None or self._direct is None:
+            return None
+        decideur, vue = self._direct
+        if self._direct_cale is None:
+            try:
+                caler(decideur, vue, [f for f, lab in self._enregistre if lab == REPOS])
+                self._direct_cale = True
+            except ValueError as e:
+                self._direct_cale = False
+                print(f"[mesure-ssvep] décisions publiées à -1 : {e}")
+        if not self._direct_cale:
+            return None
+        self._capteur.prendre()
+        decider(decideur, vue, self._decision_de_l_essai(epoque), lsl_ts=ts_fin)
+        return self._capteur.prendre()
 
     def _ouvrir_les_essais(self, now):
         super()._ouvrir_les_essais(now)
@@ -322,6 +364,9 @@ class MesureSSVEP(MesureMarqueurs):
         epoque = self._prelever(engine, ts)
         if epoque is not None:
             self._consigner(epoque)
+        # UNE décision par essai sur `decoded_ssvep`, -1 si l'époque est perdue ou le plancher absent.
+        fin = float(ts) + float(self.decalage_s)
+        self._publier_decision(self._decision_en_direct(epoque, fin), fin)
 
     def _etiquette_d_essai(self, verite):
         """`Essai(numéro, cible)` : le numéro regroupe les fenêtres d'un essai dans `_mesurer`."""
@@ -456,6 +501,43 @@ def longueur_bloc_attendue(acq=None):
     return int(acq.window_n + acq.margin_n)
 
 
+def decideur_du_mode(freqs, acq, z_min=Z_MIN, bande=BANDPASS):
+    """`(décideur, vue)` : le runtime du MODE SSVEP, neuf, sur ces fréquences et ces réglages, et la
+    vue qu'il lit. Rien n'est calé. Partagé par `rejouer` (le verdict) et par la décision EN DIRECT
+    de `MesureSSVEP` (le flux) : un seul chemin, donc ce qui est publié est ce qui est noté."""
+    vue = _Vue(acq)
+    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(float(f) for f in freqs),
+                                           "z_min": float(z_min), "bande_bas": float(bande[0]),
+                                           "bande_haut": float(bande[1])}, vue)
+    return decideur, vue
+
+
+def caler(decideur, vue, repos):
+    """Le plancher de repos, par le `_rest_step` du MODE. Lève s'il ne tient pas.
+
+    Chaque bloc de repos est posé comme tampon, dans l'ordre ; l'échéance n'est atteinte qu'au
+    DERNIER, qui déclenche le calage — exactement comme en direct, où la dernière fenêtre du repos
+    est celle qui le clôt. La médiane du σ (sur la fenêtre occipitale filtrée) et la CCA calée cible
+    par cible sont celles du mode : rien n'est recalculé ici.
+    """
+    pret = False
+    for i, bloc in enumerate(repos):
+        vue.recent = bloc
+        decideur._rest_until = 0.0 if i == len(repos) - 1 else float("inf")
+        pret = decideur._rest_step(vue, 0.0)
+    if not pret:
+        # Le SSVEP décide sur z = (ρ − μ) / σ, μ et σ mesurés cible par cible pendant le repos.
+        raise ValueError(tr("mesure.ssvep_taux.erreur.sans_repos", n=len(decideur._samples)))
+
+
+def decider(decideur, vue, fenetre_brute, lsl_ts=0.0):
+    """UNE décision, par le `_run_step` du MODE : sa sortie, ou None (fenêtre trop courte)."""
+    vue.recent = fenetre_brute
+    decideur._decoded = None
+    decideur._run_step(vue, lsl_ts)
+    return decideur.output()
+
+
 def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN,
             bande=BANDPASS):
     """**La règle du moteur, rejouée sur des fenêtres — une décision par essai.** Rend le verdict.
@@ -499,33 +581,15 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
     if len(essais) < 6:
         raise ValueError(tr("mesure.ssvep_taux.erreur.trop_peu", n=len(essais)))
 
-    # --- Le plancher de repos, par le `_rest_step` du MODE -----------------------------------
-    # Chaque bloc de repos est posé comme tampon, dans l'ordre ; l'échéance n'est atteinte qu'au
-    # DERNIER, qui déclenche le calage — exactement comme en direct, où la dernière fenêtre du
-    # repos est celle qui le clôt. La médiane du σ (sur la fenêtre occipitale filtrée) et la CCA
-    # calée cible par cible sont celles du mode : rien n'est recalculé ici.
-    vue = _Vue(acq)
-    bas, haut = float(bande[0]), float(bande[1])
-    decideur = _DecideurSSVEP(SPEC_SSVEP, {"freqs": tuple(freqs), "z_min": float(z_min),
-                                           "bande_bas": bas, "bande_haut": haut}, vue)
-    pret = False
-    for i, bloc in enumerate(repos):
-        vue.recent = bloc
-        decideur._rest_until = 0.0 if i == len(repos) - 1 else float("inf")
-        pret = decideur._rest_step(vue, 0.0)
-    if not pret:
-        # Le SSVEP décide sur z = (ρ − μ) / σ, μ et σ mesurés cible par cible pendant le repos.
-        raise ValueError(tr("mesure.ssvep_taux.erreur.sans_repos", n=len(decideur._samples)))
+    decideur, vue = decideur_du_mode(freqs, acq, z_min=z_min, bande=bande)
+    caler(decideur, vue, repos)
 
     # --- UNE décision par essai, par le `_run_step` du MODE ------------------------------------
     # Rejet d'artefact compris : le mode prend son σ sur les 4 occipitales FILTRÉES, et c'est ce
     # σ-là qui juge ici — plus celui des 8 voies (cf. l'avertissement en tête de module).
     decisions, artefacts = [], 0
     for fenetre_brute, cible in essais:
-        vue.recent = fenetre_brute
-        decideur._decoded = None
-        decideur._run_step(vue, 0.0)
-        sortie = decideur.output()
+        sortie = decider(decideur, vue, fenetre_brute)
         if sortie is None:                    # fenêtre trop courte : le mode ne publierait rien
             decisions.append((cible, None))
             continue
@@ -711,6 +775,19 @@ def _selftest():
 
     empreinte_avant = empreinte_dossier(DATA_DIR)
 
+    # Le flux du mode est ESPIONNÉ : on remplace la fonction de MODULE qu'appelle
+    # `_publieur_du_mode`, pour que sa règle (« pas de publieur sans fréquences annoncées ») reste
+    # sous test. Le vrai publieur est éprouvé à part, par `_selftest_retour_en_direct`.
+    class _Espion:
+        def __init__(self, runtime, instance):
+            self.instance, self.freqs, self.lignes = instance, list(runtime.params["freqs"]), []
+
+        def push(self, *args):
+            self.lignes.append(args)
+
+    vrai_publieur = globals()["publieur_du_mode"]
+    globals()["publieur_du_mode"] = _Espion
+
     # Une acquisition JAMAIS démarrée : on ne veut que ses filtres et sa géométrie de fenêtre —
     # exactement ce que faisait `research/ssvep_guided.analyze`.
     acq = UnicornAcquisition(synthetic=True)
@@ -774,7 +851,7 @@ def _selftest():
         """Le strict nécessaire : l'acquisition (pour les filtres) et un tampon horodaté."""
 
         def __init__(self, secondes=30.0, t0=1000.0, graine=0):
-            self.acq = acq
+            self.acq, self.instance = acq, "selftest"
             self.t0 = t0
             self.recent_ts = np.arange(t0, t0 + secondes, 1.0 / FS)
             rng = np.random.default_rng(graine)
@@ -1183,10 +1260,20 @@ def _selftest():
     moteur = _FauxMoteur(secondes=40.0)
     rt = MesureSSVEP(SPEC, {}, moteur)
     t0 = moteur.t0
+    instants = [t0 + 6.0 + 5.0 * i for i in range(6)]
+    # Un SSVEP franc dans la seconde MOITIÉ de chaque fixation, comme une réponse qui s'établit après
+    # la saccade : seule la DERNIÈRE fenêtre de décision le contient entier.
+    for i, debut in enumerate(instants):
+        dedans = ((moteur.recent_ts >= debut + SSVEP_GUIDE_FIX_S / 2)
+                  & (moteur.recent_ts < debut + SSVEP_GUIDE_FIX_S))
+        moteur.recent[dedans] += _ssvep(np.random.default_rng(40 + i), int(dedans.sum()),
+                                        FREQS[i % 3], gain=6.0, sigma=0.0)
     rt.tick(moteur, t0)
     chk(rt.phase == "chauffe" and rt.state(now=t0)["restant_s"] > 14.0,
         f"on commence par la chauffe, et elle se décompte à l'écran ({rt.phase}, "
         f"{rt.state(now=t0)['restant_s']} s)")
+    chk(rt._flux is None,
+        "sans fréquences annoncées, aucun `decoded_ssvep` : ses voies en dépendent")
 
     # L'annonce ARRIVE PENDANT la chauffe — le cas normal : la console lance la fenêtre au moment
     # même où elle demande la mesure.
@@ -1199,6 +1286,12 @@ def _selftest():
     chk(rt.essai == 0 and rt._marqueurs_chauffe == 1,
         f"…mais les essais de cette période sont JETÉS et comptés : l'offset DC dérive encore "
         f"({rt.essai} enregistré(s), {rt._marqueurs_chauffe} jeté(s))")
+    espion = rt._flux
+    chk(isinstance(espion, _Espion) and espion.instance == "selftest" and espion.freqs == FREQS
+        and espion.lignes == [],
+        f"l'annonce OUVRE `decoded_ssvep` sur les fréquences de l'ÉCRAN, sous l'instance du "
+        f"moteur — et l'essai de la chauffe n'y publie rien "
+        f"({getattr(espion, 'instance', None)!r}, {getattr(espion, 'lignes', None)})")
 
     rt.tick(moteur, t0 + rt.warmup_s + 0.1)
     chk(rt.phase == "essais", f"la chauffe écoulée ouvre les essais ({rt.phase})")
@@ -1251,6 +1344,16 @@ def _selftest():
     chk(rt.phase == "fini" and rt.resultat and rt.resultat["n_essais"] == 6,
         f"le tour suivant calcule, sur les 6 ESSAIS ({rt.phase}, "
         f"{(rt.resultat or {}).get('n_essais')})")
+
+    # === Ce qui est NOTÉ est ce qui est PUBLIÉ, essai par essai ================================
+    publies = [int(ligne[0]) for ligne in espion.lignes]
+    notes = [-1 if d is None else d for _c, d in (rt.resultat or {}).get("decisions", [])]
+    chk(publies == notes and sum(p == i % 3 for i, p in enumerate(publies)) >= 4,
+        f"🔴 UNE décision publiée par essai sur `decoded_ssvep`, celle que le verdict NOTE — sur la "
+        f"DERNIÈRE fenêtre de la fixation, par le runtime du mode ({publies} contre {notes})")
+    chk([float(ligne[-1]) for ligne in espion.lignes] == [c + SSVEP_GUIDE_FIX_S for c in instants]
+        and rt._flux is None,
+        "…horodatée à la fin de la fixation, et le flux est FERMÉ à la fin du test")
 
     # === Les deux abandons ====================================================================
     moteur1 = _FauxMoteur()
@@ -1323,6 +1426,10 @@ def _selftest():
         f"les DEUX compteurs divergent dès la première époque perdue : {rt4._essais_vus} `cue` "
         f"lisibles reçus, {rt4.essai} époque(s) prélevée(s), {rt4._epoques_perdues} perdue(s) — "
         f"c'est `_essais_vus` qui se compare au `trials` annoncé, jamais `essai`")
+    _lignes4 = [int(ligne[0]) for ligne in getattr(rt4._flux, "lignes", [])]
+    chk(_lignes4 == [-1] * 12,
+        f"…et chacun des 12 essais publie sa décision, -1 pour l'époque perdue comme pour un test "
+        f"sans plancher de repos : la fenêtre attend une réponse par essai ({_lignes4})")
     rt4.tick(moteur4, t4 + 1.0 + CALIB_FENETRE_SILENCE_S + 0.5)
     chk(rt4.phase == "essais" and rt4.resultat is None and len(rt4._enregistre) == 11,
         f"…et une époque perdue ne transforme PAS une séance complète en fenêtre morte : la "
@@ -1456,7 +1563,155 @@ def _selftest():
     chk(empreinte_dossier(DATA_DIR) == empreinte_avant,
         "et tout ce test n'a rien écrit dans `data/` — une mesure ne produit aucun fichier")
 
+    globals()["publieur_du_mode"] = vrai_publieur
+    ok = _selftest_retour_en_direct() and ok
     print(f"[mesure-ssvep] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _selftest_retour_en_direct():
+    """Sur un VRAI moteur (jamais démarré, tampon et file de marqueurs fabriqués) et un VRAI test :
+
+      1. le refus croisé test SSVEP ↔ mode SSVEP, dans les DEUX sens, à la soumission ET dans la
+         boucle — le test publie sur `decoded_ssvep`, deux publieurs du même nom ne coexistent pas ;
+      2. un client LSL qui résout `decoded_ssvep` PAR SON NOM (filtré sur l'instance) reçoit,
+         pendant le test, UNE décision par essai — celle que le verdict note.
+
+    Délégué par `python src/core/server.py --smoke` (`_smoke_retour_en_direct`).
+    """
+    import time
+
+    from pylsl import StreamInlet
+
+    from core.modes.contract import validate
+    from core.server import EngineServer, _resolve_own
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    class _ModeFactice:
+        """Un mode « démarré » : `submit` et les gardes ne lisent que les CLÉS de `active`."""
+
+        def __init__(self, spec):
+            self.spec, self.params, self.phase, self.published = spec, {}, "running", True
+
+        def state(self):
+            return {}
+
+        def close(self):
+            pass
+
+    from core.modes import registry
+    instance = "selftest-retour"
+    srv = EngineServer(synthetic=True, modes=(), instance=instance)
+    valeurs, _r = validate(SPEC, {})
+    inlet = None
+    try:
+        # === 1. Le refus croisé, sens 1 : le mode décode, son test est refusé ==================
+        srv.active["ssvep"] = _ModeFactice(SPEC_SSVEP)
+        r = srv.submit("start_mesure", id="ssvep_taux")
+        chk(not r.get("accepted") and "même flux" in (r.get("reason") or ""),
+            f"tester le SSVEP pendant que le mode SSVEP décode est REFUSÉ, pour le flux qu'ils "
+            f"partageraient ({(r.get('reason') or '')[:70]}…)")
+        srv._start_mesure("ssvep_taux", valeurs)
+        chk(srv.mesure is None, "…et côté BOUCLE aussi : aucune mesure n'est construite")
+        srv.active.pop("ssvep")
+        srv.active["neuro"] = _ModeFactice(registry.get("neuro"))
+        chk(srv._refus_mesure_pendant_mode(SPEC, dict(srv.active)) is None,
+            "…mais un AUTRE mode qui décode ne bloque pas le test SSVEP")
+        srv.active.pop("neuro")
+
+        # === Sens 2 : le test tourne, le mode est refusé ======================================
+        r = srv.submit("start_mesure", id="ssvep_taux")
+        srv._drain_commands()
+        rt = srv.mesure
+        # Le NOM de classe, pas `isinstance` : lancé en script, ce module est `__main__`, et la
+        # classe du registre est celle de `core.modes.ssvep_mesure` — un autre objet.
+        chk(r.get("accepted") and type(rt).__name__ == "MesureSSVEP",
+            f"sur un moteur libre, le test démarre par la vraie porte ({r.get('reason')}, "
+            f"{type(rt).__name__})")
+        r = srv.submit("start_mode", id="ssvep")
+        chk(not r.get("accepted") and "test de « SSVEP »" in (r.get("reason") or "")
+            and "même flux" in (r.get("reason") or ""),
+            f"démarrer le mode SSVEP pendant son test est REFUSÉ ({(r.get('reason') or '')[:70]}…)")
+        srv._start(["ssvep"], {"ssvep": validate(SPEC_SSVEP, {})[0]}, time.perf_counter())
+        chk("ssvep" not in srv.active, "…et côté BOUCLE aussi : le mode n'est pas démarré")
+
+        # === 2. Une séance, et un client qui écoute `decoded_ssvep` ===========================
+        fs, t0 = float(srv.acq.fs), 1000.0
+        ts = t0 + np.arange(int(70 * fs)) / fs
+        rng = np.random.default_rng(3)
+        eeg = rng.normal(0.0, 8.0, (len(ts), 8))
+        freqs = [15.0, 20.0, 60.0 / 7.0]
+        cues = [t0 + 30.0 + 5.0 * k for k in range(6)]
+        for k, debut in enumerate(cues):
+            dedans = (ts >= debut) & (ts < debut + SSVEP_GUIDE_FIX_S)
+            onde = 6.0 * np.sin(2 * np.pi * freqs[k % 3] * (ts[dedans] - debut))
+            eeg[dedans, 4:] += onde[:, None]
+
+        def avance(fin_s):
+            i = int(round(fin_s * fs))
+            srv.recent_ts, srv.recent = ts[max(0, i - srv.keep):i], eeg[max(0, i - srv.keep):i]
+
+        def m(event, **champs):
+            return {"mode": "ssvep", "event": event, **champs}
+
+        # Chaque marqueur DANS le tampon (sinon `markers_murs` le compte perdu) et mûr (+ 3 s).
+        srv._marqueurs, srv._marqueur_curseur = [], {}
+        avance(20.0)
+        rt.tick(srv, 0.0)
+        srv._marqueurs.append((t0 + 16.5, m("calib_start", trials=6, freqs=freqs, refresh_hz=60.0)))
+        rt.tick(srv, 1.0)
+        info = _resolve_own("decoded_ssvep", instance, 5.0)
+        chk(info is not None and info.channel_count() == 3 + len(freqs),
+            f"pendant le test, `decoded_ssvep` se RÉSOUT par son nom, sous l'instance du moteur, "
+            f"avec les voies du mode ({None if info is None else info.source_id()})")
+        if info is not None:
+            inlet = StreamInlet(info)
+            inlet.open_stream(timeout=5.0)
+        now = rt.warmup_s + 0.1
+        rt.tick(srv, now)
+        srv._marqueurs.append((t0 + 16.8, m("repos")))      # le plancher finit à t0 + 28,8 s
+        for j in range(15):
+            avance(20.2 + 0.2 * j)
+            now += 0.25
+            rt.tick(srv, now)
+        for k, debut in enumerate(cues):
+            srv._marqueurs.append((debut, m("cue", target=k % 3)))
+            avance(debut - t0 + SSVEP_GUIDE_FIX_S + 0.05)
+            now += 0.25
+            rt.tick(srv, now)
+        recus, limite = [], time.perf_counter() + 5.0
+        while inlet is not None and len(recus) < len(cues) and time.perf_counter() < limite:
+            echantillon, _t = inlet.pull_sample(timeout=0.2)
+            if echantillon is not None:
+                recus.append(int(round(echantillon[0])))
+        if inlet is not None:        # AVANT la fin du test : sinon liblsl crie à la coupure
+            inlet.close_stream()
+            inlet = None
+        srv._marqueurs.append((cues[-1] + 1.0, m("calib_end")))
+        avance(cues[-1] - t0 + 4.1)
+        for _ in range(2):
+            now += 0.25
+            rt.tick(srv, now)
+        notes = [-1 if d is None else d for _c, d in (rt.resultat or {}).get("decisions", [])]
+        chk(rt.phase == "fini" and len(notes) == len(cues),
+            f"le test se termine sur son verdict ({rt.phase}, {rt.probleme!r})")
+        chk(recus == notes and any(d >= 0 for d in recus),
+            f"🔴 le client a reçu UNE décision par essai, celle que le verdict NOTE "
+            f"({recus} contre {notes})")
+        chk(rt._flux is None, "…et le flux du test est fermé à sa fin")
+    finally:
+        inlet = None
+        if srv.mesure is not None:
+            srv.mesure.cancel()
+            srv.mesure = None
+        srv.close()
+    print(f"[retour-en-direct] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
 
