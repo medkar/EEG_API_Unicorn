@@ -4147,15 +4147,16 @@ def _smoke():
     defauts_ss = {p["key"]: p["default"] for p in f_ss.params}
     emis = []
     f_ss.appliquer.connect(emis.append)
-    # Le texte AFFICHÉ au départ (8,571… s'y écrit « 8.57143 ») : c'est lui qu'on doit retrouver.
-    freqs_depart = f_ss.champs["freqs"].text()
+    # Le défaut, écrit comme le champ l'écrit (8,571… y devient « 8.57143 ») — pas le texte affiché
+    # au départ : plus haut, ce smoke a déjà rempli la page avec d'autres fréquences.
+    freqs_defaut = ", ".join(f"{float(v):g}" for v in defauts_ss["freqs"])
     f_ss.champs["z_min"].setValue(5.0)
     f_ss.champs["bande_haut"].setValue(25.0)
     f_ss.champs["freqs"].setText("12, 20")
     f_ss.bouton_defauts.click()
     remis = f_ss.values()
     chk(remis["z_min"] == defauts_ss["z_min"] and remis["bande_haut"] == defauts_ss["bande_haut"]
-        and f_ss.champs["freqs"].text() == freqs_depart,
+        and f_ss.champs["freqs"].text() == freqs_defaut,
         f"« Rétablir les valeurs par défaut » remet les champs du SSVEP aux défauts du contrat "
         f"({remis['z_min']}, {remis['bande_haut']}, {remis['freqs']})")
     chk(not emis, "…sans rien appliquer : ce qui part au moteur part avec « Appliquer »")
