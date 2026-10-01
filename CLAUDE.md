@@ -206,14 +206,26 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - **RETOUR EN DIRECT** (2026-10-01, demandé au casque : « que le logiciel entoure la cible qu'il pense
   qu'on regarde »). Pour le c-VEP, le SSVEP et le P300 :
   - **« Tester »** publie chaque décision du test (un bloc, une fixation, une manche) sur le flux
-    décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une application : anneau VERT
-    si la décision est la cible désignée, ROUGE sinon, rien sur −1 (s'abstenir n'est pas se
-    tromper). Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
+    décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une application : anneau
+    MAGENTA si la décision est la cible désignée, ROUGE sinon, rien sur −1 (s'abstenir n'est pas se
+    tromper). Magenta et pas vert : le c-VEP cercle sa consigne en vert, le SSVEP et le P300 en bleu
+    (garde de teinte, `retour.autotest_couleurs`). L'anneau s'éteint AVANT les données que la
+    décision suivante lit — sa lumière n'entre jamais dans la mesure : c-VEP ≈ un cycle par bloc,
+    P300 0,5 s avant le premier flash, SSVEP au début de la consigne suivante. Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
     verdict (`decider`/`caler`), et le smoke vérifie que publié == noté.
-  - **« Essayer librement »**, second bouton du bloc Tester : le mode tourne, sa fenêtre (`--libre`
-    pour le c-VEP, `--retour`) entoure en ambre la dernière décision, **aucun score**. Elle ne
-    s'ouvre qu'APRÈS le repos (le plancher du SSVEP se mesure « sans fixer aucune cible »), et la
-    console arrête le mode à la fermeture si c'est elle qui l'a démarré.
+  - **« Essayer librement »**, second bouton du bloc Tester (contrôle de liaison d'abord, refusé
+    pendant une mesure ou un entraînement) : le mode tourne, sa fenêtre (`--libre` pour le c-VEP,
+    `--retour`) entoure en ambre la dernière décision, **aucun score** ; un −1 n'efface pas
+    l'anneau, il expire seul. ⚠️ **La fenêtre s'ouvre DÈS que le mode tourne, chauffe et repos
+    compris** : le plancher du SSVEP se mesure AVEC les cibles qui clignotent, sans en fixer aucune.
+    Une première version l'ouvrait après le repos — plancher mesuré sans clignotement, puis décodage
+    avec : biaisé (trouvé en revue, jamais joué). La fenêtre lit le flux PUBLIC `status`, republié
+    toutes les 2 s, et montre une croix « ne fixe aucune cible » tant que la phase vaut `warmup`
+    ou `baseline` — donc aussi quand le moteur refait son repos. La console ferme l'essai si le mode
+    disparaît, si sa publication est coupée ou si ses réglages changent, et arrête le mode à la
+    fermeture si c'est elle qui l'a démarré.
+  - Une fenêtre ne s'attache qu'à un flux publié par SA machine (nom d'hôte) : en salle, chaque
+    moteur publie sous les mêmes noms.
   - ⚠️ **Pendant un test, une application branchée sur `decoded_<mode>` reçoit les décisions du
     test.** C'est voulu et dit dans le README. Un test et son mode ne publient jamais ensemble : le
     moteur refuse l'un pendant l'autre, dans les deux sens, SSVEP compris.

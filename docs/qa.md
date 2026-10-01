@@ -718,18 +718,28 @@ a rien à rétablir.
 Les décisions du board de test sont du bruit : on vérifie la MÉCANIQUE, pas la justesse.
 
 ✅ Page **SSVEP** → **« Tester »** : après chaque essai, la flèche décodée est **entourée** — en
-**vert** si c'est celle qui était désignée, en **rouge** sinon, rien si le moteur s'est abstenu.
-L'anneau reste jusqu'à l'essai suivant. Même chose au **P300** (l'anneau apparaît dans la pause
-après la manche, s'efface au premier flash suivant) et au **c-VEP** (à la fin de chaque bloc).
+**magenta** si c'est celle qui était désignée, en **rouge** sinon, rien si le moteur s'est abstenu.
+L'anneau s'éteint au début de la consigne suivante. Même chose au **P300** (l'anneau apparaît dans
+la pause après la manche, s'éteint ~0,5 s AVANT le premier flash suivant ; la dernière manche a le
+sien avant l'écran de fin) et au **c-VEP** (à la fin de chaque bloc, pendant ~1 s seulement : il
+s'éteint avant les cycles que la décision suivante lit).
 ✅ Pendant le test, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne par essai**.
-✅ Page **SSVEP**, bloc Tester → **« Essayer librement ⓘ »** : la page dit qu'on attend la fin du
-repos (consigne + compte à rebours), **puis** la fenêtre s'ouvre ; l'anneau **ambre** suit les
-décisions, sans consigne ni score. Ferme la fenêtre : la page dit que le SSVEP est arrêté.
+✅ Page **SSVEP**, bloc Tester → **« Essayer librement ⓘ »** : le contrôle de liaison passe, puis
+la fenêtre s'ouvre **tout de suite** — les flèches clignotent avec une **croix** au centre et
+« ne fixe aucune cible » pendant la chauffe et le repos du moteur. La croix part : l'anneau
+**ambre** suit les décisions, sans consigne ni score, et ne clignote pas quand le moteur s'abstient
+(il s'éteint seul ~1 s après la dernière décision). Ferme la fenêtre : la page dit que le SSVEP est
+arrêté.
+✅ Pendant un essai libre, change un réglage du SSVEP (page « Régler ») : la console **ferme**
+l'essai et le dit en rouge.
+✅ Lance « Vérifier le casque », reviens sur la page SSVEP et clique « Essayer librement »
+pendant la mesure : **refus** qui nomme la mesure, aucune fenêtre.
 ✅ Même bouton sur c-VEP et P300 ; **absent** sur ErrP, MI, Neuro et Brut.
 ✅ SSVEP **démarré depuis la grille**, puis « Tester » : **refus**, le test et le mode publieraient
 sur le même flux.
 
-❌ Échec : la fenêtre s'ouvre pendant le repos ; un anneau sur une cible qui n'est pas celle
+❌ Échec : la fenêtre attend la fin du repos pour s'ouvrir, ou s'ouvre SANS croix pendant le
+repos ; un anneau sur une cible qui n'est pas celle
 décodée (compare à « Ce que voit ton application ») ; un anneau qui déborde sur une cible ; le
 mode qui continue de tourner après un essai libre qu'il n'avait pas commencé.
 
@@ -1025,12 +1035,13 @@ radio).
 
 ### ☐ 2.12 — « Essayer librement », au casque (c-VEP, SSVEP, P300)
 
-Page du mode → bloc Tester → **« Essayer librement »**. Attends la fin du repos (ne fixe rien),
-puis la fenêtre s'ouvre.
+Page du mode → bloc Tester → **« Essayer librement »**. La fenêtre s'ouvre tout de suite : tant
+que la **croix** est là, fixe-la, ne fixe aucune cible (c'est le repos du moteur, mesuré AVEC le
+clignotement).
 
 ✅ Fixe la cible de ton choix : l'anneau **ambre** vient sur elle en quelques secondes, et la suit
 quand tu changes. Au P300, il apparaît à la fin de chaque manche.
-✅ Regarde ailleurs (entre les cibles) : l'anneau **disparaît** — le mode s'abstient.
+✅ Regarde ailleurs (entre les cibles) : l'anneau **disparaît** en ~1 s — le mode s'abstient.
 ✅ Ferme la fenêtre : le mode s'arrête s'il ne tournait pas avant, et la page le dit.
 **Note** le délai entre « je fixe » et « l'anneau arrive », par mode.
 
