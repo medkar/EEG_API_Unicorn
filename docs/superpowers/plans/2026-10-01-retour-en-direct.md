@@ -57,3 +57,32 @@ Règles communes : celles du plan `2026-09-30-filtres-reglables.md` (textes par 
 et moteur ; les fenêtres pygame ne sont pas encore migrées — pas de texte nouveau à l'écran si on
 peut l'éviter ; mutation rouge puis verte ; `chk` comptés ; `git add` de ses fichiers ; jamais
 les deux smokes en parallèle d'un autre agent).
+
+## Passe de correction (après la revue, 2026-10-01)
+
+Sept relecteurs, 0 critique. Constats détaillés : `.superpowers/sdd/2026-10-01-retour-en-direct/progress.md`.
+
+**⚠️ La Décision 5 était FAUSSE.** Le plancher du SSVEP se mesure AVEC les cibles qui clignotent,
+sans en fixer aucune — c'est écrit dans `stimulus/ssvep.py` (`_guide`) : « mêmes conditions visuelles
+que les essais, sinon le moteur soustrait un fond qui n'est pas celui du test ». Ouvrir la fenêtre
+APRÈS le repos mesurait le plancher sans clignotement, puis décodait avec. **Nouvelle décision :**
+la fenêtre de l'essai libre s'ouvre dès que le mode démarre ; elle lit le flux PUBLIC `status`
+(`phase`) et affiche une croix + « ne fixe aucune cible » tant que la phase est `warmup` ou `rest`.
+
+- **K1 — Moteur** : chemin d'exception de la mesure testé et refus porté par la ressource (flux
+  encore vivant) ; oubli de `_ligne_muette` refusé à la construction ; lignes −1 poussées dans le
+  VRAI publieur en autotest ; c-VEP publie seulement ce que le verdict note ; fermeture vérifiée sur
+  le réseau ; `cancel()` gardé ; échec de publication exposé dans l'état de la mesure ; SSVEP en
+  direct éprouvé avec un `z_min` et une bande non défaut, un repos non figé et un essai à artefact ;
+  calage raté = abandon immédiat ; docstrings.
+- **K2 — Fenêtres** : seulement les flux de CETTE machine (nom d'hôte) ; en continu, −1 n'efface
+  plus l'anneau (il expire) ; l'anneau s'efface AVANT la fenêtre que la décision suivante lit (c-VEP :
+  au bord d'un cycle de settle, ≥ 3 s avant le `cue` ; P300 : avant le premier flash, pas sur lui) ;
+  couleur « juste » distincte de toute consigne (le c-VEP cercle en vert, le SSVEP en bleu) ;
+  dernière manche P300 : l'écran attend sa décision ; nom du flux résolu AVANT le rendu ; croix de
+  repos en libre (flux `status`) ; mineurs des revues C, D, E.
+- **K3 — Console** (après K2) : l'essai libre ouvre la fenêtre dès que le mode existe ; contrôle de
+  liaison ; refus au clic pendant une mesure ou un entraînement, avec un flux de marqueurs non
+  défaut, et sur une autre page pendant un essai ; surveillance après l'ouverture (réglages changés,
+  publication coupée) ; fin en erreur dite comme une erreur ; mineurs des revues F1, F2 ; faux
+  moteur conforme au vrai (`set_params` rend `params`/`differe`).
