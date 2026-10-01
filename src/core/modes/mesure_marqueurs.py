@@ -15,8 +15,8 @@ marqueur avant que la sous-classe ne le voie, et ne rejoint la décision qu'au m
 (`_consigner`). Le décodeur ne peut pas recevoir ce qu'on ne lui a jamais donné.
 
 LA SOUS-CLASSE POSSÈDE la forme de son essai et l'appel à son décodeur. Quatre formes :
-  • SSVEP — `cue` = un essai = une époque ; décision dans `_mesurer` (le plancher de repos n'est
-    ajusté qu'à la fin), donc elle consigne l'ÉPOQUE ;
+  • SSVEP — `cue` = un essai = une époque ; elle consigne l'ÉPOQUE, décide en direct pour le flux
+    et re-décide dans `_mesurer`, par les MÊMES fonctions (le repos précède tous les essais) ;
   • P300  — `cue` ouvre la manche, chaque `flash` est une époque, décision au `round_end` ;
   • ErrP  — `feedback` = un essai, la vérité voyage SUR lui (`error`) : la sous-classe le reçoit
     NU, comme en décodage — c'est le cas que la cloison protège ;
@@ -31,9 +31,10 @@ locale mesurerait un décodeur que personne n'utilise, cité comme s'il décriva
 
 **Un test décide comme le produit ET PUBLIE COMME LUI** (2026-10-01, « retour en direct ») : le
 c-VEP, le SSVEP et le P300 publient chaque décision de test — UNE par essai, -1 quand l'essai n'a
-pas pu être décidé — sur le flux décodé PUBLIC de leur mode, par le publieur que le mode ouvre
-lui-même (`publieur_du_mode`), sous l'instance du VRAI moteur. La fenêtre du test lit ce flux pour
-entourer la cible décodée ; une application branchée sur `decoded_<mode>` le reçoit aussi. Ouvert
+pas pu être décidé ; le c-VEP, lui, ne publie QUE les blocs que son verdict note — sur le flux
+décodé PUBLIC de leur mode, par le publieur que le mode ouvre lui-même (`publieur_du_mode`), sous
+l'instance du VRAI moteur. La fenêtre du test lit ce flux pour entourer la cible décodée ; une
+application branchée sur `decoded_<mode>` le reçoit aussi. Ouvert
 au premier tour (ou à l'annonce, si le publieur en a besoin), fermé à la fin, abandon compris. Un
 test et son mode ne publient donc jamais ensemble : le moteur refuse l'un pendant l'autre
 (`server._refus_mesure_pendant_mode`, qui lit `publie_le_flux_du_mode`).
@@ -112,6 +113,30 @@ def publieur_du_mode(runtime, instance):
         return runtime._out
     finally:
         runtime.engine, runtime._out = vue, out
+
+
+def temoin_de_publication(publieur):
+    """AUTOTESTS SEULEMENT. Branche un témoin sur l'outlet LSL du VRAI publieur `publieur` et rend
+    la liste où s'ajoute chaque rangée poussée, telle que le publieur l'a composée — puis la passe
+    au vrai `push_chunk`, pour que liblsl la juge aussi.
+
+    ⚠️ Pourquoi un témoin, et pas un faux publieur : une ligne -1 écrite À LA MAIN (`_ligne_muette`)
+    peut être mal formée sans que rien ne le dise. `_publier_decision` AVALE une publication qui
+    lève (deux champs inversés : le -1 n'atteint jamais le réseau), et pylsl 1.18 accepte en silence
+    une rangée numpy TROP LONGUE — `push_chunk` n'en lit que `channel_count` valeurs. Un faux qui
+    note ses arguments accepte tout. Le test compare donc la FORME de la rangée aux voies déclarées
+    par l'outlet réel.
+    """
+    import numpy as np
+
+    rangees, pousser = [], publieur.outlet.push_chunk
+
+    def temoin(x, *args, **kwargs):
+        rangees.append(np.array(x, dtype=float))
+        return pousser(x, *args, **kwargs)
+
+    publieur.outlet.push_chunk = temoin
+    return rangees
 
 
 # Paliers auxquels une perte se DIT. Même motif que `marker_calib._PALIERS` : une séance P300 fait

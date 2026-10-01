@@ -2572,12 +2572,18 @@ class EngineServer:
                             # calibration juste au-dessus : « annulé » avec sa raison à l'écran.
                             self.mesure.probleme = message_erreur(e)
                             self.mesure.phase = "annule"
-                            # …et ABANDONNÉE pour de bon : un test qui publiait sur le flux de
-                            # son mode le ferme ici, sinon l'outlet survivrait au test et
-                            # doublerait celui du mode qu'on démarrera ensuite.
-                            self.mesure.cancel()
                             print(f"[server] mesure interrompue par une exception : "
                                   f"{self.mesure.probleme}")
+                            # …et ABANDONNÉE pour de bon : un test qui publiait sur le flux de
+                            # son mode le ferme ici, sinon l'outlet survivrait au test et
+                            # doublerait celui du mode qu'on démarrera ensuite. ⚠️ GARDÉ : un
+                            # `cancel()` qui lève ici sortirait de la boucle — moteur tué, et
+                            # l'exception d'ORIGINE masquée par la sienne.
+                            try:
+                                self.mesure.cancel()
+                            except Exception as e_cancel:  # noqa: BLE001 - cf. ci-dessus
+                                print(f"[server] abandon de la mesure en erreur, ignoré : "
+                                      f"{e_cancel!r}")
 
                     # Publié quand l'état change, plus un rappel périodique pour les clients qui
                     # se connectent après le démarrage (LSL ne rejoue pas le passé).

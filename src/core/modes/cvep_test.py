@@ -35,9 +35,10 @@ ait davantage. D'où les choix (2, 3).
 ⚠️ **Le compteur de chauffe du socle ment pour le c-VEP** (la fenêtre clignote pendant la chauffe,
 exprès) : le verdict ne cite JAMAIS ces tics d'horloge, seulement les BLOCS (`cue`) qui y tombent.
 
-5. **CE QUI EST NOTÉ EST CE QUI EST PUBLIÉ** : à chaque `block_end`, la décision du bloc part sur
-   `decoded_cvep` (cf. `mesure_marqueurs.py`) — la ligne que `_publish` du mode a composée pour la
-   DERNIÈRE sortie, captée sur le décideur, ou -1 si le bloc n'a pas pu être décidé.
+5. **CE QUI EST NOTÉ EST CE QUI EST PUBLIÉ** : à chaque `block_end` que le verdict COMPTE, la
+   décision du bloc part sur `decoded_cvep` (cf. `mesure_marqueurs.py`) — la ligne que `_publish`
+   du mode a composée pour la DERNIÈRE sortie, captée sur le décideur (-1 pour un bloc muet). Un
+   bloc que le verdict ne compte pas (`cue` perdu, époque perdue) ne publie RIEN.
 
 Autotest :
     python src/core/modes/cvep_test.py
@@ -271,9 +272,13 @@ class MesureCVEP(MesureMarqueurs):
             self._capteur.prendre()      # rien d'un bloc précédent ne part avec celui-ci
             sorties = self._rejouer(*fin) if ouvert and fin is not None else None
             # Toujours consigner : sans vérité en attente (`cue` perdu), le socle le COMPTE.
-            self._consigner(sorties)
-            # La DERNIÈRE sortie (`_decision_du_bloc`), telle que `_publish` l'a composée ; -1 sinon.
-            self._publier_decision(self._capteur.prendre() if sorties else None, ts)
+            note = self._consigner(sorties)
+            # 🔴 PUBLIÉ == NOTÉ (invariant n°5) : seulement un bloc que `_mesurer` compte — vérité
+            # en attente ET sorties rejouées. Un `cue` perdu, une époque perdue : rien ne part. La
+            # fenêtre entourerait sinon une décision que le verdict ne juge pas.
+            if note and sorties:
+                # La DERNIÈRE sortie (`_decision_du_bloc`), telle que `_publish` l'a composée.
+                self._publier_decision(self._capteur.prendre(), ts)
 
     def _prelever_avec_instants(self, engine, ts):
         """L'époque (par le socle) et les HORODATAGES des mêmes échantillons — MÊME appel, sur la
@@ -524,6 +529,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     from core.lsl_io import cvep_channel_labels, stream_name
     from core.modes import cvep as _cvep
     from core.modes.contract import validate
+    from core.modes.mesure_marqueurs import temoin_de_publication
 
     ok = True
 
@@ -723,16 +729,18 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         chk(rt.espion.instance == "selftest" and rt._flux is None,
             f"…sous l'instance du MOTEUR, jamais « cvep_test », et fermé à la fin "
             f"({rt.espion.instance!r})")
-        # Un bloc dont le `cue` s'est perdu n'est pas décidé : il publie quand même son -1.
+        # A-M5 : un bloc dont le `cue` s'est perdu n'est pas NOTÉ — il ne publie donc RIEN. Il
+        # publiait -1 : la fenêtre recevait une décision que le verdict ne compte pas.
         perdu = [t for t, mk in marqueurs if mk["event"] == "cue"][5]
         rt_nc = MesureCVEP(SPEC, valeurs, moteur)
         res_nc = joue(rt_nc, moteur, [(t, mk) for t, mk in marqueurs
                                       if not (mk["event"] == "cue" and t == perdu)])
-        lignes_nc = rt_nc.espion.lignes
-        chk(len(lignes_nc) == 18 and int(lignes_nc[5][0]) == -1 and len(lignes_nc[5][2]) == 6
-            and res_nc.get("n_essais") == 17,
-            f"un bloc que le test n'a pas pu décider (son `cue` perdu) publie -1, aux voies du mode, "
-            f"sans entrer dans l'effectif ({[int(ligne[0]) for ligne in lignes_nc]})")
+        publies_nc = [int(ligne[0]) for ligne in rt_nc.espion.lignes]
+        notes_nc = [-1 if d is None else d for _c, d, _k in res_nc.get("decisions", [])]
+        chk(res_nc.get("n_essais") == 17 and publies_nc == notes_nc
+            and rt_nc._essais_sans_verite == 1,
+            f"🔴 un bloc que le verdict ne note pas (son `cue` perdu) ne publie RIEN : publié == "
+            f"noté, {len(publies_nc)} lignes pour {len(notes_nc)} blocs notés ({publies_nc})")
         sonde = MesureCVEP(SPEC, valeurs, moteur)
         vrai = vrai_publieur(sonde, "selftest-cvep-test")
         info = vrai.outlet.get_info()
@@ -742,7 +750,18 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             and sonde._decideur._out is sonde._capteur,
             f"le vrai publieur est celui du MODE, sous l'instance du moteur "
             f"({info.name()}, {info.source_id()}, {info.channel_count()} voies)")
-        del vrai, info
+        # A-M3 : la ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur (un faux accepte tout).
+        rangees = temoin_de_publication(vrai)
+        sonde._flux = vrai
+        sonde._publier_decision(None, 1234.5)
+        sonde._flux = None
+        chk(sonde._decisions_publiees == 1 and not sonde._echec_publication_dit
+            and [r.shape for r in rangees] == [(1, info.channel_count())]
+            and rangees[0][0][0] == -1.0,
+            f"🔴 la ligne -1 (`_ligne_muette`) passe par le VRAI `DecodedCVEPPublisher` : acceptée, "
+            f"à ses {info.channel_count()} voies, target_index = -1 "
+            f"({[r.shape for r in rangees]}, {sonde._decisions_publiees} publiée)")
+        del vrai, info, rangees
 
         # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
         # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui

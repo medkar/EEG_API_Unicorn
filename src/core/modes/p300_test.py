@@ -396,6 +396,7 @@ def _selftest():
     from core.config import DATA_DIR, empreinte_dossier
     from core.lsl_io import p300_channel_labels, stream_name
     from core.modes.contract import validate
+    from core.modes.mesure_marqueurs import temoin_de_publication
     from core.p300_decoder import NONTARGET, TARGET, P300Model, epoch_from_stream, synth_p300_epoch
 
     ok = True
@@ -643,7 +644,20 @@ def _selftest():
             and sonde._decideur._out is sonde._capteur,
             f"le vrai publieur est celui du MODE, sous l'instance du moteur "
             f"({info.name()}, {info.source_id()}, {info.channel_count()} voies)")
-        del vrai, info
+        # A-M3 : la ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur. Un faux qui note ses
+        # arguments acceptait `n_flashes` et `scores` inversés ; le vrai lève, `_publier_decision`
+        # avale — et aucune manche sans décision n'atteignait jamais le réseau.
+        rangees = temoin_de_publication(vrai)
+        sonde._flux = vrai
+        sonde._publier_decision(None, 1234.5)
+        sonde._flux = None
+        chk(sonde._decisions_publiees == 1 and not sonde._echec_publication_dit
+            and [r.shape for r in rangees] == [(1, info.channel_count())]
+            and rangees[0][0][0] == -1.0,
+            f"🔴 la ligne -1 (`_ligne_muette`) passe par le VRAI `DecodedP300Publisher` : acceptée, "
+            f"à ses {info.channel_count()} voies, target_index = -1 "
+            f"({[r.shape for r in rangees]}, {sonde._decisions_publiees} publiée)")
+        del vrai, info, rangees
         # Une manche dont le `cue` s'est perdu n'est pas NOTÉE, mais la fenêtre attend sa réponse.
         sans_cue = [(t, k) for t, k in plan if not (k["event"] == "cue" and k["target"] == 1)]
         with redirect_stdout(io.StringIO()):
