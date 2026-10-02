@@ -86,6 +86,15 @@ ESSAIS = (2, 3)
 ESSAIS_DEFAUT = 3
 ESSAIS_MIN = 6      # le plancher de `ssvep_mesure` et `mi_test`
 
+# La PHASE DE RETOUR de la fenêtre (`--retour`, que « Tester » passe toujours) : après chaque bloc,
+# la décision montrée seule ~1 s, puis la cible suivante, au bord de cycle d'après. 2 cycles à
+# 60 Hz pour une décision rendue dans le cycle qui suit le `block_end` (ici `post_s` = 0 : elle
+# part dès que l'EEG du bloc est arrivé). Ce fichier n'en dépend PAS pour noter — aucun écart fixe
+# n'est supposé entre `block_end` et `cue` — seulement pour ANNONCER la durée. Écrit ici parce que
+# `core` n'importe pas `stimulus` ; `stimulus/cvep.py --smoke` le recalcule depuis la règle de la
+# fenêtre (`cycles_de_retour`) et rougit s'ils divergent.
+RETOUR_CYCLES_PAR_BLOC = 2
+
 # Les compteurs qui PARTITIONNENT les fenêtres du mode : chaque pas en incrémente UN, ce qui nomme
 # la cause d'un -1 sans relire le texte du motif.
 _CAUSES =("decodages", "sans_reference", "reference_perimee", "sous_les_seuils", "vote_non_conclu")
@@ -118,10 +127,11 @@ def _blocs(cycles):
 
 
 def _duree_protocole_s(cycles):
-    """La séance de la fenêtre hors chauffe, à 60 Hz : par bloc le settle puis les cycles enregistrés,
-    plus le cycle de garde dont le marqueur ferme le dernier bloc."""
+    """La séance de la fenêtre hors chauffe, à 60 Hz : par bloc le settle, les cycles enregistrés
+    et la phase de retour, plus le cycle de garde dont le marqueur ferme le dernier bloc."""
     blocs = _blocs(cycles)
-    joues = len(blocs) * CVEP_CAL_SETTLE_CYCLES + sum(n for _c, n in blocs) + 1
+    joues = (len(blocs) * (CVEP_CAL_SETTLE_CYCLES + RETOUR_CYCLES_PAR_BLOC)
+             + sum(n for _c, n in blocs) + 1)
     return joues * len(_CODE) / REFRESH_REFERENCE_HZ
 
 
@@ -573,18 +583,20 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
                 self.i += 1
             return rendus
 
-    def seance(cycles=6, snr=-3.0, graine=0, muets=(), refresh=REFRESH):
-        """La séance `--calibrer`, cycle par cycle (cible cerclée dès le settle ; bloc muet = bruit)."""
+    def seance(cycles=6, snr=-3.0, graine=0, muets=(), refresh=REFRESH, retour=0):
+        """La séance `--calibrer`, cycle par cycle (cible cerclée dès le settle ; bloc muet = bruit).
+        `retour` : les cycles de la PHASE DE RETOUR de la fenêtre, après chaque bloc (du bruit)."""
         rng = np.random.default_rng(graine)
         blocs = blocs_entrelaces(_PLAN, cycles, CVEP_CAL_BLOCKS, _random.Random(graine))
         suite = [(None, None, None)] * 2
         for k, (cible, n) in enumerate(blocs):
             i = _PLAN.index(cible)
             suite += [("settle", i, k)] * CVEP_CAL_SETTLE_CYCLES + [("bloc", i, k)] * n
+            suite += [("retour", None, k)] * retour
         suite += [(None, None, None)]
         sigma = float(np.std(synth_cvep(_CODE, 0, len(CH_NAMES), FS, REFRESH, snr, rng)))
         eeg = np.concatenate([
-            rng.normal(0.0, sigma, (N_CYC, len(CH_NAMES))) if role is None or k in muets
+            rng.normal(0.0, sigma, (N_CYC, len(CH_NAMES))) if role in (None, "retour") or k in muets
             else synth_cvep(_CODE, _PLAN[i]["lag"], len(CH_NAMES), FS, REFRESH, snr, rng)
             for role, i, k in suite])
         ts = 1000.0 + np.arange(len(eeg)) / FS
@@ -683,9 +695,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         moteur = _Moteur(eeg, ts)
         rt2 = MesureCVEP(SPEC, valeurs, moteur)
         rt3 = MesureCVEP(SPEC, dict(valeurs, essais=3), moteur)
-        chk(abs(rt3.duree_estimee_s() - rt3.warmup_s - 91 * L / REFRESH_REFERENCE_HZ) < 1e-6
+        chk(abs(rt3.duree_estimee_s() - rt3.warmup_s - 127 * L / REFRESH_REFERENCE_HZ) < 1e-6
             and rt2.duree_estimee_s() < rt3.duree_estimee_s(),
-            f"la durée annoncée suit `essais` : 3 -> 18 × (4 jetés + 1) + 1 cycles, "
+            f"la durée annoncée suit `essais` : 3 -> 18 × (4 jetés + 1 + 2 de retour) + 1 cycles, "
             f"{rt3.duree_estimee_s() / 60:.1f} min ; 2 -> {rt2.duree_estimee_s() / 60:.1f} min")
         rt15 = MesureCVEP(SPEC, dict(valeurs, vote_len=_VOTE_LEN_MAX), moteur)
         chk(rt3.pre_s < rt15.pre_s <= MesureCVEP.epoque_marqueur_s,
@@ -794,6 +806,19 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
                 f"[vote {v['min_votes']}/{v['vote_len']}] chaque bloc décide ce que `decoded_cvep`, "
                 f"décodé EN CONTINU, publiait à sa fin "
                 f"({sum(a == b for a, b in zip(obtenu, attendu))}/{len(attendu)})")
+        # La PHASE DE RETOUR de la fenêtre allonge l'écart `block_end` -> `cue` suivant : rien ici
+        # ne suppose un écart fixe. (La garde de silence du socle, elle, n'est pas exercée ici : la
+        # fenêtre publie son `cycle` pendant la phase, ~1 par seconde contre 15 s de seuil.)
+        m_r, eeg_r, ts_r, _b, fins_r = seance(muets=(3, 11), retour=RETOUR_CYCLES_PAR_BLOC + 1)
+        moteur_r = _Moteur(eeg_r, ts_r)
+        rt_r = MesureCVEP(SPEC, valeurs, moteur_r)
+        r = joue(rt_r, moteur_r, m_r)
+        attendu = [continu(valeurs, eeg_r, ts_r, m_r, t) for t in fins_r]
+        obtenu = [d for _c, d, _k in r.get("decisions", [])]
+        chk(rt_r.phase == "fini" and len(obtenu) == 18 and obtenu == attendu
+            and r.get("justesse") == 1.0 and not r.get("pertes"),
+            f"avec {RETOUR_CYCLES_PAR_BLOC + 1} cycles de RETOUR entre chaque bloc et le suivant, "
+            f"le test note les mêmes 18 blocs, comme le flux continu ({r.get('chiffres')})")
         # Le settle du 1er bloc tombe dans la CHAUFFE ; un vote de 13 sur 15 a besoin de ces tics.
         v = dict(valeurs, vote_len=_VOTE_LEN_MAX, min_votes=_VOTE_LEN_MAX - 2)
         t_cue = next(t for t, m in marqueurs if m["event"] == "cue")

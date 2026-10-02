@@ -128,15 +128,19 @@ connaît le modèle.
 
 ⚠️ **`--retour` entoure la cible que le moteur DÉCODE** (`stimulus/retour.py`, qui porte la règle) :
 la fenêtre lit `decoded_cvep` comme le ferait l'application d'un étudiant, en tâche de fond, et
-trace un anneau à `RATIO_ANNEAU` × le rayon — dans la bande VIDE entre le disque et le cercle de
-consigne, donc sans toucher un seul pixel que les sondes de `--smoke` relisent. Il se trace dans
-l'image et se lit APRÈS le flip et le marqueur : le geste flip→horodatage ci-dessus n'en est pas
-retardé d'une instruction. Il est VERT, en test (`--tester`) comme en décodage : il montre la
-cible décodée, il ne juge pas — une erreur se voit, l'anneau n'est pas sur la cible cerclée. En
-décodage, il suit
-la dernière décision. ⚠️ En test, il ne vit qu'UN cycle par bloc : il s'éteint
-`CVEP_DECISION_CYCLES + 1` cycles avant chaque `cue` (`silence_avant_cue`), parce que la décision
-suivante lit déjà ce settle-là.
+trace un anneau VERT à `retour.ANNEAU_ECART_PX` du bord du disque (`retour.rayon_anneau`, la règle
+des trois fenêtres) — dans le fond, sans toucher un seul pixel que les sondes de `--smoke` relisent.
+Il se trace dans l'image et se lit APRÈS le flip et le marqueur : le geste flip→horodatage
+ci-dessus n'en est pas retardé d'une instruction. Il montre la cible décodée, il ne juge pas — une
+erreur se voit, l'anneau n'est pas sur la cible désignée. En décodage, il suit la dernière décision.
+⚠️ En test (`--tester --retour`), chaque bloc est suivi d'une PHASE DE RETOUR : plus aucun cercle
+de consigne, la fenêtre attend la décision du bloc (au plus `retour.ATTENTE_DECISION_S`), la montre
+SEULE `retour.RETOUR_AFFICHE_S`, l'efface, et seulement ENSUITE cercle la cible suivante — l'anneau
+et le cercle ne sont jamais à l'écran ensemble. La phase dure un nombre ENTIER de cycles
+(`cycles_de_retour`) : le clignotement et l'horloge `cycle` continuent pendant elle, la cible
+suivante paraît sur un bord de cycle, et son `cue` part toujours sur une frame 0. L'anneau s'éteint
+donc au début du settle, `CVEP_CAL_SETTLE_CYCLES` cycles avant le `cue` : la décision suivante, qui
+lit déjà ce settle (revue D-I1), ne voit jamais sa disparition.
 
 ⚠️ **`--libre` : les cibles et l'horloge, rien d'autre.** Sans option, cette fenêtre DÉSIGNE des
 cibles (le cercle bleu, les lignes `t=`, `--log`) : c'est le protocole de dépouillement de la
@@ -216,10 +220,10 @@ TAILLE_RATIO = 0.075
 # MÊME nombre pour aller lire ce cercle dans les pixels (cf. `point_de_sonde_cercle`) : recopié,
 # il suffirait de le déplacer d'un côté pour que la sonde lise le fond noir et ne rougisse plus.
 RATIO_CERCLE = 1.7
-# Rayon de l'anneau de RETOUR (`--retour`), en multiples du rayon du disque. Dans la bande VIDE entre
-# le disque (1,0) et le cercle de consigne (1,7, tracé vers l'intérieur sur 4 px) : il ne recouvre ni
-# l'un ni l'autre, et `--smoke` le prouve pixel par pixel à chaque image (`_smoke_retour`).
-RATIO_ANNEAU = 1.35
+# L'anneau de RETOUR (`--retour`) suit la règle des trois fenêtres, `retour.rayon_anneau` : il tombe
+# DANS le rayon du cercle de consigne, ce qui n'est permis que parce qu'ils ne sont jamais à l'écran
+# ensemble (la phase de retour, cf. la docstring du module). `--smoke` relit son rayon dans les
+# pixels, et prouve à chaque image qu'il ne recouvre ni disque ni sonde (`_smoke_retour`).
 
 TAILLE_FENETRE = (1000, 700)   # `--windowed` (dev) et `--smoke`
 
@@ -312,31 +316,37 @@ def point_de_sonde_cercle(x, y, r):
     return (x + int(r * RATIO_CERCLE) - 2, y)
 
 
-def rayon_anneau(r):
-    """Le rayon de l'anneau de RETOUR autour d'un disque de rayon `r`. Une écriture : le rendu et
-    `--smoke` (qui le relit dans les pixels) l'appellent tous les deux."""
-    return int(r * RATIO_ANNEAU)
+def en_images(secondes, refresh, au_plus=False):
+    """Une durée en IMAGES : au moins `secondes` (par défaut), ou au plus (`au_plus`). La phase de
+    retour se compte en images, comme tout ce que cette fenêtre verrouille à la frame."""
+    n = float(secondes) * float(refresh)
+    return int(math.floor(n + 1e-9)) if au_plus else int(math.ceil(n - 1e-9))
 
 
-def silence_avant_cue(programme, c, n=CVEP_DECISION_CYCLES + 1):
-    """Vrai si un bloc ENREGISTRÉ s'ouvre (`cue`) dans les `n` bords de cycle à venir, celui-ci
-    compris : l'anneau de retour doit alors être ÉTEINT.
+def cycles_de_retour(L, refresh, decision_a=None, valide=True):
+    """Combien de CYCLES dure la phase de retour d'un bloc de test — la règle de `run`, en pur.
 
-    ⚠️ Revue D-I1 : la décision d'un bloc lit ~2,5 s avant son `block_end` (cycles repliés, vote),
-    plus la marge de filtre — à un cycle par bloc (les tests), cela commence DANS le settle. Un
-    anneau encore là, ou éteint sur la frame 0 d'un cycle noté, est un transitoire calé en phase qui
-    baisse les corrélations en silence. Au settle du dépôt (4), il ne vit qu'un cycle par bloc."""
-    return any(bornes_de_bloc(programme, k)[1]
-               for k in range(c, min(c + int(n) + 1, len(programme))))
+    `decision_a` : l'image (comptée depuis celle du `block_end`) où la décision s'affiche, None si
+    rien n'arrive pendant l'attente ; `valide` : False pour un −1. La phase finit au premier bord de
+    cycle où l'anneau a été montré `RETOUR_AFFICHE_S` — ou, sans rien à montrer, où l'attente est
+    close : un −1 la clôt aussitôt, une absence au bout d'`ATTENTE_DECISION_S`. Un nombre ENTIER de
+    cycles : la cible suivante paraît sur un bord, et le `cue` part sur une frame 0. C'est aussi ce
+    que `core/modes/cvep_test.py` compte dans la durée qu'il annonce (`RETOUR_CYCLES_PAR_BLOC`)."""
+    if decision_a is None:
+        fin = en_images(_retour.ATTENTE_DECISION_S, refresh, au_plus=True)
+    elif valide:
+        fin = int(decision_a) + en_images(_retour.RETOUR_AFFICHE_S, refresh)
+    else:
+        fin = int(decision_a)
+    return max(1, -(-fin // int(L)))
 
 
 def bornes_de_bloc(programme, c):
     """`(cible_fermee, ouvre)` au bord du cycle `c` du programme : la cible du bloc qui vient de se
     FERMER (None sinon), et si un bloc ENREGISTRÉ commence ici.
 
-    Les mêmes conditions que les marqueurs de `annonce_bloc` — `block_end` ferme, `cue` ouvre. C'est
-    ce qui découpe le retour en essais : la décision d'un bloc arrive au début du settle du
-    suivant, elle est montrée jusqu'à `silence_avant_cue` (cf. `stimulus/retour.py`)."""
+    Les conditions des marqueurs de `annonce_bloc` — `block_end` ferme, `cue` ouvre — écrites UNE
+    fois. C'est aussi ce qui découpe le retour en essais : un bloc fermé ouvre sa phase de retour."""
     bloc, role, _cible = programme[c]
     prec = programme[c - 1] if c > 0 else (None, None, None)
     ferme = prec[2] if prec[1] == "bloc" and (role != "bloc" or bloc != prec[0]) else None
@@ -623,6 +633,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     # ci-dessous dure jusqu'à 5 s, autant qu'elle serve. Par essai en calibration/test (un bloc,
     # une décision), continu sinon (le mode décide à ~5 Hz).
     anneau = Retour(source_dec, len(plan), par_essai=calibrer) if retour else None
+    # La PHASE DE RETOUR après chaque bloc : en TEST seulement — un entraînement ne publie aucune
+    # décision, il n'y aurait rien à attendre (cf. la docstring du module).
+    phase_retour = anneau is not None and tester
+    images_affiche = en_images(_retour.RETOUR_AFFICHE_S, refresh)
+    images_attente = en_images(_retour.ATTENTE_DECISION_S, refresh, au_plus=True)
     # La croix de REPOS de l'essai libre : tant que le moteur chauffe, d'après son flux `status`.
     repos = ReposDuMoteur(source_rep) if libre else None
 
@@ -661,10 +676,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                                              rng=random.Random(seed))
         epoques_promises = sum(1 for _b, role, _c in programme if role == "bloc")
         n_blocs = len({b for b, role, _c in programme if role == "bloc"})
+        # La phase de retour, comptée pour une décision rendue dans le cycle qui suit le bloc (la
+        # même estimation que la console : `cvep_test.RETOUR_CYCLES_PAR_BLOC`).
+        prevus = len(programme) + (n_blocs * cycles_de_retour(L, refresh, L) if phase_retour else 0)
         print(f"[cvep-stim] {'TEST' if tester else 'CALIBRATION'} : {n_blocs} blocs entrelacés, {cycles_calib} cycles par "
               f"cible, {settle} cycle(s) JETÉ(S) à chaque changement de cible — "
               f"{epoques_promises} époques annoncées au moteur, "
-              f"≈ {len(programme) * L / refresh / 60.0:.1f} min")
+              f"≈ {prevus * L / refresh / 60.0:.1f} min")
         print(f"[cvep-stim] l'horloge « cycle » continue de battre PENDANT toute la séance, "
               f"settle et pauses compris : sans elle le moteur n'a pas de phase, donc pas "
               f"d'époque alignée — il ne décoderait rien du tout.")
@@ -727,7 +745,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     spots = positions_cibles(plan, size)
     centres = [(x, y) for x, y, _r in spots]
-    rayon_retour = rayon_anneau(spots[0][2])
+    rayon_retour = _retour.rayon_anneau(spots[0][2])
     span = min(size)
     font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
     hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
@@ -741,6 +759,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     sautees = 0
     onsets = []                  # horodatages LSL des marqueurs -> cadence réelle des cycles
     i_cible = None
+    c_prog = None                # l'indice du PROGRAMME en cours (calibration et test)
+    geste = None                 # ce que le bord de cycle de cette image publie (`annonce_bloc`)
+    retenus = 0                  # cycles de RETOUR déjà joués : ils n'avancent pas le programme
+    retour_k0 = retour_f0 = retour_montre0 = None   # la phase de retour en cours : cycle, image
+    #                              du `block_end`, image où l'anneau de la décision a paru
     etat_calib = ""              # ce que le bandeau du haut dit de la séance de calibration
     # ⚠️ La frame où le PROGRAMME commence — jamais 0 quand le moteur chauffe. Le clignotement,
     # lui, démarre tout de suite (le sujet doit voir la couronne, et un stimulus verrouillé à la
@@ -800,8 +823,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             # réellement cerclée (cf. `point_de_sonde_cercle`).
             x, y, r = spots[consigne]
             pygame.draw.circle(win, CUE, (x, y), int(r * RATIO_CERCLE), 4)
-        # L'anneau de RETOUR : après les cibles et la consigne, avant le texte — dans la bande vide
-        # entre le disque et le cercle de consigne (cf. `RATIO_ANNEAU`).
+        # L'anneau de RETOUR : après les cibles, avant le texte — dans le fond autour du disque, là
+        # où le cercle de consigne n'est jamais en même temps (cf. `RATIO_CERCLE`).
         if anneau is not None:
             anneau.dessiner(pygame, win, centres, rayon_retour)
         # La croix de REPOS (`--libre`), au centre, vide : les disques sont sur la couronne.
@@ -823,7 +846,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             + f"{ecoute}  |  ESC = quitter", True, HUD)
         win.blit(hud, (12, 10))
 
-    def annonce_bloc(c, ts):
+    def annonce_bloc(c, ts, geste="les_deux"):
         """`block_end` puis `cue`, au bord de cycle `c` du programme. DANS CET ORDRE.
 
         ⚠️ Les deux partent APRÈS le marqueur `cycle` de ce bord, et l'ordre entre eux compte : le
@@ -831,13 +854,19 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         sa DERNIÈRE époque), le `cue` ouvre celui qui commence (le prochain marqueur `cycle`
         délimitera sa PREMIÈRE). Les intervertir ferait, à chaque changement de bloc, oublier la
         cible qu'on vient d'annoncer.
+
+        `geste` coupe le bord en deux quand une PHASE DE RETOUR s'intercale : "fermer" au bord qui
+        l'ouvre (le `block_end` seul), "ouvrir" au bord où elle finit (le `cue` s'il y en a un, et
+        le bandeau) — deux bords de cycle, donc deux frames 0.
         """
         nonlocal etat_calib
         bloc, role, cible = programme[c]
-        prec = programme[c - 1] if c > 0 else (None, None, None)
-        if prec[1] == "bloc" and (role != "bloc" or bloc != prec[0]):
+        ferme, ouvre = bornes_de_bloc(programme, c)
+        if ferme is not None and geste != "ouvrir":
             emet({"mode": "cvep", "event": "block_end"}, None)
-        if role == "bloc" and (prec[1] != "bloc" or bloc != prec[0]):
+        if geste == "fermer":
+            return
+        if ouvre:
             emet({"mode": "cvep", "event": "cue", "target": int(cible)}, plan[cible]["name"])
             print(f"[cvep-stim] t={ts:.3f}  bloc {bloc + 1}/{n_blocs} : "
                   f"fixe « {plan[cible]['name']} » (cible {cible}) — "
@@ -880,20 +909,37 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # décision à cheval sur deux cibles — donc impossible à dépouiller.
         if calibrer:
             # En calibration, l'ordre des cibles ne se tire pas : il vient du programme entrelacé.
-            c_prog = None if frame_prog0 is None else (frame - frame_prog0) // L
+            # `k` compte les cycles joués depuis le début du programme, retour compris ; le
+            # programme, lui, n'avance pas pendant une phase de retour (`retenus`).
+            k = None if frame_prog0 is None else (frame - frame_prog0) // L
+            bord = k is not None and k >= 0 and (frame - frame_prog0) % L == 0
+            geste = "les_deux" if bord else None
+            if retour_k0 is not None:
+                # La PHASE DE RETOUR, décidée AVANT de dessiner l'image : aucune consigne, la
+                # décision du bloc fermé seule (cf. la docstring du module et `cycles_de_retour`).
+                geste = None
+                if anneau.attend and frame - retour_f0 >= images_attente:
+                    anneau.mesure_commence()     # attente close : une décision tardive est ignorée
+                if retour_montre0 is None and anneau.anneau is not None:
+                    retour_montre0 = frame
+                if bord and (not anneau.attend if retour_montre0 is None
+                             else frame - retour_montre0 >= images_affiche):
+                    # Fini, et sur un BORD : la cible suivante paraît sur une frame 0.
+                    anneau.mesure_commence()
+                    retenus += k - retour_k0
+                    retour_k0 = None
+                    geste = "ouvrir"
+            c_prog = None if k is None else (k if retour_k0 is None else retour_k0) - retenus
             if c_prog is not None and c_prog >= len(programme):
                 seance_complete = True
                 break
-            i_cible = None if c_prog is None else programme[c_prog][2]
-            # Le RETOUR est découpé en essais AVANT de dessiner l'image du bord : celle du
-            # `block_end` ouvre la fenêtre où la décision du bloc fermé sera montrée, et l'anneau
-            # est éteint `CVEP_DECISION_CYCLES + 1` cycles avant le `cue` (`silence_avant_cue`).
-            if anneau is not None and c_prog is not None and (frame - frame_prog0) % L == 0:
-                fermee, _ouvre = bornes_de_bloc(programme, c_prog)
-                if fermee is not None:
-                    anneau.mesure_finie()
-                if silence_avant_cue(programme, c_prog):
-                    anneau.mesure_commence()
+            if (phase_retour and geste == "les_deux"
+                    and bornes_de_bloc(programme, c_prog)[0] is not None):
+                # Un bloc se FERME ici : son `block_end` part, et la phase de retour commence.
+                anneau.mesure_finie()
+                retour_k0, retour_f0, retour_montre0 = k, frame, None
+                geste = "fermer"
+            i_cible = None if c_prog is None or retour_k0 is not None else programme[c_prog][2]
         elif not libre and frame % (L * cycles_par_cible) == 0:
             i_cible = tirage_cible(rng, len(plan), i_cible)
         draw(frame, i_cible)
@@ -914,9 +960,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                 # ⚠️ APRÈS le marqueur de cycle, jamais avant : ce marqueur-là ferme le cycle
                 # PRÉCÉDENT, et le `cue` qui le suit ne doit valoir que pour les SUIVANTS. Inversé,
                 # chaque bloc entrerait dans le jeu d'entraînement avec une époque prise pendant
-                # que le regard se déplaçait encore.
-                if c_prog is not None:
-                    annonce_bloc(c_prog, ts)
+                # que le regard se déplaçait encore. Pendant une phase de retour : rien (`geste`).
+                if geste is not None:
+                    annonce_bloc(c_prog, ts, geste)
             elif not libre and frame % (L * cycles_par_cible) == 0:
                 # ⚠️ DEUX horodatages, et le second est celui qui compte pour un dépouillement :
                 # `compter à partir de` = `t` + la transition. Avant lui, chaque `decoded_cvep`
@@ -971,7 +1017,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
         # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
         # dans la liste de la console, et donnerait ensuite des corrélations plausibles et fausses.
-        faits = 0 if frame_prog0 is None else max(0, (frame - frame_prog0) // L)
+        faits = 0 if frame_prog0 is None else max(0, c_prog if retour_k0 is not None
+                                                  else (frame - frame_prog0) // L - retenus)
         print(f"[cvep-stim] ⚠️ {'test' if tester else 'entraînement'} INTERROMPU à "
               f"{faits}/{len(programme or [])} cycles : AUCUN « calib_end » envoyé, donc "
               f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
@@ -1858,27 +1905,50 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     fichier qui lisent l'écran — la phase à zéro frame près, la consigne cerclée — restent vrais
     anneau affiché, que l'anneau ne recouvre aucun pixel non-fond, et que la lecture vient APRÈS
     le flip et le marqueur de son image. Revues D-I1 (extinction avant le settle lu), C-I3 (−1)
-    et croix de repos (`status` factice) en plus."""
+    et croix de repos (`status` factice) en plus. Et la PHASE DE RETOUR du test (2026-10-02) :
+    jamais l'anneau et le cercle ensemble, chaque décision montrée seule `RETOUR_AFFICHE_S`, une
+    absence close à l'attente, l'anneau à `retour.rayon_anneau` — lu dans les pixels, à DEUX
+    tailles d'écran."""
     import pygame
     import pylsl
 
+    from core.modes.cvep_calib import REFRESH_REFERENCE_HZ
+    from core.modes.cvep_test import RETOUR_CYCLES_PAR_BLOC
     from stimulus import retour as rt
 
-    spots = positions_cibles(plan, TAILLE_FENETRE)
-    centres = [(x, y) for x, y, _r in spots]
-    rayon = rayon_anneau(spots[0][2])
-    milieu = (TAILLE_FENETRE[0] // 2, TAILLE_FENETRE[1] // 2)
-    sondes = [point_de_sonde(x, y, r) for x, y, r in spots]
-    sondes_cercle = [point_de_sonde_cercle(x, y, r) for x, y, r in spots]
-    trace = []            # ("dessin",) ("flip", état, consigne, anneaux, croix) ("push", évén.) …
+    geo = {}
+
+    def geometrie(taille):
+        """Ce que les sondes lisent à cette taille d'écran (la fenêtre la recalcule de même)."""
+        spots_ = positions_cibles(plan, taille)
+        geo.update(spots=spots_, centres=[(x, y) for x, y, _r in spots_],
+                   rayon=rt.rayon_anneau(spots_[0][2]), milieu=(taille[0] // 2, taille[1] // 2),
+                   sondes=[point_de_sonde(x, y, r) for x, y, r in spots_],
+                   sondes_cercle=[point_de_sonde_cercle(x, y, r) for x, y, r in spots_])
+
+    def rayon_lu(s, anneaux):
+        """Le rayon EXTÉRIEUR de l'anneau, lu dans les PIXELS sur l'horizontale de son centre :
+        pygame en couvre 2 × rayon pixels, de x − rayon à x + rayon − 1 (mesuré)."""
+        if not anneaux:
+            return None
+        (x, y), r = geo["centres"][anneaux[0][0]], geo["spots"][0][2]
+        xs = [px for px in range(max(0, x - 3 * r), min(s.get_width(), x + 3 * r))
+              if tuple(s.get_at((px, y)))[:3] == rt.COULEUR_DECODEE]
+        return (max(xs) - min(xs) + 1) / 2.0 if xs else None
+
+    geometrie(TAILLE_FENETRE)
+    spots = geo["spots"]
+    trace = []   # ("dessin",) ("flip", état, consigne, anneaux, croix, rayon) ("push", évén.) …
     source = [None]
     vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
 
     def flip(*a, **k):
         r = vrai_flip(*a, **k)
         s = pygame.display.get_surface()
-        trace.append(("flip", _etat_ecran(pygame, sondes), _consigne_ecran(pygame, sondes_cercle),
-                      rt.anneaux_a_l_ecran(s, centres, rayon), rt.croix_a_l_ecran(s, milieu, CROIX)))
+        anneaux = rt.anneaux_a_l_ecran(s, geo["centres"], geo["rayon"])
+        trace.append(("flip", _etat_ecran(pygame, geo["sondes"]),
+                      _consigne_ecran(pygame, geo["sondes_cercle"]), anneaux,
+                      rt.croix_a_l_ecran(s, geo["milieu"], CROIX), rayon_lu(s, anneaux)))
         return r
 
     def push(self, *a, **k):
@@ -1890,22 +1960,40 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
 
     commun = dict(windowed=True, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
                   attente_consommateur_s=0.0, retour=True)
-    # 6 blocs d'un cycle, settle du dépôt : la décision (10 lectures après `block_end`) tombe dans
-    # le 1er cycle de settle, le seul où l'anneau vit ; « tard », 2 lectures après le `cycle` où il
-    # s'éteint.
-    moteur = rt.MoteurFactice(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
-                              depart="block_end", ouverture="cycle", delai=10, trace=trace)
+    # 6 blocs d'un cycle, settle du dépôt. Chaque décision paraît 10 images après son `block_end`,
+    # dans la phase de retour ; « tard » paraît APRÈS l'attente mais AVANT le bord de cycle qui
+    # clôt la phase : le seul moment où une décision trop tardive pourrait encore s'afficher.
+    hz_t = 240.0
+    attente_t = en_images(rt.ATTENTE_DECISION_S, hz_t, au_plus=True)
+    tard_a = attente_t + (L - attente_t % L) // 2
+
+    class _MoteurRetour(rt.MoteurFactice):
+        def marqueur(self, m):
+            super().marqueur(m)
+            self._dues += [("lectures", self.lectures + tard_a, i) for i in self._tardives]
+            self._tardives = []
+
+    moteur = _MoteurRetour(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
+                           depart="block_end", ouverture="cycle", delai=10, trace=trace)
+    # Un PLAFOND, pour qu'une phase qui ne finirait jamais rougisse au lieu de bloquer le smoke :
+    # chaque bloc avec sa phase la plus longue (rien reçu), plus le cycle de garde.
+    plafond_t = (6 * (CVEP_CAL_SETTLE_CYCLES + 1 + cycles_de_retour(L, hz_t)) + 1) * L
     # Le mode republie ~5 Hz : la cible 5 revient toutes les 30 images, sous `PERIME_S`.
     script_libre = {10: 3, 30: -1, 40: -1, 50: 5, 80: 5, 110: 5, 140: 5, 170: 5}
     statut = rt.StatutScripte({1: "warmup", 20: "decoding", 100: "baseline", 120: "decoding"})
+    # (d) à une SECONDE taille : à 1000×700 (r = 52), l'ancienne règle de cette fenêtre (1,35 × r)
+    # et `retour.rayon_anneau` tombent sur le MÊME pixel (70) — une seule taille ne verrait pas
+    # un retour à l'ancienne règle. À 800×560 (r = 42) : 56 contre 60.
+    taille_2 = (800, 560)
+    module, taille_avant = sys.modules[__name__], TAILLE_FENETRE
     pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
     try:
         with rt.Instrumentation(trace) as garde_test:
             source[0] = moteur
             journal_t = []
-            fait_t = run(refresh=240.0, calibrer=True, tester=True, cycles_calib=1,
+            fait_t = run(refresh=hz_t, calibrer=True, tester=True, cycles_calib=1,
                          settle=CVEP_CAL_SETTLE_CYCLES, seed=3, journal=journal_t,
-                         source_retour=moteur, **commun)
+                         source_retour=moteur, max_frames=plafond_t, **commun)
             trace_t = list(trace)
             trace.clear()
         with rt.Instrumentation(trace) as garde_libre:
@@ -1914,8 +2002,18 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
             fait_l = run(refresh=120.0, libre=True, max_frames=3 * L, seed=3, journal=journal_l,
                          source_retour=source[0], source_statut=statut, **commun)
             trace_l = list(trace)
+            trace.clear()
+        module.TAILLE_FENETRE = taille_2       # `run` lit la taille de `--windowed` ici
+        geometrie(taille_2)
+        with rt.Instrumentation(trace) as garde_2:
+            source[0] = rt.SourceScriptee({5: 2}, trace=trace)
+            run(refresh=120.0, libre=True, max_frames=40, seed=3, source_retour=source[0],
+                source_statut=rt.StatutScripte({1: "decoding"}), **commun)
+            trace_2, spots_2 = list(trace), geo["spots"]
     finally:
         pygame.display.flip, pylsl.StreamOutlet.push_sample = vrai_flip, vrai_push
+        module.TAILLE_FENETRE = taille_avant
+        geometrie(TAILLE_FENETRE)
 
     def images(tr):
         return [e for e in tr if e[0] == "flip"]
@@ -1944,7 +2042,7 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
         f"[C8] l'anneau VERT entoure la cible DÉCIDÉE, qu'elle soit la cible cerclée ou une autre, "
-        f"rien sur −1 ni pour une décision arrivée après son extinction — lu dans les PIXELS "
+        f"rien sur −1 ni pour une décision arrivée après l'attente — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
     vus_justes = [a for x, a in zip(moteur.attendues, vus) if a and x[1] == x[2]]
     vus_faux = [a for x, a in zip(moteur.attendues, vus) if a and x[1] != x[2]]
@@ -1955,13 +2053,83 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     chk(not pendant,
         f"[C8] AUCUN anneau pendant qu'un bloc s'enregistre, de l'image du `cue` à celle du "
         f"`block_end` — ni le précédent, ni la décision tardive ({len(pendant)} image(s) fautive(s))")
-    # 🔴 D-I1 : la décision SUIVANTE lit déjà le settle (cf. `silence_avant_cue`).
+    # 🔴 D-I1 : la décision SUIVANTE lit déjà le settle — la phase de retour finit AVANT lui.
     n_silence = (CVEP_DECISION_CYCLES + 1) * L
     avant = [i for c in cues for i in range(max(0, c - n_silence), c + 1) if anneaux_t[i]]
     chk(not avant and any(anneaux_t),
         f"[C8] aucun anneau dans les {CVEP_DECISION_CYCLES + 1} cycles ({n_silence} images) qui "
         f"précèdent chaque `cue` : la décision suivante lit ce settle-là "
         f"({len(avant)} image(s) fautive(s))")
+
+    # --- la PHASE DE RETOUR (2026-10-02) : « l'anneau vert et le cercle bleu suivant ensemble,
+    # c'est confusant ». Tout se lit dans les PIXELS : `e[2]` = le cercle, `e[3]` = l'anneau.
+    cercles_t = [e[2] for e in im_t]
+    ensemble = [i for i in range(len(im_t)) if anneaux_t[i] and cercles_t[i] is not None]
+    chk(not ensemble and any(anneaux_t) and any(c is not None for c in cercles_t),
+        f"[C8] (a) JAMAIS un anneau vert et un cercle bleu dans la même image "
+        f"({len(ensemble)} image(s) fautive(s), premières {ensemble[:3]})")
+    # Chaque phase : de l'image du `block_end` à la première image qui cercle la cible suivante.
+    bleus = [next((i for i in range(f + 1, len(im_t)) if cercles_t[i] is not None), None)
+             for f in fins]
+    affiche_t = en_images(rt.RETOUR_AFFICHE_S, hz_t)
+    montres = [sum(1 for i in range(f, b if b is not None else len(im_t)) if anneaux_t[i])
+               for f, b in zip(fins, bleus)]
+    a_montrer = [bool(rt.anneau_attendu(*x)) for x in moteur.attendues]
+    chk(all(n >= affiche_t - 1 for n, m in zip(montres, a_montrer) if m) and any(a_montrer),
+        f"[C8] (b) chaque décision est montrée SEULE au moins {rt.RETOUR_AFFICHE_S:g} s "
+        f"({affiche_t} images, à une près) AVANT le cercle bleu suivant (images montrées : "
+        f"{[n for n, m in zip(montres, a_montrer) if m]})")
+    duree = [None if b is None else b - f for f, b in zip(fins, bleus)]
+    sans = [d for d, m in zip(duree, a_montrer) if not m and d is not None]
+    borne = cycles_de_retour(L, hz_t) * L
+    chk(len(sans) == 2 and all(d <= borne for d in sans),
+        f"[C8] (c) un −1 ou une décision ABSENTE n'allongent pas la phase au-delà de "
+        f"{rt.ATTENTE_DECISION_S:g} s d'attente, arrondis au bord de cycle qui suit ({borne} "
+        f"images) — phases mesurées {sans}")
+    # La règle, en pur (`cycles_de_retour`) et en vrai (la fenêtre) : la MÊME, à l'image près —
+    # c'est elle que `cvep_test.RETOUR_CYCLES_PAR_BLOC` compte dans la durée annoncée.
+    regle = [cycles_de_retour(L, hz_t, None if q == "tard" else moteur.delai, valide=i >= 0) * L
+             for q, i, _v in moteur.attendues]
+    chk(duree[:-1] == regle[:-1],
+        f"[C8] chaque phase dure EXACTEMENT ce que dit `cycles_de_retour` : un nombre entier de "
+        f"cycles (mesurées {duree[:-1]}, règle {regle[:-1]} ; la dernière n'a pas de cible après)")
+    chk(RETOUR_CYCLES_PAR_BLOC == cycles_de_retour(L, REFRESH_REFERENCE_HZ, L),
+        f"…et la durée que le moteur ANNONCE compte la phase comme la fenêtre la joue : "
+        f"`cvep_test.RETOUR_CYCLES_PAR_BLOC` = {RETOUR_CYCLES_PAR_BLOC}, la fenêtre "
+        f"{cycles_de_retour(L, REFRESH_REFERENCE_HZ, L)} cycles à {REFRESH_REFERENCE_HZ:g} Hz pour "
+        f"une décision rendue dans le cycle qui suit le bloc")
+    # Le `cue` part TOUJOURS sur une frame 0 : juste après le `cycle` de son bord, phase comprise.
+    apres, depuis = [], []
+    for e in trace_t:
+        if e[0] == "flip":
+            depuis = []
+        elif e[0] == "push":
+            if e[1] == "cue":
+                apres.append(depuis[:1])
+            depuis.append(e[1])
+    chk(len(apres) == 6 and all(a == ["cycle"] for a in apres),
+        f"[C8] chaque `cue` part juste après le marqueur `cycle` de son bord : la phase dure des "
+        f"cycles ENTIERS, la phase du code ne bouge pas ({apres})")
+    # (d) Le RAYON, lu dans les pixels, aux deux tailles : celui de `retour.rayon_anneau`.
+    lus_t = {e[5] for e in im_t if e[5] is not None}
+    lus_2 = {e[5] for e in images(trace_2) if e[5] is not None}
+    r1, r2 = spots[0][2], spots_2[0][2]
+    chk(lus_t == {rt.rayon_anneau(r1)} and lus_2 == {rt.rayon_anneau(r2)}
+        and int(r2 * 1.35) != rt.rayon_anneau(r2),
+        f"[C8] (d) l'anneau est tracé au rayon de `retour.rayon_anneau` — la règle du P300 — lu "
+        f"dans les PIXELS : disque {r1} -> {sorted(lus_t)} ; disque {r2} -> {sorted(lus_2)}")
+    chk(garde_2.traces > 0 and garde_2.violations == 0,
+        f"[C8] …et à la seconde taille non plus, il ne recouvre aucun pixel non-fond "
+        f"({garde_2.violations} sur {garde_2.traces} tracés)")
+    # Ni disque ni sonde : l'anneau couvre [R − épaisseur, R[ ; le disque s'arrête à r, la sonde du
+    # cercle de consigne ([C7]) est à int(1,7 r) − 2 — aux tailles d'écran courantes aussi.
+    hors = [t for t in ((1000, 700), taille_2, (1280, 720), (1920, 1080), (2560, 1440))
+            for _x, _y, r in positions_cibles(plan, t)[:1]
+            if not (r < rt.rayon_anneau(r) - rt.EPAISSEUR_PX
+                    and point_de_sonde_cercle(0, 0, r)[0] >= rt.rayon_anneau(r))]
+    chk(not hors,
+        f"[C8] l'anneau ne touche ni le disque ni la SONDE du cercle de consigne, de 800×560 à "
+        f"2560×1440 (tailles fautives : {hors})")
 
     # Les deux sondes en pixels du fichier, rejouées ANNEAU AFFICHÉ.
     def phases(tr):
@@ -2085,7 +2253,8 @@ def _parse_args(argv):
                         "ce que lance « Tester librement » dans la console")
     p.add_argument("--retour", action="store_true",
                    help="entoure la cible que le moteur DÉCODE, lue sur le flux public "
-                        "decoded_cvep en tâche de fond. En test : vert si juste, rouge sinon")
+                        "decoded_cvep en tâche de fond. En test : après chaque bloc, la décision "
+                        "seule, puis la cible suivante")
     p.add_argument("--smoke", action="store_true",
                    help="test headless (CI) : la PHASE, la géométrie et la boucle réelle")
     return p.parse_args(argv)
