@@ -1,12 +1,20 @@
-"""Stimulus SSVEP — les flèches clignotantes, et le run GUIDÉ qui permet de le MESURER.
+"""Stimulus SSVEP — les disques clignotants, et le run GUIDÉ qui permet de le MESURER.
 
-⚠️ **TROIS flèches par défaut, quatre au maximum.** Ce fichier a annoncé « 4 flèches » jusqu'au
+⚠️ **TROIS cibles par défaut, quatre au maximum.** Ce fichier a annoncé « 4 flèches » jusqu'au
 2026-09-09, dans sa docstring, dans son `--help` et dans le briefing de la mesure, alors que
 `choose_frequencies` en rendait TROIS (AVANT, GAUCHE, DROITE). Le nombre vient du PLAN et de nulle
 part ailleurs : quelqu'un qui s'assoit 3,6 minutes devant cet écran ne doit pas y chercher une
-flèche qui n'existe pas. Depuis le 2026-09-21, `--freqs` décide de ce plan — donc le nombre de
-flèches est la LONGUEUR de la liste, entre 2 et 4. Quatre est la borne de la GÉOMÉTRIE (elle a
-quatre directions), pas celle du moteur, qui accepte jusqu'à 8 cibles.
+cible qui n'existe pas. Depuis le 2026-09-21, `--freqs` décide de ce plan — donc le nombre de
+cibles est la LONGUEUR de la liste, entre 2 et 4. Quatre est la borne de la GÉOMÉTRIE (elle a
+quatre places), pas celle du moteur, qui accepte jusqu'à 8 cibles.
+
+**Des DISQUES, plus des flèches** (2026-10-02, demandé au QA : « des cibles rondes, comme pour les
+autres modes »). Mêmes places qu'avant, même clignotement image par image. Le disque est un peu
+PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une cible SSVEP plus petite donne une
+réponse plus faible, et `--smoke` compte sa surface dans les pixels. La consigne est un cercle
+BLEU à `CUE_MARGE_PX` du bord, comme au P300 ; l'anneau de retour suit la règle commune
+(`stimulus/retour.py:rayon_anneau`). Les flèches ne vivent plus que dans `archive/ui.py`, pour les
+écrans archivés.
 
 🔴 **`--freqs`, et pourquoi il a manqué.** Jusqu'au 2026-09-21 cette fenêtre affichait le jeu du
 DÉPÔT quoi qu'on règle dans la console : un étudiant qui pose 12 · 15 · 20 voyait clignoter
@@ -32,7 +40,7 @@ Pourquoi « comptage de frames » et pas un timer ?
   Un stimulus SSVEP doit clignoter à une fréquence STABLE. Si on se base sur l'horloge,
   on rate/duplique des frames et la fréquence jitter -> le pic SSVEP s'étale et devient
   indétectable. On impose donc que chaque fréquence soit un DIVISEUR ENTIER du
-  rafraîchissement écran : à 60 Hz, une flèche « ON k frames / OFF k frames » clignote
+  rafraîchissement écran : à 60 Hz, une cible « ON k frames / OFF k frames » clignote
   exactement à 60/(2k) Hz. C'est à la fois « affichable » (pas de jitter) et
   « détectable » (dans la bande 8-15 Hz où le SSVEP occipital répond le mieux).
 
@@ -73,7 +81,7 @@ taux complet, et c'est le chiffre entier qu'on irait ensuite citer.
 --- Les frames SAUTÉES ---------------------------------------------------------------------------
 
 ⚠️ **Une image figée n'est pas un ralentissement : c'est une cible qui CESSE de clignoter.** Pendant
-la durée d'une frame sautée, la flèche n'émet plus à la fréquence annoncée, donc la réponse SSVEP
+la durée d'une frame sautée, la cible n'émet plus à la fréquence annoncée, donc la réponse SSVEP
 cherchée n'existe plus — et le moteur, lui, continue de corréler. Observé en séance le 2026-09-21
 (« périodiquement, l'image se figeait ») : rien n'a levé, rien n'a compté, et le verdict de la
 mesure n'en savait rien. Le compteur `sautees` est celui de `stimulus/cvep.py`, à l'identique :
@@ -83,19 +91,19 @@ AFFICHÉ, jamais corrigé**. Il tourne dans les DEUX modes, s'affiche au HUD en 
 
 --- Le RETOUR (`--retour`) ------------------------------------------------------------------------
 
-La fenêtre lit `decoded_ssvep` comme l'application d'un étudiant, en tâche de fond, et entoure la
-flèche décodée d'un anneau (`stimulus/retour.py` porte la règle). L'anneau passe AU-DELÀ de la
-pointe et de la queue de la flèche, liseré bleu compris (`rayon_anneau`) : il ne touche aucun pixel
-que les sondes de `--smoke` relisent. Il est VERT, en libre comme en `--guide` : il montre la
-flèche décodée, il ne juge pas. En libre (sans `--guide`) il suit la dernière décision. En
+La fenêtre lit `decoded_ssvep` comme l'application d'un étudiant, en tâche de fond, et entoure le
+disque décodé d'un anneau (`stimulus/retour.py` porte la règle, et sa TAILLE : `rayon_anneau`, la
+même qu'au P300 et au c-VEP). L'anneau passe au-delà du cercle de consigne, dans le noir : il ne
+touche aucun pixel que les sondes de `--smoke` relisent. Il est VERT, en libre comme en `--guide` :
+il montre la cible décodée, il ne juge pas. En libre (sans `--guide`) il suit la dernière décision. En
 `--guide`, la décision d'un essai arrive pendant le retour à la croix, et l'anneau s'éteint au
 début de la CONSIGNE suivante — soit
 `SSVEP_GUIDE_CUE_S` avant la fixation, dont le moteur ne lit que la fin. L'essai se ferme
 `MARGE_DECISION_S` AVANT la fin de la fixation : le moteur décide à la fin exacte, et une décision
 arrivée avant la fermeture serait perdue (revue C-M4). Sans `--guide`, cette fenêtre n'affiche
-déjà que ses flèches : elle n'a pas besoin d'un `--libre` — mais tant que le moteur chauffe ou
+déjà que ses cibles : elle n'a pas besoin d'un `--libre` — mais tant que le moteur chauffe ou
 mesure son plancher (son flux `status`), elle montre la croix et l'écran de REPOS du guidé : le
-plancher se mesure AVEC le clignotement, sans fixer aucune flèche.
+plancher se mesure AVEC le clignotement, sans fixer aucune cible.
 
 Lancer :
     python src/stimulus/ssvep.py                 # plein écran, ESC pour quitter
@@ -119,7 +127,6 @@ a refusé de s'ouvrir » et « elle s'est arrêtée en route » ne doivent pas s
 
 import argparse
 import json
-import math
 import os
 import sys
 import time
@@ -139,7 +146,7 @@ from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa:
 
 BG = (0, 0, 0)          # fond noir -> contraste ON/OFF maximal (meilleur SSVEP)
 ON_COLOR = (255, 255, 255)
-OUTLINE = (55, 55, 70)  # contour statique : garde le repère spatial quand la flèche est OFF
+OUTLINE = (55, 55, 70)  # contour statique : garde le repère spatial quand le disque est OFF
 LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 
@@ -148,15 +155,18 @@ FG = (225, 225, 235)
 DIM = (110, 110, 130)
 # ⚠️ La couleur de DÉSIGNATION, et elle n'est utilisée NULLE PART AILLEURS dans ce fichier — ni
 # pour un titre, ni pour un sous-titre, ni pour un décor. C'est ce qui permet à `--smoke` de LIRE
-# dans les pixels quelle cible l'écran désigne (cf. `_cible_designee_a_l_ecran`) : une seconde
-# utilisation de ce bleu déplacerait le centroïde et le test chercherait la mauvaise flèche.
+# dans les pixels quelle cible l'écran désigne (cf. `_cible_designee_a_l_ecran`) : un second
+# cercle de ce bleu serait pris pour une seconde désignation.
 CUE = (60, 130, 255)
-CUE_EPAISSEUR_PX = 8    # épaisseur du liseré de désignation, en pixels
-
-# L'anneau de RETOUR (`--retour`). La flèche s'étend jusqu'à 1,05 × sa demi-taille (les coins de sa
-# queue : √(0,32² + 1²)), et le liseré bleu déborde d'une demi-épaisseur : l'anneau passe 8 px
-# au-delà, dans le noir. `--smoke` le prouve pixel par pixel (aucun pixel non-fond sous l'anneau).
-ANNEAU_MARGE_PX = 8
+# Le cercle de consigne, comme au P300 : son bord extérieur à `CUE_MARGE_PX` du disque, tracé vers
+# l'intérieur sur `CUE_EPAISSEUR_PX` — il reste 4 px de noir entre les deux, et le disque garde
+# toute sa surface clignotante (l'ancien liseré, posé SUR le bord de la flèche, en mangeait).
+# L'anneau de retour passe au-delà (`retour.rayon_anneau`) et ne coexiste jamais avec lui.
+CUE_MARGE_PX = 8
+CUE_EPAISSEUR_PX = 4
+# L'étiquette « NOM  f Hz » sous chaque disque : ce nombre de px SOUS l'anneau de retour, jamais
+# dessous — `--smoke` compte les pixels non-fond que l'anneau couvrirait.
+ETIQUETTE_ECART_PX = 4
 
 # En `--guide --retour`, l'essai se FERME ce délai AVANT la fin de la fixation : le moteur décide
 # à la fin EXACTE (`cue` + `SSVEP_GUIDE_FIX_S`), jamais avant — fermer À la fin était une course à
@@ -165,19 +175,26 @@ MARGE_DECISION_S = 0.25
 
 # Les écrans de REPOS : du guidé, et de l'essai libre tant que le moteur se repose. UNE écriture.
 TITRE_CHAUFFE = "Le casque se stabilise"
-SOUS_CHAUFFE = "installe-toi, ne fixe aucune flèche — la mesure commence après"
+SOUS_CHAUFFE = "installe-toi, ne fixe aucune cible — la mesure commence après"
 TITRE_REPOS = "REPOS"
-SOUS_REPOS = "fixe la CROIX centrale, ne suis AUCUNE flèche"
+SOUS_REPOS = "fixe la CROIX centrale, ne suis AUCUNE cible"
 
 # La fenêtre de dev (`--windowed`) et l'écran factice de `--smoke`. Nommée plutôt qu'écrite deux
 # fois : `--smoke` relit des PIXELS à des coordonnées calculées sur cette taille, et deux valeurs
-# feraient regarder le test à côté des flèches — sans rien casser, juste en ne prouvant rien.
+# feraient regarder le test à côté des cibles — sans rien casser, juste en ne prouvant rien.
 TAILLE_FENETRE = (1000, 700)
 
-# La géométrie, en proportion du plus petit côté. Une seule écriture : `positions_cibles` la sert
-# au rendu ET à `--smoke`.
-DIST_RATIO = 0.30       # éloignement des flèches par rapport au centre
-TAILLE_RATIO = 0.13     # demi-taille d'une flèche
+# La géométrie, en proportion du plus petit côté (l'« empan »). Une seule écriture : `geometrie`
+# la sert au rendu ET à `--smoke`.
+DIST_RATIO = 0.30       # éloignement des cibles par rapport au centre
+# Le RAYON d'un disque. 0,09 et pas le 0,075 du P300 et du c-VEP : le disque remplace une flèche de
+# demi-taille 0,13, dont la surface clignotante valait 1,379 × 0,13² ≈ 0,0233 empan² (11 758 px
+# à 1000×700, 27 485 en 1920×1080). Un disque de 0,075 n'en aurait gardé que 72 % — et une cible
+# SSVEP plus petite donne une réponse plus faible. À 0,09 : π × 0,09² ≈ 0,0254 empan² (12 384 px,
+# 29 432 px), soit +5 à +7 %.
+RAYON_RATIO = 0.09
+# Le plancher que `--smoke` compte dans les pixels : la surface de la flèche d'avant.
+SURFACE_MIN_RATIO = 0.0233
 
 # Les QUATRE places de la géométrie, DANS L'ORDRE où `--freqs` les remplit. Les trois premières
 # sont celles du dépôt (`core.config.COMMANDS`), LUES et non recopiées : donner à `--freqs` le trio
@@ -188,7 +205,7 @@ TAILLE_RATIO = 0.13     # demi-taille d'une flèche
 # quatre cibles tiennent à ce rafraîchissement, hors du pic alpha et séparables, est le métier du
 # moteur (`core.config.propose_frequencies`), pas de cet écran. Elle est là parce que la géométrie
 # a toujours eu quatre directions et n'en montrait que trois — un étudiant qui règle quatre cibles
-# dans la console a droit à quatre flèches, pas à un refus d'affichage.
+# dans la console a droit à quatre disques, pas à un refus d'affichage.
 EMPLACEMENTS = list(COMMANDS) + [{"name": "ARRIERE", "dir": "down", "jx": 0.0, "jy": -0.6}]
 
 # Une image qui met plus que ça à basculer est une frame SAUTÉE. 1,5 période : un demi-intervalle
@@ -224,43 +241,10 @@ def is_on(frame, frames_per_cycle):
     return (frame % frames_per_cycle) < (frames_per_cycle + 1) // 2
 
 
-# --- Géométrie des flèches ------------------------------------------------
-
-def _up_arrow_points(size):
-    """Points d'une flèche pointant vers le haut, centrée sur (0,0), coords écran (y bas)."""
-    h = size            # demi-hauteur totale
-    head_h = size * 0.9  # hauteur de la pointe
-    head_w = size * 0.75  # demi-largeur de la pointe
-    shaft_w = size * 0.32  # demi-largeur de la tige
-    top = -h
-    return [
-        (0.0, top),                 # pointe
-        (head_w, top + head_h),     # base droite de la pointe
-        (shaft_w, top + head_h),    # haut tige droite
-        (shaft_w, h),               # bas tige droite
-        (-shaft_w, h),              # bas tige gauche
-        (-shaft_w, top + head_h),   # haut tige gauche
-        (-head_w, top + head_h),    # base gauche de la pointe
-    ]
-
-
-_DIR_ANGLE = {"up": 0.0, "right": math.pi / 2, "down": math.pi, "left": -math.pi / 2}
-
-
-def arrow_polygon(cx, cy, size, direction):
-    """Points absolus (liste de (x,y)) d'une flèche orientée, centrée en (cx, cy)."""
-    ang = _DIR_ANGLE[direction]
-    c, s = math.cos(ang), math.sin(ang)
-    pts = []
-    for x, y in _up_arrow_points(size):
-        rx = x * c - y * s
-        ry = x * s + y * c
-        pts.append((cx + rx, cy + ry))
-    return pts
-
+# --- Géométrie des cibles -------------------------------------------------
 
 def positions_cibles(plan, size, dist_ratio=DIST_RATIO):
-    """Les centres des flèches, DANS L'ORDRE DU PLAN — donc dans l'ordre des indices publiés.
+    """Les centres ENTIERS des disques, DANS L'ORDRE DU PLAN — donc dans l'ordre des indices publiés.
 
     ⚠️ **Dans l'ordre du plan, jamais indexée par direction.** L'indice qu'un `cue` publie, et que
     le moteur compare au rang de SA liste de fréquences, est un rang dans ce plan. Retrouver « la
@@ -268,21 +252,29 @@ def positions_cibles(plan, size, dist_ratio=DIST_RATIO):
     n'est vrai que par accident — et devient faux dès qu'un `--freqs` réordonne les cibles.
 
     Écrite UNE fois : elle sert au rendu et à `--smoke`, qui relit les pixels à ces points exacts.
-    Deux géométries et le test regarderait à côté des flèches — sans rien casser, juste en ne
-    prouvant plus rien. Même raison, même forme que `stimulus/cvep.py:positions_cibles`.
+    Deux géométries et le test regarderait à côté des cibles — sans rien casser, juste en ne
+    prouvant plus rien. Même raison, même forme que `stimulus/cvep.py:positions_cibles`. ENTIERS,
+    comme ceux du P300 : un cercle se trace et se relit au pixel près.
     """
     w, h = size
     cx, cy = w / 2.0, h / 2.0
     dist = min(w, h) * dist_ratio
     par_direction = {"up": (cx, cy - dist), "down": (cx, cy + dist),
                      "left": (cx - dist, cy), "right": (cx + dist, cy)}
-    return [par_direction[c["dir"]] for c in plan]
+    return [tuple(int(round(v)) for v in par_direction[c["dir"]]) for c in plan]
 
 
-def rayon_anneau(demi_taille):
-    """Le rayon de l'anneau de RETOUR autour d'une flèche de demi-taille `demi_taille`. Une
-    écriture : le rendu et `--smoke` (qui le relit dans les pixels) l'appellent tous les deux."""
-    return int(demi_taille * 1.05) + CUE_EPAISSEUR_PX + ANNEAU_MARGE_PX
+def geometrie(plan, size):
+    """`(positions, rayon, rayon_cue, rayon_retour)` : les centres des disques, leur rayon, celui du
+    cercle de consigne et celui de l'anneau de retour — ENTIERS, et calculés une seule fois.
+
+    Le rendu et `--smoke` l'appellent tous les deux : ce sont les rayons exacts auxquels les cercles
+    sont tracés, donc ceux auxquels le test les RELIT. L'anneau, lui, suit la règle COMMUNE aux
+    trois fenêtres (`retour.rayon_anneau`), et `--smoke` la rappelle de son côté au lieu de lire
+    `rayon_retour` ici : un écart local serait sinon d'accord avec lui-même."""
+    rayon = int(min(size) * RAYON_RATIO)
+    return (positions_cibles(plan, size), rayon, rayon + CUE_MARGE_PX,
+            _retour.rayon_anneau(rayon))
 
 
 # --- Les fréquences AFFICHÉES : celles du mode, ou rien ---------------------
@@ -407,7 +399,7 @@ def bilan_de_seance(frames, sautees, refresh):
     if frames and part > SEUIL_ALERTE_SAUTEES:
         avertissement = (
             f"⚠️ {part:.1%} des images ont été SAUTÉES (au-delà de "
-            f"{SEUIL_ALERTE_SAUTEES:.0%}) : pendant ce temps les flèches ne clignotaient PAS aux "
+            f"{SEUIL_ALERTE_SAUTEES:.0%}) : pendant ce temps les cibles ne clignotaient PAS aux "
             f"fréquences annoncées, et le moteur corrélait quand même. Ferme ce qui charge la "
             f"machine, reste en PLEIN ÉCRAN (c'est là qu'il y a un vsync), et REFAIS la mesure — "
             f"un taux d'émission pris sur un stimulus qui se fige mesure la machine, pas le "
@@ -478,7 +470,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         source_statut=None):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
 
-    `retour` (`--retour`) entoure la flèche décodée — et, sans `guide`, montre l'écran de repos
+    `retour` (`--retour`) entoure la cible décodée — et, sans `guide`, montre l'écran de repos
     tant que le moteur se repose. `source_retour` et `source_statut` n'existent que pour `--smoke`
     (des sources FACTICES à la place de `decoded_ssvep` et `status`, cf. `stimulus/retour.py`).
 
@@ -572,14 +564,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     w, h = size
     cx, cy = w / 2, h / 2
     span = min(w, h)
-    asize = span * TAILLE_RATIO  # demi-taille d'une flèche
     # Les positions des cibles DANS L'ORDRE DU PLAN — c'est-à-dire dans l'ordre des indices que
     # les marqueurs `cue` publient et que le moteur compare à ses fréquences. Tout ce qui suit est
     # indexé par ce RANG, jamais par direction : `--freqs` réordonne les cibles, et un
-    # dictionnaire par direction ferait alors décrire la cible 1 par la flèche d'une autre.
-    positions = positions_cibles(plan, size)
-    polys = [arrow_polygon(px, py, asize, c["dir"]) for (px, py), c in zip(positions, plan)]
-    rayon_retour = rayon_anneau(asize)
+    # dictionnaire par direction ferait alors décrire la cible 1 par le disque d'une autre.
+    positions, rayon, rayon_cue, rayon_retour = geometrie(plan, size)
     # Le RETOUR cherche `decoded_ssvep` depuis l'ouverture, dans son fil. Par essai en guidé (une
     # décision par fixation), continu en libre (le mode décide à ~5 Hz).
     anneau = Retour(source_dec, len(plan), par_essai=guide) if retour else None
@@ -635,22 +624,23 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
         Les deux modes avaient chacun leur boucle dans l'ancien découpage
         (`ssvep_stimulus.py` / `ssvep_guided.py`) et elles avaient déjà divergé sur la taille des
-        flèches (0,13 contre 0,12 de l'empan). Un stimulus qui n'est pas celui du décodage rend le
-        taux mesuré inutilisable pour prédire le décodage.
+        flèches de l'époque (0,13 contre 0,12 de l'empan). Un stimulus qui n'est pas celui du
+        décodage rend le taux mesuré inutilisable pour prédire le décodage.
         """
         win.fill(BG)
         for i, c in enumerate(plan):
-            pygame.draw.polygon(win, OUTLINE, polys[i], 2)  # repère statique
-            if is_on(frame, c["frames_per_cycle"]):
-                pygame.draw.polygon(win, ON_COLOR, polys[i])  # phase ON
-            # étiquette statique (n'interfère pas avec le clignotement)
-            label = font.render(f"{c['name']}  {c['actual_hz']:.2f} Hz", True, LABEL)
             px, py = positions[i]
-            win.blit(label, label.get_rect(center=(px, py + asize * 1.35)))
+            pygame.draw.circle(win, OUTLINE, (px, py), rayon, 2)  # repère statique
+            if is_on(frame, c["frames_per_cycle"]):
+                pygame.draw.circle(win, ON_COLOR, (px, py), rayon)  # phase ON
+            # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
+            label = font.render(f"{c['name']}  {c['actual_hz']:.2f} Hz", True, LABEL)
+            win.blit(label, label.get_rect(
+                midtop=(px, py + rayon_retour + ETIQUETTE_ECART_PX)))
         if designee is not None:
-            pygame.draw.polygon(win, CUE, polys[designee], CUE_EPAISSEUR_PX)
-        # L'anneau de RETOUR : après les flèches et la désignation, AVANT le texte — au-delà de la
-        # flèche et de son liseré (cf. `rayon_anneau`).
+            pygame.draw.circle(win, CUE, positions[designee], rayon_cue, CUE_EPAISSEUR_PX)
+        # L'anneau de RETOUR : après les disques et la consigne, AVANT le texte — au-delà du cercle
+        # de consigne, dans le noir (cf. `retour.rayon_anneau`).
         if anneau is not None:
             anneau.dessiner(pygame, win, positions, rayon_retour)
         if croix:
@@ -661,7 +651,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         if sous:
             s = hud_font.render(sous, True, DIM)
             win.blit(s, s.get_rect(center=(int(cx), int(h * 0.10) + big_font.get_height())))
-        # ⚠️ Le HUD, EN DERNIER et dans le coin haut-gauche, où il ne recouvre aucune flèche : ce
+        # ⚠️ Le HUD, EN DERNIER et dans le coin haut-gauche, où il ne recouvre aucune cible : ce
         # qu'on ajoute par-dessus un stimulus change ce que l'œil reçoit ET ce que les sondes en
         # pixels de `--smoke` relisent. Il est DANS ce dessin partagé, donc le mode guidé l'a
         # aussi — il n'affichait rien du tout jusqu'au 2026-09-21, pas même le FPS, alors que
@@ -737,9 +727,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     seance_complete = False
     try:
         if not guide:
-            # --- décodage libre : les flèches du plan clignotent, rien d'autre ----------------
+            # --- décodage libre : les disques du plan clignotent, rien d'autre ---------------
             # …sauf, en essai libre, tant que le MOTEUR se repose : l'écran de repos du guidé,
-            # flèches clignotantes — le plancher se mesure dans ces conditions (cf. `_guide`).
+            # disques clignotants — le plancher se mesure dans ces conditions (cf. `_guide`).
             while running:
                 poll()
                 if repos is not None and repos.en_repos:
@@ -844,7 +834,7 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         if anneau is not None:
             fermer = (min(MARGE_DECISION_S, fix_s / 2.0),
                       anneau.mesure_finie)
-        if not phase(fix_s, designee=cible, titre=noms[cible], sous="fixe la flèche entourée",
+        if not phase(fix_s, designee=cible, titre=noms[cible], sous="fixe la cible entourée",
                      marqueur={"mode": "ssvep", "event": "cue", "target": int(cible),
                                "freq_hz": freqs[cible]},
                      sonde=True, avant_la_fin=fermer):
@@ -870,19 +860,41 @@ def _interrompu(faits, total):
 
 # --- --smoke : le rendu libre, PUIS le run guidé sur un écran factice ------
 
-def _cible_designee_a_l_ecran(surface, positions):
-    """LA cible que l'écran DÉSIGNE, lue dans les PIXELS. -1 si aucune.
+def _rayon_lu(surface, centre, couleur, r_max):
+    """Le rayon d'un cercle de `couleur` EXACTE autour de `centre`, lu dans les PIXELS ; None si
+    aucun pixel de cette couleur à moins de `r_max`.
+
+    On part de `r_max` vers le centre, à GAUCHE et AU-DESSUS, et on garde le pixel le plus éloigné :
+    `pygame.draw.circle` atteint exactement `rayon` de ces deux côtés (un côté de moins à droite et
+    en bas — mesuré, et revérifié en précondition par `--smoke`). Deux axes, parce qu'un texte posé
+    plus tard peut masquer l'un ; il ne peut pas AJOUTER un pixel de cette couleur (`CUE` et le vert
+    de l'anneau n'existent nulle part ailleurs). La valeur rendue est donc le rayon TRACÉ, au pixel
+    près : c'est elle qui fait rougir un cercle tracé à un autre rayon que la règle."""
+    largeur, hauteur = surface.get_width(), surface.get_height()
+    x, y = int(centre[0]), int(centre[1])
+    vus = []
+    for dx, dy in ((-1, 0), (0, -1)):
+        for d in range(int(r_max), -1, -1):
+            px, py = x + dx * d, y + dy * d
+            if (0 <= px < largeur and 0 <= py < hauteur
+                    and tuple(surface.get_at((px, py)))[:3] == tuple(couleur)):
+                vus.append(d)
+                break
+    return max(vus) if vus else None
+
+
+def _cible_designee_a_l_ecran(surface, positions, rayon_cue):
+    """LA cible que l'écran DÉSIGNE, lue dans les PIXELS. -1 si aucune, **-2 si la désignation est
+    FAUTIVE** : plusieurs disques cerclés, ou un cercle à un autre rayon que `rayon_cue`.
 
     ⚠️ C'est le point de ce garde-fou : on ne demande pas à l'émetteur quelle cible il croit
     désigner — il ne peut que se donner raison. On regarde l'image. Même famille de test que la
     sonde de `stimulus/p300.py` (qui relit la cible cerclée) et celle de `stimulus/cvep.py` (qui
     relit la phase du code).
 
-    On cherche la couleur `CUE` EXACTE — `pygame.draw.polygon` ne lisse pas, donc elle se retrouve
-    telle quelle — et on prend le centroïde des pixels trouvés, puis la position la PLUS PROCHE.
-    Un liseré polygonal n'a pas de point d'échantillonnage évident comme un cercle ; le centroïde
-    en a un, et il est robuste au fait qu'une partie du liseré soit recouverte par la flèche
-    allumée.
+    Autour de chaque disque, on cherche le cercle `CUE` EXACT (`draw.circle` ne lisse pas) jusqu'à
+    deux fois son rayon — moins que la distance au disque voisin ou à la croix — et on exige son
+    rayon au pixel près (`_rayon_lu`).
 
     ⚠️ **Ce que cette sonde n'attrape PAS, et il faut le savoir avant de s'y fier** : remonter le
     `emet` AU-DESSUS du `flip`. Sous le pilote logiciel à tampon UNIQUE (`SDL_VIDEODRIVER=dummy`,
@@ -894,26 +906,23 @@ def _cible_designee_a_l_ecran(surface, positions):
     pixel : elle compte les `flip` ENTRE deux marqueurs. Aucun pixel ne pouvait répondre à la
     question, parce que la question n'est pas « quoi » mais « quand ».
     """
-    import pygame
-
-    arr = pygame.surfarray.array3d(surface)          # (largeur, hauteur, 3)
-    masque = ((arr[:, :, 0] == CUE[0]) & (arr[:, :, 1] == CUE[1]) & (arr[:, :, 2] == CUE[2]))
-    trouves = np.argwhere(masque)
-    if not len(trouves):
+    vus = [(i, r) for i, r in ((i, _rayon_lu(surface, p, CUE, 2 * rayon_cue))
+                               for i, p in enumerate(positions)) if r is not None]
+    if not vus:
         return -1
-    centre = trouves.mean(axis=0)                    # (x, y) — array3d est indexé (x, y)
-    distances = [(centre[0] - px) ** 2 + (centre[1] - py) ** 2 for px, py in positions]
-    return int(np.argmin(distances))
+    if len(vus) == 1 and vus[0][1] == rayon_cue:
+        return vus[0][0]
+    return -2
 
 
 def _etats_a_l_ecran(surface, positions):
     """Pour chaque cible et DANS L'ORDRE DU PLAN : True si elle est ALLUMÉE, lu dans les PIXELS.
 
-    Le point de lecture est le CENTRE de la flèche, qui tombe dans la tige : blanc plein quand la
-    phase est ON, fond noir sinon. Ni le contour (dessiné sur le bord), ni le liseré de
-    désignation (idem), ni l'étiquette (sous la flèche), ni le HUD (coin haut-gauche), ni le titre
-    du mode guidé (haut de l'écran) n'y passent — c'est ce qui fait de ce point une lecture de
-    l'ÉTAT du clignotement et de rien d'autre.
+    Le point de lecture est le CENTRE du disque : blanc plein quand la phase est ON, fond noir
+    sinon. Ni le contour (dessiné sur le bord), ni le cercle de consigne (au-delà), ni l'étiquette
+    (sous le disque), ni le HUD (coin haut-gauche), ni le titre du mode guidé (haut de l'écran) n'y
+    passent — c'est ce qui fait de ce point une lecture de l'ÉTAT du clignotement et de rien
+    d'autre.
     """
     import pygame
 
@@ -939,7 +948,11 @@ def _periode_observee(suite):
 
 def _rejouer_libre(freqs=None, cales=0):
     """Joue le décodage libre sur un écran factice. Rend (périodes LUES DANS LES PIXELS, bilan,
-    cales réellement posées, flips comptés).
+    cales réellement posées, flips comptés, pixels ALLUMÉS de chaque disque à la première image —
+    où tous le sont : `is_on(0, …)`).
+
+    ⚠️ Écrite le 2026-09-21 et jamais appelée jusqu'au 2026-10-02 : la fréquence AFFICHÉE n'était
+    relue nulle part. C'est la partie A bis du smoke.
 
     `cales` FABRIQUE des frames sautées, en retenant le flip assez longtemps pour dépasser
     `SEUIL_SAUT`. C'est le seul moyen d'exercer le compteur de bout en bout — sous `dummy` il n'y
@@ -954,14 +967,19 @@ def _rejouer_libre(freqs=None, cales=0):
 
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     # Là où regarder : la MÊME géométrie que le rendu, appelée et non recalculée ici.
-    positions = positions_cibles(plan_du_stimulus(60.0, freqs), TAILLE_FENETRE)
-    etats = []
+    positions, rayon, _c, _a = geometrie(plan_du_stimulus(60.0, freqs), TAILLE_FENETRE)
+    etats, allumes = [], []
     compteur = {"restantes": int(cales), "faites": 0, "attendre": 5}
     vrai_flip = pygame.display.flip
 
     def flip_espion(*a, **k):
         r = vrai_flip(*a, **k)
-        etats.append(_etats_a_l_ecran(pygame.display.get_surface(), positions))
+        surface = pygame.display.get_surface()
+        etats.append(_etats_a_l_ecran(surface, positions))
+        if not allumes:
+            pixels = pygame.surfarray.array3d(surface)
+            allumes.extend(int((pixels[x - rayon - 1:x + rayon + 2, y - rayon - 1:y + rayon + 2]
+                                == ON_COLOR).all(axis=2).sum()) for x, y in positions)
         if compteur["attendre"] > 0:
             compteur["attendre"] -= 1
         elif compteur["restantes"] > 0:
@@ -977,7 +995,8 @@ def _rejouer_libre(freqs=None, cales=0):
     finally:
         pygame.display.flip = vrai_flip
     suites = [list(s) for s in zip(*etats)] if etats else []
-    return [_periode_observee(s) for s in suites], bilan, compteur["faites"], len(etats)
+    return ([_periode_observee(s) for s in suites], bilan, compteur["faites"], len(etats),
+            allumes)
 
 
 def _smoke():
@@ -1000,6 +1019,29 @@ def _smoke():
     # --- A. le rendu libre, comme avant le déménagement ---------------------------
     chk(run(smoke=True, refresh=60.0),
         "le décodage libre rend 30 frames sans erreur (aucun écran requis)")
+
+    # --- A bis. CE QUI CLIGNOTE, lu dans les PIXELS ----------------------------------
+    # Chaque disque clignote à SA période, dans l'ordre de `--freqs` (réordonné exprès), et garde au
+    # moins la surface de la flèche qu'il remplace (`SURFACE_MIN_RATIO`) : une cible SSVEP plus
+    # petite donne une réponse plus faible. Rien n'est demandé au plan — on regarde l'écran.
+    import pygame
+
+    plan_lu = plan_du_stimulus(60.0, [20.0, 12.0, 15.0])
+    periodes, _b, _c, n_images, allumes = _rejouer_libre(freqs=[20.0, 12.0, 15.0])
+    chk(n_images == 30 and periodes == [c["frames_per_cycle"] for c in plan_lu],
+        f"chaque disque clignote à la période de SA fréquence, dans l'ordre de `--freqs`, lu dans "
+        f"les PIXELS ({periodes} pour {[c['frames_per_cycle'] for c in plan_lu]} images/cycle)")
+    plancher = SURFACE_MIN_RATIO * min(TAILLE_FENETRE) ** 2
+    chk(allumes and min(allumes) >= plancher,
+        f"…et chaque disque allumé couvre au moins la surface de la flèche d'avant "
+        f"({allumes} px allumés, plancher {plancher:.0f})")
+    # Précondition de `_rayon_lu` : ce qu'il lit sur un cercle tracé SEUL est son rayon exact.
+    toile = pygame.Surface((200, 200))
+    toile.fill(BG)
+    pygame.draw.circle(toile, CUE, (100, 100), 71, CUE_EPAISSEUR_PX)
+    chk(_rayon_lu(toile, (100, 100), CUE, 99) == 71,
+        f"(précondition) `_rayon_lu` relit le rayon EXACT d'un cercle tracé seul "
+        f"({_rayon_lu(toile, (100, 100), CUE, 99)} pour 71)")
 
     # --- B. l'ordre des essais, sur la fonction PURE -------------------------------
     # Vérifié séparément de la séance jouée : la fonction est appelée avec des effectifs qu'une
@@ -1041,8 +1083,9 @@ def _smoke():
     # fait mesurer la justesse du moteur contre une réponse fausse — sans lever la moindre
     # exception, et avec un taux parfaitement plausible.
     chk(designees and [c["target"] for c in cues] == designees,
-        f"la cible annoncée par `cue` est celle que l'écran a RÉELLEMENT DÉSIGNÉE, lue dans les "
-        f"PIXELS ({[c['target'] for c in cues]} annoncées contre {designees} affichées)")
+        f"la cible annoncée par `cue` est celle que l'écran a RÉELLEMENT DÉSIGNÉE — UN cercle bleu, "
+        f"au rayon exact, lu dans les PIXELS ({[c['target'] for c in cues]} annoncées contre "
+        f"{designees} affichées ; -2 = désignation fautive)")
 
     # L'ENTRELACEMENT, sur la séance JOUÉE : aucune cible deux fois de suite, et chacune vue
     # autant de fois. Un bloc contigu rendrait « quelle cible » inséparable de « quand », et la
@@ -1254,8 +1297,10 @@ def _smoke_retour(chk):
     from stimulus import retour as rt
 
     plan = plan_du_stimulus(60.0)
-    positions = positions_cibles(plan, TAILLE_FENETRE)
-    rayon = rayon_anneau(min(TAILLE_FENETRE) * TAILLE_RATIO)
+    positions, rayon_disque, rayon_cue, _local = geometrie(plan, TAILLE_FENETRE)
+    # ⚠️ La règle COMMUNE, rappelée ICI et pas lue dans `geometrie` : un rayon local qui
+    # s'écarterait de `retour.rayon_anneau` serait sinon d'accord avec lui-même.
+    rayon = rt.rayon_anneau(rayon_disque)
     milieu = (TAILLE_FENETRE[0] / 2, TAILLE_FENETRE[1] / 2)
     trace, source = [], [None]
     vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
@@ -1264,8 +1309,11 @@ def _smoke_retour(chk):
         r = vrai_flip(*a, **k)
         s = pygame.display.get_surface()
         trace.append(("flip", rt.anneaux_a_l_ecran(s, positions, rayon),
-                      _cible_designee_a_l_ecran(s, positions), rt.croix_a_l_ecran(s, milieu, DIM),
-                      _etats_a_l_ecran(s, positions)))
+                      _cible_designee_a_l_ecran(s, positions, rayon_cue),
+                      rt.croix_a_l_ecran(s, milieu, DIM), _etats_a_l_ecran(s, positions),
+                      # le rayon EXACT de tout anneau à l'écran, autour de n'importe quel disque
+                      {v for v in (_rayon_lu(s, p, rt.COULEUR_DECODEE, 2 * rayon)
+                                   for p in positions) if v is not None}))
         return r
 
     def push(self, *a, **k):
@@ -1327,7 +1375,7 @@ def _smoke_retour(chk):
     vus = [sorted({tuple(images[i][1]) for i in w} - {()}) for w in fenetres]
     attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[J] l'anneau VERT entoure la flèche DÉCIDÉE, désignée ou non, rien "
+        f"[J] l'anneau VERT entoure le disque DÉCIDÉ, désigné ou non, rien "
         f"sur −1 ni pour une décision arrivée pendant la fixation suivante — et une décision "
         f"publiée à la fin EXACTE de la fixation trouve son essai fermé — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
@@ -1344,12 +1392,12 @@ def _smoke_retour(chk):
         f"fixation, ni pour la décision tardive ({len(designe)} image(s) fautive(s))")
     relues = [(images[c][2], cible) for c, cible in zip(cues, cibles)]
     chk(len(relues) == 6 and all(a == b for a, b in relues),
-        f"[J] retour branché, la flèche DÉSIGNÉE se relit toujours dans les pixels au `cue` "
+        f"[J] retour branché, la cible DÉSIGNÉE se relit toujours dans les pixels au `cue` "
         f"({relues})")
     chk(garde_guide.traces > 10 and garde_guide.violations == 0 and garde_guide.croix > 10,
-        f"[J] ni l'anneau ni la croix ne recouvrent un pixel non-fond — ni flèche, ni liseré, ni "
-        f"étiquette : {garde_guide.violations} pixel(s) touché(s) sur {garde_guide.traces} + "
-        f"{garde_guide.croix} tracés")
+        f"[J] ni l'anneau ni la croix ne recouvrent un pixel non-fond — ni disque, ni cercle de "
+        f"consigne, ni étiquette : {garde_guide.violations} pixel(s) touché(s) sur "
+        f"{garde_guide.traces} + {garde_guide.croix} tracés")
     fautes = rt.ordre_de_lecture(trace_g, {"repos", "cue"})
     lectures = sum(1 for e in trace_g if e[0] == "lecture")
     chk(not fautes and lectures == len(images),
@@ -1366,15 +1414,21 @@ def _smoke_retour(chk):
         f"désaccord, {garde_libre.violations} pixel(s) touché(s))")
     croix_l = [e[3] for e in images_l]
     croix_attendue = [i < 10 or 22 <= i < 26 for i in range(len(images_l))]
-    # Pendant la croix, CHAQUE flèche continue de clignoter : le plancher se mesure dans les
-    # conditions visuelles du décodage, lu dans les pixels (allumée ET éteinte au moins une fois).
+    # Pendant la croix, CHAQUE disque continue de clignoter : le plancher se mesure dans les
+    # conditions visuelles du décodage, lu dans les pixels (allumé ET éteint au moins une fois).
     etats_croix = [e[4] for e, c in zip(images_l, croix_l) if c]
     clignotent = [len({etat[k] for etat in etats_croix}) == 2 for k in range(len(plan))]
     chk(croix_l == croix_attendue and garde_libre.croix > 0 and all(clignotent),
         f"[J] libre : la croix de repos tant que le `status` du moteur dit chauffe ou plancher, et "
-        f"de NOUVEAU quand il refait son repos — flèches toujours clignotantes (images "
+        f"de NOUVEAU quand il refait son repos — disques toujours clignotants (images "
         f"{[i for i, (a, b) in enumerate(zip(croix_l, croix_attendue)) if a != b][:5]} en "
         f"désaccord, clignotement sous la croix {clignotent})")
+    # La TAILLE de l'anneau : la règle commune aux trois fenêtres (demandé au QA le 2026-10-02,
+    # « uniformise »), au pixel près, en guidé comme en libre.
+    rayons_vus = set().union(*(e[5] for e in images + images_l))
+    chk(rayons_vus == {rayon},
+        f"[J] l'anneau est tracé au rayon de `retour.rayon_anneau` — la règle du P300 — lu au "
+        f"pixel près dans les PIXELS (rayons vus {sorted(rayons_vus)}, attendu {rayon})")
 
     nom = rt.flux_decode_de("ssvep")
     chk(nom == "EEG_API_Unicorn_decoded_ssvep",
@@ -1401,12 +1455,13 @@ def _rejouer_guide(per_target, seed, seconds=None, journal=None):
     """
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     journal, designees = ([] if journal is None else journal), []
+    _p, _r, rayon_cue, _a = geometrie(plan_du_stimulus(60.0), TAILLE_FENETRE)
     run(windowed=True, refresh=60.0, guide=True, per_target=per_target, seed=seed,
         seconds=seconds, stream=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
         attente_moteur_s=0.0, cue_s=_SMOKE_CUE_S, fix_s=_SMOKE_FIX_S, gap_s=_SMOKE_GAP_S,
         repos_s=_SMOKE_REPOS_S, journal=journal,
         sonde_ecran=lambda surface, positions: designees.append(
-            _cible_designee_a_l_ecran(surface, positions)))
+            _cible_designee_a_l_ecran(surface, positions, rayon_cue)))
     return journal, designees
 
 
@@ -1435,8 +1490,8 @@ def _parse_args(argv):
     p.add_argument("--seed", type=int, default=None,
                    help="graine du tirage de l'ordre des essais (rejouer le même ordre)")
     p.add_argument("--retour", action="store_true",
-                   help="entoure la flèche que le moteur DÉCODE, lue sur le flux public "
-                        "decoded_ssvep en tâche de fond. Avec --guide : vert si juste, rouge sinon")
+                   help="entoure en vert la cible que le moteur DÉCODE, lue sur le flux public "
+                        "decoded_ssvep en tâche de fond (avec --guide : après chaque essai)")
     p.add_argument("--smoke", action="store_true", help="test headless (SDL dummy), n'affiche rien")
     return p.parse_args(argv)
 

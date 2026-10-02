@@ -55,7 +55,8 @@ from core.config import (CH_NAMES, DATA_DIR, EXAMPLES_DIR, UDP_HOST, UDP_PORT,  
 from core.cca_decoder import CCADecoder  # noqa: E402
 from research.controller import SSVEPController  # noqa: E402
 from core.acquisition import UnicornAcquisition  # noqa: E402
-from stimulus.ssvep import arrow_polygon, is_on, measure_refresh  # noqa: E402
+from stimulus.ssvep import is_on, measure_refresh  # noqa: E402
+from ui import arrow_polygon  # noqa: E402 - les flèches vivent dans archive/ui.py depuis 2026-10-02
 
 BG = (0, 0, 0)
 ON_COLOR = (255, 255, 255)

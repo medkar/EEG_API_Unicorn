@@ -5,8 +5,9 @@ contentent de les emprunter ; `Abort` est l'exception que lève ESC. S'y ajouten
 d'affichage communes (texte centré, flèches, écrans de message) et la machinerie de pilotage
 partagée (`Live`, `_live_loop`, `_running`, `_vote`).
 
-⚠️ **Ce fichier n'est PAS un écran** : c'est la machinerie que les huit écrans archivés d'à côté
-importent. Il n'a rien à lancer, donc pas de `--smoke` à lui ; il est couvert par les leurs.
+⚠️ **Ce fichier n'est PAS un écran** : c'est la machinerie que les dix écrans archivés d'à côté
+importent (huit jusqu'au 2026-10-02 ; `live_ssvep.py` et `mi_pilot.py` y prennent depuis leurs
+flèches). Il n'a rien à lancer, donc pas de `--smoke` à lui ; il est couvert par les leurs.
 
 Il vivait comme `src/research/ui.py`, où il était le socle de l'appli pygame unifiée — supprimée
 le 2026-09-08. Il a déménagé ici le 2026-09-09, quand la règle « rien dans `src/research/` n'ouvre
@@ -34,7 +35,47 @@ from core.config import (CH_NAMES, EXAMPLES_DIR, UDP_HOST, UDP_PORT,  # noqa: E4
                     apply_invert, reference_lost, signal_verdict)
 
 sys.path.insert(0, EXAMPLES_DIR)  # l'actionneur d'exemple vit dans examples/, hors du paquet
-from stimulus.ssvep import arrow_polygon, measure_refresh  # noqa: E402
+from stimulus.ssvep import measure_refresh  # noqa: E402
+
+
+# --- Les FLÈCHES des écrans archivés -------------------------------------------------------------
+# Elles vivaient dans `src/stimulus/ssvep.py` jusqu'au 2026-10-02, quand la fenêtre SSVEP est passée
+# aux DISQUES (demandé au QA). Recopiées ici à l'identique : `live_ssvep.py`, `ssvep_pilot.py` (par
+# `App.arrows`) et `mi_pilot.py` (ses consignes gauche/droite) les dessinent encore, et un écran
+# archivé garde le stimulus sous lequel il a été validé.
+
+def _up_arrow_points(size):
+    """Points d'une flèche pointant vers le haut, centrée sur (0,0), coords écran (y bas)."""
+    h = size            # demi-hauteur totale
+    head_h = size * 0.9  # hauteur de la pointe
+    head_w = size * 0.75  # demi-largeur de la pointe
+    shaft_w = size * 0.32  # demi-largeur de la tige
+    top = -h
+    return [
+        (0.0, top),                 # pointe
+        (head_w, top + head_h),     # base droite de la pointe
+        (shaft_w, top + head_h),    # haut tige droite
+        (shaft_w, h),               # bas tige droite
+        (-shaft_w, h),              # bas tige gauche
+        (-shaft_w, top + head_h),   # haut tige gauche
+        (-head_w, top + head_h),    # base gauche de la pointe
+    ]
+
+
+_DIR_ANGLE = {"up": 0.0, "right": math.pi / 2, "down": math.pi, "left": -math.pi / 2}
+
+
+def arrow_polygon(cx, cy, size, direction):
+    """Points absolus (liste de (x,y)) d'une flèche orientée, centrée en (cx, cy)."""
+    ang = _DIR_ANGLE[direction]
+    c, s = math.cos(ang), math.sin(ang)
+    pts = []
+    for x, y in _up_arrow_points(size):
+        rx = x * c - y * s
+        ry = x * s + y * c
+        pts.append((cx + rx, cy + ry))
+    return pts
+
 
 BG = (10, 10, 16)
 FG = (225, 225, 235)
