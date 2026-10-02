@@ -1188,7 +1188,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"la coupure haute est bornée à [30, 60] Hz, bords compris — 29,9 Hz refusé (une "
             f"bande étroite fausse les seuils mesurés en 2-45 Hz) ({bords_haut})")
         aide_bande = cles_calib["bande_bas"].help
-        chk("2-45 Hz" in aide_bande and "« Tester »" in aide_bande
+        chk("2-45 Hz" in aide_bande and "« Tester sur une session »" in aide_bande
             and "Corrélation minimale" in aide_bande,
             f"…et l'aide dit que les seuils de « Régler » ont été mesurés en 2-45 Hz, et qu'une "
             f"autre bande se revérifie avec « Tester » ({aide_bande!r})")
