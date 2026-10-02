@@ -842,8 +842,8 @@ tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est 
 
 → recette 2.2
 
-✅ (2026-10-01) **Retour en direct** : après chaque essai, la flèche décodée est entourée, vert si
-juste, rouge sinon, rien si le moteur s'est abstenu. ⚠️ Le test SSVEP décide désormais essai par
+✅ (2026-10-01) **Retour en direct** : après chaque essai, la flèche décodée est entourée, magenta
+si juste, rouge sinon, rien si le moteur s'est abstenu. ⚠️ Le test SSVEP décide désormais essai par
 essai pendant la séance (pour publier en direct) — par le même chemin que le verdict.
 
 ### ☐ 2.3 — c-VEP : Entraîner puis Tester
@@ -861,9 +861,10 @@ Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 ⚠️ **Orange est le résultat attendu d'un système AU repère** : à 18 blocs, il ne sort vert qu'environ
 une fois sur quatre (calculé, pas mesuré). La réserve nomme le réglage à tourner.
 
-✅ (2026-10-01) **Retour en direct** : à la fin de chaque bloc, le disque décodé est entouré, vert
-si juste, rouge sinon. Note si l'anneau arrive **trop tard** (après le début du bloc suivant, il est
-perdu) et si le voir change ta façon de fixer.
+✅ (2026-10-01) **Retour en direct** : à la fin de chaque bloc, le disque décodé est entouré, magenta
+si juste, rouge sinon, pendant ~1 s seulement (il s'éteint avant les cycles que la décision
+suivante lit). Note si l'anneau arrive **trop tard** ou part trop vite pour être vu, et si le voir
+change ta façon de fixer.
 
 ❌ Échec : **MUET** ou « NON MESURÉ » sans autre explication. ⚠️ **C'est la panne caractéristique
 du c-VEP** : une phase fausse de quelques frames ne lève rien, les corrélations baissent juste assez
@@ -890,8 +891,8 @@ la porte s'ouvre dès **8/24** (p = 0,035) : si la réserve le dit, refais à 24
 briefing le dit (« Compter les éclairs de ta cible aide à rester attentif, mais ce n'est pas
 obligatoire »).
 
-✅ (2026-10-01) **Retour en direct** : après chaque manche, la cible retenue est entourée, vert si
-juste, rouge sinon.
+✅ (2026-10-01) **Retour en direct** : après chaque manche, la cible retenue est entourée, magenta
+si juste, rouge sinon.
 
 ❌ Échec : la cible retenue systématiquement décalée d'une position, ou une confiance élevée sur une
 cible fausse — la signature d'un décalage à l'épochage, la panne qui rend tous les autres tests
