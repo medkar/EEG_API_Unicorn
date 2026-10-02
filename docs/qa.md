@@ -612,7 +612,7 @@ pas un autre flux à sa place**.
 l'arrête.
 ✅ **1.11.4** `seances/` est **hors de `data/`**.
 ✅ **1.11.5** Le bouton ouvre une **fenêtre à part** : la console reste sur sa page. Ouvre un mode →
-**« Tester »** → **« Commencer »** : la fenêtre des flux reste ouverte et défile pendant le test. Un
+**« Tester sur une session »** → **« Commencer »** : la fenêtre des flux reste ouverte et défile pendant le test. Un
 second clic sur le bouton la ramène devant, sans en ouvrir une deuxième. Fermer la console la ferme.
 
 ❌ Régression : le panneau défile alors que le réseau est muet ; le chemin du fichier n'est pas
