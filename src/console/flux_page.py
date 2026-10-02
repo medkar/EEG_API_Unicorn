@@ -26,7 +26,7 @@ import html
 import os
 import sys
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -201,8 +201,6 @@ class FluxPage(QWidget):
     moteur DEVRAIT publier, jamais ce qu'il publie.
     """
 
-    retour = Signal()
-
     def __init__(self, console=None, decouvrir=None, ouvrir=None):
         """`decouvrir` et `ouvrir` sont les DEUX coutures qui sortent le réseau des tests.
 
@@ -245,10 +243,10 @@ class FluxPage(QWidget):
         self._diagnostic = ""         # côté flux : effacé par `chercher()` et par une ouverture
         self._diagnostic_enr = ""     # côté enregistrement : effacé par le clic suivant
 
+        # Pas de « ← » : la page vit dans SA fenêtre (cf. `FenetreFlux`), qui se ferme par son
+        # bouton de fermeture comme n'importe quelle fenêtre. Un retour « vers les modes » y
+        # ramènerait à une console qui n'a jamais été quittée.
         entete = QHBoxLayout()
-        self.bouton_retour = QPushButton(tr("pages.commun.retour_modes"))
-        self.bouton_retour.clicked.connect(self.retour)
-        entete.addWidget(self.bouton_retour)
         titre = QLabel(tr("pages.flux.titre"))
         titre.setStyleSheet("font-weight: bold;")
         entete.addWidget(titre)
@@ -334,7 +332,7 @@ class FluxPage(QWidget):
         changement de source. Rater une découverte n'est jamais définitif — on reclique.
 
         ⚠️ Mais si RIEN n'est ouvert, le flux que la liste AFFICHE s'ouvre : celui qu'on regardait
-        avant (on revient sur la page, qui l'avait lâché en sortant), sinon le premier. Passe QA
+        avant (on rouvre la fenêtre, qui l'avait lâché en se fermant), sinon le premier. Passe QA
         du 2026-09-23 : la liste montrait un flux, le panneau restait vide tant qu'on ne cliquait
         pas dessus — un écran qui affiche un choix qu'il n'a pas fait. Et si le flux qu'on
         regardait a DISPARU, on ne bascule pas en douce sur un autre : la liste reste sans choix
@@ -589,7 +587,7 @@ class FluxPage(QWidget):
     # --- le cycle de la page ------------------------------------------------------------------
 
     def update_from(self, state):
-        """Appelée à ~10 Hz par la console tant que cette page est devant.
+        """Appelée à ~10 Hz par la console tant que la fenêtre de cette page est ouverte.
 
         ⚠️ **`state` n'alimente PAS le panneau de flux.** Il ne sert QU'À l'enregistrement — un
         fichier écrit par le moteur, dont seul le moteur connaît le chemin et le compte. Les
@@ -605,15 +603,69 @@ class FluxPage(QWidget):
         self.rafraichir()
 
     def entrer(self):
-        """À l'entrée dans la page : on cherche une fois. Le geste que personne ne devrait taper."""
+        """À l'ouverture de la fenêtre : on cherche une fois. Le geste que personne ne devrait
+        taper."""
         self.chercher()
 
     def quitter(self):
-        """En sortant : on LÂCHE l'inlet. Un flux ouvert derrière une page qu'on ne regarde plus
-        est un abonné LSL que l'émetteur croit servir — et l'habitude que ce dépôt corrige
-        partout ailleurs (cf. `server._libere_marker_inlet`)."""
+        """À la fermeture de la fenêtre : on LÂCHE l'inlet. Un flux ouvert derrière une fenêtre
+        qu'on ne regarde plus est un abonné LSL que l'émetteur croit servir — et l'habitude que ce
+        dépôt corrige partout ailleurs (cf. `server._libere_marker_inlet`)."""
         self._fermer()
         self._dire_etat()
+
+
+class FenetreFlux(QWidget):
+    """« Ce que voit ton application », dans SA fenêtre — demandé au QA le 2026-10-02.
+
+    « Je ne peux pas avoir un test en cours et voir “Ce que voit ton application” » : la page
+    vivait dans la pile de la console, donc l'ouvrir REMPLAÇAIT la page du test en cours. Or
+    regarder le flux décodé PENDANT un test (une ligne par essai, qa.md 1.17.4), pendant un
+    « Essayer librement » ou pendant qu'on change un réglage, c'est précisément ce qu'on vient y
+    faire.
+
+    Une fenêtre de premier niveau, NON modale et SANS parent Qt : elle reste ouverte pendant qu'on
+    navigue dans la console, se pose sur un second écran, passe derrière la console si on le
+    veut. Avec un parent, Windows la garderait collée AU-DESSUS de la console. La contrepartie :
+    rien ne la ferme toute seule — c'est `Console.closeEvent` qui le fait.
+
+    Le cycle de la page suit la fenêtre : `entrer()` à l'ouverture (la découverte LSL),
+    `quitter()` à la fermeture (l'inlet lâché). Un second clic sur le bouton de la grille la
+    ramène DEVANT sans rien refaire : la découverte a son bouton, « Chercher les flux ».
+
+    ⚠️ La règle de la page ne bouge pas : elle lit le RÉSEAU, jamais `snapshot()`. La fenêtre ne
+    reçoit rien de la console qu'elle n'aurait reçu en page (cf. `Console.apply_state`).
+    """
+
+    def __init__(self, page):
+        super().__init__(None, Qt.Window)
+        self.page = page
+        self.setWindowTitle(tr("console.flux.fenetre_titre"))
+        # Elle ne retient PAS l'application : fermer la console doit quitter, même fenêtre des
+        # flux ouverte. Sans cet attribut, Qt attend que la DERNIÈRE fenêtre principale se ferme
+        # — une console fermée laisserait un processus vivant, casque compris.
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+        layout = QVBoxLayout(self)
+        layout.addWidget(page)
+        self.resize(760, 600)
+
+    def ouvrir(self):
+        """Le clic sur « Ce que voit ton application » : ouvre la fenêtre, ou la ramène devant."""
+        if not self.isVisible():
+            # La découverte AVANT d'afficher : elle coûte sa borne (~0,3 s), et une fenêtre vide
+            # et figée le temps qu'elle finisse se lirait comme une panne.
+            self.page.entrer()
+            self.show()
+        elif self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        """Fermer la fenêtre LÂCHE l'inlet, par quelque chemin qu'on la ferme (sa croix, la
+        console qui se ferme)."""
+        self.page.quitter()
+        super().closeEvent(event)
 
 
 def _ligne(horodatage, valeurs):

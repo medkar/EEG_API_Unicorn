@@ -177,11 +177,13 @@ breakdown.
 
 ### What your app sees
 
-A button at the bottom of the grid opens the outgoing side: it resolves the LSL streams on the
-network, opens one, and shows its channel names and values scrolling by. ⚠️ **It reads over LSL,
-like any client — never the engine's internal state.** That is the honest version: if the panel
-shows values, a real client would see them too. A panel wired to `snapshot()` would scroll happily
-while the network was silent, which is exactly the failure you came here to look at.
+A button at the bottom of the grid opens the outgoing side in **its own window**, which stays open
+while you train, test or change a setting — so you can watch the decoded stream during a test. It
+resolves the LSL streams on the network, opens one, and shows its channel names and values
+scrolling by. ⚠️ **It reads over LSL, like any client — never the engine's internal state.** That
+is the honest version: if the panel shows values, a real client would see them too. A panel
+wired to `snapshot()` would scroll happily while the network was silent, which is exactly the
+failure you came here to look at.
 
 **Record the verdicts** — one button on that page writes a JSONL file to `seances/`, one line per
 **published** decision, timestamped on the LSL clock. The engine holds the pen; the console sends

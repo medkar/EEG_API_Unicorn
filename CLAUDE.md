@@ -370,11 +370,13 @@ Dans la console (depuis le 2026-09-22) :
   « Enregistrer le modèle » ou « Refaire » : **rien n'atteint `data/` avant ce clic**. Un test
   n'écrit jamais rien.
 - **« Ce que voit ton application »**, en bas de la grille : les flux LSL du réseau, leurs voies et
-  leurs valeurs qui défilent. ⚠️ Elle lit **par LSL, comme un client** — jamais l'état interne du
-  moteur : un panneau branché sur `snapshot()` défilerait joliment pendant que le réseau est muet,
-  c'est-à-dire exactement la panne qu'on vient regarder. Un bouton **« Enregistrer les verdicts »**
-  y écrit un JSONL dans `seances/` (`moteur_<flux>_AAAAMMJJ-HHMMSS.jsonl`), **une ligne par décision
-  PUBLIÉE** — c'est le MOTEUR qui écrit, sur commande ; la console ne touche jamais au disque.
+  leurs valeurs qui défilent, **dans sa propre fenêtre** (2026-10-02), qui reste ouverte pendant
+  qu'on navigue — l'ouvrir ne remplace plus la page d'un test en cours. ⚠️ Elle lit **par LSL,
+  comme un client** — jamais l'état interne du moteur : un panneau branché sur `snapshot()`
+  défilerait joliment pendant que le réseau est muet, c'est-à-dire exactement la panne qu'on vient
+  regarder. Un bouton **« Enregistrer les verdicts »** y écrit un JSONL dans `seances/`
+  (`moteur_<flux>_AAAAMMJJ-HHMMSS.jsonl`), **une ligne par décision PUBLIÉE** — c'est le MOTEUR
+  qui écrit, sur commande ; la console ne touche jamais au disque.
   ⚠️ `seances/` est gitignoré et **hors de `data/`** : un verdict de séance n'est ni un modèle ni un
   enregistrement EEG, et `data/` garde son autorité d'écriture unique.
 

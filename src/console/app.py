@@ -64,7 +64,7 @@ from console.demarrage import (SYNTHETIQUE, UNICORN, Memoire,  # noqa: E402
 from stimulus import registry as stimulus_registry  # noqa: E402
 from console.contact_page import ContactPage  # noqa: E402
 from console.fenetres import LanceurFenetre  # noqa: E402
-from console.flux_page import FluxPage  # noqa: E402
+from console.flux_page import FenetreFlux, FluxPage  # noqa: E402
 from console.grid import ModeGrid  # noqa: E402
 from console.mesure_page import MesurePage  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
@@ -255,9 +255,10 @@ class Console(QMainWindow):
         # que `self.commande` et jamais le moteur, cf. l'en-tête de `console/flux_page.py`. C'est
         # tout l'intérêt de cette page : si elle lisait `snapshot()`, elle afficherait des données
         # pendant que le réseau est muet, c'est-à-dire exactement la panne qu'on vient y voir.
+        # 🔴 **Dans SA fenêtre, plus dans la pile** (2026-10-02) : l'ouvrir remplaçait la page du
+        # test en cours, alors que c'est PENDANT un test qu'on veut la regarder (cf. `FenetreFlux`).
         self.flux_page = FluxPage(self)
-        self.flux_page.retour.connect(self.show_grid)
-        self.stack.addWidget(self.flux_page)
+        self.fenetre_flux = FenetreFlux(self.flux_page)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -266,25 +267,9 @@ class Console(QMainWindow):
         layout.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        # Branché APRÈS le dernier `addWidget` : le tout premier en émet un lui aussi (la pile
-        # passe de « vide » à « la grille »), et le brancher plus haut ferait donc tourner ce
-        # nettoyage avant que `self.flux_page` n'existe.
-        self.stack.currentChanged.connect(self._page_changee)
-
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(REFRESH_MS)
-
-    def _page_changee(self, _index):
-        """Quitter la page des flux LÂCHE son inlet. Un seul endroit, quel que soit le chemin.
-
-        Un inlet laissé ouvert derrière une page qu'on ne regarde plus est un abonné que
-        l'émetteur croit servir — l'habitude exacte que le moteur corrige de son côté
-        (`_libere_marker_inlet`). Écrit ici plutôt que dans chaque `show_*` : il y a six façons de
-        quitter cette page, et la septième qu'on ajoutera demain oublierait la ligne.
-        """
-        if self.stack.currentWidget() is not self.flux_page:
-            self.flux_page.quitter()
 
     def refresh(self):
         """Sonde le moteur et redistribue l'état. Le SEUL endroit qui appelle `snapshot()`."""
@@ -309,6 +294,11 @@ class Console(QMainWindow):
         page = self.stack.currentWidget()
         if page is not self.grid:
             page.update_from(state)
+        # La fenêtre des flux vit À CÔTÉ de la pile : servie tant qu'elle est ouverte, quelle que
+        # soit la page devant — c'est tout son intérêt. `state` n'y nourrit que l'enregistrement
+        # (le panneau, lui, tire sur son inlet LSL : cf. `FluxPage.update_from`).
+        if self.fenetre_flux.isVisible():
+            self.flux_page.update_from(state)
         # Quand le fil est mort, ce message prend la place des champs d'un état qui ne bougera
         # plus — que le bandeau n'a, du coup, même pas repeints ci-dessus.
         self.banner.set_moteur(mort)
@@ -1166,8 +1156,11 @@ class Console(QMainWindow):
         qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
         """
         self.lanceur.arreter()
-        # L'inlet de la page des flux part avec le reste : elle peut être la page COURANTE au
-        # moment où l'on ferme, donc `_page_changee` ne passera jamais.
+        # La fenêtre des flux part avec la console : sans parent Qt (cf. `FenetreFlux`), rien
+        # d'autre ne la fermerait — elle resterait à l'écran, son inlet abonné, devant une console
+        # disparue. Sa fermeture lâche l'inlet ; `quitter()` derrière est idempotente et couvre
+        # une fenêtre déjà cachée.
+        self.fenetre_flux.close()
         self.flux_page.quitter()
         if self.engine is not None:
             # ⚠️ `stop()` ICI, et `close()` seulement APRÈS que la boucle se soit arrêtée
@@ -1240,14 +1233,17 @@ class Console(QMainWindow):
             self.show_mode(origine.mode_id)
 
     def show_flux(self):
-        """Ouvre « Ce que voit ton application ». La découverte LSL se fait à l'ENTRÉE.
+        """Ouvre « Ce que voit ton application » dans SA fenêtre, ou la ramène devant.
 
-        Même règle que `show_mode` et `rafraichir_choix` : résoudre le réseau coûte sa borne
-        entière, donc ça se fait sur un ÉVÉNEMENT — jamais dans le rafraîchissement périodique,
-        qui gèlerait la fenêtre 0,3 s dix fois par seconde.
+        ⚠️ La pile n'est PAS touchée : la page courante — un test en cours, la page d'un mode —
+        reste devant dans la console (demandé au QA le 2026-10-02).
+
+        La découverte LSL se fait à l'OUVERTURE de la fenêtre (`FenetreFlux.ouvrir`). Même règle
+        que `show_mode` et `rafraichir_choix` : résoudre le réseau coûte sa borne entière, donc ça
+        se fait sur un ÉVÉNEMENT — jamais dans le rafraîchissement périodique, qui gèlerait la
+        fenêtre 0,3 s dix fois par seconde.
         """
-        self.flux_page.entrer()
-        self.stack.setCurrentWidget(self.flux_page)
+        self.fenetre_flux.ouvrir()
 
     def show_mode(self, mode_id):
         page = self.pages.get(mode_id)
@@ -5155,7 +5151,7 @@ def _smoke():
         def source_id(self):
             return self._s
 
-    from console.flux_page import FluxPage, _ligne
+    from console.flux_page import FenetreFlux, FluxPage, _ligne
 
     page_flux = console.flux_page
     chk(isinstance(page_flux, FluxPage), "la console porte une page « flux sortant »")
@@ -5174,9 +5170,33 @@ def _smoke():
 
     page_flux._fabrique_inlet = _ouvre_faux
 
+    # 🔴 **DANS SA FENÊTRE, À CÔTÉ DE LA PAGE COURANTE** (demandé au QA le 2026-10-02 : « je ne
+    # peux pas avoir un test en cours et voir “Ce que voit ton application” »). La page vivait
+    # dans la pile : l'ouvrir REMPLAÇAIT le test en cours. On se place donc sur une autre page que
+    # la grille, et le clic ne doit pas l'en déloger. Posée DIRECTEMENT, la page d'un mode :
+    # `show_mode` relirait les modèles et, pour un mode à marqueurs, résoudrait le réseau.
+    # Mutations qui rougissent : remettre la page dans la pile (`stack.setCurrentWidget` dans
+    # `show_flux`) → les deux ; construire `FenetreFlux` avec la console pour parent, sans
+    # `Qt.Window` → la première.
+    page_devant = next(iter(console.pages.values()))
+    console.stack.setCurrentWidget(page_devant)
+    fenetre_flux = console.fenetre_flux
     console.grid.bouton_flux.click()
-    chk(console.stack.currentWidget() is page_flux,
-        "…et la grille y mène par un bouton — sans quoi la capacité existerait sans chemin")
+    chk(isinstance(fenetre_flux, FenetreFlux) and fenetre_flux.isWindow()
+        and fenetre_flux.isVisible() and page_flux.window() is fenetre_flux,
+        "…et la grille y mène par un bouton, qui l'ouvre dans SA fenêtre — sans quoi la capacité "
+        "existerait sans chemin")
+    chk(console.stack.currentWidget() is page_devant and console.stack.indexOf(page_flux) == -1,
+        f"…SANS toucher à la page courante de la console : un test en cours reste devant "
+        f"({type(console.stack.currentWidget()).__name__})")
+    # Un second clic la RAMÈNE devant. Mutation : `show_flux` qui construit une nouvelle
+    # `FenetreFlux` à chaque clic → deux fenêtres ouvertes, deux inlets sur le même flux.
+    console.grid.bouton_flux.click()
+    ouvertes = [w for w in QApplication.topLevelWidgets()
+                if isinstance(w, FenetreFlux) and w.isVisible()]
+    chk(len(ouvertes) == 1 and ouvertes[0] is fenetre_flux and console.fenetre_flux is fenetre_flux,
+        f"un second clic la ramène devant au lieu d'en ouvrir une deuxième "
+        f"({len(ouvertes)} fenêtre(s) des flux ouverte(s))")
     chk(page_flux.etat.text() and "aucun" in page_flux.etat.text().lower(),
         f"aucun flux visible se DIT, plutôt qu'un panneau vide ({page_flux.etat.text()})")
 
@@ -5240,13 +5260,43 @@ def _smoke():
         f"…et quand des flux existent sans qu'aucun soit ouvert, la page dit d'en CHOISIR un "
         f"({page_flux.etat.text()})")
 
-    # Quitter la page LÂCHE l'inlet — un abonné LSL laissé derrière une page qu'on ne regarde
-    # plus est l'habitude que le moteur corrige de son côté (`_libere_marker_inlet`).
+    # 🔴 Naviguer dans la console ne FERME plus rien : c'est tout l'objet de la fenêtre. Jusqu'au
+    # 2026-10-02, quitter la page lâchait l'inlet — au moment précis où l'on partait lancer le
+    # test qu'on voulait regarder. Mutation : un nettoyage sur `stack.currentChanged` qui appelle
+    # `quitter()` (l'ancien `_page_changee`) → rouge.
     inlet_espion = _FauxInlet(voies=["a"], echantillons=[])
     page_flux._inlet = inlet_espion
     console.show_grid()
-    chk(inlet_espion.ferme == 1 and page_flux._inlet is None,
-        f"quitter la page ferme le flux ouvert ({inlet_espion.ferme} fermeture(s))")
+    chk(fenetre_flux.isVisible() and inlet_espion.ferme == 0 and page_flux._inlet is inlet_espion,
+        f"naviguer dans la console laisse la fenêtre des flux OUVERTE, son flux avec "
+        f"({inlet_espion.ferme} fermeture(s))")
+    # …et l'état continue de la servir, quelle que soit la page devant : un enregistrement lancé
+    # se suit pendant le test. Mutation : retirer de `apply_state` la ligne qui sert la fenêtre
+    # (elle n'était servie que comme page COURANTE) → rouge.
+    console.apply_state({**fake_state(), "enregistrement": {
+        "actif": True, "chemin": "seances/en_cours.jsonl", "lignes": 3,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    chk("en_cours.jsonl" in page_flux.etat_enregistrement.text(),
+        f"…et la console la sert à chaque tour, page de la pile ou pas "
+        f"({page_flux.etat_enregistrement.text()[:50]!r})")
+    page_flux.update_from({**fake_state(), "enregistrement": None})   # le bouton redevient
+    page_flux.etat_enregistrement.setText("")                         # « Enregistrer »
+    # Fermer la FENÊTRE lâche l'inlet — un abonné LSL laissé derrière une fenêtre qu'on ne regarde
+    # plus est l'habitude que le moteur corrige de son côté (`_libere_marker_inlet`). Mutation :
+    # retirer `FenetreFlux.closeEvent` → rouge.
+    fenetre_flux.close()
+    chk(not fenetre_flux.isVisible() and inlet_espion.ferme == 1 and page_flux._inlet is None,
+        f"fermer la fenêtre des flux ferme le flux ouvert ({inlet_espion.ferme} fermeture(s))")
+    # La ROUVRIR refait `entrer()` : la découverte, et le flux que la liste affiche rouvert.
+    # Mutation : `ouvrir()` qui se contente de `show()` → panneau vide, aucun inlet → rouge.
+    avant = len(inlets)
+    console.grid.bouton_flux.click()
+    chk(fenetre_flux.isVisible() and len(inlets) == avant + 1 and page_flux._inlet is inlets[-1],
+        f"…et la rouvrir refait la découverte et rouvre le flux affiché "
+        f"({len(inlets) - avant} inlet(s) ouvert(s))")
+    # Fermée pour la suite : les blocs suivants appellent la page directement, et une fenêtre
+    # ouverte recevrait en plus chaque `apply_state` des autres sections du smoke.
+    fenetre_flux.close()
 
     # Un flux MUET (l'émetteur est là, il n'envoie rien) ne doit pas se lire comme un flux absent :
     # c'est la différence entre « mon mode ne décode pas » et « mon mode n'est pas publié », et
@@ -5820,7 +5870,19 @@ def _smoke():
     console.apply_state(p300_pret)
     console.lanceur.lancer("p300", calibrer=True)
     fenetre_ouverte = processus[-1]
+    # La fenêtre des flux, OUVERTE au moment de fermer, avec un flux. Elle n'a pas de parent Qt :
+    # rien d'autre que `Console.closeEvent` ne la ferme.
+    console.grid.bouton_flux.click()
+    inlet_au_depart = _FauxInlet(voies=["a"], echantillons=[])
+    page_flux._fermer()
+    page_flux._inlet = inlet_au_depart
     console.close()
+    # Mutation : retirer `self.fenetre_flux.close()` de `Console.closeEvent` → la fenêtre reste
+    # à l'écran devant une console disparue → rouge.
+    chk(not console.fenetre_flux.isVisible() and inlet_au_depart.ferme >= 1
+        and page_flux._inlet is None,
+        f"fermer la console ferme aussi la fenêtre des flux, et lâche son flux "
+        f"(visible={console.fenetre_flux.isVisible()}, {inlet_au_depart.ferme} fermeture(s))")
     # ⚠️ **`stop()`, pas `close()`, et c'est le correctif du 2026-09-10.** Fermer la fenêtre
     # demande l'ARRÊT de la boucle ; `close()` — qui supprime le dossier des candidats — n'arrive
     # qu'après le `join`, dans le `finally` de `run()`. Appelé depuis le fil Qt pendant que la
