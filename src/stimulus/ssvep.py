@@ -16,6 +16,12 @@ BLEU à `CUE_MARGE_PX` du bord, comme au P300 ; l'anneau de retour suit la règl
 (`stimulus/retour.py:rayon_anneau`). Les flèches ne vivent plus que dans `archive/ui.py`, pour les
 écrans archivés.
 
+⚠️ **Aucun texte sur une cible** (2026-10-02). Le titre du guidé était posé à 10 % de la hauteur,
+PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait : un texte sur une cible change sa
+luminance moyenne, donc la réponse SSVEP mesurée. Les textes vont dans une bande libre calculée
+depuis `geometrie` (`mise_en_page`) ; `--smoke` (section K) relit, à quatre résolutions, le
+rectangle de chaque texte posé et les pixels de la zone de chaque anneau.
+
 🔴 **`--freqs`, et pourquoi il a manqué.** Jusqu'au 2026-09-21 cette fenêtre affichait le jeu du
 DÉPÔT quoi qu'on règle dans la console : un étudiant qui pose 12 · 15 · 20 voyait clignoter
 15 · 20 · 8,571, et le moteur corrélait contre des sinusoïdes que PERSONNE n'affichait. Rien ne
@@ -130,6 +136,7 @@ import json
 import os
 import sys
 import time
+from collections import namedtuple
 
 # Permet `from core.config import ...` que le module soit lancé via `python src/stimulus/ssvep.py`
 # ou importé comme `stimulus.ssvep`.
@@ -178,6 +185,24 @@ TITRE_CHAUFFE = "Le casque se stabilise"
 SOUS_CHAUFFE = "installe-toi, ne fixe aucune cible — la mesure commence après"
 TITRE_REPOS = "REPOS"
 SOUS_REPOS = "fixe la CROIX centrale, ne suis AUCUNE cible"
+# …et TOUS les autres textes de cette fenêtre, sortis de `_guide` et de `dessine` le 2026-10-02 sans
+# en changer un mot : `mise_en_page` mesure le plus large pour placer le bloc une fois pour toutes,
+# et la section K de `--smoke` exige de les avoir tous vus posés HORS des cibles.
+TITRE_CONSIGNE = "REGARDE : {nom}"
+SOUS_CONSIGNE = "essai {i}/{n}"
+SOUS_FIXATION = "fixe la cible entourée"
+TITRE_PAUSE = "—"
+SOUS_PAUSE = "repose les yeux sur la croix"
+ETIQUETTE = "{nom}  {hz:.2f} Hz"
+HUD_TEXTE = "{fps:.0f} fps  |  sautées {sautees}  |  ESC = quitter"
+# Le HUD le plus LARGE qu'on réserve : 3 chiffres de fps, 5 de frames sautées.
+HUD_PIRE = HUD_TEXTE.format(fps=999, sautees=99999)
+
+# Quand le bloc titre + sous-titre ne tient dans aucune bande libre à sa taille, on le RÉDUIT par ces
+# paliers, jamais sous `POLICE_PLANCHER_PX`. Au-delà, il n'est PAS affiché (le terminal le dit) : un
+# texte posé sur une cible serait pire qu'aucun texte — la consigne bleue désigne déjà la cible.
+ECHELLES_TEXTE = (1.0, 0.9, 0.8, 0.7, 0.6)
+POLICE_PLANCHER_PX = 10
 
 # La fenêtre de dev (`--windowed`) et l'écran factice de `--smoke`. Nommée plutôt qu'écrite deux
 # fois : `--smoke` relit des PIXELS à des coordonnées calculées sur cette taille, et deux valeurs
@@ -275,6 +300,115 @@ def geometrie(plan, size):
     rayon = int(min(size) * RAYON_RATIO)
     return (positions_cibles(plan, size), rayon, rayon + CUE_MARGE_PX,
             _retour.rayon_anneau(rayon))
+
+
+# --- Les TEXTES : jamais sur une cible (2026-10-02) ---------------------------
+
+MiseEnPage = namedtuple("MiseEnPage", "titre sous etiquette hud y_bloc ou echelle ancre_hud")
+
+
+def etiquette(c):
+    """Le texte statique sous un disque. Une écriture : le rendu le pose, `mise_en_page` le mesure."""
+    return ETIQUETTE.format(nom=c["name"], hz=c["actual_hz"])
+
+
+def _hors_des_cibles(rect, centres, garde):
+    """True si AUCUN pixel de `rect` n'est à moins de `garde` du centre d'une cible."""
+    for x, y in centres:
+        qx, qy = min(max(x, rect.left), rect.right - 1), min(max(y, rect.top), rect.bottom - 1)
+        if (qx - x) ** 2 + (qy - y) ** 2 < garde ** 2:
+            return False
+    return True
+
+
+def mise_en_page(pygame, plan, size, n_essais):
+    """Où poser les textes, et à quelle taille — calculé UNE fois par séance, depuis `geometrie`.
+
+    ⚠️ **Aucun texte sur une cible, ni sur la zone de son anneau.** Jusqu'au 2026-10-02 le titre
+    du guidé était posé à 10 % de la hauteur, c'est-à-dire PAR-DESSUS le haut du disque AVANT
+    pendant qu'il clignotait (« fixe la cible entourée », « REGARDE : … », chauffe, repos). Un
+    texte sur une cible change sa luminance moyenne, donc la réponse SSVEP qu'on mesure — sans
+    rien casser. La zone interdite est le disque de rayon `rayon_retour + retour.EPAISSEUR_PX` :
+    l'anneau de retour et une épaisseur de garde ; l'étiquette sous chaque disque en touche le bord.
+
+    Le bloc titre + sous-titre va dans une BANDE LIBRE pleine largeur : au-dessus du disque du haut
+    si elle suffit, sinon sous les cibles ET leurs étiquettes, sinon RÉDUIT (`ECHELLES_TEXTE`) ; si
+    rien ne tient au plancher, il n'est pas affiché. La place est celle du texte le plus LARGE de
+    la séance, pas celle de l'écran courant : un titre qui sauterait d'une bande à l'autre entre
+    deux écrans serait un événement visuel en pleine mesure. Le HUD prend ensuite le premier coin
+    libre (cibles, étiquettes, bloc), et n'est pas affiché si aucun ne l'est.
+
+    La section K de `--smoke` relit les rectangles réellement POSÉS et les pixels, à plusieurs
+    résolutions — pas cette fonction, qui ne pourrait que se donner raison.
+    """
+    w, h = size
+    span = min(size)
+    positions, _rayon, _cue, rayon_retour = geometrie(plan, size)
+    garde = rayon_retour + _retour.EPAISSEUR_PX
+    ecart = ETIQUETTE_ECART_PX
+
+    def police(px):
+        return pygame.font.SysFont("consolas", int(px))
+
+    p_etiquette = police(max(14, int(span * 0.022)))
+    p_hud = police(max(12, int(span * 0.016)))
+    etiquettes = []
+    for c, (x, y) in zip(plan, positions):
+        r = pygame.Rect((0, 0), p_etiquette.size(etiquette(c)))
+        r.midtop = (x, y + rayon_retour + ecart)   # la place exacte où `dessine` la pose
+        etiquettes.append(r)
+
+    # Les deux bandes, en lignes de pixels [début, fin) : la ligne `y - garde` est encore permise.
+    bandes = (("en haut", ecart, min(y for _x, y in positions) - garde + 1),
+              ("en bas", max([y + garde for _x, y in positions]
+                             + [r.bottom + ecart for r in etiquettes]), h - ecart))
+    noms = [c["name"] for c in plan]
+    titres = [TITRE_CHAUFFE, TITRE_REPOS, TITRE_PAUSE] + noms + [
+        TITRE_CONSIGNE.format(nom=n) for n in noms]
+    sous = [SOUS_CHAUFFE, SOUS_REPOS, SOUS_FIXATION, SOUS_PAUSE,
+            SOUS_CONSIGNE.format(i=n_essais, n=n_essais)]
+    bloc = ou = None
+    for echelle in ECHELLES_TEXTE:
+        p_titre = police(max(POLICE_PLANCHER_PX, int(max(20, int(span * 0.040)) * echelle)))
+        p_sous = police(max(POLICE_PLANCHER_PX, int(max(12, int(span * 0.016)) * echelle)))
+        haut = p_titre.get_height() + p_sous.get_height()
+        large = max([p_titre.size(t)[0] for t in titres] + [p_sous.size(t)[0] for t in sous])
+        for nom, y0, y1 in bandes:
+            if y1 - y0 >= haut and large <= w - 2 * ecart:
+                bloc, ou = pygame.Rect(0, 0, large, haut), nom
+                bloc.midtop = (int(w / 2), y0 + (y1 - y0 - haut) // 2)
+                break
+        if bloc is not None:
+            break
+
+    hud = pygame.Rect((0, 0), p_hud.size(HUD_PIRE))
+    obstacles = [r.inflate(2 * ecart, 2 * ecart) for r in etiquettes]
+    if bloc is not None:
+        obstacles.append(bloc.inflate(2 * ecart, 2 * ecart))
+    ancre_hud = None
+    for ancre, point in (("topleft", (12, 10)), ("bottomleft", (12, h - 10)),
+                         ("topright", (w - 12, 10)), ("bottomright", (w - 12, h - 10))):
+        setattr(hud, ancre, point)
+        if (pygame.Rect(0, 0, w, h).contains(hud) and _hors_des_cibles(hud, positions, garde)
+                and hud.collidelist(obstacles) < 0):
+            ancre_hud = {ancre: point}
+            break
+    return MiseEnPage(p_titre, p_sous, p_etiquette, p_hud,
+                      None if bloc is None else bloc.top, ou, echelle, ancre_hud)
+
+
+def pose_texte(win, police, texte, couleur, **ancre):
+    """UN SEUL geste pour écrire à l'écran : rend, place (`ancre` = `midtop=…`, `topleft=…`),
+    pose, et rend le rectangle posé.
+
+    La section K de `--smoke` l'espionne pour relever le rectangle de CHAQUE texte affiché — d'où
+    l'appel par son nom GLOBAL dans `dessine`, relu à chaque image (jamais une référence gardée en
+    local), et le refus, par la même section, de tout `blit` direct dans `run` : il échapperait à
+    la garde."""
+    rendu = police.render(texte, True, couleur)
+    rect = rendu.get_rect(**ancre)
+    win.blit(rendu, rect)
+    return rect
 
 
 # --- Les fréquences AFFICHÉES : celles du mode, ou rien ---------------------
@@ -563,7 +697,6 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
     w, h = size
     cx, cy = w / 2, h / 2
-    span = min(w, h)
     # Les positions des cibles DANS L'ORDRE DU PLAN — c'est-à-dire dans l'ordre des indices que
     # les marqueurs `cue` publient et que le moteur compare à ses fréquences. Tout ce qui suit est
     # indexé par ce RANG, jamais par direction : `--freqs` réordonne les cibles, et un
@@ -575,9 +708,14 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     # L'écran de REPOS de l'essai libre, tant que le moteur se repose (son flux `status`).
     repos = ReposDuMoteur(source_rep) if source_rep is not None else None
 
-    font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
-    hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
-    big_font = pygame.font.SysFont("consolas", max(20, int(span * 0.040)))
+    # Les polices et la PLACE de chaque texte, une fois pour la séance : jamais sur une cible.
+    page = mise_en_page(pygame, plan, size, len(plan) * per_target)
+    print(f"[ssvep-stim] textes          : "
+          + (f"{page.ou} (titre {page.titre.get_height()} px, police à {page.echelle:.0%})"
+             if page.y_bloc is not None
+             else "⚠️ AUCUNE bande libre hors des cibles — titres NON affichés")
+          + (f", HUD {next(iter(page.ancre_hud))}" if page.ancre_hud
+             else ", HUD NON affiché (aucun coin libre)"))
 
     clock = pygame.time.Clock()
     fps = int(refresh) + 5
@@ -634,9 +772,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             if is_on(frame, c["frames_per_cycle"]):
                 pygame.draw.circle(win, ON_COLOR, (px, py), rayon)  # phase ON
             # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
-            label = font.render(f"{c['name']}  {c['actual_hz']:.2f} Hz", True, LABEL)
-            win.blit(label, label.get_rect(
-                midtop=(px, py + rayon_retour + ETIQUETTE_ECART_PX)))
+            pose_texte(win, page.etiquette, etiquette(c), LABEL,
+                       midtop=(px, py + rayon_retour + ETIQUETTE_ECART_PX))
         if designee is not None:
             pygame.draw.circle(win, CUE, positions[designee], rayon_cue, CUE_EPAISSEUR_PX)
         # L'anneau de RETOUR : après les disques et la consigne, AVANT le texte — au-delà du cercle
@@ -645,21 +782,23 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             anneau.dessiner(pygame, win, positions, rayon_retour)
         if croix:
             _retour.dessine_croix(pygame, win, (cx, cy), DIM)
-        if titre:
-            s = big_font.render(titre, True, FG)
-            win.blit(s, s.get_rect(center=(int(cx), int(h * 0.10))))
-        if sous:
-            s = hud_font.render(sous, True, DIM)
-            win.blit(s, s.get_rect(center=(int(cx), int(h * 0.10) + big_font.get_height())))
-        # ⚠️ Le HUD, EN DERNIER et dans le coin haut-gauche, où il ne recouvre aucune cible : ce
+        # ⚠️ Les titres, dans la bande LIBRE que `mise_en_page` a choisie — jamais sur un disque
+        # ni sur la zone de son anneau (cf. sa docstring : le titre a recouvert le disque AVANT).
+        if page.y_bloc is not None:
+            if titre:
+                pose_texte(win, page.titre, titre, FG, midtop=(int(cx), page.y_bloc))
+            if sous:
+                pose_texte(win, page.sous, sous, DIM,
+                           midtop=(int(cx), page.y_bloc + page.titre.get_height()))
+        # ⚠️ Le HUD, EN DERNIER et dans un coin où il ne recouvre aucune cible (`mise_en_page`) : ce
         # qu'on ajoute par-dessus un stimulus change ce que l'œil reçoit ET ce que les sondes en
         # pixels de `--smoke` relisent. Il est DANS ce dessin partagé, donc le mode guidé l'a
         # aussi — il n'affichait rien du tout jusqu'au 2026-09-21, pas même le FPS, alors que
         # c'est lui qui MESURE : la seule chose qui distingue « ça marche » de « ça a l'air de
         # marcher » manquait justement là où elle compte.
-        hud = hud_font.render(f"{fps_show:.0f} fps  |  sautées {sautees}  |  ESC = quitter",
-                              True, HUD)
-        win.blit(hud, (12, 10))
+        if page.ancre_hud is not None:
+            pose_texte(win, page.hud, HUD_TEXTE.format(fps=fps_show, sautees=sautees), HUD,
+                       **page.ancre_hud)
 
     def apres_flip():
         """Le comptage qui suit CHAQUE image affichée : une frame de plus, et une frame SAUTÉE si
@@ -825,8 +964,8 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         #    précédent s'éteint ICI, bien avant les données notées.
         if anneau is not None:
             anneau.mesure_commence()
-        if not phase(cue_s, designee=cible, titre=f"REGARDE : {noms[cible]}",
-                     sous=f"essai {i}/{len(ordre)}"):
+        if not phase(cue_s, designee=cible, titre=TITRE_CONSIGNE.format(nom=noms[cible]),
+                     sous=SOUS_CONSIGNE.format(i=i, n=len(ordre))):
             return _interrompu(i - 1, len(ordre))
         # 2. La fixation. Le `cue` part ICI, au premier flip : c'est l'instant à partir duquel le
         #    moteur compte `SSVEP_GUIDE_FIX_S` pour prélever la DERNIÈRE fenêtre de la fixation.
@@ -834,13 +973,13 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         if anneau is not None:
             fermer = (min(MARGE_DECISION_S, fix_s / 2.0),
                       anneau.mesure_finie)
-        if not phase(fix_s, designee=cible, titre=noms[cible], sous="fixe la cible entourée",
+        if not phase(fix_s, designee=cible, titre=noms[cible], sous=SOUS_FIXATION,
                      marqueur={"mode": "ssvep", "event": "cue", "target": int(cible),
                                "freq_hz": freqs[cible]},
                      sonde=True, avant_la_fin=fermer):
             return _interrompu(i - 1, len(ordre))
         # 3. Le retour à la croix, pour que deux essais consécutifs ne se recouvrent pas.
-        if not phase(gap_s, titre="—", croix=True, sous="repose les yeux sur la croix"):
+        if not phase(gap_s, titre=TITRE_PAUSE, croix=True, sous=SOUS_PAUSE):
             return _interrompu(i, len(ordre))
 
     emet({"mode": "ssvep", "event": "calib_end"})
@@ -920,9 +1059,9 @@ def _etats_a_l_ecran(surface, positions):
 
     Le point de lecture est le CENTRE du disque : blanc plein quand la phase est ON, fond noir
     sinon. Ni le contour (dessiné sur le bord), ni le cercle de consigne (au-delà), ni l'étiquette
-    (sous le disque), ni le HUD (coin haut-gauche), ni le titre du mode guidé (haut de l'écran) n'y
-    passent — c'est ce qui fait de ce point une lecture de l'ÉTAT du clignotement et de rien
-    d'autre.
+    (sous l'anneau), ni le HUD et les titres (hors de toute cible, `mise_en_page`) n'y passent —
+    c'est ce qui fait de ce point une lecture de l'ÉTAT du clignotement et de rien d'autre. ⚠️ Il ne
+    dit rien du RESTE de la surface : c'est la section K du smoke qui la garde des textes.
     """
     import pygame
 
@@ -1008,6 +1147,11 @@ def _smoke():
     (lue dans les pixels), et l'ordre des essais est ENTRELACÉ et équilibré.
     """
     from collections import Counter
+
+    # Cette fenêtre ne joue aucun son : sans pilote audio FACTICE, chaque `pygame.init()` du smoke
+    # ouvre la carte son et chaque `pygame.quit()` la referme — mesuré le 2026-10-02 : 4,2 s contre
+    # 1,9 s pour une séance guidée courte, et le smoke joue une vingtaine de `run`.
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
     ok = True
 
@@ -1279,6 +1423,9 @@ def _smoke():
     # --- J. `--retour` ----------------------------------------------------------------
     _smoke_retour(chk)
 
+    # --- K. AUCUN TEXTE SUR UNE CIBLE, à plusieurs résolutions --------------------------
+    _smoke_textes(chk)
+
     print(f"[ssvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -1439,6 +1586,179 @@ def _smoke_retour(chk):
     rt.autotest_couleurs(chk)
     rt.autotest_resolution(chk, run, "ssvep")
     rt.autotest_statut(chk)
+
+
+# Les tailles que la section K joue : les trois écrans courants, et une petite fenêtre qui force les
+# deux replis de `mise_en_page` — sous les cibles à 3 cibles, police RÉDUITE à 4.
+RESOLUTIONS_SMOKE = ((1920, 1080), (1280, 720), (1000, 700), (900, 500))
+_SMOKE_QUATRE_CIBLES = [12.0, 15.0, 20.0, 10.0]
+
+
+class _Relais(list):
+    """Un `journal` qui relaie chaque marqueur publié au moteur FACTICE — le `push` espionné de la
+    section J, sans toucher à pylsl."""
+
+    def __init__(self, moteur):
+        super().__init__()
+        self.moteur = moteur
+
+    def append(self, entree):
+        super().append(entree)
+        self.moteur.marqueur(entree[0])
+
+
+def _rect_touche(rect, centre, garde):
+    """True si un pixel de `rect` est à moins de `garde` de `centre`. Écrite ICI, sans
+    `_hors_des_cibles` : la garde ne doit pas partager le calcul de ce qu'elle garde."""
+    xs = np.arange(rect.left, rect.right) - int(centre[0])
+    ys = np.arange(rect.top, rect.bottom) - int(centre[1])
+    if not xs.size or not ys.size:
+        return False
+    return int(np.abs(xs).min()) ** 2 + int(np.abs(ys).min()) ** 2 < garde ** 2
+
+
+def _pixels_etrangers(surface, centre, garde, palette):
+    """Combien de pixels à moins de `garde` de `centre` ne sont d'AUCUNE couleur de `palette`.
+
+    `draw.circle` ne lisse pas : le disque, son contour, la consigne et l'anneau sont des couleurs
+    EXACTES. Un texte, lui, est lissé — ses bords ne sont d'aucune couleur de la palette."""
+    import pygame
+
+    x, y = int(centre[0]), int(centre[1])
+    zone = pygame.Rect(x - garde, y - garde, 2 * garde + 1, 2 * garde + 1).clip(surface.get_rect())
+    px = pygame.surfarray.array3d(surface.subsurface(zone)).astype(np.int64)
+    dx = np.arange(zone.left, zone.right)[:, None] - x
+    dy = np.arange(zone.top, zone.bottom)[None, :] - y
+    dedans = dx ** 2 + dy ** 2 < garde ** 2
+    code = (px[..., 0] << 16) | (px[..., 1] << 8) | px[..., 2]
+    permis = np.isin(code, [(r << 16) | (g << 8) | b for r, g, b in palette])
+    return int((dedans & ~permis).sum())
+
+
+def _smoke_textes(chk):
+    """K. AUCUN TEXTE SUR UNE CIBLE — ni sur la zone de son anneau — à chaque résolution jouée.
+
+    Le défaut (2026-10-02) : en `--guide`, le titre et le sous-titre étaient posés à 10 % de la
+    hauteur, PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait. Rien ne le voyait : les
+    sondes lisent le CENTRE des disques et le cercle de consigne, jamais le reste de leur surface.
+
+    Deux lectures, indépendantes de `mise_en_page` (qui ne pourrait que se donner raison) :
+    • le RECTANGLE de chaque texte réellement posé (`pose_texte`, espionné), contre le disque de
+      rayon `retour.rayon_anneau(rayon) + retour.EPAISSEUR_PX` de chaque cible — la règle COMMUNE,
+      rappelée ici ; les textes d'une même image ne se chevauchent pas et restent à l'écran ;
+    • les PIXELS de chaque zone après chaque flip : rien que le fond, le disque et son contour, la
+      consigne bleue et l'anneau vert.
+    Chaque régime qui écrit est joué à chaque taille de `RESOLUTIONS_SMOKE` : le guidé avec retour
+    (chauffe, repos, consigne, fixation, pause), à 3 cibles et à 4 ; l'essai libre avec retour
+    (croix de chauffe et de repos, puis décodage), à 3. Un texte attendu qui n'a jamais été posé
+    rougit aussi : une garde qui ne voit pas le texte ne prouve rien sur lui."""
+    import contextlib
+    import inspect
+    import io
+
+    import pygame
+
+    from stimulus import retour as rt
+
+    # Tout texte passe par `pose_texte` : un `blit` direct échapperait à l'espion ci-dessous.
+    source = inspect.getsource(run) + inspect.getsource(_guide)
+    chk(".blit" not in source and "pose_texte(" in source,
+        "[K] tout texte de la fenêtre passe par `pose_texte` — aucun `blit` direct dans `run` ni "
+        "`_guide`, qui échapperait à la garde des rectangles")
+
+    module = sys.modules[__name__]
+    vrai_pose, vrai_flip, taille_avant = module.pose_texte, pygame.display.flip, TAILLE_FENETRE
+    palette = (BG, ON_COLOR, OUTLINE, CUE, rt.COULEUR_DECODEE)
+    queue_hud = HUD_TEXTE.rsplit("}", 1)[1]
+    pages = []
+    try:
+        for taille in RESOLUTIONS_SMOKE:
+            for freqs in (None, _SMOKE_QUATRE_CIBLES):
+                plan = plan_du_stimulus(60.0, freqs)
+                positions, rayon, _c, _a = geometrie(plan, taille)
+                garde = rt.rayon_anneau(rayon) + rt.EPAISSEUR_PX     # la règle COMMUNE, rappelée
+                ecran = pygame.Rect((0, 0), taille)
+                image, vus = [], set()
+                f = {"disque": [], "texte": [], "ecran": [], "pixels": 0, "images": 0,
+                     "anneaux": 0}
+
+                def pose(win, police, texte, couleur, **ancre):
+                    rect = vrai_pose(win, police, texte, couleur, **ancre)
+                    image.append((texte, pygame.Rect(rect)))
+                    return rect
+
+                def flip(*a, **k):
+                    r = vrai_flip(*a, **k)
+                    s = pygame.display.get_surface()
+                    for i, (texte, rect) in enumerate(image):
+                        vus.add(texte)
+                        if any(_rect_touche(rect, p, garde) for p in positions):
+                            f["disque"].append((texte, tuple(rect)))
+                        if not ecran.contains(rect):
+                            f["ecran"].append((texte, tuple(rect)))
+                        f["texte"] += [(texte, t) for t, r2 in image[i + 1:] if rect.colliderect(r2)]
+                    f["pixels"] += sum(_pixels_etrangers(s, p, garde, palette) for p in positions)
+                    f["anneaux"] += bool(rt.anneaux_a_l_ecran(s, positions, rt.rayon_anneau(rayon)))
+                    f["images"] += 1
+                    image.clear()
+                    return r
+
+                moteur = rt.MoteurFactice(len(plan), ["juste", "faux"] * 2, depart="cue",
+                                          ouverture="cue", delai=0.05, secondes=True)
+                module.TAILLE_FENETRE = taille
+                module.pose_texte, pygame.display.flip = pose, flip
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        fait = run(windowed=True, refresh=60.0, guide=True, per_target=1, seed=5,
+                                   freqs=freqs, stream=MARKER_STREAM_DEFAULT + "_smoke",
+                                   attente_consommateur_s=0.0, attente_moteur_s=0.05, cue_s=0.05,
+                                   fix_s=0.08, gap_s=0.1, repos_s=0.05, journal=_Relais(moteur),
+                                   retour=True, source_retour=moteur)
+                        # L'essai libre : UNE fois par taille, au plan du dépôt. Même `page`, même
+                        # `dessine` que le guidé — ce qu'il ajoute est SA boucle, jouée à chaque
+                        # taille ; chaque `run` coûte ~2 à 5 s d'ouverture/fermeture de pygame.
+                        if freqs is None:
+                            run(smoke=True, refresh=60.0, freqs=freqs, retour=True,
+                                source_retour=rt.SourceScriptee({3: 0, 22: len(plan) - 1}),
+                                source_statut=rt.StatutScripte({1: "warmup", 10: "baseline",
+                                                                20: "decoding"}))
+                finally:
+                    module.pose_texte, pygame.display.flip = vrai_pose, vrai_flip
+
+                # Pour le MESSAGE et la précondition seulement : la garde, elle, a lu l'écran.
+                pygame.font.init()
+                page = mise_en_page(pygame, plan, taille, len(plan))
+                pygame.font.quit()
+                pages.append(page)
+                noms = [c["name"] for c in plan]
+                attendus = ({TITRE_CHAUFFE, SOUS_CHAUFFE, TITRE_REPOS, SOUS_REPOS, SOUS_FIXATION,
+                             TITRE_PAUSE, SOUS_PAUSE} | set(noms)
+                            | {TITRE_CONSIGNE.format(nom=n) for n in noms}
+                            | {SOUS_CONSIGNE.format(i=i, n=len(plan))
+                               for i in range(1, len(plan) + 1)}
+                            | {etiquette(c) for c in plan})
+                manquants = sorted(attendus - vus)
+                hud_vu = any(t.endswith(queue_hud) for t in vus)
+                nom = (f"{taille[0]}×{taille[1]}, {len(plan)} cibles, "
+                       + ("guidé + libre" if freqs is None else "guidé"))
+                chk(fait and not f["disque"] and not manquants and hud_vu,
+                    f"[K] {nom} : AUCUN texte posé sur un disque ni sur la zone de son anneau "
+                    f"(rayon {garde} px) — {len(vus)} textes vus en {f['images']} images, titres "
+                    f"{page.ou} à {page.echelle:.0%} ; fautes {f['disque'][:2]}, jamais posés "
+                    f"{manquants[:3]}, HUD {'vu' if hud_vu else 'JAMAIS vu'}")
+                chk(not f["pixels"] and not f["texte"] and not f["ecran"] and f["anneaux"] > 0,
+                    f"[K] {nom} : dans chaque zone, rien que le disque, la consigne bleue et "
+                    f"l'anneau vert, lu dans les PIXELS ({f['pixels']} pixel(s) étranger(s), anneau "
+                    f"vu sur {f['anneaux']} images) ; textes ni superposés {f['texte'][:2]} ni hors "
+                    f"de l'écran {f['ecran'][:2]}")
+    finally:
+        module.pose_texte, pygame.display.flip = vrai_pose, vrai_flip
+        module.TAILLE_FENETRE = taille_avant
+    # Une garde qui ne joue que la bande du haut ne dit rien des deux replis.
+    bandes = sorted({p.ou for p in pages})
+    chk(bandes == ["en bas", "en haut"] and min(p.echelle for p in pages) < 1.0,
+        f"[K] (précondition) les tailles jouées couvrent la bande du haut, celle du bas ET une "
+        f"police réduite ({bandes}, échelles {sorted({p.echelle for p in pages})})")
 
 
 # Les durées du smoke : courtes, parce qu'on teste la LIGNE DU TEMPS et pas la physiologie. Elles
