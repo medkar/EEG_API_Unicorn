@@ -961,8 +961,8 @@ MI, du P300, du c-VEP et de l'ErrP la comparent, essai par essai, à celle d'un 
 |---|---|---|---|---|
 | SSVEP (`ssvep_mesure.py`) | un essai guidé, UNE décision | 1 / nombre de cibles | 36 essais, ≈ 3,6 min | justesse ≥ 90 % **et** émission ≥ 44 % |
 | MI (`mi_test.py`) | un essai ; la DERNIÈRE sortie | 1 / classes du modèle | 6/classe, ≈ 2,8 min | justesse ≥ 40,0 % (3 cl.) ou 63,3 % (G/D) **et** émission ≥ 44 % |
-| P300 (`p300_test.py`) | une manche | 1/6 | 6 manches, ≈ 1,2 min | ≥ 80 % — les seuils de la table d'entraînement (`p300_calib.VERDICTS`), rouge sous 60 % |
-| c-VEP (`cvep_test.py`) | un bloc ; la dernière sortie votée | 1/6 | 3 cycles/cible = 18 blocs, ≈ 1,8 min | justesse ≥ 71 % **et** émission ≥ 46 % — le repère EN DIRECT |
+| P300 (`p300_test.py`) | une manche | 1/6 | 6 manches, ≈ 1,4 min (phase de retour comprise, 2026-10-02) | ≥ 80 % — les seuils de la table d'entraînement (`p300_calib.VERDICTS`), rouge sous 60 % |
+| c-VEP (`cvep_test.py`) | un bloc ; la dernière sortie votée | 1/6 | 3 cycles/cible = 18 blocs, ≈ 2,5 min (phase de retour comprise, 2026-10-02) | justesse ≥ 71 % **et** émission ≥ 46 % — le repère EN DIRECT |
 | ErrP (`errp_test.py`) | un feedback | la diagonale : autant d'erreurs attrapées que de bonnes commandes annulées | 80 essais, ≈ 2,4 min | Fisher exact unilatéral p < 0,05, écart TPR − (1 − TNR) ≥ 0,355, et moins de 50 % sans verdict |
 
 - **Un `-1` n'est jamais une bonne réponse.** Au MI, au SSVEP et au c-VEP c'est un silence : il
@@ -1381,7 +1381,7 @@ python src/console/app.py --mode p300      # page P300 -> « Entraîner » (« C
       entre le mode et son **test**.
 
 **Puis le test** (depuis le 2026-09-22) : « ← P300 » → **« 3. Tester »** → la page « Tester le
-P300 », pré-remplie avec le modèle du mode, « Manches » à **6** (≈ 1,2 min) → **Commencer**. La
+P300 », pré-remplie avec le modèle du mode, « Manches » à **6** (≈ 1,4 min) → **Commencer**. La
 fenêtre joue le protocole d'entraînement (`--tester`) : elle **cercle** une cible par manche, et le
 moteur SÉLECTIONNE avec ton modèle au lieu d'apprendre — chaque flash et chaque fin de manche
 passent par le `_run_step` du mode lui-même (garde de cible, plafond par cible, marge). Rien n'est
@@ -1394,7 +1394,7 @@ passent par le `_run_step` du mode lui-même (garde de cible, plafond par cible,
       exact** ne rejette pas le hasard à p < 0,05 (la porte commune à tous les tests depuis le
       2026-09-22 ; Wilson reste l'intervalle affiché, il ne décide plus). Donc **5/6 vert
       (p < 0,001), 4/6 orange (p = 0,009), 3/6 rouge (p = 0,062 — la porte se ferme là)** : une ou
-      deux erreurs sur six sont attendues (paragraphe suivant). À **24** manches (≈ 4,1 min) la
+      deux erreurs sur six sont attendues (paragraphe suivant). À **24** manches (≈ 5,0 min) la
       porte s'ouvre dès **8/24** (p = 0,035) : plus d'essais, moins de justes exigés en proportion.
 - [ ] Une manche sans décision (`-1`) compte comme une sélection **ratée**, et la réserve en nomme
       la cause (liaison, tampon) — à marge nulle, le mode tranche toujours une manche complète, donc
@@ -1708,7 +1708,7 @@ gagnant. Elle écrit **deux** fichiers horodatés (`data/cvep_model_AAAAMMJJ-HHM
       comparaison, qui n'a de sens que sur le **même modèle**.
 - [ ] **Puis « Tester le c-VEP »** (depuis le 2026-09-22), AVANT la séance longue : « ← c-VEP » →
       **« 3. Tester »** → pré-rempli avec le modèle et les seuils du mode, « Longueur : cycles
-      enregistrés par cible » à **3** (18 blocs, ≈ 1,8 min) → **Commencer**. La fenêtre joue le
+      enregistrés par cible » à **3** (18 blocs, ≈ 2,5 min) → **Commencer**. La fenêtre joue le
       protocole d'entraînement (`--tester`) : une cible **cerclée** par bloc, l'horloge `cycle`
       continue. **Un bloc = une décision : la dernière sortie** que `decoded_cvep` publiait quand le
       bloc s'est fermé — une fenêtre votée, l'unité même du repère EN DIRECT ; le rejeu passe par

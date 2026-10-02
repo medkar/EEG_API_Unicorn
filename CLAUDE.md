@@ -214,9 +214,14 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     peignait juste en magenta, faux en rouge et le libre en ambre.
   - **« Tester sur une session »** publie chaque décision du test (un bloc, une fixation, une
     manche) sur le flux décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une
-    application. L'anneau s'éteint AVANT les données que la
-    décision suivante lit — sa lumière n'entre jamais dans la mesure : c-VEP ≈ un cycle par bloc,
-    P300 0,5 s avant le premier flash, SSVEP au début de la consigne suivante. Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
+    application. **Phase de retour** (P300 et c-VEP, 2026-10-02, demandée au casque : « l'anneau
+    vert et la consigne bleue suivante ensemble, c'est confusant ») : après chaque essai, plus de
+    consigne ; la fenêtre attend la décision (≤ `retour.ATTENTE_DECISION_S`), la montre SEULE
+    `retour.RETOUR_AFFICHE_S`, l'efface, puis désigne la suivante. Elle allonge le test (~2 s par
+    manche ou bloc ; le c-VEP la compte en cycles entiers pour garder le `cue` sur une frame 0), et
+    la durée annoncée la compte. L'anneau s'éteint AVANT les données que la décision suivante lit —
+    sa lumière n'entre jamais dans la mesure. Sa taille est UNE règle (`retour.rayon_anneau` : le
+    bord de la cible + 18 px), celle du P300, pour les trois fenêtres. Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
     verdict (`decider`/`caler`), et le smoke vérifie que publié == noté.
   - **« Tester librement »** (contrôle de liaison d'abord, refusé pendant une mesure ou un
     entraînement) : le mode tourne, sa fenêtre (`--libre` pour le c-VEP, `--retour`) entoure la

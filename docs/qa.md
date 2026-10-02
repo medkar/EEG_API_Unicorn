@@ -30,8 +30,8 @@ sa longueur se choisit sur sa page — l'aide du réglage donne la durée de cha
 |---|---|---|
 | Vérifier le casque | **37 s** | aucune — ses durées font corps avec son repère |
 | Tester le SSVEP | **≈ 3,6 min** (36 essais : 12 par cible, 3 cibles) | aucune — pas de réglage de longueur |
-| Entraîner le c-VEP · Tester le c-VEP | **≈ 3,1 min** · **≈ 1,8 min** (3 cycles par cible, 18 blocs) | test : 2 cycles ≈ 1,3 min |
-| Entraîner le P300 · Tester le P300 | **≈ 2,2 min** (12 manches) · **≈ 1,2 min** (6 manches) | test : 12 ≈ 2,2 · 24 ≈ 4,1 min |
+| Entraîner le c-VEP · Tester le c-VEP | **≈ 3,1 min** · **≈ 2,5 min** (3 cycles par cible, 18 blocs, phase de retour comprise) | test : 2 cycles ≈ 1,7 min |
+| Entraîner le P300 · Tester le P300 | **≈ 2,2 min** (12 manches) · **≈ 1,4 min** (6 manches, phase de retour comprise) | test : 12 ≈ 2,6 · 24 ≈ 5,0 min |
 | Entraîner l'ErrP · Tester l'ErrP | **≈ 5,7 min** (200 essais) · **≈ 2,4 min** (80 essais) | test : 40 ≈ 1,4 · 200 ≈ 5,7 min |
 | Entraîner le MI · Tester le MI | **≈ 7,1 min** (14 essais/classe) · **≈ 2,8 min** (6/classe, 3 classes) | entraîner : 10 ≈ 5,4 min ; test : 4 ≈ 2,0 · 10 ≈ 4,5 min (G/D : 6 ≈ 2,0) |
 | Neuro — Observer | 15 s + 25 s de repos, puis à volonté | — |
@@ -558,7 +558,7 @@ moteur → fenêtre est un contrat testé) ; une fenêtre qui survit à « Aband
 
 → recette 1.20
 
-### ☐ 1.10 — Entraîner puis Tester : le P300 (~2,2 + 1,2 min)
+### ☐ 1.10 — Entraîner puis Tester : le P300 (~2,2 + 1,4 min)
 
 Le plus court des modes à modèle. Page **P300**.
 
@@ -738,12 +738,15 @@ voulu. Pour voir la mécanique, **baisse les seuils AVANT de tester** (bloc « 1
 ✅ **1.17.1** Page **SSVEP**, seuil à 1,0 → **« Tester sur une session »** → « Commencer » : le disque à fixer est cerclé de
 **bleu** ; après chaque essai, le disque décodé est entouré en **vert**, rien si le moteur s'est
 abstenu. L'anneau s'éteint au début de la consigne suivante.
-✅ **1.17.2** Page **P300** → **« Tester sur une session »** : l'anneau vert apparaît dans la pause après la
-manche et s'éteint ~0,5 s AVANT le premier flash suivant ; la dernière manche a le sien avant
-l'écran de fin.
-✅ **1.17.3** Page **c-VEP**, seuils à 0 → **« Tester sur une session »** : la cible à fixer est cerclée en **bleu** (plus
-en vert) ; l'anneau vert apparaît à la fin de chaque bloc, pendant ~1 s seulement (il s'éteint
-avant les cycles que la décision suivante lit).
+✅ **1.17.2** Page **P300** → **« Tester sur une session »** : après chaque manche, une **phase de
+retour** — le cercle bleu disparaît, l'anneau vert apparaît SEUL autour de la cible décodée
+(~1 s, aucune consigne à l'écran), s'efface, et SEULEMENT ENSUITE la cible suivante est cerclée en
+bleu. La dernière manche a la sienne avant l'écran de fin. L'anneau vert a la taille de la cible
+(un petit écart autour).
+✅ **1.17.3** Page **c-VEP**, seuils à 0 → **« Tester sur une session »** : la cible à fixer est
+cerclée en **bleu** (plus en vert) ; à la fin de chaque bloc, même **phase de retour** qu'au P300
+— l'anneau vert seul ~1 s, puis le cercle bleu suivant (les disques continuent de clignoter). Le
+vert a la **même taille qu'au P300** : collé à la cible, plus le grand cercle d'avant.
 ✅ **1.17.4** Pendant un de ces tests, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne
 par essai**.
 ✅ **1.17.5** Page **SSVEP** (seuil toujours à 1,0) → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
@@ -880,7 +883,7 @@ Page **c-VEP** → **« Entraîner »** (~3,1 min, stabilisation du casque compr
 « Détails » le test **McNemar** qui compare les deux décodeurs — pas l'écart des deux pourcentages.
 Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 ✅ **2.3.3** **« Enregistrer le modèle »** → « ← c-VEP » → **« Tester sur une session »** (3 cycles par cible, 18 blocs,
-~1,8 min) → « Commencer ». Fixe le disque **cerclé**, sans bouger les yeux.
+~2,5 min) → « Commencer ». Fixe le disque **cerclé**, sans bouger les yeux.
 ✅ **2.3.4** Deux chiffres ensemble : **justesse quand il émet** et **taux d'émission**, à comparer au couple
 **EN DIRECT** du dépôt — **~46 % d'émission, ~71 % de justesse** —, jamais au 59,5/64,9 %.
 ⚠️ **Orange est le résultat attendu d'un système AU repère** : à 18 blocs, il ne sort vert qu'environ
@@ -905,12 +908,12 @@ test ne les remplace pas — il ne dit rien de « réseau contre local ».
 Page **P300** → **« Entraîner »** (~2,2 min, 12 manches) → « Commencer ».
 
 ✅ **2.4.1** Le chiffre (cibles retrouvées, validation croisée par manche, hasard 17 %) → **« Enregistrer le modèle »**.
-✅ **2.4.2** « ← P300 » → **« Tester sur une session »** (6 manches, ~1,2 min) → « Commencer ». À chaque manche la fenêtre
+✅ **2.4.2** « ← P300 » → **« Tester sur une session »** (6 manches, ~1,4 min) → « Commencer ». À chaque manche la fenêtre
 **cercle** une cible : fixe-la.
 ✅ **2.4.3** Le verdict : « … de cibles justes … (hasard 17 %) sur 6 manches ». Vert à 80 %, orange de 60 à
 80 %, rouge en dessous ou si le binomial exact ne rejette pas le hasard : **5/6 vert (p < 0,001),
 4/6 orange (p = 0,009), 3/6 rouge (p = 0,062 — la porte se ferme là)**.
-⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). À **24 manches** (~4,1 min)
+⚠️ **Une ou deux erreurs sur six sont attendues** (AUC mesurée 0,71). À **24 manches** (~5,0 min)
 la porte s'ouvre dès **8/24** (p = 0,035) : si la réserve le dit, refais à 24.
 ✅ **2.4.4** ⚠️ **Le comptage mental n'est PAS requis** (validé casque) — une bonne fixation suffit, et le
 briefing le dit (« Compter les éclairs de ta cible aide à rester attentif, mais ce n'est pas
