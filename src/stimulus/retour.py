@@ -106,6 +106,29 @@ EPAISSEUR_PX = 4                 # tracée vers l'INTÉRIEUR du rayon donné (co
 ECART_TEINTE_MIN = 45.0          # degrés ; l'anneau vert était à 13° du cercle VERT du c-VEP d'avant
 CROIX_PX, CROIX_EPAISSEUR_PX = 14, 3   # la croix du repos : demi-branche, épaisseur
 
+# --- La TAILLE de l'anneau : UNE règle pour les trois fenêtres (2026-10-02) ---------------------
+# Demandé au casque : « en P300 les cercles verts sont du diamètre des cibles, ici [c-VEP] ils sont
+# bien plus grands, uniformise ». La règle est celle du P300, qui plaisait : le bord EXTÉRIEUR de
+# l'anneau à `ANNEAU_ECART_PX` du bord de la cible ronde, son bord intérieur à
+# `ANNEAU_ECART_PX - EPAISSEUR_PX` — dans le fond, jamais sur un pixel de la cible.
+ANNEAU_ECART_PX = 18
+
+
+def rayon_anneau(rayon_cible):
+    """Le rayon à passer à `dessine_anneau` autour d'une cible RONDE de rayon `rayon_cible`. Une
+    écriture : le rendu et les `--smoke` (qui relisent l'anneau dans les pixels) l'appellent."""
+    return int(rayon_cible) + ANNEAU_ECART_PX
+
+
+# --- La PHASE DE RETOUR d'un test guidé (2026-10-02) ---------------------------------------------
+# Après chaque essai, la fenêtre attend la décision du moteur (au plus `ATTENTE_DECISION_S`), la
+# montre SEULE — aucune consigne bleue à l'écran — pendant `RETOUR_AFFICHE_S`, l'efface, et
+# seulement ensuite désigne la cible suivante. Demandé au casque : l'anneau vert et la consigne
+# bleue suivante à l'écran en même temps, « c'est confusant ». Une décision −1, perdue ou trop
+# tardive : pas d'anneau, la phase s'arrête au bout de l'attente.
+RETOUR_AFFICHE_S = 1.0
+ATTENTE_DECISION_S = 3.0
+
 # Régime continu : passé ce délai sans décision VALIDE, l'anneau s'efface. 5 publications à 5 Hz.
 PERIME_S = 1.0
 
