@@ -14,7 +14,8 @@ PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une cible SSVEP plus 
 réponse plus faible, et `--smoke` compte sa surface dans les pixels. La consigne est un cercle
 BLEU à `CUE_MARGE_PX` du bord, comme au P300 ; l'anneau de retour suit la règle commune
 (`stimulus/retour.py:rayon_anneau`). Les flèches ne vivent plus que dans `archive/ui.py`, pour les
-écrans archivés.
+écrans archivés. Au centre de chaque disque, à chaque image, le point de fixation ROUGE du c-VEP
+et du P300 (`FIX_DOT`, QA 1.17.1) : les sondes de `--smoke` lisent donc l'état ON/OFF à mi-rayon.
 
 ⚠️ **Aucun texte sur une cible** (2026-10-02). Le titre du guidé était posé à 10 % de la hauteur,
 PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait : un texte sur une cible change sa
@@ -175,6 +176,21 @@ CUE_EPAISSEUR_PX = 4
 # dessous — `--smoke` compte les pixels non-fond que l'anneau couvrirait.
 ETIQUETTE_ECART_PX = 4
 
+# Le POINT DE FIXATION au centre de chaque disque (QA 1.17.1, 2026-10-02 : « mets aussi le point
+# rouge au centre pour fixer le regard »), comme au c-VEP et au P300. Dessiné à CHAQUE image,
+# disque allumé comme éteint, après le disque. CHROMATIQUE : la réponse SSVEP est pilotée par la
+# LUMINANCE du clignotement blanc/noir, un petit point rouge STATIQUE n'ampute donc quasiment pas
+# la modulation, et il reste visible dans les deux phases. Rayon en PIXELS, pas proportionnel :
+# 12 px sur ~12 400 à 1000×700 (0,1 % du disque) — `--smoke` (A bis) compte la surface qui
+# clignote VRAIMENT.
+#
+# ⚠️ RECOPIÉS de `stimulus/cvep.py` et `stimulus/p300.py` (`FIX_DOT`, `FIX_DOT_R`), pas importés :
+# une fenêtre n'importe pas une fenêtre sœur — chacune est un programme que la console lance
+# seul, et `stimulus.cvep` traînerait le code c-VEP derrière celle-ci. Leur ACCORD est tenu par
+# `--smoke` (section L), pas par la discipline — même règle que `SEUIL_SAUT`.
+FIX_DOT = (200, 40, 40)
+FIX_DOT_R = 2
+
 # En `--guide --retour`, l'essai se FERME ce délai AVANT la fin de la fixation : le moteur décide
 # à la fin EXACTE (`cue` + `SSVEP_GUIDE_FIX_S`), jamais avant — fermer À la fin était une course à
 # marge nulle, une décision arrivée une image trop tôt était perdue (revue C-M4).
@@ -300,6 +316,17 @@ def geometrie(plan, size):
     rayon = int(min(size) * RAYON_RATIO)
     return (positions_cibles(plan, size), rayon, rayon + CUE_MARGE_PX,
             _retour.rayon_anneau(rayon))
+
+
+def point_de_sonde(x, y, r):
+    """Le point de l'écran où l'état ON/OFF du disque centré en `(x, y)`, de rayon `r`, se LIT dans
+    les pixels — pour `--smoke`, qui ne croit pas l'émetteur sur parole.
+
+    ⚠️ PAS le centre : le point de fixation y est dessiné, rouge dans les deux phases, et sa couleur
+    ne dit rien de l'état du disque (la sonde lisait le centre avant l'arrivée du point). À
+    mi-rayon on est DANS le disque (blanc quand il est allumé), loin du point et en deçà du contour
+    (fond noir quand il est éteint). Même règle que `stimulus/cvep.py:point_de_sonde`."""
+    return (int(x) + int(r) // 2, int(y))
 
 
 # --- Les TEXTES : jamais sur une cible (2026-10-02) ---------------------------
@@ -771,6 +798,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             pygame.draw.circle(win, OUTLINE, (px, py), rayon, 2)  # repère statique
             if is_on(frame, c["frames_per_cycle"]):
                 pygame.draw.circle(win, ON_COLOR, (px, py), rayon)  # phase ON
+            # le point de fixation : APRÈS le disque, à CHAQUE image, allumé comme éteint
+            pygame.draw.circle(win, FIX_DOT, (px, py), FIX_DOT_R)
             # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
             pose_texte(win, page.etiquette, etiquette(c), LABEL,
                        midtop=(px, py + rayon_retour + ETIQUETTE_ECART_PX))
@@ -1054,19 +1083,63 @@ def _cible_designee_a_l_ecran(surface, positions, rayon_cue):
     return -2
 
 
-def _etats_a_l_ecran(surface, positions):
+def _etats_a_l_ecran(surface, positions, rayon):
     """Pour chaque cible et DANS L'ORDRE DU PLAN : True si elle est ALLUMÉE, lu dans les PIXELS.
 
-    Le point de lecture est le CENTRE du disque : blanc plein quand la phase est ON, fond noir
-    sinon. Ni le contour (dessiné sur le bord), ni le cercle de consigne (au-delà), ni l'étiquette
-    (sous l'anneau), ni le HUD et les titres (hors de toute cible, `mise_en_page`) n'y passent —
-    c'est ce qui fait de ce point une lecture de l'ÉTAT du clignotement et de rien d'autre. ⚠️ Il ne
-    dit rien du RESTE de la surface : c'est la section K du smoke qui la garde des textes.
+    Le point de lecture est `point_de_sonde`, à MI-RAYON : blanc plein quand la phase est ON, fond
+    noir sinon. Ni le point de fixation (au centre), ni le contour (sur le bord), ni le cercle de
+    consigne (au-delà), ni l'étiquette (sous l'anneau), ni le HUD et les titres (hors de toute
+    cible, `mise_en_page`) n'y passent — c'est ce qui fait de ce point une lecture de l'ÉTAT du
+    clignotement et de rien d'autre. ⚠️ Il ne dit rien du RESTE de la surface : c'est la section K
+    du smoke qui la garde des textes.
     """
     import pygame
 
     arr = pygame.surfarray.array3d(surface)          # (largeur, hauteur, 3)
-    return [tuple(arr[int(x), int(y)]) == ON_COLOR for x, y in positions]
+    return [tuple(arr[point_de_sonde(x, y, rayon)]) == ON_COLOR for x, y in positions]
+
+
+def _empreinte_point():
+    """Les décalages `(dx, dy)` des pixels qu'occupe le point de fixation tracé SEUL, sur une toile
+    vierge — la référence à laquelle `--smoke` compare chaque disque de chaque image."""
+    import pygame
+
+    m = FIX_DOT_R + 3
+    toile = pygame.Surface((2 * m + 1, 2 * m + 1))
+    toile.fill(BG)
+    pygame.draw.circle(toile, FIX_DOT, (m, m), FIX_DOT_R)
+    rouge = (pygame.surfarray.array3d(toile) == FIX_DOT).all(axis=2)
+    return {(int(x) - m, int(y) - m) for x, y in zip(*np.nonzero(rouge))}
+
+
+def _points_a_l_ecran(surface, positions, empreinte):
+    """Pour chaque cible et DANS L'ORDRE DU PLAN : True si son point de fixation est RÉELLEMENT à
+    l'écran — les pixels `FIX_DOT` autour de son centre forment EXACTEMENT `empreinte` : ni absent,
+    ni décalé, ni d'une autre taille, ni d'une autre couleur. Lu dans les PIXELS."""
+    import pygame
+
+    m = FIX_DOT_R + 3
+    arr = pygame.surfarray.array3d(surface)
+    vus = []
+    for x, y in positions:
+        x, y = int(x), int(y)
+        bloc = arr[x - m:x + m + 1, y - m:y + m + 1]
+        rouge = (bloc == FIX_DOT).all(axis=2)
+        vus.append({(int(a) - m, int(b) - m) for a, b in zip(*np.nonzero(rouge))} == empreinte)
+    return vus
+
+
+def _smoke_points(images, n_cibles):
+    """La garde L, sur `[(états, points), …]` lus image par image : `None` si le point de fixation
+    était à l'écran sur CHAQUE disque de CHAQUE image ET que chaque disque a été vu allumé ET
+    éteint (sinon la garde ne prouverait rien sur la phase manquante) ; la faute sinon."""
+    manques = [(i, k) for i, (_e, p) in enumerate(images) for k, vu in enumerate(p) if not vu]
+    if manques:
+        return f"point ABSENT ou faux (image, disque) : {manques[:4]} sur {len(manques)}"
+    phases = [{e[k] for e, _p in images} for k in range(n_cibles)]
+    if not images or any(ph != {True, False} for ph in phases):
+        return f"phases vues par disque : {phases} — il faut allumé ET éteint"
+    return None
 
 
 def _periode_observee(suite):
@@ -1088,7 +1161,7 @@ def _periode_observee(suite):
 def _rejouer_libre(freqs=None, cales=0):
     """Joue le décodage libre sur un écran factice. Rend (périodes LUES DANS LES PIXELS, bilan,
     cales réellement posées, flips comptés, pixels ALLUMÉS de chaque disque à la première image —
-    où tous le sont : `is_on(0, …)`).
+    où tous le sont : `is_on(0, …)` —, et par image `(états, points de fixation)` lus à l'écran).
 
     ⚠️ Écrite le 2026-09-21 et jamais appelée jusqu'au 2026-10-02 : la fréquence AFFICHÉE n'était
     relue nulle part. C'est la partie A bis du smoke.
@@ -1107,14 +1180,16 @@ def _rejouer_libre(freqs=None, cales=0):
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     # Là où regarder : la MÊME géométrie que le rendu, appelée et non recalculée ici.
     positions, rayon, _c, _a = geometrie(plan_du_stimulus(60.0, freqs), TAILLE_FENETRE)
-    etats, allumes = [], []
+    etats, allumes, points = [], [], []
+    empreinte = _empreinte_point()
     compteur = {"restantes": int(cales), "faites": 0, "attendre": 5}
     vrai_flip = pygame.display.flip
 
     def flip_espion(*a, **k):
         r = vrai_flip(*a, **k)
         surface = pygame.display.get_surface()
-        etats.append(_etats_a_l_ecran(surface, positions))
+        etats.append(_etats_a_l_ecran(surface, positions, rayon))
+        points.append((etats[-1], _points_a_l_ecran(surface, positions, empreinte)))
         if not allumes:
             pixels = pygame.surfarray.array3d(surface)
             allumes.extend(int((pixels[x - rayon - 1:x + rayon + 2, y - rayon - 1:y + rayon + 2]
@@ -1135,7 +1210,7 @@ def _rejouer_libre(freqs=None, cales=0):
         pygame.display.flip = vrai_flip
     suites = [list(s) for s in zip(*etats)] if etats else []
     return ([_periode_observee(s) for s in suites], bilan, compteur["faites"], len(etats),
-            allumes)
+            allumes, points)
 
 
 def _smoke():
@@ -1171,14 +1246,32 @@ def _smoke():
     import pygame
 
     plan_lu = plan_du_stimulus(60.0, [20.0, 12.0, 15.0])
-    periodes, _b, _c, n_images, allumes = _rejouer_libre(freqs=[20.0, 12.0, 15.0])
+    periodes, _b, _c, n_images, allumes, points = _rejouer_libre(freqs=[20.0, 12.0, 15.0])
     chk(n_images == 30 and periodes == [c["frames_per_cycle"] for c in plan_lu],
         f"chaque disque clignote à la période de SA fréquence, dans l'ordre de `--freqs`, lu dans "
         f"les PIXELS ({periodes} pour {[c['frames_per_cycle'] for c in plan_lu]} images/cycle)")
+    # La surface qui clignote VRAIMENT : le disque MOINS son point de fixation, compté dans les
+    # pixels — et la précondition que ce compte est bien celui-là (un disque tracé seul, moins
+    # l'empreinte du point), sans quoi « au-dessus du plancher » pourrait compter le point.
     plancher = SURFACE_MIN_RATIO * min(TAILLE_FENETRE) ** 2
-    chk(allumes and min(allumes) >= plancher,
-        f"…et chaque disque allumé couvre au moins la surface de la flèche d'avant "
-        f"({allumes} px allumés, plancher {plancher:.0f})")
+    empreinte = _empreinte_point()
+    _p, r_disque, _c2, _a2 = geometrie(plan_lu, TAILLE_FENETRE)
+    toile = pygame.Surface((2 * r_disque + 3, 2 * r_disque + 3))
+    toile.fill(BG)
+    pygame.draw.circle(toile, ON_COLOR, (r_disque + 1, r_disque + 1), r_disque)
+    disque_seul = int((pygame.surfarray.array3d(toile) == ON_COLOR).all(axis=2).sum())
+    chk(allumes and min(allumes) >= plancher
+        and all(a == disque_seul - len(empreinte) for a in allumes),
+        f"…et chaque disque allumé couvre au moins la surface de la flèche d'avant, point de "
+        f"fixation DÉDUIT ({allumes} px allumés = {disque_seul} du disque − {len(empreinte)} du "
+        f"point, plancher {plancher:.0f})")
+    # L. LE POINT DE FIXATION, à chaque image, disque ALLUMÉ ET ÉTEINT (QA 1.17.1). Lu dans les
+    # PIXELS : l'empreinte exacte du point, à la couleur exacte, au centre de chaque disque. Un
+    # point oublié, ou dessiné dans la seule phase ON, rougit ici.
+    chk(_smoke_points(points, len(plan_lu)) is None,
+        f"[L] libre : le point rouge est au centre de CHAQUE disque, à chaque image, allumé ET "
+        f"éteint, lu dans les PIXELS ({_smoke_points(points, len(plan_lu)) or 'ok'}, "
+        f"{len(points)} images)")
     # Précondition de `_rayon_lu` : ce qu'il lit sur un cercle tracé SEUL est son rayon exact.
     toile = pygame.Surface((200, 200))
     toile.fill(BG)
@@ -1426,6 +1519,30 @@ def _smoke():
     # --- K. AUCUN TEXTE SUR UNE CIBLE, à plusieurs résolutions --------------------------
     _smoke_textes(chk)
 
+    # --- L. LE POINT DE FIXATION : le MÊME que celui du c-VEP et du P300 ---------------------
+    # Sa présence image par image est relue en A bis (libre) et en J (guidé et libre, retour
+    # branché). Ici : ses deux constantes, recopiées, comparées à leurs SOURCES — importées
+    # ici seulement, une fenêtre n'en important pas une autre pour tourner.
+    from stimulus import cvep as _cvep, p300 as _p300
+    sources = {"cvep": (_cvep.FIX_DOT, _cvep.FIX_DOT_R), "p300": (_p300.FIX_DOT, _p300.FIX_DOT_R)}
+    chk(all(v == (FIX_DOT, FIX_DOT_R) for v in sources.values()),
+        f"[L] le point de fixation a la couleur et le rayon de ceux du c-VEP et du P300 "
+        f"(ici {FIX_DOT}, {FIX_DOT_R} px ; {sources})")
+    # …et la sonde ON/OFF ne tombe jamais dessus, à aucune taille jouée : DANS le disque, hors du
+    # point, en deçà du contour (tracé sur 2 px au bord).
+    fautes_sonde = []
+    for taille in RESOLUTIONS_SMOKE:
+        for jeu in (None, _SMOKE_QUATRE_CIBLES):
+            pos, r, _c3, _a3 = geometrie(plan_du_stimulus(60.0, jeu), taille)
+            for x, y in pos:
+                sx, sy = point_de_sonde(x, y, r)
+                d2 = (sx - x) ** 2 + (sy - y) ** 2
+                if not (FIX_DOT_R + 1) ** 2 < d2 < (r - 2) ** 2:
+                    fautes_sonde.append((taille, (x, y), (sx, sy)))
+    chk(not fautes_sonde,
+        f"[L] la sonde ON/OFF est DANS chaque disque, hors du point de fixation et du contour, aux "
+        f"{len(RESOLUTIONS_SMOKE)} tailles jouées (fautes {fautes_sonde[:2]})")
+
     print(f"[ssvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
 
@@ -1451,16 +1568,19 @@ def _smoke_retour(chk):
     milieu = (TAILLE_FENETRE[0] / 2, TAILLE_FENETRE[1] / 2)
     trace, source = [], [None]
     vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
+    empreinte = _empreinte_point()
 
     def flip(*a, **k):
         r = vrai_flip(*a, **k)
         s = pygame.display.get_surface()
         trace.append(("flip", rt.anneaux_a_l_ecran(s, positions, rayon),
                       _cible_designee_a_l_ecran(s, positions, rayon_cue),
-                      rt.croix_a_l_ecran(s, milieu, DIM), _etats_a_l_ecran(s, positions),
+                      rt.croix_a_l_ecran(s, milieu, DIM),
+                      _etats_a_l_ecran(s, positions, rayon_disque),
                       # le rayon EXACT de tout anneau à l'écran, autour de n'importe quel disque
                       {v for v in (_rayon_lu(s, p, rt.COULEUR_DECODEE, 2 * rayon)
-                                   for p in positions) if v is not None}))
+                                   for p in positions) if v is not None},
+                      _points_a_l_ecran(s, positions, empreinte)))
         return r
 
     def push(self, *a, **k):
@@ -1570,6 +1690,13 @@ def _smoke_retour(chk):
         f"de NOUVEAU quand il refait son repos — disques toujours clignotants (images "
         f"{[i for i, (a, b) in enumerate(zip(croix_l, croix_attendue)) if a != b][:5]} en "
         f"désaccord, clignotement sous la croix {clignotent})")
+    # L. Le point de fixation, en guidé (chauffe, repos, consigne, fixation, pause) et en libre,
+    # anneau de retour branché : au centre de chaque disque, à chaque image, allumé ET éteint.
+    for regime, imgs in (("guidé", images), ("libre", images_l)):
+        faute = _smoke_points([(e[4], e[6]) for e in imgs], len(plan))
+        chk(faute is None,
+            f"[L] {regime} avec retour : le point rouge est au centre de CHAQUE disque, à chaque "
+            f"image, allumé ET éteint, lu dans les PIXELS ({faute or 'ok'}, {len(imgs)} images)")
     # La TAILLE de l'anneau : la règle commune aux trois fenêtres (demandé au QA le 2026-10-02,
     # « uniformise »), au pixel près, en guidé comme en libre.
     rayons_vus = set().union(*(e[5] for e in images + images_l))
@@ -1617,11 +1744,14 @@ def _rect_touche(rect, centre, garde):
     return int(np.abs(xs).min()) ** 2 + int(np.abs(ys).min()) ** 2 < garde ** 2
 
 
-def _pixels_etrangers(surface, centre, garde, palette):
-    """Combien de pixels à moins de `garde` de `centre` ne sont d'AUCUNE couleur de `palette`.
+def _pixels_etrangers(surface, centre, garde, palette, empreinte):
+    """Combien de pixels à moins de `garde` de `centre` ne sont d'AUCUNE couleur de `palette` —
+    hormis le point de fixation : `FIX_DOT` n'est permis QUE sur `empreinte`, autour du centre.
 
-    `draw.circle` ne lisse pas : le disque, son contour, la consigne et l'anneau sont des couleurs
-    EXACTES. Un texte, lui, est lissé — ses bords ne sont d'aucune couleur de la palette."""
+    `draw.circle` ne lisse pas : le disque, son contour, son point, la consigne et l'anneau sont des
+    couleurs EXACTES. Un texte, lui, est lissé — ses bords ne sont d'aucune couleur de la palette.
+    Le rouge n'entre PAS dans la palette : permis partout, il laisserait passer un second point, ou
+    un point décalé, sans un mot."""
     import pygame
 
     x, y = int(centre[0]), int(centre[1])
@@ -1632,6 +1762,12 @@ def _pixels_etrangers(surface, centre, garde, palette):
     dedans = dx ** 2 + dy ** 2 < garde ** 2
     code = (px[..., 0] << 16) | (px[..., 1] << 8) | px[..., 2]
     permis = np.isin(code, [(r << 16) | (g << 8) | b for r, g, b in palette])
+    a_sa_place = np.zeros(dedans.shape, dtype=bool)
+    for ex, ey in empreinte:
+        i, j = x + ex - zone.left, y + ey - zone.top
+        if 0 <= i < a_sa_place.shape[0] and 0 <= j < a_sa_place.shape[1]:
+            a_sa_place[i, j] = True
+    permis |= a_sa_place & (code == ((FIX_DOT[0] << 16) | (FIX_DOT[1] << 8) | FIX_DOT[2]))
     return int((dedans & ~permis).sum())
 
 
@@ -1640,14 +1776,16 @@ def _smoke_textes(chk):
 
     Le défaut (2026-10-02) : en `--guide`, le titre et le sous-titre étaient posés à 10 % de la
     hauteur, PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait. Rien ne le voyait : les
-    sondes lisent le CENTRE des disques et le cercle de consigne, jamais le reste de leur surface.
+    sondes lisent UN point de chaque disque et le cercle de consigne, jamais le reste de leur
+    surface.
 
     Deux lectures, indépendantes de `mise_en_page` (qui ne pourrait que se donner raison) :
     • le RECTANGLE de chaque texte réellement posé (`pose_texte`, espionné), contre le disque de
       rayon `retour.rayon_anneau(rayon) + retour.EPAISSEUR_PX` de chaque cible — la règle COMMUNE,
       rappelée ici ; les textes d'une même image ne se chevauchent pas et restent à l'écran ;
-    • les PIXELS de chaque zone après chaque flip : rien que le fond, le disque et son contour, la
-      consigne bleue et l'anneau vert.
+    • les PIXELS de chaque zone après chaque flip : rien que le fond, le disque et son contour, son
+      point de fixation rouge (à sa place exacte, et nulle part ailleurs), la consigne bleue et
+      l'anneau vert.
     Chaque régime qui écrit est joué à chaque taille de `RESOLUTIONS_SMOKE` : le guidé avec retour
     (chauffe, repos, consigne, fixation, pause), à 3 cibles et à 4 ; l'essai libre avec retour
     (croix de chauffe et de repos, puis décodage), à 3. Un texte attendu qui n'a jamais été posé
@@ -1669,6 +1807,24 @@ def _smoke_textes(chk):
     module = sys.modules[__name__]
     vrai_pose, vrai_flip, taille_avant = module.pose_texte, pygame.display.flip, TAILLE_FENETRE
     palette = (BG, ON_COLOR, OUTLINE, CUE, rt.COULEUR_DECODEE)
+    # Le point de fixation est permis à SA place et nulle part ailleurs. Précondition, sur une
+    # toile : disque + point au centre -> 0 étranger ; un pixel rouge de plus à mi-rayon, ou le
+    # point décalé d'un pixel -> des étrangers. Sinon « accepter le point » voudrait dire
+    # « accepter le rouge ».
+    empreinte = _empreinte_point()
+    etrangers = []
+    for decale, en_trop in ((0, False), (0, True), (1, False)):
+        toile = pygame.Surface((121, 121))
+        toile.fill(BG)
+        pygame.draw.circle(toile, ON_COLOR, (60, 60), 40)
+        pygame.draw.circle(toile, FIX_DOT, (60 + decale, 60), FIX_DOT_R)
+        if en_trop:
+            toile.set_at(point_de_sonde(60, 60, 40), FIX_DOT)
+        etrangers.append(_pixels_etrangers(toile, (60, 60), 50, palette, empreinte))
+    chk(etrangers[0] == 0 and etrangers[1] > 0 and etrangers[2] > 0,
+        f"[K] (précondition) la garde des zones accepte le point rouge à SA place, et lui seul : "
+        f"{etrangers[0]} étranger(s) pour le point centré, {etrangers[1]} pour un pixel rouge en "
+        f"trop, {etrangers[2]} pour le point décalé d'un pixel")
     queue_hud = HUD_TEXTE.rsplit("}", 1)[1]
     pages = []
     try:
@@ -1697,7 +1853,8 @@ def _smoke_textes(chk):
                         if not ecran.contains(rect):
                             f["ecran"].append((texte, tuple(rect)))
                         f["texte"] += [(texte, t) for t, r2 in image[i + 1:] if rect.colliderect(r2)]
-                    f["pixels"] += sum(_pixels_etrangers(s, p, garde, palette) for p in positions)
+                    f["pixels"] += sum(_pixels_etrangers(s, p, garde, palette, empreinte)
+                                       for p in positions)
                     f["anneaux"] += bool(rt.anneaux_a_l_ecran(s, positions, rt.rayon_anneau(rayon)))
                     f["images"] += 1
                     image.clear()
@@ -1747,10 +1904,10 @@ def _smoke_textes(chk):
                     f"{page.ou} à {page.echelle:.0%} ; fautes {f['disque'][:2]}, jamais posés "
                     f"{manquants[:3]}, HUD {'vu' if hud_vu else 'JAMAIS vu'}")
                 chk(not f["pixels"] and not f["texte"] and not f["ecran"] and f["anneaux"] > 0,
-                    f"[K] {nom} : dans chaque zone, rien que le disque, la consigne bleue et "
-                    f"l'anneau vert, lu dans les PIXELS ({f['pixels']} pixel(s) étranger(s), anneau "
-                    f"vu sur {f['anneaux']} images) ; textes ni superposés {f['texte'][:2]} ni hors "
-                    f"de l'écran {f['ecran'][:2]}")
+                    f"[K] {nom} : dans chaque zone, rien que le disque, son point rouge, la "
+                    f"consigne bleue et l'anneau vert, lu dans les PIXELS ({f['pixels']} "
+                    f"pixel(s) étranger(s), anneau vu sur {f['anneaux']} images) ; textes ni "
+                    f"superposés {f['texte'][:2]} ni hors de l'écran {f['ecran'][:2]}")
     finally:
         module.pose_texte, pygame.display.flip = vrai_pose, vrai_flip
         module.TAILLE_FENETRE = taille_avant
