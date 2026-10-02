@@ -734,8 +734,11 @@ voulu. Pour voir la mécanique, **baisse les seuils AVANT de tester** (bloc « 1
   **1** : une décision à chaque bloc.
 - Le **P300** décide à chaque manche sans rien toucher.
 - À la fin du point : **« Rétablir les valeurs par défaut »** sur chacune des deux pages.
+- ⚠️ **Les réglages ne survivent PAS à une relance de la console** : ils reviennent aux défauts.
+  Console relancée en cours de point → **rebaisse les seuils** avant de continuer (relevé le
+  2026-10-02 : 1.17.3 sans anneau, seuils revenus aux défauts, un −1 à chaque bloc).
 
-✅ **1.17.1** Page **SSVEP**, seuil à 1,0 → **« Tester sur une session »** → « Commencer » : le disque à fixer est cerclé de
+✅ **1.17.1** Page **SSVEP** — ⚠️ **vérifie d'abord** « Seuil de détection » = **1,0** → **« Tester sur une session »** → « Commencer » : le disque à fixer est cerclé de
 **bleu** ; après chaque essai, le disque décodé est entouré en **vert**, rien si le moteur s'est
 abstenu. L'anneau s'éteint au début de la consigne suivante.
 ✅ **1.17.2** Page **P300** → **« Tester sur une session »** : après chaque manche, une **phase de
@@ -743,13 +746,14 @@ retour** — le cercle bleu disparaît, l'anneau vert apparaît SEUL autour de l
 (~1 s, aucune consigne à l'écran), s'efface, et SEULEMENT ENSUITE la cible suivante est cerclée en
 bleu. La dernière manche a la sienne avant l'écran de fin. L'anneau vert a la taille de la cible
 (un petit écart autour).
-✅ **1.17.3** Page **c-VEP**, seuils à 0 → **« Tester sur une session »** : la cible à fixer est
+✅ **1.17.3** Page **c-VEP** — ⚠️ **vérifie d'abord** « Corrélation minimale » **0**, « Marge sur le
+second » **0**, « Votes concordants » **1** (sinon : aucun anneau, ce n'est pas une panne) → **« Tester sur une session »** : la cible à fixer est
 cerclée en **bleu** (plus en vert) ; à la fin de chaque bloc, même **phase de retour** qu'au P300
 — l'anneau vert seul ~1 s, puis le cercle bleu suivant (les disques continuent de clignoter). Le
 vert a la **même taille qu'au P300** : collé à la cible, plus le grand cercle d'avant.
 ✅ **1.17.4** Pendant un de ces tests, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne
 par essai**.
-✅ **1.17.5** Page **SSVEP** (seuil toujours à 1,0) → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
+✅ **1.17.5** Page **SSVEP** — ⚠️ **vérifie** « Seuil de détection » = **1,0** → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
 s'ouvre **tout de suite** — les disques clignotent avec une **croix** au centre et « ne fixe aucune
 cible » pendant la chauffe et le repos du moteur.
 ✅ **1.17.6** La croix part : l'anneau **vert** suit les décisions, sans consigne ni score, et ne clignote pas
