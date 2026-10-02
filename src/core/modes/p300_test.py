@@ -81,10 +81,26 @@ MANCHES_DEFAUT = MANCHES[0]
 # test en joue 6 ; on ne tombe ici que si la moitié de la séance s'est perdue.
 MANCHES_MIN = 3
 
+# La PHASE DE RETOUR qui suit chaque manche du test (2026-10-02) : la fenêtre (`--tester --retour`,
+# ce que lance la console) attend la sélection — la dernière époque mûrit (`P300_EPOCH_S`), puis le
+# moteur décide et publie (`LATENCE_DECISION_S`, ESTIMÉE : jamais mesurée au casque) —, la montre
+# SEULE `RETOUR_AFFICHE_S`, et seulement ensuite cercle la cible suivante. ~2 s par manche : sans
+# elle, la durée annoncée d'un test de 24 manches mentait de ~50 s. Le plus long silence de
+# marqueurs devient `round_end` → `cue` suivant : au plus `ATTENTE_DECISION_S + RETOUR_AFFICHE_S`
+# (4 s) côté fenêtre, loin de la garde de silence du socle (`CALIB_FENETRE_SILENCE_S`, 15 s) — le
+# `--smoke` de la fenêtre le mesure.
+# ⚠️ `RETOUR_AFFICHE_S` est une COPIE de `stimulus/retour.RETOUR_AFFICHE_S` (`core` n'importe pas
+# `stimulus`) ; l'accord est tenu par `python src/stimulus/p300.py --smoke`, qui MESURE la phase de
+# la vraie fenêtre contre `PHASE_RETOUR_S`.
+RETOUR_AFFICHE_S = 1.0
+LATENCE_DECISION_S = 0.3
+PHASE_RETOUR_S = P300_EPOCH_S + LATENCE_DECISION_S + RETOUR_AFFICHE_S
+
 # Une manche à 60 Hz, depuis les constantes de la FENÊTRE : la pause qui la précède (le `cue` y est
-# affiché), puis `P300_REPS` flashs de chaque cible au SOA de référence. L'autotest vérifie qu'à 12
-# manches on retombe EXACTEMENT sur la durée que la calibration annonce.
-PAR_MANCHE_S = P300_PAUSE_MANCHE_S + P300_REPS * P300_N_TARGETS * SOA_REFERENCE_S
+# affiché), puis `P300_REPS` flashs de chaque cible au SOA de référence, puis sa phase de retour.
+# L'autotest vérifie qu'à 12 manches on retombe EXACTEMENT sur la durée que la calibration annonce,
+# plus la phase de retour de chaque manche — le seul geste que le test ajoute.
+PAR_MANCHE_S = P300_PAUSE_MANCHE_S + P300_REPS * P300_N_TARGETS * SOA_REFERENCE_S + PHASE_RETOUR_S
 
 
 def duree_protocole_s(manches):
@@ -561,8 +577,11 @@ def _selftest():
             f"…et il refuse ce que le MODE refuse : un modèle d'une autre géométrie ({refus})")
 
         # === 2. LA DURÉE, en manches ============================================================
-        chk(abs(duree_protocole_s(P300_CAL_ROUNDS) - P300Calibration.duree_protocole_s) < 1e-9,
-            f"à {P300_CAL_ROUNDS} manches, la durée est EXACTEMENT celle que l'entraînement annonce")
+        chk(abs(duree_protocole_s(P300_CAL_ROUNDS) - P300_CAL_ROUNDS * PHASE_RETOUR_S
+                - P300Calibration.duree_protocole_s) < 1e-9 and PHASE_RETOUR_S > RETOUR_AFFICHE_S,
+            f"à {P300_CAL_ROUNDS} manches, la durée est EXACTEMENT celle que l'entraînement "
+            f"annonce, plus la phase de retour de chaque manche ({PHASE_RETOUR_S:g} s) — le seul "
+            f"geste que le test ajoute")
         moteur = _Moteur(eeg_e, ts_e)
         courte = MesureP300(SPEC, valeurs, moteur).duree_estimee_s()
         longue = MesureP300(SPEC, dict(valeurs, essais=max(MANCHES)), moteur).duree_estimee_s()
