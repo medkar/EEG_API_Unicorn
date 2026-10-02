@@ -75,9 +75,9 @@ lui, ne porte que `{mode, event, refresh}` — rien d'autre, le moteur n'en lit 
 rejoue la même SÉQUENCE de consignes (sa LONGUEUR, elle, peut différer d'une consigne quand la
 séance est bornée en secondes : cf. le ⚠️ de `poll`), et la graine est IMPRIMÉE même quand on ne la
 donne pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se
-dépouille pas deux fois. Le cercle est tracé à 1,7× le rayon du disque, LOIN à l'extérieur : posé dessus, un
-contour lumineux statique écraserait la modulation de contraste du stimulus (même choix, et même
-raison, que `archive/ui.py:draw_ring`).
+dépouille pas deux fois. Le cercle suit la règle du P300 (`rayon_cercle`) : `p300.CUE_MARGE_PX` au-delà du
+bord du disque, trait vers l'intérieur — il ne touche aucun pixel du disque ni de son contour.
+Il était à 1,7 × le rayon jusqu'au 2026-10-02 : « trop grand », relevé au QA 1.17.3.
 
 ⚠️ **`--log CHEMIN` écrit cette vérité-terrain dans un FICHIER, et sans lui la séance 2.9 n'est pas
 dépouillable.** Le terminal ne suffit pas : c'est le seul exemplaire de la consigne, un `Ctrl+C`
@@ -181,6 +181,7 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
                              StatutDuMoteur)
@@ -194,7 +195,7 @@ OUTLINE = (55, 55, 70)      # contour statique : garde le repère spatial quand 
 FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (cf. archive/ui.py : la réponse c-VEP
 #                             est pilotée par la LUMINANCE, un point rouge n'ampute donc quasiment
 #                             pas la modulation tout en restant visible allumé comme éteint)
-CUE = (60, 130, 255)        # le cercle de consigne, LARGEMENT à l'extérieur du disque. BLEU comme
+CUE = (60, 130, 255)        # le cercle de consigne, juste autour du disque. BLEU comme
                             # celui du SSVEP et du P300 (vert jusqu'au 2026-10-02 : l'anneau VERT de
                             # la cible décodée s'y confondait — `retour.autotest_couleurs`)
 LABEL = (120, 120, 140)
@@ -214,16 +215,17 @@ FIX_DOT_R = 2
 # stimulus que le modèle n'a jamais vu — sans qu'aucune exception ne le dise.
 DIST_RATIO = 0.31
 TAILLE_RATIO = 0.075
-# Rayon du cercle de consigne, en multiples du rayon du disque. LARGEMENT à l'extérieur : posé
-# dessus, un contour lumineux STATIQUE écraserait la modulation de contraste du stimulus — même
-# valeur, et même raison, que `archive/ui.py:draw_ring`. Nommé parce que `--smoke` a besoin du
-# MÊME nombre pour aller lire ce cercle dans les pixels (cf. `point_de_sonde_cercle`) : recopié,
-# il suffirait de le déplacer d'un côté pour que la sonde lise le fond noir et ne rougisse plus.
-RATIO_CERCLE = 1.7
-# L'anneau de RETOUR (`--retour`) suit la règle des trois fenêtres, `retour.rayon_anneau` : il tombe
-# DANS le rayon du cercle de consigne, ce qui n'est permis que parce qu'ils ne sont jamais à l'écran
-# ensemble (la phase de retour, cf. la docstring du module). `--smoke` relit son rayon dans les
-# pixels, et prouve à chaque image qu'il ne recouvre ni disque ni sonde (`_smoke_retour`).
+# Le cercle de consigne suit la règle du P300 (`p300.geometrie`), IMPORTÉE et non recopiée :
+# `rayon_cercle`. Il était à 1,7 × le rayon jusqu'au 2026-10-02 (la valeur de
+# `archive/ui.py:draw_ring`) — « trop grand », relevé au QA 1.17.3. Il ne touche toujours aucun
+# pixel du disque : son trait couvre [r + 4, r + 8[, le disque s'arrête à r. Une fonction, parce
+# que `--smoke` a besoin du MÊME rayon pour aller lire ce cercle dans les pixels
+# (`point_de_sonde_cercle`) : recopié, il suffirait de le déplacer d'un côté pour que la sonde
+# lise le fond noir et ne rougisse plus.
+# L'anneau de RETOUR (`--retour`) suit la règle des trois fenêtres, `retour.rayon_anneau` : à
+# l'EXTÉRIEUR du cercle de consigne, comme au P300 (ils ne sont de toute façon jamais à l'écran
+# ensemble, cf. la phase de retour). `--smoke` relit son rayon dans les pixels, et prouve à chaque
+# image qu'il ne recouvre ni disque ni sonde (`_smoke_retour`).
 
 TAILLE_FENETRE = (1000, 700)   # `--windowed` (dev) et `--smoke`
 
@@ -309,11 +311,17 @@ def point_de_sonde_cercle(x, y, r):
     vérité-terrain de la calibration, et une consigne annoncée à côté de celle qui est dessinée
     produirait une séance entière étiquetée à l'envers, sans qu'aucune exception ne le dise.
 
-    Le cercle est tracé à 1,7 × le rayon du disque, en trait de 4 px vers l'INTÉRIEUR : on sonde
-    donc deux pixels sous le rayon extérieur. À cette distance il n'y a rien d'autre — le disque
-    voisin le plus proche est à 0,31 × la largeur de l'écran, le cercle à 0,128.
+    Le cercle est tracé à `rayon_cercle(r)`, en trait de `CUE_EPAISSEUR_PX` vers l'INTÉRIEUR : on
+    sonde au milieu du trait. À cette distance il n'y a rien d'autre — le disque et son contour
+    s'arrêtent à r, l'anneau de retour commence à `retour.rayon_anneau(r) - EPAISSEUR_PX`.
     """
-    return (x + int(r * RATIO_CERCLE) - 2, y)
+    return (x + rayon_cercle(r) - CUE_EPAISSEUR_PX // 2, y)
+
+
+def rayon_cercle(r):
+    """Le rayon du cercle de consigne autour d'un disque de rayon `r` : la règle du P300
+    (`p300.geometrie` : rayon de la cible + `CUE_MARGE_PX`). Le rendu et la sonde l'appellent."""
+    return int(r) + CUE_MARGE_PX
 
 
 def en_images(secondes, refresh, au_plus=False):
@@ -816,15 +824,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             lab = font.render(plan[i]["name"], True, LABEL)
             win.blit(lab, lab.get_rect(center=(x, y + int(r * 1.9))))
         if consigne is not None:
-            # ⚠️ `RATIO_CERCLE` (1,7) fois le rayon : LARGEMENT à l'extérieur du disque. Posé
-            # dessus, ce contour lumineux STATIQUE écraserait la modulation de contraste — même
-            # valeur, et même raison, que `archive/ui.py:draw_ring`. C'est aussi le cercle que
-            # `--smoke` va LIRE DANS LES PIXELS pour vérifier que le `cue` publié désigne la cible
-            # réellement cerclée (cf. `point_de_sonde_cercle`).
+            # `rayon_cercle` : la règle du P300, juste autour du disque sans toucher un de ses
+            # pixels. C'est aussi le cercle que `--smoke` va LIRE DANS LES PIXELS pour vérifier
+            # que le `cue` publié désigne la cible réellement cerclée (`point_de_sonde_cercle`).
             x, y, r = spots[consigne]
-            pygame.draw.circle(win, CUE, (x, y), int(r * RATIO_CERCLE), 4)
-        # L'anneau de RETOUR : après les cibles, avant le texte — dans le fond autour du disque, là
-        # où le cercle de consigne n'est jamais en même temps (cf. `RATIO_CERCLE`).
+            pygame.draw.circle(win, CUE, (x, y), rayon_cercle(r), CUE_EPAISSEUR_PX)
+        # L'anneau de RETOUR : après les cibles, avant le texte — dans le fond, à l'extérieur du
+        # cercle de consigne (qui n'est de toute façon jamais là en même temps).
         if anneau is not None:
             anneau.dessiner(pygame, win, centres, rayon_retour)
         # La croix de REPOS (`--libre`), au centre, vide : les disques sont sur la couronne.
@@ -1143,7 +1149,7 @@ def _course_de_phase(rt, refresh, L, t0=1000.0, cycles=8, saut_a=None):
 def _consigne_ecran(pygame, sondes_cercle, couleur=None):
     """L'indice de la cible RÉELLEMENT CERCLÉE à l'écran, lu dans les pixels — None si aucune.
 
-    La vérité-terrain d'une calibration c-VEP est la cible entourée de vert, et c'est elle que le
+    La vérité-terrain d'une calibration c-VEP est la cible cerclée de bleu, et c'est elle que le
     marqueur `cue` doit porter. Un `cue` qui annoncerait la cible que le TIRAGE a décidée, pendant
     que l'écran en cercle une autre, produirait une séance entière étiquetée à l'envers : le bon
     nombre d'époques, des proportions plausibles, aucune exception — et un modèle qui décode du
@@ -2121,15 +2127,17 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     chk(garde_2.traces > 0 and garde_2.violations == 0,
         f"[C8] …et à la seconde taille non plus, il ne recouvre aucun pixel non-fond "
         f"({garde_2.violations} sur {garde_2.traces} tracés)")
-    # Ni disque ni sonde : l'anneau couvre [R − épaisseur, R[ ; le disque s'arrête à r, la sonde du
-    # cercle de consigne ([C7]) est à int(1,7 r) − 2 — aux tailles d'écran courantes aussi.
+    # Ni disque ni cercle de consigne : l'anneau couvre [R − épaisseur, R[, le cercle de consigne
+    # [rayon_cercle − 4, rayon_cercle[ (sa sonde [C7] au milieu), le disque s'arrête à r — l'anneau
+    # à l'EXTÉRIEUR du cercle bleu, comme au P300, aux tailles d'écran courantes aussi.
     hors = [t for t in ((1000, 700), taille_2, (1280, 720), (1920, 1080), (2560, 1440))
             for _x, _y, r in positions_cibles(plan, t)[:1]
-            if not (r < rt.rayon_anneau(r) - rt.EPAISSEUR_PX
-                    and point_de_sonde_cercle(0, 0, r)[0] >= rt.rayon_anneau(r))]
+            if not (r < rayon_cercle(r) - CUE_EPAISSEUR_PX
+                    and point_de_sonde_cercle(0, 0, r)[0] < rayon_cercle(r)
+                    <= rt.rayon_anneau(r) - rt.EPAISSEUR_PX)]
     chk(not hors,
-        f"[C8] l'anneau ne touche ni le disque ni la SONDE du cercle de consigne, de 800×560 à "
-        f"2560×1440 (tailles fautives : {hors})")
+        f"[C8] le cercle de consigne ne touche pas le disque, et l'anneau reste à l'EXTÉRIEUR du "
+        f"cercle de consigne et de sa sonde, de 800×560 à 2560×1440 (tailles fautives : {hors})")
 
     # Les deux sondes en pixels du fichier, rejouées ANNEAU AFFICHÉ.
     def phases(tr):
