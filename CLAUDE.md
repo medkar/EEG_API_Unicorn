@@ -285,8 +285,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   **Trois retraits de plus le 2026-09-09** : `archive/alpha_check.py` (le contrôle alpha, devenu une
   page), `archive/live_ssvep.py` (un **septième** écran de pilotage, que le tri du 2026-09-08 avait
   oublié) et `archive/ui.py` — la machinerie pygame partagée (`App`, `Abort`, `signal_check`), que
-  **huit** des écrans archivés importent et que plus rien de vivant n'utilisait. `archive/` compte
-  donc **13 fichiers et 12 `--smoke`** : `ui.py` n'a rien à lancer, il est couvert par les huit qui
+  **huit** des écrans archivés importaient et que plus rien de vivant n'utilisait — **dix** depuis
+  le 2026-10-02, quand les flèches SSVEP (`arrow_polygon`) y ont déménagé : la fenêtre vivante
+  dessine des disques, deux écrans archivés gardent leurs flèches. `archive/` compte
+  donc **13 fichiers et 12 `--smoke`** : `ui.py` n'a rien à lancer, il est couvert par les dix qui
   l'importent.
 - ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, écran archivé. Le casque
   n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
@@ -403,7 +405,7 @@ python src/stimulus/cvep.py --log         # ⚠️ EN SÉANCE : la vérité-terr
                                            # 2026-09-22 la console ne le passe PLUS (la case
                                            # « Journal de séance » est partie) : à taper, jusqu'à
                                            # « Connecter » (recette 2.9)
-python src/stimulus/ssvep.py               # la fenêtre SSVEP : une flèche par fréquence de --freqs
+python src/stimulus/ssvep.py               # la fenêtre SSVEP : un disque par fréquence de --freqs
                                            # (sans lui, le trio du dépôt). --guide y ajoute les
                                            # consignes et la vérité-terrain : c'est ce que lance
                                            # « Tester » sur la page SSVEP, avec les --freqs du mode

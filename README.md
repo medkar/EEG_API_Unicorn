@@ -339,7 +339,7 @@ they run beside the engine rather than instead of it.
 python src/stimulus/p300.py                # the oddball ring
 python src/stimulus/errp.py                # the cursor-to-target track
 python src/stimulus/cvep.py                # the six flickering discs, and the clock
-python src/stimulus/ssvep.py               # the flickering arrows (three at the default settings)
+python src/stimulus/ssvep.py               # the flickering discs (three at the default settings)
 python src/stimulus/ssvep.py --guide       # the same, designating a target per trial (ground truth)
 python src/stimulus/cvep.py --calibrer     # the same, wrapped in a calibration protocol
 python src/stimulus/cvep.py --log s.jsonl  # ground truth to a FILE — required to score a session
@@ -455,7 +455,7 @@ by it too.** Stimulus frequencies and codes adapt automatically to the display r
 
 | Mode | How it works | Calibration | Status |
 |---|---|---|---|
-| **SSVEP** | Arrows flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable; the only one validated on hardware **through the engine** |
+| **SSVEP** | Discs flicker at fixed frequencies; CCA picks the fixated one | 25 s rest baseline | ✅ most reliable; the only one validated on hardware **through the engine** |
 | **c-VEP** | One m-sequence at circular shifts, learned template (eCCA or rCCA) | ~3 min, **from the console** | ✅ **published as a stream** — your app flickers frame-by-frame and sends a clock marker per code cycle ([docs/markers.md](docs/markers.md)); 6 targets, ~60-65 % offline → 19.1 (eCCA) / 23.8 (rCCA) bits/min, **WEAK** vs the SSVEP's 25.0 |
 | **P300** | Oddball: targets flash one by one, xDAWN + Riemannian geometry | ~2.2 min, **from the console** | ✅ **published as a stream** — your app flashes and sends markers ([docs/markers.md](docs/markers.md)); AUC 0.71 |
 | **Motor Imagery** | Imagined left/right fist squeeze, ERD on C3/C4, CSP + LDA | 5–7 min, **from the console** | ✅ **published as a stream**; left/right significant — plan for 63 %, see [Motor Imagery](#motor-imagery) |
@@ -556,7 +556,7 @@ twice: as a plain stimulus, and as a protocol that publishes ground truth (`--ca
 | [`p300.py`](src/stimulus/p300.py) | The oddball ring: `flash` · `round_end`, plus `calib_start` · `cue` · `calib_end` |
 | [`errp.py`](src/stimulus/errp.py) | The cursor-to-target track: `feedback`, which gains `error` **in calibration only** |
 | [`cvep.py`](src/stimulus/cvep.py) | Six flickering discs and the `cycle` clock, plus `cue` · `block_end` around it |
-| [`ssvep.py`](src/stimulus/ssvep.py) | Three flickering arrows; with `--guide`, `calib_start` · `repos` · `cue` · `calib_end` |
+| [`ssvep.py`](src/stimulus/ssvep.py) | Three flickering discs; with `--guide`, `calib_start` · `repos` · `cue` · `calib_end` |
 | [`refresh.py`](src/stimulus/refresh.py) | Measures the real refresh rate of the screen that will show the stimulus |
 | [`registry.py`](src/stimulus/registry.py) | Key → command line, and which windows can write a session log. The only file in the repo that names a window module |
 
@@ -632,7 +632,7 @@ python src/stimulus/errp.py --smoke      # ErrP window: track, deliberate errors
                                          #   and the ground-truth guard in BOTH directions
 python src/stimulus/p300.py --smoke      # P300 flash sequence: every target seen `reps` times
 python src/stimulus/cvep.py --smoke      # c-VEP clock: phase read from the PIXELS, frame by frame
-python src/stimulus/ssvep.py --smoke     # SSVEP arrows: cue read from the PIXELS, trials interleaved
+python src/stimulus/ssvep.py --smoke     # SSVEP discs: cue read from the PIXELS, trials interleaved
 
 # The twelve retired screens keep their own --smoke; see archive/README.md. No self-test above runs
 # them.

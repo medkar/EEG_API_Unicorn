@@ -540,8 +540,8 @@ page.
    tournent pas ensemble. Il restera arrêté ensuite. Relance-le depuis sa tuile si ton application
    en a besoin. » **Elle reste affichée** pendant le test et après. ❌ Régression : elle
    disparaît dès que le test démarre (le défaut du 2026-09-23 — elle vivait moins d'une seconde).
-   ✅ **1.9.4** **Puis** la fenêtre s'ouvre, plein écran : **trois** flèches étiquetées **12.00 · 15.00 ·
-   20.00 Hz**, une croix pour le repos, puis une flèche **entourée de bleu** par essai. Le HUD affiche
+   ✅ **1.9.4** **Puis** la fenêtre s'ouvre, plein écran : **trois** disques étiquetés **12.00 · 15.00 ·
+   20.00 Hz**, une croix pour le repos, puis un disque **cerclé de bleu** par essai. Le HUD affiche
    `… fps | sautées N | ESC = quitter`.
    ❌ Régression : `15 · 20 · 8,571` à l'écran — le trio du dépôt, pendant que le moteur corrèle
    sur 12 · 15 · 20.
@@ -735,8 +735,8 @@ voulu. Pour voir la mécanique, **baisse les seuils AVANT de tester** (bloc « 1
 - Le **P300** décide à chaque manche sans rien toucher.
 - À la fin du point : **« Rétablir les valeurs par défaut »** sur chacune des deux pages.
 
-✅ **1.17.1** Page **SSVEP**, seuil à 1,0 → **« Tester sur une session »** → « Commencer » : la flèche à fixer est bordée de
-**bleu** ; après chaque essai, la flèche décodée est entourée en **vert**, rien si le moteur s'est
+✅ **1.17.1** Page **SSVEP**, seuil à 1,0 → **« Tester sur une session »** → « Commencer » : le disque à fixer est cerclé de
+**bleu** ; après chaque essai, le disque décodé est entouré en **vert**, rien si le moteur s'est
 abstenu. L'anneau s'éteint au début de la consigne suivante.
 ✅ **1.17.2** Page **P300** → **« Tester sur une session »** : l'anneau vert apparaît dans la pause après la
 manche et s'éteint ~0,5 s AVANT le premier flash suivant ; la dernière manche a le sien avant
@@ -747,7 +747,7 @@ avant les cycles que la décision suivante lit).
 ✅ **1.17.4** Pendant un de ces tests, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne
 par essai**.
 ✅ **1.17.5** Page **SSVEP** (seuil toujours à 1,0) → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
-s'ouvre **tout de suite** — les flèches clignotent avec une **croix** au centre et « ne fixe aucune
+s'ouvre **tout de suite** — les disques clignotent avec une **croix** au centre et « ne fixe aucune
 cible » pendant la chauffe et le repos du moteur.
 ✅ **1.17.6** La croix part : l'anneau **vert** suit les décisions, sans consigne ni score, et ne clignote pas
 quand le moteur s'abstient (il s'éteint seul ~1 s après la dernière décision).
@@ -840,8 +840,8 @@ les deux intervalles (sous « Détails ») avant de dire qu'un seuil fait mieux 
 sur lui qu'ils ont été mesurés. Mais si ton pic alpha est sous ~10,5 Hz, la cible à 8,571 Hz tombe
 dans ton alpha — prends alors le jeu proposé, et **note que le chiffre n'est plus comparable**.
 
-✅ **2.2.2** **Fixe la flèche entourée de bleu**, dans la fenêtre. Pendant le **REPOS** du début, fixe la
-**croix** et ne suis aucune flèche : le moteur y mesure son fond de corrélation.
+✅ **2.2.2** **Fixe le disque cerclé de bleu**, dans la fenêtre. Pendant le **REPOS** du début, fixe la
+**croix** et ne suis aucun disque : le moteur y mesure son fond de corrélation.
 ✅ **2.2.3** **Ne ferme pas la fenêtre à la main** : sans son marqueur de fin, aucun verdict.
 ✅ **2.2.4** Deux chiffres dans la même ligne : la **justesse quand il annonce** et le **taux d'émission** — à
 lire ENSEMBLE. Repères du **2026-07-27** : **100 % de justesse** (0 confusion sur 36) pour **44 %
@@ -867,7 +867,7 @@ tels quels au 100 %/44 % du 2026-07-27**, mesuré sous l'ancienne règle. C'est 
 
 → recette 2.2
 
-✅ **2.2.9** (2026-10-01) **Retour en direct** : après chaque essai, la flèche décodée est entourée en vert
+✅ **2.2.9** (2026-10-01) **Retour en direct** : après chaque essai, le disque décodé est entouré en vert
 (juste ou non), rien si le moteur s'est abstenu. ⚠️ Le test SSVEP décide désormais essai par
 essai pendant la séance (pour publier en direct) — par le même chemin que le verdict.
 
