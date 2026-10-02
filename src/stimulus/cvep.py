@@ -676,7 +676,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     # --- La SÉANCE DE CALIBRATION : son programme, et ce qu'elle annonce au moteur -------------
     programme, epoques_promises = None, 0
-    geste = "le test" if tester else "l'entraînement"
+    geste_seance = "le test" if tester else "l'entraînement"
 
     if calibrer:
         # La graine sert ici à l'ENTRELACEMENT des blocs, pas au tirage des consignes : deux
@@ -905,7 +905,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             # protocole que l'entraînement, et le mot est la seule chose qui les distingue à
             # l'écran. Un ESC répondait « aucun modèle ne sera entraîné » — un test n'entraîne rien.
             print(f"[cvep-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
-                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste} depuis la "
+                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste_seance} depuis la "
                   f"console, ou ferme cette fenêtre.")
     while running:
         poll()

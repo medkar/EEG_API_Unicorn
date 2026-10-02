@@ -531,6 +531,10 @@ python src/stimulus/errp.py --smoke        # la fenêtre ErrP : piste, erreurs d
                                            # flip, et la garde de vérité-terrain DANS LES DEUX SENS
 python src/stimulus/p300.py --smoke        # la séquence de flashs : chaque cible vue `reps` fois,
                                            # et la séance de calibration bout à bout
+python src/stimulus/fermeture.py           # le DERNIER geste des 4 fenêtres : l'outlet reste vivant
+                                           # ~2 s après `calib_end`, sinon liblsl (recover=False)
+                                           # le jette et la séance n'a jamais de verdict ni de
+                                           # modèle (2 fois sur 5, vu le 2026-10-02)
 ```
 
 ⚠️ **`modes/marker_calib.py` porte l'invariant central des trois calibrations à fenêtre** :
