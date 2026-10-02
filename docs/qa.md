@@ -721,18 +721,29 @@ score) et **« Tester librement »** (aucune consigne, aucun score). Dans les de
 entoure la cible que le moteur DÉCODE — juste ou non : une erreur se voit, l'anneau n'est pas sur
 la cible désignée. La consigne, elle, est toujours **bleue**.
 
-✅ **1.17.1** Page **SSVEP** → **« Tester sur une session »** → « Commencer » : la flèche à fixer est bordée de
+⚠️ **Sur du bruit, le SSVEP et le c-VEP s'abstiennent presque toujours** (relevé le 2026-10-02) :
+rien ne dépasse leurs seuils, donc pas de décision, donc pas d'anneau — c'est leur comportement
+voulu. Pour voir la mécanique, **baisse les seuils AVANT de tester** (bloc « 1. Régler » →
+« Appliquer »), et le moteur annonce des cibles AU HASARD — c'est ce qu'on veut ici :
+- **SSVEP** : « Seuil de détection » à **1,0** (le minimum). Attendu : une décision dans ~40 %
+  des essais (calcul — le maximum de 3 tirages gaussiens dépasse 1 —, pas une mesure).
+- **c-VEP** : « Corrélation minimale » **0**, « Marge sur le second » **0**, « Votes concordants »
+  **1** : une décision à chaque bloc.
+- Le **P300** décide à chaque manche sans rien toucher.
+- À la fin du point : **« Rétablir les valeurs par défaut »** sur chacune des deux pages.
+
+✅ **1.17.1** Page **SSVEP**, seuil à 1,0 → **« Tester sur une session »** → « Commencer » : la flèche à fixer est bordée de
 **bleu** ; après chaque essai, la flèche décodée est entourée en **vert**, rien si le moteur s'est
 abstenu. L'anneau s'éteint au début de la consigne suivante.
 ✅ **1.17.2** Page **P300** → **« Tester sur une session »** : l'anneau vert apparaît dans la pause après la
 manche et s'éteint ~0,5 s AVANT le premier flash suivant ; la dernière manche a le sien avant
 l'écran de fin.
-✅ **1.17.3** Page **c-VEP** → **« Tester sur une session »** : la cible à fixer est cerclée en **bleu** (plus
+✅ **1.17.3** Page **c-VEP**, seuils à 0 → **« Tester sur une session »** : la cible à fixer est cerclée en **bleu** (plus
 en vert) ; l'anneau vert apparaît à la fin de chaque bloc, pendant ~1 s seulement (il s'éteint
 avant les cycles que la décision suivante lit).
 ✅ **1.17.4** Pendant un de ces tests, « Ce que voit ton application » montre `decoded_<mode>` : **une ligne
 par essai**.
-✅ **1.17.5** Page **SSVEP** → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
+✅ **1.17.5** Page **SSVEP** (seuil toujours à 1,0) → **« Tester librement ⓘ »** : le contrôle de liaison passe, puis la fenêtre
 s'ouvre **tout de suite** — les flèches clignotent avec une **croix** au centre et « ne fixe aucune
 cible » pendant la chauffe et le repos du moteur.
 ✅ **1.17.6** La croix part : l'anneau **vert** suit les décisions, sans consigne ni score, et ne clignote pas
@@ -745,6 +756,9 @@ la mesure : **refus** qui nomme la mesure, aucune fenêtre.
 ✅ **1.17.10** « Tester librement » existe sur c-VEP et P300 ; il est **absent** sur ErrP, MI, Neuro et Brut.
 ✅ **1.17.11** SSVEP **démarré depuis la grille** (« Démarrer » sur sa tuile), puis « Tester sur une
 session » : **refus**, le test et le mode publieraient sur le même flux.
+
+Si, seuil à 1,0, le SSVEP ne décide TOUJOURS rien sur 10 essais : note-le et passe ; 1.17.1 et
+1.17.6 se vérifient alors au casque (2.2, 2.12).
 
 ❌ Échec : la fenêtre libre attend la fin du repos pour s'ouvrir, ou s'ouvre SANS croix pendant le
 repos ; un anneau sur une cible qui n'est pas celle décodée (compare à « Ce que voit ton
