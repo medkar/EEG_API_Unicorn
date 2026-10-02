@@ -98,6 +98,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus.retour import (ATTENTE_DECISION_S, RETOUR_AFFICHE_S, Retour,  # noqa: E402
                              SourceDecisions, rayon_anneau)
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
@@ -693,6 +694,9 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         anneau.bilan("[p300-stim]")
         anneau.fermer()
     pygame.quit()
+    # ⚠️ Le dernier marqueur (`calib_end`) doit être TIRÉ par le moteur avant que l'outlet ne
+    # meure, sinon liblsl le jette (cf. `stimulus/fermeture.py`) : test sans verdict.
+    fermeture.laisser_tirer(outlet)
     return True
 
 

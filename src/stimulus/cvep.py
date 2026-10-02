@@ -181,6 +181,7 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
@@ -1045,6 +1046,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     if fichier_log is not None:
         fichier_log.close()   # chaque ligne est déjà vidée : ce `close` ne protège aucune donnée
     pygame.quit()
+    # ⚠️ Le dernier marqueur (`calib_end`) doit être TIRÉ par le moteur avant que l'outlet ne
+    # meure, sinon liblsl le jette (cf. `stimulus/fermeture.py`) : test sans verdict.
+    fermeture.laisser_tirer(outlet)
     return True
 
 

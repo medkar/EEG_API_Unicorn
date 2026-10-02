@@ -577,6 +577,7 @@ def bilan_de_seance(frames, sautees, refresh):
 # `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 from stimulus.garde import sous_garde_data  # noqa: E402
+from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
                              StatutDuMoteur)
@@ -924,6 +925,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             repos.bilan("[ssvep-stim]")
             repos.fermer()
         pygame.quit()
+        # ⚠️ Le dernier marqueur (`calib_end`) doit être TIRÉ par le moteur avant que l'outlet ne
+        # meure, sinon liblsl le jette (cf. `stimulus/fermeture.py`) : test sans verdict.
+        fermeture.laisser_tirer(outlet)
 
     # Un BILAN, toujours, et dans les DEUX modes : « 0 frame sautée » doit se LIRE, pas se
     # deviner. En guidé, c'est la seule trace que la mesure puisse relire dans le terminal.

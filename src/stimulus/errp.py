@@ -200,6 +200,7 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 
 # Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
 # et en calibration, et les confondre a coûté une séance entière** (voir plus bas).
@@ -630,6 +631,9 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
                                   "la durée de stimulation voulue, la fenêtre a-t-elle été fermée "
                                   "tout de suite ?"))
     pygame.quit()
+    # ⚠️ Le dernier marqueur (`calib_end`) doit être TIRÉ par le moteur avant que l'outlet ne
+    # meure, sinon liblsl le jette (cf. `stimulus/fermeture.py`) : test sans verdict.
+    fermeture.laisser_tirer(outlet)
     return True
 
 
