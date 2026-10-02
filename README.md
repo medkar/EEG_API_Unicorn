@@ -345,10 +345,11 @@ python src/stimulus/cvep.py --log s.jsonl  # ground truth to a FILE — required
 
 **Live feedback** (2026-10-01): with `--retour`, a window listens to its mode's PUBLIC decoded
 stream (`decoded_cvep`, `decoded_ssvep`, `decoded_p300`), exactly as your app would, and circles the
-target the engine decoded. During a guided test the ring is magenta when the decision is right and
-red when it is wrong (magenta, because the cues themselves are drawn in green and blue); in free use
-(`--libre` for the c-VEP, which otherwise designates targets) an amber ring follows the latest
-decision. The window only listens to streams published by its OWN machine: in a classroom, every
+target the engine decoded, with a GREEN ring, whether the decision is right or not: a wrong
+decision shows on its own, the ring is not on the cued target. Cues are drawn in BLUE in all three
+windows. In the console, the Test block has two buttons: **Tester sur une session** (a guided test
+with a score) and **Tester librement** (free use: `--libre` for the c-VEP, which otherwise
+designates targets; the ring follows the latest decision, no score). The window only listens to streams published by its OWN machine: in a classroom, every
 student's engine publishes under the same names. The ring is gone before the data the next decision
 reads (so its own light never enters the measurement), and in free use the window shows a fixation
 cross while the engine's public `status` stream says `warmup` or `baseline` — the SSVEP floor is

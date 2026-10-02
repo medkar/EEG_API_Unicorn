@@ -131,14 +131,15 @@ la fenêtre lit `decoded_cvep` comme le ferait l'application d'un étudiant, en 
 trace un anneau à `RATIO_ANNEAU` × le rayon — dans la bande VIDE entre le disque et le cercle de
 consigne, donc sans toucher un seul pixel que les sondes de `--smoke` relisent. Il se trace dans
 l'image et se lit APRÈS le flip et le marqueur : le geste flip→horodatage ci-dessus n'en est pas
-retardé d'une instruction. En test (`--tester`), MAGENTA si la décision du bloc est la cible
-cerclée, ROUGE sinon — jamais vert, la couleur du cercle de consigne ; en décodage, ambre, il suit
+retardé d'une instruction. Il est VERT, en test (`--tester`) comme en décodage : il montre la
+cible décodée, il ne juge pas — une erreur se voit, l'anneau n'est pas sur la cible cerclée. En
+décodage, il suit
 la dernière décision. ⚠️ En test, il ne vit qu'UN cycle par bloc : il s'éteint
 `CVEP_DECISION_CYCLES + 1` cycles avant chaque `cue` (`silence_avant_cue`), parce que la décision
 suivante lit déjà ce settle-là.
 
 ⚠️ **`--libre` : les cibles et l'horloge, rien d'autre.** Sans option, cette fenêtre DÉSIGNE des
-cibles (le cercle vert, les lignes `t=`, `--log`) : c'est le protocole de dépouillement de la
+cibles (le cercle bleu, les lignes `t=`, `--log`) : c'est le protocole de dépouillement de la
 recette 2.9, pas un essai libre. `--libre` retire la consigne et refuse `--log` (il n'y a aucune
 vérité-terrain à écrire) ; le marqueur `cycle` continue de partir — c'est une HORLOGE, sans elle
 le moteur ne décode rien. Tant que le moteur chauffe (son flux public `status`), une croix au
@@ -189,7 +190,9 @@ OUTLINE = (55, 55, 70)      # contour statique : garde le repère spatial quand 
 FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (cf. archive/ui.py : la réponse c-VEP
 #                             est pilotée par la LUMINANCE, un point rouge n'ampute donc quasiment
 #                             pas la modulation tout en restant visible allumé comme éteint)
-ACCENT = (60, 200, 90)      # le cercle de consigne, LARGEMENT à l'extérieur du disque
+CUE = (60, 130, 255)        # le cercle de consigne, LARGEMENT à l'extérieur du disque. BLEU comme
+                            # celui du SSVEP et du P300 (vert jusqu'au 2026-10-02 : l'anneau VERT de
+                            # la cible décodée s'y confondait — `retour.autotest_couleurs`)
 LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
@@ -796,7 +799,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             # `--smoke` va LIRE DANS LES PIXELS pour vérifier que le `cue` publié désigne la cible
             # réellement cerclée (cf. `point_de_sonde_cercle`).
             x, y, r = spots[consigne]
-            pygame.draw.circle(win, ACCENT, (x, y), int(r * RATIO_CERCLE), 4)
+            pygame.draw.circle(win, CUE, (x, y), int(r * RATIO_CERCLE), 4)
         # L'anneau de RETOUR : après les cibles et la consigne, avant le texte — dans la bande vide
         # entre le disque et le cercle de consigne (cf. `RATIO_ANNEAU`).
         if anneau is not None:
@@ -888,7 +891,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
             if anneau is not None and c_prog is not None and (frame - frame_prog0) % L == 0:
                 fermee, _ouvre = bornes_de_bloc(programme, c_prog)
                 if fermee is not None:
-                    anneau.mesure_finie(verite=fermee)
+                    anneau.mesure_finie()
                 if silence_avant_cue(programme, c_prog):
                     anneau.mesure_commence()
         elif not libre and frame % (L * cycles_par_cible) == 0:
@@ -1105,7 +1108,7 @@ def _consigne_ecran(pygame, sondes_cercle, couleur=None):
     surface = pygame.display.get_surface()
     if surface is None:
         return None
-    couleur = ACCENT if couleur is None else couleur
+    couleur = CUE if couleur is None else couleur
     for i, (x, y) in enumerate(sondes_cercle):
         if tuple(surface.get_at((x, y))[:3]) == tuple(couleur):
             return i
@@ -1940,13 +1943,14 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     vus = [sorted({tuple(anneaux_t[i]) for i in w} - {()}) for w in fenetres]
     attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[C8] l'anneau entoure la cible DÉCIDÉE, MAGENTA si c'est la cible cerclée, ROUGE sinon, "
+        f"[C8] l'anneau VERT entoure la cible DÉCIDÉE, qu'elle soit la cible cerclée ou une autre, "
         f"rien sur −1 ni pour une décision arrivée après son extinction — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
-    couleurs = {a[0][1] for v in vus for a in v}
-    chk({rt.COULEUR_JUSTE, rt.COULEUR_FAUX} <= couleurs,
-        "[C8] …et les deux couleurs ont réellement été vues (un test qui ne voit que l'une ne "
-        "prouve rien sur l'autre)")
+    vus_justes = [a for x, a in zip(moteur.attendues, vus) if a and x[1] == x[2]]
+    vus_faux = [a for x, a in zip(moteur.attendues, vus) if a and x[1] != x[2]]
+    chk(bool(vus_justes) and bool(vus_faux),
+        "[C8] …et l'anneau a réellement été vu sur la cible désignée ET sur une autre (un test qui "
+        "ne voit qu'un cas ne prouve rien sur l'autre)")
     pendant = [i for c, f in zip(cues, fins) for i in range(c, f + 1) if anneaux_t[i]]
     chk(not pendant,
         f"[C8] AUCUN anneau pendant qu'un bloc s'enregistre, de l'image du `cue` à celle du "
@@ -1993,10 +1997,10 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     # --- l'essai LIBRE ------------------------------------------------------------------------
     im_l = images(trace_l)
     anneaux_l = [e[3] for e in im_l]
-    attendus_l = ([[]] * 10 + [[(3, rt.COULEUR_LIBRE)]] * 40
-                  + [[(5, rt.COULEUR_LIBRE)]] * (len(im_l) - 50))
+    attendus_l = ([[]] * 10 + [[(3, rt.COULEUR_DECODEE)]] * 40
+                  + [[(5, rt.COULEUR_DECODEE)]] * (len(im_l) - 50))
     chk(fait_l and len(im_l) == 3 * L and anneaux_l == attendus_l,
-        f"[C8] libre : l'anneau AMBRE suit la dernière décision dès l'image suivante, et un −1 ne "
+        f"[C8] libre : l'anneau VERT suit la dernière décision dès l'image suivante, et un −1 ne "
         f"l'éteint PAS (images "
         f"{[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} en désaccord "
         f"sur {len(im_l)})")
@@ -2078,7 +2082,7 @@ def _parse_args(argv):
     p.add_argument("--libre", action="store_true",
                    help="ESSAI LIBRE : les cibles et l'horloge, aucune consigne, aucune "
                         "vérité-terrain, aucun journal (refuse --log, --calibrer, --tester). C'est "
-                        "ce que lance « Essayer librement » dans la console")
+                        "ce que lance « Tester librement » dans la console")
     p.add_argument("--retour", action="store_true",
                    help="entoure la cible que le moteur DÉCODE, lue sur le flux public "
                         "decoded_cvep en tâche de fond. En test : vert si juste, rouge sinon")

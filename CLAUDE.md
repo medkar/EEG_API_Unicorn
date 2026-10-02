@@ -21,7 +21,7 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   seule fenêtre qu'on n'a plus à fermer. ⚠️ **Un trou, daté du 2026-09-22 et connu** : la séance
   c-VEP avec journal (recette 2.9) n'a plus de bouton — elle revient avec « Connecter », le second
   chantier (pas fait). Le décodage continu avec NOTRE fenêtre de stimulus, l'autre trou de cette
-  date, est revenu le 2026-10-01 sous la forme d'« Essayer librement » (c-VEP, SSVEP, P300).
+  date, est revenu le 2026-10-01 sous la forme de « Tester librement » (c-VEP, SSVEP, P300).
   `outils/Console EEG.bat` l'ouvre par un double-clic, sans terminal. `src/core/server.py` reste
   lançable seul : c'est l'accès *headless*, pour une machine sans écran ou un montage à deux
   terminaux, et c'est lui que consomme un client LSL.
@@ -205,17 +205,22 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     le produit, la comparabilité est une NOTE, pas une contrainte de protocole.
 - **RETOUR EN DIRECT** (2026-10-01, demandé au casque : « que le logiciel entoure la cible qu'il pense
   qu'on regarde »). Pour le c-VEP, le SSVEP et le P300 :
-  - **« Tester »** publie chaque décision du test (un bloc, une fixation, une manche) sur le flux
-    décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une application : anneau
-    MAGENTA si la décision est la cible désignée, ROUGE sinon, rien sur −1 (s'abstenir n'est pas se
-    tromper). Magenta et pas vert : le c-VEP cercle sa consigne en vert, le SSVEP et le P300 en bleu
-    (garde de teinte, `retour.autotest_couleurs`). L'anneau s'éteint AVANT les données que la
+  - Le bloc Tester a **deux boutons** (noms choisis par l'utilisateur, 2026-10-02) : **« Tester sur
+    une session »** (le test guidé, consignes et score) et **« Tester librement »** (sans consigne ni
+    score). Dans les deux, l'anneau est **VERT** et entoure la cible DÉCODÉE, juste ou non :
+    « pas besoin de rouge, si ça décode la mauvaise, on le voit ». Rien sur −1. La CONSIGNE est
+    **bleue** dans les trois fenêtres — le c-VEP cerclait la sienne en vert jusqu'au 2026-10-02, à
+    13° de teinte de l'anneau (garde de teinte, `retour.autotest_couleurs`). Une première version
+    peignait juste en magenta, faux en rouge et le libre en ambre.
+  - **« Tester sur une session »** publie chaque décision du test (un bloc, une fixation, une
+    manche) sur le flux décodé PUBLIC du mode, et sa fenêtre (`--retour`) l'écoute comme une
+    application. L'anneau s'éteint AVANT les données que la
     décision suivante lit — sa lumière n'entre jamais dans la mesure : c-VEP ≈ un cycle par bloc,
     P300 0,5 s avant le premier flash, SSVEP au début de la consigne suivante. Le test SSVEP décide donc en direct, essai par essai, par le même chemin que son
     verdict (`decider`/`caler`), et le smoke vérifie que publié == noté.
-  - **« Essayer librement »**, second bouton du bloc Tester (contrôle de liaison d'abord, refusé
-    pendant une mesure ou un entraînement) : le mode tourne, sa fenêtre (`--libre` pour le c-VEP,
-    `--retour`) entoure en ambre la dernière décision, **aucun score** ; un −1 n'efface pas
+  - **« Tester librement »** (contrôle de liaison d'abord, refusé pendant une mesure ou un
+    entraînement) : le mode tourne, sa fenêtre (`--libre` pour le c-VEP, `--retour`) entoure la
+    dernière décision, **aucun score** ; un −1 n'efface pas
     l'anneau, il expire seul. ⚠️ **La fenêtre s'ouvre DÈS que le mode tourne, chauffe et repos
     compris** : le plancher du SSVEP se mesure AVEC les cibles qui clignotent, sans en fixer aucune.
     Une première version l'ouvrait après le repos — plancher mesuré sans clignotement, puis décodage
@@ -348,7 +353,7 @@ Dans la console (depuis le 2026-09-22) :
 
 - **La grille** : **sept tuiles** (les six modes plus le brut), chacune avec « publié »,
   **« Démarrer »** — le seul bouton qui démarre le décodage continu, hormis l'« Observer » du
-  Neuro et « Essayer librement » (le temps de l'essai) — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
+  Neuro et « Tester librement » (le temps de l'essai) — et « Ouvrir » ; dessous, **une seule** tuile de séance, **« Vérifier le casque »**
   (marquée *BARRIÈRE*).
 - **La page Brut a un filtre d'AFFICHAGE** (2026-09-25) : aucun, passe-haut 0,1-2 Hz, passe-bande,
   coupe-bande 50 Hz — défaut passe-haut 1 Hz. ⚠️ Il ne filtre QUE la copie dessinée : le tampon
@@ -357,7 +362,7 @@ Dans la console (depuis le 2026-09-22) :
 - **Une page par mode, en blocs numérotés** (règle 🔴 plus haut). La vue en direct des modes
   testables y est repliée sous **« Décodage en direct »**. **Ont quitté la page, et reviendront
   avec « Connecter »** : « Démarrer/Arrêter », « Journal de séance », « Brancher un client ».
-  « Lancer le stimulus » est revenu autrement : **« Essayer librement »**, dans le bloc Tester
+  « Lancer le stimulus » est revenu autrement : **« Tester librement »**, dans le bloc Tester
   (2026-10-01).
 - **« Entraîner »** et **« Tester »** ouvrent chacun une page (briefing, réglages, « Commencer »,
   « ← » qui ramène au mode). « Commencer » passe par un **contrôle de liaison** (σ par voie) qui

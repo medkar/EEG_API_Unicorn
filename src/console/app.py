@@ -150,7 +150,7 @@ class Console(QMainWindow):
         # lien qui permet de fermer la fenêtre — sans lui, elle continue plein écran à désigner des
         # cibles pour une séance qui n'existe plus, devant une console qu'elle recouvre.
         self._fenetre_de = None
-        # L'ESSAI LIBRE en cours (« Essayer librement », 2026-10-01), ou None. Une fiche, tenue
+        # L'ESSAI LIBRE en cours (« Tester librement », 2026-10-01), ou None. Une fiche, tenue
         # du clic à la fermeture de sa fenêtre : quel mode, si c'est l'essai qui l'a démarré (donc
         # s'il faudra l'arrêter), et le numéro de sa fenêtre une fois ouverte. Cf. `_suivre_essai`.
         self._essai = None
@@ -504,7 +504,7 @@ class Console(QMainWindow):
             self._lancer_fenetre(demande["mode_id"], calibrer=False)
             return
         if demande["quoi"] == "essai":
-            # « Essayer librement » : rien à arrêter avant lui — il DÉMARRE le mode, ou s'en sert.
+            # « Tester librement » : rien à arrêter avant lui — il DÉMARRE le mode, ou s'en sert.
             self._commencer_essai(demande["mode_id"], demande.get("reglages"))
             return
         # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration — ou son TEST — ne démarre : les
@@ -861,7 +861,7 @@ class Console(QMainWindow):
                                    label=spec.get("label", mode_id), options=options,
                                    libre=libre and not calibrer)
 
-    # --- « Essayer librement » (2026-10-01) ------------------------------------------------
+    # --- « Tester librement » (2026-10-01) ------------------------------------------------
     #
     # Demandé au casque : « on regarde une cible, et le logiciel entoure celle qu'il pense qu'on
     # regarde ». Le mode DÉCODE, sa fenêtre affiche ses cibles sans rien désigner, et entoure ce
@@ -1360,7 +1360,7 @@ def _smoke():
             if name == "set_params":
                 # 🔴 La FORME du vrai accusé (constat F2-C1) : `params` fusionnés sur les courants,
                 # `differe` vrai sur un mode arrêté. Sans eux, le chemin du clic (« Tester »
-                # pré-rempli, « Essayer librement » qui attend CES réglages) n'était jamais exercé.
+                # pré-rempli, « Tester librement » qui attend CES réglages) n'était jamais exercé.
                 etat = self.etat() or {}
                 mid = params.get("id")
                 actif = (etat.get("modes_state") or {}).get(mid)
@@ -5465,8 +5465,8 @@ def _smoke():
             processus[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)
 
     def _essayer(page_m, quoi):
-        """Le geste complet : « Essayer librement », puis « Commencer l'essai » du contrôle."""
-        cliquer(page_m.bouton_essayer, f"« Essayer librement » ({quoi})")
+        """Le geste complet : « Tester librement », puis « Commencer l'essai » du contrôle."""
+        cliquer(page_m.bouton_essayer, f"« Tester librement » ({quoi})")
         cliquer(console.contact.bouton_lancer if console.stack.currentWidget() is console.contact
                 else None, f"« Commencer l'essai » du contrôle de liaison ({quoi})")
 
@@ -5475,7 +5475,7 @@ def _smoke():
     #    produit est vérifiée juste après, dans le registre.
     avec_essai = sorted(mid for mid, p in console.pages.items() if p.bouton_essayer is not None)
     chk(avec_essai == ["cvep", "p300", "ssvep"],
-        f"« Essayer librement » est sur les pages c-VEP, P300 et SSVEP ({avec_essai})")
+        f"« Tester librement » est sur les pages c-VEP, P300 et SSVEP ({avec_essai})")
     sans_essai = [mid for mid in ("errp", "mi", "neuro", "raw")
                   if mid in console.pages and console.pages[mid].bouton_essayer is None]
     chk(sans_essai == ["errp", "mi", "neuro", "raw"],
@@ -5490,7 +5490,7 @@ def _smoke():
               if lbl.text() == "ⓘ"] for mid in avec_essai}
     chk(all(console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_essayer)
             and console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_tester)
-            and console.pages[mid].bouton_essayer.text() == "Essayer librement"
+            and console.pages[mid].bouton_essayer.text() == "Tester librement"
             and any("Aucun score" in b and "fermes la fenêtre" in b and "croix" in b
                     for b in bulles_essai[mid])
             for mid in avec_essai),
@@ -5510,7 +5510,7 @@ def _smoke():
     consigne_ss = "Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence."
     console.show_mode("ssvep")
     console.apply_state(ss_arrete)
-    cliquer(page_ess.bouton_essayer, "« Essayer librement » du SSVEP")
+    cliquer(page_ess.bouton_essayer, "« Tester librement » du SSVEP")
     chk(console.stack.currentWidget() is console.contact
         and [c[0] for c in moteur_faux.commandes] == ["set_params"] and not _fenetres_lancees(),
         f"🔴 le clic applique l'écran puis passe par le CONTRÔLE DE LIAISON, comme « Tester » : "
@@ -5694,7 +5694,7 @@ def _smoke():
         _remise_a_zero()
         console.show_mode("cvep")
         console.apply_state({**arrete_cv, cle_s: seance})
-        cliquer(page_ecv.bouton_essayer, f"« Essayer librement » pendant une {cle_s}")
+        cliquer(page_ecv.bouton_essayer, f"« Tester librement » pendant une {cle_s}")
         nom_s = ("Contrôle alpha" if cle_s == "mesure" else console._nom_du_mode("mi"))
         chk(console.stack.currentWidget() is page_ecv and console._essai is None
             and not [c for c in moteur_faux.commandes if c[0] == "start_mode"]
@@ -5706,7 +5706,7 @@ def _smoke():
     # …et une séance TERMINÉE ne bloque plus rien.
     _remise_a_zero()
     console.apply_state({**arrete_cv, "mesure": {**seances["mesure"], "phase": "fini"}})
-    cliquer(page_ecv.bouton_essayer, "« Essayer librement » après une mesure finie")
+    cliquer(page_ecv.bouton_essayer, "« Tester librement » après une mesure finie")
     chk(console.stack.currentWidget() is console.contact,
         "…une séance FINIE ne bloque plus : le clic mène au contrôle de liaison")
     console._contact_annule()

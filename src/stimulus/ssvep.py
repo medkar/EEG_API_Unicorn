@@ -86,9 +86,10 @@ AFFICHÉ, jamais corrigé**. Il tourne dans les DEUX modes, s'affiche au HUD en 
 La fenêtre lit `decoded_ssvep` comme l'application d'un étudiant, en tâche de fond, et entoure la
 flèche décodée d'un anneau (`stimulus/retour.py` porte la règle). L'anneau passe AU-DELÀ de la
 pointe et de la queue de la flèche, liseré bleu compris (`rayon_anneau`) : il ne touche aucun pixel
-que les sondes de `--smoke` relisent. En libre (sans `--guide`) il suit la dernière décision, ambre.
-En `--guide`, la décision d'un essai arrive pendant le retour à la croix : MAGENTA si c'est la
-flèche désignée, ROUGE sinon, et il s'éteint au début de la CONSIGNE suivante — soit
+que les sondes de `--smoke` relisent. Il est VERT, en libre comme en `--guide` : il montre la
+flèche décodée, il ne juge pas. En libre (sans `--guide`) il suit la dernière décision. En
+`--guide`, la décision d'un essai arrive pendant le retour à la croix, et l'anneau s'éteint au
+début de la CONSIGNE suivante — soit
 `SSVEP_GUIDE_CUE_S` avant la fixation, dont le moteur ne lit que la fin. L'essai se ferme
 `MARGE_DECISION_S` AVANT la fin de la fixation : le moteur décide à la fin exacte, et une décision
 arrivée avant la fermeture serait perdue (revue C-M4). Sans `--guide`, cette fenêtre n'affiche
@@ -842,7 +843,7 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         fermer = None
         if anneau is not None:
             fermer = (min(MARGE_DECISION_S, fix_s / 2.0),
-                      lambda c=cible: anneau.mesure_finie(verite=c))
+                      anneau.mesure_finie)
         if not phase(fix_s, designee=cible, titre=noms[cible], sous="fixe la flèche entourée",
                      marqueur={"mode": "ssvep", "event": "cue", "target": int(cible),
                                "freq_hz": freqs[cible]},
@@ -1326,13 +1327,15 @@ def _smoke_retour(chk):
     vus = [sorted({tuple(images[i][1]) for i in w} - {()}) for w in fenetres]
     attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[J] l'anneau entoure la flèche DÉCIDÉE, MAGENTA si c'est la désignée, ROUGE sinon, rien "
+        f"[J] l'anneau VERT entoure la flèche DÉCIDÉE, désignée ou non, rien "
         f"sur −1 ni pour une décision arrivée pendant la fixation suivante — et une décision "
         f"publiée à la fin EXACTE de la fixation trouve son essai fermé — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
-    couleurs = {a[0][1] for v in vus for a in v}
-    chk({rt.COULEUR_JUSTE, rt.COULEUR_FAUX} <= couleurs,
-        "[J] …et les deux couleurs ont réellement été vues")
+    vus_justes = [a for x, a in zip(moteur.attendues, vus) if a and x[1] == x[2]]
+    vus_faux = [a for x, a in zip(moteur.attendues, vus) if a and x[1] != x[2]]
+    chk(bool(vus_justes) and bool(vus_faux),
+        "[J] …et l'anneau a réellement été vu sur la cible désignée ET sur une autre (un test qui "
+        "ne voit qu'un cas ne prouve rien sur l'autre)")
     # Un anneau ne coexiste JAMAIS avec une désignation : ni pendant la fixation (les données
     # notées), ni pendant la consigne qui la précède (le regard s'y déplace, le grand titre y est).
     designe = [i for i, im in enumerate(images) if im[1] and im[2] != -1]
@@ -1355,9 +1358,9 @@ def _smoke_retour(chk):
 
     images_l = [e for e in trace_l if e[0] == "flip"]
     anneaux_l = [e[1] for e in images_l]
-    attendus_l = [[]] * 5 + [[(1, rt.COULEUR_LIBRE)]] * 15 + [[(2, rt.COULEUR_LIBRE)]] * 10
+    attendus_l = [[]] * 5 + [[(1, rt.COULEUR_DECODEE)]] * 15 + [[(2, rt.COULEUR_DECODEE)]] * 10
     chk(len(anneaux_l) == 30 and anneaux_l == attendus_l and garde_libre.violations == 0,
-        f"[J] libre : l'anneau AMBRE suit la dernière décision dès l'image suivante, un −1 ne "
+        f"[J] libre : l'anneau VERT suit la dernière décision dès l'image suivante, un −1 ne "
         f"l'éteint PAS, et il ne touche aucun pixel non-fond (images "
         f"{[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} en "
         f"désaccord, {garde_libre.violations} pixel(s) touché(s))")

@@ -1,5 +1,5 @@
 {
-  "mesure.affichage.reserve_hors_ligne": "Chiffre calculé sur les essais d'entraînement : c'est « Tester » qui dira ce que le mode fait vraiment.",
+  "mesure.affichage.reserve_hors_ligne": "Chiffre calculé sur les essais d'entraînement : c'est « Tester sur une session » qui dira ce que le mode fait vraiment.",
   "mesure.alpha.briefing.1": "C'est une BARRIÈRE : si ce contrôle échoue, aucun autre test de la séance ne veut rien dire. Reprends alors le montage, pas le test suivant.",
   "mesure.alpha.briefing.2": "Déroulé : stabilisation du casque, puis {duree} s yeux ouverts, puis {duree} s yeux fermés.",
   "mesure.alpha.briefing.3": "Un top sonore annonce chaque changement. Il est indispensable : la moitié de la mesure se fait les yeux fermés, tu ne peux rien lire.",
@@ -84,8 +84,8 @@
   "mesure.errp_test.conseil.long": "Refais le test à {long} essais.",
   "mesure.errp_test.conseil.rejet": "Presque tout est resté sans verdict : vérifie le contact de Fz/Cz/Pz et cligne moins quand le point bouge, puis re-teste.",
   "mesure.errp_test.consigne.repos": "Regarde la piste immobile, sans bouger : le moteur mesure ton bruit de fond.",
-  "mesure.errp_test.erreur.repos_court": "repos écourté : la référence d'artefact n'a duré que {duree} s sur les {mode} s du mode, car la fenêtre a commencé ses pas trop tôt. Pas de conclusion : un seuil de rejet pris sur si peu gonfle au premier clignement, et le test attraperait des erreurs que le mode n'attrapera pas. Relance « Tester » sans toucher à la fenêtre : elle attend seule la fin du repos.",
-  "mesure.errp_test.erreur.sans_etiquette": "aucun essai noté : {n} pas sans étiquette d'erreur lisible. La fenêtre a-t-elle été lancée par « Tester » ?",
+  "mesure.errp_test.erreur.repos_court": "repos écourté : la référence d'artefact n'a duré que {duree} s sur les {mode} s du mode, car la fenêtre a commencé ses pas trop tôt. Pas de conclusion : un seuil de rejet pris sur si peu gonfle au premier clignement, et le test attraperait des erreurs que le mode n'attrapera pas. Relance « Tester sur une session » sans toucher à la fenêtre : elle attend seule la fin du repos.",
+  "mesure.errp_test.erreur.sans_etiquette": "aucun essai noté : {n} pas sans étiquette d'erreur lisible. La fenêtre a-t-elle été lancée par « Tester sur une session » ?",
   "mesure.errp_test.erreur.sans_feedback": "aucun pas reçu pendant les essais : rien à noter.",
   "mesure.errp_test.erreur.vide": "aucun pas noté : rien à mesurer.",
   "mesure.errp_test.erreur.voie_morte": "la référence d'artefact n'a pas pu être mesurée : une voie a un σ nul (électrode décollée, câble, amplificateur saturé). Le mode refuserait de décoder ainsi, le test aussi. Vérifie le contact, puis relance le test.",

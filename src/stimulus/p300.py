@@ -49,7 +49,7 @@ règle). Le P300 décide UNE fois par manche, après le `round_end` : l'anneau a
 la pause qui suit, et s'efface `EFFACE_AVANT_FLASH_S` AVANT le premier flash de la manche
 suivante — pas sur lui : un repère statique pendant les flashs ferait concurrence à l'oddball, et
 sa disparition calée sur le premier flash s'imprimerait dans sa ligne de base. En test
-(`--tester`), MAGENTA si c'est la cible désignée, ROUGE sinon ; en décodage, ambre. Il est tracé
+(`--tester`) comme en décodage, il est VERT : il montre la sélection, il ne juge pas. Il est tracé
 au-delà du cercle de désignation (`ANNEAU_ECART_PX`), dans le noir. La DERNIÈRE manche d'un test
 a aussi le sien : l'écran final attend sa décision (au plus `ATTENTE_DERNIERE_DECISION_S`) avant
 d'envoyer `calib_end`. Sans option, cette fenêtre ne désigne déjà rien (« choisis ta cible ») :
@@ -608,9 +608,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
             else:  # round_end : pas de rendu associé, juste le marqueur de fin de manche
                 emet(m)
                 if anneau is not None:
-                    # La manche est FERMÉE : la prochaine décision du moteur est la sienne. En
-                    # test, comparée à la cible désignée ; en décodage, ambre.
-                    anneau.mesure_finie(verite=cue_courant)
+                    # La manche est FERMÉE : la prochaine décision du moteur est la sienne.
+                    anneau.mesure_finie()
                 mesure = (f"{statistics.median(soa_mesures) * 1000:.0f} ms mesuré"
                           if soa_mesures else "SOA non mesurable")
                 print(f"[p300-stim] manche {round_num} : {flashs_manche} flashs envoyés, "
@@ -1002,13 +1001,15 @@ def _smoke_retour(chk):
     bornes, vus = fenetres(images, ouv, ferm)
     attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
     chk(vus == attendus,
-        f"[E] l'anneau entoure la cible SÉLECTIONNÉE, MAGENTA si c'est la désignée, ROUGE sinon, "
+        f"[E] l'anneau VERT entoure la cible SÉLECTIONNÉE, désignée ou non, "
         f"rien pour une décision arrivée pendant la manche suivante — et la DERNIÈRE manche a le "
         f"sien : l'écran final attend sa décision — lu dans les PIXELS "
         f"(vus {vus}, attendus {attendus})")
-    couleurs = {a[0][1] for v in vus for a in v}
-    chk({rt.COULEUR_JUSTE, rt.COULEUR_FAUX} <= couleurs,
-        "[E] …et les deux couleurs ont réellement été vues")
+    vus_justes = [a for x, a in zip(moteur.attendues, vus) if a and x[1] == x[2]]
+    vus_faux = [a for x, a in zip(moteur.attendues, vus) if a and x[1] != x[2]]
+    chk(bool(vus_justes) and bool(vus_faux),
+        "[E] …et l'anneau a réellement été vu sur la cible désignée ET sur une autre (un test qui "
+        "ne voit qu'un cas ne prouve rien sur l'autre)")
     pendant = [i for o, f in zip(ouv, ferm) for i in range(o, f + 1) if images[i][1]]
     chk(not pendant,
         f"[E] AUCUN anneau pendant les flashs d'une manche — ni le précédent, ni la décision "
@@ -1038,9 +1039,9 @@ def _smoke_retour(chk):
 
     images_l, ouv_l, ferm_l = decoupe(trace_l)
     _bornes_l, vus_l = fenetres(images_l, ouv_l, ferm_l)
-    chk(len(ouv_l) >= 3 and vus_l[:2] == [[((2, rt.COULEUR_LIBRE),)], []]
+    chk(len(ouv_l) >= 3 and vus_l[:2] == [[((2, rt.COULEUR_DECODEE),)], []]
         and garde_libre.violations == 0,
-        f"[E] libre : l'anneau AMBRE montre la sélection pendant la pause, et rien sur −1 "
+        f"[E] libre : l'anneau VERT montre la sélection pendant la pause, et rien sur −1 "
         f"({vus_l[:2]}, {len(ouv_l)} manches, {garde_libre.violations} pixel(s) touché(s))")
 
     nom = rt.flux_decode_de("p300")

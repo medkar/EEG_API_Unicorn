@@ -66,7 +66,7 @@ def options_de_mesure(stimulus_id):
     return tuple(MESURE_OPTIONS.get(stimulus_id, ()))
 
 
-# Les arguments de l'ESSAI LIBRE (« Essayer librement », 2026-10-01) : le mode tourne, la fenêtre
+# Les arguments de l'ESSAI LIBRE (« Tester librement », 2026-10-01) : le mode tourne, la fenêtre
 # affiche ses cibles SANS rien désigner, et entoure ce que le moteur décode. Ce que chaque fenêtre
 # exige pour ça, et pas un mot de plus :
 #   • c-VEP : `--libre` — sans option elle DÉSIGNE des cibles (le protocole de dépouillement de la

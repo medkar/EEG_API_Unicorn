@@ -5,7 +5,7 @@
     ┌ 1. Régler ──────────────────────────┐   tous les modes
     ┌ 2. Entraîner ───────────────────────┐   si le contrat déclare une calibration
     ┌ 3. Tester ──────────────────────────┐   si le contrat déclare un `test_id`
-    │ [Tester] [Essayer librement] ⓘ      │   le second si la fenêtre sait l'essai libre
+    │ [Tester] [Tester librement] ⓘ      │   le second si la fenêtre sait l'essai libre
     ☐ Décodage en direct                       replié : la vue en direct, toujours à jour
 
     …ou, pour un mode sans vérité-terrain (le Neuro, le Brut) :
@@ -140,7 +140,7 @@ class ModePage(QWidget):
         # --- 3. Tester (si le contrat déclare un `test_id`) --------------------------------------
         # « Tester » ouvre la page de la mesure désignée : elle porte déjà le briefing,
         # « Commencer », le contrôle de liaison, la fenêtre et le verdict. La recopier ici serait
-        # un second écran de protocole à tenir d'accord avec le premier. « Essayer librement », à
+        # un second écran de protocole à tenir d'accord avec le premier. « Tester librement », à
         # côté, n'a ni protocole ni verdict : sa séquence vit dans la console (`essayer_librement`).
         test_id = spec.get("test_id") or ""
         self.bloc_tester = self.bouton_tester = None
@@ -156,7 +156,7 @@ class ModePage(QWidget):
                     tr("console.mode.tester_pas_livre", mode=spec["label"]))
             dedans = QVBoxLayout(self.bloc_tester)
             dedans.addWidget(_phrase(tr("console.mode.tester_phrase")))
-            # « Essayer librement » (2026-10-01) : DANS le bloc « Tester », à côté de son bouton —
+            # « Tester librement » (2026-10-01) : DANS le bloc « Tester », à côté de son bouton —
             # c'est la même boucle (régler -> essayer -> ajuster), sans score. Il n'existe que si
             # la fenêtre du mode SAIT tenir un essai libre : la page le DEMANDE à la console, qui
             # le demande au registre des fenêtres. Aucune liste de modes ici.
@@ -296,7 +296,7 @@ class ModePage(QWidget):
         self.console.show_mesure(self.spec["test_id"], depuis=self, reglages=reglages)
 
     def _essayer(self):
-        """« Essayer librement » essaie, lui aussi, CE QUI EST À L'ÉCRAN.
+        """« Tester librement » essaie, lui aussi, CE QUI EST À L'ÉCRAN.
 
         Même premier geste que « Tester », et pour la même raison : on change une fréquence, on
         clique sans passer par « Appliquer », et l'essai tournerait sur l'ANCIENNE configuration
@@ -316,7 +316,7 @@ class ModePage(QWidget):
     def montrer_essai(self, texte, alerte=False, en_cours=False):
         """Ce que l'essai libre a à dire, et si le bouton doit attendre qu'il se termine.
 
-        `en_cours` grise « Essayer librement » : un second clic pendant l'attente démarrerait un
+        `en_cours` grise « Tester librement » : un second clic pendant l'attente démarrerait un
         second essai sur le même mode, et la console n'en tient qu'un. Le texte, lui, RESTE après
         la fin — c'est là qu'on lit si le décodage a été arrêté ou s'il continue.
         """

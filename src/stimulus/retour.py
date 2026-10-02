@@ -32,7 +32,13 @@ Quatre morceaux :
      cible fixée est un stimulus, et le SSVEP s'abstient une fenêtre sur deux (revue C-I3) ;
    - **par essai** (les tests guidés, et le P300 qui décide une fois par manche) : la fenêtre dit
      quand un essai se FERME (`mesure_finie`) et quand le suivant COMMENCE sa mesure
-     (`mesure_commence`). En test, elle connaît la cible désignée : MAGENTA si juste, ROUGE sinon.
+     (`mesure_commence`).
+
+   **UNE seule couleur, VERTE, en test comme en libre** (2026-10-02, demandé par l'utilisateur) :
+   l'anneau montre la cible DÉCODÉE, il ne juge pas. Une erreur se voit d'elle-même — l'anneau
+   n'est pas sur la cible désignée. Une première version peignait « juste » et « faux » de deux
+   couleurs, et le libre d'une troisième : trois codes à apprendre pour une information déjà à
+   l'écran.
 
    ⚠️ **Le RATTACHEMENT d'une décision à son essai — la règle, et pourquoi.** Le moteur ne décide
    un essai qu'APRÈS sa fermeture (il attend le marqueur de fin et la maturité de la dernière
@@ -71,7 +77,7 @@ Quatre morceaux :
    après `STATUT_ABSENT_S` — une croix éternelle bloquerait l'essai.
 
 ⚠️ `−1` en test guidé : AUCUN anneau. Le moteur s'est abstenu ; ce n'est ni juste ni faux — c'est
-la règle des tests (« −1 = silence, jamais une erreur »), et la peindre en rouge mentirait.
+la règle des tests (« −1 = silence, jamais une erreur »).
 
 Pas d'autotest propre : les trois `--smoke` de fenêtre appellent les `autotest_*` d'ici, en plus
 de leurs gardes de câblage.
@@ -87,18 +93,17 @@ import time
 
 from pylsl import StreamInlet, resolve_byprop
 
-# --- Couleurs : chacune n'existe NULLE PART ailleurs dans les trois fenêtres -------------------
+# --- La couleur : elle n'existe NULLE PART ailleurs dans les trois fenêtres ---------------------
 # C'est ce qui permet aux `--smoke` de relire l'anneau dans les pixels à la couleur EXACTE (aucun
 # lissage : `pygame.draw.circle` ne lisse pas). Une couleur partagée avec un décor ferait trouver un
-# anneau là où il n'y en a pas. ⚠️ Et aucune ne RESSEMBLE à une consigne (revue D-I2) : le c-VEP
-# cercle en vert, le SSVEP et le P300 en bleu — le « juste » est donc MAGENTA, pas vert ;
-# `autotest_couleurs` compare les TEINTES aux couleurs de consigne lues dans les trois fenêtres.
-COULEUR_LIBRE = (255, 170, 0)    # ambre : « voici ce que le moteur décode », sans jugement
-COULEUR_JUSTE = (255, 0, 255)    # test : la décision est la cible désignée
-COULEUR_FAUX = (255, 40, 40)     # test : la décision est une AUTRE cible
-COULEURS = (COULEUR_LIBRE, COULEUR_JUSTE, COULEUR_FAUX)
+# anneau là où il n'y en a pas. ⚠️ Et elle ne RESSEMBLE à aucune consigne (revue D-I2) : les trois
+# fenêtres désignent leur cible en BLEU — le c-VEP la cerclait en vert jusqu'au 2026-10-02, à 13° de
+# teinte de cet anneau ; `autotest_couleurs` compare les TEINTES aux couleurs de consigne LUES dans
+# les trois fenêtres.
+COULEUR_DECODEE = (0, 230, 0)    # vert : « voici la cible que le moteur décode », sans jugement
+COULEURS = (COULEUR_DECODEE,)
 EPAISSEUR_PX = 4                 # tracée vers l'INTÉRIEUR du rayon donné (convention de pygame)
-ECART_TEINTE_MIN = 45.0          # degrés ; l'ancien vert « juste » était à 13° du vert de consigne
+ECART_TEINTE_MIN = 45.0          # degrés ; l'anneau vert était à 13° du cercle VERT du c-VEP d'avant
 CROIX_PX, CROIX_EPAISSEUR_PX = 14, 3   # la croix du repos : demi-branche, épaisseur
 
 # Régime continu : passé ce délai sans décision VALIDE, l'anneau s'efface. 5 publications à 5 Hz.
@@ -326,7 +331,6 @@ class Retour:
         self.cible = None
         self.couleur = None
         self._attente = False      # un essai est FERMÉ et attend SA décision
-        self._verite = None        # la cible désignée de cet essai (None = libre)
         self._t_derniere = None
         self.recues = self.rattachees = self.ignorees = 0
 
@@ -347,14 +351,12 @@ class Retour:
         """L'essai suivant va commencer sa MESURE : l'anneau s'efface, et une décision qui
         arriverait encore pour l'essai précédent sera ignorée (cf. la règle de rattachement). La
         fenêtre l'appelle avec une MARGE avant les données que la décision suivante lira."""
-        self._attente, self._verite = False, None
+        self._attente = False
         self._efface()
 
-    def mesure_finie(self, verite=None):
-        """Un essai vient de se fermer : la PROCHAINE décision reçue est la sienne. `verite` = la
-        cible désignée (test), None en libre (anneau ambre)."""
+    def mesure_finie(self):
+        """Un essai vient de se fermer : la PROCHAINE décision reçue est la sienne."""
         self._attente = True
-        self._verite = None if verite is None else int(verite)
 
     def lire(self):
         """APRÈS le flip et le marqueur de l'image : tire sans attendre, met l'anneau à jour."""
@@ -374,7 +376,7 @@ class Retour:
             # de la cible fixée est un stimulus).
             if valide:
                 self._t_derniere = maintenant
-                self.cible, self.couleur = indice, COULEUR_LIBRE
+                self.cible, self.couleur = indice, COULEUR_DECODEE
             return
         if not self._attente:
             self.ignorees += 1
@@ -383,11 +385,8 @@ class Retour:
         self.rattachees += 1
         if not valide:
             self._efface()        # −1 : le moteur s'est abstenu — ni juste ni faux, pas d'anneau
-        elif self._verite is None:
-            self.cible, self.couleur = indice, COULEUR_LIBRE
         else:
-            self.cible = indice
-            self.couleur = COULEUR_JUSTE if indice == self._verite else COULEUR_FAUX
+            self.cible, self.couleur = indice, COULEUR_DECODEE
 
     def dessiner(self, pygame, surface, centres, rayon):
         """Appelée à CHAQUE image, après les cibles et avant le texte. Ne dessine que s'il y a un
@@ -609,14 +608,14 @@ class MoteurFactice(SourceFactice):
         return sortie + [(0.0, int(i)) for _u, _e, i in pretes]
 
 
-def anneau_attendu(quoi, indice, verite):
+def anneau_attendu(quoi, indice, _verite=None):
     """Ce que l'écran doit montrer à la fin de la fenêtre de retour d'un essai : `[(i, couleur)]`
-    ou `[]`. Écrit à partir du SCRIPT du moteur factice, pas de l'état de `Retour`."""
+    ou `[]`. Écrit à partir du SCRIPT du moteur factice, pas de l'état de `Retour`. La cible
+    désignée (3e champ de `attendues`) ne change plus rien : l'anneau est vert, juste ou faux —
+    il entoure la cible DÉCIDÉE (« faux » = autour d'une autre que la désignée)."""
     if quoi in ("rien", "tard") or indice is None or indice < 0:
         return []
-    if verite is None:
-        return [(indice, COULEUR_LIBRE)]
-    return [(indice, COULEUR_JUSTE if indice == verite else COULEUR_FAUX)]
+    return [(indice, COULEUR_DECODEE)]
 
 
 class Instrumentation:
@@ -700,21 +699,21 @@ def autotest_etat(chk):
     r = Retour(src, 6, horloge=lambda: t[0])
     src.donne(3)
     r.lire()
-    chk(r.anneau == (3, COULEUR_LIBRE), f"[retour] libre : l'anneau suit la décision ({r.anneau})")
+    chk(r.anneau == (3, COULEUR_DECODEE), f"[retour] libre : l'anneau suit la décision ({r.anneau})")
     src.donne(1)
     src.donne(4)
     r.lire()
-    chk(r.anneau == (4, COULEUR_LIBRE),
+    chk(r.anneau == (4, COULEUR_DECODEE),
         f"[retour] …la DERNIÈRE d'un paquet, pas la première ({r.anneau})")
     t[0] += PERIME_S * 0.5
     src.donne(-1)
     r.lire()
-    chk(r.anneau == (4, COULEUR_LIBRE),
+    chk(r.anneau == (4, COULEUR_DECODEE),
         f"[retour] …un −1 ne l'efface PAS : il tient (un anneau qui clignote à 5 Hz à côté de la "
         f"cible fixée serait un stimulus) ({r.anneau})")
     src.donne(9)
     r.lire()
-    chk(r.anneau == (4, COULEUR_LIBRE),
+    chk(r.anneau == (4, COULEUR_DECODEE),
         f"[retour] …ni un indice hors des cibles ({r.anneau})")
     t[0] += PERIME_S * 0.6
     src.donne(-1)
@@ -729,7 +728,7 @@ def autotest_etat(chk):
     tient = r.anneau
     t[0] += PERIME_S * 0.2
     r.lire()
-    chk(tient == (2, COULEUR_LIBRE) and r.anneau is None,
+    chk(tient == (2, COULEUR_DECODEE) and r.anneau is None,
         f"[retour] …et quand plus rien n'arrive depuis {PERIME_S:g} s : un mode arrêté ne laisse "
         f"pas un anneau figé ({tient} puis {r.anneau})")
 
@@ -739,36 +738,39 @@ def autotest_etat(chk):
     r.lire()
     chk(r.anneau is None and r.ignorees == 1,
         "[retour] par essai : une décision qui arrive PENDANT une mesure est ignorée")
-    r.mesure_finie(verite=2)
+    r.mesure_finie()
     src.donne(2)
     src.donne(5)
     r.lire()
-    chk(r.anneau == (2, COULEUR_JUSTE) and r.ignorees == 2,
-        f"[retour] juste = MAGENTA, et UNE décision par essai, la seconde est ignorée ({r.anneau})")
+    chk(r.anneau == (2, COULEUR_DECODEE) and r.ignorees == 2,
+        f"[retour] l'anneau VERT entoure la décision, et UNE décision par essai : la seconde est "
+        f"ignorée ({r.anneau})")
     chk(r.attend is False, "[retour] …et l'essai n'attend plus rien une fois sa décision reçue")
     t[0] += 30.0
     r.lire()
-    chk(r.anneau == (2, COULEUR_JUSTE),
+    chk(r.anneau == (2, COULEUR_DECODEE),
         "[retour] …l'anneau d'un essai ne périme PAS : il tient jusqu'à l'essai suivant")
     r.mesure_commence()
     chk(r.anneau is None, "[retour] …et s'efface quand l'essai suivant commence sa mesure")
-    r.mesure_finie(verite=1)
+    r.mesure_finie()
     src.donne(4)
     r.lire()
-    chk(r.anneau == (4, COULEUR_FAUX), f"[retour] faux = ROUGE, autour de la cible DÉCIDÉE ({r.anneau})")
+    chk(r.anneau == (4, COULEUR_DECODEE),
+        f"[retour] une décision sur une AUTRE cible : même anneau vert, autour de la cible DÉCIDÉE "
+        f"— pas de rouge, l'erreur se voit d'elle-même ({r.anneau})")
     r.mesure_commence()
-    r.mesure_finie(verite=0)
+    r.mesure_finie()
     r.mesure_commence()
     src.donne(0)                      # la décision de l'essai 0 arrive APRÈS le début du suivant
     r.lire()
-    r.mesure_finie(verite=5)
+    r.mesure_finie()
     src.donne(5)
     r.lire()
-    chk(r.anneau == (5, COULEUR_JUSTE) and r.rattachees == 3,
+    chk(r.anneau == (5, COULEUR_DECODEE) and r.rattachees == 3,
         f"[retour] une décision TARDIVE est perdue, elle ne décale pas les suivantes : l'essai "
         f"d'après reçoit la sienne ({r.anneau}, {r.rattachees} rattachées)")
     r.mesure_commence()
-    r.mesure_finie(verite=3)
+    r.mesure_finie()
     chk(r.attend, "[retour] un essai fermé ATTEND sa décision (ce que guette l'écran final P300)")
     src.donne(-1)
     r.lire()
@@ -936,17 +938,12 @@ def autotest_couleurs(chk):
     les trois fenêtres (import tardif : elles importent ce module), jamais recopiées ici."""
     from stimulus import cvep, p300, ssvep
 
-    consignes = {"cercle c-VEP": cvep.ACCENT, "liseré SSVEP": ssvep.CUE, "cercle P300": p300.CUE}
-    anneaux = {"juste": COULEUR_JUSTE, "faux": COULEUR_FAUX, "libre": COULEUR_LIBRE}
-    ecarts = {(a, c): round(_ecart_teinte(ca, cc)) for a, ca in anneaux.items()
-              for c, cc in consignes.items()}
+    consignes = {"cercle c-VEP": cvep.CUE, "liseré SSVEP": ssvep.CUE, "cercle P300": p300.CUE}
+    ecarts = {c: round(_ecart_teinte(COULEUR_DECODEE, cc)) for c, cc in consignes.items()}
     chk(min(ecarts.values()) >= ECART_TEINTE_MIN,
-        f"[retour] aucune couleur d'anneau n'est à moins de {ECART_TEINTE_MIN:g}° de teinte d'une "
-        f"couleur de CONSIGNE des trois fenêtres — un « juste » vert à côté du cercle vert du c-VEP "
-        f"se lisait comme une consigne (écarts {ecarts})")
-    chk(_ecart_teinte(COULEUR_JUSTE, COULEUR_FAUX) >= ECART_TEINTE_MIN,
-        f"[retour] …et « juste » se distingue de « faux » "
-        f"({_ecart_teinte(COULEUR_JUSTE, COULEUR_FAUX):.0f}°)")
+        f"[retour] l'anneau n'est à moins de {ECART_TEINTE_MIN:g}° de teinte d'AUCUNE couleur de "
+        f"CONSIGNE des trois fenêtres — l'anneau vert à côté du cercle vert du c-VEP d'avant se "
+        f"lisait comme une consigne (écarts {ecarts})")
     partagees = [(m.__name__, k) for m in (cvep, p300, ssvep) for k, v in vars(m).items()
                  if isinstance(v, tuple) and v in COULEURS]
     chk(not partagees,
