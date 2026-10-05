@@ -899,9 +899,9 @@ Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 une fois sur quatre (calculé, pas mesuré). La réserve nomme le réglage à tourner.
 
 ✅ **2.3.5** (2026-10-01) **Retour en direct** : à la fin de chaque bloc, le disque décodé est entouré en vert
-(juste ou non), pendant ~1 s seulement (il s'éteint avant les cycles que la décision
-suivante lit). Note si l'anneau arrive **trop tard** ou part trop vite pour être vu, et si le voir
-change ta façon de fixer.
+(juste ou non), SEUL pendant ~1 s (phase de retour : plus de cercle bleu, les disques clignotent
+toujours), puis le cercle bleu suivant. Note si l'anneau arrive **trop tard** ou part trop vite pour
+être vu, et si le voir change ta façon de fixer.
 
 ❌ Échec : **MUET** ou « NON MESURÉ » sans autre explication. ⚠️ **C'est la panne caractéristique
 du c-VEP** : une phase fausse de quelques frames ne lève rien, les corrélations baissent juste assez
