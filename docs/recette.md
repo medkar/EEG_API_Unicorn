@@ -1201,6 +1201,24 @@ briefing actuel ne compte pas les flèches.)*
 > sens : un test décide comme le produit, la comparabilité est une note — elle est dans le texte
 > d'honnêteté du résultat, sous « Détails ».
 
+**Séance du 2026-10-05 (pic alpha 10 Hz, écran 60 Hz, seuil 2,0)** — deux tests, même montage :
+
+| Fréquences | Émission | Justesse | Par cible (annonces/12 · barre ρ) |
+|---|---|---|---|
+| 12 · 15 · 20 (celles de « Proposer ») | 12/36 (33 %) | 11/12 | 12 Hz : 2 · 0,52 — 15 Hz : 4 · 0,40 — 20 Hz : 6 · ? |
+| 7,5 · 15 · 20 (à la main) | 27/36 (75 %) | 26/27 | 7,5 Hz : 9 · 0,60 — 15 Hz : 8 · 0,50 — 20 Hz : 10 · 0,35 |
+
+- « Proposer » rend 12/15/20 : la garde alpha de 1,9 Hz laisse passer 12 Hz, à 2,0 Hz du pic.
+- L'émission a doublé (Fisher p = 0,0008), mais **pas seulement sur la cible changée** : 15 et
+  20 Hz sont passés de 10/24 à 18/24 (p = 0,04). La séance s'est améliorée entre les deux tests
+  (contact, habitude) : on ne peut PAS imputer le gain au remplacement de 12 Hz par 7,5 Hz.
+  12 Hz contre 7,5 Hz seuls (2/12 contre 9/12, p = 0,01) est confondu par cette dérive.
+- Second point pour `ALPHA_GARDE_HZ` (le premier : 12 Hz à 1,5 Hz du pic, échec) : 12 Hz à
+  2,0 Hz du pic, barre la plus haute et le moins d'annonces — dans le sens attendu, sans preuve.
+- ⚠️ 7,5 et 15 Hz forment une paire d'HARMONIQUES (15 = 2 × 7,5) : la référence CCA de 7,5 Hz
+  contient 15 Hz. Une seule confusion observée (7,5 Hz : 8 justes sur 9), mais c'est un risque
+  connu que la règle de « Proposer » ne regarde pas.
+
 ### 2.3 — Le cumul sous charge réelle
 
 Deux décodeurs sur le même tampon est trivial en synthétique. Ce qui ne l'est pas : la charge CPU et
