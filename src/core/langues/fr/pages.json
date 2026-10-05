@@ -116,6 +116,8 @@
   "pages.mesure.barriere_franchie": "BARRIÈRE FRANCHIE : la séance peut continuer.",
   "pages.mesure.barriere_non_franchie": "🛑 BARRIÈRE NON FRANCHIE — ARRÊTE ICI. Tant que ce contrôle échoue, aucun test ni décodage ne veut rien dire : ils lisent tous ce même signal. Reprends le montage, puis relance ce contrôle.",
   "pages.mesure.candidat": "⚠ Ton nouveau modèle n'est pas encore enregistré : ce test porte sur le modèle affiché ci-dessous. Clique d'abord « Enregistrer le modèle » (page « Entraîner »), puis reviens tester.",
+  "pages.mesure.detail.cible": "{hz} Hz : {annonces} annonce(s) sur {essais} essais, dont {justes} juste(s)",
+  "pages.mesure.detail.cible_barre": " — barre à atteindre ρ = {rho} (fond μ = {mu}, σ = {sigma})",
   "pages.mesure.detail.fenetres_repos": "bruit de fond pris sur {n} fenêtres au repos",
   "pages.mesure.detail.n_artefacts": "{n} rejetés (artefact)",
   "pages.mesure.detail.n_chauffe": "{n} jetés (arrivés pendant la stabilisation du casque)",

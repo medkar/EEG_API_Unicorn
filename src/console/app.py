@@ -3982,6 +3982,26 @@ def _smoke():
         "un test FINI laisse sa fenêtre conclure d'elle-même : seul un ABANDON la ferme")
     console.lanceur.arreter()
 
+    # --- « Détails » d'un test SSVEP : CIBLE PAR CIBLE (2026-10-02) -----------------------------
+    # Relevé au casque : « la cible gauche n'a jamais été reconnue », puis une AUTRE au test
+    # suivant. La ligne par cible montre sa barre (ρ à atteindre) à côté de ses annonces : une cible
+    # muette à barre haute accuse le plancher de CE repos. Le payload vient de la fonction du
+    # MOTEUR (`_par_cible`), pas d'une forme recopiée ici.
+    from core.modes.ssvep_mesure import _par_cible as _par_cible_moteur
+    _plancher = {"targets": [{"freq_hz": 15.0, "mu": 0.31, "sigma": 0.12, "rho_needed": 0.61},
+                             {"freq_hz": 12.0, "mu": 0.29, "sigma": 0.04, "rho_needed": 0.39}]}
+    _decisions = [(0, None), (0, None), (1, 1), (1, 0), (1, None)]
+    page_ss_t = console.mesure_pages["ssvep_taux"]
+    page_ss_t._montrer_resultat({"verdict": "MOYEN — x", "mot": "MOYEN", "niveau": "moyen",
+                                 "n_essais": 5, "par_cible": _par_cible_moteur(
+                                     [12.0, 15.0], _decisions, _plancher)}, "")
+    _det = page_ss_t.details.text()
+    chk("12 Hz : 0 annonce(s) sur 2 essais, dont 0 juste(s)" in _det
+        and "15 Hz : 2 annonce(s) sur 3 essais, dont 1 juste(s)" in _det
+        and "ρ = 0,39" in _det and "ρ = 0,61" in _det and _det.count("\n") == 2,
+        f"« Détails » d'un test SSVEP donne UNE ligne par cible : annonces, justes, et la barre de "
+        f"SON plancher, appariée par fréquence ({_det!r})")
+
     # Le même geste côté ENTRAÎNEMENT : le défaut existait avant ce chantier, pour la même raison.
     journal.clear()
     processus.clear()

@@ -523,9 +523,23 @@ class MesurePage(QWidget):
             # Les voies moyennées viennent du MOTEUR : l'écran d'origine imprimait « PO7/Oz/PO8 »
             # alors qu'il en moyennait quatre, et personne ne l'a vu pendant des mois.
             morceaux.append(tr("pages.mesure.detail.voies", voies="/".join(resultat["voies"])))
-        self.details.setText(" — ".join(morceaux))
+        # CIBLE PAR CIBLE (2026-10-02) : une ligne par cible, calculée par le MOTEUR. C'est ce
+        # qui dit POURQUOI une cible ne sort jamais — sa barre au-dessus de celle des autres.
+        lignes = [" — ".join(morceaux)] + [self._ligne_de_cible(p)
+                                           for p in resultat.get("par_cible") or ()]
+        self.details.setText("\n".join(ligne for ligne in lignes if ligne))
         self.honnetete.setText(resultat.get("honnetete") or "")
         self._montrer_proposition(resultat.get("reglage_propose"))
+
+    @staticmethod
+    def _ligne_de_cible(p):
+        """« 15 Hz : 3 annonces sur 12 essais, 3 justes — barre ρ = 0,40 (fond μ 0,29, σ 0,04) »."""
+        compte = tr("pages.mesure.detail.cible", hz=nombre(p["freq_hz"]), essais=p["essais"],
+                    annonces=p["annonces"], justes=p["justes"])
+        if p.get("rho_requis") is None:
+            return compte
+        return compte + tr("pages.mesure.detail.cible_barre", rho=nombre(p["rho_requis"], ".2f"),
+                           mu=nombre(p["mu"], ".2f"), sigma=nombre(p["sigma"], ".2f"))
 
     def _montrer_barriere(self, resultat):
         """La ligne qui ARRÊTE, ou celle qui autorise la suite. Absente si la mesure n'en est pas une.

@@ -557,6 +557,31 @@ def decider(decideur, vue, fenetre_brute, lsl_ts=0.0):
     return decideur.output()
 
 
+def _par_cible(freqs, decisions, plancher):
+    """`[{freq_hz, essais, annonces, justes, mu, sigma, rho_requis}, ...]`, dans l'ordre des cibles.
+
+    `annonces` compte les essais de CETTE cible où le moteur a annoncé quelque chose (juste ou
+    non) ; `justes`, ceux où il a annoncé CETTE cible. Le plancher est relu dans le compte-rendu
+    du mode, apparié par FRÉQUENCE (jamais par position : son ordre est celui d'un dict)."""
+    cibles = {}
+    for c in (plancher or {}).get("targets", []):
+        cibles[round(float(c["freq_hz"]), 3)] = c
+    lignes = []
+    for i, f in enumerate(freqs):
+        siens = [d for c, d in decisions if c == i]
+        fond = cibles.get(round(float(f), 3), {})
+        lignes.append({
+            "freq_hz": round(float(f), 3),
+            "essais": len(siens),
+            "annonces": sum(1 for d in siens if d is not None),
+            "justes": sum(1 for d in siens if d == i),
+            "mu": fond.get("mu"),
+            "sigma": fond.get("sigma"),
+            "rho_requis": fond.get("rho_needed"),
+        })
+    return lignes
+
+
 def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN,
             bande=BANDPASS):
     """**La règle du moteur, rejouée sur des fenêtres — une décision par essai.** Rend le verdict.
@@ -654,6 +679,12 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
         # atteindre, par cible. C'est lui qui dit POURQUOI une cible ne sort jamais.
         "plancher": decideur.rest_report,
         "decisions": [(int(c), None if d is None else int(d)) for c, d in decisions],
+        # CIBLE PAR CIBLE (2026-10-02, demandé au casque : « la cible gauche n'a jamais été
+        # reconnue », puis une autre au test suivant). Les essais où elle était désignée, combien
+        # ont produit une décision, combien justes — et la barre que son plancher imposait. Une
+        # cible muette dont la barre (`rho_requis`) dépasse celle des autres accuse le plancher
+        # de CE repos, pas le code. Calculé ICI, pas dans la console : elle n'a pas de logique.
+        "par_cible": _par_cible(freqs, decisions, decideur.rest_report),
         **_affichage,
         # Le verdict s'OUVRE sur le mot affiché en face : c'est l'invariant que
         # `affichage.verifier` tient pour chaque protocole — les deux viennent du même calcul.
@@ -1157,6 +1188,28 @@ def _selftest():
         f"🔴 le test décide EXACTEMENT comme le mode, essai par essai, rejet d'artefact compris — "
         f"test {[d for _c, d in _res3['decisions']]} ({_res3['n_artefacts']} artefacts), mode "
         f"{[d for _c, d, _a in _sorties]} ({sum(a for _c, _d, a in _sorties)} artefacts)")
+
+    # --- CIBLE PAR CIBLE (2026-10-02) : ce que « Détails » montre pour une cible muette --------
+    _pc = _res3["par_cible"]
+    _attendu = [(sum(1 for c, _d in _res3["decisions"] if c == i),
+                 sum(1 for c, d in _res3["decisions"] if c == i and d is not None),
+                 sum(1 for c, d in _res3["decisions"] if c == i and d == i))
+                for i in range(len(FREQS))]
+    chk([(p["essais"], p["annonces"], p["justes"]) for p in _pc] == _attendu
+        and sum(p["essais"] for p in _pc) == _res3["n_essais"]
+        and sum(p["annonces"] for p in _pc) == _res3["n_emis"]
+        and sum(p["justes"] for p in _pc) == _res3["n_justes"],
+        f"cible par cible : essais, annonces et justes recomptés sur les décisions, et leurs "
+        f"sommes = les totaux du verdict ({_pc})")
+    _fonds = {round(c["freq_hz"], 3): c["rho_needed"] for c in _res3["plancher"]["targets"]}
+    chk([p["freq_hz"] for p in _pc] == [round(f, 3) for f in FREQS]
+        and all(p["rho_requis"] == _fonds[p["freq_hz"]] and p["rho_requis"] is not None
+                for p in _pc),
+        f"…et chaque cible porte la barre de SON plancher, appariée par fréquence ({_pc})")
+    # L'appariement est par FRÉQUENCE : un plancher rendu dans un autre ordre ne déplace rien.
+    _melange = {"targets": list(reversed(_res3["plancher"]["targets"]))}
+    chk(_par_cible(FREQS, _res3["decisions"], _melange) == _pc,
+        "…même si le compte-rendu du plancher liste les cibles dans un autre ordre")
     chk("comparable" in _res3["honnetete"] and "2026-07-27" in _res3["honnetete"],
         "…et la phrase d'honnêteté DIT que ces chiffres ne se comparent plus tels quels au "
         "100 %/44 % du 2026-07-27, pris sous l'ancienne règle (σ sur 8 voies, trio du dépôt)")
