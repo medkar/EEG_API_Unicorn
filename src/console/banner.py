@@ -102,14 +102,56 @@ class IconeSignal(QWidget):
         p.end()
 
 
+class LigneAbregee(QLabel):
+    """Une ligne de texte qui ne fait JAMAIS grandir la fenêtre (2026-10-05).
+
+    Un QLabel sans retour à la ligne exige la largeur de TOUT son texte : c'est sa largeur
+    minimale, et Windows élargit la fenêtre pour la respecter. Relevé au casque : « la largeur de
+    la fenêtre change en fonction des messages affichés dans le bandeau ». Ici la largeur minimale
+    est nulle ; faute de place, la ligne s'abrège (« … ») et le texte entier passe dans la bulle.
+    Elle ne passe PAS à la ligne : la hauteur du bandeau changerait, et tout ce qui est dessous
+    sauterait (le défaut corrigé le 2026-10-01). `text()` rend le texte ENTIER."""
+
+    def __init__(self, texte=""):
+        super().__init__()
+        self._plein = ""
+        self.setText(texte)
+
+    def setText(self, texte):  # noqa: N802 - nom imposé par Qt
+        self._plein = texte or ""
+        self._abreger()
+        self.updateGeometry()
+
+    def text(self):
+        return self._plein
+
+    def _abreger(self):
+        court = self.fontMetrics().elidedText(self._plein, Qt.ElideRight, max(0, self.width()))
+        QLabel.setText(self, court)
+        QLabel.setToolTip(self, self._plein if court != self._plein else "")
+
+    def sizeHint(self):  # noqa: N802 - nom imposé par Qt
+        # La place qu'elle VOUDRAIT (tout son texte) : la mise en page la lui donne quand il y en a.
+        return QSize(self.fontMetrics().horizontalAdvance(self._plein) + 4,
+                     super().sizeHint().height())
+
+    def minimumSizeHint(self):  # noqa: N802 - nom imposé par Qt
+        return QSize(0, super().minimumSizeHint().height())
+
+    def resizeEvent(self, evenement):  # noqa: N802 - nom imposé par Qt
+        super().resizeEvent(evenement)
+        self._abreger()
+
+
 class Banner(QWidget):
     """Deux lignes, jamais masquées : l'état en haut, les messages en dessous."""
 
     def __init__(self):
         super().__init__()
-        self.liaison = QLabel(tr("console.bandeau.moteur_non_demarre"))
-        self.sigmas = QLabel("")
+        self.liaison = LigneAbregee(tr("console.bandeau.moteur_non_demarre"))
+        self.sigmas = LigneAbregee("")
         self.alarme = QLabel("")
+        self.alarme.setWordWrap(True)   # un MESSAGE : il passe à la ligne, il n'élargit rien
         self.alarme.setStyleSheet(f"color: {ROUGE}; font-weight: bold;")
         # L'état de la FENÊTRE de stimulus, s'il y en a une. Ici et pas sur une page, pour la même
         # raison que le reste du bandeau : une fenêtre qui meurt pendant qu'on regarde la grille

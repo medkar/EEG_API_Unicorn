@@ -5107,6 +5107,31 @@ def _smoke():
         f"…et une batterie qui devient inconnue puis revient ne déplace rien non plus "
         f"({n_icones} déplacement(s) ; 4 avant le correctif)")
 
+    # --- 🔴 LA LARGEUR NE BOUGE PAS SANS L'UTILISATEUR (2026-10-05, relevé au casque) ---------
+    # « La largeur de la fenêtre change en fonction des messages affichés dans le bandeau. » Une
+    # étiquette sans retour à la ligne exige la largeur de TOUT son texte, et Windows élargit la
+    # fenêtre pour la respecter. Mesuré avant le correctif : la largeur minimale du bandeau passait
+    # de ~130 px à ~2 700 px avec une ligne d'état longue.
+    large = Console(_Fige(sur_casque), moteur_vivant=lambda: True)
+    large.timer.stop()
+    large.resize(1000, 800)
+    large.show()
+    large.refresh()
+    for _ in range(5):
+        app.processEvents()
+    largeur_avant = large.width()
+    tres_long = "Unicorn · 250 Hz · 1 mode actif · σ 7,4–9,7 µV sur 8 voies · " * 8
+    for etiquette in (large.banner.liaison, large.banner.sigmas, large.banner.alarme):
+        etiquette.setText(tres_long)
+    for _ in range(5):
+        app.processEvents()
+    chk(large.width() == largeur_avant and large.minimumSizeHint().width() < largeur_avant
+        and large.banner.sigmas.text() == tres_long,
+        f"un texte de bandeau très long n'ÉLARGIT pas la fenêtre ({largeur_avant} -> "
+        f"{large.width()} px, largeur minimale {large.minimumSizeHint().width()} px) — la "
+        f"ligne s'abrège, son texte entier reste lisible (`text()`, bulle)")
+    large.close()
+
     # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------
     # (2026-09-25, demandé à l'écran : « des icônes évolutives, tout à droite, et le texte
     # informatif sur la ligne du dessous »).
