@@ -599,6 +599,9 @@ test dit « CALIBRATION » ; un test qui écrit dans `data/`.
 Grille → tuile **SSVEP** → **« Démarrer »** ; attends ~23 s (chauffe + repos). Puis, en bas de la
 grille, **« Ce que voit ton application »**.
 
+ℹ️ **`quality` et `status` sont TOUJOURS là**, même sans aucun mode démarré : le moteur les publie
+dès son ouverture (la santé des électrodes, ~1 Hz, et son propre état). Ce ne sont pas des
+décodages, et une application s'en sert pour savoir si le moteur tourne et si le contact est bon.
 ✅ **1.11.1** Les flux LSL **du réseau** apparaissent, avec leurs voies et des valeurs qui défilent — **celles
 du flux affiché dans la liste, tout de suite, sans cliquer dessus**. ❌ Régression : un flux affiché
 dans la liste et un panneau vide tant qu'on ne le re-choisit pas (défaut du 2026-09-23).
@@ -765,7 +768,9 @@ SSVEP (bloc « 1. Régler » → « Appliquer ») : la console **ferme** l'essai
 la mesure : **refus** qui nomme la mesure, aucune fenêtre.
 ✅ **1.17.10** « Tester librement » existe sur c-VEP et P300 ; il est **absent** sur ErrP, MI, Neuro et Brut.
 ✅ **1.17.11** SSVEP **démarré depuis la grille** (« Démarrer » sur sa tuile), puis « Tester sur une
-session » : **refus**, le test et le mode publieraient sur le même flux.
+session » → « Commencer » : la console **arrête d'abord le SSVEP**, puis lance le test — pas de
+refus (la console arrête le mode avant tout test, cf. CLAUDE.md ; le refus du moteur reste le
+filet si un client le tente). Validé ainsi par l'utilisateur le 2026-10-05.
 
 Si, seuil à 1,0, le SSVEP ne décide TOUJOURS rien sur 10 essais : note-le et passe ; 1.17.1 et
 1.17.6 se vérifient alors au casque (2.2, 2.12).
