@@ -1939,7 +1939,7 @@ python archive/cvep_pilot.py --model data/cvep_model_AAAAMMJJ-HHMMSS.npz    # ~5
 
 ## Niveau 3 — le réseau
 
-**Séance du 2026-10-05 — le premier test d'une séance SOUS-ESTIME** (même modèle eCCA, CV 57,9 %,
+**Séance du 2026-10-05 — trois tests à la suite, une émission qui monte** (même modèle eCCA, CV 57,9 %,
 rCCA 55,3 % : au repère ; réglages par défaut, trois « Tester sur une session » de 18 blocs à la
 suite) :
 
@@ -1949,11 +1949,14 @@ suite) :
 | 2 | 4/18 (22 %) | 2/4 |
 | 3 | 9/18 (50 %) | 6/9 (67 %) — au repère ~46 % / ~71 % |
 
-Tendance croissante significative (Cochran-Armitage, p = 0,009 ; test 1 contre 3, Fisher
-p = 0,03). Même forme qu'au SSVEP le même jour (33 % puis 75 % d'émission, cf. 2.2). Le test
-n'était donc pas trop sévère : le 3e atteint le repère. Ce qui monte, c'est la séance —
-habitude de fixer, contact qui se stabilise ; on ne peut pas séparer les deux ici. ⚠️ Pour juger
-un mode, ne retiens PAS le premier test de la séance : un tour d'échauffement d'abord.
+Tendance croissante (Cochran-Armitage, p = 0,009 ; test 1 contre 3, Fisher p = 0,03), de même
+sens qu'au SSVEP le même jour (33 % puis 75 %, cf. 2.2). Ce que ça établit : le test PEUT
+atteindre le repère avec ce modèle (3e test) — il n'est pas trop sévère par construction. Ce que
+ça n'établit PAS : la cause. Candidates, non départagées : habitude de fixer (le retour en direct
+peut y jouer), contact ou saline qui se stabilise avec le temps, attention qui varie, dérive du
+signal, hasard malgré le p (trois tests, une personne, une séance). ⚠️ **Une observation, pas une
+règle** : ne rien en déduire sur la procédure avant de l'avoir revue sur d'autres séances et
+d'autres personnes, en notant l'heure et l'ordre des tests.
 
 ### 3.1 — Un client sur la même machine — ✅ passé le 2026-07-29
 
