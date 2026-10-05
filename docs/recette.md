@@ -1939,6 +1939,22 @@ python archive/cvep_pilot.py --model data/cvep_model_AAAAMMJJ-HHMMSS.npz    # ~5
 
 ## Niveau 3 — le réseau
 
+**Séance du 2026-10-05 — le premier test d'une séance SOUS-ESTIME** (même modèle eCCA, CV 57,9 %,
+rCCA 55,3 % : au repère ; réglages par défaut, trois « Tester sur une session » de 18 blocs à la
+suite) :
+
+| Test | Émission | Justesse à l'émission |
+|---|---|---|
+| 1 | 2/18 (11 %) | 2/2 |
+| 2 | 4/18 (22 %) | 2/4 |
+| 3 | 9/18 (50 %) | 6/9 (67 %) — au repère ~46 % / ~71 % |
+
+Tendance croissante significative (Cochran-Armitage, p = 0,009 ; test 1 contre 3, Fisher
+p = 0,03). Même forme qu'au SSVEP le même jour (33 % puis 75 % d'émission, cf. 2.2). Le test
+n'était donc pas trop sévère : le 3e atteint le repère. Ce qui monte, c'est la séance —
+habitude de fixer, contact qui se stabilise ; on ne peut pas séparer les deux ici. ⚠️ Pour juger
+un mode, ne retiens PAS le premier test de la séance : un tour d'échauffement d'abord.
+
 ### 3.1 — Un client sur la même machine — ✅ passé le 2026-07-29
 
 Refait ce jour en synthétique, résultat conservé ici comme référence.

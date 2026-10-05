@@ -893,6 +893,7 @@ Page **c-VEP** → **« Entraîner »** (~3,1 min, stabilisation du casque compr
 Repères du dépôt : **59,5 / 64,9 %** (hors ligne). Le 2026-09-22 : 25,0 %.
 ✅ **2.3.3** **« Enregistrer le modèle »** → « ← c-VEP » → **« Tester sur une session »** (3 cycles par cible, 18 blocs,
 ~2,5 min) → « Commencer ». Fixe le disque **cerclé**, sans bouger les yeux.
+⚠️ **Le premier test d'une séance sous-estime** (2026-10-05 : c-VEP 11 % puis 22 % puis 50 % d'émission, même modèle ; SSVEP 33 % puis 75 %). Juge le mode sur un test APRÈS un tour d'échauffement, et note les deux.
 ✅ **2.3.4** Deux chiffres ensemble : **justesse quand il émet** et **taux d'émission**, à comparer au couple
 **EN DIRECT** du dépôt — **~46 % d'émission, ~71 % de justesse** —, jamais au 59,5/64,9 %.
 ⚠️ **Orange est le résultat attendu d'un système AU repère** : à 18 blocs, il ne sort vert qu'environ
