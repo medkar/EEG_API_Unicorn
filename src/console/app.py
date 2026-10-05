@@ -2838,7 +2838,11 @@ def _smoke():
             "print('[ssvep-stim] t=1.0 essai 16/18 : fixe « AVANT » (cible 0)'); "
             "print('[ssvep-stim] t=2.0 essai 17/18 : fixe « ARRIERE » (cible 2)'); "
             "print('[ssvep-stim] test terminé : 18 essais, « calib_end » envoyé'); "
-            "print('[ssvep-stim] fin : 600 frames affichées, 4 sautée(s) (0.7%)')"]
+            "print('[ssvep-stim] fin : 600 frames affichées, 4 sautée(s) (0.7%)'); "
+            # Le journal de liblsl, imprimé APRÈS le bilan (vu au casque le 2026-10-05 : le moteur
+            # ferme son flux décodé pendant que la fenêtre l'écoute encore).
+            "print('2026-10-05 13:45:48.827 ( 218.143s) [R_EEG_API_Unic ]  data_receiver.cpp:344"
+            "   ERR| Stream transmission broke off (Input stream error.); re-connecting...')"]
         propre = LanceurFenetre()
         propre.lancer("ssvep")
         propre._proc.waitForFinished(5000)
@@ -2849,6 +2853,9 @@ def _smoke():
         chk(not alerte,
             "…sans le peindre en alerte : une séance qui s'est bien passée le dit aussi, et "
             "« 0 sautée » doit se LIRE plutôt que se deviner")
+        chk("ERR|" not in texte and "data_receiver" not in texte,
+            f"…sans le journal interne de liblsl, même imprimé en dernier : il prenait la place "
+            f"du bilan et se lisait comme une panne ({texte[:90]}…)")
         chk("essai 16/18" not in texte and "essai 17/18" not in texte,
             f"…et SEULEMENT son bilan : le journal essai par essai qui le précède ne remonte pas "
             f"dans le bandeau, où il noyait le chiffre utile ({texte[:90]}…)")

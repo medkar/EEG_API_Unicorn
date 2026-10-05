@@ -35,7 +35,7 @@ import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QVBoxLayout, QWidget)
+                               QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import compter  # noqa: E402
@@ -281,11 +281,21 @@ class MesurePage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
-        layout.addWidget(self.note)
-        layout.addWidget(self.bloc_pendant)
-        layout.addWidget(self.bloc_apres)
-        layout.addWidget(self.bloc_avant)
-        layout.addStretch(1)
+        # Le CORPS défile (2026-10-05) : « Détails » déplié, les textes se tassaient les uns sur
+        # les autres faute de hauteur. L'en-tête reste en haut, hors du défilement.
+        corps = QWidget()
+        dedans = QVBoxLayout(corps)
+        dedans.setContentsMargins(0, 0, 0, 0)
+        dedans.addWidget(self.note)
+        dedans.addWidget(self.bloc_pendant)
+        dedans.addWidget(self.bloc_apres)
+        dedans.addWidget(self.bloc_avant)
+        dedans.addStretch(1)
+        self.defilement = QScrollArea()
+        self.defilement.setWidget(corps)
+        self.defilement.setWidgetResizable(True)     # sinon le corps garde sa taille d'origine
+        self.defilement.setFrameShape(QScrollArea.NoFrame)
+        layout.addWidget(self.defilement, 1)
 
         self.bloc_avant.setVisible(True)
         self.bloc_pendant.setVisible(False)

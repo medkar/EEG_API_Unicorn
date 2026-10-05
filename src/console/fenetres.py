@@ -23,6 +23,7 @@ processus et surveille sa mort. Le contrôle de liaison est dans `contact_page.p
 """
 
 import os
+import re
 import sys
 from collections import deque
 
@@ -38,6 +39,8 @@ from stimulus import registry as stimulus_registry  # noqa: E402
 LIGNES_RETENUES = 6
 # …et combien on en montre quand la fenêtre s'est fermée NORMALEMENT : son bilan, pas son journal.
 BILAN_LIGNES = 2
+# Une ligne du journal INTERNE de liblsl (loguru) : « data_receiver.cpp:344   ERR| … ».
+JOURNAL_LIBLSL = re.compile(r"\.cpp:\d+\s+(ERR|WARN|INFO)\|")
 
 
 class LanceurFenetre(QObject):
@@ -258,8 +261,12 @@ class LanceurFenetre(QObject):
             # joignait les six lignes retenues, ce qui est juste pour une mort anormale (le
             # traceback a besoin de son contexte) et faux ici : en séance (2026-09-22), le bandeau
             # portait les journaux bloc par bloc de la séance avant d'arriver au chiffre utile.
+            # ⚠️ Sans le journal de liblsl (2026-10-05) : en fin de test, le moteur ferme son
+            # flux décodé pendant que la fenêtre l'écoute encore, et liblsl imprime « data_receiver
+            # .cpp:344 ERR| Stream transmission broke off… re-connecting » — le bandeau affichait
+            # ça à la place du bilan, et ça se lisait comme une panne. Le terminal le garde.
             self.resume = (tr("pages.fenetre.fermee", quoi=quoi,
-                              bilan=self._derniere_sortie(BILAN_LIGNES))
+                              bilan=self._derniere_sortie(BILAN_LIGNES, sans_liblsl=True))
                            if self._lignes else "")
         self.change.emit()
 
@@ -283,11 +290,14 @@ class LanceurFenetre(QObject):
         self._echec = (self.numero, self.probleme)
         self.change.emit()
 
-    def _derniere_sortie(self, n=None):
-        """Les dernières lignes du processus (`n` au plus), pour que le message dise QUOI réparer."""
-        if not self._lignes:
+    def _derniere_sortie(self, n=None, sans_liblsl=False):
+        """Les dernières lignes du processus (`n` au plus), pour que le message dise QUOI réparer.
+        `sans_liblsl` : sans les lignes du journal interne de liblsl (`fichier.cpp:NNN  ERR|…`),
+        qui ne sont pas des messages de la fenêtre — pour le bilan d'une fin NORMALE seulement ;
+        une mort anormale garde tout, son contexte compris."""
+        lignes = [l for l in self._lignes if not (sans_liblsl and JOURNAL_LIBLSL.search(l))]
+        if not lignes:
             return tr("pages.fenetre.aucune_sortie")
-        lignes = list(self._lignes)
         return " · ".join(lignes[-n:] if n else lignes)
 
     def oublier_probleme(self):

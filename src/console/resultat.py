@@ -21,6 +21,7 @@ mauvais endroit (séance du 2026-09-22 : « c'est pas clair du tout et beaucoup 
 import os
 import sys
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,6 +40,17 @@ RESERVE = "#b8860b"
 assert set(COULEURS) == set(NIVEAUX), (
     f"la console doit savoir peindre CHAQUE niveau que le moteur publie, et aucun autre "
     f"({sorted(COULEURS)} contre {sorted(NIVEAUX)})")
+
+
+def selectionnable(*widgets):
+    """Rend le texte de ces étiquettes SÉLECTIONNABLE à la souris, donc copiable (Ctrl+C).
+
+    Relevé au casque le 2026-10-05 : « je ne peux pas surligner le texte pour le copier-coller »
+    — un verdict et ses détails sont faits pour être recopiés dans un compte-rendu, ou envoyés à
+    qui dépouille la séance. Un QLabel ne se sélectionne pas par défaut."""
+    for w in widgets:
+        if isinstance(w, QLabel):
+            w.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
 
 def couleur_du_niveau(niveau):
@@ -80,6 +92,7 @@ class BlocResultat(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         for w in (self.verdict, self.chiffres, self.reserve, self.details, self.pli):
             layout.addWidget(w)
+        selectionnable(self.verdict, self.chiffres, self.reserve, self.corps)
 
     def ajouter_au_detail(self, *widgets):
         """Range des widgets de la page hôte DANS le repli : présents, lisibles d'un clic, jamais
@@ -87,6 +100,7 @@ class BlocResultat(QWidget):
         for w in widgets:
             self._pli.addWidget(w)
             self._hotes += 1
+        selectionnable(*widgets)
 
     def montrer(self, resultat):
         """Affiche un résultat. Tolère un résultat ANCIEN, sans les quatre clés : son verdict
