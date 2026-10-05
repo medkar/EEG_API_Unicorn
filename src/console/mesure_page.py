@@ -536,7 +536,7 @@ class MesurePage(QWidget):
         # CIBLE PAR CIBLE (2026-10-02) : une ligne par cible, calculée par le MOTEUR. C'est ce
         # qui dit POURQUOI une cible ne sort jamais — sa barre au-dessus de celle des autres.
         lignes = [" — ".join(morceaux)] + [self._ligne_de_cible(p)
-                                           for p in resultat.get("par_cible") or ()]
+                                           for p in resultat.get("par_frequence") or ()]
         self.details.setText("\n".join(ligne for ligne in lignes if ligne))
         self.honnetete.setText(resultat.get("honnetete") or "")
         self._montrer_proposition(resultat.get("reglage_propose"))

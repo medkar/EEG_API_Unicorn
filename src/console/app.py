@@ -4000,7 +4000,7 @@ def _smoke():
     _decisions = [(0, None), (0, None), (1, 1), (1, 0), (1, None)]
     page_ss_t = console.mesure_pages["ssvep_taux"]
     page_ss_t._montrer_resultat({"verdict": "MOYEN — x", "mot": "MOYEN", "niveau": "moyen",
-                                 "n_essais": 5, "par_cible": _par_cible_moteur(
+                                 "n_essais": 5, "par_frequence": _par_cible_moteur(
                                      [12.0, 15.0], _decisions, _plancher)}, "")
     _det = page_ss_t.details.text()
     chk("12 Hz : 0 annonce(s) sur 2 essais, dont 0 juste(s)" in _det
@@ -4008,6 +4008,20 @@ def _smoke():
         and "ρ = 0,39" in _det and "ρ = 0,61" in _det and _det.count("\n") == 2,
         f"« Détails » d'un test SSVEP donne UNE ligne par cible : annonces, justes, et la barre de "
         f"SON plancher, appariée par fréquence ({_det!r})")
+    # 🔴 Et le résultat RÉEL d'un AUTRE test passe par la même page sans lever (2026-10-05, au
+    # casque : la clé du SSVEP s'appelait d'abord « par_cible », que le test P300 publiait déjà
+    # sous une autre forme — la console levait à CHAQUE rafraîchissement). Le résultat vient de
+    # la fonction du moteur (`p300_test.noter`), pas d'une forme recopiée ici.
+    from core.modes.p300_test import noter as _noter_p300
+    _res_p300 = _noter_p300([(i, i) for i in range(6)], 6, n_epoques=244)
+    try:
+        page_ss_t._montrer_resultat(_res_p300, "")
+        _leve = ""
+    except Exception as e:  # noqa: BLE001 - c'est précisément ce qu'on vérifie
+        _leve = repr(e)
+    chk(not _leve and "par_cible" in _res_p300,
+        f"le résultat d'un test P300 (qui porte SA clé « par_cible ») s'affiche sur la page de "
+        f"mesure sans lever ({_leve or 'aucune exception'})")
 
     # Le même geste côté ENTRAÎNEMENT : le défaut existait avant ce chantier, pour la même raison.
     journal.clear()

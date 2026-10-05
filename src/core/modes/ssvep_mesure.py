@@ -684,7 +684,10 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
         # ont produit une décision, combien justes — et la barre que son plancher imposait. Une
         # cible muette dont la barre (`rho_requis`) dépasse celle des autres accuse le plancher
         # de CE repos, pas le code. Calculé ICI, pas dans la console : elle n'a pas de logique.
-        "par_cible": _par_cible(freqs, decisions, decideur.rest_report),
+        # ⚠️ PAS « par_cible » : le test P300 publie déjà cette clé, sous une AUTRE forme — la
+        # console la lisait comme celle-ci et levait à chaque rafraîchissement (casque,
+        # 2026-10-05). Une clé de résultat est un contrat entre le moteur et l'écran : unique.
+        "par_frequence": _par_cible(freqs, decisions, decideur.rest_report),
         **_affichage,
         # Le verdict s'OUVRE sur le mot affiché en face : c'est l'invariant que
         # `affichage.verifier` tient pour chaque protocole — les deux viennent du même calcul.
@@ -1190,7 +1193,7 @@ def _selftest():
         f"{[d for _c, d, _a in _sorties]} ({sum(a for _c, _d, a in _sorties)} artefacts)")
 
     # --- CIBLE PAR CIBLE (2026-10-02) : ce que « Détails » montre pour une cible muette --------
-    _pc = _res3["par_cible"]
+    _pc = _res3["par_frequence"]
     _attendu = [(sum(1 for c, _d in _res3["decisions"] if c == i),
                  sum(1 for c, d in _res3["decisions"] if c == i and d is not None),
                  sum(1 for c, d in _res3["decisions"] if c == i and d == i))
