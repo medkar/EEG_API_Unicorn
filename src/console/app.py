@@ -5112,24 +5112,30 @@ def _smoke():
     # étiquette sans retour à la ligne exige la largeur de TOUT son texte, et Windows élargit la
     # fenêtre pour la respecter. Mesuré avant le correctif : la largeur minimale du bandeau passait
     # de ~130 px à ~2 700 px avec une ligne d'état longue.
+    # ⚠️ La fenêtre a AUSSI une largeur minimale fixe (~1 540 px hors écran), venue des pages de
+    # mode (en-tête, liste des modèles) : elle ne varie pas, et ce n'est pas ce qu'on teste ici.
+    # La fenêtre part donc un peu AU-DESSUS de son minimum, et c'est le bandeau qu'on éprouve.
     large = Console(_Fige(sur_casque), moteur_vivant=lambda: True)
     large.timer.stop()
-    large.resize(1000, 800)
     large.show()
     large.refresh()
     for _ in range(5):
         app.processEvents()
-    largeur_avant = large.width()
+    large.resize(large.minimumSizeHint().width() + 200, 800)
+    for _ in range(5):
+        app.processEvents()
+    largeur_avant, minimum_avant = large.width(), large.minimumSizeHint().width()
     tres_long = "Unicorn · 250 Hz · 1 mode actif · σ 7,4–9,7 µV sur 8 voies · " * 8
     for etiquette in (large.banner.liaison, large.banner.sigmas, large.banner.alarme):
         etiquette.setText(tres_long)
     for _ in range(5):
         app.processEvents()
-    chk(large.width() == largeur_avant and large.minimumSizeHint().width() < largeur_avant
+    chk(large.width() == largeur_avant and large.minimumSizeHint().width() == minimum_avant
         and large.banner.sigmas.text() == tres_long,
         f"un texte de bandeau très long n'ÉLARGIT pas la fenêtre ({largeur_avant} -> "
-        f"{large.width()} px, largeur minimale {large.minimumSizeHint().width()} px) — la "
-        f"ligne s'abrège, son texte entier reste lisible (`text()`, bulle)")
+        f"{large.width()} px, largeur minimale {minimum_avant} -> "
+        f"{large.minimumSizeHint().width()} px) — la ligne s'abrège, son texte entier reste "
+        f"lisible (`text()`, bulle)")
     large.close()
 
     # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------
