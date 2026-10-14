@@ -5136,6 +5136,38 @@ def _smoke():
         f"{large.width()} px, largeur minimale {minimum_avant} -> "
         f"{large.minimumSizeHint().width()} px) — la ligne s'abrège, son texte entier reste "
         f"lisible (`text()`, bulle)")
+
+    # --- 🔴 UNE PAGE DE MODE N'ÉLARGIT PAS LA CONSOLE (2026-10-14) ----------------------------
+    # Qt réserve la largeur de la page la plus large, même cachée. Mesuré avant le correctif :
+    # 1 538 px pour toute la console, dus à la page ErrP (son résumé sur une ligne, ~1 400 px) et
+    # aux listes de modèles (le chemin complet, ~1 150 px) — plus large qu'un portable (1366 px).
+    # Repère RELATIF, pas un nombre de pixels qui dépend des polices : aucune page de mode ne doit
+    # exiger plus que l'accueil.
+    pages_mode = [large.stack.widget(i) for i in range(large.stack.count())
+                  if isinstance(large.stack.widget(i), ModePage)]
+    accueil = large.grid.minimumSizeHint().width()
+    plus_large = max(pages_mode, key=lambda p: p.minimumSizeHint().width())
+    chk(pages_mode and plus_large.minimumSizeHint().width() <= accueil,
+        f"aucune page de mode n'exige plus de largeur que l'accueil (la plus large : "
+        f"{plus_large.minimumSizeHint().width()} px, accueil {accueil} px ; console "
+        f"{large.minimumSizeHint().width()} px, 1 538 avant le correctif)")
+    # La liste des modèles MONTRE le nom du fichier, mais ENVOIE le chemin complet, et sa largeur
+    # ne suit pas la longueur des chemins.
+    from PySide6.QtCore import QLocale as _QLocale, Qt as _Qt
+    from console.params_form import ParamsForm
+    formes = [f for p in pages_mode for f in p.findChildren(ParamsForm) if "model" in f.champs]
+    forme = formes[0]
+    liste = forme.champs["model"]
+    largeur_liste = liste.minimumSizeHint().width()
+    chemin = os.path.abspath(os.path.join("data", "cvep_rcca_model_" + "0" * 200 + ".npz"))
+    forme.set_choices("model", [chemin], garder=False)
+    affiche = liste.itemDelegate().displayText(liste.itemText(0), _QLocale())
+    chk(forme.values()["model"] == chemin and affiche == os.path.basename(chemin)
+        and liste.itemData(0, _Qt.ToolTipRole) == chemin
+        and liste.minimumSizeHint().width() == largeur_liste,
+        f"la liste des modèles montre le NOM du fichier ({affiche[:24]}…), envoie le chemin "
+        f"complet, le garde en bulle, et ne s'élargit pas avec lui ({largeur_liste} -> "
+        f"{liste.minimumSizeHint().width()} px)")
     large.close()
 
     # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------

@@ -14,8 +14,9 @@ import sys
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
-                               QWidget)
+                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QStyle,
+                               QStyledItemDelegate, QStyleOptionComboBox, QStylePainter,
+                               QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import nombre, tr  # noqa: E402
@@ -47,8 +48,53 @@ class _SansMolette:
         event.ignore()
 
 
+def texte_affiche(texte):
+    """Ce qu'une liste MONTRE d'un choix : le nom du fichier pour un chemin, le texte sinon."""
+    return os.path.basename(texte) if ("/" in texte or "\\" in texte) else texte
+
+
+class _NomDeFichier(QStyledItemDelegate):
+    """Les lignes de la liste dépliée, réduites au nom du fichier (cf. `ListeSansMolette`)."""
+
+    def displayText(self, valeur, locale):  # noqa: N802 - nom imposé par Qt
+        return texte_affiche(super().displayText(valeur, locale))
+
+
 class ListeSansMolette(_SansMolette, QComboBox):
-    pass
+    """Une liste qui MONTRE le nom du fichier, et dont la largeur ne dépend pas de ses choix.
+
+    2026-10-14 : la liste des modèles affichait le chemin complet (~1 150 px), et la console ne
+    tenait plus sur un écran de portable. Le TEXTE de chaque ligne reste le chemin complet — c'est
+    lui que `ParamsForm.values()` envoie au moteur, et lui que les pages comparent : seul le
+    dessin change. Le chemin entier reste lisible au survol de la ligne.
+    """
+
+    LARGEUR_CAR = 30        # la largeur demandée, en caractères — assez pour un nom de modèle
+
+    def __init__(self):
+        super().__init__()
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(self.LARGEUR_CAR)
+        self.setItemDelegate(_NomDeFichier(self))
+
+    def remplir_choix(self, choix):
+        """Ajoute les choix, avec le texte COMPLET en bulle quand la ligne n'en montre qu'une part."""
+        for valeur in choix:
+            texte = str(valeur)
+            self.addItem(texte)
+            if texte_affiche(texte) != texte:
+                self.setItemData(self.count() - 1, texte, Qt.ToolTipRole)
+
+    def paintEvent(self, _evenement):  # noqa: N802 - nom imposé par Qt
+        peintre = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        peintre.drawComplexControl(QStyle.CC_ComboBox, option)
+        zone = self.style().subControlRect(QStyle.CC_ComboBox, option,
+                                           QStyle.SC_ComboBoxEditField, self)
+        option.currentText = self.fontMetrics().elidedText(
+            texte_affiche(option.currentText), Qt.ElideMiddle, max(0, zone.width()))
+        peintre.drawControl(QStyle.CE_ComboBoxLabel, option)
 
 
 class EntierSansMolette(_SansMolette, QSpinBox):
@@ -242,7 +288,7 @@ class ParamsForm(QWidget):
             return champ
         if kind == "choice":
             champ = ListeSansMolette()
-            champ.addItems([str(c) for c in param["choices"]])
+            champ.remplir_choix(param["choices"])
             # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément —
             # c'était invisible tant que tous les « choice » du projet avaient leur défaut EN
             # PREMIÈRE position (`model`, dont le défaut est toujours choices_now()[0]). La
@@ -405,7 +451,7 @@ class ParamsForm(QWidget):
         courant = champ.currentText()
         champ.blockSignals(True)
         champ.clear()
-        champ.addItems([str(c) for c in choix])
+        champ.remplir_choix(choix)
         if garder and courant in [str(c) for c in choix]:
             champ.setCurrentText(courant)
         champ.blockSignals(False)

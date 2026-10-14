@@ -82,9 +82,12 @@ class ModePage(QWidget):
         self.bouton_retour = QPushButton(tr("console.nav.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        entete.addWidget(QLabel(tr("console.mode.entete", mode=spec["label"],
-                                   resume=spec["summary"])))
-        entete.addStretch(1)
+        # Le résumé PASSE À LA LIGNE (2026-10-14) : sur une seule ligne, celui de l'ErrP exigeait
+        # ~1 400 px, et Qt réserve la largeur de la page la plus large même quand elle est cachée —
+        # la console ne tenait plus sur un écran de portable (1366 px).
+        resume = QLabel(tr("console.mode.entete", mode=spec["label"], resume=spec["summary"]))
+        resume.setWordWrap(True)
+        entete.addWidget(resume, 1)
         # L'état du décodage (« arrêté », « décode »…). Placé UNE fois, plus bas, selon la page :
         # en tête quand la page l'observe, dans le repli « Décodage en direct » sinon.
         self.etat = QLabel("")
