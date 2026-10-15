@@ -58,15 +58,18 @@ from core.modes.mi import MI_DECODE_HZ, MIRuntime  # noqa: E402
 from core.modes.mi import SPEC as SPEC_MI  # noqa: E402
 # Les consignes de l'ENTRAÎNEMENT, importées : une autre formulation peut faire passer d'une
 # imagerie kinesthésique (qui produit une ERD) à une imagerie visuelle (qui n'en produit pas).
-from core.modes.mi_calib import INSTRUCTIONS, RAPPEL  # noqa: E402
+from core.modes.mi_calib import consigne, rappel_de  # noqa: E402
 # Wilson et le seul repère d'ÉMISSION du projet, importés : deux écritures de Wilson finiraient par
 # se contredire sur le même effectif.
 from core.modes.ssvep_mesure import REFERENCE_EMISSION, wilson  # noqa: E402
 
 # La seule séance de référence du projet, ré-mesurée honnêtement (CV PAR ESSAI) : 40,0 % à 3 classes
 # (p = 0,082, PAS significatif), 63,3 % à 2 classes (p = 0,038). Chiffres de CALIBRATION, hors
-# ligne : aucun repère EN DIRECT n'existe. Rangés par nombre de classes, qui fixe le hasard.
-REPERES_JUSTESSE = {3: 0.400, 2: 0.633}
+# ligne : aucun repère EN DIRECT n'existe. Rangés par JEU DE TÂCHES, pas par leur nombre
+# (2026-10-15) : depuis que les tâches se règlent, « 2 classes » peut vouloir dire pieds/mains, et
+# le 63,3 % des poings n'en dit rien.
+REPERES_JUSTESSE = {frozenset(("GAUCHE", "DROITE", "REPOS")): 0.400,
+                    frozenset(("GAUCHE", "DROITE")): 0.633}
 
 # Le seul repère d'émission du projet : le SSVEP, le mode FIABLE, émet sur 44 % des essais dans son
 # régime normal. Un MI plus souvent muet ne « tient » pas dans une application.
@@ -142,9 +145,7 @@ class MesureMI(MesureRuntime):
                       instruction=tr("mesure.mi_test.consigne.pause"),
                       rappel=tr("mesure.mi_test.rappel.pause")),
                 Etape(classe, MI_CUE_S + MI_IMAGERY_S,
-                      instruction=INSTRUCTIONS.get(
-                          classe, tr("mesure.mi_test.consigne.defaut", classe=classe)),
-                      rappel=RAPPEL if classe in MI_CONTROL else ""))
+                      instruction=consigne(classe), rappel=rappel_de(classe)))
 
     def protocole(self):
         """Les essais, TIRÉS AU HASARD parmi les classes du modèle — un ordre fixe s'anticipe.
@@ -247,7 +248,7 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
     ic_bas, ic_haut = (float(v) for v in wilson(n_justes, n_emis))
     p = p_hasard(n_justes, n_emis, hasard)
     au_dessus = au_dessus_du_hasard(n_justes, n_emis, hasard)
-    repere = REPERES_JUSTESSE.get(len(classes))
+    repere = REPERES_JUSTESSE.get(frozenset(classes))
 
     if n_emis == 0 or not au_dessus:
         niveau, mot = "faible", tr("mesure.mot.muet") if n_emis == 0 else tr("mesure.mot.faible")
@@ -274,6 +275,8 @@ def noter(decisions, classes, perdus=0, essais_par_classe=None, reglages=None):
         reserve = tr("mesure.mi_test.reserve.faible_long", p=texte_p(p))
     elif taux < EMISSION_MIN_BON:
         reserve = tr("mesure.mi_test.reserve.silencieux", taux=pct(taux), prob=prob, votes=votes)
+    elif niveau == "moyen" and repere is None:
+        reserve = tr("mesure.mi_test.reserve.sans_repere")
     elif niveau == "moyen":
         reserve = tr("mesure.mi_test.reserve.moyen")
     else:
@@ -468,7 +471,7 @@ def _selftest():
             and all(e.duree_s == MI_REST_S for e in rt._etapes if not e.enregistre),
             "durées LUES dans `core/config.py` : essai = mise en route + imagerie, pause non "
             "enregistrée")
-        chk(all(e.instruction == INSTRUCTIONS[e.nom] for e in enreg),
+        chk(all(e.instruction == consigne(e.nom) for e in enreg),
             "…et les consignes sont celles de l'ENTRAÎNEMENT, importées")
         chk(abs(rt.duree_estimee_s() - (MesureRuntime.warmup_s
                                         + 18 * (MI_REST_S + MI_CUE_S + MI_IMAGERY_S))) < 1e-9,
@@ -639,7 +642,15 @@ def _selftest():
         chk(g3["niveau"] != "faible" and g2["niveau"] == "faible" and "hasard 50 %" in g2["chiffres"],
             f"10/16 bat le hasard à 3 classes, PAS en gauche/droite ({g3['niveau']} / "
             f"{g2['niveau']} : {g2['chiffres']})")
-        for r in (bon, muet_souvent, sous_repere, flou, muet, g2, res, res7):
+        # Des TÂCHES LIBRES (2026-10-15) : le repère des poings ne les juge pas. Le même score,
+        # bon en gauche/droite, reste orange sur pieds/mains, et la réserve ne parle d'aucun repère.
+        libres = noter(_dec(("PIEDS", "MAINS"), 30, 24, 20), ("PIEDS", "MAINS"))
+        poings = noter(_dec(MI_CONTROL, 30, 24, 20), MI_CONTROL)
+        chk(poings["niveau"] == "bon" and libres["niveau"] == "moyen" and libres["repere"] is None
+            and libres["reserve"] == tr("mesure.mi_test.reserve.sans_repere"),
+            f"20/24 : au repère des poings en G/D, mais AUCUN repère pour pieds/mains "
+            f"({poings['niveau']} / {libres['niveau']} : {libres['reserve']})")
+        for r in (bon, muet_souvent, sous_repere, flou, muet, g2, res, res7, libres):
             chk(not verifier(r) and r["niveau"] in NIVEAUX and "hasard" in r["chiffres"]
                 and r["reserve"] and r["honnetete"],
                 f"affichage cohérent (`affichage.verifier`) : {r['mot']} | {r['chiffres']} "

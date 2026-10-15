@@ -3167,6 +3167,7 @@ def _smoke_calibration():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
+    from core.mi_decoder import MI_LABELS
     from core.modes import mi_calib
 
     # Le `data/` DÉTOURNÉ : la destination de `save_calibration`. Le vrai `data/` porte des
@@ -3248,7 +3249,10 @@ def _smoke_calibration():
             # commandes partent donc DOS À DOS, sans attendre entre les deux : une version
             # antérieure de ce test attendait `server.calibration is not None` avant la seconde,
             # ce qui contournait exactement la fenêtre de course qu'il prétendait couvrir.
-            ack = server.submit("start_calibration", id="mi", params={"trials_per_class": 18})
+            # Les TROIS tâches d'origine, explicitement (2026-10-15 : le défaut est passé à deux) :
+            # les comptes ci-dessous (18 × 3 = 54) et le signal appris portent sur elles.
+            ack = server.submit("start_calibration", id="mi",
+                                params={"taches": list(MI_LABELS), "trials_per_class": 18})
             ack_course = server.submit("start_calibration", id="mi", params={"trials_per_class": 10})
             chk(ack.get("accepted"), f"la première calibration est acceptée ({ack})")
             chk(ack_course.get("accepted"),

@@ -4526,6 +4526,34 @@ def _smoke():
     chk(cal_reelle.formulaire.champs["trials_per_class"].currentText() == "14",
         f"le formulaire de calibration affiche le DÉFAUT déclaré (14), pas le premier choix "
         f"({cal_reelle.formulaire.champs['trials_per_class'].currentText()})")
+    # --- Les TÂCHES du MI (2026-10-15) : un nombre, puis autant de champs ---------------------
+    # « Si on règle à 2 tâches, deux champs à remplir, trois tâches, trois champs. » Un champ
+    # caché garde sa saisie ; un champ vide part au moteur, qui le refuse avec sa raison.
+    from console.params_form import ListeDeTextes
+    from core.modes.contract import validate as _valider
+    from core.modes.mi_calib import CALIB as _CALIB_MI
+    taches = cal_reelle.formulaire.champs.get("taches")
+    visibles = (lambda: [c.text() for c in taches.textes if not c.isHidden()]) if taches else list
+    chk(isinstance(taches, ListeDeTextes) and visibles() == ["GAUCHE", "DROITE"],
+        f"« Entraîner » le MI : deux champs de tâches par défaut, les poings ({visibles()})")
+    if taches is not None:
+        taches.nombre.setValue(3)
+        taches.textes[2].setText("Pieds")
+        a_trois = cal_reelle.formulaire.values()["taches"]
+        taches.nombre.setValue(2)
+        a_deux = cal_reelle.formulaire.values()["taches"]
+        taches.nombre.setValue(3)
+        revenu = visibles()
+        accepte, _r = _valider(_CALIB_MI, {"taches": a_trois})
+        taches.textes[2].setText("")
+        _v, refus_vide = _valider(_CALIB_MI, cal_reelle.formulaire.values())
+        cal_reelle.formulaire.retablir_defauts()
+        chk(a_trois == ["GAUCHE", "DROITE", "Pieds"] and a_deux == ["GAUCHE", "DROITE"]
+            and revenu == ["GAUCHE", "DROITE", "Pieds"] and accepte is not None
+            and bool(refus_vide) and visibles() == ["GAUCHE", "DROITE"],
+            f"3 tâches = 3 champs, et le moteur les accepte ; repasser à 2 puis 3 rend la 3e telle "
+            f"que tapée ; un champ vide est REFUSÉ par le moteur ({refus_vide}) ; « Rétablir » "
+            f"rend les deux poings ({a_trois} / {a_deux} / {revenu} / {visibles()})")
     valeurs_calib = cal_reelle.formulaire.values()
     chk(valeurs_calib["trials_per_class"] == 14
         and isinstance(valeurs_calib["trials_per_class"], int),

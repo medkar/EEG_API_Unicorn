@@ -38,7 +38,7 @@ class Param:
 
     key: str                  # "freqs" — identifiant stable, la clé côté commande
     label: str                # "Fréquences des cibles" — ce que lit l'étudiant
-    kind: str                 # "float" | "int" | "bool" | "choice" | "float_list"
+    kind: str                 # "float" | "int" | "bool" | "choice" | "float_list" | "text_list"
     unit: str = ""            # "Hz"
     default: object = None
     min: float = None         # bornes par VALEUR (pour une liste : chaque élément)
@@ -363,6 +363,9 @@ def _coerce(param, value):
                 return None, reason
         return values, None
 
+    if param.kind == "text_list":
+        return _coerce_textes(param, value)
+
     try:
         converted = int(value) if param.kind == "int" else float(value)
     except (TypeError, ValueError, OverflowError):
@@ -371,6 +374,43 @@ def _coerce(param, value):
         return None, tr("moteur.contrat.nombre_attendu", reglage=param.label, valeur=repr(value))
     reason = _refus_non_fini(param, converted) or _check_bounds(param, converted)
     return (None, reason) if reason else (converted, None)
+
+
+# La longueur d'un texte d'une `text_list`. Ces textes deviennent des IDENTIFIANTS publics — les
+# classes du Motor Imagery nomment les voies `p_<classe>` du flux `decoded_mi` : un paragraphe n'en
+# fait pas un.
+TEXTE_MAX = 24
+
+
+def _coerce_textes(param, value):
+    """Une liste de textes COURTS, chacun nommé une seule fois (2026-10-15, les tâches du MI).
+
+    Les espaces autour sont retirés ; la casse est gardée telle que tapée. Refusés : un texte
+    vide, un doublon (sans tenir compte de la casse : « Pieds » et « pieds » nommeraient deux
+    voies que personne ne distingue), une virgule (le flux décrit ses classes en les joignant par
+    des virgules), un texte plus long que `TEXTE_MAX`.
+    """
+    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+        return None, tr("moteur.contrat.textes_attendus", reglage=param.label, valeur=repr(value))
+    textes = tuple(str(v).strip() for v in value)
+    if param.count:
+        lo, hi = param.count
+        if not lo <= len(textes) <= hi:
+            return None, tr("moteur.contrat.nombre_elements", reglage=param.label,
+                            mini=lo, maxi=hi, n=len(textes))
+    vus = set()
+    for rang, texte in enumerate(textes, start=1):
+        if not texte:
+            return None, tr("moteur.contrat.texte_vide", reglage=param.label, rang=rang)
+        if "," in texte:
+            return None, tr("moteur.contrat.texte_virgule", reglage=param.label, texte=texte)
+        if len(texte) > TEXTE_MAX:
+            return None, tr("moteur.contrat.texte_long", reglage=param.label, texte=texte,
+                            maxi=TEXTE_MAX)
+        if texte.casefold() in vus:
+            return None, tr("moteur.contrat.texte_doublon", reglage=param.label, texte=texte)
+        vus.add(texte.casefold())
+    return textes, None
 
 
 def _refus_non_fini(param, valeur):
@@ -593,6 +633,21 @@ def _selftest():
     values, reason = validate(borne, {"liste": [5.0, 99.0]})
     chk(values is None and reason and "dépasse le maximum" in reason,
         f"un float_list borné sans contrainte reste borné : {reason}")
+
+    # Une `text_list` (les tâches du MI, 2026-10-15) : des textes courts, distincts, comptés.
+    taches = ModeSpec(id="taches", label="Tâches", family="actif", summary="", status="moteur",
+                      params=(Param("taches", "Tâches", "text_list", default=("A", "B"),
+                                    count=(2, 5)),))
+    values, reason = validate(taches, {"taches": ["  Pieds ", "Mains"]})
+    chk(values is not None and values["taches"] == ("Pieds", "Mains"),
+        f"des tâches valides passent, sans les espaces autour ({values}, {reason})")
+    for mauvais, quoi in ((["Pieds"], "une seule"), (["a", "b", "c", "d", "e", "f"], "six"),
+                          (["Pieds", " "], "une vide"), (["Pieds", "pieds"], "un doublon"),
+                          (["Pieds, mains", "Repos"], "une virgule"),
+                          (["x" * (TEXTE_MAX + 1), "Repos"], "trop longue"),
+                          ("Pieds,Mains", "une chaîne au lieu d'une liste")):
+        values, reason = validate(taches, {"taches": mauvais})
+        chk(values is None and bool(reason), f"tâches refusées — {quoi} : {reason}")
 
     # « Brancher un client » : un extrait par mode, vérifié sur TOUT le registre.
     # La version précédente ne testait que le SSVEP, dont le résumé n'a par hasard aucun accent —

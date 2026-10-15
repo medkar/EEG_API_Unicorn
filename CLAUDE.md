@@ -635,7 +635,19 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   - **Motor Imagery** : **jamais** vert. Sur les essais ANNONCÉS (un `-1` sort du dénominateur)
     il faut 10/18 à 6 essais/classe, 15/30 à 10/classe pour que le binomial exact rejette le
     hasard ; le repère est à 40 % (p = 0,391 et p = 0,276). 18 à 30 essais ne séparent pas
-    40 % de 33 %.
+    40 % de 33 %. À **2 tâches** (le défaut depuis le 2026-10-15), il faut 10/12 ; le repère
+    gauche/droite est à 63 %. Pour des tâches libres (pieds/mains), aucun repère : orange au mieux.
+- **Les TÂCHES du Motor Imagery se règlent** (2026-10-15, demandé au casque : « pieds/mains au lieu
+  de poing droit/poing gauche », sans traduire de tête pendant la consigne). Dans « Entraîner » : un
+  nombre de 2 à 5 (défaut 2 : GAUCHE, DROITE), puis un champ par tâche (`Param` de type
+  `text_list`, validé par le moteur : non vide, distinct, court, sans virgule). Le MODÈLE porte ses
+  tâches ; le test et le décodage les relisent de lui, et `decoded_mi` publie `p_<tâche>`. « repos »,
+  « gauche », « droite » tapés redeviennent les classes d'origine (consigne validée, top
+  latéralisé, sens de REPOS dans le flux) ; toute autre tâche est cuée par son nom, top centré. Les
+  seuils du verdict d'entraînement sont devenus RELATIFS AU HASARD (kappa 0,40 / 0,175 : 60/45 %
+  inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans REPOS, le modèle désigne toujours une tâche : seul
+  le seuil de probabilité fait taire le flux. **Jamais joué au casque** : tout ce qui précède est
+  prouvé sur du signal synthétique.
 
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
   n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait

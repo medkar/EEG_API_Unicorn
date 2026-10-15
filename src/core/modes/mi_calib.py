@@ -27,7 +27,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa
                          MI_WARMUP_PER_CLASS, MI_WINDOW_S, SECTEUR_HZ, SSVEP_WARMUP_S,
                          use_utf8_console)
 from core.i18n import tr  # noqa: E402
-from core.mi_decoder import MI_BAND, MI_LABELS, MIModel  # noqa: E402
+from core.mi_decoder import MI_BAND, MI_CONTROL, MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
                                   niveau_par_seuils, non_mesure, p_hasard, pct, texte_filtre,
@@ -47,6 +47,42 @@ INSTRUCTIONS = {
 }
 RAPPEL = tr("calib.mi.rappel")
 
+# Les TÂCHES par défaut (2026-10-15) : deux, les poings — c'est le repère du projet le plus solide
+# (63,3 % en gauche/droite, p = 0,038). REPOS n'y est plus : sans lui, le modèle choisit toujours
+# l'une des deux tâches, et c'est le seuil de probabilité qui fait taire le flux. L'aide du réglage
+# le dit, et propose d'ajouter REPOS.
+TACHES_DEFAUT = MI_CONTROL
+TACHES_MAX = 5
+
+
+def canonique(tache):
+    """Une tâche tapée qui nomme une classe d'origine (« repos », « Gauche ») DEVIENT cette classe.
+
+    Elle retrouve ainsi sa consigne validée, son top latéralisé (`console/beeps.py` les connaît
+    par leur nom exact) et, pour REPOS, son sens dans le flux publié (`rest_index`). Toute autre
+    tâche garde le texte tapé.
+    """
+    return {c.casefold(): c for c in MI_LABELS}.get(tache.casefold(), tache)
+
+
+def consigne(tache):
+    """Ce que l'écran affiche pendant l'essai : la consigne validée, ou la tâche telle que tapée.
+
+    Rien hors d'un essai (`tache` vide : chauffe, entraînement) — sinon « Imagine : » à vide.
+    """
+    if not tache:
+        return ""
+    return INSTRUCTIONS.get(tache) or tr("calib.mi.instruction.tache", tache=tache)
+
+
+def rappel_de(tache):
+    """Le rappel sous la consigne. Rien pour REPOS, ni hors d'un essai."""
+    if not tache:
+        return ""
+    if tache in MI_CONTROL:
+        return RAPPEL
+    return "" if tache == "REPOS" else tr("calib.mi.rappel.tache")
+
 BRIEFING = (
     tr("calib.mi.briefing.1"),
     tr("calib.mi.briefing.2"),
@@ -63,8 +99,26 @@ BRIEFING = (
 # sur sa seule séance de référence : 40,0 % à 3 classes (p = 0,082, PAS significatif) et 63,3 % à
 # 2 classes (p = 0,038). Autrement dit : autour de 40 %, on est dans le NORMAL, et ça ne suffit
 # pas à piloter quoi que ce soit.
-VERDICTS = ((0.60, tr("calib.mi.verdict.excellent")), (0.45, tr("calib.mi.verdict.utilisable")),
+#
+# ⚠️ Ces seuils sont RELATIFS AU HASARD depuis le 2026-10-15, où le nombre de tâches est devenu un
+# réglage (2 à 5) : 45 % est « utilisable » à 3 classes, SOUS le hasard à 2. On garde la même
+# distance au hasard, mesurée en part de ce qui reste à gagner au-dessus de lui (le kappa de
+# Cohen) : 0,40 et 0,175 redonnent EXACTEMENT 60 % et 45 % à 3 classes ; à 2, 70 % et 59 % ; à 5,
+# 52 % et 34 %.
+KAPPA_EXCELLENT = 0.40
+KAPPA_UTILISABLE = 0.175
+
+
+def table_pour(hasard):
+    """La table des verdicts pour ce niveau de hasard (1 / nombre de tâches)."""
+    def seuil(kappa):
+        return round(hasard + kappa * (1.0 - hasard), 4)
+    return ((seuil(KAPPA_EXCELLENT), tr("calib.mi.verdict.excellent")),
+            (seuil(KAPPA_UTILISABLE), tr("calib.mi.verdict.utilisable")),
             (0.00, tr("calib.mi.verdict.faible")))
+
+
+VERDICTS = table_pour(1.0 / len(MI_LABELS))     # la table à 3 classes, celle d'avant
 
 # La phrase d'honnêteté du MI : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un
 # « 40 % » sans elle ne veut rien dire.
@@ -156,7 +210,7 @@ def _non_significatif(cv, n_essais, hasard):
     """
     if cv is None or not n_essais or not hasard:
         return False
-    if niveau_par_seuils(cv, VERDICTS) == "faible":
+    if niveau_par_seuils(cv, table_pour(hasard)) == "faible":
         return False
     return not au_dessus_du_hasard(int(round(cv * n_essais)), int(n_essais), hasard)
 
@@ -171,10 +225,11 @@ def verdict(cv, n_essais=None, hasard=None):
         # langues.
         return tr("calib.mi.verdict.non_significatif", mot=tr("calib.mot.non_significatif"),
                   n=n_essais, p=texte_p(p))
-    for seuil, texte in VERDICTS:
+    table = table_pour(hasard) if hasard else VERDICTS
+    for seuil, texte in table:
         if cv >= seuil:
             return texte
-    return VERDICTS[-1][1]
+    return table[-1][1]
 
 
 def lignes_de(cv, n_essais, hasard):
@@ -185,13 +240,12 @@ def lignes_de(cv, n_essais, hasard):
     if _non_significatif(cv, n_essais, hasard):
         return lignes("faible", tr("calib.mot.non_significatif"), chiffres,
                       tr("calib.mi.reserve.non_significatif"))
-    return depuis_table(cv, VERDICTS, chiffres)
+    return depuis_table(cv, table_pour(hasard), chiffres)
 
 
 class MICalibration(CalibrationRuntime):
     """Le protocole MI. Sa seule particularité est ce qu'elle fait des époques à la fin."""
 
-    classes = MI_LABELS
     cue_s = MI_CUE_S
     imagery_s = MI_IMAGERY_S
     rest_s = MI_REST_S
@@ -211,11 +265,17 @@ class MICalibration(CalibrationRuntime):
     # aussitôt le modèle le plus récent de `data/` — celui que le moteur, la console et les
     # applis proposent par défaut — sans que personne ait pu la refuser.
 
+    @property
+    def classes(self):
+        """Les tâches de CETTE séance, réglées dans « Entraîner » (2026-10-15) — elles deviennent
+        les classes du modèle, donc les voies `p_<tâche>` du flux publié au décodage."""
+        return tuple(canonique(t) for t in self.params.get("taches") or TACHES_DEFAUT)
+
     def instruction(self):
-        return INSTRUCTIONS.get(self.classe, "")
+        return consigne(self.classe)
 
     def rappel(self):
-        return RAPPEL if self.classe in ("GAUCHE", "DROITE") else ""
+        return rappel_de(self.classe)
 
     def _entrainer(self, enregistre, fs):
         """CSP + LDA (ou FBCSP) sur les fenêtres, CV honnête par essai, puis sauvegarde horodatée.
@@ -250,7 +310,8 @@ class MICalibration(CalibrationRuntime):
         bande = bande_de(self.params, MI_BAND)
         methode = "fbcsp" if self.params.get("fbcsp") else MI_METHOD
         secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
-        modele = MIModel(fs=fs, band=bande, method=methode, secteur_hz=secteur).fit(
+        modele = MIModel(labels=self.classes, fs=fs, band=bande, method=methode,
+                         secteur_hz=secteur).fit(
             np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
         # Relus du MODÈLE, pas des réglages : la phrase dit ce que le modèle a VRAIMENT appris.
         filtre = filtre_de(modele.method, modele.band, modele.secteur_hz)
@@ -336,6 +397,18 @@ CALIB = Calib(
     briefing=BRIEFING,
     epoch_s=MI_IMAGERY_S,
     params=(
+        # Les TÂCHES (2026-10-15, demandé au casque : « pieds/mains au lieu de poing droit/poing
+        # gauche », sans avoir à se souvenir laquelle est laquelle pendant la consigne). Réglées À
+        # L'ENTRAÎNEMENT, comme la bande : le modèle les porte, et le test comme le décodage les
+        # relisent de lui. Un champ par tâche dans la console, de 2 à 5.
+        Param(
+            key="taches",
+            label=tr("calib.mi.param.taches.label"),
+            kind="text_list",
+            default=TACHES_DEFAUT,
+            count=(2, TACHES_MAX),
+            help=tr("calib.mi.param.taches.aide"),
+        ),
         Param(
             key="trials_per_class",
             label=tr("calib.mi.param.trials_per_class.label"),
@@ -405,15 +478,17 @@ def _selftest():
         celles qu'on a cuées.
         """
 
-        def __init__(self, runtime, rng):
+        def __init__(self, runtime, rng, alias=None):
             self.acq = _FausseAcq()
             self.runtime = runtime
             self.rng = rng
             self.rendus = []      # les époques RENDUES, dans l'ordre des appels — cf. A3 plus bas
+            self.alias = alias or {}    # tâche libre -> classe d'origine dont elle reçoit l'ERD
 
         def recent_window(self, seconds):
             n = int(round(seconds * self.acq.fs))
             label = self.runtime.classe or "REPOS"
+            label = self.alias.get(label, label)
             epoque = synth_mi_trial(label, n_samp=n, fs=self.acq.fs, rng=self.rng).T
             self.rendus.append(np.array(epoque, copy=True))
             return epoque
@@ -439,7 +514,7 @@ def _selftest():
             f"({_mi.SPEC.calibration.epoch_s} s)")
 
         rng = np.random.default_rng(0)
-        rt = MICalibration(_mi.SPEC, {"trials_per_class": 6}, None,
+        rt = MICalibration(_mi.SPEC, {"taches": MI_LABELS, "trials_per_class": 6}, None,
                            rng=_random.Random(0), dossier=dossier)
         rt.engine = _FauxMoteur(rt, rng)
 
@@ -545,7 +620,7 @@ def _selftest():
 
         # Une séance trop courte doit REFUSER d'entraîner, avec une raison, plutôt que de
         # produire un modèle que rien ne distingue d'un bon.
-        court = MICalibration(_mi.SPEC, {"trials_per_class": 1}, None,
+        court = MICalibration(_mi.SPEC, {"taches": MI_LABELS, "trials_per_class": 1}, None,
                               rng=_random.Random(1), dossier=dossier)
         court.engine = _FauxMoteur(court, rng)
         t = 0.0
@@ -564,7 +639,8 @@ def _selftest():
         # Une calibration sans dossier ne retombe PAS sur `data/` : elle refuse, en nommant qui
         # aurait dû lui en donner un. C'est ce repli silencieux qui faisait proposer une séance
         # ratée comme modèle par défaut.
-        sans = MICalibration(_mi.SPEC, {"trials_per_class": 1}, None, rng=_random.Random(9))
+        sans = MICalibration(_mi.SPEC, {"taches": MI_LABELS, "trials_per_class": 1}, None,
+                             rng=_random.Random(9))
         try:
             sans.dossier_ou_lever()
             refus_dossier = None
@@ -595,6 +671,55 @@ def _selftest():
             and valeurs.get("fbcsp") is False,
             f"les réglages d'« Entraîner » : la bande de toujours et FBCSP décoché par défaut "
             f"({raison or valeurs})")
+        chk(valeurs and tuple(valeurs.get("taches", ())) == ("GAUCHE", "DROITE"),
+            f"…et DEUX tâches par défaut, les poings (2026-10-15) "
+            f"({valeurs and valeurs['taches']})")
+
+        # --- LES TÂCHES SE RÈGLENT (2026-10-15) -------------------------------------------------
+        # « Pieds/mains au lieu de poing droit/poing gauche », sans se souvenir laquelle est
+        # laquelle : l'écran nomme la tâche tapée, le modèle apprend CES classes, et le flux les
+        # publie sous ces noms. « repos » tapé en minuscules redevient REPOS, la classe d'origine.
+        dossier_libre = _os.path.join(dossier, "libre")
+        libre = MICalibration(_mi.SPEC, {"taches": ("Pieds", "Mains", "repos"),
+                                         "trials_per_class": 6}, None,
+                              rng=_random.Random(5), dossier=dossier_libre)
+        libre.engine = _FauxMoteur(libre, rng, alias={"Pieds": "GAUCHE", "Mains": "DROITE"})
+        vues = {}
+        t = 0.0
+        for _ in range(20000):
+            libre.tick(libre.engine, t)
+            if libre.classe:
+                vues.setdefault(libre.classe, (libre.instruction(), libre.rappel()))
+            if libre.terminee:
+                break
+            t += 0.25
+        res_l = libre.resultat or {}
+        chk(libre.phase == "fini" and libre.classes == ("Pieds", "Mains", "REPOS")
+            and res_l.get("classes") == ["Pieds", "Mains", "REPOS"] and res_l.get("n_essais") == 18,
+            f"des tâches libres : la séance cue CES tâches, « repos » redevient REPOS "
+            f"({libre.phase}, {res_l.get('classes')}, {res_l.get('n_essais')} essais)")
+        chk(vues.get("Pieds") == (tr("calib.mi.instruction.tache", tache="Pieds"),
+                                  tr("calib.mi.rappel.tache"))
+            and vues.get("REPOS") == (INSTRUCTIONS["REPOS"], ""),
+            f"l'écran NOMME la tâche tapée ; REPOS garde sa consigne validée, sans rappel ({vues})")
+        appris = MIModel.load(res_l["modele"]) if res_l.get("modele") else None
+        from core.lsl_io import mi_channel_labels
+        chk(appris is not None and list(appris.labels) == ["Pieds", "Mains", "REPOS"]
+            and mi_channel_labels(appris.labels)[2:] == ["p_Pieds", "p_Mains", "p_REPOS"],
+            f"le MODÈLE porte ces tâches, donc le flux publiera p_Pieds, p_Mains, p_REPOS "
+            f"({appris and appris.labels})")
+        chk(res_l.get("hasard") == 1 / 3,
+            f"le hasard suit le nombre de tâches ({res_l.get('hasard')})")
+
+        # Les seuils du verdict sont RELATIFS AU HASARD : à 3 classes ceux d'avant, mot pour mot ;
+        # à 2, « 45 % » n'est plus « utilisable » — il est SOUS le hasard.
+        chk([s for s, _t in VERDICTS] == [0.60, 0.45, 0.0]
+            and [s for s, _t in table_pour(0.5)] == [0.70, 0.5875, 0.0],
+            f"seuils : 60/45 % à 3 classes (inchangés), 70/59 % à 2 "
+            f"({[s for s, _t in table_pour(0.5)]})")
+        chk(verdict(0.45, hasard=0.5) == tr("calib.mi.verdict.faible")
+            and verdict(0.45, hasard=1 / 3) == tr("calib.mi.verdict.utilisable"),
+            "45 % est UTILISABLE à 3 classes, FAIBLE à 2 (le hasard y est à 50 %)")
         _v, raison = validate(CALIB, {"bande_bas": 12.0})
         chk(raison is not None,
             f"une coupure basse au-dessus de 10 Hz est REFUSÉE : elle couperait le mu ({raison})")
@@ -692,7 +817,7 @@ def _selftest():
         vrai_time = _time.time
         _time.time = lambda: 1_700_000_000.0
         try:
-            premiere = MICalibration(_mi.SPEC, {"trials_per_class": 6}, None,
+            premiere = MICalibration(_mi.SPEC, {"taches": MI_LABELS, "trials_per_class": 6}, None,
                                      rng=_random.Random(2), dossier=dossier)
             premiere.engine = _FauxMoteur(premiere, rng)
             t = 0.0
@@ -711,7 +836,7 @@ def _selftest():
             hash_npz_avant = (_hash_fichier(premiere.resultat["enregistrement"])
                               if premiere.resultat else None)
 
-            seconde = MICalibration(_mi.SPEC, {"trials_per_class": 6}, None,
+            seconde = MICalibration(_mi.SPEC, {"taches": MI_LABELS, "trials_per_class": 6}, None,
                                     rng=_random.Random(3), dossier=dossier)
             seconde.engine = _FauxMoteur(seconde, rng)
             t = 0.0

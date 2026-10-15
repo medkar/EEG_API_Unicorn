@@ -106,6 +106,48 @@ class DecimalSansMolette(_SansMolette, QDoubleSpinBox):
     pass
 
 
+class ListeDeTextes(QWidget):
+    """Un réglage « text_list » : un NOMBRE, puis autant de champs que ce nombre (2026-10-15).
+
+    Demandé pour les tâches du Motor Imagery : « si on règle à 2 tâches, deux champs à remplir,
+    trois tâches, trois champs ». Les champs au-delà du nombre sont CACHÉS, pas détruits : passer
+    de 3 à 2 puis revenir à 3 rend la troisième tâche telle qu'elle était tapée. Aucune
+    validation ici — un champ vide ou un doublon part au moteur, qui le refuse avec sa raison.
+    """
+
+    def __init__(self, compte, defaut):
+        super().__init__()
+        mini, maxi = compte or (1, max(1, len(defaut or ())))
+        self.nombre = EntierSansMolette()
+        self.nombre.setRange(int(mini), int(maxi))
+        self.nombre.setPrefix(tr("console.formulaire.nombre"))
+        self.textes = []
+        colonne = QVBoxLayout(self)
+        colonne.setContentsMargins(0, 0, 0, 0)
+        colonne.addWidget(self.nombre)
+        for rang in range(1, int(maxi) + 1):
+            champ = QLineEdit()
+            champ.setPlaceholderText(tr("console.formulaire.texte_n", n=rang))
+            self.textes.append(champ)
+            colonne.addWidget(champ)
+        self.nombre.valueChanged.connect(self._montrer)
+        self.remplir(defaut or ())
+
+    def _montrer(self, n):
+        for rang, champ in enumerate(self.textes):
+            champ.setVisible(rang < n)
+
+    def remplir(self, valeurs):
+        valeurs = [str(v) for v in valeurs]
+        for champ, texte in zip(self.textes, valeurs):
+            champ.setText(texte)
+        self.nombre.setValue(len(valeurs))
+        self._montrer(self.nombre.value())
+
+    def valeurs(self):
+        return [champ.text() for champ in self.textes[:self.nombre.value()]]
+
+
 class ParamsForm(QWidget):
     """Un champ par `Param`, plus son aide, plus un bouton et une ligne de refus."""
 
@@ -309,6 +351,8 @@ class ParamsForm(QWidget):
             champ.setPlaceholderText(tr("console.formulaire.liste_indice",
                                         min=bornes[0], max=bornes[1]))
             return champ
+        if kind == "text_list":
+            return ListeDeTextes(param["count"], param["default"])
         champ = EntierSansMolette() if kind == "int" else DecimalSansMolette()
         # Volontairement PLUS LARGES que les bornes du contrat, et pas seulement quand le contrat
         # n'en donne pas. Un QSpinBox écrête en silence : réglé sur [0 ; 0.99], il transforme un
@@ -339,6 +383,8 @@ class ParamsForm(QWidget):
                 champ.setCurrentText(str(valeur))
             elif param["kind"] == "float_list":
                 champ.setText(", ".join(f"{float(v):g}" for v in valeur))
+            elif param["kind"] == "text_list":
+                champ.remplir(valeur)
             else:
                 champ.setValue(valeur)
 
@@ -363,6 +409,8 @@ class ParamsForm(QWidget):
             champ.setCurrentText(str(valeurs))
         elif param["kind"] == "float_list":
             champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
+        elif param["kind"] == "text_list":
+            champ.remplir(valeurs)
         elif param["kind"] in ("float", "int"):
             champ.setValue(valeurs)
 
@@ -394,6 +442,8 @@ class ParamsForm(QWidget):
                     out[param["key"]] = [float(m) for m in morceaux]
                 except ValueError:
                     out[param["key"]] = champ.text()      # tel quel : le moteur refusera
+            elif param["kind"] == "text_list":
+                out[param["key"]] = champ.valeurs()       # tels quels : le moteur refusera
             else:
                 out[param["key"]] = champ.value()
         return out

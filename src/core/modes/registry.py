@@ -312,7 +312,7 @@ def check():
             if p.proposes and p.proposes not in cles:
                 defauts.append(f"{spec.id}.{p.key} : propose « {p.proposes} », "
                                f"qui n'est pas un paramètre de ce mode")
-            if p.kind not in ("float", "int", "bool", "choice", "float_list"):
+            if p.kind not in ("float", "int", "bool", "choice", "float_list", "text_list"):
                 defauts.append(f"{spec.id}.{p.key} : kind « {p.kind} » inconnu")
             if p.kind == "choice" and not p.choices and not p.choices_fn:
                 defauts.append(f"{spec.id}.{p.key} : un choix sans choices")

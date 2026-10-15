@@ -962,19 +962,31 @@ publie la réponse de chaque pas ; elle doit atteindre le CORRECTEUR et jamais l
 
 ### ☐ 2.6 — Motor Imagery : Entraîner puis Tester
 
-Page **Motor Imagery** → **« Entraîner »** (~7,1 min à 14 essais/classe) → « Commencer ». Le moteur
-mène : il tire les classes, affiche les consignes, décompte. Aucune fenêtre.
+Page **Motor Imagery** → **« Entraîner »** → choisis les **tâches** → « Commencer ». Le moteur
+mène : il tire les tâches, affiche les consignes, décompte. Aucune fenêtre. Durée à 14 essais par
+tâche : **~4,8 min à 2 tâches**, ~7,0 min à 3.
 
-✅ **2.6.1** Le chiffre est une **justesse honnête** (validation croisée **par essai**). Repères ré-mesurés :
-**40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en gauche/droite** (p = 0,038).
-✅ **2.6.2** « ← Motor Imagery » → **« Tester sur une session »** (6 essais/classe, ~2,8 min) → « Commencer ». Même consignes
-que l'entraînement, **même top latéralisé** (oreille gauche = poing gauche), et le moteur décide.
+✅ **2.6.0** (2026-10-15) **« Tâches à imaginer »** : un nombre (2 à 5, **2 par défaut** : GAUCHE,
+DROITE), puis autant de champs. Passe à 3 : un 3ᵉ champ apparaît ; repasse à 2 puis 3 : ce que tu y
+avais tapé est toujours là. Un champ vide ou deux fois la même tâche → « Commencer » est **refusé**,
+avec la raison. Pendant l'essai, l'écran **nomme** la tâche tapée (« Imagine : PIEDS ») ; GAUCHE,
+DROITE et REPOS gardent leur consigne détaillée et leur top latéralisé, toute autre tâche a un top
+**centré**. « repos » tapé en minuscules redevient REPOS.
+✅ **2.6.1** Le chiffre est une **justesse honnête** (validation croisée **par essai**), contre le
+hasard de **ton** nombre de tâches (50 % à 2, 33 % à 3). Repères ré-mesurés, **pour les poings
+seulement** : **40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en
+gauche/droite** (p = 0,038). Pour d'autres tâches (pieds/mains…), **aucun repère** : le résultat le
+dit.
+✅ **2.6.2** « ← Motor Imagery » → **« Tester sur une session »** (6 essais par tâche, ~1,9 min à 2
+tâches) → « Commencer ». Mêmes tâches et mêmes consignes que l'entraînement — elles viennent du
+modèle —, et le moteur décide.
 🔴 **Rouge est le résultat ATTENDU ici, à toutes les longueurs.** Sur les essais **annoncés**
-(un `-1` sort du dénominateur), il faut **10/18** si les 18 annoncent, **15/30** à 10/classe,
-pour rejeter le hasard — le repère du projet est
-à 40 % (p = 0,391 et p = 0,276). 18 à 30 essais ne séparent pas 40 % de 33 %. Lis ce rouge
-« pas de preuve », jamais « ça ne marche pas », et **note le chiffre et sa p-value**. Rallonger à
-10 essais/classe (~4,5 min) ne suffit pas non plus : c'est un constat, pas un réglage.
+(un `-1` sort du dénominateur), il faut **10/12** à 2 tâches, **10/18** à 3 si les 18 annoncent,
+**15/30** à 3 tâches et 10/classe, pour rejeter le hasard — le repère du projet est à 63 % en
+gauche/droite et 40 % à 3 classes, en dessous de ces portes. Lis ce rouge « pas de preuve », jamais
+« ça ne marche pas », et **note le chiffre et sa p-value**. Rallonger à 10 essais/classe ne suffit
+pas non plus : c'est un constat, pas un réglage. Sans repère (pieds/mains), le mieux possible est
+**orange** : au-dessus du hasard, sans rien à quoi comparer.
 
 🟡 **2.6.3** **Facultatif, si le temps le permet : FBCSP.** Refais un entraînement avec la case **« FBCSP »**
 cochée et la bande à **4–40 Hz**, puis « Tester sur une session ». Note les deux chiffres et « Détails » (qui dit
