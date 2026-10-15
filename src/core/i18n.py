@@ -7,6 +7,7 @@ pourra ajouter des langues plus facilement ensuite ».
     src/core/langues/fr/modes.json      # libellés, résumés, aides et briefings des modes
     src/core/langues/fr/mesures.json    # les mesures et les tests : briefings, verdicts
     src/core/langues/fr/moteur.json     # refus et réponses du moteur
+    src/core/langues/fr/fenetres.json   # les fenêtres de `src/stimulus/` (la seule migrée : le MI)
 
 Un dossier par langue, plusieurs fichiers par dossier (ils sont FUSIONNÉS ; une clé présente
 dans deux fichiers est une faute). **Ajouter une langue = copier `fr/`, traduire les valeurs, et

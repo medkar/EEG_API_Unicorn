@@ -28,7 +28,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - **Le code se divise en QUATRE paquets, sur une règle vérifiable** : `src/core/` = ce dont le
   moteur (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/stimulus/` = les
   **quatre** fenêtres pygame qui affichent un stimulus verrouillé à la frame et publient des
-  marqueurs (`p300.py`, `errp.py`, `cvep.py`, et `ssvep.py` depuis le 2026-09-09) ; `src/console/`
+  marqueurs (`p300.py`, `errp.py`, `cvep.py`, et `ssvep.py` depuis le 2026-09-09), plus **une
+  cinquième sans stimulus** depuis le 2026-10-15 : `mi.py`, l'essai libre du Motor Imagery, qui
+  n'affiche que les tâches du modèle et encadre celle que publie `decoded_mi` ; `src/console/`
   = la console PySide6 ; `src/research/` = tout le reste, et **rien qui ouvre le casque ou dessine**
   (analyses hors ligne, protocoles chiffrés, hypothèses réfutées).
 
@@ -298,8 +300,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - ⚠️ **Un seul de ces trois programmes à la fois** — console, moteur, écran archivé. Le casque
   n'accepte qu'une connexion, et les noms de flux sont un contrat public : deux instances publient
   sous le même nom, donc un programme oublié répond à la place de celui qu'on teste.
-  **Les quatre fenêtres de `src/stimulus/` sont l'exception** (depuis le 2026-10-01, celles du c-VEP,
-  du SSVEP et du P300 LISENT aussi le flux décodé de leur mode, avec `--retour`) : elles n'ouvrent PAS le casque, elles
+  **Les fenêtres de `src/stimulus/` sont l'exception** (depuis le 2026-10-01, celles du c-VEP,
+  du SSVEP et du P300 LISENT aussi le flux décodé de leur mode, avec `--retour` ; celle du MI, le
+  2026-10-15, ne fait QUE ça) : elles n'ouvrent PAS le casque, elles
   dessinent et publient des marqueurs — c'est exactement pour ça qu'elles se lancent à côté du
   moteur, dans un second terminal, **ou que la console les lance elle-même** quand on entraîne ou
   qu'on teste.

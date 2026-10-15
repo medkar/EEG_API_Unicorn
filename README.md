@@ -363,7 +363,10 @@ target the engine decoded, with a GREEN ring, whether the decision is right or n
 decision shows on its own, the ring is not on the cued target. Cues are drawn in BLUE in all three
 windows. In the console, the Test block has two buttons: **Tester sur une session** (a guided test
 with a score) and **Tester librement** (free use: `--libre` for the c-VEP, which otherwise
-designates targets; the ring follows the latest decision, no score). The window only listens to streams published by its OWN machine: in a classroom, every
+designates targets; the ring follows the latest decision, no score). **Motor Imagery** has its
+own **Tester librement** since 2026-10-15: it has no stimulus, so its window (`src/stimulus/mi.py`)
+only shows the model's tasks, read from the `decoded_mi` stream description, and frames in green the
+one being decoded — nothing when the vote does not conclude. The window only listens to streams published by its OWN machine: in a classroom, every
 student's engine publishes under the same names. The ring is gone before the data the next decision
 reads (so its own light never enters the measurement), and in free use the window shows a fixation
 cross while the engine's public `status` stream says `warmup` or `baseline` — the SSVEP floor is

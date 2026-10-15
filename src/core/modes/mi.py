@@ -273,6 +273,10 @@ SPEC = ModeSpec(
     # (`core/modes/mi_test.py`). Une CLÉ, pas un import : `mi_test` importe CE module pour en
     # reprendre le runtime et les réglages, et l'inverse ferait un cycle.
     test_id="mi_test",
+    # La fenêtre de l'ESSAI LIBRE (2026-10-15, « Tester librement ») : elle n'affiche AUCUN
+    # stimulus — le MI est endogène —, elle écoute `decoded_mi` et encadre en vert la tâche
+    # décodée. Une CLÉ, résolue par `src/stimulus/registry.py`.
+    stimulus_id="mi",
     stream="decoded_mi",
     channels_fn=_channels,
     runtime_cls=MIRuntime,

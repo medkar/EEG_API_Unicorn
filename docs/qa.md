@@ -1084,7 +1084,7 @@ radio).
 
 ❌ Échec : une pile ou des barres sur le board de test ; des barres pleines pendant une coupure.
 
-### ☐ 2.12 — « Tester librement », au casque (c-VEP, SSVEP, P300)
+### ☐ 2.12 — « Tester librement », au casque (c-VEP, SSVEP, P300, MI)
 
 Page du mode → bloc Tester → **« Tester librement »**. La fenêtre s'ouvre tout de suite : tant
 que la **croix** est là, fixe-la, ne fixe aucune cible (c'est le repos du moteur, mesuré AVEC le
@@ -1096,8 +1096,18 @@ quand tu changes. Au P300, il apparaît à la fin de chaque manche.
 ✅ **2.12.3** Ferme la fenêtre : le mode s'arrête s'il ne tournait pas avant, et la page le dit.
 **Note** le délai entre « je fixe » et « l'anneau arrive », par mode.
 
+✅ **2.12.4** (2026-10-15) **Motor Imagery** — vérifie d'abord le **modèle** choisi dans « 1. Régler »
+(celui des tâches que tu veux essayer) et que C3/Cz ne saturent pas au bandeau. Page MI → « Tester
+librement » → contrôle de liaison → la fenêtre s'ouvre : une **croix** pendant la stabilisation
+(~15 s), puis **les tâches du modèle**, en grand (PIEDS, MAINS…). Imagine-en une : son cadre devient
+**vert** et la ligne du bas dit « Décodé : … » ; ne fais rien : « Rien de décodé » (le vote ne
+conclut pas — sauf si REPOS est une des tâches, qui s'encadre alors comme les autres). Échap
+ferme, et le mode s'arrête s'il ne tournait pas avant. **Note** le délai entre « j'imagine » et « le
+cadre arrive ».
+
 ❌ Échec : l'anneau ne suit jamais la cible fixée alors que « Tester sur une session » est bon ; ou il reste sur
-une cible quand tu regardes ailleurs.
+une cible quand tu regardes ailleurs. Pour le MI : la fenêtre reste sur « Je cherche le flux… »
+alors que le mode tourne, ou affiche d'autres tâches que celles du modèle.
 
 ### ☐ 2.11 — Les filtres d'affichage du Brut, sur un vrai signal
 

@@ -1,0 +1,9 @@
+{
+  "fenetre.mi.attente": "Je cherche le flux décodé du Motor Imagery sur cette machine…",
+  "fenetre.mi.decode": "Décodé : {tache}",
+  "fenetre.mi.repos": "Le casque se stabilise : ne fais rien, reste immobile.",
+  "fenetre.mi.rien": "Rien de décodé : le vote ne conclut pas.",
+  "fenetre.mi.sans_retour": "Cette fenêtre n'a rien à montrer sans --retour : le Motor Imagery n'a pas de stimulus, elle affiche ce que publie decoded_mi.",
+  "fenetre.mi.sans_taches": "Le flux décodé ne dit pas ses tâches : rien à encadrer.",
+  "fenetre.mi.titre": "Motor Imagery — essai libre"
+}

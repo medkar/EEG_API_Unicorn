@@ -5668,12 +5668,13 @@ def _smoke():
     #    attendue est écrite ici exprès (c'est la décision du chantier), et la règle qui la
     #    produit est vérifiée juste après, dans le registre.
     avec_essai = sorted(mid for mid, p in console.pages.items() if p.bouton_essayer is not None)
-    chk(avec_essai == ["cvep", "p300", "ssvep"],
-        f"« Tester librement » est sur les pages c-VEP, P300 et SSVEP ({avec_essai})")
-    sans_essai = [mid for mid in ("errp", "mi", "neuro", "raw")
+    chk(avec_essai == ["cvep", "mi", "p300", "ssvep"],
+        f"« Tester librement » est sur les pages c-VEP, MI (depuis le 2026-10-15), P300 et SSVEP "
+        f"({avec_essai})")
+    sans_essai = [mid for mid in ("errp", "neuro", "raw")
                   if mid in console.pages and console.pages[mid].bouton_essayer is None]
-    chk(sans_essai == ["errp", "mi", "neuro", "raw"],
-        f"…et ABSENT des pages ErrP, MI, Neuro et Brut : rien à entourer ({sans_essai})")
+    chk(sans_essai == ["errp", "neuro", "raw"],
+        f"…et ABSENT des pages ErrP, Neuro et Brut : rien à entourer ({sans_essai})")
     chk(all((p.bouton_essayer is not None)
             == bool(stim_registry.option_libre(p.spec.get("stimulus_id") or ""))
             for p in console.pages.values()),

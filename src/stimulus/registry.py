@@ -29,6 +29,9 @@ FENETRES = {
     "errp": "errp.py",
     "cvep": "cvep.py",
     "ssvep": "ssvep.py",
+    # Le MI (2026-10-15) : AUCUN stimulus — le paradigme est endogène. Sa fenêtre ne sert qu'à
+    # l'essai libre : elle encadre la tâche que publie `decoded_mi`.
+    "mi": "mi.py",
 }
 
 
@@ -78,6 +81,7 @@ LIBRE = {
     "cvep": ("--libre", "--retour"),
     "ssvep": ("--retour",),
     "p300": ("--retour",),
+    "mi": ("--retour",),     # sans lui, la fenêtre du MI n'a rien à montrer et le dit
 }
 
 
@@ -252,6 +256,9 @@ def _selftest():
     # Les MESURES demandent des fenêtres elles aussi, par le même champ et pour la même raison :
     # `core` ne nomme aucun fichier, il ne connaît que des clés.
     attendues |= {s.stimulus_id for s in modes.MESURES if s.stimulus_id}
+    # …et les fenêtres de DÉCODAGE des modes (`ModeSpec.stimulus_id`) : celle du MI (2026-10-15)
+    # n'est ni une calibration ni une mesure, et passait sinon pour orpheline.
+    attendues |= {s.stimulus_id for s in modes.MODES if s.stimulus_id}
     orphelines = sorted(attendues - set(FENETRES))
     chk(not orphelines,
         f"chaque `stimulus_id` déclaré par un mode OU une mesure a sa fenêtre "
@@ -280,8 +287,8 @@ def _selftest():
         f"les tests c-VEP, SSVEP et P300 lancent leur fenêtre AVEC le retour, pas l'ErrP "
         f"({ {k: options_de_mesure(k) for k in sorted(MESURE_OPTIONS)} })")
     chk(option_libre("cvep") == ("--libre", "--retour") and option_libre("ssvep") == ("--retour",)
-        and option_libre("p300") == ("--retour",) and option_libre("errp") == ()
-        and option_libre("inconnue") == (),
+        and option_libre("p300") == ("--retour",) and option_libre("mi") == ("--retour",)
+        and option_libre("errp") == () and option_libre("inconnue") == (),
         f"l'essai libre : `--libre` là où la fenêtre désigne sinon des cibles (c-VEP), `--retour` "
         f"partout, et RIEN pour une fenêtre qui ne sait pas — la console n'offre alors pas le "
         f"bouton ({ {k: option_libre(k) for k in sorted(FENETRES)} })")
