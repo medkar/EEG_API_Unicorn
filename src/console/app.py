@@ -5137,19 +5137,28 @@ def _smoke():
         f"{large.minimumSizeHint().width()} px) — la ligne s'abrège, son texte entier reste "
         f"lisible (`text()`, bulle)")
 
-    # --- 🔴 UNE PAGE DE MODE N'ÉLARGIT PAS LA CONSOLE (2026-10-14) ----------------------------
-    # Qt réserve la largeur de la page la plus large, même cachée. Mesuré avant le correctif :
-    # 1 538 px pour toute la console, dus à la page ErrP (son résumé sur une ligne, ~1 400 px) et
-    # aux listes de modèles (le chemin complet, ~1 150 px) — plus large qu'un portable (1366 px).
-    # Repère RELATIF, pas un nombre de pixels qui dépend des polices : aucune page de mode ne doit
-    # exiger plus que l'accueil.
+    # --- 🔴 UNE PAGE DE MODE TIENT DANS LA LARGEUR DE L'ACCUEIL (2026-10-14) -----------------
+    # Mesuré avant le correctif, deux débordements différents, plus larges qu'un portable (1366) :
+    #  - la FENÊTRE : Qt réserve la largeur de la page la plus large, même cachée, et le résumé
+    #    de l'ErrP sur une ligne en exigeait ~1 400 → console à 1 538 px minimum ;
+    #  - le CORPS d'une page (il défile, donc il n'élargit pas la fenêtre) : la liste des modèles
+    #    affichait le chemin complet → ~1 460 px de réglages, à faire défiler DE CÔTÉ.
+    # Repère RELATIF, pas un nombre de pixels qui dépend des polices : ni une page, ni son corps
+    # qui défile, n'exigent plus que l'accueil.
+    from PySide6.QtWidgets import QScrollArea as _QScrollArea
     pages_mode = [large.stack.widget(i) for i in range(large.stack.count())
                   if isinstance(large.stack.widget(i), ModePage)]
     accueil = large.grid.minimumSizeHint().width()
-    plus_large = max(pages_mode, key=lambda p: p.minimumSizeHint().width())
-    chk(pages_mode and plus_large.minimumSizeHint().width() <= accueil,
-        f"aucune page de mode n'exige plus de largeur que l'accueil (la plus large : "
-        f"{plus_large.minimumSizeHint().width()} px, accueil {accueil} px ; console "
+
+    def _exige(page):
+        corps = [z.widget() for z in page.findChildren(_QScrollArea) if z.widget() is not None]
+        return max([page.minimumSizeHint().width()]
+                   + [c.minimumSizeHint().width() for c in corps])
+
+    plus_large = max(pages_mode, key=_exige)
+    chk(pages_mode and _exige(plus_large) <= accueil,
+        f"aucune page de mode — ni son corps qui défile — n'exige plus de largeur que l'accueil "
+        f"(la plus exigeante : {_exige(plus_large)} px, accueil {accueil} px ; console "
         f"{large.minimumSizeHint().width()} px, 1 538 avant le correctif)")
     # La liste des modèles MONTRE le nom du fichier, mais ENVOIE le chemin complet, et sa largeur
     # ne suit pas la longueur des chemins.
@@ -5161,7 +5170,10 @@ def _smoke():
     largeur_liste = liste.minimumSizeHint().width()
     chemin = os.path.abspath(os.path.join("data", "cvep_rcca_model_" + "0" * 200 + ".npz"))
     forme.set_choices("model", [chemin], garder=False)
-    affiche = liste.itemDelegate().displayText(liste.itemText(0), _QLocale())
+    # Le délégué par défaut d'un QComboBox n'a pas de `displayText` : sans le nôtre, la ligne
+    # montre son texte tel quel.
+    afficher = getattr(liste.itemDelegate(), "displayText", None)
+    affiche = afficher(liste.itemText(0), _QLocale()) if afficher else liste.itemText(0)
     chk(forme.values()["model"] == chemin and affiche == os.path.basename(chemin)
         and liste.itemData(0, _Qt.ToolTipRole) == chemin
         and liste.minimumSizeHint().width() == largeur_liste,

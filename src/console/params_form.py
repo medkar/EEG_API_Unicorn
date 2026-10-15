@@ -63,8 +63,9 @@ class _NomDeFichier(QStyledItemDelegate):
 class ListeSansMolette(_SansMolette, QComboBox):
     """Une liste qui MONTRE le nom du fichier, et dont la largeur ne dépend pas de ses choix.
 
-    2026-10-14 : la liste des modèles affichait le chemin complet (~1 150 px), et la console ne
-    tenait plus sur un écran de portable. Le TEXTE de chaque ligne reste le chemin complet — c'est
+    2026-10-14 : la liste des modèles affichait le chemin complet (~1 150 px), et les réglages
+    débordaient d'un écran de portable — la page se faisait défiler DE CÔTÉ. Le TEXTE de chaque
+    ligne reste le chemin complet — c'est
     lui que `ParamsForm.values()` envoie au moteur, et lui que les pages comparent : seul le
     dessin change. Le chemin entier reste lisible au survol de la ligne.
     """
