@@ -663,9 +663,14 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   LDA à shrinkage — sur les deux séances enregistrées (30 essais à 3 classes le 2026-07-22, 20
   MAINS/PIEDS le 2026-10-15), aucun gain, et 46,5 % contre 50,2 % sur la seule qui a du signal
   (test des signes p = 0,26). ⚠️ **Refusé** : décaler les fenêtres d'1 s après le top — elles sont
-  DÉJÀ à 3–7 s du top (mise en route de 3 s, jetée). Le raccourcir à 1 s (la vraie question,
-  littérature à [1, 3] s) contredirait le constat du 2026-07-22 (« il faut ~2 s pour lancer le
-  poing ») : pas fait, à trancher avec l'utilisateur. La séance MAINS/PIEDS du 2026-10-15 est au
+  DÉJÀ à 3–7 s du top (mise en route de 3 s, jetée). La vraie question — la raccourcir, la
+  littérature découpant dès 1 s — contredit le constat du 2026-07-22 (« il faut ~2 s pour lancer le
+  poing »). **Tranché avec l'utilisateur : on MESURE.** La mise en route est un réglage
+  d'« Entraîner » (1 · 1,5 · 2 · 2,5 · 3 s, défaut 3 s ; pas sous 1 s : un essai doit porter plus
+  de fenêtres que le plus long vote permis, 16 contre 15 à 1 s). Le modèle la retient
+  (`mise_en_route_s`), l'enregistrement aussi, « Détails » la nomme, et « Tester » la rejoue ; un
+  modèle d'avant a appris à 3 s. Le tampon du moteur reste dimensionné sur 3 s. Jamais joué au
+  casque. La séance MAINS/PIEDS du 2026-10-15 est au
   hasard (50,5 % pour 50 %), quelle que soit la variante.
 
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)

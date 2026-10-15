@@ -46,7 +46,8 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 import numpy as np  # noqa: E402
 
-from core.config import (MI_CUE_S, MI_IMAGERY_S, MI_REST_S, MI_WINDOW_S,  # noqa: E402
+from core.config import (MI_CUE_S, MI_IMAGERY_S, MI_MISES_EN_ROUTE, MI_REST_S,  # noqa: E402
+                         MI_WINDOW_S,
                          use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.mi_decoder import MI_CONTROL  # noqa: E402
@@ -133,18 +134,22 @@ class MesureMI(MesureRuntime):
         self._decideur = _DecideurMI(SPEC_MI, {p.key: params[p.key] for p in SPEC_MI.params},
                                      self._rejeu)
         self.classes = tuple(self._decideur.classes)
+        # La mise en route DU MODÈLE (2026-10-15) : le test rejoue l'entraînement tel qu'il a été
+        # joué. Un modèle d'avant ce réglage a appris avec 3 s.
+        self.cue_s = float(getattr(self._decideur.model, "mise_en_route_s", MI_CUE_S))
         super().__init__(spec, params, engine, rng=rng)
 
     @classmethod
-    def _essai(cls, classe):
+    def _essai(cls, classe, cue_s=MI_CUE_S):
         """UN essai : la pause qui le précède (non enregistrée), puis l'essai entier (enregistré).
 
         La pause AVANT : la première prépare, et le calcul suit le dernier essai sans attente.
+        `cue_s` : la mise en route du modèle (2026-10-15).
         """
         return (Etape(PAUSE, MI_REST_S, enregistre=False,
                       instruction=tr("mesure.mi_test.consigne.pause"),
                       rappel=tr("mesure.mi_test.rappel.pause")),
-                Etape(classe, MI_CUE_S + MI_IMAGERY_S,
+                Etape(classe, cue_s + MI_IMAGERY_S,
                       instruction=consigne(classe), rappel=rappel_de(classe)))
 
     def croix(self):
@@ -161,7 +166,7 @@ class MesureMI(MesureRuntime):
         par_classe = int(self.params.get("trials_per_class", ESSAIS_PAR_CLASSE_DEFAUT))
         suite = [c for c in self.classes for _ in range(par_classe)]
         self.rng.shuffle(suite)
-        return tuple(e for classe in suite for e in self._essai(classe))
+        return tuple(e for classe in suite for e in self._essai(classe, self.cue_s))
 
     @classmethod
     def epoque_etape_s(cls):
@@ -171,7 +176,9 @@ class MesureMI(MesureRuntime):
         (modèle, tirage) — il rendrait 0, et nos essais de 7 s ne seraient couverts que par accident
         (la panne du contrôle alpha, étapes « IGNORÉES »). Mesurée par le même `_essai`.
         """
-        return max(float(e.duree_s) for e in cls._essai("GAUCHE") if e.enregistre)
+        # La plus LONGUE mise en route proposée : le modèle n'est pas encore connu ici.
+        return max(float(e.duree_s) for e in cls._essai("GAUCHE", max(MI_MISES_EN_ROUTE))
+                   if e.enregistre)
 
     def _sorties_de_l_essai(self, epoque, fs):
         """TOUTES les sorties que le mode aurait publiées pendant cet essai, dans l'ordre.
@@ -224,6 +231,12 @@ class MesureMI(MesureRuntime):
                          essais_par_classe=int(self.params.get("trials_per_class", 0)) or None,
                          reglages=reglages)
         resultat["fenetres_par_essai"] = int(min(fenetres)) if fenetres else 0
+        # La phrase d'honnêteté compte les fenêtres d'un essai de CE test : la mise en route du
+        # modèle change leur nombre (2026-10-15).
+        if fenetres:
+            n = int(min(fenetres))
+            resultat["honnetete"] = tr("mesure.mi_test.honnetete", fenetres=n,
+                                       facteur=f"{n ** 0.5:.0f}")
         return resultat
 
 
@@ -335,7 +348,7 @@ def _duree_min(par_classe, n_classes):
 BRIEFING = (
     tr("mesure.mi_test.briefing.1"),
     tr("mesure.mi_test.briefing.2", chauffe=f"{MesureRuntime.warmup_s:.0f}",
-       pause=f"{MI_REST_S:g}".replace(".", ","), essai=f"{MI_CUE_S + MI_IMAGERY_S:.0f}"),
+       pause=f"{MI_REST_S:g}".replace(".", ","), imagerie=f"{MI_IMAGERY_S:.0f}"),
     tr("mesure.mi_test.briefing.3"),
     tr("mesure.mi_test.briefing.4"),
     tr("mesure.commun.modele_requis"),
@@ -497,6 +510,28 @@ def _selftest():
         rt2 = MesureMI(SPEC, dict(valeurs, model=m2), _FauxMoteur(rng), rng=_random.Random(2))
         chk(rt2.classes == MI_CONTROL and "REPOS" not in {e.nom for e in rt2._etapes},
             f"un modèle GAUCHE/DROITE ne fait jouer AUCUN essai REPOS ({rt2.classes})")
+        # La MISE EN ROUTE du modèle (2026-10-15) : un modèle entraîné à 1 s se teste à 1 s ; le
+        # tampon reste dimensionné sur la plus longue proposée ; et à 1 s, un essai porte encore
+        # plus de fenêtres que le plus long vote permis (la borne basse du réglage).
+        modele_1s = mi_models.charger(m2)[0]
+        modele_1s.mise_en_route_s = min(MI_MISES_EN_ROUTE)
+        m1 = _os.path.join(dossier, "mi_model_1s.joblib")
+        modele_1s.save(m1)
+        rt1 = MesureMI(SPEC, dict(valeurs, model=m1), _FauxMoteur(rng), rng=_random.Random(4))
+        enreg1 = [e for e in rt1._etapes if e.enregistre]
+        essai_1s = synth_mi_trial("GAUCHE", n_samp=int(round(enreg1[0].duree_s * FS)), fs=FS,
+                                  rng=rng).T
+        sorties_1s = rt1._sorties_de_l_essai(essai_1s, FS)
+        vote_max = next(p.max for p in SPEC_MI.params if p.key == "vote_len")
+        chk(rt1.cue_s == 1.0 and all(e.duree_s == 1.0 + MI_IMAGERY_S for e in enreg1)
+            and rt.cue_s == MI_CUE_S
+            and MesureMI.epoque_etape_s() == max(MI_MISES_EN_ROUTE) + MI_IMAGERY_S
+            and len(sorties_1s) > vote_max,
+            f"un modèle entraîné à 1 s de mise en route se teste à 1 s (essais de "
+            f"{enreg1[0].duree_s:g} s ; un modèle d'avant, à {rt.cue_s:g} s) ; le tampon reste "
+            f"dimensionné sur {MesureMI.epoque_etape_s():g} s ; et un essai porte "
+            f"{len(sorties_1s)} fenêtres, plus que le plus long vote ({vote_max})")
+        _os.remove(m1)
 
         # === 4. DE BOUT EN BOUT, sur de l'ERD synthétique ======================================
         fichiers_avant = sorted(_os.listdir(dossier))

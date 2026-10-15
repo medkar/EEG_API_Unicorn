@@ -120,7 +120,7 @@
   "mesure.fenetre.chauffe": "Le casque se stabilise : la fenêtre de stimulus prend la main dans un instant.",
   "mesure.fenetre.essais": "La séance se passe dans la fenêtre de stimulus : suis ses consignes.",
   "mesure.mi_test.briefing.1": "Ce test rejoue l'entraînement, mais le moteur décide au lieu d'apprendre : à la fin de chaque essai, il dit quelle classe il reconnaît, et on compare à la consigne.",
-  "mesure.mi_test.briefing.2": "Déroulé : stabilisation du casque ({chauffe} s), puis les essais dans un ordre tiré au hasard : {pause} s de pause, puis {essai} s d'imagerie sur la consigne affichée.",
+  "mesure.mi_test.briefing.2": "Déroulé : stabilisation du casque ({chauffe} s), puis les essais dans un ordre tiré au hasard : {pause} s de pause, puis l'essai sur la consigne affichée : la mise en route choisie à l'entraînement, puis {imagerie} s d'imagerie.",
   "mesure.mi_test.briefing.3": "Un top sonore marque le début et la fin de chaque essai. La consigne est écrite à l'écran.",
   "mesure.mi_test.briefing.4": "Imagine exactement comme à l'entraînement : dès la consigne, en sentant le mouvement, sans bouger, jusqu'à la pause. REPOS = ne rien imaginer.",
   "mesure.mi_test.chiffres": "Classe détectée dans {emis} essais sur {n} ; rien d'annoncé dans les {muets} autres. Sur ces {emis} détections, la bonne classe {justes} fois : {justesse} (hasard {hasard}).",

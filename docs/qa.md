@@ -975,6 +975,12 @@ DROITE et REPOS gardent leur consigne détaillée et leur top latéralisé, tout
 **centré**. « repos » tapé en minuscules redevient REPOS. (2026-10-15) Une **croix** « + » au-dessus de
 la consigne pendant la mise en route et l'imagerie, pour TOUTES les tâches : fixe-la ; elle s'efface
 pendant la pause **sans que la page bouge**.
+🟡 **2.6.0 bis** (2026-10-15) **« Mise en route »** (1 à 3 s, défaut 3 s) : le temps, après le top,
+avant que l'enregistrement ne commence. Pour savoir laquelle te convient, **dans la même séance** :
+entraîne un modèle à 3 s puis un à 1 s (mêmes tâches), « Tester sur une session » chacun, et note
+les deux chiffres. « Détails » dit la mise en route du modèle (« … · mise en route 1 s »), et le test
+la rejoue d'elle-même. ⚠️ Deux tests de 12 essais ne séparent qu'un écart énorme : c'est un premier
+relevé, pas une preuve.
 ✅ **2.6.1** Le chiffre est une **justesse honnête** (validation croisée **par essai**), contre le
 hasard de **ton** nombre de tâches (50 % à 2, 33 % à 3), et le **seuil** à atteindre pour
 l'écarter (« il faut au moins 75 % » à 20 essais et 2 tâches). Repères ré-mesurés, **pour les poings

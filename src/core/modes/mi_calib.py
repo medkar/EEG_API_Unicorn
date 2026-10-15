@@ -23,10 +23,11 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.
 import numpy as np  # noqa: E402
 
 from core.config import (CALIB_CANDIDAT_PREFIXE, MI_CUE_S, MI_IMAGERY_S,  # noqa: E402
-                         MI_METHOD, MI_REST_S, MI_SESSIONS, MI_TRAIN_STEP_S,
+                         MI_METHOD, MI_MISES_EN_ROUTE, MI_REST_S, MI_SESSIONS,
+                         MI_TRAIN_STEP_S,
                          MI_WARMUP_PER_CLASS, MI_WINDOW_S, SECTEUR_HZ, SSVEP_WARMUP_S,
                          use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.mi_decoder import MI_BAND, MI_CONTROL, MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
@@ -253,7 +254,6 @@ def lignes_de(cv, n_essais, hasard):
 class MICalibration(CalibrationRuntime):
     """Le protocole MI. Sa seule particularité est ce qu'elle fait des époques à la fin."""
 
-    cue_s = MI_CUE_S
     imagery_s = MI_IMAGERY_S
     rest_s = MI_REST_S
     warmup_s = SSVEP_WARMUP_S          # la même chauffe que les modes : c'est la même dérive DC
@@ -271,6 +271,13 @@ class MICalibration(CalibrationRuntime):
     # calibration sauvegardait AVANT d'annoncer sa précision, donc une séance ratée devenait
     # aussitôt le modèle le plus récent de `data/` — celui que le moteur, la console et les
     # applis proposent par défaut — sans que personne ait pu la refuser.
+
+    @property
+    def cue_s(self):
+        """La mise en route de CETTE séance (2026-10-15) : un réglage d'« Entraîner », que le
+        modèle retient. ⚠️ Une propriété, que le smoke du moteur écrase AU NIVEAU DE LA CLASSE pour
+        jouer une séance en accéléré, puis restaure."""
+        return float(getattr(self, "params", {}).get("mise_en_route_s", MI_CUE_S))
 
     @property
     def classes(self):
@@ -329,7 +336,8 @@ class MICalibration(CalibrationRuntime):
                          secteur_hz=secteur).fit(
             np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
         # Relus du MODÈLE, pas des réglages : la phrase dit ce que le modèle a VRAIMENT appris.
-        filtre = filtre_de(modele.method, modele.band, modele.secteur_hz)
+        filtre = filtre_de(modele.method, modele.band, modele.secteur_hz) + " · " + tr(
+            "calib.mi.mise_en_route", s=nombre(self.cue_s))
 
         dossier = self.dossier_ou_lever()
         _os.makedirs(dossier, exist_ok=True)
@@ -352,11 +360,14 @@ class MICalibration(CalibrationRuntime):
         # séance avec le secteur où elle a été enregistrée. `secteur_hz = 0` veut dire « pas de
         # coupe-bande » (la convention de `core/filtrage.py`, comme le `.npz` du P300) ; un `.npz`
         # d'avant ce champ n'a ni bande ni secteur, et l'outil le dit.
+        # La mise en route (2026-10-15) part dans le modèle (« Tester » la rejoue) ET dans
+        # l'enregistrement : c'est elle qu'on compare d'une séance à l'autre.
+        modele.mise_en_route_s = float(self.cue_s)
         np.savez(chemin_npz,
                  epochs=np.asarray([e for e, _l in enregistre]),
                  labels=np.asarray([l for _e, l in enregistre]),
                  fs=fs, window_s=self.window_s, step_s=self.step_s,
-                 imagery_s=self.imagery_s,
+                 imagery_s=self.imagery_s, mise_en_route_s=float(self.cue_s),
                  bande=np.asarray(modele.band, dtype=float),
                  secteur_hz=float(modele.secteur_hz or 0.0), methode=modele.method)
         modele.save(chemin_modele)
@@ -389,6 +400,7 @@ class MICalibration(CalibrationRuntime):
             "cv_naive": float(modele.cv_),
             "hasard": hasard,
             "classes": list(self.classes),
+            "mise_en_route_s": float(self.cue_s),
             # Avec quoi ce chiffre a été obtenu — les valeurs que le modèle PORTE, relues de lui.
             "methode": modele.method,
             "bande": [float(modele.band[0]), float(modele.band[1])],
@@ -423,6 +435,18 @@ CALIB = Calib(
             default=TACHES_DEFAUT,
             count=(2, TACHES_MAX),
             help=tr("calib.mi.param.taches.aide"),
+        ),
+        # La MISE EN ROUTE (2026-10-15) : le temps, après le top, avant l'enregistrement. Un
+        # réglage pour MESURER au lieu de trancher entre le constat du 2026-07-22 (~2 s pour lancer
+        # le poing, d'où 3 s) et la littérature (dès 1 s). Cf. `core/config.py`.
+        Param(
+            key="mise_en_route_s",
+            label=tr("calib.mi.param.mise_en_route.label"),
+            kind="choice",
+            unit="s",
+            default=MI_CUE_S,
+            choices=MI_MISES_EN_ROUTE,
+            help=tr("calib.mi.param.mise_en_route.aide"),
         ),
         Param(
             key="trials_per_class",
@@ -696,14 +720,19 @@ def _selftest():
         # publie sous ces noms. « repos » tapé en minuscules redevient REPOS, la classe d'origine.
         dossier_libre = _os.path.join(dossier, "libre")
         libre = MICalibration(_mi.SPEC, {"taches": ("Pieds", "Mains", "repos"),
-                                         "trials_per_class": 6}, None,
+                                         "trials_per_class": 6, "mise_en_route_s": 1.0}, None,
                               rng=_random.Random(5), dossier=dossier_libre)
         libre.engine = _FauxMoteur(libre, rng, alias={"Pieds": "GAUCHE", "Mains": "DROITE"})
         vues = {}
         croix = set()         # (étape, tâche, croix publiée)
+        debuts_cue, durees_cue = {}, []
         t = 0.0
         for _ in range(20000):
             libre.tick(libre.engine, t)
+            if libre.etape == "cue" and "cue" not in debuts_cue:
+                debuts_cue["cue"] = t
+            elif libre.etape != "cue" and "cue" in debuts_cue:
+                durees_cue.append(t - debuts_cue.pop("cue"))
             if libre.phase in ("echauffement", "essais"):
                 croix.add((libre.etape, libre.classe if libre.etape != "repos" else "",
                            libre.state(now=t)["croix"]))
@@ -732,6 +761,20 @@ def _selftest():
         chk(croix == attendu,
             f"la croix de fixation : pendant la mise en route ET l'imagerie de CHAQUE tâche, REPOS "
             f"compris, jamais pendant la pause ({sorted(croix)})")
+        # La MISE EN ROUTE (2026-10-15) : jouée telle que réglée, et retenue par le modèle, par
+        # l'enregistrement et par la ligne « Détails ».
+        with np.load(res_l["enregistrement"]) as npz:
+            archivee = float(npz["mise_en_route_s"]) if "mise_en_route_s" in npz.files else None
+        chk(durees_cue and max(durees_cue) <= 1.0 + 0.25
+            and getattr(appris, "mise_en_route_s", None) == 1.0 and archivee == 1.0
+            and res_l.get("mise_en_route_s") == 1.0
+            and tr("calib.mi.mise_en_route", s="1") in res_l.get("filtre", ""),
+            f"la mise en route réglée (1 s) est jouée ({max(durees_cue or [0]):g} s au pas de "
+            f"0,25 s), et retenue par le modèle, l'enregistrement et « Détails » "
+            f"({getattr(appris, 'mise_en_route_s', None)}, {archivee}, {res_l.get('filtre')})")
+        chk(validate(CALIB, {})[0]["mise_en_route_s"] == MI_CUE_S == 3.0
+            and validate(CALIB, {"mise_en_route_s": 0.5})[0] is None,
+            "…3 s par défaut (le constat du 2026-07-22), et rien sous 1 s : refusé par le contrat")
         chk(res_l.get("hasard") == 1 / 3,
             f"le hasard suit le nombre de tâches ({res_l.get('hasard')})")
 

@@ -396,7 +396,13 @@ MI_KEY_CHANNELS = [1, 2, 3]
 # attrapait la fin de la montée). IMAGERY reste à 4 s : allonger n'aiderait pas, le facteur
 # limitant MESURÉ est la FATIGUE, pas la durée par essai (le 3 classes tombe de 57 % à 33 % en
 # deuxième moitié de séance).
-MI_CUE_S = 3.0             # mise en route, jetée
+MI_CUE_S = 3.0             # mise en route, jetée — le DÉFAUT, et le maximum proposé
+# La mise en route est un RÉGLAGE d'« Entraîner » depuis le 2026-10-15 (revue : la littérature
+# découpe dès 1 s après le top, Mirage91 [1, 3] s ; le constat ci-dessus dit ~2 s pour CE sujet).
+# Au lieu de trancher, on mesure : deux modèles, deux valeurs, deux tests. Le modèle retient la
+# sienne, « Tester » la rejoue. Pas sous 1 s : un essai doit porter plus de fenêtres de décision
+# que le plus long vote permis (15) — à 1 s il en porte 16 (`mi_test`, autotest).
+MI_MISES_EN_ROUTE = (1.0, 1.5, 2.0, 2.5, 3.0)
 MI_IMAGERY_S = 4.0         # la partie ENREGISTRÉE d'un essai
 MI_REST_S = 1.5            # pause entre deux essais
 MI_WARMUP_PER_CLASS = 2    # essais d'échauffement NON enregistrés (le MI s'améliore en séance)
