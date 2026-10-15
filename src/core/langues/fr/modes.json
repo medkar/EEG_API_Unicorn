@@ -81,7 +81,7 @@
   "calib.mi.rappel": "Sens le serrement, sans bouger.",
   "calib.mi.rappel.tache": "Sens le mouvement, sans bouger.",
   "calib.mi.reserve.non_significatif": "Indistinguable du hasard sur ce nombre d'essais : ne garde pas ce modèle, refais la séance.",
-  "calib.mi.trop_court": "Il n'y a pas assez de données pour entraîner : {comptes} fenêtres par classe, il en faut au moins {minimum}. Refais une séance plus longue.",
+  "calib.mi.trop_court": "Il n'y a pas assez de données pour entraîner : {comptes} essais par tâche, il en faut au moins {minimum} — des essais ont pu sauter pendant la séance. Refais une séance plus longue.",
   "calib.mi.verdict.excellent": "EXCELLENT",
   "calib.mi.verdict.faible": "FAIBLE — ré-essaie : vérifie le contact, reste immobile, et sens le serrement au lieu de le voir.",
   "calib.mi.verdict.non_mesurable": "Justesse non mesurable : pas assez d'essais distincts par classe pour une validation croisée.",

@@ -56,6 +56,12 @@ RAPPEL = tr("calib.mi.rappel")
 TACHES_DEFAUT = MI_CONTROL
 TACHES_MAX = 5
 
+# Le minimum d'ESSAIS DISTINCTS par tâche pour entraîner (2026-10-15, revue). La validation
+# croisée par essai en exige 2 (deux plis) ; 3 pour que chaque pli d'apprentissage garde au moins
+# deux essais de chaque tâche. Le plus court réglage (10 essais par tâche) en laisse une marge
+# large : il ne mord que si des essais ont sauté en séance.
+ESSAIS_MIN_PAR_TACHE = 3
+
 
 def canonique(tache):
     """Une tâche tapée qui nomme une classe d'origine (« repos », « Gauche ») DEVIENT cette classe.
@@ -316,18 +322,21 @@ class MICalibration(CalibrationRuntime):
                 y.append(label)
                 groupes.append(indice)     # le GROUPE est l'essai : c'est ce qui rend la CV honnête
 
-        comptes = {c: y.count(c) for c in self.classes}
-        # ⚠️ Ce seuil (5 FENÊTRES/classe) et celui de `MIModel.fit` (n_splits >= 2, donc au moins 2
-        # ESSAIS DISTINCTS par classe) sont deux nombres séparés qui COÏNCIDENT aujourd'hui, sans
-        # qu'aucun lien ne les garantisse : à window_s/step_s/imagery_s inchangés, un essai produit
-        # 3 fenêtres, donc 5 fenêtres/classe impliquent déjà >= 2 essais/classe — assez pour que
-        # `fit` calcule `cv_groupee_`. Si l'un des deux seuils bouge, ou si des essais sont IGNORÉS
-        # en cours de séance (coupure Bluetooth, cf. le message « essai IGNORÉ » dans
-        # `CalibrationRuntime._pas_essai`), une classe peut atteindre 5 fenêtres avec un SEUL essai
-        # distinct : `cv_groupee_` redevient alors None (géré juste plus bas, jamais recopié depuis
-        # la naïve). Commentaire jumeau dans `core/mi_decoder.py::MIModel.fit`.
-        if not X or min(comptes.values()) < 5:
-            raise ValueError(tr("calib.mi.trop_court", comptes=comptes, minimum=5))
+        # La garde compte des ESSAIS DISTINCTS par tâche (2026-10-15, revue), plus des fenêtres.
+        # Elle exigeait 5 FENÊTRES par classe, ce qui n'impliquait ≥ 2 essais (le minimum de
+        # `MIModel.fit` pour former deux plis, donc pour que `cv_groupee_` existe) que par une
+        # COÏNCIDENCE de durées : 3 fenêtres par essai à window_s/step_s/imagery_s inchangés. Des
+        # essais IGNORÉS en cours de séance (coupure Bluetooth, « essai IGNORÉ » dans
+        # `CalibrationRuntime._pas_essai`) ou une autre géométrie la défaisaient en silence : un
+        # modèle sortait sans validation croisée honnête. On exige maintenant ce dont la CV a
+        # besoin, et un peu plus : `ESSAIS_MIN_PAR_TACHE`. Commentaire jumeau dans
+        # `core/mi_decoder.py::MIModel.fit`.
+        groupes_np, y_np = np.asarray(groupes), np.asarray(y)
+        comptes = {c: len(np.unique(groupes_np[y_np == c])) if len(y_np) else 0
+                   for c in self.classes}
+        if not X or min(comptes.values()) < ESSAIS_MIN_PAR_TACHE:
+            raise ValueError(tr("calib.mi.trop_court", comptes=comptes,
+                                minimum=ESSAIS_MIN_PAR_TACHE))
 
         bande = bande_de(self.params, MI_BAND)
         methode = "fbcsp" if self.params.get("fbcsp") else MI_METHOD
@@ -674,6 +683,24 @@ def _selftest():
         chk(len(_glob.glob(_os.path.join(dossier, "*mi_model*.joblib"))) == 1,
             f"et n'écrit AUCUN second fichier de modèle "
             f"({[_os.path.basename(p) for p in _glob.glob(_os.path.join(dossier, '*mi_model*.joblib'))]})")
+
+        # La garde compte des ESSAIS distincts, plus des fenêtres (2026-10-15). Une tâche réduite à
+        # DEUX essais (les autres ont sauté) a 6 fenêtres : l'ancienne garde (5 fenêtres) laissait
+        # entraîner, la nouvelle (3 essais) refuse, en le disant.
+        rng_g = np.random.default_rng(11)
+        sautes = [(synth_mi_trial(lab, n_samp=int(MI_IMAGERY_S * 250), fs=250.0, rng=rng_g).T, lab)
+                  for lab, n in (("GAUCHE", 4), ("DROITE", 2)) for _ in range(n)]
+        garde = MICalibration(_mi.SPEC, {"taches": ("GAUCHE", "DROITE"), "trials_per_class": 10},
+                              None, dossier=_os.path.join(dossier, "garde"))
+        try:
+            garde._entrainer(sautes, 250.0)
+            refus_garde = None
+        except ValueError as e:
+            refus_garde = str(e)
+        chk(refus_garde is not None and "pas assez de données" in refus_garde
+            and str(ESSAIS_MIN_PAR_TACHE) in refus_garde,
+            f"une tâche réduite à 2 essais distincts (6 fenêtres) REFUSE d'entraîner : la garde "
+            f"compte des essais, plus des fenêtres ({refus_garde})")
 
         # Une calibration sans dossier ne retombe PAS sur `data/` : elle refuse, en nommant qui
         # aurait dû lui en donner un. C'est ce repli silencieux qui faisait proposer une séance
