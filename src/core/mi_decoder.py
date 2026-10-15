@@ -194,8 +194,20 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
                           for csp, b in zip(self.csps_, self.sous_bandes)])
 
 
+def _lda(shrinkage=False):
+    """Le classifieur final du CSP et du FBCSP. `shrinkage` (2026-10-15, une OPTION de
+    l'entraînement) : la covariance des caractéristiques est tirée vers une forme simple
+    (Ledoit-Wolf, `shrinkage="auto"`), d'autant plus que les essais manquent — Blankertz et al.
+    (2011). Attendu utile quand les caractéristiques sont nombreuses face aux essais (FBCSP, 4 ou 5
+    tâches, séance courte). Mesuré sur les deux séances du projet : aucune différence détectable,
+    d'où une option décochée et pas un défaut."""
+    if shrinkage:
+        return LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")
+    return LinearDiscriminantAnalysis()
+
+
 def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_hz=None,
-               n_classes=len(MI_LABELS)):
+               n_classes=len(MI_LABELS), shrinkage=False):
     """Pipeline de classification MI. 'csp' = CSP+LDA ; 'riemann' = covariances + espace
     tangent + régression logistique (géométrie riemannienne : robuste, efficace avec peu
     de données) ; 'fbcsp' = banc de CSP par sous-bande + sélection + LDA.
@@ -226,7 +238,7 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
     """
     if method == "csp":
         return Pipeline([("csp", CSP(n_per_class)),
-                         ("lda", LinearDiscriminantAnalysis())])
+                         ("lda", _lda(shrinkage))])
     if method == "riemann":
         from pyriemann.estimation import Covariances
         from pyriemann.tangentspace import TangentSpace
@@ -241,7 +253,7 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
         return Pipeline([("banc", FilterBankCSP(fs, sous_bandes(band), n_per_class, secteur_hz)),
                          ("selection", SelectKBest(f_classif,
                                                    k=dimension_csp(n_per_class, n_classes))),
-                         ("lda", LinearDiscriminantAnalysis())])
+                         ("lda", _lda(shrinkage))])
     raise ValueError(f"méthode MI inconnue : {method!r} (attendu 'csp', 'riemann' ou 'fbcsp')")
 
 
@@ -250,7 +262,7 @@ class MIModel:
     CV. Le modèle PORTE son filtre (`band`, `secteur_hz`) et sa méthode : le décodage les relit."""
 
     def __init__(self, labels=MI_LABELS, fs=250.0, band=MI_BAND, method=MI_METHOD,
-                 n_per_class=2, reref_mode=MI_REREF, secteur_hz=None):
+                 n_per_class=2, reref_mode=MI_REREF, secteur_hz=None, shrinkage=False):
         self.labels = list(labels)
         self.fs = fs
         self.band = band
@@ -260,8 +272,12 @@ class MIModel:
         self.secteur_hz = secteur_hz
         self.method = method
         self.reref_mode = reref_mode
+        # La LDA à shrinkage (2026-10-15) : retenue pour la DIRE (« Détails »). Le décodage n'en a
+        # pas besoin, la frontière apprise est dans `pipe`. Un modèle d'avant n'a pas l'attribut :
+        # `getattr(…, "shrinkage", False)`.
+        self.shrinkage = bool(shrinkage)
         self.pipe = build_pipe(method, n_per_class, fs=fs, band=band, secteur_hz=secteur_hz,
-                               n_classes=len(self.labels))
+                               n_classes=len(self.labels), shrinkage=shrinkage)
         self.cv_ = None
         # La CV HONNÊTE (par essai) et le nombre d'essais. `None` tant qu'on n'a pas dit à `fit`
         # à quel essai appartient chaque fenêtre — voir `fit`. `mi_models.decrire()` les lit et
@@ -602,6 +618,28 @@ def _test_csp_binaire():
     csp3 = CSP(m).fit(bandpass(reref(X3, "car"), fs), y3)
     chk(csp3.filters_.shape[0] == 2 * m * 3 == dimension_csp(m, 3),
         f"à 3 classes : le un-contre-tous, {csp3.filters_.shape[0]} filtres")
+    # La LDA à shrinkage (2026-10-15) : une option, pour le CSP comme pour le FBCSP ; décochée,
+    # la LDA d'avant. Un modèle entraîné avec elle se relit (joblib) et décide à l'identique.
+    def _lda_de(methode, shrinkage):
+        lda = build_pipe(methode, m, fs=fs, n_classes=2, shrinkage=shrinkage).named_steps["lda"]
+        return lda.solver, lda.shrinkage
+    chk(_lda_de("csp", True) == _lda_de("fbcsp", True) == ("lsqr", "auto")
+        and _lda_de("csp", False) == _lda_de("fbcsp", False) == ("svd", None),
+        f"la LDA à shrinkage est une OPTION, CSP comme FBCSP ({_lda_de('csp', True)} ; décochée "
+        f"{_lda_de('csp', False)})")
+    import tempfile as _tempfile
+    Xs_, ys_ = seance(("PIEDS", "MAINS"), par_classe=10)
+    regul = MIModel(labels=("PIEDS", "MAINS"), fs=fs, shrinkage=True).fit(Xs_, ys_)
+    fenetre = Xs_[0]
+    with _tempfile.TemporaryDirectory() as tmp:
+        chemin = os.path.join(tmp, "mi_model_shrink.joblib")
+        regul.save(chemin)
+        relu = MIModel.load(chemin)
+    p1, p2 = regul.predict_proba(fenetre), relu.predict_proba(fenetre)
+    chk(relu.shrinkage is True and relu.pipe.named_steps["lda"].shrinkage == "auto"
+        and set(p1) == {"PIEDS", "MAINS"} and abs(sum(p1.values()) - 1.0) < 1e-9
+        and all(abs(p1[c] - p2[c]) < 1e-12 for c in p1),
+        f"un modèle à LDA régularisée rend des probabilités, et se RELIT à l'identique ({p1})")
     fb = build_pipe("fbcsp", m, fs=fs, n_classes=2).named_steps["selection"]
     chk(fb.k == dimension_csp(m, 2) == 4,
         f"le FBCSP à 2 classes garde la dimension d'UN CSP ({fb.k})")

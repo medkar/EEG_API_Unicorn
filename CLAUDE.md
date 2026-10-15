@@ -659,10 +659,14 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   calculé PAR la porte binomiale du verdict : Müller-Putz 2008 au sens « à atteindre ») ; une
   CROIX de fixation pendant la mise en route et l'imagerie de toutes les tâches (le protocole la
   déclare, `croix()` → None/False/True ; la page lui garde sa place pendant la pause) ; 40
-  essais/tâche comme CHOIX (pas le défaut : fatigue mesurée). ⚠️ **Mesuré et NON adopté** : la
-  LDA à shrinkage — sur les deux séances enregistrées (30 essais à 3 classes le 2026-07-22, 20
-  MAINS/PIEDS le 2026-10-15), aucun gain, et 46,5 % contre 50,2 % sur la seule qui a du signal
-  (test des signes p = 0,26). ⚠️ **Refusé** : décaler les fenêtres d'1 s après le top — elles sont
+  essais/tâche comme CHOIX (pas le défaut : fatigue mesurée). La **LDA à shrinkage** est une
+  OPTION d'« Entraîner », décochée comme le FBCSP (CSP et FBCSP, portée par le modèle, dite dans
+  « Détails », colonne de `research/mi_compare.py`) : sur les deux séances enregistrées (30 essais
+  à 3 classes le 2026-07-22, 20 MAINS/PIEDS le 2026-10-15), AUCUNE différence détectable — et le
+  SENS de l'écart change avec le découpage de la validation croisée (46,5 contre 50,2 % sur 20
+  découpages stratifiés ; 43,3 contre 38,9 % avec celui de `mi_compare`). Attendue utile quand les
+  caractéristiques sont nombreuses face aux essais ; ce qui ne départage pas une personne peut en
+  départager une autre. ⚠️ **Refusé** : décaler les fenêtres d'1 s après le top — elles sont
   DÉJÀ à 3–7 s du top (mise en route de 3 s, jetée). La vraie question — la raccourcir, la
   littérature découpant dès 1 s — contredit le constat du 2026-07-22 (« il faut ~2 s pour lancer le
   poing »). **Tranché avec l'utilisateur : on MESURE.** La mise en route est un réglage

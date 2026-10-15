@@ -1,4 +1,5 @@
-"""Compare les méthodes MI (CSP, Riemannien, FBCSP) sur une calibration enregistrée.
+"""Compare les méthodes MI (CSP, Riemannien, FBCSP, et la LDA à shrinkage) sur une calibration
+enregistrée.
 
 CV « par essai » (GroupKFold : les fenêtres d'un même essai restent ensemble -> pas de fuite
 -> estimation honnête). Sert à choisir la méthode sur TES données réelles après calibration.
@@ -78,12 +79,12 @@ def secteur_de(d):
     return SECTEUR_HZ, "NON archivé, séance d'avant le 2026-09-30 : défaut du produit"
 
 
-def _cv(Xr, y, g, method, k, fs, band=MI_BAND, secteur_hz=None):
+def _cv(Xr, y, g, method, k, fs, band=MI_BAND, secteur_hz=None, shrinkage=False):
     # Le filtre de `MIModel._prep` : passe-bande global pour CSP/Riemann, aucun pour FBCSP (son
     # banc filtre, coupe-bande compris).
     X = Xr if method == "fbcsp" else bandpass(Xr, fs, band, secteur_hz=secteur_hz)
     pipe = build_pipe(method, fs=fs, band=band, secteur_hz=secteur_hz,
-                      n_classes=len(np.unique(y)))
+                      n_classes=len(np.unique(y)), shrinkage=shrinkage)
     return cross_val_score(pipe, X, y,
                            cv=GroupKFold(min(k, len(np.unique(g)))), groups=g).mean()
 
@@ -94,9 +95,14 @@ def _row(epochs, labels, fs, tag, secteur_hz, k=5):
     riemann = _cv(Xr, y, g, "riemann", k, fs, secteur_hz=secteur_hz)
     fbcsp = _cv(Xr, y, g, "fbcsp", k, fs, secteur_hz=secteur_hz)
     large = _cv(Xr, y, g, "fbcsp", k, fs, band=BANDE_LARGE, secteur_hz=secteur_hz)
+    # La LDA à shrinkage (2026-10-15), l'option d'« Entraîner », sur CSP et FBCSP large.
+    csp_s = _cv(Xr, y, g, "csp", k, fs, secteur_hz=secteur_hz, shrinkage=True)
+    large_s = _cv(Xr, y, g, "fbcsp", k, fs, band=BANDE_LARGE, secteur_hz=secteur_hz,
+                  shrinkage=True)
     print(f"{tag:<20} n={len(epochs):>3}  csp={csp*100:5.1f}%  riemann={riemann*100:5.1f}%  "
           f"fbcsp={fbcsp*100:5.1f}%  fbcsp {BANDE_LARGE[0]:g}-{BANDE_LARGE[1]:g}="
-          f"{large*100:5.1f}%")
+          f"{large*100:5.1f}%  | shrinkage : csp={csp_s*100:5.1f}%  fbcsp "
+          f"{BANDE_LARGE[0]:g}-{BANDE_LARGE[1]:g}={large_s*100:5.1f}%")
 
 
 def _entete(path, d, titre):
@@ -110,7 +116,8 @@ def _entete(path, d, titre):
 def compare(path, drop=0):
     d = np.load(path, allow_pickle=True)
     fs = float(d["fs"])
-    secteur = _entete(path, d, "CV par essai (chance 3 classes = 33%)")
+    k = len(set(d["labels"].tolist()))
+    secteur = _entete(path, d, f"CV par essai (chance {k} classes = {100 / k:.0f}%)")
     _row(d["epochs"][drop:], d["labels"][drop:], fs, f"drop {drop} premiers", secteur)
 
 

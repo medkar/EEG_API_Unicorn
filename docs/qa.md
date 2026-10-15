@@ -1000,7 +1000,9 @@ pas non plus : c'est un constat, pas un réglage. Sans repère (pieds/mains), le
 
 🟡 **2.6.3** **Facultatif, si le temps le permet : FBCSP.** Refais un entraînement avec la case **« FBCSP »**
 cochée et la bande à **4–40 Hz**, puis « Tester sur une session ». Note les deux chiffres et « Détails » (qui dit
-la méthode). ⚠️ **Ce n'est PAS une comparaison** : deux séances différentes, et le test MI ne
+la méthode). Même geste pour la case **« LDA régularisée (shrinkage) »** (2026-10-15) : « Détails » dit
+« … + LDA régularisée ». Sans refaire de séance, `python src/research/mi_compare.py` compare toutes les
+variantes sur l'enregistrement du dernier entraînement. ⚠️ **Ce n'est PAS une comparaison** : deux séances différentes, et le test MI ne
 sépare même pas 40 % de 33 %. C'est un premier relevé ; la comparaison honnête se fait sur UNE
 séance, par validation croisée (`research/mi_compare.py`).
 

@@ -149,14 +149,17 @@ METHODES = {
 }
 
 
-def filtre_de(methode, bande, secteur_hz):
+def filtre_de(methode, bande, secteur_hz, shrinkage=False):
     """La phrase qui dit AVEC QUOI ce chiffre a été obtenu : méthode, bande, coupe-bande.
 
     Son champ `filtre` dans le résultat, lu par le repli « Détails » comme celui des trois autres
     entraînements : deux séances à 40 % ne se comparent pas si l'une a appris sur 8-30 Hz en CSP
     et l'autre sur 4-40 Hz en FBCSP.
     """
-    return texte_filtre(bande, secteur_hz, METHODES.get(methode, methode))
+    nom = METHODES.get(methode, methode)
+    if shrinkage and methode in ("csp", "fbcsp"):
+        nom += tr("calib.mi.methode.shrinkage")
+    return texte_filtre(bande, secteur_hz, nom)
 
 
 def horodatage(maintenant=None):
@@ -342,10 +345,12 @@ class MICalibration(CalibrationRuntime):
         methode = "fbcsp" if self.params.get("fbcsp") else MI_METHOD
         secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
         modele = MIModel(labels=self.classes, fs=fs, band=bande, method=methode,
-                         secteur_hz=secteur).fit(
+                         secteur_hz=secteur,
+                         shrinkage=bool(self.params.get("lda_shrinkage"))).fit(
             np.asarray(X), np.asarray(y), groups=np.asarray(groupes))
         # Relus du MODÈLE, pas des réglages : la phrase dit ce que le modèle a VRAIMENT appris.
-        filtre = filtre_de(modele.method, modele.band, modele.secteur_hz) + " · " + tr(
+        filtre = filtre_de(modele.method, modele.band, modele.secteur_hz,
+                           modele.shrinkage) + " · " + tr(
             "calib.mi.mise_en_route", s=nombre(self.cue_s))
 
         dossier = self.dossier_ou_lever()
@@ -377,6 +382,7 @@ class MICalibration(CalibrationRuntime):
                  labels=np.asarray([l for _e, l in enregistre]),
                  fs=fs, window_s=self.window_s, step_s=self.step_s,
                  imagery_s=self.imagery_s, mise_en_route_s=float(self.cue_s),
+                 lda_shrinkage=bool(modele.shrinkage),
                  bande=np.asarray(modele.band, dtype=float),
                  secteur_hz=float(modele.secteur_hz or 0.0), methode=modele.method)
         modele.save(chemin_modele)
@@ -410,6 +416,7 @@ class MICalibration(CalibrationRuntime):
             "hasard": hasard,
             "classes": list(self.classes),
             "mise_en_route_s": float(self.cue_s),
+            "shrinkage": bool(modele.shrinkage),
             # Avec quoi ce chiffre a été obtenu — les valeurs que le modèle PORTE, relues de lui.
             "methode": modele.method,
             "bande": [float(modele.band[0]), float(modele.band[1])],
@@ -484,6 +491,17 @@ CALIB = Calib(
             kind="bool",
             default=False,
             help=tr("calib.mi.param.fbcsp.aide"),
+        ),
+        # La LDA À SHRINKAGE (2026-10-15) : une OPTION, décochée, comme le FBCSP. Mesurée sur les
+        # deux séances du projet sans différence détectable — mais attendue utile ailleurs (beaucoup
+        # de caractéristiques pour peu d'essais), et ce qui ne départage pas UNE personne peut en
+        # départager une autre. Même règle de comparaison : `src/research/mi_compare.py`.
+        Param(
+            key="lda_shrinkage",
+            label=tr("calib.mi.param.shrinkage.label"),
+            kind="bool",
+            default=False,
+            help=tr("calib.mi.param.shrinkage.aide"),
         ),
     ),
     runtime_cls=MICalibration,
@@ -824,8 +842,11 @@ def _selftest():
         chk(refus_bas is not None and refus_haut is not None,
             f"une coupure basse sous 4 Hz et une haute au-dessus de 40 Hz sont REFUSÉES : dérive "
             f"et EMG ({refus_bas} | {refus_haut})")
+        chk(validate(CALIB, {})[0]["lda_shrinkage"] is False,
+            "la LDA à shrinkage est DÉCOCHÉE par défaut (2026-10-15 : jamais mesurée utile ici)")
         valeurs, raison = validate(CALIB, {"trials_per_class": 10, "bande_bas": 4.0,
-                                           "bande_haut": 40.0, "fbcsp": True})
+                                           "bande_haut": 40.0, "fbcsp": True,
+                                           "lda_shrinkage": True})
         chk(raison is None, f"une bande large avec FBCSP est acceptée ({raison})")
 
         # Une séance jouée avec ces réglages, par un moteur réglé sur le secteur des Amériques.
@@ -875,6 +896,16 @@ def _selftest():
             and res_r.get("honnetete") == HONNETETE,
             f"et le repli « Détails » NOMME la méthode et la bande, sur sa propre ligne "
             f"({res_r.get('filtre', '')!r})")
+        # La LDA à shrinkage cochée (2026-10-15) : apprise par le modèle, archivée avec les époques,
+        # et dite dans « Détails ».
+        with np.load(res_r["enregistrement"]) as npz:
+            archive_s = bool(npz["lda_shrinkage"]) if "lda_shrinkage" in npz.files else None
+        chk(appris is not None and appris.shrinkage is True
+            and appris.pipe.named_steps["lda"].shrinkage == "auto" and archive_s is True
+            and res_r.get("shrinkage") is True
+            and tr("calib.mi.methode.shrinkage").strip() in res_r.get("filtre", ""),
+            f"cochée, la LDA à shrinkage est APPRISE par le modèle, archivée, et dite dans "
+            f"« Détails » ({res_r.get('filtre', '')!r}, archive {archive_s})")
 
         # --- `_chemins_libres` seule, avant l'intégration complète --------------------------
         # Une collision sur le premier essai force une avance d'exactement 1 s, sur les DEUX
