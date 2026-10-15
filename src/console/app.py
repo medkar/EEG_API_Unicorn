@@ -2334,7 +2334,17 @@ def _smoke():
         "essai": 7, "total": 42, "restant_s": 2.4, "duree_estimee_s": 400.0,
         "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
         "resultat": None, "probleme": ""}}
-    console.apply_state(en_cours)
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"], "croix": True}})
+    avec = (cal.croix.isVisibleTo(cal), cal.croix.text(), cal.croix.height())
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"], "croix": False,
+                                                     "etape": "repos"}})
+    pause = (cal.croix.isVisibleTo(cal), cal.croix.text(), cal.croix.height())
+    console.apply_state(en_cours)       # sans `croix` : un protocole qui n'en a pas
+    sans = cal.croix.isVisibleTo(cal)
+    chk(avec[:2] == (True, "+") and pause[:2] == (True, "") and avec[2] == pause[2] > 0
+        and not sans,
+        f"la croix de fixation : affichée quand le moteur la demande, sa place GARDÉE pendant la "
+        f"pause (même hauteur), absente d'un protocole sans croix ({avec} / {pause} / {sans})")
     chk("SERRE le POING GAUCHE" in cal.consigne.text(),
         f"la consigne du moteur est affichée telle quelle ({cal.consigne.text()})")
     chk("2.4" in cal.decompte.text() or "2,4" in cal.decompte.text(),

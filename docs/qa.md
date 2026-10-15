@@ -968,12 +968,16 @@ tâche : **~4,8 min à 2 tâches**, ~7,0 min à 3.
 
 ✅ **2.6.0** (2026-10-15) **« Tâches à imaginer »** : un nombre (2 à 5, **2 par défaut** : GAUCHE,
 DROITE), puis autant de champs. Passe à 3 : un 3ᵉ champ apparaît ; repasse à 2 puis 3 : ce que tu y
-avais tapé est toujours là. Un champ vide ou deux fois la même tâche → « Commencer » est **refusé**,
+avais tapé est toujours là. « Essais par classe » propose aussi **40** (~12 min à 2 tâches : la
+fatigue joue contre, ce n'est pas le défaut). Un champ vide ou deux fois la même tâche → « Commencer » est **refusé**,
 avec la raison. Pendant l'essai, l'écran **nomme** la tâche tapée (« Imagine : PIEDS ») ; GAUCHE,
 DROITE et REPOS gardent leur consigne détaillée et leur top latéralisé, toute autre tâche a un top
-**centré**. « repos » tapé en minuscules redevient REPOS.
+**centré**. « repos » tapé en minuscules redevient REPOS. (2026-10-15) Une **croix** « + » au-dessus de
+la consigne pendant la mise en route et l'imagerie, pour TOUTES les tâches : fixe-la ; elle s'efface
+pendant la pause **sans que la page bouge**.
 ✅ **2.6.1** Le chiffre est une **justesse honnête** (validation croisée **par essai**), contre le
-hasard de **ton** nombre de tâches (50 % à 2, 33 % à 3). Repères ré-mesurés, **pour les poings
+hasard de **ton** nombre de tâches (50 % à 2, 33 % à 3), et le **seuil** à atteindre pour
+l'écarter (« il faut au moins 75 % » à 20 essais et 2 tâches). Repères ré-mesurés, **pour les poings
 seulement** : **40,0 % à 3 classes** (p = 0,082, **PAS** significatif) et **63,3 % en
 gauche/droite** (p = 0,038). Pour d'autres tâches (pieds/mains…), **aucun repère** : le résultat le
 dit.

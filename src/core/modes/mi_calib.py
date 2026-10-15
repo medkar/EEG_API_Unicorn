@@ -30,7 +30,8 @@ from core.i18n import tr  # noqa: E402
 from core.mi_decoder import MI_BAND, MI_CONTROL, MI_LABELS, MIModel  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (au_dessus_du_hasard, depuis_table, lignes,  # noqa: E402
-                                  niveau_par_seuils, non_mesure, p_hasard, pct, texte_filtre,
+                                  niveau_par_seuils, non_mesure, p_hasard, pct,
+                                  seuil_du_hasard, texte_filtre,
                                   texte_p, verifier)
 from core.modes.calibration import CalibrationRuntime  # noqa: E402
 from core.modes.contract import Calib, Param, bande_de, params_bande  # noqa: E402
@@ -237,6 +238,12 @@ def lignes_de(cv, n_essais, hasard):
     if cv is None:
         return non_mesure(tr("calib.mi.non_mesure.raison"), tr("calib.mi.non_mesure.conseil"))
     chiffres = tr("calib.mi.chiffres", justesse=pct(cv), hasard=pct(hasard), n=n_essais)
+    # Le SEUIL à atteindre pour écarter le hasard (2026-10-15), calculé par la porte du verdict :
+    # « 55 % » ne dit rien sans lui — il vaut 75 % à 20 essais et deux tâches.
+    seuil = seuil_du_hasard(n_essais, hasard) if n_essais and hasard else None
+    if n_essais and hasard:
+        chiffres += " " + (tr("calib.mi.chiffres.seuil", seuil=pct(seuil)) if seuil is not None
+                           else tr("calib.mi.chiffres.sans_seuil", n=n_essais))
     if _non_significatif(cv, n_essais, hasard):
         return lignes("faible", tr("calib.mot.non_significatif"), chiffres,
                       tr("calib.mi.reserve.non_significatif"))
@@ -276,6 +283,14 @@ class MICalibration(CalibrationRuntime):
 
     def rappel(self):
         return rappel_de(self.classe)
+
+    def croix(self):
+        """Une croix pendant tout l'essai — mise en route et imagerie —, pour TOUTES les tâches
+        (2026-10-15, revue). Le regard posé au même endroit quelle que soit la tâche : sans elle,
+        des yeux qui se relâchent pendant REPOS font monter l'alpha occipital (PO7, Oz, PO8), que le
+        CAR étale sur C3/C4, dans la bande du mu — un contraste que le modèle apprendrait sans
+        qu'il ait rien de moteur. Rien pendant la pause, qui n'est jamais enregistrée."""
+        return self.phase in ("echauffement", "essais") and self.etape in ("cue", "imagerie")
 
     def _entrainer(self, enregistre, fs):
         """CSP + LDA (ou FBCSP) sur les fenêtres, CV honnête par essai, puis sauvegarde horodatée.
@@ -685,9 +700,13 @@ def _selftest():
                               rng=_random.Random(5), dossier=dossier_libre)
         libre.engine = _FauxMoteur(libre, rng, alias={"Pieds": "GAUCHE", "Mains": "DROITE"})
         vues = {}
+        croix = set()         # (étape, tâche, croix publiée)
         t = 0.0
         for _ in range(20000):
             libre.tick(libre.engine, t)
+            if libre.phase in ("echauffement", "essais"):
+                croix.add((libre.etape, libre.classe if libre.etape != "repos" else "",
+                           libre.state(now=t)["croix"]))
             if libre.classe:
                 vues.setdefault(libre.classe, (libre.instruction(), libre.rappel()))
             if libre.terminee:
@@ -708,6 +727,11 @@ def _selftest():
             and mi_channel_labels(appris.labels)[2:] == ["p_Pieds", "p_Mains", "p_REPOS"],
             f"le MODÈLE porte ces tâches, donc le flux publiera p_Pieds, p_Mains, p_REPOS "
             f"({appris and appris.labels})")
+        attendu = {(e, c, True) for e in ("cue", "imagerie") for c in ("Pieds", "Mains", "REPOS")}
+        attendu.add(("repos", "", False))
+        chk(croix == attendu,
+            f"la croix de fixation : pendant la mise en route ET l'imagerie de CHAQUE tâche, REPOS "
+            f"compris, jamais pendant la pause ({sorted(croix)})")
         chk(res_l.get("hasard") == 1 / 3,
             f"le hasard suit le nombre de tâches ({res_l.get('hasard')})")
 

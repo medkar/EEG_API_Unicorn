@@ -90,6 +90,20 @@ def au_dessus_du_hasard(n_justes, n, hasard):
     return p_hasard(n_justes, n, hasard) < SEUIL_HASARD
 
 
+def seuil_du_hasard(n, hasard):
+    """La plus petite justesse qui passe `au_dessus_du_hasard` sur `n` décisions, ou None si même
+    `n` sur `n` n'y suffit pas (2026-10-15, demandé en revue : afficher le seuil à côté du score).
+
+    Calculé par LA porte, pas par une seconde formule : le chiffre affiché ne peut pas contredire le
+    verdict. C'est le seuil de Müller-Putz et al. (2008) au sens « à atteindre » : leur
+    `binom.ppf(0,95)/n` est celui « à dépasser » — 46,7 % à 30 essais et 3 classes, d'où 50 % ici.
+    """
+    for k in range(int(n) + 1):
+        if au_dessus_du_hasard(k, n, hasard):
+            return k / n
+    return None
+
+
 def texte_p(p):
     """`0.111` -> `"p = 0,111"` ; sous le millième, `"p < 0,001"` — trois décimales, pas plus."""
     if p < 0.001:
@@ -345,6 +359,18 @@ def _selftest():
 
     chk(pct(0.385) == "38 %" and pct(1 / 6) == "17 %" and pct(0.385, 1) == "38,5 %",
         f"les pourcentages s'écrivent à la française ({pct(0.385)}, {pct(1 / 6)}, {pct(0.385, 1)})")
+
+    # Le SEUIL du hasard (2026-10-15) : celui de Müller-Putz et al. (2008), « à atteindre ». Leurs
+    # repères « à dépasser » : 46,7 % (30 essais, 3 classes), 70 % (20, 2), 58,75 % (80, 2) — soit,
+    # à atteindre, 15/30, 15/20 et 48/80. Et il EST la porte : juste dessous, elle ne passe pas.
+    reperes = {(30, 1 / 3): 15 / 30, (20, 1 / 2): 15 / 20, (80, 1 / 2): 48 / 80}
+    vus = {cle: seuil_du_hasard(*cle) for cle in reperes}
+    porte = all(au_dessus_du_hasard(round(s * n), n, h)
+                and not au_dessus_du_hasard(round(s * n) - 1, n, h)
+                for (n, h), s in vus.items() if s is not None)
+    chk(vus == reperes and porte and seuil_du_hasard(3, 1 / 2) is None,
+        f"le seuil du hasard : les repères de Müller-Putz, et c'est la porte elle-même ; à 3 "
+        f"essais sur 2 classes, aucun score ne l'écarte ({vus})")
 
     ok = all(resultats)
     print(f"[affichage] VERDICT : {'OK' if ok else 'PROBLÈME'}")

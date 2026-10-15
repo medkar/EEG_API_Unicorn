@@ -147,6 +147,11 @@ class MesureMI(MesureRuntime):
                 Etape(classe, MI_CUE_S + MI_IMAGERY_S,
                       instruction=consigne(classe), rappel=rappel_de(classe)))
 
+    def croix(self):
+        """La croix de l'entraînement, aux mêmes moments : pendant l'essai, pas pendant la pause."""
+        etape = self._etape_courante
+        return self.phase == "essais" and etape is not None and etape.enregistre
+
     def protocole(self):
         """Les essais, TIRÉS AU HASARD parmi les classes du modèle — un ordre fixe s'anticipe.
 
@@ -473,6 +478,16 @@ def _selftest():
             "enregistrée")
         chk(all(e.instruction == consigne(e.nom) for e in enreg),
             "…et les consignes sont celles de l'ENTRAÎNEMENT, importées")
+        # La croix de l'entraînement (2026-10-15) : pendant l'essai, jamais pendant la pause.
+        vu = set()
+        phase_avant, courante_avant = rt.phase, rt._etape_courante
+        rt.phase = "essais"
+        for e in rt._etapes:
+            rt._etape_courante = e
+            vu.add((e.enregistre, rt.state(now=0.0)["croix"]))
+        rt.phase, rt._etape_courante = phase_avant, courante_avant
+        chk(vu == {(True, True), (False, False)},
+            f"la croix : pendant chaque essai, pas pendant la pause ({sorted(vu)})")
         chk(abs(rt.duree_estimee_s() - (MesureRuntime.warmup_s
                                         + 18 * (MI_REST_S + MI_CUE_S + MI_IMAGERY_S))) < 1e-9,
             f"la durée annoncée compte la chauffe et les pauses ({rt.duree_estimee_s():.0f} s)")

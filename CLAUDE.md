@@ -651,6 +651,22 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans REPOS, le modèle désigne toujours une tâche : seul
   le seuil de probabilité fait taire le flux. **Jamais joué au casque** : tout ce qui précède est
   prouvé sur du signal synthétique.
+- **Revue du décodeur MI (2026-10-15, recommandations d'une autre session, triées avec
+  l'utilisateur).** Appliqué : le CSP à DEUX classes résout le problème une fois (le un-contre-tous
+  rendait chaque filtre en double ; sans effet sur CSP + LDA — mesuré, aucun essai ne change —, mais
+  le FBCSP gaspillait la moitié de son `k`, qui suit désormais `dimension_csp`) ; le résultat
+  d'entraînement affiche le SEUIL à atteindre pour écarter le hasard (`affichage.seuil_du_hasard`,
+  calculé PAR la porte binomiale du verdict : Müller-Putz 2008 au sens « à atteindre ») ; une
+  CROIX de fixation pendant la mise en route et l'imagerie de toutes les tâches (le protocole la
+  déclare, `croix()` → None/False/True ; la page lui garde sa place pendant la pause) ; 40
+  essais/tâche comme CHOIX (pas le défaut : fatigue mesurée). ⚠️ **Mesuré et NON adopté** : la
+  LDA à shrinkage — sur les deux séances enregistrées (30 essais à 3 classes le 2026-07-22, 20
+  MAINS/PIEDS le 2026-10-15), aucun gain, et 46,5 % contre 50,2 % sur la seule qui a du signal
+  (test des signes p = 0,26). ⚠️ **Refusé** : décaler les fenêtres d'1 s après le top — elles sont
+  DÉJÀ à 3–7 s du top (mise en route de 3 s, jetée). Le raccourcir à 1 s (la vraie question,
+  littérature à [1, 3] s) contredirait le constat du 2026-07-22 (« il faut ~2 s pour lancer le
+  poing ») : pas fait, à trancher avec l'utilisateur. La séance MAINS/PIEDS du 2026-10-15 est au
+  hasard (50,5 % pour 50 %), quelle que soit la variante.
 
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
   n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait

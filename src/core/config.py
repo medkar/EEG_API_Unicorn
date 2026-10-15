@@ -402,8 +402,11 @@ MI_REST_S = 1.5            # pause entre deux essais
 MI_WARMUP_PER_CLASS = 2    # essais d'échauffement NON enregistrés (le MI s'améliore en séance)
 MI_TRAIN_STEP_S = 1.0      # pas du découpage en fenêtres -> 3 fenêtres par essai de 4 s
 # Durées de séance proposées, en essais PAR CLASSE. Le temps estimé se calcule, il ne se stocke
-# pas : il dépend de CUE + IMAGERY + REST, qui sont juste au-dessus.
-MI_SESSIONS = (10, 14, 18, 26)
+# pas : il dépend de CUE + IMAGERY + REST, qui sont juste au-dessus. 40 (2026-10-15, revue) :
+# l'effectif que vise la littérature pour qu'un score se sépare du hasard (à 2 tâches, il faut
+# 59 % sur 80 essais contre 75 % sur 20). Un CHOIX, pas le défaut : la fatigue mesurée ci-dessus
+# joue contre, et 40 × 2 tâches durent ~12 min.
+MI_SESSIONS = (10, 14, 18, 26, 40)
 
 
 # --- Calibrations menées par une FENÊTRE de stimulus (P300, ErrP, c-VEP) ----------------------

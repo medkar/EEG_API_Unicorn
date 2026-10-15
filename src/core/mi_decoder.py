@@ -71,10 +71,24 @@ def bandpass(epochs, fs, band=MI_BAND, order=4, secteur_hz=None):
     return passe_bande(epochs, fs, band, secteur_hz=secteur_hz, axis=-1, ordre=order)
 
 
+def dimension_csp(n_per_class, n_classes):
+    """Le nombre de filtres (donc de caractéristiques) d'UN CSP : 2 × n_per_class à deux classes,
+    2 × n_per_class × n_classes au-delà (un contre tous). Une écriture, que `CSP.fit` et le `k` du
+    FBCSP partagent."""
+    return 2 * n_per_class * (1 if n_classes == 2 else n_classes)
+
+
 class CSP(BaseEstimator, TransformerMixin):
     """Common Spatial Patterns multiclasse (one-vs-rest). Pour chaque classe, apprend des
     filtres spatiaux maximisant/minimisant sa variance vs le reste ; features = log-variance.
-    Compatible scikit-learn (Pipeline / cross_val_score)."""
+    Compatible scikit-learn (Pipeline / cross_val_score).
+
+    ⚠️ À DEUX classes, le problème n'est résolu qu'UNE fois (2026-10-15). Le un-contre-tous y
+    résolvait deux fois le même problème généralisé — « A contre B » puis « B contre A », mêmes
+    vecteurs propres, valeurs λ et 1 − λ — et rendait chaque filtre en double. Sans effet sur le
+    CSP + LDA (mesuré sur les deux séances enregistrées : aucun essai ne change de décision), mais
+    le FBCSP choisissait ses caractéristiques parmi des copies et gaspillait la moitié de son `k`.
+    Deux tâches est le défaut depuis le même jour."""
 
     def __init__(self, n_per_class=2, reg=1e-6):
         self.n_per_class = n_per_class
@@ -93,12 +107,18 @@ class CSP(BaseEstimator, TransformerMixin):
         y = np.asarray(y)
         self.classes_ = np.unique(y)
         eye = self.reg * np.eye(X.shape[1])
+        m = self.n_per_class
+        if len(self.classes_) == 2:
+            a, b = (self._cov(X[y == c]) for c in self.classes_)
+            evals, evecs = eigh(a + eye, a + b + 2 * eye)
+            evecs = evecs[:, np.argsort(evals)]
+            self.filters_ = np.vstack([evecs[:, :m].T, evecs[:, -m:].T])   # (2*m, n_ch)
+            return self
         filt = []
         for c in self.classes_:
             c_pos, c_neg = self._cov(X[y == c]), self._cov(X[y != c])
             evals, evecs = eigh(c_pos + eye, c_pos + c_neg + 2 * eye)
             evecs = evecs[:, np.argsort(evals)]
-            m = self.n_per_class
             filt.append(evecs[:, :m].T)     # variance MINI pour c (capte l'ERD)
             filt.append(evecs[:, -m:].T)     # variance MAXI pour c
         self.filters_ = np.vstack(filt)      # (2*m*n_classes, n_ch)
@@ -187,8 +207,9 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
     sont refaits dans CHAQUE pli de la validation croisée, sur les seules lignes d'apprentissage du
     pli. Ajustés une fois sur tout le jeu avant la CV, ils auraient choisi leurs filtres et leurs
     caractéristiques en regardant les essais de test : une CV optimiste, sans rien casser. `k` = la
-    dimension d'UN CSP (2 × n_per_class × n_classes) : le FBCSP ne garde pas plus de
-    caractéristiques qu'un CSP simple, il les choisit parmi celles de toutes les sous-bandes.
+    dimension d'UN CSP (`dimension_csp` : 2 × n_per_class à deux classes, × n_classes au-delà) : le
+    FBCSP ne garde pas plus de caractéristiques qu'un CSP simple, il les choisit parmi celles de
+    toutes les sous-bandes.
 
     ⚠️ La sélection est une ANOVA F (`f_classif`), PAS l'information mutuelle (2026-09-30, revue).
     Les lignes sont des fenêtres qui se chevauchent : trois par essai, même étiquette. L'estimateur
@@ -218,7 +239,8 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
         # `_test_fbcsp` d'y glisser un espion. Une fonction de module, pas un lambda : le modèle se
         # sérialise par joblib, et un lambda ne se picke pas.
         return Pipeline([("banc", FilterBankCSP(fs, sous_bandes(band), n_per_class, secteur_hz)),
-                         ("selection", SelectKBest(f_classif, k=2 * n_per_class * n_classes)),
+                         ("selection", SelectKBest(f_classif,
+                                                   k=dimension_csp(n_per_class, n_classes))),
                          ("lda", LinearDiscriminantAnalysis())])
     raise ValueError(f"méthode MI inconnue : {method!r} (attendu 'csp', 'riemann' ou 'fbcsp')")
 
@@ -365,7 +387,8 @@ class MIDecoder:
 def synth_mi_trial(label, n_ch=8, n_samp=500, fs=250.0, erd=0.5, noise=1.0, mu_amp=1.5,
                    common=0.0, rng=None):
     """Rythme mu (10 Hz) partout ; ATTÉNUÉ (ERD) sur la voie controlatérale pour GAUCHE/DROITE,
-    inchangé pour REPOS. `common` > 0 ajoute un MODE COMMUN in-band identique sur TOUTES les voies,
+    sur Cz pour PIEDS (l'aire des pieds est sur la ligne médiane), sur C3 ET C4 pour MAINS (les
+    deux mains), inchangé pour REPOS et toute autre étiquette. `common` > 0 ajoute un MODE COMMUN in-band identique sur TOUTES les voies,
     d'amplitude aléatoire par essai : simule la dérive de référence/EMG que subit l'online et que
     le CAR retire. Sans CAR, il gonfle la variance corrélée et NOIE le contraste ERD."""
     rng = np.random.default_rng() if rng is None else rng
@@ -376,6 +399,10 @@ def synth_mi_trial(label, n_ch=8, n_samp=500, fs=250.0, erd=0.5, noise=1.0, mu_a
         amp[1] *= (1 - erd)     # main droite -> ERD sur C3
     elif label == "GAUCHE":
         amp[3] *= (1 - erd)     # main gauche -> ERD sur C4
+    elif label == "PIEDS":
+        amp[2] *= (1 - erd)     # pieds -> ERD sur Cz
+    elif label == "MAINS":
+        amp[[1, 3]] *= (1 - erd)    # les deux mains -> ERD sur C3 et C4
     # REPOS : aucune atténuation
     for c in range(n_ch):
         X[c] += amp[c] * mu_amp * np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi))
@@ -400,7 +427,7 @@ def _eval(method, Xtr, ytr, Xte, yte, reref_mode=MI_REREF):
 
 
 def _test_cv_honnete():
-    """L'invariant de la CV groupée : elle doit être INFÉRIEURE à la naïve, toujours.
+    """L'invariant de la CV groupée : elle ne peut pas DÉPASSER la naïve.
 
     Pourquoi c'est un invariant et pas une observation : la CV naïve mélange entre plis des
     fenêtres GLISSANTES issues du même essai. Deux fenêtres d'un même essai partagent une seconde
@@ -413,7 +440,9 @@ def _test_cv_honnete():
     était affiché à la fin d'une séance de calibration.
 
     Le test ne vérifie PAS une valeur : il vérifie le SENS de l'écart, qui ne dépend d'aucun jeu
-    de données. Une valeur attendue serait fausse dès qu'on change la graine.
+    de données. Une valeur attendue serait fausse dès qu'on change la graine. ⚠️ Au sens LARGE
+    (2026-10-15, revue) : à signal fort, les deux saturent à 100 % et l'inégalité stricte tomberait
+    sans qu'aucune fuite ait disparu — le smoke du moteur l'avait déjà relâchée.
     """
     ok = True
 
@@ -445,8 +474,8 @@ def _test_cv_honnete():
         f"les deux CV sont calculées (naïve={modele.cv_}, groupée={modele.cv_groupee_})")
     chk(modele.n_essais_ == essai,
         f"le nombre d'ESSAIS est retenu, pas celui des fenêtres ({modele.n_essais_})")
-    chk(modele.cv_groupee_ < modele.cv_,
-        f"la CV groupée est INFÉRIEURE à la naïve : {modele.cv_groupee_*100:.1f}% contre "
+    chk(modele.cv_groupee_ <= modele.cv_,
+        f"la CV groupée ne dépasse pas la naïve : {modele.cv_groupee_*100:.1f}% contre "
         f"{modele.cv_*100:.1f}% — la fuite entre fenêtres d'un même essai vaut "
         f"{(modele.cv_ - modele.cv_groupee_)*100:.1f} points")
 
@@ -538,6 +567,53 @@ def _test_n_splits_insuffisant():
         f"fenêtres, `n_splits` tomberait à 1, sous le plancher de 2 ({modele.cv_groupee_})")
 
     print(f"[mi-cv-n_splits] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _test_csp_binaire():
+    """À DEUX classes, le CSP rend 2 × n_per_class filtres DISTINCTS (2026-10-15) ; au-delà, le
+    un-contre-tous d'avant, inchangé. Le un-contre-tous à deux classes rendait chaque filtre en
+    double : les mêmes vecteurs propres, à un facteur près."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    rng = np.random.default_rng(3)
+    fs, m = 250.0, 2
+
+    def seance(labels, par_classe=8):
+        X, y = [], []
+        for lab in labels:
+            for _ in range(par_classe):
+                X.append(synth_mi_trial(lab, n_samp=500, fs=fs, rng=rng))
+                y.append(lab)
+        return np.asarray(X), np.asarray(y)
+
+    X2, y2 = seance(("PIEDS", "MAINS"))
+    csp2 = CSP(m).fit(bandpass(reref(X2, "car"), fs), y2)
+    f = csp2.filters_ / np.linalg.norm(csp2.filters_, axis=1, keepdims=True)
+    cosinus = np.abs(f @ f.T)[np.triu_indices(len(f), k=1)]
+    chk(csp2.filters_.shape[0] == 2 * m == dimension_csp(m, 2) and cosinus.max() < 0.99,
+        f"à 2 classes : {csp2.filters_.shape[0]} filtres, aucune paire colinéaire "
+        f"(|cos| max {cosinus.max():.3f})")
+    X3, y3 = seance(("GAUCHE", "DROITE", "REPOS"))
+    csp3 = CSP(m).fit(bandpass(reref(X3, "car"), fs), y3)
+    chk(csp3.filters_.shape[0] == 2 * m * 3 == dimension_csp(m, 3),
+        f"à 3 classes : le un-contre-tous, {csp3.filters_.shape[0]} filtres")
+    fb = build_pipe("fbcsp", m, fs=fs, n_classes=2).named_steps["selection"]
+    chk(fb.k == dimension_csp(m, 2) == 4,
+        f"le FBCSP à 2 classes garde la dimension d'UN CSP ({fb.k})")
+    # Et le synthétique PIEDS/MAINS se sépare : la CV groupée dépasse nettement le hasard. À 20
+    # essais par classe : à 8, avec le CAR, même GAUCHE/DROITE reste au hasard sur ce synthétique
+    # (mesuré : 37 % ; 78 % pour les deux paires à 20).
+    Xs, ys = seance(("PIEDS", "MAINS"), par_classe=20)
+    modele = MIModel(labels=("PIEDS", "MAINS"), fs=fs).fit(Xs, ys, groups=np.arange(len(ys)))
+    chk(modele.cv_groupee_ is not None and modele.cv_groupee_ > 0.65,
+        f"PIEDS (ERD sur Cz) contre MAINS (ERD sur C3 et C4) se séparent : CV groupée "
+        f"{(modele.cv_groupee_ or 0) * 100:.0f} % pour un hasard à 50 %")
     return ok
 
 
@@ -802,7 +878,8 @@ def _demo():
 if __name__ == "__main__":
     use_utf8_console()
     ok_cv = _test_cv_honnete()
+    ok_binaire = _test_csp_binaire()
     ok_n_splits = _test_n_splits_insuffisant()
     ok_fbcsp = _test_fbcsp()
     ok_demo = _demo()
-    sys.exit(0 if (ok_cv and ok_n_splits and ok_fbcsp and ok_demo) else 1)
+    sys.exit(0 if (ok_cv and ok_binaire and ok_n_splits and ok_fbcsp and ok_demo) else 1)

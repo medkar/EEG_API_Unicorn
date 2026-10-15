@@ -107,6 +107,17 @@ class CalibrationRuntime:
         """La ligne secondaire, sous la consigne. "" s'il n'y en a pas."""
         return ""
 
+    def croix(self):
+        """La croix de fixation : None si ce protocole n'en a pas, sinon True/False — à afficher
+        MAINTENANT ou non.
+
+        C'est le PROTOCOLE qui le décide (2026-10-15, le Motor Imagery), pas la page : l'écran
+        générique ne connaît aucun mode, il dessine la croix quand l'instantané la demande. Trois
+        valeurs et pas deux : la croix est ce qu'on FIXE, elle garde sa place pendant les pauses
+        (False) — une page qui sauterait à chaque essai déplacerait le regard qu'elle doit tenir.
+        """
+        return None
+
     def _entrainer(self, enregistre, fs):
         """Entraîne et sauvegarde. Rend le dict de résultat, ou lève avec un message lisible.
 
@@ -302,6 +313,7 @@ class CalibrationRuntime:
             "classe": self.classe,
             "instruction": self.instruction(),
             "rappel": self.rappel(),
+            "croix": self.croix(),
             "essai": self.essai,
             "total": self.total(),
             "unite": self.unite,
@@ -375,6 +387,9 @@ def _selftest():
     # confusion qu'un `if now else ...` ferait puisque 0.0 est aussi FALSY en Python. La
     # distinction que documente `state(now=None)` (« sans lui, le décompte vaut 0 ») porte sur
     # l'ABSENCE de l'argument, jamais sur sa valeur.
+    chk(rt.state(now=0.0).get("croix", "absente") is None,
+        "un protocole qui ne déclare pas de croix publie `croix: None` : la page ne lui réserve "
+        "aucune place (2026-10-15)")
     chk(rt.state(now=0.0)["restant_s"] == round(rt.restant_s(0.0), 1) > 0.0,
         f"now=0.0 est une horloge valide, distincte de l'absence d'horloge "
         f"({rt.state(now=0.0)['restant_s']})")

@@ -10,7 +10,7 @@ horloges qui divergent donneraient un écran qui ment sur ce que le moteur enreg
 import os
 import sys
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
@@ -166,7 +166,20 @@ class CalibPage(QWidget):
         self.barre.setTextVisible(False)
         self.bouton_abandon = QPushButton(tr("pages.commun.abandonner"))
         self.bouton_abandon.clicked.connect(self._abandonner)
+        # La CROIX de fixation (2026-10-15), quand le protocole en a une (le Motor Imagery) : c'est
+        # le moteur qui dit quand (`croix` de l'instantané : None = pas de croix dans ce protocole,
+        # False = sa place reste, vide, pendant la pause). Au-dessus de la consigne, centrée.
+        self.croix = QLabel("")
+        self.croix.setAlignment(Qt.AlignCenter)
+        self.croix.setStyleSheet("font-size: 72px; font-weight: bold;")
+        # Hauteur FIGÉE sur celle du « + » : vide pendant la pause, la croix garde sa place.
+        self.croix.setText("+")
+        self.croix.ensurePolished()
+        self.croix.setFixedHeight(self.croix.sizeHint().height())
+        self.croix.setText("")
+        self.croix.setVisible(False)
         pendant = QVBoxLayout(self.bloc_pendant)
+        pendant.addWidget(self.croix)
         pendant.addWidget(self.consigne)
         pendant.addWidget(self.classe_cuee)
         pendant.addWidget(self.rappel)
@@ -404,6 +417,9 @@ class CalibPage(QWidget):
             self.refus_decision.setText("")
             self._maybe_beep(calib_state)
             self.consigne.setText(calib_state.get("instruction") or "")
+            croix = calib_state.get("croix")
+            self.croix.setVisible(croix is not None)
+            self.croix.setText("+" if croix else "")
             self.classe_cuee.setText(calib_state.get("classe") or "")
             self.rappel.setText(calib_state.get("rappel") or "")
             self.decompte.setText(tr(
