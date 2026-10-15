@@ -1187,8 +1187,8 @@ class EngineServer:
         """Supprime les fichiers du candidat en attente et oublie le verdict. Sans effet s'il
         n'y en a pas. Ne touche JAMAIS à `data/` : ne sont effacés que des chemins du candidat."""
         candidat = self.candidat
-        self.candidat = None
         if not candidat:
+            self.candidat = None
             return
         for cle in self._FICHIERS_CANDIDAT:
             chemin = candidat.get(cle)
@@ -1197,6 +1197,8 @@ class EngineServer:
                     os.remove(chemin)
                 except OSError as e:
                     print(f"[server] candidat non supprimé ({chemin}) : {e}")
+        # Oublié APRÈS les fichiers : `candidat is None` veut dire « le disque est propre ».
+        self.candidat = None
         print(f"[server] candidat jeté — {pourquoi}. Aucun modèle n'a rejoint {self.data_dir}.")
 
     def _save_calibration(self):
@@ -1267,13 +1269,18 @@ class EngineServer:
         if not self.candidat and self.calibration is None:
             print("[server] rien à jeter : aucune calibration en attente de décision")
             return
-        self._efface_candidat("« Jeter » demandé")
         if self.calibration is not None:
             # `cancel()` sur une calibration déjà terminée ne change pas sa phase, mais il libère
             # ses époques et sa référence vers le moteur — le même cycle que les modes actifs.
             self.calibration.cancel()
         self.calibration = None
         self._candidat_de = None
+        # EN DERNIER (2026-10-15) : `_efface_candidat` ne pose `candidat = None` qu'une fois les
+        # fichiers partis, et l'écran de verdict est déjà effacé — qui lit `candidat is None` lit
+        # un état FINI. Dans l'ordre d'avant, le smoke voyait parfois `None` avec le fichier encore
+        # là et le verdict encore affiché (une suppression lente, Windows qui scanne un fichier
+        # fraîchement copié) : un échec intermittent, attribué à tort à une machine chargée.
+        self._efface_candidat("« Jeter » demandé")
 
     def close(self):
         """Libère ce que CE moteur a créé sur le disque. Idempotente, appelable de partout.
@@ -3234,7 +3241,7 @@ def _smoke_calibration():
                 time.sleep(0.1)
 
             # ⚠️ ÉCART AU BRIEF, documenté dans le rapport de tâche : « Essais par classe » est un
-            # « choice » borné à MI_SESSIONS = (10, 14, 18, 26) (core/config.py), pas un entier
+            # « choice » borné à MI_SESSIONS (core/config.py), pas un entier
             # libre — 6 (la valeur du brief) est refusé par `contract.validate`. Le plus PETIT
             # choix valide, 10, est ACCEPTÉ mais rend la comparaison honnête/naïve juste plus bas
             # peu fiable sur du bruit pur (mesuré : ~1 essai sur 2 viole l'invariant sur 4 tirages
@@ -3536,11 +3543,24 @@ def _smoke_calibration():
             shutil.copy2(retenu["modele"], refait)
             server.candidat = {"modele": refait, "nom": os.path.basename(refait)}
             avant_data = sorted(os.listdir(data_dir))
-            ack_jeter = server.submit("discard_calibration")
-            chk(ack_jeter.get("accepted"), f"« Jeter » est accepté ({ack_jeter})")
-            t0 = time.perf_counter()
-            while server.candidat is not None and time.perf_counter() - t0 < 5.0:
-                time.sleep(0.05)
+            # Une suppression LENTE, exprès (2026-10-15) : sous Windows, un fichier fraîchement
+            # copié peut être scanné, et `os.remove` attendre. Le moteur ne doit dire « plus de
+            # candidat » qu'une fois le disque propre ; sans ce ralenti, l'ordre fautif ne se voyait
+            # qu'une fois sur deux.
+            vrai_remove = os.remove
+
+            def _remove_lent(chemin, *a, **k):
+                time.sleep(0.3)
+                return vrai_remove(chemin, *a, **k)
+            os.remove = _remove_lent
+            try:
+                ack_jeter = server.submit("discard_calibration")
+                chk(ack_jeter.get("accepted"), f"« Jeter » est accepté ({ack_jeter})")
+                t0 = time.perf_counter()
+                while server.candidat is not None and time.perf_counter() - t0 < 5.0:
+                    time.sleep(0.05)
+            finally:
+                os.remove = vrai_remove
             chk(not os.path.exists(refait) and server.candidat is None,
                 f"…et le candidat est SUPPRIMÉ du disque ({refait})")
             chk(sorted(os.listdir(data_dir)) == avant_data,
