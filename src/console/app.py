@@ -2417,11 +2417,10 @@ def _smoke():
         and "FBCSP" in cal.details.text() and "60 Hz" in cal.details.text(),
         f"…et AVEC QUOI il a appris : méthode, bande, coupe-bande (2026-09-30) "
         f"({cal.details.text()!r})")
-    # ⚠️ La phrase d'honnêteté vient du RÉSULTAT DU MOTEUR, plus d'une constante de la page. Elle
-    # vivait dans `calib_page.py` — donc affichée sous TOUS les résultats de calibration, la page
-    # ne connaissant aucun mode. Depuis que le P300 se calibre lui aussi ici, ce « 40 % à trois
-    # classes » se serait affiché mot pour mot sous une SÉLECTION parmi six cibles.
-    chk("séance de référence" in cal.honnetete.text(),
+    # La phrase d'honnêteté vient du RÉSULTAT du moteur, pas de la page : chaque entraînement porte
+    # la sienne (celle du MI parle de tâches, celle du P300 de cibles), et la page est la même pour
+    # tous.
+    chk("un score modeste est normal" in cal.honnetete.text(),
         "et la page dit franchement ce qu'un résultat modeste signifie")
     chk(cal.honnetete.text() == mi_calib.HONNETETE,
         "...avec la phrase que la calibration MI publie elle-même, pas une constante d'interface")

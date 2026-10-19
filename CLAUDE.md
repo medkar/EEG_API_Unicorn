@@ -321,6 +321,10 @@ Casque **Unicorn Hybrid Black** : 8 voies EEG sèches, 250 Hz, Bluetooth. Montag
   français. **`docs/qa.md` est la feuille qu'on EXÉCUTE** — action, résultat attendu, ce qui compte
   pour un échec ; `docs/recette.md` porte le pourquoi, l'histoire des défauts et les repères
   chiffrés, et c'est ce qu'on relit quand un point tombe.
+- **Écrire selon [docs/charte-redaction.md](docs/charte-redaction.md)** (2026-10-19) : les textes
+  affichés, les commentaires et les messages d'autotest s'adressent à des **élèves ingénieurs
+  débutants en EEG** — technicité minimale, au présent, sans l'histoire du chantier (elle vit dans
+  git et `docs/recette.md`). En français, comme `qa.md` et `recette.md`.
 - Avancer par **petits pas testés sur le matériel** : éditer → lancer → coller les logs.
 - **Vérifier la doc** (SDK Unicorn, LSL, littérature BCI) avant d'affirmer ; citer les sources sur les
   points incertains.

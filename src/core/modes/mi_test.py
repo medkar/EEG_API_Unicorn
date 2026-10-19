@@ -672,7 +672,7 @@ def _selftest():
             f"39 % sur 400 : au-dessus du hasard, sous le repère de 40 % -> moyen "
             f"({sous_repere['chiffres']})")
         flou = noter(_dec(MI_LABELS, 18, 13, 6), MI_LABELS, essais_par_classe=6)
-        chk(flou["niveau"] == "faible" and "10 essais par classe" in flou["reserve"],
+        chk(flou["niveau"] == "faible" and "10 essais par tâche" in flou["reserve"],
             f"6/13 : pas distinguable du hasard -> faible, et la réserve dit d'allonger "
             f"({flou['reserve']})")
         # I-2 : deux décisions justes sur 18 essais (3 classes), quatre sur 12 en gauche/droite.
@@ -689,7 +689,7 @@ def _selftest():
         # Le MÊME résultat brut, jugé contre deux hasards : c'est le hasard écrit en dur qui se voit.
         g3 = noter(_dec(MI_LABELS, 16, 16, 10), MI_LABELS)
         g2 = noter(_dec(MI_CONTROL, 16, 16, 10), MI_CONTROL)
-        chk(g3["niveau"] != "faible" and g2["niveau"] == "faible" and "hasard 50 %" in g2["chiffres"],
+        chk(g3["niveau"] != "faible" and g2["niveau"] == "faible" and "hasard : 50 %" in g2["chiffres"],
             f"10/16 bat le hasard à 3 classes, PAS en gauche/droite ({g3['niveau']} / "
             f"{g2['niveau']} : {g2['chiffres']})")
         # Des TÂCHES LIBRES (2026-10-15) : le repère des poings ne les juge pas. Le même score,
@@ -709,7 +709,7 @@ def _selftest():
             noter(_dec(MI_LABELS, 5, 5, 5), MI_LABELS)
             chk(False, "moins de 6 essais doit être refusé")
         except ValueError as e:
-            chk("pas de quoi conclure" in str(e), f"moins de 6 essais : refusé ({str(e)[:40]}…)")
+            chk("trop peu pour conclure" in str(e), f"moins de 6 essais : refusé ({str(e)[:40]}…)")
 
         # === 9. BRANCHÉ ===========================================================================
         vu = registry.get_mesure("mi_test")

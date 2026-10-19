@@ -49,17 +49,16 @@ INSTRUCTIONS = {
 }
 RAPPEL = tr("calib.mi.rappel")
 
-# Les TÂCHES par défaut (2026-10-15) : deux, les poings — c'est le repère du projet le plus solide
-# (63,3 % en gauche/droite, p = 0,038). REPOS n'y est plus : sans lui, le modèle choisit toujours
-# l'une des deux tâches, et c'est le seuil de probabilité qui fait taire le flux. L'aide du réglage
-# le dit, et propose d'ajouter REPOS.
+# Les tâches par défaut : les deux poings, le contraste le mieux mesuré sur ce casque (63 % à deux
+# tâches). Sans REPOS, le modèle désigne toujours l'une des tâches : c'est le seuil de probabilité du
+# mode qui le fait taire quand il n'est pas sûr.
 TACHES_DEFAUT = MI_CONTROL
 TACHES_MAX = 5
 
-# Le minimum d'ESSAIS DISTINCTS par tâche pour entraîner (2026-10-15, revue). La validation
-# croisée par essai en exige 2 (deux plis) ; 3 pour que chaque pli d'apprentissage garde au moins
-# deux essais de chaque tâche. Le plus court réglage (10 essais par tâche) en laisse une marge
-# large : il ne mord que si des essais ont sauté en séance.
+# Le minimum d'essais par tâche pour entraîner. La validation croisée par essai en demande 2 (deux
+# plis) ; avec 3, chaque pli d'apprentissage garde au moins deux essais de chaque tâche. Le plus
+# court réglage (10 essais par tâche) est loin au-dessus : ce minimum ne joue que si des essais ont
+# été perdus pendant la séance (coupure Bluetooth).
 ESSAIS_MIN_PAR_TACHE = 3
 
 
@@ -101,18 +100,14 @@ BRIEFING = (
     tr("calib.mi.briefing.7"),
 )
 
-# Les verdicts sont calés sur l'échelle HONNÊTE, pas sur l'ancienne. Les seuils de l'écran pygame
-# (75 % / 60 %) valaient pour une CV gonflée de 10 à 16 points : les reprendre tels quels
-# déclarerait « FAIBLE » une séance parfaitement ordinaire. Repère du projet, mesuré honnêtement
-# sur sa seule séance de référence : 40,0 % à 3 classes (p = 0,082, PAS significatif) et 63,3 % à
-# 2 classes (p = 0,038). Autrement dit : autour de 40 %, on est dans le NORMAL, et ça ne suffit
-# pas à piloter quoi que ce soit.
+# Les seuils des verdicts. Le score est mesuré sur des essais que le modèle n'a pas vus : c'est un
+# chiffre honnête, nettement plus bas qu'un score calculé sur des fenêtres mélangées. Pour situer :
+# sur ce casque, chez une personne, 40 % à 3 tâches et 63 % à 2 — un score modeste est normal.
 #
-# ⚠️ Ces seuils sont RELATIFS AU HASARD depuis le 2026-10-15, où le nombre de tâches est devenu un
-# réglage (2 à 5) : 45 % est « utilisable » à 3 classes, SOUS le hasard à 2. On garde la même
-# distance au hasard, mesurée en part de ce qui reste à gagner au-dessus de lui (le kappa de
-# Cohen) : 0,40 et 0,175 redonnent EXACTEMENT 60 % et 45 % à 3 classes ; à 2, 70 % et 59 % ; à 5,
-# 52 % et 34 %.
+# Les seuils dépendent du hasard, donc du nombre de tâches : 45 % est un bon score à 3 tâches
+# (hasard 33 %), mais il est sous le hasard à 2 (50 %). On mesure donc l'écart au hasard en part de
+# ce qui reste à gagner au-dessus de lui (le kappa de Cohen) : 0,40 et 0,175 donnent 60 % et 45 % à
+# 3 tâches, 70 % et 59 % à 2, 52 % et 34 % à 5.
 KAPPA_EXCELLENT = 0.40
 KAPPA_UTILISABLE = 0.175
 
@@ -211,13 +206,13 @@ def decouper(epoque, n, pas):
 
 
 def _non_significatif(cv, n_essais, hasard):
-    """Un chiffre que la TABLE jugerait utilisable ou mieux, mais que le hasard produit aussi.
+    """Vrai pour un score que la table jugerait utilisable ou mieux, mais que le hasard produit
+    aussi : 14 essais justes sur 30 à 3 tâches (47 %) passe la ligne des 45 %, alors qu'un tirage au
+    hasard fait aussi bien une fois sur dix.
 
-    M-5 (revue du 2026-09-22) : 14/30 à 3 classes = 47 % passait la ligne orange (45 %) alors
-    qu'un tirage au hasard fait aussi bien une fois sur dix. L'orange promet « nettement au-dessus
-    du hasard » : c'est le test binomial EXACT qui le dit (`affichage.au_dessus_du_hasard`, la
-    porte des tests), sur les ESSAIS — l'unité de la validation croisée, jamais les fenêtres.
-    Sous la ligne FAIBLE, la table garde la main : son conseil (le signal) est le bon.
+    C'est le test binomial exact qui tranche (`affichage.au_dessus_du_hasard`, la même porte que
+    les tests), compté en ESSAIS — l'unité de la validation croisée, jamais en fenêtres. Sous la
+    ligne FAIBLE, la table garde la main : son conseil (soigner le signal) est le bon.
     """
     if cv is None or not n_essais or not hasard:
         return False
@@ -248,8 +243,8 @@ def lignes_de(cv, n_essais, hasard):
     if cv is None:
         return non_mesure(tr("calib.mi.non_mesure.raison"), tr("calib.mi.non_mesure.conseil"))
     chiffres = tr("calib.mi.chiffres", justesse=pct(cv), hasard=pct(hasard), n=n_essais)
-    # Le SEUIL à atteindre pour écarter le hasard (2026-10-15), calculé par la porte du verdict :
-    # « 55 % » ne dit rien sans lui — il vaut 75 % à 20 essais et deux tâches.
+    # Le score à atteindre pour faire mieux que le hasard, calculé par la même porte que le
+    # verdict : « 55 % » ne dit rien seul — il faut 75 % à 20 essais et deux tâches.
     seuil = seuil_du_hasard(n_essais, hasard) if n_essais and hasard else None
     if n_essais and hasard:
         chiffres += " " + (tr("calib.mi.chiffres.seuil", seuil=pct(seuil)) if seuil is not None
@@ -283,15 +278,15 @@ class MICalibration(CalibrationRuntime):
 
     @property
     def cue_s(self):
-        """La mise en route de CETTE séance (2026-10-15) : un réglage d'« Entraîner », que le
-        modèle retient. ⚠️ Une propriété, que le smoke du moteur écrase AU NIVEAU DE LA CLASSE pour
-        jouer une séance en accéléré, puis restaure."""
+        """La mise en route de cette séance, réglée dans « Entraîner » ; le modèle la retient.
+        ⚠️ Une propriété : le smoke du moteur l'écrase au niveau de la CLASSE pour jouer une séance
+        en accéléré, puis la restaure."""
         return float(getattr(self, "params", {}).get("mise_en_route_s", MI_CUE_S))
 
     @property
     def classes(self):
-        """Les tâches de CETTE séance, réglées dans « Entraîner » (2026-10-15) — elles deviennent
-        les classes du modèle, donc les voies `p_<tâche>` du flux publié au décodage."""
+        """Les tâches de cette séance, réglées dans « Entraîner ». Elles deviennent les classes du
+        modèle, donc les voies `p_<tâche>` du flux publié au décodage."""
         return tuple(canonique(t) for t in self.params.get("taches") or TACHES_DEFAUT)
 
     def instruction(self):
@@ -301,11 +296,12 @@ class MICalibration(CalibrationRuntime):
         return rappel_de(self.classe)
 
     def croix(self):
-        """Une croix pendant tout l'essai — mise en route et imagerie —, pour TOUTES les tâches
-        (2026-10-15, revue). Le regard posé au même endroit quelle que soit la tâche : sans elle,
-        des yeux qui se relâchent pendant REPOS font monter l'alpha occipital (PO7, Oz, PO8), que le
-        CAR étale sur C3/C4, dans la bande du mu — un contraste que le modèle apprendrait sans
-        qu'il ait rien de moteur. Rien pendant la pause, qui n'est jamais enregistrée."""
+        """Une croix pendant tout l'essai (mise en route et imagerie), pour TOUTES les tâches.
+
+        Le regard reste au même endroit quelle que soit la tâche. Sans elle, des yeux qui se
+        relâchent pendant REPOS font monter l'alpha occipital (PO7, Oz, PO8) ; le CAR l'étale sur
+        C3 et C4, dans la bande du mu, et le modèle apprendrait un contraste qui n'a rien de moteur.
+        Rien pendant la pause, qui n'est jamais enregistrée."""
         return self.phase in ("echauffement", "essais") and self.etape in ("cue", "imagerie")
 
     def _entrainer(self, enregistre, fs):
@@ -325,15 +321,11 @@ class MICalibration(CalibrationRuntime):
                 y.append(label)
                 groupes.append(indice)     # le GROUPE est l'essai : c'est ce qui rend la CV honnête
 
-        # La garde compte des ESSAIS DISTINCTS par tâche (2026-10-15, revue), plus des fenêtres.
-        # Elle exigeait 5 FENÊTRES par classe, ce qui n'impliquait ≥ 2 essais (le minimum de
-        # `MIModel.fit` pour former deux plis, donc pour que `cv_groupee_` existe) que par une
-        # COÏNCIDENCE de durées : 3 fenêtres par essai à window_s/step_s/imagery_s inchangés. Des
-        # essais IGNORÉS en cours de séance (coupure Bluetooth, « essai IGNORÉ » dans
-        # `CalibrationRuntime._pas_essai`) ou une autre géométrie la défaisaient en silence : un
-        # modèle sortait sans validation croisée honnête. On exige maintenant ce dont la CV a
-        # besoin, et un peu plus : `ESSAIS_MIN_PAR_TACHE`. Commentaire jumeau dans
-        # `core/mi_decoder.py::MIModel.fit`.
+        # La garde compte des ESSAIS par tâche, pas des fenêtres : c'est le nombre d'essais qui
+        # permet la validation croisée (`MIModel.fit` en demande 2 pour former deux plis). Compter
+        # des fenêtres ne le garantit pas : des essais perdus en séance (« essai IGNORÉ » dans
+        # `CalibrationRuntime._pas_essai`) laisseraient sortir un modèle sans score honnête.
+        # Commentaire jumeau dans `core/mi_decoder.py::MIModel.fit`.
         groupes_np, y_np = np.asarray(groupes), np.asarray(y)
         comptes = {c: len(np.unique(groupes_np[y_np == c])) if len(y_np) else 0
                    for c in self.classes}
@@ -374,8 +366,8 @@ class MICalibration(CalibrationRuntime):
         # séance avec le secteur où elle a été enregistrée. `secteur_hz = 0` veut dire « pas de
         # coupe-bande » (la convention de `core/filtrage.py`, comme le `.npz` du P300) ; un `.npz`
         # d'avant ce champ n'a ni bande ni secteur, et l'outil le dit.
-        # La mise en route (2026-10-15) part dans le modèle (« Tester » la rejoue) ET dans
-        # l'enregistrement : c'est elle qu'on compare d'une séance à l'autre.
+        # La mise en route part dans le modèle (« Tester » la rejoue) ET dans l'enregistrement :
+        # c'est elle qu'on compare d'une séance à l'autre.
         modele.mise_en_route_s = float(self.cue_s)
         np.savez(chemin_npz,
                  epochs=np.asarray([e for e, _l in enregistre]),
@@ -440,10 +432,9 @@ CALIB = Calib(
     briefing=BRIEFING,
     epoch_s=MI_IMAGERY_S,
     params=(
-        # Les TÂCHES (2026-10-15, demandé au casque : « pieds/mains au lieu de poing droit/poing
-        # gauche », sans avoir à se souvenir laquelle est laquelle pendant la consigne). Réglées À
-        # L'ENTRAÎNEMENT, comme la bande : le modèle les porte, et le test comme le décodage les
-        # relisent de lui. Un champ par tâche dans la console, de 2 à 5.
+        # Les TÂCHES à imaginer, de 2 à 5 (un champ par tâche dans la console). Réglées à
+        # l'entraînement, comme la bande : le modèle les porte, et le test comme le décodage les
+        # relisent de lui.
         Param(
             key="taches",
             label=tr("calib.mi.param.taches.label"),
@@ -452,9 +443,9 @@ CALIB = Calib(
             count=(2, TACHES_MAX),
             help=tr("calib.mi.param.taches.aide"),
         ),
-        # La MISE EN ROUTE (2026-10-15) : le temps, après le top, avant l'enregistrement. Un
-        # réglage pour MESURER au lieu de trancher entre le constat du 2026-07-22 (~2 s pour lancer
-        # le poing, d'où 3 s) et la littérature (dès 1 s). Cf. `core/config.py`.
+        # La MISE EN ROUTE : le temps entre le bip et le début de l'enregistrement. 3 s par défaut
+        # (il faut souvent ~2 s pour bien lancer l'imagination) ; la littérature découpe dès 1 s.
+        # Un réglage, pour que chacun mesure ce qui lui convient. Cf. `core/config.py`.
         Param(
             key="mise_en_route_s",
             label=tr("calib.mi.param.mise_en_route.label"),
@@ -472,19 +463,18 @@ CALIB = Calib(
             choices=MI_SESSIONS,
             help=tr("calib.mi.param.trials_per_class.aide"),
         ),
-        # La bande (2026-09-30), réglée À L'ENTRAÎNEMENT et enregistrée dans le modèle. Les bornes
-        # gardent toujours 10-20 Hz dedans (le haut du mu, le bas du bêta) : une bande qui
-        # retirerait le rythme moteur est refusée, elle ne décoderait que du bruit sans rien dire.
-        # Et elles s'arrêtent à 4 et 40 Hz (revue du 2026-09-30) : les fenêtres Unicorn sont
-        # BRUTES, et sous 4 Hz vivent la dérive et le regard, au-dessus de 40 Hz l'EMG d'une
-        # mâchoire crispée. Le FBCSP en ferait des sous-bandes à part — et les SÉLECTIONNERAIT si
-        # elles covarient avec la consigne : un modèle qui décode la crispation, pas l'imagerie.
+        # La bande, réglée à l'entraînement et enregistrée dans le modèle. Les bornes gardent
+        # toujours 10-20 Hz dedans (le haut du mu, le bas du bêta) : une bande qui retirerait le
+        # rythme moteur est refusée, elle ne décoderait que du bruit sans rien dire. Elles
+        # s'arrêtent à 4 et 40 Hz : sous 4 Hz, la dérive et les mouvements des yeux ; au-dessus de
+        # 40 Hz, la crispation des muscles de la mâchoire. Le FBCSP en ferait des sous-bandes, et
+        # les CHOISIRAIT si elles suivent la consigne : un modèle qui décode la crispation, pas
+        # l'imagination du mouvement.
         *params_bande(MI_BAND, (4.0, 10.0), (20.0, 40.0), tr("calib.mi.param.bande.aide")),
-        # FBCSP : une OPTION, décochée — jamais mesurée sur ce casque (la seule séance MI archivée
-        # est à 40 % à 3 classes). ⚠️ « Tester » ne dit PAS s'il fait mieux que le CSP : à 18-30
-        # essais, ce test ne sépare même pas 40 % de 33 %, et deux entraînements distincts
-        # mêlent la différence de méthode à celle entre deux séances. La comparaison honnête se
-        # fait sur UNE même séance, par validation croisée : `src/research/mi_compare.py`.
+        # FBCSP : une OPTION, décochée — jamais mesurée utile sur ce casque. Un test de 18 à 30
+        # essais ne suffit pas à dire s'il fait mieux que le CSP, et deux entraînements mêlent la
+        # méthode et la séance. La comparaison honnête se fait sur UNE séance, par validation
+        # croisée : `src/research/mi_compare.py`.
         Param(
             key="fbcsp",
             label=tr("calib.mi.param.fbcsp.label"),
@@ -492,10 +482,10 @@ CALIB = Calib(
             default=False,
             help=tr("calib.mi.param.fbcsp.aide"),
         ),
-        # La LDA À SHRINKAGE (2026-10-15) : une OPTION, décochée, comme le FBCSP. Mesurée sur les
-        # deux séances du projet sans différence détectable — mais attendue utile ailleurs (beaucoup
-        # de caractéristiques pour peu d'essais), et ce qui ne départage pas UNE personne peut en
-        # départager une autre. Même règle de comparaison : `src/research/mi_compare.py`.
+        # La LDA À SHRINKAGE : une OPTION, décochée, comme le FBCSP. Aucune différence mesurée sur
+        # ce casque, mais elle aide quand il y a beaucoup de caractéristiques pour peu d'essais, et
+        # ce qui ne change rien chez une personne peut aider une autre. Même comparaison :
+        # `src/research/mi_compare.py`.
         Param(
             key="lda_shrinkage",
             label=tr("calib.mi.param.shrinkage.label"),
@@ -623,8 +613,8 @@ def _selftest():
         # l'affiche (`console/calib_page.py`) est générique : il ne connaît aucun mode, donc il ne
         # peut pas la choisir. Tant qu'elle vivait dans l'interface, elle s'affichait aussi sous
         # le résultat du P300 — « 40 % à trois classes » sous une sélection parmi six cibles.
-        chk(bool(res.get("honnetete")) and "3 classes" in res["honnetete"],
-            "le résultat porte SA phrase d'honnêteté, celle du MI")
+        chk(res.get("honnetete") == HONNETETE and "40 %" in HONNETETE,
+            "le résultat porte la phrase d'honnêteté du MI (repère : 40 % à trois tâches)")
         chk("AUC" not in res.get("honnetete", "") and "six cibles" not in res.get("honnetete", ""),
             "...et pas celle du P300, qui parle d'AUC et de sélection parmi six cibles")
 

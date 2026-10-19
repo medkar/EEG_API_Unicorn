@@ -1,24 +1,21 @@
-"""La fenêtre du Motor Imagery : l'ESSAI LIBRE (« Tester librement », 2026-10-15).
+"""La fenêtre de « Tester librement » pour le Motor Imagery : on imagine une tâche, et la fenêtre
+montre ce que le modèle décode en direct.
 
-Demandé au casque : « faire du décodage en direct à partir du modèle sélectionné pour le tester
-librement : on affiche ce qui est décodé entre, par exemple, pieds, mains ou rien ».
-
-Le MI n'a pas de stimulus — c'est un paradigme ENDOGÈNE : on imagine, rien ne clignote. Cette
-fenêtre n'en affiche donc aucun. Elle écoute le flux décodé PUBLIC du mode (`decoded_mi`, de CETTE
-machine, comme une application — `retour.SourceDecisions`), lit les TÂCHES du modèle dans la
-description du flux, et montre :
+Le Motor Imagery n'a pas de stimulus : on imagine un mouvement, rien ne clignote. Cette fenêtre
+affiche donc seulement les tâches du modèle et le résultat du décodage. Elle se comporte comme
+l'application d'un élève : elle écoute le flux public `decoded_mi` de cet ordinateur
+(`retour.SourceDecisions`) et lit le nom des tâches dans la description de ce flux. Elle montre :
 
   • les tâches, en grand, une case chacune, dans l'ordre du flux ;
-  • un cadre VERT autour de celle que le moteur décode — la couleur des trois autres fenêtres
-    (`retour.COULEUR_DECODEE`), à la même distance du bord (`retour.ANNEAU_ECART_PX`) ;
-  • « rien » quand le vote ne conclut pas. Un −1 n'efface PAS le cadre : il expire seul
-    `retour.PERIME_S` après la dernière décision valide (`retour.Retour`, régime continu) — le
-    moteur publie à ~5 Hz, et un cadre qui clignoterait à chaque abstention serait illisible ;
-  • une croix tant que le moteur se stabilise (flux `status`, `retour.ReposDuMoteur`).
+  • un cadre VERT autour de la tâche décodée — la même couleur et la même marge que l'anneau des
+    autres fenêtres (`retour.COULEUR_DECODEE`, `retour.ANNEAU_ECART_PX`) ;
+  • « rien » quand le modèle n'est pas assez sûr. Une non-réponse (−1) n'efface pas le cadre : il
+    disparaît seul `retour.PERIME_S` après la dernière vraie réponse. Le moteur répond 5 fois par
+    seconde : un cadre effacé à chaque non-réponse clignoterait et deviendrait illisible ;
+  • une croix tant que le casque se stabilise (flux `status`, `retour.ReposDuMoteur`).
 
-Elle ne publie RIEN : ni marqueur, ni vérité-terrain, et aucun score. Les tâches viennent du FLUX,
-jamais de la console : c'est le modèle chargé par le moteur qui les a, et c'est ce qu'une
-application lirait.
+Elle n'envoie rien (ni marqueur, ni score). Les tâches viennent du flux et pas de la console : c'est
+le modèle chargé par le moteur qui les connaît.
 
     python src/stimulus/mi.py --retour             # ce que lance « Tester librement »
     python src/stimulus/mi.py --retour --windowed  # fenêtre 1000×700 (dev)
