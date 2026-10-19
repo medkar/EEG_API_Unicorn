@@ -776,7 +776,7 @@ def _selftest():
         srv.mesure = None
         srv.calibration = _CalibrationFactice()
         r3 = srv.submit("start_mesure", id="essai")
-        chk(not r3.get("accepted") and "calibration" in (r3.get("reason") or "").lower(),
+        chk(not r3.get("accepted") and "entraînement" in (r3.get("reason") or "").lower(),
             f"et RÉCIPROQUEMENT — c'est le sens qu'on oublie en croyant avoir fermé la porte "
             f"({r3})")
 
@@ -801,7 +801,7 @@ def _selftest():
             f"une mesure inconnue est refusée en la nommant ({r5.get('reason')})")
 
         r6 = srv.submit("cancel_mesure")
-        chk(not r6.get("accepted") and "aucune mesure" in (r6.get("reason") or ""),
+        chk(not r6.get("accepted") and "aucun test" in (r6.get("reason") or ""),
             f"…et annuler sans mesure en cours est refusé avec un motif ({r6.get('reason')})")
     finally:
         registry.MESURES = vrais

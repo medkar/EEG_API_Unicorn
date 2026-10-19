@@ -862,8 +862,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         return noter(d + [(i % 6, None, cause) for i in range(blocs - emis)], 6, **kw)
 
     r = fab(9, 7)
-    chk(r["niveau"] == "bon" and f"{pct(r['taux_emission'])} d'émission" in r["verdict"]
-        and f"{pct(r['justesse'])} de justesse" in r["verdict"],
+    chk(r["niveau"] == "bon" and f"{pct(r['taux_emission'])} des blocs" in r["verdict"]
+        and f"{pct(r['justesse'])} de réponses justes" in r["verdict"],
         f"les DEUX chiffres sont dans le verdict, ensemble ({r['chiffres']})")
     chk(pct(r["taux_emission"]) in r["chiffres"] and pct(r["justesse"]) in r["chiffres"],
         "…et dans la ligne visible par défaut")
@@ -899,7 +899,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         "aucune horloge : NON MESURÉ, pas FAIBLE")
     r = fab(9, 7, pertes={"en_chauffe": 1, "perdus": 2})
     chk("1 bloc(s) joué(s) pendant la stabilisation" in r["verdict"]
-        and "2 bloc(s) joué(s) sans époque" in r["verdict"],
+        and "2 bloc(s) joué(s) sans signal exploitable" in r["verdict"],
         "les BLOCS perdus (chauffe, tampon) sont dits dans le verdict")
     chk("indicative" in fab(9, 7, reglages={"corr_min": 0.20})["verdict"],
         "un réglage différent du repère le dit")

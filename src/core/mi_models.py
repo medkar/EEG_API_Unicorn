@@ -198,7 +198,8 @@ def _selftest():
         etranger = _os.path.join(dossier, "mi_model_etranger.joblib")
         joblib.dump(_ModeleEtranger(), etranger)
         _m, raison = charger(etranger)
-        chk(_m is None and "hérité" in (raison or "") and "core.mi_decoder" in (raison or ""),
+        chk(_m is None and "ancienne version" in (raison or "")
+            and "core.mi_decoder" in (raison or ""),
             f"un modèle dont la classe vient d'ailleurs est refusé, même avec labels et "
             f"predict_proba ({raison})")
         chk(etranger not in modeles_disponibles(dossier),

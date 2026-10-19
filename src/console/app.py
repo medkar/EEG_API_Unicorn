@@ -1438,7 +1438,8 @@ def _smoke():
     console.apply_state(state)
     chk("Unicorn" not in console.banner.liaison.text(),
         f"le bandeau dit que c'est un board de test — « {console.banner.liaison.text()} »")
-    chk("σ" in console.banner.sigmas.text(), f"et les σ — « {console.banner.sigmas.text()} »")
+    chk("niveau du signal" in console.banner.sigmas.text(),
+        f"et le niveau du signal — « {console.banner.sigmas.text()} »")
     chk(console.banner.alarme.text() == "", "aucune alarme sur un montage sain")
 
     console.apply_state(state)
@@ -1765,7 +1766,7 @@ def _smoke():
         "le P300 a le rendu ACTIF, comme le SSVEP et le MI — même famille")
     chk(f"seuil {Z_MIN:g}" not in p3.seuil.text() and "échelle z" not in p3.seuil.text(),
         f"mais il n'annonce NI le z NI le seuil du SSVEP, qu'il n'a pas ({p3.seuil.text()})")
-    chk("log-odds" in p3.seuil.text() and "aucun seuil" in p3.seuil.text().lower(),
+    chk("score moyen" in p3.seuil.text() and "aucun seuil" in p3.seuil.text().lower(),
         f"il nomme son échelle et dit qu'il n'y a pas de seuil ({p3.seuil.text()})")
     chk(len(p3._barres) == 6 and all(e.text() for e, _b in p3._barres),
         f"six barres, et chacune porte une ÉTIQUETTE — pas six barres muettes "
@@ -1904,9 +1905,9 @@ def _smoke():
     # pendant que l'écran annoncerait l'inverse exact de la vérité, sur le seul écran dont la
     # raison d'être est d'empêcher qu'on prenne ce verdict pour fiable.
     texte_errp = errp_page.vue.avertissement.text()
-    chk("garde 86%" in texte_errp and "attrape 50%" in texte_errp,
+    chk("garde 86%" in texte_errp and "repère 50%" in texte_errp,
         f"...ET le point de fonctionnement MESURÉ (pas seulement visé), chaque taux CÔTÉ SON "
-        f"LIBELLÉ : « garde 86% des bonnes commandes » / « attrape 50% des erreurs » — un "
+        f"LIBELLÉ : « garde 86% des bonnes commandes » / « repère 50% des erreurs » — un "
         f"échange tpr↔tnr doit rougir ICI ({texte_errp!r})")
     chk("visé 85%" in texte_errp,
         f"...et le taux VISÉ reste distinct des deux mesurés ({texte_errp!r})")
@@ -1921,7 +1922,7 @@ def _smoke():
         "output": {"error": -1, "score": 0.0, "artifact": 1, "threshold": 0.044}}}}
     console.apply_state(errp_rejet)
     texte_rejet = errp_page.vue.avertissement.text()
-    chk("90%" in texte_rejet and "36/40" in texte_rejet,
+    chk("90%" in texte_rejet and "36 sur 40" in texte_rejet,
         f"un sur-rejet d'artefact se VOIT sur la page, taux ET effectif — sans quoi 36 refus de "
         f"suite ressemblent à 36 clignements ({texte_rejet!r})")
 
@@ -1984,7 +1985,7 @@ def _smoke():
     # verdict ET le taux d'erreurs attrapées — jamais le texte statique du mode.
     console.apply_state(errp_state)
     resume_errp = console.grid.tuiles["errp"].detail.text()
-    chk("ERREUR" in resume_errp and "attrape 50%" in resume_errp,
+    chk("ERREUR" in resume_errp and "repère 50%" in resume_errp,
         f"le résumé de la tuile porte le verdict ET le point de fonctionnement "
         f"({resume_errp!r})")
 
@@ -2036,14 +2037,14 @@ def _smoke():
     chk(isinstance(cv, live_views.ActiveView),
         "le c-VEP a le rendu ACTIF, comme le SSVEP, le MI et le P300 — même famille")
     chk("corrélation" in cv.seuil.text() and "échelle z" not in cv.seuil.text()
-        and "log-odds" not in cv.seuil.text(),
+        and "score moyen" not in cv.seuil.text(),
         f"et il nomme SON échelle, ni celle du SSVEP ni celle du P300 ({cv.seuil.text()})")
     chk("0.26" in cv.seuil.text() and "0.09" in cv.seuil.text(),
         f"...avec SES DEUX seuils : `corr_min` seul ferait lire « 0,40 > 0,26, ça aurait dû "
         f"déclencher » sur une fenêtre où la 2e était à 0,38 ({cv.seuil.text()})")
     # ...ET le vote, qui fait partie de la même règle : sans lui, un étudiant qui voit une barre
     # franche sans verdict croit à un bug. La latence de `vote_len / 5 Hz` s'explique ici.
-    chk("2 fenêtres d'accord sur les 3" in cv.seuil.text(),
+    chk("2 fenêtres sur les 3 dernières" in cv.seuil.text(),
         f"...et le VOTE, troisième moitié de la règle de décision ({cv.seuil.text()})")
     chk("CIBLE 2" in cv.verdict.text() and "Hz" not in cv.verdict.text(),
         f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence — le c-VEP "
@@ -2393,7 +2394,8 @@ def _smoke():
 
     chk(cal.bouton_enregistrer.isVisibleTo(cal) and cal.bouton_refaire.isVisibleTo(cal),
         "un candidat en attente fait apparaître « Enregistrer » et « Refaire »")
-    chk("temporaire" in cal.decision.text() and "data/" in cal.decision.text(),
+    chk("temporaire" in cal.decision.text()
+        and "« Enregistrer le modèle » le garde" in cal.decision.text(),
         f"...et l'écran DIT qu'un chiffre affiché n'est pas encore un modèle enregistré "
         f"({cal.decision.text()[:80]}…)")
 
@@ -2531,9 +2533,9 @@ def _smoke():
     # caractère près, que la tuile ErrP de `live_views` — le même taux doit se lire pareil sur les
     # deux écrans qui le montrent, et l'écart typographique avec le « 50 % » de la ligne du dessus
     # est le prix assumé de cet alignement-là.
-    chk("attrape 50%" in cal_errp.details.text()
+    chk("repère 50%" in cal_errp.details.text()
         and "garde 86%" in cal_errp.details.text()
-        and "permutation p = 0,010" in cal_errp.details.text(),
+        and "permutation : p = 0,010" in cal_errp.details.text(),
         f"...son point de fonctionnement et sa p-value, en DÉTAIL — jamais comme mesure qui "
         f"décide : ces deux taux sont mesurés au seuil qui les a choisis "
         f"({cal_errp.details.text()!r})")

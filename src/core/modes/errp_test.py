@@ -703,7 +703,8 @@ def _selftest():
         moteur = _FauxMoteur(e_mort, t_mort, m_mort)
         rt_mort = MesureErrP(SPEC, valeurs, moteur)
         jouer(rt_mort, moteur)
-        chk(rt_mort.phase == "annule" and "σ nul" in rt_mort.probleme and not rt_mort._enregistre,
+        chk(rt_mort.phase == "annule" and "parfaitement plate" in rt_mort.probleme
+            and not rt_mort._enregistre,
             f"une voie MORTE : le mode refuserait de conclure son repos, le test s'annule en le "
             f"disant, sans une seule décision ({rt_mort.phase}, {rt_mort.probleme[:50]}…)")
 
@@ -720,8 +721,8 @@ def _selftest():
             f"12/16), 5/35 annulées (pas 10/40), 13 sans verdict à part ({r['tpr']}, {r['fpr']})")
         r = noter(E(5, 15, 0, 57, 3, 0), 0.85)
         chk(r["tpr"] == 0.25 and r["tnr"] == 0.95
-            and "garde 95 % des bonnes commandes, attrape 25 % des erreurs" in r["chiffres"]
-            and "gardé 57, soit 95 %" in r["verdict"] and "attrapé 5, soit 25 %" in r["verdict"],
+            and "95 % des bonnes commandes gardées, 25 % des erreurs repérées" in r["chiffres"]
+            and "gardé 57, soit 95 %" in r["verdict"] and "repéré 5, soit 25 %" in r["verdict"],
             f"chaque taux à SA place, dans les chiffres ET dans le verdict ({r['chiffres']})")
 
         cas = {  # nom : (essais, visé, essais demandés, niveau attendu, mot-clé de la réserve)
@@ -729,7 +730,7 @@ def _selftest():
             "sous le repère": (E(25, 31, 0, 115, 29, 0), 0.85, 200, "moyen", "réentraîne"),
             "réglage extrême": (E(12, 44, 0, 138, 6, 0), 0.95, 200, "moyen", "re-teste à 85 %"),
             "trop de -1": (E(12, 10, 40, 50, 8, 50), 0.85, 200, "moyen", "sans verdict"),
-            "garde trop peu": (E(20, 2, 0, 42, 18, 0), 0.85, 80, "bon", "monte « "),
+            "garde trop peu": (E(20, 2, 0, 42, 18, 0), 0.85, 80, "bon", "Monte « "),
             "hasard, court": (E(2, 9, 0, 25, 4, 0), 0.85, 40, "faible", "à 200 essais"),
             "hasard, long": (E(2, 9, 0, 25, 4, 0), 0.85, 200, "faible", "réentraîne"),
             "sans erreur": (E(0, 0, 11, 25, 4, 0), 0.85, 40, "faible", "200 essais"),

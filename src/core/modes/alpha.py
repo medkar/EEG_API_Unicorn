@@ -486,8 +486,8 @@ def _selftest():
     chk("arrête" in plat["verdict"].lower() and "électrodes" in plat["verdict"].lower(),
         f"…et le verdict dit d'ARRÊTER et quoi vérifier, il ne rend pas qu'un chiffre "
         f"({plat['verdict'][:70]}…)")
-    chk("mastoïdes" in plat["verdict"].lower() and "saline" in plat["verdict"].lower(),
-        "…en nommant les TROIS gestes : occipitales, mastoïdes, saline")
+    chk("mastoïdes" in plat["verdict"].lower() and "eau salée" in plat["verdict"].lower(),
+        "…en nommant les TROIS gestes : occipitales, mastoïdes, eau salée")
     chk(plat["reglage_propose"] is None,
         f"…et RIEN n'est proposé à appliquer : sur un signal sans alpha, le « pic » est le plus "
         f"grand bin d'un spectre de bruit ({plat['pic_hz']} Hz ici). Le proposer d'un clic serait "

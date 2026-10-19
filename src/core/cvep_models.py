@@ -429,7 +429,8 @@ def _selftest():
         chemin_gold = _rcca(codes_etrangers).save(
             _os.path.join(dossier, "cvep_rcca_model_gold.npz"))
         _m, raison = charger(chemin_gold)
-        chk(_m is None and "réfut" in (raison or "") and "ré-entraîne" in (raison or "").lower()
+        chk(_m is None and "autres codes" in (raison or "")
+            and "ré-entraîne" in (raison or "").lower()
             and "cvep_rcca_model_gold.npz" in (raison or ""),
             f"un modèle rCCA calibré sur d'AUTRES codes est refusé, en le nommant et en disant "
             f"quoi faire ({raison})")
@@ -461,7 +462,7 @@ def _selftest():
         finally:
             CVEP_LAG_ROTATION = _rot_avant
         chk("ATTENDU" not in (raison_rot or "") and "ré-entraîne" in (raison_rot or "").lower()
-            and "CVEP_LAG_ROTATION" in (raison_rot or ""),
+            and "décalage entre cibles" in (raison_rot or ""),
             f"...et à CVEP_LAG_ROTATION NON NUL ce refus reste présenté comme un VRAI défaut à "
             f"réparer, jamais comme un cas attendu : la calibration écrit ses codes dans l'ordre "
             f"du plan, donc un modèle frais est ACCEPTÉ à toute rotation "

@@ -785,18 +785,19 @@ def _selftest():
         f"le verdict porte la mesure ET son hasard ({res['chiffres']})")
     # Le MÊME résultat brut contre deux hasards : c'est un hasard écrit en dur qui se verrait ici.
     six, deux = noter(dec(12, 8), 6), noter(dec(12, 8), 2, manches_demandees=24)
-    chk(six["niveau"] == "moyen" and deux["niveau"] == "faible" and "hasard 50 %" in deux["chiffres"],
+    chk(six["niveau"] == "moyen" and deux["niveau"] == "faible"
+        and "hasard : 50 %" in deux["chiffres"],
         f"8/12 bat le hasard à 6 cibles, PAS à 2 ({six['niveau']} / {deux['niveau']})")
     chk("distinguable du hasard" in deux["reserve"] and "p = " in deux["reserve"]
         and "seuil" not in deux["reserve"],
         f"…et la réserve dit POURQUOI : le hasard, p-value à l'appui, pas un seuil qu'il dépasse "
         f"({deux['reserve']})")
     cas = {
-        "5/6": (noter(dec(6, 5), 6, manches_demandees=6), "bon", "confirme à 24"),
+        "5/6": (noter(dec(6, 5), 6, manches_demandees=6), "bon", "confirme avec 24"),
         "8/10": (noter(dec(10, 8), 6, manches_demandees=24), "bon", "après une pause"),
-        "6/10": (noter(dec(10, 6), 6), "moyen", "sous le repère"),
+        "6/10": (noter(dec(10, 6), 6), "moyen", "sous le score de comparaison"),
         "6/12": (noter(dec(12, 6), 6, manches_demandees=24), "faible", "réentraîne"),
-        "2/6": (noter(dec(6, 2), 6, manches_demandees=6), "faible", "à 24 manches"),
+        "2/6": (noter(dec(6, 2), 6, manches_demandees=6), "faible", "avec 24 manches"),
         "4/6+1": (noter(dec(6, 4, sans=1), 6), "moyen", "sans décision"),
         "0/6": (noter(dec(6, 0, sans=6), 6), "faible", "sans décision"),
     }

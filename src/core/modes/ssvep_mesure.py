@@ -1211,7 +1211,7 @@ def _selftest():
     _melange = {"targets": list(reversed(_res3["plancher"]["targets"]))}
     chk(_par_cible(FREQS, _res3["decisions"], _melange) == _pc,
         "…même si le compte-rendu du plancher liste les cibles dans un autre ordre")
-    chk("comparable" in _res3["honnetete"] and "2026-07-27" in _res3["honnetete"],
+    chk("comparable" in _res3["honnetete"] and "ordre de grandeur" in _res3["honnetete"],
         "…et la phrase d'honnêteté DIT que ces chiffres ne se comparent pas tels quels au repère "
         "100 %/44 %, mesuré sous une autre règle (σ sur 8 voies, trio du dépôt)")
 
@@ -1224,7 +1224,7 @@ def _selftest():
         f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
     # Une séance de 18 annonces sur 36 essais, toutes justes : AU NIVEAU DU REPÈRE.
     _seance = _lignes(3, 36, 18, 1.0, 0.5, 0.82, 1.0)
-    chk(_seance["niveau"] == "bon" and "hasard 33 %" in _seance["chiffres"],
+    chk(_seance["niveau"] == "bon" and "hasard : 33 %" in _seance["chiffres"],
         f"18 justes sur 18 annonces, 50 % d'émission : vert, avec son hasard ({_seance})")
     # 2 annonces, 2 justes, sur 24 essais. Wilson [34 ; 100] passe 1/3 : une porte fondée sur lui
     # peindrait ORANGE, et la phrase dirait « Le décodage marche sur CETTE séance ». Le test exact
@@ -1324,8 +1324,9 @@ def _selftest():
             [(_bruit(rng, BESOIN), Essai(i, 0)) for i in range(1, 13)], FS)
         chk(False, "une séance sans plancher de repos doit être REFUSÉE")
     except ValueError as e:
-        chk("plancher de repos" in str(e) and "z" in str(e),
-            f"…en disant que le SSVEP décide sur z et que le plancher lui manque ({str(e)[:70]}…)")
+        chk("bruit au repos" in str(e) and "sans repos, aucune décision" in str(e),
+            f"…en disant que le SSVEP compare au bruit du repos, et qu'il lui manque "
+            f"({str(e)[:70]}…)")
 
     # === La ligne du temps, menée par la FENÊTRE ==============================================
     def marqueur(event, **champs):
@@ -1638,7 +1639,7 @@ def _selftest():
     with _ctx6.redirect_stdout(_io6.StringIO()):
         rt6.tick(moteur6, t6 + 0.25)
     chk(rt6.phase == "annule" and rt6.resultat is None and rt6._essais_vus == 1
-        and "plancher de repos" in (rt6.probleme or "") and rt6._flux is None
+        and "bruit au repos" in (rt6.probleme or "") and rt6._flux is None
         and espion6.lignes == [],
         f"🔴 repos inexploitable : le test S'ARRÊTE au premier essai, avec la raison du mode, flux "
         f"fermé, rien publié — au lieu de jouer 3,6 min pour rien ({rt6.phase}, "

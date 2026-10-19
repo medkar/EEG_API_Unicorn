@@ -3351,7 +3351,7 @@ def _smoke_calibration():
                 f"({retenu.get('verdict')})")
             refus_save = server.submit("save_calibration")
             chk(not refus_save.get("accepted")
-                and "aucune calibration" in (refus_save.get("reason") or ""),
+                and "aucun entraînement" in (refus_save.get("reason") or ""),
                 f"un second « Enregistrer » est refusé, avec un motif ({refus_save})")
 
             # 3ter. TOUS les fichiers d'un candidat sont déplacés, pas seulement le premier.
@@ -3491,7 +3491,7 @@ def _smoke_calibration():
                 f"({server.snapshot().get('calibration')})")
             refus_jeter = server.submit("discard_calibration")
             chk(not refus_jeter.get("accepted")
-                and "aucune calibration" in (refus_jeter.get("reason") or ""),
+                and "aucun entraînement" in (refus_jeter.get("reason") or ""),
                 f"un second « Jeter » est refusé, avec un motif ({refus_jeter})")
 
             # 5. Le moteur s'arrête SANS qu'on ait tranché : aucun candidat ne survit.
@@ -3551,7 +3551,7 @@ def _smoke_calibration_refus():
         f"mode inconnu : refusé, en le nommant ({r1.get('reason')})")
 
     r2 = froid.submit("start_calibration", id="ssvep")
-    chk(not r2.get("accepted") and "n'a pas de calibration" in (r2.get("reason") or ""),
+    chk(not r2.get("accepted") and "rien à entraîner" in (r2.get("reason") or ""),
         f"mode SANS calibration (SSVEP, la CCA n'apprend rien) : refusé ({r2.get('reason')})")
 
     # Ce contrôle porte sur un mode FABRIQUÉ : plus aucun mode réel n'a une calibration déclarée
@@ -3580,7 +3580,7 @@ def _smoke_calibration_refus():
         f"{[s.id for s in registry.MODES if s.calibration and s.calibration.runtime_cls is None]})")
 
     r4 = froid.submit("cancel_calibration")
-    chk(not r4.get("accepted") and "aucune calibration" in (r4.get("reason") or ""),
+    chk(not r4.get("accepted") and "aucun entraînement" in (r4.get("reason") or ""),
         f"annuler sans calibration en cours : refusé ({r4.get('reason')})")
 
     # 4bis. « Enregistrer » et « Jeter » sans candidat. Ce sont les deux boutons que la console
@@ -3589,7 +3589,7 @@ def _smoke_calibration_refus():
     for commande, mot in (("save_calibration", "enregistrer"), ("discard_calibration", "jeter")):
         r = froid.submit(commande)
         chk(not r.get("accepted") and mot in (r.get("reason") or "")
-            and "aucune calibration" in (r.get("reason") or ""),
+            and "aucun entraînement" in (r.get("reason") or ""),
             f"« {commande} » sans candidat : refusé, en disant ce qui manque ({r.get('reason')})")
 
     # 4ter. La validation AU CLIC. La console demande au moteur, AVANT le contrôle de liaison et
@@ -4464,7 +4464,7 @@ def _smoke_vol_marqueurs():
         finally:
             p300_models.modeles_disponibles = vrai_dispo
         raison = r.get("reason") or ""
-        chk(not r.get("accepted") and "l'entraînement de « P300 » est en cours" in raison,
+        chk(not r.get("accepted") and "entraînement de « P300 » est en cours" in raison,
             f"sens 2 — démarrer un mode dont la calibration tourne est REFUSÉ ({raison[:60]}…)")
         chk("même file de marqueurs" in raison and "choix disponible" not in raison,
             f"…pour LA bonne raison, et sans dépendre d'un modèle présent dans data/ ({raison})")

@@ -983,7 +983,7 @@ def _selftest():
         chk("contact" in verdict(0.85, perm_p=0.4),
             "...et le refus dit que ce n'est PAS un problème de contact : rallonger la séance et "
             "resaliner ne réparent pas la même panne")
-        chk("FAIBLE" in verdict(0.55, perm_p=0.01) and "saline" in verdict(0.55, perm_p=0.01),
+        chk("FAIBLE" in verdict(0.55, perm_p=0.01) and "eau salée" in verdict(0.55, perm_p=0.01),
             f"une AUC basse mais significative, elle, s'attaque par le SIGNAL "
             f"({verdict(0.55, perm_p=0.01)[:40]}…)")
         chk(verdict(None) and "non mesurée" in verdict(None),

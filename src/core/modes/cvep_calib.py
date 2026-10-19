@@ -1227,7 +1227,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
         chk(not _verifier_affichage(res),
             f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
-        chk("McNemar" in res.get("verdict", ""),
+        chk("les deux décodeurs diffèrent" in res.get("verdict", ""),
             f"…et le verdict rend le TEST, pas seulement l'écart entre deux pourcentages "
             f"({res.get('verdict')})")
         # La SEULE ligne visible par défaut doit dire « sur 37 décisions », pas « sur 90 essais » :
@@ -1505,7 +1505,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         rt_h.encaisser(moteur_h, moteur_h.t0 + 60.0, {"mode": "cvep", "event": "calib_end"})
         rt_h.tick(moteur_h, moteur_h.t0 + rt_h.warmup_s + 0.2)
         rt_h.tick(moteur_h, moteur_h.t0 + rt_h.warmup_s + 0.4)
-        chk(rt_h.phase == "annule" and "--calibrer" in rt_h.probleme,
+        chk(rt_h.phase == "annule" and "« Entraîner »" in rt_h.probleme,
             f"une fenêtre lancée SANS « --calibrer » publie une horloge et aucune consigne : le "
             f"refus NOMME cette cause, la plus banale ({rt_h.probleme[:120]})")
 
@@ -1553,7 +1553,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         f"…et cet écart de POURCENTAGE réel mais NON DÉFENDABLE ne nomme PERSONNE ({mn_reel})")
     v_reel = verdict(float(r_reel.mean()), mn_reel)
     chk("INDISCERNABLES" in v_reel and "0.727" in v_reel.replace(",", ".")
-        and "bruit" in v_reel,
+        and "peut venir du hasard" in v_reel,
         f"…et le verdict le DIT, avec son p : il rend le TEST, pas l'écart des deux pourcentages "
         f"({v_reel})")
 
@@ -1713,8 +1713,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     chk("46 %" in HONNETETE and "71 %" in HONNETETE,
         "…donne le COUPLE que le moteur produira vraiment (~46 % d'émission, ~71 % de justesse à "
         "l'émission), parce que comparer le mauvais dénominateur fabrique un verdict faux")
-    chk("jamais été décodé au casque" in HONNETETE.lower(),
-        "…et dit que le c-VEP n'a jamais été décodé au casque par le moteur")
+    chk("une seule personne" in HONNETETE.lower(),
+        "…et dit que ces repères viennent d'une seule personne")
     chk("trois classes" not in HONNETETE and "sélection" not in HONNETETE
         and "0,776" not in HONNETETE,
         "…et ce n'est celle d'AUCUN autre mode : ni les trois classes du MI, ni la sélection du "
