@@ -742,7 +742,7 @@ def _selftest():
             f"les réglages d'« Entraîner » : la bande de toujours et FBCSP décoché par défaut "
             f"({raison or valeurs})")
         chk(valeurs and tuple(valeurs.get("taches", ())) == ("GAUCHE", "DROITE"),
-            f"…et DEUX tâches par défaut, les poings (2026-10-15) "
+            f"…et DEUX tâches par défaut, les poings "
             f"({valeurs and valeurs['taches']})")
 
         # --- LES TÂCHES SE RÈGLENT ---------------------------------------------------------
@@ -804,7 +804,8 @@ def _selftest():
             f"({getattr(appris, 'mise_en_route_s', None)}, {archivee}, {res_l.get('filtre')})")
         chk(validate(CALIB, {})[0]["mise_en_route_s"] == MI_CUE_S == 3.0
             and validate(CALIB, {"mise_en_route_s": 0.5})[0] is None,
-            "…3 s par défaut (le constat du 2026-07-22), et rien sous 1 s : refusé par le contrat")
+            "…3 s par défaut (il faut ~2 s pour lancer l'imagination), et rien sous 1 s : refusé "
+            "par le contrat")
         chk(res_l.get("hasard") == 1 / 3,
             f"le hasard suit le nombre de tâches ({res_l.get('hasard')})")
 
@@ -827,7 +828,7 @@ def _selftest():
             f"une coupure basse sous 4 Hz et une haute au-dessus de 40 Hz sont REFUSÉES : dérive "
             f"et EMG ({refus_bas} | {refus_haut})")
         chk(validate(CALIB, {})[0]["lda_shrinkage"] is False,
-            "la LDA à shrinkage est DÉCOCHÉE par défaut (2026-10-15 : jamais mesurée utile ici)")
+            "la LDA à shrinkage est DÉCOCHÉE par défaut (jamais mesurée utile sur ce casque)")
         valeurs, raison = validate(CALIB, {"trials_per_class": 10, "bande_bas": 4.0,
                                            "bande_haut": 40.0, "fbcsp": True,
                                            "lda_shrinkage": True})

@@ -130,7 +130,7 @@ def _selftest():
 
     # 5. Les trois pauses sont celles sous lesquelles le modèle a été enregistré.
     chk((PAUSE_INTER_PAS_S, PAUSE_FIN_COURSE_S, PAUSE_NOUVELLE_COURSE_S) == (0.45, 0.7, 0.9),
-        "les trois pauses valent 0,45 / 0,7 / 0,9 s — les durées du modèle du 2026-07-24 "
+        "les trois pauses valent 0,45 / 0,7 / 0,9 s — les durées du modèle de référence "
         "(AUC 0,776). Les changer sans réentraîner décale le feedback dans l'époque, en silence")
 
     print(f"[errp-track] VERDICT : {'OK' if ok else 'PROBLÈME'}")

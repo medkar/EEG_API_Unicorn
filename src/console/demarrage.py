@@ -617,8 +617,8 @@ def _selftest():
     chk(titre_u != titre_s and "SANS casque" in titre_s,
         f"le board de test s'annonce comme tel dans son TITRE ({titre_s})")
     chk("FABRIQUÉ" in aide_s and "jamais" in aide_s.lower(),
-        "…et son aide dit que le signal est fabriqué et ne mesure rien — ce dépôt a déjà dû "
-        "corriger un écran qui laissait croire qu'un board de test était observé")
+        "…et son aide dit que le signal est fabriqué et ne mesure rien : rien ne doit laisser "
+        "croire qu'un board de test observe un cerveau")
 
     print(f"[demarrage] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

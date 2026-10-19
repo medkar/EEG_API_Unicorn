@@ -932,7 +932,7 @@ def _selftest():
         chk(rt.point_de_fonctionnement is not None
             and set(rt.point_de_fonctionnement) == {"tnr_target", "seuil", "tpr", "tnr"},
             f"point_de_fonctionnement expose EXACTEMENT les 4 clés que `DecodedErrPPublisher` "
-            f"publie dans les métadonnées (tâche 4) ({rt.point_de_fonctionnement})")
+            f"publie dans les métadonnées ({rt.point_de_fonctionnement})")
         chk(rt.point_de_fonctionnement["tnr_target"] == values["tnr_target"]
             and rt.point_de_fonctionnement["seuil"] == seuil_reel,
             f"...avec la cible demandée et le seuil qu'elle a produit ({rt.point_de_fonctionnement})")
@@ -1365,7 +1365,7 @@ def _selftest():
             moteur_derive.recent_ts = ts_continu[fin - n_keep:fin]
             rt2.tick(moteur_derive, lsl_ts=float(ts_continu[fin - 1]) + 0.8, now=0.2 * k)
         chk(rt2.phase == "running",
-            f"repos conclu (dérive ordinaire comprise) pour la preuve rouge-puis-vert ({rt2.phase})")
+            f"repos conclu (dérive ordinaire comprise) ({rt2.phase})")
 
         # La suite du MÊME tampon, à 4 s plus loin : « juste un autre instant de la même séance ».
         fin = n_keep + int(4.0 * fs)
@@ -1378,8 +1378,8 @@ def _selftest():
         e_derive, _s_derive, _seuil_derive, art_derive, _t_derive = rt2._out.lignes[-1]
         chk(art_derive == 0,
             f"⚠️ une époque SAINE (dérive ORDINAIRE, rien d'anormal) n'est PAS rejetée à tort — "
-            f"avec un repos FILTRÉ contre une époque brute (défaut du tour 1), sa référence "
-            f"s'effondre et le même scénario rejetait 30 fois sur 30 (artefact publié={art_derive})")
+            f"avec un repos FILTRÉ contre une époque brute, sa référence s'effondrerait et ce "
+            f"scénario serait rejeté 30 fois sur 30 (artefact publié={art_derive})")
         chk(e_derive in (0, 1),
             f"...et un VRAI verdict sort (score comparé au seuil), pas un -1 déguisé ({e_derive})")
 

@@ -1212,8 +1212,8 @@ def _selftest():
     chk(_par_cible(FREQS, _res3["decisions"], _melange) == _pc,
         "…même si le compte-rendu du plancher liste les cibles dans un autre ordre")
     chk("comparable" in _res3["honnetete"] and "2026-07-27" in _res3["honnetete"],
-        "…et la phrase d'honnêteté DIT que ces chiffres ne se comparent plus tels quels au "
-        "100 %/44 % du 2026-07-27, pris sous l'ancienne règle (σ sur 8 voies, trio du dépôt)")
+        "…et la phrase d'honnêteté DIT que ces chiffres ne se comparent pas tels quels au repère "
+        "100 %/44 %, mesuré sous une autre règle (σ sur 8 voies, trio du dépôt)")
 
     # === Le verdict : les DEUX chiffres, et l'effectif qui les porte ==========================
     chk(f"{res['n_essais']} essais" in res["verdict"],

@@ -1052,7 +1052,7 @@ def _selftest():
             "géométrie vide, il n'avale pas tout le rapport")
         chk("McNemar apparié" in txt_c,
             f"...et la comparaison des deux décodeurs passe par McNemar APPARIÉ, pas par les deux "
-            f"pourcentages côte à côte que `bd3b588` a bannis de l'écran de calibration "
+            f"pourcentages côte à côte que l'écran de calibration n'affiche pas "
             f"({[l.strip() for l in txt_c.splitlines() if 'McNemar' in l]})")
         chk("OPTIMISTE" in txt_c and "choisi sur ces décisions" in txt_c,
             "...et le tableau dit, LÀ OÙ IL EST LU, que le couple qu'on y choisira aura un point "

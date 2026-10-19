@@ -2355,7 +2355,7 @@ def _smoke():
         f"le nom du modèle produit est donné ({cal.details.text()})")
     chk(mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0) in cal.details.text()
         and "FBCSP" in cal.details.text() and "60 Hz" in cal.details.text(),
-        f"…et AVEC QUOI il a appris : méthode, bande, coupe-bande (2026-09-30) "
+        f"…et AVEC QUOI il a appris : méthode, bande, coupe-bande "
         f"({cal.details.text()!r})")
     # La phrase d'honnêteté vient du RÉSULTAT du moteur, pas de la page : chaque entraînement porte
     # la sienne (celle du MI parle de tâches, celle du P300 de cibles), et la page est la même pour
@@ -2623,8 +2623,8 @@ def _smoke():
         f"({cal.resultat.text()})")
     chk("0.0" not in cal.resultat.text() and "0,0" not in cal.resultat.text()
         and "0 %" not in cal.resultat.text(),
-        f"et surtout pas « 0 % » — le second effondrement, indépendant de celui du moteur, que "
-        f"ce correctif ferme ({cal.resultat.text()})")
+        f"et surtout pas « 0 % », qui se lirait comme un vrai score nul "
+        f"({cal.resultat.text()})")
 
     # 4. Abandon : pas de modèle, et la raison.
     annule = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "annule",
@@ -3421,7 +3421,7 @@ def _smoke():
     mes.bloc.details.setChecked(True)
     console.apply_state({**state, "mesure": fini})       # le tour de `QTimer` suivant
     chk(mes.verdict.isVisibleTo(mes) and mes.honnetete.isVisibleTo(mes),
-        "…qu'un clic RAMÈNE, et qui restent ouvertes au rafraîchissement suivant (C3, M4)")
+        "…qu'un clic RAMÈNE, et qui restent ouvertes au rafraîchissement suivant")
     mes.bloc.details.setChecked(False)
     chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
         f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
@@ -4070,8 +4070,8 @@ def _smoke():
                 form_cvep._params_par_cle[c]["label"])
             and form_cvep.lignes[c].indexOf(form_cvep.aides[c][0]) < 0
             for c in form_cvep.aides),
-        "…posée JUSTE APRÈS le libellé du réglage — pas au bout de la ligne du champ, ni sous "
-        "lui, où était la ligne grise")
+        "…posée JUSTE APRÈS le libellé du réglage — ni au bout de la ligne du champ, ni sous "
+        "lui")
     chk(all(_html.escape(t, quote=False) in form_cvep.champs[c].toolTip()
             for c, t in contrat_cvep.items() if c in form_cvep.champs),
         "…et le champ lui-même porte la même infobulle")
@@ -4234,7 +4234,7 @@ def _smoke():
     chk(page.formulaire.champs["refresh_hz"].value() == 30.0
         and page.formulaire.values()["freqs"] == [15.0, 10.0],
         f"…ET la saisie faite avant « Mesurer » a survécu à l'aller-retour : sans quoi « Tester » "
-        f"testerait 60 Hz et le trio du dépôt, effacés en silence (constat I4) "
+        f"testerait 60 Hz et le trio du dépôt, effacés en silence "
         f"({page.formulaire.champs['refresh_hz'].value()} Hz, {page.formulaire.values()['freqs']})")
     # On rend l'écran de 60 Hz à la suite, qui teste des diviseurs de 60.
     page.formulaire.champs["refresh_hz"].setValue(60.0)
@@ -5056,7 +5056,7 @@ def _smoke():
     n_mort = _sauts(fige_coupure, lambda: False)
     chk(n_mort == 0,
         f"moteur MORT sur le casque : le contenu ne bouge plus à chaque rafraîchissement "
-        f"({n_mort} déplacement(s) en 3 rafraîchissements ; 8 avant le correctif)")
+        f"({n_mort} déplacement(s) en 3 rafraîchissements)")
     # Et une icône qui APPARAÎT ou DISPARAÎT (batterie inconnue pendant une coupure, puis
     # revenue) ne déplace rien non plus : les icônes gardent leur place, vides quand le moteur
     # ne sait pas. Sinon chaque coupure ferait sauter la fenêtre deux fois.
@@ -5066,7 +5066,7 @@ def _smoke():
                       entre=lambda i: sans_batterie if i % 2 == 0 else sur_casque)
     chk(n_icones == 0,
         f"…et une batterie qui devient inconnue puis revient ne déplace rien non plus "
-        f"({n_icones} déplacement(s) ; 4 avant le correctif)")
+        f"({n_icones} déplacement(s))")
 
     # --- 🔴 LA LARGEUR NE BOUGE PAS SANS L'UTILISATEUR ---------------------------------------
     # La largeur de la fenêtre ne doit pas changer selon les messages du bandeau. Une étiquette
@@ -5120,7 +5120,7 @@ def _smoke():
     chk(pages_mode and _exige(plus_large) <= accueil,
         f"aucune page de mode — ni son corps qui défile — n'exige plus de largeur que l'accueil "
         f"(la plus exigeante : {_exige(plus_large)} px, accueil {accueil} px ; console "
-        f"{large.minimumSizeHint().width()} px, 1 538 avant le correctif)")
+        f"{large.minimumSizeHint().width()} px)")
     # La liste des modèles MONTRE le nom du fichier, mais ENVOIE le chemin complet, et sa largeur
     # ne suit pas la longueur des chemins.
     from PySide6.QtCore import QLocale as _QLocale, Qt as _Qt
@@ -5599,7 +5599,7 @@ def _smoke():
     #    produit est vérifiée juste après, dans le registre.
     avec_essai = sorted(mid for mid, p in console.pages.items() if p.bouton_essayer is not None)
     chk(avec_essai == ["cvep", "mi", "p300", "ssvep"],
-        f"« Tester librement » est sur les pages c-VEP, MI (depuis le 2026-10-15), P300 et SSVEP "
+        f"« Tester librement » est sur les pages c-VEP, MI, P300 et SSVEP "
         f"({avec_essai})")
     sans_essai = [mid for mid in ("errp", "neuro", "raw")
                   if mid in console.pages and console.pages[mid].bouton_essayer is None]

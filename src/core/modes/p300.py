@@ -798,8 +798,7 @@ def _selftest():
         chk(_channels(values) == list(p300_channel_labels(P300_N_TARGETS)),
             f"les voies sont celles de la géométrie à {P300_N_TARGETS} cibles ({_channels(values)})")
         chk({p.key for p in SPEC.params} == {"model", "stream_in"},
-            "P300_SELECT_MARGIN n'est PAS un réglage exposé : une constante de protocole ne "
-            "bouge pas dans ce chantier")
+            "P300_SELECT_MARGIN n'est PAS un réglage exposé : c'est une constante du protocole")
 
         # 3. `pre_s`/`post_s` sont des ATTRIBUTS DE CLASSE — c'est ce que `registry.check()` lit
         # pour comparer `marker_epoch_s` (le tampon que le moteur DIMENSIONNE) à ce que ce

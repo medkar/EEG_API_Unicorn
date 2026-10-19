@@ -387,7 +387,7 @@ def _selftest():
     # l'ABSENCE de l'argument, jamais sur sa valeur.
     chk(rt.state(now=0.0).get("croix", "absente") is None,
         "un protocole qui ne déclare pas de croix publie `croix: None` : la page ne lui réserve "
-        "aucune place (2026-10-15)")
+        "aucune place")
     chk(rt.state(now=0.0)["restant_s"] == round(rt.restant_s(0.0), 1) > 0.0,
         f"now=0.0 est une horloge valide, distincte de l'absence d'horloge "
         f"({rt.state(now=0.0)['restant_s']})")

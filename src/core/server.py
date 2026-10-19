@@ -3326,7 +3326,7 @@ def _smoke_calibration():
             mi_models.modeles_disponibles = vrai_catalogue_mi
             magasin_mi = (server.snapshot().get("reglages") or {}).get("mi") or {}
             chk(bool(retenu.get("modele")) and magasin_mi.get("model") == retenu.get("modele"),
-                f"🔴 C1 : « Enregistrer » pose le modèle ENREGISTRÉ comme réglage « model » du mode "
+                f"🔴 « Enregistrer » pose le modèle ENREGISTRÉ comme réglage « model » du mode "
                 f"dans le magasin — c'est lui que « Tester » relit ; l'ancien "
                 f"({os.path.basename(occupe)}) n'y reste pas "
                 f"({os.path.basename(str(magasin_mi.get('model')))})")
@@ -4039,7 +4039,7 @@ def _smoke_liaison():
             f"cible en boucle sur un tampon figé ({decisions['n'] - avant} décision(s))")
         chk(fil.is_alive(),
             "🔴 le moteur SURVIT à une réouverture ratée, qui a libéré la session (une batterie à "
-            "plat le tuait là, au casque, le 2026-10-01)")
+            "plat, par exemple)")
         chk(lectures_coupees["n"] == 0,
             f"…parce qu'il ne LIT plus la session pendant la coupure : elle peut être libérée, et "
             f"la relire à chaque tour ne ferait que faire lever BrainFlow "
@@ -5734,8 +5734,8 @@ def _smoke_tampon_horodate():
     # L'ALIGNEMENT lui-même, contre le dernier bloc réellement lu.
     bloc = srv.new_block
     chk(bloc is not None,
-        "le dernier tour de boucle a bien lu un bloc — désormais GARANTI, le producteur en rend "
-        "à chaque tour (avant, un tour à vide emportait les trois assertions suivantes)")
+        "le dernier tour de boucle a bien lu un bloc — GARANTI, le producteur en rend à chaque "
+        "tour (sans bloc, les trois assertions suivantes ne vérifieraient rien)")
     if bloc is not None:
         eeg, ts_lsl = bloc
         n = len(eeg)

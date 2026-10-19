@@ -464,7 +464,7 @@ def _selftest():
             and "CVEP_LAG_ROTATION" in (raison_rot or ""),
             f"...et à CVEP_LAG_ROTATION NON NUL ce refus reste présenté comme un VRAI défaut à "
             f"réparer, jamais comme un cas attendu : la calibration écrit ses codes dans l'ordre "
-            f"du plan depuis le 2026-08-21, donc un modèle frais est ACCEPTÉ à toute rotation "
+            f"du plan, donc un modèle frais est ACCEPTÉ à toute rotation "
             f"({raison_rot})")
 
         # 2 quater. `pyntbci` ABSENT : le cas est NOMMÉ, et les modèles rCCA ne s'évaporent pas
