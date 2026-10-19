@@ -166,7 +166,10 @@ class MesurePage(QWidget):
             tr("pages.mesure.origine", mode=mode["label"]) if self.depuis_le_mode else "")
         self.origine.setWordWrap(True)
         self.origine.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-        self.origine.setVisible(bool(self.depuis_le_mode))
+        # Caché seulement : `setVisible(True)` sur un widget SANS parent en ferait une fenêtre à
+        # part, qui s'ouvre et se referme à l'écran ; il apparaîtra avec sa page.
+        if not self.depuis_le_mode:
+            self.origine.hide()
         # Un modèle ENTRAÎNÉ mais pas encore ENREGISTRÉ n'est pas dans la liste : il vit dans un
         # dossier temporaire. « Tester avant de garder » est le geste naturel, mais il testerait
         # en silence le modèle PRÉCÉDENT : la page le dit.

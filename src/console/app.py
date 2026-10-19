@@ -6105,8 +6105,27 @@ def _smoke():
             self[cle] = valeur
 
     prefs = _Prefs()
+    from PySide6.QtCore import QEvent as _QEvent, QObject as _QObject
+
+    class _Parasites(_QObject):
+        """Toute fenêtre de premier niveau qui s'AFFICHE. Un widget rendu visible avant d'avoir un
+        parent en est une : elle s'ouvre et se referme à l'écran, au lancement comme à chaque
+        changement de langue (les pages sont reconstruites)."""
+
+        def __init__(self):
+            super().__init__()
+            self.vues = []
+
+        def eventFilter(self, objet, evenement):  # noqa: N802 - nom imposé par Qt
+            if evenement.type() == _QEvent.Show and objet.isWidgetType() and objet.isWindow():
+                self.vues.append(objet)
+            return False
+
+    parasites = _Parasites()
+    app.installEventFilter(parasites)
     bilingue = Console(None, fabrique_fenetre=_fabrique, memoire=_Memoire(prefs))
     bilingue.timer.stop()        # sans moteur : rien à sonder
+    bilingue.show()
     menu = [a.text() for a in bilingue.grid.bouton_langue.menu().actions()]
     chk(bilingue.grid.bouton_langue.text() == "🌐 Français" and menu == ["English", "Français"],
         f"l'accueil porte l'icône de langue, et son menu nomme chaque langue dans SA langue "
@@ -6132,6 +6151,19 @@ def _smoke():
     bilingue.changer_langue("fr")
     chk(prefs.get("langue") == "fr" and bilingue.pages["ssvep"].bloc_regler.title() == "1. Régler",
         "…et l'essai fini, retour au français, retenu lui aussi")
+    for mid in bilingue.pages:
+        bilingue.show_mode(mid)
+    for mid in bilingue.calib_pages:
+        bilingue.show_calibration(mid)
+    for mid in bilingue.mesure_pages:
+        bilingue.show_mesure(mid)
+    app.processEvents()
+    app.removeEventFilter(parasites)
+    bilingue.hide()
+    etrangeres = [type(f).__name__ for f in parasites.vues if f is not bilingue]
+    chk(not etrangeres,
+        f"aucune fenêtre parasite ne s'ouvre et ne se referme — construction, deux changements de "
+        f"langue, toutes les pages visitées ({etrangeres})")
     os.environ["EEG_LANGUE"] = "fr"
 
     app.processEvents()

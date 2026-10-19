@@ -315,7 +315,6 @@ class ParamsForm(QWidget):
         bas.addStretch(1)
         bas.addWidget(self.bouton_defauts)
         self.ligne_bas = bas
-        self._montrer_defauts()
 
         # `None` quand il y a des réglages : un QLabel construit sans parent serait une fenêtre
         # de premier niveau en Qt, pas un widget inerte.
@@ -331,6 +330,9 @@ class ParamsForm(QWidget):
         layout.addWidget(self.refus)
         layout.addWidget(self.avertissement)
         layout.addWidget(self.confirmation)
+        # APRÈS le rattachement au formulaire : rendu visible quand il n'a pas encore de parent,
+        # le bouton serait une fenêtre à part, qui s'ouvre et se referme à l'écran.
+        self._montrer_defauts()
 
         # Un réglage qui ne compte que sous condition (`actif_si`) se grise quand elle tombe : le
         # rafraîchissement de l'écran, quand les cibles du SSVEP sont des LED. La règle est au

@@ -456,7 +456,10 @@ class ModeGrid(QWidget):
 
         self.titre_mesures = QLabel(tr("console.grille.titre_avant_tout"))
         self.titre_mesures.setWordWrap(True)
-        self.titre_mesures.setVisible(bool(mesures))
+        # Caché seulement : `setVisible(True)` sur un widget SANS parent en ferait une fenêtre à
+        # part, qui s'ouvre et se referme à l'écran.
+        if not mesures:
+            self.titre_mesures.hide()
 
         # La sortie du produit, vue du DEHORS. Ce n'est ni un mode ni une mesure — c'est le
         # réseau —, donc pas une tuile de plus : une ligne à part, en bas, qui répond à la seule
