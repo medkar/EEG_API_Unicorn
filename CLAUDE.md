@@ -162,7 +162,7 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   se grise, « Proposer » choisit au demi-hertz (`config.PAS_CIBLES_PHYSIQUES_HZ`), et les deux
   « Tester » sont refusés par le moteur et grisés par la page : notre fenêtre fait clignoter des
   disques à l'écran. Trois champs DÉCLARATIFS du contrat portent tout ça, la console ne fait que
-  les lire : `Param.libelles` (ce que la liste montre), `Param.actif_si` (quand un réglage compte)
+  les lire : `Param.libelles` (le nom de chaque option ; un choix qui en a s'affiche en boutons radio), `Param.actif_si` (quand un réglage compte)
   et `ModeSpec.tests_si` (quand les tests ont un sens, avec la raison). Le même jour, la page SSVEP
   a perdu son second « Proposer » (sous le rafraîchissement, qui faisait le même calcul que celui du
   pic alpha). **Jamais joué avec de vraies LED.**

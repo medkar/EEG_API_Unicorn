@@ -13,10 +13,10 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QStyle,
-                               QStyledItemDelegate, QStyleOptionComboBox, QStylePainter,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
+                               QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QRadioButton, QSpinBox, QStyle, QStyledItemDelegate,
+                               QStyleOptionComboBox, QStylePainter, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import nombre, tr  # noqa: E402
@@ -102,6 +102,54 @@ class ListeSansMolette(_SansMolette, QComboBox):
         option.currentText = self.fontMetrics().elidedText(
             texte_affiche(option.currentText), Qt.ElideMiddle, max(0, zone.width()))
         peintre.drawControl(QStyle.CE_ComboBoxLabel, option)
+
+
+class ChoixRadio(_SansMolette, QWidget):
+    """Un choix FERMÉ à libellés (« un écran » / « des cibles physiques »), en boutons radio.
+
+    Toutes les options restent visibles d'un coup d'œil, sans ouvrir de menu. Il offre la même
+    interface que la liste pour ce que le formulaire en utilise (`findData`, `setCurrentIndex`,
+    `currentData`, `currentText`, `currentIndexChanged`) : le formulaire, la page et leurs
+    autotests le lisent comme une liste.
+    """
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, choix, libelles):
+        super().__init__()
+        self._choix = list(choix)
+        self._groupe = QButtonGroup(self)
+        rang = QHBoxLayout(self)
+        rang.setContentsMargins(0, 0, 0, 0)
+        for i, libelle in enumerate(libelles):
+            bouton = QRadioButton(str(libelle))
+            self._groupe.addButton(bouton, i)
+            rang.addWidget(bouton)
+        rang.addStretch(1)
+        if self._choix:
+            self._groupe.button(0).setChecked(True)
+        self._groupe.idToggled.connect(self._coche)
+
+    def _coche(self, i, coche):
+        if coche:
+            self.currentIndexChanged.emit(i)
+
+    def findData(self, valeur):  # noqa: N802 - même nom que QComboBox
+        return self._choix.index(valeur) if valeur in self._choix else -1
+
+    def setCurrentIndex(self, i):  # noqa: N802
+        self._groupe.button(i).setChecked(True)
+
+    def currentIndex(self):  # noqa: N802
+        return self._groupe.checkedId()
+
+    def currentData(self):  # noqa: N802
+        i = self._groupe.checkedId()
+        return self._choix[i] if i >= 0 else None
+
+    def currentText(self):  # noqa: N802
+        bouton = self._groupe.checkedButton()
+        return bouton.text() if bouton is not None else ""
 
 
 class EntierSansMolette(_SansMolette, QSpinBox):
@@ -289,7 +337,7 @@ class ParamsForm(QWidget):
         # contrat ; ce formulaire ne fait que la lire.
         for param in self.params:
             source = self.champs.get((param.get("actif_si") or [None])[0])
-            if isinstance(source, QComboBox):
+            if isinstance(source, (QComboBox, ChoixRadio)):
                 source.currentIndexChanged.connect(self._maj_actifs)
             elif isinstance(source, QCheckBox):
                 source.toggled.connect(self._maj_actifs)
@@ -359,6 +407,12 @@ class ParamsForm(QWidget):
         if kind == "bool":
             champ = QCheckBox()
             champ.setChecked(bool(param["default"]))
+            return champ
+        if kind == "choice" and param.get("libelles"):
+            # Un choix fermé dont le contrat nomme chaque option : des boutons radio.
+            champ = ChoixRadio(param["choices"], param["libelles"])
+            if param["default"] is not None:
+                self._choisir(param, champ, param["default"])
             return champ
         if kind == "choice":
             champ = ListeSansMolette()

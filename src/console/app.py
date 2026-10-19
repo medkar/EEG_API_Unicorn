@@ -4319,7 +4319,11 @@ def _smoke():
 
     # Cibles PHYSIQUES (des LED) : la liste MONTRE un libellé et envoie la valeur du contrat ; le
     # rafraîchissement se grise, les deux « Tester » aussi, avec la raison que le moteur donne.
+    from PySide6.QtWidgets import QRadioButton as _QRadioButton
     cibles = page.formulaire.champs["cibles"]
+    chk([r.text() for r in cibles.findChildren(_QRadioButton)]
+        == [tr("mode.ssvep.cibles.ecran"), tr("mode.ssvep.cibles.physiques")],
+        "le support des cibles est un choix en boutons radio, les deux options visibles")
     chk(cibles.currentText() == tr("mode.ssvep.cibles.ecran")
         and page.formulaire.values()["cibles"] == "ecran"
         and page.formulaire.champs["refresh_hz"].isEnabled()
