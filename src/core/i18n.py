@@ -7,11 +7,12 @@ pouvoir ajouter des langues facilement.
     src/core/langues/fr/modes.json      # libellés, résumés, aides et briefings des modes
     src/core/langues/fr/mesures.json    # les mesures et les tests : briefings, verdicts
     src/core/langues/fr/moteur.json     # refus et réponses du moteur
-    src/core/langues/fr/fenetres.json   # les fenêtres de `src/stimulus/` (la seule migrée : le MI)
+    src/core/langues/fr/fenetres.json   # les fenêtres de `src/stimulus/`
 
 Un dossier par langue, plusieurs fichiers par dossier (ils sont FUSIONNÉS ; une clé présente
-dans deux fichiers est une faute). **Ajouter une langue = copier `fr/`, traduire les valeurs, et
-lancer la console avec `EEG_LANGUE=en`.** Une clé absente d'une langue retombe sur le français.
+dans deux fichiers est une faute). Le français est la langue SOURCE : celle des autotests, et
+celle où retombe une clé absente. **Ajouter une langue = copier `fr/` et traduire les valeurs** :
+elle apparaît dans le menu de langue de la console. Le moteur seul la lit dans `EEG_LANGUE`.
 
 Dans le code, un texte s'écrit `tr("mode.ssvep.label")`, ou avec des valeurs :
 `tr("moteur.refus.frequence", f=17, ecran=60)` pour `"{f} Hz ne divise pas {ecran} Hz"`.
@@ -20,15 +21,18 @@ Dans le code, un texte s'écrit `tr("mode.ssvep.label")`, ou avec des valeurs :
 (refus, verdicts, aides des réglages, briefings), et `core` n'importe rien du dépôt hors de
 lui-même. La console, elle, a le droit d'importer `core` : un seul chargeur sert les deux.
 
-⚠️ La langue est lue UNE fois, au démarrage : les libellés des contrats sont résolus à l'import.
-Changer de langue = relancer.
+Changer de langue EN COURS de route : les libellés des contrats (modes, réglages, aides) sont
+résolus à l'import, dans la langue de départ. Chaque texte rendu par `tr` est donc un `Texte`, qui
+se souvient de sa clé et de ses valeurs, et `retraduit()` le relit dans la langue courante : le
+catalogue que le moteur sérialise pour la console passe par lui, et la console reconstruit ses
+pages. Seul l'AFFICHAGE change : noms de flux, voies et marqueurs ne se traduisent jamais.
 
 Ce que `controle()` vérifie, et que `server.py --smoke` exécute (`[smoke-textes]`) :
   - chaque `tr("…")` du dépôt nomme une clé qui EXISTE, avec une clé LITTÉRALE (une clé calculée
     échapperait à toute vérification) et exactement les `{valeurs}` que le texte attend ;
   - aucune clé du français n'est orpheline (un texte que plus rien n'affiche se traduirait pour
     rien) ;
-  - une autre langue n'a que des clés du français, avec les mêmes `{valeurs}` ;
+  - une autre langue a TOUTES les clés du français, et aucune autre, avec les mêmes `{valeurs}` ;
   - la console ne passe aucun texte EN DUR à un widget (`setText`, `QLabel`, `QPushButton`…).
 """
 
@@ -46,6 +50,66 @@ _cache = {}
 def langue():
     """La langue demandée (`EEG_LANGUE`), ou le français."""
     return _os.environ.get("EEG_LANGUE", LANGUE_DEFAUT) or LANGUE_DEFAUT
+
+
+def langues_disponibles():
+    """Les codes des langues livrées (un dossier de catalogue non vide), triés."""
+    if not _os.path.isdir(DOSSIER):
+        return []
+    return sorted(code for code in _os.listdir(DOSSIER)
+                  if _os.path.isdir(_os.path.join(DOSSIER, code))
+                  and any(n.endswith(".json") for n in _os.listdir(_os.path.join(DOSSIER, code))))
+
+
+def choisir_langue(code):
+    """Passe l'affichage dans la langue `code`. Lève `ValueError` sur une langue non livrée.
+
+    Par la variable d'environnement : `langue()` la relit à chaque `tr`, le fil du moteur compris,
+    et les fenêtres de stimulus lancées ENSUITE en héritent.
+    """
+    if code not in langues_disponibles():
+        raise ValueError(f"langue inconnue : {code!r} (livrées : {', '.join(langues_disponibles())})")
+    _os.environ["EEG_LANGUE"] = code
+
+
+def nom_de_langue(code):
+    """Le nom d'une langue écrit DANS cette langue (« English », « Français ») : c'est sous ce nom
+    qu'on la reconnaît dans un menu, quelle que soit la langue affichée."""
+    return catalogue(code).get("console.langue.nom", code)
+
+
+class Texte(str):
+    """Un texte affiché qui se souvient de sa clé et de ses valeurs, pour être RETRADUIT.
+
+    C'est un `str` : il s'affiche, se compare et se concatène comme tel. Mais une concaténation,
+    un f-string ou un `.format` rendent un `str` ordinaire, qui ne se retraduit plus : seul ce que
+    `tr` rend TEL QUEL change de langue avec `retraduit()`.
+    """
+
+    def __new__(cls, texte, cle, valeurs):
+        objet = super().__new__(cls, texte)
+        objet.cle = cle
+        objet.valeurs = valeurs
+        return objet
+
+    def __reduce__(self):
+        # Copié ou enregistré (pickle, joblib), il redevient un `str` : un modèle sur le disque ne
+        # doit pas dépendre de cette classe.
+        return (str, (str(self),))
+
+
+def retraduit(x):
+    """`x` dans la langue COURANTE. Un `Texte` est relu dans le catalogue, valeurs comprises ; un
+    dict, une liste ou un tuple le sont élément par élément ; le reste est rendu tel quel."""
+    if isinstance(x, Texte):
+        return _resoudre(x.cle, {nom: retraduit(v) for nom, v in x.valeurs.items()})
+    if isinstance(x, dict):
+        return {k: retraduit(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [retraduit(v) for v in x]
+    if isinstance(x, tuple):
+        return tuple(retraduit(v) for v in x)
+    return x
 
 
 def catalogue(code):
@@ -77,13 +141,19 @@ def tr(cle, /, **valeurs):
     Ne lève jamais : une clé introuvable s'affiche `⟦clé⟧`, visible à l'écran sans emporter le fil
     Qt. `controle()` garantit qu'aucune ne manque dans le dépôt.
     """
+    return _resoudre(cle, valeurs)
+
+
+def _resoudre(cle, valeurs):
+    """Le corps de `tr`, pour une clé connue seulement à l'exécution (`retraduit`). Ailleurs, on
+    écrit `tr("…")` : `controle()` ne vérifie que les clés écrites en toutes lettres."""
     for code in (langue(), LANGUE_DEFAUT):
         texte = catalogue(code).get(cle)
         if texte is not None:
             try:
-                return texte.format(**valeurs)
+                return Texte(texte.format(**valeurs), cle, valeurs)
             except (KeyError, IndexError, ValueError):
-                return texte
+                return Texte(texte, cle, valeurs)
     return f"⟦{cle}⟧"
 
 
@@ -243,6 +313,11 @@ def controle(racine_src, exiger_zero_en_dur=True):
             except (ValueError, OSError, _json.JSONDecodeError) as e:
                 fautes.append(f"la langue « {code} » ne se charge pas : {e}")
                 continue
+            manquantes = sorted(set(fr) - set(autre))
+            if manquantes:
+                fautes.append(f"langue « {code} » : {len(manquantes)} clé(s) du français "
+                              f"manquent (ex. {', '.join(manquantes[:3])}) — elles s'afficheraient "
+                              f"en français")
             for cle, texte in autre.items():
                 if cle not in fr:
                     fautes.append(f"langue « {code} » : « {cle} » n'existe pas en français")
@@ -288,6 +363,16 @@ def _selftest():
         del _os.environ["EEG_LANGUE"]
         chk(tr("x.absente") == "⟦x.absente⟧", "une clé introuvable se VOIT, sans lever")
         chk(tr("x.bonjour") == "Bonjour {nom}", "une valeur oubliée ne fait pas tomber l'écran")
+        # Un texte résolu en français se RETRADUIT après un changement de langue, valeurs comprises.
+        figee = tr("x.bonjour", nom="Léa")
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(isinstance(figee, Texte) and figee == "Bonjour Léa"
+            and retraduit({"a": [figee, 3]}) == {"a": ["Hello Léa", 3]},
+            f"un texte résolu avant le changement se retraduit ({retraduit(figee)!r})")
+        del _os.environ["EEG_LANGUE"]
+        import pickle as _pickle
+        chk(type(_pickle.loads(_pickle.dumps(figee))) is str,
+            "enregistré (pickle), un `Texte` redevient un `str` : un modèle n'en dépend pas")
         with open(_os.path.join(tmp, "fr", "c.json"), "w", encoding="utf-8") as f:
             _json.dump({"x.cle": "la clé {cle}"}, f)
         _cache.clear()

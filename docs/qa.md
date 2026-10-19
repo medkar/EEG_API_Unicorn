@@ -368,6 +368,26 @@ sur l'accueil — un test vit sur la page de SON mode, pas sur la grille.
 
 → recette 1.1, 1.2
 
+### ☐ 1.2 bis — La langue de l'affichage, sans redémarrer
+
+Accueil (la grille), aucune séance ni essai en cours.
+
+1. Vérifie d'abord qu'aucun entraînement, test ou essai ne tourne. En haut à droite : le bouton
+   **« 🌐 »**, suivi du nom de la langue en cours.
+   ✅ **1.2 bis.1** Son menu propose **English** et **Français**, chacune écrite dans sa langue.
+2. Toujours sans séance en cours, choisis l'autre langue.
+   ✅ **1.2 bis.2** Tout l'affichage bascule **tout de suite** : tuiles, boutons, pages des modes,
+   bulles ⓘ. Le bandeau continue de vivre (σ, liaison) : le casque n'a pas été rouvert.
+   ✅ **1.2 bis.3** Page SSVEP : le pic alpha s'écrit **9.6** en anglais, **9,6** en français.
+3. Ferme la console et relance-la.
+   ✅ **1.2 bis.4** Elle s'ouvre dans la langue choisie en dernier — écran de départ compris.
+4. Lance « Tester librement » sur un mode, puis, pendant l'essai, reviens à l'accueil et change de
+   langue.
+   ✅ **1.2 bis.5** Refusé, avec la raison dans le bandeau ; l'essai continue.
+
+❌ Régression : un texte resté dans l'ancienne langue après le changement ; le casque rouvert
+(C3/Cz qui saturent) ; un « 9,600 » dans un écran anglais.
+
 ### ☐ 1.3 — Le Brut montre vraiment le signal, et les tracés ne se chevauchent pas
 
 Tuile **Brut** → « Ouvrir ».

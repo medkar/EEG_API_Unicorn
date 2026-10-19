@@ -87,9 +87,16 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - 🔴 **AUCUN TEXTE AFFICHÉ N'EST ÉCRIT EN DUR** (2026-09-23), pour pouvoir ajouter des langues.
   Tout ce qu'un utilisateur lit — la console, ET ce que le moteur lui fait afficher (aides des
   réglages, briefings, verdicts, refus) — s'écrit `tr("zone.objet.quoi", valeur=…)` et vit dans
-  `src/core/langues/fr/*.json` (`console`, `pages`, `modes`, `mesures`, `moteur`). **Ajouter une
-  langue = copier `fr/`, traduire, lancer avec `EEG_LANGUE=en`** ; une clé absente retombe sur le
-  français. **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
+  `src/core/langues/fr/*.json` (`console`, `pages`, `modes`, `mesures`, `moteur`, `fenetres`).
+  **Deux langues livrées** (2026-10-19) : le français, langue SOURCE (celle des autotests et du
+  repli), et l'anglais, langue par défaut de la console. L'icône **« 🌐 »** en haut à droite de
+  l'accueil change l'AFFICHAGE tout de suite, sans redémarrer ni toucher au casque, et le poste
+  retient le choix (`console/demarrage.Memoire`). Comment : `tr` rend un `Texte` qui se souvient
+  de sa clé, `retraduit()` le relit dans la langue courante (catalogue des modes, état du moteur),
+  et la console reconstruit ses pages (`Console._construire`) ; refusé pendant une séance, un essai
+  ou un lancement. Les champs numériques suivent la langue (`QLocale` : « 9.6 » / « 9,6 »).
+  **Ajouter une langue = copier `fr/` et traduire** : elle apparaît dans le menu. Une langue livrée
+  doit avoir TOUTES les clés du français (`[smoke-textes]`). **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
   `{valeurs}` exactes, aucun texte orphelin, aucun littéral passé à un widget de la console. Hors
   règle : commentaires, `print()` du terminal, messages d'autotest, et le **contrat réseau** (noms
   de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais. Les fenêtres pygame de

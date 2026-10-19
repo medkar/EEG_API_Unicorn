@@ -52,7 +52,7 @@ _ARGS = _parse_args(sys.argv[1:])
 if _ARGS.smoke:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QProcess, QTimer, Signal  # noqa: E402
+from PySide6.QtCore import QLocale, QObject, QProcess, QTimer, Signal  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: E402
                                QStackedWidget, QVBoxLayout, QWidget)
 
@@ -71,7 +71,7 @@ from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import choisir_langue, langue, retraduit, tr  # noqa: E402
 from core.modes import registry  # noqa: E402
 from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 from core.server import EngineServer  # noqa: E402
@@ -101,13 +101,23 @@ def _a_plat(valeurs):
     return {k: list(v) if isinstance(v, (list, tuple)) else v for k, v in (valeurs or {}).items()}
 
 
+def appliquer_langue(code):
+    """La langue de l'affichage, et l'écriture des nombres des champs avec elle.
+
+    Un champ numérique suit la convention de Qt (`QLocale`), pas le catalogue : laissé à la
+    française dans un écran anglais, « 9,600 » se lirait neuf mille six cents.
+    """
+    choisir_langue(code)
+    QLocale.setDefault(QLocale(code))
+
+
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
 
-    def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None):
+    def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None,
+                 memoire=None):
         super().__init__()
         self.engine = engine
-        self.setWindowTitle(tr("console.fenetre.titre"))
         self.resize(1100, 720)
 
         # Le lanceur de fenêtres de stimulus. `fabrique_fenetre` est injectable pour que le smoke
@@ -147,6 +157,24 @@ class Console(QMainWindow):
         # s'il faudra l'arrêter), et le numéro de sa fenêtre une fois ouverte. Cf. `_suivre_essai`.
         self._essai = None
 
+        # Les préférences du POSTE (la langue de l'affichage, comme le secteur) : injectables, pour
+        # que l'autotest n'écrive rien dans la base de registre.
+        self.memoire = memoire if memoire is not None else Memoire()
+        self.beeps = Beeps()
+        self._origine_mesure = None
+        self._construire()
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(REFRESH_MS)
+
+    def _construire(self):
+        """Toutes les pages, dans la langue COURANTE : au démarrage, et à chaque changement de langue.
+
+        Le moteur, le casque, le lanceur de fenêtres et le minuteur ne sont pas reconstruits : seul
+        l'AFFICHAGE change. Le catalogue est resérialisé, donc retraduit (`registry`).
+        """
+        self.setWindowTitle(tr("console.fenetre.titre"))
         self.banner = Banner()
         self.stack = QStackedWidget()
         # Un SEUL appel, réutilisé par les boucles ci-dessous : le « Flux de marqueurs » du P300 et
@@ -171,9 +199,6 @@ class Console(QMainWindow):
         self._mesure_par_reglage = {
             tuple(m.runtime_cls.REGLAGE_PRODUIT): m.id for m in registry.MESURES
             if getattr(m.runtime_cls, "REGLAGE_PRODUIT", None) and m.id in self.mesures}
-        # La page d'où l'on a ouvert une mesure (« Tester », « Mesurer ») : son « ← » y ramène,
-        # parce que la boucle est « régler → tester → ajuster », pas un aller-retour par l'accueil.
-        self._origine_mesure = None
         # La grille ne porte que les mesures de SÉANCE (le contrôle alpha). Une mesure qui ÉPROUVE
         # un mode (celle que désigne son `test_id`) a sa page, ouverte par le bouton « Tester » de
         # ce mode, mais PAS de tuile : sinon chaque mode testable ajouterait un bouton sur
@@ -187,6 +212,7 @@ class Console(QMainWindow):
         self.grid.demarrer.connect(self._demarrer)
         self.grid.ouvrir_mesure.connect(self.show_mesure)
         self.grid.ouvrir_flux.connect(self.show_flux)
+        self.grid.choix_langue.connect(self.changer_langue)
         self.stack.addWidget(self.grid)
 
         self.pages = {}
@@ -205,7 +231,6 @@ class Console(QMainWindow):
         # le contrat calcule depuis son `runtime_cls` (`kind` dit seulement qui mène le protocole).
         # Un mode dont la calibration est déclarée mais pas livrée n'a donc pas de page, et son
         # bouton ne ment pas.
-        self.beeps = Beeps()
         self.calib_pages = {}
         for spec in catalogue:
             calib = spec.get("calibration") or {}
@@ -248,8 +273,18 @@ class Console(QMainWindow):
         # c'est-à-dire exactement la panne qu'on vient y voir.
         # Elle vit dans SA fenêtre, hors de la pile : c'est PENDANT un test qu'on veut la
         # regarder, et l'ouvrir ne doit pas remplacer la page du test (cf. `FenetreFlux`).
+        # Une fenêtre des flux déjà OUVERTE (changement de langue) est remplacée par la nouvelle,
+        # rouverte aussitôt : elle lit le réseau, rien ne se perd à la reconstruire.
+        ancienne = getattr(self, "fenetre_flux", None)
+        rouvrir = ancienne is not None and ancienne.isVisible()
+        if ancienne is not None:
+            ancienne.close()
+            self.flux_page.quitter()
+            ancienne.deleteLater()
         self.flux_page = FluxPage(self)
         self.fenetre_flux = FenetreFlux(self.flux_page)
+        if rouvrir:
+            self.fenetre_flux.ouvrir()
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -258,13 +293,50 @@ class Console(QMainWindow):
         layout.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(REFRESH_MS)
+    def _occupation(self):
+        """Ce qui empêche de reconstruire l'affichage maintenant, en clair — sinon "".
+
+        Une séance minutée, un essai libre ou un lancement en cours tiennent des pages et des
+        fenêtres : les reconstruire sous eux les couperait de leur écran.
+        """
+        seance = self._seance_minutee()
+        if seance:
+            return seance
+        if self._essai is not None or self._fenetre_de is not None:
+            return tr("console.langue.essai")
+        if (self._demande is not None or self._attente is not None or self._a_lancer
+                or self._a_lancer_mesure):
+            return tr("console.langue.lancement")
+        return ""
+
+    def changer_langue(self, code):
+        """L'icône de la grille : l'affichage passe dans `code`, tout de suite, et le poste le retient.
+
+        Seul l'AFFICHAGE change : les flux envoyés à l'application (noms, voies, valeurs) ne se
+        traduisent jamais. Refusé pendant une séance, un essai ou un lancement (`_occupation`).
+        """
+        if code == langue():
+            return
+        occupe = self._occupation()
+        if occupe:
+            self.banner.set_refus(f"⚠ {tr('console.langue.occupe', quoi=occupe)}")
+            return
+        appliquer_langue(code)
+        # Un widget hérite la convention des nombres de sa FENÊTRE, pas du défaut de Qt.
+        self.setLocale(QLocale(code))
+        self.memoire.retenir_langue(code)
+        self._construire()
+        self.show_grid()
+        if self.engine is not None:
+            self.refresh()
 
     def refresh(self):
-        """Sonde le moteur et redistribue l'état. Le SEUL endroit qui appelle `snapshot()`."""
-        self.apply_state(self.engine.snapshot())
+        """Sonde le moteur et redistribue l'état. Le SEUL endroit qui appelle `snapshot()`.
+
+        `retraduit` : les textes que le moteur a résolus à l'import (consignes, notes d'honnêteté)
+        suivent la langue CHOISIE depuis, comme ceux qu'il produit en direct.
+        """
+        self.apply_state(retraduit(self.engine.snapshot()))
 
     def apply_state(self, state):
         self._dernier_etat = state or {}
@@ -1420,6 +1492,9 @@ def _smoke():
             bouton.click()
 
     app = QApplication.instance() or QApplication([])
+    # Les autotests lisent les textes FRANÇAIS, la langue source du catalogue : quelle que soit la
+    # langue retenue sur ce poste ou `EEG_LANGUE`, le smoke tourne en français.
+    os.environ["EEG_LANGUE"] = "fr"
     journal = []                  # la ligne du temps commune : commandes ET fenêtres
     processus = []                # les faux processus fabriqués, dans l'ordre
     horloge = [0.0]               # une horloge PILOTÉE : le délai d'attente doit être testable
@@ -6017,6 +6092,48 @@ def _smoke():
         "...et tue la fenêtre de stimulus restée ouverte, plutôt que de la laisser plein écran "
         "devant l'étudiant")
 
+    # --- La LANGUE de l'affichage : l'icône de l'accueil, sans redémarrer -------------------
+    # Le choix est RETENU par les préférences du poste — ici en mémoire, l'autotest n'écrit rien
+    # dans la base de registre.
+    from console.demarrage import Memoire as _Memoire
+
+    class _Prefs(dict):
+        def value(self, cle, defaut=None):
+            return self.get(cle, defaut)
+
+        def setValue(self, cle, valeur):  # noqa: N802 - nom de l'API Qt
+            self[cle] = valeur
+
+    prefs = _Prefs()
+    bilingue = Console(None, fabrique_fenetre=_fabrique, memoire=_Memoire(prefs))
+    bilingue.timer.stop()        # sans moteur : rien à sonder
+    menu = [a.text() for a in bilingue.grid.bouton_langue.menu().actions()]
+    chk(bilingue.grid.bouton_langue.text() == "🌐 Français" and menu == ["English", "Français"],
+        f"l'accueil porte l'icône de langue, et son menu nomme chaque langue dans SA langue "
+        f"({bilingue.grid.bouton_langue.text()!r}, {menu})")
+    chk(_Memoire(_Prefs()).langue() == "en", "un poste neuf démarre en anglais")
+    bilingue.changer_langue("en")
+    page_ssvep = bilingue.pages["ssvep"]
+    libelles = {p["key"]: p["label"] for p in bilingue.catalogue["ssvep"]["params"]}
+    chk(prefs.get("langue") == "en" and bilingue.grid.bouton_langue.text() == "🌐 English"
+        and "9.6" in page_ssvep.formulaire.champs["alpha_hz"].text()
+        and page_ssvep.bloc_regler.title() == "1. Set up"
+        and libelles["freqs"] == "Target frequencies"
+        and bilingue.windowTitle() == tr("console.fenetre.titre") != "",
+        f"« English » : les pages sont reconstruites en anglais — titres de blocs, et libellés que "
+        f"le MOTEUR a résolus à l'import — et le choix est retenu "
+        f"({page_ssvep.bloc_regler.title()!r}, {libelles['freqs']!r}, prefs={prefs})")
+    bilingue._essai = {"mode_id": "ssvep"}
+    bilingue.changer_langue("fr")
+    chk(langue() == "en" and "free test" in bilingue.banner.refus.text(),
+        f"pendant un essai libre, la langue ne change pas, et le bandeau dit pourquoi "
+        f"({bilingue.banner.refus.text()!r})")
+    bilingue._essai = None
+    bilingue.changer_langue("fr")
+    chk(prefs.get("langue") == "fr" and bilingue.pages["ssvep"].bloc_regler.title() == "1. Régler",
+        "…et l'essai fini, retour au français, retenu lui aussi")
+    os.environ["EEG_LANGUE"] = "fr"
+
     app.processEvents()
     print(f"[console-smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok
@@ -6126,6 +6243,9 @@ def run(args):
     # pas un drapeau tapé. Il faut donc une application Qt vivante avant que quoi que ce soit
     # n'ouvre le casque.
     app = QApplication([])
+    # La langue retenue sur ce poste, AVANT le premier écran (le choix de la source) : sinon il
+    # s'afficherait dans la langue du dépôt, puis la console dans une autre.
+    appliquer_langue(Memoire().langue())
 
     try:
         ouverte = ouvrir_session(args, modes)

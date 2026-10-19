@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console.params_form import ACCENT, ListeSansMolette, infobulle  # noqa: E402
 from core.acquisition import casques_appaires, fonction_liste_unicorn  # noqa: E402
 from core.config import SECTEUR_HZ, SECTEURS_HZ, UNICORN_SERIAL  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import langues_disponibles, tr  # noqa: E402
 
 # La page Bluetooth des Paramètres de Windows : l'Unicorn s'y appaire, la bibliothèque du casque
 # n'ayant aucune fonction d'appairage.
@@ -65,6 +65,11 @@ SECTEURS = {
 }
 
 
+# La langue de l'affichage d'un poste neuf. Le français reste la langue SOURCE du catalogue (et
+# celle des autotests) ; c'est la console qui démarre en anglais.
+LANGUE_POSTE = "en"
+
+
 class Memoire:
     """Les derniers numéros de casque OUVERTS AVEC SUCCÈS, du plus récent au plus ancien — et le
     SECTEUR électrique du poste.
@@ -91,6 +96,17 @@ class Memoire:
             return
         liste = [numero] + [c for c in self.casques() if c != numero]
         self._reglages.setValue("casques", liste[:CASQUES_RETENUS])
+
+    # --- la langue de l'affichage -------------------------------------------------
+    # L'anglais par défaut ; le dernier choix fait avec l'icône de l'accueil, ensuite.
+
+    def langue(self):
+        """La langue retenue sur ce poste, si elle est livrée — sinon l'anglais."""
+        valeur = str(self._reglages.value("langue", LANGUE_POSTE) or "")
+        return valeur if valeur in langues_disponibles() else LANGUE_POSTE
+
+    def retenir_langue(self, code):
+        self._reglages.setValue("langue", code)
 
     # --- le secteur électrique du poste -------------------------------------------
     # Retenu dès que le dialogue est VALIDÉ, et non après une ouverture réussie comme un casque :

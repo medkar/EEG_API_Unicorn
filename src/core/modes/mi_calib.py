@@ -62,14 +62,22 @@ TACHES_MAX = 5
 ESSAIS_MIN_PAR_TACHE = 3
 
 
+# Les noms anglais des classes d'origine, pour qui règle la console en anglais : « LEFT » tapé
+# devient la classe GAUCHE, comme « gauche ».
+ALIAS_ANGLAIS = {"LEFT": "GAUCHE", "RIGHT": "DROITE", "REST": "REPOS"}
+
+
 def canonique(tache):
-    """Une tâche tapée qui nomme une classe d'origine (« repos », « Gauche ») DEVIENT cette classe.
+    """Une tâche tapée qui nomme une classe d'origine (« repos », « Gauche », « left ») DEVIENT
+    cette classe.
 
     Elle retrouve ainsi sa consigne validée, son top latéralisé (`console/beeps.py` les connaît
     par leur nom exact) et, pour REPOS, son sens dans le flux publié (`rest_index`). Toute autre
     tâche garde le texte tapé.
     """
-    return {c.casefold(): c for c in MI_LABELS}.get(tache.casefold(), tache)
+    connues = {c.casefold(): c for c in MI_LABELS}
+    connues.update({nom.casefold(): c for nom, c in ALIAS_ANGLAIS.items()})
+    return connues.get(tache.casefold(), tache)
 
 
 def consigne(tache):
@@ -749,6 +757,10 @@ def _selftest():
         # Pieds/mains au lieu de poing droit/poing gauche : l'écran nomme la tâche tapée, le
         # modèle apprend CES classes, et le flux les publie sous ces noms. « repos » tapé en minuscules redevient REPOS, la classe d'origine.
         dossier_libre = _os.path.join(dossier, "libre")
+        chk([canonique(t) for t in ("left", "Right", "REST", "gauche", "Pieds")]
+            == ["GAUCHE", "DROITE", "REPOS", "GAUCHE", "Pieds"],
+            "LEFT, RIGHT et REST tapés (console en anglais) deviennent les classes d'origine, "
+            "comme leurs noms français ; une autre tâche garde son nom")
         libre = MICalibration(_mi.SPEC, {"taches": ("Pieds", "Mains", "repos"),
                                          "trials_per_class": 6, "mise_en_route_s": 1.0}, None,
                               rng=_random.Random(5), dossier=dossier_libre)

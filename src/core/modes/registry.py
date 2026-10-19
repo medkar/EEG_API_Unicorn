@@ -14,6 +14,7 @@ from dataclasses import replace
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import use_utf8_console  # noqa: E402
+from core.i18n import retraduit  # noqa: E402
 from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mesure  # noqa: E402
 from core.modes import cvep_test, errp_test, mi_test, p300_test  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
@@ -85,7 +86,9 @@ def catalogue_mesures():
     catalogue (règle de `CLAUDE.md`). Sans ça, elle réécrirait les libellés et les briefings dans
     son propre code, et les deux vérités divergeraient au premier réglage ajouté.
     """
-    return [
+    # Les textes des contrats sont résolus à l'import : `retraduit` les rend dans la langue
+    # COURANTE, pour que la console change de langue sans redémarrer.
+    return retraduit([
         {
             "id": spec.id,
             "label": spec.label,
@@ -107,7 +110,7 @@ def catalogue_mesures():
             "params": _params_serialises(spec.params),
         }
         for spec in MESURES
-    ]
+    ])
 
 
 def _params_serialises(params):
@@ -150,6 +153,11 @@ def runnable():
 
 
 def serialize(spec, params=None):
+    """Le `ModeSpec` en dictionnaire, ses textes dans la langue COURANTE (cf. `_serialize`)."""
+    return retraduit(_serialize(spec, params))
+
+
+def _serialize(spec, params=None):
     """Le `ModeSpec` en dictionnaire JSON-able — ce que la console reçoit.
 
     On sérialise plutôt que de passer l'objet : la console lit un ÉTAT, pas des références vers

@@ -14,8 +14,8 @@ import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
+                               QPushButton, QToolButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # noqa: E402
@@ -24,7 +24,7 @@ from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # no
 # l'échelle la sortie d'un mode sans seuil avec la constante d'un autre (cf.
 # `ModeTile._apercu_scores`).
 from core.config import NEURO_Z_SPAN  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import langue, langues_disponibles, nom_de_langue, tr  # noqa: E402
 # Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
 # ici : un renommage côté moteur laisserait la tuile sur « en cours » pour toujours.
 from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
@@ -411,11 +411,30 @@ class ModeGrid(QWidget):
     demarrer = Signal(str, bool)
     ouvrir_mesure = Signal(str)
     ouvrir_flux = Signal()
+    choix_langue = Signal(str)  # le code de la langue d'affichage choisie dans le menu
 
     def __init__(self, catalog, mesures=()):
         super().__init__()
         self.tuiles = {}
         self.tuiles_mesure = {}
+
+        # La langue de l'AFFICHAGE, en haut à droite de l'accueil. Chaque langue est écrite dans
+        # SA langue (« English », « Français ») : on la reconnaît même sans lire la langue en cours.
+        # Les flux envoyés à l'application ne changent pas, eux (cf. la bulle).
+        self.bouton_langue = QToolButton()
+        self.bouton_langue.setText(f"🌐 {tr('console.langue.nom')}")
+        self.bouton_langue.setToolTip(tr("console.langue.bulle"))
+        self.bouton_langue.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.bouton_langue)
+        for code in langues_disponibles():
+            action = menu.addAction(nom_de_langue(code))
+            action.setCheckable(True)
+            action.setChecked(code == langue())
+            action.triggered.connect(lambda _c=False, c=code: self.choix_langue.emit(c))
+        self.bouton_langue.setMenu(menu)
+        ligne_langue = QHBoxLayout()
+        ligne_langue.addStretch(1)
+        ligne_langue.addWidget(self.bouton_langue)
 
         modes_layout = QGridLayout()
         modes_layout.setSpacing(10)
@@ -453,6 +472,7 @@ class ModeGrid(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+        layout.addLayout(ligne_langue)
         layout.addLayout(modes_layout)
         layout.addWidget(self.titre_mesures)
         layout.addLayout(mesures_layout)

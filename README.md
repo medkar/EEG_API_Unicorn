@@ -110,6 +110,11 @@ SSVEP, on a different axis.
 
 ### What the console gives you
 
+The console speaks **English** by default, and **French**: the **🌐** button at the top right of
+the home screen switches the display at once, without restarting or touching the headset, and the
+computer remembers the choice. Only the display changes — stream names, channels and values sent
+to your application never do.
+
 ```bash
 python src/console/app.py --mode ssvep,neuro      # start two modes at once (shared rest phase)
 python src/core/server.py --no-raw --mode neuro   # engine only: decode without broadcasting raw
