@@ -281,7 +281,6 @@ SPEC = ModeSpec(
             unit="Hz",
             default=60.0,
             min=20.0, max=480.0,
-            proposes="freqs",
             affecte_decodage=False,
             help=tr("mode.ssvep.param.refresh_hz.aide"),
         ),
@@ -546,7 +545,9 @@ def _selftest():
         and par_cle["bande_haut"].affecte_decodage is True,
         "🔴 changer la bande affecte le décodage : le moteur reconstruit le runtime et refait le "
         "repos, seul chemin par lequel une bande nouvelle atteint le décodeur")
-    chk(par_cle["refresh_hz"].proposes == "freqs", "et le refresh PROPOSE les fréquences")
+    chk(par_cle["refresh_hz"].proposes == "",
+        "le refresh ne propose rien lui-même : le « Proposer » du pic alpha le lit déjà, un second "
+        "bouton ferait le même calcul")
     chk(par_cle["alpha_hz"].proposes == "freqs",
         "l'alpha aussi PROPOSE les fréquences — sans bouton, changer son pic ne recalcule rien")
 

@@ -474,8 +474,8 @@ def _selftest():
     # propose un autre — et le bouton correspondant n'apparaîtrait jamais, sans erreur.
     ssvep_serialise = serialize(get("ssvep"))
     par_cle = {p["key"]: p for p in ssvep_serialise["params"]}
-    chk(par_cle["refresh_hz"]["proposes"] == "freqs",
-        f"le catalogue transmet `proposes` ({par_cle['refresh_hz'].get('proposes')!r})")
+    chk(par_cle["alpha_hz"]["proposes"] == "freqs",
+        f"le catalogue transmet `proposes` ({par_cle['alpha_hz'].get('proposes')!r})")
     chk("affecte_decodage" not in par_cle["freqs"],
         "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
 

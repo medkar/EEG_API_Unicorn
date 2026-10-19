@@ -448,7 +448,7 @@ Page **SSVEP**, mode **arrêté**, dans cet ordre.
 2. Reviens à la grille (« ← Modes »), puis rouvre la page SSVEP.
    ✅ **1.6.2** Le champ affiche toujours **10,5**. ❌ Régression : retombé à 9,6 — l'écran dirait le contraire
    de ce que le moteur a retenu.
-3. **« Proposer « Fréquences des cibles » »** (l'un ou l'autre des deux boutons).
+3. **« Proposer « Fréquences des cibles » »** (le bouton sous le pic alpha, le seul de la page).
    ✅ **1.6.3** **8,571 · 15 · 20**, le jeu accordé à un pic de 10,5 Hz. ❌ Régression : `12 · 15 · 20`, le jeu
    accordé au pic de la **population** (9,6 Hz).
 4. « Fréquences des cibles » à `15, 17` → **Appliquer**.

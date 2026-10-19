@@ -1716,7 +1716,7 @@ def _selftest():
         # (`propose_params`) et que cet autotest est celui du SSVEP qui en construit un. Le mode
         # est ARRÊTÉ : c'est le geste réel, on règle avant de lancer quoi que ce soit.
         _quatre = [15.0, 20.0, 60.0 / 7.0, 12.0]
-        _avant = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+        _avant = srv.submit("propose_params", id="ssvep", key="alpha_hz",
                             params={"freqs": _quatre})
         # La PRÉCONDITION, à part : sous la bande par défaut, la proposition DÉPASSE 20 Hz. Sans
         # elle, la propriété qui suit (« rien au-dessus de 20 une fois la coupure réglée à 20 »)
@@ -1725,7 +1725,7 @@ def _selftest():
             f"(précondition) sous la bande par défaut, « Proposer » monte au-dessus de 20 Hz "
             f"({[round(f, 3) for f in _avant.get('value', [])]})")
         _regle = srv.submit("set_params", id="ssvep", params={"bande_haut": 20.0})
-        _apres = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+        _apres = srv.submit("propose_params", id="ssvep", key="alpha_hz",
                             params={"freqs": _quatre})
         chk(_regle.get("accepted") and _regle.get("differe")
             and _apres.get("accepted") and len(_apres["value"]) == 4
@@ -1741,7 +1741,7 @@ def _selftest():
         for _saisie in ({"bande_bas": -3.0}, {"bande_haut": "?"},
                         {"bande_bas": float("nan")}, {"bande_haut": 60.0}):
             (_cle, _val), = _saisie.items()
-            _absurde = srv.submit("propose_params", id="ssvep", key="refresh_hz",
+            _absurde = srv.submit("propose_params", id="ssvep", key="alpha_hz",
                                   params={"freqs": _quatre, **_saisie})
             _appliquer = srv.submit("set_params", id="ssvep", params=_saisie)
             _attendu = _valider_un(_du_mode[_cle], _val)[1]

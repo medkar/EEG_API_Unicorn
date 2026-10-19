@@ -5170,7 +5170,7 @@ def _smoke_proposition():
     server = EngineServer(synthetic=True, modes=("ssvep",), instance="smoke-proposition")
     server._start(["ssvep"], {s.id: v for s, v in server._pending}, now=0.0)
 
-    ack = server.submit("propose_params", id="ssvep", key="refresh_hz")
+    ack = server.submit("propose_params", id="ssvep", key="alpha_hz")
     chk(ack.get("accepted") and len(ack.get("value") or []) == 3,
         f"proposer rend autant de cibles qu'il y en a réglées ({ack.get('value')})")
     chk(all(abs(60.0 / f - round(60.0 / f)) < TOLERANCE_DIVISEUR for f in ack["value"]),
@@ -5186,7 +5186,7 @@ def _smoke_proposition():
     # sur ce qui est stocké : sinon déclarer un écran 144 Hz est refusé (les fréquences en vigueur,
     # calées sur 60, ne le divisent pas) ET la proposition continue de calculer sur 60 — aucune
     # porte de sortie pour l'étudiant qui change d'écran.
-    ack5 = server.submit("propose_params", id="ssvep", key="refresh_hz",
+    ack5 = server.submit("propose_params", id="ssvep", key="alpha_hz",
                          params={"refresh_hz": 144.0})
     chk(ack5.get("accepted") and len(ack5.get("value") or []) == 3,
         f"proposer avec un refresh en cours d'édition rend 3 cibles ({ack5.get('value')})")
@@ -5341,7 +5341,7 @@ def _smoke_proposition():
 
     # Une clé qui ne propose rien est refusée AVEC sa raison : la commande reste atteignable
     # depuis un client LSL même quand la console n'affiche aucun bouton. `freqs` est la CIBLE des
-    # propositions, jamais leur source (contrairement à `refresh_hz` et `alpha_hz`) : elle ne
+    # propositions, jamais leur source (contrairement à `alpha_hz`) : elle ne
     # propose donc jamais rien elle-même.
     ack3 = server.submit("propose_params", id="ssvep", key="freqs")
     chk(not ack3.get("accepted") and "propose" in (ack3.get("reason") or ""),
@@ -5349,7 +5349,7 @@ def _smoke_proposition():
 
     # Proposer AVANT d'avoir démarré le mode doit marcher : on se règle puis on lance.
     arrete = EngineServer(synthetic=True, modes=(), instance="smoke-proposition-2")
-    ack4 = arrete.submit("propose_params", id="ssvep", key="refresh_hz")
+    ack4 = arrete.submit("propose_params", id="ssvep", key="alpha_hz")
     chk(ack4.get("accepted") and ack4.get("value"),
         f"on peut demander une proposition sur un mode PAS ENCORE démarré ({ack4.get('reason')})")
 
@@ -5360,7 +5360,7 @@ def _smoke_proposition():
     quatre = [15.0, 20.0, 60.0 / 7, 12.0]
 
     def proposer(**ecran):
-        ack = arrete.submit("propose_params", id="ssvep", key="refresh_hz",
+        ack = arrete.submit("propose_params", id="ssvep", key="alpha_hz",
                             params={"freqs": quatre, **ecran})
         return ack, list(ack.get("value") or [])
 

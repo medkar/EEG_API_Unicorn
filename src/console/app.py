@@ -4296,7 +4296,7 @@ def _smoke():
     # `proposes` sur le mauvais champ, passerait tous les tests sans jamais être exercé.
     page = reelle.pages["ssvep"]
     page.formulaire.champs["freqs"].setText("15, 20, 8.57143")
-    page.formulaire.boutons_proposer["refresh_hz"].click()
+    page.formulaire.boutons_proposer["alpha_hz"].click()
     propose = page.formulaire.values()["freqs"]
     chk(len(propose) == 3, f"« Proposer » remplit le champ ({propose})")
     chk(all(abs(60.0 / f - round(60.0 / f)) < TOLERANCE_DIVISEUR for f in propose),
@@ -4304,6 +4304,17 @@ def _smoke():
     page._appliquer(page.formulaire.values())
     chk(page.formulaire.refus.text() == "",
         f"et le moteur accepte ce qu'il a lui-même proposé ({page.formulaire.refus.text()})")
+    # UN seul « Proposer » sur la page SSVEP, sous le pic alpha : il lit aussi le rafraîchissement
+    # à l'écran, donc un second bouton sous le rafraîchissement ferait exactement le même calcul.
+    chk(list(page.formulaire.boutons_proposer) == ["alpha_hz"],
+        f"un seul bouton « Proposer », sous le pic alpha ({list(page.formulaire.boutons_proposer)})")
+    page.formulaire.champs["refresh_hz"].setValue(144.0)
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    chk(all(abs(144.0 / f - round(144.0 / f)) < TOLERANCE_DIVISEUR
+            for f in page.formulaire.values()["freqs"]),
+        f"…et il calcule sur le rafraîchissement en cours d'édition, sans « Appliquer » "
+        f"({page.formulaire.values()['freqs']})")
+    page.formulaire.champs["refresh_hz"].setValue(60.0)
 
     # Un avertissement (proposition ACCEPTÉE, mais hors de la plage confortable) ne doit PAS
     # ressembler à un refus. Cas connu : 60 Hz, alpha 10,5 Hz, 5 cibles — le même triplet que le
@@ -4312,7 +4323,7 @@ def _smoke():
     # valeurs elles-mêmes n'ont pas besoin d'être un jeu SSVEP valide, on ne les applique jamais.
     page.formulaire.champs["alpha_hz"].setValue(10.5)
     page.formulaire.champs["freqs"].setText("1, 2, 3, 4, 5")
-    page.formulaire.boutons_proposer["refresh_hz"].click()
+    page.formulaire.boutons_proposer["alpha_hz"].click()
     chk(len(page.formulaire.values()["freqs"]) == 5,
         f"la proposition avec avertissement remplit quand même le champ "
         f"({page.formulaire.values()['freqs']})")
