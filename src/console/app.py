@@ -4142,9 +4142,10 @@ def _smoke():
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
-    chk(set(page.formulaire.champs) == {"freqs", "refresh_hz", "alpha_hz", "z_min",
+    chk(set(page.formulaire.champs) == {"cibles", "freqs", "refresh_hz", "alpha_hz", "z_min",
                                         "bande_bas", "bande_haut"},
-        f"le SSVEP expose ses six réglages, seuil de détection et bande de filtrage compris "
+        f"le SSVEP expose ses sept réglages, support des cibles, seuil de détection et bande de "
+        f"filtrage compris "
         f"({sorted(page.formulaire.champs)})")
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
@@ -4315,6 +4316,32 @@ def _smoke():
         f"…et il calcule sur le rafraîchissement en cours d'édition, sans « Appliquer » "
         f"({page.formulaire.values()['freqs']})")
     page.formulaire.champs["refresh_hz"].setValue(60.0)
+
+    # Cibles PHYSIQUES (des LED) : la liste MONTRE un libellé et envoie la valeur du contrat ; le
+    # rafraîchissement se grise, les deux « Tester » aussi, avec la raison que le moteur donne.
+    cibles = page.formulaire.champs["cibles"]
+    chk(cibles.currentText() == tr("mode.ssvep.cibles.ecran")
+        and page.formulaire.values()["cibles"] == "ecran"
+        and page.formulaire.champs["refresh_hz"].isEnabled()
+        and page.bouton_tester.isEnabled() and page.bouton_essayer.isEnabled()
+        and not page.note_tests.isVisibleTo(page),
+        f"par défaut, des cibles sur « {cibles.currentText()} » : rafraîchissement et tests actifs")
+    cibles.setCurrentIndex(cibles.findData("physiques"))
+    chk(page.formulaire.values()["cibles"] == "physiques"
+        and not page.formulaire.champs["refresh_hz"].isEnabled()
+        and not page.bouton_tester.isEnabled() and not page.bouton_essayer.isEnabled()
+        and page.note_tests.isVisibleTo(page)
+        and page.note_tests.text() == tr("mode.ssvep.tests_ecran"),
+        f"des cibles physiques grisent le rafraîchissement et les deux « Tester », en disant "
+        f"pourquoi ({page.note_tests.text()[:50]}…)")
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    led = page.formulaire.values()["freqs"]
+    chk(isinstance(led, list) and led and all(abs(f * 2 - round(f * 2)) < 1e-9 for f in led),
+        f"…et « Proposer » choisit au demi-hertz ({led})")
+    cibles.setCurrentIndex(cibles.findData("ecran"))
+    chk(page.formulaire.champs["refresh_hz"].isEnabled() and page.bouton_tester.isEnabled()
+        and page.bouton_essayer.isEnabled() and not page.note_tests.isVisibleTo(page),
+        "revenir à l'écran rend le rafraîchissement et les deux « Tester »")
 
     # Un avertissement (proposition ACCEPTÉE, mais hors de la plage confortable) ne doit PAS
     # ressembler à un refus. Cas connu : 60 Hz, alpha 10,5 Hz, 5 cibles — le même triplet que le

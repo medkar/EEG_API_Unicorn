@@ -77,9 +77,16 @@ class ListeSansMolette(_SansMolette, QComboBox):
         self.setMinimumContentsLength(self.LARGEUR_CAR)
         self.setItemDelegate(_NomDeFichier(self))
 
-    def remplir_choix(self, choix):
-        """Ajoute les choix, avec le texte COMPLET en bulle quand la ligne n'en montre qu'une part."""
-        for valeur in choix:
+    def remplir_choix(self, choix, libelles=()):
+        """Ajoute les choix, avec le texte COMPLET en bulle quand la ligne n'en montre qu'une part.
+
+        Avec des `libelles` (« un écran »), la ligne MONTRE le libellé et garde le choix
+        (« ecran ») en donnée : c'est lui que `ParamsForm.values()` envoie au moteur.
+        """
+        for i, valeur in enumerate(choix):
+            if libelles:
+                self.addItem(str(libelles[i]), valeur)
+                continue
             texte = str(valeur)
             self.addItem(texte)
             if texte_affiche(texte) != texte:
@@ -277,6 +284,36 @@ class ParamsForm(QWidget):
         layout.addWidget(self.avertissement)
         layout.addWidget(self.confirmation)
 
+        # Un réglage qui ne compte que sous condition (`actif_si`) se grise quand elle tombe : le
+        # rafraîchissement de l'écran, quand les cibles du SSVEP sont des LED. La règle est au
+        # contrat ; ce formulaire ne fait que la lire.
+        for param in self.params:
+            source = self.champs.get((param.get("actif_si") or [None])[0])
+            if isinstance(source, QComboBox):
+                source.currentIndexChanged.connect(self._maj_actifs)
+            elif isinstance(source, QCheckBox):
+                source.toggled.connect(self._maj_actifs)
+        self._maj_actifs()
+
+    @staticmethod
+    def _choisir(param, champ, valeur):
+        """Sélectionne `valeur` dans une liste : par sa DONNÉE quand les lignes montrent un libellé."""
+        if param.get("libelles"):
+            i = champ.findData(valeur)
+            if i >= 0:
+                champ.setCurrentIndex(i)
+        else:
+            champ.setCurrentText(str(valeur))
+
+    def _maj_actifs(self, *_):
+        """Grise chaque réglage dont la condition `actif_si` ne tient pas avec ce qui est à l'écran."""
+        valeurs = self.values()
+        for param in self.params:
+            regle = param.get("actif_si")
+            if regle:
+                actif = valeurs.get(regle[0]) == regle[1]
+                self.champs[param["key"]].setEnabled(actif and param["key"] not in self.lecture_seule)
+
     def figer(self, cle):
         """Rend le champ `cle` non modifiable : il MONTRE une valeur qui se règle ailleurs.
 
@@ -325,7 +362,7 @@ class ParamsForm(QWidget):
             return champ
         if kind == "choice":
             champ = ListeSansMolette()
-            champ.remplir_choix(param["choices"])
+            champ.remplir_choix(param["choices"], param.get("libelles") or ())
             # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément. C'est
             # invisible quand le défaut est EN PREMIÈRE position (`model`, dont le défaut est
             # toujours choices_now()[0]), mais faux dès qu'il est ailleurs dans la liste
@@ -333,7 +370,7 @@ class ParamsForm(QWidget):
             # afficherait 10 essais/classe alors que le contrat dit 14 — un mensonge visuel dès
             # la première ouverture de la page.
             if param["default"] is not None:
-                champ.setCurrentText(str(param["default"]))
+                self._choisir(param, champ, param["default"])
             return champ
         if kind == "float_list":
             # Une ligne de valeurs séparées par des virgules : c'est la MÊME écriture que
@@ -373,7 +410,7 @@ class ParamsForm(QWidget):
             if param["kind"] == "bool":
                 champ.setChecked(bool(valeur))
             elif param["kind"] == "choice":
-                champ.setCurrentText(str(valeur))
+                self._choisir(param, champ, valeur)
             elif param["kind"] == "float_list":
                 champ.setText(", ".join(f"{float(v):g}" for v in valeur))
             elif param["kind"] == "text_list":
@@ -399,7 +436,7 @@ class ParamsForm(QWidget):
         if param["kind"] == "bool":
             champ.setChecked(bool(valeurs))
         elif param["kind"] == "choice":
-            champ.setCurrentText(str(valeurs))
+            self._choisir(param, champ, valeurs)
         elif param["kind"] == "float_list":
             champ.setText(", ".join(f"{float(v):g}" for v in valeurs))
         elif param["kind"] == "text_list":
@@ -418,6 +455,8 @@ class ParamsForm(QWidget):
             champ = self.champs[param["key"]]
             if param["kind"] == "bool":
                 out[param["key"]] = champ.isChecked()
+            elif param["kind"] == "choice" and param.get("libelles"):
+                out[param["key"]] = champ.currentData()   # le choix, pas son libellé
             elif param["kind"] == "choice":
                 # `currentText()` ne rend jamais qu'une CHAÎNE — correct pour `model`, dont les
                 # choix SONT des chaînes (des chemins), mais faux pour `trials_per_class` (la

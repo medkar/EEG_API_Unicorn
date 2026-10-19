@@ -612,6 +612,21 @@ class EngineServer:
             return tr("moteur.refus.mesure_pendant_mode_flux", mode=mode.label)
         return None
 
+    def _refus_test_hors_condition(self, mesure_spec):
+        """Refuser le test d'un mode dont un réglage l'exclut (`ModeSpec.tests_si`) ? La raison, ou None.
+
+        Le SSVEP à cibles PHYSIQUES : son test fait clignoter des disques à l'écran, que personne
+        ne regarde. Les réglages lus sont ceux du mode qui tourne, sinon ceux retenus — ceux que
+        « Tester » vient d'appliquer.
+        """
+        mode = next((m for m in registry.runnable() if m.test_id == mesure_spec.id), None)
+        if mode is None or not mode.tests_si:
+            return None
+        cle, valeur, raison = mode.tests_si
+        runtime = self.active.get(mode.id)
+        reglages = dict(runtime.params) if runtime is not None else self._reglages_de(mode)
+        return None if reglages.get(cle, valeur) == valeur else raison
+
     def _refus_mode_pendant_mesure(self, spec, mesure):
         """Refuser de démarrer `spec` parce qu'une mesure lit SES marqueurs ? La raison, ou None.
 
@@ -1530,7 +1545,11 @@ class EngineServer:
             # supprime — et que « Appliquer » refuserait au clic suivant.
             bande = ({"bande": (entrees["bande_bas"], entrees["bande_haut"])}
                      if "bande_bas" in entrees and "bande_haut" in entrees else {})
-            valeurs, note = propose_frequencies(entrees.get("refresh_hz", 60.0), n,
+            # Des cibles PHYSIQUES n'ont pas d'écran : `None` fait proposer sur une grille fine,
+            # là où un écran impose les diviseurs de son rafraîchissement.
+            physiques = courant.get("cibles") == contract.CIBLES_PHYSIQUES
+            valeurs, note = propose_frequencies(None if physiques
+                                                else entrees.get("refresh_hz", 60.0), n,
                                                 entrees.get("alpha_hz", ALPHA_DEFAUT_HZ),
                                                 **bande)
             if not valeurs:
@@ -1586,7 +1605,8 @@ class EngineServer:
             # une mesure pendant une autre mesure — un double-clic sur « Commencer » y suffit.
             refus = (self._refus_pour_calibration_en_cours(self.calibration)
                      or self._refus_pour_mesure_en_cours(self.mesure)
-                     or self._refus_mesure_pendant_mode(spec, dict(self.active)))
+                     or self._refus_mesure_pendant_mode(spec, dict(self.active))
+                     or self._refus_test_hors_condition(spec))
             if refus:
                 return {"accepted": False, "reason": refus}
             values, reason = contract.validate(spec, params.get("params") or {})
@@ -5411,6 +5431,34 @@ def _smoke_proposition():
             and rendu.get("reason") == attendu == applique.get("reason"),
             f"« Proposer » avec {saisie} à l'écran rend la main et REFUSE, avec la raison "
             f"d'« Appliquer » ({vu})")
+
+    # --- CIBLES PHYSIQUES (des LED) : pas d'écran, donc pas de diviseurs à respecter ------------
+    # 17 Hz ne divise pas 60 : refusé pour un écran, accepté pour des LED, qui clignotent à la
+    # fréquence qu'on leur programme.
+    trio_17 = [12.0, 17.0, 20.0]
+    ecran_17 = arrete.submit("set_params", id="ssvep", params={"cibles": "ecran", "freqs": trio_17})
+    led_17 = arrete.submit("set_params", id="ssvep",
+                           params={"cibles": "physiques", "freqs": trio_17})
+    chk(not ecran_17.get("accepted") and "diviseur entier" in (ecran_17.get("reason") or "")
+        and led_17.get("accepted"),
+        f"17 Hz : refusé sur un écran à 60 Hz, accepté sur des cibles physiques "
+        f"({(ecran_17.get('reason') or 'accepté')[:50]}… / {led_17.get('reason', 'accepté')})")
+    _ack, sur_grille = proposer(cibles="physiques", bande_bas=5.0, bande_haut=40.0)
+    chk(sur_grille and all(abs(f * 2 - round(f * 2)) < 1e-9 for f in sur_grille)
+        and any(abs(60.0 / f - round(60.0 / f)) > TOLERANCE_DIVISEUR for f in sur_grille),
+        f"« Proposer » sur des cibles physiques choisit au demi-hertz, hors des seuls diviseurs "
+        f"de l'écran ({sur_grille})")
+    # Les deux « Tester » font clignoter des disques À L'ÉCRAN : avec des LED, le test est refusé,
+    # avec la raison du contrat — celle que la console affiche sous ses boutons grisés.
+    refuse = arrete.submit("start_mesure", id="ssvep_taux")
+    chk(not refuse.get("accepted") and refuse.get("reason") == tr("mode.ssvep.tests_ecran"),
+        f"le test SSVEP est refusé sur des cibles physiques ({refuse.get('reason')})")
+    retour = arrete.submit("set_params", id="ssvep",
+                           params={"cibles": "ecran",
+                                   "freqs": list(registry.get("ssvep").defaults()["freqs"])})
+    chk(retour.get("accepted")
+        and arrete._refus_test_hors_condition(registry.get_mesure("ssvep_taux")) is None,
+        f"…et il redevient possible sur un écran ({retour.get('reason', 'accepté')})")
     arrete.close()
 
     # Ce moteur n'est jamais passé par `run()` : on casse le cycle à la main, comme les autres

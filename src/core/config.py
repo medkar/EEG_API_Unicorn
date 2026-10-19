@@ -778,8 +778,16 @@ def _plus_ecartees(candidats, n):
     return None
 
 
+# Le pas de la grille proposée à des cibles PHYSIQUES (des LED) : sans écran, toute fréquence se
+# programme, et un demi-hertz reste simple à écrire dans un microcontrôleur.
+PAS_CIBLES_PHYSIQUES_HZ = 0.5
+
+
 def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ, bande=BANDPASS):
     """`(fréquences, note)` : `n` cibles affichables à ce refresh ET décodables pour cet alpha.
+
+    `refresh` vaut None pour des cibles PHYSIQUES : plus de diviseurs à respecter, les candidates
+    sont une grille au pas `PAS_CIBLES_PHYSIQUES_HZ` dans la bande.
 
     `note` est vide si tout va bien, porte un avertissement si l'on a dû sortir de la plage
     confortable, et porte la raison si c'est impossible — auquel cas la liste est VIDE. On ne rend
@@ -796,7 +804,12 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ, bande=BANDPASS):
     lo_bande, hi_bande = float(bande[0]), float(bande[1])
     # ⚠️ `available_frequencies` ne borne QUE le bas (son `fmin`) : à 100 Hz elle rend 50 Hz, que
     # le passe-bande supprime AVANT le décodage. Le haut se borne donc ici.
-    divisibles = [f for _k, f in available_frequencies(refresh, bande=bande)
+    if refresh is None:
+        pas = PAS_CIBLES_PHYSIQUES_HZ
+        grille = [k * pas for k in range(int(lo_bande / pas - 1e-9) + 1, int(hi_bande / pas) + 1)]
+    else:
+        grille = [f for _k, f in available_frequencies(refresh, bande=bande)]
+    divisibles = [f for f in grille
                   if lo_bande <= f <= hi_bande and abs(f - alpha) >= ALPHA_GARDE_HZ]
 
     from core.i18n import nombre, tr   # ici et pas en tête : `config` est importé partout
@@ -816,8 +829,14 @@ def propose_frequencies(refresh, n, alpha=ALPHA_DEFAUT_HZ, bande=BANDPASS):
     # plus rapide » serait alors un conseil faux.
     for k in range(n - 1, 1, -1):
         if _plus_ecartees(divisibles, k) is not None:
+            if refresh is None:
+                return [], tr("moteur.proposer.impossible_max_physiques", k=k,
+                              alpha=nombre(alpha), bas=nombre(lo_bande), haut=nombre(hi_bande))
             return [], tr("moteur.proposer.impossible_max", k=k, refresh=nombre(refresh),
                           alpha=nombre(alpha), bas=nombre(lo_bande), haut=nombre(hi_bande))
+    if refresh is None:
+        return [], tr("moteur.proposer.impossible_physiques", n=n,
+                      bas=nombre(lo_bande), haut=nombre(hi_bande))
     return [], tr("moteur.proposer.impossible", n=n, refresh=nombre(refresh),
                   bas=nombre(lo_bande), haut=nombre(hi_bande))
 

@@ -38,6 +38,8 @@
   "moteur.proposer.hors_plage": "hors de la plage confortable ({lo}-{hi} Hz) : {hors}. Le scintillement est plus pénible et la réponse du cerveau plus bruitée.",
   "moteur.proposer.impossible": "impossible : aucun jeu de {n} cibles à {refresh} Hz dans la bande {bas}-{haut} Hz.",
   "moteur.proposer.impossible_max": "impossible : {k} cibles au maximum à {refresh} Hz dans la bande {bas}-{haut} Hz, avec un alpha à {alpha} Hz. Il faut un écran plus rapide, ou une bande plus large.",
+  "moteur.proposer.impossible_max_physiques": "impossible : {k} cibles au maximum dans la bande {bas}-{haut} Hz, avec un alpha à {alpha} Hz. Élargis la bande, ou prends moins de cibles.",
+  "moteur.proposer.impossible_physiques": "impossible : aucun jeu de {n} cibles dans la bande {bas}-{haut} Hz.",
   "moteur.refus.aucun": "aucun",
   "moteur.refus.aucun_enregistrement": "aucun enregistrement en cours : rien à arrêter.",
   "moteur.refus.aucun_mode_demande": "Aucun mode demandé.",

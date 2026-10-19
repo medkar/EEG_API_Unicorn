@@ -32,6 +32,10 @@ from core.i18n import nombre, tr  # noqa: E402
 from core.lsl_io import stream_name as _stream_name  # noqa: E402
 
 
+# La valeur du réglage `cibles` (SSVEP) qui lève la règle des diviseurs du rafraîchissement.
+CIBLES_PHYSIQUES = "physiques"
+
+
 @dataclass(frozen=True)
 class Param:
     """Un réglage exposé à l'utilisateur : son type, ses bornes, son aide."""
@@ -46,6 +50,10 @@ class Param:
     count: tuple = None       # (mini, maxi) d'éléments, pour les listes
     choices: tuple = ()
     choices_fn: object = None  # () -> choix, quand ils sont DÉCOUVERTS à l'exécution (modèles MI)
+    libelles: tuple = ()      # ce que l'écran MONTRE pour chaque choix, dans le même ordre
+    #                           (« un écran ») ; la valeur envoyée au moteur reste le choix (« ecran »)
+    actif_si: tuple = ()      # (clé, valeur) : ce réglage ne compte que si le réglage `clé` vaut
+    #                           `valeur`. Sinon la console le grise — elle lit la règle ici.
     constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
     proposes: str = ""        # ce paramètre en PROPOSE un autre (cf. spec §3.1)
     affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
@@ -239,6 +247,11 @@ class ModeSpec:
                                # distinctes : « avec quoi décode-t-on » et « avec quoi
                                # calibre-t-on ». Le SSVEP montre qu'il faut les séparer : il a un
                                # stimulus et AUCUNE calibration (la CCA n'apprend rien).
+    tests_si: tuple = ()       # (clé, valeur, raison) : les deux « Tester » de ce mode exigent
+                               # que le réglage `clé` vaille `valeur` (le SSVEP : des cibles à
+                               # l'écran, que la fenêtre de test sait afficher). Sinon le moteur
+                               # refuse le test, et la console grise les deux boutons en disant
+                               # `raison`.
     test_id: str = ""          # la CLÉ de la MESURE qui ÉPROUVE ce mode, ou "" s'il n'est pas
                                # testable. Même forme que `stimulus_id` : une clé, jamais une
                                # classe — c'est `registry.MESURES` qui la résout, et `core` n'a
@@ -473,6 +486,10 @@ def _check_constraints(param, values):
             # rafraîchissement : sinon l'écran saute des cycles, et le décodeur corrèle contre une
             # sinusoïde que personne n'affiche. Panne parfaitement silencieuse — aucune erreur,
             # juste zéro détection — donc on la refuse ICI plutôt que de la laisser en séance.
+            # Des cibles PHYSIQUES (des LED) clignotent à la fréquence qu'on leur donne : aucun
+            # écran, donc aucun diviseur à respecter. La clé est nommée en dur, comme `refresh_hz`.
+            if values.get("cibles") == CIBLES_PHYSIQUES:
+                return None
             refresh = float(values.get("refresh_hz") or 0.0)
             if refresh <= 0:
                 return tr("moteur.contrat.refresh_positif", reglage=param.label,

@@ -21,7 +21,8 @@ import numpy as np  # noqa: E402
 from core.cca_decoder import CCADecoder  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
 from core.lsl_io import DecodedSSVEPPublisher, ssvep_channel_labels, stream_name  # noqa: E402
-from core.modes.contract import ModeSpec, Param, Rest, bande_de, params_bande, validate  # noqa: E402
+from core.modes.contract import (CIBLES_PHYSIQUES, ModeSpec, Param, Rest,  # noqa: E402
+                                 bande_de, params_bande, validate)
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Le défaut vient de `choose_frequencies`, la MÊME fonction que le stimulus : passer le même
@@ -263,7 +264,24 @@ SPEC = ModeSpec(
     # Le « Tester » de ce mode : la mesure du taux d'émission, jouée sur les réglages COURANTS
     # (la console passe les fréquences retenues à sa fenêtre guidée, qui les annonce au moteur).
     test_id="ssvep_taux",
+    # Les deux « Tester » ouvrent NOTRE fenêtre, qui fait clignoter les cibles à l'écran : avec des
+    # LED, elle montrerait des disques que personne ne regarde, à des fréquences que l'écran ne
+    # sait peut-être pas afficher.
+    tests_si=("cibles", "ecran", tr("mode.ssvep.tests_ecran")),
     params=(
+        # Sur quoi clignotent les cibles : un écran (la règle des diviseurs du rafraîchissement
+        # s'applique) ou des cibles physiques, des LED pilotées par un microcontrôleur (elle ne
+        # s'applique plus, cf. `contract.CIBLES_PHYSIQUES`). Le décodage, lui, ne change pas.
+        Param(
+            key="cibles",
+            label=tr("mode.ssvep.param.cibles.label"),
+            kind="choice",
+            default="ecran",
+            choices=("ecran", CIBLES_PHYSIQUES),
+            libelles=(tr("mode.ssvep.cibles.ecran"), tr("mode.ssvep.cibles.physiques")),
+            affecte_decodage=False,
+            help=tr("mode.ssvep.param.cibles.aide"),
+        ),
         Param(
             key="freqs",
             label=tr("mode.ssvep.param.freqs.label"),
@@ -281,6 +299,7 @@ SPEC = ModeSpec(
             unit="Hz",
             default=60.0,
             min=20.0, max=480.0,
+            actif_si=("cibles", "ecran"),
             affecte_decodage=False,
             help=tr("mode.ssvep.param.refresh_hz.aide"),
         ),

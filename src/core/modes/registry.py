@@ -123,6 +123,7 @@ def _params_serialises(params):
             "default": p.default_now(), "min": p.min, "max": p.max,
             "count": list(p.count) if p.count else None, "proposes": p.proposes,
             "choices": list(p.choices_now()), "help": p.help,
+            "libelles": list(p.libelles), "actif_si": list(p.actif_si),
         }
         for p in params
     ]
@@ -191,10 +192,14 @@ def serialize(spec, params=None):
                 "min": p.min, "max": p.max,
                 "count": list(p.count) if p.count else None,
                 "proposes": p.proposes,
-                "choices": list(p.choices_now()), "help": p.help
+                "choices": list(p.choices_now()), "help": p.help,
+                "libelles": list(p.libelles), "actif_si": list(p.actif_si),
             }
             for p in spec.params
         ],
+        # (clé, valeur, raison) : la condition des deux « Tester ». La console grise les boutons
+        # en disant `raison` ; le moteur refuse le test pour la même raison.
+        "tests_si": list(spec.tests_si),
         "rest": None if spec.rest is None else {
             "warmup_s": spec.rest.warmup_s,
             "duration_s": spec.rest.duration_s,
@@ -313,9 +318,21 @@ def check():
                 defauts.append(f"{spec.id}.{p.key} : kind « {p.kind} » inconnu")
             if p.kind == "choice" and not p.choices and not p.choices_fn:
                 defauts.append(f"{spec.id}.{p.key} : un choix sans choices")
+            if p.libelles and len(p.libelles) != len(p.choices):
+                defauts.append(f"{spec.id}.{p.key} : {len(p.libelles)} libellé(s) pour "
+                               f"{len(p.choices)} choix")
+            if p.actif_si and p.actif_si[0] not in cles:
+                defauts.append(f"{spec.id}.{p.key} : actif si « {p.actif_si[0]} », qui n'est pas "
+                               f"un paramètre de ce mode")
             if not p.help:
                 defauts.append(f"{spec.id}.{p.key} : pas de texte d'aide "
                                f"(un étudiant doit savoir ce qu'il règle)")
+        if spec.tests_si:
+            cle, valeur = spec.tests_si[0], spec.tests_si[1]
+            reglage = next((p for p in spec.params if p.key == cle), None)
+            if reglage is None or valeur not in reglage.choices:
+                defauts.append(f"{spec.id} : ses tests exigent « {cle} » = « {valeur} », qui "
+                               f"n'est pas un choix de ce mode")
 
         # Les voies annoncées doivent correspondre à ce qui sera réellement publié.
         if spec.stream and not spec.channels_for(spec.defaults()):

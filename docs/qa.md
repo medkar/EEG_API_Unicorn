@@ -470,6 +470,29 @@ du modèle recopié derrière « aucun choix disponible » (passe du 2026-09-23)
 
 → recette 1.8, 1.9, 1.13
 
+### ☐ 1.6 bis — SSVEP : des cibles physiques (LED), sans écran
+
+Page **SSVEP**, mode **arrêté**, dans cet ordre.
+
+1. Vérifie d'abord que « Cibles affichées sur » montre **un écran**, puis choisis **des cibles
+   physiques (LED…)**. Ne clique rien d'autre.
+   ✅ **1.6 bis.1** Le champ « Rafraîchissement de l'écran du stimulus » se **grise**, les deux boutons
+   « Tester sur une session » et « Tester librement » aussi, et une phrase apparaît dessous :
+   « Les deux tests affichent leurs cibles à l'écran : ils ne marchent pas avec des cibles physiques… ».
+2. Toujours sur **des cibles physiques**, mode arrêté : « Fréquences des cibles » à `12, 17, 20` →
+   **Appliquer**.
+   ✅ **1.6 bis.2** **Vert** : 17 Hz est accepté. (Sur un écran à 60 Hz, il est refusé : point 1.6.4.)
+3. Toujours sur **des cibles physiques**, mode arrêté : **« Proposer « Fréquences des cibles » »**.
+   ✅ **1.6 bis.3** Des fréquences au **demi-hertz** (des valeurs en ,5 ou entières), pas seulement les
+   diviseurs de 60 (12 · 15 · 20…).
+4. Repasse « Cibles affichées sur » à **un écran**, remets `12, 15, 20` → **Appliquer**.
+   ✅ **1.6 bis.4** Vert ; le rafraîchissement et les deux « Tester » redeviennent cliquables, la phrase
+   disparaît.
+
+❌ Régression : un « Tester » cliquable sur des cibles physiques ; 17 Hz refusé sur des cibles
+physiques ; « Proposer » qui ne rend que des diviseurs de 60 sur des cibles physiques ; le
+rafraîchissement qui reste grisé une fois revenu à l'écran.
+
 ### ☐ 1.7 — Le contrôle de liaison REFUSE, et ne se contourne pas
 
 Il s'intercale devant **chaque** « Commencer » : Vérifier le casque, Entraîner, Tester. Tu le verras

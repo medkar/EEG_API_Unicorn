@@ -156,6 +156,16 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   ne valent qu'en régime établi). Parmi les quatre modes à modèle, le coupe-bande n'aide vraiment
   que le c-VEP (fenêtre décodée ~4 → ~2 µV) ; le SSVEP a toujours eu le sien (filtre d'acquisition
   BrainFlow). Le remède — filtrer le signal continu AVANT la découpe — n'est pas fait.
+- **Le SSVEP accepte des CIBLES PHYSIQUES** (2026-10-19 : des LED pilotées par un microcontrôleur).
+  « Cibles affichées sur » : un écran / des cibles physiques, dans « 1. Régler ». Sur des LED, la
+  règle des diviseurs du rafraîchissement tombe (`contract.CIBLES_PHYSIQUES`), le rafraîchissement
+  se grise, « Proposer » choisit au demi-hertz (`config.PAS_CIBLES_PHYSIQUES_HZ`), et les deux
+  « Tester » sont refusés par le moteur et grisés par la page : notre fenêtre fait clignoter des
+  disques à l'écran. Trois champs DÉCLARATIFS du contrat portent tout ça, la console ne fait que
+  les lire : `Param.libelles` (ce que la liste montre), `Param.actif_si` (quand un réglage compte)
+  et `ModeSpec.tests_si` (quand les tests ont un sens, avec la raison). Le même jour, la page SSVEP
+  a perdu son second « Proposer » (sous le rafraîchissement, qui faisait le même calcul que celui du
+  pic alpha). **Jamais joué avec de vraies LED.**
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
   c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. ⚠️ **Publié ≠ validé** : seul le
   SSVEP a été décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300,
