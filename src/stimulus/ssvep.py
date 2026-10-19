@@ -138,6 +138,7 @@ from core.config import (COMMANDS, MARKER_STREAM_DEFAULT,  # noqa: E402
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, SSVEP_WARMUP_S,
                          choose_frequencies, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage (les fréquences/commandes viennent de config.py) --
@@ -186,22 +187,18 @@ FIX_DOT_R = 2
 MARGE_DECISION_S = 0.25
 
 # Les écrans de REPOS : du guidé, et de l'essai libre tant que le moteur se repose. UNE écriture.
-TITRE_CHAUFFE = "Le casque se stabilise"
-SOUS_CHAUFFE = "installe-toi, ne fixe aucune cible — la mesure commence après"
-TITRE_REPOS = "REPOS"
-SOUS_REPOS = "fixe la CROIX centrale, ne suis AUCUNE cible"
+TITRE_CHAUFFE = tr("fenetre.ssvep.titre_chauffe")
+SOUS_CHAUFFE = tr("fenetre.ssvep.sous_chauffe")
+TITRE_REPOS = tr("fenetre.ssvep.titre_repos")
+SOUS_REPOS = tr("fenetre.ssvep.sous_repos")
 # …et TOUS les autres textes de cette fenêtre, regroupés ici : `mise_en_page` mesure le plus large
 # pour placer le bloc une fois pour toutes, et la section K de `--smoke` exige de les avoir tous vus
 # posés HORS des cibles.
-TITRE_CONSIGNE = "REGARDE : {nom}"
-SOUS_CONSIGNE = "essai {i}/{n}"
-SOUS_FIXATION = "fixe la cible entourée"
-TITRE_PAUSE = "—"
-SOUS_PAUSE = "repose les yeux sur la croix"
-ETIQUETTE = "{nom}  {hz:.2f} Hz"
-HUD_TEXTE = "{fps:.0f} fps  |  sautées {sautees}  |  ESC = quitter"
+SOUS_FIXATION = tr("fenetre.ssvep.sous_fixation")
+TITRE_PAUSE = tr("fenetre.ssvep.titre_pause")
+SOUS_PAUSE = tr("fenetre.ssvep.sous_pause")
 # Le HUD le plus LARGE qu'on réserve : 3 chiffres de fps, 5 de frames sautées.
-HUD_PIRE = HUD_TEXTE.format(fps=999, sautees=99999)
+HUD_PIRE = tr("fenetre.ssvep.hud", fps=999, sautees=99999)
 
 # Quand le bloc titre + sous-titre ne tient dans aucune bande libre à sa taille, on le RÉDUIT par ces
 # paliers, jamais sous `POLICE_PLANCHER_PX`. Au-delà, il n'est PAS affiché (le terminal le dit) : un
@@ -324,7 +321,7 @@ MiseEnPage = namedtuple("MiseEnPage", "titre sous etiquette hud y_bloc ou echell
 
 def etiquette(c):
     """Le texte statique sous un disque. Une écriture : le rendu le pose, `mise_en_page` le mesure."""
-    return ETIQUETTE.format(nom=c["name"], hz=c["actual_hz"])
+    return tr("fenetre.ssvep.etiquette", nom=c["name"], hz=c["actual_hz"])
 
 
 def _hors_des_cibles(rect, centres, garde):
@@ -377,9 +374,9 @@ def mise_en_page(pygame, plan, size, n_essais):
                              + [r.bottom + ecart for r in etiquettes]), h - ecart))
     noms = [c["name"] for c in plan]
     titres = [TITRE_CHAUFFE, TITRE_REPOS, TITRE_PAUSE] + noms + [
-        TITRE_CONSIGNE.format(nom=n) for n in noms]
+        tr("fenetre.ssvep.titre_consigne", nom=n) for n in noms]
     sous = [SOUS_CHAUFFE, SOUS_REPOS, SOUS_FIXATION, SOUS_PAUSE,
-            SOUS_CONSIGNE.format(i=n_essais, n=n_essais)]
+            tr("fenetre.ssvep.sous_consigne", i=n_essais, n=n_essais)]
     bloc = ou = None
     for echelle in ECHELLES_TEXTE:
         p_titre = police(max(POLICE_PLANCHER_PX, int(max(20, int(span * 0.040)) * echelle)))
@@ -685,7 +682,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("SSVEP stimulus — EEG_API_Unicorn")
+    pygame.display.set_caption(tr("fenetre.ssvep.titre_fenetre"))
     pygame.mouse.set_visible(False)
 
     if refresh is None:
@@ -809,8 +806,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         # MESURE, l'affiche aussi : le FPS et le compte de frames sautées distinguent « ça marche »
         # de « ça a l'air de marcher ».
         if page.ancre_hud is not None:
-            pose_texte(win, page.hud, HUD_TEXTE.format(fps=fps_show, sautees=sautees), HUD,
-                       **page.ancre_hud)
+            pose_texte(win, page.hud, tr("fenetre.ssvep.hud", fps=fps_show, sautees=sautees),
+                       HUD, **page.ancre_hud)
 
     def apres_flip():
         """Le comptage qui suit CHAQUE image affichée : une frame de plus, et une frame SAUTÉE si
@@ -977,8 +974,9 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
         #    précédent s'éteint ICI, bien avant les données notées.
         if anneau is not None:
             anneau.mesure_commence()
-        if not phase(cue_s, designee=cible, titre=TITRE_CONSIGNE.format(nom=noms[cible]),
-                     sous=SOUS_CONSIGNE.format(i=i, n=len(ordre))):
+        if not phase(cue_s, designee=cible,
+                     titre=tr("fenetre.ssvep.titre_consigne", nom=noms[cible]),
+                     sous=tr("fenetre.ssvep.sous_consigne", i=i, n=len(ordre))):
             return _interrompu(i - 1, len(ordre))
         # 2. La fixation. Le `cue` part ICI, au premier flip : c'est l'instant à partir duquel le
         #    moteur compte `SSVEP_GUIDE_FIX_S` pour prélever la DERNIÈRE fenêtre de la fixation.
@@ -1807,7 +1805,7 @@ def _smoke_textes(chk):
         f"[K] (précondition) la garde des zones accepte le point rouge à SA place, et lui seul : "
         f"{etrangers[0]} étranger(s) pour le point centré, {etrangers[1]} pour un pixel rouge en "
         f"trop, {etrangers[2]} pour le point décalé d'un pixel")
-    queue_hud = HUD_TEXTE.rsplit("}", 1)[1]
+    queue_hud = tr("fenetre.ssvep.hud", fps=0, sautees=0).rsplit("0", 1)[1]
     pages = []
     try:
         for taille in RESOLUTIONS_SMOKE:
@@ -1872,8 +1870,8 @@ def _smoke_textes(chk):
                 noms = [c["name"] for c in plan]
                 attendus = ({TITRE_CHAUFFE, SOUS_CHAUFFE, TITRE_REPOS, SOUS_REPOS, SOUS_FIXATION,
                              TITRE_PAUSE, SOUS_PAUSE} | set(noms)
-                            | {TITRE_CONSIGNE.format(nom=n) for n in noms}
-                            | {SOUS_CONSIGNE.format(i=i, n=len(plan))
+                            | {tr("fenetre.ssvep.titre_consigne", nom=n) for n in noms}
+                            | {tr("fenetre.ssvep.sous_consigne", i=i, n=len(plan))
                                for i in range(1, len(plan) + 1)}
                             | {etiquette(c) for c in plan})
                 manquants = sorted(attendus - vus)

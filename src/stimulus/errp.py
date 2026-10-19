@@ -163,6 +163,7 @@ NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurren
 # relire les deux boucles avant d'affirmer quoi que ce soit ici.
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
+from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 
@@ -317,7 +318,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("ErrP stimulus — EEG_API_Unicorn")
+    pygame.display.set_caption(tr("fenetre.errp.titre"))
     pygame.mouse.set_visible(False)
 
     if refresh is None:
@@ -340,7 +341,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     # ⚠️ Attendre le moteur AVANT le premier pas — même raisonnement que stimulus/p300.py : sans
     # ça, un étudiant qui a oublié de lancer le moteur regarde un écran fonctionnel sans le moindre
     # signe que personne n'écoute. L'attente est BORNÉE et on démarre quand même après.
-    attente_initiale_s, note_initiale = PAUSE_NOUVELLE_COURSE_S, "nouvelle cible"
+    attente_initiale_s, note_initiale = PAUSE_NOUVELLE_COURSE_S, tr("fenetre.errp.nouvelle_cible")
     if attente_consommateur_s > 0 and not outlet.wait_for_consumers(attente_consommateur_s):
         print(f"[errp-stim] ⚠️ PERSONNE n'écoute « {stream_name} » après "
               f"{attente_consommateur_s:g} s. Le moteur est-il lancé "
@@ -360,8 +361,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
               f"{ATTENTE_MOTEUR_REPOS_S:g} s, cf. core/modes/errp.py). Piste STATIQUE en attendant "
               f"— les pas décodés seront ceux d'après. `--no-wait` pour démarrer tout de suite.")
         attente_initiale_s = ATTENTE_MOTEUR_DECODAGE_S
-        note_initiale = (f"le moteur chauffe (~{ATTENTE_MOTEUR_DECODAGE_S:g} s) — la piste "
-                         f"démarre après")
+        note_initiale = tr("fenetre.errp.attente_decodage", secondes=f"{ATTENTE_MOTEUR_DECODAGE_S:g}")
 
     w, h = size
     cy = h / 2
@@ -424,10 +424,11 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             win.blit(txt, txt.get_rect(center=(int(w / 2), int(cy + h * 0.16))))
         # L'indicateur d'écoute, en direct : c'est la seule chose de cet écran qui distingue
         # « ça marche » de « ça a l'air de marcher ».
-        ecoute = "moteur À L'ÉCOUTE" if outlet.have_consumers() else "PERSONNE n'écoute"
+        ecoute = (tr("fenetre.errp.ecoute") if outlet.have_consumers()
+                  else tr("fenetre.errp.sans_ecoute"))
         taux_mesure = f"{erreurs_total / pas_total:.0%}" if pas_total else "—"
-        hud = hud_font.render(f"pas {pas_total}  |  erreurs {taux_mesure} (visé {taux_erreur:.0%})  "
-                              f"|  {refresh:.0f} fps  |  {ecoute}  |  ESC = quitter", True, HUD)
+        hud = hud_font.render(tr("fenetre.errp.hud", pas=pas_total, erreurs=taux_mesure,
+                                 voulu=taux_erreur, fps=refresh, ecoute=ecoute), True, HUD)
         win.blit(hud, (12, 10))
 
     def tenir(pos, cible, secondes, note=None):
@@ -473,9 +474,8 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # ⚠️ Pas le repos du MODE : une calibration n'en a pas, et l'attendre quand même ferait
         # abandonner la séance avant son premier pas (cf. `ATTENTE_MOTEUR_S` en tête de fichier).
         attente_initiale_s = attente_avant_premier_pas(calibrer, tester, attente_moteur_s)
-        note_initiale = ("le casque se stabilise, puis le moteur mesure ton bruit de fond — ne "
-                         "bouge plus" if tester else
-                         "le casque se stabilise — installe-toi, ne bouge plus")
+        note_initiale = (tr("fenetre.errp.attente_test") if tester
+                         else tr("fenetre.errp.attente_entrainement"))
         if attente_initiale_s > 0:
             print(f"[errp-stim] le moteur JETTE tout pendant sa chauffe"
                   + (" puis mesure ton bruit de fond" if tester else "")
@@ -546,11 +546,12 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             # second qui fait le travail. Le protocole d'entraînement joue les deux au même
             # endroit, avec les mêmes durées (`core/errp_track.py`).
             tenir(pos, cible, PAUSE_FIN_COURSE_S,
-                  note="cible atteinte" if atteinte else "on recommence")
+                  note=(tr("fenetre.errp.cible_atteinte") if atteinte
+                        else tr("fenetre.errp.recommence")))
             pos = n_cells // 2
             cible = nouvelle_cible(n_cells, rng)
             n_pas_course = 0
-            tenir(pos, cible, PAUSE_NOUVELLE_COURSE_S, note="nouvelle cible")
+            tenir(pos, cible, PAUSE_NOUVELLE_COURSE_S, note=tr("fenetre.errp.nouvelle_cible"))
         else:
             tenir(pos, cible, PAUSE_INTER_PAS_S)     # pause inter-pas / settle (cadence du modèle)
 
@@ -560,7 +561,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # publié dans la foulée du dernier pas arriverait bien après lui, mais l'écran, lui, serait
         # déjà noir et le sujet aurait bougé. Même geste que chez le P300.
         tenir(pos, cible, ERRP_EPOCH_S + 0.15,
-              note=("test terminé" if tester else "entraînement terminé") + " — ne bouge plus")
+              note=(tr("fenetre.errp.fin_test") if tester else tr("fenetre.errp.fin_entrainement")))
         emet({"mode": "errp", "event": "calib_end"}, None, False)
         print(f"[errp-stim] {'test' if tester else 'entraînement'} terminé : {pas_total} pas, "
               f"« calib_end » envoyé — le moteur "

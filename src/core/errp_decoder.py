@@ -39,6 +39,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (ERRP_BAND, ERRP_EPOCH_S, ERRP_PRE_S, ERRP_TNR_TARGET,  # noqa: E402
                     ERRP_XDAWN_NFILTER, use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from core.p300_decoder import (P300Model, bandpass, build_pipe,  # noqa: E402,F401  (réutilisés/ré-exportés)
                           epoch_from_stream)
 
@@ -261,18 +262,14 @@ class ErrPModel:
                 # au CV et ont été avalés par le `except … continue` ci-dessus. Il faut le dire :
                 # sinon le refus en aval accuserait « calibration trop courte » et renverrait
                 # l'étudiant refaire une séance casque pour rien.
-                self.echec_oof_ = (
-                    f"validation croisée échouée pour TOUTES les valeurs de nfilter essayées "
-                    f"({', '.join(str(nf) for nf in ERRP_XDAWN_NFILTER_CANDIDATES)}) sur "
-                    f"{len(y)} essais — ce n'est PAS un manque d'essais : voir les lignes "
-                    f"« [errp] nfilter=… : CV échouée » de l'entraînement (voie plate/électrode "
-                    f"décollée rendant la covariance singulière, ou dérive de version sklearn)")
+                # Les lignes « [errp] nfilter=… : CV échouée » du terminal disent pour quel réglage.
+                self.echec_oof_ = tr(
+                    "mode.errp.cause.cv_echouee", n=len(y),
+                    reglages=", ".join(str(nf) for nf in ERRP_XDAWN_NFILTER_CANDIDATES))
         else:
             compte = np.bincount(y, minlength=2)
-            self.echec_oof_ = (
-                f"calibration trop courte : {len(y)} essais ({int(compte[CORRECT])} corrects / "
-                f"{int(compte[ERROR])} erreurs) — il en faut au moins 10, des DEUX classes, et "
-                f"au moins 2 de chaque")
+            self.echec_oof_ = tr("mode.errp.cause.trop_courte", n=len(y),
+                                 corrects=int(compte[CORRECT]), erreurs=int(compte[ERROR]))
         self.core.pipe.fit(Xf, y)     # modèle final (nfilter retenu) sur TOUTES les données
         return self
 
@@ -402,7 +399,7 @@ def _gardes():
     #    Le refus en aval (`errp_models.charger`) ne devine plus : il recopie cette phrase.
     court = ErrPModel(fs=fs).fit(epochs[:5], np.asarray([CORRECT, ERROR, CORRECT, ERROR, CORRECT]),
                                  n_perm=0)
-    chk(court.oof_scores_ is None and court.echec_oof_ and "trop courte" in court.echec_oof_
+    chk(court.oof_scores_ is None and court.echec_oof_ and "trop court" in court.echec_oof_
         and "10" in court.echec_oof_,
         f"5 essais : pas de scores hors-pli, et la cause est ENREGISTRÉE ({court.echec_oof_})")
     chk(court.n_epoques_ == 5, f"...et le nombre d'époques d'entraînement aussi ({court.n_epoques_})")
@@ -424,8 +421,8 @@ def _gardes():
     finally:
         globals()["build_pipe"] = vrai_build
     chk(modele_cv.oof_scores_ is None and modele_cv.echec_oof_
-        and "validation croisée" in modele_cv.echec_oof_
-        and "trop courte" not in modele_cv.echec_oof_,
+        and "essais non vus" in modele_cv.echec_oof_
+        and "trop court" not in modele_cv.echec_oof_,
         f"CV échouée sur tous les nfilter : la cause dit CE QUI s'est passé, et surtout PAS "
         f"« trop courte » — 24 essais n'ont pas manqué d'essais ({modele_cv.echec_oof_})")
 

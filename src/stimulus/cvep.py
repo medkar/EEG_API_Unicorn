@@ -181,6 +181,7 @@ from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E
                          CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
+from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
@@ -204,7 +205,7 @@ LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
 CROIX = LABEL               # la croix de repos de `--libre` (`retour.ReposDuMoteur`), au centre
-TEXTE_REPOS = "ne fixe aucune cible"   # …et le bandeau qui l'accompagne
+TEXTE_REPOS = tr("fenetre.cvep.repos")   # …et le bandeau qui l'accompagne
 
 # Rayon du point de fixation, en PIXELS et non proportionnel — la MÊME valeur que
 # `archive/ui.py:FIX_DOT_R`, celle sous laquelle les modèles c-VEP ont été calibrés. Quelques
@@ -626,7 +627,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("c-VEP stimulus — EEG_API_Unicorn")
+    pygame.display.set_caption(tr("fenetre.cvep.titre"))
     pygame.mouse.set_visible(False)
 
     if refresh is None:
@@ -746,8 +747,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                   f"ne décode pas encore. Le clignotement démarre tout de suite ; `--seconds` ne "
                   f"compte qu'après.")
         # En libre, aucune cible n'est entourée : la consigne du bandeau perd sa seconde moitié.
-        note = (f"le moteur chauffe (~{attente_moteur_s:g} s)"
-                + ("" if libre else " — fixe la cible entourée"))
+        note = (tr("fenetre.cvep.bandeau_chauffe", s=f"{attente_moteur_s:g}") if libre
+                else tr("fenetre.cvep.bandeau_chauffe_consigne", s=f"{attente_moteur_s:g}"))
         fin_note = time.perf_counter() + attente_moteur_s
         t_start = None
 
@@ -836,19 +837,22 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         bandeau = note
         if repos is not None and repos.en_repos:
             _retour.dessine_croix(pygame, win, (size[0] // 2, size[1] // 2), CROIX)
-            bandeau = TEXTE_REPOS if note is None else f"{note} — {TEXTE_REPOS}"
+            bandeau = (TEXTE_REPOS if note is None
+                       else tr("fenetre.cvep.bandeau_avec_repos", note=note, repos=TEXTE_REPOS))
         if bandeau is not None:
             txt = note_font.render(bandeau, True, NOTE)
             win.blit(txt, txt.get_rect(center=(int(size[0] / 2), int(size[1] * 0.93))))
         # L'indicateur d'écoute, en direct : c'est la seule chose de cet écran qui distingue
         # « ça marche » de « ça a l'air de marcher ».
-        ecoute = "moteur À L'ÉCOUTE" if outlet.have_consumers() else "PERSONNE n'écoute"
+        ecoute = (tr("fenetre.cvep.hud_ecoute") if outlet.have_consumers()
+                  else tr("fenetre.cvep.hud_silence"))
         hud = hud_font.render(
-            f"cycles {cycles}  |  {refresh:.0f} fps  |  sautées {sautees}  |  "
+            tr("fenetre.cvep.hud_base", cycles=cycles, fps=refresh, sautees=sautees)
             + ("" if libre else
-               f"fixe « {plan[consigne]['name'] if consigne is not None else '—'} »  |  ")
+               tr("fenetre.cvep.hud_cible",
+                  nom=plan[consigne]['name'] if consigne is not None else '—'))
             + (f"{etat_calib}  |  " if etat_calib else "")
-            + f"{ecoute}  |  ESC = quitter", True, HUD)
+            + tr("fenetre.cvep.hud_fin", ecoute=ecoute), True, HUD)
         win.blit(hud, (12, 10))
 
     def annonce_bloc(c, ts, geste="les_deux"):
@@ -881,13 +885,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
                        "cible": int(cible), "nom": plan[cible]["name"],
                        "cycle": int(cycles), "frame": int(frame), "bloc": int(bloc)})
         if role == "fin":
-            etat_calib = "séance terminée"
+            etat_calib = tr("fenetre.cvep.etat_fin")
         else:
             # ⚠️ Un TEST n'enregistre rien : le moteur NOTE. Le mot est à l'écran pendant toute la
             # séance, et c'est le seul repère de l'étudiant entre les deux gestes.
-            etat_calib = (f"bloc {bloc + 1}/{n_blocs} — "
-                          + (("LE MOTEUR NOTE" if tester else "ENREGISTRE") if role == "bloc"
-                             else "cherche la cible (jeté)"))
+            etat_calib = tr("fenetre.cvep.etat_bloc", i=bloc + 1, n=n_blocs, geste=(
+                (tr("fenetre.cvep.etat_note") if tester else tr("fenetre.cvep.etat_enregistre"))
+                if role == "bloc" else tr("fenetre.cvep.etat_jete")))
 
     t_flip_precedent = None
     seance_complete = False

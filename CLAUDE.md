@@ -92,8 +92,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   français. **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
   `{valeurs}` exactes, aucun texte orphelin, aucun littéral passé à un widget de la console. Hors
   règle : commentaires, `print()` du terminal, messages d'autotest, et le **contrat réseau** (noms
-  de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais. ⚠️ Les fenêtres pygame de
-  `src/stimulus/` ne sont PAS encore migrées. Une aide de réglage s'affiche dans une bulle
+  de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais. Les fenêtres pygame de
+  `src/stimulus/` y passent aussi (2026-10-19, `fenetres.json`) ; ⚠️ le contrôle vérifie leurs
+  clés et leurs `{valeurs}`, mais ne repère un texte EN DUR que dans la console. Une aide de réglage s'affiche dans une bulle
   **« ⓘ »** au survol, jamais en texte gris sous le champ.
 - 🔴 **UNE PAGE DE MODE A SES GESTES NUMÉROTÉS, ET PAS UN DE PLUS ; « TESTER » POSSÈDE SA SÉQUENCE
   ENTIÈRE** (2026-09-22). Même rang que les deux règles ci-dessus. Une page = **1. Régler ·

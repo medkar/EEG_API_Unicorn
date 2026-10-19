@@ -95,6 +95,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
                          P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
+from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus.retour import (ATTENTE_DECISION_S, RETOUR_AFFICHE_S, Retour,  # noqa: E402
@@ -243,7 +244,9 @@ def mots_ecran(tester):
     puis cette fenêtre prend tout l'écran. Si elle écrit « Calibration P300 », il croit s'être
     trompé de bouton. L'autotest lit cette fonction.
     """
-    return ("Test P300", "Test terminé") if tester else ("Entraînement P300", "Entraînement terminé")
+    if tester:
+        return tr("fenetre.p300.titre_test"), tr("fenetre.p300.titre_test_fin")
+    return tr("fenetre.p300.titre_entrainement"), tr("fenetre.p300.titre_entrainement_fin")
 
 
 def target_positions(n_targets, span):
@@ -340,7 +343,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         win = pygame.display.set_mode(size, flags, vsync=1)
     except (TypeError, pygame.error):
         win = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("P300 stimulus — EEG_API_Unicorn")
+    pygame.display.set_caption(tr("fenetre.p300.titre"))
     pygame.mouse.set_visible(False)
 
     if refresh is None:
@@ -462,10 +465,11 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         dessine_cibles(allumee)
         # L'indicateur d'écoute, en direct : c'est la seule chose de cet écran qui distingue
         # « ça marche » de « ça a l'air de marcher ».
-        ecoute = "moteur À L'ÉCOUTE" if outlet.have_consumers() else "PERSONNE n'écoute"
+        ecoute = (tr("fenetre.p300.moteur_ecoute") if outlet.have_consumers()
+                  else tr("fenetre.p300.moteur_absent"))
         soa = f"{statistics.median(soa_mesures) * 1000:.0f} ms" if soa_mesures else "—"
-        hud = hud_font.render(f"manche {round_num}  |  {refresh:.0f} fps  |  SOA mesuré {soa}  "
-                              f"|  {ecoute}  |  ESC = quitter", True, HUD)
+        hud = hud_font.render(tr("fenetre.p300.hud", manche=round_num, fps=refresh, soa=soa,
+                                 ecoute=ecoute), True, HUD)
         win.blit(hud, (12, 10))
 
     def ecran_statique(secondes, titre, note=None, marqueur_cue=False, avant_la_fin=None,
@@ -504,7 +508,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                 grand = big_font.render(titre, True, PAUSE)
                 win.blit(grand, grand.get_rect(center=(int(cx), int(cy))))
                 restant = max(0.0, secondes - (time.perf_counter() - t0))
-                sous = hud_font.render(note or f"la manche suivante commence dans {restant:.1f} s",
+                sous = hud_font.render(note or tr("fenetre.p300.pause_restant", restant=restant),
                                        True, HUD)
                 win.blit(sous, sous.get_rect(center=(int(cx), int(cy + span * 0.06))))
             pygame.display.flip()
@@ -572,7 +576,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                   f"cf. core/modes/marker_calib.py) : consigne à l'écran en attendant, la "
                   f"première manche démarre après.")
             ecran_statique(attente_moteur_s, titre_chauffe,
-                           note="le casque se stabilise — installe-toi, ne bouge plus")
+                           note=tr("fenetre.p300.chauffe_note"))
 
     while running:
         if calibrer and round_num >= rounds:
@@ -586,8 +590,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
             # sélection en leave-one-round-out n'aurait alors rien à retrouver pour elles.
             cue_courant = (round_num - 1) % int(targets)
             ecran_statique(P300_PAUSE_MANCHE_S,
-                           f"FIXE la cible {cue_courant} et COMPTE ses éclairs",
-                           note=f"manche {round_num}/{rounds} — ne bouge pas, cligne peu",
+                           tr("fenetre.p300.consigne", cible=cue_courant),
+                           note=tr("fenetre.p300.consigne_note", manche=round_num, total=rounds),
                            marqueur_cue=True, avant_la_fin=efface)
         for m in build_markers(targets, reps, rng):
             if not running:
@@ -643,7 +647,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                     # En calibration, la pause est jouée EN TÊTE de la manche suivante, avec la
                     # consigne : la jouer aussi ici en ferait deux d'affilée (5 s d'écran fixe) et
                     # rien ne le dirait, sinon une séance deux fois plus longue qu'annoncée.
-                    ecran_statique(P300_PAUSE_MANCHE_S, "choisis ta cible et fixe-la",
+                    ecran_statique(P300_PAUSE_MANCHE_S, tr("fenetre.p300.choisis_cible"),
                                    avant_la_fin=efface)
 
         # ⚠️ Sortir en pleine manche (ESC, fenêtre fermée, `--seconds` atteint) laisserait le
@@ -664,7 +668,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # (En test, la dernière manche a déjà eu sa phase de retour, dans la boucle : même geste
         # que les autres.)
         cue_courant = None
-        note_fin = "ne bouge plus — la dernière époque finit de s'enregistrer"
+        note_fin = tr("fenetre.p300.fin_note")
         ecran_statique(P300_EPOCH_S + 0.15, titre_fin, note=note_fin)
         emet({"mode": "p300", "event": "calib_end"})
         print(f"[p300-stim] {'test' if tester else 'entraînement'} terminé : {rounds} manches, "
