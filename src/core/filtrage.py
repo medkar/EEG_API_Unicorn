@@ -2,13 +2,12 @@
 
 Une seule écriture pour les quatre modes à modèle (Motor Imagery, P300, ErrP, c-VEP) : chacun
 garde sa fonction `bandpass` — c'est le nom que ses appelants connaissent —, mais elle délègue ici.
-Avant le 2026-09-30, trois modules écrivaient chacun leur Butterworth, identiques à l'axe près.
 
-Pourquoi le coupe-bande est à part, et pourquoi il est là partout (2026-09-30) : un passe-bande
+Pourquoi le coupe-bande est à part, et pourquoi il est là partout : un passe-bande
 ne s'arrête pas net à son bord, il écrase de plus en plus à mesure qu'on s'en éloigne. Le 50 Hz
 du secteur est donc écrasé quand le bord haut est loin (−114 dB pour le P300, bord à 12 Hz), et
 seulement atténué quand il est proche (−12 dB pour le c-VEP, bord à 45 Hz : 20 µV de secteur y
-laissaient 5 µV, autant que l'EEG). Depuis que la bande se règle, n'importe quel mode peut monter
+laissent 5 µV, autant que l'EEG). La bande se règle, donc n'importe quel mode peut monter
 son bord près du secteur : le coupe-bande, étroit (±~0,8 Hz), s'ajoute donc toujours, et le
 secteur (50 ou 60 Hz) est un réglage du POSTE (`config.SECTEUR_HZ`), enregistré dans chaque
 modèle avec sa bande.
@@ -18,8 +17,8 @@ filtre à phase non nulle décalerait la réponse, et le P300 comme le c-VEP viv
 au stimulus. (Les tracés du Brut, eux, filtrent au fil de l'eau : `core/filtres_affichage.py`.)
 
 ⚠️ **Des sections (`sos`), pas des coefficients (b, a).** Aux bandes par défaut, les deux formes
-rendent le même signal à 3·10⁻⁵ µV près (mesuré le 2026-09-30) : rien ne change pour un modèle
-existant. Mais la bande se règle maintenant (jusqu'à 0,5 Hz pour le P300 et l'ErrP), et plus la
+rendent le même signal à 3·10⁻⁵ µV près (mesuré) : rien ne change pour un modèle
+existant. Mais la bande se règle (jusqu'à 0,5 Hz pour le P300 et l'ErrP), et plus la
 coupure descend, plus la forme (b, a) d'un ordre 8 se conditionne mal (elle s'écarte déjà de
 0,01 µV à 0,1 Hz) — les sections sont la forme que la documentation de scipy recommande pour
 cette raison.
@@ -36,7 +35,7 @@ from scipy.signal import butter, iirnotch, sosfiltfilt, tf2sos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import SECTEUR_Q  # noqa: E402
 
-#: L'ordre des Butterworth des décodeurs — celui qu'ils avaient chacun avant d'être réunis ici.
+#: L'ordre des Butterworth des décodeurs.
 ORDRE = 4
 
 
@@ -58,7 +57,7 @@ def passe_bande(x, fs, bande, secteur_hz=None, axis=-1, ordre=ORDRE):
     """`x` filtré le long de `axis` : passe-bande `bande` (Hz), puis coupe-bande `secteur_hz`.
 
     Rend un NOUVEAU tableau ; `x` n'est jamais modifié. `secteur_hz=None` : pas de coupe-bande —
-    c'est ce que reçoit un modèle entraîné avant le 2026-09-30, qui doit décoder comme il a appris.
+    c'est ce que reçoit un modèle entraîné sans coupe-bande, qui doit décoder comme il a appris.
     """
     return sosfiltfilt(sections(fs, bande, secteur_hz, ordre), np.asarray(x, dtype=float),
                        axis=axis)
@@ -82,7 +81,7 @@ def _selftest():
     avant = bruit.copy()
 
     # (1) Rien ne change pour un modèle existant : aux bandes des quatre modes, le même signal que
-    # l'ancienne écriture (b, a) + filtfilt, qu'on recalcule ici exprès.
+    # l'écriture (b, a) + filtfilt, qu'on recalcule ici exprès.
     for bande in ((8.0, 30.0), (1.0, 12.0), (1.0, 10.0), (2.0, 45.0)):
         b, a = butter(ORDRE, [bande[0] / (fs / 2), bande[1] / (fs / 2)], btype="band")
         ancien = filtfilt(b, a, bruit, axis=-1)
@@ -133,8 +132,8 @@ def _selftest():
         "un bord haut au-dessus de Nyquist est borné, pas refusé en plein entraînement")
 
     # (6) L'écriture elle-même : des SECTIONS, à l'ordre demandé, avec un coupe-bande de Q 30.
-    # Trois mutants survivaient aux contrôles ci-dessus (revue du 2026-09-30) : revenir à (b, a)
-    # — le contrôle (1) exige justement l'égalité avec (b, a) —, ignorer `ordre`, changer `Q`.
+    # Les contrôles ci-dessus ne détectent pas trois altérations : revenir à (b, a) — le contrôle
+    # (1) exige justement l'égalité avec (b, a) —, ignorer `ordre`, changer `Q`.
     from scipy.signal import sosfiltfilt as _sosfiltfilt
     from scipy.signal import sosfreqz
     exact = _sosfiltfilt(sections(fs, (0.5, 12.0), 50.0), bruit, axis=-1)
@@ -153,7 +152,7 @@ def _selftest():
         f"la largeur du coupe-bande est celle de Q = 30 : à 49 Hz, gain {gain_49:.2f} (Q 15 "
         f"donnerait 0,27, Q 100 : 0,94)")
 
-    # (7) ⚠️ CE QUE LE COUPE-BANDE NE FAIT PAS, mesuré le 2026-09-30 : sur une ÉPOQUE COURTE filtrée
+    # (7) ⚠️ CE QUE LE COUPE-BANDE NE FAIT PAS, mesuré : sur une ÉPOQUE COURTE filtrée
     # seule, le secteur fuit aux BORDS, coupe-bande ou pas. Le prolongement impair d'une sinusoïde
     # est une sinusoïde d'une autre phase, et un filtre étroit met ~50 échantillons à s'y refaire.
     # Les chiffres « −114 dB à 50 Hz » d'une bande 1-12 Hz ne valent qu'en régime établi : sur une

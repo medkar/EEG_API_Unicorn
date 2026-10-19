@@ -121,18 +121,16 @@ def table_pour(hasard):
             (0.00, tr("calib.mi.verdict.faible")))
 
 
-VERDICTS = table_pour(1.0 / len(MI_LABELS))     # la table à 3 classes, celle d'avant
+VERDICTS = table_pour(1.0 / len(MI_LABELS))     # la table à 3 classes
 
 # La phrase d'honnêteté du MI : OBLIGATOIRE avec le résultat, quelle que soit l'accuracy. Un
 # « 40 % » sans elle ne veut rien dire.
 #
-# ⚠️ Elle vit ICI, avec le chiffre qu'elle explique, et PAS dans `console/calib_page.py` où elle
-# se trouvait jusqu'au 2026-09-07. Elle y était une constante de l'interface, donc affichée sous
-# TOUS les résultats de calibration : la page est générique, elle ne connaît aucun mode. Depuis
-# que le P300 se calibre lui aussi depuis la console (tâche 4), cette phrase — « 40 % à trois
-# classes », « niveau du hasard 33 % » — se serait affichée sous une SÉLECTION parmi six cibles,
-# où elle n'a aucun sens. Chaque calibration porte donc la sienne dans son résultat, comme le
-# P300 le fait déjà (`p300_calib.HONNETETE`).
+# Elle vit ICI, avec le chiffre qu'elle explique, et PAS dans `console/calib_page.py` : la page
+# est générique et ne connaît aucun mode, donc une phrase de page s'afficherait sous tous les
+# résultats — « 40 % à trois classes », « niveau du hasard 33 % » sous une sélection parmi six
+# cibles, où elle n'a aucun sens. Chaque calibration porte la sienne dans son résultat, comme
+# le P300 (`p300_calib.HONNETETE`).
 HONNETETE = tr("calib.mi.honnetete")
 
 # Le nom de chaque méthode, tel que le résultat l'affiche. Les CLÉS sont les identifiants de
@@ -161,9 +159,9 @@ def horodatage(maintenant=None):
     """`AAAAMMJJ-HHMMSS`. Le paramètre existe pour que le test soit reproductible.
 
     ⚠️ `maintenant or _time.time()` serait faux : `0.0` (l'epoch Unix, un instant valide) est
-    FALSY en Python, donc `or` le remplacerait par l'heure réelle — exactement le piège que le
-    commit frère du même jour documente ailleurs dans ce fichier (cf. `now=0.0` dans
-    `calibration.py`). Inatteignable en séance réelle, mais un piège posé pour le prochain test.
+    FALSY en Python, donc `or` le remplacerait par l'heure réelle — c'est le
+    même piège que `now=0.0` dans `calibration.py`. Inatteignable en séance réelle, mais un
+    piège posé pour le prochain test.
     """
     return _time.strftime("%Y%m%d-%H%M%S",
                           _time.localtime(_time.time() if maintenant is None else maintenant))
@@ -266,14 +264,13 @@ class MICalibration(CalibrationRuntime):
     # même raison : un test doit pouvoir jouer une séance entière en quelques secondes, et il ne
     # peut le faire qu'en raccourcissant la fenêtre EN MÊME TEMPS que l'imagerie. Les raccourcir
     # séparément donne `imagery_s < window_s`, donc ZÉRO fenêtre découpée et un entraînement qui
-    # refuse — un piège dans lequel ce plan est tombé en s'écrivant.
+    # refuse.
     window_s = MI_WINDOW_S
     step_s = MI_TRAIN_STEP_S
 
-    # ⚠️ Plus de `__init__` ici : `dossier` est porté par `CalibrationRuntime`, et il n'a PLUS de
-    # repli sur `DATA_DIR`. C'est le correctif du chantier « seul point d'entrée » : cette
-    # calibration sauvegardait AVANT d'annoncer sa précision, donc une séance ratée devenait
-    # aussitôt le modèle le plus récent de `data/` — celui que le moteur, la console et les
+    # Pas de `__init__` ici : `dossier` est porté par `CalibrationRuntime`, qui n'a AUCUN repli
+    # sur `DATA_DIR`. Une calibration n'écrit jamais dans `data/` : sinon une séance ratée
+    # deviendrait aussitôt le modèle le plus récent — celui que le moteur, la console et les
     # applis proposent par défaut — sans que personne ait pu la refuser.
 
     @property
@@ -358,14 +355,14 @@ class MICalibration(CalibrationRuntime):
                                                     prefixe=CALIB_CANDIDAT_PREFIXE)
         # Le `.npz` D'ABORD, le `.joblib` ENSUITE : si `savez` échoue (disque plein, verrou
         # antivirus), l'exception remonte AVANT que le modèle n'existe — aucun fichier orphelin.
-        # Dans l'ordre inverse, un `.npz` qui échoue après un `.joblib` déjà écrit laissait un
+        # Dans l'ordre inverse, un `.npz` qui échoue après un `.joblib` déjà écrit laisserait un
         # MODÈLE sur le disque, visible dans la liste de la console, sans enregistrement ni
         # provenance : exactement ce que « l'échec ne produit AUCUN fichier » interdit. Un `.npz`
         # orphelin, lui, est inoffensif — rien ne le liste, rien ne le propose.
-        # Avec la géométrie, le FILTRE du modèle (2026-09-30) : `research/mi_compare.py` rejoue une
-        # séance avec le secteur où elle a été enregistrée. `secteur_hz = 0` veut dire « pas de
+        # Avec la géométrie, le FILTRE du modèle : `research/mi_compare.py` rejoue une séance
+        # avec le secteur où elle a été enregistrée. `secteur_hz = 0` veut dire « pas de
         # coupe-bande » (la convention de `core/filtrage.py`, comme le `.npz` du P300) ; un `.npz`
-        # d'avant ce champ n'a ni bande ni secteur, et l'outil le dit.
+        # sans ces champs n'a ni bande ni secteur, et l'outil le dit.
         # La mise en route part dans le modèle (« Tester » la rejoue) ET dans l'enregistrement :
         # c'est elle qu'on compare d'une séance à l'autre.
         modele.mise_en_route_s = float(self.cue_s)
@@ -382,7 +379,7 @@ class MICalibration(CalibrationRuntime):
         # `None` PROPAGÉ, jamais recopié en 0.0 : un 0 % afficherait « FAIBLE — contact des
         # électrodes, immobilité… », un diagnostic précis et SANS RAPPORT avec la vraie cause (pas
         # assez d'essais distincts pour former deux plis). `mi_models.decrire()` et
-        # `MIModel.fit` préservent déjà ce None ailleurs dans le chantier ; il doit l'être ICI aussi.
+        # `MIModel.fit` préservent ce None, et il doit l'être ICI aussi.
         cv = modele.cv_groupee_
         hasard = 1.0 / len(self.classes)
         if cv is None:
@@ -538,7 +535,7 @@ def _selftest():
             self.acq = _FausseAcq()
             self.runtime = runtime
             self.rng = rng
-            self.rendus = []      # les époques RENDUES, dans l'ordre des appels — cf. A3 plus bas
+            self.rendus = []      # les époques RENDUES, dans l'ordre des appels — cf. plus bas
             self.alias = alias or {}    # tâche libre -> classe d'origine dont elle reçoit l'ERD
 
         def recent_window(self, seconds):
@@ -599,8 +596,8 @@ def _selftest():
         # Le verdict doit être RECALCULÉ depuis la CV honnête, jamais recopié depuis la naïve —
         # sinon l'étudiant lit un verdict optimiste pendant que le chiffre honnête, affiché juste
         # à côté, est plus bas. Une implémentation qui calculerait verdict(cv_naive) tout en
-        # gardant cv_groupee honnête passait les 19 assertions précédentes (mutant confirmé) :
-        # celle-ci recoupe explicitement les deux au lieu de les vérifier séparément.
+        # gardant cv_groupee honnête passerait toutes les assertions précédentes : celle-ci
+        # recoupe explicitement les deux au lieu de les vérifier séparément.
         # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
         # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
         chk(not _verifier_affichage(res),
@@ -611,8 +608,8 @@ def _selftest():
 
         # La phrase d'honnêteté voyage AVEC le résultat, et c'est bien CELLE DU MI. L'écran qui
         # l'affiche (`console/calib_page.py`) est générique : il ne connaît aucun mode, donc il ne
-        # peut pas la choisir. Tant qu'elle vivait dans l'interface, elle s'affichait aussi sous
-        # le résultat du P300 — « 40 % à trois classes » sous une sélection parmi six cibles.
+        # peut pas la choisir : une phrase d'interface s'afficherait aussi sous le résultat du
+        # P300 — « 40 % à trois classes » sous une sélection parmi six cibles.
         chk(res.get("honnetete") == HONNETETE and "40 %" in HONNETETE,
             "le résultat porte la phrase d'honnêteté du MI (repère : 40 % à trois tâches)")
         chk("AUC" not in res.get("honnetete", "") and "six cibles" not in res.get("honnetete", ""),
@@ -629,11 +626,10 @@ def _selftest():
         chk("_n18.npz" in res["enregistrement"],
             f"l'enregistrement porte le nombre d'essais ({_os.path.basename(res['enregistrement'])})")
 
-        # ⚠️ L'INVERSE de ce que ce test exigeait jusqu'au chantier « seul point d'entrée » : ce
-        # qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE tant
-        # que quelqu'un ne l'a pas retenu. Une calibration ratée devenait sinon, en silence, le
-        # modèle le plus récent — donc celui que le moteur ÉLIT par défaut — avant même que son
-        # chiffre ne s'affiche.
+        # ⚠️ Ce qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE
+        # tant que quelqu'un ne l'a pas retenu. Sinon une calibration ratée deviendrait, en
+        # silence, le modèle le plus récent — donc celui que le moteur ÉLIT par défaut — avant
+        # même que son chiffre ne s'affiche.
         chk(_os.path.basename(res["modele"]).startswith(CALIB_CANDIDAT_PREFIXE),
             f"le modèle produit est un CANDIDAT, marqué comme tel "
             f"({_os.path.basename(res['modele'])})")
@@ -652,9 +648,9 @@ def _selftest():
         # --- l'invariant « époques BRUTES », pinné d'un bout à l'autre ----------------------
         # La garde du projet (`acquisition.py --synthetic`) protège `motor_window`, que la
         # calibration n'appelle JAMAIS : elle passe par `recent_window`, une SECONDE porte vers
-        # `MIModel.fit`, sans serrure dédiée. Rien ne pinnait qu'aucun filtrage ne s'y glisse —
-        # un `bandpass(reref(...))` inséré avant `decouper` passe les 19 assertions ci-dessus ET
-        # le smoke (mutant confirmé, cf. rapport). Comparaison OCTET POUR OCTET entre ce que le
+        # `MIModel.fit`, sans serrure dédiée. Sans cette comparaison, un `bandpass(reref(...))`
+        # inséré avant `decouper` passerait toutes les assertions ci-dessus ET le smoke du
+        # moteur. Comparaison OCTET POUR OCTET entre ce que le
         # faux moteur a RENDU et ce que le `.npz` a PERSISTÉ : ça pinne d'un coup le non-filtrage
         # (les valeurs) ET l'orientation (n_essais, n_samp, n_ch) — une transposition oubliée
         # romprait aussi cette égalité (les deux tableaux n'auraient plus la même forme). `rendus`
@@ -692,9 +688,9 @@ def _selftest():
             f"et n'écrit AUCUN second fichier de modèle "
             f"({[_os.path.basename(p) for p in _glob.glob(_os.path.join(dossier, '*mi_model*.joblib'))]})")
 
-        # La garde compte des ESSAIS distincts, plus des fenêtres (2026-10-15). Une tâche réduite à
-        # DEUX essais (les autres ont sauté) a 6 fenêtres : l'ancienne garde (5 fenêtres) laissait
-        # entraîner, la nouvelle (3 essais) refuse, en le disant.
+        # La garde compte des ESSAIS distincts, pas des fenêtres. Une tâche réduite à DEUX essais
+        # (les autres ont sauté) a 6 fenêtres : une garde en fenêtres (5) laisserait entraîner,
+        # celle en essais (3) refuse, en le disant.
         rng_g = np.random.default_rng(11)
         sautes = [(synth_mi_trial(lab, n_samp=int(MI_IMAGERY_S * 250), fs=250.0, rng=rng_g).T, lab)
                   for lab, n in (("GAUCHE", 4), ("DROITE", 2)) for _ in range(n)]
@@ -724,7 +720,7 @@ def _selftest():
             f"sans dossier, la calibration REFUSE au lieu de retomber sur data/ "
             f"({(refus_dossier or 'aucun refus')[:70]}…)")
 
-        # --- la bande, la méthode et le secteur de l'entraînement (2026-09-30) ---------------
+        # --- la bande, la méthode et le secteur de l'entraînement ----------------------------
         # Ils partent DANS le modèle, et c'est le modèle qu'on relit ici — pas le résultat, qui
         # pourrait les annoncer sans que `_entrainer` les ait passés à `MIModel`. Un modèle appris
         # sur 8-30 Hz qui se dirait appris sur 4-40 Hz ne lèverait rien : il décoderait moins bien.
@@ -749,10 +745,9 @@ def _selftest():
             f"…et DEUX tâches par défaut, les poings (2026-10-15) "
             f"({valeurs and valeurs['taches']})")
 
-        # --- LES TÂCHES SE RÈGLENT (2026-10-15) -------------------------------------------------
-        # « Pieds/mains au lieu de poing droit/poing gauche », sans se souvenir laquelle est
-        # laquelle : l'écran nomme la tâche tapée, le modèle apprend CES classes, et le flux les
-        # publie sous ces noms. « repos » tapé en minuscules redevient REPOS, la classe d'origine.
+        # --- LES TÂCHES SE RÈGLENT ---------------------------------------------------------
+        # Pieds/mains au lieu de poing droit/poing gauche : l'écran nomme la tâche tapée, le
+        # modèle apprend CES classes, et le flux les publie sous ces noms. « repos » tapé en minuscules redevient REPOS, la classe d'origine.
         dossier_libre = _os.path.join(dossier, "libre")
         libre = MICalibration(_mi.SPEC, {"taches": ("Pieds", "Mains", "repos"),
                                          "trials_per_class": 6, "mise_en_route_s": 1.0}, None,
@@ -796,7 +791,7 @@ def _selftest():
         chk(croix == attendu,
             f"la croix de fixation : pendant la mise en route ET l'imagerie de CHAQUE tâche, REPOS "
             f"compris, jamais pendant la pause ({sorted(croix)})")
-        # La MISE EN ROUTE (2026-10-15) : jouée telle que réglée, et retenue par le modèle, par
+        # La MISE EN ROUTE : jouée telle que réglée, et retenue par le modèle, par
         # l'enregistrement et par la ligne « Détails ».
         with np.load(res_l["enregistrement"]) as npz:
             archivee = float(npz["mise_en_route_s"]) if "mise_en_route_s" in npz.files else None
@@ -813,8 +808,7 @@ def _selftest():
         chk(res_l.get("hasard") == 1 / 3,
             f"le hasard suit le nombre de tâches ({res_l.get('hasard')})")
 
-        # Les seuils du verdict sont RELATIFS AU HASARD : à 3 classes ceux d'avant, mot pour mot ;
-        # à 2, « 45 % » n'est plus « utilisable » — il est SOUS le hasard.
+        # Les seuils du verdict sont RELATIFS AU HASARD : 60/45 % à 3 classes ; à 2, « 45 % » n'est plus « utilisable » — il est SOUS le hasard.
         chk([s for s, _t in VERDICTS] == [0.60, 0.45, 0.0]
             and [s for s, _t in table_pour(0.5)] == [0.70, 0.5875, 0.0],
             f"seuils : 60/45 % à 3 classes (inchangés), 70/59 % à 2 "
@@ -825,7 +819,7 @@ def _selftest():
         _v, raison = validate(CALIB, {"bande_bas": 12.0})
         chk(raison is not None,
             f"une coupure basse au-dessus de 10 Hz est REFUSÉE : elle couperait le mu ({raison})")
-        # Les deux bords EXTÉRIEURS (revue du 2026-09-30) : sous 4 Hz la dérive et le regard,
+        # Les deux bords EXTÉRIEURS : sous 4 Hz la dérive et le regard,
         # au-dessus de 40 Hz l'EMG — ce que le FBCSP isolerait en sous-bandes et sélectionnerait.
         _v, refus_bas = validate(CALIB, {"bande_bas": 3.5})
         _v, refus_haut = validate(CALIB, {"bande_haut": 41.0})
@@ -886,7 +880,7 @@ def _selftest():
             and res_r.get("honnetete") == HONNETETE,
             f"et le repli « Détails » NOMME la méthode et la bande, sur sa propre ligne "
             f"({res_r.get('filtre', '')!r})")
-        # La LDA à shrinkage cochée (2026-10-15) : apprise par le modèle, archivée avec les époques,
+        # La LDA à shrinkage cochée : apprise par le modèle, archivée avec les époques,
         # et dite dans « Détails ».
         with np.load(res_r["enregistrement"]) as npz:
             archive_s = bool(npz["lda_shrinkage"]) if "lda_shrinkage" in npz.files else None
@@ -926,8 +920,8 @@ def _selftest():
 
         # --- « rien n'est jamais écrasé » : preuve par DEUX séances, pas affirmation --------
         # Le format du nom (AAAAMMJJ-HHMMSS) a une résolution d'une SECONDE : deux séances
-        # RÉUSSIES qui finissent la même seconde sont le cas exact qui a fait perdre les époques
-        # d'une séance à 42 essais (nom fixe, à l'époque). Horloge ÉPINGLÉE pour reproduire cette
+        # RÉUSSIES qui finissent la même seconde sont le cas où un nom fixe écraserait les
+        # époques de la première. Horloge ÉPINGLÉE pour reproduire cette
         # collision à coup sûr plutôt que de compter sur la chance, restaurée dans un `finally`.
         vrai_time = _time.time
         _time.time = lambda: 1_700_000_000.0
@@ -990,7 +984,7 @@ def _selftest():
             and _hash_fichier(res1["enregistrement"]) == hash_npz_avant,
             "et son enregistrement aussi")
 
-        # Même recoupement qu'au-dessus (verdict vs CV honnête), sur DEUX séances de PLUS : la
+        # Même recoupement qu'au-dessus (verdict vs CV honnête), sur DEUX séances de plus : la
         # séance principale (`res`) ne suffit pas à elle seule à débusquer un `verdict(cv_naive)`
         # ici, ses deux CV tombent dans le MÊME palier — ces deux-ci, si : `cv_groupee`/`cv_naive`
         # encadrent une frontière de `VERDICTS` sur chacune (vérifié sur cette graine).
@@ -1007,10 +1001,10 @@ def _selftest():
             and verdict(0.40).startswith("FAIBLE"),
             "les verdicts sont calés sur l'échelle HONNÊTE : 40 % n'est pas « utilisable »")
 
-        # --- M-5 : un chiffre que le hasard produit n'est pas « UTILISABLE » ---------------------
+        # --- un chiffre que le hasard produit n'est pas « UTILISABLE » ---------------------
         # 14/30 à 3 classes = 47 %, au-dessus de la ligne orange (45 %), mais un tirage au hasard
         # fait aussi bien près d'une fois sur dix (p = 0,090). La couleur promet « nettement au-dessus du hasard » :
-        # c'est le test binomial EXACT qui le dit, par la MÊME fonction que les cinq tests.
+        # c'est le test binomial EXACT qui le dit, par la MÊME fonction que les tests.
         try:
             v_ns = verdict(14 / 30, n_essais=30, hasard=1 / 3)
         except TypeError:

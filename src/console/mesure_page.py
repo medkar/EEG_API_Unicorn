@@ -45,7 +45,8 @@ from console.resultat import BlocResultat  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
 # Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié — même geste que
 # `calib_page.py`. `mesure.PHASES_TERMINALES` EST l'objet de `calibration.py` (cf. son
-# commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de verdict.
+# commentaire) : renommer une phase d'un côté ne peut pas laisser cette page sans écran de
+# verdict.
 from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
 from core.modes import registry  # noqa: E402
 
@@ -134,10 +135,9 @@ class MesurePage(QWidget):
             if spec.get("yeux_fermes", False):
                 # ⚠️ PLUS ferme que pour le reste, parce que l'enjeu l'est : la personne a les
                 # yeux FERMÉS et n'a aucun autre moyen de savoir quand rouvrir. C'est le MOTEUR qui
-                # déclare qu'un protocole se fait les yeux fermés (`MesureSpec.yeux_fermes`) : cet
-                # avertissement était posé sur TOUTE page de mesure, et les cinq pages « Tester »
-                # annonçaient sans son une « seconde moitié les yeux fermés » qui n'existe pas —
-                # on y fixe une fenêtre, ou on lit une consigne (constat I3 de la revue).
+                # déclare qu'un protocole se fait les yeux fermés (`MesureSpec.yeux_fermes`) : sur
+                # une page « Tester », où l'on fixe une fenêtre ou lit une consigne, il
+                # annoncerait une « seconde moitié les yeux fermés » qui n'existe pas.
                 self.audio_avertissement.setText(
                     tr("pages.mesure.sans_son_yeux_fermes", raison=console.beeps.raison))
             else:
@@ -148,11 +148,11 @@ class MesurePage(QWidget):
         # partir, et son formulaire est soumis avec `start_mesure`. Le bouton du formulaire
         # générique n'aurait donc rien à faire, et un bouton sans effet est un mensonge.
         self.formulaire.bouton.hide()
-        # 🔴 Les réglages qui VIENNENT DU MODE testé sont en LECTURE SEULE (constat I5 de la revue).
-        # Éditables ici, ils faisaient une seconde copie de la configuration : on montait le seuil
-        # du MI sur la page de test, le verdict passait au vert — et le mode, son décodage
-        # continu et l'application de l'étudiant gardaient l'ancienne valeur. Le verdict décrivait
-        # une configuration qui n'existait nulle part. Le critère « vient du mode » se lit dans le
+        # 🔴 Les réglages qui VIENNENT DU MODE testé sont en LECTURE SEULE. Éditables ici, ils
+        # feraient une seconde copie de la configuration : monter le seuil du MI sur la page de
+        # test passerait le verdict au vert, alors que le mode, son décodage continu et
+        # l'application de l'élève garderaient l'ancienne valeur — le verdict décrirait une
+        # configuration qui n'existe nulle part. Le critère « vient du mode » se lit dans le
         # CATALOGUE (les clés des réglages du mode), jamais dans une liste tenue ici ; seuls les
         # réglages PROPRES au test (sa longueur) restent modifiables.
         cles_du_mode = {p["key"] for p in (mode or {}).get("params") or ()}
@@ -168,8 +168,8 @@ class MesurePage(QWidget):
         self.origine.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         self.origine.setVisible(bool(self.depuis_le_mode))
         # Un modèle ENTRAÎNÉ mais pas encore ENREGISTRÉ n'est pas dans la liste : il vit dans un
-        # dossier temporaire. « Tester avant de garder » est le geste naturel — et il testait en
-        # silence le modèle PRÉCÉDENT (constat C1 de la revue, côté console). On le dit.
+        # dossier temporaire. « Tester avant de garder » est le geste naturel, mais il testerait
+        # en silence le modèle PRÉCÉDENT : la page le dit.
         self.candidat = QLabel("")
         self.candidat.setWordWrap(True)
         self.candidat.setStyleSheet("color: #b8860b; font-weight: bold;")
@@ -206,7 +206,7 @@ class MesurePage(QWidget):
         avant.addWidget(self.avis)
 
         # --- écran 2 : pendant ----------------------------------------------------------------
-        # ⚠️ « Séance », pas « mesure » : le mot du moteur (spec §6). Un étudiant qui clique
+        # ⚠️ « Séance », pas « mesure » : le mot du moteur (spec §6). Un élève qui clique
         # « Tester » ou « Vérifier le casque » ne lance pas « une mesure ».
         self.bloc_pendant = QGroupBox(tr("pages.commun.seance_en_cours"))
         self.consigne = QLabel("")
@@ -224,7 +224,7 @@ class MesurePage(QWidget):
         self.barre.setTextVisible(False)
         self.bouton_abandon = QPushButton(tr("pages.commun.abandonner"))
         self.bouton_abandon.clicked.connect(self._abandonner)
-        # La CROIX de fixation (2026-10-15), quand le protocole en a une (le Motor Imagery) : c'est
+        # La CROIX de fixation, quand le protocole en a une (le Motor Imagery) : c'est
         # le moteur qui dit quand (`croix` de l'instantané : None = pas de croix dans ce protocole,
         # False = sa place reste, vide, pendant la pause). Au-dessus de la consigne, centrée.
         self.croix = QLabel("")
@@ -280,8 +280,8 @@ class MesurePage(QWidget):
         self.bloc = BlocResultat(corps_auto=False)
         self.bloc.ajouter_au_detail(self.barriere, self.verdict, self.details, self.honnetete)
         # Un résultat retrouvé en REVENANT sur la page date d'avant : on a pu changer les réglages
-        # entre-temps (« ← SSVEP », une autre fréquence, « Tester »), et le vert d'hier coiffait la
-        # page comme s'il décrivait ceux d'aujourd'hui (constat M1 de la revue).
+        # entre-temps (« ← SSVEP », une autre fréquence, « Tester »), et le vert d'hier coifferait
+        # la page comme s'il décrivait ceux d'aujourd'hui.
         self.precedent = QLabel(tr("pages.mesure.precedent"))
         self.precedent.setWordWrap(True)
         self.precedent.setStyleSheet("color: #8a8f9c; font-size: 11px;")
@@ -294,7 +294,7 @@ class MesurePage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
-        # Le CORPS défile (2026-10-05) : « Détails » déplié, les textes se tassaient les uns sur
+        # Le CORPS défile : « Détails » déplié, les textes se tassaient les uns sur
         # les autres faute de hauteur. L'en-tête reste en haut, hors du défilement.
         corps = QWidget()
         dedans = QVBoxLayout(corps)
@@ -336,28 +336,26 @@ class MesurePage(QWidget):
     def _appliquer_propose(self):
         """Envoie au moteur le réglage que la mesure a produit. La console ne calcule rien.
 
-        ⚠️ C'est la boucle que la recette faisait faire à la main : noter le pic alpha sur un
-        carnet, aller sur la page du SSVEP, le retaper, cliquer « Proposer ». Une valeur recopiée
-        entre deux écrans est exactement ce que ce dépôt a déjà vu diverger.
+        ⚠️ Cela remplace la boucle à la main : noter le pic alpha sur un carnet, aller sur la page
+        du SSVEP, le retaper, cliquer « Proposer ». Une valeur recopiée entre deux écrans finit
+        par diverger.
 
         Le refus du moteur est AFFICHÉ tel quel plutôt que deviné — un bouton qui échoue en
-        silence est la panne que ce chantier répare.
+        silence est un bouton cassé.
 
-        ⚠️ Il en existait un, et c'était CELUI-CI qui tombait en séance : jusqu'au 2026-09-21,
-        `set_params` exigeait un mode DÉMARRÉ et répondait « « SSVEP » n'est pas démarré ». Or le
-        contrôle alpha est le PREMIER geste d'une séance, bien avant qu'on lance le SSVEP : ce
-        bouton-ci échouait donc systématiquement à l'endroit exact où il sert. Le moteur accepte
-        désormais un réglage sur un mode arrêté, le valide, et le retient pour le démarrage.
+        Le contrôle alpha est le PREMIER geste d'une séance, bien avant qu'on lance le SSVEP : le
+        moteur accepte donc un réglage sur un mode arrêté, le valide, et le retient pour le
+        démarrage (sinon ce bouton échouerait exactement là où il sert).
         """
         propose = self._propose
         if not propose:
             return
         ack = self.console.commande("set_params", id=propose["mode"],
                                     params={propose["cle"]: propose["valeur"]})
-        # ⚠️ Ce message SURVIT aux rafraîchissements (constat I2 de la revue de branche) : la page
-        # est repeinte dix fois par seconde, et `_montrer_proposition` l'effaçait à chaque tour —
-        # la confirmation, comme un REFUS du moteur, disparaissaient en 100 ms. Seuls un nouveau
-        # geste, une nouvelle séance ou une nouvelle proposition le remplacent.
+        # ⚠️ Ce message SURVIT aux rafraîchissements : la page est repeinte dix fois par seconde,
+        # et `_montrer_proposition` ne l'efface pas à chaque tour (la confirmation, comme un
+        # REFUS du moteur, disparaîtraient en 100 ms). Seuls un nouveau geste, une nouvelle
+        # séance ou une nouvelle proposition le remplacent.
         if ack.get("accepted"):
             self.reponse_pic.setText(tr(
                 "pages.mesure.applique", label=propose["label"],
@@ -395,10 +393,10 @@ class MesurePage(QWidget):
     def montrer_frequences(self, freqs):
         """Les fréquences que la fenêtre de CE test affichera, ou None si elle n'en reçoit pas.
 
-        🔴 « Tester teste TES réglages » doit se VÉRIFIER à l'écran (constat M1 de la revue) : la
-        page du test SSVEP n'a aucun champ, et rien n'y disait sur quelles fréquences il allait
-        tourner — la promesse était vraie, mais invisible. C'est la console qui décide ce qu'elle
-        passe à la fenêtre ; cette page le montre, et dit où ça se change.
+        🔴 « Tester teste TES réglages » doit se VÉRIFIER à l'écran : la page du test SSVEP n'a
+        aucun champ, et sans cette ligne rien ne dirait sur quelles fréquences il va tourner — la
+        promesse serait vraie, mais invisible. C'est la console qui décide ce qu'elle passe à la
+        fenêtre ; cette page le montre, et dit où ça se change.
         """
         if freqs:
             valeurs = " · ".join(f"{float(f):g}" for f in freqs)
@@ -442,9 +440,9 @@ class MesurePage(QWidget):
         if self._etape_precedente is not None and etape != self._etape_precedente:
             # ⚠️ Le son PROPRE à l'étape quand le module en a un, le top neutre sinon. Le test du
             # Motor Imagery rejoue le protocole d'ENTRAÎNEMENT, dont le repère est un top
-            # LATÉRALISÉ (oreille gauche = poing gauche) : lui jouer un top neutre, c'était changer
-            # le protocole entre l'entraînement et le test — et retirer à l'étudiant le repère
-            # qu'il vient d'apprendre. La page ne nomme aucune classe : elle demande au module.
+            # LATÉRALISÉ (oreille gauche = poing gauche) : un top neutre changerait le protocole
+            # entre l'entraînement et le test, et retirerait à l'élève le repère qu'il vient
+            # d'apprendre. La page ne nomme aucune classe : elle demande au module.
             self.console.beeps.jouer(etape if connait(etape) else TOP_ETAPE)
         self._etape_precedente = etape
 
@@ -546,10 +544,10 @@ class MesurePage(QWidget):
         morceaux = [texte(resultat[cle]) for cle, texte in self.DETAILS
                     if resultat.get(cle) is not None]
         if resultat.get("voies"):
-            # Les voies moyennées viennent du MOTEUR : l'écran d'origine imprimait « PO7/Oz/PO8 »
-            # alors qu'il en moyennait quatre, et personne ne l'a vu pendant des mois.
+            # Les voies moyennées viennent du MOTEUR : une liste écrite ici pourrait annoncer
+            # « PO7/Oz/PO8 » alors que le moteur en moyenne quatre.
             morceaux.append(tr("pages.mesure.detail.voies", voies="/".join(resultat["voies"])))
-        # CIBLE PAR CIBLE (2026-10-02) : une ligne par cible, calculée par le MOTEUR. C'est ce
+        # CIBLE PAR CIBLE : une ligne par cible, calculée par le MOTEUR. C'est ce
         # qui dit POURQUOI une cible ne sort jamais — sa barre au-dessus de celle des autres.
         lignes = [" — ".join(morceaux)] + [self._ligne_de_cible(p)
                                            for p in resultat.get("par_frequence") or ()]
@@ -598,7 +596,7 @@ class MesurePage(QWidget):
         propose = propose or None
         if propose != self._propose:
             # Une AUTRE proposition : la réponse affichée parlait de la précédente. La même,
-            # repeinte au tour suivant, garde sa réponse — c'est tout le constat I2.
+            # repeinte au tour suivant, garde sa réponse.
             self.reponse_pic.setText("")
         self._propose = propose
         self.appliquer_pic.setVisible(bool(propose))

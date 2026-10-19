@@ -2,25 +2,22 @@
 
 Deux gardes vivent ici. La première protège `data/` (voir ci-dessous). La seconde protège le
 VOCABULAIRE d'un test (`mot_du_geste`) : les trois fenêtres à marqueurs jouent le même protocole
-pour entraîner et pour tester, et le seul repère de l'étudiant est le MOT. Elles l'ont eu faux
-jusqu'au 2026-09-23 — plein écran « Calibration P300 » pendant la chauffe de chaque test, et un
-ESC qui répondait « aucun modèle ne sera entraîné » alors qu'un test n'entraîne rien.
-
-
+pour entraîner et pour tester, et le seul repère de l'étudiant est le MOT. Une fenêtre de test ne
+doit donc jamais afficher « Calibration » ni annoncer qu'un modèle sera entraîné.
 
 ⚠️ **Pourquoi ce fichier existe.** `data/` porte des enregistrements EEG d'une personne
 identifiable, sur un dépôt PUBLIC, et les modèles que le moteur propose par défaut. Un test qui y
 écrit ne le dit pas : `git status --short data/` rend une sortie **vide** même après une écriture,
 parce que le dossier est gitignoré. La seule preuve est une EMPREINTE prise avant et après.
 
-Les douze `--smoke` de `archive/` l'ont, la console l'a. **Les quatre fenêtres de `stimulus/` ne
-l'avaient pas** — constat de la revue du 2026-09-08 — alors que ce sont elles qu'on relance après
-chaque modification, et qu'elles construisent désormais les runtimes de calibration du moteur.
+Les `--smoke` de `archive/` et de la console l'ont aussi. Les fenêtres de `stimulus/` en ont
+besoin : on les relance après chaque modification, et elles construisent les runtimes de
+calibration du moteur.
 
-Ce n'est pas une précaution théorique. Le 2026-09-08, un smoke d'archive dont le détournement de
-dossier était devenu un no-op a écrit un modèle entraîné sur du bruit SYNTHÉTIQUE dans le vrai
-`data/`, sous un nom que le catalogue liste — donc proposable par défaut à la séance casque
-suivante. Sa propre garde d'empreinte existait, mais elle était placée APRÈS l'écriture.
+Ce n'est pas une précaution théorique : un smoke dont le détournement de dossier est devenu un
+no-op peut écrire un modèle entraîné sur du bruit SYNTHÉTIQUE dans le vrai `data/`, sous un nom que
+le catalogue liste, donc proposable par défaut à la séance casque suivante. La garde d'empreinte
+doit être posée AVANT l'écriture, pas après.
 
 ⚠️ **Ce que la garde ne voit pas**, et il faut le savoir avant de s'y fier : une écriture SUIVIE
 d'une suppression à l'intérieur du même smoke laisse l'empreinte inchangée. Elle attrape le fichier
@@ -80,8 +77,7 @@ def mot_du_geste(chk, texte, marqueur, etiquette):
     n'a pas le droit de faire, c'est d'appeler CETTE séance-ci d'un autre nom que le sien.
 
     ⚠️ La ligne doit EXISTER : sans ce premier `chk`, supprimer le message ferait taire la
-    fenêtre et passer le test — une assertion verte parce qu'elle ne lit rien (leçon du chantier
-    « Configurer · Entraîner · Tester »).
+    fenêtre et passer le test — une assertion verte parce qu'elle ne lit rien.
     """
     lignes = [l for l in texte.splitlines() if marqueur in l]
     chk(len(lignes) == 1,

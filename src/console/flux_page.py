@@ -1,8 +1,8 @@
 """« Ce que voit ton application » — le flux sortant, lu PAR LE RÉSEAU, comme un client.
 
-C'est le cœur du produit : un moteur qui décode et **diffuse sur LSL**. Il n'existait aucun moyen
-de le REGARDER depuis l'application — la console montrait ce que le moteur pense publier, jamais
-ce qui sort vraiment.
+C'est le cœur du produit : un moteur qui décode et **diffuse sur LSL**. Cette page permet de le
+REGARDER depuis l'application : elle montre ce qui sort vraiment, pas ce que le moteur pense
+publier.
 
 ⚠️ **Cette page lit par LSL, jamais l'état interne du moteur.** C'est la seule version honnête :
 si le panneau montre des valeurs, un vrai client en verrait aussi. Lire `engine.snapshot()`
@@ -12,9 +12,9 @@ test le vérifie (`console/app.py --smoke`) : `update_from()` reçoit un état c
 RIEN pour ce panneau ; seul `rafraichir()`, qui tire sur un inlet, le remplit.
 
 ⚠️ **Elle ne recopie pas d'extrait de code client.** Le contrat le génère
-(`contract.client_snippet`) ; il a quitté la page du mode le 2026-09-22 et reviendra avec
-« Connecter ». Cette page montre le FLUX, pas le code qui le lit : deux textes qui disent la même
-chose finissent toujours par diverger (`classement_relatif`, `span_correlation`).
+(`contract.client_snippet`). Cette page montre le FLUX, pas le code qui le lit : deux textes
+qui disent la même chose finissent toujours par diverger (`classement_relatif`,
+`span_correlation`).
 
 Le patron de découverte est celui de `core/markers.flux_de_marqueurs_visibles`, avec ses raisons :
 on résout LARGEMENT (LSL répond une fois par interface réseau), on fond les doublons par NOM, on
@@ -66,12 +66,11 @@ def _phrase_et_bulle(phrase, bulle):
     Pour de l'EXPLICATION seulement (pourquoi la page existe, à quoi sert un fichier) : un
     résultat, un refus ou un avertissement reste écrit en toutes lettres sur la page.
 
-    La bulle est DANS le texte, collée au dernier mot (demandé le 2026-09-23 : « juste après les
-    textes »). Un QLabel « ⓘ » à côté ne le permet pas : sans étirement la phrase se replie sur
-    trois lignes étroites, avec étirement la bulle part au bout de la ligne. Le survol de la
-    phrase entière montre l'aide — la bulle en est le signe visible. `<qt>` fait passer
-    l'infobulle en texte riche, donc elle revient à la ligne ; `html.escape` garde les « < » et
-    « & » des textes tels quels.
+    La bulle est DANS le texte, collée au dernier mot. Un QLabel « ⓘ » à côté ne le permet pas :
+    sans étirement la phrase se replie sur trois lignes étroites, avec étirement la bulle part
+    au bout de la ligne. Le survol de la phrase entière montre l'aide — la bulle en est le signe
+    visible. `<qt>` fait passer l'infobulle en texte riche, donc elle revient à la ligne ;
+    `html.escape` garde les « < » et « & » des textes tels quels.
     """
     etiquette = QLabel()
     etiquette.setWordWrap(True)
@@ -226,19 +225,12 @@ class FluxPage(QWidget):
         # Le sens du bouton d'enregistrement, tel que le MOTEUR l'a dit au dernier état reçu.
         # Jamais une bascule tenue ici : elle se désynchroniserait au premier refus.
         self._enregistre = False
-        # 🔴 **LES DEUX DIAGNOSTICS RETENUS, et c'est le correctif du 2026-09-10.**
-        #
-        # Cette page est peinte à ~10 Hz. Ses trois messages de panne — « aucun flux nommé X »,
-        # « X n'a pas pu être ouvert », et surtout « X a disparu du réseau » — étaient écrits
-        # directement dans `self.etat`, que le tour SUIVANT écrasait par une des trois phrases
-        # neutres de `_dire_etat` (« N flux visible(s) — choisis-en un »). Durée de vie du
-        # diagnostic : **UN tick, 100 ms.** Et aucun de ces chemins ne passe par
-        # `Console.commande`, donc le bandeau ne les rattrapait pas non plus.
-        #
-        # Sur la page dont la raison d'être est de VOIR les pannes réseau, c'était le
-        # refus-invisible du test 1.13 de la recette, à l'endroit le plus coûteux.
-        #
-        # Un diagnostic tient donc jusqu'au GESTE qui y répond — une nouvelle recherche, un flux
+        # 🔴 LES DEUX DIAGNOSTICS SONT RETENUS. La page est peinte à ~10 Hz : un message de panne
+        # (« aucun flux nommé X », « X n'a pas pu être ouvert », « X a disparu du réseau ») écrit
+        # directement dans `self.etat` serait écrasé au tour suivant par une phrase neutre de
+        # `_dire_etat` (« N flux visible(s) — choisis-en un »), soit au bout de 100 ms. Aucun de
+        # ces chemins ne passe par `Console.commande`, donc le bandeau ne les rattrape pas non
+        # plus. Un diagnostic tient jusqu'au GESTE qui y répond — une nouvelle recherche, un flux
         # ouvert, un clic de plus — jamais jusqu'au prochain tour d'horloge.
         self._diagnostic = ""         # côté flux : effacé par `chercher()` et par une ouverture
         self._diagnostic_enr = ""     # côté enregistrement : effacé par le clic suivant
@@ -332,9 +324,9 @@ class FluxPage(QWidget):
         changement de source. Rater une découverte n'est jamais définitif — on reclique.
 
         ⚠️ Mais si RIEN n'est ouvert, le flux que la liste AFFICHE s'ouvre : celui qu'on regardait
-        avant (on rouvre la fenêtre, qui l'avait lâché en se fermant), sinon le premier. Passe QA
-        du 2026-09-23 : la liste montrait un flux, le panneau restait vide tant qu'on ne cliquait
-        pas dessus — un écran qui affiche un choix qu'il n'a pas fait. Et si le flux qu'on
+        avant (on rouvre la fenêtre, qui l'avait lâché en se fermant), sinon le premier. Sans
+        cela, la liste montrerait un flux et le panneau resterait vide : un écran qui affiche un
+        choix qu'il n'a pas fait. Et si le flux qu'on
         regardait a DISPARU, on ne bascule pas en douce sur un autre : la liste reste sans choix
         et la page le dit (sinon des valeurs défileraient — celles d'un autre flux).
         """
@@ -453,9 +445,9 @@ class FluxPage(QWidget):
             nom = self._inlet.nom
             self._fermer()
             self.entetes.setText("")
-            # ⚠️ **LE message de cette page**, celui qui distingue « mon appli ne reçoit plus »
-            # de « mon appli n'a jamais reçu ». Sans `_dire_probleme`, le tour suivant — 100 ms
-            # plus tard — le remplaçait par « N flux visible(s) — choisis-en un ».
+            # ⚠️ LE message de cette page : il distingue « mon appli ne reçoit plus » de « mon
+            # appli n'a jamais reçu ». `_dire_probleme` le retient ; sans lui, le tour suivant le
+            # remplacerait par « N flux visible(s) — choisis-en un ».
             self._dire_probleme(tr("pages.flux.disparu", nom=nom,
                                    erreur=f"{type(e).__name__} : {e}"))
             return
@@ -514,9 +506,8 @@ class FluxPage(QWidget):
         demanderait alors l'inverse de ce qu'il annonce.
 
         ⚠️ Le refus du moteur est AFFICHÉ. Il en existe des vrais et ils sont utiles : « ce mode
-        n'est pas démarré », « un enregistrement est déjà en cours ». Un bouton qui échoue en
-        silence est la panne que ce chantier répare — la recette du projet a relevé cinq clics
-        d'affilée sur un bouton qui refusait correctement, mais dans le terminal.
+        n'est pas démarré », « un enregistrement est déjà en cours ». Un refus écrit seulement
+        dans le terminal laisse un bouton qui semble muet (cf. docs/recette.md, test 1.13).
         """
         # Ce clic-ci reprend la question à zéro : le diagnostic du précédent a fait son temps.
         self._diagnostic_enr = ""
@@ -537,10 +528,10 @@ class FluxPage(QWidget):
     def _dire_probleme_enr(self, texte):
         """Même remède que `_dire_probleme`, sur l'autre bloc de la page.
 
-        ⚠️ Sans la rétention, ces deux messages-là vivaient un tour eux aussi : dès qu'un
-        enregistrement existait dans l'état — même TERMINÉ —, `_montrer_enregistrement` repeignait
-        « terminé — N verdict(s) dans … » par-dessus, 100 ms après le clic. Un étudiant qui clique
-        sans avoir choisi de flux voyait donc le chemin d'un fichier, jamais la raison du refus.
+        ⚠️ Sans la rétention, ces messages ne vivraient qu'un tour : dès qu'un enregistrement
+        existe dans l'état — même TERMINÉ —, `_montrer_enregistrement` repeindrait « terminé — N
+        verdict(s) dans … » par-dessus, 100 ms après le clic. Un élève qui clique sans avoir
+        choisi de flux verrait le chemin d'un fichier, jamais la raison du refus.
         """
         self._diagnostic_enr = texte
         self.etat_enregistrement.setText(texte)
@@ -616,13 +607,11 @@ class FluxPage(QWidget):
 
 
 class FenetreFlux(QWidget):
-    """« Ce que voit ton application », dans SA fenêtre — demandé au QA le 2026-10-02.
+    """« Ce que voit ton application », dans SA fenêtre.
 
-    « Je ne peux pas avoir un test en cours et voir “Ce que voit ton application” » : la page
-    vivait dans la pile de la console, donc l'ouvrir REMPLAÇAIT la page du test en cours. Or
-    regarder le flux décodé PENDANT un test (une ligne par essai, qa.md 1.17.4), pendant un
-    « Essayer librement » ou pendant qu'on change un réglage, c'est précisément ce qu'on vient y
-    faire.
+    Dans la pile de la console, la page REMPLACERAIT celle du test en cours. Or regarder le flux
+    décodé PENDANT un test (une ligne par essai, qa.md 1.17.4), pendant un « Tester librement »
+    ou pendant qu'on change un réglage, c'est précisément ce qu'on vient y faire.
 
     Une fenêtre de premier niveau, NON modale et SANS parent Qt : elle reste ouverte pendant qu'on
     navigue dans la console, se pose sur un second écran, passe derrière la console si on le

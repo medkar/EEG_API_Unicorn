@@ -8,7 +8,7 @@ DÉCALAGE : le cerveau produit une réponse en « empreinte » qu'on recale sur 
 Pourquoi c'est intéressant ici :
   - la m-séquence a une autocorrélation **piquée** (pic à 0, ~0 partout ailleurs) : deux
     cibles décalées sont quasi orthogonales, donc très séparables ;
-  - le spectre est **étalé** : aucune concurrence avec le pic alpha (~10.5 Hz chez toi),
+  - le spectre est **étalé** : aucune concurrence avec le pic alpha (~10 Hz),
     contrairement au SSVEP ;
   - une seule fixation calibre TOUTES les cibles (il suffit de re-décaler le template).
 Coût : il faut une calibration (le SSVEP par CCA, lui, n'en demande aucune).
@@ -84,17 +84,13 @@ def blocs_entrelaces(plan, cycles, n_blocs, rng=None):
     blocs sont mélangés ensemble.
 
     ⚠️ **L'entrelacement n'est pas cosmétique.** Sans lui, chaque cible occupe une tranche de temps
-    distincte et « quelle cible » devient indissociable de « à quel moment » : mesuré le
-    2026-07-20, l'accuracy passait de 34 % sur le premier tiers de la séance à 66 % sur le dernier,
-    ce qui faisait passer les deux dernières cibles pour les meilleures. C'était un artefact de
-    protocole, pas un résultat.
+    distincte et « quelle cible » devient indissociable de « à quel moment » : la justesse dérive
+    au fil de la séance (fatigue, électrodes qui sèchent), et les dernières cibles passent pour
+    les meilleures. Ce serait un artefact de protocole, pas un résultat.
 
-    ⚠️ **Né dans `research/cvep_calibrate.py::_make_blocks`, monté ici parce qu'il a maintenant DEUX
-    joueurs** : l'appli pygame et la fenêtre `src/stimulus/cvep.py` (que la console lance pour
-    calibrer). Deux exemplaires de la même règle de protocole finiraient par diverger sans que
-    personne le voie — les deux séances resteraient plausibles, et seule la comparaison de leurs
-    modèles dirait qu'elles n'ont pas joué le même jeu. Même geste, même raison, que
-    `core/errp_track.py` pour la piste de l'ErrP.
+    La règle vit ici, en un seul exemplaire, pour que les fenêtres qui jouent le protocole
+    jouent le même jeu : deux copies finiraient par diverger sans erreur visible. Même raison
+    que `core/errp_track.py` pour la piste de l'ErrP.
 
     `rng` : un `random.Random` (ou le module `random`). None -> le module. Le passer EXPLICITEMENT
     est ce qui rend une séance rejouable à l'identique avec `--seed`.
@@ -158,8 +154,7 @@ def _selftest():
     total_ok = set(par_cible.values()) == {CVEP_CAL_CYCLES} and len(par_cible) == len(plan)
     ok &= total_ok
     # L'entrelacement lui-même : sans lui, les blocs sortiraient groupés par cible, et « quelle
-    # cible » ne se distinguerait plus de « à quel moment » (mesuré : 34 % -> 66 % du premier au
-    # dernier tiers d'une séance NON entrelacée, le 2026-07-20).
+    # cible » ne se distinguerait plus de « à quel moment ».
     groupes = [nom for nom, _g in
                [(c["name"], None) for c, _n in blocs]]
     tranches = 1 + sum(1 for a, b in zip(groupes, groupes[1:]) if a != b)

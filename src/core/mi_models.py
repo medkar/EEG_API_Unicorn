@@ -20,7 +20,7 @@ from core.i18n import tr  # noqa: E402
 import glob as _glob  # noqa: E402
 import time as _time  # noqa: E402
 
-MOTIF = "mi_model*.joblib"     # tous les modèles MI ; la calibration en écrira d'horodatés
+MOTIF = "mi_model*.joblib"     # tous les modèles MI, dont les horodatés de la calibration
 
 
 def charger(chemin):
@@ -32,7 +32,7 @@ def charger(chemin):
     """
     # Un chemin vide n'est pas un incident : c'est l'état d'un formulaire dont la liste de
     # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
-    # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
+    # de ne jamais lever, or `os.path.isfile(None)` lèverait. Le refus doit dire quoi faire.
     if not chemin:
         return None, tr("mode.modele.aucun", mode="Motor Imagery")
     if not _os.path.isfile(chemin):
@@ -46,16 +46,14 @@ def charger(chemin):
     if not hasattr(modele, "labels") or not hasattr(modele, "predict_proba"):
         return None, tr("mode.modele.pas_un_modele", mode="MI", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
-    # hérité (d'avant le déménagement du décodeur dans core/) porte "mi_decoder" (racine) — et
-    # RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`, le dossier
-    # du script rejoint sys.path et rend "mi_decoder" importable comme module de PREMIER
-    # NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la console ou l'appli pygame, ce
-    # chemin n'existe pas et le même fichier est refusé plus haut (ModuleNotFoundError).
-    # Vérifié empiriquement le 2026-07-30 : les quatre `.joblib` de `data/` portent bien
-    # "mi_decoder" sous ce sys.path-là. Cette divergence selon la commande de lancement, pour
-    # un modèle abandonné par décision de conception (spec §3), est exactement le « pire des
-    # deux mondes » que ce module existe pour éliminer : décoder avec les probabilités de
-    # quelqu'un d'autre, en silence.
+    # hérité (écrit quand le décodeur n'était pas encore dans core/) porte "mi_decoder"
+    # (racine) — et RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`,
+    # le dossier du script rejoint sys.path et rend "mi_decoder" importable comme module de
+    # PREMIER NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la console, ce chemin
+    # n'existe pas et le même fichier est refusé plus haut (ModuleNotFoundError). Cette
+    # divergence selon la commande de lancement, pour un modèle abandonné par décision de
+    # conception (spec §3), est exactement le « pire des deux mondes » que ce module existe
+    # pour éliminer : décoder avec les probabilités de quelqu'un d'autre, en silence.
     module = type(modele).__module__
     if module != "core.mi_decoder":
         return None, tr("mode.modele.herite", module=repr(module), attendu=repr("core.mi_decoder"),
@@ -79,13 +77,13 @@ def modeles_disponibles(dossier=DATA_DIR):
 def decrire(chemin):
     """Ce qu'il faut afficher à côté d'un modèle pour le choisir en connaissance de cause.
 
-    `cv_groupee` est la validation croisée HONNÊTE (par essai). Elle vaut None pour tout modèle
-    entraîné avant la moitié B : on l'affiche absente plutôt que de recopier `cv_naive`, qui est
-    gonflée de 10 à 16 points par la fuite entre fenêtres d'un même essai.
+    `cv_groupee` est la validation croisée HONNÊTE (par essai). Elle vaut None pour un modèle
+    entraîné sans identifier les essais : on l'affiche absente plutôt que de recopier
+    `cv_naive`, qui est gonflée de 10 à 16 points par la fuite entre fenêtres d'un même essai.
 
-    `methode`, `bande`, `secteur_hz` (2026-09-30) : avec quoi le modèle a appris — « csp »,
-    « riemann » ou « fbcsp », sa bande en Hz, son coupe-bande (None : aucun, c'est le cas de tout
-    modèle d'avant ce réglage). Deux justesses ne se comparent qu'à méthode et bande connues.
+    `methode`, `bande`, `secteur_hz` : avec quoi le modèle a appris — « csp », « riemann » ou
+    « fbcsp », sa bande en Hz, son coupe-bande (None : aucun, comme tout modèle enregistré sans
+    ce réglage). Deux justesses ne se comparent qu'à méthode et bande connues.
     """
     modele, raison = charger(chemin)
     horodatage = _os.path.getmtime(chemin) if _os.path.isfile(chemin) else 0.0
@@ -183,10 +181,10 @@ def _selftest():
         chk(_m is None and "introuvable" in (raison or ""),
             f"un chemin inexistant est signalé comme tel ({raison})")
 
-        # `charger` promet dans sa docstring de ne JAMAIS lever. Elle levait pourtant sur None,
-        # et la moitié B l'appelle avec ce que rend un formulaire — donc potentiellement rien du
-        # tout, quand aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt
-        # et arrêterait toute la console.
+        # `charger` promet dans sa docstring de ne JAMAIS lever, y compris sur None : elle est
+        # appelée avec ce que rend un formulaire — donc potentiellement rien du tout, quand
+        # aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt et
+        # arrêterait toute la console.
         for entree in (None, "", 0):
             _m, raison = charger(entree)
             chk(_m is None and raison and "aucun modèle" in raison,

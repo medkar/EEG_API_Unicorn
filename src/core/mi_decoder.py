@@ -17,8 +17,8 @@ Signal : ERD (désynchronisation) mu/beta du cortex moteur — la puissance chut
 OPPOSÉ à la main imaginée (main droite -> baisse sur C3 ; main gauche -> sur C4). Le CSP apprend
 les filtres spatiaux qui maximisent ce contraste de variance.
 
-Trois méthodes (`build_pipe`) : "csp" (le défaut), "riemann", et "fbcsp" (2026-09-30, option
-d'entraînement décochée par défaut, JAMAIS mesurée sur ce casque). Le FBCSP découpe la bande en
+Trois méthodes (`build_pipe`) : "csp" (le défaut), "riemann", et "fbcsp" (option
+d'entraînement décochée par défaut, jamais mesurée sur ce casque). Le FBCSP découpe la bande en
 sous-bandes d'~4 Hz, apprend un CSP par sous-bande, puis une sélection de CARACTÉRISTIQUES (ANOVA
 F) garde celles qui séparent les classes de CETTE personne : son pic mu n'est pas forcément à
 10 Hz. C'est une VARIANTE du FBCSP d'Ang et al. (2008), pas sa copie : eux filtrent en Chebyshev
@@ -83,12 +83,11 @@ class CSP(BaseEstimator, TransformerMixin):
     filtres spatiaux maximisant/minimisant sa variance vs le reste ; features = log-variance.
     Compatible scikit-learn (Pipeline / cross_val_score).
 
-    ⚠️ À DEUX classes, le problème n'est résolu qu'UNE fois (2026-10-15). Le un-contre-tous y
-    résolvait deux fois le même problème généralisé — « A contre B » puis « B contre A », mêmes
-    vecteurs propres, valeurs λ et 1 − λ — et rendait chaque filtre en double. Sans effet sur le
-    CSP + LDA (mesuré sur les deux séances enregistrées : aucun essai ne change de décision), mais
-    le FBCSP choisissait ses caractéristiques parmi des copies et gaspillait la moitié de son `k`.
-    Deux tâches est le défaut depuis le même jour."""
+    À DEUX classes, le problème n'est résolu qu'UNE fois : le un-contre-tous y résoudrait deux
+    fois le même problème généralisé (« A contre B » puis « B contre A » : mêmes vecteurs propres,
+    valeurs λ et 1 − λ) et rendrait chaque filtre en double. Sans effet sur CSP + LDA, mais le
+    FBCSP choisirait ses caractéristiques parmi des copies et gaspillerait la moitié de son `k`.
+    Deux tâches est le défaut."""
 
     def __init__(self, n_per_class=2, reg=1e-6):
         self.n_per_class = n_per_class
@@ -150,7 +149,7 @@ def sous_bandes(bande):
     de la largeur : les sections `sos` la garantissent, cf. `core/filtrage.py`.)
 
     ⚠️ Pourquoi pas `round()` : Python arrondit les demis au nombre PAIR (10 Hz / 4 = 2,5 -> 2,
-    14 / 4 = 3,5 -> 4). À égalité, la règle changeait de sens d'une largeur à l'autre ; arrondir
+    14 / 4 = 3,5 -> 4). À égalité, la règle changerait de sens d'une largeur à l'autre ; arrondir
     vers le haut choisit TOUJOURS le découpage le plus proche de 4 Hz (10 Hz : 3 × 3,33 plutôt que
     2 × 5). La largeur est d'abord arrondie au millionième : 14,3 − 4,3 ne vaut pas exactement 10
     en virgule flottante, et la même largeur doit donner le même découpage quelle que soit sa
@@ -195,7 +194,7 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
 
 
 def _lda(shrinkage=False):
-    """Le classifieur final du CSP et du FBCSP. `shrinkage` (2026-10-15, une OPTION de
+    """Le classifieur final du CSP et du FBCSP. `shrinkage` (une OPTION de
     l'entraînement) : la covariance des caractéristiques est tirée vers une forme simple
     (Ledoit-Wolf, `shrinkage="auto"`), d'autant plus que les essais manquent — Blankertz et al.
     (2011). Attendu utile quand les caractéristiques sont nombreuses face aux essais (FBCSP, 4 ou 5
@@ -223,7 +222,7 @@ def build_pipe(method=MI_METHOD, n_per_class=2, fs=250.0, band=MI_BAND, secteur_
     FBCSP ne garde pas plus de caractéristiques qu'un CSP simple, il les choisit parmi celles de
     toutes les sous-bandes.
 
-    ⚠️ La sélection est une ANOVA F (`f_classif`), PAS l'information mutuelle (2026-09-30, revue).
+    ⚠️ La sélection est une ANOVA F (`f_classif`), PAS l'information mutuelle.
     Les lignes sont des fenêtres qui se chevauchent : trois par essai, même étiquette. L'estimateur
     de l'information mutuelle compte des plus proches voisins (3) — et les deux plus proches d'une
     fenêtre sont souvent ses SŒURS du même essai. Toute caractéristique qui reconnaît l'ESSAI
@@ -266,14 +265,14 @@ class MIModel:
         self.labels = list(labels)
         self.fs = fs
         self.band = band
-        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
-        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
-        # d'avant ce réglage, qui doit décoder comme il a appris.
+        # Le SECTEUR du coupe-bande, enregistré avec la bande : le décodage filtre exactement
+        # comme l'entraînement. None = pas de coupe-bande (un modèle enregistré sans ce réglage
+        # doit décoder comme il a appris).
         self.secteur_hz = secteur_hz
         self.method = method
         self.reref_mode = reref_mode
-        # La LDA à shrinkage (2026-10-15) : retenue pour la DIRE (« Détails »). Le décodage n'en a
-        # pas besoin, la frontière apprise est dans `pipe`. Un modèle d'avant n'a pas l'attribut :
+        # La LDA à shrinkage : retenue pour la DIRE (« Détails »). Le décodage n'en a pas besoin,
+        # la frontière apprise est dans `pipe`. Un ancien modèle n'a pas l'attribut :
         # `getattr(…, "shrinkage", False)`.
         self.shrinkage = bool(shrinkage)
         self.pipe = build_pipe(method, n_per_class, fs=fs, band=band, secteur_hz=secteur_hz,
@@ -290,8 +289,8 @@ class MIModel:
         if epochs.ndim == 2:            # essai unique (n_ch, n_samp) -> (1, n_ch, n_samp)
             epochs = epochs[None]
         # re-ref spatial AVANT le passe-bande (both linéaires -> ordre indifférent). getattr avec
-        # défaut "none" : un modèle picklé AVANT l'ajout du CAR a été entraîné sans re-ref -> il faut
-        # décoder sans re-ref aussi (sinon incohérence train/predict). Les modèles récents portent
+        # défaut "none" : un modèle enregistré sans CAR a été entraîné sans re-ref -> il faut
+        # décoder sans re-ref aussi (sinon incohérence train/predict). Les autres modèles portent
         # l'attribut et utilisent leur propre mode.
         epochs = reref(epochs, getattr(self, "reref_mode", "none"))
         # FBCSP : AUCUN passe-bande global — le banc filtre lui-même, sous-bande par sous-bande,
@@ -306,9 +305,8 @@ class MIModel:
 
         Deux chiffres sortent d'ici, et ils ne disent pas la même chose :
 
-        - `cv_` — validation croisée ORDINAIRE, fenêtres mélangées. Gardée parce qu'elle permet de
-          comparer avec les mesures antérieures du projet, et parce que l'écart entre les deux EST
-          l'information : c'est la fuite, chiffrée.
+        - `cv_` — validation croisée ORDINAIRE, fenêtres mélangées. Gardée parce que l'écart
+          avec l'autre EST l'information : c'est la fuite, chiffrée.
         - `cv_groupee_` — validation croisée par ESSAI : toutes les fenêtres d'un essai tombent
           dans le MÊME pli. C'est la seule qui réponde à la question de l'étudiant, « est-ce que ça
           marchera sur un essai que le modèle n'a jamais vu ? ». C'est celle-là, et elle seule,
@@ -320,9 +318,8 @@ class MIModel:
         respecte les DEUX contraintes : groupes entiers ET classes représentées.
 
         `n_splits` est borné par le plus petit effectif d'essais par classe : demander 5 plis quand
-        une classe n'a que 3 essais est irréalisable, et sklearn le refuserait en pleine fin de
-        séance de calibration — après sept minutes d'imagerie. On borne AVANT plutôt que de laisser
-        lever.
+        une classe n'a que 3 essais est irréalisable, et sklearn le refuserait en toute fin de
+        calibration, après toute l'imagerie. On borne AVANT plutôt que de laisser lever.
         """
         Xf, y = self._prep(epochs), np.asarray(y)
         self.cv_ = float(cross_val_score(self.pipe, Xf, y, cv=5).mean())
@@ -335,10 +332,10 @@ class MIModel:
             par_classe = [len(np.unique(groups[y == c])) for c in np.unique(y)]
             # ⚠️ `n_splits >= 2` (donc `cv_groupee_` non None) dépend d'avoir >= 2 essais DISTINCTS
             # par classe. Le seul appelant (`mi_calib._entrainer`) l'exige lui-même, en ESSAIS
-            # (`ESSAIS_MIN_PAR_TACHE`, 3) depuis le 2026-10-15 : il comptait des fenêtres, et ne
-            # l'impliquait que par une coïncidence de durées que des essais ignorés en séance
-            # défaisaient. Un autre appelant reste libre de passer moins : `cv_groupee_` vaut
-            # alors None, jamais une copie de la naïve. Commentaire jumeau dans
+            # (`ESSAIS_MIN_PAR_TACHE`, 3), pas en fenêtres : les fenêtres ne l'impliquent que par
+            # une coïncidence de durées que des essais ignorés défont. Un autre appelant reste
+            # libre de passer moins : `cv_groupee_` vaut alors None, jamais une copie de la
+            # naïve. Commentaire jumeau dans
             # `core/modes/mi_calib.py::MICalibration._entrainer`.
             n_splits = min(5, min(par_classe)) if par_classe else 0
             if n_splits >= 2:
@@ -450,14 +447,13 @@ def _test_cv_honnete():
     exact de ce qu'il a vu en apprentissage. Le score obtenu ne dit plus rien de sa capacité à
     généraliser à un NOUVEL essai, qui est pourtant la seule question qui compte pour un étudiant.
 
-    Mesuré sur les 30 essais archivés du projet : 55,6 % naïve contre 40,0 % honnête à 3 classes,
-    73,3 % contre 63,3 % à 2 classes. L'écart est de 10 à 16 points, et c'est CE chiffre-là qui
-    était affiché à la fin d'une séance de calibration.
+    Mesuré sur 30 essais enregistrés : 55,6 % naïve contre 40,0 % honnête à 3 classes, 73,3 %
+    contre 63,3 % à 2 classes. L'écart est de 10 à 16 points.
 
     Le test ne vérifie PAS une valeur : il vérifie le SENS de l'écart, qui ne dépend d'aucun jeu
-    de données. Une valeur attendue serait fausse dès qu'on change la graine. ⚠️ Au sens LARGE
-    (2026-10-15, revue) : à signal fort, les deux saturent à 100 % et l'inégalité stricte tomberait
-    sans qu'aucune fuite ait disparu — le smoke du moteur l'avait déjà relâchée.
+    de données. Une valeur attendue serait fausse dès qu'on change la graine. L'inégalité est
+    au sens LARGE : à signal fort, les deux saturent à 100 % et une inégalité stricte tomberait
+    sans qu'aucune fuite ait disparu.
     """
     ok = True
 
@@ -495,7 +491,7 @@ def _test_cv_honnete():
         f"{(modele.cv_ - modele.cv_groupee_)*100:.1f} points")
 
     # Sans `groups`, la CV honnête n'est pas INVENTÉE : elle reste absente. Recopier la naïve
-    # ferait passer un chiffre gonflé pour un chiffre honnête — exactement le défaut corrigé.
+    # ferait passer un chiffre gonflé pour un chiffre honnête — exactement le défaut à éviter.
     sans = MIModel(fs=fs, reref_mode="none").fit(X, y)
     chk(sans.cv_ is not None and sans.cv_groupee_ is None and sans.n_essais_ is None,
         f"sans `groups`, la CV honnête reste absente au lieu d'être inventée "
@@ -534,8 +530,8 @@ def _test_cv_honnete():
 
 
 def _test_n_splits_insuffisant():
-    """La garde `n_splits < 2` : rien ne l'exerçait, alors que sa sûreté ne tenait QUE sur une
-    coïncidence arithmétique non documentée entre deux fichiers (cf. `mi_calib._entrainer`).
+    """La garde `n_splits < 2` (cf. `mi_calib._entrainer`, qui exige de son côté des essais
+    distincts).
 
     Moins de 2 essais DISTINCTS pour au moins une classe doit laisser `cv_groupee_` à `None` —
     MÊME quand cette classe a plein de FENÊTRES (un seul essai en produit plusieurs, cf.
@@ -586,9 +582,9 @@ def _test_n_splits_insuffisant():
 
 
 def _test_csp_binaire():
-    """À DEUX classes, le CSP rend 2 × n_per_class filtres DISTINCTS (2026-10-15) ; au-delà, le
-    un-contre-tous d'avant, inchangé. Le un-contre-tous à deux classes rendait chaque filtre en
-    double : les mêmes vecteurs propres, à un facteur près."""
+    """À DEUX classes, le CSP rend 2 × n_per_class filtres DISTINCTS ; au-delà, le
+    un-contre-tous. Le un-contre-tous à deux classes rendrait chaque filtre en double : les
+    mêmes vecteurs propres, à un facteur près."""
     ok = True
 
     def chk(cond, msg):
@@ -618,8 +614,8 @@ def _test_csp_binaire():
     csp3 = CSP(m).fit(bandpass(reref(X3, "car"), fs), y3)
     chk(csp3.filters_.shape[0] == 2 * m * 3 == dimension_csp(m, 3),
         f"à 3 classes : le un-contre-tous, {csp3.filters_.shape[0]} filtres")
-    # La LDA à shrinkage (2026-10-15) : une option, pour le CSP comme pour le FBCSP ; décochée,
-    # la LDA d'avant. Un modèle entraîné avec elle se relit (joblib) et décide à l'identique.
+    # La LDA à shrinkage : une option, pour le CSP comme pour le FBCSP ; décochée, la LDA
+    # ordinaire. Un modèle entraîné avec elle se relit (joblib) et décide à l'identique.
     def _lda_de(methode, shrinkage):
         lda = build_pipe(methode, m, fs=fs, n_classes=2, shrinkage=shrinkage).named_steps["lda"]
         return lda.solver, lda.shrinkage
@@ -655,7 +651,7 @@ def _test_csp_binaire():
 
 
 def _test_fbcsp():
-    """Le FBCSP (2026-09-30) : il sépare, il choisit la bonne sous-bande, ni son banc ni sa
+    """Le FBCSP : il sépare, il choisit la bonne sous-bande, ni son banc ni sa
     sélection ne fuient, sa sélection ne se laisse pas prendre aux fenêtres sœurs, il filtre avec
     le coupe-bande et après le CAR, il se relit.
 
@@ -686,7 +682,7 @@ def _test_fbcsp():
         and all(b[i][1] == b[i + 1][0] for i in range(len(b) - 1)),
         f"4-40 Hz -> 9 sous-bandes contiguës de 4 Hz, qui recouvrent la bande exactement ({b})")
     # L'arrondi : à égalité (largeur = 4n + 2), TOUJOURS vers le haut. `round()` arrondit au pair :
-    # 10 Hz donnait 2 sous-bandes de 5 Hz, 14 Hz en donnait 4 de 3,5 Hz.
+    # 10 Hz donnerait 2 sous-bandes de 5 Hz, 14 Hz en donnerait 4 de 3,5 Hz.
     egalites = {10.0: 3, 14.0: 4, 18.0: 5, 22.0: 6, 26.0: 7, 30.0: 8, 34.0: 9}
     obtenu = {w: len(sous_bandes((4.0, 4.0 + w))) for w in egalites}
     chk(obtenu == egalites,

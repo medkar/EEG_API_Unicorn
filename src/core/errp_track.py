@@ -1,19 +1,16 @@
 """La piste de l'ErrP : où va le point, quand la machine se trompe, combien de temps on attend.
 
-Ce module n'existait pas avant le 2026-09-07, et son absence était un défaut connu, écrit noir sur
-blanc dans le code qu'il remplace : *« ⚠️ Cette fonction est un DOUBLE de `_decide_step`, pas
-encore une source unique »*. Il y avait DEUX implémentations de la même règle — celle de
-`research/errp_calibrate.py`, sous laquelle les modèles ont été entraînés, et celle de l'émetteur,
-sous laquelle ils sont appliqués — et un test qui rejouait 500 pas à graine égale pour vérifier
-qu'elles ne divergeaient pas. Un test pareil est un aveu : il protège une duplication au lieu de la
-supprimer, et il ne peut rien dire du 501e pas.
+La règle de la piste a UNE seule écriture, partagée par la fenêtre ErrP (l'émetteur, sous
+laquelle les modèles sont appliqués) et par la calibration (sous laquelle ils sont entraînés).
+Deux copies de la même règle pourraient diverger sans qu'un test puisse le voir au-delà des pas
+rejoués.
 
-Le déménagement dans `core` est ce que la règle du projet prescrit : quand `stimulus` a besoin de
-ce que `research` détient, ce n'est pas la frontière qu'on assouplit, c'est le module qui déménage.
-La calibration ErrP jouée par le moteur en aura besoin à son tour.
+Le module vit dans `core` parce que `stimulus` et la calibration du moteur en ont besoin : quand
+`stimulus` a besoin d'un module, c'est lui qui déménage vers `core`, on n'assouplit pas la
+frontière.
 
 ⚠️ **Les trois pauses ne sont pas des réglages de confort.** Ce sont les durées sous lesquelles les
-époques du modèle du 2026-07-24 (AUC 0,776) ont été enregistrées. Les changer sans réentraîner
+époques du modèle de référence (AUC 0,776) ont été enregistrées. Les changer sans réentraîner
 décale la position du feedback dans l'époque, ce qui ne lève aucune erreur et dégrade le décodage
 en silence.
 
@@ -27,18 +24,16 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from core.config import use_utf8_console  # noqa: E402
 
-# Les trois temps d'attente de la piste, en secondes. Ils étaient jusqu'ici des LITTÉRAUX dans
-# `research/errp_calibrate.py:_run_block` et des constantes RECOPIÉES dans l'émetteur, arrimées
-# l'une à l'autre par un test qui lisait le code source de `_run_block` avec `inspect.getsource`.
-# Le test disparaît avec la duplication : les deux lisent désormais le même nom.
+# Les trois temps d'attente de la piste, en secondes. La fenêtre et la calibration lisent les
+# mêmes noms : aucune copie à garder alignée.
 PAUSE_INTER_PAS_S = 0.45        # entre deux pas d'une même course — SOA intra-course 1,45 s
 PAUSE_FIN_COURSE_S = 0.7        # état FINAL : le point est sur la cible (ou on renonce)
 PAUSE_NOUVELLE_COURSE_S = 0.9   # état NEUF : point au centre, cible redéplacée
 # ⚠️ DEUX écrans statiques par fin de course, pas un, et le second est celui qui compte. Sans lui,
 # la remise à zéro — le point saute de plusieurs cases ET la cible change d'extrémité une fois sur
-# deux — tombait dans la frame horodatée du pas SUIVANT : l'époque commençait sur un transitoire
-# visuel plein écran qui n'est pas le feedback qu'elle prétend mesurer. Mesuré sur 200 séances
-# simulées : 14,9 % des époques partaient ainsi.
+# deux — tomberait dans la frame horodatée du pas SUIVANT : l'époque commencerait sur un
+# transitoire visuel plein écran qui n'est pas le feedback qu'elle prétend mesurer. Sur 200
+# séances simulées, 14,9 % des époques seraient touchées.
 
 
 def nouvelle_cible(n_cells, rng):

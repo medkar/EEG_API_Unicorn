@@ -13,17 +13,17 @@
     ┌ 1. Régler ──────────────────────────┐
     ┌ 2. Observer ────────────────────────┐   la vue en direct, en face ; aucun score
 
-🔴 **Pourquoi cette forme (séance casque du 2026-09-22).** L'ancienne page mettait « Démarrer »,
-« Calibrer » et « Lancer le stimulus » à plat, comme trois gestes de même rang. Il existe pourtant
-un ORDRE, et en sauter un rend les autres inutiles sans que rien ne le dise : le stimulus a été
-lancé sur un mode arrêté, et dix minutes de fixation se sont perdues dans le vide. La boucle réelle
-est « régler → tester → ajuster → re-tester » ; « Tester » possède sa séquence entière (la mesure,
-le contrôle de liaison, la fenêtre, le verdict), donc il n'y a plus d'ordre à respecter.
+🔴 **Pourquoi cette forme.** Des gestes à plat (« Démarrer », « Calibrer », « Lancer le
+stimulus »), comme s'ils étaient de même rang, cacheraient qu'il existe un ORDRE : en sauter un
+rend les autres inutiles sans que rien ne le dise (un stimulus lancé sur un mode arrêté, c'est
+dix minutes de fixation perdues). La boucle réelle est « régler → tester → ajuster → re-tester » ;
+« Tester » possède sa séquence entière (la mesure, le contrôle de liaison, la fenêtre, le
+verdict), donc il n'y a pas d'ordre à respecter.
 
-Ce qui a QUITTÉ la page — « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
-« Brancher un client » — reviendra avec « Connecter », le second chantier. La machinerie de la
-`Console` qui les servait (`demander_stimulus`, le journal de `_lancer_fenetre`, les boutons des
-tuiles de la grille) reste en place.
+Ne figurent pas sur la page : « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
+« Brancher un client » (ils reviendront avec « Connecter »). La machinerie de la `Console` qui
+les servait (`demander_stimulus`, le journal de `_lancer_fenetre`, les boutons des tuiles de la
+grille) reste en place.
 
 Rien ici ne sait qu'un SSVEP a des fréquences ou qu'un MI s'entraîne : c'est le CONTRAT qui le dit
 (`calibration`, `test_id`), et le moteur qui déclare quelle mesure sait remplir quel réglage.
@@ -82,9 +82,9 @@ class ModePage(QWidget):
         self.bouton_retour = QPushButton(tr("console.nav.retour_modes"))
         self.bouton_retour.clicked.connect(self.retour)
         entete.addWidget(self.bouton_retour)
-        # Le résumé PASSE À LA LIGNE (2026-10-14) : sur une seule ligne, celui de l'ErrP exigeait
-        # ~1 400 px, et Qt réserve la largeur de la page la plus large même quand elle est cachée —
-        # la console ne tenait plus sur un écran de portable (1366 px).
+        # Le résumé PASSE À LA LIGNE : sur une seule ligne, celui de l'ErrP exigerait ~1 400 px,
+        # et Qt réserve la largeur de la page la plus large même quand elle est cachée — la
+        # console ne tiendrait plus sur un écran de portable (1366 px).
         resume = QLabel(tr("console.mode.entete", mode=spec["label"], resume=spec["summary"]))
         resume.setWordWrap(True)
         entete.addWidget(resume, 1)
@@ -119,9 +119,9 @@ class ModePage(QWidget):
 
         # --- 2. Entraîner (si le contrat déclare une calibration) --------------------------------
         # ⚠️ Le critère d'activation est `jouable` — le moteur a-t-il un runtime pour cette
-        # calibration — et non `kind` (qui dit seulement QUI mène le protocole). Le critère
-        # précédent désignait une valeur que le contrat n'a plus : le bouton avait DISPARU de tous
-        # les modes, MI compris, et aucun test ne l'a vu parce que le smoke ne cliquait jamais.
+        # calibration — et non `kind` (qui dit seulement QUI mène le protocole). Un critère sur
+        # une valeur de `kind` que le contrat n'a pas ferait DISPARAÎTRE le bouton de tous les
+        # modes, sans qu'une erreur le signale.
         calib = spec.get("calibration") or {}
         self.bloc_entrainer = self.bouton_entrainer = None
         if calib:
@@ -159,7 +159,7 @@ class ModePage(QWidget):
                     tr("console.mode.tester_pas_livre", mode=spec["label"]))
             dedans = QVBoxLayout(self.bloc_tester)
             dedans.addWidget(_phrase(tr("console.mode.tester_phrase")))
-            # « Tester librement » (2026-10-01) : DANS le bloc « Tester », à côté de son bouton —
+            # « Tester librement » : DANS le bloc « Tester », à côté de son bouton —
             # c'est la même boucle (régler -> essayer -> ajuster), sans score. Il n'existe que si
             # la fenêtre du mode SAIT tenir un essai libre : la page le DEMANDE à la console, qui
             # le demande au registre des fenêtres. Aucune liste de modes ici.
@@ -186,7 +186,7 @@ class ModePage(QWidget):
         self.vue = live_views.build(spec["family"], spec["channels"])
         if hasattr(self.vue, "set_source") and console.engine is not None:
             # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`. Et le
-            # SECTEUR du poste qu'il porte (2026-09-30) : le coupe-bande des tracés est le sien,
+            # SECTEUR du poste qu'il porte : le coupe-bande des tracés est le sien,
             # fixé à sa construction, pas le défaut du dépôt.
             self.vue.set_source(console.engine.recent_window,
                                 getattr(getattr(console.engine, "acq", None), "fs", None),
@@ -217,27 +217,26 @@ class ModePage(QWidget):
             blocs.append(self.bloc_observer)
             entete.addWidget(self.etat)      # ici l'état EST l'objet de la page
         else:
-            # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille,
-            # et reviendra en face avec « Connecter ». Cachée SANS case pour l'ouvrir, elle serait
-            # un widget testé que personne ne peut voir — le motif que ce dépôt traque.
+            # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille.
+            # Cachée SANS case pour l'ouvrir, elle serait un widget testé que personne ne peut
+            # voir.
             self.direct = QCheckBox(tr("console.mode.direct"))
             self.direct.setToolTip(tr("console.mode.direct_aide"))
             self.pli_direct = QWidget()
             pli = QVBoxLayout(self.pli_direct)
             pli.setContentsMargins(0, 0, 0, 0)
             pli.addWidget(_phrase(tr("console.mode.direct_vide")))
-            # L'état du décodage (« arrêté », « décode »…) vit ICI, et plus dans l'en-tête : une
-            # page testable ne démarre ni n'arrête rien, donc un « arrêté » en tête de page n'y
-            # disait rien d'utile — il laissait croire qu'il fallait démarrer quelque chose avant
-            # de tester (relevé à la livraison de la page en blocs).
+            # L'état du décodage (« arrêté », « décode »…) vit ICI, pas dans l'en-tête : une page
+            # testable ne démarre ni n'arrête rien, donc un « arrêté » en tête de page laisserait
+            # croire qu'il faut démarrer quelque chose avant de tester.
             pli.addWidget(self.etat)
             pli.addWidget(self.vue, 1)
             self.pli_direct.setVisible(False)
             self.direct.toggled.connect(self.pli_direct.setVisible)
 
-        # ⚠️ Le corps DÉFILE (2026-09-10) : sans ça, une page plus haute que la fenêtre est
-        # TRONQUÉE — Qt écrase les blocs du bas, il ne les rend pas défilables (constat 1.10 de la
-        # recette). L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable du bas.
+        # ⚠️ Le corps DÉFILE : sans ça, une page plus haute que la fenêtre est TRONQUÉE — Qt
+        # écrase les blocs du bas, il ne les rend pas défilables (cf. docs/recette.md, constat
+        # 1.10). L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable du bas.
         corps = QWidget()
         dedans = QVBoxLayout(corps)
         dedans.setContentsMargins(0, 0, 0, 0)
@@ -265,10 +264,9 @@ class ModePage(QWidget):
         et l'on RESTE — partir tester (ou mesurer) une configuration que le moteur refuse ne
         mesurerait rien, et la saisie fautive serait perdue au retour.
 
-        ⚠️ Pendant que le TEST de ce mode tourne, rien n'est envoyé (constat M7 de la revue) : il
-        est parti avec ses réglages, et changer le magasin sous lui ferait afficher à cette page
-        une configuration que son verdict ne décrira pas. Le clic mène alors simplement à la
-        page du test en cours.
+        ⚠️ Pendant que le TEST de ce mode tourne, rien n'est envoyé : il est parti avec ses
+        réglages, et changer le magasin sous lui ferait afficher à cette page une configuration
+        que son verdict ne décrira pas. Le clic mène alors simplement à la page du test en cours.
         """
         if self.console.mesure_en_cours(self.spec.get("test_id") or ""):
             return True, None
@@ -283,13 +281,12 @@ class ModePage(QWidget):
     def _tester(self):
         """« Tester » teste CE QUI EST À L'ÉCRAN, et pas ce qui avait été appliqué avant.
 
-        ⚠️ Relevé par l'auteur de cette page, à la livraison (2026-09-22) : sans ce premier geste,
-        on change une fréquence, on clique « Tester » sans passer par « Appliquer », et c'est
-        l'ANCIENNE configuration qui est testée — sans que rien ne le dise. Dans la boucle
-        régler → tester → ajuster, c'est le piège exact. Le formulaire part donc d'abord au moteur
-        comme par « Appliquer » ; s'il est refusé (17 Hz ne divise pas 60), le refus s'affiche
-        dans « Régler » et le test n'est PAS ouvert — tester une configuration impossible ne
-        mesurerait rien.
+        ⚠️ Sans ce premier geste, on change une fréquence, on clique « Tester » sans passer par
+        « Appliquer », et c'est l'ANCIENNE configuration qui est testée, sans que rien ne le
+        dise. Dans la boucle régler → tester → ajuster, c'est le piège exact. Le formulaire part
+        donc d'abord au moteur comme par « Appliquer » ; s'il est refusé (17 Hz ne divise pas
+        60), le refus s'affiche dans « Régler » et le test n'est PAS ouvert — tester une
+        configuration impossible ne mesurerait rien.
         """
         parti, reglages = self._appliquer_avant_de_partir()
         if not parti:
@@ -331,13 +328,13 @@ class ModePage(QWidget):
         self.bouton_essayer.setEnabled(not en_cours)
 
     def _mesurer(self, mesure_id):
-        """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester » (constat I4).
+        """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester ».
 
-        🔴 Sans ce geste, l'aller-retour ÉCRASAIT la saisie : on tape « Rafraîchissement 30 » et
+        🔴 Sans ce geste, l'aller-retour ÉCRASERAIT la saisie : on tape « Rafraîchissement 30 » et
         de nouvelles fréquences sans « Appliquer », on clique « Mesurer », on applique le pic
         alpha — qui écrit le magasin du mode —, on revient, et `update_from` recharge le
-        formulaire depuis ce magasin : 60 Hz et le trio du dépôt étaient de retour, et « Tester »
-        testait ce que l'étudiant venait d'effacer sans le savoir.
+        formulaire depuis ce magasin : 60 Hz et le trio du dépôt seraient de retour, et « Tester »
+        testerait ce que l'élève vient d'effacer sans le savoir.
         """
         parti, _ = self._appliquer_avant_de_partir()
         if parti:
@@ -356,20 +353,19 @@ class ModePage(QWidget):
         ack = self.console.commande("set_params", id=self.mode_id, params=values)
         if ack.get("accepted"):
             self.formulaire.show_refus("")
-            # Accepté sur un mode ARRÊTÉ : validé et retenu. En VERT, pas en orange (retour de
-            # séance du 2026-09-22) — il n'y a aucune réserve à émettre, c'est un succès. La
-            # nuance « pas encore en vigueur » est un fait de CALENDRIER, et elle est dans le
-            # texte ; la couleur ne répond qu'à « est-ce accepté ». L'orange le faisait lire
-            # comme un problème, alors que `mesure_page.py` disait déjà vert pour le même fait.
-            # (La page ne démarre plus rien : ce sont « Tester » et le décodage continu qui
-            # partiront avec — constat M14 de la revue.)
+            # Accepté sur un mode ARRÊTÉ : validé et retenu. En VERT, pas en orange — il n'y a
+            # aucune réserve à émettre, c'est un succès. La nuance « pas encore en vigueur » est
+            # un fait de CALENDRIER, et elle est dans le texte ; la couleur ne répond qu'à « est-ce
+            # accepté ». L'orange le ferait lire comme un problème (`mesure_page.py` dit vert pour
+            # le même fait). La page ne démarre rien : ce sont « Tester » et le décodage continu
+            # qui partiront avec ce réglage.
             self.formulaire.show_confirmation(
                 tr("console.mode.reglage_retenu", mode=self.spec["label"])
                 if ack.get("differe") else "")
             return
         # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
         # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire
-        # comme l'état du moteur, et l'étudiant croit décoder sur des réglages jamais appliqués.
+        # comme l'état du moteur, et l'élève croit décoder sur des réglages jamais appliqués.
         vigueur = self._derniers_params or {}
         raison = ack.get("reason", "")
         self.formulaire.show_refus(
@@ -406,11 +402,11 @@ class ModePage(QWidget):
         if mode_state is None:
             self.etat.setText(tr("console.etat.arrete"))
             self.vue.update_from(None)
-            # ⚠️ Les RÉGLAGES RETENUS se montrent (2026-09-21). `modes_state` ne contient que
-            # les modes actifs : sans cette branche, un réglage posé sur un mode arrêté était
-            # accepté par le moteur, retenu, appliqué au démarrage — et INVISIBLE, le champ
-            # gardant l'ancienne valeur. L'écran disait alors le contraire de la vérité, ce qui
-            # est pire qu'un refus franc. Vu en séance : « mon pic alpha n'a pas été reporté ».
+            # ⚠️ Les RÉGLAGES RETENUS se montrent. `modes_state` ne contient que les modes
+            # actifs : sans cette branche, un réglage posé sur un mode arrêté serait accepté par
+            # le moteur, retenu, appliqué au démarrage — et INVISIBLE, le champ gardant
+            # l'ancienne valeur. L'écran dirait le contraire de la vérité, ce qui est pire qu'un
+            # refus franc (« mon pic alpha n'a pas été reporté »).
             retenus = (state.get("reglages") or {}).get(self.mode_id)
             if retenus and retenus != self._derniers_params:
                 self._derniers_params = dict(retenus)
@@ -445,7 +441,7 @@ class ModePage(QWidget):
 
         Appelée sur ÉVÉNEMENT — à l'entrée dans la page (cf. `Console.show_mode`) — jamais dans le
         rafraîchissement périodique : résoudre ces choix lit le disque, et le faire dix fois par
-        seconde a déjà coûté 30 % d'un cœur à ce projet. Revenir d'un entraînement, d'un test ou
+        seconde coûterait environ 30 % d'un cœur (mesuré). Revenir d'un entraînement, d'un test ou
         d'une mesure ramène sur CETTE page par `show_mode`, donc par ce même événement : un modèle
         fraîchement enregistré est dans la liste dès le retour. Quel modèle y est SÉLECTIONNÉ,
         c'est le magasin du moteur qui le dit (`update_from`), pas cette liste.

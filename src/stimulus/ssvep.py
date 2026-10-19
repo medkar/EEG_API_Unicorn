@@ -1,47 +1,40 @@
 """Stimulus SSVEP — les disques clignotants, et le run GUIDÉ qui permet de le MESURER.
 
-⚠️ **TROIS cibles par défaut, quatre au maximum.** Ce fichier a annoncé « 4 flèches » jusqu'au
-2026-09-09, dans sa docstring, dans son `--help` et dans le briefing de la mesure, alors que
-`choose_frequencies` en rendait TROIS (AVANT, GAUCHE, DROITE). Le nombre vient du PLAN et de nulle
-part ailleurs : quelqu'un qui s'assoit 3,6 minutes devant cet écran ne doit pas y chercher une
-cible qui n'existe pas. Depuis le 2026-09-21, `--freqs` décide de ce plan — donc le nombre de
-cibles est la LONGUEUR de la liste, entre 2 et 4. Quatre est la borne de la GÉOMÉTRIE (elle a
-quatre places), pas celle du moteur, qui accepte jusqu'à 8 cibles.
+⚠️ **TROIS cibles par défaut, quatre au maximum.** Le nombre vient du PLAN et de nulle part
+ailleurs : `choose_frequencies` en rend TROIS (AVANT, GAUCHE, DROITE), et quelqu'un qui s'assoit
+3,6 minutes devant cet écran ne doit pas y chercher une cible qui n'existe pas. `--freqs` décide
+de ce plan, donc le nombre de cibles est la LONGUEUR de la liste, entre 2 et 4. Quatre est la
+borne de la GÉOMÉTRIE (elle a quatre places), pas celle du moteur, qui accepte jusqu'à 8 cibles.
 
-**Des DISQUES, plus des flèches** (2026-10-02, demandé au QA : « des cibles rondes, comme pour les
-autres modes »). Mêmes places qu'avant, même clignotement image par image. Le disque est un peu
-PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une cible SSVEP plus petite donne une
-réponse plus faible, et `--smoke` compte sa surface dans les pixels. La consigne est un cercle
-BLEU à `CUE_MARGE_PX` du bord, comme au P300 ; l'anneau de retour suit la règle commune
-(`stimulus/retour.py:rayon_anneau`). Les flèches ne vivent plus que dans `archive/ui.py`, pour les
-écrans archivés. Au centre de chaque disque, à chaque image, le point de fixation ROUGE du c-VEP
-et du P300 (`FIX_DOT`, QA 1.17.1) : les sondes de `--smoke` lisent donc l'état ON/OFF à mi-rayon.
+**Des DISQUES.** Le disque est un peu PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une
+cible SSVEP plus petite donne une réponse plus faible, et `--smoke` compte sa surface dans les
+pixels. La consigne est un cercle BLEU à `CUE_MARGE_PX` du bord, comme au P300 ; l'anneau de retour
+suit la règle commune (`stimulus/retour.py:rayon_anneau`). Les flèches ne vivent que dans
+`archive/ui.py`, pour les écrans archivés. Au centre de chaque disque, à chaque image, le point de
+fixation ROUGE du c-VEP et du P300 (`FIX_DOT`) : les sondes de `--smoke` lisent donc l'état ON/OFF
+à mi-rayon.
 
-⚠️ **Aucun texte sur une cible** (2026-10-02). Le titre du guidé était posé à 10 % de la hauteur,
-PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait : un texte sur une cible change sa
-luminance moyenne, donc la réponse SSVEP mesurée. Les textes vont dans une bande libre calculée
-depuis `geometrie` (`mise_en_page`) ; `--smoke` (section K) relit, à quatre résolutions, le
-rectangle de chaque texte posé et les pixels de la zone de chaque anneau.
+⚠️ **Aucun texte sur une cible.** Un texte posé sur un disque change sa luminance moyenne, donc la
+réponse SSVEP mesurée. Les textes vont dans une bande libre calculée depuis `geometrie`
+(`mise_en_page`) ; `--smoke` (section K) relit, à quatre résolutions, le rectangle de chaque texte
+posé et les pixels de la zone de chaque anneau.
 
-🔴 **`--freqs`, et pourquoi il a manqué.** Jusqu'au 2026-09-21 cette fenêtre affichait le jeu du
-DÉPÔT quoi qu'on règle dans la console : un étudiant qui pose 12 · 15 · 20 voyait clignoter
-15 · 20 · 8,571, et le moteur corrélait contre des sinusoïdes que PERSONNE n'affichait. Rien ne
-lève, rien ne compte, le mode ne détecte simplement plus rien — la panne caractéristique de ce
-produit. Trouvé en séance casque, pas par un test.
+🔴 **`--freqs` : la fenêtre affiche les fréquences DU MODE.** Sans lui, elle afficherait le jeu du
+DÉPÔT quoi qu'on règle dans la console : un étudiant qui pose 12 · 15 · 20 verrait clignoter
+15 · 20 · 8,571, et le moteur corrélerait contre des sinusoïdes que PERSONNE n'affiche. Rien ne
+lève, le mode ne détecte simplement plus rien — la panne caractéristique de ce produit.
 
-⚠️ Et le corollaire, qui compte autant : une fréquence qui ne divise pas le rafraîchissement est
-**REFUSÉE**, jamais arrondie en silence. `choose_frequencies` ajuste `frames_per_cycle` sans rien
-dire — une valeur impossible deviendrait donc une AUTRE fréquence, affichée sans prévenir, pendant
-que le moteur corrèle sur celle qu'on lui a demandée. La règle du refus n'est pas réécrite ici :
-c'est celle du moteur (`core/modes/contract.py`, contrainte `divise_le_refresh`), APPELÉE.
+⚠️ Corollaire : une fréquence qui ne divise pas le rafraîchissement est **REFUSÉE**, jamais
+arrondie en silence. `choose_frequencies` ajuste `frames_per_cycle` sans rien dire — une valeur
+impossible deviendrait donc une AUTRE fréquence, affichée sans prévenir, pendant que le moteur
+corrèle sur celle qu'on lui a demandée. La règle du refus n'est pas réécrite ici : c'est celle du
+moteur (`core/modes/contract.py`, contrainte `divise_le_refresh`), APPELÉE.
 
 Brique « affichage » du produit. **Ce programme n'ouvre PAS le casque** : il ne fait que présenter
 les stimuli visuels et, en mode guidé, publier des marqueurs. C'est ce qui lui permet de tourner
 EN MÊME TEMPS que le moteur, dans deux processus — le même montage que le P300, l'ErrP et le c-VEP.
-
-⚠️ **Ce fichier vivait dans `src/research/`** (`ssvep_stimulus.py`) et n'était lançable qu'à la
-main. Il a déménagé ici le 2026-09-09 : afficher un stimulus est de l'USAGE RÉEL, et l'usage réel
-se pilote depuis la console. La règle est vérifiée par `python src/core/server.py --smoke`.
+Il se pilote depuis la console (usage réel) ; la règle est vérifiée par
+`python src/core/server.py --smoke`.
 
 Pourquoi « comptage de frames » et pas un timer ?
   Un stimulus SSVEP doit clignoter à une fréquence STABLE. Si on se base sur l'horloge,
@@ -54,10 +47,9 @@ Pourquoi « comptage de frames » et pas un timer ?
 --- Le mode GUIDÉ (`--guide`) ------------------------------------------------------------------
 
 Le décodage libre ne dit pas si le moteur a RAISON : personne ne sait où le regard se pose. Le run
-guidé le dit, parce qu'il DÉSIGNE la cible à fixer et publie cette vérité-terrain. C'est la moitié
-« stimulus » de l'ancien `research/ssvep_guided.py` ; sa moitié « acquisition et décision » est
-montée dans le moteur (`src/core/modes/ssvep_mesure.py`), et sa moitié « analyse d'un run archivé »
-est restée au banc d'essai.
+guidé le dit, parce qu'il DÉSIGNE la cible à fixer et publie cette vérité-terrain. Cette fenêtre en
+est la moitié « stimulus » ; la moitié « acquisition et décision » est dans le moteur
+(`src/core/modes/ssvep_mesure.py`).
 
 Protocole publié sur le flux `MARKER_STREAM_DEFAULT` (core/config.py), type "Markers", 1 voie
 "string", cadence irrégulière — quatre événements, dans cet ordre :
@@ -89,9 +81,8 @@ taux complet, et c'est le chiffre entier qu'on irait ensuite citer.
 
 ⚠️ **Une image figée n'est pas un ralentissement : c'est une cible qui CESSE de clignoter.** Pendant
 la durée d'une frame sautée, la cible n'émet plus à la fréquence annoncée, donc la réponse SSVEP
-cherchée n'existe plus — et le moteur, lui, continue de corréler. Observé en séance le 2026-09-21
-(« périodiquement, l'image se figeait ») : rien n'a levé, rien n'a compté, et le verdict de la
-mesure n'en savait rien. Le compteur `sautees` est celui de `stimulus/cvep.py`, à l'identique :
+cherchée n'existe plus — et le moteur, lui, continue de corréler. Sans compteur, rien ne
+lève et le verdict de la mesure ignore ces images figées. Le compteur `sautees` est celui de `stimulus/cvep.py`, à l'identique :
 même seuil, même façon de mesurer l'écart entre deux flips, et la même honnêteté — **le compte est
 AFFICHÉ, jamais corrigé**. Il tourne dans les DEUX modes, s'affiche au HUD en direct, et
 `bilan_de_seance` l'imprime en fin de séance.
@@ -104,10 +95,9 @@ même qu'au P300 et au c-VEP). L'anneau passe au-delà du cercle de consigne, da
 touche aucun pixel que les sondes de `--smoke` relisent. Il est VERT, en libre comme en `--guide` :
 il montre la cible décodée, il ne juge pas. En libre (sans `--guide`) il suit la dernière décision. En
 `--guide`, la décision d'un essai arrive pendant le retour à la croix, et l'anneau s'éteint au
-début de la CONSIGNE suivante — soit
-`SSVEP_GUIDE_CUE_S` avant la fixation, dont le moteur ne lit que la fin. L'essai se ferme
-`MARGE_DECISION_S` AVANT la fin de la fixation : le moteur décide à la fin exacte, et une décision
-arrivée avant la fermeture serait perdue (revue C-M4). Sans `--guide`, cette fenêtre n'affiche
+début de la CONSIGNE suivante — soit `SSVEP_GUIDE_CUE_S` avant la fixation, dont le moteur ne lit
+que la fin. L'essai se ferme `MARGE_DECISION_S` AVANT la fin de la fixation : le moteur décide à la
+fin exacte, et une décision arrivée avant la fermeture serait perdue. Sans `--guide`, cette fenêtre n'affiche
 déjà que ses cibles : elle n'a pas besoin d'un `--libre` — mais tant que le moteur chauffe ou
 mesure son plancher (son flux `status`), elle montre la croix et l'écran de REPOS du guidé : le
 plancher se mesure AVEC le clignotement, sans fixer aucune cible.
@@ -168,7 +158,7 @@ DIM = (110, 110, 130)
 CUE = (60, 130, 255)
 # Le cercle de consigne, comme au P300 : son bord extérieur à `CUE_MARGE_PX` du disque, tracé vers
 # l'intérieur sur `CUE_EPAISSEUR_PX` — il reste 4 px de noir entre les deux, et le disque garde
-# toute sa surface clignotante (l'ancien liseré, posé SUR le bord de la flèche, en mangeait).
+# toute sa surface clignotante (un liseré posé SUR le bord du disque en mangerait).
 # L'anneau de retour passe au-delà (`retour.rayon_anneau`) et ne coexiste jamais avec lui.
 CUE_MARGE_PX = 8
 CUE_EPAISSEUR_PX = 4
@@ -176,8 +166,7 @@ CUE_EPAISSEUR_PX = 4
 # dessous — `--smoke` compte les pixels non-fond que l'anneau couvrirait.
 ETIQUETTE_ECART_PX = 4
 
-# Le POINT DE FIXATION au centre de chaque disque (QA 1.17.1, 2026-10-02 : « mets aussi le point
-# rouge au centre pour fixer le regard »), comme au c-VEP et au P300. Dessiné à CHAQUE image,
+# Le POINT DE FIXATION au centre de chaque disque, comme au c-VEP et au P300. Dessiné à CHAQUE image,
 # disque allumé comme éteint, après le disque. CHROMATIQUE : la réponse SSVEP est pilotée par la
 # LUMINANCE du clignotement blanc/noir, un petit point rouge STATIQUE n'ampute donc quasiment pas
 # la modulation, et il reste visible dans les deux phases. Rayon en PIXELS, pas proportionnel :
@@ -192,8 +181,8 @@ FIX_DOT = (200, 40, 40)
 FIX_DOT_R = 2
 
 # En `--guide --retour`, l'essai se FERME ce délai AVANT la fin de la fixation : le moteur décide
-# à la fin EXACTE (`cue` + `SSVEP_GUIDE_FIX_S`), jamais avant — fermer À la fin était une course à
-# marge nulle, une décision arrivée une image trop tôt était perdue (revue C-M4).
+# à la fin EXACTE (`cue` + `SSVEP_GUIDE_FIX_S`), jamais avant — fermer À la fin serait une course à
+# marge nulle : une décision arrivée une image trop tôt serait perdue.
 MARGE_DECISION_S = 0.25
 
 # Les écrans de REPOS : du guidé, et de l'essai libre tant que le moteur se repose. UNE écriture.
@@ -201,9 +190,9 @@ TITRE_CHAUFFE = "Le casque se stabilise"
 SOUS_CHAUFFE = "installe-toi, ne fixe aucune cible — la mesure commence après"
 TITRE_REPOS = "REPOS"
 SOUS_REPOS = "fixe la CROIX centrale, ne suis AUCUNE cible"
-# …et TOUS les autres textes de cette fenêtre, sortis de `_guide` et de `dessine` le 2026-10-02 sans
-# en changer un mot : `mise_en_page` mesure le plus large pour placer le bloc une fois pour toutes,
-# et la section K de `--smoke` exige de les avoir tous vus posés HORS des cibles.
+# …et TOUS les autres textes de cette fenêtre, regroupés ici : `mise_en_page` mesure le plus large
+# pour placer le bloc une fois pour toutes, et la section K de `--smoke` exige de les avoir tous vus
+# posés HORS des cibles.
 TITRE_CONSIGNE = "REGARDE : {nom}"
 SOUS_CONSIGNE = "essai {i}/{n}"
 SOUS_FIXATION = "fixe la cible entourée"
@@ -268,7 +257,7 @@ SEUIL_SAUT = 1.5
 SEUIL_ALERTE_SAUTEES = 0.01
 
 # Ce que le MOTEUR jette avant d'enregistrer pour de bon : sa chauffe (l'offset DC de l'Unicorn
-# dérive après ouverture de session — 10⁵ µV en rampe, mesuré le 2026-07-27). Valeur LUE dans
+# dérive après ouverture de session — 10⁵ µV en rampe, mesuré sur ce casque). Valeur LUE dans
 # `core/config.py` comme le fait `stimulus/p300.py`, jamais recopiée. Sans cette attente, le
 # plancher de repos serait mesuré dans la dérive, c'est-à-dire étalonné sur le transitoire d'un
 # filtre — et tout le reste de la séance se compare à ce plancher-là.
@@ -323,13 +312,12 @@ def point_de_sonde(x, y, r):
     les pixels — pour `--smoke`, qui ne croit pas l'émetteur sur parole.
 
     ⚠️ PAS le centre : le point de fixation y est dessiné, rouge dans les deux phases, et sa couleur
-    ne dit rien de l'état du disque (la sonde lisait le centre avant l'arrivée du point). À
-    mi-rayon on est DANS le disque (blanc quand il est allumé), loin du point et en deçà du contour
+    ne dit rien de l'état du disque. À mi-rayon on est DANS le disque (blanc quand il est allumé), loin du point et en deçà du contour
     (fond noir quand il est éteint). Même règle que `stimulus/cvep.py:point_de_sonde`."""
     return (int(x) + int(r) // 2, int(y))
 
 
-# --- Les TEXTES : jamais sur une cible (2026-10-02) ---------------------------
+# --- Les TEXTES : jamais sur une cible ----------------------------------------
 
 MiseEnPage = namedtuple("MiseEnPage", "titre sous etiquette hud y_bloc ou echelle ancre_hud")
 
@@ -351,11 +339,9 @@ def _hors_des_cibles(rect, centres, garde):
 def mise_en_page(pygame, plan, size, n_essais):
     """Où poser les textes, et à quelle taille — calculé UNE fois par séance, depuis `geometrie`.
 
-    ⚠️ **Aucun texte sur une cible, ni sur la zone de son anneau.** Jusqu'au 2026-10-02 le titre
-    du guidé était posé à 10 % de la hauteur, c'est-à-dire PAR-DESSUS le haut du disque AVANT
-    pendant qu'il clignotait (« fixe la cible entourée », « REGARDE : … », chauffe, repos). Un
-    texte sur une cible change sa luminance moyenne, donc la réponse SSVEP qu'on mesure — sans
-    rien casser. La zone interdite est le disque de rayon `rayon_retour + retour.EPAISSEUR_PX` :
+    ⚠️ **Aucun texte sur une cible, ni sur la zone de son anneau.** Un titre posé par-dessus un
+    disque qui clignote (« fixe la cible entourée », « REGARDE : … », chauffe, repos) change sa
+    luminance moyenne, donc la réponse SSVEP qu'on mesure — sans rien casser. La zone interdite est le disque de rayon `rayon_retour + retour.EPAISSEUR_PX` :
     l'anneau de retour et une épaisseur de garde ; l'étiquette sous chaque disque en touche le bord.
 
     Le bloc titre + sous-titre va dans une BANDE LIBRE pleine largeur : au-dessus du disque du haut
@@ -448,10 +434,9 @@ def parse_freqs(texte):
     """`(liste de fréquences, None)` ou `(None, raison)`. Le format de `--freqs`, comme `--mode`.
 
     Fonction PURE, donc testable sans écran — et c'est la moitié « lecture » d'un geste dont la
-    console tient la moitié « écriture » (`stimulus/registry.py:option_frequences`). Les deux
-    moitiés d'un même geste, testées chacune sur son propre décor et jamais sur leur accord, sont
-    la forme exacte des deux défauts que la QA du 2026-09-21 a trouvés ; leur aller-retour est
-    donc vérifié par `--smoke`.
+    console tient la moitié « écriture » (`stimulus/registry.py:option_frequences`). Deux moitiés
+    d'un même geste, testées chacune sur son propre décor et jamais sur leur accord, peuvent
+    diverger sans qu'aucun test ne le voie ; leur aller-retour est donc vérifié par `--smoke`.
     """
     morceaux = [m.strip() for m in str(texte).split(",") if m.strip()]
     if not morceaux:
@@ -492,13 +477,13 @@ def verifie_freqs(freqs, refresh):
     Le seul refus qui appartienne à la FENÊTRE est le nombre de places. Le moteur accepte jusqu'à
     8 cibles ; cet écran a quatre directions et ne sait pas en dessiner davantage.
 
-    ⚠️ **La BANDE n'est pas l'affaire de la fenêtre** (passe C1, 2026-09-30). Elle ne la reçoit
-    pas, et `validate` complète ce qu'on ne lui passe pas avec les DÉFAUTS du contrat : la fenêtre
-    jugeait donc les fréquences contre 5-40 Hz, en parlant de « la bande RÉGLÉE ». Aux boutons :
-    coupure basse à 3 Hz, « Proposer » rend 3 · 12 · 20 · 30, « Appliquer » accepte, « Tester »
-    lance cette fenêtre… qui refuse. On juge donc contre la bande la PLUS LARGE que les réglages
-    du mode permettent : aucune bande que le moteur accepte n'en sort, et tout le reste — les
-    diviseurs du rafraîchissement, la séparabilité — est jugé comme avant, par le contrat.
+    ⚠️ **La BANDE n'est pas l'affaire de la fenêtre.** Elle ne la reçoit pas, et `validate`
+    complète ce qu'on ne lui passe pas avec les DÉFAUTS du contrat : juger contre ces défauts
+    (5-40 Hz) ferait refuser par la fenêtre un jeu que le moteur accepte avec une autre bande.
+    Exemple : coupure basse réglée à 3 Hz, « Proposer » rend 3 · 12 · 20 · 30, « Appliquer »
+    accepte, « Tester » lance cette fenêtre… qui refuserait. On juge donc contre la bande la PLUS
+    LARGE que les réglages du mode permettent : aucune bande que le moteur accepte n'en sort, et
+    tout le reste — les diviseurs du rafraîchissement, la séparabilité — est jugé par le contrat.
     """
     # Import TARDIF : la fenêtre doit rester importable et lançable sans traîner le décodeur du
     # mode derrière elle. Même geste que `stimulus/cvep.py` pour `core.modes`.
@@ -525,7 +510,7 @@ def plan_du_stimulus(refresh, freqs=None):
     `freqs=None` — l'absence de `--freqs` — rend le plan du dépôt, inchangé : c'est le seul chemin
     qui n'est pas validé, et c'est voulu. `choose_frequencies` y ARRONDIT au diviseur le plus
     proche (à 75 Hz, les 15 · 20 · 8,571 du dépôt deviennent 15 · 18,75 · 8,33), ce qui est le
-    comportement historique de cette fenêtre lancée seule. Dès qu'on IMPOSE des fréquences, en
+    comportement de cette fenêtre lancée seule. Dès qu'on IMPOSE des fréquences, en
     revanche, cet arrondi devient le mensonge qu'on traque : le moteur corrélerait sur ce qu'on a
     demandé pendant que l'écran montre autre chose. On refuse donc au lieu d'arrondir.
     """
@@ -572,9 +557,8 @@ def bilan_de_seance(frames, sautees, refresh):
 
 # --- Mesure du refresh écran ----------------------------------------------
 
-# `measure_refresh` a DÉMÉNAGÉ dans `stimulus/refresh.py` le 2026-09-07, avec les trois fenêtres
-# qui l'importaient. Réexporté sous son nom d'origine : `archive/ui.py` et les écrans de
-# `archive/` l'importent encore d'ici.
+# `measure_refresh` vit dans `stimulus/refresh.py`. Réexporté ici sous son nom : `archive/ui.py` et
+# les écrans de `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 from stimulus.garde import sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
@@ -676,7 +660,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
 
     # Les flux du RETOUR, construits AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
-    # modes (1 à 2 s d'import), qui volait le GIL au clignotement depuis un fil (revue C-M5). Le
+    # modes (1 à 2 s d'import), qui volerait le GIL au clignotement depuis un fil. Le
     # `status` ne sert qu'à l'essai LIBRE : en guidé, la fenêtre mène elle-même chauffe et repos.
     source_dec = source_retour
     if retour and source_dec is None:
@@ -788,10 +772,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     def dessine(designee=None, titre="", sous="", croix=False):
         """UN SEUL dessin pour tous les écrans du programme.
 
-        Les deux modes avaient chacun leur boucle dans l'ancien découpage
-        (`ssvep_stimulus.py` / `ssvep_guided.py`) et elles avaient déjà divergé sur la taille des
-        flèches de l'époque (0,13 contre 0,12 de l'empan). Un stimulus qui n'est pas celui du
-        décodage rend le taux mesuré inutilisable pour prédire le décodage.
+        Le décodage libre et le run guidé partagent ce dessin : deux dessins séparés divergeraient
+        (taille des cibles, par exemple), et un stimulus qui n'est pas celui du décodage rend le
+        taux mesuré inutilisable pour prédire le décodage.
         """
         win.fill(BG)
         for i, c in enumerate(plan):
@@ -813,7 +796,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         if croix:
             _retour.dessine_croix(pygame, win, (cx, cy), DIM)
         # ⚠️ Les titres, dans la bande LIBRE que `mise_en_page` a choisie — jamais sur un disque
-        # ni sur la zone de son anneau (cf. sa docstring : le titre a recouvert le disque AVANT).
+        # ni sur la zone de son anneau (cf. sa docstring).
         if page.y_bloc is not None:
             if titre:
                 pose_texte(win, page.titre, titre, FG, midtop=(int(cx), page.y_bloc))
@@ -822,10 +805,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
                            midtop=(int(cx), page.y_bloc + page.titre.get_height()))
         # ⚠️ Le HUD, EN DERNIER et dans un coin où il ne recouvre aucune cible (`mise_en_page`) : ce
         # qu'on ajoute par-dessus un stimulus change ce que l'œil reçoit ET ce que les sondes en
-        # pixels de `--smoke` relisent. Il est DANS ce dessin partagé, donc le mode guidé l'a
-        # aussi — il n'affichait rien du tout jusqu'au 2026-09-21, pas même le FPS, alors que
-        # c'est lui qui MESURE : la seule chose qui distingue « ça marche » de « ça a l'air de
-        # marcher » manquait justement là où elle compte.
+        # pixels de `--smoke` relisent. Il est DANS ce dessin partagé, donc le mode guidé, celui qui
+        # MESURE, l'affiche aussi : le FPS et le compte de frames sautées distinguent « ça marche »
+        # de « ça a l'air de marcher ».
         if page.ancre_hud is not None:
             pose_texte(win, page.hud, HUD_TEXTE.format(fps=fps_show, sautees=sautees), HUD,
                        **page.ancre_hud)
@@ -834,11 +816,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         """Le comptage qui suit CHAQUE image affichée : une frame de plus, et une frame SAUTÉE si
         le basculement a pris plus de `SEUIL_SAUT` périodes.
 
-        ⚠️ **Écrit UNE fois pour le décodage libre ET pour le run guidé.** Deux compteurs, même
-        posés le même jour, cessent de compter la même chose au premier changement — et ce serait
-        le mode guidé, celui qui MESURE, qui hériterait du plus vieux. Même mesure, au même
-        endroit du tour de boucle, que `stimulus/cvep.py` : l'écart entre deux instants pris
-        juste APRÈS le flip.
+        ⚠️ **Écrit UNE fois pour le décodage libre ET pour le run guidé.** Deux compteurs cessent
+        de compter la même chose au premier changement. Même mesure, au même endroit du tour de
+        boucle, que `stimulus/cvep.py` : l'écart entre deux instants pris juste APRÈS le flip.
         """
         nonlocal frame, sautees, t_flip_precedent, fps_acc, fps_n, fps_show
         t_flip = time.perf_counter()
@@ -952,7 +932,7 @@ def _guide(plan, per_target, seed, phase, emet, refresh,
     `anneau` (le RETOUR) : l'essai se FERME `MARGE_DECISION_S` avant la fin de la fixation, la
     décision arrive pendant le retour à la croix ; l'anneau s'éteint au début de la CONSIGNE
     suivante, `SSVEP_GUIDE_CUE_S` avant la fixation — hors des données notées, et jamais sous le
-    grand titre « REGARDE : … » (revue E-M5). Cf. `stimulus/retour.py`.
+    grand titre « REGARDE : … ». Cf. `stimulus/retour.py`.
     """
     noms = [c["name"] for c in plan]
     freqs = [float(c["actual_hz"]) for c in plan]
@@ -1074,9 +1054,9 @@ def _cible_designee_a_l_ecran(surface, positions, rayon_cue):
     donc la même chose des deux côtés. Elle prouve QUELLE cible est à l'écran, jamais QUAND elle y
     est arrivée. Même limite, même cause et même formulation que `stimulus/p300.py`.
 
-    Ce trou-là est **fermé depuis le 2026-09-10 par la partie F du smoke**, qui ne regarde aucun
-    pixel : elle compte les `flip` ENTRE deux marqueurs. Aucun pixel ne pouvait répondre à la
-    question, parce que la question n'est pas « quoi » mais « quand ».
+    Ce trou-là est fermé par la partie F du smoke, qui ne regarde aucun pixel : elle compte les
+    `flip` ENTRE deux marqueurs. Aucun pixel ne peut répondre à la question, parce que la question
+    n'est pas « quoi » mais « quand ».
     """
     vus = [(i, r) for i, r in ((i, _rayon_lu(surface, p, CUE, 2 * rayon_cue))
                                for i, p in enumerate(positions)) if r is not None]
@@ -1167,8 +1147,7 @@ def _rejouer_libre(freqs=None, cales=0):
     cales réellement posées, flips comptés, pixels ALLUMÉS de chaque disque à la première image —
     où tous le sont : `is_on(0, …)` —, et par image `(états, points de fixation)` lus à l'écran).
 
-    ⚠️ Écrite le 2026-09-21 et jamais appelée jusqu'au 2026-10-02 : la fréquence AFFICHÉE n'était
-    relue nulle part. C'est la partie A bis du smoke.
+    C'est la partie A bis du smoke : la fréquence AFFICHÉE doit être relue dans les pixels.
 
     `cales` FABRIQUE des frames sautées, en retenant le flip assez longtemps pour dépasser
     `SEUIL_SAUT`. C'est le seul moyen d'exercer le compteur de bout en bout — sous `dummy` il n'y
@@ -1228,8 +1207,8 @@ def _smoke():
     from collections import Counter
 
     # Cette fenêtre ne joue aucun son : sans pilote audio FACTICE, chaque `pygame.init()` du smoke
-    # ouvre la carte son et chaque `pygame.quit()` la referme — mesuré le 2026-10-02 : 4,2 s contre
-    # 1,9 s pour une séance guidée courte, et le smoke joue une vingtaine de `run`.
+    # ouvre la carte son et chaque `pygame.quit()` la referme — mesuré : 4,2 s contre 1,9 s pour une
+    # séance guidée courte, et le smoke joue une vingtaine de `run`.
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
     ok = True
@@ -1239,7 +1218,7 @@ def _smoke():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    # --- A. le rendu libre, comme avant le déménagement ---------------------------
+    # --- A. le rendu libre ---------------------------------------------------------
     chk(run(smoke=True, refresh=60.0),
         "le décodage libre rend 30 frames sans erreur (aucun écran requis)")
 
@@ -1269,7 +1248,7 @@ def _smoke():
         f"…et chaque disque allumé couvre au moins la surface de la flèche d'avant, point de "
         f"fixation DÉDUIT ({allumes} px allumés = {disque_seul} du disque − {len(empreinte)} du "
         f"point, plancher {plancher:.0f})")
-    # L. LE POINT DE FIXATION, à chaque image, disque ALLUMÉ ET ÉTEINT (QA 1.17.1). Lu dans les
+    # L. LE POINT DE FIXATION, à chaque image, disque ALLUMÉ ET ÉTEINT. Lu dans les
     # PIXELS : l'empreinte exacte du point, à la couleur exacte, au centre de chaque disque. Un
     # point oublié, ou dessiné dans la seule phase ON, rougit ici.
     chk(_smoke_points(points, len(plan_lu)) is None,
@@ -1432,8 +1411,8 @@ def _smoke():
     # --- G. `--freqs` DÉCIDE VRAIMENT DU PLAN, ET DANS L'ORDRE DONNÉ ---------------
     #
     # C'est la moitié « lecture » d'un geste dont `stimulus/registry.py` tient la moitié
-    # « écriture ». Les deux défauts trouvés par la QA du 2026-09-21 ont exactement cette forme :
-    # deux moitiés d'un même geste, chacune testée sur son propre décor, jamais sur leur accord.
+    # « écriture ». Le défaut à attraper a exactement cette forme : deux moitiés d'un même geste,
+    # chacune testée sur son propre décor, jamais sur leur accord.
     lu, raison = parse_freqs("12,15,20")
     chk(lu == [12.0, 15.0, 20.0] and raison is None,
         f"« --freqs 12,15,20 » se lit comme trois fréquences ({lu}, {raison})")
@@ -1480,7 +1459,7 @@ def _smoke():
         f"…et cinq cibles sont refusées par la FENÊTRE : le moteur en accepte 8, cet écran a "
         f"quatre directions et ne sait pas en dessiner plus ({(trop or 'AUCUN REFUS')[:50]}…)")
 
-    # --- H bis. LA BANDE N'EST PAS L'AFFAIRE DE LA FENÊTRE (passe C1, 2026-09-30) ----------
+    # --- H bis. LA BANDE N'EST PAS L'AFFAIRE DE LA FENÊTRE ----------------------------
     #
     # Le parcours aux boutons : coupure basse à 3 Hz dans « Régler », « Proposer », « Appliquer »,
     # « Tester ». Le moteur accepte le jeu ; la fenêtre le jugeait contre la bande PAR DÉFAUT
@@ -1506,9 +1485,9 @@ def _smoke():
 
     # --- I. LE COMPTEUR DE FRAMES SAUTÉES COMPTE, ET NE CORRIGE RIEN ---------------
     #
-    # Observé en séance le 2026-09-21 : « périodiquement, l'image se figeait ». Rien ne levait,
-    # rien ne comptait, et le verdict de la mesure n'en savait rien. Une image figée n'est pas un
-    # ralentissement : c'est une cible qui CESSE de clignoter pendant que le moteur corrèle.
+    # Sans compteur, rien ne lève et le verdict de la mesure ignore les images figées. Une image
+    # figée n'est pas un ralentissement : c'est une cible qui CESSE de clignoter pendant que le
+    # moteur corrèle.
     net = bilan_de_seance(1000, 0, 60.0)
     abime = bilan_de_seance(1000, 37, 60.0)
     chk(net["sautees"] == 0 and abs(net["part_sautees"]) < 1e-9,
@@ -1596,8 +1575,8 @@ def _smoke_retour(chk):
 
     duree = 0.3
     # ⚠️ `delai=duree` EXACTEMENT : la décision part à la fin de la fixation, comme celle du vrai
-    # moteur (`ssvep_mesure` la date `cue` + `SSVEP_GUIDE_FIX_S`). Un « + 0,1 s » ici masquait la
-    # course à marge nulle de la fermeture de l'essai (revue C-M4).
+    # moteur (`ssvep_mesure` la date `cue` + `SSVEP_GUIDE_FIX_S`). Un délai de plus ici masquerait
+    # la course à marge nulle de la fermeture de l'essai.
     moteur = rt.MoteurFactice(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
                               depart="cue", ouverture="cue", delai=duree, secondes=True,
                               trace=trace)
@@ -1701,8 +1680,8 @@ def _smoke_retour(chk):
         chk(faute is None,
             f"[L] {regime} avec retour : le point rouge est au centre de CHAQUE disque, à chaque "
             f"image, allumé ET éteint, lu dans les PIXELS ({faute or 'ok'}, {len(imgs)} images)")
-    # La TAILLE de l'anneau : la règle commune aux trois fenêtres (demandé au QA le 2026-10-02,
-    # « uniformise »), au pixel près, en guidé comme en libre.
+    # La TAILLE de l'anneau : la règle commune aux trois fenêtres, au pixel près, en guidé comme
+    # en libre.
     rayons_vus = set().union(*(e[5] for e in images + images_l))
     chk(rayons_vus == {rayon},
         f"[J] l'anneau est tracé au rayon de `retour.rayon_anneau` — la règle du P300 — lu au "
@@ -1778,10 +1757,9 @@ def _pixels_etrangers(surface, centre, garde, palette, empreinte):
 def _smoke_textes(chk):
     """K. AUCUN TEXTE SUR UNE CIBLE — ni sur la zone de son anneau — à chaque résolution jouée.
 
-    Le défaut (2026-10-02) : en `--guide`, le titre et le sous-titre étaient posés à 10 % de la
-    hauteur, PAR-DESSUS le haut du disque AVANT pendant qu'il clignotait. Rien ne le voyait : les
-    sondes lisent UN point de chaque disque et le cercle de consigne, jamais le reste de leur
-    surface.
+    Le défaut visé : un titre posé par-dessus un disque qui clignote. Les autres sondes ne le
+    voient pas : elles lisent UN point de chaque disque et le cercle de consigne, jamais le reste
+    de leur surface.
 
     Deux lectures, indépendantes de `mise_en_page` (qui ne pourrait que se donner raison) :
     • le RECTANGLE de chaque texte réellement posé (`pose_texte`, espionné), contre le disque de

@@ -12,12 +12,12 @@ ceux qui en délimitent une, et entraîne quand elle annonce la fin (`calib_end`
 
 ⚠️ **L'INVARIANT QUE CE MODULE EXISTE POUR TENIR.** `pre_s` et `post_s` ne sont **pas** redéclarés
 ici : ils sont LUS sur la classe du runtime de DÉCODAGE (`runtime_cls_du_mode`), et l'époque est
-prélevée par le MÊME appel que le décodage (`core.p300_decoder.epoch_from_stream`). Jusqu'ici les
-époques d'entraînement étaient découpées par un chemin de code (l'appli pygame et son horloge) et
-celles du décodage par un autre (le tampon du moteur, les marqueurs LSL, `time_correction`), et
-RIEN ne vérifiait qu'ils s'accordent. Un décalage de quelques échantillons ne lève aucune
-exception : le modèle est entraîné sur un alignement, appliqué sur un autre, et il décode du bruit
-avec une confiance élevée pendant que tous les autres tests restent verts — mesuré sur
+prélevée par le MÊME appel que le décodage (`core.p300_decoder.epoch_from_stream`). Deux chemins
+de découpe (un pour l'entraînement, un autre pour le décodage : tampon du moteur, marqueurs LSL,
+`time_correction`) pourraient diverger sans que rien le vérifie. Un décalage de quelques
+échantillons ne lève aucune exception : le modèle est entraîné sur un alignement, appliqué sur
+un autre, et il décode du bruit avec une confiance élevée pendant que tous les autres tests
+restent verts — mesuré sur
 `core/modes/p300.py`, où la mutation déplace le pic de −38 échantillons (−152 ms) et 46 autres
 assertions ne bronchent pas. Lire la géométrie plutôt que la recopier rend le désaccord
 **structurellement impossible** au lieu de seulement testé.
@@ -82,7 +82,7 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
     classes = ()
 
     # La MÊME chauffe que les modes et que la calibration MI : c'est la même dérive DC de
-    # l'Unicorn (mesurée le 2026-07-27 : 10⁵ µV en rampe après ouverture de session), et elle ne
+    # l'Unicorn (10⁵ µV en rampe après l'ouverture de session), et elle ne
     # dépend pas de qui mène le protocole. Une époque prélevée là-dedans ne vaut rien.
     warmup_s = SSVEP_WARMUP_S
 
@@ -240,9 +240,9 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
         # 1. Consommer les marqueurs mûrs À CHAQUE TOUR, chauffe comprise. C'est l'APPEL qui fait
         # avancer le curseur du moteur : sans lui pendant la chauffe, l'arriéré s'empile derrière
         # un curseur immobile, et le premier tour de la phase « essais » avale d'un coup 15 s de
-        # marqueurs dont l'EEG a déjà quitté le tampon. Panne n°7 de `core/modes/p300.py`, à
-        # l'identique — c'est le comportement PAR DÉFAUT, puisque la console lance la fenêtre en
-        # même temps qu'elle demande la calibration.
+        # marqueurs dont l'EEG a déjà quitté le tampon (même panne que dans `core/modes/p300.py`).
+        # C'est le cas PAR DÉFAUT : la console lance la fenêtre en même temps qu'elle demande la
+        # calibration.
         lot = engine.markers_murs(self.spec.id, post_s=self.post_s)
         for ts, marqueur in lot:
             self.encaisser(engine, ts, marqueur)
@@ -276,8 +276,7 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
             # avant — elle sonde à 10 Hz un état qui, sans ce décalage, passerait directement des
             # essais au résultat. L'écran resterait sur le dernier essai pendant tout
             # l'entraînement : exactement la tête d'un moteur figé. Sans cette condition, la
-            # transition et l'entraînement tombaient dans le même tour (attrapé par `_selftest`,
-            # pas par relecture).
+            # transition et l'entraînement tomberaient dans le même tour (`_selftest` le vérifie).
             self._terminer(engine)
 
     def _ouvrir_les_essais(self, now):
@@ -423,7 +422,7 @@ class MarkerCalibrationRuntime(CalibrationRuntime):
         if self._annonce_recue:
             # Un second `calib_start` sans `calib_end` entre les deux : la fenêtre a redémarré sa
             # séance. On le DIT plutôt que d'empiler deux séances dans le même jeu d'entraînement
-            # — c'est la panne n°6 du P300, transposée à la calibration.
+            # — même panne que dans le P300, transposée à la calibration.
             print(f"[marker-calib] ⚠️ second « calib_start » sans « calib_end » : les "
                   f"{self.essai} essai(s) déjà enregistrés RESTENT dans le jeu d'entraînement. "
                   f"Si la fenêtre a redémarré, abandonne et recommence la calibration.")
@@ -548,7 +547,7 @@ def _selftest():
         return rt
 
     # Une SECONDE géométrie d'époque, et elle n'est pas décorative — sans elle, LE test ci-dessous
-    # serait INFALSIFIABLE, ce qui est mesuré, pas supposé.
+    # serait INFALSIFIABLE.
     #
     # ⚠️ À la géométrie du P300 (pre_s = 0,15 s, fs = 250 Hz), un « décalage d'un échantillon »
     # écrit `pre_s + 1/fs` N'EN EST PAS UN : `epoch_from_stream` calcule

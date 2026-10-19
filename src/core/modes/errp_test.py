@@ -26,8 +26,8 @@ AUSSI. La fenêtre `--tester` tient sa piste IMMOBILE pendant la chauffe PLUS ce
 dans `core/modes/errp.py::SPEC.rest`), et le repos est pris là, par le `_rest_step` du mode. Si
 elle marche avant (lancée à la main, sans `--tester`), le test REFUSE de conclure : un repos de 2 s
 fait ~10 fenêtres, un clignement en pollue la MÉDIANE, le seuil de rejet monte, et le test
-attrape des erreurs que le mode n'attrapera pas (revue du 2026-09-22, I-4). Sa durée réelle est
-dans le résultat et dans le verdict.
+attrape des erreurs que le mode n'attrapera pas. Sa durée réelle est dans le résultat et dans le
+verdict.
 
 Autotest :
     python src/core/modes/errp_test.py
@@ -58,9 +58,9 @@ from core.modes.mesure_marqueurs import (MesureMarqueurs,  # noqa: E402
                                          params_du_mode_pour_un_test, reglages_du_decideur)
 from core.modes.ssvep_mesure import wilson  # noqa: E402
 
-# Le repère : la séance de référence (200 essais, une personne), réglage par défaut. ⚠️ Taux
-# OPTIMISTES (seuil choisi sur les scores qui les mesurent), mais cohérents avec l'AUC hors-pli 0,776
-# sous un modèle binormal : c'est la courbe du projet, prise à 85 %. Le vert exige son ÉCART
+# Le repère : une séance de 200 essais chez une personne, au réglage par défaut. Taux OPTIMISTES
+# (seuil choisi sur les scores qui les mesurent), mais cohérents avec l'AUC hors-pli 0,776 sous un
+# modèle binormal : c'est la courbe du projet, prise à 85 %. Le vert exige son ÉCART
 # (attrapées − annulées) : sur ~20 erreurs, un détecteur au repère le franchit une fois sur deux.
 REPERE_TPR, REPERE_TNR = 0.500, 0.855
 REPERE_ECART = REPERE_TPR - (1.0 - REPERE_TNR)
@@ -164,9 +164,9 @@ class MesureErrP(MesureMarqueurs):
         self._decideur._rest_until = now + self._decideur._rest_s
         # La fenêtre se TAIT pendant ce repos, et c'est le protocole : elle tient sa piste immobile
         # pour que le moteur mesure le bruit de fond. Le silence qui déclare une fenêtre morte se
-        # compte donc depuis la FIN du repos — depuis la fin de la chauffe, une fenêtre qui met
-        # 14 s à s'annoncer (pygame, rafraîchissement, `wait_for_consumers`) était tuée avant son
-        # premier pas. Même budget de démarrage que les calibrations, pas moins.
+        # compte donc depuis la FIN du repos : compté depuis la fin de la chauffe, il tuerait une
+        # fenêtre lente à s'annoncer (pygame, rafraîchissement, `wait_for_consumers`) avant son
+        # premier pas. Même budget de démarrage que les calibrations.
         self._dernier_marqueur_s = now + self._decideur._rest_s
 
     def _pendant_les_essais(self, engine, now):
@@ -661,11 +661,11 @@ def _selftest():
             and espion.rest_report["fenetres"] >= 30 and abs(res["repos"]["secondes"] - 8.0) < 0.3,
             f"le repos du MODE est mesuré sur la piste immobile, ses 8 s PLEINES, et clos AVANT la "
             f"première décision ({res['repos']})")
-        # I-4 (revue du 2026-09-22) : la durée RÉELLE de la référence est DITE, dans « Détails ».
+        # La durée RÉELLE de la référence est DITE, dans « Détails ».
         chk(f"{res['repos']['secondes']:.1f} s".replace(".", ",") in res["verdict"],
             f"…et sa durée réelle est DITE dans le verdict ({res['verdict'][-160:]!r})")
 
-        # 🔴 I-4 : une fenêtre qui marche AVANT la fin du repos. La référence n'aurait duré que ~4 s,
+        # 🔴 Une fenêtre qui marche AVANT la fin du repos. La référence n'aurait duré que ~4 s,
         # soit ~20 fenêtres : un clignement la gonfle, le seuil de rejet monte, et le test attrape
         # des erreurs que le mode n'attrapera pas — biais OPTIMISTE. Le test REFUSE de conclure,
         # tout de suite, en disant la durée réelle.
@@ -679,7 +679,7 @@ def _selftest():
             f"seule décision, en disant sa durée réelle ({rt_tot.phase}, "
             f"{(rt_tot.probleme or '')[:90]}…)")
 
-        # I-4, le budget : la fenêtre tient sa piste immobile pendant le repos, donc le silence qui
+        # Le budget : la fenêtre tient sa piste immobile pendant le repos, donc le silence qui
         # tue une séance se compte depuis la FIN du repos, pas de la chauffe. Une fenêtre qui
         # s'annonce tard (14 s : pygame, rafraîchissement, `wait_for_consumers`), puis attend ses
         # 23 s, joue son premier pas 37 s après le lancement — à 22 s de la fin de la chauffe.
@@ -776,10 +776,10 @@ def _selftest():
             serialisable = False
         chk(serialisable, "l'instantané, résultat compris, est sérialisable (il part dans `snapshot()`)")
 
-        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
-        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
-        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
-        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        # === 6. UN TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ==========
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test
+        # qui hériterait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant)
+        # écouterait un flux où personne ne publie : abandon à 30 s, fenêtre jouant dans le vide.
         from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
         from core.modes.contract import validate as _valider
         from core.server import EngineServer as _Moteur_

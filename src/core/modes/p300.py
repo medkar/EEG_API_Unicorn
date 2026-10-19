@@ -19,8 +19,8 @@ contente d'ÉCOUTER ce flux (`engine.markers_murs`), d'épocher l'EEG autour de 
 ⚠️ **`target_index = -1` signifie « pas de décision » — jamais « la cible 0 ».** Une manche qui ne
 peut pas conclure (trop peu de flashs valides, ou des cibles qui n'ont pas toutes eu la chance de
 flasher) publie -1 ET dit pourquoi dans le journal, plutôt que de choisir un argmax sur un
-sous-ensemble de cibles. C'est mot pour mot la garde qu'il a fallu inscrire pour le Motor Imagery
-(`DecodedMIPublisher`) — elle se reproduira chez le premier client qui lit ce flux sans lire la doc.
+sous-ensemble de cibles. C'est la même garde que pour le Motor Imagery
+(`DecodedMIPublisher`) : un client qui lit ce flux sans lire la doc confondrait -1 et cible 0.
 
 Sept pannes bruyantes de ce sous-système (un décodeur qui tourne, publie des scores honnêtes et
 ne déclenche simplement jamais est la panne la plus coûteuse de ce projet) :
@@ -34,7 +34,7 @@ ne déclenche simplement jamais est la panne la plus coûteuse de ce projet) :
 Les trois premières vivent une couche plus bas (`core/markers.py`, `core/server.py`) et sont
 prouvées là-bas ; ce fichier ajoute et prouve les quatre dernières, propres au protocole P300.
 
-⚠️ **La 6e (trouvée à la relecture, pas au premier jet) est la plus sournoise des sept** : sans
+⚠️ **La 6e est la plus sournoise des sept** : sans
 `_verifie_abandon`, une application externe qui plante EN PLEINE manche (le cas normal d'un
 plantage) laisse `_epoques`/`_cibles` avec des flashs ORPHELINS, pour toujours. Si l'application
 redémarre et flashe une manche NEUVE sans avoir renvoyé le `round_end` de l'ancienne, les nouveaux
@@ -47,7 +47,7 @@ s'en aperçoit.
 ⚠️ **La 7e a la même forme, un cran plus tôt.** Personne ne consomme les marqueurs pendant la
 chauffe : sans le `tick` redéfini ci-dessous, le curseur du moteur ne bouge pas de toute la
 chauffe, puis le premier `_run_step` avale l'arriéré — dont tout ce qui a déjà quitté le tampon
-EEG, `round_end` compris. C'est le comportement PAR DÉFAUT de la première manche de chaque
+EEG, `round_end` compris. C'est le cas PAR DÉFAUT de la première manche de chaque
 séance (l'émetteur flashe dès son lancement, et `docs/markers.md` dit de le lancer à côté du
 moteur), et de chaque « Refaire le repos ». On les JETTE donc explicitement, en le comptant et en
 le disant : une époque prélevée pendant que l'offset DC de l'Unicorn dérive encore n'a de toute
@@ -76,36 +76,33 @@ from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # n
 # ⚠️ L'arête ne va QUE dans ce sens : `p300_calib` ne nous importe pas en retour (il lit
 # `P300Runtime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
-# `python src/core/modes/p300.py` compris. Mesuré, pas supposé.
+# `python src/core/modes/p300.py` compris.
 from core.modes.p300_calib import BRIEFING as BRIEFING_CALIB, P300Calibration  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Plafond DUR d'une manche, compté **PAR CIBLE** : au-delà, ce ne sont plus les répétitions d'une
 # même manche, c'est une manche NEUVE soudée à la précédente par un `round_end` perdu.
 #
-# ⚠️ Ce plafond était GLOBAL (`P300_N_TARGETS * P300_REPS * 2` = 96 époques), et il ratait le seul
-# cas crédible : une manche normale fait 48 époques, deux manches soudées en font exactement 96,
-# et `96 > 96` est FAUX. Les deux garde-fous se taisaient, `select()` recevait 96 époques dont la
-# moitié portaient l'intention de la manche PRÉCÉDENTE, et le moteur publiait une cible plausible
-# avec une confiance normale — silencieusement fausse. Trois manches soudées (144) déclenchaient
-# bien : le garde attrapait l'invraisemblable et ratait le vraisemblable.
+# ⚠️ Un plafond GLOBAL (`P300_N_TARGETS * P300_REPS * 2` = 96 époques) raterait le seul cas
+# crédible : une manche normale fait 48 époques, deux manches soudées en font exactement 96, et
+# `96 > 96` est faux. `select()` recevrait 96 époques dont la moitié portent l'intention de la
+# manche PRÉCÉDENTE, et le moteur publierait une cible plausible avec une confiance normale —
+# silencieusement fausse.
 #
-# Pourquoi PAR CIBLE et pas un `>=` sur le plafond global : un compteur global ne peut pas à la
-# fois tolérer un protocole qui répéterait plus que la référence ET distinguer 2×8 répétitions de
-# 1×16. Le discriminant « par cible » n'a pas cette ambiguïté : dans UNE manche, une cible flashe
-# `reps` fois, jamais plus. Le prix est assumé et il est BRUYANT : une application qui répète plus
-# de `P300_REPS` fois par cible fait abandonner ses manches, avec un message qui nomme la
-# constante à changer — au lieu de publier une sélection fausse sans un mot. C'est aussi ce que
-# `DecodedP300Publisher` annonce désormais dans ses métadonnées (`max_reps_per_target`) : un
-# PLAFOND que le moteur applique, et non plus le nombre de répétitions de l'application externe,
-# que le moteur ne contrôle pas.
+# Pourquoi PAR CIBLE : un compteur global ne peut pas à la fois tolérer un protocole qui répéterait
+# plus que la référence ET distinguer 2×8 répétitions de 1×16. Le discriminant « par cible » n'a
+# pas cette ambiguïté : dans UNE manche, une cible flashe `reps` fois, jamais plus. Le prix est
+# assumé et BRUYANT : une application qui répète plus de `P300_REPS` fois par cible fait abandonner
+# ses manches, avec un message qui nomme la constante à changer — au lieu de publier une sélection
+# fausse sans un mot. `DecodedP300Publisher` l'annonce dans ses métadonnées
+# (`max_reps_per_target`) : c'est un PLAFOND que le moteur applique, pas le nombre de répétitions
+# de l'application externe, que le moteur ne contrôle pas.
 #
 # Pourquoi pas l'ÉCART entre deux flashs consécutifs (une frontière de manche dure plus qu'un SOA
-# de 150 ms) : mesuré sur l'émetteur de ce dépôt, la frontière entre deux manches est aujourd'hui
-# un intervalle inter-flash ordinaire — il n'y a AUCUNE pause à détecter (c'est un défaut connu de
-# l'émetteur, pas du mode). Un seuil sur l'écart ne détecterait donc rien ici, et punirait au
-# passage un protocole légitimement lent (un speller à SOA 1 s). Le compte par cible, lui, ne
-# dépend d'aucune horloge.
+# de 150 ms) : sur l'émetteur de ce dépôt, la frontière entre deux manches est un intervalle
+# inter-flash ordinaire — il n'y a AUCUNE pause à détecter. Un seuil sur l'écart ne détecterait
+# rien ici, et punirait un protocole légitimement lent (un speller à SOA 1 s). Le compte par cible
+# ne dépend d'aucune horloge.
 _MAX_PAR_CIBLE = P300_REPS
 
 # Paliers auxquels une cible refusée se DIT (panne n°4), dans la manche en cours. Le même motif
@@ -350,10 +347,10 @@ class P300Runtime(ModeRuntime):
         """Panne bruyante n°4 : une cible inutilisable est un bug de l'application cliente.
 
         Comptée toujours, dite par PALIERS (1, 10, 100…) DANS LA MANCHE : le dire à chaque flash
-        noierait le terminal (jusqu'à 48 par manche), et le dire une seule fois par manche laissait
-        un émetteur qui numérote mal TOUTES ses cibles — l'erreur la plus banale — n'imprimer
-        qu'une ligne pour des minutes de séance. `_refus_cible` est réarmé à chaque manche
-        (`_vider_manche`), donc ces paliers repartent de zéro à chaque manche.
+        noierait le terminal (jusqu'à 48 par manche), et le dire une seule fois par manche
+        laisserait un émetteur qui numérote mal TOUTES ses cibles — l'erreur la plus banale —
+        n'imprimerait qu'une ligne pour des minutes de séance. `_refus_cible` est réarmé à
+        chaque manche (`_vider_manche`), donc ces paliers repartent de zéro à chaque manche.
         """
         self._refus_cible += 1
         if self._refus_cible in _PALIERS_REFUS:
@@ -363,7 +360,7 @@ class P300Runtime(ModeRuntime):
     def _verifie_abandon(self, lsl_ts):
         """Abandonne la manche en cours si elle ne se fermera visiblement JAMAIS — panne n°6.
 
-        Deux façons de le détecter, et je veux les deux :
+        Deux façons de le détecter, et les deux sont nécessaires :
           1. **Délai d'abandon** (ici) : aucun flash REÇU depuis plus de `P300_ROUND_TIMEOUT_S`.
              Ce qui attrape une application externe plantée EN PLEINE manche — le cas normal d'un
              plantage, et le seul des deux qui ne dépend pas du DÉBIT de flashs.
@@ -450,8 +447,8 @@ class P300Runtime(ModeRuntime):
             return
 
         # `select` agrège lui-même les répétitions (moyenne des log-odds) et applique la marge.
-        # On ne ré-agrège rien ici : ce calcul a été validé au casque, le refaire à côté en
-        # créerait une seconde version qui finirait par diverger. `P300_SELECT_MARGIN` vient
+        # On ne ré-agrège rien ici : refaire ce calcul à côté en créerait une seconde version qui
+        # finirait par diverger. `P300_SELECT_MARGIN` vient
         # directement de `core.config` : c'est une constante de PROTOCOLE, pas un réglage exposé.
         choisi, moyennes = self.model.select(par_cible, margin=P300_SELECT_MARGIN)
         # L'appariement score_<i> <-> cible i est le CONTRAT PUBLIC du flux : une inversion ne se
@@ -462,9 +459,8 @@ class P300Runtime(ModeRuntime):
         if choisi is None:
             # `select` a refusé : l'écart entre les deux meilleures cibles est sous
             # `P300_SELECT_MARGIN`. C'est le SEUL -1 accompagné de vrais scores (les deux autres
-            # publient des zéros faute d'avoir consulté le modèle), et il était jusqu'ici le seul
-            # sans motif imprimé — `_log` lui en inventait même un faux (« manche non conclue,
-            # 48 flashs valides », alors que 48 flashs, c'est conclusif).
+            # publient des zéros faute d'avoir consulté le modèle) : son motif est imprimé, pour
+            # ne pas le confondre avec une manche non conclue faute de flashs.
             # ⚠️ NE PAS supprimer cette branche parce que `P300_SELECT_MARGIN` vaut 0 aujourd'hui
             # et la rend inatteignable : remonter la constante ferait alors tomber le `else` sur
             # `moyennes[None]` -> `KeyError` -> moteur à terre.
@@ -569,14 +565,14 @@ SPEC = ModeSpec(
                       # fois (−6 dB à la coupure) — mesuré sur une époque, le pic garde 67 % à
                       # 1 Hz, 44 % à 2 Hz. 0,5 Hz AU MOINS : le filtre agit sur chaque ÉPOQUE
                       # (~0,95 s, après la ligne de base), et plus bas ce qu'il fait tient surtout
-                      # aux bords de l'époque, plus à la fréquence de coupure (2026-09-30).
+                      # aux bords de l'époque, plus à la fréquence de coupure.
                       params=params_bande(P300_BAND, (0.5, 1.0), (8.0, 40.0),
                                           tr("calib.p300.param.bande.aide")),
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),
-    # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrivait à
-    # deux endroits (`SPEC.stream` et le littéral de `DecodedP300Publisher`) sans que rien ne les
-    # relie — deux façons de nommer la même chose finissent toujours par diverger.
+    # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : écrit à deux endroits
+    # (`SPEC.stream` et le littéral de `DecodedP300Publisher`), le contrat public finirait par
+    # diverger.
     stream=DecodedP300Publisher.SUFFIXE,
     channels_fn=_channels,
     runtime_cls=P300Runtime,
@@ -595,7 +591,7 @@ def _selftest():
     pannes bruyantes propres au protocole P300 (cible hors plage, manche trop courte, manche qui
     ne se ferme jamais, flashs reçus pendant la chauffe).
 
-    Deux façons de tricher que ce test refuse maintenant : juger une époque sur sa FORME (une
+    Deux façons de tricher que ce test refuse : juger une époque sur sa FORME (une
     époque juste au bon endroit peut avoir été filtrée deux fois — on compare donc à la tranche
     brute, valeur pour valeur) et juger un appariement sur des COMPTES (une permutation des
     cibles donne le même dictionnaire de tailles — on plante donc une amplitude unique par flash
@@ -688,7 +684,7 @@ def _selftest():
         décodeur — elle n'en est pas moins la seule à publier -1 AVEC de vrais scores, et la seule
         que remonter la constante rendrait vivante. Sans ce modèle, la mutation
         `if choisi is None: self._publish(0, ...)` — littéralement la confusion « -1 = la cible
-        0 » — passait tous les tests."""
+        0 » — passerait tous les tests."""
 
         def __init__(self, scores_par_cible):
             self._scores = dict(scores_par_cible)
@@ -700,10 +696,11 @@ def _selftest():
         """Capture, cible par cible, l'AMPLITUDE plantée à l'onset de chaque époque reçue — pas
         seulement leur nombre.
 
-        ⚠️ Compter ne suffisait pas : une PERMUTATION pure des cibles
+        ⚠️ Compter ne suffit pas : une PERMUTATION pure des cibles
         (`_cibles.append((cible + 1) % n)`) donne `{1:1, 2:1, …, 0:1}`, dict ÉGAL à
         `{i: 1 for i in range(6)}` — l'égalité de dictionnaires ignore l'ordre. L'appariement
-        époque <-> cible n'était donc prouvé qu'en SORTIE (`_ModeleControle`), jamais en ENTRÉE.
+        époque <-> cible est donc prouvé aussi en ENTRÉE, pas seulement en SORTIE
+        (`_ModeleControle`).
         En relisant `v[0][N_PRE, 0]`, une permutation change la valeur lue et se voit.
         """
 
@@ -781,12 +778,11 @@ def _selftest():
         _os.makedirs(vide, exist_ok=True)
         p300_models.modeles_disponibles = lambda dossier=vide: vrai_dispo(dossier)
         _v, raison = validate(SPEC, {})
-        # ⚠️ Le refus doit envoyer là où l'on calibre AUJOURD'HUI. Il a nommé `research/app.py`
-        # jusqu'au 2026-09-07 ; cet écran ne mène plus la séance P300, c'est la console qui lance
-        # la fenêtre de stimulus. Un refus qui donne le bon diagnostic et la MAUVAISE marche à
-        # suivre coûte plus cher qu'un refus muet : l'étudiant fait ce qu'on lui dit, ça ne marche
-        # pas, et il cherche la panne ailleurs. Même texte, même geste que
-        # `core/p300_models.charger`, où cette phrase a déjà été fausse deux fois.
+        # ⚠️ Le refus doit envoyer là où l'on entraîne VRAIMENT : la console, qui lance la fenêtre
+        # de stimulus (et non `research/app.py`, qui n'existe plus). Un refus qui donne le bon
+        # diagnostic et la MAUVAISE marche à suivre coûte plus cher qu'un refus muet : l'étudiant
+        # fait ce qu'on lui dit, ça ne marche pas, et il cherche la panne ailleurs. Même texte,
+        # même geste que `core/p300_models.charger`.
         chk(raison is not None and "Aucun modèle entraîné" in raison
             and "console" in raison and "Entraîner" in raison
             and "research/app.py" not in raison,
@@ -817,8 +813,8 @@ def _selftest():
 
         moteur = _FauxMoteur(recent, recent_ts)
 
-        # 3bis. Le contrôle SYMÉTRIQUE du précédent, et celui qui manquait : `registry.check()`
-        # compare le CONTRAT au runtime ; personne ne comparait le runtime au MODÈLE. Un modèle
+        # 3bis. Le contrôle SYMÉTRIQUE du précédent : `registry.check()` compare le CONTRAT au
+        # runtime ; ce contrôle-ci compare le runtime au MODÈLE. Un modèle
         # entraîné à une autre fréquence (ou avec d'autres bornes pré/post) découpe une autre
         # géométrie d'époque et rend des log-odds plausibles et faux.
         # Nom volontairement HORS du motif `p300_model*.joblib` : ce modèle est bon à jeter, il
@@ -893,8 +889,8 @@ def _selftest():
             f"une décision publiée pour cette manche complète ({len(rt._out.lignes)})")
         index, _confiance, n_flashes, scores, ts_publie = rt._out.lignes[-1]
         # La manche est complète et `P300_SELECT_MARGIN` vaut 0 : `select` rend TOUJOURS un
-        # argmax ici. `-1 <= index` était donc vrai quoi qu'il arrive — le seul test qui fait
-        # tourner le vrai décodeur ne pouvait pas échouer.
+        # argmax ici. Borner l'index par `-1 <= index` serait vrai quoi qu'il arrive : le seul test
+        # qui fait tourner le vrai décodeur ne pourrait pas échouer.
         chk(0 <= index < P300_N_TARGETS, f"index de cible dans les bornes ({index})")
         chk(len(scores) == P300_N_TARGETS, f"un score par cible ({scores})")
         chk(n_flashes == P300_N_TARGETS * P300_MIN_REPS,
@@ -913,9 +909,9 @@ def _selftest():
         # DISTINCTS : une inversion, un tri, ou un décalage d'index produirait une liste
         # DIFFÉRENTE de celle attendue — rien ici ne pourrait passer par coïncidence.
         # ⚠️ Le gagnant annoncé est la cible 3, dont le score (0,5) n'est NI le maximum NI le
-        # minimum : avec `gagnant=1` (qui était aussi l'argmax des scores), deux mutations
-        # passaient — un runtime qui recalculerait son propre argmax au lieu de croire `select`,
-        # et `confidence = max(moyennes.values())` au lieu du score DU gagnant.
+        # minimum : si le gagnant était aussi l'argmax des scores, deux mutations passeraient — un
+        # runtime qui recalculerait son propre argmax au lieu de croire `select`, et
+        # `confidence = max(moyennes.values())` au lieu du score DU gagnant.
         scores_connus = {0: -3.0, 1: 7.0, 2: -1.5, 3: 0.5, 4: -2.5, 5: 4.0}
         controle = _ModeleControle(scores_connus, gagnant=3)
         rt.model = controle
@@ -955,8 +951,8 @@ def _selftest():
 
         # Cas A' : le plancher vaut `P300_MIN_REPS` répétitions, pas UNE. Une manche d'une seule
         # répétition (6 flashs, toutes les cibles couvertes) donne un score de bruit NON MOYENNÉ
-        # par cible — et sortait jusqu'ici avec exactement la même tête qu'une décision sur 48
-        # flashs, `_log` n'imprimant `n_flashes` que sur les -1.
+        # par cible — et sortirait avec exactement la même tête qu'une décision sur 48 flashs si
+        # `_log` n'imprimait `n_flashes` que sur les -1.
         lot, t = manche(101.0, reps=1)
         lot.append(fin_manche(t))
         moteur._lots = [lot]
@@ -976,8 +972,8 @@ def _selftest():
             f"({texte_court.strip()!r})")
 
         # Cas B : autant (ou plus) de flashs que le plancher, mais pas TOUTES les cibles vues —
-        # celui que la preuve rouge-puis-vert cible : la brèche ne se voit ni sur le nombre de
-        # flashs ni sur les bornes de l'index, seulement sur la COUVERTURE des cibles.
+        # la brèche ne se voit ni sur le nombre de flashs ni sur les bornes de l'index, seulement
+        # sur la COUVERTURE des cibles.
         lot, t = manche(101.0, reps=P300_N_TARGETS, cibles=(0, 1))   # 12 flashs, 2 cibles
         lot.append(fin_manche(t))
         moteur._lots = [lot]
@@ -992,8 +988,8 @@ def _selftest():
             f"le modèle n'est TOUJOURS pas consulté — {espion.appels} appel(s) au lieu de 0")
 
         # --- La branche `choisi is None` : le SEUL -1 accompagné de VRAIS scores ---------------
-        # `P300_SELECT_MARGIN` vaut 0, donc le vrai `select` ne rend jamais None aujourd'hui et
-        # aucun test ne passait par là. La mutation `if choisi is None: self._publish(0, …)` est
+        # `P300_SELECT_MARGIN` vaut 0, donc le vrai `select` ne rend jamais None et seul ce faux
+        # modèle passe par là. La mutation `if choisi is None: self._publish(0, …)` est
         # littéralement la confusion « -1 = la cible 0 » autour de laquelle toute la docstring de
         # ce module est construite ; remonter la constante suffirait à la rendre vivante.
         rt.model = _ModeleIndecis(scores_connus)
@@ -1071,12 +1067,12 @@ def _selftest():
             f"la marge de protocole est transmise ici aussi ({capture_modele.marge_recue!r})")
 
         # --- Panne bruyante n°6, LE cas crédible : DEUX MANCHES SOUDÉES ----------------------
-        # Un seul `round_end` manquant colle deux manches complètes. Avec un plafond GLOBAL de
-        # 96 époques (= exactement deux manches) et une comparaison stricte, les deux garde-fous
-        # se taisaient : `select` recevait 96 époques dont la moitié portaient l'intention de la
-        # manche PRÉCÉDENTE, et le moteur publiait une cible plausible avec une confiance normale.
-        # Le plafond PAR CIBLE, lui, tombe sur le premier flash de trop — donc AVANT le
-        # `round_end` du même lot, qui publierait sinon la décision fausse.
+        # Un seul `round_end` manquant colle deux manches complètes. Un plafond GLOBAL de 96
+        # époques (= exactement deux manches) avec une comparaison stricte laisserait `select`
+        # recevoir 96 époques dont la moitié portent l'intention de la manche PRÉCÉDENTE, et le
+        # moteur publierait une cible plausible avec une confiance normale.
+        # Le plafond PAR CIBLE tombe sur le premier flash de trop — donc AVANT le `round_end` du
+        # même lot, qui publierait sinon la décision fausse.
         lot_a, t_mid = manche(101.0, reps=P300_REPS)      # manche A, complète, SANS round_end
         lot_b, t_fin = manche(t_mid, reps=P300_REPS)      # manche B, soudée à la précédente
         moteur_s, amp_s = moteur_marque(lot_a + lot_b)
@@ -1152,9 +1148,9 @@ def _selftest():
             f"une manche B, neuve, réimprime l'avertissement : la garde n'est pas « une fois "
             f"par session » ({texte2.count('hors de la plage')} occurrence(s))")
         chk(rt._refus_cible == 1, f"et son propre compteur repart bien de 1, pas de 4 ({rt._refus_cible})")
-        # `state()` est lu ICI, pendant que le compteur vaut 1 : plus bas, deux remises à zéro
-        # l'ont précédé et l'assertion `state()["refus_cible"] == rt._refus_cible` valait `0 == 0`
-        # — un `state()` qui écrirait `0` en dur passait.
+        # `state()` est lu ICI, pendant que le compteur vaut 1 : après deux remises à zéro,
+        # `state()["refus_cible"] == rt._refus_cible` vaudrait `0 == 0` — un `state()` qui
+        # écrirait `0` en dur passerait.
         etat_b = rt.state()
         chk(etat_b["refus_cible"] == 1,
             f"...et `state()` le montre PENDANT qu'il vaut 1, pas seulement une fois retombé à 0 "
@@ -1163,9 +1159,9 @@ def _selftest():
         moteur._lots = [[fin_manche(t + 0.15)]]
         rt.tick(moteur, lsl_ts=t + 0.15, now=6.5)   # referme B proprement avant la suite du test
 
-        # Manche B' : un booléen est un `int` en Python, donc `True` passait
+        # Manche B' : un booléen est un `int` en Python, donc `True` passerait
         # `isinstance(cible, int)` ET `0 <= True < 6` — un `target: true` en JSON (le mot-clé
-        # existe, et il est à une faute de frappe de `1`) était décodé comme la cible 1, en
+        # existe, et il est à une faute de frappe de `1`) serait décodé comme la cible 1, en
         # silence. Manche à part : le message ne se réimprime qu'au premier refus de CHAQUE
         # manche (paliers), et la manche B en a déjà eu un.
         capture_bool = io.StringIO()
@@ -1183,12 +1179,12 @@ def _selftest():
         moteur._lots = [[fin_manche(t + 0.45)]]
         rt.tick(moteur, lsl_ts=t + 0.45, now=6.7)   # referme B' à son tour
 
-        # Manche C : TOUS ses flashs refusés, donc AUCUNE époque. `_verifie_abandon` rendait la
-        # main sur `if not self._epoques` : une telle manche ne se fermait JAMAIS (seul un
+        # Manche C : TOUS ses flashs refusés, donc AUCUNE époque. Si `_verifie_abandon` rendait la
+        # main sur `if not self._epoques`, une telle manche ne se fermerait JAMAIS (seul un
         # `round_end` la ferme, et l'émetteur fautif n'en envoie pas forcément), donc
-        # `_refus_cible` gardait sa valeur pour le reste de la SESSION et la garde anti-bruit
-        # redevenait « une fois par session ». ⚠️ Et `_dernier_flash_ts` n'avançant que sur les
-        # flashs ACCEPTÉS, un émetteur bien vivant mais fautif était indiscernable d'un mort.
+        # `_refus_cible` garderait sa valeur pour le reste de la SESSION et la garde anti-bruit
+        # redeviendrait « une fois par session ». ⚠️ Et si `_dernier_flash_ts` n'avançait que sur
+        # les flashs ACCEPTÉS, un émetteur vivant mais fautif serait indiscernable d'un mort.
         t = 111.0
         moteur._lots = [[marqueur(t, 42), marqueur(t + 0.15, 43)]]
         with redirect_stdout(io.StringIO()):
@@ -1223,12 +1219,11 @@ def _selftest():
             f"({rt._epoques_perdues - avant_perdues})")
         chk(len(rt._epoques) == 0,
             "...et ne rejoint PAS la manche en cours (elle n'a rien à décoder)")
-        # ⚠️ L'assertion que 478 lignes de test n'avaient pas : `_cibles` n'était lu NULLE PART.
-        # Remonter `self._cibles.append(cible)` au-dessus de la garde `if epoque is None` — une
+        # ⚠️ `_cibles` doit être lue ici, sinon rien ne la vérifie. Remonter
+        # `self._cibles.append(cible)` au-dessus de la garde `if epoque is None` — une
         # édition d'UNE ligne — décale les deux listes pour tout le reste de la manche, et
         # `_decider` (qui les apparie par `zip`) classe alors chaque flash suivant sous la cible du
-        # PRÉCÉDENT : cible fausse, confiance normale, déclenché par un événement qui a son propre
-        # compteur donc connu pour arriver.
+        # PRÉCÉDENT : cible fausse, confiance normale.
         chk(len(rt._cibles) == 0,
             f"...et sa CIBLE non plus : les deux listes ne s'allongent QUE ensemble "
             f"({len(rt._cibles)} cible(s) pour {len(rt._epoques)} époque(s))")
@@ -1272,10 +1267,14 @@ def _selftest():
             f"y flashe {P300_REPS} fois, le plafond en tolère {_MAX_PAR_CIBLE}")
 
         # --- LE test d'alignement ------------------------------------------------
-        # On fabrique un tampon plat, on y plante un pic d'amplitude unique à un instant CONNU, et
-        # on envoie un marqueur à cet instant. L'époque extraite doit contenir ce pic exactement à
-        # l'échantillon `n_pre` — c'est-à-dire à l'onset. Un décalage de 3 échantillons (12 ms) ne
-        # change RIEN d'autre : l'époque a la bonne taille, le décodeur tourne, les scores sortent.
+        # 🔴 L'époque est découpée à l'échantillon près, par le même appel que la calibration
+        # (`epoch_from_stream`). On fabrique un tampon plat, on y plante un pic d'amplitude unique
+        # à un instant CONNU, et on envoie un marqueur à cet instant. L'époque extraite doit
+        # contenir ce pic exactement à l'échantillon `n_pre` — c'est-à-dire à l'onset. Un
+        # décalage de quelques échantillons ne change RIEN d'autre : l'époque a la bonne taille,
+        # le décodeur tourne, les scores sortent, et il décode du bruit avec une confiance
+        # élevée. Mesuré : une mutation qui déplace le pic de −38 échantillons (−152 ms) laisse
+        # les 46 autres assertions vertes.
         fs = 250.0
         n_pre = int(round(P300_PRE_S * fs))       # 38 (0,15 s × 250 Hz, arrondi)
         n_post = int(round(P300_EPOCH_S * fs))    # 200
@@ -1286,8 +1285,7 @@ def _selftest():
         i_pic = int(np.searchsorted(ts, instant_du_pic))
         eeg[i_pic, :] = np.arange(1, 9) * 10.0    # une valeur DISTINCTE par voie (10, 20, ..., 80) —
         # PAS un scalaire répété : une valeur unique sur les 8 voies laisserait passer un échange de
-        # deux voies (`np.array_equal` resterait vrai), cf. le commentaire plus bas (correction de
-        # revue, tâche 5 ErrP, tour 1 — même fixture trop généreuse trouvée ici et dans errp.py)
+        # deux voies (`np.array_equal` resterait vrai), cf. le commentaire plus bas.
 
         epoque = epoch_from_stream(eeg, ts, instant_du_pic, fs,
                                   pre_s=P300_PRE_S, post_s=P300_EPOCH_S)
@@ -1337,17 +1335,16 @@ def _selftest():
             f"{position_reelle - n_pre} échantillons = "
             f"{(position_reelle - n_pre) / fs * 1000:+.0f} ms) — pre_s/post_s mal transmis par "
             f"le runtime")
-        # ⚠️ LA seule assertion qui ferme le trou du DOUBLE FILTRAGE — et elle en remplace trois.
+        # ⚠️ LA seule assertion qui ferme le trou du DOUBLE FILTRAGE.
         # La position du pic ne suffit PAS : `filtfilt` est à phase nulle, donc ajouter un
         # `bandpass()` dans `_encaisser_flash` laisse le maximum exactement au même échantillon
-        # (vérifié par mutation). Or `P300Model._prep` filtre DÉJÀ — le double filtrage passait
-        # donc cet autotest sans un mot, la panne exacte contre laquelle ce projet a écrit un
-        # garde dédié pour le Motor Imagery (« bruit à p=0,99 »). Une correction de ligne de base
-        # ou une conversion d'unité passaient de même. Comparer à la TRANCHE BRUTE attendue
-        # épingle d'un coup la position, la forme, ET l'absence de tout traitement — et, la fixture
-        # plantant une valeur DISTINCTE par voie (pas un scalaire répété, cf. plus haut, trouvé en
-        # revue tâche 5 ErrP tour 1), l'ORDRE des voies aussi : ce que le runtime empile doit être
-        # l'EEG, tel quel.
+        # (vérifié par mutation). Or `P300Model._prep` filtre DÉJÀ — le double filtrage passerait
+        # donc cet autotest sans un mot, la panne exacte contre laquelle le Motor Imagery a son
+        # garde dédié (« bruit à p=0,99 »). Une correction de ligne de base ou une conversion
+        # d'unité passeraient de même. Comparer à la TRANCHE BRUTE attendue épingle d'un coup la
+        # position, la forme, ET l'absence de tout traitement — et, la fixture plantant une valeur
+        # DISTINCTE par voie (pas un scalaire répété), l'ORDRE des voies aussi : ce que le runtime
+        # empile doit être l'EEG, tel quel.
         attendue = eeg[i_pic - n_pre:i_pic + n_post]
         chk(rt._epoques and rt._epoques[-1].shape == (n_pre + n_post, 8),
             f"l'époque construite par le runtime a exactement la FORME attendue "

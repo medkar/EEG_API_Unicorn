@@ -1,8 +1,8 @@
 """Mode « brut » : diffuser les 8 voies telles que le casque les rend.
 
-C'est un mode comme un autre, et c'est le changement : on peut donc **arrêter** de diffuser le
-brut, ce qui n'était pas possible avant. Les flux `quality` et `status` décrivent la santé du
-MOTEUR, pas un mode : eux restent publiés en permanence, hors registre.
+C'est un mode comme un autre : on peut donc **arrêter** de diffuser le brut. Les flux `quality`
+et `status` décrivent la santé du MOTEUR, pas un mode : eux restent publiés en permanence, hors
+registre.
 """
 
 import os as _os

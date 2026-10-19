@@ -8,9 +8,8 @@ frequence fixee du regard. Methode STANDARD du SSVEP, **sans entrainement**.
     fenetre EEG ---CCA vs {15,12,10,8.57 Hz}---> rho par frequence ---argmax---> commande
                                                 (+ seuil : sous le seuil = "rien fixe")
 
-Ce module ne depend PAS du casque : il est valide ici sur signal SYNTHETIQUE (faux SSVEP
-+ bruit) pour derisquer l'algo avant de brancher l'Unicorn. Demain, `window` viendra de
-BrainFlow (voies PO7/Oz/PO8) au lieu du generateur synthetique.
+Ce module ne depend PAS du casque : l'autotest le valide sur signal SYNTHETIQUE (faux SSVEP
++ bruit). En usage réel, `window` vient de BrainFlow (voies occipitales).
 
 Reference : Lin et al. 2007, "Frequency Recognition Based on CCA for SSVEP-Based BCIs",
 IEEE TBME. https://doi.org/10.1109/TBME.2006.889197
@@ -39,10 +38,9 @@ def reference_signals(freq, n_samples, fs=FS_UNICORN, n_harmonics=2, max_freq=No
     BRUIT a la reference. Comme la correlation canonique ne peut que croitre quand on agrandit
     l'espace de reference, ca donne a cette frequence-la de la liberte d'ajustement sans
     contrepartie -> rho gonfle par du bruit, et asymetrie entre cibles.
-    Concretement avec BANDPASS=(5,40) et N_HARMONICS=3 : 8.57 et 12 Hz gardaient leurs 3
-    harmoniques, mais 15 Hz voyait sa 3e (45 Hz) filtree en amont tout en restant dans sa
-    reference. C'est le miroir du bug de 2026-07-17 (passe-bande 5-30 qui affamait 12/15 Hz) :
-    on avait elargi la bande sans rendre le nombre d'harmoniques adaptatif.
+    Exemple avec BANDPASS=(5,40) et N_HARMONICS=3 : 15 Hz aurait sa 3e harmonique (45 Hz)
+    filtrée en amont tout en la gardant dans sa référence ; le nombre d'harmoniques s'adapte
+    donc à la bande.
     """
     t = np.arange(n_samples) / fs
     limit = min(fs / 2.0, max_freq if max_freq else fs / 2.0)
@@ -81,7 +79,7 @@ def canonical_correlation(X, Y, reg=1e-8):
 class CCADecoder:
     """Décodeur SSVEP CCA pour un jeu fixe de frequences cibles.
 
-    Parametres de décision (à affiner sur EEG reel demain) :
+    Parametres de décision :
       rho_min : correlation mini du gagnant pour accepter une detection.
       margin  : ecart mini entre rho du 1er et du 2e (evite les faux positifs ambigus).
     Si l'un des deux n'est pas satisfait -> classify() renvoie freq=None ("rien fixe").
@@ -146,8 +144,8 @@ class CCADecoder:
 
         Les scores rendus sont ceux qui ont servi a decider : rho brut, ou z si un plancher
         de repos a ete appris (`fit_baseline`) — l'affichage montre ainsi ce qui decide.
-        freq=None signifie "aucune cible fixee de facon fiable" -> le robot s'arretera
-        (on n'envoie pas de commande ; un actionneur a chien de garde s'arrete de lui-meme).
+        freq=None signifie "aucune cible fixee de facon fiable" : aucune intention n'est
+        publiée.
         """
         sc = self.z_scores(self.scores(window))
         lo, mg = self.thresholds

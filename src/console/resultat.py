@@ -13,9 +13,9 @@ phrase de verdict. Déduire une couleur du texte ou d'un pourcentage, ici, serai
 table de seuils côté écran — qui peindrait un jour en vert ce que le moteur juge faible.
 
 ⚠️ **Rien n'est supprimé, tout est RANGÉ.** La phrase de verdict complète, la phrase d'honnêteté et
-le nom du fichier produit passent sous « Détails ». Chacune a été écrite après une conclusion fausse
-réellement tirée sur ce projet ; elles ne sont pas de la verbosité, elles étaient seulement au
-mauvais endroit (séance du 2026-09-22 : « c'est pas clair du tout et beaucoup trop verbeux »).
+le nom du fichier produit passent sous « Détails ». Chacune protège d'une conclusion fausse déjà
+tirée sur ce projet ; elles ne sont pas de la verbosité, seulement trop lourdes pour la première
+ligne que l'on lit.
 """
 
 import os
@@ -33,8 +33,8 @@ from core.modes.affichage import NIVEAUX  # noqa: E402
 COULEURS = {"bon": "#3fae5a", "moyen": "#b8860b", "faible": "#e5484d"}
 NEUTRE = "#8a8f9c"      # un résultat SANS niveau : on ne l'invente pas, on le laisse gris
 # La RÉSERVE a sa propre teinte, celle des avertissements de la console (« accepté, MAIS »), quel
-# que soit le verdict. Peinte de la couleur du verdict, elle se lisait en VERT sous un bon
-# résultat — comme un encouragement, alors qu'elle dit de quoi se méfier (constat M5).
+# que soit le verdict. Peinte de la couleur du verdict, elle se lirait en VERT sous un bon
+# résultat — comme un encouragement, alors qu'elle dit de quoi se méfier.
 RESERVE = "#b8860b"
 
 assert set(COULEURS) == set(NIVEAUX), (
@@ -45,8 +45,7 @@ assert set(COULEURS) == set(NIVEAUX), (
 def selectionnable(*widgets):
     """Rend le texte de ces étiquettes SÉLECTIONNABLE à la souris, donc copiable (Ctrl+C).
 
-    Relevé au casque le 2026-10-05 : « je ne peux pas surligner le texte pour le copier-coller »
-    — un verdict et ses détails sont faits pour être recopiés dans un compte-rendu, ou envoyés à
+    Un verdict et ses détails sont faits pour être recopiés dans un compte-rendu, ou envoyés à
     qui dépouille la séance. Un QLabel ne se sélectionne pas par défaut."""
     for w in widgets:
         if isinstance(w, QLabel):
@@ -118,10 +117,9 @@ class BlocResultat(QWidget):
         # « ⚠ » en tête, comme la maquette de la spec (§3) : c'est une mise en garde, pas une suite
         # du verdict.
         # Une CONCLUSION (« Le casque est bien posé ») s'écrit sans ⚠ ni ambre : un panneau orange
-        # sous « tu peux la reporter dans ton application » se lisait « attention » (passe au
-        # casque du 2026-09-24). Une MISE EN GARDE garde son ⚠, même sous un vert (constat M5 :
-        # « hors ligne, teste avant d'y croire »). C'est le MOTEUR qui déclare laquelle
-        # (`affichage.lignes(conclusion=…)`), l'écran ne devine rien.
+        # sous « tu peux la reporter dans ton application » se lirait « attention ». Une MISE EN
+        # GARDE garde son ⚠, même sous un vert (« hors ligne, teste avant d'y croire »). C'est le
+        # MOTEUR qui déclare laquelle (`affichage.lignes(conclusion=…)`), l'écran ne devine rien.
         conclusion = bool(resultat.get("conclusion"))
         texte = resultat.get("reserve") or ""
         self.reserve.setText(texte if conclusion or not texte else f"⚠ {texte}")
@@ -142,10 +140,9 @@ class BlocResultat(QWidget):
         self.details.setVisible((self.corps_auto and bool(morceaux)) or self._hotes > 0)
         # 🔴 Le repli ne se referme que sur un NOUVEAU résultat. La page appelle `montrer` à chaque
         # rafraîchissement (dix fois par seconde) avec le MÊME résultat : le refermer à chaque
-        # appel, c'était refermer « Détails » 100 ms après qu'on l'a ouvert — la phrase
-        # d'honnêteté, le McNemar et le nom du modèle étaient donc ILLISIBLES, et « rangé, pas
-        # supprimé » ne tenait pas. Trouvé par la revue de branche ; le smoke restait vert parce
-        # qu'il cochait puis lisait sans rafraîchir entre les deux.
+        # appel refermerait « Détails » 100 ms après qu'on l'a ouvert, et la phrase d'honnêteté,
+        # le McNemar et le nom du modèle deviendraient ILLISIBLES (un test qui coche puis lit
+        # sans rafraîchir entre les deux ne le verrait pas).
         if resultat != self._dernier:
             self.details.setChecked(False)
             self._deplier(False)

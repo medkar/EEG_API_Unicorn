@@ -39,9 +39,9 @@ def infobulle(*paragraphes):
 class _SansMolette:
     """Un champ que la MOLETTE ne modifie pas : elle fait défiler la page, pas la valeur.
 
-    Demandé le 2026-09-24. Qt fait tourner la valeur d'une liste ou d'un champ numérique sous la
-    souris : en faisant défiler une page de réglages, on changeait en passant un seuil ou un
-    modèle, sans le voir. `ignore()` renvoie l'événement au parent — la zone qui défile.
+    Qt fait tourner la valeur d'une liste ou d'un champ numérique sous la souris : en faisant
+    défiler une page de réglages, on changerait en passant un seuil ou un modèle, sans le voir.
+    `ignore()` renvoie l'événement au parent — la zone qui défile.
     """
 
     def wheelEvent(self, event):  # noqa: N802 - nom imposé par Qt
@@ -63,11 +63,10 @@ class _NomDeFichier(QStyledItemDelegate):
 class ListeSansMolette(_SansMolette, QComboBox):
     """Une liste qui MONTRE le nom du fichier, et dont la largeur ne dépend pas de ses choix.
 
-    2026-10-14 : la liste des modèles affichait le chemin complet (~1 150 px), et les réglages
-    débordaient d'un écran de portable — la page se faisait défiler DE CÔTÉ. Le TEXTE de chaque
-    ligne reste le chemin complet — c'est
-    lui que `ParamsForm.values()` envoie au moteur, et lui que les pages comparent : seul le
-    dessin change. Le chemin entier reste lisible au survol de la ligne.
+    Afficher le chemin complet d'un modèle (~1 150 px) ferait déborder les réglages d'un écran de
+    portable, et la page défilerait DE CÔTÉ. Le TEXTE de chaque ligne reste le chemin complet —
+    c'est lui que `ParamsForm.values()` envoie au moteur, et lui que les pages comparent : seul
+    le dessin change. Le chemin entier reste lisible au survol de la ligne.
     """
 
     LARGEUR_CAR = 30        # la largeur demandée, en caractères — assez pour un nom de modèle
@@ -107,10 +106,10 @@ class DecimalSansMolette(_SansMolette, QDoubleSpinBox):
 
 
 class ListeDeTextes(QWidget):
-    """Un réglage « text_list » : un NOMBRE, puis autant de champs que ce nombre (2026-10-15).
+    """Un réglage « text_list » : un NOMBRE, puis autant de champs que ce nombre.
 
-    Demandé pour les tâches du Motor Imagery : « si on règle à 2 tâches, deux champs à remplir,
-    trois tâches, trois champs ». Les champs au-delà du nombre sont CACHÉS, pas détruits : passer
+    Pensé pour les tâches du Motor Imagery : 2 tâches, deux champs à remplir ; 3 tâches, trois
+    champs. Les champs au-delà du nombre sont CACHÉS, pas détruits : passer
     de 3 à 2 puis revenir à 3 rend la troisième tâche telle qu'elle était tapée. Aucune
     validation ici — un champ vide ou un doublon part au moteur, qui le refuse avec sa raison.
     """
@@ -176,8 +175,7 @@ class ParamsForm(QWidget):
             ligne.addWidget(champ, 1)
             self.lignes[param["key"]] = ligne
             # Le libellé et sa bulle « ⓘ » forment UN bloc, la bulle collée au texte qu'elle
-            # explique (demandé le 2026-09-23 : « juste après les textes plutôt qu'au bout de la
-            # ligne »). Au bout de la ligne, elle se lisait comme une annexe du champ.
+            # explique. Au bout de la ligne, elle se lirait comme une annexe du champ.
             titre = QWidget()
             rang = QHBoxLayout(titre)
             rang.setContentsMargins(0, 0, 0, 0)
@@ -194,10 +192,10 @@ class ParamsForm(QWidget):
                 formulaire.addRow("", bouton)
                 self.boutons_proposer[param["key"]] = bouton
             if param["help"]:
-                # L'aide vit dans une bulle « ⓘ » juste APRÈS le libellé, lue au survol (2026-09-23).
-                # Elle était une ligne grise sous chaque réglage, plus une case « Aide détaillée »
-                # qui dépliait le reste : la page c-VEP en portait un mur de trente lignes. Rien
-                # n'est perdu — la bulle porte le texte ENTIER du contrat, et le champ aussi.
+                # L'aide vit dans une bulle « ⓘ » juste APRÈS le libellé, lue au survol : une
+                # ligne grise sous chaque réglage ferait, sur la page c-VEP, un mur de trente
+                # lignes. Rien n'est perdu — la bulle porte le texte ENTIER du contrat, et le
+                # champ aussi.
                 paragraphes = [param["help"]]
                 if param["key"] == "refresh_hz":
                     # L'écran PRINCIPAL, lu une fois au lancement — pas forcément celui où est la
@@ -219,18 +217,15 @@ class ParamsForm(QWidget):
 
         self.bouton = QPushButton(tr("console.formulaire.appliquer"))
         self.bouton.clicked.connect(lambda: self.appliquer.emit(self.values()))
-        # ⚠️ Aucun réglage = rien à appliquer, donc pas de bouton (2026-09-21, trouvé en recette
-        # 1.5). Il soumettait un dictionnaire VIDE : le moteur l'acceptait, rien ne changeait, et
-        # l'étudiant avait cliqué sur quelque chose qui avait l'air de faire quelque chose. C'est
-        # la définition du réglage-décor que ce projet combat ailleurs.
+        # ⚠️ Aucun réglage = rien à appliquer, donc pas de bouton : il soumettrait un
+        # dictionnaire VIDE, que le moteur accepterait sans rien changer, et l'élève aurait
+        # cliqué sur quelque chose qui a l'air de faire quelque chose.
         #
-        # Cette règle-ci ne couvre QUE le formulaire vide — aujourd'hui la page du mode « Brut ».
-        # Les deux autres familles de pages cachent le bouton ELLES-MÊMES, sans condition, et pour
-        # une autre raison : leurs réglages partent avec « Commencer », jamais avec « Appliquer ».
-        # `console/calib_page.py` (les quatre entraînements, qui ont tous une bande réglable
-        # depuis le 2026-09-30 — le formulaire n'y est donc plus jamais vide) et
-        # `console/mesure_page.py` (une mesure se règle avant de partir, son formulaire part avec
-        # `start_mesure`).
+        # Cette règle ne couvre QUE le formulaire vide — la page du mode « Brut ». Les deux
+        # autres familles de pages cachent le bouton ELLES-MÊMES, sans condition, parce que
+        # leurs réglages partent avec « Commencer », jamais avec « Appliquer » :
+        # `console/calib_page.py` (les entraînements) et `console/mesure_page.py` (une mesure se
+        # règle avant de partir, son formulaire part avec `start_mesure`).
         if not self.params:
             self.bouton.hide()
         self.refus = QLabel("")
@@ -242,21 +237,20 @@ class ParamsForm(QWidget):
         self.avertissement = QLabel("")
         self.avertissement.setWordWrap(True)
         self.avertissement.setStyleSheet("color: #b8860b;")
-        # ⚠️ TROIS canaux, pas deux (2026-09-22, retour de séance). Un réglage RETENU sur un mode
-        # arrêté a été accepté : rien ne cloche, il n'y a aucune réserve à émettre, et l'orange
-        # le faisait lire comme un problème. La nuance « pas encore en vigueur » est dans le
-        # TEXTE ; la couleur, elle, ne répond qu'à une question : est-ce que ça a été accepté.
-        # `console/mesure_page.py` disait déjà VERT pour le même événement (« pic appliqué ») —
-        # deux écrans, deux couleurs pour un seul fait : c'est ça qu'on corrige.
+        # ⚠️ TROIS canaux, pas deux. Un réglage RETENU sur un mode arrêté a été accepté : rien
+        # ne cloche, il n'y a aucune réserve à émettre, et l'orange le ferait lire comme un
+        # problème. La nuance « pas encore en vigueur » est dans le TEXTE ; la couleur ne répond
+        # qu'à une question : est-ce que ça a été accepté. `console/mesure_page.py` dit VERT pour
+        # le même événement (« pic appliqué ») : un fait, une couleur.
         self.confirmation = QLabel("")
         self.confirmation.setWordWrap(True)
         self.confirmation.setStyleSheet("color: #3fae5a;")
 
-        # « Rétablir les valeurs par défaut », en bas à droite (demandé le 2026-09-30 : « partout
-        # où il y a des réglages »). Les défauts sont ceux que le MOTEUR déclare dans son contrat
+        # « Rétablir les valeurs par défaut », en bas à droite, partout où il y a des réglages.
+        # Les défauts sont ceux que le MOTEUR déclare dans son contrat
         # (`param["default"]`) : la console n'en tient aucune copie. Il REMPLIT les champs, il
         # n'applique rien — comme « Proposer » : ce qui part au moteur part avec « Appliquer » ou
-        # « Commencer », pour que l'étudiant voie ce qui change avant que ça change.
+        # « Commencer », pour que l'élève voie ce qui change avant que ça change.
         self.bouton_defauts = QPushButton(tr("console.formulaire.defauts"))
         self.bouton_defauts.setToolTip(infobulle(tr("console.formulaire.defauts_aide")))
         self.bouton_defauts.clicked.connect(self.retablir_defauts)
@@ -332,13 +326,12 @@ class ParamsForm(QWidget):
         if kind == "choice":
             champ = ListeSansMolette()
             champ.remplir_choix(param["choices"])
-            # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément —
-            # c'était invisible tant que tous les « choice » du projet avaient leur défaut EN
-            # PREMIÈRE position (`model`, dont le défaut est toujours choices_now()[0]). La
-            # calibration MI est le premier à déclarer un défaut ailleurs dans la liste
-            # (`trials_per_class` vaut MI_SESSIONS[1]) : sans cette ligne, le formulaire
-            # affichait 10 essais/classe alors que le contrat dit « commence par la valeur par
-            # défaut » (14) — un mensonge visuel dès la première ouverture de la page.
+            # Sans ce réglage, un QComboBox fraîchement rempli affiche son PREMIER élément. C'est
+            # invisible quand le défaut est EN PREMIÈRE position (`model`, dont le défaut est
+            # toujours choices_now()[0]), mais faux dès qu'il est ailleurs dans la liste
+            # (`trials_per_class` de la calibration MI vaut MI_SESSIONS[1]) : le formulaire
+            # afficherait 10 essais/classe alors que le contrat dit 14 — un mensonge visuel dès
+            # la première ouverture de la page.
             if param["default"] is not None:
                 champ.setCurrentText(str(param["default"]))
             return champ
@@ -356,9 +349,9 @@ class ParamsForm(QWidget):
         champ = EntierSansMolette() if kind == "int" else DecimalSansMolette()
         # Volontairement PLUS LARGES que les bornes du contrat, et pas seulement quand le contrat
         # n'en donne pas. Un QSpinBox écrête en silence : réglé sur [0 ; 0.99], il transforme un
-        # « 5 » saisi en « 0.99 » et l'envoie sans un mot. L'étudiant croit avoir demandé 5, le
+        # « 5 » saisi en « 0.99 » et l'envoie sans un mot. L'élève croit avoir demandé 5, le
         # moteur reçoit 0.99, et personne ne lui dit pourquoi 5 était impossible. C'est le moteur
-        # qui refuse, avec sa raison — c'est la règle de ce fichier, et l'écrêtage la contournait.
+        # qui refuse, avec sa raison — c'est la règle de ce fichier, que l'écrêtage contournerait.
         champ.setRange(-1e9, 1e9)
         if kind != "int":
             champ.setDecimals(3)
@@ -391,7 +384,7 @@ class ParamsForm(QWidget):
     def remplir(self, cle, valeurs):
         """Écrit une proposition dans un champ, SANS l'appliquer.
 
-        L'étudiant voit ce qu'on lui propose et clique « Appliquer » lui-même. Appliquer à sa
+        L'élève voit ce qu'on lui propose et clique « Appliquer » lui-même. Appliquer à sa
         place lui retirerait la seule occasion de comprendre ce qui vient de changer.
 
         Aiguille sur `kind`, comme `set_values` : un `setText` à l'aveugle lève `AttributeError`
@@ -430,9 +423,8 @@ class ParamsForm(QWidget):
                 # choix SONT des chaînes (des chemins), mais faux pour `trials_per_class` (la
                 # calibration MI), dont les choix sont des ENTIERS (10, 14, 18, 26) : soumettre
                 # "14" au lieu de 14 est refusé par `contract.validate` (`"14" not in (10, 14,
-                # 18, 26)`), en silence pour l'étudiant jusqu'à ce qu'il lise le refus. On
-                # retrouve donc le choix d'ORIGINE par sa représentation textuelle, pour rendre
-                # au moteur le type qu'il a lui-même déclaré dans `param["choices"]`.
+                # 18, 26)`). On retrouve donc le choix d'ORIGINE par sa représentation textuelle,
+                # pour rendre au moteur le type qu'il a lui-même déclaré dans `param["choices"]`.
                 texte = champ.currentText()
                 correspond = [c for c in param["choices"] if str(c) == texte]
                 out[param["key"]] = correspond[0] if correspond else texte
@@ -452,8 +444,8 @@ class ParamsForm(QWidget):
         """Un SUCCÈS : accepté, sans réserve. Vert — la couleur ne dit QUE ça.
 
         Distinct de `show_avertissement` (orange), qui dit « accepté, MAIS ». Confondre les deux
-        fait lire un succès comme un problème : c'est le retour de séance du 2026-09-22 sur le
-        message « réglage RETENU », qui n'annonce aucune réserve — juste un fait de calendrier.
+        fait lire un succès comme un problème : le message « réglage RETENU » n'annonce aucune
+        réserve, juste un fait de calendrier.
         """
         self.confirmation.setText(texte or "")
         if texte:
@@ -491,9 +483,9 @@ class ParamsForm(QWidget):
         reconstruire tout le formulaire perdrait la saisie en cours dans les autres champs.
 
         ⚠️ N'est PAS appelée à chaque rafraîchissement : résoudre les choix du réglage `model`
-        lit le disque (`joblib.load` par fichier). Une version antérieure de ce projet a mis
-        30 % d'un cœur sur le fil Qt en résolvant un catalogue dix fois par seconde. On appelle
-        ceci sur ÉVÉNEMENT — entrée dans la page, fin d'une calibration.
+        lit le disque (`joblib.load` par fichier), et le faire dix fois par seconde met environ
+        30 % d'un cœur sur le fil Qt (mesuré). On appelle ceci sur ÉVÉNEMENT — entrée dans la
+        page, fin d'une calibration.
         """
         champ = self.champs.get(cle)
         param = self._params_par_cle.get(cle)

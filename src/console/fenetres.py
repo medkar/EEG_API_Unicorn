@@ -12,10 +12,9 @@ Trois règles, et chacune ferme une panne réelle :
 2. **UNE SEULE fenêtre à la fois.** Deux fenêtres publieraient les mêmes marqueurs sous le même
    nom, et le moteur mélangerait les deux séances sans rien signaler — aucune exception, aucun
    compteur, des époques étiquetées à l'envers.
-3. **Une fenêtre qui meurt anormalement le DIT.** C'est le défaut que ce chantier répare : la
-   recette du projet (test 1.13) a relevé cinq clics d'affilée sur un bouton qui refusait
-   correctement — mais dans le terminal, pas dans la fenêtre. Un refus qu'on ne voit pas est un
-   bouton cassé.
+3. **Une fenêtre qui meurt anormalement le DIT.** Un refus affiché seulement dans le terminal
+   laisse un bouton qui semble ne rien faire (cf. docs/recette.md, test 1.13) : un refus qu'on
+   ne voit pas est un bouton cassé.
 
 ⚠️ Ce module ne décide RIEN sur le contact des électrodes ni sur l'état du moteur : il lance un
 processus et surveille sa mort. Le contrôle de liaison est dans `contact_page.py`, l'ordre
@@ -88,7 +87,7 @@ class LanceurFenetre(QObject):
         """Le message d'échec de la fenêtre n° `numero` si elle est morte ANORMALEMENT, sinon "".
 
         Une fenêtre tuée par nous, ou fermée normalement (code 0), rend "". C'est ce qui permet à
-        l'essai libre de dire « erreur » plutôt que « terminé » (constat F1-M2) sans confondre la
+        l'essai libre de dire « erreur » plutôt que « terminé » sans confondre la
         mort de SA fenêtre avec le refus d'une autre.
         """
         n, message = self._echec
@@ -170,8 +169,7 @@ class LanceurFenetre(QObject):
 
     def _refuser(self, raison):
         """Un refus qui se VOIT. La raison est aussi rangée dans `probleme`, donc affichée par le
-        bandeau : un refus rendu à l'appelant et à personne d'autre est exactement le bouton
-        silencieux que ce chantier répare."""
+        bandeau : un refus rendu à l'appelant et à personne d'autre laisse un bouton muet."""
         self.probleme = raison
         self.change.emit()
         return {"accepted": False, "reason": raison}
@@ -249,22 +247,16 @@ class LanceurFenetre(QObject):
                                sortie=self._derniere_sortie())
             self._echec = (self.numero, self.probleme)
         else:
-            # 🔴 UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE (2026-09-22, retour de séance).
-            # Les lignes étaient déjà retenues — et jetées, parce que seule une mort anormale les
-            # affichait. Or la dernière ligne d'une fenêtre est son BILAN : « N frames affichées,
-            # M sautée(s) ». C'est le chiffre qui QUALIFIE la séance qu'on vient de jouer, et il
-            # partait dans la console cmd que personne ne regarde. Exactement le défaut 1.13
-            # (« le refus ne va que dans le terminal »), un cran plus loin : ici ce n'est pas un
-            # refus qu'on perd, c'est une mesure.
-            # ⚠️ Les DEUX dernières lignes seulement : le bilan (frames sautées) et, pour le
-            # c-VEP, la cadence — ce qu'une fenêtre imprime en tout dernier. La première version
-            # joignait les six lignes retenues, ce qui est juste pour une mort anormale (le
-            # traceback a besoin de son contexte) et faux ici : en séance (2026-09-22), le bandeau
-            # portait les journaux bloc par bloc de la séance avant d'arriver au chiffre utile.
-            # ⚠️ Sans le journal de liblsl (2026-10-05) : en fin de test, le moteur ferme son
-            # flux décodé pendant que la fenêtre l'écoute encore, et liblsl imprime « data_receiver
-            # .cpp:344 ERR| Stream transmission broke off… re-connecting » — le bandeau affichait
-            # ça à la place du bilan, et ça se lisait comme une panne. Le terminal le garde.
+            # Une fin normale a aussi quelque chose à dire : la dernière ligne d'une fenêtre est
+            # son BILAN (« N frames affichées, M sautée(s) »), le chiffre qui QUALIFIE la séance
+            # qu'on vient de jouer ; le laisser dans le terminal le ferait perdre.
+            # Les DEUX dernières lignes seulement : le bilan et, pour le c-VEP, la cadence. Les
+            # six lignes retenues ne servent qu'à une mort anormale (le traceback a besoin de son
+            # contexte) ; ici elles noieraient le chiffre utile sous les journaux de la séance.
+            # Sans le journal de liblsl : en fin de test, le moteur ferme son flux décodé pendant
+            # que la fenêtre l'écoute encore, et liblsl imprime « data_receiver.cpp:344 ERR|
+            # Stream transmission broke off… re-connecting ». Au bandeau, cela se lirait comme
+            # une panne ; le terminal le garde.
             self.resume = (tr("pages.fenetre.fermee", quoi=quoi,
                               bilan=self._derniere_sortie(BILAN_LIGNES, sans_liblsl=True))
                            if self._lignes else "")

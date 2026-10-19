@@ -15,7 +15,7 @@ Les flux publiés, dans l'ordre où ce fichier les définit :
     <PREFIX>_decoded_errp   un échantillon/feedback — la machine vient-elle de se tromper
     <PREFIX>_decoded_cvep   ~5 Hz                  — quelle cible fixée, lue dans la PHASE d'un code
     <PREFIX>_status         JSON, événementiel     — l'état du moteur
-Les trois premiers du MVP sont devenus neuf : un flux `decoded_*` par mode publié par le moteur.
+Un flux `decoded_*` par mode publié par le moteur.
 
 Autotest (sans casque, sans LSL entrant) :
     python src/core/lsl_io.py
@@ -50,8 +50,8 @@ def default_instance_id(serial=None, synthetic=False):
     ⚠️ Sans identité distincte, deux moteurs qui tournent en même temps (une salle de TP
     entière) publient des flux de MÊME nom ET de même `source_id`. Or LSL se sert du
     `source_id` pour rattacher un flux après une coupure : deux sources identiques et il
-    entremêle les deux casques dans un seul flux, en silence. Constaté le 2026-07-27 :
-    1509 échantillons reçus pour 1491 publiés, cadence apparente 401 Hz au lieu de 250.
+    entremêle les deux casques dans un seul flux, en silence (mesuré : 1509 échantillons reçus
+    pour 1491 publiés, cadence apparente 401 Hz au lieu de 250).
 
     On prend le numéro de série du casque (identité stable, propre à l'étudiant) plutôt
     qu'un identifiant de processus : `source_id` doit rester le MÊME d'un lancement à
@@ -159,9 +159,8 @@ class QualityPublisher:
     """`<PREFIX>_quality` : σ par voie, ~1 Hz — la santé des électrodes.
 
     Pourquoi ce flux existe : une électrode décollée ne produit AUCUN message d'erreur, juste
-    des données inexploitables. Le 2026-07-20, 3,4 minutes ont été enregistrées dans le vide
-    sans le moindre avertissement. Un client qui affiche ce flux voit le problème AVANT
-    d'enregistrer.
+    des données inexploitables : on peut enregistrer plusieurs minutes dans le vide sans le
+    moindre avertissement. Un client qui affiche ce flux voit le problème AVANT d'enregistrer.
 
     On publie le σ NUMÉRIQUE plutôt qu'un verdict textuel : c'est traçable sur une courbe, et
     les seuils voyagent dans les métadonnées du flux pour que le client reconstitue le verdict
@@ -229,8 +228,8 @@ class DecodedSSVEPPublisher:
         desc.append_child_value("decision_scale", decision_scale)
         desc.append_child_value("threshold", str(thresholds[0]))
         desc.append_child_value("margin", str(thresholds[1]))
-        # Le sens de -1 voyage dans les MÉTADONNÉES ici aussi, comme pour le MI et le P300 : la
-        # docstring le dit depuis toujours, mais un client Unity ou MATLAB ne lit que `desc()`.
+        # Le sens de -1 voyage dans les MÉTADONNÉES ici aussi, comme pour le MI et le P300 : un
+        # client Unity ou MATLAB ne lit que `desc()`, pas la docstring.
         desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
 
@@ -341,10 +340,10 @@ class DecodedMIPublisher:
         desc.append_child_value("threshold", str(prob_min))
         desc.append_child_value("min_votes", str(votes[0]))
         desc.append_child_value("vote_len", str(votes[1]))
-        # La distinction la plus coûteuse à confondre du mode est celle que les métadonnées
-        # taisaient : « je ne sais pas » (-1) contre « la personne se repose » (l'indice de
-        # REPOS). Ce module promet en tête qu'un client peut se décrire l'API tout seul — alors
-        # les deux indices y sont, plutôt que dans une documentation qu'il n'ouvrira pas.
+        # La distinction la plus coûteuse à confondre du mode : « je ne sais pas » (-1) contre « la
+        # personne se repose » (l'indice de REPOS). Ce module promet en tête qu'un client peut se
+        # décrire l'API tout seul — alors les deux indices sont dans les métadonnées, plutôt que
+        # dans une documentation qu'il n'ouvrira pas.
         # `rest_index` vaut -1 quand le modèle n'a pas de classe de repos : un modèle à deux
         # classes est possible, et supposer que REPOS existe toujours serait faux.
         desc.append_child_value("no_decision_index", "-1")
@@ -369,8 +368,8 @@ class DecodedP300Publisher:
     """`<PREFIX>_decoded_p300` : quelle cible l'utilisateur a sélectionnée. Une fois par manche.
 
     ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
-    « repos ». C'est mot pour mot la confusion qu'il a fallu inscrire en garde pour le MI, et
-    elle se reproduira chez le premier client qui lira ce flux sans lire la doc — c'est pour ça
+    « repos ». C'est la même confusion que pour le MI, et elle se reproduira chez le premier
+    client qui lira ce flux sans lire la doc — c'est pour ça
     que `no_decision_index` voyage aussi dans les métadonnées, pas seulement ici : un client
     Unity ou MATLAB qui lit `inlet.info().desc()` sans jamais ouvrir ce fichier doit pouvoir le
     découvrir tout seul, exactement comme `DecodedMIPublisher` le fait juste au-dessus.
@@ -402,18 +401,17 @@ class DecodedP300Publisher:
         desc.append_child_value("n_targets", str(self.n_targets))
         # ⚠️ Un PLAFOND, pas le nombre de répétitions de la manche : c'est l'application EXTERNE
         # qui décide combien de fois elle fait flasher chaque cible, et le moteur ne le sait pas.
-        # Ce champ annonçait `P300_REPS` comme si c'était un fait ; à `--reps 12` il mentait. Ce
-        # qu'il dit maintenant est vrai parce que le moteur l'APPLIQUE : au-delà de ce nombre de
-        # flashs pour une même cible, la manche est abandonnée (cf. `_MAX_PAR_CIBLE`).
+        # Ce champ dit un fait que le moteur APPLIQUE : au-delà de ce nombre de flashs pour une
+        # même cible, la manche est abandonnée (cf. `_MAX_PAR_CIBLE`).
         desc.append_child_value("max_reps_per_target", str(int(max_reps)))
         # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
         # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
         # sans cette indication, un seuil côté client n'aurait aucun sens.
         desc.append_child_value("decision_scale", "logodds")
-        # L'écart 1er-2e exigé pour émettre autre chose que -1. Le SSVEP publie `threshold` et
-        # `margin`, le MI `threshold`/`min_votes`/`vote_len` ; le P300 était le seul publieur
-        # `decoded_*` à appliquer une règle de décision sans la dire. Il n'a pas de seuil absolu
-        # (les log-odds ne sont pas comparables d'une personne à l'autre), donc `margin` seule.
+        # L'écart 1er-2e exigé pour émettre autre chose que -1 : chaque publieur `decoded_*` dit sa
+        # règle de décision (SSVEP : `threshold` et `margin` ; MI : `threshold`, `min_votes`,
+        # `vote_len`). Le P300 n'a pas de seuil absolu (les log-odds ne sont pas comparables
+        # d'une personne à l'autre), donc `margin` seule.
         desc.append_child_value("margin", str(margin))
         desc.append_child_value("no_decision_index", "-1")
         self.outlet = StreamOutlet(info)
@@ -429,15 +427,15 @@ class DecodedP300Publisher:
 def cvep_channel_labels(n_targets):
     """Voies du flux `decoded_cvep`. Une seule fonction pour le publieur ET le `ModeSpec`.
 
-    ⚠️ `corr_min`/`margin` EN DERNIER (tâche 7, tour de correction 1) : ce mode est le premier du
-    produit dont les seuils de décision se règlent SANS reconstruire le runtime
-    (`affecte_decodage=False`, cf. `contract.py`) — donc sans recréer le flux ni ses métadonnées.
-    Les métadonnées LSL (`desc()`, figées à l'ouverture) restent alors correctes seulement au
-    moment où elles ont été écrites ; sans ces deux voies, un client qui dépouille un
-    enregistrement plus tard n'aurait AUCUN moyen de savoir contre quel seuil chaque décision a
-    été prise. Même geste que `threshold` chez l'ErrP (`errp_channel_labels`), pour la même
-    raison. Ajoutées à la FIN parce que `score_i` est un bloc de longueur VARIABLE (une par
-    cible) : rien ne peut s'intercaler dedans sans casser l'indexation `score_<i>`."""
+    ⚠️ `corr_min`/`margin` EN DERNIER : ce mode est le premier du produit dont les seuils de
+    décision se règlent SANS reconstruire le runtime (`affecte_decodage=False`, cf. `contract.py`)
+    — donc sans recréer le flux ni ses métadonnées. Les métadonnées LSL (`desc()`, figées à
+    l'ouverture) ne restent correctes qu'au moment où elles ont été écrites ; sans ces deux
+    voies, un client qui dépouille un enregistrement plus tard n'aurait AUCUN moyen de savoir
+    contre quel seuil chaque décision a été prise. Même geste que `threshold` chez l'ErrP
+    (`errp_channel_labels`), pour la même raison. Ajoutées à la FIN parce que `score_i` est un
+    bloc de longueur VARIABLE (une par cible) : rien ne peut s'intercaler dedans sans casser
+    l'indexation `score_<i>`."""
     return (["target_index", "confidence"] + [f"score_{i}" for i in range(int(n_targets))]
             + ["corr_min", "margin"])
 
@@ -453,8 +451,8 @@ class DecodedCVEPPublisher:
     tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` voyagent à côté
     de l'échelle qui leur donne un sens — et qu'ils voyagent à DEUX ENDROITS À LA FOIS.
 
-    ⚠️ **`corr_min`/`margin` voyagent aux DEUX endroits, et ils NE DISENT PAS la même chose**
-    (tâche 7, tour de correction 1). Ceux des MÉTADONNÉES (`desc()`, juste en dessous) sont
+    ⚠️ **`corr_min`/`margin` voyagent aux DEUX endroits, et ils NE DISENT PAS la même chose**.
+    Ceux des MÉTADONNÉES (`desc()`, juste en dessous) sont
     figés à l'OUVERTURE du flux : ce mode rend ces deux seuils réglables en pleine séance SANS
     reconstruire le runtime (`affecte_decodage=False` dans `contract.py`), donc SANS recréer ce
     flux — les métadonnées ne bougent alors plus, elles décrivent le seuil qui était en vigueur
@@ -571,11 +569,11 @@ class DecodedErrPPublisher:
     """
 
     # Le nom du flux, écrit UNE fois — même raison que `DecodedP300Publisher.SUFFIXE` : deux
-    # sources pour un contrat public finissent par diverger. `modes/errp.py` porte encore son
-    # propre littéral (`stream="decoded_errp"`) ; en attendant qu'il reprenne cette constante,
-    # c'est l'autotest §8 plus bas qui LIE les deux — il compare le nom que l'outlet publie
-    # RÉELLEMENT à `registry.get("errp").stream`, ce qui est plus fort qu'une égalité de
-    # constantes : un renommage d'un seul côté rougit, quel que soit le côté.
+    # sources pour un contrat public finissent par diverger. `modes/errp.py` porte son propre
+    # littéral (`stream="decoded_errp"`) ; c'est l'autotest §8 plus bas qui LIE les deux — il
+    # compare le nom que l'outlet publie RÉELLEMENT à `registry.get("errp").stream`, ce qui est
+    # plus fort qu'une égalité de constantes : un renommage d'un seul côté rougit, quel que soit
+    # le côté.
     SUFFIXE = "decoded_errp"
 
     def __init__(self, point, n_calib, instance=""):
@@ -606,11 +604,9 @@ class DecodedErrPPublisher:
         # sans que rien n'ait changé : le suffixe `_measured` promet des performances constatées.
         # Il faut donc que le contrat publié dise à quoi il engage vraiment.
         #
-        # « 1 session » a disparu du texte : c'était un LITTÉRAL, seul champ du point de
-        # fonctionnement à ne dériver de rien. Un modèle entraîné sur deux séances (les blocs de
-        # calibration sont déjà dans `groups`) aurait publié « 1 session » sans que rien ne s'en
-        # aperçoive. Le rendre honnête pour de bon demande que le modèle expose son nombre de
-        # blocs — c'est `core/errp_models.py`, hors du périmètre de ce correctif.
+        # « 1 person » est un littéral : c'est le seul champ du point de fonctionnement qui ne
+        # dérive de rien. Le dériver demanderait que le modèle expose son nombre de blocs de
+        # calibration (`core/errp_models.py`).
         desc.append_child_value("measured_on",
                                 "1 person; threshold picked on these same out-of-fold scores, "
                                 "so tpr/tnr are optimistic")
@@ -683,8 +679,8 @@ def _autotest():
     # 1. Découverte + métadonnées du flux brut.
     # On exige NOTRE instance : les noms de flux sont un contrat public, donc identiques pour
     # tous les moteurs. Sans ce filtre, un serveur laissé ouvert sur le poste répond à la
-    # place du nôtre et l'autotest compare ses données à notre motif — il a échoué ainsi le
-    # 2026-07-27 sur « valeurs altérées ». `minimum` élevé force à attendre tout le monde.
+    # place du nôtre et l'autotest compare ses données à notre motif (échec sur « valeurs
+    # altérées »). `minimum` élevé force à attendre tout le monde.
     found = [i for i in resolve_byprop("name", stream_name("raw"), minimum=32, timeout=2.0)
              if i.source_id().endswith(f"@{instance}")]
     if not found:
@@ -784,19 +780,19 @@ def _autotest():
     marge = deco.child_value("margin")
     print(f"  decoded_p300 margin (métadonnées) : {marge!r}")
     assert marge == "0.75", f"margin attendue '0.75', reçue {marge!r}"
-    # Et `reps` est devenu `max_reps_per_target` : un PLAFOND que le moteur applique, pas une
-    # affirmation sur une application externe qu'il ne contrôle pas.
+    # Le champ s'appelle `max_reps_per_target` (l'ancien `reps` n'est plus publié) : un PLAFOND
+    # que le moteur applique, pas une affirmation sur une application externe qu'il ne voit pas.
     plafond = deco.child_value("max_reps_per_target")
     ancien = deco.child_value("reps")
     print(f"  decoded_p300 max_reps_per_target : {plafond!r} (ancien champ `reps` : {ancien!r})")
     assert plafond == "8", f"max_reps_per_target attendu '8', reçu {plafond!r}"
     assert ancien == "", "le champ `reps` (le nombre de l'appli externe) ne doit plus être publié"
 
-    # 7. Le sens de -1 manquait aussi au SSVEP, le plus ancien des publieurs `decoded_*`.
+    # 7. Le sens de -1 voyage aussi dans les métadonnées du SSVEP, le plus ancien des publieurs.
     pub_ssvep = DecodedSSVEPPublisher((15.0, 20.0), decision_scale="z", thresholds=(3.0, 0.5),
                                       instance="selftest-ssvep")
-    info_ssvep = pub_ssvep.outlet.get_info()    # ⚠️ idem — c'est CE site qui échouait ~1 fois
-    ssvep_deco = info_ssvep.desc().child("decoding")   # sur 6, et systématiquement sous charge
+    info_ssvep = pub_ssvep.outlet.get_info()    # ⚠️ idem : la référence doit vivre tout le temps
+    ssvep_deco = info_ssvep.desc().child("decoding")   # de la lecture (échec ~1 fois sur 6)
     print(f"  decoded_ssvep no_decision_index : "
           f"{ssvep_deco.child_value('no_decision_index')!r}")
     assert ssvep_deco.child_value("no_decision_index") == "-1", "no_decision_index manquant (SSVEP)"
@@ -840,11 +836,11 @@ def _autotest():
         f"measured_on doit dire que le seuil est choisi sur ces mêmes scores : {mesure_sur!r}"
 
     # 8bis. LE NOM DU FLUX est un contrat PUBLIC, et il est écrit à deux endroits : ici
-    # (`DecodedErrPPublisher.SUFFIXE`) et dans le `ModeSpec` de `core/modes/errp.py`. Rien ne les
-    # liait — l'autotest du mode compare un littéral à un littéral, celui-ci vérifiait les voies
-    # et le point de fonctionnement mais jamais le NOM. Un renommage d'un seul côté laissait donc
-    # les QUATRE autotests verts, et le seul symptôme arrivait en séance : la page ErrP affiche
-    # un nom, l'extrait « Brancher un client » que l'étudiant COPIE demande ce nom-là, et son
+    # (`DecodedErrPPublisher.SUFFIXE`) et dans le `ModeSpec` de `core/modes/errp.py`. L'autotest du
+    # mode compare un littéral à un littéral, les contrôles précédents vérifient les voies et le
+    # point de fonctionnement mais pas le NOM. Un renommage d'un seul côté laisserait donc les
+    # autotests verts, et le seul symptôme arriverait en séance : la page ErrP affiche un nom,
+    # l'extrait « Brancher un client » que l'étudiant COPIE demande ce nom-là, et son
     # `resolve_byprop` ne trouve rien — un `SystemExit` qui accuse l'étudiant.
     #
     # On compare le nom que l'outlet publie RÉELLEMENT à celui que le contrat du mode annonce :
@@ -862,10 +858,10 @@ def _autotest():
     # cibles, et le troisième à décider sur une grandeur DIFFÉRENTE (z pour le SSVEP, log-odds
     # pour le P300, corrélation ici). Un client qui poserait le seuil de l'un sur l'échelle de
     # l'autre se tromperait d'un ordre de grandeur — d'où `decision_scale` ET les deux seuils.
-    # ⚠️ `corr_min`/`margin` EN DERNIER (tâche 7, tour de correction 1) : les deux seuils du
-    # c-VEP se règlent en pleine séance SANS recréer ce flux, donc les métadonnées seules
-    # (ci-dessous) ne suffisent plus à dire contre quel seuil une décision a été prise — cf. la
-    # docstring de `DecodedCVEPPublisher` et `errp_channel_labels` pour le même geste chez l'ErrP.
+    # ⚠️ `corr_min`/`margin` EN DERNIER : les deux seuils du c-VEP se règlent en pleine séance
+    # SANS recréer ce flux, donc les métadonnées seules (ci-dessous) ne suffisent pas à dire
+    # contre quel seuil une décision a été prise — cf. la docstring de `DecodedCVEPPublisher` et
+    # `errp_channel_labels` pour le même geste chez l'ErrP.
     labels = cvep_channel_labels(6)
     print(f"  voies decoded_cvep : {labels}")
     assert labels == ["target_index", "confidence",
@@ -896,8 +892,7 @@ def _autotest():
     assert lu["corr_min"] == "0.26" and lu["margin"] == "0.09", lu
     # La règle de décision est en TROIS morceaux, et le troisième est le vote glissant. Sans lui
     # dans les métadonnées, un client mesure une latence de `vote_len / 5 Hz` sans pouvoir
-    # l'expliquer, et conclut que le décodage est lent — le même reproche que le P300 publiant
-    # une marge qu'il appliquait sans la dire.
+    # l'expliquer, et conclut que le décodage est lent.
     assert lu["min_votes"] == "2" and lu["vote_len"] == "3", lu
     assert lu["code_len"] == "63" and lu["refresh"] == "60" and lu["n_targets"] == "6", lu
     # Le c-VEP est le seul mode à DEUX décodeurs sur le même stimulus : c'est le fichier de

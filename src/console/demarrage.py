@@ -1,22 +1,20 @@
 """L'écran de départ : sur quoi ouvre-t-on la session ? Casque (lequel ?), ou board de test.
 
-Ce choix était un DRAPEAU À TAPER (`--synthetic`) jusqu'au 2026-09-09, et le numéro du casque
-l'était encore jusqu'au 2026-09-25 (`--serial`, faute de quoi le moteur ouvrait le casque écrit en
-dur dans `core/config.py`). La règle du produit — *tout l'usage réel se pilote depuis
-l'interface* — ne souffre pas d'exception : chaque étudiant vient avec SON casque, et celui qui
-n'en a pas sous la main est exactement celui qui n'ouvrira jamais un terminal.
+La source et le numéro du casque se choisissent ici, pas par un drapeau à taper. La règle du
+produit — *tout l'usage réel se pilote depuis l'interface* — ne souffre pas d'exception : chaque
+élève vient avec SON casque, et celui qui n'en a pas sous la main est exactement celui qui
+n'ouvrira jamais un terminal.
 
 ⚠️ **JAMAIS DE REPLI AUTOMATIQUE, et c'est la seule chose sérieuse de ce fichier.** Un casque
 introuvable ne doit PAS faire basculer en douce sur le board de test : on enregistrerait une séance
 entière de signal fabriqué en croyant tenir du vrai, et rien dans les fichiers produits ne le
-dirait. Ce dépôt a déjà dû corriger un écran qui laissait croire qu'un board de test était observé
-(« Say plainly when the board is fake »). Le choix est donc EXPLICITE, et le bandeau le répète tant
-que la console tourne. Quand le casque refuse de s'ouvrir, la question est REPOSÉE, avec la raison
-— jamais tranchée à la place de l'étudiant.
+dirait. Le choix est donc EXPLICITE, et le bandeau le répète tant que la console tourne. Quand
+le casque refuse de s'ouvrir, la question est REPOSÉE, avec la raison — jamais tranchée à la
+place de l'élève.
 
-Vérifié : au 2026-09-09, aucun repli n'existe dans `core/acquisition.py` ni `core/server.py`. La
-garde de ce fichier — et son test dans `console/app.py --smoke` — sert à ce qu'on n'en ajoute pas
-un le jour où un casque récalcitrant fera perdre dix minutes à quelqu'un.
+Aucun repli n'existe dans `core/acquisition.py` ni `core/server.py`. La garde de ce fichier — et
+son test dans `console/app.py --smoke` — sert à ce qu'on n'en ajoute pas un le jour où un casque
+récalcitrant fera perdre dix minutes à quelqu'un.
 
 ⚠️ **Le numéro n'est pas facultatif ici**, bien que BrainFlow le dise optionnel pour l'Unicorn :
 sa documentation le déclare « important si plusieurs appareils sont au même endroit » — une salle
@@ -39,7 +37,7 @@ from core.config import SECTEUR_HZ, SECTEURS_HZ, UNICORN_SERIAL  # noqa: E402
 from core.i18n import tr  # noqa: E402
 
 # La page Bluetooth des Paramètres de Windows : l'Unicorn s'y appaire, la bibliothèque du casque
-# n'ayant aucune fonction d'appairage (vérifié le 2026-09-25).
+# n'ayant aucune fonction d'appairage.
 REGLAGES_BLUETOOTH = "ms-settings:bluetooth"
 
 UNICORN = "unicorn"
@@ -57,7 +55,7 @@ DESCRIPTIONS = {
     SYNTHETIQUE: (tr("console.demarrage.synthetique"), tr("console.demarrage.synthetique_aide")),
 }
 
-# Le SECTEUR électrique (2026-09-30), un réglage du POSTE : le coupe-bande de tous les décodeurs,
+# Le SECTEUR électrique, un réglage du POSTE : le coupe-bande de tous les décodeurs,
 # que chaque modèle entraîné ENREGISTRE. Un libellé par valeur de `config.SECTEURS_HZ` — une
 # valeur ajoutée là sans libellé ici lève à l'ouverture du dialogue, plutôt que d'afficher un
 # choix muet.
@@ -94,7 +92,7 @@ class Memoire:
         liste = [numero] + [c for c in self.casques() if c != numero]
         self._reglages.setValue("casques", liste[:CASQUES_RETENUS])
 
-    # --- le secteur électrique du poste (2026-09-30) -------------------------------------------
+    # --- le secteur électrique du poste -------------------------------------------
     # Retenu dès que le dialogue est VALIDÉ, et non après une ouverture réussie comme un casque :
     # c'est une propriété de la prise murale, qu'un casque éteint ne rend pas moins vraie.
 
@@ -185,8 +183,8 @@ class DialogueDemarrage(QDialog):
                 layout.addWidget(QLabel(tr("console.demarrage.numero")))
                 ligne = QHBoxLayout()
                 ligne.addWidget(self.champ_numero, 1)
-                # La liste des casques APPAIRÉS (2026-09-25) : chaque étudiant choisit SON casque
-                # au lieu de taper un numéro de mémoire. Pas une détection — cf.
+                # La liste des casques APPAIRÉS : chaque élève choisit SON casque au lieu de
+                # taper un numéro de mémoire. Pas une détection — cf.
                 # `core.acquisition.casques_appaires` : rien ne dit qu'un casque appairé est
                 # allumé sans l'ouvrir, et l'écran ne le prétend pas.
                 self.bouton_chercher = QPushButton(tr("console.demarrage.actualiser"))
@@ -204,7 +202,7 @@ class DialogueDemarrage(QDialog):
                 layout.addWidget(self.detection)
                 layout.addWidget(aide_numero)
 
-        # Le SECTEUR électrique (2026-09-30), pour les DEUX sources : le board de test passe par
+        # Le SECTEUR électrique, pour les DEUX sources : le board de test passe par
         # le même filtre d'acquisition, et un modèle entraîné dessus l'enregistre aussi.
         self.choix_secteur = ListeSansMolette()
         for hz in SECTEURS_HZ:
@@ -468,7 +466,7 @@ def _selftest():
         f"…et le dialogue propose le DERNIER casque ouvert, les autres dans la liste "
         f"({rappel.numero()}, {rappel.champ_numero.count()})")
 
-    # Le SECTEUR électrique (2026-09-30) : une liste, retenue sur le poste, écrite à la VALIDATION.
+    # Le SECTEUR électrique : une liste, retenue sur le poste, écrite à la VALIDATION.
     mem_s = Memoire(_Reglages())
     chk(mem_s.secteur() == SECTEUR_HZ,
         f"un poste neuf retient le secteur par défaut du dépôt ({mem_s.secteur()})")
@@ -543,8 +541,8 @@ def _selftest():
         and trouve.bouton_chercher.isEnabled(),
         f"le dernier casque utilisé ET appairé passe en tête, puis les autres appairés, sans "
         f"doublon, et le choix en cours est gardé ({items}, {trouve.numero()})")
-    # 🔴 « Appairé » n'est pas « allumé » : ni « trouvé », ni vert — c'est ce que l'écran a
-    # prétendu le 2026-09-25, casque éteint dans la liste.
+    # 🔴 « Appairé » n'est pas « allumé » : ni « trouvé », ni vert (le casque peut être éteint
+    # tout en figurant dans la liste).
     chk("trouv" not in trouve.detection.text().lower() and "appair" in trouve.detection.text()
         and "3fae5a" not in trouve.detection.styleSheet(),
         f"…et le message dit APPAIRÉ, jamais « trouvé », et n'est pas vert : rien ne dit que le "
@@ -588,8 +586,8 @@ def _selftest():
         f"({sans_dll.detection.text()!r})")
 
     # La VRAIE bibliothèque du casque se charge — sans être appelée (un appel lance un balayage).
-    # Sans ce contrôle, une faute dans le chargement n'apparaissait qu'à l'écran : tous les
-    # autres tests de ce fichier remplacent la recherche entière (vu le 2026-09-25 : `_os`).
+    # Sans ce contrôle, une faute dans le chargement n'apparaîtrait qu'à l'écran : tous les
+    # autres tests de ce fichier remplacent la recherche entière.
     if sys.platform == "win32":
         try:
             charge, raison = callable(fonction_liste_unicorn()), ""

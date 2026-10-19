@@ -3,24 +3,21 @@ fréquence. BCI **active** : l'utilisateur choisit une cible en la fixant, comme
 là où le SSVEP cherche une fréquence, le c-VEP cherche une PHASE dans une m-séquence.
 
 Le décodage (corrélation par lag) est dans `core/cvep_decoder.py` ; la m-séquence et le plan des
-cibles dans `core/cvep_code.py` (tous deux déménagés dans `core/` à la tâche 1 de ce chantier, le
-modèle `data/cvep_model.npz` survivant intact). Ici on décrit le MODE : ce qui se règle, ce qui se
-publie, et — le cœur de CE fichier — **où en est le code affiché en ce moment**, sans quoi aucune
+cibles dans `core/cvep_code.py`. Ici on décrit le MODE : ce qui se règle, ce qui se publie, et
+— le cœur de CE fichier — **où en est le code affiché en ce moment**, sans quoi aucune
 corrélation ne veut rien dire.
 
-⚠️ **Ce fichier est différent de son patron, `core/modes/p300.py`/`core/modes/errp.py`, et c'est le
-point à comprendre avant de lire plus loin.** Le P300 et l'ErrP DÉCOUPENT une époque **autour** de
-chaque marqueur — le marqueur délimite un événement discret (un flash, un feedback). Le c-VEP, lui,
-décode **en continu sur une fenêtre glissante**, comme le SSVEP : ses marqueurs ne délimitent RIEN,
-ils **tiennent une horloge**. Un programme séparé (`stimulus/cvep.py`, tâche 5 de ce
-chantier) affiche le clignotement et publie un marqueur `{"mode":"cvep","event":"cycle",
-"refresh":…}` à CHAQUE redémarrage de la m-séquence (toutes les 63 frames). Ce runtime reconstruit,
-à tout instant `t_fin`, la position dans le code que ce marqueur implique : c'est la **phase**.
-`SPEC.marker_epoch_s` (voir plus bas) en découle : il **dimensionne le tampon du moteur**, il ne
-décrit **aucune époque** — si ce champ te fait chercher un `pre_s`/`post_s` comme chez le P300 ou
-l'ErrP, tu ne le trouveras pas ici, et c'est voulu : `CVEPRuntime` n'expose délibérément PAS ces
-deux attributs de classe, pour que `registry.check()` n'applique pas la logique de troncature
-d'époque (`pre_s+post_s` contre `marker_epoch_s`) à un mode qui n'en a pas.
+⚠️ **Ce fichier diffère de `core/modes/p300.py` et `core/modes/errp.py`.** Le P300 et l'ErrP
+DÉCOUPENT une époque **autour** de chaque marqueur : le marqueur délimite un événement discret
+(un flash, un feedback). Le c-VEP, lui, décode **en continu sur une fenêtre glissante**, comme
+le SSVEP : ses marqueurs ne délimitent RIEN, ils **tiennent une horloge**. Un programme séparé
+(`stimulus/cvep.py`) affiche le clignotement et publie un marqueur `{"mode":"cvep",
+"event":"cycle","refresh":…}` à CHAQUE redémarrage de la m-séquence (toutes les 63 frames). Ce
+runtime reconstruit, à tout instant `t_fin`, la position dans le code que ce marqueur implique :
+c'est la **phase**. `SPEC.marker_epoch_s` (voir plus bas) en découle : il **dimensionne le
+tampon du moteur**, il ne décrit **aucune époque**. `CVEPRuntime` n'expose donc PAS `pre_s` ni
+`post_s`, pour que `registry.check()` n'applique pas la logique de troncature d'époque
+(`pre_s+post_s` contre `marker_epoch_s`) à un mode qui n'en a pas.
 
 ⚠️ **Le cœur de ce fichier est la distinction entre `None` et `0`.** `phase_a` rend `None` quand il
 n'y a pas de phase connue, et `0` est une position VALIDE du code (la toute première frame de la
@@ -50,11 +47,11 @@ présent et lisible, `maj_reference` refuse tout marqueur dont le rafraîchissem
 s'écarte de plus de 1 Hz de celui auquel le modèle a été calibré. Le modèle est calibré à UN
 rafraîchissement, et c'est l'ÉMETTEUR qui tient l'écran — le moteur ne peut pas le voir avant de
 recevoir un marqueur. Sans cette garde : le décodage tourne, les scores restent honnêtes, et RIEN
-ne se déclenche jamais — c'est la panne qui a coûté une séance au SSVEP (cf. `SSVEP_WARMUP_S`).
+ne se déclenche jamais (même panne que celle du SSVEP, cf. `SSVEP_WARMUP_S`).
 
 ⚠️ **QUATRE façons de ne pas décider, et elles sont COMPTÉES SÉPARÉMENT** (`state()`). Le flux, lui,
-ne porte qu'un `-1` : c'est le contrat public, et il ne dit pas pourquoi. Or une séance casque coûte
-cher et ne se répète pas — « ça ne détecte pas » sans la cause ne permet pas de distinguer
+ne porte qu'un `-1` : c'est le contrat public, et il ne dit pas pourquoi. Or « ça ne détecte pas »
+sans la cause ne permet pas de distinguer
     1. `sans_reference`     — aucun marqueur d'horloge n'est jamais arrivé : l'émetteur n'est pas
                               lancé, ou il publie sous un autre nom de flux (`stream_in`) ;
     2. `reference_perimee`  — l'horloge s'est TUE : l'émetteur a planté, ou l'écran a été fermé ;
@@ -71,17 +68,14 @@ vivante et à quelle hauteur les corrélations passent.
 ⚠️ **Le VOTE GLISSANT (spec §5) est dans le mode, pas dans le publieur.** Passer les deux seuils ne
 suffit pas : il faut que `min_votes` des `vote_len` dernières fenêtres désignent la MÊME cible.
 `core/lsl_io.py` est un transport sans état — y mettre une décision créerait une seconde logique de
-décodage hors du mode. Ce vote n'est pas un raffinement : sans lui, le moteur décoderait à la même
-cadence et sur la même géométrie que l'écran pygame que ce chantier archive, MOINS son 2-sur-3 —
-donc strictement plus permissif que la référence à laquelle la séance casque doit le comparer.
+décodage hors du mode. Sans ce vote, le moteur serait strictement plus permissif que le décodage
+local de référence (`archive/cvep_pilot.py`, vote 2-sur-3) auquel on le compare en séance.
 
-⚠️ **Ce fichier ne rend AUCUN stimulus.** Comme le P300 et l'ErrP, c'est une application EXTERNE
-(`stimulus/cvep.py`) qui affiche le clignotement et publie les marqueurs de cycle. Ce que
-le c-VEP demande de plus qu'eux est un verrouillage à la FRAME : une seule frame sautée décale le
-code et détruit la corrélation — c'est pourquoi sa calibration est `Calib(kind="fenetre")`, menée
-par une fenêtre de `src/stimulus/` — que la console LANCE, et dont le moteur écoute les marqueurs.
-(⚠️ Cette phrase a dit le contraire, « menée par l'appli pygame et jamais par la console », jusqu'à
-la revue finale du 2026-09-08 : le chantier avait changé le code sans changer le commentaire.)
+⚠️ **Ce fichier ne rend AUCUN stimulus.** Comme le P300 et l'ErrP, c'est une fenêtre EXTERNE
+(`stimulus/cvep.py`) qui affiche le clignotement et publie les marqueurs de cycle. Le c-VEP
+demande en plus un verrouillage à la FRAME : une seule frame sautée décale le code et détruit la
+corrélation. C'est pourquoi sa calibration est `Calib(kind="fenetre")`, menée par une fenêtre de
+`src/stimulus/` que la console lance et dont le moteur écoute les marqueurs.
 
 Autotest :
     python src/core/modes/cvep.py
@@ -113,8 +107,8 @@ from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # n
                                   params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `cvep_calib` ne nous importe pas en retour (il lit
 # `CVEPRuntime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
-# refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
-# `python src/core/modes/cvep.py` compris. Mesuré côté P300, repris tel quel ici.
+# refermerait un cycle, qui casse dès qu'on lance l'un des deux fichiers directement,
+# `python src/core/modes/cvep.py` compris. Même montage que côté P300.
 from core.modes.cvep_calib import BRIEFING as BRIEFING_CALIB, CVEPCalibration  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
@@ -123,12 +117,10 @@ from core.modes.runtime import ModeRuntime  # noqa: E402
 # jamais un algorithme. Les deux classes partagent EXACTEMENT le même contrat en ligne —
 # `classify(fenêtre, phase) -> (cible|None, {nom: corrélation})` — et chacune apporte ses propres
 # seuils DE CONSTRUCTION (`CVEP_CORR_MIN`/`CVEP_MARGIN` pour l'eCCA, `CVEP_RCCA_*` pour le rCCA),
-# qui ne servent plus que de repli : `CVEPRuntime.decide` (tâche 7) leur impose ENSUITE un couple
-# commun, relu dans `SPEC.params["corr_min"/"margin"]`. ⚠️ Il fut un temps où ce fichier écrivait
-# ICI « ne pas partager un seuil entre les deux, leurs scores ne sont pas à la même échelle » —
-# affirmation depuis RÉFUTÉE et corrigée dans `core/config.py` : mesurés, les deux décodeurs
-# vivent à la MÊME échelle empirique (gagnant médian, essais corrects, k=2 : 0,323 pour l'eCCA,
-# 0,261 pour le rCCA). Un couple commun n'est donc plus une approximation.
+# qui ne servent que de repli : `CVEPRuntime.decide` leur impose ENSUITE un couple commun, relu
+# dans `SPEC.params["corr_min"/"margin"]`. Un couple commun est légitime : mesurés, les deux
+# décodeurs vivent à la MÊME échelle empirique (gagnant médian, essais corrects, k=2 : 0,323
+# pour l'eCCA, 0,261 pour le rCCA, cf. `core/config.py`).
 _DECODEURS = {"eCCA": CVEPDecoder, "rCCA": RCCADecoder}
 
 # Paliers auxquels un marqueur de cycle refusé se DIT. Même motif que `p300._PALIERS_REFUS` et que
@@ -149,27 +141,23 @@ _MOTIFS_FR = {
 }
 
 # Tolérance flottante sur `age * refresh`, juste avant de tronquer en frame entière dans
-# `phase_a`. ⚠️ MESURÉ, pas de précaution en l'air : à `ref_ts=100.0` et `t_fin=100.0+63/60.0`
-# (exactement un cycle plus tard, le cas même que le test de ce fichier vérifie), `age` vaut
-# `1.0499999999999972` au lieu de `1.05` — l'ARRONDI binaire de `100.0 + 63/60.0 - 100.0`, jamais
-# `1.05` exactement. `age * 60.0` rend alors `62.99999999999983`, et `int(...)` TRONQUE vers 62 au
-# lieu de 63 : la phase calculée retombe sur 62 au lieu de 0, un décalage d'UNE frame entière au
-# pire moment (juste au wrap du code). Même classe de bug, même ordre de grandeur, que
-# `registry._EPS_S` (« 0.15 + 0.80 vaut 0.9500000000000001 en flottant ») — 1e-9 s n'a aucune
-# commune mesure avec un échantillon EEG (4 ms à 250 Hz) ni avec une frame d'écran (16,7 ms à
-# 60 Hz), donc aucune vraie fraction de frame ne peut se glisser dessous.
+# `phase_a`. ⚠️ Mesuré : à `ref_ts=100.0` et `t_fin=100.0+63/60.0` (exactement un cycle plus
+# tard), `age` vaut `1.0499999999999972` au lieu de `1.05` (arrondi binaire). `age * 60.0` rend
+# alors `62.99999999999983`, et `int(...)` TRONQUE vers 62 au lieu de 63 : la phase retombe sur
+# 62 au lieu de 0, un décalage d'UNE frame entière juste au bouclage du code, sans erreur. Même
+# classe de bug que `registry._EPS_S`. 1e-9 s est sans commune mesure avec un échantillon EEG
+# (4 ms à 250 Hz) ou une frame d'écran (16,7 ms à 60 Hz) : aucune vraie fraction de frame ne
+# peut se glisser dessous.
 _EPS_FRAME = 1e-9
 
 
 def _modeles_disponibles():
     """Les modèles c-VEP chargeables, du plus récent au plus ancien. Délègue à `cvep_models`.
 
-    ⚠️ Le dossier est DÉDUIT de `CVEP_MODEL_PATH` au lieu d'être laissé à son défaut, et ce n'est
-    pas un détail de style : c'est la seule chose que l'autotest de ce fichier puisse repointer
-    pour que ses fixtures ne lisent — ni n'écrivent — jamais le VRAI `data/`, qui contient des
-    enregistrements EEG d'une personne identifiable sur un dépôt public. La constante est relue
-    À CHAQUE APPEL (variable de module, pas valeur capturée) : c'est ce qui rend le repointage
-    effectif.
+    Le dossier est DÉDUIT de `CVEP_MODEL_PATH` au lieu d'être laissé à son défaut : c'est ce que
+    l'autotest repointe pour que ses fixtures ne lisent ni n'écrivent jamais le VRAI `data/`
+    (enregistrements EEG d'une personne identifiable). La constante est relue À CHAQUE APPEL
+    (variable de module, pas valeur capturée), ce qui rend le repointage effectif.
     """
     return cvep_models.modeles_disponibles(_os.path.dirname(CVEP_MODEL_PATH))
 
@@ -189,15 +177,15 @@ class CVEPRuntime(ModeRuntime):
         if self.model is None:
             # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
             # « aucun modèle » ; il reste celui du fichier effacé entre la validation et le
-            # démarrage, que seul le moteur peut voir — même garde que P300Runtime/ErrPRuntime.
+            # démarrage, que seul le moteur peut voir (même garde que P300Runtime/ErrPRuntime).
             raise ValueError(raison)
         self.plan, self.code = build_targets()
         desaccord = self._desaccord_code()
         if desaccord is not None:
             raise ValueError(desaccord)
         # == len(self.code), vérifié juste au-dessus : `phase_a` s'appuie sur CETTE valeur (celle
-        # que le modèle a APPRISE), pas sur `len(self.code)` — les deux sont égales par
-        # construction ici, mais c'est le modèle qui fait autorité sur ce qu'il a décodé.
+        # que le modèle a APPRISE), pas sur `len(self.code)` : c'est le modèle qui fait autorité
+        # sur ce qu'il a décodé.
         self.code_len = self.model.code_len
         # Le décodeur suit le MODÈLE, pas un réglage : c'est le fichier qui déclare le sien.
         # `.decoder` est un attribut de CLASSE (cf. `cvep_decoder.CVEPModel`), donc un objet ne
@@ -208,8 +196,8 @@ class CVEPRuntime(ModeRuntime):
         # où l'indice du flux est décidé, et il est décidé à partir de ce que le DÉCODEUR rend :
         # refaire ici une recherche par `lag` créerait une seconde table d'appariement, qui
         # continuerait de désigner la bonne cible même si celle du décodeur était décalée d'un
-        # cran — le défaut que la revue du P300 avait trouvé sur son propre mode, rendu
-        # indétectable. (`cvep_code._selftest` garantit que les noms sont distincts.)
+        # cran, rendant ce décalage indétectable. (`cvep_code._selftest` garantit que les noms
+        # sont distincts.)
         self._indice = {c["name"]: i for i, c in enumerate(self.plan)}
         # Aucune phase connue tant qu'aucun marqueur de cycle n'est arrivé : c'est CE `None`,
         # distinct de `0`, qui fait refuser `phase_a` plutôt que de rendre une position plausible
@@ -219,17 +207,14 @@ class CVEPRuntime(ModeRuntime):
         self._out = None
         self._decoded = None
         self._last_log = 0.0
-        # Le VOTE GLISSANT (spec §5), sur le patron de `core/modes/mi.py`. Sans lui, le moteur
-        # décoderait à la même cadence et sur la même géométrie que l'écran pygame que ce
-        # chantier archive, MOINS son 2-sur-3 : strictement plus permissif que la référence à
-        # laquelle la séance casque doit le comparer. On garde `(nom, corrélation)` et non le seul
-        # nom, parce que c'est la MOYENNE des corrélations des fenêtres VOTANTES qui devient la
-        # confiance publiée — cf. `_run_step`.
+        # Le VOTE GLISSANT (spec §5), sur le patron de `core/modes/mi.py`. On garde
+        # `(nom, corrélation)` et non le seul nom, parce que c'est la MOYENNE des corrélations
+        # des fenêtres VOTANTES qui devient la confiance publiée — cf. `_run_step`.
         self._votes = deque(maxlen=int(params["vote_len"]))
         # Le couple (corr_min, margin) sous lequel les votes ACTUELLEMENT empilés ont été jugés,
         # et celui que la dernière décision a réellement appliqué. Les deux existent parce que ces
         # deux seuils se règlent EN PLEINE SÉANCE sans reconstruire le runtime : sans eux, un
-        # échantillon publié pouvait annoncer `corr_min = 0,40` à côté d'une `confidence` de 0,35
+        # échantillon publié pourrait annoncer `corr_min = 0,40` à côté d'une `confidence` de 0,35
         # moyennée sur des fenêtres jugées à 0,26 — auto-contradictoire sur ses propres voies.
         # Cf. `decide` (qui capture) et `_publish` (qui publie le couple capturé).
         self._seuils_du_vote = None
@@ -249,10 +234,7 @@ class CVEPRuntime(ModeRuntime):
         self._decodages = 0            # fenêtres qui ont DÉSIGNÉ une cible
         self._sans_reference = 0       # ...aucun marqueur d'horloge jamais reçu
         self._reference_perimee = 0    # ...l'horloge s'est tue depuis trop longtemps
-        # ⚠️ `sous_les_seuils` et `vote_non_conclu` sont DEUX refus distincts, et c'est la
-        # correction la plus utile de ce fichier. Le brief n'en prévoyait qu'un, nommé
-        # « vote_non_conclu », qui comptait en réalité les fenêtres sous `corr_min`/`margin` —
-        # un vote qui n'existait pas encore. Maintenant qu'il existe :
+        # ⚠️ `sous_les_seuils` et `vote_non_conclu` sont DEUX refus distincts :
         #   • `sous_les_seuils`  = cette fenêtre n'avait AUCUN candidat -> regarder le SIGNAL
         #                          (contact, saline, la personne fixe-t-elle quelque chose ?) ;
         #   • `vote_non_conclu`  = elle en avait un, mais les fenêtres récentes ne s'accordent
@@ -274,22 +256,19 @@ class CVEPRuntime(ModeRuntime):
         `core/config.py`, jamais du modèle chargé. Un modèle calibré avant un changement de ces
         constantes porterait un `code_len` différent : sans ce contrôle, `phase_a` continuerait de
         rendre un entier plausible (juste modulo un AUTRE nombre que celui du code réellement
-        affiché), et les lags de `self.plan` ne correspondraient à rien dans le template appris —
-        un désaccord aussi silencieux que celui du rafraîchissement (`maj_reference`), découvert
-        ici pour la même raison : un décodeur qui tourne, publie des scores honnêtes en apparence,
-        et ne veut plus rien dire.
+        affiché), et les lags de `self.plan` ne correspondraient à rien dans le template appris :
+        un désaccord aussi silencieux que celui du rafraîchissement (`maj_reference`), où le
+        décodeur tourne et publie des scores d'apparence honnête qui ne veulent plus rien dire.
         """
         if self.model.code_len != len(self.code):
             return tr("mode.cvep.desaccord.code", modele=self.model.code_len, bits=CVEP_BITS,
                       actuel=len(self.code))
-        # ...et le NOMBRE DE CIBLES sur lequel il a été calibré. `CVEPModel.save` enregistre ce
-        # champ « pour pouvoir prévenir » (sa propre docstring) : jusqu'ici personne ne prévenait.
-        # Le template eCCA est COMMUN à tous les lags, donc un modèle calibré sur 3 cibles
-        # « marche » techniquement à 6 — il publie six corrélations d'apparence normale, dont
-        # trois sortent de lags que la calibration n'a JAMAIS présentés. C'est la panne INVISIBLE
-        # que ce fichier existe pour éliminer, et le comportement que l'appli pygame avait avant
-        # ce chantier. `0` = modèle antérieur au champ : on ne peut alors rien en dire, et refuser
-        # jetterait `data/cvep_model.npz`, le seul modèle réel du dépôt.
+        # ...et le NOMBRE DE CIBLES sur lequel il a été calibré (`CVEPModel.save` enregistre ce
+        # champ pour pouvoir prévenir). Le template eCCA est COMMUN à tous les lags, donc un
+        # modèle calibré sur 3 cibles « marche » techniquement à 6 : il publie six corrélations
+        # d'apparence normale, dont trois sortent de lags que la calibration n'a JAMAIS présentés.
+        # `0` = champ absent : on ne peut alors rien en dire, et refuser jetterait un modèle
+        # valide (par exemple `data/cvep_model.npz`).
         cibles = int(getattr(self.model, "n_targets", 0) or 0)
         if cibles and cibles != len(self.plan):
             # Le template vaut pour tous les lags : les cibles en plus « marchent » techniquement,
@@ -302,8 +281,8 @@ class CVEPRuntime(ModeRuntime):
 
         ⚠️ Le modèle est calibré à UN rafraîchissement, et c'est l'ÉMETTEUR qui tient l'écran — le
         moteur ne peut pas le voir avant de recevoir un marqueur. Sans cette garde : le décodage
-        tourne, les scores restent honnêtes, et RIEN ne se déclenche jamais. C'est la panne qui a
-        coûté une séance au SSVEP.
+        tourne, les scores restent honnêtes, et RIEN ne se déclenche jamais (même panne que celle
+        du SSVEP).
         """
         refresh = float(refresh)
         if abs(refresh - self.model.refresh) > 1.0:
@@ -321,11 +300,10 @@ class CVEPRuntime(ModeRuntime):
         None veut dire « je ne sais pas où j'en suis ». Les confondre ferait décoder sur une
         horloge fausse en publiant des corrélations d'apparence normale.
 
-        ⚠️ Écart signalé au brief, MESURÉ : sa formule littérale (`int(age * refresh) %
-        code_len`, sans `_EPS_FRAME`) échoue sur son PROPRE test de bord de cycle — cf. le
-        commentaire de `_EPS_FRAME` ci-dessus pour les nombres exacts. Sans cette tolérance,
-        `phase_a` rendrait 62 au lieu de 0 pile au wrap du code, une frame entière de moins que
-        la position réelle, silencieusement (aucune exception, un entier plausible).
+        ⚠️ La formule littérale (`int(age * refresh) % code_len`, sans `_EPS_FRAME`) échoue au
+        bord de cycle — cf. le commentaire de `_EPS_FRAME` ci-dessus pour les nombres exacts. Sans
+        cette tolérance, `phase_a` rendrait 62 au lieu de 0 pile au bouclage du code, une frame
+        de moins que la position réelle, silencieusement (aucune exception, un entier plausible).
         """
         return self._phase_et_cause(t_fin)[0]
 
@@ -333,18 +311,18 @@ class CVEPRuntime(ModeRuntime):
         """(phase, None) quand l'horloge sert, (None, cause) sinon. `cause` nomme LAQUELLE.
 
         Le calcul vit ICI et `phase_a` s'y ramène, pour qu'il n'existe qu'UNE formule de
-        péremption. La recopier dans `_run_step` pour y nommer la cause aurait donné deux
-        arithmétiques à garder d'accord, sur exactement le genre de comparaison flottante qui a
-        déjà coûté une frame entière à ce fichier (cf. `_EPS_FRAME`).
+        péremption : deux arithmétiques à garder d'accord, sur une comparaison flottante, sont
+        un risque de décalage d'une frame (cf. `_EPS_FRAME`).
 
         Deux causes seulement là où la docstring du module en compte quatre : les deux autres
-        (`sous_les_seuils`, `vote_non_conclu`) n'ont rien à voir avec l'horloge — elles se
-        décident plus loin, sur des corrélations puis sur le vote glissant. Et le cas `age < 0` — un instant antérieur au dernier marqueur — est rangé
-        sous `reference_perimee` plutôt que sous une quatrième cause : par le chemin du moteur il
-        est INATTEIGNABLE (`markers_murs` ne rend jamais un marqueur postérieur au dernier
-        échantillon acquis, et le moteur compte à part ceux qui viennent du futur, cf.
-        `engine.marqueurs_futurs`), et la garde reste comme défense en profondeur — sans elle,
-        `int(age * refresh) % code_len` sur un `age` négatif rendrait un entier PLAUSIBLE.
+        (`sous_les_seuils`, `vote_non_conclu`) n'ont rien à voir avec l'horloge, elles se
+        décident plus loin, sur des corrélations puis sur le vote glissant. Le cas `age < 0`
+        (un instant antérieur au dernier marqueur) est rangé sous `reference_perimee` : par le
+        chemin du moteur il est INATTEIGNABLE (`markers_murs` ne rend jamais un marqueur
+        postérieur au dernier échantillon acquis, et le moteur compte à part ceux qui viennent
+        du futur, cf. `engine.marqueurs_futurs`). La garde reste comme défense en profondeur :
+        sans elle, `int(age * refresh) % code_len` sur un `age` négatif rendrait un entier
+        PLAUSIBLE.
         """
         if self._ref_ts is None:
             return None, "sans_reference"
@@ -361,10 +339,9 @@ class CVEPRuntime(ModeRuntime):
         # arrive le premier marqueur d'horloge (`resolve_byprop` a un délai fini).
         # ⚠️ `self.params["corr_min"/"margin"]`, PAS `self.decodeur.corr_min`/`.margin` : ces deux
         # réglages sont TOURNABLES en pleine séance (cf. `decide`), mais les métadonnées LSL sont
-        # figées à l'ouverture du flux, qui elle N'EST PAS refaite quand on les change
-        # (`affecte_decodage=False`). Elles décrivent donc le seuil EN VIGUEUR à l'ouverture, pas
-        # une promesse de rester à jour — la sortie live (`_publish`) est la source qui reste
-        # exacte après coup.
+        # figées à l'ouverture du flux, qui n'est PAS refaite quand on les change
+        # (`affecte_decodage=False`). Elles décrivent donc le seuil EN VIGUEUR à l'ouverture ; la
+        # sortie live (`_publish`) reste la source exacte.
         self._out = DecodedCVEPPublisher(
             len(self.plan), decoder=self.model.decoder, refresh=self.model.refresh,
             code_len=self.code_len, corr_min=float(self.params["corr_min"]),
@@ -381,7 +358,7 @@ class CVEPRuntime(ModeRuntime):
         # ⚠️ La référence de phase part AUSSI : « refaire le repos » se fait en touchant les
         # électrodes, donc l'émetteur a eu tout le temps de dériver ou d'être relancé. Garder
         # l'ancienne ferait décoder sur une horloge qui n'a plus cours, en publiant des
-        # corrélations d'apparence normale — la panne muette que ce mode existe pour éliminer.
+        # corrélations d'apparence normale.
         self._ref_ts = None
         self._ref_refresh = None
         # ...et le vote glissant avec elle : ses fenêtres décrivent un montage qu'on vient de
@@ -400,8 +377,8 @@ class CVEPRuntime(ModeRuntime):
     def state(self):
         """Comme `ModeRuntime.state()`, plus les compteurs qui disent POURQUOI il ne décide pas.
 
-        Sans eux, une séance muette n'a qu'une lecture possible — « l'étudiant fixe mal » — et
-        c'est le mode de panne le plus coûteux de ce projet. Les CINQ premiers PARTITIONNENT les
+        Sans eux, une séance muette n'a qu'une lecture possible : « l'étudiant fixe mal ». Les
+        CINQ premiers PARTITIONNENT les
         fenêtres traitées (chacune en incrémente exactement un, cf. `_raz_compteurs`) ;
         `marqueurs_refuses` compte des MARQUEURS et non des fenêtres, il n'entre pas dans cette
         somme ; les trois derniers décrivent la dernière fenêtre seule.
@@ -421,8 +398,8 @@ class CVEPRuntime(ModeRuntime):
     def _rest_step(self, engine, now):
         """Rien à mesurer : aucun plancher de repos ici (cf. `Rest.duration_s = 0`). Seule la
         chauffe compte, et elle est déjà passée quand on arrive ici. On en profite pour DIRE, en
-        une ligne, les trois choses qu'on veut relire dans le journal d'une séance : quel modèle,
-        quel décodeur, et où le mode écoute son horloge — le réglage le plus facile à se tromper.
+        une ligne, ce qu'on veut relire dans le journal d'une séance : quel modèle, quel
+        décodeur, et où le mode écoute son horloge (le réglage le plus facile à se tromper).
         """
         if now < self._rest_until:
             return False
@@ -444,13 +421,13 @@ class CVEPRuntime(ModeRuntime):
         """Comme `ModeRuntime.tick`, mais l'horloge tourne AUSSI pendant la chauffe.
 
         Le P300 JETTE ses marqueurs de chauffe : les siens délimitent des époques, et une époque
-        prélevée pendant que l'offset DC dérive ne vaut rien. Ceux-ci ne délimitent rien — ils
+        prélevée pendant que l'offset DC dérive ne vaut rien. Ceux-ci ne délimitent rien : ils
         tiennent une horloge, et une horloge n'a pas besoin d'être « bonne » pour être à l'heure.
-        On les ENCAISSE donc, et ça règle deux choses d'un coup :
+        On les ENCAISSE donc, ce qui règle deux choses :
           1. le curseur du moteur avance pendant les 15 s de chauffe. Sinon le premier
              `_run_step` avale l'arriéré, dont la douzaine de marqueurs déjà sortis du tampon
-             EEG — comptés en `engine.marqueurs_perdus`, un compteur qui signale une VRAIE perte
-             de données. Une alarme fausse à chaque démarrage apprend à ignorer l'alarme ;
+             EEG, comptés en `engine.marqueurs_perdus`, compteur d'une VRAIE perte de données :
+             une fausse alarme à chaque démarrage apprendrait à ignorer l'alarme ;
           2. la première fenêtre décodée l'est avec une phase FRAÎCHE, au lieu d'attendre le
              marqueur suivant (jusqu'à 1,05 s de plus).
         """
@@ -461,18 +438,16 @@ class CVEPRuntime(ModeRuntime):
     def _encaisser_marqueurs(self, engine):
         """Avance l'horloge sur tous les marqueurs de cycle mûrs. Ne lève jamais.
 
-        ⚠️ `post_s=0.0`, et c'est un choix, pas un oubli. `markers_murs` attend que le tampon
-        couvre les `post_s` secondes SUIVANT le marqueur. Pour une époque (P300, ErrP) c'est
-        indispensable — il faut le signal d'après pour la découper. Pour une HORLOGE il n'y a
-        rien à attendre : le marqueur dit où en était le code à `ts`, et c'est tout.
+        `post_s=0.0` est voulu. `markers_murs` attend que le tampon couvre les `post_s` secondes
+        SUIVANT le marqueur. Pour une époque (P300, ErrP) c'est indispensable : il faut le signal
+        d'après pour la découper. Pour une HORLOGE il n'y a rien à attendre : le marqueur dit où
+        en était le code à `ts`, et c'est tout.
 
-        Le second argument, celui de la MARGE, mérite d'être écrit avec ses chiffres parce qu'il
-        est plus serré qu'il n'en a l'air. Avec `post_s = marker_epoch_s` (2,1 s), la référence
-        la plus fraîche que le mode puisse tenir aurait toujours entre 2,1 s et 3,15 s d'âge, et
-        la péremption tombe à `> 3,15` s : le mode ne serait donc PAS cassé avec un émetteur
-        parfait — il fonctionnerait avec **zéro marge**. Le premier marqueur sauté (une frame
-        perdue, un tour de boucle long) ferait basculer la référence en `reference_perimee`, et
-        le mode cesserait de décoder pour une raison que personne ne rattacherait à ce réglage.
+        Avec `post_s = marker_epoch_s` (2,1 s), la référence la plus fraîche que le mode puisse
+        tenir aurait toujours entre 2,1 s et 3,15 s d'âge, et la péremption tombe à `> 3,15` s :
+        le mode fonctionnerait avec **zéro marge**. Le premier marqueur sauté (une frame perdue,
+        un tour de boucle long) ferait basculer la référence en `reference_perimee`, et le mode
+        cesserait de décoder pour une raison que personne ne rattacherait à ce réglage.
         """
         for ts, marqueur in engine.markers_murs(self.spec.id, post_s=0.0):
             if marqueur.get("event") != "cycle":
@@ -483,7 +458,7 @@ class CVEPRuntime(ModeRuntime):
             # `isinstance(refresh, bool)` d'abord : en Python `bool` HÉRITE de `int`, donc `True`
             # passerait pour un rafraîchissement de 1 Hz. Un émetteur qui enverrait `true` en
             # JSON (le mot-clé existe) verrait alors tous ses marqueurs refusés pour la mauvaise
-            # raison — ou pire, acceptés si la tolérance changeait un jour.
+            # raison, ou acceptés si la tolérance changeait.
             if isinstance(refresh, bool) or not isinstance(refresh, (int, float)):
                 self._refuse_marqueur(f"« {refresh!r} » n'est pas un rafraîchissement "
                                       f"({type(refresh).__name__}) — le marqueur de cycle doit "
@@ -511,12 +486,11 @@ class CVEPRuntime(ModeRuntime):
 
         `n_cycles` cycles ENTIERS (ce que le décodeur va replier) plus la marge de filtrage, qui
         reste en TÊTE : le transitoire d'établissement du passe-bande y est confiné, et `fold`
-        l'écarte en ne gardant que la queue. ⚠️ **Non filtrée**, exprès — `CVEPModel.scores`
+        l'écarte en ne gardant que la queue. ⚠️ **Non filtrée**, exprès : `CVEPModel.scores`
         applique le passe-bande DU MODÈLE (celui de son entraînement, `CVEP_BAND` = 2-45 Hz par
-        défaut, LARGE, ≠ SSVEP), coupe-bande secteur compris. Filtrer ici
-        filtrerait deux fois : phase décalée et amplitudes modifiées, donc une corrélation
-        calculée contre autre chose que ce que le template a appris. Même piège, même formulation
-        que `acquisition.motor_window` — c'est le défaut qui a déjà coûté un décodage au MI.
+        défaut, LARGE, ≠ SSVEP), coupe-bande secteur compris. Filtrer ici filtrerait deux fois :
+        phase décalée et amplitudes modifiées, donc une corrélation calculée contre autre chose
+        que ce que le template a appris. Même règle que `acquisition.motor_window` pour le MI.
 
         Les colonnes sont celles du MODÈLE (`model.channels`, indices dans `CH_NAMES`), pas les
         premières venues : `w` est un filtre SPATIAL appris sur CES voies, dans CET ordre.
@@ -531,24 +505,21 @@ class CVEPRuntime(ModeRuntime):
         """(cible|None, {nom: corrélation}) — même contrat que `self.decodeur.classify`.
 
         ⚠️ `corr_min`/`margin` sont relus ICI, dans `self.params`, à CHAQUE décision — jamais mis
-        en cache dans `__init__`. C'est la SEULE raison pour laquelle `affecte_decodage=False` sur
-        ces deux réglages (cf. `SPEC.params` et le commentaire du drapeau dans `contract.py`) n'est
-        pas un mensonge : le contrat promet que les changer n'exige pas de reconstruire le runtime,
-        et ce n'est vrai que tant qu'aucune valeur figée ne traîne. C'est aussi ce qui rend une
-        séance casque réglable SANS l'interrompre : ni flux recréé, ni chauffe refaite (cf.
-        `server._set_params`) — la garde que l'ErrP n'a pas sur son propre seuil (`tnr_target`).
+        en cache dans `__init__`. C'est ce qui rend vrai `affecte_decodage=False` sur ces deux
+        réglages (cf. `SPEC.params` et le commentaire du drapeau dans `contract.py`) : les changer
+        n'exige pas de reconstruire le runtime, ce qui n'est vrai que tant qu'aucune valeur figée
+        ne traîne. Une séance casque se règle ainsi SANS l'interrompre : ni flux recréé, ni
+        chauffe refaite (cf. `server._set_params`).
 
         On les pose sur le DÉCODEUR juste avant de l'appeler, plutôt que de recopier ici son
         classement des corrélations : une seconde formule de décision à garder d'accord avec la
-        sienne serait exactement le genre de vérité double que ce fichier évite ailleurs (cf.
-        `self._indice`, et le défaut d'appariement que la revue du P300 avait trouvé sur son
-        propre mode).
+        sienne serait une vérité double (cf. `self._indice`).
         """
         seuils = (float(self.params["corr_min"]), float(self.params["margin"]))
         self.decodeur.corr_min, self.decodeur.margin = seuils
-        # ⚠️ Le couple RÉELLEMENT appliqué à CETTE fenêtre est retenu, parce que c'est lui qui
-        # sera publié avec la décision qui en sort (cf. `_publish`) : un échantillon doit être
-        # AUTO-COHÉRENT — les seuils qu'il annonce sont ceux contre lesquels il a été jugé, pas
+        # Le couple RÉELLEMENT appliqué à CETTE fenêtre est retenu, parce que c'est lui qui sera
+        # publié avec la décision qui en sort (cf. `_publish`) : un échantillon doit être
+        # AUTO-COHÉRENT, les seuils qu'il annonce étant ceux contre lesquels il a été jugé, pas
         # ceux que l'opérateur a peut-être tournés depuis.
         self._seuils_decision = seuils
         return self.decodeur.classify(fenetre, phase)
@@ -562,14 +533,13 @@ class CVEPRuntime(ModeRuntime):
             # compter : ce n'est pas un refus de décider, c'est un mode qui n'a pas commencé.
             return
 
-        # ⚠️ **L'instant auquel la phase se lit, et c'est le point le plus délicat du fichier.**
-        # `CVEPModel.scores` documente `phase` comme la position du code au DÉBUT des cycles
-        # repliés. On la lit pourtant à la FIN de la fenêtre, et les deux sont la même chose :
-        # les cycles repliés couvrent exactement `n_cycles` périodes du code, donc la phase y
-        # revient à l'identique. Le faire à l'endroit littéral serait au contraire FAUX en
-        # pratique — le début de la fenêtre est 2,1 s dans le passé, tandis que le dernier
-        # marqueur d'horloge a moins de 1,05 s : la référence tomberait presque toujours APRÈS
-        # lui, `phase_a` verrait un âge négatif et refuserait de décoder à chaque fenêtre.
+        # ⚠️ **L'instant auquel la phase se lit.** `CVEPModel.scores` documente `phase` comme la
+        # position du code au DÉBUT des cycles repliés. On la lit pourtant à la FIN de la fenêtre,
+        # et c'est équivalent : les cycles repliés couvrent exactement `n_cycles` périodes du
+        # code, donc la phase y revient à l'identique. La lire au début serait FAUX en pratique :
+        # le début de la fenêtre est 2,1 s dans le passé, tandis que le dernier marqueur d'horloge
+        # a moins de 1,05 s ; la référence tomberait presque toujours APRÈS lui, `phase_a`
+        # verrait un âge négatif et refuserait de décoder à chaque fenêtre.
         t_fin = float(engine.recent_ts[-1]) if len(engine.recent_ts) else float(lsl_ts)
         self._age_reference_s = (None if self._ref_ts is None
                                  else round(t_fin - self._ref_ts, 3))
@@ -582,13 +552,11 @@ class CVEPRuntime(ModeRuntime):
             self._corr_gagnant = self._corr_second = None
             # ⚠️ ...et LA FILE DE VOTES avec, pour la raison même qui la vide dans `_reset_rest` :
             # ces votes décrivent un instant où l'horloge tenait ENCORE. Une référence périmée
-            # rend ses votes périmés par construction — rien ne borne dans le temps une coupure
-            # d'émetteur, elle peut durer dix minutes. Sans ce `clear`, la toute première fenêtre
-            # d'après le retour de l'émetteur atteint `min_votes` sur des votes arbitrairement
-            # vieux et publie une cible franche, avec une confiance parfaitement normale — la
-            # panne muette que ce fichier existe pour éliminer, sur le chemin le PLUS fréquent
-            # des deux (on relance l'émetteur plusieurs fois par séance, on « refait le repos »
-            # une ou deux fois).
+            # rend ses votes périmés par construction, et rien ne borne dans le temps une coupure
+            # d'émetteur (elle peut durer dix minutes). Sans ce `clear`, la première fenêtre
+            # d'après le retour de l'émetteur atteindrait `min_votes` sur des votes arbitrairement
+            # vieux et publierait une cible franche, avec une confiance normale. C'est le chemin
+            # le plus fréquent : on relance l'émetteur plusieurs fois par séance.
             self._votes.clear()
             if cause == "sans_reference":
                 self._sans_reference += 1
@@ -602,7 +570,7 @@ class CVEPRuntime(ModeRuntime):
         # parcourant le plan DANS L'ORDRE et en relisant le nom que le décodeur a attaché à
         # chaque corrélation : c'est la SEULE lecture qui rougisse si la table d'appariement du
         # décodeur glisse d'un cran (elle désignerait alors la cible voisine, avec une confiance
-        # parfaitement normale — prouvé par mutation dans `_selftest`).
+        # parfaitement normale).
         scores = [float(nommes[c["name"]]) for c in self.plan]
         ordonnes = sorted(scores, reverse=True)
         self._corr_gagnant = round(ordonnes[0], 3)
@@ -610,20 +578,18 @@ class CVEPRuntime(ModeRuntime):
 
         # Le VOTE GLISSANT. La fenêtre vote pour la cible que le décodeur a retenue, ou pour
         # personne (`None`) si elle n'a pas passé `corr_min`/`margin`. ⚠️ On empile AVANT de
-        # consulter, et on consulte MÊME quand la fenêtre courante n'a rien retenu : c'est tout
-        # l'intérêt d'un vote que d'absorber une mauvaise fenêtre au milieu de bonnes. Court-
-        # circuiter sur `cible is None` rendrait le vote inutile — une fenêtre bruitée suffirait
-        # à casser une fixation stable, ce qui est précisément ce qu'il existe pour éviter.
-        # (Même mécanique que `MIRuntime._run_step`, jusqu'au `None` comptabilisé dans le
-        # `Counter` : « aucune fenêtre récente n'était assez sûre » EST une réponse.)
+        # consulter, et on consulte MÊME quand la fenêtre courante n'a rien retenu : un vote sert
+        # à absorber une mauvaise fenêtre au milieu de bonnes. Court-circuiter sur `cible is
+        # None` le rendrait inutile : une fenêtre bruitée suffirait à casser une fixation
+        # stable. (Même mécanique que `MIRuntime._run_step`, jusqu'au `None` comptabilisé dans
+        # le `Counter` : « aucune fenêtre récente n'était assez sûre » EST une réponse.)
         # ⚠️ Avant d'empiler : si le couple de seuils a bougé depuis que la file a été constituée,
         # elle part. Ces deux réglages se tournent EN PLEINE SÉANCE (`affecte_decodage=False`), et
         # chaque vote déjà empilé a été jugé contre le couple en vigueur AU MOMENT où il l'a été.
-        # Les garder ferait publier une `confidence` — la moyenne de leurs corrélations — SOUS le
+        # Les garder ferait publier une `confidence` (la moyenne de leurs corrélations) SOUS le
         # `corr_min` que le même échantillon annonce sur ses propres voies : un client qui refiltre
-        # sur `confidence >= corr_min` (le geste que `cvep_channel_labels` l'invite explicitement à
-        # faire) jetterait alors une fixation stable et valide. Coût du vidage : `vote_len - 1`
-        # fenêtres, soit 0,4 s aux défauts — le prix d'un échantillon qui ne se contredit pas.
+        # sur `confidence >= corr_min` jetterait une fixation stable et valide. Coût du vidage :
+        # `vote_len - 1` fenêtres, soit 0,4 s aux défauts.
         if self._seuils_du_vote != self._seuils_decision:
             self._votes.clear()
             self._seuils_du_vote = self._seuils_decision
@@ -635,8 +601,7 @@ class CVEPRuntime(ModeRuntime):
             # Deux refus, deux GESTES. La fenêtre courante n'avait aucun candidat -> c'est le
             # SIGNAL qu'il faut regarder (contact, saline, fixation). Elle en avait un mais les
             # fenêtres récentes ne s'accordent pas -> c'est la STABILITÉ du regard. Les fondre
-            # en un seul compteur, comme le nom `vote_non_conclu` du brief le faisait, envoie
-            # chercher au mauvais endroit — et une séance casque ne se répète pas.
+            # en un seul compteur enverrait chercher au mauvais endroit.
             if nom is None:
                 self._sous_les_seuils += 1
                 motif = "sous_les_seuils"
@@ -647,14 +612,13 @@ class CVEPRuntime(ModeRuntime):
             return
         # La confiance décrit le VOTE, comme l'indice qu'elle accompagne : la moyenne des
         # corrélations des fenêtres qui ont voté pour la cible retenue. Publier celle de la SEULE
-        # dernière fenêtre mélangerait deux instants — un même échantillon dirait « CIBLE 2 » avec
-        # une corrélation SOUS le `corr_min` que le flux annonce dans ses propres métadonnées, et
-        # un client qui refiltre sur ce seuil (le geste naturel) jetterait les fixations stables.
-        # Chacune de ces corrélations valant au moins `corr_min` par construction (sinon la
-        # fenêtre aurait voté None), leur moyenne aussi : l'invariant est tenu par CONSTRUCTION.
-        # ⚠️ « par construction » ne tient que parce que la file a été VIDÉE au moindre changement
-        # de seuil juste au-dessus — sans ça, les votes de la file et le `corr_min` publié ne
-        # seraient plus le même nombre pendant `vote_len - 1` fenêtres après chaque réglage.
+        # dernière fenêtre mélangerait deux instants : un même échantillon dirait « CIBLE 2 » avec
+        # une corrélation SOUS le `corr_min` annoncé dans ses propres métadonnées, et un client
+        # qui refiltre sur ce seuil jetterait les fixations stables. Chacune de ces corrélations
+        # valant au moins `corr_min` (sinon la fenêtre aurait voté None), leur moyenne aussi.
+        # ⚠️ Cet invariant ne tient que parce que la file est VIDÉE au moindre changement de
+        # seuil, juste au-dessus : sinon les votes de la file et le `corr_min` publié ne seraient
+        # plus le même nombre pendant `vote_len - 1` fenêtres après chaque réglage.
         votantes = [c for n, c in self._votes if n == gagnant]
         self._decodages += 1
         self._publish(self._indice[gagnant], sum(votantes) / len(votantes), scores, t_fin,
@@ -663,8 +627,8 @@ class CVEPRuntime(ModeRuntime):
     def _publish(self, target_index, confidence, scores, lsl_ts, motif=None, seuils=None):
         """`seuils` : le couple (corr_min, margin) contre lequel CETTE décision a été prise.
 
-        ⚠️ Chaque échantillon doit être AUTO-COHÉRENT, et c'est toute la question ici, parce que
-        ces deux seuils se règlent en pleine séance sans reconstruire le runtime :
+        ⚠️ Chaque échantillon doit être AUTO-COHÉRENT, parce que ces deux seuils se règlent en
+        pleine séance sans reconstruire le runtime :
 
         * un échantillon DÉCIDÉ (`target_index >= 0`) porte les seuils que la décision a
           réellement appliqués — ceux capturés par `decide`, sous lesquels toute la file de votes
@@ -682,11 +646,11 @@ class CVEPRuntime(ModeRuntime):
             seuils = (float(self.params["corr_min"]), float(self.params["margin"]))
         corr_min, margin = float(seuils[0]), float(seuils[1])
         if self._out is not None:
-            # ⚠️ Transportés PAR ÉCHANTILLON (tâche 7, tour de correction 1), pas seulement dans
-            # les métadonnées figées à l'ouverture du flux : ces deux seuils se règlent en pleine
-            # séance SANS recréer ce flux, donc les métadonnées seules ne suffisent plus à dire
-            # contre quel seuil UNE décision précise a été prise. Même geste que `threshold` chez
-            # l'ErrP. Cf. `cvep_channel_labels`/`DecodedCVEPPublisher.push` dans `core/lsl_io.py`.
+            # ⚠️ Transportés PAR ÉCHANTILLON, pas seulement dans les métadonnées figées à
+            # l'ouverture du flux : ces deux seuils se règlent en pleine séance SANS recréer ce
+            # flux, donc les métadonnées seules ne disent pas contre quel seuil UNE décision
+            # précise a été prise. Même geste que `threshold` chez l'ErrP. Cf.
+            # `cvep_channel_labels`/`DecodedCVEPPublisher.push` dans `core/lsl_io.py`.
             self._out.push(target_index, confidence, scores, corr_min, margin, lsl_ts)
         self._decoded = {
             "target_index": int(target_index),
@@ -694,26 +658,24 @@ class CVEPRuntime(ModeRuntime):
             "scores": [round(float(s), 3) for s in scores],
             # ⚠️ `corr_min`, PAS `threshold` : les deux consommateurs de cette sortie (la tuile de
             # la grille et la page du mode) choisissent leur rendu sur une CLÉ PRÉSENTE, jamais
-            # sur l'identifiant du mode. `threshold` est celle du SSVEP, et elle emmène avec elle
-            # une échelle en z et le texte « échelle z · seuil … » — appliqués à des corrélations
-            # bornées dans [-1, 1], ils mentent d'un ordre de grandeur. Une clé propre force le
-            # rendu propre, et le fait rougir s'il manque.
+            # sur l'identifiant du mode. `threshold` est celle du SSVEP et emmène avec elle une
+            # échelle en z, fausse d'un ordre de grandeur pour des corrélations bornées dans
+            # [-1, 1]. Une clé propre force le rendu propre, et le fait rougir s'il manque.
             "corr_min": corr_min,
             "margin": margin,
             # Le motif EN CLAIR, pas la clé du compteur : c'est le moteur qui possède ce
             # vocabulaire, et la console se contente de l'afficher. Le traduire côté interface
             # ferait deux tables à garder d'accord, et l'écran finirait par ne plus dire la même
-            # chose que le terminal — pendant une séance, sur la seule ligne qui indique QUEL
-            # geste faire.
+            # chose que le terminal sur la ligne qui indique QUEL geste faire.
             "motif": _MOTIFS_FR.get(motif, "") if motif else "",
         }
         self._log(target_index, scores, motif)
 
     def _log(self, target_index, scores, motif=None):
         """Trace la décision en console ~1×/s, comme le SSVEP : ce flux tourne à ~5 Hz, tout
-        imprimer noierait le terminal. Les corrélations sont à CÔTÉ de la décision — c'est ce qui
-        permet, pendant une séance, de dire si une non-détection vient d'un signal absent ou d'un
-        seuil trop haut, sans brancher un troisième terminal."""
+        imprimer noierait le terminal. Les corrélations sont à CÔTÉ de la décision : elles
+        permettent de dire si une non-détection vient d'un signal absent ou d'un seuil trop
+        haut."""
         now = _time.perf_counter()
         if now - self._last_log < 1.0:
             return
@@ -734,8 +696,8 @@ def _channels(params):
     return cvep_channel_labels(CVEP_N_TARGETS)
 
 
-# Les BORNES de la bande réglable à l'entraînement (mini, maxi de chaque coupure), révisées après
-# la revue du 2026-09-30 — elles valaient (0,5, 5) et (20, 60). Chacune a sa raison :
+# Les BORNES de la bande réglable à l'entraînement (mini, maxi de chaque coupure). Chacune a sa
+# raison :
 #
 # • Coupure basse, pas sous 2 Hz. Une époque d'ENTRAÎNEMENT fait UN cycle (262 échantillons,
 #   1,05 s à 60 Hz) et se filtre SEULE, sans marge (`CVEPModel.fit`), alors que la fenêtre DÉCODÉE
@@ -744,8 +706,8 @@ def _channels(params):
 #   sur l'époque d'entraînement — à 0,5 Hz il la couvre entière —, et le template apprend un bord
 #   de filtre que le décodage ne verra jamais. Pire, `_align` est un `np.roll` : une pente
 #   résiduelle devient une MARCHE au milieu de l'époque recalée. Il n'y a pas de seuil net : 2 Hz
-#   est la coupure de toujours, celle sous laquelle les seuils ont été mesurés, et on ne descend
-#   pas plus bas. (Mesuré sur un signal synthétique à forte dérive : l'époque filtrée seule
+#   est la coupure sous laquelle les seuils ont été mesurés, et on ne descend pas plus bas.
+#   (Mesuré sur un signal synthétique à forte dérive : l'époque filtrée seule
 #   s'écarte du même segment pris dans un long signal filtré de 77 % de son σ à 0,5 Hz, 43 % à
 #   2 Hz, 24 % à 5 Hz — indicatif, l'écart dépend de la dérive réelle.)
 # • Coupure haute, pas sous 30 Hz. `corr_min`/`margin` (« Régler ») ont été mesurés en 2-45 Hz, et
@@ -775,8 +737,8 @@ SPEC = ModeSpec(
               choices_fn=_modeles_disponibles,
               si_vide=SANS_MODELE,
               help=tr("mode.cvep.param.model.aide")),
-        # Strict par défaut : un seuil trop permissif est la panne la plus coûteuse du projet, un
-        # décodage qui affiche avec assurance des corrélations d'apparence normale sur du bruit.
+        # Strict par défaut : un seuil trop permissif fait afficher avec assurance des
+        # corrélations d'apparence normale sur du bruit.
         # En dessous, la fenêtre compte en « sous_les_seuils » (comme sous `margin`).
         Param(key="corr_min", label=tr("mode.cvep.param.corr_min.label"), kind="float",
               default=CVEP_CORR_MIN, min=0.0, max=1.0, affecte_decodage=False,
@@ -818,38 +780,37 @@ SPEC = ModeSpec(
         # `_COUPURE_HAUTE`, juste au-dessus de `SPEC`) gardent toujours 5-30 Hz dedans.
         params=params_bande(CVEP_BAND, _COUPURE_BASSE, _COUPURE_HAUTE,
                             tr("calib.cvep.param.bande.aide", plancher=_COUPURE_BASSE[0])),
-        # ⚠️ **UN CYCLE ENTIER du code**, et ce n'est pas la même grandeur que `marker_epoch_s`
-        # juste en dessous. Celui-ci dimensionne le tampon du moteur pour ce que la CALIBRATION
-        # prélève : `CVEPCalibration` découpe `code_len / refresh` secondes JUSTE AVANT chaque
-        # marqueur de cycle (cf. sa `pre_s`), là où le DÉCODAGE, lui, replie
-        # `CVEP_DECISION_CYCLES` cycles glissants. Le déclarer trop court tronquerait chaque
-        # époque enregistrée SANS erreur.
+        # ⚠️ **UN CYCLE ENTIER du code**, grandeur distincte de `marker_epoch_s` plus bas : elle
+        # dimensionne le tampon du moteur pour ce que la CALIBRATION prélève, `CVEPCalibration`
+        # découpant `code_len / refresh` secondes JUSTE AVANT chaque marqueur de cycle (cf. sa
+        # `pre_s`), là où le DÉCODAGE replie `CVEP_DECISION_CYCLES` cycles glissants. La déclarer
+        # trop courte tronquerait chaque époque enregistrée SANS erreur.
         # Au rafraîchissement de RÉFÉRENCE (60 Hz) : 1,05 s. Un écran PLUS LENT allonge l'époque
         # — c'est `marker_epoch_s` (2,1 s) qui dimensionne alors le tampon, et il couvre tout
         # écran au-dessus de 30 Hz.
         epoch_s=(2 ** CVEP_BITS - 1) / 60.0),
     # Le nom du flux vient du PUBLIEUR, il n'est pas réécrit ici : le contrat public s'écrirait
-    # sinon à deux endroits sans que rien ne les relie — et deux façons de nommer la même chose
-    # finissent toujours par diverger (cf. `DecodedP300Publisher.SUFFIXE`).
+    # sinon à deux endroits sans lien, qui finiraient par diverger (cf.
+    # `DecodedP300Publisher.SUFFIXE`).
     stream=DecodedCVEPPublisher.SUFFIXE,
     channels_fn=_channels,
     runtime_cls=CVEPRuntime,
     # La fenêtre de décision : CVEP_DECISION_CYCLES cycles du code, 2 x 63 / 60 = 2,1 s. ⚠️ Ce
     # champ DIMENSIONNE LE TAMPON DU MOTEUR, il NE DÉCRIT AUCUNE ÉPOQUE — contrairement au P300 et
     # à l'ErrP, dont les marqueurs délimitent un événement discret. Les marqueurs c-VEP ne
-    # délimitent rien : ils tiennent une horloge (cf. la docstring du module). Si tu cherches un
-    # `pre_s`/`post_s` correspondant sur `CVEPRuntime`, il n'y en a pas, volontairement.
+    # délimitent rien : ils tiennent une horloge (cf. la docstring du module). `CVEPRuntime`
+    # n'a donc ni `pre_s` ni `post_s`.
     marker_epoch_s=CVEP_DECISION_CYCLES * (2 ** CVEP_BITS - 1) / 60.0,
 )
 
 
 def _selftest():
-    """Le runtime c-VEP : la phase et ses TROIS états muets (LE test de cette tâche, brief
-    étape 1), plus les refus qui protègent `__init__` — sans modèle, modèle/rafraîchissement en
-    désaccord avec l'émetteur, et modèle/config en désaccord sur la longueur du code.
+    """Le runtime c-VEP : la phase et ses TROIS états muets, plus les refus qui protègent
+    `__init__` (sans modèle, modèle/rafraîchissement en désaccord avec l'émetteur, et
+    modèle/config en désaccord sur la longueur du code), puis le décodage de bout en bout sur
+    un faux moteur.
 
-    Aucun casque, aucune fenêtre EEG : ce fichier ne décode rien encore (cf. le ⚠️ de la docstring
-    du module) — il tient l'horloge du code et refuse de la tenir à tort, rien de plus.
+    Aucun casque, aucun flux LSL.
     """
     import contextlib
     import shutil
@@ -870,12 +831,9 @@ def _selftest():
         temps du bloc `with` — ou vers un chemin qui n'existe pas si `modele` est None (« aucun
         modèle »). Restauré et le dossier nettoyé ENSUITE, quoi qu'il arrive.
 
-        ⚠️ C'est le SEUL levier qui permette à `_modeles_disponibles`/`validate` de voir CE
-        modèle plutôt que le vrai `data/cvep_model.npz` du dépôt — jamais touché, jamais même lu
-        par ce fichier de test. Même geste que `errp.py` monkey-patchant
-        `errp_models.modeles_disponibles` pour ses propres tests ; ici il n'existe pas encore de
-        module `cvep_models` à monkey-patcher (tâche 3), donc c'est la constante elle-même,
-        importée dans CE module, qui est repointée.
+        C'est le levier qui permet à `_modeles_disponibles`/`validate` de voir CE modèle plutôt
+        que le vrai `data/cvep_model.npz`, jamais touché ni lu par ce test. On repointe la
+        constante elle-même, importée dans CE module.
         """
         global CVEP_MODEL_PATH
         dossier = tempfile.mkdtemp(prefix="cvep_mode_test_")
@@ -900,20 +858,19 @@ def _selftest():
                          overrides=None, engine=None):
         """Fabrique minimale, sans moteur ni casque : un `CVEPModel` de la forme voulue (voies =
         CVEP_CHANNELS, `code_len`/`refresh` donnés), sauvegardé puis rechargé par le chemin RÉEL
-        de `CVEPRuntime.__init__` (`validate` puis construction) — pas de raccourci qui
+        de `CVEPRuntime.__init__` (`validate` puis construction) : pas de raccourci qui
         court-circuiterait les refus que ce fichier doit protéger.
 
         Le modèle par défaut a un `template` PLAT : ses corrélations valent 0, ce qui est
         exactement ce qu'il faut aux tests de contrat et de compteurs (aucune décision ne peut
-        sortir). Passer `modele=` fournit à la place un modèle RÉELLEMENT entraîné — c'est ce
-        dont le test de bout en bout a besoin.
+        sortir). Passer `modele=` fournit à la place un modèle RÉELLEMENT entraîné, ce dont le
+        test de bout en bout a besoin.
 
-        `overrides` : réglages soumis à `validate` EN PLUS des défauts — ce qui permet de
-        fabriquer un runtime démarré avec un `corr_min`/`margin` NON défaut, comme le ferait la
-        commande initiale d'un client (tour de correction 1, revue de la tâche 7 : `_open` et
-        `_rest_step` s'étaient avérés non protégés contre ce cas précis). `engine` : `None` par
-        défaut (la plupart des tests ne décodent jamais assez pour en avoir besoin) — passer un
-        objet portant `.instance` pour les tests qui appellent `_open()`, qui le lit.
+        `overrides` : réglages soumis à `validate` EN PLUS des défauts, pour fabriquer un runtime
+        démarré avec un `corr_min`/`margin` NON défaut, comme le ferait la commande initiale d'un
+        client. `engine` : `None` par défaut (la plupart des tests ne décodent jamais assez pour
+        en avoir besoin) ; passer un objet portant `.instance` pour les tests qui appellent
+        `_open()`, qui le lit.
         """
         if modele is None:
             modele = CVEPModel(fs=250.0, refresh=refresh, code_len=code_len,
@@ -931,17 +888,16 @@ def _selftest():
     # --- 1. Sans modèle du tout : le mode REFUSE et dit comment en obtenir un. ----------------
     with _modele_temporaire(None):
         valeurs, raison = validate(SPEC, {})
-    # ⚠️ Le refus doit envoyer là où l'on calibre AUJOURD'HUI. Il a nommé
-    # `python src/research/app.py` jusqu'au 2026-09-08, date à laquelle ce fichier a été SUPPRIMÉ :
-    # un refus au bon diagnostic mais au mauvais geste coûte plus cher qu'un silence — l'étudiant
-    # fait ce qu'on lui dit, ça échoue, et il cherche la faute ailleurs. La seconde condition
-    # INTERDIT donc l'ancien texte, elle ne se contente pas d'exiger le nouveau.
+    # ⚠️ Le refus doit envoyer là où l'on entraîne (la console), pas vers un programme qui
+    # n'existe plus : un bon diagnostic avec un mauvais geste coûte plus cher qu'un silence,
+    # l'étudiant fait ce qu'on lui dit, ça échoue, et il cherche la faute ailleurs. La seconde
+    # condition INTERDIT donc l'ancien texte, elle ne se contente pas d'exiger le nouveau.
     chk(raison is not None and "Aucun modèle entraîné" in raison
         and "Entraîner" in raison and "research/app.py" not in raison,
         f"sans modèle, le mode refuse en envoyant vers la CONSOLE, pas vers l'appli supprimée "
         f"({raison})")
 
-    # --- 2. La phase, et ses TROIS états muets (LE test de cette tâche, brief étape 1) --------
+    # --- 2. La phase, et ses TROIS états muets ------------------------------------------------
     # Chacun est une panne muette s'il n'est pas traité : le mode continuerait de publier des
     # scores d'apparence honnête calculés sur une horloge fausse.
     rt = _runtime_de_test(code_len=63, refresh=60.0)
@@ -967,9 +923,9 @@ def _selftest():
     chk(rt.phase_a(juste_apres) is None,
         "juste après, elle est PÉRIMÉE : on cesse de décoder au lieu de dériver en silence")
 
-    # ⚠️ Le TROISIÈME état muet, documenté en commentaire dans `phase_a` mais pas exercé par le
-    # test ci-dessus : `t_fin` ANTÉRIEUR au dernier marqueur connu (age < 0). Pas un cas d'école :
-    # deux horloges en léger désaccord, ou un appel fait avant la toute première référence utile.
+    # ⚠️ Le TROISIÈME état muet : `t_fin` ANTÉRIEUR au dernier marqueur connu (age < 0), par
+    # exemple deux horloges en léger désaccord, ou un appel fait avant la toute première
+    # référence utile.
     # Sans la garde `age < 0.0`, `int(age * refresh) % code_len` sur un age NÉGATIF rend un entier
     # PLAUSIBLE (le modulo Python est toujours positif) — AUCUNE exception, juste une phase qui a
     # l'air normale et qui ne veut rien dire.
@@ -1013,13 +969,12 @@ def _selftest():
         f"...mais la CONSTRUCTION refuse un modèle calibré pour un AUTRE code que celui que la "
         f"config actuelle construit, en nommant les deux longueurs ({refus_code})")
 
-    # --- 4bis. Le refus de NOMBRE DE CIBLES : `n_targets` PRÉVIENT enfin -----------------------
-    # ⚠️ `CVEPModel.save` enregistre ce champ « pour pouvoir prévenir » (sa docstring) et personne
-    # ne prévenait. Cas concret, et il n'a rien d'une hypothèse d'école : une calibration
-    # interrompue à l'ESC après deux cibles sur six, ou un `CVEP_N_TARGETS` remis à 6 après une
-    # calibration rapide à 3 (`core/config.py` documente des allers-retours 4 -> 6 -> 8 -> 6). Le
-    # template eCCA étant COMMUN à tous les lags, le modèle « marche » : six corrélations
-    # d'apparence normale, dont quatre issues de lags jamais validés.
+    # --- 4bis. Le refus de NOMBRE DE CIBLES : `n_targets` PRÉVIENT -----------------------------
+    # ⚠️ `CVEPModel.save` enregistre ce champ pour pouvoir prévenir. Cas concret : une
+    # calibration interrompue après deux cibles sur six, ou un `CVEP_N_TARGETS` remis à 6 après
+    # une calibration rapide à 3. Le template eCCA étant COMMUN à tous les lags, le modèle
+    # « marche » : six corrélations d'apparence normale, dont quatre issues de lags jamais
+    # validés.
     modele_partiel = CVEPModel(fs=250.0, refresh=60.0, code_len=63, channels=CVEP_CHANNELS)
     modele_partiel.w = np.ones(len(CVEP_CHANNELS))
     modele_partiel.template = np.zeros(63)
@@ -1037,8 +992,8 @@ def _selftest():
         f"...et un modèle calibré sur MOINS de cibles que le stimulus n'en affiche est refusé, en "
         f"nommant les deux nombres — sinon les cibles jamais validées publient des corrélations "
         f"plausibles ({refus_cibles})")
-    # ...mais un modèle ANTÉRIEUR au champ (`n_targets = 0`) reste accepté : on ne peut rien en
-    # dire, et refuser jetterait `data/cvep_model.npz`, le seul modèle c-VEP réel du dépôt.
+    # ...mais un modèle sans le champ (`n_targets = 0`) reste accepté : on ne peut rien en dire,
+    # et refuser jetterait un modèle valide.
     rt_ancien = _runtime_de_test(n_targets=0)
     chk(rt_ancien.model.n_targets == 0 and rt_ancien._desaccord_code() is None,
         f"un modèle antérieur au champ (n_targets = 0) n'est PAS refusé : 0 veut dire « inconnu », "
@@ -1066,9 +1021,9 @@ def _selftest():
     # --- 5bis. Le flux entrant se RÈGLE, comme chez le P300 et l'ErrP -------------------------
     # Ce mode consomme `engine.markers_murs`, donc `server._nom_flux_marqueurs` va lire
     # `rt.params["stream_in"]`. Sans ce réglage déclaré, `contract.validate` REFUSE la clé : le
-    # flux entrant serait GELÉ sur le nom par défaut, et `_libere_marker_inlet` — qui ne lâche
-    # l'inlet que si plus aucun mode actif n'écoute — casserait la voie de secours que l'aide du
-    # P300 promet (« arrêter puis redémarrer ce mode suffit »). Mesuré au chantier ErrP.
+    # flux entrant serait GELÉ sur le nom par défaut, et `_libere_marker_inlet` (qui ne lâche
+    # l'inlet que si plus aucun mode actif n'écoute) casserait la voie de secours que l'aide du
+    # P300 promet (« arrêter puis redémarrer ce mode suffit »).
     rt_flux = _runtime_de_test(code_len=63, refresh=60.0)
     chk({p.key for p in SPEC.params} == {"model", "stream_in", "vote_len", "min_votes",
                                          "corr_min", "margin"},
@@ -1081,13 +1036,11 @@ def _selftest():
         f"ce mode CONSOMME des marqueurs, donc le moteur lit son stream_in — c'est ce qui rend "
         f"ce réglage obligatoire et non décoratif ({SPEC.marker_epoch_s})")
 
-    # --- 5ter. Le VOTE GLISSANT : les deux constantes de la spec §5 sont enfin LUES ------------
-    # ⚠️ `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` existent depuis toujours dans `core/config.py` et
-    # n'étaient lues que par l'écran pygame (`research/app.py`), que ce chantier archive. Sans
-    # elles ici, le moteur décoderait à la MÊME cadence sur la MÊME géométrie que la référence
-    # qu'il remplace, MOINS son 2-sur-3 : strictement plus bruyant par construction. Or la séance
-    # casque doit comparer les deux sur la même personne — une version moteur plus permissive
-    # fausserait la seule comparaison chiffrée que ce chantier prévoit.
+    # --- 5ter. Le VOTE GLISSANT : les deux constantes de la spec §5 sont LUES ----------------
+    # ⚠️ `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` (`core/config.py`) règlent le vote. Sans elles, le
+    # moteur serait strictement plus bruyant que le décodage local de référence
+    # (`archive/cvep_pilot.py`, vote 2-sur-3), et la comparaison des deux en séance serait
+    # faussée.
     chk(rt_flux.params["vote_len"] == CVEP_VOTE_LEN
         and rt_flux.params["min_votes"] == CVEP_MIN_VOTES,
         f"le vote prend les défauts du protocole ({rt_flux.params['vote_len']}, "
@@ -1100,15 +1053,13 @@ def _selftest():
         f"({raison_vote})")
 
     # --- 5quater. `_open`/`_rest_step` honorent un seuil NON DÉFAUT DÈS LA CONSTRUCTION ---------
-    # ⚠️ Revue de la tâche 7, tour de correction 1 : ni `_open` ni `_rest_step` ne sont exercés
-    # par la section 7bis ci-dessous (elle pose `rt._opened = True` À LA MAIN, sans jamais
-    # appeler `_open`), et partout où `decide()` tourne, `self.decodeur.corr_min` vaut DÉJÀ
-    # `self.params["corr_min"]` par construction — donc revenir à une lecture sur `self.decodeur`
-    # dans `_open`/`_rest_step` laissait `modes/cvep.py`, `server.py --smoke` et
-    # `console/app.py --smoke` tous verts. Scénario réel : un client démarre le mode avec un
-    # `corr_min` NON défaut dès sa commande initiale (avant tout `decide()`) — les métadonnées et
-    # le compte-rendu de repos doivent porter CE réglage, pas le défaut de construction du
-    # décodeur (`CVEP_CORR_MIN`/`CVEP_MARGIN`, qui vaut ici par coïncidence le même défaut que
+    # ⚠️ Ni `_open` ni `_rest_step` ne sont exercés par la section 7bis ci-dessous (elle pose
+    # `rt._opened = True` À LA MAIN, sans appeler `_open`), et partout où `decide()` tourne,
+    # `self.decodeur.corr_min` vaut DÉJÀ `self.params["corr_min"]` : lire `self.decodeur` dans
+    # `_open`/`_rest_step` resterait donc invisible. Scénario réel : un client démarre le mode
+    # avec un `corr_min` NON défaut dès sa commande initiale (avant tout `decide()`) ; les
+    # métadonnées et le compte-rendu de repos doivent porter CE réglage, pas le défaut de
+    # construction du décodeur (`CVEP_CORR_MIN`/`CVEP_MARGIN`, identique au défaut de
     # `SPEC.params` : sans un `overrides` explicitement DIFFÉRENT, ce test ne prouverait rien).
     from types import SimpleNamespace
 
@@ -1145,10 +1096,9 @@ def _selftest():
     from core.cvep_decoder import synth_cvep
 
     class _FauxPublieur:
-        """Même signature que `DecodedCVEPPublisher.push` (tâche 7, tour de correction 1 : les
-        deux derniers arguments sont `corr_min`/`margin`, EXIGÉS comme chez le vrai publieur —
-        un appel qui les omettrait doit lever ici aussi, pas être accepté en silence avec un
-        défaut que le vrai publieur n'a pas."""
+        """Même signature que `DecodedCVEPPublisher.push` : `corr_min`/`margin` sont EXIGÉS comme
+        chez le vrai publieur (un appel qui les omettrait doit lever ici aussi, pas être accepté
+        en silence avec un défaut que le vrai publieur n'a pas)."""
 
         def __init__(self):
             self.lignes = []
@@ -1179,16 +1129,15 @@ def _selftest():
             return self._lots.pop(0) if self._lots else []
 
     fs = 250.0
-    # ⚠️ 262, pas 263 : 63 frames à 60 Hz font 262,5 échantillons à 250 Hz, et `round` en Python
-    # arrondit au PAIR. Le modèle SOUS-compte donc d'un demi-échantillon par cycle — c'est la même
-    # expression que `CVEPModel.n_cyc`, écrite ici pour que le tampon de test et le repliement du
-    # décodeur tombent sur la même grille.
+    # 262, pas 263 : 63 frames à 60 Hz font 262,5 échantillons à 250 Hz, et `round` en Python
+    # arrondit au PAIR. Même expression que `CVEPModel.n_cyc`, pour que le tampon de test et le
+    # repliement du décodeur tombent sur la même grille.
     n_cyc = int(round(63 * fs / 60.0))
 
     def _horloge(t0, k, refresh=60.0):
         """Le marqueur que l'émetteur publie au k-ième redémarrage du code.
 
-        ⚠️ Placé sur l'horloge VRAIE (`k * code_len / refresh`), pas sur un multiple de `n_cyc`
+        Placé sur l'horloge VRAIE (`k * code_len / refresh`), pas sur un multiple de `n_cyc`
         échantillons : un cycle dure 63/60 = 1,05 s = 262,5 échantillons, et `n_cyc` (262) n'en
         est que l'arrondi que le modèle utilise pour replier. Confondre les deux introduit un
         demi-échantillon de dérive par cycle.
@@ -1196,11 +1145,10 @@ def _selftest():
         return (float(t0) + k * 63.0 / refresh,
                 {"mode": "cvep", "event": "cycle", "refresh": refresh})
 
-    # --- 6. Les COMPTEURS PAR CAUSE (LE test de cette tâche, brief étape 1) -------------------
-    # ⚠️ Les trois causes de « pas de décision » doivent être SÉPARÉES dans l'état. Une séance
-    # casque coûte cher et ne se répète pas : « ça ne détecte pas » sans la cause ne permet pas
-    # de distinguer une phase fausse d'un contact médiocre d'un étudiant qui ne fixe pas —
-    # trois causes qui appellent trois gestes opposés.
+    # --- 6. Les COMPTEURS PAR CAUSE -----------------------------------------------------------
+    # ⚠️ Les causes de « pas de décision » doivent être SÉPARÉES dans l'état : « ça ne détecte
+    # pas » sans la cause ne permet pas de distinguer une phase fausse d'un contact médiocre
+    # d'un étudiant qui ne fixe pas, trois causes qui appellent trois gestes opposés.
     rng_c = np.random.default_rng(11)
     ts_c = 100.0 + np.arange(8 * n_cyc) / fs
     moteur_c = _FauxMoteur(rng_c.normal(0.0, 8.0, (len(ts_c), 8)), ts_c)
@@ -1209,15 +1157,14 @@ def _selftest():
     rt_c = _runtime_de_test(code_len=63, refresh=60.0)    # template PLAT : corrélations nulles
     rt_c._out = _FauxPublieur()
     rt_c._opened = True
-    # ⚠️ Changé ICI, APRÈS la construction et AVANT le premier `_run_step` — donc AVANT que
-    # `decide()` n'ait jamais tourné une seule fois (revue de la tâche 7, tour de correction 1) :
-    # les trois premiers appels ci-dessous tombent tous sur le chemin `phase is None`
-    # (`sans_reference`/`reference_perimee`), qui publie SANS jamais passer par `decide`. Un
-    # opérateur qui tourne le seuil PENDANT que l'horloge est perdue est un scénario réaliste en
-    # séance ; si `_publish` relisait `self.decodeur.corr_min`/`.margin` au lieu de
+    # ⚠️ Changé ICI, APRÈS la construction et AVANT le premier `_run_step`, donc avant que
+    # `decide()` n'ait tourné : les trois premiers appels ci-dessous tombent sur le chemin
+    # `phase is None` (`sans_reference`/`reference_perimee`), qui publie SANS passer par
+    # `decide`. Un opérateur qui tourne le seuil PENDANT que l'horloge est perdue est un
+    # scénario réaliste ; si `_publish` relisait `self.decodeur.corr_min`/`.margin` au lieu de
     # `self.params[...]`, il publierait le défaut de CONSTRUCTION du décodeur (0.26/0.09,
-    # identique par coïncidence au défaut de `SPEC.params` — d'où des valeurs volontairement
-    # DIFFÉRENTES ici) plutôt que ce changement, en silence.
+    # identique au défaut de `SPEC.params` — d'où des valeurs volontairement DIFFÉRENTES ici)
+    # plutôt que ce changement, en silence.
     rt_c.params["corr_min"] = 0.501
     rt_c.params["margin"] = 0.222
 
@@ -1240,8 +1187,8 @@ def _selftest():
         f"...et chaque compteur compte SA cause, pas le total ({st})")
     chk(st["decodages"] == 0,
         f"aucune de ces six fenêtres n'a désigné de cible ({st['decodages']})")
-    # ⚠️ `sous_les_seuils` et `vote_non_conclu` ne sont PAS le même refus, et c'est tout l'intérêt
-    # de les avoir séparés : ici les corrélations elles-mêmes sont sous `corr_min`, donc aucune
+    # ⚠️ `sous_les_seuils` et `vote_non_conclu` ne sont PAS le même refus : ici les
+    # corrélations elles-mêmes sont sous `corr_min`, donc aucune
     # fenêtre n'a jamais eu de candidat à soumettre au vote. Un `vote_non_conclu` non nul dirait
     # l'inverse — « le décodage passe les seuils mais les fenêtres se contredisent » — et
     # enverrait chercher un problème de stabilité de fixation là où il y a un problème de signal.
@@ -1252,8 +1199,8 @@ def _selftest():
     # pas rester suspendu parce que le moteur ne sait pas où en est le code.
     chk(len(rt_c._out.lignes) == 6 and all(l[0] == -1 for l in rt_c._out.lignes),
         f"les six refus partent quand même sur le flux, en -1 ({rt_c._out.lignes})")
-    # `lignes[0]` : le tout premier refus, publié AVANT que `decide()` n'ait jamais tourné (cf.
-    # le commentaire à la construction de `rt_c` plus haut) — LA preuve que `_publish` lit
+    # `lignes[0]` : le tout premier refus, publié AVANT que `decide()` n'ait tourné (cf. le
+    # commentaire à la construction de `rt_c` plus haut) : preuve que `_publish` lit
     # `self.params`, pas un `self.decodeur` qui n'aurait encore rien synchronisé.
     premiere = rt_c._out.lignes[0]
     chk(premiere[-3] == 0.501 and premiere[-2] == 0.222,
@@ -1272,14 +1219,14 @@ def _selftest():
     chk(set(moteur_c.post_s_recus) == {0.0},
         f"le mode réclame ses marqueurs SANS attendre de post-stimulus ({set(moteur_c.post_s_recus)})")
 
-    # --- 7. LE test de BOUT EN BOUT (brief étape 5) : la chaîne entière, sans casque ----------
+    # --- 7. Le test de BOUT EN BOUT : la chaîne entière, sans casque --------------------------
     # Un EEG synthétique portant le c-VEP de la cible 2, des marqueurs de cycle aux bons
-    # instants, et le moteur doit désigner LA CIBLE 2. Le test de phase (tâche 5) dit que
-    # l'horloge est juste ; celui-ci dit qu'elle est BRANCHÉE AU BON ENDROIT.
+    # instants, et le moteur doit désigner LA CIBLE 2. Le test de phase de `stimulus/cvep.py`
+    # dit que l'horloge est juste ; celui-ci dit qu'elle est BRANCHÉE AU BON ENDROIT.
     #
-    # ⚠️ Sa mutation est l'APPARIEMENT SCORE↔CIBLE : décaler d'un cran la table `lag_to_cmd` du
-    # décodeur ne casse rien — le mode désigne juste la cible voisine, avec une confiance
-    # normale. C'est exactement le défaut que la revue du P300 avait trouvé sur son propre mode.
+    # ⚠️ Ce test protège l'APPARIEMENT SCORE↔CIBLE : décaler d'un cran la table `lag_to_cmd` du
+    # décodeur ne casse rien d'autre, le mode désigne juste la cible voisine, avec une
+    # confiance normale.
     plan, code = build_targets()
     lags = [c["lag"] for c in plan]
     cible = 2
@@ -1310,8 +1257,8 @@ def _selftest():
         la file rend les marqueurs d'horloge correspondants.
 
         `snr_db` est réglable pour la section 8ter, qui a besoin de fenêtres FRANCHES et de
-        fenêtres FAIBLES de la même cible : c'est le seul moyen d'encadrer un seuil par deux
-        corrélations réelles, plutôt que d'en écrire une à la main dans la file de votes.
+        fenêtres FAIBLES de la même cible, pour encadrer un seuil par deux corrélations réelles
+        plutôt que d'en écrire une à la main dans la file de votes.
         """
         eeg = _tampon_synthetique(lag, n_cycles_buf, snr_db=snr_db)
         ts = 500.0 + np.arange(len(eeg)) / fs
@@ -1325,9 +1272,9 @@ def _selftest():
     rt_e._out = _FauxPublieur()
     rt_e._opened = True
 
-    # ⚠️ `CVEP_MIN_VOTES` fenêtres, pas une : le vote glissant est DANS la chaîne, et le tester
-    # avec une seule fenêtre prouverait le décodage sans jamais prouver le vote. La boucle décode
-    # la même fenêtre glissante à ~5 Hz, exactement ce que la boucle du moteur fait en séance.
+    # `CVEP_MIN_VOTES` fenêtres, pas une : le vote glissant est DANS la chaîne, et une seule
+    # fenêtre prouverait le décodage sans prouver le vote. La boucle décode la même fenêtre
+    # glissante à ~5 Hz, comme la boucle du moteur en séance.
     for _ in range(CVEP_MIN_VOTES):
         rt_e._run_step(moteur_e, lsl_ts=float(ts_e[-1]))
     publie = rt_e.output()
@@ -1339,10 +1286,9 @@ def _selftest():
     chk(publie is not None and publie["scores"][cible] == max(publie["scores"]),
         f"...et c'est bien elle qui porte la meilleure corrélation "
         f"({None if publie is None else publie['scores']})")
-    # ⚠️ Le FLUX et l'écran ne doivent pas se contredire — mais le flux porte la pleine
-    # précision, l'écran arrondit au millième (`_publish`). On compare donc les scores publiés
-    # ARRONDIS de la même façon : exiger l'égalité stricte reviendrait à demander au contrat
-    # public de s'aligner sur un confort d'affichage.
+    # Le FLUX et l'écran ne doivent pas se contredire, mais le flux porte la pleine précision
+    # et l'écran arrondit au millième (`_publish`) : on compare les scores publiés ARRONDIS de la
+    # même façon, sans demander au contrat public de s'aligner sur un confort d'affichage.
     chk(rt_e._out.lignes and rt_e._out.lignes[-1][0] == cible
         and [round(s, 3) for s in rt_e._out.lignes[-1][2]] == publie["scores"],
         f"...et c'est CE que le flux publie, pas seulement ce que l'écran montre "
@@ -1357,14 +1303,13 @@ def _selftest():
         f"...et les {CVEP_MIN_VOTES - 1} qui l'ont précédée sont des « vote non conclu », "
         f"publiées en -1 ({st_e['vote_non_conclu']}, {[l[0] for l in rt_e._out.lignes]})")
 
-    # --- 7bis. Les SEUILS se règlent EN PLEINE SÉANCE (LE test de cette tâche, brief étape 1) ---
-    # ⚠️ C'est la garde que l'ErrP N'A PAS : chez lui, changer `tnr_target` reconstruit le
-    # runtime, détruit et recrée le flux, et relance 23 s de chauffe (mesuré). Le récepteur ouvert
-    # devient muet, et l'opérateur lit ça comme une panne — en séance, ça se paie en minutes de
-    # casque à chaque essai de réglage. Ici, `corr_min` et `margin` sont relus DANS `self.params`
-    # à CHAQUE décision — jamais mis en cache dans `__init__` — ce qui permet de les tourner sans
-    # réabonner personne ni refaire la chauffe. `decide` est la méthode qui porte cette garantie
-    # (`_run_step` s'y ramène, cf. plus bas).
+    # --- 7bis. Les SEUILS se règlent EN PLEINE SÉANCE -----------------------------------------
+    # ⚠️ Chez l'ErrP, changer `tnr_target` reconstruit le runtime, détruit et recrée le flux, et
+    # relance 23 s de chauffe : le récepteur ouvert devient muet, et en séance ça se paie en
+    # minutes de casque à chaque essai de réglage. Ici, `corr_min` et `margin` sont relus DANS
+    # `self.params` à CHAQUE décision, jamais mis en cache dans `__init__`, ce qui permet de
+    # les tourner sans réabonner personne ni refaire la chauffe. `decide` porte cette garantie
+    # (`_run_step` s'y ramène).
     p = {p.key for p in SPEC.params if not p.affecte_decodage}
     chk({"corr_min", "margin"} <= p,
         f"les deux seuils sont déclarés SANS reconstruction du runtime ({sorted(p)})")
@@ -1383,15 +1328,13 @@ def _selftest():
         "changer le seuil change la décision SUR LA MÊME fenêtre, sans rien reconstruire")
 
     # --- 7ter. La MÊME chaîne, avec l'AUTRE décodeur ------------------------------------------
-    # ⚠️ `_DECODEURS["rCCA"]` est devenu un chemin de PRODUCTION pendant ce chantier :
-    # `cvep_calibrate.calibrate()` écrit un `cvep_rcca_model_<horodatage>.npz` à CHAQUE
-    # calibration, `cvep_models.charger` l'accepte dès que ses codes sont ceux du stimulus du
-    # jour, et la liste étant triée par date, c'est le défaut proposé juste après une calibration
-    # — une chance sur deux, selon lequel des deux `save()` a la mtime la plus haute. Or aucun
-    # test du dépôt ne construisait de `CVEPRuntime` sur un `RCCAModel` : la colle de niveau MODE
-    # (`.corr_min`/`.margin`/`.n_cycles` posés sur `RCCADecoder`, `model.n_cyc`, `model.channels`,
-    # `model.code_len`, `model.refresh`, `cv_`) n'avait JAMAIS tourné, ni ici ni au casque, sur le
-    # chemin qu'un étudiant prend par défaut. Ce bloc la fait tourner une fois, de bout en bout.
+    # ⚠️ `_DECODEURS["rCCA"]` est un chemin de PRODUCTION : une calibration écrit un modèle rCCA
+    # à côté du modèle eCCA, `cvep_models.charger` l'accepte dès que ses codes sont ceux du
+    # stimulus du jour, et la liste étant triée par date, l'un ou l'autre est le défaut proposé
+    # juste après une calibration. La colle de niveau MODE (`.corr_min`/`.margin`/`.n_cycles`
+    # posés sur `RCCADecoder`, `model.n_cyc`, `model.channels`, `model.code_len`,
+    # `model.refresh`, `cv_`) doit donc tourner sur un `RCCAModel` : ce bloc la fait tourner une
+    # fois, de bout en bout.
     from core.cvep_rcca import RCCAModel
 
     codes_du_plan = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
@@ -1418,10 +1361,9 @@ def _selftest():
         f"RCCADecoder, cf. `decide`) ({sortie_r['target_index']}, {rt_r.state()})")
 
     # --- 8. LE VOTE : une seule fenêtre ne décide pas, et deux qui se contredisent non plus ----
-    # C'est ce que `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` achètent, et c'est exactement ce que l'écran
-    # pygame que ce chantier archive faisait déjà. Sans ce test, le vote pourrait être câblé à
-    # `min_votes=1` sans que rien ne rougisse — le moteur serait alors plus permissif que la
-    # référence à laquelle la séance casque doit le comparer.
+    # C'est ce que `CVEP_VOTE_LEN`/`CVEP_MIN_VOTES` achètent. Sans ce test, le vote pourrait être
+    # câblé à `min_votes=1` sans que rien ne rougisse, et le moteur serait plus permissif que le
+    # décodage local de référence.
     rt_v = _runtime_de_test(modele=modele_appris)
     rt_v._out = _FauxPublieur()
     rt_v._opened = True
@@ -1456,11 +1398,11 @@ def _selftest():
     # ⚠️ `DecodedCVEPPublisher` promet, sur ses propres voies, que « `confidence` est toujours
     # `>= corr_min` quand `target_index >= 0` », et `cvep_channel_labels` invite explicitement le
     # client à refiltrer là-dessus. Or `confidence` est la MOYENNE des corrélations des fenêtres
-    # votantes, chacune jugée contre le seuil en vigueur AU MOMENT où elle a voté — et ce mode
-    # est le premier du produit dont le seuil se tourne sans reconstruire le runtime. Sans le
-    # vidage de la file au changement de couple (`_run_step`), un échantillon annonce donc une
-    # confiance SOUS le `corr_min` qu'il porte lui-même : le client jette une fixation stable, et
-    # un enregistrement dépouillé plus tard porte une ligne auto-contradictoire.
+    # votantes, chacune jugée contre le seuil en vigueur AU MOMENT où elle a voté, et le seuil
+    # de ce mode se tourne sans reconstruire le runtime. Sans le vidage de la file au changement
+    # de couple (`_run_step`), un échantillon annoncerait une confiance SOUS le `corr_min` qu'il
+    # porte lui-même : le client jetterait une fixation stable, et un enregistrement dépouillé
+    # plus tard porterait une ligne auto-contradictoire.
     #
     # Le seuil n'est pas choisi à la main : il est posé ENTRE deux corrélations RÉELLES — celle
     # que produirait le mélange (votes faibles + fenêtre franche) et celle de la fenêtre franche
@@ -1504,7 +1446,7 @@ def _selftest():
         f"confiance au-dessus ({derniere})")
 
     # --- 9. L'horloge tourne PENDANT LA CHAUFFE, et « refaire le repos » l'oublie --------------
-    # Deux comportements qu'aucune assertion ne couvrait, et deux pannes différentes.
+    # Deux comportements, deux pannes différentes.
     rt_w = _runtime_de_test(modele=modele_appris)
     rt_w._out = _FauxPublieur()
     rt_w._opened = True
@@ -1513,9 +1455,9 @@ def _selftest():
     chk(rt_w.phase == "warmup", f"le mode commence par la chauffe ({rt_w.phase})")
     rt_w.tick(moteur_w, lsl_ts=float(moteur_w.recent_ts[-1]), now=1.0)
     # ⚠️ Sans le `tick` redéfini, `markers_murs` n'est PAS appelée de toute la chauffe : le
-    # curseur du moteur ne bouge pas, puis le premier `_run_step` avale l'arriéré — dont tous les
-    # marqueurs déjà sortis du tampon EEG, comptés en `engine.marqueurs_perdus`, un compteur qui
-    # signale une VRAIE perte de données. Une alarme fausse à chaque démarrage apprend à ignorer
+    # curseur du moteur ne bouge pas, puis le premier `_run_step` avale l'arriéré, dont tous les
+    # marqueurs déjà sortis du tampon EEG, comptés en `engine.marqueurs_perdus` (compteur d'une
+    # VRAIE perte de données). Une fausse alarme à chaque démarrage apprendrait à ignorer
     # l'alarme.
     chk(moteur_w.post_s_recus and rt_w._ref_ts is not None,
         f"pendant la CHAUFFE, l'horloge est encaissée : le curseur du moteur avance et la phase "
@@ -1533,12 +1475,11 @@ def _selftest():
     chk(rt_w.state()["sans_reference"] == 0 and rt_w.state()["decodages"] == 0,
         f"...et les compteurs repartent de zéro avec elle ({rt_w.state()})")
 
-    # ⚠️ Et la FILE DE VOTES part avec, ce qui est le même défaut que celui juste au-dessus, sur
-    # l'état que le vote glissant vient d'ajouter. Le scénario tient en trois lignes : une fenêtre
+    # ⚠️ Et la FILE DE VOTES part avec, même défaut que celui juste au-dessus. Une fenêtre
     # franche AVANT le repos laisse un vote dans la file ; si « refaire le repos » ne la vide pas,
-    # UNE SEULE fenêtre neuve suffit ensuite à atteindre `min_votes` — le mode émet une cible en
-    # s'appuyant sur des votes qui décrivent un montage qu'on vient de démonter, avec une
-    # confiance parfaitement normale.
+    # UNE SEULE fenêtre neuve suffit ensuite à atteindre `min_votes` : le mode émettrait une
+    # cible en s'appuyant sur des votes qui décrivent un montage qu'on vient de démonter, avec
+    # une confiance normale.
     #
     # L'assertion porte sur le COMPORTEMENT (« une fenêtre seule n'émet toujours pas »), pas sur
     # `len(rt._votes)` : une file vidée par un autre chemin, ou un vote qui cesserait de lire sa
@@ -1558,14 +1499,13 @@ def _selftest():
         f"pas émettre en s'appuyant sur des votes d'avant ({rt_p.output()}, {rt_p.state()})")
 
     # --- 9bis. La PERTE D'HORLOGE vide la file EXACTEMENT DE MÊME ------------------------------
-    # ⚠️ Le raisonnement de « refaire le repos » s'applique mot pour mot ici, et ce chemin-là est
-    # le PLUS FRÉQUENT des deux : on relance l'émetteur plusieurs fois par séance (fenêtre pygame
-    # fermée, second terminal coupé, plantage), on refait le repos une ou deux fois. Rien ne borne
-    # la coupure dans le temps — une seconde ou dix minutes — et la file, elle, était GELÉE
-    # pendant toute sa durée. Une référence périmée rend ses votes périmés par construction : la
-    # première fenêtre d'après le retour de l'émetteur atteignait `min_votes` sur des votes
-    # arbitrairement vieux et publiait une cible franche, indiscernable sur le flux d'une
-    # sélection stable (indice valide, confiance au-dessus de `corr_min`, scores plausibles).
+    # ⚠️ Le raisonnement de « refaire le repos » s'applique ici, sur le chemin le PLUS FRÉQUENT :
+    # on relance l'émetteur plusieurs fois par séance (fenêtre fermée, second terminal coupé,
+    # plantage). Rien ne borne la coupure dans le temps (une seconde ou dix minutes), et une
+    # file gelée pendant ce temps rend ses votes périmés par construction : la première fenêtre
+    # d'après le retour de l'émetteur atteindrait `min_votes` sur des votes arbitrairement
+    # vieux et publierait une cible franche, indiscernable sur le flux d'une sélection stable
+    # (indice valide, confiance au-dessus de `corr_min`, scores plausibles).
     rt_h = _runtime_de_test(modele=modele_appris)
     rt_h._out = _FauxPublieur()
     rt_h._opened = True

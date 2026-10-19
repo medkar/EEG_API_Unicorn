@@ -5,7 +5,7 @@ et les époques d'entraînement restent tels quels — `EngineServer.recent_wind
 filtrée (le Motor Imagery s'entraîne dessus, et un double filtrage l'entraînerait sur autre chose
 que ce qu'il voit en ligne, sans une erreur).
 
-Pourquoi un choix, et pas un filtre fixe (2026-09-25, relevé au casque) : sur le brut, certaines
+Pourquoi un choix, et pas un filtre fixe : sur le brut, certaines
 voies DÉRIVENT en y — l'Unicorn sort un offset continu énorme, qui rampe après l'ouverture de
 session — et la dérive écrase l'EEG. Un passe-haut la retire. Mais le brut dit aussi des choses
 qu'un filtre cache : une voie qui bourdonne à 50 Hz est une voie mal posée. D'où un choix, comme
@@ -14,9 +14,9 @@ secteur à part.
 
 ⚠️ **Causal**, comme un oscilloscope et comme la Unicorn Suite : chaque échantillon n'est filtré
 qu'avec son passé, donc le bord DROIT de l'écran — le plus récent, celui qu'on regarde — est exact
-et ne bouge plus quand le signal suivant arrive. (Un filtre à zéro phase, `filtfilt`, a été essayé
-et écarté : il invente la suite du bloc pour filtrer son bord, et sur la dernière demi-seconde un
-50 Hz de 20 µV y ressortait jusqu'à 33 µV crête, là où celui-ci n'en laisse rien.) Le prix est
+et ne bouge plus quand le signal suivant arrive. (Un filtre à zéro phase, `filtfilt`, est écarté :
+il invente la suite du bloc pour filtrer son bord, et sur la dernière demi-seconde un 50 Hz de
+20 µV y ressort jusqu'à 33 µV crête, là où celui-ci n'en laisse rien.) Le prix est
 connu : un passe-haut déforme un clignement (plus bas, suivi d'un rebond), d'autant plus qu'il
 coupe haut — c'est dit dans la bulle.
 

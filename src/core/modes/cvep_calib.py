@@ -1,9 +1,9 @@
 """La calibration c-VEP : la fenêtre tient l'HORLOGE, le MOTEUR entraîne.
 
-Troisième et DERNIÈRE sous-classe concrète de `MarkerCalibrationRuntime`
+Troisième sous-classe concrète de `MarkerCalibrationRuntime`
 (`core/modes/marker_calib.py`, à lire avant celui-ci), après `p300_calib.py` et `errp_calib.py`.
 
-⚠️⚠️ **CE MODE EST L'EXCEPTION DU CHANTIER, et c'est la chose à comprendre avant tout le reste.**
+⚠️⚠️ **CE MODE EST L'EXCEPTION DES TROIS CALIBRATIONS À FENÊTRE, à comprendre d'abord.**
 Chez le P300 et l'ErrP, l'invariant tenu par le socle est « la calibration prélève son époque par le
 MÊME appel que le décodage » : `epoch_from_stream`, avec les `pre_s`/`post_s` LUS sur le runtime de
 décodage. Ici il n'y a **aucun événement à découper** — les marqueurs `cycle` ne délimitent rien,
@@ -20,24 +20,25 @@ fichier l'**APPELLE**, il ne la réimplémente pas — littéralement :
 C'est la méthode du DÉCODAGE, appelée sur cet objet-ci. Elle n'a besoin, sur son `self`, que de
 trois choses que cette classe porte comme `CVEPRuntime` les porte : `code_len`, `_ref_ts` et
 `_ref_refresh`. Une recopie de sa formule (`int(age * refresh + eps) % code_len`) donnerait les
-mêmes nombres aujourd'hui et dériverait au premier changement — la tolérance `_EPS_FRAME` a déjà
-coûté une frame entière à ce projet, et une frame entière suffit à faire échouer un décodage sans
-lever la moindre exception. `python src/core/modes/cvep_calib.py` compare les DEUX reconstructions
-par les VALEURS, sur une course qui inclut une frame sautée.
+mêmes nombres aujourd'hui et dériverait au premier changement — la tolérance `_EPS_FRAME` pèse une
+frame entière, et une frame entière suffit à faire échouer un décodage sans lever la moindre
+exception. Une assertion `ast` interdit toute arithmétique modulaire dans la classe.
+`python src/core/modes/cvep_calib.py` compare les DEUX reconstructions par les VALEURS, sur une
+course qui inclut une frame sautée.
 
-⚠️ **La géométrie de l'époque est donc REDÉCLARÉE ici, et c'est le seul endroit du chantier où
+⚠️ **La géométrie de l'époque est donc REDÉCLARÉE ici, et c'est le seul des trois modes où
 c'est le cas.** Une époque de calibration c-VEP est **un cycle entier du code**, pris JUSTE AVANT
 le marqueur qui annonce le redémarrage — `pre_s = code_len / refresh`, `post_s = 0`. Ce n'est pas
 une constante : `refresh` est celui que l'ÉMETTEUR déclare dans ses marqueurs, et le moteur ne le
 connaît qu'après en avoir reçu un. C'est la même longueur que `CVEPModel.n_cyc`, celle que
 `CVEPModel.fit` attend, et celle que `CVEPRuntime._fenetre` replie en ligne.
 
-⚠️ **Ce que ce fichier NE teste PAS : l'alignement à l'échantillon près.** Comme chez ses deux
-aînés, son autotest juge un décodage, donc il tolère ce qu'un décodage tolère. Ce qu'il teste, lui,
-c'est l'accord des deux reconstructions de PHASE — le seul chemin partagé qui existe ici.
+⚠️ **Ce que ce fichier NE teste PAS : l'alignement à l'échantillon près.** Comme pour le P300 et
+l'ErrP, son autotest juge un décodage, donc il tolère ce qu'un décodage tolère. Ce qu'il teste,
+lui, c'est l'accord des deux reconstructions de PHASE — le seul chemin partagé qui existe ici.
 
 ⚠️ **`CVEPRuntime` est importé TARDIVEMENT, dans la propriété**, exactement comme chez le P300 et
-l'ErrP et pour la même raison mesurée : `core/modes/cvep.py` importe ce module-ci (son `Calib`
+l'ErrP et pour la même raison : `core/modes/cvep.py` importe ce module-ci (son `Calib`
 porte `runtime_cls=CVEPCalibration`), donc un import en tête refermerait un CYCLE. Un cycle
 module-à-module survit tant que chacun est importé par son nom de paquet — mais pas quand l'un des
 deux fichiers est lancé DIRECTEMENT (`python src/core/modes/cvep.py`, l'un des autotests de la
@@ -47,9 +48,9 @@ le second exemplaire demande un nom pas encore défini.
 ⚠️ **DEUX décodeurs, DEUX fichiers, et AUCUN gagnant nommé à la légère.** Le c-VEP est le seul mode
 du produit à avoir deux décodeurs sur le même stimulus (eCCA et rCCA). La calibration les entraîne
 sur les MÊMES époques et les compare par un **McNemar exact** sur des décisions APPARIÉES —
-« indiscernables » est la réponse attendue, et c'est celle que la seule séance réelle donne
-(p = 0,727 sur 8 décisions discordantes / 37). Ce dépôt a déjà relayé « rCCA gagne, 64,9 contre
-59,5 » comme un résultat avant de mesurer ; le verdict rend donc le TEST, jamais l'écart seul.
+« indiscernables » est la réponse attendue, et c'est celle que donne la séance de référence
+(p = 0,727 sur 8 décisions discordantes / 37). « rCCA gagne, 64,9 contre 59,5 » se lirait comme un
+résultat sans en être un ; le verdict rend donc le TEST, jamais l'écart seul.
 
 Autotest :
     python src/core/modes/cvep_calib.py
@@ -127,9 +128,8 @@ _PALIERS_REFUS = (1, 10, 100, 1000)
 
 
 # --- L'entraînement : les DEUX décodeurs, sur les MÊMES époques ---------------
-# ⚠️ Ce bloc est monté ici depuis `research/cvep_calibrate.py` (chantier « la console, seul point
-# d'entrée », tâche 8). C'est le moteur qui entraîne maintenant, et `core` n'importe jamais
-# `research` ; l'appli pygame, elle, ré-importe d'ici — le sens autorisé. Une seconde copie de
+# ⚠️ Ce bloc vit dans `core` parce que c'est le moteur qui entraîne, et `core` n'importe jamais
+# `research` ; les écrans archivés ré-importent d'ici — le sens autorisé. Une seconde copie de
 # cette comparaison, avec ses propres tests, finirait par diverger sans que rien ne le dise.
 
 def _fit_et_compte(modele, epochs, labels, **kw):
@@ -154,8 +154,8 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
 
     `n_cycles` vaut `CVEP_DECISION_CYCLES` par défaut : c'est la géométrie où le MOTEUR décide,
     pas celle d'une époque de calibration seule — `groupes_de_cycles` prescrit littéralement de
-    « mesurer un décodeur à la géométrie où il servira ». Mesuré sur `data/cvep_calib_last.npz`
-    (lecture seule) : à k=1 les deux décodeurs sont à ÉGALITÉ EXACTE (43/90 chacun) ; à k=2 (la
+    « mesurer un décodeur à la géométrie où il servira ». Mesuré sur la séance de référence :
+    à k=1 les deux décodeurs sont à ÉGALITÉ EXACTE (43/90 chacun) ; à k=2 (la
     géométrie réelle), ils ne le sont plus — sans que l'écart soit défendable pour autant (cf.
     `gagnant`).
 
@@ -164,7 +164,7 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     `uniq = sorted(set(lags))` rétrécit avec eux, et son hasard aussi) — mais un `RCCAModel`
     construit avec TOUS les codes du plan resterait jugé sur 1/6, quel que soit ce qui a été
     enregistré. Comparer les deux tels quels offre alors des points gratuits à celui jugé sur le
-    plus petit jeu : MESURÉ sur `cvep_calib_last.npz` tronqué à 3 cibles, eCCA 71,1 % (hasard
+    plus petit jeu : mesuré sur une séance de référence tronquée à 3 cibles, eCCA 71,1 % (hasard
     33,3 %) contre rCCA 51,1 % (hasard 16,7 %) — un « gagnant » entièrement fabriqué par l'écart
     de hasard, pas par le signal. On réduit donc les codes du rCCA aux SEULES cibles présentes
     dans `labels`, exactement comme `hors_pli` réduit `uniq`.
@@ -176,7 +176,7 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     `labels` : le LAG (frames) fixé à chaque époque.
 
     `band` / `secteur_hz` : le FILTRE (passe-bande, puis coupe-bande secteur ; `secteur_hz=None`
-    = pas de coupe-bande, comme avant le 2026-09-30). Les DEUX modèles sont construits avec, et
+    = pas de coupe-bande). Les DEUX modèles sont construits avec, et
     ils le portent dans leur fichier : le décodage filtrera avec le MÊME filtre que cet
     entraînement. (Le même filtre, pas le même signal filtré : une époque d'entraînement fait un
     cycle, filtré seul ; la fenêtre décodée a sa marge — c'est ce qui borne la coupure basse à 2 Hz,
@@ -191,13 +191,13 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     Chaque valeur du dict rendu porte :
       `modele`      — l'objet entraîné (CVEPModel ou RCCAModel), prêt pour `.save(...)` ;
       `justesse`    — accuracy HORS-PLI (jamais celle, optimiste, d'un modèle qui a vu l'essai
-                      qu'il note — le piège qui a gonflé le premier écran de calibration MI) ;
+                      qu'il note — le piège qui gonfle une calibration MI) ;
       `n_epoques`   — le nombre d'époques RÉELLEMENT données à `.fit()` pour CE décodeur (lu sur
                       l'appel lui-même, `_fit_et_compte`) ; DOIT être `len(labels)` pour les deux ;
       `n_cycles`    — la GÉOMÉTRIE à laquelle `justesse` a été mesurée. C'est de CE champ que
                       l'appelant doit tirer la DURÉE d'une décision pour calculer un ITR — jamais
-                      d'une constante recopiée à côté (l'ITR affiché s'est déjà retrouvé DOUBLÉ
-                      pour cette raison exacte, sans qu'aucune assertion ne s'en aperçoive) ;
+                      d'une constante recopiée à côté (un ITR calculé sur une durée recopiée
+                      peut être faux, par exemple doublé, sans qu'aucune assertion le voie) ;
       `groupes`     — les groupes de validation croisée (`core.cvep_decoder.groupes_de_cycles`, à
                       la géométrie `n_cycles`) — LES MÊMES pour les deux, par construction ;
       `n_decisions` — le nombre de groupes RÉELLEMENT notés par ce décodeur. Comparé à
@@ -224,11 +224,11 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     # contrat d'appariement du rCCA est POSITIONNEL et il est écrit deux fois dans `core/` :
     # `cvep_rcca.RCCADecoder` et `cvep_models._codes_affiches`. Or `build_targets` fait TOURNER
     # l'affectation lag↔position quand `CVEP_LAG_ROTATION != 0` : `sorted(set(labels))` et l'ordre
-    # du plan ne coïncident qu'à rotation nulle. Un `sorted()` nu produisait donc, hors rotation
+    # du plan ne coïncident qu'à rotation nulle. Un `sorted()` nu produirait donc, hors rotation
     # zéro, un modèle rCCA dont les lignes sont une PERMUTATION de celles du stimulus :
-    # `cvep_models.charger` le refuse (à juste titre : permuté, il nommerait systématiquement la
-    # cible voisine), APRÈS que la calibration a annoncé « modèles sauvegardés ». Ré-entraîner
-    # reproduisait le même fichier refusé — une impasse permanente.
+    # `cvep_models.charger` le refuserait (à juste titre : permuté, il nommerait systématiquement
+    # la cible voisine), APRÈS que la calibration a annoncé « modèles sauvegardés ». Ré-entraîner
+    # reproduirait le même fichier refusé — une impasse permanente.
     presentes = sorted(set(labels), key=lambda l: lag_a_idx[l])
     codes_vus = np.stack([codes[lag_a_idx[l]] for l in presentes])
     idx_local = {l: i for i, l in enumerate(presentes)}
@@ -268,7 +268,7 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
     # ⚠️ **Le test qui décide « rien à mesurer » DOIT être `len(sc) == 0` (le nombre de LIGNES),
     # jamais `sc.ndim`** : sur un tableau vide, `CVEPModel.hors_pli` rend `(0,)` mais
     # `RCCAModel.hors_pli` rend `(0, n_targets)` (il PRÉ-ALLOUE, donc la largeur survit à zéro
-    # ligne). Un test sur `.ndim` aurait laissé passer un `n_cibles` rCCA d'apparence normale — 6,
+    # ligne). Un test sur `.ndim` laisserait passer un `n_cibles` rCCA d'apparence normale — 6,
     # le compte du plan — sur un tableau qui ne contient VRAIMENT rien.
     n_cibles_e = int(sc_e.shape[1]) if len(sc_e) > 0 else None
     n_cibles_r = int(sc_r.shape[1]) if len(sc_r) > 0 else None
@@ -291,15 +291,15 @@ def gagnant(res, seuil=SEUIL_MCNEMAR):
     comme si elles venaient d'échantillons indépendants. Pure, sans effet de bord.
 
     ⚠️ **Ne JAMAIS nommer de gagnant sur un écart qui n'est pas défendable.** C'est précisément
-    parce que ce projet n'a mesuré AUCUNE différence détectable entre les deux décodeurs sur la
-    seule séance réelle disponible (k=1 : eCCA 43/90 contre rCCA 43/90 ; k=2, la géométrie du
+    parce qu'aucune différence détectable n'a été mesurée entre les deux décodeurs sur la
+    séance de référence (k=1 : eCCA 43/90 contre rCCA 43/90 ; k=2, la géométrie du
     moteur : **eCCA 22/37 = 59,5 % contre rCCA 24/37 = 64,9 %**, McNemar p = 0,727) qu'il garde
     les deux au lieu d'en jeter un — un « gagnant » affiché sur un écart de deux décisions dirait
     le contraire de ce que la mesure montre, à un étudiant qui n'a aucun moyen de le savoir.
 
     ⚠️ Écrire **`<décodeur> <valeur>`, jamais une valeur nue** : ce fichier nomme systématiquement
     eCCA en premier, et « 24/37 contre 22/37 » — deux fractions nues dans l'ordre INVERSE de cette
-    convention — attribuait silencieusement le meilleur chiffre au mauvais décodeur.
+    convention — attribuerait silencieusement le meilleur chiffre au mauvais décodeur.
 
     Rend un dict, jamais un simple nom : l'écran a besoin de la p-value et du nombre de décisions
     discordantes pour être honnête, pas seulement des deux pourcentages qui ne portent pas
@@ -326,9 +326,8 @@ def phrase_comparaison(mn):
 
     ⚠️ C'est le point d'honnêteté de tout ce fichier. « rCCA 64,9 % contre eCCA 59,5 % » se lit
     comme un résultat et n'en est pas un : sur 37 décisions, cinq points d'écart tiennent
-    entièrement dans le bruit (McNemar p = 0,727). Ce dépôt a relayé cet écart comme un verdict
-    avant de mesurer, et a dû se corriger. La phrase rend donc le test, son p et le nombre de
-    décisions DISCORDANTES — les seuls chiffres qui portent l'incertitude.
+    entièrement dans le bruit (McNemar p = 0,727). La phrase rend donc le test, son p et le nombre
+    de décisions DISCORDANTES — les seuls chiffres qui portent l'incertitude.
     """
     if mn["p"] is None:
         # Aucune décision à noter à la géométrie du moteur.
@@ -395,9 +394,9 @@ def chemins_libres(dossier, n_epoques, prefixe=""):
 def chemin_modele_horodate(decodeur, dossier=None):
     """`cvep_model_AAAAMMJJ-HHMMSS.npz` (eCCA) ou `cvep_rcca_model_…` (rCCA) — un fichier NEUF.
 
-    Le chemin d'entrée de l'écran ARCHIVÉ (`archive/cvep_calibrate.calibrate`), qui écrit encore
-    directement dans `data/` — c'est assumé et documenté dans `archive/README.md`. La calibration du MOTEUR, elle, passe par `chemins_libres` et son
-    dossier candidat : elle n'a pas le droit de choisir où elle écrit.
+    Le chemin d'entrée de l'écran ARCHIVÉ (`archive/cvep_calibrate.calibrate`), qui écrit
+    directement dans `data/` (cf. `archive/README.md`). La calibration du MOTEUR, elle, passe par
+    `chemins_libres` et son dossier candidat : elle n'a pas le droit de choisir où elle écrit.
     """
     if decodeur not in ("eCCA", "rCCA"):
         raise ValueError(f"décodeur inconnu : {decodeur!r} (attendu 'eCCA' ou 'rCCA')")
@@ -412,24 +411,23 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
     """Entraîne les DEUX décodeurs, écrit ce qui est écrivable, et rend le dict que la console
     affiche. LÈVE si la séance est trop pauvre pour valoir un modèle.
 
-    ⚠️ **`fs` et `refresh` sont EXIGÉS, sans valeur par défaut, et c'est la leçon de la tâche 4.**
+    ⚠️ **`fs` et `refresh` sont EXIGÉS, sans valeur par défaut.**
     Ce sont les deux nombres qui décident, avec `code_len`, `band` et `channels`, si le modèle
     produit sera ACCEPTÉ par le mode qui décodera avec : `CVEPRuntime._desaccord_code` compare le
     `code_len`, et `maj_reference` refuse tout marqueur dont le rafraîchissement s'écarte de plus
-    de 1 Hz de celui du modèle. Côté P300, le modèle était construit avec ses valeurs PAR DÉFAUT
-    alors que les époques étaient découpées avec celles du runtime : mêmes nombres, tous les tests
-    verts, et un refus certain du modèle fraîchement calibré au premier déplacement de constante.
+    de 1 Hz de celui du modèle. Un modèle construit avec ses valeurs PAR DÉFAUT alors que les
+    époques sont découpées avec celles du runtime donne les mêmes nombres et des tests verts, puis
+    un refus certain du modèle fraîchement calibré au premier déplacement de constante.
     Ici, `refresh` ne peut MÊME PAS avoir de défaut honnête : il vient de l'écran de l'émetteur, et
     `core` ne voit aucun écran.
 
     `chemin_ecca` / `chemin_rcca` sont EXPLICITES, jamais devinés ici : c'est l'appelant qui décide
-    où écrire. Un défaut fixe est précisément ce qui a fait perdre ses modèles au MI.
+    où écrire. Un chemin par défaut fixe écraserait les modèles précédents.
 
     `chemin_npz` (facultatif) archive les époques BRUTES à côté des modèles, écrit AVANT eux — si
     le disque est plein, l'exception remonte avant qu'un modèle n'existe, et aucun modèle orphelin
     ne se retrouve ÉLU comme le plus récent chargeable. Dans un projet d'exploration, les jeux de
-    données SONT le résultat : la meilleure séance c-VEP jamais enregistrée (27,1 bits/min) a été
-    perdue faute d'archive.
+    données SONT le résultat : une séance sans archive ne se réanalyse plus.
 
     `hors_bloc` : le nombre de marqueurs d'horloge reçus HORS d'un bloc consigné. Purement
     informatif, mais il nomme la panne la plus banale — une fenêtre lancée SANS `--calibrer`, qui
@@ -531,8 +529,8 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
            if meilleur is None
            # ⚠️ « sur N DÉCISIONS », pas « sur N essais » : la justesse est hors-pli sur des
            # GROUPES de `CVEP_DECISION_CYCLES` cycles (`groupes_de_cycles`) — 37 décisions pour
-           # 90 cycles à la séance de référence. Citer les cycles gonflait l'effectif ×2,4 sur la
-           # seule ligne visible par défaut : « un essai = une décision », perdu par l'affichage.
+           # 90 cycles à la séance de référence. Citer les cycles gonflerait l'effectif ×2,4 sur la
+           # seule ligne visible par défaut : un essai = une décision.
            else depuis_table(meilleur, VERDICTS,
                              tr("calib.cvep.chiffres", justesse=pct(meilleur),
                                 hasard=pct(1.0 / n_cibles),
@@ -593,8 +591,8 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         """`dossier` : où écrire — porté par `CalibrationRuntime` et SANS repli sur `DATA_DIR`.
 
         C'est le moteur qui le donne, et c'est son dossier CANDIDAT temporaire : une calibration
-        qui choisissait elle-même écrivait dans `data/` AVANT d'annoncer sa précision, donc une
-        séance ratée y devenait le modèle le plus récent — celui qui est proposé par défaut —
+        qui choisirait elle-même écrirait dans `data/` AVANT d'annoncer sa précision, donc une
+        séance ratée y deviendrait le modèle le plus récent — celui qui est proposé par défaut —
         sans que personne ait pu la refuser.
         """
         super().__init__(spec, params, engine, rng=rng, dossier=dossier)
@@ -655,7 +653,7 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         """(phase, cause) — celle du décodage aussi : `phase_a` s'y ramène, sur `self`."""
         return self.runtime_cls_du_mode._phase_et_cause(self, t_fin)
 
-    # --- la géométrie de l'époque, REDÉCLARÉE (le seul cas du chantier) --------
+    # --- la géométrie de l'époque, REDÉCLARÉE (le seul cas parmi les trois) ----
 
     @property
     def refresh(self):
@@ -677,7 +675,7 @@ class CVEPCalibration(MarkerCalibrationRuntime):
     def pre_s(self):
         """UN CYCLE ENTIER du code, pris JUSTE AVANT le marqueur qui annonce le redémarrage.
 
-        ⚠️ C'est la seule redéclaration de géométrie du chantier, et voici pourquoi elle est
+        ⚠️ C'est la seule redéclaration de géométrie des trois calibrations, et elle est
         inévitable : `CVEPRuntime` n'expose ni `pre_s` ni `post_s` (il ne découpe aucune époque),
         donc il n'y a rien à LIRE. Ce qui remplace la lecture est `phase_a` : l'époque n'est
         enregistrée que si la phase reconstruite à sa FIN vaut 0 — c'est-à-dire si elle couvre
@@ -846,7 +844,7 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         `CALIB_CANDIDAT_PREFIXE` : ce qui sort d'ici est un CANDIDAT, invisible aux motifs
         `cvep_model*.npz` / `cvep_rcca_model*.npz` tant que personne ne l'a retenu.
 
-        Le FILTRE (2026-09-30) suit la même règle que `fs`/`refresh` : la bande vient des réglages
+        Le FILTRE suit la même règle que `fs`/`refresh` : la bande vient des réglages
         de CET entraînement (`bande_bas`/`bande_haut`, déclarés par le `Calib` du mode), le
         secteur vient du MOTEUR — c'est un réglage du poste, pas du mode. Les laisser aux défauts
         d'`entraine_les_deux` écrirait un modèle filtré autrement que ce que l'étudiant a réglé,
@@ -876,12 +874,12 @@ class CVEPCalibration(MarkerCalibrationRuntime):
 
 
 def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morceaux
-    """Trois parties, et c'est la première qui porte la tâche.
+    """Cinq parties, et la première est celle qui protège ce fichier.
 
     **A. LA PHASE.** Une course de rendu rejouée frame par frame, incluant une frame SAUTÉE, avec
     les MÊMES marqueurs donnés à un vrai `CVEPRuntime` et à cette calibration : les deux
     reconstructions sont comparées PAR LES VALEURS. C'est le seul chemin de code partagé entre
-    l'entraînement et le décodage pour ce mode — les deux autres calibrations du chantier
+    l'entraînement et le décodage pour ce mode — les deux autres calibrations à fenêtre
     partagent `epoch_from_stream`, celle-ci partage `phase_a`.
 
     **B. Une séance ENTIÈRE**, jouée par des marqueurs sur un tampon EEG fabriqué qui porte un
@@ -998,7 +996,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             _filtrage.sections = vrai
 
     # =====================================================================================
-    # A. LA PHASE — LE test de cette tâche.
+    # A. LA PHASE — LE test de ce fichier.
     # =====================================================================================
     # Deux compteurs, et c'est tout le sujet : `pos` est la position du code que l'ÉMETTEUR
     # affiche (+1 par image dessinée), `frame` est la frame d'écran écoulée (+1 par balayage).
@@ -1151,8 +1149,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"« ≈ 0 min » pour une séance de presque trois minutes "
             f"({CVEPCalibration.duree_protocole_s:.0f} s)")
 
-        # La BANDE se règle à l'entraînement (2026-09-30) : deux réglages, la bande de toujours
-        # par défaut, et des bornes qui gardent le cœur de la réponse (5-30 Hz) dedans.
+        # La BANDE se règle à l'entraînement : deux réglages, la bande habituelle par défaut, et
+        # des bornes qui gardent le cœur de la réponse (5-30 Hz) dedans.
         from core.modes.contract import validate as _valider
 
         cles_calib = {p.key: p for p in calib_spec.params}
@@ -1169,7 +1167,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"…et une bande qui couperait le cœur de la réponse est REFUSÉE, des deux côtés "
             f"({refus_bas} / {refus_haut})")
 
-        # Les BORNES, testées des DEUX côtés de CHAQUE bord (revue du 2026-09-30). Écrites en
+        # Les BORNES, testées des DEUX côtés de CHAQUE bord. Écrites en
         # dur, et pas relues sur `_COUPURE_BASSE`/`_COUPURE_HAUTE` : une borne qui glisserait
         # passerait sinon le test qui la lit. Coupure basse dans [2, 5] Hz : sous 2 Hz, le
         # transitoire du passe-haut couvre une époque d'entraînement d'UN cycle, filtrée seule.
@@ -1232,9 +1230,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk("McNemar" in res.get("verdict", ""),
             f"…et le verdict rend le TEST, pas seulement l'écart entre deux pourcentages "
             f"({res.get('verdict')})")
-        # I-1 (revue du 2026-09-22) : la SEULE ligne visible par défaut disait « sur 90 essais »
-        # alors que la justesse porte sur ~37 DÉCISIONS (des groupes de `CVEP_DECISION_CYCLES`
-        # cycles). « Un essai = une décision », réintroduit par l'affichage : l'effectif lu ×2,4.
+        # La SEULE ligne visible par défaut doit dire « sur 37 décisions », pas « sur 90 essais » :
+        # la justesse porte sur des DÉCISIONS (des groupes de `CVEP_DECISION_CYCLES` cycles). Un
+        # essai = une décision ; dire les cycles gonflerait l'effectif lu d'un facteur ~2,4.
         chiffres = res.get("chiffres", "")
         chk(0 < res.get("n_decisions", 0) < res.get("n_essais", 0)
             and f"sur {res.get('n_decisions')} décisions" in chiffres
@@ -1268,12 +1266,11 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"({nom_retenu(res.get('modele', ''))}, {nom_retenu(res.get('modele_rcca', ''))})")
 
         # --- 5. L'ALLER-RETOUR : le modèle produit est ACCEPTÉ par le mode qui décodera avec ----
-        # ⚠️ C'est le contrôle SYMÉTRIQUE de tout ce fichier, et c'est le défaut mesuré à la
-        # tâche 4 côté P300 : le modèle y était construit avec les valeurs PAR DÉFAUT de la
-        # configuration alors que les époques venaient du runtime — mêmes nombres, tous les tests
-        # verts, et un refus certain du modèle fraîchement calibré au premier déplacement de
-        # constante. Pour le c-VEP, les nombres qui décident sont `refresh`, `code_len`, `fs`,
-        # `band` et `channels`.
+        # ⚠️ C'est le contrôle SYMÉTRIQUE de tout ce fichier. Un modèle construit avec les valeurs
+        # PAR DÉFAUT de la configuration alors que les époques viennent du runtime donne les mêmes
+        # nombres et des tests verts, puis un refus certain du modèle fraîchement calibré au
+        # premier déplacement de constante. Pour le c-VEP, les nombres qui décident sont `refresh`,
+        # `code_len`, `fs`, `band` et `channels`.
         class _MoteurDuMode:
             acq = _FausseAcq()
             instance = "selftest"
@@ -1328,7 +1325,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             f"…tandis qu'un émetteur à 60 Hz est REFUSÉ, en nommant les deux chiffres : c'est ce "
             f"refus qui rend le test précédent falsifiable ({refus60})")
 
-        # --- 5 bis. LE FILTRE : les DEUX fichiers portent la bande et le secteur (2026-09-30) ---
+        # --- 5 bis. LE FILTRE : les DEUX fichiers portent la bande et le secteur --------------
         # Relus par `cvep_models.charger`, le chemin par lequel le moteur les chargera : un
         # attribut juste sur l'objet en mémoire mais perdu à l'écriture ne compterait pas.
         # Sans réglage, et sur un moteur qui ne déclare aucun secteur : la bande de toujours, et
@@ -1541,8 +1538,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
                      dtype=bool)
         return e, r
 
-    # Le cas RÉEL : 37 décisions, 3 discordances pour eCCA seul, 5 pour rCCA seul (mesuré sur
-    # data/cvep_calib_last.npz à k=2, lecture seule), soit eCCA 22/37 = 59,5 % contre rCCA
+    # Le cas RÉEL : 37 décisions, 3 discordances pour eCCA seul, 5 pour rCCA seul (mesuré sur la
+    # séance de référence à k=2), soit eCCA 22/37 = 59,5 % contre rCCA
     # 24/37 = 64,9 % — un écart qui A L'AIR réel — et pourtant McNemar p = 0,7265625 : DU BRUIT.
     e_reel, r_reel = _corrects(19, 3, 5, n_faux=10)
     chk(len(e_reel) == 37 and int(e_reel.sum()) == 22 and int(r_reel.sum()) == 24,
@@ -1583,10 +1580,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     # =====================================================================================
     # D. `entraine_les_deux` : la comparaison est-elle HONNÊTE ?
     # =====================================================================================
-    # ⚠️ Ces assertions ont DÉMÉNAGÉ ici avec leur fonction (chantier « seul point d'entrée »,
-    # tâche 8) : elles vivaient dans `research/cvep_calibrate.py`, qui n'entraîne plus. Elles
-    # gardent la seule chose qui rend un « gagnant » lisible — que les deux décodeurs aient vu les
-    # MÊMES époques, les MÊMES groupes de validation croisée et le MÊME nombre d'alternatives.
+    # ⚠️ Ces assertions gardent la seule chose qui rend un « gagnant » lisible : que les deux
+    # décodeurs aient vu les MÊMES époques, les MÊMES groupes de validation croisée et le MÊME
+    # nombre d'alternatives.
     # 8 voies BRUTES (comme l'Unicorn), réduites à 4 AJUSTÉES : un jeu généré directement à 4
     # voies ne pourrait jamais faire diverger « brut » et « réduit », et le garde de largeur de
     # voies resterait invérifiable.
@@ -1624,7 +1620,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
 
     # ⚠️ Une séance INTERROMPUE ne doit pas fausser le hasard. Tronquée à 3 cibles sur 6 : SANS
     # restreindre les codes du rCCA aux cibles VUES, il resterait jugé sur 1/6 (16,7 %) quand
-    # l'eCCA rétrécit correctement à 1/3 (33,3 %) — c'est EXACTEMENT ce qui a produit
+    # l'eCCA rétrécit correctement à 1/3 (33,3 %) — c'est EXACTEMENT ce qui fabriquerait un
     # « gagnant : eCCA » sur des points offerts par le hasard, pas par le signal (mesuré sur une
     # séance réelle tronquée : 71,1 % contre 51,1 %).
     epochs_t = [synth_cvep(code, c["lag"], len(CH_NAMES), fs_d, ref_d, -6.0, rng_d)
@@ -1672,7 +1668,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         "seul des deux côtés passerait inaperçu")
 
     # =====================================================================================
-    # E. LE FILTRE de la validation croisée est celui des modèles écrits (2026-09-30)
+    # E. LE FILTRE de la validation croisée est celui des modèles écrits
     # =====================================================================================
     # La partie B vérifie ce que les FICHIERS portent. Elle ne voit pas une CV qui construirait
     # ses propres modèles aux valeurs par défaut : les fichiers seraient justes, et la justesse
@@ -1695,7 +1691,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         f"…et les deux modèles rendus portent ce filtre "
         f"({[(tuple(res_f[n]['modele'].band), res_f[n]['modele'].secteur_hz) for n in res_f]})")
 
-    # Les chemins de l'appli pygame : horodatés, jamais les noms FIXES (qui s'écrasent), et
+    # Les chemins de l'écran archivé : horodatés, jamais les noms FIXES (qui s'écrasent), et
     # reconnus par les motifs de découverte — chacun sous LE SIEN.
     from core.cvep_models import MOTIFS as _MOTIFS
 

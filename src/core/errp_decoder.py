@@ -5,12 +5,12 @@ perçoit que la MACHINE s'est trompée. Onde LENTE multiphasique après le FEEDB
 +320 / −450 ms (cœur discriminant N250+P320). On classe CHAQUE époque de feedback « erreur / correct »
 et, en ligne, on ANNULE la dernière commande si erreur détectée.
 
-RÉUTILISATION de la pile P300 (revue littérature 2026-07-23, cf. eeg-modes-a-venir) : le décodeur
+RÉUTILISATION de la pile P300 (revue de littérature) : le décodeur
 xDAWN + covariances riemanniennes + LR est l'ÉTAT DE L'ART de l'ErrP (famille gagnante du Kaggle NER
 2015). On réutilise `core.p300_decoder` (build_pipe, bandpass, epoch_from_stream, P300Model._prep)
 via composition ; on change 4 choses : bande 1-10 Hz, pre_s=0.2, post_s=0.7, onset = feedback.
 
-DIFFÉRENCES CLÉS avec le P300 (durement établies par la revue) :
+DIFFÉRENCES CLÉS avec le P300 :
 - **MONO-ESSAI** : une action = UNE époque, AUCUN moyennage sur répétitions (ce qui portait le P300
   à ~95 %). L'ErrP est plus petit -> AUC réaliste ~0,65-0,78 en électrodes sèches. C'est un DÉTECTEUR
   imparfait, pas un interrupteur propre.
@@ -20,7 +20,7 @@ DIFFÉRENCES CLÉS avec le P300 (durement établies par la revue) :
 - **Métriques** : jamais l'accuracy brute (dire toujours « correct » = 75 %). On rapporte AUC +
   balanced-accuracy + TPR/TNR séparés (GroupKFold par bloc).
 
-AFFINEMENTS post-revue (2026-07-23), tous à petit N donc anti-surapprentissage/anti-bruit :
+AFFINEMENTS, tous pensés pour un petit N (anti-surapprentissage, anti-bruit) :
 - **nfilter TRANCHÉ PAR AUC** (pas figé) : `fit` balaie ERRP_XDAWN_NFILTER_CANDIDATES {2,3,4} et retient
   le meilleur AUC out-of-fold. Sur ~55 époques erreur, nfilter=4 (rang plein) surapprend souvent.
 - **TEST DE PERMUTATION** : p-value de l'AUC (garde-fou « conclure sur du bruit » à petit N).
@@ -60,14 +60,11 @@ def pick_threshold(y, scores, tnr_target=ERRP_TNR_TARGET):
     Renvoie (seuil, {tpr, tnr, bal_acc}). Rationnel : un faux veto (annuler une bonne commande)
     coûte plus qu'une erreur ratée (récupérable) -> on privilégie la spécificité.
 
-    ⚠️ Elle se défend ELLE-MÊME (correction de revue) : deux gardes avaient été posées chez ses
-    appelants (`errp_models.charger` et `ErrPRuntime._sans_scores_oof`), aucune dans la fonction
-    qui produit l'erreur. Sans ce contrôle, `pick_threshold(None, None)` lève
-    `ValueError: zero-dimensional arrays cannot be concatenated` (`np.asarray(None, dtype=float)`
-    rend un tableau 0-d) et des scores VIDES lèvent encore autrement (`scores.min()` ->
-    « zero-size array to reduction operation minimum ») — deux exceptions numpy brutes, sans
-    rapport avec ce qu'il faut faire. Le 3e appelant (page de console, script d'analyse) ne
-    doit pas avoir à redécouvrir la garde : elle est à la source.
+    Elle se défend ELLE-MÊME : ses appelants (`errp_models.charger`, `ErrPRuntime.
+    _sans_scores_oof`) ont leur garde, mais un nouvel appelant (page de console, script
+    d'analyse) ne doit pas avoir à la redécouvrir. Sans ce contrôle, des scores absents ou vides
+    lèveraient des exceptions numpy brutes (« zero-dimensional arrays cannot be concatenated »,
+    « zero-size array to reduction operation minimum »), sans rapport avec ce qu'il faut faire.
     """
     scores = np.asarray(scores, dtype=float)
     y_arr = np.asarray(y)
@@ -188,10 +185,10 @@ class ErrPModel:
         self.n_epoques_ = None    # nombre d'époques d'entraînement (parité avec P300Model)
         self.echec_oof_ = None    # POURQUOI il n'y a pas de scores hors-pli (None si tout va bien)
 
-    # --- Le filtre : UNE seule copie, celle du noyau qui filtre (2026-09-30) ----------------------
-    # ⚠️ Ils étaient posés DEUX fois, ici et sur `self.core`. Rien ne les tenait d'accord : une
-    # écriture sur `modele.band` aurait changé la description sans changer le filtre, et le modèle
-    # se serait décrit avec une bande qu'il n'applique pas. Lire et écrire passent donc par le noyau.
+    # --- Le filtre : UNE seule copie, celle du noyau qui filtre ---------------------------------
+    # ⚠️ Une seconde copie ici (en plus de `self.core`) ne serait tenue d'accord par rien : une
+    # écriture sur `modele.band` changerait la description sans changer le filtre, et le modèle
+    # se décrirait avec une bande qu'il n'applique pas. Lire et écrire passent donc par le noyau.
 
     @property
     def band(self):
@@ -204,8 +201,8 @@ class ErrPModel:
 
     @property
     def secteur_hz(self):
-        """Le secteur du coupe-bande, lu sur le noyau. None pour un modèle d'avant le 2026-09-30
-        (son noyau n'a pas l'attribut) : il décode sans coupe-bande, comme il a appris."""
+        """Le secteur du coupe-bande, lu sur le noyau. None pour un modèle sans secteur (son noyau
+        n'a pas l'attribut) : il décode sans coupe-bande, comme il a appris."""
         return getattr(self.core, "secteur_hz", None)
 
     @secteur_hz.setter
@@ -213,10 +210,10 @@ class ErrPModel:
         self.core.secteur_hz = valeur
 
     def __setstate__(self, etat):
-        """Un modèle enregistré avant le 2026-09-30 porte encore `band` (et, un temps, `secteur_hz`)
-        dans son dictionnaire extérieur. Les propriétés les masqueraient de toute façon ; on les
-        retire au chargement pour qu'il ne reste qu'UNE copie, celle du noyau — qui a toujours
-        été celle qui filtre, donc le modèle décode exactement comme avant."""
+        """Un modèle enregistré avec l'ancienne disposition porte encore `band` (et parfois
+        `secteur_hz`) dans son dictionnaire extérieur. On les retire au chargement pour qu'il ne
+        reste qu'UNE copie, celle du noyau — qui est celle qui filtre, donc le modèle décode
+        exactement comme il a appris."""
         etat = dict(etat)
         etat.pop("band", None)
         etat.pop("secteur_hz", None)
@@ -259,12 +256,11 @@ class ErrPModel:
                                               self.cv_auc_, n_perm)
                 self.slda_auc_ = _slda_auc(Xf, y, cv, g, self.fs)
             else:
-                # ⚠️ Le SECOND chemin qui laisse `oof_scores_` à None, et il n'a RIEN à voir avec
-                # le premier : la garde est passée (assez d'essais, deux classes), mais les trois
-                # nfilter ont levé au CV et ont été avalés par le `except … continue` ci-dessus.
-                # Sans cette phrase, le refus en aval accusait « calibration trop courte » et
-                # ordonnait « ré-entraîne avec plus d'essais » — un diagnostic INVENTÉ, qui renvoie
-                # l'étudiant refaire une séance casque de 5 min pour rien.
+                # Second chemin qui laisse `oof_scores_` à None, sans rapport avec le premier : la
+                # garde est passée (assez d'essais, deux classes), mais tous les nfilter ont levé
+                # au CV et ont été avalés par le `except … continue` ci-dessus. Il faut le dire :
+                # sinon le refus en aval accuserait « calibration trop courte » et renverrait
+                # l'étudiant refaire une séance casque pour rien.
                 self.echec_oof_ = (
                     f"validation croisée échouée pour TOUTES les valeurs de nfilter essayées "
                     f"({', '.join(str(nf) for nf in ERRP_XDAWN_NFILTER_CANDIDATES)}) sur "
@@ -339,10 +335,9 @@ def _synth_dataset(n_trials, error_rate, blocks, fs, rng, amp=0.95, noise=2.0):
 def _rapport(m):
     """Imprime le verdict d'un modèle entraîné, et rend True s'il est validé.
 
-    ⚠️ Séparé de `_demo` EXPRÈS : ce bloc doit rester imprimable sur un modèle DÉGÉNÉRÉ (aucune
-    AUC, aucune p-value, aucune métrique) — c'est précisément l'état dans lequel il levait un
-    `TypeError` sur `f"{None:.3f}"` au lieu d'imprimer le diagnostic. `_gardes` le rappelle sur
-    un tel modèle ; sans cette séparation, la correction n'aurait aucun test.
+    Séparé de `_demo` EXPRÈS : ce bloc doit rester imprimable sur un modèle DÉGÉNÉRÉ (aucune
+    AUC, aucune p-value, aucune métrique), sans lever de `TypeError` sur `f"{None:.3f}"` au lieu
+    d'imprimer le diagnostic. `_gardes` le rappelle sur un tel modèle.
     """
     auc = m.cv_auc_ or 0.0
     mt = m.metrics_ or {"tpr": 0, "tnr": 0, "bal_acc": 0}
@@ -350,12 +345,10 @@ def _rapport(m):
     print(f"\n[1] balayage nfilter (AUC OOF) : {sweep}  -> RETENU nfilter={m.nfilter_}")
     print(f"[2] AUC erreur/correct (GroupKFold par bloc) : {auc * 100:.1f}%  (hasard 50%)")
     pp = m.perm_p_
-    # ⚠️ `pp` est None dès que `fit` n'a pas de scores hors-pli (garde non atteinte, ou tous les
-    # nfilter tombés au CV). Le garde-fou était posé sur le MAUVAIS opérande : la f-string qui
-    # formate `pp` s'évalue la première, sans condition, et `f"{None:.3f}"` lève
-    # `TypeError: unsupported format string passed to NoneType.__format__`. Le diagnostic imprimé
-    # juste au-dessus (« nfilter=… : CV échouée ») était alors noyé sous un traceback qui parle
-    # d'autre chose. Même correction que `p300_decoder`, pour la même raison.
+    # `pp` est None dès que `fit` n'a pas de scores hors-pli (garde non atteinte, ou tous les
+    # nfilter tombés au CV). Il faut tester None AVANT de formater : `f"{None:.3f}"` lèverait un
+    # TypeError qui noierait le diagnostic imprimé juste au-dessus (« nfilter=… : CV échouée »).
+    # Même précaution que dans `p300_decoder`.
     pp_txt = "non testée" if pp is None else f"{pp:.3f}"
     print(f"    test de permutation : p={pp_txt}" + ("" if pp is None else
           (" (significatif)" if pp < 0.05 else " (NON significatif — prudence)")))
@@ -389,8 +382,8 @@ def _gardes():
     rng = np.random.default_rng(1)
     epochs, y, groups = _synth_dataset(24, 0.4, 3, fs, rng)
 
-    # 1. `pick_threshold` se défend ELLE-MÊME : ses deux appelants ont chacun une garde, mais un
-    #    troisième arrivera (page de console, script d'analyse hors ligne) et recevrait sinon
+    # 1. `pick_threshold` se défend ELLE-MÊME : ses appelants ont chacun une garde, mais un
+    #    nouvel appelant (page de console, script d'analyse hors ligne) recevrait sinon
     #    l'exception numpy brute que ces gardes existent pour cacher.
     for etiquette, args in (("(None, None) — le cas mesuré en revue", (None, None)),
                             ("des scores VIDES — gardé nulle part jusqu'ici", ([], [])),
@@ -414,7 +407,7 @@ def _gardes():
         f"5 essais : pas de scores hors-pli, et la cause est ENREGISTRÉE ({court.echec_oof_})")
     chk(court.n_epoques_ == 5, f"...et le nombre d'époques d'entraînement aussi ({court.n_epoques_})")
 
-    # 3. L'AUTRE chemin vers « pas de scores hors-pli », celui qu'aucun message ne nommait : la
+    # 3. L'AUTRE chemin vers « pas de scores hors-pli » : la
     #    garde est passée (24 essais, 2 classes), mais TOUS les nfilter tombent au CV (voie plate,
     #    covariance singulière, dérive de version). On le reproduit en faisant lever `build_pipe`,
     #    exactement là où `fit` l'appelle. Le modèle est construit AVANT le remplacement : son
@@ -436,9 +429,9 @@ def _gardes():
         f"CV échouée sur tous les nfilter : la cause dit CE QUI s'est passé, et surtout PAS "
         f"« trop courte » — 24 essais n'ont pas manqué d'essais ({modele_cv.echec_oof_})")
 
-    # 4. Et ce modèle-là doit rester RAPPORTABLE : c'est sur lui que `_rapport` levait un
-    #    TypeError (`f"{None:.3f}"`), noyant les trois lignes « CV échouée » imprimées juste
-    #    au-dessus — le seul endroit où la vraie cause était écrite.
+    # 4. Et ce modèle-là doit rester RAPPORTABLE : `_rapport` ne doit pas lever de TypeError
+    #    (`f"{None:.3f}"`), qui noierait les lignes « CV échouée » imprimées juste au-dessus —
+    #    le seul endroit où la vraie cause est écrite.
     try:
         _rapport(modele_cv)
         leve = None
@@ -461,9 +454,9 @@ def _gardes():
         f"...et il n'en existe aucune seconde copie "
         f"({sorted(k for k in vars(filtre) if k in ('band', 'secteur_hz'))})")
 
-    # Un modèle enregistré AVANT : `band` dans le dictionnaire extérieur, aucun `secteur_hz` nulle
-    # part (c'est l'état exact de `data/errp_model_20260924_120032.joblib`). La copie extérieure est
-    # rendue DIVERGENTE exprès : si c'est elle qu'on relisait, ça se verrait.
+    # Un modèle à l'ancienne disposition : `band` dans le dictionnaire extérieur, aucun
+    # `secteur_hz` nulle part. La copie extérieure est rendue DIVERGENTE exprès : si c'est elle
+    # qu'on relisait, ça se verrait.
     import io
 
     ancien = ErrPModel(fs=fs).fit(epochs, y, groups=groups, n_perm=0)

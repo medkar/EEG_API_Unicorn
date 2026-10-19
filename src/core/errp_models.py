@@ -3,30 +3,22 @@
 Jumeau de `p300_models.py`, et pour la même raison : un modèle est propre à UNE personne, et le
 mode doit pouvoir dire « aucun choix disponible » plutôt que démarrer muet.
 
-⚠️ **Les modèles antérieurs au 2026-08-18 sont refusés, et c'est une décision.** Ils ont été
-enregistrés quand le décodeur vivait dans `src/research/`, donc leur pickle référence le module NU
-`errp_decoder`, qui n'existe plus sous ce nom (le décodeur P300 a fait le même trajet la veille, et
-l'ErrP le suit aujourd'hui). On ne fabrique PAS de passerelle. C'est la TROISIÈME fois que ce projet
-rencontre ce piège précis — la première fois (Motor Imagery), les époques avaient été écrasées, et
-ça a coûté 4 modèles.
+⚠️ **Les modèles hérités sont refusés, et c'est une décision.** Un modèle enregistré quand le
+décodeur vivait hors de `core` référence dans son pickle le module NU `errp_decoder`, qui n'existe
+plus sous ce nom. On ne fabrique PAS de passerelle.
 
-⚠️ **Et le remède qu'on aimerait donner n'existe pas encore.** Les époques de calibration ont bien
-survécu (`data/errp_calib_last.npz`, plus des horodatées), mais **aucun code de ce dépôt ne les
-lit** : le ré-entraînement du 2026-08-18 a été fait par un script jetable, non versionné. Prescrire
-« ré-entraîne depuis les .npz » enverrait donc l'étudiant vers une porte fermée. Le seul remède
-livré aujourd'hui est une nouvelle calibration au casque, et c'est ce que disent les messages de
-refus, plus bas. Écrire ce lecteur de `.npz` reste la bonne idée ; elle n'est simplement pas faite.
+⚠️ **Le remède disponible est une nouvelle calibration au casque.** Les époques de calibration
+sont conservées (`data/errp_calib_*.npz`), mais aucun code de ce dépôt ne les relit pour
+ré-entraîner : les messages de refus ne prescrivent donc pas « ré-entraîne depuis les .npz ».
+Écrire ce lecteur de `.npz` reste possible.
 
 ⚠️ **Le filtre d'un `.npz` d'époques, et ce que veut dire son ABSENCE** — à lire avant d'écrire ce
-lecteur. Depuis le 2026-09-30, `core/modes/errp_calib.entrainer` archive avec les époques BRUTES
-le filtre du modèle qui a appris dessus : `band` (Hz) et `secteur_hz`, où `0` veut dire « pas de
-coupe-bande » (un None ferait un tableau d'objets, illisible sans `allow_pickle`). Un `.npz` plus
-ancien n'a NI l'un NI l'autre, et cette absence a un sens précis : **la bande de toujours
-(`config.ERRP_BAND`, 1-10 Hz), SANS coupe-bande** — c'est avec ce filtre qu'ont appris tous les
-modèles d'avant (vérifié le 2026-09-30 sur chaque modèle ErrP de `data/`, la trace casque du
-24 juillet comprise : tous portent 1-10 Hz, aucun de secteur). Ré-entraîner un tel fichier en y
-ajoutant le secteur du poste, ou la bande réglée du moment, produirait un AUTRE modèle que celui de
-la séance.
+lecteur. `core/modes/errp_calib.entrainer` archive avec les époques BRUTES le filtre du modèle qui
+a appris dessus : `band` (Hz) et `secteur_hz`, où `0` veut dire « pas de coupe-bande » (un None
+ferait un tableau d'objets, illisible sans `allow_pickle`). Un `.npz` sans ces deux champs a appris
+avec **la bande de toujours (`config.ERRP_BAND`, 1-10 Hz), SANS coupe-bande**. Ré-entraîner un tel
+fichier en y ajoutant le secteur du poste, ou la bande réglée du moment, produirait un AUTRE modèle
+que celui de la séance.
 
 Autotest :
     python src/core/errp_models.py
@@ -54,18 +46,15 @@ def charger(chemin):
     La `raison` est destinée à un étudiant : elle dit quoi FAIRE, pas seulement ce qui a raté.
     """
     # Un chemin vide n'est pas un incident : c'est l'état d'un formulaire dont la liste de
-    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
-    # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
+    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). `charger` ne lève
+    # jamais, et le refus doit dire quoi faire.
     if not chemin:
-        # ⚠️ Ce texte a été FAUX, et il l'a été parce qu'il décrivait un état du dépôt : il
-        # disait, en toutes lettres, que « la console n'a PAS de page de calibration ErrP » et
-        # renvoyait à l'appli pygame. Depuis le 2026-09-07 elle en a une — le stimulus est rendu
-        # par une FENÊTRE de `src/stimulus/` que la console lance elle-même (`Calib(kind="fenetre")`
-        # du mode) et c'est le moteur qui entraîne. L'écran pygame, lui, existe toujours : envoyer
-        # là-bas ne produit donc pas une erreur visible, mais un modèle découpé par l'horloge de
-        # l'appli au lieu des horodatages LSL du moteur. C'est le texte du `help` du réglage
-        # « Modèle entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le
-        # lit. Même correction que `core/p300_models.charger`, où elle a déjà été faite.
+        # Le stimulus est rendu par une FENÊTRE de `src/stimulus/` que la console lance
+        # elle-même (`Calib(kind="fenetre")` du mode), et c'est le moteur qui entraîne. Renvoyer
+        # vers un écran archivé produirait un modèle découpé par l'horloge de l'appli au lieu des
+        # horodatages LSL du moteur, sans erreur visible. C'est le texte du `help` du réglage
+        # « Modèle entraîné » : le même geste est dit du même mot aux deux endroits où un étudiant
+        # le lit (cf. `core/p300_models.charger`).
         return None, tr("mode.modele.aucun", mode="ErrP")
     if not _os.path.isfile(chemin):
         return None, tr("mode.modele.introuvable", chemin=chemin)
@@ -78,61 +67,48 @@ def charger(chemin):
     if not hasattr(modele, "score") or not hasattr(modele, "is_error"):
         return None, tr("mode.modele.pas_un_modele", mode="ErrP", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
-    # hérité (d'avant le déménagement du décodeur dans core/, 2026-08-18) porte "errp_decoder"
-    # (module NU) — et RESSUSCITE selon la commande de lancement, exactement le mécanisme déjà
-    # documenté dans `p300_models.charger` (vérifié empiriquement sur ce projet le 2026-08-17) :
-    # sous `python src/core/server.py`, le dossier du script rejoint sys.path et rend "errp_decoder"
-    # importable comme module de PREMIER NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la
-    # console ou l'appli pygame, ce chemin n'existe pas et le même fichier est refusé plus haut
-    # (ModuleNotFoundError). Cette divergence selon la commande de lancement, pour un modèle
-    # abandonné par décision de conception, est exactement le « pire des deux mondes » que ce module
-    # existe pour éliminer : décoder avec les probabilités de quelqu'un d'autre, en silence.
-    # Contrairement au MI, les époques de calibration ont survécu (`errp_calib_*.npz`) : on ne
-    # garde donc PAS ce modèle « en dépannage », on dit de ré-entraîner.
+    # hérité porte "errp_decoder" (module NU) — et RESSUSCITE selon la commande de lancement,
+    # exactement le mécanisme documenté dans `p300_models.charger` : sous
+    # `python src/core/server.py`, le dossier du script rejoint sys.path et rend "errp_decoder"
+    # importable comme module de PREMIER NIVEAU, donc ce pickle se CHARGE sans lever ; sous la
+    # console, ce chemin n'existe pas et le même fichier échoue plus haut (ModuleNotFoundError).
+    # Cette divergence selon la commande de lancement ferait décoder, en silence, avec les
+    # probabilités de quelqu'un d'autre. On ne garde donc PAS ce modèle « en dépannage ».
     module = type(modele).__module__
     if module != _MODULE_ATTENDU:
-        # ⚠️ Trois corrections de revue tiennent dans cette phrase. (a) Elle NOMME le fichier,
-        # comme les trois autres refus de cette fonction et comme les deux jumeaux : deux modèles
-        # hérités côte à côte donnaient sinon deux lignes de liste RIGOUREUSEMENT identiques.
-        # (b) Elle ne dit plus « illisible » — on n'arrive ici que si `joblib.load` a RÉUSSI
-        # (c'est comme ça qu'on connaît son module) ; le mot juste est « abandonné ». (c) Elle
-        # prescrit le remède qui EXISTE. « Ré-entraîner depuis data/errp_calib_*.npz » n'était
-        # tenable pour personne : aucun code de ce dépôt ne lit ces .npz (le ré-entraînement du
-        # 18/08 a été fait par un script jetable, non versionné), et la branche « aucun modèle
-        # désigné » 25 lignes plus haut disait déjà, elle, le vrai geste. Deux instructions
-        # contradictoires pour la même panne : on garde celle qu'un étudiant peut suivre.
+        # Ce refus NOMME le fichier, comme les autres refus de cette fonction et ses jumeaux :
+        # deux modèles hérités côte à côte donneraient sinon deux lignes de liste identiques. Il
+        # ne dit pas « illisible » (on n'arrive ici que si `joblib.load` a RÉUSSI, c'est ainsi
+        # qu'on connaît son module) mais « abandonné ». Il prescrit le remède qui EXISTE, le
+        # même geste que la branche « aucun modèle désigné » plus haut : une calibration, pas un
+        # ré-entraînement depuis les .npz que rien ne sait relire.
         return None, tr("mode.modele.herite", module=repr(module), attendu=repr(_MODULE_ATTENDU),
                         mode="ErrP", nom=_os.path.basename(chemin))
     # `ErrPModel` n'HÉRITE pas de `P300Model`, il le CONTIENT (`self.core`) : un pickle d'ErrP
     # porte donc DEUX chemins de module, et c'est le second qui SCORE (`score` -> `self.core.pipe`).
-    # Le contrôle ci-dessus ne regarde que l'extérieur. La passerelle que ce chantier refuse
-    # d'écrire finira par être écrite à moitié — un script « de dépannage » qui recharge sous un
-    # `sys.modules["errp_decoder"] = core.errp_decoder` puis re-`save()` — et rendra un modèle dont
-    # la coquille est neuve et le noyau ressuscité d'un module fantôme. `_desaccord_geometrie`
-    # (`core/modes/errp.py`) ne le verrait pas non plus : fs/pre_s/post_s sont posés sur l'objet
-    # EXTÉRIEUR. Ce serait le « pire des deux mondes » avec un tour de plus.
+    # Le contrôle ci-dessus ne regarde que l'extérieur. Une passerelle écrite à moitié — un script
+    # « de dépannage » qui recharge sous un `sys.modules["errp_decoder"] = core.errp_decoder` puis
+    # re-`save()` — rendrait un modèle dont la coquille est neuve et le noyau ressuscité d'un
+    # module fantôme. `_desaccord_geometrie` (`core/modes/errp.py`) ne le verrait pas non plus :
+    # fs/pre_s/post_s sont posés sur l'objet EXTÉRIEUR.
     noyau = type(getattr(modele, "core", None)).__module__
     if noyau != _NOYAU_ATTENDU:
         return None, tr("mode.errp.modele.noyau_herite", module=repr(noyau),
                         attendu=repr(_NOYAU_ATTENDU), nom=_os.path.basename(chemin))
-    # ⚠️ Correction de revue (tâche 3) : `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la
-    # calibration a au moins 10 essais, 2 classes, et une classe minoritaire d'au moins 2 membres
-    # (cf. sa garde, `errp_decoder.py`) — en dessous, ces deux attributs restent `None`. Rien
-    # ci-dessus ne le voit : `hasattr(modele, "score"/"is_error")` est vrai même pour un modèle
-    # jamais entraîné sur assez de données. Sans ce refus, un tel modèle apparaissait normalement
-    # dans la liste proposée à l'étudiant, et `core/modes/errp.py` finissait par appeler
-    # `pick_threshold(None, None, ...)` — mesuré, pas supposé : lève
-    # `ValueError: zero-dimensional arrays cannot be concatenated`, une exception numpy BRUTE,
+    # `ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si la calibration a au moins 10 essais,
+    # 2 classes, et une classe minoritaire d'au moins 2 membres (cf. sa garde, `errp_decoder.py`)
+    # — en dessous, ces deux attributs restent `None`. Rien ci-dessus ne le voit :
+    # `hasattr(modele, "score"/"is_error")` est vrai même pour un modèle jamais entraîné sur assez
+    # de données. Sans ce refus, un tel modèle apparaîtrait dans la liste proposée à l'étudiant,
+    # et `core/modes/errp.py` finirait par appeler `pick_threshold(None, None, ...)`, qui lève
+    # `ValueError: zero-dimensional arrays cannot be concatenated`, une exception numpy BRUTE
     # sans aucun rapport avec ce qu'il faut faire.
     if getattr(modele, "oof_scores_", None) is None or getattr(modele, "oof_y_", None) is None:
-        # ⚠️ Correction de revue (tranche B) : ce message ÉNUMÉRAIT trois causes — « moins de 10
-        # essais, une seule classe, ou une classe à moins de 2 membres » — et concluait
-        # « ré-entraîne AVEC PLUS D'ESSAIS ». Or `fit` laisse `oof_scores_` à None dans DEUX
-        # situations, et la seconde (les trois nfilter tombés à la validation croisée : voie
-        # plate, électrode décollée, dérive de version) n'a rien à voir avec le nombre d'essais.
-        # Un étudiant qui venait d'en faire 200 était renvoyé en refaire davantage, pour rien.
-        # On ne DEVINE donc plus : `ErrPModel.fit` enregistre ce qu'il a CONSTATÉ dans
-        # `echec_oof_`, et on le cite tel quel.
+        # `fit` laisse `oof_scores_` à None dans DEUX situations (calibration trop courte, ou
+        # validation croisée échouée pour tous les nfilter : voie plate, électrode décollée,
+        # dérive de version), et seule la première se répare avec plus d'essais. On ne DEVINE
+        # donc pas : `ErrPModel.fit` enregistre ce qu'il a CONSTATÉ dans `echec_oof_`, et on le
+        # cite tel quel.
         cause = getattr(modele, "echec_oof_", None) or tr("mode.errp.modele.cause_inconnue")
         return None, tr("mode.errp.modele.sans_oof", cause=cause, nom=_os.path.basename(chemin))
     return modele, None
@@ -155,13 +131,13 @@ def modeles_disponibles(dossier=DATA_DIR):
     font quelques dizaines de kilo-octets, la liste est construite à l'ouverture du catalogue,
     pas en boucle.
     """
-    # ⚠️ `key=_os.path.getmtime` s'évalue sur TOUS les candidats : un fichier qui disparaît (ou
-    # qu'un antivirus verrouille) entre le `glob` et la clé faisait sortir un `FileNotFoundError`
-    # de cette fonction. `Param.choices_status` (`core/modes/contract.py`) l'attrape, mais le
-    # classe « un `choices_fn` qui lève est un DÉFAUT de déclaration » — donc le formulaire de la
-    # console annonçait un bug du produit là où il n'y a qu'une course bénigne (catalogue ouvert
-    # pendant qu'une calibration écrit son modèle). Un candidat évaporé passe en fin de tri, et
-    # `charger` le refuse ensuite proprement (« modèle introuvable »).
+    # `key=_os.path.getmtime` s'évalue sur TOUS les candidats : un fichier qui disparaît (ou
+    # qu'un antivirus verrouille) entre le `glob` et la clé ferait sortir un `FileNotFoundError`
+    # de cette fonction. `Param.choices_status` (`core/modes/contract.py`) l'attraperait, mais le
+    # classerait en « DÉFAUT de déclaration » — le formulaire de la console annoncerait un bug du
+    # produit là où il n'y a qu'une course bénigne (catalogue ouvert pendant qu'une calibration
+    # écrit son modèle). Un candidat évaporé passe en fin de tri, et `charger` le refuse ensuite
+    # proprement (« modèle introuvable »).
     chemins = sorted(_glob.glob(_os.path.join(dossier, MOTIF)),
                      key=lambda c: _os.path.getmtime(c) if _os.path.isfile(c) else 0.0,
                      reverse=True)
@@ -172,13 +148,10 @@ def decrire(chemin):
     """Une ligne lisible pour la liste de la console : date, AUC honnête, nombre d'époques.
     Ne lève jamais, exactement comme `charger`, sa fonction sœur.
 
-    ⚠️ AUCUN appelant en production aujourd'hui (vérifié sur tout `src/` : seul `_selftest`
-    l'appelle) — la console n'importe pas encore ce module. Cette forme existe pour la PARITÉ
-    avec `p300_models.decrire` et `mi_models.decrire` (celui-là réellement appelé, par
-    `core/modes/mi_calib.py`), que la console lira quand elle affichera les listes de modèles :
-    les trois doivent rendre les mêmes clés. Dit autrement pour le prochain lecteur : changer la
-    forme de ce dict ne casse aujourd'hui aucun affichage — mais casserait les trois d'un coup
-    le jour où il y en aura un.
+    Cette forme existe pour la PARITÉ avec `p300_models.decrire` et `mi_models.decrire`, que la
+    console lit pour afficher les listes de modèles : les trois doivent rendre les mêmes clés.
+    Seul `_selftest` appelle celle-ci aujourd'hui ; changer la forme de ce dict casserait les
+    trois affichages d'un coup le jour où elle sera lue.
 
     `cv_auc` est l'AUC erreur/correct en validation croisée PAR BLOC (`GroupKFold`), rendue par
     `ErrPModel.fit` quand une calibration lui fournit `groups` — c'est la seule mesure honnête ici :
@@ -186,11 +159,10 @@ def decrire(chemin):
     se retrouveraient entre train et test, et gonfleraient le chiffre.
     """
     modele, raison = charger(chemin)
-    # ⚠️ `charger` avait été durcie contre le chemin vide (« une exception ici remonterait
-    # jusqu'au fil Qt »), mais le durcissement s'était arrêté une fonction trop tôt côté P300 : ici
-    # `os.path.isfile(None)` et `os.path.basename(None)` lèvent tous les deux un TypeError, sur
-    # la fonction PUBLIQUE qui remplit la liste de modèles. Le `chemin and` court-circuite aussi
-    # l'entier 0, que `os.path.isfile` prendrait pour un descripteur de fichier (stdin).
+    # Comme `charger`, elle ne lève pas sur un chemin vide (une exception remonterait jusqu'au fil
+    # Qt) : `os.path.isfile(None)` et `os.path.basename(None)` lèvent tous deux un TypeError. Le
+    # `chemin and` court-circuite aussi l'entier 0, que `os.path.isfile` prendrait pour un
+    # descripteur de fichier (stdin).
     horodatage = _os.path.getmtime(chemin) if chemin and _os.path.isfile(chemin) else 0.0
     infos = {
         "chemin": chemin,
@@ -204,11 +176,8 @@ def decrire(chemin):
         return infos
     cv = getattr(modele, "cv_auc_", None)
     infos["cv_auc"] = float(cv) if cv is not None else None
-    # `ErrPModel.fit` pose `n_epoques_` comme `P300Model.fit`, en une ligne (correction de revue :
-    # la colonne « époques » était vide pour l'ErrP et remplie pour le P300, sans que rien ne dise
-    # pourquoi, et le moteur avait dû contourner par `len(oof_y_)` — un second chiffre calculé
-    # autrement pour la même quantité). Les modèles antérieurs à cette ligne n'ont pas l'attribut :
-    # `getattr` rend None, et la clé reste None plutôt que de faire lever la liste.
+    # `ErrPModel.fit` pose `n_epoques_` comme `P300Model.fit`. Un modèle plus ancien n'a pas
+    # l'attribut : `getattr` rend None, et la clé reste None plutôt que de faire lever la liste.
     n = getattr(modele, "n_epoques_", None)
     infos["n_epoques"] = int(n) if n is not None else None
     return infos
@@ -236,19 +205,16 @@ class _ModeleHerite:
 
     ⚠️ C'est la seule forme qui protège la décision de conception de ce module. `_ModeleEtranger`
     ci-dessus porte `__module__ == "__main__"` (ou `"core.errp_models"` à l'import) — **jamais
-    `"errp_decoder"`**. Donc l'assouplissement qu'un contributeur écrira un jour pour « juste faire
-    marcher les vieux modèles » — `module.endswith("errp_decoder")`, la petite passerelle de
-    compatibilité que ce chantier a explicitement refusé d'écrire — laissait toutes les assertions
-    vertes pendant que `data/errp_model.joblib` redevenait acceptable, et que le moteur se
-    remettait à décoder avec les probabilités de quelqu'un d'autre.
+    `"errp_decoder"`**. Un assouplissement du type `module.endswith("errp_decoder")` (la petite
+    passerelle de compatibilité qu'on a refusé d'écrire) laisserait toutes les assertions vertes
+    alors que les modèles hérités redeviendraient acceptables, et que le moteur décoderait avec
+    les probabilités de quelqu'un d'autre.
 
     `__module__` est posé en dur : c'est ce que `pickle` enregistre. **Elle doit vivre au niveau du
-    MODULE, et pas être imbriquée dans `_selftest`** — contrairement à ce qu'un premier jet peut
-    suggérer : une classe locale à une fonction a un `__qualname__` du type
-    `_selftest.<locals>._ModeleHerite`, et le composant `<locals>` fait lever un
-    `pickle.PicklingError` DÈS LE DUMP (« Can't pickle ... : it's not found as
-    errp_decoder._selftest.<locals>._ModeleHerite »), avant même de consulter `sys.modules` —
-    vérifié en pratique en écrivant la version imbriquée en premier. `_selftest` inscrit un
+    MODULE, et pas être imbriquée dans `_selftest`** : une classe locale à une fonction a un
+    `__qualname__` du type `_selftest.<locals>._ModeleHerite`, et le composant `<locals>` fait
+    lever un `pickle.PicklingError` DÈS LE DUMP, avant même de consulter `sys.modules`.
+    `_selftest` inscrit un
     `types.ModuleType("errp_decoder")` dans `sys.modules` le temps du dump ET du chargement (le
     retirer entre les deux ferait retrouver le VRAI `src/core/errp_decoder.py`, importable au
     premier niveau selon la commande de lancement — la divergence même que `charger` documente).
@@ -268,10 +234,10 @@ class _ModeleP300Renomme:
     """Un modèle P300 (interface `scores` + `select`) déposé sous un nom de modèle ErrP.
 
     Ça arrive dès qu'on range `data/` : `p300_model.joblib` copié en `errp_model_vieux.joblib`.
-    Sans le contrôle `hasattr(score/is_error)`, ce fichier tombait sur le contrôle de MODULE et
-    l'étudiant lisait « modèle hérité (module 'core.p300_decoder') — ré-entraîne » : on l'envoyait
-    ré-entraîner le MAUVAIS mode. Aucune fixture ne présentait un objet dépourvu de l'interface —
-    supprimer entièrement ce contrôle laissait tout l'autotest vert.
+    Sans le contrôle `hasattr(score/is_error)`, ce fichier tomberait sur le contrôle de MODULE et
+    l'étudiant lirait « modèle hérité (module 'core.p300_decoder') — ré-entraîne » : on
+    l'enverrait ré-entraîner le MAUVAIS mode. Cette fixture est la seule qui présente un objet
+    dépourvu de l'interface.
     """
 
     def scores(self, epochs):
@@ -316,12 +282,6 @@ def _selftest():
 
     dossier = tempfile.mkdtemp(prefix="errp_models_")
     try:
-        # (Il y avait ICI un `chk(modeles_disponibles(dossier) == [])`, doublon EXACT de celui de
-        # la section 3 — au premier appel, `dossier` est vide lui aussi. Aucune mutation d'une
-        # ligne de `modeles_disponibles` ne les rougissait : MOTIF faux, tri supprimé, filtre
-        # inversé, filtre supprimé, tous verts sur un dossier vide. Un seul survit, et il mord
-        # désormais : voir la section 3.)
-
         # Un petit jeu synthétique, dans la forme d'une vraie calibration (blocs, classe ERREUR
         # minoritaire) : de quoi obtenir une AUC groupée non triviale (>= 10 époques, 2 classes,
         # >= 2 par classe). n_perm=0 : ce fichier ne teste pas la significativité, juste le
@@ -360,9 +320,9 @@ def _selftest():
         chk(_m is None and "introuvable" in (raison or ""),
             f"un chemin inexistant est signalé comme tel ({raison})")
 
-        # `charger` promet dans sa docstring de ne JAMAIS lever. Elle lèverait pourtant sur None
-        # (os.path.isfile(None) lève) — et un formulaire de console peut très bien rendre None ou
-        # "" quand aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt.
+        # `charger` promet de ne JAMAIS lever, y compris sur None (os.path.isfile(None) lève) :
+        # un formulaire de console peut rendre None ou "" quand aucun modèle n'existe encore, et
+        # une exception remonterait jusqu'au fil Qt.
         for entree in (None, "", 0):
             _m, raison = charger(entree)
             chk(_m is None and raison and "aucun modèle" in raison,
@@ -373,10 +333,10 @@ def _selftest():
         etranger = _os.path.join(dossier, "errp_model_etranger.joblib")
         joblib.dump(_ModeleEtranger(), etranger)
         _m, raison = charger(etranger)
-        # ⚠️ Le refus doit NOMMER LE FICHIER — les trois autres refus de `charger` le font, et les
-        # deux jumeaux (`p300_models`, `mi_models`) aussi pour cette branche-là. Deux modèles
-        # hérités côte à côte (`errp_model.joblib` et une copie de sauvegarde) donnaient sinon
-        # deux lignes de liste rigoureusement identiques, sans dire laquelle concerne quoi.
+        # Le refus doit NOMMER LE FICHIER, comme les autres refus de `charger` et ses deux
+        # jumeaux (`p300_models`, `mi_models`) : deux modèles hérités côte à côte
+        # (`errp_model.joblib` et une copie de sauvegarde) donneraient sinon deux lignes de liste
+        # identiques, sans dire laquelle concerne quoi.
         chk(_m is None and "ré-entraîne" in (raison or "").lower()
             and "errp_model_etranger.joblib" in (raison or ""),
             f"un modèle hérité est refusé en disant quoi faire ET sur QUEL fichier ({raison})")
@@ -395,11 +355,10 @@ def _selftest():
 
         # 1 bis. LE VRAI cas hérité : le pickle porte le module NU `errp_decoder`.
         #
-        # ⚠️ L'assertion ci-dessus ne pouvait PAS attraper l'assouplissement de la règle, parce que
+        # ⚠️ L'assertion ci-dessus n'attraperait PAS un assouplissement de la règle, parce que
         # `_ModeleEtranger.__module__` vaut "__main__" (ou "core.errp_models" à l'import) et jamais
-        # "errp_decoder" : la mutation `module.endswith("errp_decoder")` — la passerelle de
-        # compatibilité que ce chantier a refusé d'écrire — la laissait verte tout en rendant
-        # `data/errp_model.joblib` à nouveau acceptable. Celle-ci rougit dessus, parce que le module
+        # "errp_decoder" : la mutation `module.endswith("errp_decoder")` la laisserait verte tout
+        # en rendant un modèle hérité acceptable. Celle-ci rougit dessus, parce que le module
         # refusé est EXACTEMENT celui que la mutation ré-autoriserait.
         #
         # Le faux module reste dans `sys.modules` pendant le dump ET le chargement : l'en retirer
@@ -448,13 +407,12 @@ def _selftest():
         chk(noyau_etranger not in modeles_disponibles(dossier),
             "...et il n'apparaît donc pas dans la liste")
 
-        # 1 ter. ⚠️ Correction de revue (tâche 3) : un modèle dont la calibration était trop
-        # courte pour avoir des scores hors-pli (`ErrPModel.fit` ne pose `oof_scores_`/`oof_y_`
-        # que si len(y)>=10, 2 classes, et chaque classe >=2 membres — cf. `errp_decoder.py`) est
-        # refusé ICI, EN LE NOMMANT. Sans ce refus, un tel modèle apparaissait normalement dans la
-        # liste proposée à l'étudiant (`hasattr(modele, "score"/"is_error")` ne dit rien de
-        # `oof_scores_`), et `core/modes/errp.py` finissait par appeler
-        # `pick_threshold(None, None, ...)` — mesuré, pas supposé : lève
+        # 1 ter. Un modèle dont la calibration était trop courte pour avoir des scores hors-pli
+        # (`ErrPModel.fit` ne pose `oof_scores_`/`oof_y_` que si len(y)>=10, 2 classes, et chaque
+        # classe >=2 membres — cf. `errp_decoder.py`) est refusé ICI, EN LE NOMMANT. Sans ce
+        # refus, un tel modèle apparaîtrait dans la liste proposée à l'étudiant
+        # (`hasattr(modele, "score"/"is_error")` ne dit rien de `oof_scores_`), et
+        # `core/modes/errp.py` finirait par appeler `pick_threshold(None, None, ...)`, qui lève
         # `ValueError: zero-dimensional arrays cannot be concatenated`, une exception numpy BRUTE
         # sans aucun rapport avec ce qu'il faut faire.
         #
@@ -485,16 +443,13 @@ def _selftest():
             f"...et la raison RECOPIE le diagnostic posé par fit lui-même, mot pour mot "
             f"({modele_degenere.echec_oof_!r})")
 
-        # ⚠️ LES QUATRE REFUS ENSEMBLE : chacun envoie là où l'on calibre AUJOURD'HUI. Tous les
-        # quatre nommaient `python src/research/app.py` jusqu'au 2026-09-07 ; depuis, c'est la
-        # console qui lance la fenêtre de stimulus et le moteur qui entraîne. L'écran pygame
-        # existe TOUJOURS, et c'est ce qui rend l'erreur coûteuse : y envoyer ne produit aucune
-        # panne visible, juste un modèle découpé par l'horloge de l'appli au lieu des horodatages
-        # LSL du moteur — le second chemin d'épochage que ce chantier existe pour retirer. Un
-        # refus au bon diagnostic et à la MAUVAISE marche à suivre coûte plus cher qu'un refus
-        # muet. Cette phrase a déjà été fausse deux fois côté P300 : on la cloue ici, dans les
-        # DEUX sens, et sur les quatre refus à la fois plutôt qu'un par un — c'est le quatrième
-        # ajouté demain qui, sans ça, repartirait avec l'ancienne adresse.
+        # ⚠️ LES QUATRE REFUS ENSEMBLE : chacun envoie là où l'on calibre, la console, qui lance
+        # la fenêtre de stimulus pendant que le moteur entraîne. Renvoyer vers un écran archivé ne
+        # produit aucune panne visible, juste un modèle découpé par l'horloge de l'appli au lieu
+        # des horodatages LSL du moteur (un second chemin d'épochage). Un refus au bon diagnostic
+        # et à la MAUVAISE marche à suivre coûte plus cher qu'un refus muet. On le vérifie sur
+        # les quatre refus à la fois : un cinquième ajouté plus tard ne doit pas repartir avec
+        # une mauvaise adresse.
         raisons = [charger(None)[1] or "", charger(etranger)[1] or "",
                    charger(noyau_etranger)[1] or "", charger(degenere)[1] or ""]
         chk(all("console" in r and "Entraîner" in r for r in raisons)
@@ -510,19 +465,13 @@ def _selftest():
         chk(d["nom"] == "errp_model.joblib", f"la description porte le nom du fichier ({d['nom']})")
         chk(isinstance(d["cv_auc"], float) and 0.0 <= d["cv_auc"] <= 1.0,
             f"l'AUC honnête (GroupKFold par bloc) est une proportion ({d['cv_auc']})")
-        # ⚠️ Cette assertion était RETOURNÉE : elle exigeait `n_epoques is None`, c'est-à-dire
-        # qu'elle interdisait le correctif. Analyse de mutation à l'appui : aucune mutation d'une
-        # ligne de `charger`/`decrire` ne la rougissait, et la SEULE chose qui la rougissait était
-        # d'ajouter `self.n_epoques_ = int(len(y))` à `ErrPModel.fit` — une amélioration correcte,
-        # que ce test aurait fait passer pour une régression. Elle dit maintenant ce que dit son
-        # jumeau (`p300_models.py`) : le chiffre est là, et c'est le bon.
+        # Comme dans `p300_models.py` : le nombre d'époques est là, et c'est le bon.
         chk(d["n_epoques"] == len(y),
             f"et le nombre d'époques d'entraînement est retenu ({d['n_epoques']})")
         chk(d["date"], f"et une date lisible ({d['date']})")
 
         # `decrire` est la fonction SŒUR de `charger`, publique, et c'est elle qui remplit la
-        # liste de modèles de la console. Elle levait un TypeError sur les mêmes entrées contre
-        # lesquelles `charger` avait été durcie (`os.path.isfile(None)`), à un fil Qt de distance.
+        # liste de modèles de la console : elle doit tenir les mêmes entrées vides.
         for entree in (None, "", 0):
             d_vide = decrire(entree)
             chk(d_vide["probleme"] and d_vide["cv_auc"] is None and d_vide["nom"] == "",
@@ -540,10 +489,10 @@ def _selftest():
         dispo = modeles_disponibles(dossier)
         chk(dispo == [recent, ancien], f"le plus récent d'abord ({dispo})")
 
-        # 3. Ce que la liste LAISSE DEHORS. La version d'avant demandait « un dossier vide rend
-        # [] » — vrai, mais insensible à toute mutation d'une ligne (MOTIF faux, tri supprimé,
-        # filtre inversé, filtre supprimé : tous verts sur un dossier vide). Ici le dossier
-        # contient exactement les deux pièges, et le résultat attendu reste [] :
+        # 3. Ce que la liste LAISSE DEHORS. Un simple « dossier vide rend [] » serait insensible
+        # à toute mutation d'une ligne (MOTIF faux, tri supprimé, filtre inversé, filtre supprimé :
+        # tous verts sur un dossier vide). Ici le dossier contient exactement les deux pièges, et
+        # le résultat attendu reste [] :
         #   (a) un modèle PARFAITEMENT valide sous un nom qui ne correspond PAS à MOTIF — il
         #       rougit `MOTIF = "*.joblib"`, l'élargissement qu'on écrit sans y penser ;
         #   (b) un fichier illisible sous un nom qui, lui, correspond — il rougit la suppression

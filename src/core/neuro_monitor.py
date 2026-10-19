@@ -1,28 +1,28 @@
 """Mode 5 — neuro-monitoring PASSIF : indices spectraux workload / vigilance / attention.
 
 BCI PASSIF : aucune commande n'est envoyée au robot. On lit un ÉTAT mental à partir des
-puissances de bande (θ/α/β) et on l'affiche en histogramme temps réel (voir app.mode_neuro).
+puissances de bande (θ/α/β) et on l'affiche en histogramme temps réel (console).
 
 Les trois indices reposent tous sur les MÊMES puissances de bande — un seul calcul PSD, trois
 ratios. Ils sont donc CORRÉLÉS (l'engagement de Pope β/(α+θ) est ~l'inverse de la somnolence
 (θ+α)/β) : ce sont des TENDANCES RELATIVES à comparer à un repos, PAS des mesures indépendantes.
-Formules (v2 2026-07-23, après revue littérature multi-agent — cf. eeg-modes-a-venir) :
+Formules :
   - charge / workload      = θ_(Fz,Cz) / α_pariétal   (« task load index » de Holm 2009 ; θ
         frontal-médian MOYENNÉ Fz+Cz — pas Fz seul, trop sensible au clignement — sur l'α pariétal)
   - somnolence / vigilance = α_postérieur             (α pariéto-occipital, normalisé au repos :
         marqueur classique de somnolence/relâchement, monte quand la vigilance baisse — Jap 2009.
-        REMPLACE l'ancien (θ+α)/β qui était l'INVERSE EXACT de l'engagement = barre redondante)
+        (et non (θ+α)/β, l'INVERSE EXACT de l'engagement : ce serait une barre redondante)
   - engagement / attention = β / (α + θ)  sur sites POSTÉRO-CENTRAUX (Cz,Pz,PO7,Oz,PO8, PAS Fz)
         (indice de Pope 1995 : sites central-pariétaux ; exclure Fz retire l'EMG/clignement frontal)
 Bande β bornée à 25 Hz (moins d'EMG, cf. Goncharova 2003) ; VETO EMG sur une bande 30-45 Hz ;
 passe-haut léger avant PSD (dérive électrode SÈCHE) ; re-calage lent du repos (dérive multi-min).
 
-⚠️ Ces ratios DÉRIVENT et sont individuels. Sans repères ils n'affichent que du bruit -> l'appli
+⚠️ Ces ratios DÉRIVENT et sont individuels. Sans repères ils n'affichent que du bruit -> on
 les NORMALISE en z **dans l'espace LOG** contre un repos mesuré en début de mode (IndexNormalizer :
 les ratios de bande ont une queue lourde à droite, le log la redresse sinon le moindre effort
 sature l'échelle), les LISSE (EMA) et REJETTE les fenêtres à σ aberrant (clignement/EMG : le θ
 frontal est pollué en premier). À lire comme « au-dessus / en-dessous de mon repos », jamais en
-absolu. (cf. rigueur-statistique-eeg.)
+absolu.
 
 Le calcul travaille sur le flux BRUT (non filtré) : le passe-bande d'acquisition SSVEP (5-40 Hz)
 couperait le bas du θ. La PSD de Welch détend (linéaire) chaque segment -> l'offset DC et la
@@ -50,10 +50,8 @@ INDEX_KEYS = ("charge", "somnolence", "engagement")
 # formule en une ligne, et le SENS de la montée. Sans les trois, une barre étiquetée « charge »
 # qui monte ne dit pas si c'est bon signe, ni ce qu'elle mesure.
 #
-# ⚠️ Ces textes vivaient dans `research/app.py` (`_NEURO_VIEW`), c'est-à-dire dans le banc d'essai,
-# et la console n'en avait aucun : elle affichait la CLÉ brute (« charge »), sans formule ni sens.
-# Deux écrans du même produit disaient donc deux choses différentes du même chiffre. Ils sont
-# montés ici le 2026-09-08, avec le calcul qui les produit — la couleur, elle, reste à chaque
+# Ces textes vivent ici, avec le calcul qui les produit : deux écrans du même produit ne doivent
+# jamais dire deux choses différentes du même chiffre. La couleur, elle, reste à chaque
 # interface, c'est de la présentation.
 #
 # L'ordre est celui de `INDEX_KEYS`, et il est vérifié par l'autotest : deux listes parallèles qui
@@ -88,7 +86,7 @@ def artifact_sigma(window, fs, band=(1.0, 30.0), notch_hz=SECTEUR_HZ):
     """σ PAR VOIE pour le rejet d'artefact — sur un signal BANDE-LIMITÉ + NOTCH secteur, PAS le
     signal quasi-brut utilisé pour la PSD des indices.
 
-    ⚠️ Piège corrigé (retour utilisateur 2026-07-23 : « ça se déclenche même à l'arrêt complet ») :
+    ⚠️ Piège (sans cela, le rejet se déclenche même à l'arrêt complet) :
     calculer le σ sur un signal seulement passe-haut à 0,5 Hz laisse passer TOUT le reste (ronflement
     secteur 50 Hz, bruit haute fréquence, dérive sub-1 Hz) -> ce σ est intrinsèquement bien plus
     volatil minute à minute que celui utilisé ailleurs dans l'app (SSVEP compare son ratio ×4 sur un
@@ -99,7 +97,7 @@ def artifact_sigma(window, fs, band=(1.0, 30.0), notch_hz=SECTEUR_HZ):
     qualité de la fenêtre ; les indices restent calculés sur le signal large-bande (highpass_filter).
 
     `notch_hz` : le secteur du POSTE (50 ou 60 Hz), que `NeuroDecoder` reçoit du moteur. Son effet
-    est MINCE, et c'est mesuré (2026-09-30) : le passe-bande coupe déjà à 30 Hz, donc à 50 comme à
+    est MINCE, et c'est mesuré : le passe-bande coupe déjà à 30 Hz, donc à 50 comme à
     60 Hz il ne reste guère que le transitoire des bords de `filtfilt`, que le notch ne touche pas
     (1000 µV de secteur à 50 Hz sur 4 s : σ 107,45 avec le notch à 50 Hz, 107,55 à 60, 107,55
     sans). Il suit le poste pour que « le secteur coupé » ait partout le même sens, pas parce
@@ -174,9 +172,9 @@ class IndexNormalizer:
     Deux robustesses délibérées :
     - **log** : ces indices sont des RATIOS de bande, à distribution très asymétrique (queue lourde
       à droite : quand l'α s'effondre, le ratio explose de façon multiplicative). En z direct, le
-      moindre effort SATURAIT l'échelle (charge « qui plafonne »). log(ratio) redresse la queue ->
-      un doublement compte autant qu'une division par deux, le z reste borné et symétrique. C'est
-      la pratique standard pour les ratios spectraux.
+      moindre effort SATURERAIT l'échelle (charge « qui plafonne »). log(ratio) redresse la
+      queue -> un doublement compte autant qu'une division par deux, le z reste borné et
+      symétrique. C'est la pratique standard pour les ratios spectraux.
     - **médiane + MAD** (pas moyenne/écart-type) : un clignement résiduel pendant le repos ne fausse
       pas les échelles. L'EMA absorbe la variabilité fenêtre-à-fenêtre (ces ratios sont bruités).
     """
@@ -246,11 +244,11 @@ class IndexNormalizer:
 class NeuroDecoder:
     """Une fenêtre brute -> trois z lissés, veto d'artefact compris. **Une seule définition.**
 
-    Cette classe existe pour une raison précise : le mode est utilisé par DEUX programmes —
-    l'appli pygame (histogramme) et le moteur (flux `decoded_neuro`). Les mêmes vingt lignes
-    recopiées des deux côtés dériveraient au premier réglage, et on afficherait alors une
-    charge mentale à l'écran pendant qu'on en publierait une autre sur le réseau. Le projet a
-    déjà payé ce genre de divergence sur la mesure de qualité (cf. `sigma_from_block`).
+    Cette classe existe pour une raison précise : le mode est utilisé par plusieurs programmes
+    (le moteur, qui publie le flux `decoded_neuro`, et tout écran qui l'affiche). Les mêmes
+    vingt lignes recopiées de chaque côté dériveraient au premier réglage, et on afficherait
+    alors une charge mentale à l'écran pendant qu'on en publierait une autre sur le réseau
+    (même raison que pour la mesure de qualité, cf. `sigma_from_block`).
 
     Cycle d'utilisation :
         d = NeuroDecoder(fs)
@@ -268,7 +266,7 @@ class NeuroDecoder:
     def __init__(self, fs, update_hz=NEURO_UPDATE_HZ, rebaseline_s=NEURO_REBASELINE_S, smoothing=NEURO_SMOOTH,
                  secteur_hz=SECTEUR_HZ):
         self.fs = float(fs)
-        # Le secteur du POSTE (2026-09-30) : le notch du σ de contrôle (cf. `artifact_sigma`).
+        # Le secteur du POSTE : le notch du σ de contrôle (cf. `artifact_sigma`).
         self.secteur_hz = float(secteur_hz)
         self.norm = None
         self.sigma_ref = None      # σ par voie au repos -> rejet par voie
@@ -292,7 +290,7 @@ class NeuroDecoder:
         Brute à dessein : le passe-bande d'acquisition (5-40 Hz) couperait le bas du θ. Le σ de
         contrôle, lui, est calculé à part sur une version bande-limitée + notch — un σ pris sur
         du quasi-brut est dominé par le secteur et la dérive, et déclenche de faux rejets même
-        immobile (retour utilisateur 2026-07-23).
+        immobile.
         """
         if window is None or len(window) < int(0.5 * self.fs):
             return None
@@ -412,7 +410,7 @@ def _demo():
         norm.creep(indices(_synth(fs, theta=1.0, alpha=1.0, beta=3.0, seed=99), fs), 0.05)
     chk(norm.mu["engagement"] > mu0, "le re-calage lent (creep) ne déplace pas le zéro")
 
-    # Le SECTEUR du poste (2026-09-30) : le σ de contrôle coupe celui que le décodeur a REÇU, pas
+    # Le SECTEUR du poste : le σ de contrôle coupe celui que le décodeur a REÇU, pas
     # 50 Hz en dur. Comparé à l'appel direct, au bit près : l'effet du notch sur ce σ est mince
     # (cf. `artifact_sigma`), donc un écart de valeur ne prouverait rien — c'est le filtre DEMANDÉ
     # qu'on vérifie, et qu'il diffère bien de l'autre secteur.

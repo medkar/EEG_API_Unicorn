@@ -59,11 +59,11 @@ def decompte(mode_state):
 def compter(n, unite):
     """« 0 manche », « 1 manche », « 6 manches » — `unite` est celle que le MOTEUR publie.
 
-    ⚠️ L'unité n'est pas un détail d'affichage (constat I7 de la revue de branche). La page de test
-    comptait tout en « phase(s) enregistrée(s) » et en « fenêtre(s) prélevée(s) », le vocabulaire
-    du contrôle alpha : l'étudiant choisissait « Manches : 6 » et lisait ensuite « 12 phase(s)
-    enregistrée(s) sur 288 », sous un verdict « … sur 6 manches ». Le moteur publie désormais
-    l'unité de chaque protocole (`state()["unite"]`) ; la console n'en connaît aucune.
+    ⚠️ L'unité n'est pas un détail d'affichage : un test réglé en « manches » doit compter en
+    manches, pas dans le vocabulaire du contrôle alpha (« phases enregistrées », « fenêtres
+    prélevées »), sinon l'élève lit « 12 phases sur 288 » sous un verdict « … sur 6 manches ».
+    Le moteur publie l'unité de chaque protocole (`state()["unite"]`) ; la console n'en connaît
+    aucune.
 
     La règle du pluriel appartient à la LANGUE, pas au code : son suffixe et les terminaisons qui
     ne varient pas sont lus dans le catalogue (« s », et « s,x,z » en français).
@@ -74,16 +74,11 @@ def compter(n, unite):
 
 # Jusqu'où va la barre d'un mode qui PUBLIE UN SEUIL. Une barre pleine à ras le seuil laisserait
 # croire qu'on est au maximum alors qu'on vient à peine de déclencher — d'où 2× le seuil, ce qui
-# place le déclenchement à mi-hauteur, un repère visuel immédiat. Ici et pas dans chaque écran :
-# la tuile et la page ont divergé sur ce facteur (tuile 1×, page 2×), au point qu'un même score
-# de 3,1 pour un seuil de 2,5 s'affichait « barre PLEINE » sur la grille et « 62 % » sur la page.
-# Deux écrans, mêmes données, deux lectures.
-#
-# ⚠️ Il s'appelait `SSVEP_SPAN_SEUILS`, et ce nom devenait faux : le c-VEP publie lui aussi un
-# seuil absolu (`corr_min`), et l'écran s'en sert de la même façon. Un nom de mode sur une
-# convention d'AFFICHAGE finit par faire croire qu'une constante du SSVEP met à l'échelle la
-# sortie d'un autre mode — c'est exactement le défaut qui a survécu deux chantiers sur la tuile
-# P300 (le repli sur `Z_MIN`). Le facteur, lui, n'appartient à aucun mode.
+# place le déclenchement à mi-hauteur, un repère visuel immédiat. Défini ici et pas dans chaque
+# écran : si la tuile et la page n'avaient pas le même facteur, un même score s'afficherait
+# « barre pleine » sur la grille et « 62 % » sur la page (mêmes données, deux lectures).
+# Le facteur n'appartient à aucun mode : le SSVEP (z) et le c-VEP (`corr_min`) s'en servent
+# pareillement.
 SPAN_SEUILS = 2.0
 
 
@@ -96,13 +91,11 @@ def span_correlation(corr_min):
     SSVEP (`max(..., 1.0)`) écraserait les deux dans le tiers bas de la barre, visuellement
     identiques.
 
-    ⚠️ **Cette fonction existe parce que la règle a divergé DÈS le commit qui l'écrivait**, comme
-    `classement_relatif` avant elle : la tuile (`grid.ModeTile._apercu_scores`) et la page
-    (`live_views.ActiveView._update_correlations`) l'appliquaient chacune de leur côté et
-    différaient déjà d'un repli. À `corr_min = 0` — une valeur LÉGALE (`min=0.0` sur le réglage)
-    et ENCOURAGÉE en séance (son `help` : « DESCENDS cette valeur… SANS risque », et la recette
-    2.9 la fait descendre à 0,05 comme geste de routine) — la page affichait 33 % là où la tuile
-    montrait TOUTES les barres pleines. Mêmes données, deux lectures, deux diagnostics opposés.
+    ⚠️ **La tuile (`grid.ModeTile._apercu_scores`) et la page
+    (`live_views.ActiveView._update_correlations`) appellent cette même fonction** : écrite
+    deux fois, la règle dérive. Le cas qui les séparait est `corr_min = 0`, valeur LÉGALE
+    (`min=0.0` sur le réglage) et courante en séance (cf. docs/recette.md, test 2.9) : l'une
+    affichait 33 %, l'autre toutes les barres pleines, deux diagnostics opposés.
 
     `corr_min = 0` veut dire « aucun seuil ne borne l'échelle » : on retombe alors sur l'échelle
     absolue complète d'une corrélation, 1,0. Jamais 0 — une échelle nulle rend toute barre pleine.
@@ -119,12 +112,10 @@ def classement_relatif(scores):
     maximum » n'aurait donc aucun sens ; ce qu'on montre est le CLASSEMENT — la plus faible vide,
     la plus forte pleine — parce que c'est l'écart 1er-2e qui décide.
 
-    ⚠️ **Cette fonction existe parce que la règle a déjà divergé une fois.** Elle était écrite
-    deux fois, mot pour mot : dans `live_views.ActiveView._update_selection` (la page) et dans
-    `grid.ModeTile._apercu_scores` (la tuile). La page a été corrigée lors d'un chantier, la tuile
-    oubliée — et pendant ce temps la grille montrait six moignons de 2 px là où la page montrait
-    un classement lisible. Les deux ont été remises d'accord ; les garder d'accord demande
-    qu'elles appellent le MÊME code, pas qu'elles se ressemblent.
+    ⚠️ **La page (`live_views.ActiveView._update_selection`) et la tuile
+    (`grid.ModeTile._apercu_scores`) appellent cette même fonction.** Deux copies de la règle
+    dérivent : la grille montrerait six moignons de 2 px là où la page montre un classement
+    lisible. Rester d'accord demande d'appeler le MÊME code, pas de se ressembler.
 
     `etendue <= 0` (scores tous égaux, ou une seule cible) laisse tout à mi-hauteur : ni division
     par zéro, ni gagnant désigné qui n'en est pas un.

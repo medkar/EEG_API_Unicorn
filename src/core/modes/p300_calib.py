@@ -1,6 +1,6 @@
 """La calibration P300 : la fenêtre mène le protocole, le MOTEUR entraîne.
 
-Première sous-classe concrète de `MarkerCalibrationRuntime` (`core/modes/marker_calib.py`, à lire
+Sous-classe concrète de `MarkerCalibrationRuntime` (`core/modes/marker_calib.py`, à lire
 avant celui-ci). Elle ne fournit que les trois choses que le socle réclame :
 
   1. `runtime_cls_du_mode = P300Runtime` — la géométrie d'époque est LUE là, jamais redéclarée ici ;
@@ -9,31 +9,30 @@ avant celui-ci). Elle ne fournit que les trois choses que le socle réclame :
   3. `_entrainer(enregistre, fs)` — xDAWN + Riemann, la sélection en leave-one-round-out, et une
      sauvegarde HORODATÉE.
 
-⚠️ **LE FILTRE SE RÈGLE ICI, ET PAS AU DÉCODAGE** (2026-09-30). La bande (`bande_bas`/`bande_haut`,
+⚠️ **LE FILTRE SE RÈGLE ICI, ET PAS AU DÉCODAGE.** La bande (`bande_bas`/`bande_haut`,
 les réglages de « Entraîner ») et le secteur du poste (`engine.secteur_hz`) partent dans le modèle,
 qui décodera toujours avec. Les changer au décodage ferait décoder un modèle sur un autre filtre que
 celui qu'il a appris, sans la moindre erreur. Et ils partent aussi dans CHAQUE modèle de la
 validation (`selection_loro`) : un modèle de CV filtré autrement que le modèle final mesurerait
 autre chose que lui — le chiffre affiché serait celui d'un modèle qu'on n'enregistre pas.
 
-⚠️ **Ce qui change par rapport à l'ancien chemin**, et c'est le point du chantier : les époques
-d'entraînement étaient découpées par `research/p300_calibrate.py` (l'horloge de l'appli pygame) et
-celles du décodage par le moteur (marqueurs LSL, `time_correction`). Deux chemins, aucun test pour
-les accorder. Ici il n'y en a plus qu'UN : le socle prélève par `epoch_from_stream`, avec les
-`pre_s`/`post_s` lus sur `P300Runtime` — littéralement l'appel que `core/modes/p300.py` fait en
-décodant.
+⚠️ **Un seul chemin d'épochage.** Les époques d'entraînement et celles du décodage sont
+découpées par le même appel : le socle prélève par `epoch_from_stream`, avec les `pre_s`/`post_s`
+lus sur `P300Runtime` — littéralement l'appel que `core/modes/p300.py` fait en décodant (marqueurs
+LSL, `time_correction`). Deux chemins distincts pourraient se désaccorder sans qu'aucun test le
+voie.
 
 ⚠️ **CE FICHIER NE TESTE PAS L'ALIGNEMENT, et il ne le peut pas.** Son autotest juge un décodage,
-donc il tolère ce qu'un décodage tolère : MESURÉ, translater l'époque de 150 ms (37 échantillons)
+donc il tolère ce qu'un décodage tolère : mesuré, translater l'époque de 150 ms (37 échantillons)
 laisse ici la sélection à 6/6 et l'AUC à 94 % — tout reste VERT. C'est exactement la panne
-« indiscernable d'un succès » du projet. L'alignement est gardé UN CRAN PLUS BAS, par
-`python src/core/modes/marker_calib.py`, qui compare échantillon par échantillon les deux chemins
+« indiscernable d'un succès » du projet : un décalage d'épochage décode du bruit avec confiance.
+L'alignement est gardé UN CRAN PLUS BAS, par `python src/core/modes/marker_calib.py`, qui compare échantillon par échantillon les deux chemins
 d'épochage sur deux géométries : la même mutation y rougit sur cinq assertions. Ne pas déplacer ce
 garde-là ici en croyant le rapprocher de son sujet — il n'y survivrait pas.
 
 ⚠️ **L'ÉTIQUETTE VOYAGE AVEC L'ÉPOQUE, dans le même tuple**, et ce n'est pas un détail de style.
-La tentation est d'empiler `flashed`/`groups` dans des listes parallèles au moment où le marqueur
-arrive — c'est ce que faisait l'ancienne calibration. Mais le socle n'enregistre PAS toujours :
+Empiler `flashed`/`groups` dans des listes parallèles au moment où le marqueur arrive serait une
+erreur : le socle n'enregistre PAS toujours :
 quand l'époque déborde du tampon (`epoch_from_stream` rend None), il compte une perte et passe. Des
 listes parallèles se décaleraient alors d'un cran pour tout le reste de la séance, chaque époque
 apprenant l'étiquette de la suivante — un modèle entraîné sur du bruit, avec des scores plausibles.
@@ -45,11 +44,10 @@ ENSEMBLE »), fermée ici par la STRUCTURE plutôt que par une garde.
 import en tête d'ici refermerait un CYCLE. Un cycle module-à-module survit tant que chacun est
 importé par son nom de paquet — mais pas quand l'un des deux fichiers est lancé DIRECTEMENT :
 Python le charge alors sous le nom `__main__`, la garde de `sys.modules` ne joue plus, et le second
-exemplaire se retrouve à demander un nom pas encore défini. MESURÉ, avant d'écrire cette ligne :
-`python src/core/modes/p300.py` sortait sur `ImportError: cannot import name 'BRIEFING' from
-partially initialized module` — c'est-à-dire l'autotest du mode P300, l'un des six que la recette
-demande. Différer l'import supprime l'arête au lieu de l'ordonner : plus aucun ordre de chargement
-ne peut échouer.
+exemplaire se retrouve à demander un nom pas encore défini : `python src/core/modes/p300.py` (le
+mode P300 est l'un des autotests de la recette) sortirait sur `ImportError: cannot import name
+'BRIEFING' from partially initialized module`. Différer l'import supprime l'arête au lieu de
+l'ordonner : plus aucun ordre de chargement ne peut échouer.
 
 Autotest :
     python src/core/modes/p300_calib.py
@@ -88,8 +86,8 @@ SOA_REFERENCE_S = (P300_FLASH_ON_FR + P300_FLASH_OFF_FR) / REFRESH_REFERENCE_HZ
 # Ce que l'étudiant lit AVANT de commencer, sur la page de la console. Le protocole lui-même
 # s'affiche dans la fenêtre de stimulus : ce qui est ici est ce qu'il faut avoir compris avant.
 BRIEFING = (
-    # « Compter ses éclairs aide, sans être indispensable » : vérifié au casque le 2026-09-22, la
-    # sélection marche sur la fixation seule.
+    # Compter ses éclairs aide sans être indispensable : au casque, la sélection marche sur la
+    # fixation seule.
     tr("calib.p300.briefing.1"),
     tr("calib.p300.briefing.2"),
     tr("calib.p300.briefing.3"),
@@ -197,13 +195,10 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s, band, se
     C'est LA métrique du P300 : l'AUC dit ce que vaut une époque isolée, celle-ci dit ce que vaut
     la réponse rendue à l'utilisateur, après moyennage sur les répétitions.
 
-    Montée telle quelle depuis `research/p300_calibrate.py` (elle y était déjà écrite et validée
-    au casque) : `core` en a besoin maintenant que c'est le moteur qui entraîne.
-
     ⚠️ `band` et `secteur_hz` sont EXIGÉS, sans défaut : ce sont ceux du modèle FINAL (`entrainer`
     les relit sur lui). Un modèle de validation construit avec les défauts de `P300Model`
     mesurerait un AUTRE filtre que celui qu'on enregistre — le chiffre affiché serait celui d'un
-    modèle que personne ne garde, et rien ne le signalerait tant que la bande reste par défaut.
+    modèle que personne ne garde, sans rien signaler tant que la bande reste par défaut.
     """
     epochs, flashed, groups = np.asarray(epochs), np.asarray(flashed), np.asarray(groups)
     y = np.array([TARGET if flashed[i] == cues[groups[i]] else NONTARGET
@@ -233,12 +228,12 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
     trop pauvre pour valoir un modèle.
 
     `chemin_modele` est EXPLICITE, jamais deviné ici : c'est l'appelant qui décide où écrire (la
-    calibration du moteur passe son `self.dossier`, `research/p300_calibrate.py` passe son
-    `save_path`). Un défaut fixe est précisément ce qui a fait perdre les modèles du MI.
+    calibration du moteur passe son `self.dossier`). Un chemin par défaut fixe risquerait
+    d'écraser un modèle existant.
 
-    `chemin_npz` (facultatif) archive les époques BRUTES à côté du modèle. C'est ce qui a sauvé le
-    P300 quand ses modèles sont devenus illisibles : on ré-entraîne depuis le disque au lieu de
-    refaire une séance (cf. `core/p300_models.py`). Le `.npz` est écrit AVANT le `.joblib` — si le
+    `chemin_npz` (facultatif) archive les époques BRUTES à côté du modèle : si un modèle devient
+    illisible, on ré-entraîne depuis le disque au lieu de refaire une séance (cf.
+    `core/p300_models.py`). Le `.npz` est écrit AVANT le `.joblib` — si le
     disque est plein, l'exception remonte avant que le modèle n'existe, et aucun modèle orphelin
     ne se retrouve ÉLU comme le plus récent chargeable.
 
@@ -253,13 +248,12 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
     vient tout juste de calibrer, en accusant le modèle. L'appelant qui a découpé les époques est
     le seul à savoir avec quoi.
 
-    `band` / `secteur_hz` : le FILTRE que le modèle apprend, et avec lequel il décodera toujours
-    (2026-09-30). La calibration du moteur passe la bande réglée dans « Entraîner » et le secteur
-    du poste. Les défauts sont ceux des écrans archivés (`archive/p300_calibrate.py`), qui
-    entraînent comme avant ce réglage : la bande de toujours, sans coupe-bande. Ils ne sont pas
-    un piège comme le serait un défaut de géométrie : le modèle PORTE son filtre et décode avec,
-    il ne peut donc pas être appliqué sur un autre — au pire, le réglage de l'étudiant est ignoré,
-    et c'est ce que l'autotest de ce fichier fait rougir.
+    `band` / `secteur_hz` : le FILTRE que le modèle apprend, et avec lequel il décodera toujours.
+    La calibration du moteur passe la bande réglée dans « Entraîner » et le secteur du poste. Les
+    défauts sont ceux de l'écran archivé (`archive/p300_calibrate.py`) : la bande de toujours,
+    sans coupe-bande. Ils ne sont pas un piège comme le serait un défaut de géométrie : le modèle
+    PORTE son filtre et décode avec, il ne peut donc pas être appliqué sur un autre — au pire, le
+    réglage de l'étudiant est ignoré, et c'est ce que l'autotest de ce fichier fait rougir.
     """
     epochs = np.asarray(epochs, dtype=float)
     labels = np.asarray(labels, dtype=int)
@@ -292,9 +286,8 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
         # aussi : ce sont les époques BRUTES, et un ré-entraînement qui voudrait refaire CE
         # modèle doit savoir avec quel filtre. `secteur_hz = 0` veut dire « pas de coupe-bande »
         # (la convention de `core/filtrage.py`, qui ne coupe que si le secteur est vrai) : un
-        # None ferait un tableau d'objets, illisible sans `allow_pickle`. Et leur ABSENCE, dans
-        # un `.npz` d'avant le 2026-09-30, a un sens précis : cf. la docstring de
-        # `core/p300_models.py`.
+        # None ferait un tableau d'objets, illisible sans `allow_pickle`. Leur ABSENCE dans un
+        # `.npz` a un sens précis : cf. la docstring de `core/p300_models.py`.
         np.savez(chemin_npz, epochs=epochs, labels=labels, flashed=flashed, groups=groups,
                  cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s,
                  band=np.asarray(modele.band, dtype=float),
@@ -375,8 +368,8 @@ class P300Calibration(MarkerCalibrationRuntime):
         """`dossier` : où écrire — porté par `CalibrationRuntime` et SANS repli sur `DATA_DIR`.
 
         C'est le moteur qui le donne, et c'est son dossier CANDIDAT temporaire : une calibration
-        qui choisissait elle-même écrivait dans `data/` AVANT d'annoncer sa précision, donc une
-        séance ratée y devenait le modèle le plus récent — celui qui est proposé par défaut —
+        qui choisirait elle-même écrirait dans `data/` AVANT d'annoncer sa précision, donc une
+        séance ratée y deviendrait le modèle le plus récent — celui qui est proposé par défaut —
         sans que personne ait pu la refuser.
         """
         super().__init__(spec, params, engine, rng=rng, dossier=dossier)
@@ -720,12 +713,11 @@ def _selftest():
 
         from core import p300_models
 
-        # ⚠️ L'INVERSE de ce que ce test exigeait avant le chantier « seul point d'entrée » : ce
-        # qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE tant
-        # que quelqu'un ne l'a pas retenu. Le préfixe le rend invisible au motif de découverte —
-        # sans lui, un candidat oublié dans son dossier temporaire redeviendrait « le modèle
-        # chargeable le plus récent » le jour où ce dossier serait scanné, c'est-à-dire le défaut
-        # que ce chantier ferme, rouvert par sa propre correction.
+        # ⚠️ Ce qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE
+        # tant que quelqu'un ne l'a pas retenu. Le préfixe le rend invisible au motif de
+        # découverte — sans lui, un candidat oublié dans son dossier temporaire deviendrait « le
+        # modèle chargeable le plus récent », donc le défaut proposé, le jour où ce dossier serait
+        # scanné.
         chk(_os.path.basename(res.get("modele", "")).startswith(CALIB_CANDIDAT_PREFIXE),
             f"le modèle produit est un CANDIDAT, marqué comme tel "
             f"({_os.path.basename(res.get('modele', ''))})")
@@ -741,9 +733,9 @@ def _selftest():
         # prélève (`_desaccord_geometrie`) — et il a raison : les scores seraient plausibles et
         # faux. C'est le contrôle SYMÉTRIQUE de tout ce fichier : on a vérifié que la calibration
         # découpe comme le décodage, on vérifie ici que ce qu'elle en SAUVEGARDE le dit aussi.
-        # Sans cette ligne, `P300Model(fs=fs)` construit avec ses défauts passait tous les tests,
-        # et le premier changement de `P300Runtime.pre_s` aurait fait refuser, au démarrage du
-        # mode, le modèle qu'on venait tout juste de calibrer — en accusant le modèle.
+        # Sans cette ligne, un `P300Model(fs=fs)` construit avec ses défauts passerait tous les
+        # tests, et le premier changement de `P300Runtime.pre_s` ferait refuser, au démarrage du
+        # mode, le modèle qu'on vient tout juste de calibrer — en accusant le modèle.
         class _MoteurDuMode:
             acq = _FausseAcq()
             instance = "selftest"
@@ -774,7 +766,7 @@ def _selftest():
         # ⚠️ L'espion est posé sur `core.filtrage.sections`, et sur rien de plus haut : c'est le
         # SEUL point par lequel passent tous les chemins. `passe_bande` le cherche dans son module
         # à chaque appel ; un `bandpass` importé PAR SON NOM ailleurs (`errp_decoder` le fait), ou un
-        # appel direct à `passe_bande`, échappaient à l'espion de `p300_decoder.bandpass` d'avant.
+        # appel direct à `passe_bande`, échapperaient à un espion posé sur `p300_decoder.bandpass`.
         from core import filtrage as _filtrage
         from core.modes.contract import validate
 
@@ -788,8 +780,8 @@ def _selftest():
             f"l'entrée, en nommant la coupure fautive ({raison_b})")
         # Les bornes, des DEUX côtés de CHAQUE coupure : basse de 0,5 à 1 Hz (l'onde vit en partie
         # sous 2 Hz ; plus bas que 0,5, un filtre sur une époque d'1 s ne fait plus que ses bords),
-        # haute de 8 à 40 Hz. Le seul refus testé avant (8-30 Hz) laissait survivre des bornes
-        # (0,1 ; 7,9) ou (2,5 ; 40) : chaque cas ci-dessous en tue au moins une.
+        # haute de 8 à 40 Hz. Le seul refus de 8-30 Hz laisserait survivre des bornes (0,1 ; 7,9)
+        # ou (2,5 ; 40) : chaque cas ci-dessous en tue au moins une.
         cas_bornes = (((0.5, 12.0), None), ((1.0, 8.0), None), ((1.0, 40.0), None),
                       ((0.4, 12.0), "moteur.bande.bas"), ((1.2, 12.0), "moteur.bande.bas"),
                       ((1.0, 7.8), "moteur.bande.haut"), ((1.0, 41.0), "moteur.bande.haut"))

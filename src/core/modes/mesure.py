@@ -5,7 +5,7 @@ disque. Une MESURE est la même mécanique amputée de sa fin. Elle joue une sui
 prélève une fenêtre de signal à la fin de celles qui sont enregistrées, et rend une PHRASE qu'on
 lit à l'écran. **Rien ne va sur le disque** : ni modèle, ni enregistrement, ni dossier candidat.
 
-Ce que ce socle existe pour porter — les deux premières mesures du produit, écrites ailleurs :
+Ce que ce socle porte (ces mesures sont écrites ailleurs) :
 
   • le **contrôle alpha** (effet de Berger : yeux ouverts / yeux fermés), qui est une BARRIÈRE —
     si l'alpha ne monte pas, aucune autre mesure de la séance ne veut rien dire ;
@@ -117,8 +117,8 @@ class MesureSpec:
     key_channels: tuple = ()    # les voies où CETTE mesure lit son signal, pour que le contrôle de
     #                             liaison les entoure — même champ que `ModeSpec.key_channels`. Vide
     #                             pour un TEST : la console prête alors celles du mode testé. Le
-    #                             contrôle alpha déclare ses occipitales (passe QA du 2026-09-23 :
-    #                             « on ne sait pas laquelle ou lesquelles sont utilisées »).
+    #                             contrôle alpha déclare ses occipitales, pour qu'on voie
+    #                             quelles voies il utilise.
     stimulus_id: str = ""       # la CLÉ de la fenêtre à ouvrir en même temps, ou "" si la mesure
     #                             se joue sans écran. Exactement la même clé et le même rôle que
     #                             `Calib.stimulus_id` : `core` ne nomme aucun fichier de fenêtre,
@@ -158,7 +158,7 @@ class MesureRuntime(CalibrationRuntime):
     """
 
     # La MÊME chauffe que les modes, que la calibration MI et que les calibrations à fenêtre :
-    # c'est la même dérive DC de l'Unicorn (mesurée le 2026-07-27 : 10⁵ µV en rampe après ouverture
+    # c'est la même dérive DC de l'Unicorn (mesurée : 10⁵ µV en rampe après ouverture
     # de session), et elle ne dépend pas de ce qu'on mesure ensuite. Une fenêtre prélevée là-dedans
     # ne vaut rien — et pour le contrôle alpha, dont tout le verdict tient dans un RAPPORT de
     # puissances, un offset dérivant fausse les deux termes de façon différente. Ne pas la
@@ -168,7 +168,7 @@ class MesureRuntime(CalibrationRuntime):
 
     # Comment cette séance se nomme dans le journal. `_terminer` est HÉRITÉE (c'est tout l'intérêt
     # de ce module), et sans ces deux mots un contrôle alpha raté s'annoncerait « [calib]
-    # entraînement impossible » — un étudiant irait chercher un modèle que personne n'a demandé.
+    # entraînement impossible » — on irait chercher un modèle que personne n'a demandé.
     _journal = "mesure"
     _nom_du_calcul = "calcul du verdict"
 
@@ -181,23 +181,21 @@ class MesureRuntime(CalibrationRuntime):
     # Ce que cette mesure prélève AUTOUR D'UN MARQUEUR, en secondes. 0 = elle n'en prélève pas (le
     # contrôle alpha, dont les fenêtres viennent de sa propre ligne du temps).
     #
-    # ⚠️ Ce champ existe pour DIMENSIONNER le tampon du moteur (`EngineServer.__init__`, terme
-    # `epoque_mesure`), et il doit être déclaré ici plutôt que déduit. Le tampon n'était couvert
-    # que par accident, à travers l'`epoch_s` de la calibration MI (4 s) — une grandeur qui n'a
-    # aucun rapport avec une mesure. Le jour où le MI raccourcirait la sienne, chaque époque de
-    # cette mesure serait TRONQUÉE en silence, et le verdict porterait sur moins de signal que ce
-    # que l'écran annonce. Nommer le besoin est ce qui empêche cette panne-là.
+    # ⚠️ Ce champ sert à DIMENSIONNER le tampon du moteur (`EngineServer.__init__`, terme
+    # `epoque_mesure`), et il doit être déclaré ici plutôt que déduit de l'`epoch_s` de la
+    # calibration MI (4 s), grandeur sans rapport avec une mesure : le jour où le MI
+    # raccourcirait la sienne, chaque époque de cette mesure serait TRONQUÉE en silence, et le
+    # verdict porterait sur moins de signal que ce que l'écran annonce.
     epoque_marqueur_s = 0.0
 
     # ⚠️ **La plus longue étape ENREGISTRÉE de ce protocole, en secondes.** Le moteur dimensionne
     # son tampon dessus, exactement comme il le fait sur `Calib.epoch_s` et `marker_epoch_s`.
     #
-    # Sans ce terme, le contrôle alpha demandait des fenêtres de 8 s à un tampon qui n'en gardait
-    # que 5 : les deux étapes étaient « IGNORÉES », `_mesurer` recevait une liste VIDE, et la
-    # séance se soldait en `annule` avec un message qui accusait le PROTOCOLE (« phase
-    # manquante ») au lieu du tampon. La barrière d'entrée de toute séance ne pouvait donc jamais
-    # être franchie — trouvé par la revue de branche du 2026-09-10, jamais par un test, parce que
-    # les deux moteurs factices rendent TOUJOURS la longueur demandée.
+    # Sans ce terme, un contrôle alpha demanderait des fenêtres de 8 s à un tampon qui n'en
+    # garde que 5 : les deux étapes seraient « IGNORÉES », `_mesurer` recevrait une liste VIDE,
+    # et la séance se solderait en `annule` avec un message qui accuserait le PROTOCOLE (« phase
+    # manquante ») au lieu du tampon. Les moteurs factices des tests rendent TOUJOURS la
+    # longueur demandée : ils ne voient pas cette panne.
     #
     # `epoque_marqueur_s` ne pouvait pas couvrir ce cas et n'était pas censé le faire : sa
     # docstring dit « autour d'un MARQUEUR », et le contrôle alpha y met légitimement 0 — ses
@@ -494,7 +492,7 @@ def _selftest():
             return np.zeros((int(round(seconds * self.acq.fs)), 8))
 
     # Le patron exact d'une mesure réelle : deux préparations NON enregistrées encadrant deux
-    # phases enregistrées. C'est littéralement la forme du contrôle alpha (tâche 3).
+    # phases enregistrées. C'est littéralement la forme du contrôle alpha.
     class _MesureDEssai(MesureRuntime):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -685,9 +683,9 @@ def _selftest():
     chk(set(reference) == set(etat),
         f"…et c'est EXACTEMENT celui d'une calibration : `state()` n'est pas redéfinie ici, elle "
         f"est héritée ({sorted(set(reference) ^ set(etat)) or 'aucun écart'})")
-    # L'UNITÉ de `essai`/`total`, publiée par le moteur : la console écrivait « phase(s)
-    # enregistrée(s) » sous TOUTES les mesures, et un test P300 de 6 manches s'affichait « 0 phase(s)
-    # enregistrée(s) sur 288 ». Le mot vient de celui qui compte, pas d'une table côté écran.
+    # L'UNITÉ de `essai`/`total`, publiée par le moteur : une console qui écrirait « phase(s)
+    # enregistrée(s) » sous TOUTES les mesures afficherait « 0 phase(s) enregistrée(s) sur 288 »
+    # pour un test P300 de 6 manches. Le mot vient de celui qui compte, pas d'une table côté écran.
     chk(etat.get("unite") == "étape" and milieu.get("unite") == "étape",
         f"l'instantané NOMME l'unité de son avancement — « étape » par défaut ({etat.get('unite')!r})")
     chk(getattr(SPEC, "yeux_fermes", None) is False

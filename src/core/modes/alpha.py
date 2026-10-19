@@ -11,18 +11,15 @@ D'où le mot BARRIÈRE, et le fait que le verdict soit une **phrase qui arrête*
 chiffre à interpréter. Un étudiant qui lit « ratio 1,04 » ne sait pas quoi en faire ; un étudiant
 qui lit « ARRÊTE, re-saline les occipitales » sait.
 
-⚠️ **Le protocole, les durées et les bandes sont repris TELS QUELS de l'écran archivé
-`archive/alpha_check.py`** (ex-`src/research/alpha_check.py`), que cette mesure remplace. Ce n'est
-pas de la fidélité de principe : le repère « ratio > ~1,5 » a été observé sous CES durées, sur CE
-casque. Raccourcir une phase à 4 s diviserait la résolution spectrale par deux et rendrait le
-repère faux — sans qu'aucun test ne le dise, parce que le calcul, lui, continuerait à rendre un
-nombre parfaitement plausible.
+⚠️ **Le protocole, les durées et les bandes sont ceux de l'écran archivé
+`archive/alpha_check.py`.** Le repère « ratio > ~1,5 » a été observé sous CES durées, sur CE casque. Raccourcir une phase à
+4 s diviserait la résolution spectrale par deux et rendrait le repère faux, sans qu'aucun test ne
+le dise, parce que le calcul continuerait à rendre un nombre parfaitement plausible.
 
-⚠️ **Ce que cette mesure ferme, en plus** : le pic alpha mesuré ici est exactement la valeur que
-le réglage « Pic alpha » du SSVEP attend (`core/modes/ssvep.py`, `alpha_hz`, borné 6-14 Hz comme
-la recherche de pic ci-dessous). La recette le faisait NOTER À LA MAIN sur un carnet, puis
-RETAPER dans un autre écran. La console le renvoie maintenant au moteur d'un clic — une valeur
-recopiée entre deux écrans est ce que ce dépôt a déjà vu diverger.
+Le pic alpha mesuré ici est exactement la valeur que le réglage « Pic alpha » du SSVEP attend
+(`core/modes/ssvep.py`, `alpha_hz`, borné 6-14 Hz comme la recherche de pic ci-dessous). La
+console le renvoie au moteur d'un clic : une valeur recopiée à la main entre deux écrans finit
+par diverger.
 
 Autotest :
     python src/core/modes/alpha.py
@@ -42,13 +39,13 @@ from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import lignes, pct  # noqa: E402
 from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
-# ⚠️ Importé pour UNE chose : le réglage que ce pic alimente (`alpha_hz`), avec son libellé et le
-# mode qui le porte. C'est ce qui permet à la console de PROPOSER l'application du pic sans écrire
-# « ssvep » ni « alpha_hz » dans son propre code — le « catalogue recopié » que `CLAUDE.md`
-# interdit. Aucun cycle : `modes/ssvep.py` n'importe ni `mesure` ni `registry`.
+# Importé pour UNE chose : le réglage que ce pic alimente (`alpha_hz`), avec son libellé et le
+# mode qui le porte. La console peut ainsi PROPOSER l'application du pic sans écrire « ssvep »
+# ni « alpha_hz » dans son propre code (pas de catalogue recopié). Aucun cycle :
+# `modes/ssvep.py` n'importe ni `mesure` ni `registry`.
 from core.modes.ssvep import SPEC as SPEC_SSVEP  # noqa: E402
 
-# --- les constantes du protocole, reprises telles quelles ---------------------------------------
+# --- les constantes du protocole ----------------------------------------------------------------
 # ⚠️ Les quatre valeurs ci-dessous forment un TOUT avec le repère `RATIO_MIN`. Elles ne se règlent
 # pas depuis l'interface, et `SPEC.params` est vide pour cette raison précise : un réglage
 # « durée » exposé à l'étudiant lui laisserait invalider le seul repère chiffré de la mesure en
@@ -64,12 +61,12 @@ BANDE_PIC = (6.0, 14.0)    # la plage où l'on CHERCHE le pic — plus large, po
 # que ce n'est pas de l'alpha mais une dérive lente. Chercher directement dans 8-12 rendrait
 # toujours un pic « valide », y compris sur du bruit.
 PIC_ATTENDU = (8.0, 12.5)
-RATIO_MIN = 1.5            # le repère : `alpha_check.py` affichait « attendu > ~1.5 » depuis 2026-07
+RATIO_MIN = 1.5            # le repère : « attendu > ~1,5 », observé sur ce casque
 
 # Les noms des deux étapes ENREGISTRÉES. Des constantes, et pas deux chaînes écrites à deux
 # endroits : `protocole()` les pose sur ses `Etape`, `_mesurer()` les cherche dans ce qu'il reçoit.
 # Écrites deux fois, une faute de frappe donnerait « phase manquante » sur une séance parfaitement
-# jouée — 37 s de casque pour un message qui accuse le sujet.
+# jouée.
 # ⚠️ Ce sont AUSSI les textes affichés sous la consigne (`classe`), donc lus dans le fichier de
 # langue. La comparaison reste juste dans toutes les langues : les deux côtés lisent la MÊME
 # constante, résolue une fois à l'import.
@@ -77,11 +74,9 @@ OUVERT = tr("mesure.alpha.etape.ouvert")
 FERME = tr("mesure.alpha.etape.ferme")
 PREPARATION = tr("mesure.alpha.etape.preparation")
 
-# Les voies moyennées, NOMMÉES. `OCCIPITAL` vaut [4, 5, 6, 7] : Pz est dedans depuis qu'une mesure
-# sur trois séances a montré qu'il aidait la projection SSVEP. ⚠️ L'écran d'origine imprimait
-# « moyenne PO7/Oz/PO8 » alors qu'il moyennait DÉJÀ les quatre voies (il lisait `acq.occ_rows`,
-# donc `OCCIPITAL`) : la phrase avait cessé d'être vraie sans que personne le voie. On la calcule
-# donc au lieu de l'écrire.
+# Les voies moyennées, NOMMÉES. `OCCIPITAL` vaut [4, 5, 6, 7] : Pz en fait partie parce qu'il
+# aide la projection SSVEP. Les noms sont calculés depuis `OCCIPITAL` plutôt qu'écrits à la main,
+# pour que le texte affiché reste vrai si cette liste change.
 VOIES = [CH_NAMES[i] for i in OCCIPITAL]
 
 # Le réglage que ce pic alimente : mode SSVEP, clé `alpha_hz`. Lu dans le CONTRAT du mode, jamais
@@ -109,10 +104,9 @@ BRIEFING = (
 def _welch(x, fs, seg_s=SEGMENT_S):
     """PSD (Welch : segments Hann à 50 % de recouvrement) d'un signal 1D. Rend (freqs, psd).
 
-    Repris tel quel de l'écran d'origine. Un `scipy.signal.welch` ferait la même chose en une
-    ligne — on garde CETTE écriture parce que c'est elle qui a produit le repère 1,5 : les deux
-    ne normalisent pas pareil, et un ratio est justement ce qui survit à une normalisation… tant
-    que les deux termes passent par la MÊME.
+    Un `scipy.signal.welch` ferait la même chose en une ligne ; on garde CETTE écriture parce
+    que c'est elle qui a produit le repère 1,5 : les deux ne normalisent pas pareil, et un ratio
+    survit à une normalisation tant que les deux termes passent par la MÊME.
     """
     n = len(x)
     seg = min(n, int(seg_s * fs))
@@ -137,7 +131,7 @@ def _nettoyer(sig, fs, secteur_hz=SECTEUR_HZ):
     CELUI de la prise murale.
 
     ⚠️ Le détrend n'est pas une politesse : l'Unicorn sort un offset DC de l'ordre de 10⁵ µV
-    (mesuré le 2026-07-27). Une fenêtre non détrendue le fait FUIR à travers la fenêtre de Hann
+    (mesuré). Une fenêtre non détrendue le fait FUIR à travers la fenêtre de Hann
     jusque dans la bande alpha, où il domine l'EEG de plusieurs ordres de grandeur — les deux
     phases y ressemblent alors à la même chose, et le ratio tombe à 1 quel que soit le sujet.
     L'autotest le vérifie en ajoutant 10⁵ µV aux deux phases.
@@ -199,8 +193,6 @@ class ControleAlpha(MesureRuntime):
     # « Mesurer » à côté du champ « Pic alpha » de la page SSVEP — la console le LIT ici, elle
     # n'écrit ni « alpha » ni « alpha_hz ». Même source que `reglage_propose` ci-dessous : la
     # porte d'entrée et le retour ne peuvent pas désigner deux champs différents.
-    # ⚠️ Sa place naturelle est un champ de `MesureSpec`, sérialisé par `catalogue_mesures` ; il
-    # vit sur le runtime tant que `registry.py` est en chantier ailleurs (2026-09-22).
     REGLAGE_PRODUIT = (SPEC_SSVEP.id, PARAM_CIBLE.key)
 
     def protocole(self):
@@ -235,8 +227,8 @@ class ControleAlpha(MesureRuntime):
             raise ValueError(tr("mesure.alpha.erreur.phase_manquante",
                                 phases=", ".join(manquantes)))
 
-        # Le secteur du POSTE, que porte le moteur (2026-09-30). `getattr` avec le défaut : un
-        # autotest joue la mesure sans moteur (`self.engine` vaut None).
+        # Le secteur du POSTE, que porte le moteur. `getattr` avec le défaut : un autotest joue
+        # la mesure sans moteur (`self.engine` vaut None).
         secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
         freqs, psd_ouvert, sigmas_ouvert = _psd_occipitale(par_etape[OUVERT][-1], fs, secteur)
         _f, psd_ferme, sigmas_ferme = _psd_occipitale(par_etape[FERME][-1], fs, secteur)
@@ -244,11 +236,10 @@ class ControleAlpha(MesureRuntime):
         # ⚠️ LA LIAISON MORTE, avant tout calcul. Quatre voies plates donnent une puissance de
         # l'ordre de 10⁻²⁷ des DEUX côtés, et leur rapport est alors du bruit d'arrondi : il vaut
         # 0,3 ou 4,1 au hasard des derniers bits, donc il FRANCHIT la barrière une fois sur
-        # deux. C'est le pire résultat possible — « le montage est bon » affiché sur un câble
-        # débranché, ce qui est exactement ce qui a coûté 3,4 min de vide le 2026-07-20.
-        # Le seuil n'est pas inventé ici : c'est `signal_verdict`, la règle que le moteur applique
-        # déjà à ses huit voies (`SIGNAL_DEAD_SIGMA`). Une seconde règle de qualité écrite ici
-        # finirait par contredire celle du bandeau, et ce jour-là c'est l'écran qu'on croirait.
+        # deux, et afficherait « le montage est bon » sur un câble débranché.
+        # Le seuil est celui de `signal_verdict`, la règle que le moteur applique déjà à ses huit
+        # voies (`SIGNAL_DEAD_SIGMA`) : une seconde règle de qualité écrite ici finirait par
+        # contredire celle du bandeau.
         for etiquette, sigmas in ((OUVERT, sigmas_ouvert), (FERME, sigmas_ferme)):
             if all(signal_verdict(s) == "morte" for s in sigmas):
                 raise ValueError(tr(
@@ -283,15 +274,13 @@ class ControleAlpha(MesureRuntime):
             # deux issues — elle se franchit ou elle ARRÊTE —, donc jamais d'orange ici.
             **self._lignes(ratio, pic_hz, monte, au_bon_endroit),
             "honnetete": HONNETETE,
-            # ⚠️ CE QUI FERME LA BOUCLE. La recette faisait NOTER ce pic sur un carnet, puis le
-            # RETAPER dans « Pic alpha » de la page SSVEP. La console le renvoie maintenant au
-            # moteur d'un clic — et c'est le MOTEUR qui dit vers quel mode et quelle clé, pour
-            # que l'interface n'ait ni « ssvep » ni « alpha_hz » écrit dans son propre code.
+            # Le réglage à appliquer : la console renvoie le pic au moteur d'un clic, et c'est le
+            # MOTEUR qui dit vers quel mode et quelle clé, pour que l'interface n'ait ni « ssvep »
+            # ni « alpha_hz » écrit dans son propre code.
             #
             # ⚠️ **Absent quand la barrière n'est pas franchie**, et la décision vit ICI plutôt
             # que dans l'écran : sur un signal sans alpha, le « pic » est le plus grand bin d'un
-            # spectre de bruit. Le proposer serait pire que la boucle manuelle qu'on remplace —
-            # une valeur fausse, appliquée d'un clic, sans le carnet où l'on aurait hésité.
+            # spectre de bruit, et le proposer ferait appliquer d'un clic une valeur fausse.
             "reglage_propose": None if not franchie else {
                 "mode": self.REGLAGE_PRODUIT[0],
                 "mode_label": SPEC_SSVEP.label,
@@ -341,8 +330,8 @@ class ControleAlpha(MesureRuntime):
 
 SPEC = MesureSpec(
     id="alpha",
-    # « Vérifier le casque » (2026-09-22) : nommé d'après son BUT, pas d'après sa métrique. C'est
-    # le geste que l'étudiant fait — l'effet de Berger est le moyen, pas ce qu'il vient chercher.
+    # « Vérifier le casque » : nommé d'après son BUT, pas d'après sa métrique. C'est le geste que
+    # l'étudiant fait ; l'effet de Berger est le moyen, pas ce qu'il vient chercher.
     label=tr("mesure.alpha.label"),
     summary=tr("mesure.alpha.summary"),
     briefing=BRIEFING,
@@ -523,7 +512,7 @@ def _selftest():
         f"…et le verdict nomme le pic fautif ({lent['verdict'][:70]}…)")
 
     # === L'OFFSET DC de l'Unicorn : 10⁵ µV, et le verdict ne doit pas bouger ==================
-    # Mesuré sur ce casque le 2026-07-27. Sans détrend, il fuit à travers la fenêtre de Hann
+    # Mesuré sur ce casque. Sans détrend, il fuit à travers la fenêtre de Hann
     # jusque dans la bande alpha, où il domine l'EEG de plusieurs ordres de grandeur : les deux
     # phases se ressemblent alors, le ratio tombe vers 1, et TOUTE séance échoue à la barrière —
     # y compris celles où le casque est parfait.
@@ -536,7 +525,7 @@ def _selftest():
         f"un offset DC de 10⁵ µV ne change pas le verdict ({avec_dc['ratio']:.2f} contre "
         f"{res['ratio']:.2f} sans lui) — c'est le détrend qui tient ça, et rien d'autre")
 
-    # === Le SECTEUR du POSTE (2026-09-30) : à 60 Hz, c'est le 60 Hz qui part =================
+    # === Le SECTEUR du POSTE : à 60 Hz, c'est le 60 Hz qui part ===============================
     # 20 µV à 50 Hz ET 20 µV à 60 Hz sur les occipitales, et le protocole ENTIER joué par un
     # moteur qui porte son secteur. Un espion lit ce que le nettoyage rend réellement : c'est le
     # SIGNAL qu'on regarde, pas l'argument passé. Deux pannes le font rougir, à deux endroits :
@@ -599,11 +588,10 @@ def _selftest():
             f"…en nommant la phase absente et pourquoi elle est indispensable ({str(e)[:60]}…)")
 
     # === LA LIAISON MORTE : quatre voies plates ne rendent PAS un verdict =====================
-    # ⚠️ Le piège, et il est vicieux : sur des voies plates la puissance vaut ~10⁻²⁷ des deux
-    # côtés, donc le rapport est du bruit d'arrondi. Mesuré sur cette implémentation, il vaut
-    # 0,3 ou 4,1 selon les derniers bits — donc il FRANCHIT la barrière une fois sur deux, et
-    # l'écran annonce « le montage est bon » sur un câble débranché. C'est exactement le défaut
-    # qui a laissé enregistrer 3,4 min de vide le 2026-07-20.
+    # ⚠️ Sur des voies plates la puissance vaut ~10⁻²⁷ des deux côtés, donc le rapport est du
+    # bruit d'arrondi. Mesuré sur cette implémentation, il vaut 0,3 ou 4,1 selon les derniers
+    # bits : il FRANCHIT la barrière une fois sur deux, et l'écran annoncerait « le montage est
+    # bon » sur un câble débranché.
     plat_signal = np.zeros((N, len(CH_NAMES)))
     try:
         rt5._mesurer([(plat_signal, OUVERT), (plat_signal, FERME)], FS)
@@ -622,11 +610,10 @@ def _selftest():
     # `__main__` et `registry` importe `core.modes.alpha` — deux modules distincts, donc deux
     # classes `ControleAlpha` distinctes, donc une égalité de dataclass qui échoue alors que le
     # catalogue est parfaitement correct.
-    # ⚠️ La PREMIÈRE du catalogue, et pas « la seule » : le taux SSVEP s'y est ajouté le
-    # 2026-09-09, et une égalité de liste aurait fait rougir cette assertion à chaque mesure
-    # nouvelle — un rouge qui ne dit rien sur l'alpha. Ce qui compte VRAIMENT ici est le rang :
-    # l'alpha est la barrière d'entrée, l'écran range les tuiles dans cet ordre, et une mesure
-    # jouée avant elle rendrait un chiffre qui décrit le montage plutôt que le décodage.
+    # ⚠️ La PREMIÈRE du catalogue, et pas « la seule » : une égalité de liste rougirait à chaque
+    # mesure nouvelle, sans rien dire sur l'alpha. Ce qui compte est le rang : l'alpha est la
+    # barrière d'entrée, l'écran range les tuiles dans cet ordre, et une mesure jouée avant elle
+    # rendrait un chiffre qui décrit le montage plutôt que le décodage.
     ids_mesures = [s.id for s in registry.MESURES]
     chk(ids_mesures and ids_mesures[0] == "alpha",
         f"…et elle ouvre le catalogue du moteur : sans ça, `start_mesure` ne l'atteindrait "

@@ -47,7 +47,7 @@ class Param:
     choices: tuple = ()
     choices_fn: object = None  # () -> choix, quand ils sont DÉCOUVERTS à l'exécution (modèles MI)
     constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
-    proposes: str = ""        # ce paramètre en PROPOSE un autre (chantier 2 ; cf. spec §3.1)
+    proposes: str = ""        # ce paramètre en PROPOSE un autre (cf. spec §3.1)
     affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
                                     # runtime (donc pas de flux recréé, pas de chauffe refaite).
                                     # ⚠️ C'est TOUT ce que ce drapeau promet — pas « le changement
@@ -72,9 +72,9 @@ class Param:
                                     # respecter le contrat.
     help: str = ""
     si_vide: str = ""         # le refus ENTIER quand un `choice` n'a aucun choix, s'il en faut un
-    #                           plus court que « aucun choix disponible — <help> ». Passe QA du
-    #                           2026-09-23 : l'aide complète du modèle, recopiée dans un refus
-    #                           affiché au bandeau, était un paragraphe là où il fallait une ligne.
+    #                           plus court que « aucun choix disponible — <help> » : l'aide
+    #                           complète d'un modèle, recopiée dans un refus affiché au bandeau,
+    #                           serait un paragraphe là où il faut une ligne.
 
     def choices_status(self):
         """(choix, None) si la source a répondu, ((), raison) si elle a LEVÉ.
@@ -131,10 +131,9 @@ class Param:
 def _defaults_of(params):
     """Les réglages par défaut d'un jeu de `Param`, résolus maintenant.
 
-    Partagée entre `Calib.defaults` et `ModeSpec.defaults` : les deux avaient EXACTEMENT le même
-    corps, affirmé en commentaire (« même corps que… ») plutôt que garanti en code — une
-    convention que rien n'empêchait de diverger silencieusement le jour où l'un des deux
-    changerait sans l'autre. La factoriser transforme la garantie en STRUCTURE.
+    Partagée entre `Calib.defaults` et `ModeSpec.defaults` : un corps unique garantit en
+    STRUCTURE que les deux se comportent pareil, là où une convention (« même corps que… »)
+    pourrait diverger silencieusement le jour où l'un des deux changerait sans l'autre.
     """
     return {p.key: p.default_now() for p in params}
 
@@ -144,9 +143,9 @@ class Rest:
     """Le plancher de repos exigé par un mode avant de pouvoir décoder."""
 
     warmup_s: float      # stabilisation JETÉE : l'Unicorn sort un offset DC qui DÉRIVE pendant
-    #                      des dizaines de secondes après l'ouverture de session (mesuré le
-    #                      2026-07-27 : 10⁵ µV en rampe). Un plancher mesuré là-dedans hérite d'un
-    #                      σ gonflé, et comme on décide sur z, le seuil devient INATTEIGNABLE.
+    #                      des dizaines de secondes après l'ouverture de session (10⁵ µV en
+    #                      rampe, mesuré). Un plancher mesuré là-dedans hérite d'un σ gonflé, et
+    #                      comme on décide sur z, le seuil devient INATTEIGNABLE.
     duration_s: float
     instruction: str     # consigne à AFFICHER pendant la mesure — sans elle, le plancher est
     #                      mesuré pendant que l'étudiant fixe une cible, et il est faux.
@@ -156,10 +155,8 @@ class Rest:
 class Calib:
     """Comment ce mode s'entraîne : par qui, avec quels réglages, et pour quel coût en signal.
 
-    Deux valeurs de `kind`. Elles disaient jusqu'au 2026-09-07 OÙ la calibration vivait
-    (« console » ou « natif », c'est-à-dire dans l'appli pygame) ; elles disent maintenant **qui
-    mène la ligne du temps**, parce que les quatre calibrations sont jouées par le MOTEUR et
-    affichées par la console :
+    Deux valeurs de `kind`, qui disent **qui mène la ligne du temps** (les quatre calibrations
+    sont jouées par le MOTEUR et affichées par la console) :
       - "moteur" — le moteur mène. Les consignes sont du texte et un décompte. C'est le cas du
         Motor Imagery : il est ENDOGÈNE, il n'a aucun stimulus à afficher à la frame près.
       - "fenetre" — une fenêtre de `src/stimulus/` mène, parce que le protocole exige un stimulus
@@ -240,11 +237,8 @@ class ModeSpec:
                                # fenêtre du PROTOCOLE DE CALIBRATION. Les deux valent la même
                                # chose là où les deux existent, mais ce sont deux questions
                                # distinctes : « avec quoi décode-t-on » et « avec quoi
-                               # calibre-t-on ». Le SSVEP est la preuve qu'il fallait les séparer
-                               # — il a un stimulus et AUCUNE calibration (la CCA n'apprend rien),
-                               # donc son bouton « Lancer le stimulus » était introuvable tant que
-                               # le critère passait par `calibration`. Trouvé en séance casque le
-                               # 2026-09-21, sur le seul mode déjà validé sur un cerveau.
+                               # calibre-t-on ». Le SSVEP montre qu'il faut les séparer : il a un
+                               # stimulus et AUCUNE calibration (la CCA n'apprend rien).
     test_id: str = ""          # la CLÉ de la MESURE qui ÉPROUVE ce mode, ou "" s'il n'est pas
                                # testable. Même forme que `stimulus_id` : une clé, jamais une
                                # classe — c'est `registry.MESURES` qui la résout, et `core` n'a
@@ -383,7 +377,7 @@ TEXTE_MAX = 24
 
 
 def _coerce_textes(param, value):
-    """Une liste de textes COURTS, chacun nommé une seule fois (2026-10-15, les tâches du MI).
+    """Une liste de textes COURTS, chacun nommé une seule fois (les tâches du MI).
 
     Les espaces autour sont retirés ; la casse est gardée telle que tapée. Refusés : un texte
     vide, un doublon (sans tenir compte de la casse : « Pieds » et « pieds » nommeraient deux
@@ -418,7 +412,7 @@ def _refus_non_fini(param, valeur):
 
     ⚠️ `_check_bounds` ne les voit pas : `nan < min` et `nan > max` sont FAUX tous les deux, donc
     un NaN traverse n'importe quelles bornes. Et l'infini traverse un réglage sans `max` : un
-    rafraîchissement infini faisait lever `divise_le_refresh` (`round(inf)`) et tourner sans fin
+    rafraîchissement infini ferait lever `divise_le_refresh` (`round(inf)`) et tourner sans fin
     la boucle des diviseurs de `config.available_frequencies`.
     """
     if _math.isfinite(valeur):
@@ -441,14 +435,14 @@ def valider_un(param, valeur):
 def _check_constraints(param, values):
     """Contraintes CROISÉES, nommées dans le contrat et implémentées ICI — jamais dans l'interface.
 
-    Elles reçoivent tous les réglages du mode, pas seulement le leur : c'est ce qui permettra au
-    chantier 2 de vérifier qu'un nombre de cibles s'accorde à une liste de fréquences.
+    Elles reçoivent tous les réglages du mode, pas seulement le leur : c'est ce qui permet de
+    vérifier, par exemple, qu'un nombre de cibles s'accorde à une liste de fréquences.
     """
     for name in param.constraints:
         if name == "dans_la_bande":
-            # La bande EN VIGUEUR : celle que le mode règle (`params_bande`, le SSVEP depuis le
-            # 2026-09-30), sinon celle de l'acquisition. Juger contre `BANDPASS` un mode qui filtre
-            # sur 8-20 Hz laisserait passer 30 Hz — que son filtre supprime avant le décodage.
+            # La bande EN VIGUEUR : celle que le mode règle (`params_bande`, le SSVEP), sinon celle
+            # de l'acquisition. Juger contre `BANDPASS` un mode qui filtre sur 8-20 Hz laisserait
+            # passer 30 Hz — que son filtre supprime avant le décodage.
             lo, hi = bande_de(values, BANDPASS)
             hors = [v for v in _as_list(values.get(param.key)) if not lo <= v <= hi]
             if hors:
@@ -535,7 +529,7 @@ def _as_list(value):
 
 
 def params_bande(defaut, bas, haut, aide):
-    """Les deux réglages d'une BANDE de fréquences : `bande_bas` et `bande_haut` (2026-09-30).
+    """Les deux réglages d'une BANDE de fréquences : `bande_bas` et `bande_haut`.
 
     `defaut` : la bande de toujours du mode. `bas` et `haut` : les bornes (mini, maxi) de chaque
     coupure. Elles sont choisies pour que la bande contienne TOUJOURS le cœur du signal du
@@ -634,7 +628,7 @@ def _selftest():
     chk(values is None and reason and "dépasse le maximum" in reason,
         f"un float_list borné sans contrainte reste borné : {reason}")
 
-    # Une `text_list` (les tâches du MI, 2026-10-15) : des textes courts, distincts, comptés.
+    # Une `text_list` (les tâches du MI) : des textes courts, distincts, comptés.
     taches = ModeSpec(id="taches", label="Tâches", family="actif", summary="", status="moteur",
                       params=(Param("taches", "Tâches", "text_list", default=("A", "B"),
                                     count=(2, 5)),))
@@ -649,9 +643,9 @@ def _selftest():
         values, reason = validate(taches, {"taches": mauvais})
         chk(values is None and bool(reason), f"tâches refusées — {quoi} : {reason}")
 
-    # « Brancher un client » : un extrait par mode, vérifié sur TOUT le registre.
-    # La version précédente ne testait que le SSVEP, dont le résumé n'a par hasard aucun accent —
-    # elle aurait donc validé une règle fausse pour le brut (« µV ») et le neuro (« écart »).
+    # « Brancher un client » : un extrait par mode, vérifié sur TOUT le registre. Le SSVEP seul ne
+    # suffit pas : son résumé n'a aucun accent, il validerait une règle fausse pour le brut
+    # (« µV ») et le neuro (« écart »).
     from core.modes import registry
 
     for spec in registry.MODES:
@@ -684,8 +678,8 @@ def _selftest():
                                 unavailable="pas encore")) == "",
         "un mode sans flux ne propose aucun extrait")
 
-    # `divise_le_refresh` : la contrainte regarde un AUTRE réglage du mode. C'est ce que
-    # `_check_constraints` permet depuis le chantier 1 ; c'est ici qu'on s'en sert enfin.
+    # `divise_le_refresh` : la contrainte regarde un AUTRE réglage du mode, ce que
+    # `_check_constraints` permet.
     ecran = ModeSpec(
         id="essai_refresh", label="Essai", family="actif", summary="",
         status="prevu", unavailable="jeu d'essai du contrat",
@@ -709,8 +703,8 @@ def _selftest():
     chk(raison is None, f"les mêmes valeurs jugées contre 144 Hz passent ({raison})")
 
     # TOLERANCE_DIVISEUR : une saisie humaine doit passer, même très arrondie par rapport au
-    # flottant exact que Python calcule en interne (60/7 = 8.571428571428571). C'est la panne que
-    # la tolérance ABSOLUE (1e-6) provoquait : elle refusait sa PROPRE valeur affichée.
+    # flottant exact que Python calcule en interne (60/7 = 8.571428571428571). Une tolérance
+    # ABSOLUE (1e-6) refuserait sa PROPRE valeur affichée.
     for valeur in (8.571, 8.57143, 60.0 / 7):
         _v, raison = validate(ecran, {"freqs": [15.0, valeur]})
         chk(raison is None, f"{valeur!r} Hz (diviseur 60/7 arrondi ou exact) est accepté ({raison})")
@@ -756,9 +750,9 @@ def _selftest():
     # --- `kind` et `stimulus_id` vont par paire ------------------------------------
     # Les deux refus ci-dessous ferment la même porte par ses deux côtés, et chacun correspond à
     # un défaut VISIBLE de l'interface : sans `stimulus_id`, le bouton « Entraîner » n'a aucune
-    # fenêtre à lancer et le clic reste SILENCIEUX (le défaut que ce chantier répare — cf. le
-    # test 1.13 de la recette, cinq clics d'affilée sur un bouton muet) ; avec un `stimulus_id`
-    # de trop, un bouton « Lancer le stimulus » apparaît sur un mode qui n'a pas de stimulus.
+    # fenêtre à lancer et le clic reste SILENCIEUX (cf. le test 1.13 de la recette : des clics
+    # d'affilée sur un bouton muet) ; avec un `stimulus_id` de trop, un bouton « Lancer le
+    # stimulus » apparaît sur un mode qui n'a pas de stimulus.
     try:
         Calib(kind="fenetre")
         chk(False, "une calibration « fenetre » SANS stimulus_id doit être refusée")
@@ -813,10 +807,9 @@ def _selftest():
         f"plus de votes que de fenêtres : refusé, en nommant les deux valeurs ({raison})")
 
     # La clé partenaire ABSENTE doit être refusée, pas ignorée. Sans ce refus, un mode qui
-    # déclare la contrainte sans déclarer `vote_len` était accepté EN SILENCE : la contrainte
-    # figurait dans le contrat, ne s'évaluait jamais, et rien ne le disait. Sa voisine
-    # `divise_le_refresh` refuse déjà dans le même cas — deux comportements opposés côte à côte
-    # étaient le vrai défaut.
+    # déclare la contrainte sans déclarer `vote_len` serait accepté EN SILENCE : la contrainte
+    # figurerait dans le contrat, ne s'évaluerait jamais, et rien ne le dirait. Sa voisine
+    # `divise_le_refresh` refuse dans le même cas : les deux contraintes se comportent pareil.
     vote_orphelin = ModeSpec(
         id="essai_vote_orphelin", label="Essai vote orphelin", family="actif", summary="",
         status="prevu", unavailable="jeu d'essai du contrat",
@@ -861,7 +854,7 @@ def _selftest():
         and "Produit par une calibration." in raison,
         f"et le refus reprend l'aide du réglage ({raison})")
     # …sauf si le réglage déclare son refus COURT (`si_vide`) : c'est lui, et lui seul, qui part
-    # — pas l'aide recopiée derrière (passe QA du 2026-09-23 : un paragraphe dans le bandeau).
+    # — pas l'aide recopiée derrière (qui ferait un paragraphe dans le bandeau).
     spec_court = ModeSpec(
         id="dyn2", label="Dyn2", family="actif", summary="", status="moteur",
         params=(Param(key="modele", label="Modèle entraîné", kind="choice",
@@ -889,7 +882,7 @@ def _selftest():
     # --- validation des défauts : un défaut hors de ses propres bornes doit être refusé -------
     # Protège contre un contrat mal écrit qui déclare default=99 avec max=10. Sans cette
     # vérification, le mode démarre en silence puis refuse ses propres valeurs à la première
-    # soumission — découvert en séance, casque sur la tête.
+    # soumission, en pleine séance.
     bad_default = ModeSpec(
         id="bad", label="Mauvais défaut", family="actif", summary="", status="moteur",
         params=(Param("valeur", "Valeur", "float", default=99.0, max=10.0, help="Entre 0 et 10"),),
@@ -908,7 +901,7 @@ def _selftest():
     chk(raison is not None and "nombre attendu" in raison,
         f"un défaut None pour un nombre est refusé ({raison})")
 
-    # --- une bande réglable (2026-09-30) ------------------------------------------------------
+    # --- une bande réglable ------------------------------------------------------------------
     bande = ModeSpec(id="bande", label="Bande", family="actif", summary="test", status="moteur",
                      params=params_bande((1.0, 12.0), (0.1, 2.0), (8.0, 40.0), "aide"))
     valeurs, raison = validate(bande, {})
@@ -925,9 +918,9 @@ def _selftest():
         chk(False, "une déclaration où la coupure basse peut dépasser la haute doit lever")
     except ValueError:
         chk(True, "une déclaration où la coupure basse peut dépasser la haute lève à l'import")
-    # Les deux BORDS de la déclaration (passe C1, 2026-09-30). Le cas croisé ci-dessus ne tient pas
-    # le `<` strict : écrit `<=`, une coupure basse maxi ÉGALE à la coupure haute mini passerait, et
-    # la bande 8-8 Hz — vide — serait réglable. Ni la coupure basse nulle ou négative, que
+    # Les deux BORDS de la déclaration. Le cas croisé ci-dessus ne tient pas le `<` strict : écrit
+    # `<=`, une coupure basse maxi ÉGALE à la coupure haute mini passerait, et la bande 8-8 Hz —
+    # vide — serait réglable. Ni la coupure basse nulle ou négative, que
     # `config.available_frequencies` refuse (sa boucle des diviseurs ne s'arrêterait jamais).
     for bas_d, haut_d, quoi in (((0.5, 8.0), (8.0, 40.0),
                                  "coupure basse maxi ÉGALE à la coupure haute mini (bande vide)"),
@@ -940,9 +933,9 @@ def _selftest():
             leve = True
         chk(leve, f"une déclaration à {quoi} lève à l'import (bas {bas_d}, haut {haut_d})")
 
-    # --- NaN et l'infini sont REFUSÉS (passe C1, 2026-09-30) -----------------------------------
-    # `nan < min` et `nan > max` sont faux tous les deux : un NaN traversait n'importe quelles
-    # bornes. Et l'infini traversait un réglage sans `max`. Le refus dit « nombre fini ».
+    # --- NaN et l'infini sont REFUSÉS ----------------------------------------------------------
+    # `nan < min` et `nan > max` sont faux tous les deux : un NaN traverse n'importe quelles
+    # bornes. Et l'infini traverse un réglage sans `max`. Le refus dit « nombre fini ».
     # (Un jeu à part : `spec` a été réaffecté par la boucle du registre plus haut.)
     finis = ModeSpec(
         id="finis", label="Finis", family="actif", summary="", status="moteur",
@@ -958,7 +951,7 @@ def _selftest():
     chk(_v is None and raison and "fini" in raison,
         f"…un NaN dans une LISTE aussi, avant toute contrainte ({raison})")
     # Deux exceptions que `submit` ne doit jamais laisser remonter jusqu'au fil de l'interface :
-    # `int(inf)` lève `OverflowError` (pas `ValueError`), et un rafraîchissement infini faisait
+    # `int(inf)` lève `OverflowError` (pas `ValueError`), et un rafraîchissement infini ferait
     # lever `round(inf / f)` dans `divise_le_refresh` (réglage SANS `max`).
     for jeu, cas, attendu in ((vote, {"vote_len": float("inf")}, "nombre attendu"),
                               (ecran, {"refresh_hz": float("inf")}, "fini")):
@@ -977,7 +970,7 @@ def _selftest():
         f"un réglage SEUL se juge comme dans `validate`, refus identique "
         f"({valider_un(bas_bande, 0.0)[1]})")
 
-    # --- `dans_la_bande` juge contre la bande RÉGLÉE, pas contre BANDPASS (2026-09-30) ---------
+    # --- `dans_la_bande` juge contre la bande RÉGLÉE, pas contre BANDPASS -----------------------
     # Le SSVEP règle sa bande. Si la contrainte de ses fréquences restait sur 5-40 Hz, 30 Hz
     # passerait sous une coupure haute à 20 — et le filtre la supprimerait avant le décodage :
     # zéro détection, aucune erreur, « l'utilisateur fixe mal ». Les DEUX sens sont vérifiés : une
@@ -1023,10 +1016,10 @@ def _selftest():
     _v, raison = validate(_ssvep.SPEC, {"freqs": [15.0, 24.0]})
     chk(_v is None and raison and "30" in raison,
         f"…alors qu'à la bande par défaut, 30 Hz est bien le voisin proposé ({raison})")
-    # Le côté BAS de la même suggestion (passe C1). Les trois contrôles ci-dessus ne regardent
-    # que la coupure haute : `available_frequencies(refresh)` appelée SANS la bande (donc bornée
-    # en bas par 5 Hz) les passait tous. 8,2 Hz sous une coupure basse à 8 : le plus proche est
-    # 8,571, puis 7,5 — que le clic suivant refuserait (hors bande) ; 10 est le bon second voisin.
+    # Le côté BAS de la même suggestion. Les trois contrôles ci-dessus ne regardent que la coupure
+    # haute : `available_frequencies(refresh)` appelée SANS la bande (donc bornée en bas par 5 Hz)
+    # les passerait tous. 8,2 Hz sous une coupure basse à 8 : le plus proche est 8,571, puis 7,5 —
+    # que le clic suivant refuserait (hors bande) ; 10 est le bon second voisin.
     # (Une cible SOUS la coupure, 7,9 Hz, n'atteint jamais cette suggestion : `dans_la_bande`,
     # évaluée avant, la refuse la première.)
     _v, raison = validate(_ssvep.SPEC, {"bande_bas": 8.0, "freqs": [8.2, 15.0]})

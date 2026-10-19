@@ -4,8 +4,8 @@ Le jumeau, côté MESURES, de `modes/marker_calib.py` (à lire avant) : une fen�
 `src/stimulus/` DÉSIGNE ce que l'utilisateur doit faire, le moteur écoute ses marqueurs. À la fin,
 une calibration APPREND ; une mesure NOTE — le moteur décide avec les règles réelles du mode, on
 compare à ce que la fenêtre avait désigné, et rien n'est écrit sur le disque. Ce socle existe
-parce que `MesureSSVEP` réimplémentait seule tout le tuyau, et que trois mesures de test allaient
-le refaire chacune : quatre copies d'un épochage divergent.
+pour que le tuyau (épochage, compteurs, abandons) ne soit écrit qu'une fois : quatre copies
+d'un épochage finiraient par diverger.
 
 LE SOCLE POSSÈDE la ligne du temps (chauffe, `calib_start`, `calib_end`, les trois abandons), les
 compteurs (`_essais_vus` ARRIVÉS contre `essai` RETENUS, pertes, chauffe), l'épochage par le
@@ -29,7 +29,7 @@ aurait mis la fuite de l'ErrP à une ligne d'inattention.
 🔴 **La décision passe par le décodeur RÉEL du mode, jamais par une réécriture** : une règle
 locale mesurerait un décodeur que personne n'utilise, cité comme s'il décrivait le produit.
 
-**Un test décide comme le produit ET PUBLIE COMME LUI** (2026-10-01, « retour en direct ») : le
+**Un test décide comme le produit ET PUBLIE COMME LUI** : le
 c-VEP, le SSVEP et le P300 publient chaque décision de test — UNE par essai, -1 quand l'essai n'a
 pas pu être décidé ; le c-VEP, lui, ne publie QUE les blocs que son verdict note — sur le flux
 décodé PUBLIC de leur mode, par le publieur que le mode ouvre lui-même (`publieur_du_mode`), sous
@@ -55,11 +55,11 @@ from core.modes.mesure import MesureRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
 
 # --- Le flux qu'un TEST écoute : TOUJOURS le flux par défaut ------------------------------------
-# « Tester » lance NOTRE fenêtre, et elle publie sur `MARKER_STREAM_DEFAULT`. Jusqu'au 2026-09-22 un
-# test déclarait le « Flux de marqueurs » du mode — que l'étudiant règle sur SON appli pour
-# « Connecter » — et la console le lui recopiait : le moteur écoutait l'appli, la fenêtre publiait
-# ailleurs, et le test abandonnait à 30 s pendant que la fenêtre jouait plein écran dans le vide.
-# Un test n'offre donc pas ce réglage (le contrat REFUSE la clé), et le runtime du mode qu'il fait
+# « Tester » lance NOTRE fenêtre, et elle publie sur `MARKER_STREAM_DEFAULT`. Si un test
+# déclarait le « Flux de marqueurs » du mode — que l'étudiant règle sur SON appli pour
+# « Connecter » —, le moteur écouterait l'appli pendant que la fenêtre publierait ailleurs : le
+# test abandonnerait à 30 s pendant que la fenêtre joue plein écran dans le vide. Un test
+# n'offre donc pas ce réglage (le contrat REFUSE la clé), et le runtime du mode qu'il fait
 # décider le reçoit fixé au défaut. Brancher une application tierce, c'est « Connecter ».
 CLE_FLUX = "stream_in"
 
@@ -407,7 +407,7 @@ class MesureMarqueurs(MesureRuntime):
 
         ⚠️ Les marqueurs sont consommés à CHAQUE TOUR, chauffe comprise : c'est l'APPEL qui fait
         avancer le curseur du moteur. Sans lui, l'arriéré s'empile, et le premier tour des essais
-        avale 15 s de marqueurs dont l'EEG a quitté le tampon — panne n°7 de `modes/p300.py`.
+        avale 15 s de marqueurs dont l'EEG a quitté le tampon (cf. `modes/p300.py`).
         """
         if self.terminee:
             return
@@ -461,9 +461,8 @@ class MesureMarqueurs(MesureRuntime):
 
         ⚠️ **« Arrivées » se compte sur `_essais_vus`, JAMAIS sur `self.essai`.** Les deux
         coïncident tant qu'aucune époque n'est perdue et se séparent dès la première : 36 essais
-        annoncés, 36 reçus, UN sans époque, `calib_end` perdu — comparer `self.essai` faisait
-        abandonner, et `cancel()` détruisait les 35 essais valides (revue de branche du
-        2026-09-10, sur `ssvep_mesure.py`). Un total annoncé de 0 (`trials` illisible) rend le
+        annoncés, 36 reçus, UN sans époque, `calib_end` perdu — comparer `self.essai` ferait
+        abandonner, et `cancel()` détruirait les 35 essais valides. Un total annoncé de 0 (`trials` illisible) rend le
         silence mortel, faute de pouvoir prouver que la séance est complète.
         """
         if self._dernier_marqueur_s is None:

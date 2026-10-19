@@ -3,22 +3,19 @@
 Jumeau de `mi_models.py`, et pour la même raison : un modèle est propre à UNE personne, et le
 mode doit pouvoir dire « aucun choix disponible » plutôt que démarrer muet.
 
-⚠️ **Les modèles antérieurs au 2026-08-17 sont refusés, et c'est une décision.** Ils ont été
-enregistrés quand le décodeur vivait dans `src/research/`, donc leur pickle référence le module
-NU `p300_decoder`, qui n'existe plus sous ce nom. On ne fabrique PAS de passerelle : les époques
-de calibration ayant survécu (`data/p300_calib_*.npz`), un modèle se ré-entraîne depuis le disque
-en quelques secondes. C'est ce qui manquait au MI, dont les époques avaient été écrasées — et ce
-qui a coûté ses 4 modèles.
+⚠️ **Les modèles hérités sont refusés, et c'est une décision.** Un modèle enregistré quand le
+décodeur vivait hors de `core` référence dans son pickle le module NU `p300_decoder`, qui
+n'existe plus sous ce nom. On ne fabrique PAS de passerelle : les époques de calibration étant
+conservées (`data/p300_calib_*.npz`), un modèle se ré-entraîne depuis le disque en quelques
+secondes.
 
-⚠️ **Le filtre d'un `.npz` d'époques, et ce que veut dire son ABSENCE.** Depuis le 2026-09-30,
-`core/modes/p300_calib.entrainer` archive avec les époques BRUTES le filtre du modèle qui a appris
-dessus : `band` (Hz) et `secteur_hz`, où `0` veut dire « pas de coupe-bande » (un None ferait un
-tableau d'objets, illisible sans `allow_pickle`). Un `.npz` plus ancien n'a NI l'un NI l'autre, et
-cette absence a un sens précis : **la bande de toujours (`config.P300_BAND`, 1-12 Hz), SANS
-coupe-bande** — c'est avec ce filtre qu'ont appris tous les modèles d'avant (vérifié le 2026-09-30
-sur chaque modèle P300 de `data/`, ceux du 22 juillet compris : tous portent 1-12 Hz, aucun de
-secteur). Ré-entraîner un tel fichier en y ajoutant le secteur du poste, ou la bande réglée du
-moment, produirait un AUTRE modèle que celui de la séance.
+⚠️ **Le filtre d'un `.npz` d'époques, et ce que veut dire son ABSENCE.** `core/modes/p300_calib.
+entrainer` archive avec les époques BRUTES le filtre du modèle qui a appris dessus : `band` (Hz)
+et `secteur_hz`, où `0` veut dire « pas de coupe-bande » (un None ferait un tableau d'objets,
+illisible sans `allow_pickle`). Un `.npz` sans ces deux champs a appris avec **la bande de
+toujours (`config.P300_BAND`, 1-12 Hz), SANS coupe-bande**. Ré-entraîner un tel fichier en y
+ajoutant le secteur du poste, ou la bande réglée du moment, produirait un AUTRE modèle que celui
+de la séance.
 
 Autotest :
     python src/core/p300_models.py
@@ -44,15 +41,13 @@ def charger(chemin):
     La `raison` est destinée à un étudiant : elle dit quoi FAIRE, pas seulement ce qui a raté.
     """
     # Un chemin vide n'est pas un incident : c'est l'état d'un formulaire dont la liste de
-    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). La docstring promet
-    # de ne jamais lever ; `os.path.isfile(None)` levait. Le refus doit dire quoi faire.
+    # modèles est vide (dépôt fraîchement cloné, aucune calibration faite). `charger` ne lève
+    # jamais, et le refus doit dire quoi faire.
     if not chemin:
-        # ⚠️ Ce texte a été FAUX deux fois, dans les deux sens. Il a d'abord dit « depuis la
-        # console » quand la console n'avait pas de page P300 ; il a ensuite renvoyé vers l'appli
-        # pygame, qui ne rend plus ce stimulus depuis le 2026-09-07. Le stimulus est verrouillé à
-        # la frame et rendu par une FENÊTRE de `src/stimulus/`, que la console lance elle-même
-        # (`Calib(kind="fenetre")` du mode). Ce texte est celui du `help` du réglage « Modèle
-        # entraîné » — le même geste dit du même mot aux deux endroits où un étudiant le lit.
+        # Le stimulus est verrouillé à la frame et rendu par une FENÊTRE de `src/stimulus/`, que
+        # la console lance elle-même (`Calib(kind="fenetre")` du mode). Ce texte est celui du
+        # `help` du réglage « Modèle entraîné » : le même geste est dit du même mot aux deux
+        # endroits où un étudiant le lit.
         return None, tr("mode.modele.aucun", mode="P300")
     if not _os.path.isfile(chemin):
         return None, tr("mode.modele.introuvable", chemin=chemin)
@@ -65,17 +60,13 @@ def charger(chemin):
     if not hasattr(modele, "select") or not hasattr(modele, "scores"):
         return None, tr("mode.modele.pas_un_modele", mode="P300", nom=_os.path.basename(chemin))
     # Un pickle porte le CHEMIN DE MODULE de sa classe au moment de la sauvegarde. Un modèle
-    # hérité (d'avant le déménagement du décodeur dans core/, 2026-08-17) porte "p300_decoder"
-    # (module NU) — et RESSUSCITE selon la commande de lancement : sous `python src/core/server.py`,
-    # le dossier du script rejoint sys.path et rend "p300_decoder" importable comme module de
-    # PREMIER NIVEAU, donc ce vieux pickle se CHARGE sans lever ; sous la console ou l'appli
-    # pygame, ce chemin n'existe pas et le même fichier est refusé plus haut (ModuleNotFoundError).
-    # Vérifié empiriquement le 2026-08-17 : `data/p300_model.joblib` porte bien "p300_decoder"
-    # (module nu) sous ce sys.path-là. Cette divergence selon la commande de lancement, pour un
-    # modèle abandonné par décision de conception, est exactement le « pire des deux mondes » que
-    # ce module existe pour éliminer : décoder avec les probabilités de quelqu'un d'autre, en
-    # silence. Contrairement au MI, les époques de calibration ont survécu (`p300_calib_*.npz`) :
-    # on ne garde donc PAS ce modèle « en dépannage », on dit de ré-entraîner.
+    # hérité porte "p300_decoder" (module NU) — et RESSUSCITE selon la commande de lancement :
+    # sous `python src/core/server.py`, le dossier du script rejoint sys.path et rend
+    # "p300_decoder" importable comme module de PREMIER NIVEAU, donc ce pickle se CHARGE sans
+    # lever ; sous la console, ce chemin n'existe pas et le même fichier échoue plus haut
+    # (ModuleNotFoundError). Cette divergence selon la commande de lancement ferait décoder, en
+    # silence, avec les probabilités de quelqu'un d'autre. On ne garde donc PAS ce modèle « en
+    # dépannage » : on dit de ré-entraîner depuis les époques conservées.
     module = type(modele).__module__
     if module != "core.p300_decoder":
         return None, tr("mode.p300.modele.herite", module=repr(module),
@@ -115,11 +106,10 @@ def decrire(chemin):
     P300 sous-jacent) se retrouveraient entre train et test, et gonfleraient le chiffre.
     """
     modele, raison = charger(chemin)
-    # ⚠️ `charger` avait été durcie contre le chemin vide (« une exception ici remonterait
-    # jusqu'au fil Qt »), mais le durcissement s'était arrêté une fonction trop tôt : ici
-    # `os.path.isfile(None)` et `os.path.basename(None)` lèvent tous les deux un TypeError, sur
-    # la fonction PUBLIQUE qui remplit la liste de modèles. Le `chemin and` court-circuite aussi
-    # l'entier 0, que `os.path.isfile` prendrait pour un descripteur de fichier (stdin).
+    # Comme `charger`, elle ne lève pas sur un chemin vide (une exception remonterait jusqu'au fil
+    # Qt) : `os.path.isfile(None)` et `os.path.basename(None)` lèvent tous deux un TypeError. Le
+    # `chemin and` court-circuite aussi l'entier 0, que `os.path.isfile` prendrait pour un
+    # descripteur de fichier (stdin).
     horodatage = _os.path.getmtime(chemin) if chemin and _os.path.isfile(chemin) else 0.0
     infos = {
         "chemin": chemin,
@@ -158,11 +148,10 @@ class _ModeleHerite:
 
     ⚠️ C'est la seule forme qui protège la décision de conception de ce module. `_ModeleEtranger`
     ci-dessus porte `__module__ == "__main__"` (ou `"core.p300_models"` à l'import) — **jamais
-    `"p300_decoder"`**. Donc l'assouplissement qu'un contributeur écrira un jour pour « juste
-    faire marcher les vieux modèles » — `module.endswith("p300_decoder")`, la petite passerelle
-    de compatibilité que ce chantier a explicitement refusé d'écrire — laissait toutes les
-    assertions vertes pendant que `data/p300_model.joblib` redevenait acceptable, et que le
-    moteur se remettait à décoder avec les probabilités de quelqu'un d'autre.
+    `"p300_decoder"`**. Un assouplissement du type `module.endswith("p300_decoder")` (la petite
+    passerelle de compatibilité qu'on a refusé d'écrire) laisserait toutes les assertions vertes
+    alors que les modèles hérités redeviendraient acceptables, et que le moteur décoderait avec
+    les probabilités de quelqu'un d'autre.
 
     `__module__` est posé en dur : c'est ce que `pickle` enregistre. `_selftest` inscrit un
     `types.ModuleType("p300_decoder")` dans `sys.modules` le temps du dump ET du chargement (le
@@ -238,9 +227,9 @@ def _selftest():
         chk(_m is None and "introuvable" in (raison or ""),
             f"un chemin inexistant est signalé comme tel ({raison})")
 
-        # `charger` promet dans sa docstring de ne JAMAIS lever. Elle lèverait pourtant sur None
-        # (os.path.isfile(None) lève) — et un formulaire de console peut très bien rendre None ou
-        # "" quand aucun modèle n'existe encore. Une exception ici remonterait jusqu'au fil Qt.
+        # `charger` promet de ne JAMAIS lever, y compris sur None (os.path.isfile(None) lève) :
+        # un formulaire de console peut rendre None ou "" quand aucun modèle n'existe encore, et
+        # une exception remonterait jusqu'au fil Qt.
         for entree in (None, "", 0):
             _m, raison = charger(entree)
             chk(_m is None and raison and "aucun modèle" in raison,
@@ -257,10 +246,9 @@ def _selftest():
 
         # 1 bis. Le VRAI cas hérité : le pickle porte le module NU `p300_decoder`.
         #
-        # ⚠️ L'assertion ci-dessus ne pouvait PAS attraper l'assouplissement de la règle, parce
-        # que `_ModeleEtranger.__module__` vaut "__main__" et jamais "p300_decoder" : la mutation
-        # `module.endswith("p300_decoder")` — la passerelle de compatibilité que ce chantier a
-        # refusé d'écrire — la laissait verte tout en rendant `data/p300_model.joblib` à nouveau
+        # ⚠️ L'assertion ci-dessus n'attraperait PAS un assouplissement de la règle, parce que
+        # `_ModeleEtranger.__module__` vaut "__main__" et jamais "p300_decoder" : la mutation
+        # `module.endswith("p300_decoder")` la laisserait verte tout en rendant un modèle hérité
         # acceptable. Celle-ci rougit dessus, parce que le module refusé est EXACTEMENT celui que
         # la mutation ré-autoriserait.
         #
@@ -300,8 +288,7 @@ def _selftest():
         chk(d["date"], f"et une date lisible ({d['date']})")
 
         # `decrire` est la fonction SŒUR de `charger`, publique, et c'est elle qui remplit la
-        # liste de modèles de la console. Elle levait un TypeError sur les mêmes entrées contre
-        # lesquelles `charger` avait été durcie (`os.path.isfile(None)`), à un fil Qt de distance.
+        # liste de modèles de la console : elle doit tenir les mêmes entrées vides.
         for entree in (None, "", 0):
             d_vide = decrire(entree)
             chk(d_vide["probleme"] and d_vide["cv_auc"] is None and d_vide["nom"] == "",

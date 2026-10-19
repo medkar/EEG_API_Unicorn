@@ -21,15 +21,15 @@ from core.config import use_utf8_console  # noqa: E402
 
 _ICI = _os.path.dirname(_os.path.abspath(__file__))
 
-# clé du contrat -> fichier de ce paquet. Les clés sont celles de `Calib.stimulus_id` — et, depuis
-# le 2026-09-09, de `MesureSpec.stimulus_id` : une MESURE peut avoir besoin d'une fenêtre elle
-# aussi (le taux SSVEP n'a rien à décoder sans cibles qui clignotent).
+# clé du contrat -> fichier de ce paquet. Les clés sont celles de `Calib.stimulus_id` et de
+# `MesureSpec.stimulus_id` : une MESURE peut avoir besoin d'une fenêtre elle aussi (le taux SSVEP
+# n'a rien à décoder sans cibles qui clignotent).
 FENETRES = {
     "p300": "p300.py",
     "errp": "errp.py",
     "cvep": "cvep.py",
     "ssvep": "ssvep.py",
-    # Le MI (2026-10-15) : AUCUN stimulus — le paradigme est endogène. Sa fenêtre ne sert qu'à
+    # Le MI : AUCUN stimulus — le paradigme est endogène. Sa fenêtre ne sert qu'à
     # l'essai libre : elle encadre la tâche que publie `decoded_mi`.
     "mi": "mi.py",
 }
@@ -44,23 +44,20 @@ FENETRES = {
 # `--calibrer` et le décodage pour les trois autres fenêtres, sous un autre mot parce que le
 # résultat est un verdict et pas un modèle.
 MESURE_OPTIONS = {
-    # `--retour` (2026-10-01) : la fenêtre entoure la cible que le moteur DÉCIDE pour chaque essai,
+    # `--retour` : la fenêtre entoure la cible que le moteur DÉCIDE pour chaque essai,
     # lue sur le flux décodé public du mode (le moteur y publie les décisions du test) — vert si
     # juste, rouge sinon. Pas pour l'ErrP : il n'y a pas de cible à entourer, la décision est
     # « erreur ou non » sur un feedback que la fenêtre a elle-même choisi.
     "ssvep": ("--guide", "--retour"),
     # `--tester` : le protocole de `--calibrer` (qui désigne la cible et publie la vérité-terrain),
     # mais une fenêtre qui dit « TEST » et « le moteur note » au lieu de « CALIBRATION » et « le
-    # moteur entraîne ». Relevé à l'écriture du test c-VEP : le bandeau de la console affiche ces
-    # lignes à la fermeture de la fenêtre, et un étudiant qui vient de cliquer « Tester » y aurait
-    # lu qu'il entraînait un modèle — exactement le vocabulaire brouillé de la séance du 2026-09-22.
+    # moteur entraîne ». Le bandeau de la console affiche ces lignes à la fermeture de la fenêtre :
+    # un étudiant qui vient de cliquer « Tester » ne doit pas y lire qu'il entraîne un modèle.
     "p300": ("--tester", "--retour"),   # le TEST du P300 : une cible cerclée par manche, `cue`
     "cvep": ("--tester", "--retour"),   # le TEST du c-VEP : une cible par bloc, garde son HORLOGE
     "errp": ("--tester",),      # le TEST de l'ErrP : erreurs délibérées, `feedback` étiqueté
-    # Les trois fenêtres à marqueurs se TESTERONT avec leur protocole de calibration (`--calibrer`),
-    # qui désigne une cible et publie la vérité-terrain ; le moteur DÉCODE au lieu d'apprendre. Leur
-    # entrée arrive AVEC la mesure de test qui la réclame, pas avant : l'autotest refuse une option
-    # de mesure qu'aucune mesure n'utilise — de la configuration morte (spec du 2026-09-22 §4).
+    # Une entrée n'existe que si une mesure la réclame : l'autotest refuse une option de mesure
+    # qu'aucune mesure n'utilise (configuration morte).
 }
 
 
@@ -69,7 +66,7 @@ def options_de_mesure(stimulus_id):
     return tuple(MESURE_OPTIONS.get(stimulus_id, ()))
 
 
-# Les arguments de l'ESSAI LIBRE (« Tester librement », 2026-10-01) : le mode tourne, la fenêtre
+# Les arguments de l'ESSAI LIBRE (« Tester librement ») : le mode tourne, la fenêtre
 # affiche ses cibles SANS rien désigner, et entoure ce que le moteur décode. Ce que chaque fenêtre
 # exige pour ça, et pas un mot de plus :
 #   • c-VEP : `--libre` — sans option elle DÉSIGNE des cibles (le protocole de dépouillement de la
@@ -109,12 +106,10 @@ def sait_journaliser(stimulus_id):
 
 # 🔴 Quelles fenêtres acceptent qu'on leur DICTE les fréquences du mode, et sous quel argument.
 #
-# ⚠️ Sans ça, la fenêtre SSVEP affichait le jeu de fréquences du DÉPÔT quel que soit le réglage
-# de la console : un étudiant qui pose 12 · 15 · 20 se voyait montrer 15 · 20 · 8,571, et le
-# moteur corrélait contre des sinusoïdes que personne n'affichait. Rien ne lève, rien ne compte,
-# le mode ne détecte simplement plus rien — la panne caractéristique de ce produit. Trouvée en
-# séance casque le 2026-09-21, au moment où le SSVEP a enfin gagné son bouton « Lancer le
-# stimulus » : les deux défauts n'en font qu'un, et livrer le bouton seul aurait été pire que rien.
+# ⚠️ Sans ça, la fenêtre SSVEP afficherait le jeu de fréquences du DÉPÔT quel que soit le réglage
+# de la console : un étudiant qui pose 12 · 15 · 20 verrait 15 · 20 · 8,571, et le moteur
+# corrélerait contre des sinusoïdes que personne n'affiche. Rien ne lève, le mode ne détecte
+# simplement plus rien — la panne caractéristique de ce produit.
 #
 # Seul le SSVEP y figure, et ce n'est pas un oubli : les trois autres fenêtres n'affichent pas des
 # FRÉQUENCES. Le P300 et l'ErrP montrent des événements, le c-VEP un code pseudo-aléatoire dont la
@@ -125,13 +120,13 @@ FREQUENCES = {"ssvep": "--freqs"}
 # L'argument qui fixe la LONGUEUR d'une séance guidée, par fenêtre — et donc la durée d'un test.
 # ⚠️ Chaque fenêtre compte dans SA propre unité, et le `Param` de la mesure qui la sert doit être
 # exprimé dans la même : des essais PAR CIBLE pour le SSVEP, des MANCHES pour le P300, des ESSAIS
-# pour l'ErrP, des CYCLES enregistrés PAR CIBLE pour le c-VEP (répartis en trois blocs — et non
-# « par bloc », comme l'écrivait la première version de ce commentaire, relevée par l'auteur du
-# test c-VEP). Une valeur passée dans la mauvaise unité ne lève
-# rien : la séance est juste six fois trop courte, ou trop longue, que ce que l'écran annonce.
+# pour l'ErrP, des CYCLES enregistrés PAR CIBLE pour le c-VEP (répartis en trois blocs, donc pas
+# « par bloc »). Une valeur passée dans la mauvaise unité ne lève rien : la séance est juste
+# beaucoup trop courte, ou trop longue, par rapport à ce que l'écran annonce.
 #
-# Pourquoi ça existe : l'ErrP calibre en 200 essais, 5,7 minutes. Un bouton « Tester » qu'on refait
-# à chaque réglage ne peut pas coûter ça — la boucle régler → tester → ajuster doit être RAPIDE.
+# Pourquoi ça existe : l'ErrP s'entraîne en 200 essais, 5,7 minutes. Un bouton « Tester » qu'on
+# refait à chaque réglage ne peut pas coûter ça — la boucle régler → tester → ajuster doit être
+# RAPIDE.
 COMPTES = {"ssvep": "--trials", "p300": "--rounds", "errp": "--essais", "cvep": "--cycles"}
 
 
@@ -245,10 +240,10 @@ def _selftest():
         chk("connues" in str(e), f"…en disant lesquelles sont connues ({e})")
 
     # --- La correspondance avec le CONTRAT, dans les deux sens ---------------------
-    # ⚠️ Ce contrôle est ici et pas dans `core/modes/registry.py::check()`, où il avait d'abord
-    # été écrit : `core` ne connaît que des CLÉS, jamais des fenêtres, et la frontière AST de
-    # `server.py --smoke` a refusé l'import — à juste titre. C'est ce module qui détient la
-    # correspondance, c'est donc lui qui la vérifie. `stimulus -> core` est autorisé.
+    # ⚠️ Ce contrôle est ici et pas dans `core/modes/registry.py::check()` : `core` ne connaît que
+    # des CLÉS, jamais des fenêtres, et la frontière AST de `server.py --smoke` refuse l'import.
+    # C'est ce module qui détient la correspondance, c'est donc lui qui la vérifie.
+    # `stimulus -> core` est autorisé.
     from core.modes import registry as modes
 
     attendues = {s.calibration.stimulus_id for s in modes.MODES
@@ -256,8 +251,8 @@ def _selftest():
     # Les MESURES demandent des fenêtres elles aussi, par le même champ et pour la même raison :
     # `core` ne nomme aucun fichier, il ne connaît que des clés.
     attendues |= {s.stimulus_id for s in modes.MESURES if s.stimulus_id}
-    # …et les fenêtres de DÉCODAGE des modes (`ModeSpec.stimulus_id`) : celle du MI (2026-10-15)
-    # n'est ni une calibration ni une mesure, et passait sinon pour orpheline.
+    # …et les fenêtres de DÉCODAGE des modes (`ModeSpec.stimulus_id`) : celle du MI n'est ni
+    # une calibration ni une mesure, et passerait sinon pour orpheline.
     attendues |= {s.stimulus_id for s in modes.MODES if s.stimulus_id}
     orphelines = sorted(attendues - set(FENETRES))
     chk(not orphelines,
@@ -280,7 +275,7 @@ def _selftest():
     chk("--guide" in argv_guide and argv_guide[2].endswith("ssvep.py"),
         f"…et la commande du run guidé porte bien son option ({argv_guide[3:]})")
 
-    # --- Le RETOUR et l'ESSAI LIBRE (2026-10-01) ---------------------------------------
+    # --- Le RETOUR et l'ESSAI LIBRE ---------------------------------------
     # Un test des trois fenêtres à cible entoure la décision du moteur ; l'ErrP n'a pas de cible.
     chk(all("--retour" in options_de_mesure(k) for k in ("cvep", "ssvep", "p300"))
         and "--retour" not in options_de_mesure("errp"),

@@ -4,9 +4,9 @@ Ce qui est ICI est ce que **tous** les modes partagent : la séquence chauffe �
 la publication activable, et le compte-rendu de repos. Ce qui est dans les sous-classes est ce qui
 diffère vraiment : ce qu'on collecte pendant le repos, et ce qu'on publie ensuite.
 
-Avant, cette séquence était écrite une fois pour TOUT le moteur. Ça marchait tant qu'un seul mode
-tournait ; dès que deux tournent ensemble, ils sont à des phases différentes — l'un mesure encore
-son plancher pendant que l'autre décode déjà. L'état devait donc descendre dans le mode.
+Chaque mode porte sa propre séquence, et non une seule pour tout le moteur : quand deux modes
+tournent ensemble, ils sont à des phases différentes — l'un mesure encore son plancher pendant
+que l'autre décode déjà. L'état vit donc dans le mode.
 
 ⚠️ **Un runtime ne lit jamais l'horloge lui-même** : `tick` reçoit `now`. C'est ce qui rend la
 machine de phases testable sans dormir, et ce qui garantit que tous les modes d'un même tour de
@@ -140,8 +140,8 @@ class ModeRuntime:
         attend d'avoir assez de fenêtres), et son décompte ne part qu'à la première fenêtre
         exploitable — d'où les deux branches. À 0, la console dit « encore un instant ».
 
-        Demandé au casque le 2026-09-24 : la stabilisation puis le repos du Neuro durent 40 s
-        « sans indication de temps à l'écran ». Même horloge que la boucle (`perf_counter`).
+        La stabilisation puis le repos du Neuro durent 40 s : ce décompte évite de les laisser
+        sans indication de temps à l'écran. Même horloge que la boucle (`perf_counter`).
         """
         if self.phase not in ("warmup", "rest") or self.spec.rest is None:
             return None
@@ -203,7 +203,7 @@ class ModeRuntime:
     # glissant, et une manche qui a pris du retard (un tour de boucle long, une purge) laisse
     # sortir les plus vieux échantillons. Découper rend alors `None`.
     #
-    # Conséquence pour qui écrit le prochain mode à marqueurs (l'ErrP est le premier concerné) :
+    # Conséquence pour qui écrit un mode à marqueurs :
     # **garder la garde `if epoque is None: continue` et COMPTER ce qu'elle jette** — c'est ce
     # que fait `_epoques_perdues` dans `modes/p300.py`. La retirer en croyant la maturité
     # suffisante ne lèverait rien : le mode perdrait des époques en silence, exactement la panne
@@ -261,7 +261,7 @@ def _selftest():
     chk(rt.remises_a_zero == 1, "le début de repos remet l'état du mode à zéro")
 
     rt.tick(None, 0.0, now=105.0)     # encore dans la chauffe (10 s)
-    # Le temps avant le décodage (2026-09-24) : le reste de la chauffe PLUS tout le repos.
+    # Le temps avant le décodage : le reste de la chauffe PLUS tout le repos.
     chk(rt.avant_decodage_s(now=105.0) == 25.0,
         f"pendant la chauffe, le décodage est à « reste de chauffe + repos » "
         f"({rt.avant_decodage_s(now=105.0)} s au lieu de 5 + 20)")

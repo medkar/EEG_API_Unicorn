@@ -34,26 +34,24 @@ flip qui la montre, exactement comme les flashs, et pour la même raison.
 moteur n'entraînera donc rien, et le dira. Une séance tronquée qui produirait quand même un modèle
 donnerait une entrée que RIEN ne distingue d'un modèle complet dans la liste de la console.
 
-⚠️ Cette pause n'est pas du confort. Sans elle, la frontière entre deux manches est visuellement
-identique à un intervalle entre deux flashs (~83 ms) : dès la deuxième sélection, les époques
-contiennent la transition du regard d'une cible vers la suivante, et le moteur publie quand même
-une cible plausible. Les deux implémentations du même protocole validées au casque ont cet écran
-(`research/p300_calibrate.py` et le mode P300 de `research/app.py`) ; l'émetteur était le seul à
-l'avoir perdu. Elle a une SECONDE conséquence, côté moteur : le discriminant par ÉCART entre deux
-flashs — celui qui fermerait complètement la contamination entre manches, cf. le rapport du lot 2
-§4(a) — ne peut rien détecter tant qu'il n'y a aucune frontière temporelle à détecter. Cette pause
-est donc ce qui rend ce garde-fou possible.
+⚠️ La pause entre manches n'est pas du confort. Sans elle, la frontière entre deux manches est
+visuellement identique à un intervalle entre deux flashs (~83 ms) : dès la deuxième sélection, les
+époques contiennent la transition du regard d'une cible vers la suivante, et le moteur publie quand
+même une cible plausible. Elle a une SECONDE conséquence, côté moteur : le discriminant par ÉCART
+entre deux flashs, qui fermerait complètement la contamination entre manches, ne peut rien
+détecter tant qu'il n'y a aucune frontière temporelle à détecter. Cette pause est donc ce qui
+rend ce garde-fou possible.
 
 ⚠️ **`--retour` entoure la cible que le moteur a SÉLECTIONNÉE** (`stimulus/retour.py` porte la
 règle). Le P300 décide UNE fois par manche, après le `round_end`. En test (`--tester`) comme en
 décodage, l'anneau est VERT : il montre la sélection, il ne juge pas. Sa taille est celle des trois
 fenêtres (`retour.rayon_anneau`), au-delà du cercle de désignation, dans le noir.
-- **En test, chaque manche a sa PHASE DE RETOUR** (2026-10-02, `phase_de_retour`) : la fenêtre
+- **En test, chaque manche a sa PHASE DE RETOUR** (`phase_de_retour`) : la fenêtre
   attend la sélection (au plus `retour.ATTENTE_DECISION_S`), la montre SEULE — aucun cercle bleu,
   aucun texte — pendant `retour.RETOUR_AFFICHE_S`, l'éteint, et SEULEMENT ENSUITE cercle la cible
-  de la manche suivante. Demandé au casque : l'anneau de la manche finie et la consigne bleue de
-  la suivante à l'écran ensemble, « c'est confusant ». La DERNIÈRE manche passe par le même geste,
-  avant `calib_end`. La console annonce cette phase dans la durée du test
+  de la manche suivante. Sans elle, l'anneau de la manche finie et la consigne bleue de la
+  suivante seraient à l'écran ensemble, ce qui prête à confusion. La DERNIÈRE manche passe par le
+  même geste, avant `calib_end`. La console annonce cette phase dans la durée du test
   (`core/modes/p300_test.PHASE_RETOUR_S`, accord tenu par `--smoke`).
 - **En décodage** (l'essai libre), rien ne change : l'anneau apparaît pendant la pause qui suit
   la manche.
@@ -91,7 +89,7 @@ import time
 from collections import Counter
 
 # Permet `from config import ...` que le module soit lancé via `python src/stimulus/p300.py`
-# ou importé comme `src.p300_stimulus`.
+# ou importé comme `stimulus.p300`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  # noqa: E402
                          P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
@@ -127,16 +125,15 @@ CUE_EPAISSEUR_PX = 4
 # ~1 s d'affichage ; en test, la phase de retour l'a éteint bien avant (cf. `phase_de_retour`).
 EFFACE_AVANT_FLASH_S = 0.5
 
-# ⚠️ La durée de la pause entre deux manches est LUE dans `core/config.py`, jamais recopiée ici.
-# Elle y a été hissée le 2026-09-07 parce que DEUX programmes en dépendent et qu'aucun ne peut
-# importer l'autre : cette fenêtre la JOUE, et `core/modes/p300_calib.py` s'en sert pour ESTIMER la
-# durée d'une séance de calibration — le chiffre que la console affiche AVANT de commencer. Deux
-# copies dériveraient, et l'écran annoncerait alors une durée que la fenêtre ne tient pas. C'est la
-# leçon de la piste ErrP, qui était écrite deux fois. `--smoke` vérifie qu'aucune copie locale
-# n'est revenue.
+# ⚠️ La durée de la pause entre deux manches est LUE dans `core/config.py`, jamais recopiée ici :
+# DEUX programmes en dépendent et aucun ne peut importer l'autre. Cette fenêtre la JOUE, et
+# `core/modes/p300_calib.py` s'en sert pour ESTIMER la durée d'une séance de calibration — le
+# chiffre que la console affiche AVANT de commencer. Deux copies dériveraient, et l'écran
+# annoncerait alors une durée que la fenêtre ne tient pas. `--smoke` vérifie qu'aucune copie
+# locale n'existe.
 
 # Ce que le moteur JETTE avant d'enregistrer pour de bon, EN CALIBRATION : sa chauffe (l'offset DC
-# de l'Unicorn dérive après ouverture de session — 10⁵ µV en rampe, mesuré le 2026-07-27). Valeur
+# de l'Unicorn dérive après ouverture de session — 10⁵ µV en rampe, mesuré sur ce casque). Valeur
 # lue dans `core/modes/marker_calib.py` (`warmup_s = SSVEP_WARMUP_S`), pas recopiée.
 #
 # ⚠️ Ce n'est PAS du confort, et `wait_for_consumers` ne le remplace pas : il répond « oui » dès
@@ -148,9 +145,9 @@ EFFACE_AVANT_FLASH_S = 0.5
 ATTENTE_MOTEUR_S = SSVEP_WARMUP_S
 
 # Rayon du point de fixation, en PIXELS et non proportionnel — la MÊME valeur que
-# `archive/ui.py:FIX_DOT_R`, celle sous laquelle les données d'entraînement ont été
-# enregistrées. Il valait 3 ici, soit 2,25× la surface : un stimulus qui n'est pas celui du
-# modèle, pour une constante recopiée de travers.
+# `archive/ui.py:FIX_DOT_R`, celle sous laquelle les données d'entraînement ont été enregistrées.
+# Un rayon plus grand changerait la surface du stimulus (3 px : 2,25× la surface) : ce ne serait
+# plus celui du modèle.
 FIX_DOT_R = 2
 
 
@@ -173,11 +170,8 @@ def blocs_melanges(n_targets, reps, rng):
     réponse évoquée au 2e flash consécutif sur la même cible est amoindrie, qu'elle soit ou non
     la cible attendue) qui abîme l'onde qu'on cherche justement à mesurer.
 
-    Cette fonction est donc le SEUL endroit où ce mélange s'écrit. La calibration
-    (`research/p300_calibrate.py`) et le P300 live de `research/app.py` l'appellent aussi : ils
-    remélangeaient chacun de leur côté, sans garde de jonction — un invariant affirmé et testé
-    ici, violé aux deux endroits qui produisent réellement les modèles. Une contrainte tenue à un
-    seul endroit sur trois n'est pas une contrainte.
+    Cette fonction est donc le SEUL endroit où ce mélange s'écrit : la calibration et le décodage
+    l'appellent aussi. Une contrainte tenue à un seul endroit sur trois n'est pas une contrainte.
 
     Sans effet si `n_targets <= 1` : il n'y a alors aucune autre cible à placer en tête.
     """
@@ -216,15 +210,15 @@ def build_markers(n_targets, reps, rng):
 def valide_reglages(reps, targets):
     """(ok, raison). Refuse ce que le moteur ne saura pas décoder — au lancement, pas en séance.
 
-    Documenter ne suffisait pas : `--targets 4` tournait sans un mot, les indices 0-3 étant dans
-    la plage attendue, et la probabilité oddball passait de 1/6 à 1/4 — le modèle décodait alors
-    avec les probabilités de quelqu'un d'autre, en publiant des sélections parfaitement
-    plausibles. `--targets 0` levait un `IndexError` nu, `--targets 2` produisait une séquence
-    strictement alternée donc 100 % prévisible (le contraire d'un oddball), et le smoke disait OK.
+    Documenter ne suffit pas : `--targets 4` tournerait sans un mot, les indices 0-3 étant dans
+    la plage attendue, et la probabilité oddball passerait de 1/6 à 1/4 — le modèle décoderait
+    alors avec les probabilités de quelqu'un d'autre, en publiant des sélections parfaitement
+    plausibles. `--targets 0` lèverait un `IndexError` nu, `--targets 2` produirait une séquence
+    strictement alternée donc 100 % prévisible (le contraire d'un oddball), et le smoke dirait OK.
 
-    `--reps` est devenu tout aussi contraignant depuis que le moteur applique `P300_REPS` comme
-    PLAFOND PAR CIBLE : au-delà, il abandonne la manche — bruyamment, mais TOUTES les manches. Et
-    en dessous de `P300_MIN_REPS`, il refuse de décider (plancher de manche). Un émetteur lancé à
+    `--reps` est tout aussi contraignant : le moteur applique `P300_REPS` comme PLAFOND PAR
+    CIBLE : au-delà, il abandonne la manche — bruyamment, mais TOUTES les manches. Et en dessous
+    de `P300_MIN_REPS`, il refuse de décider (plancher de manche). Un émetteur lancé à
     `--reps 12` ne produirait donc plus une seule sélection.
     """
     if int(targets) != P300_N_TARGETS:
@@ -247,7 +241,7 @@ def mots_ecran(tester):
 
     ⚠️ Une seule écriture, et c'est le point : l'étudiant lance « Tester » depuis la console,
     puis cette fenêtre prend tout l'écran. Si elle écrit « Calibration P300 », il croit s'être
-    trompé de bouton — c'est arrivé, et l'autotest lit désormais cette fonction.
+    trompé de bouton. L'autotest lit cette fonction.
     """
     return ("Test P300", "Test terminé") if tester else ("Entraînement P300", "Entraînement terminé")
 
@@ -255,10 +249,10 @@ def mots_ecran(tester):
 def target_positions(n_targets, span):
     """Centres (dx, dy) des `n_targets` cibles, relatifs au centre de l'écran.
 
-    Les angles sont LUS dans `p300_targets(n)`, jamais recalculés : la couronne était réécrite
-    ici en `2πi/n`, ce qui donne le même résultat pour n=6 mais DIVERGE dès n=3 (`cvep_targets(3)`
+    Les angles sont LUS dans `p300_targets(n)`, jamais recalculés : une couronne réécrite en
+    `2πi/n` donnerait le même résultat pour n=6 mais DIVERGERAIT dès n=3 (`cvep_targets(3)`
     reprend exactement les angles de `COMMANDS`, pas trois tiers de tour). Deux géométries pour
-    le même protocole, et l'écran ne montre plus les cibles sur lesquelles le modèle a été
+    le même protocole, et l'écran ne montrerait plus les cibles sur lesquelles le modèle a été
     entraîné. Les ratios (0,31 et 0,075) sont ceux de `archive/ui.py:ring_spots`, pour la même
     raison.
     """
@@ -295,10 +289,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     `--smoke` (une source de décisions FACTICE à la place de `decoded_p300`).
 
     ⚠️ Les deux modes partagent la MÊME boucle et la MÊME séquence de flashs (`build_markers`).
-    Une manche de calibration est une manche normale, précédée d'un `cue` : écrire une seconde
-    boucle « pour la calibration » rouvrirait exactement la duplication que ce chantier a passé son
-    temps à supprimer ailleurs (la piste ErrP était écrite deux fois, avec un test de 500 pas pour
-    garder les copies d'accord).
+    Une manche de calibration est une manche normale, précédée d'un `cue` : une seconde boucle
+    « pour la calibration » dupliquerait la séquence, et les deux copies pourraient diverger.
 
     `journal`, s'il est fourni, reçoit `(marqueur, horodatage)` pour CHAQUE marqueur réellement
     poussé — c'est ce qui permet à `--smoke` de vérifier le rendu réel et pas seulement la séquence
@@ -323,7 +315,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         return False
 
     # Le flux du RETOUR, construit AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
-    # modes (1 à 2 s d'import), qui volait le GIL au rendu depuis un fil (revue C-M5).
+    # modes (1 à 2 s d'import), qui volerait le GIL au rendu s'il se faisait depuis un fil.
     source_dec = source_retour
     if retour and source_dec is None:
         source_dec = SourceDecisions(stimulus_id="p300")
@@ -406,9 +398,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     running = True
     round_num = 0
     # La cible DÉSIGNÉE de la manche en cours (calibration), ou None en décodage. Elle reste
-    # cerclée PENDANT les flashs : c'est ce que faisait l'écran validé au casque
-    # (`research/p300_calibrate._flash_targets`, `cue=cue_name`), et c'est nécessaire — un sujet
-    # qui perd le repère de sa cible au premier flash compte les éclairs de la mauvaise.
+    # cerclée PENDANT les flashs : un sujet qui perd le repère de sa cible au premier flash
+    # compte les éclairs de la mauvaise.
     cue_courant = None
     flashs_manche = 0            # ce qui a déjà été envoyé dans la manche EN COURS
     soa_mesures = []             # intervalles RÉELS entre deux onsets de flash consécutifs
@@ -424,9 +415,9 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         return ts
 
     def poll():
-        """Événements + la limite `--seconds`. Les DEUX ici : la limite n'était regardée qu'en
-        fin de manche, donc `--seconds 20` pouvait tourner 25 s. Un étudiant qui règle une durée
-        veut qu'elle soit tenue, pas arrondie à la manche supérieure."""
+        """Événements + la limite `--seconds`. Les DEUX ici, à chaque image : sinon la limite ne
+        serait regardée qu'en fin de manche, et `--seconds 20` pourrait tourner 25 s. Un étudiant
+        qui règle une durée veut qu'elle soit tenue, pas arrondie à la manche supérieure."""
         nonlocal running
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -440,11 +431,10 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         """La couronne : contour permanent, cible ALLUMÉE s'il y en a une, cible DÉSIGNÉE cerclée
         s'il y en a une, point de fixation, numéro.
 
-        UN SEUL dessin pour les deux écrans du programme — les flashs et les attentes. Ils avaient
-        chacun leur boucle, et elles avaient déjà divergé : l'écran d'attente ne dessinait pas la
-        cible allumée (normal) mais il aurait tout aussi bien pu oublier le point de fixation, et
-        le sujet aurait alors changé de repère de regard entre les deux écrans sans que rien ne le
-        signale.
+        UN SEUL dessin pour les deux écrans du programme — les flashs et les attentes. Avec une
+        boucle chacun, ils pourraient diverger : l'écran d'attente pourrait oublier le point de
+        fixation, et le sujet changerait de repère de regard entre les deux écrans sans que rien
+        ne le signale.
         """
         win.fill(BG)
         for i, (x, y) in enumerate(spots):
@@ -492,8 +482,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         ⚠️ Cette pause n'est pas du confort. Sans elle, la frontière entre deux manches est
         visuellement identique à un intervalle entre deux flashs (~150 ms) : l'étudiant n'a aucun
         instant pour déplacer son regard, dès la 2e sélection les époques contiennent la
-        transition, et le moteur publie quand même une cible plausible. Les deux implémentations
-        validées au casque ont cet écran.
+        transition, et le moteur publie quand même une cible plausible.
 
         ⚠️ **`marqueur_cue` : le `cue` part APRÈS le premier `flip`**, c'est-à-dire une fois que la
         cible désignée est RÉELLEMENT à l'écran. Publié avant, il annonce la consigne une frame
@@ -545,8 +534,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         Un −1, une sélection perdue ou trop tardive : aucun anneau, la phase s'arrête au bout de
         l'attente, sans ajouter `RETOUR_AFFICHE_S` d'écran vide.
 
-        La DERNIÈRE manche y passe comme les autres, avant `calib_end` : la fenêtre se fermait
-        avant sa décision, et elle n'avait jamais d'anneau (revue E-I3)."""
+        La DERNIÈRE manche y passe comme les autres, avant `calib_end` : sans cela, la fenêtre se
+        fermerait avant sa décision, et elle n'aurait jamais d'anneau."""
         nonlocal cue_courant
         cue_courant = None
         ecran_statique(ATTENTE_DECISION_S, None, jusqu_a=lambda: not anneau.attend)
@@ -557,10 +546,11 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
     rounds = int(rounds)
     seance_complete = False
-    # ⚠️ En `--tester`, TOUT ce que cette fenêtre montre ou imprime dit « test ». Elle jouait le
-    # même protocole sous le mot « calibration » : plein écran « Calibration P300 » pendant la
-    # chauffe de chaque test, et un ESC répondait « aucun modèle ne sera entraîné » alors qu'un
-    # test n'en entraîne jamais. L'étudiant croyait avoir lancé le mauvais geste.
+    # ⚠️ En `--tester`, TOUT ce que cette fenêtre montre ou imprime dit « test ». Elle joue le même
+    # protocole que l'entraînement : sous le mot « calibration », l'étudiant lirait « Calibration
+    # P300 » en plein écran pendant la chauffe de chaque test, et un ESC répondrait « aucun modèle
+    # ne sera entraîné » alors qu'un test n'en entraîne jamais. Il croirait avoir lancé le mauvais
+    # geste.
     geste = "le test" if tester else "l'entraînement"
     titre_chauffe, titre_fin = mots_ecran(tester)
 
@@ -656,10 +646,10 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
                     ecran_statique(P300_PAUSE_MANCHE_S, "choisis ta cible et fixe-la",
                                    avant_la_fin=efface)
 
-        # ⚠️ Sortir en pleine manche (ESC, fenêtre fermée, `--seconds` atteint) laissait le
-        # moteur avec des flashs orphelins : il attend 10 s puis ABANDONNE la manche. Émettre le
-        # `round_end` lui dit tout de suite que c'est fini — il refusera de décider (trop peu de
-        # flashs) et le DIRA, au lieu de rester muet dix secondes.
+        # ⚠️ Sortir en pleine manche (ESC, fenêtre fermée, `--seconds` atteint) laisserait le
+        # moteur avec des flashs orphelins : il attendrait 10 s puis ABANDONNERAIT la manche.
+        # Émettre le `round_end` lui dit tout de suite que c'est fini — il refusera de décider
+        # (trop peu de flashs) et le DIRA, au lieu de rester muet dix secondes.
         if flashs_manche:
             emet({"mode": "p300", "event": "round_end"})
             print(f"[p300-stim] interrompu en pleine manche {round_num} : round_end envoyé pour "
@@ -670,8 +660,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
         # ⚠️ Laisser la DERNIÈRE époque se remplir avant d'annoncer la fin. Le moteur ne libère un
         # marqueur qu'une fois son post-stimulus écoulé (`markers_murs(post_s=…)`) : `calib_end`
         # publié dans la foulée du dernier flash arriverait bien après lui, mais l'écran, lui,
-        # serait déjà noir et le sujet aurait bougé. Même geste que le `settle` de l'ancienne
-        # calibration (`research/p300_calibrate._collect`).
+        # serait déjà noir et le sujet aurait bougé.
         # (En test, la dernière manche a déjà eu sa phase de retour, dans la boucle : même geste
         # que les autres.)
         cue_courant = None
@@ -736,15 +725,15 @@ def _cible_designee_a_l_ecran(surface, spots, rayon_cue):
 
 
 def _smoke(reps, n_targets):
-    """Trois moitiés — la deuxième est celle qui manquait, la troisième est la calibration.
+    """Trois moitiés : la séquence, la boucle réelle, la calibration.
 
     **A. La séquence** (`build_markers`, fonction pure) : sa forme, ses comptes, ses jonctions.
 
-    **B. `run()` POUR DE VRAI**, sur `SDL_VIDEODRIVER=dummy` — le patron de `research/app.py` et
-    de `ssvep_stimulus.py`. Le `--smoke` retournait avant même l'import de pygame : les ~90
-    lignes qui contiennent **le geste flip→horodatage que ce fichier existe pour enseigner**
-    n'avaient AUCUNE couverture. Un `push_sample` remonté au-dessus du `flip`, une pause
-    supprimée, un `round_end` jamais émis en sortie — rien de tout ça n'échouait.
+    **B. `run()` POUR DE VRAI**, sur `SDL_VIDEODRIVER=dummy`. Un `--smoke` qui retournerait avant
+    même l'import de pygame laisserait SANS COUVERTURE les ~90 lignes qui contiennent **le geste
+    flip→horodatage que ce fichier existe pour enseigner** : un `push_sample` remonté au-dessus
+    du `flip`, une pause supprimée, un `round_end` jamais émis en sortie — rien de tout ça
+    n'échouerait.
 
     **C. `--calibrer`**, sur le même écran factice : la forme exacte de la séance, et surtout que
     la cible annoncée par chaque `cue` est celle que l'écran a RÉELLEMENT désignée — lue dans les
@@ -788,8 +777,8 @@ def _smoke(reps, n_targets):
         f"({consecutifs} répétition(s) immédiate(s))")
 
     # --- les réglages que le MOTEUR refuserait sont refusés ICI, au lancement -----
-    # `--targets 4` tournait sans un mot (indices 0-3 dans la plage, donc aucune garde ne se
-    # déclenchait) et changeait la probabilité oddball de 1/6 à 1/4. `--reps 12` fait désormais
+    # `--targets 4` tournerait sans un mot (indices 0-3 dans la plage, donc aucune garde ne se
+    # déclencherait) et changerait la probabilité oddball de 1/6 à 1/4. `--reps 12` ferait
     # ABANDONNER toutes les manches, le moteur appliquant P300_REPS comme plafond par cible.
     chk(valide_reglages(P300_REPS, P300_N_TARGETS)[0],
         "les valeurs par défaut sont, elles, acceptées")
@@ -824,10 +813,10 @@ def _smoke(reps, n_targets):
     chk(all(b > a for a, b in zip(horodatages, horodatages[1:])),
         "les horodatages avancent strictement — un flip par flash, un horodatage par flip")
 
-    # ⚠️ LE garde-fou du critique 3.2 : il DOIT y avoir une pause entre un `round_end` et le
-    # premier flash de la manche suivante. Sans elle, la frontière de manche est indiscernable
-    # d'un intervalle inter-flash (~83 ms), l'étudiant n'a aucun instant pour changer de cible,
-    # et le discriminant par ÉCART côté moteur (lot 2, §4a) ne pourrait rien détecter.
+    # ⚠️ Il DOIT y avoir une pause entre un `round_end` et le premier flash de la manche suivante.
+    # Sans elle, la frontière de manche est indiscernable d'un intervalle inter-flash (~83 ms),
+    # l'étudiant n'a aucun instant pour changer de cible, et le discriminant par ÉCART côté moteur
+    # ne pourrait rien détecter.
     pauses = [b - a for (ma, a), (mb, b) in zip(journal, journal[1:])
               if ma["event"] == "round_end" and mb["event"] == "flash"]
     chk(pauses and min(pauses) >= P300_PAUSE_MANCHE_S * 0.9,
@@ -846,11 +835,11 @@ def _smoke(reps, n_targets):
         f"quoi qu'il arrive, le dernier marqueur envoyé est un round_end — jamais des flashs "
         f"orphelins ({journal[-1][0]})")
 
-    # La pause est LUE dans `core/config.py`, pas recopiée ici. Vérifié sur le TEXTE SOURCE, comme
-    # les invariants P300 de `research/app.py` : comparer les VALEURS ne prouverait rien, une
-    # copie locale à 2,5 s étant égale à la constante à 2,5 s le jour où on l'écrit — et
-    # divergeant en silence au premier changement. Ce qui se casse alors n'est pas ce fichier :
-    # c'est `core/modes/p300_calib.py::duree_protocole_s`, donc la durée que la console ANNONCE à
+    # La pause est LUE dans `core/config.py`, pas recopiée ici. Vérifié sur le TEXTE SOURCE :
+    # comparer les VALEURS ne prouverait rien, une copie locale à 2,5 s étant égale à la
+    # constante à 2,5 s le jour où on l'écrit — et divergeant en silence au premier changement.
+    # Ce qui se casse alors n'est pas ce fichier : c'est
+    # `core/modes/p300_calib.py::duree_protocole_s`, donc la durée que la console ANNONCE à
     # l'étudiant avant qu'il ne s'assoie.
     import inspect
     import re
@@ -915,9 +904,9 @@ def _smoke(reps, n_targets):
 
     # --- D. `--tester` : LE MOT de la séance -------------------------------------
     # Cette fenêtre joue le MÊME protocole pour entraîner et pour tester ; le mot est le seul
-    # repère de l'étudiant, et elle l'a eu faux jusqu'au 2026-09-23. Deux branches, donc deux
-    # séances : celle qui va au bout, et celle qu'on coupe — c'est la seconde qu'on lit quand on
-    # vient d'appuyer sur ESC sans comprendre, et elle répondait « aucun modèle ne sera entraîné ».
+    # repère de l'étudiant. Deux branches, donc deux séances : celle qui va au bout, et celle qu'on
+    # coupe — c'est la seconde qu'on lit quand on vient d'appuyer sur ESC sans comprendre, et elle
+    # ne doit pas répondre « aucun modèle ne sera entraîné » à un test.
     titre_chauffe, titre_fin = mots_ecran(True)
     chk("test" in titre_chauffe.lower() and "test" in titre_fin.lower()
         and "calibration" not in (titre_chauffe + titre_fin).lower()
@@ -935,9 +924,8 @@ def _smoke(reps, n_targets):
                                           **commun_test)
     mot_du_geste(chk, dit_coupe, "INTERROMPU", "P300 (abandon)")
 
-    # ⚠️ Appelée SANS `ok and …` : `and` court-circuite, donc le bout-à-bout aurait été SAUTÉ dès
-    # qu'une assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. Attrapé
-    # par mutation (renommer l'événement `cue` faisait rougir la moitié C et taisait la D).
+    # ⚠️ Appelée SANS `ok and …` : `and` court-circuite, donc le bout-à-bout serait SAUTÉ dès
+    # qu'une assertion précédente échoue — c'est-à-dire précisément quand on en a besoin.
     # `chk` met à jour `ok` par `nonlocal` : la valeur de retour n'a rien à faire ici.
     _smoke_bout_en_bout(chk, journal_c, designees)
 
@@ -1061,7 +1049,7 @@ def _smoke_retour(chk):
         f"[E] l'anneau s'éteint {EFFACE_AVANT_FLASH_S:g} s AVANT le premier flash de la manche "
         f"suivante, jamais sur lui : sa disparition ne tombe pas dans la ligne de base "
         f"({len(tout_pres)} image(s) fautive(s))")
-    # --- La PHASE DE RETOUR du test (2026-10-02) : tout est lu dans les PIXELS et l'horloge ---
+    # --- La PHASE DE RETOUR du test : tout est lu dans les PIXELS et l'horloge ---
     # (a) La confusion signalée au casque : l'anneau de la manche finie et le cercle bleu de la
     # suivante dans la MÊME image.
     ensemble = [i for i, im in enumerate(images) if im[1] and im[2] != -1]
@@ -1142,10 +1130,10 @@ def _smoke_bout_en_bout(chk, journal, designees):
     """LES MARQUEURS DE CETTE FENÊTRE, donnés à la calibration du MOTEUR. Le seul test qui les
     fait se parler.
 
-    Les deux moitiés de ce chantier se vérifient séparément partout ailleurs : la fenêtre publie
+    Les deux moitiés se vérifient séparément partout ailleurs : la fenêtre publie
     une séquence (juste au-dessus), et le moteur sait en faire un modèle
     (`python src/core/modes/p300_calib.py`, qui rejoue une séance qu'il FABRIQUE lui-même). Rien
-    ne prouvait qu'elles parlent de la même chose. Un désaccord de protocole — un événement
+    ne prouve qu'elles parlent de la même chose. Un désaccord de protocole — un événement
     renommé, la cible sur une autre clé, un `round_end` oublié — ne lève RIEN : le moteur
     enregistre simplement moins d'époques, ou les étiquette toutes « non-cible », et la
     calibration produit un modèle plausible qui décodera du bruit.

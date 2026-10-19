@@ -4,7 +4,7 @@
 moteur, dans deux terminaux — le même montage que pour le P300 et l'ErrP :
 
     python src/core/server.py --mode cvep          # terminal 1 : acquiert et décode (EXIGE un
-                                                    # modèle entraîné : console, page c-VEP, « Calibrer »)
+                                                    # modèle entraîné : console, page c-VEP, « Entraîner »)
     python src/stimulus/cvep.py           # terminal 2 : fait clignoter et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
@@ -49,8 +49,10 @@ au-dessus du `flip` le fait tomber sur une frame identique à la précédente. I
 CHAQUE frame (c'est le clignotement), donc ce critère-là serait VERT quoi qu'on fasse — un test
 creux. Le critère c-VEP est plus exigeant : le flip qui précède le marqueur doit être celui qui a
 affiché la **frame 0 du code**, ni la 62 ni la 1. `--smoke` le lit dans les PIXELS de l'écran (voir
-`_smoke`, section « l'alignement ») : il échantillonne l'état ON/OFF des six disques et le compare
-au code attendu. Inverser les deux lignes ci-dessus le fait rougir.
+`_smoke`, section « l'alignement »), pas dans le compteur de l'émetteur, qui ne peut que se donner
+raison : il échantillonne l'état ON/OFF des six disques et le compare au code attendu, en exigeant
+ZÉRO image d'écart (une tolérance de ±1 laisserait passer un décalage systématique d'une frame,
+c'est-à-dire la panne). Inverser les deux lignes ci-dessus le fait rougir.
 
 ⚠️ **Ce que ce fichier NE fait pas comme `errp_stimulus.py` non plus : il ne s'arrête pas pendant
 la chauffe du moteur.** L'ErrP tient un écran statique pendant que le moteur chauffe, parce que
@@ -77,7 +79,6 @@ séance est bornée en secondes : cf. le ⚠️ de `poll`), et la graine est IMP
 donne pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se
 dépouille pas deux fois. Le cercle suit la règle du P300 (`rayon_cercle`) : `p300.CUE_MARGE_PX` au-delà du
 bord du disque, trait vers l'intérieur — il ne touche aucun pixel du disque ni de son contour.
-Il était à 1,7 × le rayon jusqu'au 2026-10-02 : « trop grand », relevé au QA 1.17.3.
 
 ⚠️ **`--log CHEMIN` écrit cette vérité-terrain dans un FICHIER, et sans lui la séance 2.9 n'est pas
 dépouillable.** Le terminal ne suffit pas : c'est le seul exemplaire de la consigne, un `Ctrl+C`
@@ -109,12 +110,12 @@ décision (`CVEP_DECISION_CYCLES` cycles = 2,1 s) puis son vote glissant (`CVEP_
 espacées de `ModeRuntime.period_s()` = 0,6 s), soit **2,7 s pendant lesquelles chaque échantillon
 publié est calculé sur du signal à cheval sur DEUX cibles**. Noter tous les `decoded_cvep` de
 `[t_consigne, t_consigne + durée]` compte donc ces 2,7 s dans le score, et **plafonne la justesse
-mesurée quel que soit le décodeur** : à l'ancien réglage (4 cycles = 4,2 s par consigne) la
-transition couvrait 64 % de l'intervalle, donc ~40 % au maximum — de quoi conclure que le décodeur
-ne marche pas en regardant une transition. D'où deux remèdes appliqués ensemble : la consigne dure
-maintenant `CYCLES_PAR_CIBLE` = 8 cycles (8,4 s, dont 5,7 s exploitables = 68 %), et chaque ligne
-`t=` imprime l'instant « **compter à partir de** ». **Ne note que les échantillons postérieurs à
-cet instant-là.**
+mesurée quel que soit le décodeur** : avec une consigne de 4 cycles (4,2 s), la transition
+couvrirait 64 % de l'intervalle, donc ~40 % de justesse au maximum — de quoi conclure que le
+décodeur ne marche pas en regardant une transition. D'où deux remèdes appliqués ensemble : la
+consigne dure `CYCLES_PAR_CIBLE` = 8 cycles (8,4 s, dont 5,7 s exploitables = 68 %), et chaque
+ligne `t=` imprime l'instant « **compter à partir de** ». **Ne note que les échantillons
+postérieurs à cet instant-là.**
 
 ⚠️ **Pas de `valide_reglages` comme `p300_stimulus.py` — et ce n'est pas un oubli.** Le P300 doit
 refuser `--targets 4` parce que le moteur code six cibles en dur et que la probabilité oddball
@@ -140,7 +141,7 @@ et le cercle ne sont jamais à l'écran ensemble. La phase dure un nombre ENTIER
 (`cycles_de_retour`) : le clignotement et l'horloge `cycle` continuent pendant elle, la cible
 suivante paraît sur un bord de cycle, et son `cue` part toujours sur une frame 0. L'anneau s'éteint
 donc au début du settle, `CVEP_CAL_SETTLE_CYCLES` cycles avant le `cue` : la décision suivante, qui
-lit déjà ce settle (revue D-I1), ne voit jamais sa disparition.
+lit déjà ce settle, ne voit jamais sa disparition.
 
 ⚠️ **`--libre` : les cibles et l'horloge, rien d'autre.** Sans option, cette fenêtre DÉSIGNE des
 cibles (le cercle bleu, les lignes `t=`, `--log`) : c'est le protocole de dépouillement de la
@@ -197,8 +198,8 @@ FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (cf. archive/ui.py :
 #                             est pilotée par la LUMINANCE, un point rouge n'ampute donc quasiment
 #                             pas la modulation tout en restant visible allumé comme éteint)
 CUE = (60, 130, 255)        # le cercle de consigne, juste autour du disque. BLEU comme
-                            # celui du SSVEP et du P300 (vert jusqu'au 2026-10-02 : l'anneau VERT de
-                            # la cible décodée s'y confondait — `retour.autotest_couleurs`)
+                            # celui du SSVEP et du P300 (jamais vert : l'anneau VERT de la cible
+                            # décodée s'y confondrait — `retour.autotest_couleurs`)
 LABEL = (120, 120, 140)
 HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
@@ -212,14 +213,13 @@ TEXTE_REPOS = "ne fixe aucune cible"   # …et le bandeau qui l'accompagne
 FIX_DOT_R = 2
 
 # La couronne : ratios de `archive/ui.py:ring_spots`, c'est-à-dire la géométrie EXACTE sous
-# laquelle `research/app.py` a enregistré les époques de calibration. Les changer, c'est afficher un
-# stimulus que le modèle n'a jamais vu — sans qu'aucune exception ne le dise.
+# laquelle les modèles c-VEP existants ont été entraînés. Les changer, c'est afficher un stimulus
+# que le modèle n'a jamais vu — sans qu'aucune exception ne le dise.
 DIST_RATIO = 0.31
 TAILLE_RATIO = 0.075
 # Le cercle de consigne suit la règle du P300 (`p300.geometrie`), IMPORTÉE et non recopiée :
-# `rayon_cercle`. Il était à 1,7 × le rayon jusqu'au 2026-10-02 (la valeur de
-# `archive/ui.py:draw_ring`) — « trop grand », relevé au QA 1.17.3. Il ne touche toujours aucun
-# pixel du disque : son trait couvre [r + 4, r + 8[, le disque s'arrête à r. Une fonction, parce
+# `rayon_cercle`. Il ne touche aucun pixel du disque : son trait couvre [r + 4, r + 8[, le
+# disque s'arrête à r. Une fonction, parce
 # que `--smoke` a besoin du MÊME rayon pour aller lire ce cercle dans les pixels
 # (`point_de_sonde_cercle`) : recopié, il suffirait de le déplacer d'un côté pour que la sonde
 # lise le fond noir et ne rougisse plus.
@@ -244,10 +244,10 @@ TAILLE_FENETRE = (1000, 700)   # `--windowed` (dev) et `--smoke`
 #
 # ⚠️ **C'est un générateur de faux verdict pour la recette.** Quelqu'un qui note tous les
 # `decoded_cvep` de `[t_consigne, t_consigne + durée]` compte ces échantillons-là dans son score et
-# conclut que le décodeur ne marche pas. À l'ancien réglage (4 cycles = 4,2 s), la transition
-# couvrait 2,7 s sur 4,2 — soit **64 % des échantillons**, donc une justesse mesurée qui ne pouvait
-# pas dépasser ~40 % même avec un décodage parfait. Deux remèdes, appliqués tous les deux :
-#   • la consigne dure maintenant TROIS fois la transition, pour que la part exploitable DOMINE ;
+# conclut que le décodeur ne marche pas. Avec une consigne de 4 cycles (4,2 s), la transition
+# couvrirait 2,7 s sur 4,2 — soit **64 % des échantillons**, donc une justesse mesurée qui ne
+# pourrait pas dépasser ~40 % même avec un décodage parfait. Deux remèdes, ensemble :
+#   • la consigne dure TROIS fois la transition, pour que la part exploitable DOMINE ;
 #   • et chaque ligne `t=` du terminal imprime l'instant À PARTIR DUQUEL les échantillons comptent,
 #     pour qu'un dépouillement n'ait pas à redécouvrir ce calcul (cf. `run`).
 # `--smoke` arrime les deux constantes du moteur à leur source (cf. `_smoke`, section « la
@@ -405,8 +405,8 @@ def diagnostic_cadence(mesure_s, cycle_theorique_s, refresh, code_len, tolerance
     marqueurs (le modèle est calibré à 60, l'émetteur annonce 60, `maj_reference` ne voit rien
     d'anormal) et décode contre une phase qui part de ~8 % par cycle.
     Une SEULE fonction produit ce verdict, et c'est elle que `--smoke` interroge point par point :
-    l'écrire à même le bilan la laissait sans aucune assertion — trois mutations d'une ligne
-    (comparaison inversée, compteur neutralisé, bloc supprimé) passaient toutes au vert.
+    écrite à même le bilan, elle resterait sans assertion — trois mutations d'une ligne
+    (comparaison inversée, compteur neutralisé, bloc supprimé) passeraient toutes au vert.
 
     `tolerance` = 2 % : un écran 59,94 Hz annoncé à 60 dérive de 0,1 %, un vrai désaccord de mode
     d'affichage dépasse toujours les 2 % (le plus serré, 60 contre 59,94/1,001, reste sous ; le
@@ -547,9 +547,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     if smoke:
         return sous_garde_data(_smoke)
 
-    # `--refresh 0` (ou négatif) divisait par zéro au premier `L / refresh`, APRÈS avoir ouvert la
-    # fenêtre : traceback nu, pas de `pygame.quit()`, écran plein resté à l'écran. Le refus se pose
-    # donc AVANT d'ouvrir quoi que ce soit, comme `p300_stimulus.valide_reglages`.
+    # `--refresh 0` (ou négatif) diviserait par zéro au premier `L / refresh`, APRÈS avoir ouvert
+    # la fenêtre : traceback nu, pas de `pygame.quit()`, écran plein resté à l'écran. Le refus se
+    # pose donc AVANT d'ouvrir quoi que ce soit, comme `p300_stimulus.valide_reglages`.
     if refresh is not None and float(refresh) <= 0.0:
         print(f"[cvep-stim] REFUSÉ — --refresh {refresh} : un rafraîchissement est un nombre de "
               f"frames par seconde, donc strictement positif. Laisse l'option de côté pour qu'il "
@@ -568,9 +568,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     # sous un plein écran qu'on ne peut plus quitter. Ouvert en AJOUT ("a") : deux séances sur le
     # même chemin s'empilent, aucune ne s'efface.
     fichier_log = None
-    # `--log` sans valeur : la FENÊTRE choisit son nom, pas la console. C'est ce qui permet à
-    # l'interface de cocher « Journal de séance » sans avoir à composer un chemin — et la console
-    # n'écrit jamais sur le disque, elle ne fait que demander.
+    # `--log` sans valeur : la FENÊTRE choisit le nom (horodaté, dans `seances/`), pas l'appelant,
+    # qui n'a pas à composer un chemin — et la console n'écrit jamais sur le disque.
     if log_path is _AUTO:
         log_path = _chemin_journal_auto()
     if log_path:
@@ -592,7 +591,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         fichier_log.flush()
 
     # Les flux du RETOUR, construits AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
-    # modes (1 à 2 s d'import), qui volait le GIL au clignotement depuis un fil (revue C-M5/D-M4).
+    # modes (1 à 2 s d'import), qui volerait le GIL au clignotement depuis un fil.
     source_dec = source_retour
     if retour and source_dec is None:
         source_dec = SourceDecisions(stimulus_id="cvep")
@@ -666,9 +665,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     print(f"[cvep-stim] ⚠️ le moteur REFUSE ces marqueurs si son modèle a été calibré à plus de "
           f"1 Hz d'écart de {refresh:.1f} Hz — il le dit, mais lis ses premières lignes")
     # ⚠️ La graine est TIRÉE quand elle n'est pas donnée, et IMPRIMÉE dans TOUS les cas. Sans ça,
-    # une séance lancée sans `--seed` était irrejouable — et personne ne le savait, puisque rien ne
-    # s'affichait. Or une séance casque ne se répète pas : c'est la seule ligne qui permette de la
-    # rejouer plus tard pour la dépouiller autrement.
+    # une séance lancée sans `--seed` serait irrejouable, sans que personne le sache. Or une séance
+    # casque ne se répète pas : c'est la seule ligne qui permette de la rejouer plus tard pour la
+    # dépouiller autrement.
     if seed is None:
         seed = random.randrange(2 ** 31)
     print(f"[cvep-stim] graine {seed} — REJOUE cette séance à l'identique avec `--seed {seed}`")
@@ -799,10 +798,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         doublon : une durée dépend de l'ordonnanceur, un compte d'images non. C'est ce qui rend une
         séance REJOUABLE À L'IDENTIQUE — le tirage des consignes est graine par graine, mais deux
         exécutions bornées par le temps ne s'arrêtent pas forcément sur la même image, donc la
-        seconde peut avoir une consigne de plus. Mesuré par la revue : 1 exécution sur ~8 rendait
-        des journaux de longueurs différentes (4 consignes contre 5, préfixe identique). C'est la
-        borne en temps qui était en cause, jamais la graine. Un stimulus verrouillé à la frame se
-        borne donc en frames.
+        seconde peut avoir une consigne de plus. Mesuré : 1 exécution sur ~8 rend un journal de
+        longueur différente (4 consignes contre 5, préfixe identique). C'est la borne en temps qui
+        est en cause, jamais la graine. Un stimulus verrouillé à la frame se borne donc en frames.
         """
         nonlocal running
         for e in pygame.event.get():
@@ -903,7 +901,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         if attente_consommateur_s > 0 and not outlet.have_consumers():
             # ⚠️ En `--tester`, TOUT ce que cette fenêtre imprime dit « test » : elle joue le MÊME
             # protocole que l'entraînement, et le mot est la seule chose qui les distingue à
-            # l'écran. Un ESC répondait « aucun modèle ne sera entraîné » — un test n'entraîne rien.
+            # l'écran. Dire « aucun modèle ne sera entraîné » serait faux : un test n'entraîne
+            # rien.
             print(f"[cvep-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
                   f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste_seance} depuis la "
                   f"console, ou ferme cette fenêtre.")
@@ -1089,17 +1088,16 @@ def _runtime_de_test(code_len=63, refresh=60.0):
         if raison is not None:
             raise RuntimeError(f"fabrique de test cassée : {raison}")
 
-        # ⚠️ **Le détournement doit être PROUVÉ, pas espéré** — constat de la revue du 2026-09-08,
-        # et ce n'est pas une précaution théorique : c'est EXACTEMENT la faute qui, ce jour-là, a
-        # fait écrire un modèle entraîné sur du bruit synthétique dans le vrai `data/`, sous un
-        # nom que le catalogue liste, donc proposable par défaut à la séance suivante.
+        # ⚠️ **Le détournement doit être PROUVÉ, pas espéré** : ce n'est pas une précaution
+        # théorique, c'est EXACTEMENT la faute qui écrirait un modèle entraîné sur du bruit
+        # synthétique dans le vrai `data/`, sous un nom que le catalogue liste, donc proposable par
+        # défaut à la séance suivante.
         #
         # Repointer `mode_cvep.CVEP_MODEL_PATH` ne marche que parce que `_modeles_disponibles`
         # relit cette variable de module à CHAQUE appel — une propriété d'un AUTRE fichier, que
-        # rien ne promet. Le jour où elle change (le même déménagement qui a cassé
-        # `cvep_rcca_pilot` en septembre), `validate` élirait le modèle le plus récent du VRAI
-        # `data/` : sur ce poste il est à 60 Hz et L=63, donc la course de phase ci-dessous
-        # tournerait contre un modèle de séance casque **et resterait verte**.
+        # rien ne promet. Le jour où elle change (un déménagement de module), `validate` élirait le
+        # modèle le plus récent du VRAI `data/` : s'il est à 60 Hz et L=63, la course de phase
+        # ci-dessous tournerait contre un modèle de séance casque **et resterait verte**.
         choisi = valeurs.get("model", "")
         if os.path.dirname(os.path.abspath(choisi)) != os.path.abspath(dossier):
             raise RuntimeError(
@@ -1208,7 +1206,7 @@ C3_CALES = 3
 
 
 def _smoke():
-    """Trois parties, et c'est la première qui porte le chantier.
+    """Trois parties, et la première est celle qui protège ce fichier.
 
     **A. LA PHASE.** Une course de rendu rejouée EN PUR, frame par frame, contre le `CVEPRuntime`
     RÉEL du moteur : à chaque image, la phase que le moteur reconstruirait est comparée à celle que
@@ -1242,7 +1240,7 @@ def _smoke():
     L = len(code)
 
     # =====================================================================================
-    # A. LA PHASE — LE test de ce fichier, et de tout le chantier c-VEP.
+    # A. LA PHASE — LE test de ce fichier, et de tout le mode c-VEP.
     # =====================================================================================
     refresh = 60.0
     rt = _runtime_de_test(code_len=L, refresh=refresh)
@@ -1330,8 +1328,8 @@ def _smoke():
     duree_consigne = CYCLES_PAR_CIBLE * L / 60.0
     part_exploitable = (duree_consigne - TRANSITION_S) / duree_consigne
     # ⚠️ L'assertion qui empêche le retour du faux verdict de recette : la part EXPLOITABLE d'une
-    # consigne doit DOMINER. À 4 cycles (4,2 s) elle valait 36 % — une recette qui compte tout
-    # l'intervalle plafonnait donc à ~40 % de justesse, décodeur parfait ou non.
+    # consigne doit DOMINER. À 4 cycles (4,2 s) elle ne vaudrait que 36 % — une recette qui compte
+    # tout l'intervalle plafonnerait donc à ~40 % de justesse, décodeur parfait ou non.
     chk(part_exploitable >= 0.60,
         f"une consigne dure {duree_consigne:.1f} s dont {TRANSITION_S:.1f} s de transition : "
         f"{part_exploitable:.0%} d'échantillons exploitables (il en faut au moins 60 %, sinon "
@@ -1350,10 +1348,10 @@ def _smoke():
         "...et à une seule cible, la contrainte s'efface au lieu de boucler à l'infini")
 
     # --- Le DIAGNOSTIC DE CADENCE, point par point (la jumelle du geste flip->horodatage) ------
-    # ⚠️ Ce verdict n'était gardé par AUCUNE assertion tant qu'il vivait à même le bilan : inverser
-    # `abs(derive) < 0.02` en `>= 0.02` laissait le smoke entièrement vert, et l'avertissement ne
-    # partait plus jamais. Le voici interrogé des DEUX côtés du seuil, plus le cas réel qui motive
-    # tout ça : un écran 144 Hz lancé avec `--refresh 60`.
+    # ⚠️ Écrit à même le bilan, ce verdict ne serait gardé par AUCUNE assertion : inverser
+    # `abs(derive) < 0.02` en `>= 0.02` laisserait le smoke entièrement vert, et l'avertissement ne
+    # partirait plus jamais. Il est donc interrogé des DEUX côtés du seuil, plus le cas réel qui
+    # motive tout ça : un écran 144 Hz lancé avec `--refresh 60`.
     cyc60 = L / 60.0
     for mesure, doit_avertir, quoi in (
             (cyc60, False, "cadence exacte"),
@@ -1406,8 +1404,7 @@ def _smoke():
     # neutraliser ne rougirait rien.
     # ⚠️ `attendre` n'est pas un raffinement : l'émetteur mesure un ÉCART entre deux flips, donc le
     # tout premier flip d'une séance n'a pas de prédécesseur et ne peut par construction pas être
-    # compté comme sauté. Caler les toutes premières images faisait donc poser 3 cales pour 2
-    # comptées — et c'est l'assertion de C3 qui l'a montré, pas une relecture.
+    # compté comme sauté. Caler les toutes premières images poserait donc 3 cales pour 2 comptées.
     cales = {"restantes": 0, "faites": 0, "duree": 0.0, "attendre": 0}
 
     def flip_trace(*a, **k):
@@ -1465,12 +1462,11 @@ def _smoke():
         trace.clear()
         # C4/C5 : la MÊME graine doit rejouer la MÊME séquence de consignes.
         #
-        # ⚠️ **Bornés en IMAGES, jamais en secondes, et c'est la correction du tour 2.** Deux
-        # `run()` bornés par `seconds` ne s'arrêtent pas forcément sur la même image : la revue a
-        # mesuré 1 exécution sur ~8 où le second passage rendait UNE consigne de plus (préfixes
-        # identiques). Le mécanisme de graine n'y était pour rien — c'était l'ordonnanceur. Un test
-        # instable qu'on relance jusqu'au vert est un test qu'on a appris à ignorer, et ce dépôt
-        # vient justement d'en enterrer un ; on supprime donc la CAUSE au lieu de comparer des
+        # ⚠️ **Bornés en IMAGES, jamais en secondes.** Deux `run()` bornés par `seconds` ne
+        # s'arrêtent pas forcément sur la même image : mesuré, 1 exécution sur ~8 où le second
+        # passage rend UNE consigne de plus (préfixes identiques). Le mécanisme de graine n'y est
+        # pour rien — c'est l'ordonnanceur. Un test instable qu'on relance jusqu'au vert est un
+        # test qu'on apprend à ignorer ; on supprime donc la CAUSE au lieu de comparer des
         # préfixes. `max_frames` rend les deux courses identiques à l'image près.
         #
         # 6 cycles de 63 frames à `cycles_par_cible=1` = 6 consignes : une coïncidence entre deux
@@ -1612,7 +1608,7 @@ def _smoke():
     # ⚠️ **Ce qu'il faut mesurer, c'est l'ÉTENDUE, pas les trous.** Un écran figé PENDANT la chauffe
     # ne creuse aucun trou ENTRE deux marqueurs : il retarde simplement le premier. Un « plus grand
     # intervalle < X » reste donc vert, quelle que soit la valeur de X — c'est exactement le test
-    # creux que la revue de l'ErrP a appris à repérer. L'étendue des marqueurs, elle, ne peut
+    # creux. L'étendue des marqueurs, elle, ne peut
     # dépasser la seule durée décomptée QUE si la chauffe en a produit aussi.
     ts_c2 = [ts for _m, ts, _f, _c in journal2]
     etendue = (ts_c2[-1] - ts_c2[0]) if len(ts_c2) > 1 else 0.0
@@ -1635,9 +1631,9 @@ def _smoke():
 
     # --- LE BILAN DE FIN : gardé par des assertions, plus seulement imprimé ------------------
     # ⚠️ C'est le seul garde-fou de la SECONDE panne muette de ce mode (un écran qui ne tient pas
-    # le rafraîchissement annoncé). Tant qu'il n'était qu'une suite de `print`, TROIS mutations
-    # d'une ligne le laissaient entièrement vert : comparaison de dérive inversée, compteur de
-    # frames sautées neutralisé, bloc de bilan supprimé. Les trois rougissent maintenant.
+    # le rafraîchissement annoncé). Réduit à une suite de `print`, TROIS mutations d'une ligne le
+    # laisseraient entièrement vert : comparaison de dérive inversée, compteur de frames sautées
+    # neutralisé, bloc de bilan supprimé. Les trois rougissent.
     chk(bilan1.get("cycles") == len(journal) and bilan1.get("frames", 0) > 0,
         f"[C1] le bilan de fin EXISTE et compte ce que la séance a vraiment fait "
         f"({bilan1.get('cycles')} cycles, {bilan1.get('frames')} frames)")
@@ -1657,21 +1653,18 @@ def _smoke():
     chk(bilan1.get("sautees", 0) <= 0.02 * bilan1.get("frames", 1),
         f"[C1] ...sans fabriquer de fausses frames sautées quand tout va bien "
         f"({bilan1.get('sautees')} sur {bilan1.get('frames')})")
-    # ⚠️ **Une borne INFÉRIEURE, pas une égalité — et c'est une correction, pas un relâchement.**
-    # L'égalité `sautees == C3_CALES` a rougi par intermittence pendant tout le chantier du
-    # 2026-09-09 (mesuré : 1 échec sur 3 lancements, « 3 cales posées -> 4 comptées »), et la
-    # revue du 2026-09-08 en avait donné la cause exacte : sur une course de 1,2 s, une pause du
-    # ramasse-miettes dépassant `SEUIL_SAUT` ajoute une frame sautée VRAIE, que rien ne distingue
-    # d'une cale. Le compteur a raison ; c'est l'assertion qui prétendait connaître l'avenir.
+    # ⚠️ **Une borne INFÉRIEURE, pas une égalité.** Une égalité `sautees == C3_CALES` rougirait par
+    # intermittence (mesuré : 1 échec sur 3 lancements, « 3 cales posées -> 4 comptées ») : sur une
+    # course de 1,2 s, une pause du ramasse-miettes dépassant `SEUIL_SAUT` ajoute une frame sautée
+    # VRAIE, que rien ne distingue d'une cale. Le compteur a raison ; c'est l'égalité qui
+    # prétendrait connaître l'avenir.
     #
     # Ce qui est vérifié reste ce qui compte : **le compteur voit AU MOINS toutes les cales
     # posées** — s'il en ratait une, il ne compterait pas ce qu'il prétend compter. Le faux
     # positif en masse, lui, est déjà couvert par C1 juste au-dessus (≤ 2 % des frames), et la
     # borne haute ci-dessous garde le garde-fou : quelques frames de charge machine, pas dix.
     #
-    # Un rouge qui tombe une fois sur trois finit par être ignoré, puis désactivé. Ce dépôt a
-    # déjà enterré un « test instable » en trouvant sa vraie cause ; ici la cause était connue et
-    # documentée depuis une revue, et l'assertion ne l'avait pas suivie.
+    # Un rouge qui tombe une fois sur trois finit par être ignoré, puis désactivé.
     sautees3 = bilan3.get("sautees", 0)
     chk(cales["faites"] == C3_CALES and C3_CALES <= sautees3 <= C3_CALES + 3,
         f"[C3] les {C3_CALES} frames RÉELLEMENT retenues (flip bloqué "
@@ -1681,15 +1674,15 @@ def _smoke():
         f"compteur ne prouverait rien")
 
     # --- `--seed` tient sa promesse, et la graine est TOUJOURS connue ------------------------
-    # ⚠️ Le contrat n'était vérifié par rien : remplacer `random.Random(seed)` par
-    # `random.Random()` laissait tout vert. Et sans `--seed`, la graine tirée n'était pas
-    # imprimée — la séance était irrejouable et personne ne le savait. Or la séance casque est le
-    # livrable de ce chantier : une séance qu'on ne peut pas rejouer ne se dépouille pas deux fois.
+    # ⚠️ Sans ces assertions, remplacer `random.Random(seed)` par `random.Random()` laisserait tout
+    # vert. Et sans `--seed`, une graine tirée mais non imprimée rendrait la séance irrejouable
+    # sans que personne le sache. Or une séance qu'on ne peut pas rejouer ne se dépouille pas deux
+    # fois.
     consignes4 = [c for _m, _ts, _f, c in journal4]
     consignes5 = [c for _m, _ts, _f, c in journal5]
-    # ⚠️ On exige la MÊME LONGUEUR autant que le même contenu, et c'est le fond de la correction du
-    # tour 2 : comparer des listes de longueurs différentes est exactement ce qui rendait ce
-    # contrôle instable. Bornées en frames, les deux courses en ont forcément 6.
+    # ⚠️ On exige la MÊME LONGUEUR autant que le même contenu : comparer des listes de longueurs
+    # différentes rendrait ce contrôle instable. Bornées en frames, les deux courses en ont
+    # forcément 6.
     chk(len(consignes4) == 6 and len(consignes5) == 6 and consignes4 == consignes5,
         f"deux séances à la MÊME graine ET au MÊME compte d'images rejouent EXACTEMENT les mêmes "
         f"consignes, en même nombre ({consignes4} vs {consignes5})")
@@ -1860,9 +1853,9 @@ def _smoke():
         f"la cible ({len(debuts)} blocs)")
     # ⚠️ La durée que la CONSOLE annonce vient du moteur (`CVEPCalibration.duree_protocole_s`,
     # calculée depuis `core/config.py`), celle qui est JOUÉE vient de ce programme. Deux calculs,
-    # deux fichiers, et rien ne les reliait : un `settle` déplacé d'un côté ferait annoncer 2,8 min
-    # pour une séance de 4. Le cycle de garde est le seul écart admis (il n'est pas dans le compte
-    # du moteur), d'où la tolérance d'UN cycle.
+    # deux fichiers, que cette assertion relie : sans elle, un `settle` déplacé d'un côté ferait
+    # annoncer 2,8 min pour une séance de 4. Le cycle de garde est le seul écart admis (il n'est
+    # pas dans le compte du moteur), d'où la tolérance d'UN cycle.
     from core.modes.cvep_calib import CVEPCalibration
 
     joue_s = len(prog) * L / 60.0
@@ -1876,8 +1869,8 @@ def _smoke():
     # --- `--tester` : LE MOT de la séance ----------------------------------------
     # Cette fenêtre joue le MÊME stimulus pour entraîner et pour tester, à la frame près ; le mot
     # est la seule chose qui les distingue. Deux branches, donc deux séances : celle qui va au
-    # bout, et celle qu'on coupe — la seconde répondait « aucun modèle ne sera entraîné » alors
-    # qu'un test n'entraîne rien.
+    # bout, et celle qu'on coupe — la seconde ne doit pas répondre « aucun modèle ne sera
+    # entraîné » : un test n'entraîne rien.
     commun_test = dict(windowed=True, refresh=240.0, calibrer=True, tester=True, cycles_calib=2,
                        settle=1, seed=3, attente_moteur_s=0.0, attente_consommateur_s=0.0,
                        stream_name=MARKER_STREAM_DEFAULT + "_smoke")
@@ -1914,8 +1907,8 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     n'apparaît pas sur −1 ni pour une décision tardive. Et, surtout, que les DEUX tests de ce
     fichier qui lisent l'écran — la phase à zéro frame près, la consigne cerclée — restent vrais
     anneau affiché, que l'anneau ne recouvre aucun pixel non-fond, et que la lecture vient APRÈS
-    le flip et le marqueur de son image. Revues D-I1 (extinction avant le settle lu), C-I3 (−1)
-    et croix de repos (`status` factice) en plus. Et la PHASE DE RETOUR du test (2026-10-02) :
+    le flip et le marqueur de son image. Aussi : l'extinction avant le settle lu par la décision
+    suivante, le −1, et la croix de repos (`status` factice). Et la PHASE DE RETOUR du test :
     jamais l'anneau et le cercle ensemble, chaque décision montrée seule `RETOUR_AFFICHE_S`, une
     absence close à l'attente, l'anneau à `retour.rayon_anneau` — lu dans les pixels, à DEUX
     tailles d'écran."""
@@ -1991,9 +1984,9 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     # Le mode republie ~5 Hz : la cible 5 revient toutes les 30 images, sous `PERIME_S`.
     script_libre = {10: 3, 30: -1, 40: -1, 50: 5, 80: 5, 110: 5, 140: 5, 170: 5}
     statut = rt.StatutScripte({1: "warmup", 20: "decoding", 100: "baseline", 120: "decoding"})
-    # (d) à une SECONDE taille : à 1000×700 (r = 52), l'ancienne règle de cette fenêtre (1,35 × r)
-    # et `retour.rayon_anneau` tombent sur le MÊME pixel (70) — une seule taille ne verrait pas
-    # un retour à l'ancienne règle. À 800×560 (r = 42) : 56 contre 60.
+    # (d) à une SECONDE taille : à 1000×700 (r = 52), une règle à 1,35 × r et `retour.rayon_anneau`
+    # tombent sur le MÊME pixel (70) — une seule taille ne verrait pas un retour à cette règle.
+    # À 800×560 (r = 42) : 56 contre 60.
     taille_2 = (800, 560)
     module, taille_avant = sys.modules[__name__], TAILLE_FENETRE
     pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
@@ -2063,7 +2056,7 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     chk(not pendant,
         f"[C8] AUCUN anneau pendant qu'un bloc s'enregistre, de l'image du `cue` à celle du "
         f"`block_end` — ni le précédent, ni la décision tardive ({len(pendant)} image(s) fautive(s))")
-    # 🔴 D-I1 : la décision SUIVANTE lit déjà le settle — la phase de retour finit AVANT lui.
+    # 🔴 La décision SUIVANTE lit déjà le settle — la phase de retour finit AVANT lui.
     n_silence = (CVEP_DECISION_CYCLES + 1) * L
     avant = [i for c in cues for i in range(max(0, c - n_silence), c + 1) if anneaux_t[i]]
     chk(not avant and any(anneaux_t),
@@ -2071,8 +2064,8 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
         f"précèdent chaque `cue` : la décision suivante lit ce settle-là "
         f"({len(avant)} image(s) fautive(s))")
 
-    # --- la PHASE DE RETOUR (2026-10-02) : « l'anneau vert et le cercle bleu suivant ensemble,
-    # c'est confusant ». Tout se lit dans les PIXELS : `e[2]` = le cercle, `e[3]` = l'anneau.
+    # --- la PHASE DE RETOUR : jamais l'anneau vert et le cercle bleu suivant ensemble (ce serait
+    # confus). Tout se lit dans les PIXELS : `e[2]` = le cercle, `e[3]` = l'anneau.
     cercles_t = [e[2] for e in im_t]
     ensemble = [i for i in range(len(im_t)) if anneaux_t[i] and cercles_t[i] is not None]
     chk(not ensemble and any(anneaux_t) and any(c is not None for c in cercles_t),

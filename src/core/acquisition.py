@@ -11,9 +11,9 @@ même session :
   `server.py` tient son propre tampon glissant à partir de ce qu'il en tire.
 
 Filtrage : detrend + passe-bande + notch secteur (50 ou 60 Hz, `NOTCH_SECTEUR`), appliqué sur
-une fenêtre ÉLARGIE de `FILTER_MARGIN_S` de chaque côté puis rognée. Sans cette marge, le transitoire d'établissement
-du filtre reste dans la fenêtre et se fait passer pour du signal (il avait fait mesurer un σ de
-40 000 µV sur de l'EEG à 5 µV).
+une fenêtre ÉLARGIE de `FILTER_MARGIN_S` de chaque côté puis rognée. Sans cette marge, le
+transitoire d'établissement du filtre reste dans la fenêtre et se fait passer pour du signal (il
+fait mesurer un σ de 40 000 µV sur de l'EEG à 5 µV).
 
 BrainFlow parle au casque via l'API g.tec : 250 Hz, 8 voies sur les rows 0..7, dans l'ordre
 Fz, C3, Cz, C4, Pz, PO7, Oz, PO8. Le casque doit être chargé et appairé en Bluetooth.
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from core.config import (BANDPASS, CH_NAMES, FILTER_MARGIN_S, MI_WINDOW_S,  # noqa: E402
                     OCCIPITAL, UNICORN_SERIAL, WINDOW_S, use_utf8_console)
 
-# Le coupe-bande de BrainFlow pour chaque secteur de `config.SECTEURS_HZ` (2026-09-30). UNE table,
+# Le coupe-bande de BrainFlow pour chaque secteur de `config.SECTEURS_HZ`. UNE table,
 # lue par le moteur (le filtre d'acquisition : σ du bandeau, contrôle de liaison, SSVEP) et par le
 # contrôle alpha : deux écritures de la même correspondance finiraient par couper 50 Hz sur un
 # poste réglé à 60, sans rien casser — le secteur resterait simplement dans le signal.
@@ -70,7 +70,7 @@ def casques_appaires():
     """Les numéros de série des casques Unicorn APPAIRÉS à ce PC — allumés ou non.
 
     C'est tout ce que la bibliothèque du casque sait dire sans l'ouvrir, et c'est MESURÉ
-    (2026-09-25, Windows, `Unicorn.dll` de BrainFlow, API 4.0) :
+    (Windows, `Unicorn.dll` de BrainFlow, API 4.0) :
 
       `UNICORN_GetAvailableDevices(…, TRUE)`  instantané (0,0 s) -> les casques appairés, y compris
                                               ÉTEINTS : il lit la liste de Windows, il ne cherche
@@ -84,9 +84,9 @@ def casques_appaires():
 
     ⚠️ Aucune recherche ne dit donc qu'un casque appairé est ALLUMÉ : seule une tentative
     d'ouverture le dit (« OK » sur l'écran de départ, qui revient avec la raison en cas d'échec).
-    Un écran qui écrirait « casque trouvé » sur ce résultat mentirait — il l'a fait, relevé à
-    l'écran le jour même. La bibliothèque n'a pas non plus de fonction d'APPAIRAGE : un casque
-    neuf s'appaire dans les réglages Bluetooth de Windows.
+    Un écran qui écrirait « casque trouvé » sur ce résultat mentirait. La bibliothèque n'a pas
+    non plus de fonction d'APPAIRAGE : un casque neuf s'appaire dans les réglages Bluetooth de
+    Windows.
 
     Lève si la bibliothèque manque (hors Windows, BrainFlow sans Unicorn) ou si l'API rend un
     code d'erreur.
@@ -114,8 +114,8 @@ def casques_appaires():
 def compter_paquets(compteurs, dernier):
     """`(reçus, perdus, dernier)` pour un bloc de compteurs d'échantillons.
 
-    Le casque numérote chaque échantillon (voie « compteur », +1 à chaque fois ; MESURÉ le
-    2026-09-25 : de 1 à 2 490 en 10 s, aucun saut). Un saut de `d > 1` = `d - 1` échantillons
+    Le casque numérote chaque échantillon (voie « compteur », +1 à chaque fois ; mesuré :
+    de 1 à 2 490 en 10 s, aucun saut). Un saut de `d > 1` = `d - 1` échantillons
     PERDUS en route. Un pas `d <= 0` n'est PAS une perte : le compteur est reparti (il redémarre à
     1 à chaque ouverture, et celui du board de test boucle à 255). `dernier` est le dernier
     compteur du bloc PRÉCÉDENT (None au premier bloc), pour ne pas rater un saut à la jointure.
@@ -133,8 +133,8 @@ def fonction_liste_unicorn():
     """`UNICORN_GetAvailableDevices`, chargée depuis la `Unicorn.dll` de BrainFlow et typée.
 
     À part pour qu'un autotest la charge SANS l'appeler : un autotest ne touche pas au Bluetooth.
-    Le 2026-09-25, une faute de nom dans ce chargement (`_os`) n'a été vue qu'à l'écran — les
-    tests remplaçaient la recherche entière.
+    Les tests remplacent la recherche entière ; sans ce chargement isolé, une faute de nom dedans
+    ne se verrait qu'à l'écran.
     """
     import ctypes
 
@@ -177,12 +177,12 @@ class UnicornAcquisition:
         # Canal timestamp BrainFlow (temps Unix par échantillon) : sert au P300 à découper les
         # époques calées sur chaque flash SANS dérive d'horloge (cf. get_raw).
         self.ts_row = BoardShim.get_timestamp_channel(self.board_id)
-        # Les voies de SERVICE du casque (2026-09-25) : son niveau de batterie et le compteur de
+        # Les voies de SERVICE du casque : son niveau de batterie et le compteur de
         # ses échantillons, qui dit combien se sont perdus en route. BrainFlow les expose pour
         # l'Unicorn (voies 14 et 15, cf. `unicorn.h`) ; un board qui n'en a pas rend None.
         self.batt_row = self._voie_ou_none(BoardShim.get_battery_channel)
         self.cpt_row = self._voie_ou_none(BoardShim.get_package_num_channel)
-        self.batterie = None             # dernier niveau lu (en %, 80 le jour de la mesure)
+        self.batterie = None             # dernier niveau lu (en %)
         self.paquets_recus = 0           # cumuls depuis l'ouverture
         self.paquets_perdus = 0
         self._dernier_compteur = None
@@ -208,8 +208,8 @@ class UnicornAcquisition:
     def reouvrir(self):
         """Ferme la session (sans lever), puis la rouvre. Lève si le casque ne répond toujours pas.
 
-        Le geste qu'il fallait faire à la main — fermer et relancer la console — quand le casque a
-        décroché : BrainFlow garde alors une session dont la lecture échoue en boucle, sans
+        Remplace le geste manuel (fermer et relancer la console) quand le casque a décroché :
+        BrainFlow garde alors une session dont la lecture échoue en boucle, sans
         jamais lever, et seule une réouverture rétablit le flux. Même `BoardShim`, mêmes
         paramètres (numéro de série compris) : on rouvre CE casque, jamais un autre.
         """
@@ -222,10 +222,10 @@ class UnicornAcquisition:
     def stop(self):
         """Arrête le flux, puis LIBÈRE la session — chaque geste dans son propre `try`.
 
-        ⚠️ Ils étaient dans le MÊME `try` jusqu'au 2026-09-25, et c'est ce qui empêchait le casque
-        de revenir après une coupure : sur une liaison morte, `stop_stream()` lève, la libération
-        était SAUTÉE en silence, BrainFlow gardait l'ancienne session, et chaque réouverture se
-        heurtait à `ANOTHER_BOARD_IS_CREATED_ERROR:16` — vu au casque, 81 essais d'affilée.
+        ⚠️ Chaque geste a son propre `try`, sinon le casque ne revient pas après une coupure : sur
+        une liaison morte, `stop_stream()` lève, la libération serait SAUTÉE en silence, BrainFlow
+        garderait l'ancienne session, et chaque réouverture se heurterait à
+        `ANOTHER_BOARD_IS_CREATED_ERROR:16` (vu au casque : 81 essais d'affilée).
         La vérification `is_prepared()` reste, elle : BrainFlow PARTAGE la session entre boards
         aux mêmes paramètres, et libérer à l'aveugle pourrait fermer celle d'un autre moteur.
         """
@@ -257,19 +257,18 @@ class UnicornAcquisition:
         `NOTCH_SECTEUR` ; le défaut du constructeur (50 Hz) ne sert qu'aux outils hors moteur.
 
         `bande` : `(bas, haut)` en Hz, ou None pour la bande de l'acquisition (`self.bandpass`).
-        Seul le SSVEP en passe une — la sienne, réglable depuis le 2026-09-30. Le σ du bandeau et
+        Seul le SSVEP en passe une — la sienne, réglable. Le σ du bandeau et
         le contrôle de liaison n'en passent pas, exprès : ce ne sont pas des choix de décodage, et
         un σ qui changerait avec le réglage d'un mode ne se comparerait plus d'une séance à l'autre.
 
         ⚠️ Ne jamais remplacer ce `np.array(..., copy=True)` par `np.ascontiguousarray` :
         celui-ci rend l'objet TEL QUEL quand il est déjà float64 C-contigu, et le filtrage
-        écrase alors les données de l'appelant. Le bug a existé (2026-07-27) et il est
-        sournois : tous les appelants historiques passent `data[rows, :].T`, une vue
-        TRANSPOSÉE donc non contiguë, qui était copiée par chance. Le premier appelant à
-        passer un tampon persistant et contigu (le serveur LSL) a vu son tampon se faire
-        filtrer sur place, puis re-filtrer à chaque tour, avec une marche géante à la
-        frontière entre la partie déjà filtrée et les échantillons bruts fraîchement
-        ajoutés — σ mesuré 40 000 µV pour un EEG à 5 µV.
+        écrase alors les données de l'appelant. Le bug est sournois : un appelant qui passe
+        `data[rows, :].T`, une vue TRANSPOSÉE donc non contiguë, est copié par chance. Un
+        appelant qui passe un tampon persistant et contigu (le serveur LSL) verrait son tampon
+        filtré sur place, puis re-filtré à chaque tour, avec une marche géante à la frontière
+        entre la partie déjà filtrée et les échantillons bruts fraîchement ajoutés — σ mesuré
+        40 000 µV pour un EEG à 5 µV.
         """
         out = np.array(sig, dtype=np.float64, order="C")
         lo, hi = self.bandpass if bande is None else (float(bande[0]), float(bande[1]))
@@ -301,7 +300,7 @@ class UnicornAcquisition:
 
         ⚠️ Écarter le transitoire n'est pas un raffinement, c'est ce qui sépare une mesure
         utilisable d'une mesure fausse d'un facteur 100. L'Unicorn sort un offset DC énorme et
-        DÉRIVANT (mesuré le 2026-07-27 : 10⁵ µV, en rampe sur des dizaines de secondes après
+        DÉRIVANT (mesuré : 10⁵ µV, en rampe sur des dizaines de secondes après
         l'ouverture de session). `_filter` ne retire que la MOYENNE (`detrend(CONSTANT)`), pas
         la rampe ; le Butterworth étant à PASSE UNIQUE, ce résidu se présente comme une marche
         géante en début de tampon et son transitoire d'établissement domine tout le σ.
@@ -320,9 +319,9 @@ class UnicornAcquisition:
         Le σ par voie ne voit PAS ce défaut : quand une mastoïde se décolle, les 8 voies
         mesurent toutes la même chose (la référence qui flotte) avec des amplitudes qui
         restent plausibles. L'écran de contrôle affiche alors 8 barres rassurantes sur un
-        signal sans aucune information — une séance entière perdue, deux fois le 2026-07-27.
+        signal sans aucune information — une séance entière perdue.
 
-        Mesuré sur casque le même jour : mastoïdes absentes -> médiane **+1,000** (mode
+        Mesuré sur casque : mastoïdes absentes -> médiane **+1,000** (mode
         commun pur, min +1,000 sur toutes les paires) ; mastoïdes en place -> **+0,31 à
         +0,50**. La séparation est énorme et le mécanisme est physique, pas statistique :
         deux voies qui mesurent la même référence flottante corrèlent exactement à 1.
@@ -365,8 +364,8 @@ class UnicornAcquisition:
         qui vide le tampon avec `get_new_data`) de DÉCODER en même temps : il tient son
         propre historique et le passe ici.
 
-        `bande` : la bande du SSVEP, `(bas, haut)` en Hz — un RÉGLAGE du mode depuis le
-        2026-09-30. None = la bande de l'acquisition (`BANDPASS`), celle de toujours.
+        `bande` : la bande du SSVEP, `(bas, haut)` en Hz — un RÉGLAGE du mode.
+        None = la bande de l'acquisition (`BANDPASS`), celle de toujours.
 
         `block` indexe les 8 voies dans l'ordre de `CH_NAMES` — pas les rows du board.
         Retourne None tant que le bloc est trop court.

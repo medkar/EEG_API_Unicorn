@@ -3,13 +3,12 @@
 Il ne disparaît sur aucun écran, et c'est délibéré. Une référence décrochée rend une séance
 entière inexploitable **sans autre symptôme** : les 8 voies mesurent alors la même référence
 flottante avec des amplitudes parfaitement plausibles, et un écran de contrôle affiche 8 barres
-rassurantes sur un signal vide. Ça a coûté 3,4 minutes d'enregistrement dans le vide le
-2026-07-20, sans le moindre avertissement.
+rassurantes sur un signal vide.
 
-DEUX lignes (2026-09-25, demandé à l'écran) : en haut l'ÉTAT — source, σ, corrélation, et tout à
-droite deux icônes qui évoluent, la batterie du casque et les barres de sa liaison ; en dessous
-les MESSAGES (référence décrochée, liaison perdue, refus, fenêtre…), et cette seconde ligne
-n'existe que lorsqu'il y a quelque chose à dire.
+DEUX lignes : en haut l'ÉTAT — source, σ, corrélation, et tout à droite deux icônes qui
+évoluent, la batterie du casque et les barres de sa liaison ; en dessous les MESSAGES
+(référence décrochée, liaison perdue, refus, fenêtre…), et cette seconde ligne n'existe que
+lorsqu'il y a quelque chose à dire.
 """
 
 import os
@@ -103,14 +102,13 @@ class IconeSignal(QWidget):
 
 
 class LigneAbregee(QLabel):
-    """Une ligne de texte qui ne fait JAMAIS grandir la fenêtre (2026-10-05).
+    """Une ligne de texte qui ne fait JAMAIS grandir la fenêtre.
 
     Un QLabel sans retour à la ligne exige la largeur de TOUT son texte : c'est sa largeur
-    minimale, et Windows élargit la fenêtre pour la respecter. Relevé au casque : « la largeur de
-    la fenêtre change en fonction des messages affichés dans le bandeau ». Ici la largeur minimale
-    est nulle ; faute de place, la ligne s'abrège (« … ») et le texte entier passe dans la bulle.
-    Elle ne passe PAS à la ligne : la hauteur du bandeau changerait, et tout ce qui est dessous
-    sauterait (le défaut corrigé le 2026-10-01). `text()` rend le texte ENTIER."""
+    minimale, et Windows élargit la fenêtre pour la respecter, au gré des messages du bandeau.
+    Ici la largeur minimale est nulle ; faute de place, la ligne s'abrège (« … ») et le texte
+    entier passe dans la bulle. Elle ne passe PAS à la ligne : la hauteur du bandeau changerait,
+    et tout ce qui est dessous sauterait. `text()` rend le texte ENTIER."""
 
     def __init__(self, texte=""):
         super().__init__()
@@ -162,13 +160,8 @@ class Banner(QWidget):
         # Le dernier REFUS du moteur, quel qu'il soit. Ici, et pas sur une page, parce que le
         # refus le plus banal du produit arrive depuis la GRILLE — cliquer « Démarrer » sur un
         # mode sans modèle entraîné — et que la grille n'a aucune page où l'écrire.
-        #
-        # ⚠️ Jusqu'au 2026-09-10, `Console.commande` imprimait ces refus dans le TERMINAL et nulle
-        # part ailleurs. Sur un dépôt fraîchement cloné, cliquer « Démarrer » sur le MI, le P300,
-        # l'ErrP ou le c-VEP laissait l'écran STRICTEMENT immobile — le moteur refusait
-        # correctement, avec son message complet, derrière la fenêtre. La recette du projet
-        # (test 1.13) a relevé cinq clics d'affilée sur ce bouton muet. C'est le défaut que ce
-        # chantier a passé son temps à réparer ailleurs ; il vivait encore ici.
+        # ⚠️ Un refus imprimé seulement dans le terminal laisserait l'écran immobile : le clic
+        # sur « Démarrer » semblerait muet (cf. docs/recette.md, test 1.13).
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet(f"color: {ROUGE}; font-weight: bold;")
@@ -182,12 +175,12 @@ class Banner(QWidget):
         self.alerte_casque = QLabel("")
         self.alerte_casque.setWordWrap(True)
         self.alerte_casque.setStyleSheet(f"color: {AMBRE}; font-weight: bold;")
-        # Après une coupure du casque : la minute qui suit son retour (2026-09-25).
+        # Après une coupure du casque : la minute qui suit son retour.
         self.reprise = QLabel("")
         self.reprise.setWordWrap(True)
         self.reprise.setStyleSheet(f"color: {AMBRE};")
 
-        # Les icônes du casque, tout à droite (2026-09-25).
+        # Les icônes du casque, tout à droite.
         self.batterie = IconeBatterie()
         self.batterie_pc = QLabel("")
         self.signal = IconeSignal()
@@ -295,9 +288,9 @@ class Banner(QWidget):
         if saturees:
             morceaux.append(tr("console.bandeau.saturees.plusieurs", n=saturees) if saturees > 1
                             else tr("console.bandeau.saturees.un", n=saturees))
-        # La corrélation inter-voies, TOUJOURS visible (passe au casque du 2026-09-24 : la QA
-        # demandait de la lire au montage, et elle ne s'affichait que dans l'alarme, au-delà de
-        # 0,90). C'est le signe d'une référence qui flotte : ~0,3-0,5 sur un montage sain.
+        # La corrélation inter-voies, TOUJOURS visible (pas seulement dans l'alarme, au-delà de
+        # 0,90) : on la lit au montage. C'est le signe d'une référence qui flotte ; ~0,3-0,5 sur
+        # un montage sain.
         if quality.get("common_mode") is not None:
             morceaux.append(tr("console.bandeau.correlation",
                                correlation=nombre(float(quality["common_mode"]), ".2f")))
@@ -314,15 +307,15 @@ class Banner(QWidget):
     def _icones(self, casque):
         """Batterie et barres de liaison, tout à droite ; rien de ce que le moteur ne sait pas.
 
-        La batterie PRÉVIENT : un casque à plat refuse de s'ouvrir et décroche en pleine séance
-        (vu le 2026-09-25). Les barres aussi : un casque qui s'éloigne perd des échantillons AVANT
+        La batterie PRÉVIENT : un casque à plat refuse de s'ouvrir et décroche en pleine séance.
+        Les barres aussi : un casque qui s'éloigne perd des échantillons AVANT
         de décrocher. Le board de test n'a ni l'une ni les autres (sa batterie est fabriquée, il
         n'a pas de liaison radio) : le moteur rend None, et rien ne s'affiche.
         """
         # ⚠️ Les icônes ne se CACHENT jamais : une icône « inconnue » reste à sa place, vide (son
         # `paintEvent` ne dessine rien). La cacher puis la remontrer change la hauteur de la ligne,
-        # donc fait sauter tout ce qui est dessous — vu au casque le 2026-10-01 : la batterie
-        # devient inconnue pendant une coupure, puis revient.
+        # donc fait sauter tout ce qui est dessous (la batterie devient inconnue pendant une
+        # coupure, puis revient).
         batterie = casque.get("batterie_pc")
         self.batterie.montrer(batterie)
         self.batterie_pc.setText("" if batterie is None
@@ -345,7 +338,7 @@ class Banner(QWidget):
         self.alerte_casque.setText("   ".join(alertes))
 
     def _montrer_liaison(self, liaison):
-        """Le casque a-t-il décroché ? (2026-09-25) Prioritaire sur tout le reste du bandeau.
+        """Le casque a-t-il décroché ? Prioritaire sur tout le reste du bandeau.
 
         Pendant la coupure, le moteur ne décode plus rien et réessaie seul : l'écran doit le dire,
         sinon il montre des σ figés sur le dernier tampon — l'écran « où plus rien ne bouge » que

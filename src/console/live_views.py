@@ -28,8 +28,8 @@ from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
 def _avec_decompte(texte, mode_state):
     """La consigne du repos, suivie du temps qu'il reste avant le décodage (s'il n'a pas commencé).
 
-    Sans lui, la stabilisation puis le repos (40 s pour le Neuro) défilaient sans une seule
-    indication de temps — relevé au casque le 2026-09-24.
+    Sans lui, la stabilisation puis le repos (40 s pour le Neuro) défileraient sans une seule
+    indication de temps.
     """
     attente = decompte(mode_state)
     return f"{texte}\n{attente}" if attente else texte
@@ -65,11 +65,11 @@ class TracesView(QWidget):
     qui dérive écrase les sept autres et on ne voit plus rien — or la dérive d'une voie est
     précisément ce qu'on cherche à repérer ici.
 
-    ⚠️ **L'écart entre deux voies est MESURÉ sur le signal, et le tracé est ROGNÉ à son couloir**
-    (2026-09-10). L'écart valait 100 µV en dur : sur un vrai casque, le brut non filtré respire
-    de plusieurs centaines de µV, donc les huit tracés se chevauchaient et le contrôle de contact
-    à l'œil — l'étape 1 de toute séance — ne montrait qu'un enchevêtrement. C'est le constat 1.3
-    de la recette, posé le 2026-08-17 et parké depuis.
+    ⚠️ **L'écart entre deux voies est MESURÉ sur le signal, et le tracé est ROGNÉ à son couloir.**
+    Un écart fixe (100 µV) ne convient pas : sur un vrai casque, le brut non filtré respire de
+    plusieurs centaines de µV, les huit tracés se chevaucheraient et le contrôle de contact à
+    l'œil — l'étape 1 de toute séance — ne montrerait qu'un enchevêtrement (cf. docs/recette.md,
+    constat 1.3).
 
     Le rognage est ce qui rend le non-chevauchement **garanti** plutôt que probable : une voie
     hors échelle vient s'aplatir sur le rail de son couloir au lieu de passer devant ses voisines.
@@ -78,8 +78,8 @@ class TracesView(QWidget):
     c'est le bon prix ici, où l'on cherche « cette voie est-elle plus agitée que les autres », pas
     l'amplitude exacte d'un clignement.
 
-    **Un filtre d'AFFICHAGE au choix** (2026-09-25, relevé au casque : « certaines voies ont une
-    dérive en y »). Aucun, plusieurs passe-haut, quelques passe-bande, plus un coupe-bande
+    **Un filtre d'AFFICHAGE au choix**, pour retirer la dérive de certaines voies. Aucun, plusieurs
+    passe-haut, quelques passe-bande, plus un coupe-bande
     secteur, comme dans la Unicorn Suite ; le calcul vit dans `core/filtres_affichage.py`. Il ne
     filtre que la COPIE qu'on dessine : le tampon du moteur reste brut, parce que le Motor
     Imagery s'entraîne dessus. On demande `AMORCE` secondes de plus que ce qu'on montre, pour que
@@ -103,8 +103,8 @@ class TracesView(QWidget):
         self.ecart = self.ECART_DEPART_UV
         self.filtre = filtres_affichage.FILTRE_DEFAUT
         self.coupe_bande = False
-        # Le secteur que coupe la case « Coupe-bande » : celui du MOTEUR, donné par `set_source`
-        # (2026-09-30). Le défaut n'est que celui du dépôt, le temps qu'un moteur soit branché.
+        # Le secteur que coupe la case « Coupe-bande » : celui du MOTEUR, donné par `set_source`.
+        # Le défaut n'est que celui du dépôt, le temps qu'un moteur soit branché.
         self.secteur_hz = filtres_affichage.SECTEUR_HZ
         self._recaler = False
         self.plot = pg.PlotWidget()
@@ -141,7 +141,7 @@ class TracesView(QWidget):
         rang.addWidget(self.bulle_secteur)
         rang.addStretch(1)
         # Le même « Rétablir les valeurs par défaut » que les formulaires, au bout de la ligne de
-        # ces deux réglages (demandé le 2026-09-30 : « partout où il y a des réglages »).
+        # ces deux réglages.
         self.bouton_defauts = QPushButton(tr("console.formulaire.defauts"))
         self.bouton_defauts.setToolTip(infobulle(tr("pages.traces.defauts_aide")))
         self.bouton_defauts.clicked.connect(self.retablir_defauts)
@@ -306,23 +306,22 @@ class ActiveView(QWidget):
     échelle en z avec un déclenchement, `corr_min` pour une corrélation bornée avec son seuil,
     et à défaut une accumulation de preuves dont seul le CLASSEMENT a un sens.
 
-    Deux pannes réelles, dans cet ordre, sont la raison d'être de cet aiguillage :
+    Deux pannes silencieuses justifient cet aiguillage :
 
     1. **le MI** afficherait « aucune cible » en PERMANENCE, `target_index` n'existant pas dans
        sa sortie ;
-    2. **le P300** tombait dans le rendu du SSVEP : `params["freqs"]` absent donnait six barres
-       SANS ÉTIQUETTE, `threshold` absent retombait sur `Z_MIN`, et l'écran annonçait
-       « échelle z · seuil 3 — un score au-dessus déclenche » AU-DESSUS de log-odds (qui sont
-       normalement NÉGATIFS, donc toutes les barres à zéro), puis « CIBLE 3 · 0 Hz ». Aucune de
-       ces quatre affirmations n'était vraie, et rien ne le disait.
+    2. **le P300**, rendu comme un SSVEP : `params["freqs"]` absent donnerait six barres SANS
+       ÉTIQUETTE, `threshold` absent retomberait sur `Z_MIN`, et l'écran annoncerait
+       « échelle z · seuil 3 — un score au-dessus déclenche » AU-DESSUS de log-odds (normalement
+       NÉGATIFS, donc toutes les barres à zéro), puis « CIBLE 3 · 0 Hz ». Aucune de ces quatre
+       affirmations ne serait vraie, et rien ne le dirait.
 
-    La panne n°2 est la n°1 recommencée un mode plus tard. C'est pourquoi le troisième rendu
-    n'est pas branché sur `"p300"` : la prochaine sortie d'une forme inconnue doit tomber dans le
-    rendu le plus PRUDENT (celui qui n'invente ni seuil ni unité), pas dans celui du SSVEP. Le
-    c-VEP est venu confirmer que cette précaution valait : sans clé à lui, il serait tombé dans
-    ce rendu prudent, qui montre un CLASSEMENT — or ses corrélations ont une échelle absolue, et
-    « tout le monde à 0,05 » (rien de fixé) y aurait la même tête que « les deux premières à
-    0,45 » (une hésitation entre deux cibles). Deux diagnostics opposés, une seule image.
+    C'est pourquoi le troisième rendu n'est pas branché sur `"p300"` : la prochaine sortie d'une
+    forme inconnue doit tomber dans le rendu le plus PRUDENT (celui qui n'invente ni seuil ni
+    unité), pas dans celui du SSVEP. Le c-VEP a sa propre clé pour la même raison : dans le rendu
+    prudent, qui montre un CLASSEMENT, « tout le monde à 0,05 » (rien de fixé) aurait la même
+    tête que « les deux premières à 0,45 » (une hésitation entre deux cibles), alors que ses
+    corrélations ont une échelle absolue. Deux diagnostics opposés, une seule image.
     """
 
     def __init__(self):
@@ -385,8 +384,8 @@ class ActiveView(QWidget):
 
         # L'échelle du remplissage va jusqu'à `SPAN_SEUILS` (2×) fois le seuil : une barre
         # pleine à ras le seuil laisserait croire qu'on est au maximum alors qu'on vient à peine
-        # de déclencher. Le facteur vit dans `console/__init__.py` — la TUILE l'applique aussi, et
-        # elle s'en était écartée (cf. `grid.ModeTile._apercu_scores`).
+        # de déclencher. Le facteur vit dans `console/__init__.py` — la TUILE l'applique aussi
+        # (cf. `grid.ModeTile._apercu_scores`).
         for i, (_e, barre) in enumerate(self._barres):
             valeur = scores[i] if i < len(scores) else 0.0
             barre.setValue(int(max(0.0, min(valeur / (SPAN_SEUILS * seuil), 1.0)) * 100))
@@ -413,9 +412,9 @@ class ActiveView(QWidget):
 
         Cette règle est celle du MOTEUR, écrite avec les valeurs que le moteur publie
         (`threshold` dans la sortie, `min_votes` et `vote_len` dans les réglages) : rien n'est
-        décidé ici. L'écran annonçait « la classe gagnante doit dépasser le seuil », ce qui est
-        faux — le seuil filtre CHAQUE fenêtre, puis c'est le vote qui décide — et il affichait
-        donc « 0,99 » à côté de « vote non conclu », sur le même écran.
+        décidé ici. Annoncer « la classe gagnante doit dépasser le seuil » serait faux : le seuil
+        filtre CHAQUE fenêtre, puis c'est le vote qui décide, et l'écran afficherait « 0,99 » à
+        côté de « vote non conclu ».
         """
         params = (mode_state or {}).get("params") or {}
         probas = sortie.get("probas") or {}
@@ -488,10 +487,10 @@ class ActiveView(QWidget):
             self.seuil.setText(tr("pages.direct.cvep.echelle_vote_inconnu",
                                   corr_min=f"{corr_min:g}", marge=f"{marge:g}"))
 
-        # ⚠️ L'échelle vit dans `console/__init__.py`, PAS ici : la TUILE l'appliquait de son côté
-        # (`grid.ModeTile._apercu_scores`) et les deux copies différaient déjà d'un repli dans le
-        # commit qui les écrivait — à `corr_min = 0` (réglage légal et encouragé en séance) la
-        # page montrait 33 % là où la tuile montrait tout PLEIN.
+        # ⚠️ L'échelle vit dans `console/__init__.py`, PAS ici : la TUILE l'applique aussi
+        # (`grid.ModeTile._apercu_scores`), et deux copies diffèrent — à `corr_min = 0` (réglage
+        # légal et courant en séance) la page montrerait 33 % là où la tuile montrerait tout
+        # PLEIN.
         span = span_correlation(corr_min)
         for i, (_e, barre) in enumerate(self._barres):
             valeur = scores[i] if i < len(scores) else 0.0
@@ -534,8 +533,8 @@ class ActiveView(QWidget):
 
         # Échelle RELATIVE, recalculée à chaque manche : c'est le classement qu'on montre, pas une
         # position sur une règle graduée. La règle vit dans `console.classement_relatif` — la MÊME
-        # fonction que la tuile de la grille appelle (cf. sa docstring : écrite deux fois, elle a
-        # déjà divergé une fois, et c'est ce chantier-ci qui a dû les remettre d'accord).
+        # fonction que la tuile de la grille appelle (cf. sa docstring : écrite deux fois, elle
+        # diverge).
         parts = classement_relatif(scores)
         self._assure(len(scores), [tr("pages.direct.cible_score", i=i, score=f"{v:+.2f}")
                                    for i, v in enumerate(scores)])
@@ -560,14 +559,11 @@ class ActiveView(QWidget):
 # Les deux textes d'échelle de la famille « passif ». Ils sont posés par la BRANCHE qui a
 # mesuré la valeur affichée, jamais par le constructeur — et c'est tout leur intérêt.
 #
-# ⚠️ Correction de revue (tour 2) : `AVERTISSEMENT_Z` était le texte PAR DÉFAUT du label. Il
-# s'affichait donc au-dessus de n'importe quelle sortie passive tant qu'aucune n'était encore
-# arrivée — dont l'ErrP, qui n'a JAMAIS de z : entre le démarrage du mode et le tout premier
-# feedback décodé (chauffe + repos = 23 s, plus le temps d'aller lancer le stimulus dans un
-# second terminal), la page de l'ErrP affirmait en toutes lettres que son score est « un z
-# contre TON repos du jour ». C'est un log-odds comparé au seuil d'une calibration. Une phrase
-# fausse sur l'unité est pire qu'un silence : c'est la catégorie de défaut que ce fichier
-# combat (cf. le P300 rendu comme un SSVEP dans `ActiveView`).
+# ⚠️ `AVERTISSEMENT_Z` n'est PAS le texte par défaut du label : affiché avant toute sortie, il
+# apparaîtrait aussi sur la page de l'ErrP, qui n'a JAMAIS de z, et affirmerait que son score est
+# « un z contre TON repos du jour » alors que c'est un log-odds comparé au seuil d'une
+# calibration. Une phrase fausse sur l'unité est pire qu'un silence (cf. le P300 rendu comme un
+# SSVEP dans `ActiveView`).
 #
 # Lus dans le fichier de langue à l'IMPORT, comme les libellés des contrats.
 AVERTISSEMENT_Z = tr("pages.direct.passif.avertissement_z")
@@ -585,9 +581,8 @@ class PassiveView(QWidget):
     mentirait. D'où deux textes séparés, posés par la branche qui a produit la valeur.
     """
 
-    # Au-delà de ±NEURO_Z_SPAN, la barre est pleine. La constante vient de `core/config.py`,
-    # comme celle de l'appli pygame : la recopier ici ferait diverger les deux affichages le jour
-    # où quelqu'un la retouche pour rendre les barres plus ou moins sensibles.
+    # Au-delà de ±NEURO_Z_SPAN, la barre est pleine. La constante vient de `core/config.py` : la
+    # recopier ici ferait diverger les affichages le jour où quelqu'un la retouche.
     SPAN = NEURO_Z_SPAN
 
     def __init__(self):
@@ -607,13 +602,11 @@ class PassiveView(QWidget):
 
     def update_from(self, mode_state):
         sortie = (mode_state or {}).get("output") or {}
-        # ⚠️ Correction de revue (tour 1, tâche 4) : la famille « passif » a une DEUXIÈME forme de
-        # sortie, celle de l'ErrP — `{"error", "score", "threshold", "artifact"}` — qui n'a JAMAIS
-        # de clé "z". Router uniquement sur "z" (comme avant ce correctif) laissait cette page
-        # perpétuellement muette pour l'ErrP : ni crash ni mensonge, un SILENCE (le défaut
-        # symétrique du P300 rendu comme un SSVEP dans `ActiveView`, qui LUI affirmait du faux).
-        # On aiguille donc ICI AUSSI sur ce que la sortie DÉCLARE, jamais sur l'identifiant du
-        # mode — même principe que `ActiveView.update_from` juste au-dessus.
+        # La famille « passif » a une DEUXIÈME forme de sortie, celle de l'ErrP —
+        # `{"error", "score", "threshold", "artifact"}` — qui n'a JAMAIS de clé "z". Router
+        # uniquement sur "z" laisserait la page perpétuellement muette pour l'ErrP : ni crash ni
+        # mensonge, un SILENCE. On aiguille donc ICI AUSSI sur ce que la sortie DÉCLARE, jamais
+        # sur l'identifiant du mode — même principe que `ActiveView.update_from` juste au-dessus.
         if "error" in sortie:
             self._update_errp(mode_state, sortie)
             return
@@ -624,11 +617,10 @@ class PassiveView(QWidget):
             # ne sait pas encore laquelle des deux formes de sortie ce mode va rendre.
             #
             # ⚠️ `or` et pas seulement `[...]` : après son repos, `ErrPRuntime.instruction()` rend
-            # une chaîne VIDE (il n'y a plus de consigne à donner à l'utilisateur — c'est au
-            # stimulus de jouer). Ce label est le texte principal de la page : le laisser vide,
-            # c'est un écran blanc pendant tout le temps où l'étudiant cherche pourquoi rien ne
-            # vient. Un écran vide se lit « ça ne marche pas ». On ne route PAS sur l'identifiant
-            # du mode pour autant : la phrase est vraie pour n'importe quel mode qui attend.
+            # une chaîne VIDE (il n'y a plus de consigne à donner, c'est au stimulus de jouer).
+            # Ce label est le texte principal de la page : vide, il donnerait un écran blanc, qui
+            # se lit « ça ne marche pas ». On ne route PAS sur l'identifiant du mode pour autant :
+            # la phrase est vraie pour n'importe quel mode qui attend.
             self.etat.setText(_avec_decompte((mode_state or {}).get("instruction")
                                              or tr("pages.direct.passif.attente_premier"),
                                              mode_state))
@@ -652,19 +644,17 @@ class PassiveView(QWidget):
                 self._barres[cle] = barre
                 # Le nom en clair, la formule et le SENS de la montée viennent du MOTEUR
                 # (`core.neuro_monitor.INDEX_DESCRIPTIONS`), jamais d'une liste recopiée ici.
-                # Cette page affichait la CLÉ brute — « charge » — pendant que l'écran pygame
-                # montrait « Charge mentale · θ(Fz,Cz) / α postérieur · + = plus chargé » : deux
-                # écrans du même produit qui disaient deux choses du même chiffre. Une barre sans
-                # son sens de montée ne dit pas si elle est bon signe.
+                # Une barre sans son sens de montée (« Charge mentale · θ(Fz,Cz) / α postérieur ·
+                # + = plus chargé ») ne dit pas si elle est bon signe ; la clé brute (« charge »)
+                # ne dirait rien.
                 nom, formule, sens = INDEX_DESCRIPTIONS.get(cle, (cle, "", ""))
                 etiquette = QLabel(_etiquette_indice(nom, formule, sens))
                 self.barres.addRow(etiquette, barre)
-            # ⚠️ Écrêtage LINÉAIRE, et c'est un choix, pas un oubli. L'écran pygame comprime en
-            # `tanh(z / SPAN)` pour éviter un plafond brutal au-delà de ±SPAN. Le porter ici a été
-            # essayé le 2026-09-08 et ABANDONNÉ : `tanh` comprime aussi À L'INTÉRIEUR de la plage
-            # (z = +1,2 sur ±3 donne 37 % au lieu de 40 %), donc la barre cesse d'être un relevé
-            # linéaire du z reçu — ce que le test de cette page vérifie nommément. On perd la
-            # lisibilité du cas courant pour gagner un cas rare, l'inverse du compromis voulu.
+            # ⚠️ Écrêtage LINÉAIRE, par choix. Une compression en `tanh(z / SPAN)` éviterait un
+            # plafond brutal au-delà de ±SPAN, mais comprime aussi À L'INTÉRIEUR de la plage
+            # (z = +1,2 sur ±3 donne 37 % au lieu de 40 %) : la barre cesserait d'être un relevé
+            # linéaire du z reçu, ce que le test de cette page vérifie. Perdre la lisibilité du
+            # cas courant pour gagner un cas rare serait l'inverse du compromis voulu.
             part = max(-1.0, min(float(valeur) / self.SPAN, 1.0))
             self._barres[cle].setValue(int(part * 100))
 
@@ -722,12 +712,10 @@ class PassiveView(QWidget):
 
         ⚠️ `ErrPRuntime.state()` calcule `epoques_vues`/`artefacts`/`taux_rejet` EXPRÈS pour ça,
         et la console est le SEUL client qui lit `state()` (le flux `status` ne transporte pas
-        `modes_state`). Sans cette ligne, ces trois compteurs étaient reçus dix fois par seconde
-        et JETÉS : une séance où 36 feedbacks sur 40 partent en artefact publie 36 × `error=-1`
-        — honnêtes, et indiscernables de 36 clignements isolés. L'étudiant, casque sur la tête et
-        console en plein écran, conclut « ça ne marche pas » et refait sa séance ; le diagnostic
-        (contact des électrodes) l'attendait sur le stdout du terminal de lancement, qu'il ne
-        regarde pas.
+        `modes_state`). Sans cette ligne, ces compteurs seraient reçus dix fois par seconde et
+        JETÉS : une séance où 36 feedbacks sur 40 partent en artefact publie 36 × `error=-1`
+        — honnêtes, et indiscernables de 36 clignements isolés. L'élève conclurait « ça ne marche
+        pas » alors que le diagnostic (contact des électrodes) est dans ces compteurs.
 
         La FRACTION est affichée à côté du pourcentage, et pas seulement le pourcentage : elle
         dit toute seule ce qu'un taux vaut. « 100 % » sur une époque alarmerait pour rien ;

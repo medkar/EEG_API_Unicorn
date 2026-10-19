@@ -1,7 +1,7 @@
 """Les textes affichés, lus dans un fichier par langue — jamais écrits en dur dans le code.
 
-Demandé le 2026-09-23 : « n'écris pas en dur sur l'app, passe par un fichier séparé, comme ça on
-pourra ajouter des langues plus facilement ensuite ».
+Aucun texte affiché n'est écrit en dur dans le code : il vit dans un fichier séparé, pour
+pouvoir ajouter des langues facilement.
 
     src/core/langues/fr/console.json    # ce que la console écrit elle-même
     src/core/langues/fr/modes.json      # libellés, résumés, aides et briefings des modes

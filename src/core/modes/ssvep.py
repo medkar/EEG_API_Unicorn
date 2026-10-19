@@ -28,8 +28,8 @@ from core.modes.runtime import ModeRuntime  # noqa: E402
 # refresh des deux côtés garantit l'accord sans recopier des décimales à la main.
 FREQS_60HZ = tuple(c["actual_hz"] for c in choose_frequencies(60))   # 15 · 20 · 8,571 Hz
 
-# Les bornes de la BANDE réglable (2026-09-30). Défaut : `BANDPASS`, la bande de toujours.
-# ⚠️ La coupure basse ne descend PAS sous 3 Hz, et c'est MESURÉ, pas choisi : le filtre de la
+# Les bornes de la BANDE réglable. Défaut : `BANDPASS`.
+# ⚠️ La coupure basse ne descend PAS sous 3 Hz, et c'est mesuré : le filtre de la
 # fenêtre (`acquisition._filter`, Butterworth à PASSE UNIQUE) ne dispose que de `FILTER_MARGIN_S`
 # (1 s) pour s'établir, et son transitoire s'éteint d'autant plus lentement que la coupure est
 # basse. Sur un offset qui dérive de 2000 µV/s (l'Unicorn le fait, cf. `Rest.warmup_s`), le σ de
@@ -38,13 +38,13 @@ FREQS_60HZ = tuple(c["actual_hz"] for c in choose_frequencies(60))   # 15 · 20 
 # `modes/ssvep_mesure.py` rejoue cette mesure à la borne déclarée ici.
 # La coupure haute ne descend pas sous 20 Hz : c'est la plus haute cible du trio du dépôt, et les
 # bornes garantissent ainsi que les réglages par défaut restent valides quelle que soit la bande.
-# ⚠️ Et elle ne MONTE pas au-dessus de 45 Hz (revue du 2026-09-30) : le filtre de la fenêtre finit
-# par le coupe-bande SECTEUR (`remove_environmental_noise`), qui éteint 48-52 Hz à 50 Hz et
-# 58-62 Hz à 60 Hz — mesuré, un sinus ressort à 0,50 à 48 Hz, à 0,999 à 45 Hz. À 60, la bande
-# acceptait une cible dans ce trou (50 Hz sur un écran à 100 Hz, que « Proposer » proposait), et la
-# référence CCA y gardait des harmoniques (25 × 2 = 50) que le filtre avait retirées : du bruit dans
-# le ρ, une cible qui ne sort jamais, rien qui lève. Plafonnée ici, la coupure haute borne AUSSI les
-# harmoniques (`max_freq`) : rien de ce que le décodeur corrèle n'approche le secteur.
+# ⚠️ Et elle ne MONTE pas au-dessus de 45 Hz : le filtre de la fenêtre finit par le coupe-bande
+# SECTEUR (`remove_environmental_noise`), qui éteint 48-52 Hz à 50 Hz et 58-62 Hz à 60 Hz —
+# mesuré, un sinus ressort à 0,50 à 48 Hz, à 0,999 à 45 Hz. Avec une coupure haute à 60, une
+# cible tomberait dans ce trou (50 Hz sur un écran à 100 Hz, que « Proposer » proposerait), et la
+# référence CCA y garderait des harmoniques (25 × 2 = 50) que le filtre a retirées : du bruit dans
+# le ρ, une cible qui ne sort jamais, rien qui lève. Plafonnée ici, la coupure haute borne AUSSI
+# les harmoniques (`max_freq`) : rien de ce que le décodeur corrèle n'approche le secteur.
 SSVEP_BANDE_BAS = (3.0, 8.0)
 SSVEP_BANDE_HAUT = (20.0, 45.0)
 
@@ -88,15 +88,14 @@ class SsvepRuntime(ModeRuntime):
         return self._bande
 
     def _new_decoder(self):
-        # Le seuil de détection est un RÉGLAGE (2026-09-24) : lu dans les paramètres, jamais dans
-        # la constante seule. `.get` parce qu'un appelant du banc d'essai peut ne passer que les
-        # fréquences — il retombe alors sur le défaut du réglage, qui EST `Z_MIN`.
-        # La BANDE est lue ICI, et nulle part ailleurs (2026-09-30) : figée avec le décodeur dont
-        # le plancher sera mesuré sous elle (cf. `bande`). Même repli que le seuil : un appelant
-        # du banc d'essai qui ne passe que les fréquences retombe sur `BANDPASS`, le défaut.
-        # `max_freq` = sa coupure HAUTE : une harmonique au-dessus, le filtre l'a supprimée, et la
-        # garder dans la référence n'ajouterait que du bruit au ρ de SA cible
-        # (cf. `cca_decoder.reference_signals`) — exactement ce qui se passait déjà à 40 Hz.
+        # Le seuil de détection est un RÉGLAGE : lu dans les paramètres, jamais dans la constante
+        # seule. `.get` parce qu'un appelant du banc d'essai peut ne passer que les fréquences ;
+        # il retombe alors sur le défaut du réglage, qui EST `Z_MIN`.
+        # La BANDE est lue ICI, et nulle part ailleurs : figée avec le décodeur dont le plancher
+        # sera mesuré sous elle (cf. `bande`). Même repli que le seuil : sans réglage, `BANDPASS`.
+        # `max_freq` = sa coupure HAUTE : une harmonique au-dessus a été supprimée par le filtre,
+        # et la garder dans la référence n'ajouterait que du bruit au ρ de SA cible
+        # (cf. `cca_decoder.reference_signals`).
         self._bande = bande_de(self.params, BANDPASS)
         self.decoder = CCADecoder(list(self.params["freqs"]), fs=self.engine.acq.fs,
                                   z_min=float(self.params.get("z_min", Z_MIN)),
@@ -106,7 +105,7 @@ class SsvepRuntime(ModeRuntime):
         # Le flux est créé TOUT DE SUITE, avant même la mesure du repos, et reste silencieux
         # jusqu'à ce que le décodage commence. Le faire apparaître seulement à la fin du repos
         # serait un piège : un client qui cherche le flux au lancement ne le trouve pas et
-        # abandonne (`resolve_byprop` a un délai fini) — vécu au premier essai casque.
+        # abandonne (`resolve_byprop` a un délai fini).
         #
         # L'échelle de décision fait partie du contrat et ne change donc jamais : on décide
         # TOUJOURS sur z, quitte à prolonger le repos jusqu'à pouvoir le mesurer.
@@ -160,8 +159,8 @@ class SsvepRuntime(ModeRuntime):
 
         # Un plancher trop DISPERSÉ rend le seuil inatteignable, en silence : on décide sur
         # z=(ρ-μ)/σ, donc un σ gonflé exige un ρ que le SSVEP ne produit jamais en électrodes
-        # sèches. Vécu sur casque le 2026-07-27 : σ=0,19 => il aurait fallu ρ≈0,94. Mieux vaut le dire tout de
-        # suite que laisser l'utilisateur fixer une cible qui ne peut pas sortir.
+        # sèches (mesuré sur casque : σ=0,19 exigeait ρ≈0,94). Mieux vaut le dire tout de suite
+        # que laisser l'utilisateur fixer une cible qui ne peut pas sortir.
         for f, (mu, sd) in self.decoder.baseline.items():
             needed = mu + self.decoder.z_min * sd
             if needed > 0.85:
@@ -258,8 +257,8 @@ SPEC = ModeSpec(
     status="moteur",
     key_channels=tuple(OCCIPITAL),   # les 4 occipitales : le SSVEP y est maximal
     # La fenêtre qui fait clignoter les cibles PENDANT le décodage. Le SSVEP n'a aucune
-    # calibration (la CCA n'apprend rien) : sans ce champ, son bouton « Lancer le stimulus »
-    # n'existait nulle part, et on ne pouvait pas éprouver le mode depuis l'application.
+    # calibration (la CCA n'apprend rien) : ce champ est la seule façon d'éprouver le mode
+    # depuis la console, avec « Tester librement ».
     stimulus_id="ssvep",
     # Le « Tester » de ce mode : la mesure du taux d'émission, jouée sur les réglages COURANTS
     # (la console passe les fréquences retenues à sa fenêtre guidée, qui les annonce au moteur).
@@ -297,9 +296,9 @@ SPEC = ModeSpec(
             affecte_decodage=False,
             help=tr("mode.ssvep.param.alpha_hz.aide"),
         ),
-        # Le seuil de détection (2026-09-24, demandé au casque : « un réglage pour augmenter ou
-        # diminuer la détection »). UN seul réglage, exprès : la marge sur le 2e (`Z_MARGIN`, à 0)
-        # et un vote glissant jouent sur le MÊME compromis et se compenseraient. Il affecte le
+        # Le seuil de détection : UN seul réglage pour monter ou baisser la détection, exprès :
+        # la marge sur le 2e (`Z_MARGIN`, à 0) et un vote glissant jouent sur le MÊME compromis
+        # et se compenseraient. Il affecte le
         # décodage (défaut de `Param`) : le seuil est annoncé dans les métadonnées du flux
         # `decoded_ssvep`, un contrat public ; le changer pendant que le mode tourne recrée donc
         # le flux, pour que ce qu'il annonce reste vrai. On le règle mode ARRÊTÉ, puis « Tester ».
@@ -311,7 +310,7 @@ SPEC = ModeSpec(
             min=1.0, max=6.0,
             help=tr("mode.ssvep.param.z_min.aide"),
         ),
-        # La BANDE du filtre qui précède le décodage (2026-09-30). Réglée dans « Régler », parce
+        # La BANDE du filtre qui précède le décodage. Réglée dans « Régler », parce
         # que le SSVEP n'a pas de modèle : aucun apprentissage ne dépend d'elle, contrairement aux
         # quatre modes à modèle, qui la règlent à l'entraînement. Elle affecte le décodage (défaut
         # de `Param`) : le plancher de repos est mesuré PAR fréquence SOUS ce filtre, il est donc
@@ -385,8 +384,8 @@ def _selftest():
     chk(rt.phase == "warmup", "le SSVEP commence par une chauffe")
     chk(len(rt.params["freqs"]) == 3, f"3 cibles par défaut ({rt.params['freqs']})")
 
-    # Le SEUIL DE DÉTECTION est un réglage (2026-09-24) : lu dans les paramètres, et relu quand le
-    # repos refait un décodeur neuf — sinon « Refaire le repos » ramènerait en douce la constante.
+    # Le SEUIL DE DÉTECTION est un réglage : lu dans les paramètres, et relu quand le repos
+    # refait un décodeur neuf — sinon « Refaire le repos » ramènerait en douce la constante.
     chk(values["z_min"] == Z_MIN and rt.decoder.z_min == Z_MIN,
         f"le seuil par défaut est {Z_MIN} écarts-types ({values['z_min']}, {rt.decoder.z_min})")
     v17, _r = validate(SPEC, {"z_min": 1.7})
@@ -430,7 +429,7 @@ def _selftest():
     chk(index == -1 and rt.output()["artifact"],
         f"une fenêtre d'artefact est rejetée, pas décodée (index={index})")
 
-    # === La BANDE réglable : mesurée au repos, FIGÉE avec le décodeur (2026-09-30) ==============
+    # === La BANDE réglable : mesurée au repos, FIGÉE avec le décodeur ============================
     # Plancher μ/σ, coupure des références et σ de référence du rejet d'artefact se mesurent sous
     # la bande du REPOS. On les recalcule ici à la main sous une bande NON défaut, sur les blocs
     # mêmes que le runtime a vus : un σ de référence pris sous `BANDPASS` (par `sigma_from_block`,
@@ -484,9 +483,9 @@ def _selftest():
         f"…et un repos refait la prend, avec un décodeur neuf ({rt_b.bande()}, "
         f"max_freq {rt_b.decoder.max_freq})")
 
-    # === La coupure haute ne monte pas jusqu'au SECTEUR (revue du 2026-09-30) ==================
-    # L'exemple de la revue : écran 100 Hz, coupure haute 60, une cible à 50 Hz — accepté, et le
-    # coupe-bande secteur l'éteignait avant le décodage.
+    # === La coupure haute ne monte pas jusqu'au SECTEUR ========================================
+    # Exemple : écran 100 Hz, coupure haute 60, une cible à 50 Hz. Si c'était accepté, le
+    # coupe-bande secteur l'éteindrait avant le décodage.
     _v, refus_60 = validate(SPEC, {"refresh_hz": 100.0, "bande_haut": 60.0,
                                    "freqs": [12.5, 20.0, 50.0]})
     chk(_v is None and refus_60 and tr("moteur.bande.haut") in refus_60,
@@ -494,7 +493,7 @@ def _selftest():
     # Et, à la coupure haute MAXIMALE, rien de ce que le décodeur CORRÈLE — cibles et harmoniques
     # de ses références, lues dans la matrice qu'il construit — ne tombe dans le coupe-bande, à 50
     # comme à 60 Hz. Le coupe-bande est l'appel même de `acquisition._filter`. Deux jeux : 25 × 2
-    # = 50 (l'harmonique de la revue), et une cible posée SUR la coupure (45 Hz, écran à 90 Hz).
+    # = 50 (un harmonique sur le secteur), et une cible posée SUR la coupure (45 Hz, écran à 90 Hz).
     from brainflow.data_filter import DataFilter
     from core.acquisition import NOTCH_SECTEUR
 

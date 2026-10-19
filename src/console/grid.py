@@ -1,11 +1,11 @@
 """La grille : une tuile par mode, l'état du produit d'un seul coup d'œil.
 
-Elle a cessé d'être un menu. Une tuile porte les quatre choses qu'on veut savoir sans cliquer :
+Ce n'est pas un menu. Une tuile porte les quatre choses qu'on veut savoir sans cliquer :
 l'état réel, un aperçu vivant de ce que le mode produit, s'il est publié, et pour les non publiés
 POURQUOI (« demande des marqueurs », « verrouillé à la frame »).
 
 Les modes que le moteur ne sait pas faire sont affichés, grisés, avec leur raison. Sans eux, un
-étudiant croirait que le produit fait trois choses. Depuis le 2026-09-08, les sept tuiles sont
+élève croirait que le produit fait moins de choses qu'il n'en fait. Les sept tuiles sont
 toutes du moteur : cette grille EST le catalogue.
 """
 
@@ -20,14 +20,13 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLab
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # noqa: E402
                      span_correlation)
-# `Z_MIN` n'est PLUS importé, et c'est le correctif : c'était le seuil du SSVEP, servant de
-# repli à des modes qui n'ont pas de seuil du tout (cf. `ModeTile._apercu_scores`). Ne pas le
-# réintroduire ici — une constante d'un mode ne met pas à l'échelle la sortie d'un autre.
+# `Z_MIN` (le seuil du SSVEP) n'est volontairement PAS importé : l'utiliser en repli mettrait à
+# l'échelle la sortie d'un mode sans seuil avec la constante d'un autre (cf.
+# `ModeTile._apercu_scores`).
 from core.config import NEURO_Z_SPAN  # noqa: E402
 from core.i18n import tr  # noqa: E402
 # Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
-# ici, qui vaudrait l'ancien nom le jour d'un renommage et laisserait la tuile sur « en cours »
-# pour toujours.
+# ici : un renommage côté moteur laisserait la tuile sur « en cours » pour toujours.
 from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
 
 COLONNES = 4
@@ -152,12 +151,10 @@ class ModeTile(QFrame):
             self._arrete = True
             self.demarrage.setText(tr("console.grille.demarrer"))
             self.etat.setText(tr("console.etat.arrete"))
-            # ⚠️ `blockSignals` ICI AUSSI, et pour la même raison qu'en bas de cette méthode :
-            # décocher la case ÉMET `set_published(id, False)`. Un mode qu'on vient d'arrêter
-            # postait donc, à l'instant même où sa tuile se repeignait, une commande que personne
-            # n'avait demandée — engendrée par un simple AFFICHAGE. Bénigne tant que le moteur
-            # répond « arrêté entre-temps », mais si le mode est redémarré dans la même seconde,
-            # la commande en file arrive APRÈS et retire silencieusement le flux du réseau.
+            # ⚠️ `blockSignals` ICI AUSSI, comme en bas de cette méthode : décocher la case ÉMET
+            # `set_published(id, False)`. Sans lui, un simple AFFICHAGE posterait une commande
+            # que personne n'a demandée ; si le mode est redémarré dans la même seconde, la
+            # commande en file arrive APRÈS et retire silencieusement le flux du réseau.
             self.publie.blockSignals(True)
             self.publie.setChecked(False)
             self.publie.blockSignals(False)
@@ -191,11 +188,9 @@ class ModeTile(QFrame):
         elif "z" in sortie:
             self.apercu.set_values(list(sortie["z"].values()), span=NEURO_Z_SPAN, centre=True)
         elif "error" in sortie:
-            # ⚠️ Correction de revue (tour 1, tâche 4) : cette clé n'existait dans AUCUNE des
-            # branches ci-dessus, donc l'ErrP tombait toujours dans le `else` — l'aperçu vivant
-            # restait vide en permanence. `error < 0` (pas de verdict) : `score`/`threshold`
-            # valent 0.0 par CONVENTION, jamais une mesure (cf. `ErrPRuntime._traiter_feedback`)
-            # — les montrer fabriquerait un chiffre, donc rien plutôt qu'un faux zéro.
+            # ErrP : `error < 0` (pas de verdict) : `score`/`threshold` valent 0.0 par CONVENTION,
+            # jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — les montrer fabriquerait
+            # un chiffre, donc rien plutôt qu'un faux zéro.
             if sortie.get("error", -1) < 0:
                 self.apercu.set_values([])
             else:
@@ -212,21 +207,15 @@ class ModeTile(QFrame):
     def _apercu_scores(self, sortie):
         """Un score par cible. TROIS échelles, choisies sur ce que la sortie DÉCLARE.
 
-        ⚠️ Correction de revue (tour 2) : cette branche appliquait `max(sortie.get("threshold",
-        Z_MIN), 1.0)` à tout le monde. Or la sortie du P300 n'a PAS de clé `threshold`, et c'est
-        délibéré — le moteur prend l'argmax, il ne compare ces scores à rien (cf.
-        `live_views.ActiveView._update_selection`). Le repli `Z_MIN` (le seuil du SSVEP, 2,5)
-        s'appliquait donc systématiquement à des LOG-ODDS, et `centre=False` écrase à zéro tout
-        ce qui est négatif : sur une manche P300 ordinaire (les scores sont négatifs le plus
-        souvent — une cible flashe une fois sur six), la tuile montrait SIX MOIGNONS DE 2 PX,
-        dont un bleu. L'étudiant y lisait « la sélection n'a aucune preuve derrière elle », ce
-        qui est faux : c'est l'ÉCART 1er-2e qui décide, et il peut être franc. La même tuile,
-        ouverte sur sa page, montrait un classement lisible : la tuile et la page se
-        contredisaient sur les mêmes données.
-
-        C'est exactement le défaut que le chantier précédent a corrigé SUR LA PAGE, jamais sur la
-        tuile. Il est corrigé ici de la même façon, et pour la même raison : sans `threshold`,
-        aucune échelle absolue n'existe, donc on montre le CLASSEMENT.
+        ⚠️ Appliquer un seuil unique à tout le monde (`max(sortie.get("threshold", Z_MIN), 1.0)`)
+        est faux : la sortie du P300 n'a PAS de clé `threshold`, et c'est délibéré — le moteur
+        prend l'argmax, il ne compare ces scores à rien (cf.
+        `live_views.ActiveView._update_selection`). Le seuil du SSVEP (2,5) appliqué à des
+        LOG-ODDS, avec `centre=False` qui écrase à zéro tout ce qui est négatif, donnerait SIX
+        MOIGNONS DE 2 PX sur une manche P300 ordinaire (les scores sont le plus souvent négatifs :
+        une cible flashe une fois sur six). L'élève y lirait « aucune preuve », ce qui est faux :
+        c'est l'ÉCART 1er-2e qui décide, et il peut être franc. Sans `threshold`, aucune échelle
+        absolue n'existe, donc on montre le CLASSEMENT, comme la page.
         """
         scores = [float(s) for s in (sortie.get("scores") or [])]
         seuil = sortie.get("threshold")
@@ -235,11 +224,9 @@ class ModeTile(QFrame):
         if seuil is not None:
             # SSVEP : un z, comparé à un seuil publié. L'échelle absolue a un sens.
             # ⚠️ `SPAN_SEUILS × seuil`, pas `seuil` : c'est l'échelle de la PAGE
-            # (`live_views._update_scores`). La tuile s'arrêtait à 1× — donc sur le fixture du
-            # smoke (score 3,1, seuil 2,5) elle montrait une barre PLEINE là où la page affiche
-            # 62 %. L'étudiant lisait « c'est au maximum » sur la grille, puis « 62 % » en
-            # ouvrant la page : mêmes données, deux lectures — le défaut même que la branche
-            # d'à côté a été écrite pour supprimer.
+            # (`live_views._update_scores`). À 1×, un score de 3,1 pour un seuil de 2,5 montrerait
+            # une barre PLEINE sur la grille et « 62 % » sur la page : mêmes données, deux
+            # lectures.
             # `max(..., 1.0)` est un PLANCHER : un z n'a pas de plafond naturel, et un seuil
             # minuscule ferait déborder toutes les barres.
             self.apercu.set_values(scores, span=max(SPAN_SEUILS * float(seuil), 1.0),
@@ -247,22 +234,20 @@ class ModeTile(QFrame):
             return
         if corr_min is not None:
             # c-VEP : une corrélation de Pearson, bornée dans [-1, 1], comparée au seuil que le
-            # mode PUBLIE (`corr_min`). Échelle absolue, donc — mais surtout PAS celle du SSVEP :
+            # mode PUBLIE (`corr_min`). Échelle absolue, mais surtout PAS celle du SSVEP :
             # `max(2 × 0,26, 1.0)` vaudrait 1,0, et les corrélations réelles de ce mode (0,33
-            # quand c'est juste, 0,21 quand c'est faux — les deux chiffres de la seule séance
-            # mesurée) s'écraseraient dans le tiers bas de la barre, visuellement identiques.
-            # C'est mot pour mot le « six moignons de 2 px » de la tuile P300, avec une cause
-            # différente. On PLAFONNE donc à 1 au lieu de plancher à 1 : la barre va jusqu'à
-            # `SPAN_SEUILS × corr_min` (0,52 par défaut), et le seuil tombe à mi-hauteur.
+            # quand c'est juste, 0,21 quand c'est faux, sur la seule séance mesurée)
+            # s'écraseraient dans le tiers bas de la barre, visuellement identiques. On PLAFONNE
+            # donc à 1 au lieu de plancher à 1 : la barre va jusqu'à `SPAN_SEUILS × corr_min`
+            # (0,52 par défaut), et le seuil tombe à mi-hauteur.
             # ⚠️ La formule vit dans `console/__init__.py`, PAS ici : écrite des deux côtés, elle
-            # avait déjà divergé d'un repli dans le commit qui l'introduisait (à `corr_min = 0`,
-            # réglage légal, la tuile montrait tout PLEIN et la page 33 %). Même leçon que
-            # `classement_relatif` : les garder d'accord demande qu'elles appellent le MÊME code.
+            # diverge (à `corr_min = 0`, réglage légal, la tuile montrerait tout PLEIN et la page
+            # 33 %). Même règle que `classement_relatif` : appeler le MÊME code.
             self.apercu.set_values(scores, span=span_correlation(corr_min), retenue=retenue)
             return
         # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
         # recalculée à chaque manche. La règle vit dans `console.classement_relatif` — la MÊME
-        # fonction que la page appelle, parce qu'écrite deux fois elle a déjà divergé une fois.
+        # fonction que la page appelle, parce qu'écrite deux fois elle diverge.
         self.apercu.set_values(classement_relatif(scores), span=1.0, retenue=retenue)
 
 
@@ -271,9 +256,9 @@ def _resume(mode_state):
     sortie = mode_state.get("output") or {}
     if "corr_min" in sortie:
         # c-VEP : AVANT la branche `scores` juste en dessous, qui lui inventerait une fréquence.
-        # ⚠️ C'est littéralement le « CIBLE 3 · 0 Hz » du P300 rendu en SSVEP : `freq_hz` n'existe
-        # pas dans cette sortie, `.get(..., 0)` en fabrique un, et l'étudiant lit une grandeur que
-        # personne n'a mesurée. Ce mode ne cherche pas une fréquence mais une PHASE.
+        # ⚠️ `freq_hz` n'existe pas dans cette sortie : la branche `scores` en fabriquerait un
+        # avec `.get(..., 0)` (« CIBLE 3 · 0 Hz »), et l'élève lirait une grandeur que personne
+        # n'a mesurée. Ce mode ne cherche pas une fréquence mais une PHASE.
         index = sortie.get("target_index", -1)
         if index < 0:
             # Le motif vient du MOTEUR, en clair (`core/modes/cvep.py::_MOTIFS_FR`). La console ne
@@ -302,10 +287,10 @@ def _resume(mode_state):
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
     if "error" in sortie:
-        # ⚠️ Correction de revue (tour 1, tâche 4) : sans cette branche, le résumé retombait sur
-        # `params`/`""`, donc sur `spec["summary"]` (le texte STATIQUE du mode) — jamais ce que ce
-        # feedback précis vient de décider. Le verdict ne se montre JAMAIS seul : ce détecteur
-        # n'attrape qu'une partie des erreurs, `pdf['tpr']` le rappelle à chaque ligne.
+        # Sans cette branche, le résumé retomberait sur `spec["summary"]` (le texte STATIQUE du
+        # mode), jamais sur ce que ce feedback précis vient de décider. Le verdict ne se montre
+        # JAMAIS seul : ce détecteur n'attrape qu'une partie des erreurs, `pdf['tpr']` le rappelle
+        # à chaque ligne.
         error = sortie.get("error", -1)
         if sortie.get("artifact"):
             return tr("console.grille.resume.artefact")
@@ -314,7 +299,7 @@ def _resume(mode_state):
         pdf = mode_state.get("point_de_fonctionnement") or {}
         verdict = (tr("console.grille.resume.erreur") if error == 1
                    else tr("console.grille.resume.correct"))
-        # `.get` ici aussi, comme vingt-cinq lignes plus haut : `if pdf` protège du dict VIDE,
+        # `.get` ici aussi, comme plus haut : `if pdf` protège du dict VIDE,
         # pas du dict INCOMPLET. Un `point_de_fonctionnement` qui évoluerait (une clé `auc`
         # ajoutée, `tpr` renommé `tpr_oof`) ferait tomber `ModeGrid.update_from` sur un
         # KeyError — donc TOUTE la grille, pas seulement cette tuile, en pleine séance.
@@ -456,8 +441,8 @@ class ModeGrid(QWidget):
 
         # La sortie du produit, vue du DEHORS. Ce n'est ni un mode ni une mesure — c'est le
         # réseau —, donc pas une tuile de plus : une ligne à part, en bas, qui répond à la seule
-        # question qu'un étudiant se pose une fois son décodage lancé (« est-ce que mon appli
-        # reçoit quelque chose ? ») et à laquelle la console ne savait pas répondre.
+        # question qu'un élève se pose une fois son décodage lancé (« est-ce que mon appli
+        # reçoit quelque chose ? »).
         self.bouton_flux = QPushButton(tr("console.grille.flux"))
         self.bouton_flux.setToolTip(tr("console.grille.flux_aide"))
         self.bouton_flux.clicked.connect(self.ouvrir_flux)

@@ -1,9 +1,8 @@
 """Recevoir des marqueurs d'une application EXTERNE — l'oreille du moteur.
 
-Le moteur publie depuis toujours ; il ne savait pas écouter. Or trois modes sur six restent
-gris dans la grille pour la même raison : ils ont besoin de savoir QUAND quelque chose s'est
-produit sur l'écran de quelqu'un d'autre — l'onset d'un flash P300, l'instant où un feedback
-s'affiche. Ce module est ce chaînon.
+Le moteur publie ; pour écouter, il passe par ce module. Trois modes sur six (P300, ErrP,
+c-VEP) ont besoin de savoir QUAND quelque chose s'est produit sur l'écran de quelqu'un d'autre —
+l'onset d'un flash P300, l'instant où un feedback s'affiche.
 
 Il ne connaît AUCUN mode : il reçoit des objets JSON horodatés et les rend tels quels. Le sens
 des événements appartient aux modes.
@@ -22,8 +21,8 @@ démarrage de CHAQUE machine : le projet a mesuré 45 JOURS d'écart entre deux 
 correction, tous les marqueurs distants tombent hors du tampon du moteur et le mode ne décode
 jamais rien — sans la moindre erreur.
 
-⚠️ **Un inlet n'est JAMAIS valide pour toujours** : c'est la leçon centrale de ce module, et elle
-a coûté quatre pannes distinctes (voir la docstring de `MarkerInlet`). Un émetteur meurt, une
+⚠️ **Un inlet n'est JAMAIS valide pour toujours** : c'est la règle centrale de ce module, et
+elle évite quatre pannes distinctes (voir la docstring de `MarkerInlet`). Un émetteur meurt, une
 application se relance, un réseau tombe — à chaque fois l'objet doit pouvoir être ABANDONNÉ et
 reconstruit, jamais gardé « au cas où ».
 
@@ -65,8 +64,8 @@ TIME_CORRECTION_TIMEOUT_S = 2.0
 # seule attente longue — le motif de `server._resolve_own`, pour la même raison.
 RESOLVE_PASSE_S = 0.2
 
-# Borne de `flux_de_marqueurs_visibles()`, en secondes. MESURÉE le 2026-08-19 sur ce poste, et
-# la mesure dit d'abord ceci : avec `minimum=32`, **la borne EST le coût**, pas le pire cas.
+# Borne de `flux_de_marqueurs_visibles()`, en secondes. MESURÉE sur ce poste, et la mesure dit
+# d'abord ceci : avec `minimum=32`, **la borne EST le coût**, pas le pire cas.
 # Chronométré à 0 / 1 / 2 flux publiés, le résultat ne bouge pas d'un cheveu — 0,05 s -> 51 ms,
 # 0,1 s -> 101 ms, 0,2 s -> 201 ms, 0,3 s -> 302 ms, 0,5 s -> 502 ms, 1,0 s -> 1002 ms. On ne
 # trouvera jamais 32 flux, donc liblsl attend toujours jusqu'au bout : allonger la borne, c'est
@@ -189,11 +188,12 @@ class MarkerInlet:
 
     1. **Il se construit atomiquement, ou pas du tout.** `self.inlet` n'est affecté qu'après
        `open_stream()` ET `time_correction()`, jamais avant. Un émetteur sans `source_id` (le
-       défaut de LSL, donc celui qu'un étudiant écrira) qui meurt dans la fenêtre faisait lever
-       `LostError` en ~4 s : au premier appel l'exception remontait dans la boucle du moteur et
-       la TUAIT ; en re-tentative elle était attrapée, mais l'objet restait `connecte=True` avec
-       `offset=0.0` — le moteur se croyait connecté et n'appliquait plus AUCUNE correction
-       d'horloge, la catastrophe des 45 jours en silence total.
+       défaut de LSL, donc celui qu'un étudiant écrira) qui meurt dans la fenêtre fait lever
+       `LostError` en ~4 s : si `self.inlet` était déjà affecté, l'exception remonterait dans la
+       boucle du moteur et la TUERAIT ; en re-tentative elle serait attrapée, mais l'objet
+       resterait `connecte=True` avec `offset=0.0` — le moteur se croirait connecté et
+       n'appliquerait plus AUCUNE correction d'horloge, la catastrophe des 45 jours en silence
+       total.
 
     2. **Il se LÂCHE dès qu'il ne sert plus** (`lache()`). `recover=False`, et non le défaut
        `recover=True` : un inlet qui « récupère » tout seul attend le retour de l'ANCIEN
@@ -206,8 +206,7 @@ class MarkerInlet:
     3. **Il ne bloque jamais plus de quelques secondes.** `time_correction()` sans borne fige la
        boucle ENTIÈRE — 26 s mesurées quand l'émetteur meurt pendant l'appel, sans exception, et
        Ctrl-C ne peut pas interrompre un appel C bloquant. Pendant ce temps le tampon BrainFlow
-       déborde et plus RIEN n'est publié : ni SSVEP, ni neuro, ni MI. Cela contredisait mot pour
-       mot la promesse de cette ligne de docstring.
+       déborde et plus RIEN n'est publié : ni SSVEP, ni neuro, ni MI.
 
     ⚠️ **Plusieurs flux peuvent porter le même nom** — les étudiants utilisent tous le nom par
     défaut et LSL porte sur tout le réseau. On les résout donc TOUS (`minimum=32`, le motif de
@@ -282,7 +281,7 @@ class MarkerInlet:
     def lache(self, raison=""):
         """ABANDONNE l'inlet courant. True s'il y en avait un. Ne lève jamais.
 
-        Le geste que ce module n'avait pas, et sans lequel les trois autres pannes reviennent :
+        Sans ce geste, les trois autres pannes reviennent :
         garder un inlet dont l'émetteur a disparu, c'est rester MUET pour toujours tout en se
         croyant connecté. Après cet appel l'objet est de nouveau « non connecté », donc
         `resolve()` reprendra son travail au tour suivant — y compris sur un émetteur RELANCÉ,
@@ -457,11 +456,10 @@ def _selftest():
         # échoue par intermittence est pire qu'un test qui échoue toujours.
         #
         # ⚠️ On attend les TROIS marqueurs (2 valides ET l'illisible), pas seulement les 2
-        # valides. Attendre `len(recus) == 2` puis vérifier `illisibles == 1` juste après violait
-        # l'avertissement ci-dessus : le 3e échantillon pouvait être encore EN VOL, et le test
-        # échouait alors par intermittence sur son propre invariant. Les trois sont poussés dans
-        # cet ordre et LSL préserve l'ordre : `illisibles >= 1` prouve donc que les trois sont
-        # arrivés.
+        # valides. Attendre `len(recus) == 2` puis vérifier `illisibles == 1` juste après
+        # laisserait le 3e échantillon encore EN VOL, et le test échouerait par intermittence
+        # sur son propre invariant. Les trois sont poussés dans cet ordre et LSL préserve
+        # l'ordre : `illisibles >= 1` prouve donc que les trois sont arrivés.
         recus, echeance = [], time.time() + 5.0
         while (len(recus) < 2 or inlet.illisibles < 1) and time.time() < echeance:
             recus.extend(inlet.pull())
@@ -496,8 +494,8 @@ def _selftest():
             f"(écart mesuré {marqueurs[0][0] - t1:+.3f} s, +12345.678 attendu)")
 
         # 4. LÂCHER puis RE-RÉSOUDRE : le cycle de vie complet, sur un flux qui existe toujours.
-        # C'est le geste qui manquait au module, et sans lequel un émetteur relancé laisse le
-        # moteur muet pour toujours. On vérifie qu'il RÉPARE (on relit ensuite) et qu'il ne
+        # Sans ce geste, un émetteur relancé laisse le moteur muet pour toujours.
+        # On vérifie qu'il RÉPARE (on relit ensuite) et qu'il ne
         # laisse RIEN derrière — en particulier pas l'offset d'avant, qui n'a plus de sens sur
         # l'émetteur d'après et ferait épocher à côté sans rien dire.
         chk(inlet.lache("test") is True, "lâcher un inlet CONNECTÉ rend True")
@@ -521,8 +519,9 @@ def _selftest():
         del outlet
 
     # 5. DEUX émetteurs du même nom : on les voit TOUS LES DEUX, on en choisit un, et on le DIT.
-    # `minimum=1` en rendait un seul — pas même le premier lancé — et ne disait rien : un moteur
-    # pouvait épocher sur les flashs du voisin et publier des sélections confiantes et fausses.
+    # Avec `minimum=1`, on n'en verrait qu'un — pas même le premier lancé — sans rien dire : un
+    # moteur pourrait épocher sur les flashs du voisin et publier des sélections confiantes et
+    # fausses.
     nom2 = "EEG_API_Unicorn_selftest_homonymes"
     o_a = StreamOutlet(StreamInfo(nom2, "Markers", 1, IRREGULAR_RATE, "string", "selftest-aaa"))
     o_b = StreamOutlet(StreamInfo(nom2, "Markers", 1, IRREGULAR_RATE, "string", "selftest-bbb"))
@@ -547,9 +546,9 @@ def _selftest():
 
     # 6. ATOMICITÉ : une connexion qui échoue À MI-CHEMIN ne laisse pas un objet à moitié
     # construit. C'est la panne la plus sournoise du lot : avec `self.inlet` affecté AVANT
-    # `time_correction()`, un émetteur qui meurt dans la fenêtre laissait `connecte=True` et
-    # `offset=0.0` — le moteur se croyait connecté et n'appliquait plus aucune correction
-    # d'horloge, donc TOUS les marqueurs distants tombaient hors du tampon, en silence total.
+    # `time_correction()`, un émetteur qui meurt dans la fenêtre laisserait `connecte=True` et
+    # `offset=0.0` — le moteur se croirait connecté et n'appliquait plus aucune correction
+    # d'horloge, donc TOUS les marqueurs distants tomberaient hors du tampon, en silence total.
     # On injecte la panne en remplaçant `StreamInlet` le temps de l'appel : c'est le seul moyen
     # de la provoquer à volonté, sans dépendre du timing d'un émetteur qu'on tuerait.
     nom3 = "EEG_API_Unicorn_selftest_atomique"
@@ -591,7 +590,7 @@ def _selftest():
         globals()["StreamInlet"] = vrai_stream_inlet
         del o_c
 
-    # 6. La LISTE proposée à l'étudiant — `flux_de_marqueurs_visibles`.
+    # 7. La LISTE proposée à l'étudiant — `flux_de_marqueurs_visibles`.
     #
     # ⚠️ Le test qui porte cette section est l'EXCLUSION du flux `status`. Il est de type
     # `Markers` comme les émetteurs, donc une découverte par TYPE le propose comme source de

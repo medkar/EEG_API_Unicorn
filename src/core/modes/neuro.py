@@ -43,7 +43,7 @@ class NeuroRuntime(ModeRuntime):
         self._new_decoder()
 
     def _new_decoder(self):
-        # Le secteur du POSTE (2026-09-30), que porte le moteur : le notch du σ de rejet
+        # Le secteur du POSTE, que porte le moteur : le notch du σ de rejet
         # d'artefact. Refait à chaque repos avec le décodeur, donc jamais perdu en route.
         self.decoder = NeuroDecoder(self.engine.acq.fs,
                                     rebaseline_s=self.params["rebaseline_s"],
@@ -247,7 +247,7 @@ def _selftest():
         and all(v is None or math.isfinite(v) for v in sortie["raw"].values()),
         f"la sortie pour l'affichage ne contient ni NaN ni infini ({sortie['z']})")
 
-    # === Le SECTEUR du POSTE (2026-09-30) : le rejet d'artefact coupe celui du MOTEUR ========
+    # === Le SECTEUR du POSTE : le rejet d'artefact coupe celui du MOTEUR ========
     # Un espion sur `artifact_sigma`, là où le décodeur l'appelle : c'est le notch DEMANDÉ qu'on
     # vérifie, pas une valeur de σ (son effet sur ce σ est mince, cf. `neuro_monitor`). Et
     # après un repos REFAIT : `_reset_rest` construit un décodeur neuf, qui ne doit pas oublier

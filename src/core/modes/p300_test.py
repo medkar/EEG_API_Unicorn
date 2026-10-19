@@ -6,7 +6,7 @@ par manche (`cue`), fait flasher les six (`flash`), ferme la manche (`round_end`
 score avec son niveau de hasard, **rien sur le disque**. La ligne du temps, la cloison de vérité et
 l'épochage viennent du socle (`modes/mesure_marqueurs.py`, à lire avant).
 
---- LES QUATRE INVARIANTS ---------------------------------------------------------------------
+--- LES CINQ INVARIANTS -----------------------------------------------------------------------
 
 1. **LA DÉCISION EST CELLE DU MODE.** Le décideur est un `P300Runtime` dont seul `_log` est coupé.
    Chaque `flash` et chaque `round_end` passent par SON `_run_step` : sa garde de cible, son
@@ -81,11 +81,11 @@ MANCHES_DEFAUT = MANCHES[0]
 # test en joue 6 ; on ne tombe ici que si la moitié de la séance s'est perdue.
 MANCHES_MIN = 3
 
-# La PHASE DE RETOUR qui suit chaque manche du test (2026-10-02) : la fenêtre (`--tester --retour`,
+# La PHASE DE RETOUR qui suit chaque manche du test : la fenêtre (`--tester --retour`,
 # ce que lance la console) attend la sélection — la dernière époque mûrit (`P300_EPOCH_S`), puis le
 # moteur décide et publie (`LATENCE_DECISION_S`, ESTIMÉE : jamais mesurée au casque) —, la montre
 # SEULE `RETOUR_AFFICHE_S`, et seulement ensuite cercle la cible suivante. ~2 s par manche : sans
-# elle, la durée annoncée d'un test de 24 manches mentait de ~50 s. Le plus long silence de
+# elle, la durée annoncée d'un test de 24 manches serait fausse de ~50 s. Le plus long silence de
 # marqueurs devient `round_end` → `cue` suivant : au plus `ATTENTE_DECISION_S + RETOUR_AFFICHE_S`
 # (4 s) côté fenêtre, loin de la garde de silence du socle (`CALIB_FENETRE_SILENCE_S`, 15 s) — le
 # `--smoke` de la fenêtre le mesure.
@@ -597,10 +597,11 @@ def _selftest():
             f"le moteur est interrogé sous le `mode` de la fenêtre, à la maturité du MODE "
             f"({moteur.appels})")
 
-        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
-        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
-        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
-        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        # === Un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test
+        # qui hériterait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant)
+        # écouterait un flux où personne ne publie : abandon à 30 s, fenêtre plein écran jouant
+        # dans le vide.
         from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
         from core.modes.contract import validate as _valider
         from core.server import EngineServer as _Moteur_
@@ -663,9 +664,9 @@ def _selftest():
             and sonde._decideur._out is sonde._capteur,
             f"le vrai publieur est celui du MODE, sous l'instance du moteur "
             f"({info.name()}, {info.source_id()}, {info.channel_count()} voies)")
-        # A-M3 : la ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur. Un faux qui note ses
-        # arguments acceptait `n_flashes` et `scores` inversés ; le vrai lève, `_publier_decision`
-        # avale — et aucune manche sans décision n'atteignait jamais le réseau.
+        # La ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur. Un faux qui note ses
+        # arguments accepterait `n_flashes` et `scores` inversés ; le vrai lève,
+        # `_publier_decision` avale — et aucune manche sans décision n'atteindrait le réseau.
         rangees = temoin_de_publication(vrai)
         sonde._flux = vrai
         sonde._publier_decision(None, 1234.5)
@@ -687,9 +688,9 @@ def _selftest():
             f"l'effectif ({publies(rt_nc)}, {(rt_nc.resultat or {}).get('n_essais')} notées)")
 
         # === 3 bis. L'AVANCEMENT affiché est en MANCHES — la garde de silence, elle, en FLASHS ====
-        # L'étudiant choisit « Manches : 6 » ; il lisait « 12 phase(s) enregistrée(s) sur 288 »
-        # (des flashs, sous l'unité du contrôle alpha). L'instantané publie maintenant des manches
-        # ET leur nom ; la garde du socle continue de compter les flashs annoncés par `trials`.
+        # L'étudiant choisit « Manches : 6 » et doit lire des manches, pas « 12 sur 288 » flashs.
+        # L'instantané publie des manches ET leur nom ; la garde du socle continue de compter les
+        # flashs annoncés par `trials`.
         etat = rt.state(now=0.0)
         chk(etat.get("unite") == "manche" and (etat.get("essai"), etat.get("total")) == (6, 6),
             f"en fin de test l'écran lit « 6 manches sur 6 », pas des flashs "
@@ -802,8 +803,8 @@ def _selftest():
     for nom, (r, niveau, reserve) in cas.items():
         chk(r["niveau"] == niveau and reserve in r["reserve"],
             f"{nom} -> {niveau} ({r['mot']} | {r['reserve'][:60]}…)")
-    # I-2 : 2 manches justes sur 3 retenues. 67 % passe la ligne « utilisable » (60 %) et Wilson
-    # [21 ; 94] passe 1/6 ; le test binomial exact dit p = 0,074. Rouge.
+    # 2 manches justes sur 3 retenues : 67 % passe la ligne « utilisable » (60 %) et Wilson
+    # [21 ; 94] passe 1/6, mais le test binomial exact dit p = 0,074. Rouge.
     r = noter(dec(3, 2), 6, manches_demandees=6)
     chk(r["niveau"] == "faible" and "p = 0,074" in r["verdict"],
         f"2/3 : p = 0,074, FAIBLE — pas UTILISABLE ({r['mot']}, Wilson [{r['ic_bas']} ; "

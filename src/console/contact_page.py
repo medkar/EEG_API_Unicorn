@@ -1,8 +1,8 @@
 """Le contrôle de liaison casque, AVANT tout lancement coûteux.
 
-Repris de `archive/ui.py:signal_check`, qui existe depuis le 2026-07-20 : ce jour-là un câble
-débranché a laissé enregistrer 3,4 minutes de signal plat, puis produire tranquillement un modèle
-à 0 %. Rien ne le signalait. Mieux vaut bloquer cinq secondes ici que perdre une séance.
+Repris de `archive/ui.py:signal_check`. Un câble débranché laisse enregistrer des minutes de
+signal plat, puis produire tranquillement un modèle à 0 %, sans rien signaler. Mieux vaut
+bloquer cinq secondes ici que perdre une séance.
 
 **Pourquoi cet écran vit dans la console et pas dans les fenêtres de `src/stimulus/`** : celles-ci
 n'ouvrent PAS le casque — c'est exactement ce qui leur permet de tourner à côté du moteur. Elles
@@ -64,7 +64,7 @@ class ContactPage(QWidget):
         self.voies_layout = QVBoxLayout(self.bloc_voies)
 
         # Le refus est un TEXTE À L'ÉCRAN, pas seulement un bouton grisé. Un bouton qui ne
-        # réagit pas se lit comme une interface cassée — c'est la panne que ce chantier répare.
+        # réagit pas se lit comme une interface cassée.
         self.refus = QLabel("")
         self.refus.setWordWrap(True)
         self.refus.setStyleSheet("color: #e5484d; font-weight: bold;")

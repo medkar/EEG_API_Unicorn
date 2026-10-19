@@ -52,15 +52,16 @@ class CalibrationRuntime:
 
     # Comment cette séance se NOMME dans le journal, et comment s'appelle son calcul final. Deux
     # attributs de classe plutôt qu'un texte en dur dans `_terminer` : cette méthode est héritée
-    # TELLE QUELLE par `modes/mesure.py`, qui n'entraîne RIEN. Un contrôle alpha raté
-    # s'annonçait « [calib] entraînement impossible » — et un étudiant y cherchait un modèle que
-    # personne n'avait demandé.
+    # TELLE QUELLE par `modes/mesure.py`, qui n'entraîne RIEN. Sinon un contrôle alpha raté
+    # s'annoncerait « [calib] entraînement impossible » — et on y chercherait un modèle que
+    # personne n'a demandé.
     _journal = "calib"
     _nom_du_calcul = "entraînement"
 
     # Le NOM de ce que comptent `essai` et `total`, au singulier. Publié dans `state()` parce que
-    # c'est le moteur qui sait ce qu'il compte : la console écrivait « phase(s) enregistrée(s) »
-    # sous toutes les pages, et un test P300 de 6 manches s'affichait « sur 288 ». Une sous-classe
+    # c'est le moteur qui sait ce qu'il compte : une console qui écrirait « phase(s)
+    # enregistrée(s) » sous toutes les pages afficherait « sur 288 » pour un test P300 de
+    # 6 manches. Une sous-classe
     # qui compte autre chose (une époque, une manche, un cycle) le redéclare.
     unite = tr("calib.unite.essai")
 
@@ -74,10 +75,10 @@ class CalibrationRuntime:
         `dossier` : OÙ écrire le modèle et son enregistrement. Il vit sur la classe de BASE, donc
         toute calibration l'accepte, et le moteur peut le passer sans savoir laquelle il
         construit (`EngineServer._start_calibration`). ⚠️ **Aucun défaut, surtout pas `DATA_DIR`** :
-        une calibration qui choisissait elle-même son dossier écrivait dans `data/` AVANT
-        d'annoncer sa précision, donc une séance ratée y devenait le modèle le plus récent — donc
-        le défaut proposé — sans que personne ait pu la refuser. Une calibration ne décide plus
-        où elle écrit ; cf. `dossier_ou_lever`.
+        une calibration qui choisirait elle-même son dossier écrirait dans `data/` AVANT
+        d'annoncer sa précision, donc une séance ratée y deviendrait le modèle le plus récent —
+        donc le défaut proposé — sans que personne ait pu la refuser. Une calibration ne décide
+        pas où elle écrit ; cf. `dossier_ou_lever`.
         """
         self.spec = spec
         self.dossier = dossier
@@ -111,7 +112,7 @@ class CalibrationRuntime:
         """La croix de fixation : None si ce protocole n'en a pas, sinon True/False — à afficher
         MAINTENANT ou non.
 
-        C'est le PROTOCOLE qui le décide (2026-10-15, le Motor Imagery), pas la page : l'écran
+        C'est le PROTOCOLE qui le décide (le Motor Imagery), pas la page : l'écran
         générique ne connaît aucun mode, il dessine la croix quand l'instantané la demande. Trois
         valeurs et pas deux : la croix est ce qu'on FIXE, elle garde sa place pendant les pauses
         (False) — une page qui sauterait à chaque essai déplacerait le regard qu'elle doit tenir.
@@ -165,22 +166,19 @@ class CalibrationRuntime:
 
         Choix délibéré : une séance interrompue à cinq essais produirait un modèle que rien ne
         distingue d'un modèle complet dans la liste, et qui donnerait des probabilités plausibles
-        et fausses. L'écran pygame, lui, entraînait sur ce qui restait — comportement qu'on ne
-        reprend pas.
+        et fausses.
         """
         if not self.terminee:
             self.phase = "annule"
             self.etape, self.classe, self._echeance = "", "", None
         # `run()` (server.py) casse le cycle self.active <-> ModeRuntime.engine en vidant
-        # `self.active` — mais pour la calibration, son commentaire promettait ce nettoyage à
-        # CETTE méthode alors que c'était en réalité `self.calibration = None`, LÀ-BAS, qui
-        # faisait tout le travail : `cancel()` ne libérait ni `self.engine` (une référence vers
-        # le moteur ENTIER) ni les époques déjà enregistrées (plusieurs minutes de signal, mortes
-        # dès qu'on renonce à entraîner). Les deux sont libérées ICI, inconditionnellement — même
-        # sur une calibration déjà "fini" (le `finally` de `run()` appelle `cancel()` sans
-        # regarder `terminee`) — pour qu'un abandon EN COURS DE SÉANCE (`cancel_calibration`,
-        # sans arrêt du moteur) ne les garde pas vivantes jusqu'au prochain passage du
-        # ramasse-miettes cyclique.
+        # `self.active`. Pour la calibration, c'est ICI que se fait le nettoyage : `self.engine`
+        # (une référence vers le moteur ENTIER) et les époques déjà enregistrées (plusieurs
+        # minutes de signal, mortes dès qu'on renonce à entraîner) sont libérés
+        # inconditionnellement — même sur une calibration déjà "fini" (le `finally` de `run()`
+        # appelle `cancel()` sans regarder `terminee`) — pour qu'un abandon EN COURS DE SÉANCE
+        # (`cancel_calibration`, sans arrêt du moteur) ne les garde pas vivantes jusqu'au
+        # prochain passage du ramasse-miettes cyclique.
         self._enregistre = []
         self.engine = None
 

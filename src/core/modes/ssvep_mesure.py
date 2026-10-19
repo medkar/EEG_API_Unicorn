@@ -9,10 +9,11 @@ applique **exactement sa propre règle de décision**, et rend deux chiffres :
   • le **taux d'émission** — sur combien d'essais le moteur a produit une cible plutôt que rien ;
   • la **justesse à l'émission** — quand il en produit une, à quelle fréquence est-ce la bonne.
 
-⚠️ **Ces deux chiffres se lisent ENSEMBLE, toujours.** Mesuré sur casque le 2026-07-27 : **100 % de
-justesse quand le moteur émet, mais 44 % d'émission seulement**. Le second sans le premier fait
-passer un régime parfaitement normal pour une panne ; le premier sans le second fait croire à un
-sans-faute. Un long silence entre deux verdicts justes EST le régime normal de ce mode.
+⚠️ **Ces deux chiffres se lisent ENSEMBLE, toujours.** Mesuré sur casque, chez une personne :
+**100 % de justesse quand le moteur émet, mais 44 % d'émission seulement**. Le second sans le
+premier fait passer un régime parfaitement normal pour une panne ; le premier sans le second
+fait croire à un sans-faute. Un long silence entre deux verdicts justes EST le régime normal de
+ce mode.
 
 ⚠️ **Cette mesure ne change RIEN au décodage : elle le fait faire par le MODE.** Le plancher de
 repos passe par `SsvepRuntime._rest_step`, chaque décision par `SsvepRuntime._run_step` — le
@@ -21,29 +22,28 @@ occipitale, CCA calée sur le plancher, seuil z, rejet d'artefact au-delà de
 `ARTIFACT_SIGMA_RATIO` × le σ du repos. Un correctif futur du mode (seuil, rejet, fenêtre) est donc
 mesuré ici sans une ligne à reporter.
 
-⚠️ **Jusqu'au 2026-09-22 la règle était RÉÉCRITE ici, avec un écart** : le σ du rejet d'artefact
-pris sur les **8** voies (`acq.sigma_from_block`) là où le mode le prend sur les 4 occipitales
-FILTRÉES. Un clignement frontal fort faisait rejeter au test un essai que le mode décode (taux
-sous-estimé) ; un artefact de nuque, dilué dans 8 voies, passait au test et pas au mode (taux
-sur-estimé). L'écart avait été GARDÉ parce que les repères du 2026-07-27 (100 %/44 %) ont été
-mesurés sous cette règle-là. La spec « Configurer · Entraîner · Tester » (§4, §9) tranche : un
-« Tester » décide comme le produit, et la comparabilité devient une NOTE — elle est dans
-`HONNETETE`, pas dans le protocole. Les chiffres de ce test ne se comparent donc plus tels quels à
-ces repères.
+⚠️ **La règle n'est JAMAIS réécrite ici.** Un test qui prendrait le σ du rejet d'artefact sur les
+**8** voies (`acq.sigma_from_block`) là où le mode le prend sur les 4 occipitales FILTRÉES se
+tromperait dans les deux sens : un clignement frontal fort ferait rejeter au test un essai que le
+mode décode (taux sous-estimé) ; un artefact de nuque, dilué dans 8 voies, passerait au test et
+pas au mode (taux sur-estimé). Un « Tester » décide comme le produit (spec « Configurer ·
+Entraîner · Tester », §4 et §9), et la comparabilité avec les repères 100 %/44 %, mesurés avec une
+règle antérieure, est une NOTE — elle est dans `HONNETETE`, pas dans le protocole. Les chiffres de
+ce test ne se comparent donc pas tels quels à ces repères.
 
 --- LES TROIS INVARIANTS DU PROTOCOLE -----------------------------------------------------------
 
-Ils viennent de `research/ssvep_guided.py`, le monolithe (stimulus + acquisition + analyse) que ce
-module et `src/stimulus/ssvep.py` remplacent. Chacun ferme une façon de se tromper en beauté.
+Chacun ferme une façon de se tromper en beauté.
 
 1. **CHAUFFE AVANT TOUT.** L'Unicorn sort un offset DC énorme et DÉRIVANT pendant des dizaines de
-   secondes après l'ouverture de session (10⁵ µV en rampe, mesuré le 2026-07-27). Mesurer le
+   secondes après l'ouverture de session (10⁵ µV en rampe). Mesurer le
    plancher de repos là-dedans revient à étalonner sur le transitoire d'un filtre — et tout le
    reste de la séance se compare ensuite à ce plancher-là. Tenu par `warmup_s`, hérité du socle.
 
 2. **ESSAIS ENTRELACÉS ET TIRÉS AU SORT.** Un bloc contigu par cible rend « quelle cible »
    inséparable de « quand » : la dérive d'impédance, la fatigue et l'installation des électrodes se
-   confondent avec l'effet cherché. **Le c-VEP a payé ce confond 76 % de débit** (cf. README).
+   confondent avec l'effet cherché. **Sur le c-VEP, ce confond a fait perdre 76 % de débit**
+   (cf. README).
    Tenu côté FENÊTRE (`stimulus/ssvep.py::schedule`), qui décide de l'ordre — le moteur ne fait que
    l'apprendre par les marqueurs. Ce module ne peut donc pas le défaire, et c'est voulu.
 
@@ -87,7 +87,7 @@ from core.modes.mesure_marqueurs import (CapteurDePublication, MesureMarqueurs, 
 # fenêtres chevauchantes une fixation contient, donc de combien l'effectif serait gonflé si on les
 # comptait. Le test s'en sert pour fabriquer un essai réaliste.
 from core.modes.ssvep import SSVEP_DECODE_HZ  # noqa: E402
-# Le runtime du MODE : c'est LUI qui mesure le plancher et qui décide, dans ce test (I-3).
+# Le runtime du MODE : c'est LUI qui mesure le plancher et qui décide, dans ce test.
 from core.modes.ssvep import SPEC as SPEC_SSVEP  # noqa: E402
 from core.modes.ssvep import SsvepRuntime  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
@@ -132,7 +132,7 @@ def wilson(k, n, z=1.96):
 
 
 # --- Les repères, et la phrase qui les porte ----------------------------------------------------
-# Mesurés sur casque le 2026-07-27, sur UNE personne et UNE séance. Ce sont les deux chiffres
+# Mesurés sur casque, sur UNE personne et UNE séance. Ce sont les deux chiffres
 # auxquels un résultat se compare — et ils ne se citent jamais l'un sans l'autre.
 REFERENCE_JUSTESSE = 1.00      # 100 % de justesse QUAND le moteur émet (0 confusion sur 36)
 REFERENCE_EMISSION = 0.44      # …mais 44 % d'essais seulement produisent une décision
@@ -290,7 +290,7 @@ class MesureSSVEP(MesureMarqueurs):
         """Le plancher du décideur EN DIRECT, au PREMIER essai : le repos est fini, et c'est le
         même que `_mesurer` relira. Rend False si le test vient d'être ABANDONNÉ.
 
-        🔴 Un calage raté ABANDONNE le test, tout de suite, avec la raison du mode (B-M3) : le
+        🔴 Un calage raté ABANDONNE le test, tout de suite, avec la raison du mode : le
         verdict cale sur les MÊMES fenêtres de repos par la MÊME fonction, il échouerait donc
         pareil — mais après 3,6 min de fixations perdues, l'anneau éteint pendant tout ce temps.
         """
@@ -440,10 +440,9 @@ class MesureSSVEP(MesureMarqueurs):
 
         # ⚠️ **Les deux pertes voyagent avec le chiffre.** `n_essais` ne compte que les essais
         # RETENUS ; ceux dont l'époque a débordé du tampon disparaissent du dénominateur sans
-        # laisser de trace. Ils étaient comptés et imprimés sur stdout — que la console ne montre
-        # pas — donc un verdict « Sur 26 ESSAIS… » se citait ensuite comme s'il décrivait la
-        # séance de 36. C'est le même geste que `n_artefacts`, qui est publié ET nommé dans la
-        # phrase depuis toujours. Trouvé par la revue de branche du 2026-09-10.
+        # laisser de trace. Un compte seulement imprimé sur stdout — que la console ne montre pas —
+        # laisserait citer un verdict « Sur 26 ESSAIS… » comme s'il décrivait la séance de 36.
+        # Même geste que `n_artefacts`, publié ET nommé dans la phrase.
         # Le seuil ET la bande du MODE (la console les pré-remplit, grisés, depuis « Régler ») : un
         # test qui filtrerait sur 5-40 Hz un mode réglé sur 8-25 mesurerait un décodage que
         # personne n'utilise, et son verdict partirait avec la configuration de l'étudiant.
@@ -488,15 +487,15 @@ def acquisition_de_reference():
     EXACTEMENT le chemin que le mode SSVEP emprunte en direct. Les rebâtir ailleurs créerait un
     second filtrage, qui coïnciderait le jour de son écriture et divergerait ensuite en silence —
     et c'est la seule chose qui rendrait ce module inutile, puisqu'il existe pour mesurer la règle
-    du PRODUIT. C'est déjà le geste que faisait `research/ssvep_guided.analyze` ; il vit ici
-    désormais, du côté du moteur, pour que le banc d'essai n'ait plus à connaître l'acquisition.
+    du PRODUIT. Cette fabrique vit du côté du moteur, pour que le banc d'essai n'ait pas à
+    connaître l'acquisition.
 
     ⚠️ **Publique, et c'est le point.** `src/research/` n'a plus le droit d'importer
     `core.acquisition` (règle vérifiée par `python src/core/server.py --smoke`), or ses analyses
     hors ligne doivent filtrer leurs fenêtres archivées EXACTEMENT comme le moteur filtre les
     siennes — sinon leurs chiffres cessent de décrire le produit. C'est ce point d'entrée-ci qui
-    leur donne le bon filtrage sans leur donner le casque : `ssvep_analyze.py` s'en sert depuis le
-    2026-09-09, `rejouer` et `longueur_bloc_attendue` sont publiques pour la même raison.
+    leur donne le bon filtrage sans leur donner le casque : `ssvep_analyze.py` s'en sert,
+    `rejouer` et `longueur_bloc_attendue` sont publiques pour la même raison.
 
     ⚠️ Neuve à chaque appel, et NON mise en cache : un `BoardShim` gardé jusqu'à la fermeture de
     l'interpréteur y lève dans son `__del__` (« sys.meta_path is None »), et un étudiant lit ce
@@ -591,7 +590,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
     `freqs`   : les fréquences AFFICHÉES, dans l'ordre des indices de cible.
     `perdus`  : essais JOUÉS mais absents de `essais` — leur époque a débordé du tampon.
     `chauffe` : marqueurs reçus pendant la chauffe du moteur, jetés avant la mesure.
-    `bande`   : la bande `(bas, haut)` du MODE (2026-09-30). Elle est remise au runtime du mode,
+    `bande`   : la bande `(bas, haut)` du MODE. Elle est remise au runtime du mode,
                 qui en tire son filtre ET la coupure de ses références — rien n'est filtré ici.
 
     ⚠️ **`perdus` et `chauffe` ne changent aucun calcul : ils rendent le dénominateur HONNÊTE.**
@@ -630,7 +629,7 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
 
     # --- UNE décision par essai, par le `_run_step` du MODE ------------------------------------
     # Rejet d'artefact compris : le mode prend son σ sur les 4 occipitales FILTRÉES, et c'est ce
-    # σ-là qui juge ici — plus celui des 8 voies (cf. l'avertissement en tête de module).
+    # σ-là qui juge ici — pas celui des 8 voies (cf. l'avertissement en tête de module).
     decisions, artefacts = [], 0
     for fenetre_brute, cible in essais:
         sortie = decider(decideur, vue, fenetre_brute)
@@ -679,14 +678,13 @@ def rejouer(essais, repos, freqs, fs, acq=None, perdus=0, chauffe=0, z_min=Z_MIN
         # atteindre, par cible. C'est lui qui dit POURQUOI une cible ne sort jamais.
         "plancher": decideur.rest_report,
         "decisions": [(int(c), None if d is None else int(d)) for c, d in decisions],
-        # CIBLE PAR CIBLE (2026-10-02, demandé au casque : « la cible gauche n'a jamais été
-        # reconnue », puis une autre au test suivant). Les essais où elle était désignée, combien
-        # ont produit une décision, combien justes — et la barre que son plancher imposait. Une
-        # cible muette dont la barre (`rho_requis`) dépasse celle des autres accuse le plancher
-        # de CE repos, pas le code. Calculé ICI, pas dans la console : elle n'a pas de logique.
-        # ⚠️ PAS « par_cible » : le test P300 publie déjà cette clé, sous une AUTRE forme — la
-        # console la lisait comme celle-ci et levait à chaque rafraîchissement (casque,
-        # 2026-10-05). Une clé de résultat est un contrat entre le moteur et l'écran : unique.
+        # CIBLE PAR CIBLE : les essais où elle était désignée, combien ont produit une décision,
+        # combien justes — et la barre que son plancher imposait. Une cible muette dont la barre
+        # (`rho_requis`) dépasse celle des autres accuse le plancher de CE repos, pas le code.
+        # Calculé ICI, pas dans la console : elle n'a pas de logique.
+        # ⚠️ PAS « par_cible » : le test P300 publie déjà cette clé, sous une AUTRE forme, et la
+        # console la lirait comme celle-ci (elle lèverait à chaque rafraîchissement). Une clé de
+        # résultat est un contrat entre le moteur et l'écran : unique.
         "par_frequence": _par_cible(freqs, decisions, decideur.rest_report),
         **_affichage,
         # Le verdict s'OUVRE sur le mot affiché en face : c'est l'invariant que
@@ -712,8 +710,9 @@ def _lignes(n_cibles, n_essais, n_emis, justesse, taux, ic_bas, ic_haut):
     Rouge si le moteur s'est tu, ou si le test binomial EXACT ne distingue pas sa justesse du
     hasard (`affichage.au_dessus_du_hasard` — la MÊME porte que la phrase de `verdict`, et que les
     autres tests) ; vert s'il a raison presque toujours ET parle au moins aussi souvent que le
-    repère du 2026-07-27 ; orange entre les deux. Wilson (`ic_bas`/`ic_haut`) reste l'intervalle
-    AFFICHÉ, il ne décide plus : sa borne basse passait 1/3 dès deux annonces justes.
+    repère du projet (`REFERENCE_EMISSION`) ; orange entre les deux. Wilson (`ic_bas`/`ic_haut`)
+    est l'intervalle AFFICHÉ, il ne décide pas : sa borne basse passerait 1/3 dès deux annonces
+    justes.
     """
     hasard = 1.0 / n_cibles
     # `justesse` vaut exactement n_justes / n_emis : l'arrondi rend l'entier sans perte.
@@ -773,8 +772,8 @@ def verdict(n_cibles, n_essais, n_emis, n_justes, taux, justesse, ic_bas, ic_hau
                      ratio=f"{ARTIFACT_SIGMA_RATIO:g}")
     if n_emis == 0:
         return phrase + tr("mesure.ssvep_taux.verdict.muet")
-    # ⚠️ La MÊME porte que `_lignes` (`affichage.au_dessus_du_hasard`), jamais une seconde : la
-    # phrase disait « le décodage marche » sur 2 annonces justes, au-dessus d'un mot calculé autrement.
+    # ⚠️ La MÊME porte que `_lignes` (`affichage.au_dessus_du_hasard`), jamais une seconde : sinon
+    # la phrase dirait « le décodage marche » sur 2 annonces justes, sous un mot calculé autrement.
     p = p_hasard(n_justes, n_emis, hasard)
     if not au_dessus_du_hasard(n_justes, n_emis, hasard):
         return phrase + tr("mesure.ssvep_taux.verdict.faible", justes=n_justes, emis=n_emis,
@@ -789,7 +788,7 @@ SPEC = MesureSpec(
     summary=tr("mesure.ssvep_taux.summary"),
     briefing=BRIEFING,
     # Les fréquences sont celles du MODE, que la console passe à la fenêtre guidée et que celle-ci
-    # annonce dans `calib_start`. Le SEUIL DE DÉTECTION et la BANDE (2026-09-30), eux, sont les
+    # annonce dans `calib_start`. Le SEUIL DE DÉTECTION et la BANDE, eux, sont les
     # `Param` du mode — les MÊMES objets —, que la console pré-remplit (grisés) avec les valeurs
     # réglées sur la page SSVEP : c'est le motif de tous les autres tests. Pas de « Flux de
     # marqueurs » : un test écoute toujours la fenêtre qu'il lance, sur le flux par défaut
@@ -841,8 +840,7 @@ def _selftest():
     vrai_publieur = globals()["publieur_du_mode"]
     globals()["publieur_du_mode"] = _Espion
 
-    # Une acquisition JAMAIS démarrée : on ne veut que ses filtres et sa géométrie de fenêtre —
-    # exactement ce que faisait `research/ssvep_guided.analyze`.
+    # Une acquisition JAMAIS démarrée : on ne veut que ses filtres et sa géométrie de fenêtre.
     acq = UnicornAcquisition(synthetic=True)
     FS = float(acq.fs)
     BESOIN = acq.window_n + acq.margin_n              # 625 échantillons = 2,5 s
@@ -872,7 +870,7 @@ def _selftest():
 
         `sur_trois` : combien d'essais sur trois portent réellement un SSVEP. Les autres sont du
         bruit — l'étudiant a cligné, regardé ailleurs, ou la réponse n'est pas montée. C'est le
-        régime NORMAL de ce mode (44 % d'émission le 2026-07-27), et le prendre comme cas de test
+        régime NORMAL de ce mode (44 % d'émission au repère), et le prendre comme cas de test
         plutôt qu'un sans-faute est ce qui donne un intervalle de confiance de taille réaliste :
         à 24 essais tous justes, l'intervalle est le plus ÉTROIT qu'il puisse être, donc le cas le
         moins représentatif de ce qu'on mesure vraiment.
@@ -986,7 +984,7 @@ def _selftest():
         f"sur un SSVEP synthétique franc, le moteur émet et a raison ({fort['n_emis']} émissions, "
         f"{fort['justesse_emission'] * 100:.0f} % justes)")
 
-    # === Le SEUIL DE DÉTECTION est un réglage, et le test le reçoit du mode (2026-09-24) ==========
+    # === Le SEUIL DE DÉTECTION est un réglage, et le test le reçoit du mode ===================
     # Mêmes essais, deux seuils : un seuil bas doit annoncer PLUS de cibles qu'un seuil haut. C'est
     # la seule preuve que le réglage atteint la décision — un seuil perdu en chemin (le test qui
     # retombe sur la constante) rendrait deux résultats identiques, et tout le reste resterait vert.
@@ -1003,7 +1001,7 @@ def _selftest():
         f"un seuil de détection plus BAS fait annoncer plus de cibles, sur les mêmes essais "
         f"({_bas_seuil['n_emis']} à z=1,0 contre {_haut_seuil['n_emis']} à z=6,0)")
 
-    # === La BANDE est un réglage du mode, et le test DÉCIDE sous elle (2026-09-30) ===============
+    # === La BANDE est un réglage du mode, et le test DÉCIDE sous elle =========================
     # Le calcul est refait ICI, à la main, par les deux briques publiques du chemin — le filtre de
     # l'acquisition (`occipital_window`) et la CCA bornée à la coupure haute (`max_freq`) —, puis
     # comparé au plancher que le runtime du MODE a mesuré dans le test. Égalité EXACTE : une bande
@@ -1122,11 +1120,11 @@ def _selftest():
         f"sur du bruit pur, le moteur se TAIT plutôt que de deviner ({plat['taux_emission'] * 100:.0f} "
         f"% d'émission) — c'est le seuil z du mode, pas un seuil écrit ici")
 
-    # === I-3 : la DÉCISION est celle du RUNTIME DU MODE, rejet d'artefact compris ==============
-    # Le test réécrivait la règle du mode, avec UN écart connu : le σ du rejet d'artefact pris sur
-    # les 8 voies (`sigma_from_block`) là où le mode le prend sur les 4 occipitales FILTRÉES. Un
-    # clignement frontal fort faisait rejeter au test un essai que le mode décode (taux SOUS-estimé) ;
-    # un artefact de nuque sur PO7/PO8, dilué dans 8 voies, passait au test et pas au mode (taux
+    # === La DÉCISION est celle du RUNTIME DU MODE, rejet d'artefact compris ====================
+    # Un test qui réécrirait la règle du mode prendrait le σ du rejet d'artefact sur les 8 voies
+    # (`sigma_from_block`) là où le mode le prend sur les 4 occipitales FILTRÉES. Un clignement
+    # frontal fort ferait rejeter au test un essai que le mode décode (taux SOUS-estimé) ; un
+    # artefact de nuque sur PO7/PO8, dilué dans 8 voies, passerait au test et pas au mode (taux
     # SUR-estimé). Deux fixtures, calibrées pour tomber ENTRE les deux règles, et un `SsvepRuntime`
     # qui décode EN DIRECT par son propre `tick` : le test doit rendre, essai par essai, SA décision.
     import contextlib as _ctx
@@ -1192,7 +1190,7 @@ def _selftest():
         f"test {[d for _c, d in _res3['decisions']]} ({_res3['n_artefacts']} artefacts), mode "
         f"{[d for _c, d, _a in _sorties]} ({sum(a for _c, _d, a in _sorties)} artefacts)")
 
-    # --- CIBLE PAR CIBLE (2026-10-02) : ce que « Détails » montre pour une cible muette --------
+    # --- CIBLE PAR CIBLE : ce que « Détails » montre pour une cible muette --------
     _pc = _res3["par_frequence"]
     _attendu = [(sum(1 for c, _d in _res3["decisions"] if c == i),
                  sum(1 for c, d in _res3["decisions"] if c == i and d is not None),
@@ -1224,12 +1222,13 @@ def _selftest():
     # mot ; les chiffres portent leur hasard (`affichage.verifier`, tenu par chaque protocole).
     chk(not _verifier_affichage(res),
         f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
-    # Une séance comme celle du 2026-09-22 (18 annonces sur 36, 18 justes) : AU NIVEAU DU REPÈRE.
+    # Une séance de 18 annonces sur 36 essais, toutes justes : AU NIVEAU DU REPÈRE.
     _seance = _lignes(3, 36, 18, 1.0, 0.5, 0.82, 1.0)
     chk(_seance["niveau"] == "bon" and "hasard 33 %" in _seance["chiffres"],
         f"18 justes sur 18 annonces, 50 % d'émission : vert, avec son hasard ({_seance})")
-    # I-2 : 2 annonces, 2 justes, sur 24 essais. Wilson [34 ; 100] passe 1/3 : la porte peignait
-    # ORANGE, et la phrase disait « Le décodage marche sur CETTE séance ». Le test exact : p = 0,111.
+    # 2 annonces, 2 justes, sur 24 essais. Wilson [34 ; 100] passe 1/3 : une porte fondée sur lui
+    # peindrait ORANGE, et la phrase dirait « Le décodage marche sur CETTE séance ». Le test exact
+    # donne p = 0,111.
     _bas, _haut = wilson(2, 2)
     _deux = _lignes(3, 24, 2, 1.0, 2 / 24, _bas, _haut)
     _phrase = verdict(3, 24, 2, 2, 2 / 24, 1.0, _bas, _haut, 0)
@@ -1265,9 +1264,9 @@ def _selftest():
     # === Les essais JETÉS sont DANS le résultat, et NOMMÉS dans le verdict =====================
     # ⚠️ `n_essais` ne compte que les essais RETENUS. Une séance de 36 dont 10 époques débordent le
     # tampon (moteur chargé, `calib_start` tardif) annonce « Sur 26 ESSAIS… », avec un intervalle
-    # calculé sur 26 — et ce chiffre-là se cite ensuite comme s'il décrivait les 36. Les deux
-    # compteurs n'existaient que sur stdout, que la console ne montre pas. Ils voyagent maintenant
-    # avec le chiffre, comme `n_artefacts`.
+    # calculé sur 26 — et ce chiffre-là se citerait comme s'il décrivait les 36. Des compteurs
+    # seulement imprimés sur stdout, que la console ne montre pas, n'y changeraient rien : ils
+    # voyagent avec le chiffre, comme `n_artefacts`.
     rt_perdu = MesureSSVEP(SPEC, {}, _FauxMoteur())
     rt_perdu._freqs = list(FREQS)
     rt_perdu._epoques_perdues = 10
@@ -1430,9 +1429,9 @@ def _selftest():
         and rt._flux is None,
         "…horodatée à la fin de la fixation, et le flux est FERMÉ à la fin du test")
 
-    # === B-I1 : le DIRECT décide sous le SEUIL et la BANDE du test, pas sous les défauts ========
+    # === Le DIRECT décide sous le SEUIL et la BANDE du test, pas sous les défauts ==============
     # La garde ci-dessus joue les réglages PAR DÉFAUT : un direct construit sans `z_min` ni `bande`
-    # la passait — l'anneau décidait à z = 2,5 quand le verdict notait à 1,5. Séance par la vraie
+    # la passerait — l'anneau déciderait à z = 2,5 quand le verdict note à 1,5. Séance par la vraie
     # porte, tampon qui COULE (plancher non figé), SSVEP d'intensités croissantes : les premiers
     # essais tombent ENTRE les deux seuils.
     _regles = {"z_min": 1.5, "bande_bas": 6.0, "bande_haut": 30.0}
@@ -1502,7 +1501,7 @@ def _selftest():
         "…et la séance DISCRIMINE : au seuil par défaut, une décision change ; sous la bande par "
         "défaut, les scores changent — un direct qui perdrait l'un des deux rougirait")
 
-    # === A-M3 : la ligne -1 écrite À LA MAIN, dans le VRAI publieur ============================
+    # === La ligne -1 écrite À LA MAIN, dans le VRAI publieur ===================================
     from core.modes.mesure_marqueurs import temoin_de_publication
 
     rt_m = MesureSSVEP(SPEC, {}, _FauxMoteur())
@@ -1533,7 +1532,7 @@ def _selftest():
 
     def _avec_repos(moteur, trials):
         """Lancée, annoncée, chauffe passée, REPOS joué : l'état d'une séance quand ses essais
-        commencent. Sans repos, le premier `cue` ARRÊTE le test (B-M3, plus bas). Rend
+        commencent. Sans repos, le premier `cue` ARRÊTE le test (cf. plus bas). Rend
         `(rt, now)`. La fin du repos tombe après ce tampon figé : chaque tour en prélève."""
         rt_ = MesureSSVEP(SPEC, {}, moteur)
         rt_.tick(moteur, moteur.t0)
@@ -1574,12 +1573,12 @@ def _selftest():
 
     # === LE test qui SÉPARE les deux compteurs ================================================
     # ⚠️ `self.essai` et `self._essais_vus` coïncident tant qu'aucune époque n'est perdue — c'est
-    # pour ça que le cas ci-dessus (rt3) reste vert quel que soit celui des deux qu'on compare, et
-    # c'est pour ça que le défaut avait survécu à la revue. Ici on en perd UNE, ce qui suffit à
-    # les séparer : la garde doit continuer d'ATTENDRE, parce que la fenêtre a bel et bien joué
-    # tous les essais qu'elle avait annoncés. Comparer `self.essai` au nombre annoncé fait
-    # abandonner, donc appeler `cancel()`, donc DÉTRUIRE les onze essais valides — 3,6 min de
-    # signal bon jetées pour une seule époque manquée et un `calib_end` perdu.
+    # pour ça que le cas ci-dessus (rt3) reste vert quel que soit celui des deux qu'on compare.
+    # Ici on en perd UNE, ce qui suffit à les séparer : la garde doit continuer d'ATTENDRE, parce
+    # que la fenêtre a bel et bien joué tous les essais qu'elle avait annoncés. Comparer
+    # `self.essai` au nombre annoncé fait abandonner, donc appeler `cancel()`, donc DÉTRUIRE les
+    # onze essais valides — 3,6 min de signal bon jetées pour une seule époque manquée et un
+    # `calib_end` perdu.
     moteur4 = _FauxMoteur()
     rt4, t4 = _avec_repos(moteur4, trials=12)
     # Onze `cue` prélevables, plus UN — au milieu, pas au bord — dont l'EEG précède le début du
@@ -1616,9 +1615,10 @@ def _selftest():
         f"s'annule ({rt5._essais_vus}/{rt5.total()} reçus, {rt5.phase}) — sinon la garde "
         f"attendrait pour toujours, et « elle attend » se lirait comme « elle a fini »")
 
-    # === B-M3 : un repos INEXPLOITABLE arrête le test au PREMIER essai, en le disant =============
+    # === Un repos INEXPLOITABLE arrête le test au PREMIER essai, en le disant ================
     # Le décideur du direct se cale au premier `cue`, sur les fenêtres de repos que le verdict
-    # relira. Raté, il publiait -1 trente-six fois et le verdict échouait pareil, 3,6 min plus tard.
+    # relira. Raté, il publierait -1 trente-six fois et le verdict échouerait pareil, 3,6 min plus
+    # tard.
     # Ici, TROIS fenêtres de repos (il en faut 10) : fenêtre lancée trop tard, ou repos écourté.
     import contextlib as _ctx6
     import io as _io6
@@ -1667,10 +1667,10 @@ def _selftest():
         f"`etape` reste VIDE : la console joue un top au front montant de `etape`, et cette "
         f"mesure ne doit pas biper par-dessus un stimulus visuel ({etat['etape']!r})")
 
-    # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+    # === Un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ==============
     # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
-    # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
-    # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+    # hériterait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écouterait un
+    # flux où personne ne publie : abandon à 30 s, fenêtre plein écran jouant dans le vide.
     from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
     from core.modes.contract import validate as _valider
     from core.server import EngineServer as _Moteur_
@@ -1688,8 +1688,8 @@ def _selftest():
         f"régime normal de ce mode, pas un feu rouge ({SPEC.stimulus_id}, {SPEC.barriere})")
     _ids = [s.id for s in registry.MESURES]
     # La PROPRIÉTÉ, pas la liste : la barrière alpha d'abord, cette mesure après. Une liste figée
-    # rougissait dès qu'une mesure de test s'ajoutait au registre (le MI, le 2026-09-22), sans que
-    # rien de ce que ce test protège n'ait changé.
+    # rougirait dès qu'une mesure de test s'ajoute au registre, sans que rien de ce que ce test
+    # protège ait changé.
     chk(_ids[:1] == ["alpha"] and "ssvep_taux" in _ids
         and _ids.index("ssvep_taux") > _ids.index("alpha"),
         f"…et elle est dans le catalogue du moteur, APRÈS la barrière alpha, qui se fait en "
@@ -1711,7 +1711,7 @@ def _selftest():
             f"tronquée en silence le jour où la calibration MI raccourcirait la sienne")
 
         # « Proposer » — le bouton de « Régler » qu'on clique AVANT ce test — ne sort pas de la
-        # bande RÉGLÉE (2026-09-30). Vérifié ici parce que c'est le MOTEUR qui propose
+        # bande RÉGLÉE. Vérifié ici parce que c'est le MOTEUR qui propose
         # (`propose_params`) et que cet autotest est celui du SSVEP qui en construit un. Le mode
         # est ARRÊTÉ : c'est le geste réel, on règle avant de lancer quoi que ce soit.
         _quatre = [15.0, 20.0, 60.0 / 7.0, 12.0]
@@ -1733,9 +1733,9 @@ def _selftest():
             f"{[round(f, 3) for f in _apres.get('value', [])]} une fois la coupure haute réglée à "
             f"20 Hz ({_regle.get('reason', 'réglage retenu')})")
         # Une bande saisie hors bornes EN COURS d'édition est REFUSÉE, avec la raison du contrat —
-        # celle qu'« Appliquer » donnerait pour la même saisie (passe C1, 2026-09-30). Elle était
-        # auparavant ramenée en silence dans les bornes (-3 → 3, « ? » → 40, NaN traversait) :
-        # « Proposer » répondait sur une bande que l'écran ne montrait pas.
+        # celle qu'« Appliquer » donnerait pour la même saisie. Ramenée en silence dans les
+        # bornes (-3 → 3, « ? » → 40, NaN qui traverse), elle ferait répondre « Proposer » sur une
+        # bande que l'écran ne montre pas.
         from core.modes.contract import valider_un as _valider_un
         for _saisie in ({"bande_bas": -3.0}, {"bande_haut": "?"},
                         {"bande_bas": float("nan")}, {"bande_haut": 60.0}):

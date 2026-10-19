@@ -74,9 +74,9 @@ class P300Model:
                  nfilter=P300_XDAWN_NFILTER, secteur_hz=None):
         self.fs = fs
         self.band = band
-        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
-        # exactement comme l'entraînement. None = pas de coupe-bande — c'est ce que rend un modèle
-        # d'avant ce réglage, qui doit décoder comme il a appris.
+        # Le SECTEUR du coupe-bande, enregistré avec la bande : le décodage filtre exactement
+        # comme l'entraînement. None = pas de coupe-bande (un modèle sans secteur décode comme
+        # il a appris).
         self.secteur_hz = secteur_hz
         self.pre_s = pre_s
         self.post_s = post_s
@@ -134,9 +134,8 @@ class P300Model:
         margin > 0 : refuse la sélection si l'écart 1er-2e est trop faible (ambiguë -> None).
 
         Sans AUCUNE époque, c'est `(None, {})` : « je n'ai pas décidé », la même réponse que la
-        marge insuffisante. Avant, `order[0]` levait un `IndexError` nu — une manche entièrement
-        perdue (marqueurs arrivés trop tard, application plantée) faisait tomber l'appelant sur
-        une exception qui ne nomme rien, au lieu du non-choix que le contrat prévoit déjà.
+        marge insuffisante. Une manche entièrement perdue (marqueurs arrivés trop tard,
+        application plantée) donne ce non-choix, pas une exception qui ne nomme rien.
         """
         if not epochs_by_target:
             return None, {}
@@ -225,8 +224,8 @@ def _demo():
     model = P300Model(fs=fs).fit(epochs, y, groups=groups)
     auc = model.cv_auc_
     # `_cv_auc` rend None quand le calcul échoue (elle le dit et n'interrompt pas le fit) : le
-    # formatage doit donc encaisser None, sinon la seule chose qu'on lirait serait un TypeError
-    # dans un `f-string`, qui masque la vraie cause imprimée deux lignes plus haut.
+    # formatage doit donc encaisser None, sinon un TypeError dans le `f-string` masquerait la
+    # vraie cause, imprimée juste avant.
     auc_txt = "non calculée" if auc is None else f"{auc * 100:.1f}%"
     print(f"\n[1] AUC cible-vs-non-cible (GroupKFold par manche) : {auc_txt}  (hasard 50%)")
 
@@ -260,9 +259,7 @@ def _demo():
 
 if __name__ == "__main__":
     use_utf8_console()
-    # `sys.exit(0 si … sinon 1)`, comme `p300_models.py` et `mi_models.py` : le verdict de
-    # `_demo()` était JETÉ, donc ce fichier sortait TOUJOURS en 0. Un pipeline cassé passait
-    # pour vert dans une chaîne `&&`, dans un rapport de tâche, et dans une CI. Un autotest qui
-    # ne peut pas échouer ne teste rien — c'est la panne muette que ce projet combat, appliquée
-    # à son propre outillage.
+    # Le code de sortie porte le verdict de `_demo()` (0 si OK, sinon 1), comme `p300_models.py`
+    # et `mi_models.py` : un autotest qui sort toujours en 0 laisserait passer un pipeline cassé
+    # dans une chaîne `&&` ou une CI.
     sys.exit(0 if _demo() else 1)

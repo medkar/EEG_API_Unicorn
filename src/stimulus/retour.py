@@ -1,8 +1,7 @@
 """Le RETOUR EN DIRECT : la fenêtre entoure la cible que le moteur DÉCODE (option `--retour`).
 
-Demandé au casque le 2026-10-01 : « on regarde une cible, le logiciel entoure celle qu'il pense
-qu'on regarde ». Trois fenêtres le proposent — `cvep.py`, `ssvep.py`, `p300.py` — et ce module est
-leur SEULE écriture du geste, comme `garde.py` l'est pour leurs gardes : trois copies d'un fil
+On regarde une cible, le logiciel entoure celle qu'il pense qu'on regarde. Trois fenêtres le
+proposent — `cvep.py`, `ssvep.py`, `p300.py` — et ce module est leur SEULE écriture du geste, comme `garde.py` l'est pour leurs gardes : trois copies d'un fil
 réseau et d'une règle de rattachement divergeraient au premier correctif.
 
 Quatre morceaux :
@@ -17,28 +16,25 @@ Quatre morceaux :
    une image figée est une cible qui cesse de clignoter (SSVEP) ou une phase qui glisse (c-VEP).
    La boucle ne fait que `pull_chunk(timeout=0.0)` : jamais une attente. Le NOM, lui, se lit dans
    le constructeur, que la fenêtre appelle AVANT `pygame.init()` : il importe le catalogue des modes
-   (1 à 2 s de calcul), qui dans un fil voisin volait le GIL au rendu (revue C-M5).
-   🔴 **Seulement un flux de CETTE machine** (revues C-I1, E-I1). En salle, chaque étudiant fait
+   (1 à 2 s de calcul), qui dans un fil voisin volerait le GIL au rendu.
+   🔴 **Seulement un flux de CETTE machine.** En salle, chaque étudiant fait
    tourner son moteur sous les MÊMES noms de flux : un homonyme d'une autre machine est ignoré, et
    le fil cherche jusqu'à trouver celui d'ici. Le nom d'hôte est celui que liblsl publie
-   (`StreamInfo.hostname()`), comparé sans casse à `socket.gethostname()` — égaux sur le poste,
-   vérifié le 2026-10-01.
+   (`StreamInfo.hostname()`), comparé sans casse à `socket.gethostname()` — égaux sur le poste.
 
 2. **`Retour` — l'état de l'anneau**, en pur (ni pygame, ni réseau : testable sans écran).
    Deux régimes :
    - **continu** (c-VEP et SSVEP en libre, ~5 Hz) : l'anneau suit la DERNIÈRE décision VALIDE, et
      s'efface `PERIME_S` après elle (un mode arrêté ne doit pas laisser un anneau figé qui aurait
      l'air d'une décision). ⚠️ Un −1 ne l'efface PAS : un anneau qui clignote à 5 Hz à côté de la
-     cible fixée est un stimulus, et le SSVEP s'abstient une fenêtre sur deux (revue C-I3) ;
+     cible fixée est un stimulus, et le SSVEP s'abstient une fenêtre sur deux ;
    - **par essai** (les tests guidés, et le P300 qui décide une fois par manche) : la fenêtre dit
      quand un essai se FERME (`mesure_finie`) et quand le suivant COMMENCE sa mesure
      (`mesure_commence`).
 
-   **UNE seule couleur, VERTE, en test comme en libre** (2026-10-02, demandé par l'utilisateur) :
-   l'anneau montre la cible DÉCODÉE, il ne juge pas. Une erreur se voit d'elle-même — l'anneau
-   n'est pas sur la cible désignée. Une première version peignait « juste » et « faux » de deux
-   couleurs, et le libre d'une troisième : trois codes à apprendre pour une information déjà à
-   l'écran.
+   **UNE seule couleur, VERTE, en test comme en libre** : l'anneau montre la cible DÉCODÉE, il ne
+   juge pas. Une erreur se voit d'elle-même — l'anneau n'est pas sur la cible désignée. Plusieurs
+   couleurs (juste, faux, libre) feraient apprendre des codes pour une information déjà à l'écran.
 
    ⚠️ **Le RATTACHEMENT d'une décision à son essai — la règle, et pourquoi.** Le moteur ne décide
    un essai qu'APRÈS sa fermeture (il attend le marqueur de fin et la maturité de la dernière
@@ -53,7 +49,7 @@ Quatre morceaux :
    une décision trop tardive est perdue (un essai sans anneau), elle ne décale jamais les
    suivantes — là où « la plus ancienne en attente » ferait colorier TOUTE la suite à contretemps
    après une seule décision manquante.
-   Pourquoi l'effacer BIEN AVANT la mesure suivante (revue D-I1) : un anneau autour d'une AUTRE
+   Pourquoi l'effacer BIEN AVANT la mesure suivante : un anneau autour d'une AUTRE
    cible pendant qu'on enregistre la suivante est un distracteur, et sa DISPARITION est un
    transitoire visuel — calée sur un flash ou une frame 0 de cycle, elle s'imprime dans les données
    notées. Chaque fenêtre appelle donc `mesure_commence()` avec la marge de son paradigme.
@@ -96,21 +92,19 @@ from pylsl import StreamInlet, resolve_byprop
 # --- La couleur : elle n'existe NULLE PART ailleurs dans les trois fenêtres ---------------------
 # C'est ce qui permet aux `--smoke` de relire l'anneau dans les pixels à la couleur EXACTE (aucun
 # lissage : `pygame.draw.circle` ne lisse pas). Une couleur partagée avec un décor ferait trouver un
-# anneau là où il n'y en a pas. ⚠️ Et elle ne RESSEMBLE à aucune consigne (revue D-I2) : les trois
-# fenêtres désignent leur cible en BLEU — le c-VEP la cerclait en vert jusqu'au 2026-10-02, à 13° de
-# teinte de cet anneau ; `autotest_couleurs` compare les TEINTES aux couleurs de consigne LUES dans
+# anneau là où il n'y en a pas. ⚠️ Et elle ne RESSEMBLE à aucune consigne : les trois fenêtres
+# désignent leur cible en BLEU (une consigne verte, à quelques degrés de teinte de l'anneau, les
+# ferait confondre) ; `autotest_couleurs` compare les TEINTES aux couleurs de consigne LUES dans
 # les trois fenêtres.
 COULEUR_DECODEE = (0, 230, 0)    # vert : « voici la cible que le moteur décode », sans jugement
 COULEURS = (COULEUR_DECODEE,)
 EPAISSEUR_PX = 4                 # tracée vers l'INTÉRIEUR du rayon donné (convention de pygame)
-ECART_TEINTE_MIN = 45.0          # degrés ; l'anneau vert était à 13° du cercle VERT du c-VEP d'avant
+ECART_TEINTE_MIN = 45.0          # degrés d'écart de teinte exigés entre l'anneau et une consigne
 CROIX_PX, CROIX_EPAISSEUR_PX = 14, 3   # la croix du repos : demi-branche, épaisseur
 
-# --- La TAILLE de l'anneau : UNE règle pour les trois fenêtres (2026-10-02) ---------------------
-# Demandé au casque : « en P300 les cercles verts sont du diamètre des cibles, ici [c-VEP] ils sont
-# bien plus grands, uniformise ». La règle est celle du P300, qui plaisait : le bord EXTÉRIEUR de
-# l'anneau à `ANNEAU_ECART_PX` du bord de la cible ronde, son bord intérieur à
-# `ANNEAU_ECART_PX - EPAISSEUR_PX` — dans le fond, jamais sur un pixel de la cible.
+# --- La TAILLE de l'anneau : UNE règle pour les trois fenêtres ----------------------------------
+# Le bord EXTÉRIEUR de l'anneau est à `ANNEAU_ECART_PX` du bord de la cible ronde, son bord
+# intérieur à `ANNEAU_ECART_PX - EPAISSEUR_PX` — dans le fond, jamais sur un pixel de la cible.
 ANNEAU_ECART_PX = 18
 
 
@@ -120,12 +114,12 @@ def rayon_anneau(rayon_cible):
     return int(rayon_cible) + ANNEAU_ECART_PX
 
 
-# --- La PHASE DE RETOUR d'un test guidé (2026-10-02) ---------------------------------------------
+# --- La PHASE DE RETOUR d'un test guidé -----------------------------------------------------------
 # Après chaque essai, la fenêtre attend la décision du moteur (au plus `ATTENTE_DECISION_S`), la
 # montre SEULE — aucune consigne bleue à l'écran — pendant `RETOUR_AFFICHE_S`, l'efface, et
-# seulement ensuite désigne la cible suivante. Demandé au casque : l'anneau vert et la consigne
-# bleue suivante à l'écran en même temps, « c'est confusant ». Une décision −1, perdue ou trop
-# tardive : pas d'anneau, la phase s'arrête au bout de l'attente.
+# seulement ensuite désigne la cible suivante : l'anneau vert et la consigne bleue suivante
+# affichés ensemble prêtent à confusion. Une décision −1, perdue ou trop tardive : pas d'anneau,
+# la phase s'arrête au bout de l'attente.
 RETOUR_AFFICHE_S = 1.0
 ATTENTE_DECISION_S = 3.0
 
@@ -255,7 +249,7 @@ class SourceDecisions:
 
     def _valeur(self, ligne):
         """`target_index`, ou None si illisible : NaN et ±inf sautent (`int(inf)` lèverait dans la
-        boucle de rendu, revue C-M7)."""
+        boucle de rendu)."""
         v = float(ligne[0])
         return int(round(v)) if math.isfinite(v) else None
 
@@ -634,8 +628,8 @@ class MoteurFactice(SourceFactice):
 def anneau_attendu(quoi, indice, _verite=None):
     """Ce que l'écran doit montrer à la fin de la fenêtre de retour d'un essai : `[(i, couleur)]`
     ou `[]`. Écrit à partir du SCRIPT du moteur factice, pas de l'état de `Retour`. La cible
-    désignée (3e champ de `attendues`) ne change plus rien : l'anneau est vert, juste ou faux —
-    il entoure la cible DÉCIDÉE (« faux » = autour d'une autre que la désignée)."""
+    désignée (3e champ de `attendues`) n'intervient pas : l'anneau est vert, juste ou faux — il
+    entoure la cible DÉCIDÉE (« faux » = autour d'une autre que la désignée)."""
     if quoi in ("rien", "tard") or indice is None or indice < 0:
         return []
     return [(indice, COULEUR_DECODEE)]
@@ -922,7 +916,7 @@ def autotest_source(chk):
 
 
 def autotest_resolution(chk, run, stimulus_id):
-    """C-M5 : le NOM du flux se résout dans le fil APPELANT, et la fenêtre construit sa source
+    """Le NOM du flux se résout dans le fil APPELANT, et la fenêtre construit sa source
     AVANT `pygame.init()` — jamais un import du catalogue dans un fil pendant le rendu.
 
     Deux preuves : le constructeur rend une source dont le nom est DÉJÀ connu (résolu par lui, pas
@@ -957,7 +951,7 @@ def _ecart_teinte(a, b):
 
 
 def autotest_couleurs(chk):
-    """D-I2 : aucun anneau ne ressemble à une CONSIGNE. Les couleurs de consigne sont LUES dans
+    """Aucun anneau ne ressemble à une CONSIGNE. Les couleurs de consigne sont LUES dans
     les trois fenêtres (import tardif : elles importent ce module), jamais recopiées ici."""
     from stimulus import cvep, p300, ssvep
 

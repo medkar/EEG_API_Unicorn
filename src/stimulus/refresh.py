@@ -1,9 +1,8 @@
 """Mesurer le rafraîchissement RÉEL de l'écran, en le chronométrant.
 
-Cette fonction vivait dans `research/ssvep_stimulus.py` et les trois fenêtres l'importaient de là.
-Elle a déménagé ici le 2026-09-07 avec elles : la laisser dans `research/` aurait créé l'arête
-`stimulus -> research`, celle que la frontière de `server.py --smoke` interdit — la console importe
-`stimulus`, donc tout `research` serait entré dans la console par la bande.
+Elle vit dans `stimulus/` et non dans `research/` : sinon les fenêtres importeraient `research`
+(arête `stimulus -> research` interdite par la frontière de `server.py --smoke`), et comme la
+console importe `stimulus`, tout `research` entrerait dans la console par la bande.
 
 ⚠️ **Pourquoi mesurer plutôt que croire.** Le rafraîchissement ANNONCÉ n'est pas toujours celui que
 l'écran tient. Un `--refresh 60` sur un écran à 59,94 Hz fait dériver la phase du c-VEP d'une frame

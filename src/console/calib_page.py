@@ -19,18 +19,14 @@ from console import compter  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
-# Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : le catalogue recopié
-# que CLAUDE.md interdit — renommer une phase côté moteur laisserait sinon cette page sans écran
-# de résultat, sans qu'aucun test ne le voie (`PHASES_TERMINALES` local aurait continué à valoir
-# l'ancien nom).
+# Le vocabulaire des phases vient du MOTEUR, importé plutôt que recopié : renommer une phase côté
+# moteur laisserait sinon cette page sans écran de résultat, sans qu'aucune erreur ne le signale.
 from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
 
-# ⚠️ La phrase d'honnêteté N'EST PLUS une constante de ce fichier. Elle vit dans chaque
-# calibration (`mi_calib.HONNETETE`, `p300_calib.HONNETETE`) et voyage dans son résultat, sous la
-# clé `honnetete`. La raison est la règle de cette page : elle ne connaît AUCUN mode. Celle du MI
-# parle de « 40 % à 3 classes » et d'un hasard à 33 % ; sous une sélection P300 parmi six cibles,
-# elle n'a aucun sens — et c'est pourtant ce qui se serait affiché, mot pour mot, dès que le P300
-# a gagné sa page de calibration. Une constante d'interface ne peut pas être vraie pour six modes.
+# La phrase d'honnêteté n'est pas une constante de ce fichier. Elle vit dans chaque calibration
+# (`mi_calib.HONNETETE`, `p300_calib.HONNETETE`) et voyage dans son résultat, sous la clé
+# `honnetete` : cette page ne connaît AUCUN mode. Celle du MI parle d'un hasard à 33 % ; sous
+# une sélection P300 parmi six cibles elle n'aurait aucun sens.
 
 
 def _diagnostic(calib_state):
@@ -40,9 +36,8 @@ def _diagnostic(calib_state):
     sur aucun identifiant de mode. Une clé absente vaut zéro : ce qui n'est pas compté ne
     s'affiche pas.
     """
-    # ⚠️ Dans les mots de l'étudiant, pas dans ceux du moteur (« marqueur », « époque »,
-    # « tampon », « mode calibration » — constat I7 de la revue) : il n'a lancé qu'un
-    # « Entraîner », et c'est la seule chose qu'il puisse vérifier.
+    # Dans les mots de l'élève, pas dans ceux du moteur (« marqueur », « époque », « tampon »,
+    # « mode calibration ») : il n'a lancé qu'un « Entraîner », seule chose qu'il puisse vérifier.
     # Une fonction par ligne, pas une clé de texte rangée dans la table : `tr` exige une clé
     # écrite en toutes lettres, pour que son existence se vérifie (cf. `core/i18n.py`).
     quoi = [(("refus_cible", "refus_etiquette", "refus_marqueur"),
@@ -106,17 +101,14 @@ class CalibPage(QWidget):
                 tr("pages.calib.sans_son", raison=console.beeps.raison))
         self.formulaire = ParamsForm(list(self.calib.get("params") or ()))
         # Les réglages d'un entraînement partent AVEC « Commencer » (`start_calibration`) : le
-        # bouton « Appliquer » du formulaire générique n'est branché à rien ici. Il s'affichait
-        # pourtant sur l'entraînement du MI depuis toujours — un bouton sans effet, qu'on cliquait
-        # en croyant régler quelque chose. `mesure_page` cachait déjà le sien pour cette raison.
-        # Trouvé le 2026-09-30, quand les quatre entraînements ont gagné une bande réglable.
+        # bouton « Appliquer » du formulaire générique n'est branché à rien ici, et un bouton
+        # sans effet se clique en croyant régler quelque chose. `mesure_page` cache le sien aussi.
         self.formulaire.bouton.hide()
         self.duree = QLabel("")
         self.duree.setWordWrap(True)
         self.duree.setStyleSheet("color: #8a8f9c; font-size: 11px;")
         # Ce que le MOTEUR a répondu quand on a essayé de commencer. Un refus qui ne s'affiche que
-        # sur stdout est un bouton qui ne fait rien : c'est le défaut que ce chantier répare (la
-        # recette a relevé cinq clics d'affilée sur un bouton qui refusait, dans le terminal).
+        # sur stdout est un bouton qui ne fait rien.
         # Une NOTE sur le déroulé qui doit survivre au changement de bloc — « tel mode a été
         # arrêté pour cette séance, et le restera ». Hors des trois blocs, sous l'en-tête : l'avis,
         # lui, disparaît avec « Avant de commencer » dès que la séance démarre.
@@ -148,17 +140,13 @@ class CalibPage(QWidget):
         self.decompte = QLabel("")
         self.decompte.setStyleSheet("font-size: 22px;")
         self.progression = QLabel("")
-        # 🔴 **Ce que le moteur REFUSE pendant la séance, et personne ne l'affichait.**
-        # Les trois calibrations à fenêtre comptent leurs refus (`refus_cible`, `refus_etiquette`,
-        # `refus_marqueur`) et le socle compte ses époques perdues et ses marqueurs de chauffe.
-        # Leurs docstrings justifient ces compteurs par « sans lui, une fenêtre qui numérote mal
-        # ses cibles ne se voit que dans le terminal » — sauf qu'ils étaient dans `snapshot()` et
-        # que RIEN ne les peignait. Ils étaient donc exactement aussi invisibles que la ligne de
-        # terminal qu'ils devaient remplacer (revue du 2026-09-08, constat n°4).
-        #
-        # Le cas que ça rattrape : la fenêtre lancée sans `--calibrer`. L'écran affichait une
-        # progression normale à zéro essai, et l'étudiant découvrait au bout de six minutes que
-        # la séance était vide.
+        # 🔴 Ce que le moteur REFUSE pendant la séance doit se VOIR ici. Les trois calibrations à
+        # fenêtre comptent leurs refus (`refus_cible`, `refus_etiquette`, `refus_marqueur`) et le
+        # socle compte ses époques perdues et ses marqueurs de chauffe ; ces compteurs sont dans
+        # `snapshot()`, mais invisibles tant que la page ne les peint pas.
+        # Cas rattrapé : la fenêtre lancée sans `--calibrer`. Sans ce diagnostic, l'écran montre
+        # une progression normale à zéro essai, et l'élève découvre au bout de six minutes que la
+        # séance est vide.
         self.diagnostic = QLabel("")
         self.diagnostic.setWordWrap(True)
         self.diagnostic.setStyleSheet("color: #b8860b;")
@@ -166,7 +154,7 @@ class CalibPage(QWidget):
         self.barre.setTextVisible(False)
         self.bouton_abandon = QPushButton(tr("pages.commun.abandonner"))
         self.bouton_abandon.clicked.connect(self._abandonner)
-        # La CROIX de fixation (2026-10-15), quand le protocole en a une (le Motor Imagery) : c'est
+        # La CROIX de fixation, quand le protocole en a une (le Motor Imagery) : c'est
         # le moteur qui dit quand (`croix` de l'instantané : None = pas de croix dans ce protocole,
         # False = sa place reste, vide, pendant la pause). Au-dessus de la consigne, centrée.
         self.croix = QLabel("")
@@ -203,18 +191,16 @@ class CalibPage(QWidget):
         self.honnetete = QLabel("")
         self.honnetete.setWordWrap(True)
         self.honnetete.setStyleSheet("color: #8a8f9c; font-size: 11px;")
-        # La DÉCISION. Le moteur écrit désormais son modèle dans un dossier temporaire et attend
-        # un geste : tant que « Enregistrer » n'est pas cliqué, RIEN n'est dans `data/`, et la
-        # fermeture de la console effacerait le candidat. Le dire, sinon un étudiant qui lit son
-        # accuracy croit légitimement que son modèle existe.
+        # La DÉCISION. Le moteur écrit son modèle dans un dossier temporaire et attend un geste :
+        # tant que « Enregistrer » n'est pas cliqué, RIEN n'est dans `data/`, et la fermeture de
+        # la console effacerait le candidat. Le dire, sinon un élève qui lit son score croit
+        # légitimement que son modèle existe.
         self.decision = QLabel("")
         self.decision.setWordWrap(True)
         self.decision.setStyleSheet("font-weight: bold;")
-        # Le REFUS d'« Enregistrer » ou de « Refaire », sur SA propre ligne (constat I2 de la revue
-        # de branche). Il était écrit dans `decision`, que chaque rafraîchissement réécrit : un
-        # refus du moteur était remplacé en 100 ms par « ⚠ Pas encore enregistré », et l'étudiant,
-        # croyant que rien ne s'était passé, recliquait. Seuls un nouveau geste ou une nouvelle
-        # séance l'effacent.
+        # Le REFUS d'« Enregistrer » ou de « Refaire », sur SA propre ligne : `decision` est
+        # réécrit à chaque rafraîchissement, et un refus y serait effacé en 100 ms par « Pas
+        # encore enregistré ». Seuls un nouveau geste ou une nouvelle séance l'effacent.
         self.refus_decision = QLabel("")
         self.refus_decision.setWordWrap(True)
         self.refus_decision.setStyleSheet("color: #e5484d; font-weight: bold;")
@@ -229,8 +215,7 @@ class CalibPage(QWidget):
         # ⚠️ EN FACE, trois lignes écrites par le MOTEUR (`core/modes/affichage.py`) : le verdict
         # en couleur, la mesure avec son hasard, une réserve. La phrase complète, les chiffres
         # secondaires, le nom du fichier et l'honnêteté passent DANS le repli « Détails » — ils
-        # sont rangés, pas supprimés. Séance casque du 2026-09-22 : l'écran de résultat du c-VEP
-        # était « pas clair du tout et beaucoup trop verbeux ».
+        # sont rangés, pas supprimés.
         self.bloc = BlocResultat(corps_auto=False)
         self.bloc.ajouter_au_detail(self.resultat, self.details, self.honnetete)
         apres = QVBoxLayout(self.bloc_apres)
@@ -246,7 +231,7 @@ class CalibPage(QWidget):
         # étudiant qui revient sur cette page après une séance veut lire son résultat AVANT de
         # retomber sur le briefing d'une nouvelle séance.
         layout.addLayout(entete)
-        # Le CORPS défile (2026-10-05) : « Détails » déplié, les textes se tassaient les uns sur
+        # Le CORPS défile : « Détails » déplié, les textes se tassaient les uns sur
         # les autres faute de hauteur. L'en-tête reste en haut, hors du défilement.
         corps = QWidget()
         dedans = QVBoxLayout(corps)
@@ -274,20 +259,20 @@ class CalibPage(QWidget):
         """Fige le formulaire et « Commencer » pendant la séance ET entre le clic et son départ.
 
         Pendant la séance : changer un réglage n'aurait aucun effet sur une séance déjà lancée, et
-        un champ actif sans effet est un mensonge. ENTRE le clic et le départ (passe C1,
-        2026-09-30) : les valeurs sont déjà copiées dans la demande de la console, qui passe par
-        le contrôle de liaison, l'arrêt du mode, puis l'attente de la séance — une valeur changée
-        pendant ce temps ne partirait pas, et la séance démarrerait avec l'ancienne, sans un mot.
-        Le « en route » est lu dans la CONSOLE (`entrainement_en_route`), jamais tenu ici : un
-        drapeau de page survivrait à une demande abandonnée. Tout se dégèle dès que la séance est
-        TERMINÉE (pas seulement absente), pour en relancer une autre sans naviguer ailleurs.
+        un champ actif sans effet est un mensonge. ENTRE le clic et le départ : les valeurs sont
+        déjà copiées dans la demande de la console, qui passe par le contrôle de liaison, l'arrêt
+        du mode, puis l'attente de la séance — une valeur changée pendant ce temps ne partirait
+        pas, et la séance démarrerait avec l'ancienne, sans un mot. Le « en route » est lu dans
+        la CONSOLE (`entrainement_en_route`), jamais tenu ici : un drapeau de page survivrait à
+        une demande abandonnée. Tout se dégèle dès que la séance est TERMINÉE (pas seulement
+        absente), pour en relancer une autre sans naviguer ailleurs.
         """
         fige = self._en_cours or self.console.entrainement_en_route(self.mode_id)
         self.formulaire.setEnabled(not fige)
         self.bouton_commencer.setEnabled(not fige)
 
     def _commencer(self):
-        """Demande une calibration à la CONSOLE, qui l'orchestre. Cette page n'envoie plus
+        """Demande une calibration à la CONSOLE, qui l'orchestre. Cette page n'envoie pas
         `start_calibration` elle-même, et c'est l'ordre qui l'impose.
 
         Trois choses doivent arriver, dans cet ordre, et deux d'entre elles ne sont pas de son
@@ -350,17 +335,13 @@ class CalibPage(QWidget):
         """Joue le top de la classe cuée sur le FRONT MONTANT de `etape` vers « cue », jamais de
         plus.
 
-        ⚠️ Ne PAS retenir `(phase, essai, etape)` comme clé — une version antérieure de ce fichier
-        le faisait, et c'était un bug, pas une prudence : `essai` (le compteur d'essais
+        ⚠️ Ne PAS retenir `(phase, essai, etape)` comme clé : `essai` (le compteur d'essais
         ENREGISTRÉS) ne bouge JAMAIS pendant l'échauffement, seule la phase « essais » l'incrémente
-        (`core/modes/calibration.py::_pas_essai`), et `phase` elle-même reste constante tout du
-        long d'une même phase. Une clé assise dessus vaut donc EXACTEMENT la même chose pour les
-        six essais d'échauffement du MI (2 par classe × 3 classes), quelle que soit la classe
-        tirée : le premier top sonne, les cinq suivants ne sonnent JAMAIS — pas une coïncidence de
-        tirage, une garantie, à chaque séance. La seule chose qui distingue de façon fiable « un
-        nouvel essai commence » de « la page se repeint pendant le même cue » (~10 fois par
-        seconde) est la TRANSITION de `etape` elle-même, indépendamment de tout compteur que le
-        moteur pourrait ne pas faire avancer.
+        (`core/modes/calibration.py::_pas_essai`), et `phase` reste constante tout au long d'une
+        phase. Une telle clé vaut la même chose pour tous les essais d'échauffement du MI : le
+        premier top sonne, les suivants jamais, à chaque séance. Ce qui distingue de façon fiable
+        « un nouvel essai commence » de « la page se repeint pendant le même cue » (~10 fois par
+        seconde) est la TRANSITION de `etape` elle-même.
         """
         etape = calib_state.get("etape")
         if etape == "cue" and self._etape_precedente != "cue":
@@ -442,19 +423,17 @@ class CalibPage(QWidget):
                 raison = tr("pages.calib.abandonne",
                             raison=calib_state.get("probleme", "")
                             or tr("pages.calib.aucun_modele"))
-                # ⚠️ EN FACE, et en gris : pas de verdict, donc rien à peindre en couleur. Le
-                # repli « Détails » a d'abord avalé cette phrase — elle vivait dans
-                # `self.resultat` — et le smoke restait vert, parce qu'il lisait le TEXTE du
-                # label sans jamais vérifier qu'on le VOIT.
+                # EN FACE, et en gris : pas de verdict, donc rien à peindre en couleur. Cette
+                # phrase ne doit pas vivre que dans `self.resultat`, que le repli « Détails »
+                # cache : un test qui lit le texte du label ne vérifie pas qu'on le VOIT.
                 self.bloc.montrer({"verdict": raison})
                 self.resultat.setText(raison)
                 self.details.setText("")
                 # Rien à mettre en garde : sans accuracy, il n'y a rien à sur-interpréter.
                 self.honnetete.setVisible(False)
             # `candidat` non nul = il reste une DÉCISION à prendre. Le moteur a écrit le modèle
-            # dans un dossier temporaire et n'a rien mis dans `data/` — c'est le correctif de la
-            # tâche 5, et sans les deux boutons ci-dessous plus AUCUNE calibration n'atteindrait
-            # jamais `data/`.
+            # dans un dossier temporaire et n'a rien mis dans `data/` : sans les deux boutons
+            # ci-dessous, aucune calibration n'atteindrait jamais `data/`.
             self._montrer_decision(calib_state.get("candidat"), resultat)
 
     # --- le verdict : rendu sur ce que le résultat PORTE, jamais sur un mode connu -------------
@@ -465,10 +444,9 @@ class CalibPage(QWidget):
     # identifiant de mode — c'est la même discipline que `live_views`, qui route sur la forme de
     # la sortie et pas sur `spec["id"]`.
     #
-    # ⚠️ Écrire les lignes du MI en dur (ce que faisait cette page avant le 2026-09-07) affichait
-    # « 0 fenêtres d'entraînement — classes : » sous un résultat P300, qui n'a ni fenêtres ni
-    # classes : deux chiffres FABRIQUÉS et une liste vide, sous le seul écran qui sert à décider
-    # si on garde le modèle. On n'écrit donc que ce qui est présent.
+    # ⚠️ On n'écrit que ce qui est présent : des lignes du MI en dur afficheraient « 0 fenêtres
+    # d'entraînement — classes : » sous un résultat P300, qui n'a ni fenêtres ni classes — des
+    # chiffres fabriqués, sous le seul écran qui sert à décider si on garde le modèle.
 
     # La mesure qui DÉCIDE. Une seule est présente à la fois ; à `None` (mesure impossible), on
     # passe à la suivante, et s'il n'en reste aucune on n'affiche AUCUN chiffre — jamais un 0 %,
@@ -480,22 +458,21 @@ class CalibPage(QWidget):
     MESURES = (
         ("cv_groupee", tr("pages.calib.mesure.cv_groupee")),
         ("selection", tr("pages.calib.mesure.selection")),
-        # ⚠️ L'AUC vient EN DERNIER, et sa place dans cette liste est ce qui la rend correcte pour
-        # les deux modes qui la publient. Le P300 la rend AUSSI, mais ce n'est pas chez lui le
-        # chiffre qui décide (la sélection l'est) : la mettre plus haut lui ferait afficher la
-        # mauvaise mesure. L'ErrP, lui, ne publie qu'elle — il n'a ni manche à retrouver ni classe
-        # à choisir, il répond oui/non à chaque feedback, et son AUC hors-pli est le SEUL de ses
+        # ⚠️ L'AUC vient EN DERNIER : sa place dans cette liste la rend correcte pour les deux
+        # modes qui la publient. Le P300 la rend AUSSI, mais chez lui le chiffre qui décide est la
+        # sélection ; plus haut, l'AUC ferait afficher la mauvaise mesure. L'ErrP ne publie
+        # qu'elle (il répond oui/non à chaque feedback), et son AUC hors-pli est le seul de ses
         # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
         ("auc", tr("pages.calib.mesure.auc")),
-        # ⚠️ Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
-        # qui décide est celle de l'eCCA — arbitrairement, et c'est assumé : les deux sont
-        # INDISCERNABLES sur la seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt
-        # que l'autre ici ne choisit rien. Celle du rCCA est en détail juste en dessous, et le
-        # `verdict` porte le TEST qui dit s'il y a lieu de les départager.
+        # Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
+        # qui décide est celle de l'eCCA, arbitrairement : les deux sont indiscernables sur la
+        # seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt que l'autre ne choisit
+        # rien. Celle du rCCA est en détail, et le `verdict` porte le test qui dit s'il y a lieu
+        # de les départager.
         ("acc_ecca", tr("pages.calib.mesure.acc_ecca")),
     )
-    # Le détail, par clé présente elle aussi. `cv_naive` n'y est PAS et n'y sera jamais : elle est
-    # gonflée de 10 à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
+    # Le détail, par clé présente elle aussi. `cv_naive` n'y figure pas : elle est gonflée de 10
+    # à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
     # Une fonction par ligne (valeur -> texte) : le NOMBRE se met en forme ici, le texte vient du
     # fichier de langue, avec une clé écrite en toutes lettres.
     DETAILS = (
@@ -589,9 +566,8 @@ class CalibPage(QWidget):
         self.bouton_enregistrer.setVisible(a_decider)
         self.bouton_refaire.setVisible(a_decider)
         if a_decider:
-            # UNE ligne, et elle garde le point d'honnêteté entier : un chiffre affiché n'est
-            # pas un modèle enregistré. Les quatre lignes d'avant disaient la même chose, et
-            # faisaient partie du mur de texte relevé en séance le 2026-09-22.
+            # UNE ligne, qui garde le point d'honnêteté entier : un chiffre affiché n'est pas
+            # un modèle enregistré.
             self.decision.setText(tr("pages.calib.pas_encore_enregistre"))
             self.decision.setStyleSheet("color: #b8860b; font-weight: bold;")
         elif resultat is not None:

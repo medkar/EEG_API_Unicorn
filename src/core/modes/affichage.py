@@ -9,9 +9,8 @@ qui sont tout ce qu'on montre par défaut :
     reserve   UNE phrase : celle qui changerait la décision qu'on s'apprête à prendre
 
 Tout le reste — la phrase de verdict complète, la phrase d'honnêteté, les tests statistiques, les
-repères historiques, le nom du fichier — va derrière « Détails ». Rien n'est supprimé : chacune de
-ces phrases a été écrite après une conclusion fausse réellement tirée sur ce projet. Elles sont
-RANGÉES.
+repères chiffrés, le nom du fichier — va derrière « Détails ». Rien n'est supprimé : chacune de
+ces phrases protège d'une conclusion fausse. Elles sont RANGÉES, pas retirées.
 
 ⚠️ **Pourquoi c'est le moteur qui décide du niveau, et pas la console.** Chaque protocole a déjà sa
 table de seuils (`VERDICTS`) et c'est elle qui produit « FAIBLE ». Laisser la console déduire une
@@ -19,11 +18,10 @@ couleur du TEXTE du verdict — ou pire, d'un pourcentage — reviendrait à ten
 seuils côté écran. Le jour où les deux divergent, l'écran peint en vert ce que le moteur juge
 faible. Le niveau est donc calculé par la MÊME table que le mot, dans le même appel.
 
-⚠️ **Pourquoi ce fichier existe** (séance casque du 2026-09-22) : l'écran de résultat du c-VEP
-enterrait « 25,0 % pour un hasard à 17 % » au milieu d'une phrase, après une subordonnée sur
-McNemar, elle-même après un conseil de resalinage, suivie du nom du fichier et de six lignes
-grises. Tout y était vrai, et rien n'était lisible — mot pour mot : « c'est pas clair du tout et
-beaucoup trop verbeux ».
+Pourquoi ce fichier existe : un résultat qui enterre « 25,0 % pour un hasard à 17 % » au milieu
+d'une phrase, après une subordonnée statistique et un conseil de resalinage, suivi du nom du
+fichier et de six lignes grises, est vrai de bout en bout et illisible. Les trois lignes
+d'un résultat (niveau, mot, chiffres) et sa réserve disent l'essentiel, le reste est replié.
 
 Autotest :
     python src/core/modes/affichage.py
@@ -64,10 +62,10 @@ def p_hasard(n_justes, n, hasard):
     `n` est un nombre de DÉCISIONS (une par essai, jamais une par fenêtre), `hasard` la probabilité
     d'une bonne réponse au hasard (1/6 pour six cibles). Zéro décision : p = 1, rien n'est prouvé.
 
-    ⚠️ **Pourquoi pas la borne basse de Wilson, qui tenait lieu de porte jusqu'au 2026-09-22.**
+    ⚠️ **Pourquoi pas la borne basse de Wilson comme porte.**
     Quand toutes les décisions sont justes, elle vaut n/(n + z²) : elle dépasse 1/6 dès UNE
-    décision (0,207) et 1/3 dès deux (0,342). Un test c-VEP qui n'avait émis qu'une fois, juste,
-    sur 18 blocs, était peint ORANGE — « nettement au-dessus du hasard » — alors qu'un tirage au dé
+    décision (0,207) et 1/3 dès deux (0,342). Un test c-VEP qui n'émettrait qu'une fois, juste,
+    sur 18 blocs, serait peint ORANGE — « nettement au-dessus du hasard » — alors qu'un tirage au dé
     y arrive une fois sur six. Wilson reste l'INTERVALLE qu'on affiche ; la DÉCISION « au-dessus
     du hasard ou non » est celle-ci, et elle est partagée par tous les tests qui en prennent une
     (SSVEP, MI, P300, c-VEP) et par la calibration MI : deux portes écrites séparément finiraient
@@ -92,7 +90,7 @@ def au_dessus_du_hasard(n_justes, n, hasard):
 
 def seuil_du_hasard(n, hasard):
     """La plus petite justesse qui passe `au_dessus_du_hasard` sur `n` décisions, ou None si même
-    `n` sur `n` n'y suffit pas (2026-10-15, demandé en revue : afficher le seuil à côté du score).
+    `n` sur `n` n'y suffit pas. Le seuil s'affiche à côté du score.
 
     Calculé par LA porte, pas par une seconde formule : le chiffre affiché ne peut pas contredire le
     verdict. C'est le seuil de Müller-Putz et al. (2008) au sens « à atteindre » : leur
@@ -121,7 +119,7 @@ def pct(x, decimales=0):
 def texte_filtre(bande, secteur_hz, methode=None):
     """AVEC QUOI un modèle a appris : sa bande, son coupe-bande, et sa méthode quand il en a une.
 
-    Une ligne du repli « Détails » d'un entraînement (2026-09-30). Deux séances à 40 % ne se
+    Une ligne du repli « Détails » d'un entraînement. Deux séances à 40 % ne se
     comparent pas si l'une a appris sur 8-30 Hz et l'autre sur 4-40 Hz : c'est ici qu'on le lit.
     Les valeurs viennent du MODÈLE entraîné, jamais des réglages qu'on croit lui avoir donnés.
     """
@@ -139,8 +137,8 @@ def lignes(niveau, mot, chiffres, reserve, conclusion=False):
     que rien ne dise pourquoi.
 
     `conclusion` : la dernière ligne CONCLUT (« Le casque est bien posé »), elle ne met pas en
-    garde. La console l'écrit alors sans ⚠ ni ambre (passe au casque du 2026-09-24 : un panneau
-    orange sous « tu peux la reporter dans ton application » se lisait « attention »). C'est le
+    garde. La console l'écrit alors sans ⚠ ni ambre (un panneau orange sous « tu peux la
+    reporter dans ton application » se lirait « attention »). C'est le
     PRODUCTEUR qui le déclare, parce que le niveau seul ne suffit pas : un bon score
     d'entraînement porte une VRAIE mise en garde (« hors ligne : teste avant d'y croire »).
     """
@@ -156,9 +154,8 @@ def niveau_par_seuils(valeur, table):
     `table` est un `VERDICTS` : des couples `(seuil, texte)` du meilleur au pire. La PREMIÈRE
     ligne est « bon », la DERNIÈRE est « faible », tout ce qui est entre les deux est « moyen ».
 
-    ⚠️ Pas « le rang donne le niveau » : c'était la première écriture, et son autotest l'a pris
-    en défaut — une table à DEUX lignes rangeait sa dernière en « moyen ». Or la dernière ligne
-    d'une table de verdicts est toujours celle du « ré-essaie », quelle que soit la longueur de
+    ⚠️ Le niveau n'est pas « le rang » : une table à DEUX lignes rangerait sa dernière en
+    « moyen ». Or la dernière ligne d'une table de verdicts est toujours celle du « ré-essaie », quelle que soit la longueur de
     la table : c'est elle qui doit être rouge.
     """
     dernier = len(table) - 1
@@ -298,8 +295,8 @@ def _selftest():
         == "FAIBLE",
         "…et `depuis_table` retombe alors sur le NOM du niveau, jamais sur une chaîne vide")
     # La DERNIÈRE ligne d'une table est toujours rouge, quelle que soit la longueur de la table.
-    # Écrit après que la première version (« le rang donne le niveau ») a rangé la dernière ligne
-    # d'une table à deux lignes en « moyen ».
+    # Un niveau déduit du seul rang rangerait la dernière ligne d'une table à deux lignes en
+    # « moyen ».
     deux = ((0.5, "UTILISABLE"), (0.0, "FAIBLE — refais"))
     quatre = ((0.9, "EXCELLENT"), (0.7, "BON"), (0.5, "UTILISABLE"), (0.0, "FAIBLE — refais"))
     chk(niveau_par_seuils(0.1, deux) == "faible" and niveau_par_seuils(0.1, quatre) == "faible",
@@ -331,7 +328,7 @@ def _selftest():
         "…et un résultat qui n'a pas ses quatre clés d'affichage")
 
     # --- « Au-dessus du hasard » : le test binomial EXACT, unilatéral, UNE fonction partagée ---
-    # Les cas de la revue du 2026-09-22, où Wilson concluait et le test exact non.
+    # Les cas où Wilson concluait et le test exact non.
     import sys as _s
     module = _s.modules[__name__]
     p_hasard = getattr(module, "p_hasard", None)
@@ -360,7 +357,7 @@ def _selftest():
     chk(pct(0.385) == "38 %" and pct(1 / 6) == "17 %" and pct(0.385, 1) == "38,5 %",
         f"les pourcentages s'écrivent à la française ({pct(0.385)}, {pct(1 / 6)}, {pct(0.385, 1)})")
 
-    # Le SEUIL du hasard (2026-10-15) : celui de Müller-Putz et al. (2008), « à atteindre ». Leurs
+    # Le SEUIL du hasard : celui de Müller-Putz et al. (2008), « à atteindre ». Leurs
     # repères « à dépasser » : 46,7 % (30 essais, 3 classes), 70 % (20, 2), 58,75 % (80, 2) — soit,
     # à atteindre, 15/30, 15/20 et 48/80. Et il EST la porte : juste dessous, elle ne passe pas.
     reperes = {(30, 1 / 3): 15 / 30, (20, 1 / 2): 15 / 20, (80, 1 / 2): 48 / 80}

@@ -741,8 +741,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         chk(rt.espion.instance == "selftest" and rt._flux is None,
             f"…sous l'instance du MOTEUR, jamais « cvep_test », et fermé à la fin "
             f"({rt.espion.instance!r})")
-        # A-M5 : un bloc dont le `cue` s'est perdu n'est pas NOTÉ — il ne publie donc RIEN. Il
-        # publiait -1 : la fenêtre recevait une décision que le verdict ne compte pas.
+        # Un bloc dont le `cue` s'est perdu n'est pas NOTÉ, donc il ne publie RIEN (publier -1
+        # donnerait à la fenêtre une décision que le verdict ne compte pas).
         perdu = [t for t, mk in marqueurs if mk["event"] == "cue"][5]
         rt_nc = MesureCVEP(SPEC, valeurs, moteur)
         res_nc = joue(rt_nc, moteur, [(t, mk) for t, mk in marqueurs
@@ -762,7 +762,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             and sonde._decideur._out is sonde._capteur,
             f"le vrai publieur est celui du MODE, sous l'instance du moteur "
             f"({info.name()}, {info.source_id()}, {info.channel_count()} voies)")
-        # A-M3 : la ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur (un faux accepte tout).
+        # La ligne -1 écrite À LA MAIN, poussée dans le VRAI publieur (un faux accepte tout).
         rangees = temoin_de_publication(vrai)
         sonde._flux = vrai
         sonde._publier_decision(None, 1234.5)
@@ -775,10 +775,10 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             f"({[r.shape for r in rangees]}, {sonde._decisions_publiees} publiée)")
         del vrai, info, rangees
 
-        # === C2 : un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
-        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test qui
-        # héritait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant) écoutait un flux
-        # où personne ne publiait : abandon à 30 s, fenêtre plein écran jouant dans le vide.
+        # === Un TEST écoute le flux PAR DÉFAUT, et n'offre pas d'en choisir un autre ============
+        # « Tester » lance TOUJOURS notre fenêtre, qui publie sur `MARKER_STREAM_DEFAULT`. Un test
+        # qui hériterait le « Flux de marqueurs » du mode (réglé sur l'appli de l'étudiant)
+        # écouterait un flux où personne ne publie : abandon à 30 s, fenêtre plein écran jouant dans le vide.
         from core.config import MARKER_STREAM_DEFAULT as _DEFAUT
         from core.modes.contract import validate as _valider
         from core.server import EngineServer as _Moteur_
@@ -877,8 +877,8 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     r = fab(12, 5)
     chk(r["niveau"] == "moyen",
         f"5 justes sur 12 : Wilson [{r['ic_bas']} ; {r['ic_haut']}] passe 1/6, PAS 1/2 ({r['niveau']})")
-    # I-2 : UN bloc émis, juste, sur 18. Wilson [21 ; 100] passe 1/6 et peignait ORANGE ; le test
-    # binomial exact dit p = 0,167 — une décision juste sur six au hasard. Rouge.
+    # UN bloc émis, juste, sur 18. Wilson [21 ; 100] passe 1/6 et peindrait ORANGE ; le test
+    # binomial exact dit p = 0,167 (une décision juste sur six au hasard) : rouge.
     r = fab(1, 1)
     chk(r["niveau"] == "faible" and r["mot"] == "FAIBLE" and "p = 0,167" in r["verdict"],
         f"1 bloc émis juste sur 18 : p = 0,167, FAIBLE — pas UTILISABLE ({r['mot']}, "

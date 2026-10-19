@@ -4,7 +4,7 @@
 moteur, dans deux terminaux — le même montage que pour le P300 et le SSVEP :
 
     python src/core/server.py --mode errp           # terminal 1 : acquiert et décode (EXIGE un
-                                                      # modèle entraîné : console, page ErrP, « Calibrer »)
+                                                      # modèle entraîné : console, page ErrP, « Entraîner »)
     python src/stimulus/errp.py             # terminal 2 : affiche la piste et marque
 
 C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
@@ -47,81 +47,50 @@ erreur vécue. C'est la même faute que d'horodater avant le flip, sur un autre 
 le moteur n'entraînera donc rien, et le dira. Un modèle appris sur un tiers de séance serait
 indiscernable d'un modèle complet dans la liste de la console.
 
-La tâche est le curseur-vers-cible (Ferrez & Millán 2008, Chavarriaga 2010), reprise des DEUX
-endroits qui la jouent déjà — le démonstrateur (`research/app.py`, mode ErrP) et la calibration
-(`research/errp_calibrate.py`) — va les lire, ce protocole ne s'invente pas ici, il se reproduit :
-un point sur une piste de `ERRP_TRACK_CELLS` cases part du CENTRE vers une cible tirée à l'une des
-DEUX EXTRÉMITÉS (50/50 — le sens du mouvement reste décorrélé de l'étiquette erreur/correct, cf.
-`nouvelle_cible`) ; à chaque pas il avance d'une case, sauf en cas d'erreur DÉLIBÉRÉE qui l'éloigne
-(rebond aux bords, cf. `decide_pas`). ⚠️ « Il se reproduit » vaut pour la TRAJECTOIRE et pour la
-cadence intra-course ; sur la découpe des FINS DE COURSE, cet émetteur diverge délibérément de la
-calibration — c'est écrit noir sur blanc plus bas, avec les deux SOA.
+La tâche est le curseur-vers-cible (Ferrez & Millán 2008, Chavarriaga 2010) : un point sur une
+piste de `ERRP_TRACK_CELLS` cases part du CENTRE vers une cible tirée à l'une des DEUX
+EXTRÉMITÉS (50/50 — le sens du mouvement reste décorrélé de l'étiquette erreur/correct, cf.
+`nouvelle_cible`) ; à chaque pas il avance d'une case, sauf en cas d'erreur DÉLIBÉRÉE qui
+l'éloigne (rebond aux bords, cf. `decide_pas`). La règle est écrite UNE fois, dans
+`core/errp_track.py`, partagée par cette fenêtre et par la calibration du moteur : le protocole
+joué ici est celui sous lequel les modèles s'entraînent. Une affirmation d'identité entre deux
+protocoles doit être VÉRIFIÉE dans les deux, jamais supposée.
 
-⚠️ **`decide_pas`/`nouvelle_cible` sont, à ce jour, une SECONDE écriture du protocole** — la
-première est `errp_calibrate._decide_step`/`_new_goal`, celle sous laquelle les modèles sont
-réellement entraînés. Tant que les deux n'ont pas fusionné (le sens de la fusion serait celui du
-P300 : le module LÉGER possède l'invariant, les modules lourds l'importent — cf.
-`p300_stimulus.blocs_melanges`), `--smoke` interdit au moins la DÉRIVE : il fait jouer 500 pas aux
-deux implémentations avec la même graine et exige la MÊME trajectoire.
+⚠️ **Le taux d'erreur par défaut est `ERRP_ERROR_RATE`** (~28 %, la valeur de littérature,
+Chavarriaga/Yasemin), pas `ERRP_DEMO_ERROR_RATE` (35 %, réglé plus haut pour qu'une démonstration
+solo reste vivante malgré une dérive nette vers la cible, cf. `core/config.py`). Cet émetteur se
+veut la référence RÉSEAU du protocole (l'exemple pour Unity) : la valeur ancrée dans la
+littérature. `--error-rate` reste libre d'en changer.
 
-⚠️ **Correction de revue (tour 1) : leur TAUX d'erreur, lui, DIFFÈRE — l'attribution d'origine ici
-était fausse.** La calibration vise `ERRP_ERROR_RATE` (~28 %, la valeur de littérature,
-Chavarriaga/Yasemin) ; le démonstrateur vise `ERRP_DEMO_ERROR_RATE` (35 %, choisie plus haute pour
-que l'expérience solo reste vivante malgré une dérive nette vers la cible — cf. son commentaire
-dans `core/config.py`) : deux réglages distincts pour deux usages distincts, pas une divergence
-accidentelle. Cet émetteur prend `ERRP_ERROR_RATE` par défaut, PAS la valeur du démonstrateur : il
-se veut la référence RÉSEAU du protocole (cf. plus haut, l'exemple pour Unity), donc la valeur
-ancrée dans la littérature plutôt que celle réglée pour l'agrément d'une démo solo —
-`--error-rate` reste libre d'en changer, pour qui voudrait l'un ou l'autre.
+⚠️ **La CADENCE est un paramètre du modèle, pas un réglage de confort.** Un pas = `ERRP_FEEDBACK_S`
+(1 s) de feedback affiché, PUIS `PAUSE_INTER_PAS_S` (0,45 s) de piste immobile : **1,45 s entre
+deux onsets D'UNE MÊME COURSE**, la cadence intra-course sous laquelle les époques du modèle ont
+été enregistrées. Sans pause, l'époque du moteur (0,9 s, `ERRP_PRE_S + ERRP_EPOCH_S`) ne laisserait
+que 0,1 s de piste libre, et la ligne de base [-0,2 s ; 0] du pas suivant serait prélevée dans la
+queue de la réponse précédente — que `ERRP_BAND` (1-10 Hz) laisse passer. Rien ne lève d'exception
+dans ce cas : le moteur publie des scores plausibles et faux.
 
-⚠️ **La CADENCE est un paramètre du modèle, pas un réglage de confort** (correction de revue,
-tour 2). Un pas = `ERRP_FEEDBACK_S` (1 s) de feedback affiché, PUIS `PAUSE_INTER_PAS_S` (0,45 s) de
-piste immobile : **1,45 s entre deux onsets D'UNE MÊME COURSE**, exactement la cadence intra-course
-de `errp_calibrate._run_block` (`:217` puis `:230`) sous laquelle les époques du modèle ont été
-enregistrées. L'émetteur enchaînait les pas sans respiration (1,0 s) : l'époque du moteur dure déjà
-0,9 s (`ERRP_PRE_S + ERRP_EPOCH_S`), il ne restait donc 0,1 s de piste libre, et la ligne de base
-[-0,2 s ; 0] du pas suivant était prélevée dans la queue de la réponse précédente — que `ERRP_BAND`
-(1-10 Hz) laisse passer. Rien ne lève d'exception dans ce cas : le moteur publie des scores
-plausibles et faux.
+⚠️ **Une fin de course intercale DEUX écrans statiques**, pour la même raison. Cible atteinte, ou
+`ERRP_MAX_RUN_STEPS` dépassés -> on tient la piste `PAUSE_FIN_COURSE_S` (0,7 s) à sa position
+finale, PUIS on remet le point au centre avec une nouvelle cible et on tient
+`PAUSE_NOUVELLE_COURSE_S` (0,9 s). Sans le second, la remise à zéro (le point saute de 2 à 4 cases,
+et la cible change d'extrémité une fois sur deux) tomberait DANS la frame horodatée du feedback
+suivant : ~1 époque sur 7 commencerait sur un transitoire visuel plein écran. Le même écran sert
+au tout premier pas, sans quoi l'utilisateur ne voit jamais d'où le point part et ne peut former
+aucune attente à violer.
 
-⚠️ **Une fin de course intercale ici DEUX écrans statiques**, pour la même raison (correction de
-revue, tour 2). Cible atteinte, ou `ERRP_MAX_RUN_STEPS` dépassés -> on tient la piste
-`PAUSE_FIN_COURSE_S` (0,7 s) à sa position finale, PUIS on remet le point au centre avec une
-nouvelle cible et on tient `PAUSE_NOUVELLE_COURSE_S` (0,9 s). Sans le second, la remise à zéro (le
-point saute de 2 à 4 cases, et la cible change d'extrémité une fois sur deux) tombait DANS la frame
-horodatée du feedback suivant : ~1 époque sur 7 commençait sur un transitoire visuel plein écran.
-Le même écran sert au tout premier pas, sans quoi l'utilisateur ne voit jamais d'où le point part
-et ne peut former aucune attente à violer.
-
-⚠️ **Cet émetteur et la calibration jouent le MÊME protocole, et il a fallu trois tours pour y
-arriver.** Écrit ici parce que ce fichier s'est cru identique à `errp_calibrate` trois fois sans
-l'être — le taux d'erreur (corrigé au tour 1), la cadence (tour 2), la découpe des fins de course
-(tour 3) — et parce que c'est la référence que lira quelqu'un qui écrit son émetteur en Unity. Une
-affirmation d'identité dans ce fichier doit être VÉRIFIÉE dans l'autre, jamais supposée.
-
-État aligné, en secondes entre deux onsets :
+Cadence, en secondes entre deux onsets :
 
     SOA de TRANSITION (dernier pas d'une course -> premier pas de la suivante)
-        errp_calibrate._run_block : 1,0 + 0,7 + 0,9  = 2,6 s   sans transitoire
-        cet émetteur              : 1,0 + 0,7 + 0,9  = 2,6 s   sans transitoire
+        1,0 + 0,7 + 0,9  = 2,6 s   sans transitoire
 
     SOA INTRA-course (deux pas de la même course)
-        errp_calibrate._run_block : 1,0 + 0,45       = 1,45 s
-        cet émetteur              : 1,0 + 0,45       = 1,45 s
+        1,0 + 0,45       = 1,45 s
 
-⚠️ **Ce que ça change pour le modèle du 2026-07-24 (AUC 0,7763) : rien, et c'est mesuré.** Ce modèle
-a été entraîné AVANT l'alignement, donc **14,9 % de ses époques** commençaient sur le transitoire
-(mesuré sur 200 séances simulées, pas estimé). Cette sous-population n'existe plus dans ce que
-produit l'émetteur, ce qui pourrait décaler la distribution des scores publiés — sauf que la
-contamination n'était **pas corrélée à l'étiquette** : +1,2 point d'écart seulement (z = 1,84), et
-il vient du rebond de bord, pas du saut (après une transition le point repart du CENTRE, où aucun
-rebond ne peut retourner l'étiquette). Du bruit ajouté, donc, pas un biais appris : trop petit pour
-fabriquer une AUC, et la mesure est au pire un peu pessimiste. Une future calibration produira des
-époques plus propres que celles-là, pas différentes.
-
-(Le troisième site, `app.mode_errp`, n'est une référence de cadence NI pour l'un NI pour l'autre :
-il tient `ERRP_EPOCH_S + 0,2` entre les pas — `app.py:1036` — et ajoute 2,4 s d'écran de verdict à
-chaque détection. C'est un démonstrateur solo ; ses époques n'entraînent aucun modèle.)
+Le modèle de référence (AUC 0,7763) a été entraîné avec ~14,9 % d'époques qui commençaient sur ce
+transitoire (mesuré sur 200 séances simulées). Cette contamination n'était pas corrélée à
+l'étiquette (+1,2 point d'écart, z = 1,84, dû au rebond de bord et non au saut) : du bruit
+ajouté, pas un biais appris.
 
 Le geste critique, identique au P300 :
 
@@ -137,7 +106,7 @@ instrumente `pygame.display.flip` et `StreamOutlet.push_sample` pour enregistrer
 deux gestes, et prend une empreinte de l'écran à chaque flip — le flip qui précède un marqueur doit
 être celui qui a CHANGÉ l'image, pas une frame de plus du même écran.
 
-⚠️ **Pas de `valide_reglages` complet, à la différence de `p300_stimulus.py` — et ce n'est pas un
+⚠️ **Pas de `valide_reglages` complet, à la différence de `stimulus/p300.py` — et ce n'est pas un
 oubli.** Le mode ErrP du moteur ne lit QUE l'horodatage du marqueur `feedback` : aucun nombre de
 cases codé en dur, aucune manche à plafonner, rien qui s'accumule sur plusieurs pas. `--cells` et
 `--error-rate` ne peuvent donc jamais dérégler le décodage — ils changent seulement la qualité de
@@ -180,30 +149,25 @@ from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa:
 
 BG = (0, 0, 0)              # fond noir -> contraste maximal, même choix que les autres stimuli
 ON_COLOR = (255, 255, 255)  # le point (curseur)
-GOAL_COLOR = (60, 200, 90)  # la cible : pastille verte, même choix que research/errp_calibrate.py
+GOAL_COLOR = (60, 200, 90)  # la cible : pastille verte
 OUTLINE = (55, 55, 70)      # les cases de la piste
 HUD = (70, 90, 70)
 NOTE = (110, 150, 110)      # les écrans d'attente : vert éteint, ne concurrence pas le point
 
 # --- Le TEMPS du protocole : ces trois durées ne sont PAS du confort ---------
-# Elles vivent désormais dans `core/errp_track.py`, avec le reste de la piste (2026-09-07). Elles
-# étaient jusque-là RECOPIÉES ici depuis les littéraux de `research/errp_calibrate.py:_run_block`,
-# et un test de `--smoke` lisait le code source de cette fonction pour vérifier qu'elles n'avaient
-# pas dérivé. Le test a disparu avec la recopie : les deux lisent maintenant le même nom, ce qui
-# rend la dérive impossible au lieu de la détecter après coup.
+# Elles vivent dans `core/errp_track.py`, avec le reste de la piste : la fenêtre et la calibration
+# du moteur lisent les mêmes noms, la dérive est donc impossible.
 #
-# ⚠️ Même valeur ne suffit toujours pas : il faut la même PLACE. `_run_block` n'a longtemps joué
-# son écran « nouvelle cible » qu'en tête de bloc, ce qui donnait la même constante à un SOA de
-# transition différent (1,7 s là-bas, 2,6 s ici). Aligné depuis — les deux jouent les deux écrans
-# à chaque fin de course. Aucun test ne couvre la PLACE : relire les deux boucles avant
-# d'affirmer quoi que ce soit ici.
+# ⚠️ Même valeur ne suffit pas : il faut la même PLACE. Les deux protocoles jouent les deux écrans
+# de fin de course (état final, état neuf) à chaque fin de course. Aucun test ne couvre la PLACE :
+# relire les deux boucles avant d'affirmer quoi que ce soit ici.
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                             PAUSE_NOUVELLE_COURSE_S, decide_pas, nouvelle_cible)
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 
 # Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
-# et en calibration, et les confondre a coûté une séance entière** (voir plus bas).
+# et en calibration** (voir plus bas).
 #
 # En DÉCODAGE, c'est `ErrPRuntime` qui tourne : chauffe (l'offset DC de l'Unicorn dérive après
 # ouverture) PUIS repos, pendant lequel il mesure la référence de son rejet d'artefact et veut un
@@ -215,21 +179,16 @@ ATTENTE_MOTEUR_DECODAGE_S = SSVEP_WARMUP_S + ATTENTE_MOTEUR_REPOS_S
 # phases sont chauffe → essais → entraînement (`core/modes/calibration.py::PHASES`, où « rest » ne
 # figure pas). Elle ne mesure aucune référence d'artefact — elle ne décode rien.
 #
-# ⚠️ **Cette attente a valu 23 s ici aussi, et c'était FAUX — mesuré, pas relu.** La valeur était
-# lue sur le bon fichier mais sur le mauvais RUNTIME : le repos du mode de DÉCODAGE, ajouté à
-# l'attente d'une CALIBRATION qui ne le joue jamais. C'est le motif « mesurer ailleurs que là où ça
-# sert », relevé quatre fois au chantier c-VEP.
-#
-# ⚠️ Et ce n'était pas seulement 8 s perdues à fixer une piste immobile. Le socle ABANDONNE une
+# ⚠️ L'attente d'une calibration est donc la chauffe SEULE, pas 23 s. Le socle ABANDONNE une
 # calibration après `CALIB_FENETRE_SILENCE_S` (15 s) sans le moindre marqueur, décompté depuis la
-# fin de SA chauffe : l'échéance du premier pas tombe donc `SSVEP_WARMUP_S +
-# CALIB_FENETRE_SILENCE_S` = 30 s après `start_calibration`. En en consommant 23, la fenêtre ne
-# laissait plus que 7 s à son propre démarrage — init pygame, `set_mode`, mesure du
-# rafraîchissement, et jusqu'à 5 s de `wait_for_consumers`. MESURÉ en rejouant la ligne du temps du
-# socle : à 7,5 s de démarrage, la calibration abandonne (« la fenêtre de stimulus s'est arrêtée en
-# pleine séance ») avant qu'un seul pas ait été joué, en accusant une fenêtre parfaitement vivante.
-# À la chauffe seule, le budget de démarrage repasse à 15 s, et cette fenêtre s'aligne enfin sur
-# celles du P300 et du c-VEP, qui n'ont jamais attendu que leur chauffe.
+# fin de SA chauffe : l'échéance du premier pas tombe `SSVEP_WARMUP_S + CALIB_FENETRE_SILENCE_S`
+# = 30 s après `start_calibration`. Tout ce que la fenêtre attend est pris sur ce budget, et le
+# reste est ce qu'il lui faut pour démarrer (init pygame, `set_mode`, mesure du rafraîchissement,
+# jusqu'à 5 s de `wait_for_consumers`). Avec 23 s d'attente il ne resterait que 7 s : à 7,5 s de
+# démarrage, la calibration abandonnerait (« la fenêtre de stimulus s'est arrêtée en pleine
+# séance ») avant qu'un seul pas ait été joué, en accusant une fenêtre parfaitement vivante. À la
+# chauffe seule, le budget de démarrage est de 15 s, comme pour les fenêtres du P300 et du
+# c-VEP.
 ATTENTE_MOTEUR_S = SSVEP_WARMUP_S
 
 def attente_avant_premier_pas(calibrer, tester, attente_moteur_s):
@@ -238,7 +197,7 @@ def attente_avant_premier_pas(calibrer, tester, attente_moteur_s):
     `--calibrer` : la chauffe seule (`ATTENTE_MOTEUR_S`) — `ErrPCalibration` n'a pas de repos.
     `--tester` : la chauffe PLUS le repos du MODE, lus dans son contrat (`core/modes/errp.py`,
     `SPEC.rest`) — le test décide avec `ErrPRuntime`, qui prend là sa référence d'artefact sur 8 s
-    de piste immobile, et REFUSE de conclure sur moins (revue du 2026-09-22, I-4). Import tardif :
+    de piste immobile, et REFUSE de conclure sur moins. Import tardif :
     le contrat du mode tire tout le décodeur, et seule cette séance-là en a besoin.
     `attente_moteur_s` explicite (l'autotest) prime sur les deux.
     """
@@ -261,13 +220,9 @@ MIN_CELLS = 3
 
 
 # --- Le protocole (fonctions PURES) : `nouvelle_cible` et `decide_pas` -------
-# Elles étaient ÉCRITES ICI, en double de `research/errp_calibrate.py`, et cette docstring-là le
-# disait : « ⚠️ Cette fonction est un DOUBLE de `_decide_step`, pas encore une source unique ». Un
-# test rejouait 500 pas à graine égale pour vérifier que les deux ne divergeaient pas — un test
-# qui protège une duplication au lieu de la supprimer, et qui ne pouvait rien dire du 501e pas.
-# Les deux écritures ont fusionné dans `core/errp_track.py` le 2026-09-07 ; elles sont importées
-# en tête de ce fichier, avec les trois durées. Voir `python src/core/errp_track.py` pour les
-# quatre propriétés dont dépend la validité des modèles déjà entraînés.
+# Elles vivent dans `core/errp_track.py` et sont importées en tête de ce fichier, avec les trois
+# durées : la fenêtre et la calibration du moteur jouent la même règle. Voir
+# `python src/core/errp_track.py` pour les quatre propriétés dont dépend la validité des modèles.
 
 
 def marqueur_feedback(erreur, calibrer):
@@ -302,9 +257,8 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
 
     ⚠️ Les deux modes partagent la MÊME boucle et la MÊME piste. Une séance de calibration est une
     séance normale, bornée à `essais` pas, encadrée de `calib_start`/`calib_end`, et dont chaque
-    feedback porte son étiquette. Écrire une seconde boucle « pour la calibration » rouvrirait
-    exactement la duplication que la tâche 1 a supprimée (la piste était écrite deux fois, avec un
-    test de 500 pas pour garder les copies d'accord).
+    feedback porte son étiquette. Écrire une seconde boucle « pour la calibration » dupliquerait
+    la piste, et les deux copies pourraient diverger sans erreur.
 
     `journal`, s'il est fourni, reçoit `(marqueur, horodatage, erreur, debut_de_course)` pour
     CHAQUE marqueur réellement poussé — `calib_start`/`calib_end` compris, avec `erreur=None`.
@@ -383,7 +337,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     if seed is not None:
         print(f"[errp-stim] graine {seed} — la séquence des erreurs est REJOUABLE à l'identique")
 
-    # ⚠️ Attendre le moteur AVANT le premier pas — même raisonnement que p300_stimulus.py : sans
+    # ⚠️ Attendre le moteur AVANT le premier pas — même raisonnement que stimulus/p300.py : sans
     # ça, un étudiant qui a oublié de lancer le moteur regarde un écran fonctionnel sans le moindre
     # signe que personne n'écoute. L'attente est BORNÉE et on démarre quand même après.
     attente_initiale_s, note_initiale = PAUSE_NOUVELLE_COURSE_S, "nouvelle cible"
@@ -430,11 +384,11 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     pas_total = 0
     erreurs_total = 0
     # ⚠️ `None` tant que la STIMULATION n'a pas commencé : `--seconds` compte le temps pendant
-    # lequel des marqueurs partent, pas l'attente du moteur. Posé avant, il produisait une séance
+    # lequel des marqueurs partent, pas l'attente du moteur. Posé avant, il produirait une séance
     # entièrement muette, en silence et avec une sortie 0 : `--seconds 20` (l'exemple de la
-    # docstring !) expirait PENDANT les ~23 s de chauffe+repos du moteur, la boucle principale
-    # n'était jamais exécutée, l'étudiant regardait une piste immobile puis l'invite revenait sans
-    # un mot. Voir aussi le bilan imprimé en fin de `run`.
+    # docstring) expirerait PENDANT les ~23 s de chauffe+repos du moteur, la boucle principale ne
+    # serait jamais exécutée, et l'étudiant regarderait une piste immobile puis retrouverait
+    # l'invite sans un mot. Voir aussi le bilan imprimé en fin de `run`.
     t_start = None
 
     def emet(m, erreur, debut_de_course):
@@ -448,7 +402,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     def poll():
         """Événements + la limite `--seconds`, vérifiés à CHAQUE frame (pas seulement entre deux
         pas) : un étudiant qui règle une durée veut qu'elle soit tenue, pas arrondie au pas
-        supérieur (~1,45 s ici, le même défaut que p300_stimulus.py corrigeait pour ses manches).
+        supérieur (~1,45 s ici, comme pour les manches de stimulus/p300.py).
         La fenêtre de feedback EN COURS, elle, va jusqu'au bout : cf. la boucle principale."""
         nonlocal running
         for e in pygame.event.get():
@@ -480,8 +434,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         """Tient la piste IMMOBILE `secondes` : aucun marqueur ne part, l'image ne change pas.
 
         Les trois attentes du protocole passent par ici (pause inter-pas, fin de course, nouvelle
-        cible) : c'est le `_track_hold` de `research/errp_calibrate.py`, réduit à ce dont un
-        émetteur a besoin. Une attente n'est PAS un `time.sleep` : la fenêtre doit continuer à se
+        cible). Une attente n'est PAS un `time.sleep` : la fenêtre doit continuer à se
         rafraîchir (sinon l'OS la déclare « ne répond pas ») et ESC doit rester vivant.
         """
         t0 = time.perf_counter()
@@ -498,7 +451,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
     seance_complete = False
     # ⚠️ En `--tester`, TOUT ce que cette fenêtre montre ou imprime dit « test » — elle joue le
     # MÊME protocole que l'entraînement, et c'est justement pour ça que le mot doit changer :
-    # un ESC répondait « aucun modèle ne sera entraîné » alors qu'un test n'entraîne rien.
+    # un ESC ne doit pas répondre « aucun modèle ne sera entraîné » quand un test n'entraîne rien.
     geste = "le test" if tester else "l'entraînement"
 
     if calibrer:
@@ -517,7 +470,7 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
         # (`marker_calib::encaisser`, phase « chauffe »), donc la séance serait plus courte que ce
         # que l'écran annonce. Le `calib_start`, lui, est bien retenu par le moteur pendant sa
         # chauffe — c'est pour ça qu'il part AVANT cette attente et pas après.
-        # ⚠️ Pas le repos du MODE : une calibration n'en a pas, et l'attendre quand même faisait
+        # ⚠️ Pas le repos du MODE : une calibration n'en a pas, et l'attendre quand même ferait
         # abandonner la séance avant son premier pas (cf. `ATTENTE_MOTEUR_S` en tête de fichier).
         attente_initiale_s = attente_avant_premier_pas(calibrer, tester, attente_moteur_s)
         note_initiale = ("le casque se stabilise, puis le moteur mesure ton bruit de fond — ne "
@@ -585,13 +538,13 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
             atteinte = pos == cible
             print(f"[errp-stim] {'cible atteinte' if atteinte else 'pas max atteint'} en "
                   f"{n_pas_course} pas — nouvelle course")
-            # ⚠️ LES DEUX ÉCRANS QUI MANQUAIENT. La remise à zéro déplace le point de 2 à 4 cases
-            # ET fait changer la cible d'extrémité une fois sur deux : sans eux, ce transitoire
-            # plein écran tombe DANS la frame horodatée du feedback suivant, et le moteur décode
-            # une époque hors protocole (14,9 % d'entre elles, mesuré) en publiant un verdict
-            # parfaitement confiant. Le premier écran montre l'état FINAL, le second l'état NEUF —
-            # c'est le second qui fait le travail. `errp_calibrate._run_block` joue désormais les
-            # deux au même endroit, avec les mêmes durées : les deux protocoles sont alignés.
+            # ⚠️ LES DEUX ÉCRANS : la remise à zéro déplace le point de 2 à 4 cases ET fait changer
+            # la cible d'extrémité une fois sur deux ; sans eux, ce transitoire plein écran tombe
+            # DANS la frame horodatée du feedback suivant, et le moteur décode une époque hors
+            # protocole (14,9 % d'entre elles, mesuré) en publiant un verdict parfaitement
+            # confiant. Le premier écran montre l'état FINAL, le second l'état NEUF — c'est le
+            # second qui fait le travail. Le protocole d'entraînement joue les deux au même
+            # endroit, avec les mêmes durées (`core/errp_track.py`).
             tenir(pos, cible, PAUSE_FIN_COURSE_S,
                   note="cible atteinte" if atteinte else "on recommence")
             pos = n_cells // 2
@@ -621,9 +574,9 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
               f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
               f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
 
-    # Un BILAN, toujours : « 0 pas joué » doit se lire, pas se deviner. Une séance muette (fenêtre
-    # fermée trop tôt, `--seconds` trop court) et une séance réussie se ressemblaient à l'écran
-    # comme au terminal — sortie 0 dans les deux cas.
+    # Un BILAN, toujours : « 0 pas joué » doit se lire, pas se deviner. Sans lui, une séance muette
+    # (fenêtre fermée trop tôt, `--seconds` trop court) et une séance réussie se ressembleraient
+    # à l'écran comme au terminal — sortie 0 dans les deux cas.
     taux_reel = f"{erreurs_total / pas_total:.0%}" if pas_total else "—"
     print(f"[errp-stim] fin : {pas_total} pas joués, {erreurs_total} erreurs délibérées "
           f"({taux_reel}, visé {taux_erreur:.0%})"
@@ -661,9 +614,9 @@ def _ecarts(journal):
     """(intra_course, transitions) : les écarts entre onsets, séparés par CE QUE LE PROTOCOLE A
     INTERCALÉ entre eux — la pause inter-pas seule, ou les deux écrans de fin de course.
 
-    Les confondre en une seule moyenne était exactement le trou de la revue : une tolérance de
-    ±50 % autour de 1 s acceptait aussi bien 1,0 s (l'émetteur d'avant, hors protocole) que 1,45 s
-    (la cadence du modèle) que 2,6 s (une transition).
+    Les confondre en une seule moyenne laisserait passer des cadences hors protocole : une
+    tolérance de ±50 % autour de 1 s accepterait aussi bien 1,0 s (sans pause inter-pas) que
+    1,45 s (la cadence du modèle) que 2,6 s (une transition).
     """
     pas = _feedbacks(journal)
     intra, transitions = [], []
@@ -716,11 +669,10 @@ def _smoke(n_cells, taux_erreur):
     ICI, avec un N élevé et sans le moindre écran, que « proche de ERRP_ERROR_RATE » se vérifie
     avec une marge STATISTIQUE qui veut dire quelque chose. À l'échelle d'un `--smoke` réel (~
     quelques secondes, cf. B), on n'a que quelques pas : aucune tolérance sur un taux d'erreur n'y
-    serait honnête (rigueur statistique du projet : ne jamais conclure sur du bruit). S'y ajoute le
-    test DIFFÉRENTIEL contre `errp_calibrate`, tant que le protocole est écrit deux fois.
+    serait honnête (rigueur statistique du projet : ne jamais conclure sur du bruit).
 
-    **B. `run()` POUR DE VRAI**, sur `SDL_VIDEODRIVER=dummy` — le patron de `p300_stimulus.py`
-    depuis sa correction de revue : un `--smoke` qui retournerait avant l'import de pygame
+    **B. `run()` POUR DE VRAI**, sur `SDL_VIDEODRIVER=dummy` — le patron de `stimulus/p300.py` :
+    un `--smoke` qui retournerait avant l'import de pygame
     laisserait SANS AUCUNE COUVERTURE les lignes qui contiennent le geste flip->horodatage, la
     seule chose que ce fichier existe pour enseigner. Exécuter ces lignes ne suffisait pas non plus
     à les VÉRIFIER : `pygame.display.flip` et `StreamOutlet.push_sample` sont instrumentés pour
@@ -747,7 +699,7 @@ def _smoke(n_cells, taux_erreur):
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    # Posé AVANT tout import de pygame (direct ou via `research.errp_calibrate`) : aucun test de ce
+    # Posé AVANT tout import de pygame : aucun test de ce
     # dépôt n'ouvre de fenêtre.
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -777,8 +729,8 @@ def _smoke(n_cells, taux_erreur):
 
     # `force=True` impose le TIRAGE (intention « erreur »), pas l'étiquette : au bord de la piste,
     # le rebond peut retourner un pas voulu erreur en pas qui RAPPROCHE réellement de la cible
-    # (même comportement que `research/errp_calibrate.py:_decide_step`, documenté dans
-    # `decide_pas`). Vérifié ici en position 0 -> le rebond inverse effectivement l'étiquette.
+    # (comportement documenté dans `decide_pas`). Vérifié ici en position 0 -> le rebond inverse
+    # effectivement l'étiquette.
     pos_bord, erreur_bord = decide_pas(random.Random(1), 0, n_cells - 1, n_cells, taux_erreur,
                                        force=True)
     chk(pos_bord == 1 and erreur_bord is False,
@@ -823,15 +775,11 @@ def _smoke(n_cells, taux_erreur):
         f"({taux_erreur:.0%}, marge ±{5 * sigma:.1%} à 5σ) — le modèle a besoin d'une classe "
         f"minoritaire d'environ un quart, pas d'un déséquilibre à 5 %")
 
-    # --- Le protocole n'est plus écrit qu'UNE fois -------------------------------
-    # Deux tests vivaient ici, et tous deux protégeaient une duplication : l'un rejouait 500 pas à
-    # graine égale contre les fonctions de `research/errp_calibrate.py`, l'autre lisait le CODE
-    # SOURCE de `_run_block` pour vérifier que les trois durées n'avaient pas dérivé. La
-    # duplication a été supprimée le 2026-09-07 (`core/errp_track.py`) ; les deux tests avec elle.
-    # Ce qui reste à vérifier n'est plus « les deux écritures s'accordent-elles » mais « cette
-    # fenêtre utilise-t-elle bien la source unique » — sinon quelqu'un pourrait réintroduire une
-    # copie locale, et les assertions de cadence plus bas, qui construisent `soa_intra` à partir
-    # de `PAUSE_INTER_PAS_S`, se compareraient de nouveau à elles-mêmes sans rien voir.
+    # --- Le protocole n'est écrit qu'UNE fois --------------------------------------------
+    # Ce qui reste à vérifier est « cette fenêtre utilise-t-elle bien la source unique » : sinon
+    # quelqu'un pourrait réintroduire une copie locale, et les assertions de cadence plus bas, qui
+    # construisent `soa_intra` à partir de `PAUSE_INTER_PAS_S`, se compareraient de nouveau à
+    # elles-mêmes sans rien voir.
     import core.errp_track as errp_track
     chk(decide_pas is errp_track.decide_pas and nouvelle_cible is errp_track.nouvelle_cible,
         "le protocole des pas vient de `core/errp_track.py`, pas d'une copie locale — c'est la "
@@ -843,14 +791,14 @@ def _smoke(n_cells, taux_erreur):
         "été enregistrées")
 
     # --- Le BUDGET de démarrage : ce que la fenêtre laisse au socle avant qu'il la croie morte ---
-    # ⚠️ Cette assertion a été écrite APRÈS avoir mesuré la panne, pas en prévention. La fenêtre
-    # attendait la chauffe du moteur PLUS le repos du MODE ErrP (8 s) — un repos qu'une CALIBRATION
-    # ne joue jamais (`core/modes/calibration.py::PHASES` n'a pas de « rest »). Or le socle abandonne
-    # une calibration après `CALIB_FENETRE_SILENCE_S` sans marqueur, décompté depuis la fin de sa
-    # chauffe : tout ce que la fenêtre attend est pris sur CE budget-là, et le reste est ce qu'il
-    # lui reste pour démarrer (init pygame, `set_mode`, mesure du rafraîchissement, jusqu'à 5 s de
-    # `wait_for_consumers`). À 23 s d'attente il ne restait que 7 s, et une fenêtre lente était
-    # déclarée morte avant son premier pas — en séance, cela coûte l'installation du casque.
+    # ⚠️ Attendre la chauffe du moteur PLUS le repos du MODE ErrP (8 s) en calibration serait une
+    # faute : une CALIBRATION ne joue jamais ce repos (`core/modes/calibration.py::PHASES` n'a pas
+    # de « rest »). Or le socle abandonne une calibration après `CALIB_FENETRE_SILENCE_S` sans
+    # marqueur, décompté depuis la fin de sa chauffe : tout ce que la fenêtre attend est pris sur
+    # CE budget-là, et le reste est ce qu'il lui reste pour démarrer (init pygame, `set_mode`,
+    # mesure du rafraîchissement, jusqu'à 5 s de `wait_for_consumers`). À 23 s d'attente il ne
+    # resterait que 7 s, et une fenêtre lente serait déclarée morte avant son premier pas — en
+    # séance, cela coûte l'installation du casque.
     #
     # On exige donc que le reste couvre au moins `wait_for_consumers` PLUS une marge d'init. Écrit
     # comme une SOUSTRACTION des constantes du socle, jamais comme un nombre : sinon la prochaine
@@ -870,11 +818,11 @@ def _smoke(n_cells, taux_erreur):
         f"({ATTENTE_MOTEUR_S:g} s) — c'est `ErrPCalibration` qui tourne alors, et elle n'a aucune "
         f"phase de repos")
 
-    # --- I-4 (revue du 2026-09-22) : en TEST, la piste attend la chauffe ET le repos du MODE -----
+    # --- En TEST, la piste attend la chauffe ET le repos du MODE ------------------------------
     # Le test décide avec `ErrPRuntime`, qui prend sa référence d'artefact sur 8 s de piste
-    # immobile. À la chauffe seule (15 s), ce repos ne durait que la latence de lancement de la
-    # fenêtre (~2-4 s) : un clignement en polluait la médiane, et le test attrapait des erreurs
-    # que le mode n'attrapera pas. Le moteur REFUSE désormais un repos trop court : cette fenêtre
+    # immobile. À la chauffe seule (15 s), ce repos ne durerait que la latence de lancement de la
+    # fenêtre (~2-4 s) : un clignement en polluerait la médiane, et le test attraperait des
+    # erreurs que le mode n'attrapera pas. Le moteur REFUSE un repos trop court : cette fenêtre
     # doit donc l'attendre — durées LUES dans le contrat du mode, pas recopiées.
     from core.modes.errp import SPEC as _SPEC_ERRP
     _attente = globals().get("attente_avant_premier_pas")
@@ -893,9 +841,8 @@ def _smoke(n_cells, taux_erreur):
     chk(budget_test_s >= ATTENTE_CONSOMMATEUR_MAX_S + MARGE_INIT_PYGAME_S,
         f"…et le test lui laisse {budget_test_s:.0f} s pour démarrer, comme une calibration")
 
-    # ⚠️ Ce qu'AUCUN test ne couvre, ni avant ni maintenant : la PLACE où ces durées sont jouées.
-    # `PAUSE_NOUVELLE_COURSE_S` ne l'est pas au même endroit des deux côtés (là-bas une fois par
-    # BLOC, ici après chaque course). Écart assumé, chiffré dans la docstring du module.
+    # ⚠️ Ce qu'AUCUN test ne couvre : la PLACE où ces durées sont jouées. Relire les boucles de
+    # cette fenêtre et de la calibration avant d'affirmer qu'elles sont alignées.
 
     # --- La seule garde de réglage : une piste où le centre est une extrémité ------
     chk(run(windowed=True, refresh=60.0, n_cells=2, taux_erreur=taux_erreur, seconds=0.1,
@@ -1050,7 +997,6 @@ def _smoke(n_cells, taux_erreur):
         f"la frame horodatée suivante ({[round(e, 2) for e in transitions]} s)")
     # ⚠️ `min`/`max` sont calculés À PART : un f-string est évalué AVANT d'entrer dans `chk`, donc
     # une liste vide y lèverait un `ValueError` — un traceback au lieu d'un « VERDICT : PROBLÈME ».
-    # Mesuré en mutant le plafond de pas : le smoke sortait bien en 1, mais sans verdict lisible.
     plus_court, plus_long = (min(transitions) if transitions else 0.0,
                              max(intra) if intra else 0.0)
     chk(bool(transitions) and bool(intra) and plus_court > plus_long,
@@ -1136,16 +1082,15 @@ def _smoke(n_cells, taux_erreur):
         f"serait indiscernable d'un modèle complet dans la liste ({evenements_i})")
 
     # ⚠️ Appelé SANS `ok and …` : `and` court-circuite, donc le bout-à-bout serait SAUTÉ dès qu'une
-    # assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. Le défaut a été
-    # attrapé par mutation côté P300 ; `chk` met `ok` à jour par `nonlocal`, la valeur de retour
-    # n'a rien à faire ici.
+    # assertion précédente échoue — c'est-à-dire précisément quand on en a besoin. `chk` met `ok`
+    # à jour par `nonlocal`, la valeur de retour n'a rien à faire ici.
     _smoke_bout_en_bout(chk, journal_c, journal)
 
     # --- `--tester` : LE MOT de la séance ----------------------------------------
     # Cette fenêtre joue le MÊME protocole pour entraîner et pour tester ; le mot est le seul
     # repère de l'étudiant. Deux branches, donc deux séances : celle qui va au bout, et celle
-    # qu'on coupe — la seconde répondait « aucun modèle ne sera entraîné » alors qu'un test
-    # n'entraîne rien. `attente_moteur_s=0.0` court-circuite le repos du mode (I-4), qui n'a rien
+    # qu'on coupe — la seconde ne doit pas répondre « aucun modèle ne sera entraîné » alors qu'un
+    # test n'entraîne rien. `attente_moteur_s=0.0` court-circuite le repos du mode, qui n'a rien
     # à voir avec le vocabulaire.
     commun_test = dict(windowed=True, refresh=60.0, n_cells=n_cells, taux_erreur=taux_erreur,
                        calibrer=True, tester=True, attente_moteur_s=0.0, seed=0,

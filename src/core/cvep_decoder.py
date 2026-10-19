@@ -7,7 +7,7 @@ Principe (méthode « template matching » standard, Bin et al. 2011) :
      réponse au MÊME code à la phase 0. On les moyenne -> `template`.
   2. FILTRE SPATIAL — une CCA entre les époques et le template donne le vecteur de poids
      `w` qui combine les voies pour maximiser le rapport signal/bruit (l'équivalent appris
-     de « prendre PO7/Oz/PO8 » en SSVEP, mais optimisé pour TON cerveau et TON montage).
+     de « prendre PO7/Oz/PO8 » en SSVEP, mais optimisé pour CE cerveau et CE montage).
   3. ONLINE — on projette la fenêtre courante par `w`, et on la corrèle au template décalé
      de chaque lag candidat. Le lag qui corrèle le mieux = la cible fixée.
 
@@ -73,8 +73,8 @@ def groupes_de_cycles(labels, k=1):
 
     ⚠️ Un groupe à cheval sur un changement de cible est **écarté**, pas rogné : les blocs de
     calibration sont entrelacés, donc ces frontières existent réellement, et un groupe mélangé
-    fabriquerait une époque que le moteur ne verra jamais. Conséquence à connaître en lisant les
-    chiffres : à k=2 sur 90 cycles, il reste 37 décisions et non 45.
+    fabriquerait une époque que le moteur ne verra jamais. Conséquence : à k=2 sur 90 cycles,
+    il reste 37 décisions et non 45.
 
     Rend une liste de tuples d'indices. `k=1` rend simplement tous les cycles, un par groupe.
     """
@@ -104,11 +104,10 @@ class CVEPModel:
     `template` est indexé par la POSITION DANS LE CODE (0..n_cyc-1, phase 0).
     """
 
-    # ⚠️ Ce que ce modèle EST, et ce que `cvep_models.charger` lit pour choisir le décodeur (voir
+    # Ce que ce modèle EST, et ce que `cvep_models.charger` lit pour choisir le décodeur (voir
     # son jumeau `cvep_rcca.RCCAModel.decoder`). Posé au niveau de la CLASSE, pas relu du fichier :
-    # un objet ne peut alors pas mentir sur lui-même. Le champ `decoder` ÉCRIT dans le fichier sert
-    # à l'AIGUILLAGE, et à rien d'autre — un fichier qui ne le porte pas est un modèle d'avant le
-    # chantier c-VEP-moteur, donc un eCCA : c'était le seul décodeur qui existait sous ce nom.
+    # un objet ne peut alors pas mentir sur lui-même. Le champ `decoder` écrit dans le fichier
+    # sert à l'aiguillage, et à rien d'autre ; un fichier qui ne le porte pas est un eCCA.
     decoder = "eCCA"
 
     def __init__(self, fs=FS_UNICORN, refresh=60.0, code_len=63, band=CVEP_BAND,
@@ -117,9 +116,8 @@ class CVEPModel:
         self.refresh = float(refresh)
         self.code_len = int(code_len)
         self.band = tuple(band)
-        # Le SECTEUR du coupe-bande (2026-09-30), enregistré avec la bande : le décodage filtre
-        # avec le MÊME filtre que l'entraînement. None = pas de coupe-bande — c'est ce que rend un
-        # modèle d'avant ce réglage, qui doit décoder comme il a appris.
+        # Le secteur du coupe-bande, enregistré avec la bande : le décodage filtre avec le MÊME
+        # filtre que l'entraînement. None = pas de coupe-bande (modèle sans ce champ).
         self.secteur_hz = secteur_hz
         # Indices (dans CH_NAMES) des voies sur lesquelles le filtre spatial est appris. On
         # ENREGISTRE toujours les 8, mais on n'en ajuste qu'un sous-ensemble : donner 8 voies à
@@ -186,11 +184,9 @@ class CVEPModel:
         groupe. `scores[j, i]` est la corrélation du groupe j au lag `lags_triés[i]` ; `y[j]` est
         l'index du vrai lag dans cette même liste.
 
-        ⚠️ Cette fonction existe pour que **la moitié eCCA de la comparaison soit reproductible**.
-        Le « jeu égal entre les deux décodeurs » est l'affirmation qui justifie de réintégrer le
-        rCCA : un chiffre qu'aucune commande du dépôt n'imprime est un chiffre qu'il faut croire.
-        `python src/core/cvep_rcca.py --seuils <calib.npz>` l'imprime, pour les deux décodeurs et
-        les deux géométries.
+        Cette fonction rend **la moitié eCCA de la comparaison entre décodeurs reproductible** :
+        `python src/core/cvep_rcca.py --seuils <calib.npz>` imprime les scores des deux
+        décodeurs, aux deux géométries.
         """
         filt = [bandpass(e, self.fs, self.band, secteur_hz=self.secteur_hz) for e in epochs]
         lags = [int(l) for l in lags]
@@ -219,11 +215,11 @@ class CVEPModel:
 
         k*L frames = k périodes exactes du code : tous les cycles de la fenêtre démarrent
         donc à la même phase et se moyennent directement, ce qui gagne ~√k en SNR. C'est le
-        levier qui fait passer la 1re calibration réelle de 57% (1 cycle) à 73% (2 cycles).
+        levier qui fait monter la justesse quand on passe de 1 à 2 cycles.
 
-        `n_cycles` est EXPLICITE et non déduit de la longueur : sinon une fenêtre récupérée
+        `n_cycles` est EXPLICITE et non déduit de la longueur : sinon une fenêtre prélevée
         avec une marge de filtrage ferait silencieusement passer k de 2 à 3, changeant la
-        latence de décision sans que rien ne le signale.
+        latence de décision sans erreur.
         """
         w = np.asarray(window, dtype=float)
         k = max(1, len(w) // self.n_cyc) if n_cycles is None else int(n_cycles)
@@ -254,8 +250,7 @@ class CVEPModel:
                  secteur_hz=float(self.secteur_hz or 0.0),
                  channels=np.asarray(self.channels, dtype=int),
                  # Le fichier DÉCLARE son décodeur : `cvep_models.charger` lit ce champ pour
-                 # savoir quelle classe instancier. Un fichier SANS le champ est un eCCA d'avant
-                 # ce chantier — cf. le commentaire de `CVEPModel.decoder`.
+                 # savoir quelle classe instancier (sans le champ : eCCA, cf. `CVEPModel.decoder`).
                  decoder=self.decoder,
                  cv=(-1.0 if self.cv_ is None else self.cv_))
         return path
@@ -266,11 +261,11 @@ class CVEPModel:
         m = cls(fs=float(d["fs"]), refresh=float(d["refresh"]),
                 code_len=int(d["code_len"]), band=tuple(d["band"]),
                 channels=([int(c) for c in d["channels"]] if "channels" in d else None),
-                # Absent = un modèle d'avant le coupe-bande : il décode comme il a appris, sans.
+                # Absent = pas de coupe-bande : le modèle décode comme il a appris.
                 secteur_hz=(float(d["secteur_hz"]) or None) if "secteur_hz" in d else None)
         m.w, m.template = d["w"], d["template"]
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])
-        m.n_targets = int(d["n_targets"]) if "n_targets" in d else 0   # 0 = modèle antérieur
+        m.n_targets = int(d["n_targets"]) if "n_targets" in d else 0   # 0 = inconnu
         return m
 
 
@@ -371,13 +366,10 @@ def _demo(n_ch=4, fs=FS_UNICORN, refresh=60.0, n_cal=10, n_test=40, seed=0):
 
 
 def _selftest():
-    """Le modèle SURVIT au déménagement dans `core/` — LE test de cette tâche.
+    """Le modèle survit à un déplacement du module : aller-retour du fichier, puis hors-pli.
 
-    Le P300 et l'ErrP ont perdu leur modèle à ce même déménagement : leur `.joblib` est un
-    pickle qui référence le module `research.p300_decoder` / `research.errp_decoder`, disparu
-    une fois le fichier déplacé — il a fallu ré-entraîner deux fois. `CVEPModel.save` écrit du
-    `np.savez` de tableaux purs, sans nom de classe : il DEVRAIT survivre. Ce test transforme ce
-    « devrait » en fait mesuré, avant que le fichier ne bouge.
+    Un pickle référence le module qui l'a écrit et casse si le fichier déménage.
+    `CVEPModel.save` écrit du `np.savez` de tableaux purs, sans nom de classe : il survit.
     """
     ok = True
 
@@ -386,11 +378,9 @@ def _selftest():
         print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
         ok = ok and bool(cond)
 
-    # Le modèle SURVIT au déménagement — la question qui a coûté deux ré-entraînements.
     # On écrit un modèle, on le relit, et on vérifie que les tableaux sont identiques BIT
-    # POUR BIT. Pas de pickle ici (np.savez de tableaux purs), donc aucun nom de module
-    # n'est gravé dans le fichier : c'est ce qui rend `core.cvep_decoder` capable de relire
-    # ce que `research.cvep_decoder` avait écrit.
+    # POUR BIT. Pas de pickle ici (np.savez de tableaux purs) : aucun nom de module n'est
+    # gravé dans le fichier.
     import os as _os
     import tempfile as _tf, shutil as _sh
     tmp = _tf.mkdtemp(prefix="cvep_selftest_")
@@ -410,10 +400,8 @@ def _selftest():
     finally:
         _sh.rmtree(tmp, ignore_errors=True)
 
-    # La MOITIÉ eCCA de la comparaison entre décodeurs. C'est le « 43/90 de l'eCCA » qui justifie
-    # de réintégrer le rCCA : sans une fonction du dépôt qui l'imprime, c'est un chiffre à croire
-    # — exactement le reproche « un chiffre sans provenance » qu'on applique aux seuils.
-    # `hors_pli` la rend reproductible ; `cvep_rcca.py --seuils` l'appelle.
+    # La moitié eCCA de la comparaison entre décodeurs : `hors_pli` la rend reproductible,
+    # `cvep_rcca.py --seuils` l'appelle.
     plan, code = build_targets()
     lags = [c["lag"] for c in plan]
     rng = np.random.default_rng(3)
@@ -430,15 +418,14 @@ def _selftest():
     chk(float((sc1.argmax(axis=1) == y1).mean()) > 1.5 / len(lags),
         f"...et ces scores DÉCODENT, très au-dessus du hasard "
         f"({(sc1.argmax(axis=1) == y1).mean()*100:.0f} % pour {100/len(lags):.0f} % de hasard)")
-    # ⚠️ HORS-PLI VEUT DIRE HORS-PLI, et c'est CE test qui le prouve. Le template qui note un
-    # groupe ne doit pas avoir vu ses cycles ; si l'exclusion saute, le template contient une part
-    # de l'époque qu'il note, et la corrélation devient une auto-corrélation. Rien dans le
-    # résultat ne le dirait : les chiffres montent, ils ont l'air meilleurs.
+    # ⚠️ Hors-pli veut dire hors-pli. Le template qui note un groupe ne doit pas avoir vu ses
+    # cycles ; si l'exclusion saute, le template contient une part de l'époque qu'il note, et la
+    # corrélation devient une auto-corrélation. Rien ne le signale : les chiffres montent.
     #
     # On le rend visible en donnant à `hors_pli` du BRUIT PUR étiqueté au hasard. Il n'y a rien à
-    # décoder, donc la seule justesse honnête est le hasard (1/6). MESURÉ sur ce jeu : 16,7 %
-    # hors-pli — et **91,7 % si l'exclusion saute**. Une fuite d'un douzième d'époque suffit à
-    # faire décoder du bruit à 92 %, exactement la panne muette que ce dépôt existe pour éliminer.
+    # décoder, donc la seule justesse honnête est le hasard (1/6). Mesuré sur ce jeu : 16,7 %
+    # hors-pli, et 91,7 % si l'exclusion saute : une fuite d'un douzième d'époque suffit à
+    # faire « décoder » du bruit.
     rng_b = np.random.default_rng(5)
     bruit = [rng_b.normal(0.0, 1.0, (m.n_cyc, 4)) for _ in lags for _ in range(2)]
     et_bruit = [l for l in lags for _ in range(2)]
@@ -458,8 +445,6 @@ def _selftest():
 if __name__ == "__main__":
     use_utf8_console()
     _demo()
-    # `sys.exit(0 si … sinon 1)`, comme `p300_decoder.py` et `errp_decoder.py` : avant ce test,
-    # `_demo()` s'exécutait sans que son résultat ne soit vérifié, donc ce fichier sortait
-    # TOUJOURS en 0 — un décodeur cassé aurait quand même passé pour vert. `_selftest()` est ce
-    # qui rend cette sortie honnête.
+    # Le code de sortie vient de `_selftest()` : `_demo()` seule ne vérifie rien, un décodeur
+    # cassé sortirait quand même en 0.
     sys.exit(0 if _selftest() else 1)

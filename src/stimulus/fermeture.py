@@ -1,9 +1,9 @@
 """Fermer une fenêtre SANS perdre ses derniers marqueurs. Une écriture, les quatre fenêtres.
 
-⚠️ **Mesuré le 2026-10-02** (vrai moteur synthétique, vraie fenêtre c-VEP `--tester`, flux isolés)
-: le `calib_end` s'est perdu dans 2 séances sur 5. Le test restait alors en « essais » sans verdict
-(« la séance ATTEND »), et un entraînement serait resté sans modèle. Le moteur l'a même dit : « inlet
-de marqueurs en erreur : the stream has been lost ».
+⚠️ **Sans ce délai, le `calib_end` se perd** (mesuré avec le vrai moteur synthétique et la vraie
+fenêtre c-VEP `--tester` : 2 séances sur 5). Le test reste alors en « essais » sans verdict
+(« la séance ATTEND »), et un entraînement reste sans modèle. Le moteur le signale : « inlet de
+marqueurs en erreur : the stream has been lost ».
 
 **La cause.** Le moteur lit les marqueurs par un inlet `recover=False` (`core/markers.py`, pour une
 raison mesurée là-bas). Avec `recover=False`, liblsl JETTE un échantillon DÉJÀ REÇU si l'émetteur
@@ -13,7 +13,7 @@ fenêtre publiait `calib_end` puis rendait la main quelques millisecondes plus t
 son outlet. Le moteur, qui tire ses marqueurs une fois par tour de boucle (`POLL_S` = 50 ms), perdait
 la course une fois sur deux.
 
-**Le remède, ici et une seule fois.** Après le DERNIER marqueur, l'outlet reste vivant `DELAI_S`
+**Le remède, écrit ici une seule fois.** Après le DERNIER marqueur, l'outlet reste vivant `DELAI_S`
 avant que la fenêtre ne rende la main — si quelqu'un l'écoute. On l'appelle APRÈS `pygame.quit()` :
 la fenêtre a déjà disparu de l'écran, seul le processus attend. Ce n'est pas un critère observable,
 c'est un délai BORNÉ : le contrat des marqueurs n'a aucun accusé de réception, et la fenêtre ne peut
@@ -148,8 +148,8 @@ def _selftest():
         "…et la même lecture rougit sur une fenêtre qui ne l'appelle pas (mutation)")
 
     # 🔴 La perte, sur un VRAI flux et l'inlet RÉEL du moteur, tiré à la cadence du moteur. Cinq
-    # séances : aucun `calib_end` perdu. Puis le délai RETIRÉ (la fenêtre d'avant) : la perte
-    # revient — sinon cette garde ne prouverait rien.
+    # séances : aucun `calib_end` perdu. Puis le délai RETIRÉ : la perte revient — sinon cette
+    # garde ne prouverait rien.
     from core.server import POLL_S
 
     base = f"EEG_API_Unicorn_fermeture_smoke_{_os.getpid()}"

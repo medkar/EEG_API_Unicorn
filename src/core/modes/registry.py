@@ -18,16 +18,13 @@ from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mes
 from core.modes import cvep_test, errp_test, mi_test, p300_test  # noqa: E402
 from core.modes.contract import validate  # noqa: E402
 
-# ⚠️ **Tous les modes de ce catalogue tournent dans le moteur**, et c'est nouveau : il a longtemps
-# porté aussi des entrées « appli pygame » (`core/modes/external.py`), des `ModeSpec` sans runtime,
-# décrits pour que la grille de la console ne laisse pas croire que le produit se limite à ce qui
-# est chargé. Le MI, le P300, l'ErrP puis le c-VEP les ont vidées une par une ; le fichier a donc
-# été SUPPRIMÉ avec sa dernière entrée, plutôt que gardé vide. Les statuts « appli_pygame » et
-# « prevu » restent pourtant vérifiés par `check()` ci-dessous : le prochain mode décrit avant
-# d'être fait n'aura qu'à déclarer son `ModeSpec` et sa raison d'`unavailable`.
+# Tous les modes de ce catalogue tournent dans le moteur. Les statuts « appli_pygame » et
+# « prevu » restent pourtant vérifiés par `check()` ci-dessous : un mode décrit avant d'être fait
+# n'a qu'à déclarer son `ModeSpec` et sa raison d'`unavailable` (un `ModeSpec` sans runtime évite
+# que la grille laisse croire que le produit se limite à ce qui est chargé).
 # ⚠️ Cet ordre est celui de la GRILLE de la console (4 colonnes) : il se lit, il n'est pas
-# arbitraire. Il rangeait les modes par date d'arrivée dans le moteur ; il les range désormais par
-# GESTE DEMANDÉ À L'UTILISATEUR, ce qui est ce qu'un étudiant compare vraiment.
+# arbitraire. Les modes sont rangés par GESTE DEMANDÉ À L'UTILISATEUR, ce qu'un étudiant compare
+# vraiment.
 #
 #   rangée 1  Brut · SSVEP · c-VEP · Neuro     ce qu'on peut lancer sans rien apprendre du sujet
 #   rangée 2  MI · P300 · ErrP                 ce qui exige un modèle entraîné par personne
@@ -130,12 +127,12 @@ def _params_serialises(params):
         for p in params
     ]
 
-# Tolérance des comparaisons de DURÉES de `check()`. Mesuré le 2026-08-18 : `0.15 + 0.80` vaut
-# 0.9500000000000001 en flottant, donc `0.95 < 0.15 + 0.80` est VRAI. Un auteur de mode qui écrit
-# `marker_epoch_s=0.95` en clair — la valeur exacte et juste — s'entendait dire « est SOUS
-# pre_s+post_s=0.95 s […] chaque époque serait tronquée en silence ». Un garde-fou qui accuse une
-# déclaration correcte est pire qu'absent : on apprend à ignorer ce qu'il dit. Le vrai P300 y
-# échappait par hasard, en réécrivant la MÊME expression (`P300_PRE_S + P300_EPOCH_S`).
+# Tolérance des comparaisons de DURÉES de `check()`. Mesuré : `0.15 + 0.80` vaut
+# 0.9500000000000001 en flottant, donc `0.95 < 0.15 + 0.80` est VRAI. Sans tolérance, un auteur
+# de mode qui écrit `marker_epoch_s=0.95` en clair — la valeur exacte et juste — s'entendrait dire
+# « est SOUS pre_s+post_s=0.95 s […] chaque époque serait tronquée en silence ». Un garde-fou qui
+# accuse une déclaration correcte est pire qu'absent : on apprend à ignorer ce qu'il dit. Le vrai
+# P300 y échappe par hasard, en réécrivant la MÊME expression (`P300_PRE_S + P300_EPOCH_S`).
 # 1e-9 s = 1 nanoseconde : sans commune mesure avec un échantillon (4 ms à 250 Hz), donc aucune
 # vraie troncature ne peut se glisser dessous.
 _EPS_S = 1e-9
@@ -162,8 +159,8 @@ def serialize(spec, params=None):
     # est absent (juste en dessous), et la clé "default" plus bas (qui doit rester le défaut
     # DÉCLARÉ même quand `params` est fourni — voir son commentaire).
     #
-    # ⚠️ Ce n'est PAS une optimisation de chemin chaud : le catalogue a quitté `snapshot()`, donc
-    # cette fonction n'est plus appelée qu'à l'ouverture de la console. Une seule résolution parce
+    # ⚠️ Ce n'est PAS une optimisation de chemin chaud : le catalogue n'est pas dans `snapshot()`,
+    # donc cette fonction n'est appelée qu'à l'ouverture de la console. Une seule résolution parce
     # qu'une source dynamique (`choices_fn`) peut lire le disque et que deux appels pourraient
     # rendre deux réponses DIFFÉRENTES — un modèle apparu entre les deux, et un catalogue qui se
     # contredirait lui-même. C'est de la cohérence, pas de la vitesse : ne pas « ré-optimiser ».
@@ -206,8 +203,8 @@ def serialize(spec, params=None):
         "key_channels": list(spec.key_channels),
         # La fenêtre de stimulus de CE MODE, distincte de celle de sa calibration (cf. la
         # docstring de `ModeSpec.stimulus_id`). C'est ce champ que la console lit pour décider
-        # d'afficher « Lancer le stimulus » — pas `calibration.stimulus_id`, qui ne répond pas à
-        # la même question et laissait le SSVEP sans bouton.
+        # d'afficher son stimulus — pas `calibration.stimulus_id`, qui ne répond pas à la même
+        # question (le SSVEP a un stimulus et aucune calibration).
         "stimulus_id": spec.stimulus_id,
         # La MESURE qui éprouve ce mode. C'est ce champ que la console lit pour décider d'afficher
         # « Tester » — elle ne tient aucune liste des modes testables, elle demande au contrat.
@@ -279,10 +276,10 @@ def check():
         #
         # Une seule exception, et elle porte sur LE PARAMÈTRE, pas sur le mode : un choix
         # dynamique peut être vide (aucun modèle entraîné encore), ce qui est l'état normal de
-        # tout dépôt fraîchement cloné — `data/` est gitignoré. Exempter le mode ENTIER, comme
-        # c'était fait, faisait cesser toute vérification de ses autres défauts (`prob_min`,
-        # `vote_len`, `min_votes`…) dans l'état le plus courant qui soit. On retire donc le seul
-        # paramètre sans choix, et on valide tout le reste.
+        # tout dépôt fraîchement cloné — `data/` est gitignoré. Exempter le mode ENTIER ferait
+        # cesser toute vérification de ses autres défauts (`prob_min`, `vote_len`, `min_votes`…)
+        # dans l'état le plus courant qui soit. On retire donc le seul paramètre sans choix, et
+        # on valide tout le reste.
         #
         # Une source de choix qui LÈVE, elle, n'est pas une situation normale : c'est un défaut
         # de déclaration, et il part dans `defauts`. `choices_now()` rend `()` dans les deux cas
@@ -326,9 +323,9 @@ def check():
 
         # La calibration de ce mode, si le moteur sait la jouer. `check()` est appelée EN
         # PREMIER par le smoke, précisément parce qu'« un défaut là-dedans explique tous les
-        # suivants » (cf. sa docstring) — mais elle ignorait `spec.calibration` : un défaut
-        # invalide dans un `Calib.params` traversait les quatre tests verts et n'était
-        # découvert qu'au clic « Entraîner ». Une calibration dont le `runtime_cls` est encore
+        # suivants » (cf. sa docstring) : sans ce contrôle, un défaut invalide dans un
+        # `Calib.params` traverserait les tests et ne serait découvert qu'au clic « Entraîner ».
+        # Une calibration dont le `runtime_cls` est encore
         # `None` n'est en revanche jamais jouée par le moteur — vérifier ses défauts ici
         # signalerait des « défauts » qui n'en sont pas.
         calib = spec.calibration
@@ -355,8 +352,8 @@ def check():
                 defauts.append(f"{spec.id} : les défauts de sa calibration sont refusés — "
                                f"{calib_reason}")
 
-            # Le contrôle qui empêche le défaut de REVENIR : `epoch_s` (ici) dimensionne le
-            # tampon du moteur (et, via lui, la fenêtre de mesure de la qualité — cf. A5) ;
+            # Le contrôle de cohérence : `epoch_s` (ici) dimensionne le
+            # tampon du moteur (et, via lui, la fenêtre de mesure de la qualité) ;
             # `imagery_s` (côté runtime) décide combien on en PRÉLÈVE à la fin de chaque essai.
             # Deux sources de vérité pour le MÊME nombre, et rien ne les liait : un `epoch_s`
             # sous `imagery_s` tronquerait CHAQUE époque enregistrée EN SILENCE — un modèle
@@ -371,10 +368,9 @@ def check():
                                f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
                                f"serait tronquée en silence")
 
-        # ⚠️ **Le contrôle « chaque `stimulus_id` désigne une fenêtre qui existe » n'est PAS ici**,
-        # et la première écriture de ce chantier s'y est trompée : elle importait
-        # `stimulus.registry` localement, et la frontière AST de `server.py --smoke` l'a
-        # refusée — à juste titre. `core` ne connaît pas les fenêtres, il ne connaît que des clés.
+        # ⚠️ **Le contrôle « chaque `stimulus_id` désigne une fenêtre qui existe » n'est PAS ici**
+        # importer `stimulus.registry` localement violerait la frontière AST de
+        # `server.py --smoke`. `core` ne connaît pas les fenêtres, il ne connaît que des clés.
         # Le contrôle vit donc chez celui qui détient la correspondance :
         # `python src/stimulus/registry.py` lit le registre des modes et vérifie les deux sens.
 
@@ -392,7 +388,7 @@ def check():
         #
         # DEUX cas, deux messages — comme le contrôle jumeau d'`epoch_s` juste au-dessus. Le
         # champ vaut 0.0 par défaut, donc l'OUBLI est le cas par défaut du prochain auteur de
-        # mode (l'ErrP est nommément le premier concerné) ; lui servir « marker_epoch_s=0 s est
+        # mode ; lui servir « marker_epoch_s=0 s est
         # SOUS pre_s+post_s=0,95 s » l'envoie vérifier une arithmétique alors qu'il lui manque un
         # CHAMP. Et l'oubli est le plus grave des deux : sans `marker_epoch_s > 0` le moteur
         # n'ouvre jamais d'inlet, `markers_murs` rend [] pour toujours, et le mode tourne sans
@@ -434,7 +430,7 @@ def check():
         if not spec.label:
             defauts.append(f"mesure « {spec.id} » : sans libellé, sa tuile serait vide")
         # Le même tri que pour un MODE, plus haut : un TEST exige un modèle, et une liste VIDE est
-        # l'état normal d'un dépôt cloné — sans ce tri, tout le registre était « malsain » sur un
+        # l'état normal d'un dépôt cloné — sans ce tri, tout le registre serait « malsain » sur un
         # poste sans modèle MI. Une source qui LÈVE reste un défaut.
         mesure_sans_choix = []
         for p in spec.params:
@@ -484,8 +480,8 @@ def _selftest():
         "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
 
     # --- Le contrat avec la console : « yeux_fermes », dans le catalogue des mesures ---------
-    # Sans lui, la console avertissait « la seconde moitié se fait LES YEUX FERMÉS » sous les CINQ
-    # pages de test dès qu'il n'y avait pas de son — faux pour toutes, sauf le contrôle alpha. Le
+    # Sans lui, la console avertirait « la seconde moitié se fait LES YEUX FERMÉS » sous les CINQ
+    # pages de test dès qu'il n'y a pas de son — faux pour toutes, sauf le contrôle alpha. Le
     # moteur le DÉCLARE ; la console le lit (`spec.get("yeux_fermes", False)`), elle ne le devine
     # pas d'après un identifiant.
     par_id = {m["id"]: m for m in catalogue_mesures()}
@@ -495,8 +491,8 @@ def _selftest():
         f"seul ({ {i: m.get('yeux_fermes') for i, m in par_id.items()} })")
 
     # --- l'assouplissement des choix vides, sur un registre PIÉGÉ ---------------
-    # Il n'était couvert par rien, alors que c'est l'état par défaut de tout dépôt fraîchement
-    # cloné (`data/` est gitignoré, donc zéro modèle MI). On ne peut pas le prouver sur les
+    # C'est l'état par défaut de tout dépôt fraîchement cloné (`data/` est gitignoré, donc zéro
+    # modèle MI). On ne peut pas le prouver sur les
     # vrais modes — leur état dépend du poste — donc on remplace le registre le temps du test.
     from core.modes.contract import ModeSpec, Param
 

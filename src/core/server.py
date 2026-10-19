@@ -32,11 +32,10 @@ modèle, le mode refuse de démarrer plutôt que de publier des probabilités qu
 Le P300 est actif ET évoqué : il exige un modèle entraîné (comme le MI) **et** que l'application
 cliente dise au moteur QUAND chaque cible s'est allumée — c'est à ça que sert le flux entrant.
 
-Le moteur publie les SIX modes depuis le 2026-08-21, et joue les QUATRE calibrations depuis le
-2026-09-07 — voir `src/core/modes/registry.py` pour le catalogue complet. Pas encore : le control
-plane entrant (démarrer un mode depuis le réseau). Les MARQUEURS entrants, eux, existent depuis le
-2026-08-17 : le moteur ouvre un inlet LSL dès qu'un mode qui en consomme démarre (`core/markers.py`),
-et le contrat public de ces marqueurs est dans `docs/markers.md`.
+Le moteur publie les SIX modes et joue les QUATRE calibrations — voir `src/core/modes/registry.py`
+pour le catalogue complet. Il n'a pas de control plane entrant (démarrer un mode depuis le réseau).
+Les MARQUEURS entrants, eux, existent : le moteur ouvre un inlet LSL dès qu'un mode qui en consomme
+démarre (`core/markers.py`), et le contrat public de ces marqueurs est dans `docs/markers.md`.
 
 ⚠️ Le moteur ne rend AUCUN stimulus. Pour le SSVEP, c'est l'application cliente qui fait
 clignoter les cibles ; elle déclare simplement leurs fréquences au moteur (`--freqs`). Le
@@ -155,9 +154,7 @@ def _calibration_lit_les_marqueurs(calib):
     Lu sur la CLASSE du runtime (`issubclass(..., MarkerCalibrationRuntime)`), jamais sur
     `Calib.kind` : c'est cette classe-là qui appelle `markers_murs`, donc c'est elle qui vole.
     `kind` est une DÉCLARATION, et une déclaration peut cesser de décrire le code sans que rien
-    ne le dise — le motif que ce chantier traque partout (ce qui coïncide aujourd'hui sans
-    qu'aucun lien ne le garantisse). Les deux se recoupent aujourd'hui ; c'est la classe qui fait
-    foi.
+    ne le dise. Les deux se recoupent ; c'est la classe qui fait foi.
 
     `runtime_cls` peut valoir None (calibration déclarée, runtime pas encore livré) : elle n'est
     alors jamais jouée, donc elle ne vole rien. D'où le `isinstance(cls, type)` avant le
@@ -183,7 +180,7 @@ class _Enregistrement:
     tour où le mode n'a rien publié (fenêtre incomplète, époque hors tampon, mode encore en repos)
     rend donc le MÊME objet qu'au tour d'avant. On compare par IDENTITÉ, et on n'écrit que du
     neuf : sinon le fichier porterait une décision par tour de boucle, et un mode qui n'émet que
-    44 % du temps — le régime NORMAL du SSVEP, mesuré le 2026-07-27 — se relirait à 100 %. Le
+    44 % du temps — le régime NORMAL du SSVEP, mesuré sur ce casque — se relirait à 100 %. Le
     fichier mentirait précisément sur la grandeur qu'on vient y chercher.
 
     ⚠️ Cette règle repose sur une propriété des modes (« publier reconstruit la sortie ») que le
@@ -352,11 +349,11 @@ class EngineServer:
         self.acq = UnicornAcquisition(serial=serial, synthetic=synthetic, verbose=verbose,
                                       notch=NOTCH_SECTEUR[secteur])
         # Passe à True dès que le casque (ou le board de test) est OUVERT, dans le fil de `run()`.
-        # C'est ce que la console attend avant de s'afficher (2026-09-25) : un casque qui refuse
+        # C'est ce que la console attend avant de s'afficher : un casque qui refuse
         # de s'ouvrir tue ce fil avant que l'indicateur ne passe, et l'écran de départ peut alors
         # reposer la question au lieu d'afficher une console déjà morte.
         self.acquisition_ouverte = False
-        # La SURVEILLANCE DE LA LIAISON (2026-09-25, cf. `DECROCHAGE_S`). `_liaison` : « ok » ou
+        # La SURVEILLANCE DE LA LIAISON (cf. `DECROCHAGE_S`). `_liaison` : « ok » ou
         # « perdue » ; les instants sont en `perf_counter`, l'horloge de la boucle. Attributs
         # d'instance pour que les tests les raccourcissent sans attendre 2 s réelles.
         self.decrochage_s = DECROCHAGE_S
@@ -415,12 +412,10 @@ class EngineServer:
         # candidat, pas de `save_mesure`, aucun fichier — donc rien à nettoyer dans `close()`.
         self.mesure = None
         # ⚠️ OÙ UNE CALIBRATION ÉCRIT, ET OÙ ELLE N'ÉCRIT PAS.
-        # Jusqu'au 2026-09-07, une calibration sauvegardait DANS `data/` puis annonçait sa
-        # précision. Comme le moteur, la console et les applis proposent tous le modèle
-        # chargeable le PLUS RÉCENT, une séance ratée devenait le défaut — en silence, et sans
-        # que personne puisse la refuser : quand le chiffre s'affichait, le fichier était déjà là.
-        # Désormais elle écrit un CANDIDAT dans un dossier temporaire propre à CE moteur, et
-        # `save_calibration` est le seul geste qui touche `data/`.
+        # Elle écrit un CANDIDAT dans un dossier temporaire propre à CE moteur, et
+        # `save_calibration` est le seul geste qui touche `data/`. Le moteur, la console et les
+        # applis proposent tous le modèle chargeable le PLUS RÉCENT : un modèle écrit dans `data/`
+        # avant d'être jugé deviendrait le défaut en silence, sans que personne puisse le refuser.
         self.data_dir = data_dir or DATA_DIR
         # Là où le moteur écrit les VERDICTS d'une séance, sur commande de la console. ⚠️ Un
         # dossier distinct de `data_dir`, et ce n'est pas cosmétique : la moitié de la valeur de
@@ -430,13 +425,11 @@ class EngineServer:
         # arrêt : `state()` garde le chemin à l'écran, c'est ce qu'on vient chercher pour
         # dépouiller. Il n'est remplacé qu'au démarrage du suivant.
         self.enregistrement = None
-        # ⚠️ ÉCART AU BRIEF, assumé : le dossier est créé à la PREMIÈRE calibration, pas à la
-        # construction du moteur. Sa seule différence observable est le déchet : `run()` le
-        # balaie dans son `finally`, mais tous les `EngineServer` construits SANS être lancés —
-        # une dizaine par passage de `--smoke`, plus tous ceux d'un `--mode` refusé — laisseraient
-        # un dossier vide de plus dans le temporaire du système à chaque fois, que rien n'efface
-        # jamais sous Windows. Ce qui compte du brief est tenu : un dossier par moteur, créé par
-        # le moteur, jamais partagé. Cf. `_dossier_candidat`.
+        # Le dossier est créé à la PREMIÈRE calibration, pas à la construction du moteur : `run()`
+        # le balaie dans son `finally`, mais un `EngineServer` construit sans être lancé (les
+        # autotests, un `--mode` refusé) laisserait sinon un dossier vide dans le temporaire du
+        # système, que rien n'efface sous Windows. Un dossier par moteur, créé par lui, jamais
+        # partagé. Cf. `_dossier_candidat`.
         self.calib_dir = None
         self.candidat = None        # le dict rendu par `_entrainer`, tant qu'il n'est pas tranché
         # La calibration DONT le candidat courant provient. Sert à n'adopter le résultat qu'UNE
@@ -467,16 +460,12 @@ class EngineServer:
         # `epoch_s`, purement documentaire, ne doit dimensionner AUCUN tampon ici. Sans ce filtre,
         # un `epoch_s` posé pour la lisibilité gonflerait `keep` en silence — et, par ricochet, la
         # fenêtre de mesure de la qualité (`_publish_quality`, cf. son propre avertissement).
-        # ⚠️ Ce filtre a changé de population le 2026-09-07 : il excluait les trois calibrations
-        # « natives » (jouées par l'appli pygame) ; depuis que le moteur les joue toutes, il ne
-        # reste que celles dont le runtime n'est pas encore écrit.
         epoque_calib = max([spec.calibration.epoch_s for spec in registry.MODES
                             if spec.calibration is not None
                             and spec.calibration.runtime_cls is not None] or [0.0])
         # L'époque prélevée autour d'un marqueur, plus le retard qu'on tolère pour ce marqueur.
-        # ⚠️ Ce besoin doit être NOMMÉ ici. Les 2 s qui suffisaient jusqu'ici venaient de
-        # `QUALITY_WINDOW_S` et `MI_WINDOW_S` : personne ne pense à les protéger, et les baisser
-        # un jour tronquerait CHAQUE époque P300 en silence.
+        # ⚠️ Ce besoin doit être NOMMÉ ici, et non couvert par `QUALITY_WINDOW_S` ou `MI_WINDOW_S` :
+        # les baisser un jour tronquerait CHAQUE époque P300 en silence.
         #
         # ⚠️ À ne pas confondre avec le filtre juste au-dessus : l'`epoch_s` d'une calibration
         # SANS RUNTIME ne dimensionne rien, parce que le moteur ne la joue pas. Ici c'est l'époque
@@ -484,20 +473,18 @@ class EngineServer:
         # `epoch_s`, qui dimensionne le tampon des calibrations menées par une FENÊTRE, puisque
         # celles-ci prélèvent par le même chemin que le décodage (cf. `modes/marker_calib.py`).
         epoque_marqueur = max([spec.marker_epoch_s for spec in registry.MODES] or [0.0])
-        # Et l'époque des MESURES menées par une fenêtre. ⚠️ Ce terme doit être NOMMÉ, pas hérité
-        # par accident : la mesure du taux SSVEP prélève la fixation entière (4 s), et jusqu'ici
-        # elle n'était couverte que par `epoque_calib` — l'`epoch_s` de la calibration MI, une
-        # grandeur qui n'a aucun rapport avec elle. Le jour où le MI raccourcirait la sienne,
+        # Et l'époque des MESURES menées par une fenêtre. ⚠️ Ce terme doit être NOMMÉ, pas couvert
+        # par `epoque_calib` : la mesure du taux SSVEP prélève la fixation entière (4 s), grandeur
+        # sans rapport avec l'`epoch_s` de la calibration MI. Si le MI raccourcissait la sienne,
         # CHAQUE époque de la mesure serait tronquée en silence, et le taux porterait sur moins de
         # signal que ce que l'écran annonce. Déclaré par `MesureRuntime.epoque_marqueur_s`.
         epoque_mesure = max([getattr(spec.runtime_cls, "epoque_marqueur_s", 0.0) or 0.0
                              for spec in registry.MESURES if spec.runtime_cls is not None] or [0.0])
-        # ⚠️ **Et la plus longue ÉTAPE d'un protocole de mesure**, qui n'a rien à voir avec la
-        # précédente : le contrôle alpha ne prélève AUCUNE époque autour d'un marqueur (son
-        # `epoque_marqueur_s` vaut 0, à raison) mais demande deux fenêtres de 8 s à sa propre
-        # ligne du temps. Sans ce terme, `keep` valait 5 s, les deux étapes étaient ignorées, et
-        # la BARRIÈRE D'ENTRÉE DE TOUTE SÉANCE ne pouvait jamais être franchie — avec un message
-        # qui accusait le protocole. Revue de branche du 2026-09-10.
+        # ⚠️ **Et la plus longue ÉTAPE d'un protocole de mesure**, distincte de la précédente : le
+        # contrôle alpha ne prélève AUCUNE époque autour d'un marqueur (son `epoque_marqueur_s`
+        # vaut 0, à raison) mais demande deux fenêtres de 8 s à sa propre ligne du temps. Sans ce
+        # terme, `keep` serait de 5 s, les deux étapes seraient ignorées, et la BARRIÈRE D'ENTRÉE
+        # DE TOUTE SÉANCE ne pourrait jamais être franchie.
         etape_mesure = max([spec.runtime_cls.epoque_etape_s()
                             for spec in registry.MESURES if spec.runtime_cls is not None] or [0.0])
         self.keep = max(int(QUALITY_WINDOW_S * self.acq.fs),
@@ -513,10 +500,8 @@ class EngineServer:
 
         # Les DERNIERS réglages connus de chaque mode, qu'il tourne ou non. C'est ce qui permet de
         # régler un mode AVANT de le démarrer — le geste naturel : on cale ses fréquences sur son
-        # écran, son pic alpha sur sa tête, puis on lance. Jusqu'au 2026-09-21 `set_params` exigeait
-        # un mode DÉMARRÉ et refusait sans même regarder les valeurs, alors que `propose_params`,
-        # l'autre moitié du même geste, acceptait un mode arrêté depuis toujours : le moteur
-        # proposait un jeu de fréquences, le mettait dans le champ, puis refusait de l'appliquer.
+        # écran, son pic alpha sur sa tête, puis on lance. `set_params` et `propose_params`, les
+        # deux moitiés du même geste, acceptent donc l'une et l'autre un mode arrêté.
         #
         # Écrit à DEUX endroits, et il faut les deux : `submit("set_params")`, qui couvre aussi
         # bien le réglage différé que celui pris en route ; et `_start`, pour ce avec quoi le mode
@@ -595,8 +580,7 @@ class EngineServer:
         return tr("moteur.refus.mode_pendant_calibration", mode=spec.label)
 
     # --- le même vol, entre un mode et son TEST ------------------------------------------------
-    # Signalé par la revue de la tâche 2 du chantier « Configurer · Entraîner · Tester »
-    # (2026-09-22) : une mesure menée par une fenêtre lit ses marqueurs par
+    # Une mesure menée par une fenêtre lit ses marqueurs par
     # `markers_murs(marker_mode_id)`, et `marker_mode_id` est l'identifiant DU MODE (« p300 »). Le
     # moteur n'y tient qu'UN curseur par identifiant : un test lancé pendant que son mode décode
     # verrait la moitié des flashs, le mode l'autre moitié, sans la moindre erreur. Exactement le
@@ -609,7 +593,7 @@ class EngineServer:
         Lu sur la CLASSE du runtime (`marker_mode_id`), la seule chose connue avant construction.
         Une mesure sans marqueurs (le contrôle alpha, le test du MI) n'est jamais concernée.
 
-        ⚠️ **Deux raisons, pas une** (2026-10-01). Un test peut voler les marqueurs de son mode
+        ⚠️ **Deux raisons, pas une.** Un test peut voler les marqueurs de son mode
         (`marker_epoch_s > 0`), OU publier sur son flux : le c-VEP, le P300 et le SSVEP publient
         leurs décisions de test sur `decoded_<mode>` (`_publie_le_flux_du_mode`). Deux publieurs,
         même nom, même instance : un client reçoit leurs décisions mêlées, ou se rattache au
@@ -706,8 +690,8 @@ class EngineServer:
     def _lire(self):
         """La lecture d'un tour : `(eeg, ts)`, ou `(None, None)` — JAMAIS une exception.
 
-        🔴 Deux règles, trouvées au casque le 2026-10-01 : une batterie à plat a TUÉ le fil du
-        moteur (« LE MOTEUR S'EST ARRÊTÉ »), au lieu de la coupure attendue, reprise toute seule.
+        🔴 Deux règles : sans elles, une batterie à plat TUE le fil du moteur au lieu de produire
+        la coupure attendue, reprise toute seule.
         1. **Pendant une coupure, on ne lit PAS la session.** `reouvrir()` la LIBÈRE avant de
            rouvrir ; si le casque ne répond pas (éteint, à plat), elle reste libérée, et BrainFlow
            LÈVE sur une session libérée (`BOARD_NOT_CREATED_ERROR:15`). Le fil mourait au tour
@@ -784,7 +768,7 @@ class EngineServer:
                 seance.cancel()
 
     def _etat_casque(self):
-        """Batterie et paquets perdus, lus dans les voies de service du casque (2026-09-25).
+        """Batterie et paquets perdus, lus dans les voies de service du casque.
 
         ⚠️ La batterie du board de TEST est FABRIQUÉE (tirée entre 80 et 100 %, vérifié) : elle
         n'est pas rendue, un « batterie 93 % » sur du signal synthétique serait une invention de
@@ -802,9 +786,8 @@ class EngineServer:
         if self.synthetic:
             return {"batterie_pc": None, "perte_pc": None, "signal_barres": None,
                     "perdus_total": 0}
-        # Liaison coupée : la batterie est INCONNUE, pas « la dernière lue ». Vu au casque le
-        # 2026-09-25 : figée à 0 % au moment de la coupure, elle affichait « recharge le casque »
-        # sur un casque allumé et chargé.
+        # Liaison coupée : la batterie est INCONNUE, pas « la dernière lue » (figée à 0 % à la
+        # coupure, elle afficherait « recharge le casque » sur un casque allumé et chargé).
         batterie = None if self._liaison == "perdue" else self.acq.batterie
         return {
             "batterie_pc": None if batterie is None else round(float(batterie)),
@@ -903,11 +886,9 @@ class EngineServer:
             print(f"[server] réglage ignoré : « {mode_id} » a été arrêté entre-temps")
             return
         spec = ancien.spec
-        # ⚠️ Le magasin `self.reglages` n'est PAS écrit ici, et ce n'est pas un oubli : `submit`
-        # l'a déjà fait avant de mettre la commande en file, et on n'arrive ici QUE par cette
-        # file. Une écriture de plus serait redondante — et invérifiable : la retirer ne faisait
-        # rougir aucun test, ce qui est la définition d'une ligne que rien ne tient. Il n'est
-        # touché ici que pour être REMIS quand le runtime refuse (cf. plus bas, M-7).
+        # Le magasin `self.reglages` n'est PAS écrit ici : `submit` l'a déjà fait avant de mettre
+        # la commande en file, et on n'arrive ici QUE par cette file. Il n'est touché ici que pour
+        # être REMIS quand le runtime refuse (cf. plus bas).
         avant = dict(ancien.params)
         # Le décodeur ne lit pas tous les réglages : le rafraîchissement de l'écran et le pic
         # alpha ne servent qu'à proposer et à valider. Quand rien de ce qu'il lit n'a bougé, on
@@ -925,18 +906,18 @@ class EngineServer:
             return
         # CONSTRUIRE d'abord, FERMER ensuite. Un constructeur de runtime peut lever — celui du MI
         # le fait PAR CONCEPTION quand le modèle a disparu entre la validation et le démarrage.
-        # Dans l'autre ordre, l'ancien runtime restait dans `active` avec son flux déjà fermé mais
-        # `published = True` : la console affichait « publié, en décodage » alors que plus rien ne
-        # sortait du réseau. Aucun doublon de flux à craindre ici — un constructeur n'ouvre aucun
+        # Dans l'autre ordre, l'ancien runtime resterait dans `active` avec son flux déjà fermé mais
+        # `published = True` : la console afficherait « publié, en décodage » alors que plus rien
+        # ne sortirait du réseau. Aucun doublon de flux à craindre ici — un constructeur n'ouvre aucun
         # outlet, c'est `open()` qui le fait, et il n'est appelé qu'après la fermeture.
         try:
             runtime = spec.runtime_cls(spec, values, self)
         except Exception:
-            # M-7 (revue du 2026-09-22) : `validate` a accepté, le RUNTIME refuse (c-VEP : modèle
-            # calibré sur un autre nombre de cibles). Le mode continue sur `avant` ; le magasin,
-            # écrit par `submit`, doit le redire — sinon `snapshot()` annonce le réglage refusé et
-            # « Tester » le relit. Seulement s'il porte ENCORE ce réglage-ci : un `set_params` soumis
-            # depuis a écrit le sien, qu'une remise aveugle effacerait.
+            # `validate` a accepté, le RUNTIME refuse (c-VEP : modèle calibré sur un autre nombre
+            # de cibles). Le mode continue sur `avant` ; le magasin, écrit par `submit`, doit le
+            # redire — sinon `snapshot()` annonce le réglage refusé et « Tester » le relit.
+            # Seulement s'il porte ENCORE ce réglage-ci : un `set_params` soumis depuis a écrit le
+            # sien, qu'une remise aveugle effacerait.
             if self.reglages.get(mode_id) == dict(values):
                 self.reglages[mode_id] = dict(avant)
             raise
@@ -1008,8 +989,8 @@ class EngineServer:
         # ⚠️ Lâcher la calibration PRÉCÉDENTE, pas seulement son candidat. `_candidat_de` la
         # référence, et une calibration terminée avec succès garde ses époques (`_enregistre`,
         # plusieurs minutes de signal) et une référence vers le moteur entier : seul `cancel()`
-        # les libère, et `_terminer` ne l'appelle pas. Sans ces deux lignes, chaque séance de la
-        # journée resterait vivante en mémoire derrière la suivante.
+        # les libère, et `_terminer` ne l'appelle pas. Sans cela, chaque séance de la journée
+        # resterait vivante en mémoire derrière la suivante.
         if self._candidat_de is not None:
             self._candidat_de.cancel()      # sur une calibration « fini », ne change QUE ça
             self._candidat_de = None
@@ -1104,8 +1085,8 @@ class EngineServer:
 
     # --- le candidat : produit, montré, puis retenu ou jeté --------------------
     # `_entrainer` écrit dans `self.calib_dir`. Le résultat est ADOPTÉ ici (une fois), affiché par
-    # la console, et ne rejoint `data/` que sur `save_calibration`. Trois gestes, dans cet ordre —
-    # c'est tout le correctif : avant, l'écriture précédait l'annonce.
+    # la console, et ne rejoint `data/` que sur `save_calibration`. Trois gestes, dans cet ordre :
+    # produire, annoncer, puis seulement écrire dans `data/`.
 
     # ⚠️ Les clés de `_entrainer` qui portent un CHEMIN DE FICHIER, et rien d'autre. Une clé
     # oubliée ici ne lève rien : son fichier n'est ni déplacé à l'enregistrement (le modèle reste
@@ -1120,7 +1101,7 @@ class EngineServer:
     # plein), ce qui reste dans `data/` doit être INOFFENSIF. Un `.npz` orphelin ne l'est : rien
     # ne le liste, rien ne le propose. Un MODÈLE orphelin, lui, est découvert par son catalogue,
     # élu « le plus récent », et proposé par défaut à la séance suivante — sans son enregistrement
-    # ni sa provenance. La première écriture de ce tuple mettait les modèles devant.
+    # ni sa provenance.
     _FICHIERS_CANDIDAT = ("enregistrement", "modele", "modele_rcca")
 
     def _dossier_candidat(self):
@@ -1239,11 +1220,11 @@ class EngineServer:
     def _retenir_modele(self, calib, chemin):
         """Pose le modèle qu'on vient d'ENREGISTRER comme réglage « model » du mode, au magasin.
 
-        🔴 C1 (revue du 2026-09-22). Réentraîner est le cas NORMAL d'une séance : le magasin tient
-        déjà le modèle d'avant. « Enregistrer » rangeait le nouveau dans `data/` sans y toucher ; la
-        page du mode relisait le magasin, gardait l'ancien sélectionné (il est toujours dans la
-        liste), et « Tester » testait l'ANCIEN — deux noms qui ne diffèrent que par l'horodatage,
-        donc rien ne se remarquait. Le modèle qu'on vient de garder est celui qu'on veut tester.
+        🔴 Réentraîner est le cas NORMAL d'une séance : le magasin tient déjà le modèle d'avant.
+        Si « Enregistrer » rangeait le nouveau dans `data/` sans y toucher, la page du mode
+        garderait l'ancien sélectionné et « Tester » testerait l'ANCIEN — deux noms qui ne
+        diffèrent que par l'horodatage, donc sans que rien ne se remarque. Le modèle qu'on vient
+        de garder est celui qu'on veut tester.
 
         Validé par le CONTRAT avant d'être écrit, comme tout ce qui entre au magasin : un modèle
         qu'aucun catalogue ne retrouve (un `data_dir` détourné, un nom mal formé) ne s'y pose pas —
@@ -1275,11 +1256,11 @@ class EngineServer:
             self.calibration.cancel()
         self.calibration = None
         self._candidat_de = None
-        # EN DERNIER (2026-10-15) : `_efface_candidat` ne pose `candidat = None` qu'une fois les
-        # fichiers partis, et l'écran de verdict est déjà effacé — qui lit `candidat is None` lit
-        # un état FINI. Dans l'ordre d'avant, le smoke voyait parfois `None` avec le fichier encore
-        # là et le verdict encore affiché (une suppression lente, Windows qui scanne un fichier
-        # fraîchement copié) : un échec intermittent, attribué à tort à une machine chargée.
+        # EN DERNIER : `_efface_candidat` ne pose `candidat = None` qu'une fois les fichiers
+        # partis, et l'écran de verdict est déjà effacé — qui lit `candidat is None` lit un état
+        # FINI. Dans un autre ordre, on pourrait voir `None` avec le fichier encore là et le
+        # verdict encore affiché (suppression lente, Windows qui scanne un fichier fraîchement
+        # copié) : un échec intermittent, attribué à tort à une machine chargée.
         self._efface_candidat("« Jeter » demandé")
 
     def close(self):
@@ -1356,10 +1337,8 @@ class EngineServer:
         if spec.calibration is None:
             return None, tr("moteur.refus.sans_calibration", mode=spec.label)
         if spec.calibration.runtime_cls is None:
-            # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré. Ce refus
-            # existait pour le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans l'appli
-            # pygame ; il ne reste, depuis le 2026-09-07, que le temps d'un chantier en cours.
-            # Dire « pas encore livrée » plutôt que d'inventer une cause.
+            # Une calibration DÉCLARÉE mais dont le runtime n'est pas encore livré : dire « pas
+            # encore livrée » plutôt que d'inventer une cause.
             return None, tr("moteur.refus.calibration_pas_livree", mode=spec.label)
         return spec, None
 
@@ -1368,10 +1347,9 @@ class EngineServer:
         (None, raison) — sans RIEN changer : ni file, ni état, ni disque.
 
         La console l'appelle au clic sur « Commencer », AVANT le contrôle de liaison et avant
-        d'arrêter le décodage du mode (passe C1, 2026-09-30). Sans elle, une coupure haute à 50 Hz
-        sur un MI plafonné à 40 n'était refusée qu'au `start_calibration` : le décodage était déjà
-        arrêté, la page disait « décodage arrêté pour cet entraînement », et le flux de
-        l'application de l'étudiant était coupé pour rien. Aucune validation n'est recopiée côté
+        d'arrêter le décodage du mode. Sans elle, une coupure haute à 50 Hz sur un MI plafonné à
+        40 ne serait refusée qu'au `start_calibration` : le décodage serait déjà arrêté, et le
+        flux de l'application de l'étudiant coupé pour rien. Aucune validation n'est recopiée côté
         interface : c'est CETTE méthode que `submit("start_calibration")` appelle aussi.
 
         ⚠️ Un seul refus n'y est PAS : le vol de marqueurs (le mode décode pendant sa propre
@@ -1456,12 +1434,11 @@ class EngineServer:
             return {"accepted": True, "command": "start_mode", "ids": ids}
 
         if command == "set_params":
-            # ⚠️ Cette commande ne passe PAS par `_one` (qui exige un mode démarré), et c'est tout
-            # le sujet : on règle un mode AVANT de le lancer. Un réglage soumis à un mode arrêté
-            # est VALIDÉ comme les autres — c'est là qu'on apprend que 17 Hz ne divise pas 60 —
-            # puis RETENU pour le prochain démarrage. Refuser sans regarder, c'était obliger à
-            # démarrer sur des réglages qu'on sait faux, subir 23 s de repos, puis les corriger et
-            # refaire le repos.
+            # Cette commande ne passe PAS par `_one` (qui exige un mode démarré) : on règle un mode
+            # AVANT de le lancer. Un réglage soumis à un mode arrêté est VALIDÉ comme les autres —
+            # c'est là qu'on apprend que 17 Hz ne divise pas 60 — puis RETENU pour le prochain
+            # démarrage. Sinon il faudrait démarrer sur des réglages qu'on sait faux, subir 23 s de
+            # repos, puis les corriger et refaire le repos.
             spec = registry.get(params.get("id"))
             if spec is None:
                 connus = ", ".join(s.id for s in registry.runnable())
@@ -1474,8 +1451,7 @@ class EngineServer:
                                      raison=spec.unavailable)}
             # Une seule lecture de `self.active` : `submit` tourne sur le fil de l'APPELANT, la
             # boucle peut arrêter ce mode entre deux lignes, et `submit` promet de ne jamais lever.
-            # Un mode arrêté entre-temps ne produit plus d'erreur — le réglage devient différé,
-            # ce qui est exactement ce qu'on voulait.
+            # Un mode arrêté entre-temps ne produit pas d'erreur : le réglage devient différé.
             runtime = self.active.get(spec.id)
             # On fusionne sur les réglages COURANTS : un appelant peut n'envoyer que ce qu'il
             # change, sans avoir à relire et renvoyer tout le reste.
@@ -1514,11 +1490,9 @@ class EngineServer:
                                      liste=", ".join(proposeurs) or tr("moteur.refus.aucun"))}
             runtime = self.active.get(spec.id)
             # ⚠️ Le MAGASIN, pas les défauts du contrat, quand le mode est arrêté. Sinon les deux
-            # moitiés du même geste se contredisent une seconde fois : on applique son pic alpha à
-            # un mode arrêté (accepté, retenu), puis « Proposer » recalcule sur 9,6 Hz — le pic de
-            # la population, pas le sien — et rend un jeu de fréquences accordé à la mauvaise tête.
-            # C'est le même défaut que celui corrigé le matin du 2026-09-21 sur `set_params`, un
-            # cran plus loin ; il a fallu une séance casque pour le voir.
+            # moitiés du même geste se contredisent : on applique son pic alpha à un mode arrêté
+            # (accepté, retenu), puis « Proposer » recalcule sur 9,6 Hz — le pic de la population,
+            # pas le sien — et rend un jeu de fréquences accordé à la mauvaise tête.
             courant = dict(runtime.params) if runtime is not None else self._reglages_de(spec)
             # Ce que l'appelant est en train d'éditer prime sur ce qui est stocké : sans ça,
             # déclarer un écran 144 Hz est refusé (les anciennes fréquences ne le divisent pas)
@@ -1532,17 +1506,15 @@ class EngineServer:
             valeur_cible = courant.get(cible)
             n = (len(valeur_cible) if isinstance(valeur_cible, (list, tuple))
                  else len(spec.defaults().get(cible) or ()))
-            # Les ENTRÉES du calcul — rafraîchissement, pic alpha et BANDE réglée (2026-09-30) —
+            # Les ENTRÉES du calcul — rafraîchissement, pic alpha et BANDE réglée —
             # telles qu'elles sont à l'écran, JUGÉES par le contrat, un réglage à la fois
             # (`contract.valider_un`) : le refus est celui qu'« Appliquer » rendrait, mot pour mot.
             # Les fréquences, elles, ne sont PAS jugées : c'est ce qu'on remplace.
-            # ⚠️ Plus d'écrêtage (passe C1). Une bande saisie hors bornes était RAMENÉE en silence
-            # dans les bornes (0 → 5, « ? » → 40, NaN traversait) : « Proposer » répondait sur une
-            # bande que l'écran ne montrait pas, et « Appliquer » refusait ensuite la saisie. Et le
-            # rafraîchissement n'était borné par RIEN : « inf » faisait tourner sans fin la boucle
-            # des diviseurs de `available_frequencies`, sur le fil de l'interface (et 10⁹ Hz la
-            # faisait tourner des minutes). `submit` promet de ne jamais lever ; il doit aussi
-            # rendre la main.
+            # ⚠️ Pas d'écrêtage : une bande saisie hors bornes ramenée en silence dans les bornes
+            # ferait répondre « Proposer » sur une bande que l'écran ne montre pas, puis refuser
+            # « Appliquer ». Et un rafraîchissement non borné (« inf », 10⁹ Hz) ferait tourner
+            # sans fin ou des minutes la boucle des diviseurs de `available_frequencies`, sur le
+            # fil de l'interface. `submit` promet de ne jamais lever ; il doit aussi rendre la main.
             par_cle = {p.key: p for p in spec.params}
             entrees = {}
             for cle in ("refresh_hz", "alpha_hz", "bande_bas", "bande_haut"):
@@ -1648,9 +1620,7 @@ class EngineServer:
             # calculer ici pour le rendre tout de suite serait plus commode et FAUX : deux clics
             # dans la même fenêtre de sondage (100 ms) voient tous les deux `self.enregistrement`
             # à None, donc les deux seraient acceptés — et le second afficherait le chemin d'un
-            # fichier que la boucle refusera de créer. MESURÉ en écrivant ce test : l'accusé
-            # annonçait un fichier qui n'a jamais existé. Ne rien promettre qu'on ne puisse tenir
-            # est moins cher que d'expliquer après coup pourquoi le fichier annoncé est absent.
+            # fichier que la boucle refusera de créer. Ne rien promettre qu'on ne puisse tenir.
             self._commands.put(("start_enregistrement", {"id": spec.id}))
             return {"accepted": True, "command": command, "id": spec.id,
                     "stream": stream_name(spec.stream)}
@@ -1752,12 +1722,10 @@ class EngineServer:
             if self.calibration is not None:
                 # ⚠️ `cancel()` ne change PAS la phase d'une calibration déjà « fini », et c'est
                 # voulu là-bas. Mais `_terminer` BLOQUE la boucle le temps du `fit` (plusieurs
-                # secondes, assumé) : c'est précisément l'instant où l'écran est figé et où l'on
-                # clique « Abandonner ». La commande était alors acceptée, le `fit` se terminait,
-                # le candidat était adopté — et ce message annonçait « aucun modèle produit »
-                # alors qu'un modèle venait d'être écrit et attendait, à un clic de `data/`, avec
-                # « Enregistrer » actif. Le geste de l'étudiant était ignoré et l'écran le
-                # contredisait. On jette donc AUSSI le candidat, ce qui rend le message vrai.
+                # secondes) : c'est l'instant où l'écran est figé et où l'on clique « Abandonner ».
+                # La commande est acceptée, le `fit` se termine, le candidat est adopté : sans
+                # le jeter AUSSI, « aucun modèle produit » serait faux, un modèle attendant à un
+                # clic de `data/` avec « Enregistrer » actif.
                 jete = self.candidat is not None
                 self.calibration.cancel()
                 self._efface_candidat("abandon demandé pendant l'entraînement")
@@ -1778,9 +1746,8 @@ class EngineServer:
             self._start_mesure(params["id"], params["params"])
         elif command == "cancel_mesure":
             if self.mesure is not None:
-                # Plus simple que son homologue `cancel_calibration` : il n'y a AUCUN candidat à
-                # jeter en même temps, donc aucun risque que ce message contredise un fichier
-                # écrit entre-temps. Une mesure n'écrit rien, c'est sa définition.
+                # Plus simple que `cancel_calibration` : une mesure n'écrit rien, donc aucun
+                # candidat à jeter en même temps.
                 self.mesure.cancel()
                 print("[server] mesure abandonnée — aucun verdict produit")
 
@@ -1907,15 +1874,14 @@ class EngineServer:
             "phase": phase,
             "samples_published": self.samples,
             "streams": [stream_name(s) for s in streams],
-            # ⚠️ Les quatre compteurs de marqueurs SORTENT ici, et c'est le point : ils étaient
-            # incrémentés avec soin et lus par personne. `modes/p300.py` les annonce comme le
+            # Les quatre compteurs de marqueurs sortent ici : `modes/p300.py` les annonce comme le
             # moyen par lequel trois de ses six pannes sont dites, et `docs/markers.md` dit à
-            # l'étudiant « si ce nombre grimpe » — sans ce champ, la chaîne ne menait nulle part
-            # et un P300 qui ne déclenche jamais restait indiscernable d'un sujet distrait.
+            # l'étudiant « si ce nombre grimpe ». Sans eux, un P300 qui ne déclenche jamais
+            # serait indiscernable d'un sujet distrait.
             #
             # Ils n'entrent PAS dans `_status_key` : un compteur qui bouge ne doit pas compter
-            # comme un changement d'état, sinon la déduplication du flux `status` tombe (mesuré
-            # une fois à 19,6 Hz au lieu de 0,5 Hz). Ils voyagent donc avec le rappel périodique,
+            # comme un changement d'état, sinon la déduplication du flux `status` tombe (19,6 Hz
+            # de messages au lieu de 0,5 Hz). Ils voyagent donc avec le rappel périodique,
             # ce qui suffit largement pour un indicateur de santé.
             "marqueurs": {
                 "perdus": self.marqueurs_perdus,
@@ -1932,7 +1898,7 @@ class EngineServer:
     def snapshot(self):
         """État complet pour un afficheur, en lecture seule. Sûr depuis un autre fil.
 
-        La console (tâches 11-15) sonde ceci depuis le fil Qt, à 10 Hz, pendant que la boucle du
+        La console sonde ceci depuis le fil Qt, à 10 Hz, pendant que la boucle du
         moteur tourne sur le sien et peut démarrer ou arrêter un mode, ou une calibration, À TOUT
         INSTANT. On prend donc UNE SEULE copie atomique de `self.active` (`dict(...)`, copié en C
         d'un coup — pas de point où l'autre fil pourrait s'intercaler) ET UNE SEULE copie de
@@ -1968,11 +1934,11 @@ class EngineServer:
             "quality": self._quality,
             "rest_instruction": self.rest_instruction,
             "modes_state": {mid: r.state() for mid, r in active.items()},
-            # La liaison avec le casque (2026-09-25) : dans `snapshot()` seulement, pas dans le
+            # La liaison avec le casque : dans `snapshot()` seulement, pas dans le
             # flux `status`, contrat public.
             "liaison": self._etat_liaison(),
             "casque": self._etat_casque(),
-            # Le secteur du POSTE (2026-09-30), fixé à la construction : ce que le moteur coupe,
+            # Le secteur du POSTE, fixé à la construction : ce que le moteur coupe,
             # et ce que chaque entraînement enregistre. Pas dans le flux `status` : ce n'est pas
             # un état qui change, et le contrat public n'a pas à grossir pour le dire.
             "secteur_hz": self.secteur_hz,
@@ -1998,25 +1964,21 @@ class EngineServer:
             # lectures, et `None.state()` lèverait ICI, dans le fil de la console.
             "enregistrement": None if enregistrement is None else enregistrement.state(),
             # ⚠️ Les derniers réglages connus de CHAQUE mode, qu'il tourne ou non. Sans eux, un
-            # réglage posé sur un mode ARRÊTÉ est accepté, retenu, appliqué au démarrage… et
-            # parfaitement INVISIBLE : `modes_state` ne contient que les modes actifs, donc la
-            # page d'un mode arrêté n'a aucune source et garde l'ancienne valeur à l'écran.
-            # L'écran disait alors le contraire de la vérité, ce qui est pire qu'un refus franc.
-            # Vu en séance casque le 2026-09-21 : « mon pic alpha n'a pas été reporté » — il
-            # l'était. Une COPIE par mode, jamais la référence : la boucle écrit dedans.
+            # réglage posé sur un mode ARRÊTÉ serait accepté, retenu, appliqué au démarrage… et
+            # INVISIBLE : `modes_state` ne contient que les modes actifs, donc la page d'un mode
+            # arrêté garderait l'ancienne valeur à l'écran, ce qui est pire qu'un refus franc.
+            # Une COPIE par mode, jamais la référence : la boucle écrit dedans.
             "reglages": {mid: dict(v) for mid, v in self.reglages.items()},
-            # Un catalogue est une déclaration, pas de la télémétrie — il ne change pas avec l'état
-            # du moteur. Le republier dix fois par seconde était déjà du gaspillage avant que des
-            # entrées-sorties (joblib.load, accès au système de fichiers) ne se trouvent derrière.
-            # Un client qui voudra le catalogue le demandera explicitement — c'est la forme correcte
-            # pour une donnée de ce genre (appel `registry.catalog()` direct, plutôt que via snapshot).
+            # Pas de catalogue ici : c'est une déclaration, pas de la télémétrie, et il ne change
+            # pas avec l'état du moteur. Le republier dix fois par seconde coûterait des
+            # entrées-sorties (joblib.load, système de fichiers) : on appelle `registry.catalog()`.
         })
         return state
 
     def recent_window(self, seconds):
         """Copie des `seconds` dernières secondes de signal BRUT (n, 8), ou None.
 
-        Accesseur PUBLIC pour un afficheur — ET, depuis la moitié B, la source des époques
+        Accesseur PUBLIC pour un afficheur — ET la source des époques
         D'ENTRAÎNEMENT du Motor Imagery (`CalibrationRuntime._pas_essai` l'appelle avec
         `imagery_s`). Elle DOIT rester non filtrée pour cette seconde raison, exactement comme
         `UnicornAcquisition.motor_window` (qui sert le décodage EN LIGNE, cf. son avertissement) :
@@ -2098,25 +2060,20 @@ class EngineServer:
     def _ecouteurs_de_marqueurs(self):
         """Tout ce qui, dans CE moteur, consomme la file de marqueurs : les modes ET la calibration.
 
-        ⚠️ **Le défaut que cette méthode existe pour fermer, trouvé à la revue finale du
-        2026-09-08 par deux relecteurs indépendants.** Les quatre décisions « faut-il une oreille,
-        sous quel nom, quand la lâcher, jusqu'où purger » se prenaient sur `self.active` SEUL. Or
-        une calibration ne vit PAS dans `self.active` — c'est l'invariant explicite de
-        `modes/calibration.py` : elle a son emplacement propre, parce qu'un mode qui refuse de
-        démarrer sans modèle rendrait sa propre calibration inatteignable.
+        ⚠️ Les quatre décisions « faut-il une oreille, sous quel nom, quand la lâcher, jusqu'où
+        purger » ne doivent pas se prendre sur `self.active` SEUL. Une calibration ne vit PAS
+        dans `self.active` (invariant de `modes/calibration.py`) : elle a son emplacement propre,
+        parce qu'un mode qui refuse de démarrer sans modèle rendrait sa propre calibration
+        inatteignable.
 
-        Conséquence, sur le parcours NORMAL du produit : la console arrête le mode avant de
-        démarrer sa calibration (elle y est obligée, c'est le refus du vol de marqueurs), donc
-        plus aucun mode à marqueurs n'est actif, donc aucun inlet n'était ouvert. La fenêtre
-        publiait ses marqueurs cinq minutes dans le vide, et le moteur abandonnait au bout de
-        `CALIB_FENETRE_ATTENTE_S` en annonçant « la fenêtre ne s'est pas lancée, ou elle publie
-        sous un autre nom » — **les deux causes citées étaient fausses**, et l'étudiant était
-        envoyé vérifier une fenêtre qui tournait parfaitement.
-
-        Aucun test ne pouvait le voir : les autotests des quatre calibrations passent par un
-        moteur factice dont `markers_murs` rend une file déjà remplie, donc le seul chemin jamais
-        exercé était celui où les marqueurs sont DÉJÀ là. `_smoke_marqueurs_calibration` couvre
-        désormais le chemin manquant.
+        Sur le parcours NORMAL du produit, la console arrête le mode avant de démarrer sa
+        calibration (refus du vol de marqueurs) : plus aucun mode à marqueurs n'est actif. Sans
+        cette méthode, aucun inlet ne s'ouvrirait, la fenêtre publierait ses marqueurs dans le
+        vide, et le moteur abandonnerait au bout de `CALIB_FENETRE_ATTENTE_S` en annonçant « la
+        fenêtre ne s'est pas lancée, ou elle publie sous un autre nom » — deux causes fausses
+        qui enverraient l'étudiant vérifier une fenêtre qui tourne parfaitement.
+        `_smoke_marqueurs_calibration` couvre ce chemin, que des autotests sur un moteur
+        factice (file de marqueurs déjà remplie) ne voient pas.
         """
         for rt in self.active.values():
             if rt.spec.marker_epoch_s > 0.0:
@@ -2126,11 +2083,10 @@ class EngineServer:
                 and _calibration_lit_les_marqueurs(calib.spec.calibration)):
             yield calib
         # ⚠️ Et la MESURE, qui a exactement le même besoin et vit dans un troisième emplacement.
-        # Elle n'est ni dans `self.active` ni dans `self.calibration` : l'oublier ici rejouerait,
-        # à l'identique, le défaut trouvé à la revue du 2026-09-08 — la fenêtre guidée publierait
-        # quatre minutes de marqueurs dans le vide, et la mesure abandonnerait en annonçant « la
-        # fenêtre ne s'est pas lancée, ou elle publie sous un autre nom », **les deux causes citées
-        # étant fausses**. Le critère est le même que pour une calibration : est-ce que cet
+        # Elle n'est ni dans `self.active` ni dans `self.calibration` : l'oublier ici ferait
+        # publier la fenêtre guidée dans le vide, et la mesure abandonnerait en annonçant « la
+        # fenêtre ne s'est pas lancée, ou elle publie sous un autre nom », deux causes fausses.
+        # Le critère est le même que pour une calibration : est-ce que cet
         # objet-là appelle `markers_murs` ? Il le déclare par `marker_mode_id`.
         mesure = self.mesure
         if mesure is not None and not mesure.terminee and _lit_les_marqueurs(mesure):
@@ -2177,14 +2133,11 @@ class EngineServer:
     def _resout_marker_inlet(self):
         """Tente la résolution si besoin, et DIT la transition — une seule fois par transition.
 
-        ⚠️ Le message « connecté » était sur le chemin qui n'aboutit presque jamais. Mesuré :
-        `resolve_byprop(timeout=0.0)` échoue aux tout premiers appels d'un processus neuf (0 sur
-        5 en rafale, le temps que le résolveur de liblsl remplisse son cache), puis marche. Or
-        `_ouvre_marker_inlet` ne donnait qu'UNE chance puis imprimait « pas encore là », tandis
-        que la re-tentative de `_tire_marqueurs` — celle qui connecte réellement — n'imprimait
-        RIEN. L'étudiant qui lance le moteur avec son stimulus déjà en route lisait donc « pas
-        encore là » et n'avait jamais la moindre confirmation. Les deux chemins passent
-        maintenant ICI, donc le message suit l'ÉVÉNEMENT et non le chemin.
+        `resolve_byprop(timeout=0.0)` échoue aux tout premiers appels d'un processus neuf (0
+        succès sur 5 en rafale, le temps que le résolveur de liblsl remplisse son cache), puis
+        marche. `_ouvre_marker_inlet` et la re-tentative de `_tire_marqueurs` passent donc par
+        cette méthode, pour que le message suive l'ÉVÉNEMENT (la connexion) et non le chemin : sinon
+        l'étudiant lirait « pas encore là » sans jamais voir de confirmation.
         """
         inlet = self.marker_inlet
         if inlet is None or inlet.connecte:
@@ -2278,12 +2231,11 @@ class EngineServer:
     def _dit_compteurs_marqueurs(self):
         """Annonce un compteur de marqueurs quand il franchit un seuil. Une fois par seuil.
 
-        ⚠️ Ces quatre compteurs étaient comptés et lus par PERSONNE : ni `_state`, ni `snapshot`,
-        ni le flux `status`, ni un `print`. Or `modes/p300.py` les ANNONCE comme le moyen par
-        lequel trois de ses six pannes sont dites, et `docs/markers.md` dit à l'étudiant « si ce
-        nombre grimpe ». La chaîne ne menait nulle part. Le cas le plus probable en vrai — un
-        `time_correction()` oublié côté émetteur, donc TOUT qui part dans `marqueurs_futurs` —
-        produisait un P300 qui tourne, ne déclenche jamais, et ne dit rien.
+        ⚠️ `modes/p300.py` annonce ces quatre compteurs comme le moyen par lequel trois de ses six
+        pannes sont dites, et `docs/markers.md` dit à l'étudiant « si ce nombre grimpe ». Le cas le
+        plus probable — un `time_correction()` oublié côté émetteur, donc TOUT qui part dans
+        `marqueurs_futurs` — donne un P300 qui tourne, ne déclenche jamais, et ne dit rien : il
+        faut que les compteurs se disent (ici, et dans `_state`).
 
         Par SEUILS (1, 10, 100…) et non à chaque incrément : à 6,7 flashs par seconde, un
         message par marqueur perdu serait aussi illisible que pas de message du tout.
@@ -2318,10 +2270,9 @@ class EngineServer:
         sans jamais passer par `marqueurs_perdus`, que `markers_murs` réserve au SEUL rejet muet
         qu'elle autorise (et celui-ci n'en fait pas partie).
 
-        ⚠️ SANS écouteur, en revanche, « ce que TOUS les écouteurs ont dépassé » est TOUT : la
-        version précédente rendait la main (`if not ecouteurs: return`), soit l'inverse exact de
-        cette phrase, et le tampon croissait alors sans borne — mesuré ~5 Mo en 30 min, sans un
-        compteur ni un message. Ce chemin ne devrait plus être atteignable depuis que `_stop_mode`
+        ⚠️ SANS écouteur, en revanche, « ce que TOUS les écouteurs ont dépassé » est TOUT : rendre
+        la main (`if not ecouteurs: return`) ferait croître le tampon sans borne (~5 Mo en 30 min,
+        sans un compteur ni un message). Ce chemin ne devrait plus être atteignable depuis que `_stop_mode`
         libère l'inlet dès le dernier écouteur arrêté ; il reste écrit juste, parce qu'un garde
         qui ne tient que par un autre garde ne tient pas.
         """
@@ -2353,7 +2304,7 @@ class EngineServer:
     def markers_murs(self, mode_id, post_s):
         """Les marqueurs de CE mode dont l'époque tient entièrement dans le tampon.
 
-        « Mûr » = le tampon couvre déjà les `post_s` secondes qui SUIVENT le marqueur. Avant,
+        « Mûr » = le tampon couvre déjà les `post_s` secondes qui SUIVENT le marqueur. Sinon
         l'époque déborderait et le découpage rendrait None — sans rien dire. Cette attente est
         générique, donc elle vit ici : chaque mode qui la réimplémenterait la referait un peu
         différemment.
@@ -2372,13 +2323,11 @@ class EngineServer:
             # derrière lui. Un horodatage très en avance est la signature du `time_correction()`
             # oublié entre deux machines — on le compte, on le saute, et la séance continue.
             #
-            # ⚠️ L'ordre inverse (maturité d'abord) a deux défauts d'un coup : un marqueur
-            # horodaté loin dans le futur n'est PAR DÉFINITION jamais « mûr », donc il déclenche
-            # le `break` juste en dessous AVANT d'atteindre ce contrôle — `marqueurs_futurs`
-            # devient inatteignable, et pire, le curseur ne le dépasse jamais : ce marqueur reste
-            # indéfiniment le premier examiné, et tout ce qui arrive après lui dans la file
-            # (y compris des marqueurs parfaitement valides) reste bloqué derrière, pour
-            # toujours. Prouvé par mutation dans `_smoke_marqueurs_file_coincee`.
+            # ⚠️ Dans l'ordre inverse (maturité d'abord), un marqueur horodaté loin dans le futur
+            # n'est PAR DÉFINITION jamais « mûr » : il déclenche le `break` juste en dessous AVANT
+            # ce contrôle, `marqueurs_futurs` devient inatteignable, et le curseur ne le dépasse
+            # jamais — tout ce qui arrive après lui (y compris des marqueurs valides) reste
+            # bloqué derrière, pour toujours. Tenu par `_smoke_marqueurs_file_coincee`.
             if ts > plus_recent + MARKER_LATE_S:
                 self.marqueurs_futurs += 1
                 i += 1
@@ -2409,15 +2358,12 @@ class EngineServer:
         seraient pires que pas de mesure du tout.
 
         ⚠️ On ne passe PAS `self.recent` en entier : ce tampon est dimensionné (`self.keep`,
-        cf. `__init__`) pour le plus gourmand de TOUS ses consommateurs — aujourd'hui la
-        calibration MI, qui prélève des époques de 4 s là où cette fenêtre de qualité n'en veut
-        que `QUALITY_WINDOW_S` (2 s). Passer le tampon entier mesurait donc le σ sur `self.keep`
-        (4 s dès que le MI est calibrable), un couplage NON borné : demain un `epoch_s` de
-        calibration plus long élargirait encore la fenêtre de qualité SANS que rien ne le dise
-        — un flux PUBLIC, consommé par n'importe quel client. On borne donc explicitement le
-        bloc à la fenêtre déclarée plus sa marge de filtre, comme le font déjà tous les autres
-        lecteurs du tampon (`recent_window`, `motor_window`, `occipital_window`…) : `_publish_
-        quality` était le seul à consommer le tampon entier.
+        cf. `__init__`) pour le plus gourmand de TOUS ses consommateurs — la calibration MI, qui
+        prélève des époques de 4 s là où cette fenêtre de qualité n'en veut que
+        `QUALITY_WINDOW_S` (2 s). Passer le tampon entier ferait dépendre le σ, flux PUBLIC, de
+        la plus longue époque de calibration, sans que rien ne le dise. On borne donc le bloc à
+        la fenêtre déclarée plus sa marge de filtre, comme tous les autres lecteurs du tampon
+        (`recent_window`, `motor_window`, `occipital_window`…).
         """
         n = int(round(QUALITY_WINDOW_S * self.acq.fs)) + self.acq.margin_n
         bloc = self.recent[-n:]
@@ -2458,7 +2404,7 @@ class EngineServer:
         self._warmup_override = warmup_s
         self._rest_override = baseline_s
         # Le moteur écrit des µ, des σ et des accents. Sous PowerShell, stdout est en cp1252 par
-        # défaut : un simple print tuait alors le fil d'acquisition sur un UnicodeEncodeError. On
+        # défaut : un simple print tuerait le fil d'acquisition sur un UnicodeEncodeError. On
         # le fait ici plutôt que dans le seul `__main__`, parce que le moteur est aussi utilisé
         # comme bibliothèque (console, tests) — et qu'un échec d'AFFICHAGE ne doit jamais
         # interrompre une ACQUISITION.
@@ -2476,11 +2422,10 @@ class EngineServer:
             try:
                 # `_start` est DANS le `try`, et pas avant : un constructeur de runtime peut lever
                 # — celui du MI le fait PAR CONCEPTION quand le modèle a disparu entre la
-                # validation et le démarrage. Or le `finally` plus bas n'est pas un nettoyage
-                # optionnel : c'est lui qui casse le cycle `active ↔ engine`, sans quoi un
-                # `BoardShim.__del__` tardif libère la session d'un AUTRE moteur (voir son long
-                # commentaire). Le sauter parce qu'un mode n'a pas su démarrer ferait payer
-                # l'incident au moteur SUIVANT du même processus.
+                # validation et le démarrage. Or le `finally` plus bas casse le cycle
+                # `active ↔ engine`, sans quoi un `BoardShim.__del__` tardif libère la session d'un
+                # AUTRE moteur (voir son long commentaire) : le sauter ferait payer l'incident au
+                # moteur SUIVANT du même processus.
                 self._start([s.id for s, _ in self._pending],
                             {s.id: v for s, v in self._pending}, time.perf_counter())
                 self.status_out.push(self._state(True, calibration=self.calibration),
@@ -2535,8 +2480,7 @@ class EngineServer:
                             # L'horodatage est calculé UNE fois et servi deux fois : au mode (qui
                             # le donne à son publieur) puis à l'enregistrement. Le recalculer pour
                             # le fichier écrirait une date légèrement différente de celle partie
-                            # sur le réseau — quelques dizaines de microsecondes, invisibles, et
-                            # fausses. C'est le genre d'écart qu'on ne retrouve jamais après coup.
+                            # sur le réseau : un écart invisible, qu'on ne retrouve jamais.
                             lsl_ts = self.clock.to_lsl(time.time())
                             runtime.tick(self, lsl_ts, now)
                             self._last_tick[mode_id] = now
@@ -2555,16 +2499,14 @@ class EngineServer:
                         except Exception as e:  # noqa: BLE001 - un tick fautif ne doit tuer NI
                             # le moteur NI la séance en cours des AUTRES modes : on perd cette
                             # calibration (potentiellement plusieurs minutes d'imagerie), pas le
-                            # reste. Marquer « annulé » avec sa raison est ce que `_terminer` fait
-                            # déjà pour un entraînement qui lève ; un tick qui lève méritait le
-                            # même traitement, pas un crash du processus entier.
+                            # reste. Marquer « annulé » avec sa raison, comme `_terminer` pour un
+                            # entraînement qui lève.
                             self.calibration.probleme = message_erreur(e)
                             self.calibration.phase = "annule"
                             print(f"[server] calibration interrompue par une exception : "
                                   f"{self.calibration.probleme}")
                     # Hors du `if` ci-dessus, et c'est le point : une calibration qui vient
-                    # d'aboutir EST terminée, donc ce `if` ne l'exécute plus. Son résultat serait
-                    # sinon adopté seulement si une autre calibration démarrait après.
+                    # d'aboutir EST terminée, donc ce `if` ne l'exécute plus.
                     self._adopte_candidat()
 
                     # La MESURE, exactement au même régime que la calibration : chaque tour, sans
@@ -2581,7 +2523,7 @@ class EngineServer:
                             self.mesure.phase = "annule"
                             print(f"[server] mesure interrompue par une exception : "
                                   f"{self.mesure.probleme}")
-                            # …et ABANDONNÉE pour de bon : un test qui publiait sur le flux de
+                            # …et ABANDONNÉE pour de bon : un test qui publie sur le flux de
                             # son mode le ferme ici, sinon l'outlet survivrait au test et
                             # doublerait celui du mode qu'on démarrera ensuite. ⚠️ GARDÉ : un
                             # `cancel()` qui lève ici sortirait de la boucle — moteur tué, et
@@ -2607,9 +2549,8 @@ class EngineServer:
                 # DOIT s'exécuter sur TOUTE sortie de la boucle, y compris une EXCEPTION — casque
                 # perdu en séance, erreur BrainFlow : précisément ce que ce produit doit survivre.
                 # Sans ce `finally`, une exception levée par `get_new_data()` ou par un `tick()`
-                # saute tout ce bloc et va droit à `__exit__` : ni les flux ne se ferment, ni le
-                # cycle plus bas ne se rompt. Le bug revient alors pour le PROCHAIN moteur du même
-                # processus — au pire moment, celui où on relance juste après l'incident.
+                # saute tout ce bloc : ni les flux ne se ferment, ni le cycle plus bas ne se
+                # rompt, et le PROCHAIN moteur du même processus en subit les conséquences.
                 for runtime in self.active.values():
                     try:
                         runtime.close()
@@ -2639,9 +2580,9 @@ class EngineServer:
                 # est vraie pour LA SESSION DU DEUXIÈME. Le destructeur zombie du premier appelle
                 # alors `release_session()` et libère la session du second, en pleine séance :
                 # ce n'est pas une session qui traîne, c'est un destructeur qui se trompe de
-                # cible. Mesuré le 2026-07-28 : deux `EngineServer` synthétiques lancés l'un
-                # après l'autre dans le même processus, le second échoue sur `get_new_data()`
-                # avec `BOARD_NOT_CREATED_ERROR`.
+                # cible. Mesuré : deux `EngineServer` synthétiques lancés l'un après l'autre dans
+                # le même processus, le second échoue sur `get_new_data()` avec
+                # `BOARD_NOT_CREATED_ERROR`.
                 #
                 # Vider `active` casse le cycle : `self` (et son `BoardShim`) redevient
                 # collectable par simple comptage de références, donc nettoyé tout de suite —
@@ -2678,8 +2619,8 @@ class EngineServer:
                 self.active = {}
                 # APRÈS `self.active = {}`, jamais avant : `_libere_marker_inlet` ne lâche que
                 # s'il ne reste plus un seul écouteur, et c'est cette ligne-là qui le garantit.
-                # Un moteur arrêté n'a plus rien à écouter — garder un inlet LSL ouvert après la
-                # boucle, c'est exactement l'habitude que ce chantier corrige partout ailleurs.
+                # Un moteur arrêté n'a plus rien à écouter : aucun inlet LSL ne doit survivre à la
+                # boucle.
                 self._libere_marker_inlet("le moteur s'arrête")
 
         elapsed = time.perf_counter() - started
@@ -2694,8 +2635,7 @@ def _resolve_own(suffix, instance, timeout=10.0):
     Chercher par NOM seul ne suffit pas : les noms sont un contrat public, donc identiques
     pour tous les moteurs. Un serveur laissé ouvert sur le poste — ou le casque d'un voisin
     en salle — répond alors à la place du nôtre, et le test mesure quelqu'un d'autre
-    (vécu deux fois le 2026-07-27 : cadence lue à 401 Hz au lieu de 250, échantillons reçus
-    en surnombre). On filtre donc sur le `source_id`, qui porte l'instance.
+    (cadence lue à 401 Hz au lieu de 250, échantillons reçus en surnombre). On filtre donc sur le `source_id`, qui porte l'instance.
     """
     from pylsl import resolve_byprop
     # Deux précautions, chacune pour un piège distinct :
@@ -2722,13 +2662,12 @@ def _smoke():
     from pylsl import StreamInlet, resolve_byprop
 
     instance = "smoke"
-    server = EngineServer(synthetic=True, instance=instance)               # inchangé (raw seul)
+    server = EngineServer(synthetic=True, instance=instance)               # raw seul
 
     # Garde-fou : `_filter` ne doit JAMAIS modifier son entrée. Le serveur lui passe un
     # tampon persistant ; s'il était filtré sur place, les échantillons bruts suivants
-    # seraient collés sur une queue déjà filtrée et le σ deviendrait absurde (vécu le
-    # 2026-07-27 : 40 000 µV mesurés sur un EEG à 5 µV). Un tableau contigu float64 est
-    # exactement le cas qui déclenchait le bug.
+    # seraient collés sur une queue déjà filtrée et le σ deviendrait absurde (40 000 µV
+    # mesurés sur un EEG à 5 µV). Un tableau contigu float64 est exactement le cas à risque.
     probe = np.full((300, len(CH_NAMES)), 150000.0, dtype=np.float64)
     untouched = probe.copy()
     server.acq._filter(probe)
@@ -2770,9 +2709,8 @@ def _smoke():
     print(f"[smoke] reçu {got} échantillons, {quality_rows} mesures de qualité, "
           f"{status_rows} messages d'état")
     # L'état est *événementiel* : il doit se taire tant que rien ne change. Un compteur
-    # glissé dans la charge utile avait suffi à le faire émettre à 19,6 Hz au lieu de 0,5 Hz
-    # (dédup défaite) — assez discret pour passer inaperçu, assez bruyant pour noyer un
-    # client. On garde donc une borne dure ici.
+    # glissé dans la charge utile suffit à le faire émettre à 19,6 Hz au lieu de 0,5 Hz
+    # (dédup défaite) — discret, mais assez bruyant pour noyer un client. D'où la borne dure.
     status_hz = status_rows / max(watched_s, 1e-9)
     if status_hz > 3.0:
         print(f"[smoke] ÉCHEC : le flux d'état émet à {status_hz:.1f} Hz (déduplication cassée ?)")
@@ -2809,12 +2747,10 @@ def _smoke():
           f"dont {len(registry.runnable())} dans le moteur — "
           f"{'OK' if integre else 'PROBLÈME'}")
     # ⚠️ Chaque sous-test est appelé INCONDITIONNELLEMENT, dans une LISTE — pas dans un `and` en
-    # cascade. Un `and` court-circuite : dès le premier `False`, Python n'appelle même plus les
-    # suivants, qui restent alors muets. Un seul test instable (timing réseau, SSVEP…) masquait
-    # ainsi SILENCIEUSEMENT tous les tests placés après lui dans la chaîne — déjà rencontré sur ce
-    # projet. En construisant la liste d'abord, chaque appel s'exécute et imprime son propre
-    # VERDICT quoi qu'il arrive ; `all()` ne fait que COMBINER des résultats déjà obtenus, donc un
-    # échec en signale un seul, jamais plus.
+    # cascade. Un `and` court-circuite : dès le premier `False`, les suivants ne sont plus appelés
+    # et restent muets, donc un seul test instable (timing réseau, SSVEP…) masquerait
+    # SILENCIEUSEMENT tous ceux placés après lui. Avec la liste, chaque appel s'exécute et imprime
+    # son propre VERDICT ; `all()` ne fait que COMBINER des résultats déjà obtenus.
     resultats = [
         ok,
         integre,
@@ -2936,7 +2872,7 @@ def _smoke_ssvep():
     from pylsl import StreamInlet, resolve_byprop
 
     # Les fréquences viennent de `choose_frequencies`, comme celles du mode et celles du
-    # stimulus. Le littéral arrondi 8.57 qui était ici n'est PAS un diviseur entier de 60 Hz
+    # stimulus. Le littéral arrondi 8.57 n'est PAS un diviseur entier de 60 Hz
     # (60/8.57 = 7,0012, soit un millier de fois la tolérance) : il passait tant que personne ne
     # le vérifiait, et il tombe maintenant que la contrainte `divise_le_refresh` existe. Repasser
     # par la fonction supprime la classe entière du problème plutôt que ce cas-là.
@@ -3004,13 +2940,12 @@ def _smoke_mi():
     """Le mode MI de bout en bout, sans casque : un modèle entraîné à la volée, puis le flux.
 
     **Tout est écrit dans un dossier temporaire. Le vrai `data/` n'est jamais approché** — comme
-    son voisin `_smoke_calibration`, et c'était le dernier smoke du dépôt à faire autrement. Il
-    écrivait `data/mi_model_smoke.joblib` puis l'effaçait dans un `finally` : le fichier ne
-    survivait qu'à un arrêt DUR (Ctrl+Break, taskkill, coupure), mais `empreinte_dossier` est
-    AVEUGLE à un créer-puis-effacer dans la même fenêtre de mesure (cf. sa docstring), donc rien
-    ne pouvait le voir. Le remède ne réduit pas la fenêtre d'exposition : il la supprime.
+    son voisin `_smoke_calibration`. Écrire puis effacer un fichier dans `data/` ne survivrait
+    qu'à un arrêt DUR (Ctrl+Break, taskkill, coupure), mais `empreinte_dossier` est AVEUGLE à un
+    créer-puis-effacer dans la même fenêtre de mesure (cf. sa docstring) : le remède est de ne
+    jamais approcher `data/`, pas de réduire la fenêtre d'exposition.
 
-    Le levier est déjà en place, et délibérément : `modes/mi.py` déclare
+    Le levier est en place, et délibérément : `modes/mi.py` déclare
     `choices_fn=lambda: mi_models.modeles_disponibles()` — un lambda qui résout la fonction À
     L'APPEL, précisément pour qu'un autotest puisse rediriger la recherche ailleurs. Le chemin du
     modèle, lui, est déjà passé explicitement ; `data/` ne servait qu'à faire passer le contrôle
@@ -3152,7 +3087,7 @@ def _smoke_calibration():
     produit un modèle que `modeles_disponibles` retrouve. L'autotest de `mi_calib.py`, lui, joue
     la même séance sur un faux moteur : il valide le protocole, pas l'intégration.
 
-    Il couvre aussi, depuis le chantier « seul point d'entrée », TOUT LE CYCLE DU CANDIDAT : le
+    Il couvre aussi TOUT LE CYCLE DU CANDIDAT : le
     modèle est écrit dans le dossier temporaire du moteur, invisible aux quatre catalogues, et ne
     rejoint `data/` que sur `save_calibration`. C'est ici qu'il faut le vérifier, parce que le
     candidat y est produit par une VRAIE calibration passée par la boucle — pas fabriqué à la main.
@@ -3187,9 +3122,8 @@ def _smoke_calibration():
     # seule façon de jouer une séance de sept minutes en quelques secondes sans donner à
     # `CalibrationRuntime` une horloge accélérée, qui serait un chemin de code que la séance
     # réelle n'emprunte jamais.
-    # ⚠️ Plus de monkeypatch de `MICalibration.__init__` ici : c'est le MOTEUR qui donne son
-    # dossier candidat à la calibration, donc le détour n'a plus lieu d'être — et le supprimer
-    # fait de ce test la preuve que ce câblage-là fonctionne.
+    # Pas de monkeypatch de `MICalibration.__init__` : c'est le MOTEUR qui donne son dossier
+    # candidat à la calibration, et ce test prouve que ce câblage fonctionne.
     anciens = {c: getattr(mi_calib.MICalibration, c)
                for c in ("cue_s", "imagery_s", "rest_s", "warmup_s", "warmup_per_class",
                          "window_s", "step_s")}
@@ -3199,15 +3133,11 @@ def _smoke_calibration():
         # l'entraînement refuse. Le rapport est conservé — 0,32 / 0,16 / 0,08 donne 3 fenêtres
         # par essai, comme 4 / 2 / 1 en séance réelle.
         #
-        # ⚠️ ÉCART AU BRIEF (documenté dans le rapport de tâche) : le brief proposait 0,20 / 0,10 /
-        # 0,05. Ça respecte la règle ci-dessus (le rapport 0,5 / 0,25 est conservé) mais ÉCHOUE
-        # quand même — `MIModel.fit` passe chaque fenêtre dans un filtre passe-bande 0-phase
-        # (`scipy.signal.filtfilt`, ordre 4), qui EXIGE plus d'échantillons que son `padlen`
-        # (27, mesuré : `3 * (2*ordre+1)`). Une fenêtre de 0,10 s à 250 Hz ne fait que 25
-        # échantillons — sous le plancher — et l'entraînement lève AVANT même d'atteindre la
-        # comparaison honnête/naïve. 0,32 s donne une fenêtre de 40 échantillons, confortablement
-        # au-dessus. Le seuil du brief n'est donc pas juste inconfortable : il est INFAISABLE tel
-        # quel avec le filtre réellement utilisé par `MIModel`.
+        # ⚠️ Pas plus court que 0,32 s : `MIModel.fit` passe chaque fenêtre dans un filtre
+        # passe-bande 0-phase (`scipy.signal.filtfilt`, ordre 4), qui EXIGE plus d'échantillons
+        # que son `padlen` (27 : `3 * (2*ordre+1)`). Une imagerie de 0,20 s (fenêtre de 0,10 s,
+        # soit 25 échantillons à 250 Hz) est sous ce plancher : l'entraînement lèverait avant la
+        # comparaison honnête/naïve. 0,32 s donne une fenêtre de 40 échantillons.
         mi_calib.MICalibration.cue_s = 0.05
         mi_calib.MICalibration.imagery_s = 0.32
         mi_calib.MICalibration.rest_s = 0.05
@@ -3222,7 +3152,7 @@ def _smoke_calibration():
         server = EngineServer(synthetic=True, modes=("raw",), instance="smoke-calib",
                               data_dir=data_dir, secteur_hz=60.0)
         # 120 s, pas 60 : la séance mesure ~27 s mais le PAS de boucle (POLL_S, plus la latence
-        # des E/S) ajoute couramment ~8,5 s de plus sur ce poste, et un dépassement de
+        # des E/S) ajoute couramment ~8,5 s de plus, et un dépassement de
         # `duration_s` arrête le moteur EN PLEINE séance — un échec de timing du test, pas de la
         # calibration elle-même. Large marge plutôt qu'un ajustement fin.
         thread = threading.Thread(target=server.run, kwargs={"duration_s": 120.0}, daemon=True)
@@ -3240,24 +3170,23 @@ def _smoke_calibration():
                     break
                 time.sleep(0.1)
 
-            # ⚠️ ÉCART AU BRIEF, documenté dans le rapport de tâche : « Essais par classe » est un
-            # « choice » borné à MI_SESSIONS (core/config.py), pas un entier
-            # libre — 6 (la valeur du brief) est refusé par `contract.validate`. Le plus PETIT
-            # choix valide, 10, est ACCEPTÉ mais rend la comparaison honnête/naïve juste plus bas
-            # peu fiable sur du bruit pur (mesuré : ~1 essai sur 2 viole l'invariant sur 4 tirages
-            # répétés) — la fenêtre d'entraînement n'a alors aucun signal réel à apprendre, contrairement
-            # aux autotests de mi_calib.py/mi_decoder.py qui fabriquent une ERD. 18 (3e choix) ramène
-            # ça à ~1 tirage sur 6 dans les mêmes conditions, pour un coût en temps encore raisonnable.
+            # « Essais par classe » est un « choice » borné à MI_SESSIONS (core/config.py), pas un
+            # entier libre : 6 est refusé par `contract.validate`. Le plus PETIT choix valide, 10,
+            # est accepté mais rend la comparaison honnête/naïve plus bas peu fiable sur du bruit
+            # pur (~1 essai sur 2 viole l'invariant sur 4 tirages répétés) : la fenêtre
+            # d'entraînement n'a aucun signal réel à apprendre, contrairement aux autotests de
+            # mi_calib.py/mi_decoder.py qui fabriquent une ERD. 18 (3e choix) ramène cela à ~1
+            # tirage sur 6, pour un coût en temps raisonnable.
             # Deux `start_calibration` soumis dans la MÊME fenêtre de sondage (avant que la
             # boucle n'ait drainé le premier) doivent produire UNE SEULE calibration, pas deux
             # qui se chevauchent. `submit()` ne peut PAS voir venir cette course :
             # `self.calibration` est encore `None` pour LES DEUX au moment où elles sont
             # soumises — c'est la garde côté BOUCLE (`_start_calibration`) qui compte. Les deux
-            # commandes partent donc DOS À DOS, sans attendre entre les deux : une version
-            # antérieure de ce test attendait `server.calibration is not None` avant la seconde,
-            # ce qui contournait exactement la fenêtre de course qu'il prétendait couvrir.
-            # Les TROIS tâches d'origine, explicitement (2026-10-15 : le défaut est passé à deux) :
-            # les comptes ci-dessous (18 × 3 = 54) et le signal appris portent sur elles.
+            # commandes partent donc DOS À DOS, sans attendre entre les deux : attendre
+            # `server.calibration is not None` avant la seconde contournerait la fenêtre de
+            # course qu'il s'agit de couvrir.
+            # Les TROIS tâches d'origine, explicitement (le défaut est de deux) : les comptes
+            # ci-dessous (18 × 3 = 54) et le signal appris portent sur elles.
             ack = server.submit("start_calibration", id="mi",
                                 params={"taches": list(MI_LABELS), "trials_per_class": 18})
             ack_course = server.submit("start_calibration", id="mi", params={"trials_per_class": 10})
@@ -3275,8 +3204,7 @@ def _smoke_calibration():
                 f"tourne, pas la seconde (10) "
                 f"({None if server.calibration is None else server.calibration.params})")
 
-            # Une fois la première APPLIQUÉE, cette fois `submit()` lui-même la voit et refuse —
-            # le scénario que l'ancienne version de ce test croyait déjà couvrir.
+            # Une fois la première APPLIQUÉE, cette fois `submit()` lui-même la voit et refuse.
             refus = server.submit("start_calibration", id="mi", params={})
             chk(not refus.get("accepted") and "déjà en cours" in (refus.get("reason") or ""),
                 f"une troisième, soumise APRÈS coup, est refusée par submit() lui-même ({refus})")
@@ -3286,9 +3214,8 @@ def _smoke_calibration():
             chk(etat is not None and etat["mode_id"] == "mi" and etat["total"] == 54,
                 f"et snapshot() porte l'état complet, celui de la PREMIÈRE (18×3=54) ({etat})")
 
-            # Bornes ÉLARGIES par rapport au brief (25 s), pour la même raison que trials_per_class
-            # ci-dessus : 18 essais/classe jouent 54 essais au lieu de 18, à ~0,42 s/essai avec les
-            # durées raccourcies — mesuré ~27 s de bout en bout. 45 s laisse une marge confortable.
+            # 18 essais/classe jouent 54 essais, à ~0,42 s/essai avec les durées raccourcies :
+            # ~27 s mesurées de bout en bout. 45 s laisse une marge confortable.
             t0 = time.perf_counter()
             while (server.calibration is not None and not server.calibration.terminee
                    and time.perf_counter() - t0 < 45.0):
@@ -3303,21 +3230,20 @@ def _smoke_calibration():
 
             # Les époques prélevées dans le VRAI tampon glissant font la longueur annoncée.
             # ⚠️ `calib` peut être None ici : le `chk` ci-dessus ne court-circuite PAS (il imprime
-            # et continue) — sur un build réellement cassé, déréférencer `calib._enregistre` sans
-            # garde donnerait une trace Python brute au lieu du diagnostic ligne à ligne que ce
-            # smoke doit rendre jusqu'au bout.
+            # et continue) — déréférencer `calib._enregistre` sans garde donnerait une trace
+            # Python brute au lieu du diagnostic ligne à ligne que ce smoke doit rendre.
             attendu = int(round(mi_calib.MICalibration.imagery_s * server.acq.fs))
             longueurs = {len(e) for e, _l in calib._enregistre} if calib is not None else set()
             chk(longueurs == {attendu},
                 f"chaque époque fait exactement {attendu} échantillons ({sorted(longueurs)})")
 
-            # ⚠️ ET LE VRAI TEST DU DÉFAUT — celui-ci ne dépend PAS de la séance jouée, qui
-            # tourne sur des durées rabotées. Le tampon du moteur doit tenir la plus longue
-            # époque que le CONTRAT annonce (`Calib.epoch_s` = 4 s pour le MI), pas seulement la
-            # fenêtre de décodage (2 s). Sans ce terme dans `keep`, chaque époque d'une séance
-            # RÉELLE serait tronquée de moitié — sans erreur, avec un tiers des fenêtres
-            # d'entraînement attendues. Deux vérifications, parce qu'aucune ne suffit seule :
-            # le dimensionnement calculé, et le bloc réellement rendu.
+            # ⚠️ Ce contrôle ne dépend PAS de la séance jouée, qui tourne sur des durées
+            # rabotées. Le tampon du moteur doit tenir la plus longue époque que le CONTRAT annonce
+            # (`Calib.epoch_s` = 4 s pour le MI), pas seulement la fenêtre de décodage (2 s). Sans
+            # ce terme dans `keep`, chaque époque d'une séance RÉELLE serait tronquée de moitié —
+            # sans erreur, avec un tiers des fenêtres d'entraînement attendues. Deux
+            # vérifications, parce qu'aucune ne suffit seule : le dimensionnement calculé, et le
+            # bloc réellement rendu.
             from core.config import MI_IMAGERY_S
 
             besoin = int(round(MI_IMAGERY_S * server.acq.fs))
@@ -3356,9 +3282,9 @@ def _smoke_calibration():
                 f"modèle à 60 Hz — résultat {res.get('secteur_hz')!r}, fichier relu "
                 f"{relu_secteur!r} ; 50 dirait que le secteur du poste n'atteint pas le modèle")
 
-            # 2. Aucun des QUATRE catalogues ne découvre le candidat. Sans ça, un candidat
+            # 2. Aucun des QUATRE catalogues ne découvre le candidat. Sinon un candidat
             #    orphelin (nettoyage sauté, dossier rouvert) redeviendrait « le modèle chargeable
-            #    le plus récent » : le défaut qu'on ferme, rouvert par sa propre correction.
+            #    le plus récent ».
             chk(server._candidats_visibles() == [],
                 f"aucun des quatre catalogues ne découvre quoi que ce soit dans le dossier "
                 f"candidat ({server._candidats_visibles()})")
@@ -3382,11 +3308,10 @@ def _smoke_calibration():
                 f.write(b"un modele qui existait deja")
             source = res["modele"]
             npz_source = res.get("enregistrement")
-            # 🔴 C1 (revue du 2026-09-22) : le magasin du mode tient DÉJÀ un modèle, l'ancien — l'état
-            # de toute séance où l'on RÉentraîne. Sans correctif, « Enregistrer » rangeait le
-            # nouveau dans `data/` et laissait le magasin sur l'ancien : la page le relisait, et
-            # « Tester » testait l'ANCIEN modèle, en silence (deux noms qui ne diffèrent que par
-            # l'horodatage). La découverte des modèles est pointée sur le `data/` DÉTOURNÉ le temps
+            # 🔴 Le magasin du mode tient DÉJÀ un modèle, l'ancien — l'état de toute séance où
+            # l'on RÉentraîne. « Enregistrer » doit y poser le nouveau, sinon « Tester » testerait
+            # l'ANCIEN modèle, en silence (deux noms qui ne diffèrent que par l'horodatage). La
+            # découverte des modèles est pointée sur le `data/` DÉTOURNÉ le temps
             # de cette étape : c'est là que le moteur enregistre, donc là que le choix doit exister.
             ancien_magasin = dict(registry.get("mi").defaults(), model=occupe)
             server.reglages["mi"] = dict(ancien_magasin)
@@ -3439,7 +3364,7 @@ def _smoke_calibration():
             # ⚠️ Les clés sont écrites EN DUR ici, surtout pas relues sur `_FICHIERS_CANDIDAT` :
             # une fixture construite depuis la constante qu'elle vérifie ne peut rien prouver —
             # retirer une clé retirerait le fichier de la fixture du même geste, et le test
-            # resterait vert (mesuré). Cette liste-ci est celle des clés de chemin que les
+            # resterait vert. Cette liste-ci est celle des clés de chemin que les
             # calibrations rendent vraiment : `modele` + `enregistrement` (MI, P300, ErrP) et
             # `modele_rcca` en plus pour le c-VEP (`core/modes/cvep_calib.py::entrainer`).
             cles_de_chemin = ("modele", "modele_rcca", "enregistrement")
@@ -3468,10 +3393,10 @@ def _smoke_calibration():
 
             # 3bis. Une séance terminée est LÂCHÉE quand la suivante commence. Elle garde sinon
             # ses époques (plusieurs minutes de signal) et une référence vers le moteur entier :
-            # seul `cancel()` les libère, et `_terminer` ne l'appelle pas. `_candidat_de` la
-            # référence après coup, donc sans ce lâcher explicite chaque séance de la journée
-            # resterait vivante derrière la suivante. La nouvelle est abandonnée aussitôt : ce
-            # qu'on éprouve ici est le passage de relais, pas une seconde séance.
+            # seul `cancel()` les libère, et `_terminer` ne l'appelle pas. Sans ce lâcher
+            # explicite, chaque séance de la journée resterait vivante derrière la suivante.
+            # La nouvelle est abandonnée aussitôt : ce qu'on éprouve ici est le passage de
+            # relais, pas une seconde séance.
             ancienne = server.calibration
             server.submit("start_calibration", id="mi", params={})
             t0 = time.perf_counter()
@@ -3490,15 +3415,13 @@ def _smoke_calibration():
             chk(produits == [retenu.get("modele")],
                 f"le modèle RETENU, lui, est chargeable et listé — c'est le motif "
                 f"`{mi_models.MOTIF}` qui le veut ({[os.path.basename(p) for p in produits]})")
-            # Que la CV honnête soit RAPPORTÉE est un fait déterministe — une vraie propriété du
-            # chantier — donc reste une assertion. Que cv_groupee < cv_naive, en revanche, n'EN
-            # est plus une : `_smoke_calibration` entraîne sur le bruit RÉEL du board synthétique
-            # (c'est tout l'intérêt du test), donc sans aucun signal appris, l'ORDRE des deux CV
-            # est un tirage — mesuré ~1 échec sur 6 même à 18 essais/classe. Conclure sur du bruit
-            # est justement ce que ce projet interdit (CLAUDE.md, « rigueur statistique »).
-            # L'invariant reste vérifié, lui, là où il a un sens : sur de l'ERD FABRIQUÉE, par
-            # `mi_calib._selftest()` et `mi_decoder._test_cv_honnete()` — pas abandonné ici, mesuré
-            # au bon endroit. On imprime donc les deux chiffres pour mémoire, sans en juger l'ordre.
+            # Que la CV honnête soit RAPPORTÉE est un fait déterministe : c'est une assertion.
+            # Que cv_groupee < cv_naive n'en est pas une : ce test entraîne sur le bruit RÉEL du
+            # board synthétique, donc sans aucun signal appris l'ORDRE des deux CV est un tirage
+            # (~1 échec sur 6 même à 18 essais/classe). Conclure sur du bruit est ce que ce projet
+            # interdit (CLAUDE.md, « rigueur statistique »). L'invariant est vérifié là où il a un
+            # sens : sur de l'ERD FABRIQUÉE, par `mi_calib._selftest()` et
+            # `mi_decoder._test_cv_honnete()`. On imprime les deux chiffres sans en juger l'ordre.
             chk(res.get("cv_groupee") is not None,
                 f"l'accuracy HONNÊTE (validation croisée par essai) est rapportée "
                 f"({res.get('cv_groupee')})")
@@ -3507,13 +3430,12 @@ def _smoke_calibration():
 
             # Et le mode MI peut alors démarrer sur ce modèle : c'est tout l'objet du chantier.
             #
-            # ⚠️ ÉCART AU BRIEF, documenté dans le rapport de tâche : le Param « model » de
-            # `mi.SPEC` résout ses choix via `mi_models.modeles_disponibles()` SANS argument,
-            # donc contre le VRAI `data/` — jamais le dossier temporaire de ce test. Sans
-            # redirection, `start_mode` refuserait TOUJOURS avec « aucun choix disponible », même
-            # juste après l'entraînement : le brief demande à la fois « ne jamais toucher data/ »
-            # et « le mode démarre sur le modèle produit », deux exigences incompatibles sans ce
-            # monkeypatch — le même que `core/modes/mi.py::_selftest` utilise pour la même raison.
+            # Le Param « model » de `mi.SPEC` résout ses choix via
+            # `mi_models.modeles_disponibles()` SANS argument, donc contre le VRAI `data/` — jamais
+            # le dossier temporaire de ce test. Sans redirection, `start_mode` refuserait TOUJOURS
+            # avec « aucun choix disponible », même juste après l'entraînement : ne jamais toucher
+            # `data/` et démarrer le mode sur le modèle produit exigent ce monkeypatch, le même que
+            # `core/modes/mi.py::_selftest`.
             # `contract.validate` (donc `choices_fn`) tourne DANS `submit`, sur CE fil, de façon
             # SYNCHRONE : la redirection n'a besoin de vivre que le temps de cet appel — la suite
             # (`MIRuntime.__init__`) charge le modèle par CHEMIN direct (`mi_models.charger`), qui
@@ -3521,11 +3443,9 @@ def _smoke_calibration():
             vrai_disponibles = mi_models.modeles_disponibles
             mi_models.modeles_disponibles = lambda d=data_dir: vrai_disponibles(d)
             try:
-                # `if produits else ...` : pas pour éviter un faux vert (un build réellement
-                # cassé échoue de toute façon, `produits` serait déjà vide plus haut) mais pour
-                # la règle que ce fichier s'est donnée pour le `chk` juste au-dessus de `calib`
-                # (cf. son commentaire) : rendre le diagnostic ligne à ligne jusqu'au bout plutôt
-                # qu'une trace Python brute sur un `IndexError` si `produits` est vide ici.
+                # `if produits else ...` : pour rendre le diagnostic ligne à ligne jusqu'au bout
+                # (cf. le commentaire sur `calib`) plutôt qu'une trace Python brute sur un
+                # `IndexError` si `produits` est vide ici.
                 demarrage = (server.submit("start_mode", id="mi",
                                            params={"mi": {"model": produits[0]}})
                             if produits else
@@ -3543,10 +3463,10 @@ def _smoke_calibration():
             shutil.copy2(retenu["modele"], refait)
             server.candidat = {"modele": refait, "nom": os.path.basename(refait)}
             avant_data = sorted(os.listdir(data_dir))
-            # Une suppression LENTE, exprès (2026-10-15) : sous Windows, un fichier fraîchement
-            # copié peut être scanné, et `os.remove` attendre. Le moteur ne doit dire « plus de
-            # candidat » qu'une fois le disque propre ; sans ce ralenti, l'ordre fautif ne se voyait
-            # qu'une fois sur deux.
+            # Une suppression LENTE, exprès : sous Windows, un fichier fraîchement copié peut
+            # être scanné, et `os.remove` attendre. Le moteur ne doit dire « plus de candidat »
+            # qu'une fois le disque propre ; sans ce ralenti, un ordre fautif ne se verrait qu'une
+            # fois sur deux.
             vrai_remove = os.remove
 
             def _remove_lent(chemin, *a, **k):
@@ -3609,8 +3529,8 @@ def _smoke_calibration():
 
 def _smoke_calibration_refus():
     """Les quatre refus de `start_calibration`/`cancel_calibration`, et l'annulation de bout en
-    bout — rien de tout ça n'était exercé, alors que ce sont les quatre premiers messages qu'un
-    étudiant voit s'il se trompe de mode ou clique « Entraîner » sans y penser.
+    bout — ce sont les quatre premiers messages qu'un étudiant voit s'il se trompe de mode ou
+    clique « Entraîner » sans y penser.
 
     Coût délibérément bas pour les quatre premiers : `submit` ne dépend pas de la boucle (cf. sa
     docstring — la validité se vérifie tout de suite, l'application se fait plus tard), donc ils
@@ -3634,13 +3554,10 @@ def _smoke_calibration_refus():
     chk(not r2.get("accepted") and "n'a pas de calibration" in (r2.get("reason") or ""),
         f"mode SANS calibration (SSVEP, la CCA n'apprend rien) : refusé ({r2.get('reason')})")
 
-    # ⚠️ **Ce contrôle porte désormais sur un mode FABRIQUÉ, et c'est le seul moyen de le garder.**
-    # Il visait le c-VEP, le P300 et l'ErrP, dont la calibration vivait dans l'appli pygame ; le
-    # chantier « seul point d'entrée » leur a livré un `runtime_cls` à chacun (tâches 4, 7, 8), et
-    # il ne reste PLUS AUCUN mode réel dans cet état. Le supprimer aurait laissé sans test le seul
-    # refus qui protège le prochain mode déclaré avant d'être jouable — celui-là repartirait alors
-    # sur un `None(spec, …)` incompréhensible au lieu d'une phrase. On injecte donc un mode le
-    # temps du contrôle, et on restaure le registre juste après.
+    # Ce contrôle porte sur un mode FABRIQUÉ : plus aucun mode réel n'a une calibration déclarée
+    # sans `runtime_cls`. Il protège le prochain mode déclaré avant d'être jouable, qui
+    # repartirait sinon sur un `None(spec, …)` incompréhensible au lieu d'une phrase. On injecte
+    # donc un mode le temps du contrôle, et on restaure le registre juste après.
     from dataclasses import replace as _replace
 
     faux = _replace(registry.get("cvep"), id="__pas_livre__", label="Mode pas livré",
@@ -3655,7 +3572,7 @@ def _smoke_calibration_refus():
         f"encore la jouer ({r3.get('reason')})")
     # …et le pendant, vérifié SANS rien soumettre : soumettre un `start_calibration` accepté à ce
     # moteur froid créerait son dossier candidat et laisserait une commande en file, ce que deux
-    # contrôles plus bas mesurent justement (mesuré : les deux rougissent).
+    # contrôles plus bas mesurent justement.
     chk(all(s.calibration is None or s.calibration.runtime_cls is not None
             for s in registry.MODES),
         f"…et plus AUCUN mode réel n'est dans ce cas : les six calibrations déclarées sont "
@@ -3675,10 +3592,10 @@ def _smoke_calibration_refus():
             and "aucune calibration" in (r.get("reason") or ""),
             f"« {commande} » sans candidat : refusé, en disant ce qui manque ({r.get('reason')})")
 
-    # 4ter. La validation AU CLIC (passe C1, 2026-09-30). La console demande au moteur, AVANT le
-    # contrôle de liaison et avant d'arrêter le décodage, si l'entraînement serait accepté. Sans
-    # elle, une coupure haute à 50 Hz sur le MI (maximum 40) n'était refusée qu'au
-    # `start_calibration` — le flux de l'application de l'étudiant déjà coupé pour rien.
+    # 4ter. La validation AU CLIC. La console demande au moteur, AVANT le contrôle de liaison et
+    # avant d'arrêter le décodage, si l'entraînement serait accepté. Sans elle, une coupure
+    # haute à 50 Hz sur le MI (maximum 40) ne serait refusée qu'au `start_calibration` — le flux
+    # de l'application de l'étudiant déjà coupé pour rien.
     v_ok, r_ok = froid.valider_calibration("mi", {})
     chk(v_ok is not None and r_ok is None and {"bande_bas", "bande_haut"} <= set(v_ok),
         f"un entraînement valide est validé, réglages COMPLETS rendus ({r_ok or sorted(v_ok)})")
@@ -3733,8 +3650,8 @@ def _smoke_calibration_refus():
 
     # 6. Le `finally` de `run()` : arrêter le moteur EN PLEINE calibration, SANS l'annuler
     # explicitement, doit quand même la couper proprement — c'est lui qui casse le cycle
-    # calibration <-> moteur (cf. son long commentaire), et rien ne vérifiait qu'il s'exécute
-    # vraiment sur ce chemin plutôt que sur le seul chemin `cancel_calibration` testé au-dessus.
+    # calibration <-> moteur (cf. son long commentaire) : on vérifie qu'il s'exécute vraiment sur
+    # ce chemin et pas seulement sur le chemin `cancel_calibration` testé au-dessus.
     encore = EngineServer(synthetic=True, modes=(), instance="smoke-calib-refus-3")
     thread2 = threading.Thread(target=encore.run, kwargs={"duration_s": 30.0}, daemon=True)
     thread2.start()
@@ -3759,19 +3676,17 @@ def _smoke_calibration_refus():
 def _smoke_oreille_calibration():
     """Une calibration à FENÊTRE, seule, fait-elle ouvrir l'oreille du moteur ?
 
-    ⚠️ **Le test qui manquait, et le défaut qu'il ferme.** Les quatre décisions « faut-il une
-    oreille, sous quel nom, quand la lâcher, jusqu'où purger » se prenaient sur `self.active`
-    SEUL. Une calibration ne vit pas dans `self.active` — c'est l'invariant de
-    `modes/calibration.py` — et la console ARRÊTE le mode avant de démarrer sa calibration (elle y
-    est obligée, cf. `_smoke_vol_marqueurs`). Donc, sur le parcours NORMAL du produit, plus
-    personne n'écoutait : la fenêtre publiait ses marqueurs cinq minutes dans le vide, et le
-    moteur abandonnait au bout de `CALIB_FENETRE_ATTENTE_S` en annonçant « la fenêtre ne s'est pas
-    lancée, ou elle publie sous un autre nom ». **Les deux causes étaient fausses.**
+    ⚠️ Les quatre décisions « faut-il une oreille, sous quel nom, quand la lâcher, jusqu'où
+    purger » ne doivent pas se prendre sur `self.active` SEUL. Une calibration ne vit pas dans
+    `self.active` (invariant de `modes/calibration.py`) et la console ARRÊTE le mode avant de
+    démarrer sa calibration (cf. `_smoke_vol_marqueurs`). Sur le parcours NORMAL du produit,
+    si plus personne n'écoutait, la fenêtre publierait ses marqueurs dans le vide, et le moteur
+    abandonnerait au bout de `CALIB_FENETRE_ATTENTE_S` en annonçant « la fenêtre ne s'est pas
+    lancée, ou elle publie sous un autre nom » : deux causes fausses.
 
-    Pourquoi aucun test existant ne pouvait le voir : les autotests des quatre calibrations
-    passent tous par un moteur factice dont `markers_murs` rend une file DÉJÀ REMPLIE. Le seul
-    chemin jamais exercé était celui où les marqueurs sont là. Trouvé par deux relecteurs
-    indépendants à la revue finale du 2026-09-08, jamais par un test.
+    Les autotests des quatre calibrations passent par un moteur factice dont `markers_murs` rend
+    une file DÉJÀ REMPLIE, donc ils n'exercent que le chemin où les marqueurs sont là : ce test
+    couvre le chemin manquant.
 
     Aucun casque, aucune boucle, aucun émetteur : on interroge les prédicats eux-mêmes.
     """
@@ -3836,7 +3751,7 @@ def _smoke_oreille_calibration():
 
 
 def _smoke_secteur():
-    """Le SECTEUR du poste (2026-09-30) : ce que le moteur coupe, et ce qu'il refuse.
+    """Le SECTEUR du poste : ce que le moteur coupe, et ce qu'il refuse.
 
     Un secteur mal transmis ne casse RIEN : le bourdonnement reste dans le signal, un peu plus de
     σ au bandeau, un modèle qui apprend avec un coupe-bande à côté du secteur. Aucune exception,
@@ -3925,7 +3840,7 @@ def _smoke_secteur():
 def _smoke_casque():
     """L'état du casque : paquets perdus comptés sur le compteur, batterie non inventée.
 
-    Le compteur du casque monte de 1 à chaque échantillon (mesuré le 2026-09-25) ; un saut = des
+    Le compteur du casque monte de 1 à chaque échantillon (mesuré) ; un saut = des
     échantillons perdus en route. Deux pièges : un compteur qui REPART (réouverture, bouclage du
     board de test à 255) n'est pas une perte ; et un saut à la JOINTURE de deux blocs en est une.
     """
@@ -3949,7 +3864,7 @@ def _smoke_casque():
         "les barres de liaison : 4 sans perte, 3 jusqu'au seuil d'alerte, 2, puis 1 ; 0 quand "
         "la liaison est perdue ; rien tant qu'on ne sait pas")
     # La RÉOUVERTURE libère l'ancienne session même quand l'arrêt du flux lève — le cas d'une
-    # liaison morte. Vu au casque le 2026-09-25 : la libération sautée, 81 réouvertures refusées
+    # liaison morte. Si la libération saute, BrainFlow refuse toute réouverture
     # (`ANOTHER_BOARD_IS_CREATED_ERROR:16`). Un faux board rejoue exactement ce cas.
     from core.acquisition import UnicornAcquisition
 
@@ -4019,8 +3934,8 @@ def _smoke_casque():
 def _smoke_liaison():
     """Un casque qui DÉCROCHE : détecté, rien n'est décodé pendant la coupure, et il revient.
 
-    Constaté en séance (2026-09-25) : une déconnexion d'une seconde figeait tout jusqu'à relancer
-    la console. BrainFlow ne lève rien — les échantillons cessent d'arriver —, donc ce test coupe
+    Sans surveillance, une déconnexion d'une seconde figerait tout jusqu'à relancer la console.
+    BrainFlow ne lève rien — les échantillons cessent d'arriver —, donc ce test coupe
     les échantillons d'un VRAI moteur (board de test) et fait échouer la réouverture tant qu'il
     ne l'a pas décidé : c'est la seule façon de voir la coupure DURER, et de vérifier ce que le
     moteur fait pendant.
@@ -4059,11 +3974,11 @@ def _smoke_liaison():
     def rouvrir_si_permis():
         essais.append(time.perf_counter())
         if not retour["ok"]:
-            # FIDÈLE au vrai `reouvrir` sur un casque éteint (2026-10-01) : il LIBÈRE d'abord la
-            # session (`stop()`), PUIS l'ouverture échoue. Ce faux levait sans rien libérer, et
-            # la session restait lisible — or BrainFlow LÈVE (`BOARD_NOT_CREATED_ERROR:15`) sur
-            # une session libérée. Au casque, une batterie à plat a tué le moteur exactement là :
-            # au tour qui suit la première réouverture ratée.
+            # FIDÈLE au vrai `reouvrir` sur un casque éteint : il LIBÈRE d'abord la session
+            # (`stop()`), PUIS l'ouverture échoue. La session n'est alors plus lisible, et
+            # BrainFlow LÈVE (`BOARD_NOT_CREATED_ERROR:15`) sur une session libérée : un faux qui
+            # lèverait sans rien libérer ne verrait pas le tour qui suit la première réouverture
+            # ratée, celui où une batterie à plat tue un moteur mal protégé.
             srv.acq.stop()
             raise RuntimeError("UNABLE_TO_OPEN_PORT_ERROR (simulé)")
         coupe["on"] = False
@@ -4194,9 +4109,8 @@ def _smoke_liaison():
         # de son acquisition : un CYCLE, que seul le ramasse-miettes défait, plus tard, au hasard.
         # Et ce jour-là, `BoardShim.__del__` libère la session du board de test — que BrainFlow
         # PARTAGE entre tous les boards de test aux mêmes paramètres, donc celle du moteur d'un
-        # AUTRE test. Mesuré le 2026-09-25 : un fil orphelin (`BOARD_NOT_CREATED_ERROR:15`) et
-        # `[smoke-cumul]` rouge à chaque passage complet, vert seul. Le piège du `finally` de
-        # `run()`, reproduit par un test.
+        # AUTRE test (fil orphelin `BOARD_NOT_CREATED_ERROR:15`, `[smoke-cumul]` rouge à chaque
+        # passage complet, vert seul). C'est le piège du `finally` de `run()`, reproduit ici.
         for nom in ("get_new_data", "reouvrir"):
             srv.acq.__dict__.pop(nom, None)
         srv.__dict__.pop("_drain_commands", None)
@@ -4216,8 +4130,7 @@ def _smoke_mesure():
     `_refus_pour_calibration_en_cours`, plus leurs jumeaux côté boucle), mais il n'a de sens
     qu'avec un `MesureRuntime` en face, et l'autotest de `core/modes/mesure.py` en construit
     déjà un — avec son protocole, son horloge fabriquée et son moteur factice. Écrire la même
-    vérité aux deux endroits, c'est la laisser diverger : un jour l'un des deux serait corrigé
-    et pas l'autre, et le vert de celui qu'on lance le plus couvrirait le rouge de l'autre.
+    vérité aux deux endroits la laisserait diverger : l'un serait corrigé et pas l'autre.
 
     Ce qui compte est que `python src/core/server.py --smoke` rougisse si l'un des deux sens du
     refus disparaît — et c'est ce que cet appel garantit.
@@ -4228,7 +4141,7 @@ def _smoke_mesure():
 
 
 def _smoke_retour_en_direct():
-    """Le retour en direct (2026-10-01) : un TEST publie ses décisions sur le flux de son mode.
+    """Le retour en direct : un TEST publie ses décisions sur le flux de son mode.
 
     Sur un VRAI moteur et un VRAI test SSVEP : un client LSL qui résout `decoded_ssvep` reçoit,
     pendant le test, une décision par essai — celle que le verdict note — ; et le refus croisé
@@ -4246,9 +4159,9 @@ def _smoke_retour_en_direct():
 def _smoke_enregistrement():
     """Enregistrer une séance : le MOTEUR tient la plume, et JAMAIS au-dessus de `data/`.
 
-    ⚠️ **Ce test existe surtout pour la deuxième moitié de cette phrase.** C'est la première
-    capacité d'ÉCRITURE que le moteur gagne en dehors des modèles de calibration : c'est donc
-    exactement le moment où `data/` peut être touché par accident. `data/` porte des
+    ⚠️ **Ce test existe surtout pour la deuxième moitié de cette phrase.** L'enregistrement est
+    la seule capacité d'ÉCRITURE du moteur en dehors des modèles de calibration : `data/` peut
+    donc être touché par accident. `data/` porte des
     enregistrements EEG d'une personne identifiable, sur un dépôt PUBLIC, et le fichier le plus
     récent qui s'y trouve est ce que le moteur ÉLIT par défaut — un verdict de séance déposé là ne
     se contenterait pas d'encombrer. On prend donc l'empreinte du VRAI `data/` avant et après.
@@ -4351,8 +4264,8 @@ def _smoke_enregistrement():
         # ⚠️ **L'accusé de départ ne promet AUCUN chemin**, et c'est ce que cette assertion
         # protège. Le nom du fichier est décidé par la BOUCLE : `submit` ne fait que mettre en
         # file, donc un chemin rendu ici serait celui d'un fichier que la boucle peut refuser de
-        # créer — mesuré en écrivant ce test, sur le double-clic juste en dessous. L'écran lit le
-        # chemin dans `snapshot()`, où il est vrai.
+        # créer (cas du double-clic juste en dessous). L'écran lit le chemin dans `snapshot()`,
+        # où il est vrai.
         chk("chemin" not in r,
             f"…sans promettre de chemin : c'est la BOUCLE qui le décide, et l'écran le lit dans "
             f"l'état ({r})")
@@ -4500,7 +4413,7 @@ def _smoke_vol_marqueurs():
             f"sens 1 — calibrer un mode qui décode est REFUSÉ ({raison[:60]}…)")
         chk("« P300 »" in raison and "même file de marqueurs" in raison,
             f"…en NOMMANT le mode à arrêter et en disant la panne ({raison})")
-        # …mais la validation AU CLIC (passe C1) ne refuse PAS pour ça : c'est le refus que la
+        # …mais la validation AU CLIC ne refuse PAS pour ça : c'est le refus que la
         # console lève elle-même, en arrêtant le mode avant l'entraînement. Le refuser ici
         # interdirait le geste qu'elle s'apprête à faire.
         v_clic, r_clic = srv.valider_calibration("p300", {})
@@ -4541,9 +4454,9 @@ def _smoke_vol_marqueurs():
             f"pendant un entraînement, la validation au clic en refuse un second ({r_clic})")
 
         # ⚠️ La liste de modèles est VIDÉE le temps de l'appel. Sans ça, ce test passerait pour la
-        # mauvaise raison sur un dépôt fraîchement cloné (« aucun choix disponible ») et
-        # dirait PASSERAIT aussi si le refus était placé après `contract.validate` — c'est la
-        # preuve que la garde ne dépend pas de l'état de `data/`.
+        # mauvaise raison sur un dépôt fraîchement cloné (« aucun choix disponible »), et aussi
+        # si le refus était placé après `contract.validate` : c'est la preuve que la garde ne
+        # dépend pas de l'état de `data/`.
         vrai_dispo = p300_models.modeles_disponibles
         p300_models.modeles_disponibles = lambda d=None: []
         try:
@@ -4584,11 +4497,10 @@ def _smoke_vol_marqueurs():
             f"sur « existe » ({r})")
 
         # === 🔴 LE TROISIÈME LECTEUR DE LA MÊME FILE : le TEST d'un mode =======================
-        # Chantier « Configurer · Entraîner · Tester » (2026-09-22). Une mesure menée par une
-        # fenêtre lit par `markers_murs(marker_mode_id)`, et `marker_mode_id` est l'identifiant DU
+        # Une mesure menée par une fenêtre lit par `markers_murs(marker_mode_id)`, et `marker_mode_id` est l'identifiant DU
         # MODE. Un test P300 lancé pendant que le mode P300 décode serait donc le même vol, par un
         # troisième lecteur. Le test factice ci-dessous ne déclare que ce que le refus examine : la
-        # CLASSE et son `marker_mode_id` — les vrais tests de mode ne sont pas encore branchés.
+        # CLASSE et son `marker_mode_id`.
         from core.modes import registry as _reg
         from core.modes.mesure import MesureSpec
         from core.modes.mesure_marqueurs import MesureMarqueurs
@@ -4597,9 +4509,9 @@ def _smoke_vol_marqueurs():
 
         class _TestFactice(MesureMarqueurs):
             """CONSTRUCTIBLE, et c'est ce qui rend l'assertion « côté boucle » falsifiable : sans
-            le refus, la boucle construit bel et bien cette mesure, et l'assertion rougit. La
-            première écriture, réduite à `marker_mode_id`, levait à la construction — la garde ne
-            rougissait alors que par accident, sur une exception."""
+            le refus, la boucle construit bel et bien cette mesure, et l'assertion rougit. Une
+            classe réduite à `marker_mode_id` lèverait à la construction, et la garde ne
+            rougirait que par accident, sur une exception."""
             marker_mode_id = "p300"
             runtime_cls_du_mode = P300Runtime
             evenement_unite = "round_end"
@@ -4659,8 +4571,8 @@ def _smoke_vol_marqueurs():
             chk("est en cours" not in (r.get("reason") or ""),
                 "…et le test d'un AUTRE mode ne bloque pas celui-ci : chacun a sa propre file")
             srv.mesure = None
-            # Le SSVEP ne lit AUCUN marqueur, mais son test publie sur `decoded_ssvep` depuis le
-            # 2026-10-01 : refusé pour CETTE raison-là, pas pour un vol (cf. `_smoke_retour_en_direct`).
+            # Le SSVEP ne lit AUCUN marqueur, mais son test publie sur `decoded_ssvep` : refusé
+            # pour CETTE raison-là, pas pour un vol (cf. `_smoke_retour_en_direct`).
             srv.active["ssvep"] = _ModeFactice()
             refus_ssvep = srv._refus_mesure_pendant_mode(_reg.get_mesure("ssvep_taux"),
                                                          dict(srv.active)) or ""
@@ -4711,10 +4623,9 @@ _FRONTIERE_STIMULUS_INTERDITS = ("research", "console", "brainflow")
 # ⚠️ **Et l'acquisition, nommément.** L'invariant fondateur de `src/stimulus/` — *« une fenêtre
 # n'ouvre JAMAIS le casque »* — est ce qui autorise le montage à deux programmes : l'Unicorn
 # n'accepte qu'une connexion, et c'est parce que la fenêtre n'en ouvre aucune qu'elle peut tourner
-# à côté du moteur. Cet invariant ne reposait que sur la PROSE de `stimulus/__init__.py` jusqu'à la
-# revue finale du 2026-09-08, dans un dépôt dont la règle est « vérifié par un test, pas par la
-# discipline ». `brainflow` ci-dessus ferme la porte d'en bas ; celle-ci ferme la porte d'en haut,
-# car `core.acquisition` est un import de `core`, donc autorisé par la liste des paquets.
+# à côté du moteur. Il est vérifié par un test, pas par la prose de `stimulus/__init__.py`.
+# `brainflow` ci-dessus ferme la porte d'en bas ; celle-ci ferme la porte d'en haut, car
+# `core.acquisition` est un import de `core`, donc autorisé par la liste des paquets.
 _FRONTIERE_STIMULUS_MODULES_INTERDITS = ("core.acquisition",)
 
 # Ce que `src/research/` n'a pas le droit d'importer. Le banc d'essai peut tout CALCULER sur des
@@ -4722,17 +4633,14 @@ _FRONTIERE_STIMULUS_MODULES_INTERDITS = ("core.acquisition",)
 # `itr.py` le font très bien — mais il ne touche NI au casque NI à un écran : ces deux gestes-là
 # sont de l'USAGE RÉEL, et l'usage réel se pilote depuis la console.
 #
-# ⚠️ **Cette règle existe parce qu'elle a été demandée CINQ FOIS sans jamais être écrite nulle
-# part.** Entre juillet et septembre 2026, l'utilisateur a redemandé cinq fois que tout se pilote
-# depuis l'interface graphique ; cinq fois la demande a été traitée comme une fonctionnalité à
-# ajouter — on ajoutait un bouton — et le chantier suivant repartait sans la règle, donc un nouveau
-# trou apparaissait. Une contrainte tenue par la discipline n'est pas tenue. Celle-ci est
-# désormais tenue par ce scanner, comme la frontière entre les paquets.
+# ⚠️ Tout l'usage réel se pilote depuis l'interface graphique : une contrainte tenue par la
+# discipline n'est pas tenue, donc elle est tenue par ce scanner, comme la frontière entre les
+# paquets.
 #
-# `console` a rejoint la liste le 2026-09-10 : le tableau des quatre flèches donne à `research`
-# le droit d'importer `core` et `stimulus`, et RIEN d'autre. Un `research -> console` tirerait Qt
-# dans une analyse hors ligne — donc rendrait le banc d'essai inutilisable sur une machine sans
-# écran, alors que c'est précisément là qu'il tourne.
+# `console` est dans la liste : le tableau des quatre flèches donne à `research` le droit
+# d'importer `core` et `stimulus`, et RIEN d'autre. Un `research -> console` tirerait Qt dans une
+# analyse hors ligne — donc rendrait le banc d'essai inutilisable sur une machine sans écran,
+# alors que c'est précisément là qu'il tourne.
 _FRONTIERE_RESEARCH_INTERDITS = ("pygame", "brainflow", "console")
 _FRONTIERE_RESEARCH_MODULES_INTERDITS = ("core.acquisition",)
 
@@ -4743,13 +4651,9 @@ _FRONTIERE_RESEARCH_MODULES_INTERDITS = ("core.acquisition",)
 # ligne, des protocoles chiffrés et des hypothèses réfutées, dont rien n'est du parcours d'un
 # étudiant. Un import suffirait à en faire entrer un dans l'interface sans qu'on l'ait décidé.
 #
-# ⚠️ **`src/console/` n'était scanné par AUCUNE règle jusqu'au 2026-09-10**, alors que `CLAUDE.md`
-# annonçait « les INTERDITS sont vérifiés par un test » juste sous ce tableau de quatre flèches.
-# Deux des quatre passaient : `console -> research` et `research -> console`. C'est la forme exacte
-# du défaut trouvé le 2026-09-08 sur `core` (« ni pygame **ni Qt** » écrit, seul pygame vérifié) —
-# la règle ÉCRITE plus large que sa VÉRIFICATION, et c'est toujours le cran qui manque qui compte.
-# Le risque était théorique le jour du correctif (aucun import fautif), mais « aujourd'hui personne
-# ne le fait » est de la discipline, pas un test.
+# ⚠️ `src/console/` est scanné lui aussi : la règle ÉCRITE ne doit jamais être plus large que sa
+# VÉRIFICATION (c'est toujours le cran qui manque qui compte), et « aujourd'hui personne ne le
+# fait » est de la discipline, pas un test.
 _FRONTIERE_CONSOLE_INTERDITS = ("research",)
 
 
@@ -4757,14 +4661,11 @@ def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdit
                        exacts=None):
     """Les paquets interdits que CE CODE importe. Retourne [(ligne, paquet), ...].
 
-    ⚠️ **Juge le CODE, pas le texte** (correction de revue, 2026-08-19). La version précédente
-    passait le fichier à une expression régulière `^\\s*(?:from|import)\\s+(…)` : elle voyait donc
-    aussi les docstrings et les chaînes. Sa propre documentation contenait l'exemple
-    « un import de PySide6 » écrit sous forme d'import complet, une ligne plus bas que le début
-    de phrase — **un simple reflow du paragraphe** (ou un mot ajouté à la phrase précédente)
-    aurait suffi à faire échouer `--smoke` sur de la PROSE, avec le message « core/server.py
-    importe PySide6 » et un contributeur envoyé chercher un import qui n'existe pas. Une garde
-    qui se déclenche sur sa propre documentation est une garde qu'on finit par désactiver.
+    ⚠️ **Juge le CODE, pas le texte.** Une expression régulière `^\\s*(?:from|import)\\s+(…)`
+    verrait aussi les docstrings et les chaînes : un simple reflow d'un paragraphe contenant
+    l'exemple « un import de PySide6 » ferait échouer `--smoke` sur de la PROSE, et un
+    contributeur chercherait un import qui n'existe pas. Une garde qui se déclenche sur sa propre
+    documentation est une garde qu'on finit par désactiver.
 
     Ici c'est `ast` qui répond : seuls les vrais nœuds `Import`/`ImportFrom` sont examinés, donc
     ni les docstrings, ni les commentaires, ni les chaînes ne peuvent produire de verdict. En
@@ -4786,9 +4687,9 @@ def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdit
     import ast
     import re
 
-    # `interdits` est paramétrable pour que `core` et `stimulus` soient scannés par le MÊME code,
-    # avec deux listes différentes. Une seconde fonction copiée-collée aurait divergé : celle qui
-    # ne sert qu'à un paquet est celle qu'on oublie de corriger.
+    # `interdits` est paramétrable pour que les quatre paquets soient scannés par le MÊME code,
+    # avec des listes différentes : une fonction copiée-collée par paquet divergerait, et celle
+    # qui ne sert qu'à un paquet est celle qu'on oublie de corriger.
     noms = tuple(_FRONTIERE_INTERDITS if interdits is None else interdits)
     motif_re = _FRONTIERE_INTERDITS_RE if interdits_re is None else interdits_re
     alternatives = "|".join(noms)
@@ -4806,14 +4707,11 @@ def _imports_interdits(source, nom_fichier="<extrait>", interdits=None, interdit
             # match ne peut désigner qu'une remontée hors de `core`.
             # ⚠️ **Les ALIAS comptent, pas seulement le module.** `from core import acquisition`
             # ne nomme jamais `core.acquisition` dans `noeud.module` — il y a `core`, autorisé —
-            # et l'interdit passait donc EN SILENCE. Or `from X import Y` est l'idiome dominant
-            # de ce dépôt : c'est exactement « la faute plausible, celle qu'on écrit sans y
-            # penser » que cette fonction prétend attraper.
-            #
-            # Deux règles tombaient d'un coup : « rien dans `research/` n'ouvre le casque », et
-            # l'invariant fondateur de `stimulus/` — une fenêtre qui aurait ouvert le casque par
-            # cette forme aurait passé le smoke et volé sa connexion au moteur en séance.
-            # Trouvé par la revue de branche du 2026-09-10.
+            # et l'interdit passerait EN SILENCE. Or `from X import Y` est l'idiome dominant de ce
+            # dépôt : c'est « la faute plausible, celle qu'on écrit sans y penser ». Deux règles
+            # en dépendent : « rien dans `research/` n'ouvre le casque », et l'invariant fondateur
+            # de `stimulus/` (une fenêtre qui ouvrirait le casque volerait sa connexion au moteur
+            # en séance).
             base = noeud.module or ""
             # Le PAQUET se juge sur le module seul — sinon `from console.grid import Grille`
             # compterait deux fois la même faute. Les formes complètes servent aux `exacts`.
@@ -4847,21 +4745,14 @@ def _smoke_frontiere():
     écran. Le jour où un import de `research` devient nécessaire, ce n'est pas ce test qu'il
     faut assouplir — c'est le module visé qui doit DÉMÉNAGER dans `core`.
 
-    ⚠️ Correction de revue (tour 2) : la règle vérifiée ne couvrait que `research|console|pygame`,
-    alors que CLAUDE.md (« ni pygame **ni Qt** dans core »), `core/__init__.py` et cette docstring
-    même promettent aussi Qt. Or Qt n'arrive PAS dans `core` par le paquet `console` : il arrive
-    par son propre nom. Un import de PySide6 glissé dans un utilitaire du moteur passait donc en
-    silence — et `python src/core/server.py --mode ssvep` mourait sur un `ImportError` au
-    démarrage, sur toute machine sans Qt (installation minimale, poste de TP, CI sans libGL), pour
-    un moteur dont le contrat est justement de tourner sans écran. La règle VÉRIFIÉE était plus
-    étroite d'un cran que la règle ÉCRITE, et c'était le cran qui compte.
+    ⚠️ La règle vérifiée doit couvrir Qt (« ni pygame **ni Qt** dans core »), pas seulement
+    `research|console|pygame` : Qt n'arrive PAS dans `core` par le paquet `console`, il arrive
+    par son propre nom. Un import de PySide6 glissé dans un utilitaire du moteur le ferait mourir
+    sur un `ImportError` au démarrage, sur toute machine sans Qt (installation minimale, poste de
+    TP, CI sans libGL), alors que son contrat est de tourner sans écran.
 
-    ⚠️ Correction de revue (2026-09-10) : **le paquet `src/console/` n'était scanné nulle part**,
-    et `console` n'était pas dans la liste de `research` — donc `console -> research` ET
-    `research -> console` passaient tous les deux, sous un `CLAUDE.md` qui annonçait « les
-    INTERDITS sont vérifiés par un test » juste sous un tableau de QUATRE flèches. Même forme que
-    la correction du tour 2 juste au-dessus, un cran plus haut : la règle écrite plus large que sa
-    vérification. Les quatre paquets sont maintenant scannés, chacun avec sa liste.
+    ⚠️ Les quatre paquets sont scannés, chacun avec sa liste : `console -> research` ET
+    `research -> console` doivent échouer, comme les deux autres flèches du tableau.
 
     La détection elle-même vit dans `_imports_interdits` (voir sa docstring pour ce qui lui
     échappe). Ce test l'applique à tout `src/core/**/*.py`, `src/stimulus/`, `src/research/` et
@@ -4893,10 +4784,9 @@ def _smoke_frontiere():
         ("# from PySide6.QtCore import QTimer\n", []),                          # commentaire
         ("x = 'import pygame'\n", []),                                          # chaîne
         ("import numpy\nfrom core.config import DATA_DIR\n", []),               # légitime
-        # `stimulus` est le quatrième paquet (2026-09-07). Interdit dans `core` au même titre que
-        # `research` et `console` : le moteur tourne sans écran, et une fenêtre de stimulus est
-        # du pygame. Sans ces deux lignes, la règle ÉCRITE serait plus large que la règle
-        # VÉRIFIÉE — le cran qui compte, cf. la correction du tour 2 juste au-dessus.
+        # `stimulus` est interdit dans `core` au même titre que `research` et `console` : le
+        # moteur tourne sans écran, et une fenêtre de stimulus est du pygame. Sans ces deux
+        # lignes, la règle ÉCRITE serait plus large que la règle VÉRIFIÉE.
         ("from stimulus.registry import commande\n", ["stimulus"]),
         ("import stimulus.p300\n", ["stimulus"]),
     ]
@@ -4928,9 +4818,8 @@ def _smoke_frontiere():
     # 1 bis. La règle du paquet `stimulus`, sur des extraits fabriqués eux aussi. Elle diffère de
     # celle de `core` par les deux bouts : `pygame` y est AUTORISÉ (une fenêtre de stimulus est du
     # pygame), et `core.acquisition` y est INTERDIT alors que `core` ne l'est pas. Ce second point
-    # est l'invariant fondateur du paquet — *une fenêtre n'ouvre JAMAIS le casque* — et il ne
-    # reposait que sur la prose jusqu'à la revue finale du 2026-09-08. C'est lui qui autorise le
-    # montage à deux programmes : l'Unicorn n'accepte qu'une connexion.
+    # est l'invariant fondateur du paquet — *une fenêtre n'ouvre JAMAIS le casque* — qui autorise
+    # le montage à deux programmes : l'Unicorn n'accepte qu'une connexion.
     for source, attendu in (
             ("from core.acquisition import UnicornAcquisition\n", ["core.acquisition"]),
             ("import core.acquisition as acq\n", ["core.acquisition"]),
@@ -4953,13 +4842,13 @@ def _smoke_frontiere():
     # libre : c'est tout le métier de `research/`.
     for source, attendu in (
             ("from core.acquisition import UnicornAcquisition\n", ["core.acquisition"]),
-            # ⚠️ La forme qui PASSAIT en silence jusqu'au 2026-09-10, et c'est l'idiome dominant
-            # du dépôt : `from X import Y` ne nomme jamais `X.Y` dans `noeud.module`.
+            # ⚠️ La forme qui passerait en silence sans la lecture des alias, et c'est l'idiome
+            # dominant du dépôt : `from X import Y` ne nomme jamais `X.Y` dans `noeud.module`.
             ("from core import acquisition\n", ["core.acquisition"]),
             ("from core import acquisition as acq\n", ["core.acquisition"]),
             ("import pygame\n", ["pygame"]),
             ("import brainflow\n", ["brainflow"]),
-            # `research -> console`, la 2e des deux flèches qui passaient jusqu'au 2026-09-10.
+            # `research -> console`, interdit lui aussi.
             ("from console.grid import ModeGrid\n", ["console"]),
             ("from core.config import DATA_DIR\n", []),               # calculer reste libre
             ("import numpy as np\n", []),
@@ -4995,7 +4884,7 @@ def _smoke_frontiere():
 
     # 3. Et `src/stimulus/`, avec sa liste à lui (cf. `_FRONTIERE_STIMULUS_INTERDITS`). Le dossier
     #    DOIT exister : sans cette vérification, supprimer le paquet rendrait « 0 violation » et
-    #    passerait pour un succès — la garde muette que la partie 1 existe déjà pour éviter.
+    #    passerait pour un succès — la garde muette que la partie 1 existe pour éviter.
     racine_stim = os.path.join(os.path.dirname(racine), "stimulus")
     chk(os.path.isdir(racine_stim), f"le paquet src/stimulus/ existe ({racine_stim})")
     if os.path.isdir(racine_stim):
@@ -5007,10 +4896,9 @@ def _smoke_frontiere():
 
     # 4. `src/research/` : le banc d'essai ne touche ni au casque ni à un écran.
     racine_res = os.path.join(os.path.dirname(racine), "research")
-    # ⚠️ Le dossier DOIT exister, exactement comme pour `stimulus/` juste au-dessus — le
-    # raisonnement y était écrit et n'avait pas été appliqué ici. Sans ce `chk`, un
-    # `git mv src/research src/bench` désarmerait la règle en rendant « 0 violation » et
-    # « VERDICT : OK » : la garde muette contre laquelle tout ce chantier a été fait.
+    # ⚠️ Le dossier DOIT exister, exactement comme pour `stimulus/` juste au-dessus. Sans ce
+    # `chk`, un `git mv src/research src/bench` désarmerait la règle en rendant « 0 violation »
+    # et « VERDICT : OK » : une garde muette.
     chk(os.path.isdir(racine_res), f"le banc d'essai src/research/ existe ({racine_res})")
     if os.path.isdir(racine_res):
         fautes_res, vus_res = _scanner(racine_res, "research", _FRONTIERE_RESEARCH_INTERDITS,
@@ -5028,9 +4916,8 @@ def _smoke_frontiere():
     # 5. `src/console/` : la console est un client du MOTEUR, pas du banc d'essai. Quatrième et
     #    dernière section — c'est elle qui rend le tableau des quatre flèches de `CLAUDE.md`
     #    entièrement vérifié, `research -> console` étant fermé par la liste ci-dessus.
-    #    Même `chk` d'existence et même assertion d'effectif que les deux sections précédentes,
-    #    pour la même raison : sans elles, supprimer ou vider le dossier rendrait « 0 violation »
-    #    et « VERDICT : OK ».
+    #    Même `chk` d'existence et d'effectif que les sections précédentes : sans eux, supprimer
+    #    ou vider le dossier rendrait « 0 violation » et « VERDICT : OK ».
     racine_console = os.path.join(os.path.dirname(racine), "console")
     chk(os.path.isdir(racine_console), f"la console src/console/ existe ({racine_console})")
     if os.path.isdir(racine_console):
@@ -5057,8 +4944,8 @@ def _smoke_frontiere():
 def _smoke_textes():
     """Aucun texte affiché n'est écrit en dur : tout passe par `tr()` et `langues/<langue>/`.
 
-    Demandé le 2026-09-23, pour pouvoir ajouter des langues. Même idiome que la frontière : la
-    règle est tenue par un test, pas par la discipline. `core.i18n.controle` refuse une clé qui
+    La règle existe pour pouvoir ajouter des langues. Même idiome que la frontière : elle est
+    tenue par un test, pas par la discipline. `core.i18n.controle` refuse une clé qui
     n'existe pas, une clé calculée, des `{valeurs}` qui ne correspondent pas au texte, un texte
     que plus rien n'affiche, une autre langue qui diverge du français — et tout texte passé EN DUR
     à un widget de la console.
@@ -5087,9 +4974,8 @@ def _smoke_textes():
 def _smoke_exemples():
     """`examples/` ne nomme aucun flux que le moteur ne publie plus.
 
-    ⚠️ **`examples/` n'était couvert par AUCUN test** jusqu'au 2026-09-10, alors que c'est le seul
-    endroit du dépôt qui montre à un étudiant comment CONSOMMER le produit. Un exemple qui nomme
-    un flux disparu ne lève rien : `resolve_byprop` attend, puis rend une liste vide, et
+    ⚠️ `examples/` est le seul endroit du dépôt qui montre à un étudiant comment CONSOMMER le
+    produit. Un exemple qui nomme un flux disparu ne lève rien : `resolve_byprop` attend, puis rend une liste vide, et
     l'étudiant conclut que le moteur ne publie pas — alors qu'il publie sous un autre nom.
 
     La panne la plus probable est un renommage : c'est le registre des modes qui décide des
@@ -5186,11 +5072,11 @@ def _smoke_repos_partage():
     a, b = server.active["ssvep"], server.active["neuro"]
     chk(a._rest_s == b._rest_s == max(ssvep.rest.duration_s, neuro.rest.duration_s),
         f"une seule durée de repos, la plus longue ({a._rest_s:g} s)")
-    # ⚠️ Assertion FAIBLE : SSVEP_WARMUP_S == NEURO_WARMUP_S == 15.0 aujourd'hui, donc cette
-    # égalité passerait MÊME SI le partage de la chauffe était cassé (chacun garderait sa propre
-    # chauffe, qui vaut 15 s des deux côtés par pure coïncidence). Elle documente quand même le
-    # comportement attendu sur les VRAIS modes — c'est la partie 1b, sur des contrats fabriqués à
-    # valeurs distinctes, qui prouve réellement la règle « chauffe = maximum ».
+    # ⚠️ Assertion FAIBLE : SSVEP_WARMUP_S == NEURO_WARMUP_S == 15.0, donc cette égalité passerait
+    # MÊME SI le partage de la chauffe était cassé (chacun garderait sa propre chauffe, qui vaut
+    # 15 s des deux côtés par coïncidence). Elle documente le comportement attendu sur les VRAIS
+    # modes ; c'est la partie 1b, sur des contrats fabriqués à valeurs distinctes, qui prouve la
+    # règle « chauffe = maximum ».
     chk(a._warmup_s == b._warmup_s == max(ssvep.rest.warmup_s, neuro.rest.warmup_s),
         f"une seule chauffe, la plus longue ({a._warmup_s:g} s)")
     chk(server.rest_instruction == neuro.rest.instruction,
@@ -5209,10 +5095,9 @@ def _smoke_repos_partage():
     server.active = {}
 
     # 1b. La règle « chauffe = maximum » ne peut PAS être prouvée par les deux VRAIS modes :
-    # SSVEP_WARMUP_S et NEURO_WARMUP_S valent tous deux 15 s aujourd'hui, donc l'égalité
-    # vérifiée ci-dessus passerait même si le partage était cassé. On la prouve donc sur des
-    # contrats FABRIQUÉS, aux valeurs distinctes — et le test restera valable le jour où l'une
-    # des deux constantes bougera.
+    # SSVEP_WARMUP_S et NEURO_WARMUP_S valent tous deux 15 s, donc l'égalité vérifiée ci-dessus
+    # passerait même si le partage était cassé. On la prouve sur des contrats FABRIQUÉS, aux
+    # valeurs distinctes — valables même si l'une des deux constantes bouge.
     #
     # Le mode qui a la plus longue CHAUFFE n'est volontairement pas celui qui a le plus long
     # REPOS : c'est ce qui vérifie que les deux maximums sont calculés séparément, et que la
@@ -5235,11 +5120,10 @@ def _smoke_repos_partage():
         f"durée partagée = le MAXIMUM des durées ({a._rest_s:g} s pour 30 et 5)")
     chk(faux.rest_instruction == court.rest.instruction,
         f"la consigne suit la DURÉE du repos, pas la chauffe — « {faux.rest_instruction} »")
-    # Même cleanup que les trois autres blocs, par cohérence. Ici `_begin_shared_rest` est
-    # appelée DIRECTEMENT (pas via `_start`), donc `a`/`b` ne sont jamais entrés dans
-    # `faux.active` : ce bloc est un no-op en pratique, sans session BrainFlow ni cycle formé
-    # (rien dans `faux` ne référence `a`/`b` en retour). On le garde quand même pour que le
-    # motif reste identique aux trois autres blocs, y compris si ce test évolue vers `_start`.
+    # Même cleanup que les trois autres blocs. Ici `_begin_shared_rest` est appelée DIRECTEMENT
+    # (pas via `_start`), donc `a`/`b` ne sont jamais entrés dans `faux.active` : ce bloc est un
+    # no-op en pratique, sans cycle formé. On le garde pour que le motif reste identique, y
+    # compris si ce test évolue vers `_start`.
     for runtime in faux.active.values():
         runtime.close()
     faux.active = {}
@@ -5315,13 +5199,11 @@ def _smoke_proposition():
 
     # --- 🔴 RÉGLER UN MODE AVANT DE LE DÉMARRER --------------------------------------------
     #
-    # Trouvé en recette 1.6 le 2026-09-21. `set_params` exigeait un mode DÉMARRÉ et refusait sans
-    # même regarder les valeurs (« « SSVEP » n'est pas démarré »), alors que `propose_params` —
-    # l'autre moitié du même geste — acceptait un mode arrêté depuis toujours : le moteur
-    # proposait un jeu de fréquences, le mettait dans le champ, puis refusait de l'appliquer.
-    # En pratique on règle EN AMONT : on cale ses fréquences sur son écran, son pic alpha sur sa
-    # tête, puis on lance. L'ancien chemin obligeait à démarrer sur des réglages qu'on savait
-    # faux, subir les 23 s de repos, corriger, et refaire le repos.
+    # `set_params` et `propose_params`, les deux moitiés du même geste, doivent accepter l'une et
+    # l'autre un mode arrêté : sinon le moteur proposerait un jeu de fréquences, le mettrait dans
+    # le champ, puis refuserait de l'appliquer. On règle EN AMONT : on cale ses fréquences sur son
+    # écran, son pic alpha sur sa tête, puis on lance — sans démarrer sur des réglages faux, subir
+    # les 23 s de repos, corriger et refaire le repos.
     libre = EngineServer(synthetic=True, modes=("raw",), instance="smoke-reglage-amont")
     chk("ssvep" not in libre.active, "un moteur dont le SSVEP n'est PAS démarré")
     refus_amont = libre.submit("set_params", id="ssvep", params={"freqs": [15.0, 17.0]})
@@ -5371,13 +5253,12 @@ def _smoke_proposition():
 
     # --- 🔴 LE MAGASIN SE VOIT, ET « PROPOSER » LE LIT ---------------------------------------
     #
-    # Deux conséquences du même oubli, toutes deux trouvées EN SÉANCE CASQUE le 2026-09-21, après
-    # que `set_params` eut appris à accepter un mode arrêté le matin même.
+    # Deux exigences découlent de ce qu'un réglage peut être retenu sur un mode arrêté.
     #
-    # (1) `snapshot()` ne portait pas les réglages retenus, et `modes_state` ne contient que les
-    #     modes ACTIFS : la page d'un mode arrêté n'avait donc aucune source et gardait l'ancienne
-    #     valeur à l'écran. Le réglage était en vigueur et l'écran disait le contraire — pire
-    #     qu'un refus franc. Rapporté tel quel : « mon pic alpha n'a pas été reporté ».
+    # (1) `snapshot()` doit porter les réglages retenus : `modes_state` ne contient que les modes
+    #     ACTIFS, donc la page d'un mode arrêté n'aurait aucune source et garderait l'ancienne
+    #     valeur à l'écran. Le réglage serait en vigueur et l'écran dirait le contraire — pire
+    #     qu'un refus franc.
     libre.submit("stop_mode", id="ssvep")
     libre._drain_commands()
     libre.submit("set_params", id="ssvep", params={"alpha_hz": 11.0})
@@ -5387,8 +5268,8 @@ def _smoke_proposition():
         f"peut pas le montrer, et dit le contraire de la vérité ({vu.get('alpha_hz')})")
     chk("ssvep" not in (libre.snapshot().get("modes_state") or {}),
         "…et c'est bien le seul endroit où il apparaît : `modes_state` ne porte que les actifs")
-    # (2) « Proposer » recalculait sur le pic de la POPULATION (9,6 Hz) au lieu de celui qu'on
-    #     venait d'appliquer. Le choix de 11,0 Hz n'est pas neutre : c'est LA valeur qui sépare
+    # (2) « Proposer » doit calculer sur le pic qu'on vient d'appliquer, pas sur celui de la
+    #     POPULATION (9,6 Hz). Le choix de 11,0 Hz n'est pas neutre : c'est LA valeur qui sépare
     #     les deux réponses. À 9,6 Hz le moteur propose 12 · 15 · 20 ; à 11,0 il garde 8,571, qui
     #     est alors assez loin de l'alpha. Une valeur où les deux jeux coïncident rendrait cette
     #     assertion infalsifiable.
@@ -5400,11 +5281,10 @@ def _smoke_proposition():
 
     # --- LE STIMULUS D'UN MODE N'EST PAS CELUI DE SA CALIBRATION ----------------------------
     #
-    # Deux questions distinctes que `Calib.stimulus_id` confondait : « avec quoi décode-t-on » et
-    # « avec quoi s'entraîne-t-on ». Elles ont la même réponse pour le P300, l'ErrP et le c-VEP —
-    # c'est ce qui a caché le défaut pendant tout le chantier. Le SSVEP a un stimulus et AUCUNE
-    # calibration, donc son bouton « Lancer le stimulus » n'existait nulle part : le seul mode
-    # déjà validé sur un cerveau ne pouvait pas être éprouvé depuis l'application.
+    # Deux questions distinctes : « avec quoi décode-t-on » et « avec quoi s'entraîne-t-on ».
+    # Elles ont la même réponse pour le P300, l'ErrP et le c-VEP, ce qui peut cacher la
+    # différence. Le SSVEP a un stimulus et AUCUNE calibration : le critère « a une calibration »
+    # ne suffit donc pas à savoir qu'un mode a un stimulus.
     ssvep_spec = registry.serialize(registry.get("ssvep"))
     chk(ssvep_spec["stimulus_id"] == "ssvep" and ssvep_spec["calibration"] is None,
         f"le SSVEP déclare un stimulus SANS déclarer de calibration — le cas que l'ancien critère "
@@ -5461,8 +5341,8 @@ def _smoke_proposition():
 
     # Une clé qui ne propose rien est refusée AVEC sa raison : la commande reste atteignable
     # depuis un client LSL même quand la console n'affiche aucun bouton. `freqs` est la CIBLE des
-    # propositions, jamais leur source (contrairement à `refresh_hz` ET, depuis la critique 5,
-    # `alpha_hz`) : elle ne propose donc jamais rien elle-même.
+    # propositions, jamais leur source (contrairement à `refresh_hz` et `alpha_hz`) : elle ne
+    # propose donc jamais rien elle-même.
     ack3 = server.submit("propose_params", id="ssvep", key="freqs")
     chk(not ack3.get("accepted") and "propose" in (ack3.get("reason") or ""),
         f"un réglage qui ne propose rien est refusé ({ack3.get('reason')})")
@@ -5474,8 +5354,7 @@ def _smoke_proposition():
         f"on peut demander une proposition sur un mode PAS ENCORE démarré ({ack4.get('reason')})")
 
     # --- 🔴 « PROPOSER » LIT LA BANDE À L'ÉCRAN, SES DEUX COUPURES, ET REFUSE L'ABSURDE ----------
-    # (passe C1, 2026-09-30) Ces gardes n'existaient que dans `modes/ssvep_mesure.py`, que ce smoke
-    # n'exécute pas. Quatre cibles à 60 Hz, pic alpha par défaut : sous 5-40 Hz le moteur propose
+    # Ces gardes sont aussi vérifiées dans `modes/ssvep_mesure.py`. Quatre cibles à 60 Hz, pic alpha par défaut : sous 5-40 Hz le moteur propose
     # 5 · 12 · 20 · 30 — une cible sous 8 Hz ET une au-dessus de 20, ce qui rend les deux
     # coupures observables.
     quatre = [15.0, 20.0, 60.0 / 7, 12.0]
@@ -5507,9 +5386,9 @@ def _smoke_proposition():
         f"la coupure BASSE à l'écran (8 Hz) borne la proposition, et « Appliquer » accepte ce "
         f"qu'elle rend ({[round(f, 3) for f in sous_8]}, {applique.get('reason', 'accepté')})")
     # (c) Une saisie absurde est REFUSÉE, avec la raison d'« Appliquer » — jamais écrêtée en
-    #     silence (0 → 5, « ? » → 40, NaN traversait), et jamais une boucle sans fin : un
-    #     rafraîchissement infini faisait tourner `available_frequencies` à jamais, sur le fil de
-    #     l'interface. D'où le délai : un « Proposer » qui ne rend pas la main est un ROUGE ici,
+    #     silence (0 → 5, « ? » → 40, NaN), et jamais une boucle sans fin : un rafraîchissement
+    #     infini ferait tourner `available_frequencies` à jamais, sur le fil de l'interface.
+    #     D'où le délai : un « Proposer » qui ne rend pas la main est un ROUGE ici,
     #     pas un smoke figé.
     import threading as _threading
 
@@ -5594,8 +5473,8 @@ def _smoke_cumul():
             ok = False
 
     # `set_published` doit couper la publication SANS toucher au décodage (contrat documenté
-    # dans ModeRuntime.set_published) — et jusqu'ici rien ne le vérifiait : un flux qui refuserait
-    # de disparaître serait un défaut SILENCIEUX, invisible à l'étudiant qui l'a coupé.
+    # dans ModeRuntime.set_published) : un flux qui refuserait de disparaître serait un défaut
+    # SILENCIEUX, invisible à l'étudiant qui l'a coupé.
     ack = server.submit("set_published", id="ssvep", on=False)
     if not ack.get("accepted"):
         print(f"[smoke-cumul] ÉCHEC : set_published(on=False) refusé ({ack})")
@@ -5679,7 +5558,7 @@ def _smoke_dimensionnement():
 
     ⚠️ Assertion DIRECTE sur `server.keep`, et c'est délibéré. Observer qu'une époque « sort »
     ne prouve RIEN : un tampon sous-dimensionné rend quand même ce qu'on lui demande, juste
-    plus court. Ce piège a déjà été rencontré au chantier 3B, sur la calibration MI.
+    plus court (piège rencontré sur la calibration MI).
 
     ⚠️ Et surtout : les deux premières assertions ne peuvent PAS ÉCHOUER telles quelles. Le seul
     mode marqueur du catalogue demande 0,95 s, donc `attendu` vaut 488 échantillons contre un
@@ -5708,7 +5587,7 @@ def _smoke_dimensionnement():
 
     # Le mode marqueur le plus gourmand du catalogue est DOMINÉ par les autres consommateurs du
     # tampon : on en déclare donc un qui les domine tous, le temps de ce test. 30 s d'époque
-    # contre 4 s pour la calibration MI, la plus gourmande aujourd'hui — aucune ambiguïté sur
+    # contre 4 s pour la calibration MI, la plus gourmande — aucune ambiguïté sur
     # quel terme décide. Le motif (patcher `registry.MODES` puis restaurer) est celui de
     # `_smoke_marqueurs_inlet`.
     from core.modes import registry as _registry
@@ -5792,20 +5671,14 @@ def _smoke_tampon_horodate():
     tampons doit donc être exactement ce bloc — valeurs ET horodatages, à l'identique. Ça
     épingle d'un coup la longueur, l'ordre, le décalage et toute transformation glissée en route.
 
-    ⚠️ **Correction de revue (tour 2) : ce test jugeait le mauvais objet, et il était instable
-    depuis cinq tâches.** Il faisait tourner un vrai board pendant 3 s de temps MURAL, puis
-    jugeait les horodatages produits par le thread interne de BrainFlow — que `server.py` se
-    contente de RECOPIER (`clock.to_lsl(ts_unix)` du canal TIMESTAMP). Une préemption suivie
-    d'un rattrapage en rafale effondrait la médiane des écarts et faisait rougir un test dont
-    aucune ligne de ce fichier n'était la cause : échec journalisé « cadence médiane 0.02 ms
-    attendu 4.00 ms », précédé dans le log de `data_receiver.cpp ERR| Stream transmission broke
-    off`, et jusqu'à quatre fois de suite pendant qu'une autre charge tournait. Trois
-    implémenteurs y ont dépensé du temps à prouver que ce n'était pas eux.
-
-    La réponse n'est PAS d'élargir la tolérance : un test qui juge la mauvaise chose ne devient
-    pas bon en devenant permissif, il devient un test qu'on relance jusqu'au vert — donc un test
-    qu'on a appris à ignorer. Le producteur est donc remplacé par `_AcqDeterministe`, et chaque
-    assertion redevient une question sur `server.py` :
+    ⚠️ Ce test juge `server.py`, pas BrainFlow. Un vrai board jugé sur 3 s de temps MURAL
+    produirait des horodatages que `server.py` se contente de RECOPIER (`clock.to_lsl(ts_unix)`
+    du canal TIMESTAMP) : une préemption suivie d'un rattrapage en rafale effondrerait la médiane
+    des écarts et ferait rougir un test dont aucune ligne de ce fichier n'est la cause (« cadence
+    médiane 0.02 ms attendu 4.00 ms »). La réponse n'est PAS d'élargir la tolérance : un test qui
+    juge la mauvaise chose ne devient pas bon en devenant permissif, il devient un test qu'on
+    relance jusqu'au vert — donc qu'on apprend à ignorer. Le producteur est donc remplacé par
+    `_AcqDeterministe`, et chaque assertion est une question sur `server.py` :
 
     - la cadence médiane vaut EXACTEMENT 1/fs parce qu'on l'a fournie ainsi : ce qui est vérifié
       est que le moteur TRANSMET les horodatages du producteur au lieu d'en régénérer ;
@@ -5839,8 +5712,8 @@ def _smoke_tampon_horodate():
     #
     # ⚠️ Ici, et ICI SEULEMENT, le `min()` est INERTE : 0,4 s à POLL_S = 0,05 s font 8 tours de
     # 13 échantillons, soit 104 pour un `keep` de 1250 — le tampon ne sature jamais, donc cette
-    # ligne ne dit rien de la troncature (elle l'a longtemps prétendu ; correction de revue
-    # 2026-08-19). Le régime plein est exercé plus bas, sur un SECOND moteur.
+    # ligne ne dit rien de la troncature. Le régime plein est exercé plus bas, sur un SECOND
+    # moteur.
     chk(len(srv.recent_ts) == min(srv.acq.produits, srv.keep) > 0,
         f"et ils portent tout ce que le producteur a rendu, borné à `keep` "
         f"({len(srv.recent_ts)} pour {srv.acq.produits} produits, keep={srv.keep})")
@@ -5879,8 +5752,7 @@ def _smoke_tampon_horodate():
     # --- LE RÉGIME PLEIN : le tampon SATURE et la troncature s'exerce -----------------------
     #
     # Le moteur passe sa vie dans ce régime (`keep` = 5 s de signal, une séance en dure des
-    # milliers) et aucun test ne l'atteignait : retirer les deux `[-self.keep:]` de la boucle
-    # laissait TOUT le fichier vert. Le moteur se mettait alors à `vstack` un tableau qui grandit
+    # milliers). Sans les deux `[-self.keep:]` de la boucle, il `vstack` un tableau qui grandit
     # sans borne, dix fois par seconde — ça ne casse pas, ça ralentit puis ça sature la mémoire,
     # la panne la plus difficile à imputer.
     #
@@ -5932,8 +5804,7 @@ def _smoke_marqueurs_murs():
 
     # `.get("target")` partout, jamais `["target"]` : la liste `resultats` de `_smoke()` est
     # construite EN AMONT, donc une exception levée ICI ferait sauter TOUS les sous-tests
-    # suivants — exactement le court-circuit que le passage de `and` à `all()` venait de
-    # supprimer, et sans même imprimer un verdict. Un marqueur qui échapperait au filtre n'a pas
+    # suivants, sans même imprimer un verdict. Un marqueur qui échapperait au filtre n'a pas
     # forcément de clé « target » : on veut un ÉCHEC propre via `chk`, pas un `KeyError`.
     murs = srv.markers_murs("p300", post_s=0.80)
     chk([m[1].get("target") for m in murs] == [1],
@@ -5991,10 +5862,10 @@ def _smoke_marqueurs_murs():
         f"le marqueur errp, MÛR et EXAMINÉ dans ce même appel, n'empêche pas le p300 valide de "
         f"sortir mais lui-même n'est jamais rendu à p300 ({murs})")
 
-    # Les FRONTIÈRES EXACTES des trois comparaisons. Elles n'étaient testées nulle part : chaque
-    # test tombait franchement d'un côté ou de l'autre, donc passer un `>` en `>=` (ou l'inverse)
-    # ne faisait rougir aucune assertion. Ce sont pourtant les trois seules décisions de
-    # `markers_murs`, et un marqueur pile à la limite est le cas NORMAL d'un émetteur régulier.
+    # Les FRONTIÈRES EXACTES des trois comparaisons : sans elles, chaque test tombe franchement
+    # d'un côté ou de l'autre, et passer un `>` en `>=` (ou l'inverse) ne ferait rougir aucune
+    # assertion. Ce sont pourtant les trois seules décisions de `markers_murs`, et un marqueur
+    # pile à la limite est le cas NORMAL d'un émetteur régulier.
     srv.recent_ts = np.arange(300.0, 303.0, 1.0 / fs)
     srv.recent = np.zeros((len(srv.recent_ts), 8))
     vieux, recent = float(srv.recent_ts[0]), float(srv.recent_ts[-1])
@@ -6021,10 +5892,10 @@ def _smoke_marqueurs_murs():
         f"un marqueur dont l'époque finit PILE sur le dernier échantillon est MÛR, pas retenu "
         f"un tour de plus ({murs})")
 
-    # Et les compteurs SORTENT : ils étaient incrémentés avec soin et lus par personne, alors que
-    # `modes/p300.py` les annonce comme le moyen par lequel trois de ses six pannes sont dites et
-    # que `docs/markers.md` promet à l'étudiant qu'il les verra grimper. Ils valent 1 et 1 ici
-    # (pas 0), donc un `_state()` qui écrirait des zéros en dur ne passerait pas.
+    # Et les compteurs SORTENT : `modes/p300.py` les annonce comme le moyen par lequel trois de
+    # ses six pannes sont dites, et `docs/markers.md` promet à l'étudiant qu'il les verra grimper.
+    # Ils valent 1 et 1 ici (pas 0), donc un `_state()` qui écrirait des zéros en dur ne
+    # passerait pas.
     etat = srv._state(True, calibration=None)
     chk(etat.get("marqueurs", {}).get("perdus") == srv.marqueurs_perdus == 1,
         f"l'état publié porte le compte des marqueurs PERDUS ({etat.get('marqueurs')})")
@@ -6049,8 +5920,8 @@ def _smoke_marqueurs_murs():
 def _smoke_marqueurs_file_coincee():
     """Un marqueur ABERRANT (futur) ne doit jamais coincer ceux qui le suivent dans la file.
 
-    Contrôler la MATURITÉ avant le FUTUR (l'ordre initialement proposé pour `markers_murs`) a
-    deux défauts d'un coup : un marqueur horodaté loin dans le futur n'est par définition jamais
+    Contrôler la MATURITÉ avant le FUTUR (l'ordre inverse de `markers_murs`) a deux défauts d'un
+    coup : un marqueur horodaté loin dans le futur n'est par définition jamais
     « mûr », donc il déclenche le `break` avant même d'atteindre le contrôle du futur —
     `marqueurs_futurs` devient inatteignable, et surtout le curseur ne le dépasse JAMAIS. Ce
     marqueur reste indéfiniment le premier examiné, et tout ce qui le suit dans la file — y
@@ -6118,7 +5989,7 @@ def _smoke_marqueurs_inlet():
         ok = ok and bool(cond)
 
     # Spec de test, absente du vrai catalogue. `runtime_cls=ModeRuntime` : la classe de BASE,
-    # sûre à instancier telle quelle (déjà fait par `_smoke_repos_partage`) — `_open`/`_close`/
+    # sûre à instancier telle quelle (comme `_smoke_repos_partage`) — `_open`/`_close`/
     # `_run_step` y sont des no-op. `rest=None` : elle démarre directement en "running", sans
     # séquence chauffe/repos à gérer ici.
     ecoute = ModeSpec(id="smoke-ecoute", label="Écoute (test)", family="actif", summary="",
@@ -6235,7 +6106,7 @@ def _smoke_marqueurs_inlet():
     # `EngineServer ↔ ModeRuntime` (un runtime garde `self.engine`). Laissé vivant, ce cycle
     # retarde le nettoyage du `BoardShim` jusqu'à un passage du ramasse-miettes cyclique, et son
     # `__del__` tardif peut alors libérer la session d'un AUTRE moteur du même processus — le
-    # destructeur zombie documenté le 2026-07-28 (`BOARD_NOT_CREATED_ERROR`). Inoffensif ici
+    # destructeur zombie (`BOARD_NOT_CREATED_ERROR`). Inoffensif ici
     # seulement parce qu'aucun sous-test ne démarre de board APRÈS celui-ci ; ça ne se remarque
     # pas quand ça cesse d'être vrai, donc on casse le cycle explicitement.
     srv2.active = {}
@@ -6247,25 +6118,19 @@ def _smoke_marqueurs_inlet():
 def _smoke_marqueurs_relance():
     """L'émetteur meurt, puis REVIENT. Le moteur doit le réentendre tout seul.
 
-    « Je ferme le stimulus et je le relance » est un geste de routine en TP, et c'était la panne
-    la plus coûteuse du sous-système : l'inlet n'était re-résolu que `if not connecte`, `connecte`
-    restait `True` à vie, et le `recover=True` par défaut faisait attendre indéfiniment le retour
-    de l'ANCIEN `source_id` — que l'émetteur de référence déclare par PID, donc qui ne revient
-    jamais. Mesuré, deux processus, avant correctif :
+    « Je ferme le stimulus et je le relance » est un geste de routine en TP, et la panne est
+    silencieuse : si l'inlet n'est re-résolu que `if not connecte`, `connecte` reste `True` à vie,
+    et le `recover=True` par défaut de LSL fait attendre indéfiniment le retour de l'ANCIEN
+    `source_id` — que l'émetteur de référence déclare par PID, donc qui ne revient jamais. Le
+    moteur reste muet, sans exception, `marqueurs_inlet_erreurs` immobile à 0, et redémarrer le
+    mode n'y change rien. Avec `recover=False`, la disparition lève `LostError`,
+    `MarkerInlet.pull` lâche l'inlet, et la boucle re-résout (mesuré sur deux processus : 51
+    marqueurs après relance, contre 0 avec `recover=True`).
 
-        [B] émetteur #1 vivant : 13 marqueurs | [C] fermé : 1 | [D] #2 RELANCÉ : 0 -> MUET
-        [E] un inlet NEUF : 13 -> le flux #2 est pourtant bien là
-
-    Aucune exception, `marqueurs_inlet_erreurs` immobile à 0, et redémarrer le mode n'y changeait
-    rien. Avec `recover=False`, la disparition lève `LostError`, `MarkerInlet.pull` lâche l'inlet,
-    et la boucle re-résout : mesuré 51 marqueurs après relance, contre 0.
-
-    ⚠️ Ce test ne lance PAS deux processus : détruire le `StreamOutlet` côté Python suffit à
-    produire exactement le même `LostError` côté inlet (vérifié en sonde avant d'écrire ce test —
-    même enchaînement B/C/D/E/F que la mesure à deux processus ci-dessus). Ce qu'il ne couvre
-    donc PAS, et qu'il faut savoir : la mort BRUTALE d'un processus émetteur (Ctrl-C, plantage),
-    où c'est le système qui ferme les sockets. La sonde à deux processus a montré le même
-    comportement dans ce cas, mais elle n'est pas rejouée ici.
+    ⚠️ Ce test ne lance PAS deux processus : détruire le `StreamOutlet` côté Python produit
+    exactement le même `LostError` côté inlet. Il ne couvre donc PAS la mort BRUTALE d'un
+    processus émetteur (Ctrl-C, plantage), où c'est le système qui ferme les sockets ; une sonde à
+    deux processus y a montré le même comportement.
     """
     import io
     import types
@@ -6321,7 +6186,7 @@ def _smoke_marqueurs_relance():
     finally:
         del o1
 
-    # --- B. L'émetteur DISPARAÎT : l'inlet doit redevenir « non connecté ». (IMPORTANT 1.5) ----
+    # --- B. L'émetteur DISPARAÎT : l'inlet doit redevenir « non connecté ». -----------------
     avant_erreurs = srv.marqueurs_inlet_erreurs
     vu = tourne(srv, 20.0, lambda: not srv.marker_inlet.connecte)
     chk(vu and not srv.marker_inlet.connecte,
@@ -6330,7 +6195,7 @@ def _smoke_marqueurs_relance():
     chk(srv.marqueurs_inlet_erreurs > avant_erreurs,
         f"...et l'incident est COMPTÉ, pas avalé ({srv.marqueurs_inlet_erreurs})")
 
-    # --- C. Un émetteur NEUF (source_id différent, comme un vrai relancement). (CRITIQUE 1.4) --
+    # --- C. Un émetteur NEUF (source_id différent, comme un vrai relancement). -------------
     o2 = StreamOutlet(StreamInfo(nom, "Markers", 1, IRREGULAR_RATE, "string", "smoke-emetteur-2"))
     try:
         srv._marqueurs = []
@@ -6347,8 +6212,8 @@ def _smoke_marqueurs_relance():
         del o2
 
     # --- D. Le message d'erreur est LIMITÉ EN CADENCE. ----------------------------------------
-    # Mesuré avant correctif : 310 exceptions en 20 s, soit 20 lignes par seconde, qui noient le
-    # journal des modes qui tournent à côté. On martèle 50 tours sur un inlet qui échoue toujours
+    # Sans limite : 310 exceptions en 20 s, soit 20 lignes par seconde, qui noient le journal des
+    # modes qui tournent à côté. On martèle 50 tours sur un inlet qui échoue toujours
     # et on COMPTE les lignes imprimées, plutôt que de faire confiance à la relecture.
     class _InletMort:
         connecte = True
@@ -6405,11 +6270,11 @@ def _smoke_marqueurs_relance():
 
 
 def _smoke_magasin_refus_du_runtime():
-    """M-7 (revue du 2026-09-22) : `set_params` sur un mode EN MARCHE écrit le magasin à la
-    soumission, puis la boucle RECONSTRUIT le runtime — qui peut refuser (c-VEP : un modèle calibré
-    sur un autre nombre de cibles, `_desaccord_code`). Le mode continuait sur l'ancien réglage
-    pendant que `snapshot()["reglages"]` annonçait le nouveau, et la console (« le magasin
-    d'abord ») lançait « Tester » avec ce réglage refusé. Joué sur un mode FABRIQUÉ dont le
+    """`set_params` sur un mode EN MARCHE écrit le magasin à la soumission, puis la boucle
+    RECONSTRUIT le runtime — qui peut refuser (c-VEP : un modèle calibré sur un autre nombre de
+    cibles, `_desaccord_code`). Le mode continue alors sur l'ancien réglage : le magasin doit être
+    remis dessus, sinon `snapshot()["reglages"]` annonce le nouveau et la console (« le magasin
+    d'abord ») lance « Tester » avec ce réglage refusé. Joué sur un mode FABRIQUÉ dont le
     constructeur refuse un gain > 5 : aucun vrai mode ne peut être laissé fautif pour le test.
     """
     from core.modes.contract import ModeSpec, Param
@@ -6471,12 +6336,11 @@ def _smoke_magasin_refus_du_runtime():
 def _smoke_marqueurs_stream_in():
     """`stream_in` doit vraiment choisir le flux écouté, pas rester un réglage-décor.
 
-    Avant ce correctif, `_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` EN DUR : le réglage
-    « Flux de marqueurs » du P300 s'affichait dans la console, se validait, se sauvegardait — et
-    ne servait à RIEN. `_nom_flux_marqueurs` fait des runtimes FABRIQUÉS (`types.SimpleNamespace`,
-    pas un vrai `P300Runtime` : ça éviterait un modèle entraîné pour rien) pour ne pas dépendre
-    d'un mode marqueur réel — seul le P300 en a un aujourd'hui, un futur mode pourrait s'y ajouter
-    sans que ce test doive changer.
+    Si `_ouvre_marker_inlet` avait `MARKER_STREAM_DEFAULT` EN DUR, le réglage « Flux de
+    marqueurs » du P300 s'afficherait dans la console, se validerait, se sauvegarderait — et ne
+    servirait à RIEN. Ce test utilise des runtimes FABRIQUÉS (`types.SimpleNamespace`) plutôt
+    qu'un vrai `P300Runtime`, pour ne pas dépendre d'un modèle entraîné ni d'un mode marqueur
+    réel : un futur mode marqueur ne le change pas.
     """
     import io
     import types
@@ -6515,8 +6379,8 @@ def _smoke_marqueurs_stream_in():
     chk(srv._nom_flux_marqueurs() == "mon_flux_perso",
         "un mode qui ne consomme pas de marqueurs ne pèse pas sur le choix, même avec stream_in")
 
-    # 4. Un mode marqueur qui NE DÉCLARE PAS `stream_in` (aucun aujourd'hui, un futur mode
-    # pourrait) compte pour le défaut, pas pour une absence.
+    # 4. Un mode marqueur qui NE DÉCLARE PAS `stream_in` compte pour le défaut, pas pour une
+    # absence.
     srv.active = {"futur-mode": faux_runtime(0.5)}
     chk(srv._nom_flux_marqueurs() == MARKER_STREAM_DEFAULT,
         f"un mode marqueur sans stream_in déclaré retombe sur le défaut "
@@ -6535,8 +6399,8 @@ def _smoke_marqueurs_stream_in():
         f"...et il est dit BRUYAMMENT, en nommant les deux flux en désaccord ({texte!r})")
 
     # 6. Preuve BOUT EN BOUT : `_ouvre_marker_inlet` (pas seulement le helper isolé) crée bien
-    # son inlet sur le nom du mode actif — c'est LA méthode qui portait `MARKER_STREAM_DEFAULT`
-    # en dur avant ce correctif, celle que la preuve rouge/vert du rapport casse et répare.
+    # son inlet sur le nom du mode actif — c'est LA méthode qui ne doit pas porter
+    # `MARKER_STREAM_DEFAULT` en dur.
     srv2 = EngineServer(synthetic=True, modes=(), params={}, instance="smoke-marqueurs-stream-in-2")
     srv2.active = {"p300": faux_runtime(0.95, stream_in="flux_bout_en_bout")}
     srv2._ouvre_marker_inlet()
@@ -6611,10 +6475,10 @@ if __name__ == "__main__":
     # au moteur, même inoffensif.
     params = {mode_id: settings for mode_id, settings in params.items() if mode_id in modes}
     # `_prepare` refuse un réglage invalide en levant un `ValueError` dont le message est déjà
-    # rédigé pour être lu. Un traceback autour ne dit rien de plus et enterre ce message sous
-    # quinze lignes de pile — or c'est le PREMIER contact de tout étudiant qui lance `--mode mi`
-    # avant d'avoir calibré : sans modèle entraîné, ce refus est le comportement normal du mode,
-    # pas un plantage. Code de sortie 2 : « la commande est mal formée », comme argparse.
+    # rédigé pour être lu. Un traceback autour enterrerait ce message sous quinze lignes de pile —
+    # or c'est le PREMIER contact de tout étudiant qui lance `--mode mi` avant d'avoir calibré :
+    # sans modèle entraîné, ce refus est le comportement normal du mode, pas un plantage. Code de
+    # sortie 2 : « la commande est mal formée », comme argparse.
     try:
         engine = EngineServer(serial=args.serial, synthetic=args.synthetic, verbose=args.verbose,
                               modes=modes, params=params, instance=args.instance,

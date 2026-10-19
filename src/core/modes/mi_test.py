@@ -13,8 +13,8 @@ le contrôle alpha, avec de vraies `Etape`.
 
 2. **UN ESSAI = UNE DÉCISION.** Le mode décide toutes les 0,2 s sur des fenêtres de 2 s qui se
    chevauchent : ~26 par essai. Les compter gonflerait l'effectif d'autant et rétrécirait
-   l'intervalle d'un facteur ~5 (sur le SSVEP : n = 24 devenait 168). La décision d'un essai est
-   **la DERNIÈRE sortie : ce que `decoded_mi` publiait quand l'imagerie se termine** — la consigne
+   l'intervalle d'un facteur ~5 (sur le SSVEP : n = 24 deviendrait 168). La décision d'un essai est
+   **la DERNIÈRE sortie : ce que `decoded_mi` publie quand l'imagerie se termine** — la consigne
    tenue le plus longtemps, ce qu'un client lit alors, un vote fait de CET essai seul (cf. 4). Ni
    la première (vote sans historique), ni une majorité (le produit publie un flux, pas un résumé).
 
@@ -64,11 +64,11 @@ from core.modes.mi_calib import consigne, rappel_de  # noqa: E402
 # se contredire sur le même effectif.
 from core.modes.ssvep_mesure import REFERENCE_EMISSION, wilson  # noqa: E402
 
-# La seule séance de référence du projet, ré-mesurée honnêtement (CV PAR ESSAI) : 40,0 % à 3 classes
-# (p = 0,082, PAS significatif), 63,3 % à 2 classes (p = 0,038). Chiffres de CALIBRATION, hors
-# ligne : aucun repère EN DIRECT n'existe. Rangés par JEU DE TÂCHES, pas par leur nombre
-# (2026-10-15) : depuis que les tâches se règlent, « 2 classes » peut vouloir dire pieds/mains, et
-# le 63,3 % des poings n'en dit rien.
+# Les repères d'une séance de référence, mesurée par validation croisée PAR ESSAI : 40,0 % à 3
+# classes (p = 0,082, PAS significatif), 63,3 % à 2 classes (p = 0,038). Chiffres de CALIBRATION,
+# hors ligne : aucun repère EN DIRECT n'existe. Rangés par JEU DE TÂCHES, pas par leur nombre :
+# les tâches se règlent, donc « 2 classes » peut vouloir dire pieds/mains, et le 63,3 % des
+# poings n'en dit rien.
 REPERES_JUSTESSE = {frozenset(("GAUCHE", "DROITE", "REPOS")): 0.400,
                     frozenset(("GAUCHE", "DROITE")): 0.633}
 
@@ -86,8 +86,8 @@ ESSAIS_MIN = 6
 # restent des identifiants — la console en tire le top latéralisé.
 PAUSE = tr("mesure.mi_test.etape.pause")
 
-# Essais PAR CLASSE. Défaut COURT, parce qu'on refait ce test à chaque réglage ; 10 = l'effectif de
-# la séance de référence (30 essais à 3 classes), pour TRANCHER quand l'intervalle est trop large.
+# Essais PAR CLASSE. Défaut COURT, parce qu'on refait ce test à chaque réglage ; 10 = l'effectif
+# de la séance de référence (30 essais à 3 classes), pour TRANCHER quand l'intervalle est trop large.
 ESSAIS_PAR_CLASSE = (4, 6, 10)
 ESSAIS_PAR_CLASSE_DEFAUT = 6
 
@@ -134,8 +134,8 @@ class MesureMI(MesureRuntime):
         self._decideur = _DecideurMI(SPEC_MI, {p.key: params[p.key] for p in SPEC_MI.params},
                                      self._rejeu)
         self.classes = tuple(self._decideur.classes)
-        # La mise en route DU MODÈLE (2026-10-15) : le test rejoue l'entraînement tel qu'il a été
-        # joué. Un modèle d'avant ce réglage a appris avec 3 s.
+        # La mise en route DU MODÈLE : le test rejoue l'entraînement tel qu'il a été joué. Un
+        # modèle enregistré sans ce réglage a appris avec 3 s.
         self.cue_s = float(getattr(self._decideur.model, "mise_en_route_s", MI_CUE_S))
         super().__init__(spec, params, engine, rng=rng)
 
@@ -144,7 +144,7 @@ class MesureMI(MesureRuntime):
         """UN essai : la pause qui le précède (non enregistrée), puis l'essai entier (enregistré).
 
         La pause AVANT : la première prépare, et le calcul suit le dernier essai sans attente.
-        `cue_s` : la mise en route du modèle (2026-10-15).
+        `cue_s` : la mise en route du modèle.
         """
         return (Etape(PAUSE, MI_REST_S, enregistre=False,
                       instruction=tr("mesure.mi_test.consigne.pause"),
@@ -232,7 +232,7 @@ class MesureMI(MesureRuntime):
                          reglages=reglages)
         resultat["fenetres_par_essai"] = int(min(fenetres)) if fenetres else 0
         # La phrase d'honnêteté compte les fenêtres d'un essai de CE test : la mise en route du
-        # modèle change leur nombre (2026-10-15).
+        # modèle change leur nombre.
         if fenetres:
             n = int(min(fenetres))
             resultat["honnetete"] = tr("mesure.mi_test.honnetete", fenetres=n,
@@ -491,7 +491,7 @@ def _selftest():
             "enregistrée")
         chk(all(e.instruction == consigne(e.nom) for e in enreg),
             "…et les consignes sont celles de l'ENTRAÎNEMENT, importées")
-        # La croix de l'entraînement (2026-10-15) : pendant l'essai, jamais pendant la pause.
+        # La croix de l'entraînement : pendant l'essai, jamais pendant la pause.
         vu = set()
         phase_avant, courante_avant = rt.phase, rt._etape_courante
         rt.phase = "essais"
@@ -510,7 +510,7 @@ def _selftest():
         rt2 = MesureMI(SPEC, dict(valeurs, model=m2), _FauxMoteur(rng), rng=_random.Random(2))
         chk(rt2.classes == MI_CONTROL and "REPOS" not in {e.nom for e in rt2._etapes},
             f"un modèle GAUCHE/DROITE ne fait jouer AUCUN essai REPOS ({rt2.classes})")
-        # La MISE EN ROUTE du modèle (2026-10-15) : un modèle entraîné à 1 s se teste à 1 s ; le
+        # La MISE EN ROUTE du modèle : un modèle entraîné à 1 s se teste à 1 s ; le
         # tampon reste dimensionné sur la plus longue proposée ; et à 1 s, un essai porte encore
         # plus de fenêtres que le plus long vote permis (la borne basse du réglage).
         modele_1s = mi_models.charger(m2)[0]
@@ -675,8 +675,8 @@ def _selftest():
         chk(flou["niveau"] == "faible" and "10 essais par tâche" in flou["reserve"],
             f"6/13 : pas distinguable du hasard -> faible, et la réserve dit d'allonger "
             f"({flou['reserve']})")
-        # I-2 : deux décisions justes sur 18 essais (3 classes), quatre sur 12 en gauche/droite.
-        # Wilson les peignait ORANGE ; le test binomial exact dit p = 0,111 et p = 0,062.
+        # Deux décisions justes sur 18 essais (3 classes), quatre sur 12 en gauche/droite.
+        # Wilson les peindrait ORANGE ; le test binomial exact dit p = 0,111 et p = 0,062.
         deux = noter(_dec(MI_LABELS, 18, 2, 2), MI_LABELS, essais_par_classe=6)
         gd = noter(_dec(MI_CONTROL, 12, 4, 4), MI_CONTROL, essais_par_classe=6)
         chk(deux["niveau"] == "faible" and gd["niveau"] == "faible"
@@ -692,7 +692,7 @@ def _selftest():
         chk(g3["niveau"] != "faible" and g2["niveau"] == "faible" and "hasard : 50 %" in g2["chiffres"],
             f"10/16 bat le hasard à 3 classes, PAS en gauche/droite ({g3['niveau']} / "
             f"{g2['niveau']} : {g2['chiffres']})")
-        # Des TÂCHES LIBRES (2026-10-15) : le repère des poings ne les juge pas. Le même score,
+        # Des TÂCHES LIBRES : le repère des poings ne les juge pas. Le même score,
         # bon en gauche/droite, reste orange sur pieds/mains, et la réserve ne parle d'aucun repère.
         libres = noter(_dec(("PIEDS", "MAINS"), 30, 24, 20), ("PIEDS", "MAINS"))
         poings = noter(_dec(MI_CONTROL, 30, 24, 20), MI_CONTROL)
