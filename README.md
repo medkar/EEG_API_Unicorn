@@ -245,9 +245,10 @@ measured on this headset.
 
 `--mode mi` publishes `EEG_API_Unicorn_decoded_mi`: `intent_index`, `confidence`, then one
 probability per class, `p_<class>`. **The classes are the tasks the model was trained on**: by
-default the two fists (`GAUCHE`, `DROITE`), or whatever 2 to 5 tasks were typed on the training page
-(`PIEDS`, `MAINS`, `REPOS`…). Read them from the stream's channel labels, or from its `classes`
-description field — never assume a fixed list.
+default the two fists (`LEFT`, `RIGHT`), or whatever 2 to 5 tasks were typed on the training page
+(`FEET`, `HANDS`, `REST`…). Read them from the stream's channel labels, or from its `classes`
+description field — never assume a fixed list. The original classes keep their English names
+whatever language the console shows.
 
 Unlike SSVEP, this mode **must be trained per person**. It loads a model produced by a calibration
 and **refuses to start without one**, saying so — a mode that started without a model would publish
@@ -255,12 +256,13 @@ probabilities and never decide anything, which is the silent failure this projec
 Train one **from the console itself**: open Motor Imagery and click **Train** — choose the tasks
 (one field per task, 2 to 5), then a few minutes of cued trials, played by the engine, ending in a
 timestamped model and an accuracy figure that is honestly cross-validated **by trial**, so no window
-leaks between folds. The mode page then lists the models it finds, newest first. Typing `repos`,
-`gauche` or `droite` gives back the original class, with its detailed cue and its lateralized beep;
-any other task is cued by its name, with a centred beep.
+leaks between folds. The mode page then lists the models it finds, newest first. Typing `rest`,
+`left` or `right` (or their French names `repos`, `gauche`, `droite`, in any case) gives back the
+original class, with its detailed cue and its lateralized beep; any other task is cued by its name,
+with a centred beep.
 
-Without `REPOS` among the tasks, the model always names one of the tasks it knows; only the
-probability threshold makes the stream fall silent (`-1`). Add `REPOS` if the application needs to
+Without `REST` among the tasks, the model always names one of the tasks it knows; only the
+probability threshold makes the stream fall silent (`-1`). Add `REST` if the application needs to
 know when the user is doing nothing.
 
 Two values are easy to confuse and mean different things:
@@ -268,7 +270,7 @@ Two values are easy to confuse and mean different things:
 | `intent_index` | Meaning |
 |---|---|
 | `-1` | the sliding vote did not conclude — not enough recent windows agreed, or the classifier stayed under its threshold |
-| index of `REPOS` | the model decided the user is at rest (only if `REPOS` is one of its tasks) |
+| index of `REST` | the model decided the user is at rest (only if `REST` is one of its tasks) |
 
 For an application, that is the difference between "wait" and "stop".
 
@@ -449,7 +451,7 @@ terminal, and its **Record the verdicts** button files the session for you.
 | `EEG_API_Unicorn_status` | engine state, JSON — in English, whatever language the console shows |
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
-| `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_<task>…}` — one `p_` per trained task (default `p_GAUCHE, p_DROITE`), ~5 Hz |
+| `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_<task>…}` — one `p_` per trained task (default `p_LEFT, p_RIGHT`), ~5 Hz |
 | `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
 | `EEG_API_Unicorn_decoded_errp` | `{error, score, threshold, artifact}`, one sample per feedback |
 | `EEG_API_Unicorn_decoded_cvep` | `{target_index, confidence, score_0…score_5, corr_min, margin}`, ~5 Hz |

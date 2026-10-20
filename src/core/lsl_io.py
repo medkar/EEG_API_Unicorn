@@ -298,7 +298,7 @@ class DecodedMIPublisher:
     """`<PREFIX>_decoded_mi` : quelle imagerie motrice l'utilisateur produit, ~5 Hz. BCI **active**.
 
     Le contrat (SPEC §5) : une **intention neutre** — quelle classe, avec quelle probabilité —
-    et JAMAIS une commande d'actionneur. « GAUCHE » veut dire « imagerie de la main gauche »,
+    et JAMAIS une commande d'actionneur. « LEFT » veut dire « imagerie de la main gauche »,
     pas « tourne à gauche » : c'est le client qui décide ce que ça déclenche.
 
     Voies : `intent_index`, `confidence`, puis une probabilité par classe.
@@ -307,22 +307,22 @@ class DecodedMIPublisher:
     le **vote** — jusqu'à `vote_len` fenêtres, dont `min_votes` d'accord ; `confidence` est la
     moyenne des probabilités de ces fenêtres-là, donc toujours `>= threshold` quand
     `intent_index >= 0`. Les `p_*`, eux, décrivent la **dernière fenêtre seule**. Pendant un
-    changement d'intention, il est donc NORMAL de lire « intention GAUCHE » à côté d'un
-    `p_DROITE` élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
+    changement d'intention, il est donc NORMAL de lire « intention LEFT » à côté d'un
+    `p_RIGHT` élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
     jamais du `p_*` de la classe retenue.
 
-    ⚠️ **`-1` et la classe REPOS sont deux choses différentes.** `-1` = le vote n'a pas conclu
-    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; l'indice de REPOS = le
+    ⚠️ **`-1` et la classe REST sont deux choses différentes.** `-1` = le vote n'a pas conclu
+    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; l'indice de REST = le
     modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
     n'appellent pas la même réaction dans une application. Les deux indices voyagent dans les
     métadonnées (`no_decision_index`, `rest_index`) : un client n'a pas à les deviner, ni à
-    supposer que REPOS est toujours la dernière classe.
+    supposer que REST est toujours la dernière classe.
 
     ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
     entraîné sur quelqu'un d'autre sont plausibles et fausses.
     """
 
-    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance="", rest_label="REPOS"):
+    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance="", rest_label="REST"):
         self.classes = [str(c) for c in classes]
         labels = mi_channel_labels(self.classes)
         info = StreamInfo(stream_name("decoded_mi"), "Decoded", len(labels),
@@ -341,11 +341,11 @@ class DecodedMIPublisher:
         desc.append_child_value("min_votes", str(votes[0]))
         desc.append_child_value("vote_len", str(votes[1]))
         # La distinction la plus coûteuse à confondre du mode : « je ne sais pas » (-1) contre « la
-        # personne se repose » (l'indice de REPOS). Ce module promet en tête qu'un client peut se
+        # personne se repose » (l'indice de REST). Ce module promet en tête qu'un client peut se
         # décrire l'API tout seul — alors les deux indices sont dans les métadonnées, plutôt que
         # dans une documentation qu'il n'ouvrira pas.
         # `rest_index` vaut -1 quand le modèle n'a pas de classe de repos : un modèle à deux
-        # classes est possible, et supposer que REPOS existe toujours serait faux.
+        # classes est possible, et supposer que REST existe toujours serait faux.
         desc.append_child_value("no_decision_index", "-1")
         rest_index = self.classes.index(rest_label) if rest_label in self.classes else -1
         desc.append_child_value("rest_index", str(rest_index))
@@ -748,10 +748,10 @@ def _autotest():
     print(f"[lsl] verdicts : {[verdict_from_sigma(s) for s in (8.0, 0.1, 600.0)]}")
 
     # 5. decoded_mi : voies attendues, et le publieur pousse sans lever (indice ET repos).
-    labels = mi_channel_labels(("GAUCHE", "DROITE", "REPOS"))
+    labels = mi_channel_labels(("LEFT", "RIGHT", "REST"))
     print(f"  voies decoded_mi : {labels}")
-    assert labels == ["intent_index", "confidence", "p_GAUCHE", "p_DROITE", "p_REPOS"], labels
-    pub = DecodedMIPublisher(("GAUCHE", "DROITE", "REPOS"), prob_min=0.6, votes=(3, 5),
+    assert labels == ["intent_index", "confidence", "p_LEFT", "p_RIGHT", "p_REST"], labels
+    pub = DecodedMIPublisher(("LEFT", "RIGHT", "REST"), prob_min=0.6, votes=(3, 5),
                              instance="selftest-mi")
     pub.push(0, 0.81, [0.81, 0.12, 0.07])
     pub.push(-1, 0.0, [0.34, 0.33, 0.33])

@@ -38,9 +38,9 @@ TOP_ETAPE = "TOP"
 # Déclaré au niveau du module, et non dans le constructeur : `connait()` doit répondre même sur une
 # machine SANS son, sinon une page choisirait un autre top selon qu'une carte audio est branchée.
 SONS = {
-    "GAUCHE": (True, False, DUREE_COTE_S),
-    "DROITE": (False, True, DUREE_COTE_S),
-    "REPOS": (True, True, DUREE_CENTRE_S),
+    "LEFT": (True, False, DUREE_COTE_S),
+    "RIGHT": (False, True, DUREE_COTE_S),
+    "REST": (True, True, DUREE_CENTRE_S),
     TOP_ETAPE: (True, True, DUREE_COTE_S),
 }
 

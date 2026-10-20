@@ -179,7 +179,7 @@ python src/core/modes/affichage.py         # les trois lignes d'un résultat : l
 python src/core/modes/mesure_marqueurs.py  # le SOCLE des tests menés par une fenêtre : épochage par
                                            # le chemin du décodage, garde de silence, et la CLOISON
                                            # qui retire la vérité avant la sous-classe
-python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REPOS
+python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REST
 python src/core/modes/p300_test.py         # Tester le P300 : une MANCHE = un essai, hasard 1/6
 python src/core/modes/cvep_test.py         # Tester le c-VEP : un BLOC = une décision, phase APPELÉE
 python src/core/modes/errp_test.py         # Tester l'ErrP : 🔴 l'étiquette va au correcteur, JAMAIS
@@ -966,7 +966,7 @@ MI, du P300, du c-VEP et de l'ErrP la comparent, essai par essai, à celle d'un 
 | ErrP (`errp_test.py`) | un feedback | la diagonale : autant d'erreurs attrapées que de bonnes commandes annulées | 80 essais, ≈ 2,4 min | Fisher exact unilatéral p < 0,05, écart TPR − (1 − TNR) ≥ 0,355, et moins de 50 % sans verdict |
 
 - **Un `-1` n'est jamais une bonne réponse.** Au MI, au SSVEP et au c-VEP c'est un silence : il
-  compte dans le taux d'émission, pas comme une erreur (et au MI, jamais comme REPOS, que
+  compte dans le taux d'émission, pas comme une erreur (et au MI, jamais comme REST, que
   `classes[-1]` désignerait). Au P300 c'est une sélection RATÉE (marge nulle : une perte, pas une
   abstention). À l'ErrP il est compté à part, ni erreur attrapée ni bonne commande gardée.
 - 🔴 **La cloison de l'ErrP.** Son étiquette voyage sur le `feedback`, et un test en a besoin pour
@@ -1289,7 +1289,7 @@ python src/console/app.py --mode mi
       dit. C'est une règle uniforme (elle vaut pour les quatre modes, même quand le moteur ne
       l'exigerait pas), et la conséquence visible est qu'il faudra le **redémarrer** depuis la grille
       ensuite — ce qu'on ferait de toute façon, pour prendre le nouveau modèle.
-- [ ] La page affiche la consigne en cours (GAUCHE / DROITE / REPOS), l'essai en cours et le temps
+- [ ] La page affiche la consigne en cours (LEFT / RIGHT / REST), l'essai en cours et le temps
       restant — 5 à 7 min par défaut, fatigant : sujet frais.
 - [ ] La calibration va au bout et affiche son accuracy. Noter : ______ %.
 - [ ] ⚠️ **Rien n'est encore écrit sur le disque.** Deux boutons apparaissent : **Enregistrer le
@@ -1301,7 +1301,7 @@ python src/console/app.py --mode mi
 - [ ] **Ce qu'il faut attendre — à lire AVANT de regarder ce chiffre.** Il est désormais
       **honnête** (validation croisée groupée PAR ESSAI, jamais par fenêtre — l'ancien écran
       pygame affichait un chiffre gonflé de 10 à 16 points) et porte sur les **trois classes**
-      (GAUCHE/DROITE/REPOS, hasard 33 %). **≈ 40 % est un résultat NORMAL**, pas un échec : c'est
+      (LEFT/RIGHT/REST, hasard 33 %). **≈ 40 % est un résultat NORMAL**, pas un échec : c'est
       le chiffre de référence mesuré honnêtement sur la seule séance archivée du projet —
       **40,0 %, p = 0,082, PAS significatif**. Un « 40 % » lu à côté d'un hasard à 33 % donne
       naturellement envie de conclure que c'est mieux que le hasard ; ce n'est **pas** le cas avec
@@ -1354,8 +1354,8 @@ python src/console/app.py --mode mi
       « Tester » ci-dessus fait proprement : consigne tirée, décision notée, intervalle affiché.)*
 - [ ] En parallèle, sur un autre terminal, vérifier que l'intention sort **vraiment** sur le
       réseau : `python -u examples/receiver.py --stream decoded_mi`. Attendu : `intent_index`,
-      `confidence`, puis `p_GAUCHE`, `p_DROITE`, `p_REPOS`.
-- [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REPOS (« la personne se
+      `confidence`, puis un `p_<tâche>` par tâche du modèle (`p_LEFT`, `p_RIGHT`, `p_REST` à trois classes).
+- [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REST (« la personne se
       repose ») ne veulent **pas** dire la même chose. Le flux donne les deux dans ses
       métadonnées (`no_decision_index`, `rest_index`) : vérifier qu'ils diffèrent.
 

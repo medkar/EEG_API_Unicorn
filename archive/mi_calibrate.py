@@ -52,9 +52,9 @@ GO = (80, 210, 120)
 REST_COL = (230, 160, 70)
 
 INSTR = {
-    "GAUCHE": "Imagine : SERRE le POING GAUCHE",
-    "DROITE": "Imagine : SERRE le POING DROIT",
-    "REPOS":  "REPOS — détends-toi, ne rien imaginer",
+    "LEFT": "Imagine : SERRE le POING GAUCHE",
+    "RIGHT": "Imagine : SERRE le POING DROIT",
+    "REST":  "REPOS — détends-toi, ne rien imaginer",
 }
 REMINDER = "sens le serrement — NE BOUGE PAS"
 
@@ -184,7 +184,7 @@ def _briefing(win, pygame, big, small, clock):
 
 
 # Position horizontale de la croix = la commande (pas de texte à lire, vision périphérique).
-POS_X = {"GAUCHE": 0.25, "REPOS": 0.5, "DROITE": 0.75}
+POS_X = {"LEFT": 0.25, "REST": 0.5, "RIGHT": 0.75}
 
 
 def _draw_cross(win, pygame, label, color, size):
@@ -218,9 +218,9 @@ def _make_beeps(pygame):
         except Exception:  # noqa: BLE001
             return None
 
-    return {"GAUCHE": snd(True, False, 0.18),
-            "DROITE": snd(False, True, 0.18),
-            "REPOS": snd(True, True, 0.40)}   # centre = les deux oreilles + plus long
+    return {"LEFT": snd(True, False, 0.18),
+            "RIGHT": snd(False, True, 0.18),
+            "REST": snd(True, True, 0.40)}   # centre = les deux oreilles + plus long
 
 
 def _run_trial(win, pygame, big, small, clock, acq, label, imagery_s, beeps=None):

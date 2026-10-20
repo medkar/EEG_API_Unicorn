@@ -124,7 +124,7 @@ class _ModeleEtranger:
     locale à une fonction (elle n'est pas retrouvable par son nom qualifié au chargement).
     """
 
-    labels = ["GAUCHE", "DROITE", "REPOS"]
+    labels = ["LEFT", "RIGHT", "REST"]
 
     def predict_proba(self, window):
         return {c: 1.0 / len(self.labels) for c in self.labels}

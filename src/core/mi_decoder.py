@@ -1,13 +1,13 @@
 """Décodeur Motor Imagery (imagerie motrice) : CSP + LDA, deux classes de mouvement imaginé
-(main gauche/droite) + un état REPOS explicite (indispensable pour distinguer un repos réel
+(main gauche/droite) + un état REST explicite (indispensable pour distinguer un repos réel
 d'une simple absence de décision).
 
 Contrairement au SSVEP (CCA, zéro entraînement), le MI doit être ENTRAÎNÉ :
-  1. calibration  -> essais EEG étiquetés GAUCHE / DROITE / REPOS   [src/core/modes/mi_calib.py]
+  1. calibration  -> essais EEG étiquetés LEFT / RIGHT / REST   [src/core/modes/mi_calib.py]
   2. entraînement -> CSP (filtres spatiaux) + LDA                    [MIModel.fit]
   3. online       -> MIModel classe la fenêtre en direct            [MIModel.predict_proba]
 
-Pourquoi REPOS comme 3e classe : un classifieur 2 classes choisit TOUJOURS un côté (même sans
+Pourquoi REST comme 3e classe : un classifieur 2 classes choisit TOUJOURS un côté (même sans
 imagerie) => faux mouvements au repos. En apprenant « repos », le modèle peut dire « la personne
 ne fait rien » — ce qui est une intention à part entière, DIFFÉRENTE de « je ne sais pas ». Ce
 que l'application en fait (s'arrêter, attendre, ignorer) ne regarde pas ce module : le flux
@@ -47,8 +47,8 @@ from core.config import MI_METHOD, MI_REREF, use_utf8_console  # noqa: E402
 from core.filtrage import passe_bande  # noqa: E402
 
 MI_BAND = (8.0, 30.0)                       # mu (8-12) + beta (13-30) = rythmes sensorimoteurs
-MI_CONTROL = ("GAUCHE", "DROITE")           # classes actives (hors REPOS)
-MI_LABELS = ("GAUCHE", "DROITE", "REPOS")   # classes du modèle (REPOS = état neutre)
+MI_CONTROL = ("LEFT", "RIGHT")           # classes actives (hors REST)
+MI_LABELS = ("LEFT", "RIGHT", "REST")   # classes du modèle (REST = état neutre)
 
 
 def reref(epochs, mode=MI_REREF):
@@ -360,9 +360,9 @@ class MIModel:
 
 class MIDecoder:
     """Décodeur online. Interface commune à CCADecoder : `.classify(window) -> (label|None, scores)`.
-    `window` = (n_samp, n_ch), comme côté acquisition. REPOS ou proba < prob_min -> None."""
+    `window` = (n_samp, n_ch), comme côté acquisition. REST ou proba < prob_min -> None."""
 
-    def __init__(self, model, prob_min=0.60, rest_label="REPOS"):
+    def __init__(self, model, prob_min=0.60, rest_label="REST"):
         self.model = model
         self.prob_min = prob_min
         self.rest_label = rest_label
@@ -378,9 +378,9 @@ class MIDecoder:
         `decoded_mi`.
 
         Deux différences, et elles comptent :
-          - ici, REPOS et « probabilité trop basse » rendent tous les deux `None` — deux
+          - ici, REST et « probabilité trop basse » rendent tous les deux `None` — deux
             situations confondues, alors que le flux les distingue par contrat (l'indice de
-            REPOS d'un côté, `-1` de l'autre) ;
+            REST d'un côté, `-1` de l'autre) ;
           - ici, une seule fenêtre décide ; là-bas, un vote glissant sur `vote_len` fenêtres.
 
         Cette méthode n'est plus utilisée que par `archive/mi_pilot.py`. Le moteur, lui, passe
@@ -398,24 +398,24 @@ class MIDecoder:
 # Ordre des voies Unicorn : Fz,C3,Cz,C4,Pz,PO7,Oz,PO8 -> C3=1, C4=3.
 def synth_mi_trial(label, n_ch=8, n_samp=500, fs=250.0, erd=0.5, noise=1.0, mu_amp=1.5,
                    common=0.0, rng=None):
-    """Rythme mu (10 Hz) partout ; ATTÉNUÉ (ERD) sur la voie controlatérale pour GAUCHE/DROITE,
+    """Rythme mu (10 Hz) partout ; ATTÉNUÉ (ERD) sur la voie controlatérale pour LEFT/RIGHT,
     sur Cz pour PIEDS (l'aire des pieds est sur la ligne médiane), sur C3 ET C4 pour MAINS (les
-    deux mains), inchangé pour REPOS et toute autre étiquette. `common` > 0 ajoute un MODE COMMUN in-band identique sur TOUTES les voies,
+    deux mains), inchangé pour REST et toute autre étiquette. `common` > 0 ajoute un MODE COMMUN in-band identique sur TOUTES les voies,
     d'amplitude aléatoire par essai : simule la dérive de référence/EMG que subit l'online et que
     le CAR retire. Sans CAR, il gonfle la variance corrélée et NOIE le contraste ERD."""
     rng = np.random.default_rng() if rng is None else rng
     t = np.arange(n_samp) / fs
     X = rng.normal(0.0, noise, (n_ch, n_samp))
     amp = np.ones(n_ch)
-    if label == "DROITE":
+    if label == "RIGHT":
         amp[1] *= (1 - erd)     # main droite -> ERD sur C3
-    elif label == "GAUCHE":
+    elif label == "LEFT":
         amp[3] *= (1 - erd)     # main gauche -> ERD sur C4
     elif label == "PIEDS":
         amp[2] *= (1 - erd)     # pieds -> ERD sur Cz
     elif label == "MAINS":
         amp[[1, 3]] *= (1 - erd)    # les deux mains -> ERD sur C3 et C4
-    # REPOS : aucune atténuation
+    # REST : aucune atténuation
     for c in range(n_ch):
         X[c] += amp[c] * mu_amp * np.sin(2 * np.pi * 10 * t + rng.uniform(0, 2 * np.pi))
     if common > 0:              # même signal sur toutes les voies -> annulé exactement par le CAR
@@ -429,7 +429,7 @@ def _eval(method, Xtr, ytr, Xte, yte, reref_mode=MI_REREF):
     ctrl_ok = ctrl_tot = rest_ok = rest_tot = 0
     for e, lab in zip(Xte, yte):        # e : (n_ch, n_samp) -> classify attend (n_samp, n_ch)
         pred, _ = dec.classify(e.T)
-        if lab == "REPOS":
+        if lab == "REST":
             rest_tot += 1
             rest_ok += (pred is None)
         else:
@@ -536,7 +536,7 @@ def _test_n_splits_insuffisant():
     Moins de 2 essais DISTINCTS pour au moins une classe doit laisser `cv_groupee_` à `None` —
     MÊME quand cette classe a plein de FENÊTRES (un seul essai en produit plusieurs, cf.
     `decouper`) : c'est le nombre d'essais qui compte pour la CV groupée, jamais celui des
-    fenêtres. GAUCHE et DROITE ont ici 8 essais distincts chacune (comme d'habitude) ; REPOS
+    fenêtres. LEFT et RIGHT ont ici 8 essais distincts chacune (comme d'habitude) ; REST
     n'en a qu'UN SEUL, découpé en 10 fenêtres — assez de fenêtres pour que la CV NAÏVE (5-fold
     ordinaire, indifférente aux groupes) se calcule sans encombre, mais un seul groupe, donc
     `n_splits` retomberait à 1 pour la CV groupée : sous le plancher de 2 posé par `fit`.
@@ -553,18 +553,18 @@ def _test_n_splits_insuffisant():
     n_fen = int(round(2.0 * fs))          # MI_WINDOW_S -> une fenêtre MI ordinaire
     X, y, groupes = [], [], []
     essai = 0
-    for label in MI_CONTROL:              # ("GAUCHE", "DROITE") : 8 essais distincts chacune
+    for label in MI_CONTROL:              # ("LEFT", "RIGHT") : 8 essais distincts chacune
         for _ in range(8):
             for _ in range(3):            # 3 fenêtres par essai, comme un essai réel de 4 s
                 X.append(synth_mi_trial(label, n_samp=n_fen, fs=fs, rng=rng))
                 y.append(label)
                 groupes.append(essai)
             essai += 1
-    for _ in range(10):                   # REPOS : 10 FENÊTRES, mais un SEUL essai (le groupe
-        X.append(synth_mi_trial("REPOS", n_samp=n_fen, fs=fs, rng=rng))  # ne change pas)
-        y.append("REPOS")
+    for _ in range(10):                   # REST : 10 FENÊTRES, mais un SEUL essai (le groupe
+        X.append(synth_mi_trial("REST", n_samp=n_fen, fs=fs, rng=rng))  # ne change pas)
+        y.append("REST")
         groupes.append(essai)
-    n_essais_attendu = essai + 1          # +1 pour l'unique essai REPOS
+    n_essais_attendu = essai + 1          # +1 pour l'unique essai REST
 
     modele = MIModel(fs=fs, reref_mode="none").fit(np.asarray(X), np.asarray(y),
                                                     groups=np.asarray(groupes))
@@ -574,7 +574,7 @@ def _test_n_splits_insuffisant():
     chk(modele.n_essais_ == n_essais_attendu,
         f"le nombre d'essais DISTINCTS est bien recensé (17 = 8+8+1) ({modele.n_essais_})")
     chk(modele.cv_groupee_ is None,
-        f"mais la CV honnête reste ABSENTE : REPOS n'a qu'UN essai distinct malgré ses 10 "
+        f"mais la CV honnête reste ABSENTE : REST n'a qu'UN essai distinct malgré ses 10 "
         f"fenêtres, `n_splits` tomberait à 1, sous le plancher de 2 ({modele.cv_groupee_})")
 
     print(f"[mi-cv-n_splits] VERDICT : {'OK' if ok else 'PROBLÈME'}")
@@ -610,7 +610,7 @@ def _test_csp_binaire():
     chk(csp2.filters_.shape[0] == 2 * m == dimension_csp(m, 2) and cosinus.max() < 0.99,
         f"à 2 classes : {csp2.filters_.shape[0]} filtres, aucune paire colinéaire "
         f"(|cos| max {cosinus.max():.3f})")
-    X3, y3 = seance(("GAUCHE", "DROITE", "REPOS"))
+    X3, y3 = seance(("LEFT", "RIGHT", "REST"))
     csp3 = CSP(m).fit(bandpass(reref(X3, "car"), fs), y3)
     chk(csp3.filters_.shape[0] == 2 * m * 3 == dimension_csp(m, 3),
         f"à 3 classes : le un-contre-tous, {csp3.filters_.shape[0]} filtres")
@@ -640,7 +640,7 @@ def _test_csp_binaire():
     chk(fb.k == dimension_csp(m, 2) == 4,
         f"le FBCSP à 2 classes garde la dimension d'UN CSP ({fb.k})")
     # Et le synthétique PIEDS/MAINS se sépare : la CV groupée dépasse nettement le hasard. À 20
-    # essais par classe : à 8, avec le CAR, même GAUCHE/DROITE reste au hasard sur ce synthétique
+    # essais par classe : à 8, avec le CAR, même LEFT/RIGHT reste au hasard sur ce synthétique
     # (mesuré : 37 % ; 78 % pour les deux paires à 20).
     Xs, ys = seance(("PIEDS", "MAINS"), par_classe=20)
     modele = MIModel(labels=("PIEDS", "MAINS"), fs=fs).fit(Xs, ys, groups=np.arange(len(ys)))
@@ -890,15 +890,23 @@ def _demo():
             epochs.append(synth_mi_trial(lab, n_samp=n_samp, rng=rng))
             y.append(lab)
     epochs, y = np.asarray(epochs), np.asarray(y)
-    print(f"Dataset synthétique : {len(y)} essais ({n_per}/classe : GAUCHE/DROITE/REPOS), "
+    print(f"Dataset synthétique : {len(y)} essais ({n_per}/classe : LEFT/RIGHT/REST), "
           f"fenêtre {n_samp/250:.1f}s, 8 voies indépendantes\n")
 
-    Xtr, Xte, ytr, yte = train_test_split(epochs, y, test_size=0.3, random_state=0, stratify=y)
-    print("== Validation du classifieur (ERD synthétique propre, re-ref 'none') ==")
+    # La MOYENNE de 10 découpages apprentissage/test, jamais un seul : un découpage ne laisse que
+    # 36 essais G/D au test, et le verdict basculait d'un découpage à l'autre (G/D de 78 à 94 %).
+    # Même le NOM des classes le faisait basculer : il change l'ordre de la stratification.
+    # Mesuré au passage de GAUCHE/DROITE/REPOS à LEFT/RIGHT/REST : moyennes égales (G/D 86,4 et
+    # 86,9 %), mais le découpage n° 0 passait d'un côté du seuil à l'autre.
+    decoupages = [train_test_split(epochs, y, test_size=0.3, random_state=g, stratify=y)
+                  for g in range(10)]
+    print(f"== Validation du classifieur (ERD synthétique propre, re-ref 'none', "
+          f"moyenne de {len(decoupages)} découpages) ==")
     print("méthode  | CV 5-fold | G/D test | repos->None")
     ok = False
     for m in ("csp", "riemann", "fbcsp"):
-        cv, ctrl, rest = _eval(m, Xtr, ytr, Xte, yte, reref_mode="none")
+        cv, ctrl, rest = np.mean([_eval(m, Xtr, ytr, Xte, yte, reref_mode="none")
+                                  for Xtr, Xte, ytr, yte in decoupages], axis=0)
         star = "  <- défaut" if m == MI_METHOD else ""
         print(f"{m:<8} |   {cv*100:5.1f}% |  {ctrl*100:5.1f}% |   {rest*100:5.1f}%{star}")
         if m == MI_METHOD:

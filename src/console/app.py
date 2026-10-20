@@ -1778,18 +1778,18 @@ def _smoke():
         "published": True,
         "params": {"model": "mi_model.joblib", "prob_min": 0.6, "vote_len": 5, "min_votes": 3},
         "instruction": "", "stream": "decoded_mi",
-        "channels": ["intent_index", "confidence", "p_GAUCHE", "p_DROITE", "p_REPOS"],
+        "channels": ["intent_index", "confidence", "p_LEFT", "p_RIGHT", "p_REST"],
         "rest_report": {"kind": "mi", "model": "mi_model.joblib",
-                        "classes": ["GAUCHE", "DROITE", "REPOS"]},
-        "output": {"intent_index": 0, "label": "GAUCHE", "confidence": 0.81,
-                   "probas": {"GAUCHE": 0.81, "DROITE": 0.12, "REPOS": 0.07},
+                        "classes": ["LEFT", "RIGHT", "REST"]},
+        "output": {"intent_index": 0, "label": "LEFT", "confidence": 0.81,
+                   "probas": {"LEFT": 0.81, "RIGHT": 0.12, "REST": 0.07},
                    "threshold": 0.6}}}}
     console.show_mode("mi")
     console.apply_state(mi_state)
     mi_page = console.pages["mi"]
     chk(isinstance(mi_page.vue, live_views.ActiveView),
         "le MI a le rendu ACTIF, comme le SSVEP — même famille")
-    chk("INTENTION GAUCHE" in mi_page.vue.verdict.text(),
+    chk("INTENTION LEFT" in mi_page.vue.verdict.text(),
         f"mais la sortie en direct nomme l'INTENTION décodée, pas une cible "
         f"({mi_page.vue.verdict.text()})")
     chk("probabilité" in mi_page.vue.seuil.text() and "z" not in mi_page.vue.seuil.text(),
@@ -2345,10 +2345,10 @@ def _smoke():
     # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
     en_cours = {**mi_state, "calibration": {
         "mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "essais",
-        "etape": "imagerie", "classe": "GAUCHE",
+        "etape": "imagerie", "classe": "LEFT",
         "instruction": "Imagine : SERRE le POING GAUCHE", "rappel": "sens le serrement",
         "essai": 7, "total": 42, "restant_s": 2.4, "duree_estimee_s": 400.0,
-        "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+        "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
         "resultat": None, "probleme": ""}}
     console.apply_state({**en_cours, "calibration": {**en_cours["calibration"], "croix": True}})
     avec = (cal.croix.isVisibleTo(cal), cal.croix.text(), cal.croix.height())
@@ -2392,7 +2392,7 @@ def _smoke():
                          "enregistrement": "/tmp/mi_calib_20260730-141205_n42.npz",
                          "n_essais": 42, "n_fenetres": 126, "cv_groupee": 0.401,
                          "cv_naive": 0.556, "hasard": 1 / 3,
-                         "classes": ["GAUCHE", "DROITE", "REPOS"],
+                         "classes": ["LEFT", "RIGHT", "REST"],
                          # Rédigé par le MOTEUR, par la même fonction que ses entraînements.
                          "filtre": mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0),
                          "honnetete": mi_calib.HONNETETE,
@@ -2691,7 +2691,7 @@ def _smoke():
                            "enregistrement": "/tmp/mi_calib_20260731-090000_n06.npz",
                            "n_essais": 6, "n_fenetres": 18, "cv_groupee": None,
                            "cv_naive": 0.50, "hasard": 1 / 3,
-                           "classes": ["GAUCHE", "DROITE", "REPOS"],
+                           "classes": ["LEFT", "RIGHT", "REST"],
                            "verdict": "justesse non mesurable : pas assez d'essais distincts "
                                       "par classe pour une validation croisée"}}}
     console.apply_state(sans_cv)
@@ -3219,12 +3219,12 @@ def _smoke():
     try:
         base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
                 "essai": 0, "total": 42, "duree_estimee_s": 400.0,
-                "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+                "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
                 "resultat": None, "probleme": ""}
         # Six essais d'échauffement (2 par classe × 3 classes) ; classes délibérément PAS toutes
         # distinctes d'un essai au suivant (comme un mélange aléatoire peut en produire) : la clé
         # correcte ne doit dépendre NI de la classe NI d'un compteur qui ne bouge pas ici.
-        classes_echauffement = ["GAUCHE", "DROITE", "REPOS", "GAUCHE", "DROITE", "REPOS"]
+        classes_echauffement = ["LEFT", "RIGHT", "REST", "LEFT", "RIGHT", "REST"]
         for classe in classes_echauffement:
             cue = {**base, "etape": "cue", "classe": classe,
                   "instruction": f"Imagine : {classe}", "rappel": "", "restant_s": 3.0}
@@ -3266,15 +3266,15 @@ def _smoke():
     try:
         base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
                 "essai": 0, "total": 42, "duree_estimee_s": 400.0,
-                "params": {"trials_per_class": 14}, "classes": ["GAUCHE", "DROITE", "REPOS"],
+                "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
                 "resultat": None, "probleme": ""}
 
         # Première séance : elle sonne son premier top, pendant la mise en route (échauffement)
         # — le moment le plus probable pour s'apercevoir d'une électrode mal placée...
-        premier_cue = {**base, "etape": "cue", "classe": "GAUCHE",
+        premier_cue = {**base, "etape": "cue", "classe": "LEFT",
                        "instruction": "Imagine : GAUCHE", "rappel": "", "restant_s": 3.0}
         console.apply_state({**mi_state, "calibration": premier_cue})
-        chk(console.beeps.appels == ["GAUCHE"],
+        chk(console.beeps.appels == ["LEFT"],
             f"la première séance sonne son premier top normalement ({console.beeps.appels})")
 
         # ...et qu'on ABANDONNE EN PLEIN dedans : le moteur livre directement l'état terminal,
@@ -3285,10 +3285,10 @@ def _smoke():
 
         # Relance, sur la MÊME page : son tout premier "cue" doit sonner, sans exception.
         console.beeps.appels = []
-        cue_relance = {**base, "etape": "cue", "classe": "DROITE",
+        cue_relance = {**base, "etape": "cue", "classe": "RIGHT",
                        "instruction": "Imagine : DROITE", "rappel": "", "restant_s": 3.0}
         console.apply_state({**mi_state, "calibration": cue_relance})
-        chk(console.beeps.appels == ["DROITE"],
+        chk(console.beeps.appels == ["RIGHT"],
             f"et le premier top de la séance RELANCÉE après un abandon sonne aussi — pas muet "
             f"({console.beeps.appels})")
     finally:
@@ -3446,13 +3446,13 @@ def _smoke():
         # LATÉRALISÉ (oreille gauche = poing gauche). Les noms d'étapes viennent du VRAI protocole
         # du test (`MesureMI._essai`), pas d'une liste écrite ici.
         from core.modes.mi_test import MesureMI
-        noms = [e.nom for classe in ("GAUCHE", "DROITE")
+        noms = [e.nom for classe in ("LEFT", "RIGHT")
                 for e in MesureMI._essai(classe)]
         console.beeps.appels = []
         mes._etape_precedente = None
         for nom in [""] + noms:
             console.apply_state({**state, "mesure": {**base_m, "classe": nom}})
-        chk(console.beeps.appels == ["TOP", "GAUCHE", "TOP", "DROITE"],
+        chk(console.beeps.appels == ["TOP", "LEFT", "TOP", "RIGHT"],
             f"le test MI joue le top LATÉRALISÉ de la classe, comme l'entraînement, et le top "
             f"neutre sur la pause ({console.beeps.appels})")
     finally:
@@ -4590,7 +4590,7 @@ def _smoke():
     from core.modes.mi_calib import CALIB as _CALIB_MI
     taches = cal_reelle.formulaire.champs.get("taches")
     visibles = (lambda: [c.text() for c in taches.textes if not c.isHidden()]) if taches else list
-    chk(isinstance(taches, ListeDeTextes) and visibles() == ["GAUCHE", "DROITE"],
+    chk(isinstance(taches, ListeDeTextes) and visibles() == ["LEFT", "RIGHT"],
         f"« Entraîner » le MI : deux champs de tâches par défaut, les poings ({visibles()})")
     if taches is not None:
         taches.nombre.setValue(3)
@@ -4604,9 +4604,9 @@ def _smoke():
         taches.textes[2].setText("")
         _v, refus_vide = _valider(_CALIB_MI, cal_reelle.formulaire.values())
         cal_reelle.formulaire.retablir_defauts()
-        chk(a_trois == ["GAUCHE", "DROITE", "Pieds"] and a_deux == ["GAUCHE", "DROITE"]
-            and revenu == ["GAUCHE", "DROITE", "Pieds"] and accepte is not None
-            and bool(refus_vide) and visibles() == ["GAUCHE", "DROITE"],
+        chk(a_trois == ["LEFT", "RIGHT", "Pieds"] and a_deux == ["LEFT", "RIGHT"]
+            and revenu == ["LEFT", "RIGHT", "Pieds"] and accepte is not None
+            and bool(refus_vide) and visibles() == ["LEFT", "RIGHT"],
             f"3 tâches = 3 champs, et le moteur les accepte ; repasser à 2 puis 3 rend la 3e telle "
             f"que tapée ; un champ vide est REFUSÉ par le moteur ({refus_vide}) ; « Rétablir » "
             f"rend les deux poings ({a_trois} / {a_deux} / {revenu} / {visibles()})")

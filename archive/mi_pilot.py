@@ -39,7 +39,7 @@ DIM = (110, 110, 130)
 GO = (80, 210, 120)
 BAR_BG = (40, 40, 52)
 WARN = (230, 160, 70)
-COLROW = {"GAUCHE": (90, 170, 240), "DROITE": (240, 140, 90), "REPOS": (150, 150, 160)}
+COLROW = {"LEFT": (90, 170, 240), "RIGHT": (240, 140, 90), "REST": (150, 150, 160)}
 
 
 class MIController:
@@ -171,7 +171,7 @@ def _render_loop(state, lock, stop, decoder, sending, windowed, smoke):
             name, scores, sigma, ready = state["name"], dict(state["scores"]), state["sigma"], state["ready"]
 
         win.fill(BG)
-        for d, lab in (("left", "GAUCHE"), ("right", "DROITE")):
+        for d, lab in (("left", "LEFT"), ("right", "RIGHT")):
             active = (name == lab)
             pygame.draw.polygon(win, GO if active else DIM, poly[d], 0 if active else 3)
         if name == "STOP":
@@ -183,7 +183,7 @@ def _render_loop(state, lock, stop, decoder, sending, windowed, smoke):
 
         # barres de probabilité (neurofeedback)
         y0, bw = int(h * 0.88), int(w * 0.5)
-        for i, lab in enumerate(["GAUCHE", "DROITE", "REPOS"]):
+        for i, lab in enumerate(["LEFT", "RIGHT", "REST"]):
             p = scores.get(lab, 0.0)
             ry = y0 + i * 22
             pygame.draw.rect(win, BAR_BG, (int(w * 0.28), ry, bw, 14))

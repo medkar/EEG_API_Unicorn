@@ -3050,7 +3050,7 @@ def _smoke_mi():
                 f"l'échelle de décision annoncée est « proba », pas le z du SSVEP ({echelle!r})")
             # « Je ne sais pas » et « la personne se repose » sont la confusion la plus coûteuse
             # du mode : les deux indices doivent voyager dans les métadonnées, et être DIFFÉRENTS.
-            chk(sans_decision == "-1" and repos == str(MI_LABELS.index("REPOS")),
+            chk(sans_decision == "-1" and repos == str(MI_LABELS.index("REST")),
                 f"le flux dit lui-même ce que valent « aucune décision » et « repos » "
                 f"(no_decision_index={sans_decision!r}, rest_index={repos!r})")
             recus, indices, probas_vues = 0, set(), set()

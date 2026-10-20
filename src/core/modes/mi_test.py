@@ -18,9 +18,9 @@ le contrôle alpha, avec de vraies `Etape`.
    tenue le plus longtemps, ce qu'un client lit alors, un vote fait de CET essai seul (cf. 4). Ni
    la première (vote sans historique), ni une majorité (le produit publie un flux, pas un résumé).
 
-3. **`-1` = « VOTE NON CONCLU », JAMAIS « REPOS ».** Un essai sans décision compte dans le taux
-   d'émission, jamais comme une erreur, jamais comme REPOS — une classe du modèle, avec son indice.
-   Le piège tient en une ligne : `classes[-1]` vaut `"REPOS"`. Le score est donc un COUPLE, comme
+3. **`-1` = « VOTE NON CONCLU », JAMAIS « REST ».** Un essai sans décision compte dans le taux
+   d'émission, jamais comme une erreur, jamais comme REST — une classe du modèle, avec son indice.
+   Le piège tient en une ligne : `classes[-1]` vaut `"REST"`. Le score est donc un COUPLE, comme
    le SSVEP : taux d'émission + justesse à l'émission, Wilson sur les essais DÉCIDÉS.
 
 4. **L'ÉTAPE ENREGISTRÉE EST L'ESSAI ENTIER (mise en route + imagerie, 7 s).** Le plus long vote
@@ -69,8 +69,8 @@ from core.modes.ssvep_mesure import REFERENCE_EMISSION, wilson  # noqa: E402
 # hors ligne : aucun repère EN DIRECT n'existe. Rangés par JEU DE TÂCHES, pas par leur nombre :
 # les tâches se règlent, donc « 2 classes » peut vouloir dire pieds/mains, et le 63,3 % des
 # poings n'en dit rien.
-REPERES_JUSTESSE = {frozenset(("GAUCHE", "DROITE", "REPOS")): 0.400,
-                    frozenset(("GAUCHE", "DROITE")): 0.633}
+REPERES_JUSTESSE = {frozenset(("LEFT", "RIGHT", "REST")): 0.400,
+                    frozenset(("LEFT", "RIGHT")): 0.633}
 
 # Le seul repère d'émission du projet : le SSVEP, le mode FIABLE, émet sur 44 % des essais dans son
 # régime normal. Un MI plus souvent muet ne « tient » pas dans une application.
@@ -80,9 +80,9 @@ EMISSION_MIN_BON = REFERENCE_EMISSION
 # tombe que si le tampon du moteur en a perdu.
 ESSAIS_MIN = 6
 
-# L'étape NON enregistrée. En minuscules : « REPOS » est une CLASSE, pas une pause, et `_mesurer`
+# L'étape NON enregistrée. En minuscules : « REST » est une CLASSE, pas une pause, et `_mesurer`
 # ne compte que les étapes dont le nom est une classe du modèle. C'est aussi le texte affiché sous
-# la consigne, donc lu dans le fichier de langue ; les classes (GAUCHE, DROITE, REPOS), elles,
+# la consigne, donc lu dans le fichier de langue ; les classes (LEFT, RIGHT, REST), elles,
 # restent des identifiants — la console en tire le top latéralisé.
 PAUSE = tr("mesure.mi_test.etape.pause")
 
@@ -177,7 +177,7 @@ class MesureMI(MesureRuntime):
         (la panne du contrôle alpha, étapes « IGNORÉES »). Mesurée par le même `_essai`.
         """
         # La plus LONGUE mise en route proposée : le modèle n'est pas encore connu ici.
-        return max(float(e.duree_s) for e in cls._essai("GAUCHE", max(MI_MISES_EN_ROUTE))
+        return max(float(e.duree_s) for e in cls._essai("LEFT", max(MI_MISES_EN_ROUTE))
                    if e.enregistre)
 
     def _sorties_de_l_essai(self, epoque, fs):
@@ -204,7 +204,7 @@ class MesureMI(MesureRuntime):
         """**LA décision d'un essai : la DERNIÈRE sortie. Une seule.** La classe, ou None.
 
         ⚠️ Les invariants n°2 et n°3 vivent ici : rendre toutes les sorties multiplierait l'effectif
-        par ~26 ; lire `classes[intent_index]` sans tester `-1` ferait de chaque silence un REPOS.
+        par ~26 ; lire `classes[intent_index]` sans tester `-1` ferait de chaque silence un REST.
         """
         index = int(sorties[-1]["intent_index"])
         if index < 0:
@@ -341,7 +341,7 @@ HONNETETE = tr("mesure.mi_test.honnetete", fenetres=FENETRES_PAR_ESSAI,
 
 def _duree_min(par_classe, n_classes):
     """La durée d'un test, en minutes — depuis la forme d'UN essai (`_essai`), jamais recopiée."""
-    par_essai = sum(float(e.duree_s) for e in MesureMI._essai("GAUCHE"))
+    par_essai = sum(float(e.duree_s) for e in MesureMI._essai("LEFT"))
     return (MesureRuntime.warmup_s + par_classe * n_classes * par_essai) / 60.0
 
 
@@ -443,9 +443,9 @@ def _selftest():
         return None if i < 0 else runtime.classes[i]
 
     # === 1. LE HASARD SE DÉDUIT DES CLASSES ==================================================
-    chk(abs(_hasard_de(["GAUCHE", "DROITE", "REPOS"]) - 1 / 3) < 1e-9,
+    chk(abs(_hasard_de(["LEFT", "RIGHT", "REST"]) - 1 / 3) < 1e-9,
         "trois classes -> hasard 1/3")
-    chk(abs(_hasard_de(["GAUCHE", "DROITE"]) - 1 / 2) < 1e-9,
+    chk(abs(_hasard_de(["LEFT", "RIGHT"]) - 1 / 2) < 1e-9,
         "deux classes -> hasard 1/2 : il se DÉDUIT du modèle, il n'est pas écrit en dur")
 
     vrai_dispo = mi_models.modeles_disponibles
@@ -508,8 +508,8 @@ def _selftest():
             f"le tampon du moteur est dimensionné sur l'essai ENTIER ({MesureMI.epoque_etape_s():g} "
             f"s) — le calcul du socle, joué sur la classe, rendrait 0")
         rt2 = MesureMI(SPEC, dict(valeurs, model=m2), _FauxMoteur(rng), rng=_random.Random(2))
-        chk(rt2.classes == MI_CONTROL and "REPOS" not in {e.nom for e in rt2._etapes},
-            f"un modèle GAUCHE/DROITE ne fait jouer AUCUN essai REPOS ({rt2.classes})")
+        chk(rt2.classes == MI_CONTROL and "REST" not in {e.nom for e in rt2._etapes},
+            f"un modèle LEFT/RIGHT ne fait jouer AUCUN essai REST ({rt2.classes})")
         # La MISE EN ROUTE du modèle : un modèle entraîné à 1 s se teste à 1 s ; le
         # tampon reste dimensionné sur la plus longue proposée ; et à 1 s, un essai porte encore
         # plus de fenêtres que le plus long vote permis (la borne basse du réglage).
@@ -519,7 +519,7 @@ def _selftest():
         modele_1s.save(m1)
         rt1 = MesureMI(SPEC, dict(valeurs, model=m1), _FauxMoteur(rng), rng=_random.Random(4))
         enreg1 = [e for e in rt1._etapes if e.enregistre]
-        essai_1s = synth_mi_trial("GAUCHE", n_samp=int(round(enreg1[0].duree_s * FS)), fs=FS,
+        essai_1s = synth_mi_trial("LEFT", n_samp=int(round(enreg1[0].duree_s * FS)), fs=FS,
                                   rng=rng).T
         sorties_1s = rt1._sorties_de_l_essai(essai_1s, FS)
         vote_max = next(p.max for p in SPEC_MI.params if p.key == "vote_len")
@@ -579,10 +579,10 @@ def _selftest():
             "le décideur EST le runtime du mode : `_run_step` et `_publish` ne sont pas redéfinis")
 
         # Scores FABRIQUÉS, lus dans le signal (voie 0 = un code), servis aux DEUX décodeurs.
-        SCORES = {1: {"GAUCHE": 0.90, "DROITE": 0.05, "REPOS": 0.05},
-                  2: {"GAUCHE": 0.05, "DROITE": 0.88, "REPOS": 0.07},
-                  3: {"GAUCHE": 0.45, "DROITE": 0.30, "REPOS": 0.25},    # sous le seuil
-                  4: {"GAUCHE": 0.04, "DROITE": 0.13, "REPOS": 0.83}}
+        SCORES = {1: {"LEFT": 0.90, "RIGHT": 0.05, "REST": 0.05},
+                  2: {"LEFT": 0.05, "RIGHT": 0.88, "REST": 0.07},
+                  3: {"LEFT": 0.45, "RIGHT": 0.30, "REST": 0.25},    # sous le seuil
+                  4: {"LEFT": 0.04, "RIGHT": 0.13, "REST": 0.83}}
 
         def _scores(window):
             return dict(SCORES[int(round(float(np.asarray(window)[-1, 0])))])
@@ -595,11 +595,11 @@ def _selftest():
                 morceaux.append(bloc)
             return np.vstack(morceaux)
 
-        # GAUCHE sûr 5,8 s, DROITE sûr 1 s, tiède 0,2 s : le vote final (5 fenêtres) voit 4 DROITE
-        # + 1 tiède -> DROITE ; la première sortie n'a pas de vote ; la majorité des 26 est GAUCHE ;
+        # LEFT sûr 5,8 s, RIGHT sûr 1 s, tiède 0,2 s : le vote final (5 fenêtres) voit 4 RIGHT
+        # + 1 tiède -> RIGHT ; la première sortie n'a pas de vote ; la majorité des 26 est LEFT ;
         # la dernière fenêtre SEULE est sous le seuil. Trois lectures fausses, trois réponses fausses.
         essai = _signal([(1, 5.8), (2, 1.0), (3, 0.2)])
-        avant = _signal([(4, MI_CUE_S + MI_IMAGERY_S), (3, MI_REST_S)])   # un essai REPOS + pause
+        avant = _signal([(4, MI_CUE_S + MI_IMAGERY_S), (3, MI_REST_S)])   # un essai REST + pause
         rt._decideur.decoder.scores = _scores
         sorties = rt._sorties_de_l_essai(essai, FS)
         decision = rt._decision_de_l_essai(sorties)
@@ -608,7 +608,7 @@ def _selftest():
         direct._last_log = float("inf")          # pas de journal : ce n'est pas un vrai mode
         direct.decoder.scores = _scores
         en_direct = _rejouer_en_continu(direct, np.vstack([avant, essai]))
-        chk(decision == en_direct == "DROITE",
+        chk(decision == en_direct == "RIGHT",
             f"la décision du test est CELLE que `decoded_mi` publiait à la fin de l'imagerie, le "
             f"mode ayant décodé en continu depuis l'essai précédent ({decision} / {en_direct})")
         labels = [s["label"] for s in sorties]
@@ -621,7 +621,7 @@ def _selftest():
         accord = 0
         for label in MI_LABELS * 3:
             ep = synth_mi_trial(label, n_samp=N_ESSAI, fs=FS, rng=rng).T
-            prec = synth_mi_trial("DROITE" if label == "GAUCHE" else "GAUCHE",
+            prec = synth_mi_trial("RIGHT" if label == "LEFT" else "LEFT",
                                   n_samp=N_ESSAI + int(round(MI_REST_S * FS)), fs=FS, rng=rng).T
             direct._reset_rest()
             accord += (rt._decision_de_l_essai(rt._sorties_de_l_essai(ep, FS))
@@ -629,26 +629,26 @@ def _selftest():
         chk(accord == 9, f"…et sur 9 essais d'ERD synthétique, sans bouchon, le test et le flux en "
                          f"direct décident pareil ({accord}/9)")
 
-        # === 7. -1 VEUT DIRE « VOTE NON CONCLU », JAMAIS REPOS ===================================
-        # Consignes REPOS -> scores tièdes (le vote ne conclut pas) ; GAUCHE/DROITE -> sûrs et justes.
-        code_de = {"GAUCHE": 1, "DROITE": 2, "REPOS": 3}
+        # === 7. -1 VEUT DIRE « VOTE NON CONCLU », JAMAIS REST ===================================
+        # Consignes REST -> scores tièdes (le vote ne conclut pas) ; LEFT/RIGHT -> sûrs et justes.
+        code_de = {"LEFT": 1, "RIGHT": 2, "REST": 3}
         moteur7 = _FauxMoteur(rng, fabrique=lambda classe, n: _signal([(code_de[classe], n / FS)]))
         rt7 = MesureMI(SPEC, valeurs, moteur7, rng=_random.Random(7))
         rt7._decideur.decoder.scores = _scores
         res7 = _jouer(rt7, moteur7)
-        repos7 = [d for c, d in res7["decisions"] if c == "REPOS"]
+        repos7 = [d for c, d in res7["decisions"] if c == "REST"]
         chk(len(repos7) == 6 and all(d is None for d in repos7),
-            f"un vote non conclu sur un essai REPOS reste SANS décision ({repos7})")
+            f"un vote non conclu sur un essai REST reste SANS décision ({repos7})")
         chk(res7["n_emis"] == res7["n_justes"] == 12 and res7["n_silences"] == 6
             and abs(res7["taux_emission"] - 12 / 18) < 1e-3,
             f"…compté dans le taux d'émission ({res7['taux_emission']:.2f}), ni comme une erreur ni "
-            f"comme un REPOS juste ({res7['n_justes']}/{res7['n_emis']})")
-        code_de["REPOS"] = 4                      # la réciproque : REPOS reconnu avec certitude
+            f"comme un REST juste ({res7['n_justes']}/{res7['n_emis']})")
+        code_de["REST"] = 4                      # la réciproque : REST reconnu avec certitude
         rt7b = MesureMI(SPEC, valeurs, moteur7, rng=_random.Random(8))
         rt7b._decideur.decoder.scores = _scores
         res7b = _jouer(rt7b, moteur7)
-        chk(res7b["n_emis"] == 18 and res7b["par_classe"]["REPOS"]["justes"] == 6,
-            f"…tandis qu'un REPOS reconnu est une décision ordinaire ({res7b['par_classe']['REPOS']})")
+        chk(res7b["n_emis"] == 18 and res7b["par_classe"]["REST"]["justes"] == 6,
+            f"…tandis qu'un REST reconnu est une décision ordinaire ({res7b['par_classe']['REST']})")
 
         # === 8. LES NIVEAUX, jugés par le moteur =================================================
         def _dec(classes, n, emis, justes):

@@ -227,10 +227,10 @@ def _smoke():
     # 1. Les tâches se lisent dans la description d'un VRAI flux `decoded_mi` — celle qu'écrit le
     #    moteur, pas une copie écrite pour le test, qui se donnerait raison.
     from core.lsl_io import DecodedMIPublisher
-    pub = DecodedMIPublisher(("PIEDS", "MAINS", "REPOS"), instance="smoke-mi-libre")
+    pub = DecodedMIPublisher(("PIEDS", "MAINS", "REST"), instance="smoke-mi-libre")
     lues = classes_du_flux(pub.outlet.get_info())
     del pub
-    chk(lues == ("PIEDS", "MAINS", "REPOS"),
+    chk(lues == ("PIEDS", "MAINS", "REST"),
         f"les tâches sont lues dans la description du flux publié par le moteur ({lues})")
 
     class _SansDescription:

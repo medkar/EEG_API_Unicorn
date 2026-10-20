@@ -99,7 +99,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   doit avoir TOUTES les clés du français (`[smoke-textes]`). **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
   `{valeurs}` exactes, aucun texte orphelin, aucun littéral passé à un widget de la console. Hors
   règle : commentaires, `print()` du terminal, messages d'autotest, et le **contrat réseau** (noms
-  de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais. Les fenêtres pygame de
+  de flux, JSON des `decoded_*`, marqueurs), qui ne se traduit jamais : il est en ANGLAIS, quelle
+  que soit la langue de l'écran. Un texte du catalogue qui y part (la consigne de repos du flux
+  `status`) passe par `i18n.pour_le_contrat`, qui le relit en anglais. Les fenêtres pygame de
   `src/stimulus/` y passent aussi (2026-10-19, `fenetres.json`) ; ⚠️ le contrôle vérifie leurs
   clés et leurs `{valeurs}`, mais ne repère un texte EN DUR que dans la console. Une aide de réglage s'affiche dans une bulle
   **« ⓘ »** au survol, jamais en texte gris sous le champ.
@@ -524,7 +526,7 @@ python src/core/modes/affichage.py         # les trois lignes d'un résultat : l
                                            # table du verdict, jamais d'une seconde table d'écran
 python src/core/modes/mesure_marqueurs.py  # le SOCLE des tests à fenêtre : épochage par le chemin du
                                            # décodage, garde de silence, CLOISON de la vérité
-python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REPOS
+python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REST
 python src/core/modes/p300_test.py         # Tester le P300 : une MANCHE = un essai, hasard 1/6
 python src/core/modes/cvep_test.py         # Tester le c-VEP : un BLOC = une décision, phase APPELÉE
 python src/core/modes/errp_test.py         # 🔴 Tester l'ErrP : l'étiquette au correcteur, JAMAIS au
@@ -664,13 +666,15 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
     gauche/droite est à 63 %. Pour des tâches libres (pieds/mains), aucun repère : orange au mieux.
 - **Les TÂCHES du Motor Imagery se règlent** (2026-10-15, demandé au casque : « pieds/mains au lieu
   de poing droit/poing gauche », sans traduire de tête pendant la consigne). Dans « Entraîner » : un
-  nombre de 2 à 5 (défaut 2 : GAUCHE, DROITE), puis un champ par tâche (`Param` de type
+  nombre de 2 à 5 (défaut 2 : LEFT, RIGHT), puis un champ par tâche (`Param` de type
   `text_list`, validé par le moteur : non vide, distinct, court, sans virgule). Le MODÈLE porte ses
-  tâches ; le test et le décodage les relisent de lui, et `decoded_mi` publie `p_<tâche>`. « repos »,
-  « gauche », « droite » tapés redeviennent les classes d'origine (consigne validée, top
-  latéralisé, sens de REPOS dans le flux) ; toute autre tâche est cuée par son nom, top centré. Les
+  tâches ; le test et le décodage les relisent de lui, et `decoded_mi` publie `p_<tâche>`. Les
+  classes d'origine s'appellent **LEFT, RIGHT, REST** (2026-10-20 : en anglais, comme tout ce que
+  reçoit l'application ; GAUCHE, DROITE, REPOS avant) ; « rest », « gauche », « Droite »… tapés
+  y mènent (consigne validée, top latéralisé, sens de REST dans le flux) ; toute autre tâche est
+  cuée par son nom, top centré, et s'affiche telle que tapée. Les
   seuils du verdict d'entraînement sont devenus RELATIFS AU HASARD (kappa 0,40 / 0,175 : 60/45 %
-  inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans REPOS, le modèle désigne toujours une tâche : seul
+  inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans REST, le modèle désigne toujours une tâche : seul
   le seuil de probabilité fait taire le flux. **Jamais joué au casque** : tout ce qui précède est
   prouvé sur du signal synthétique.
 - **Revue du décodeur MI (2026-10-15, recommandations d'une autre session, triées avec
