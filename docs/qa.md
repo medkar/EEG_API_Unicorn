@@ -863,8 +863,11 @@ le mode qui continue de tourner après un essai libre qu'il n'avait pas commenc�
 > 🔔 **POINT DE VIGILANCE — séance du 2026-10-21 : VÉRIFIER LE SEUIL DE CONTACT.**
 > Le repère vert/rouge de « Contact des électrodes » (**40 µV**, `config.CONTACT_SIGMA_MAX`) est
 > **provisoire** : il ne vient pas de g.tec (qui ne publie aucun chiffre), il a été posé sur trois
-> séances archivées et un seul exemple d'électrode dégradée. **Fais le contraste du point 2.1.0
-> avant tout le reste**, et note les valeurs : c'est ce qui décidera de le garder ou de le changer.
+> séances archivées et un seul exemple d'électrode dégradée. Même chose pour le seuil de la
+> **référence** (corrélation entre voies > 0,90, une seule séance). **Fais le contraste du point
+> 2.1.0 avant tout le reste**, et note les valeurs : c'est ce qui décidera de les garder ou de les
+> changer. Le signal brut du contraste servira aussi à essayer, hors ligne, un critère de plus :
+> la corrélation de chaque électrode avec les autres.
 
 ⚠️ **Sauf le SSVEP, rien de ce bloc n'a jamais décodé un vrai cerveau à travers le moteur, et aucun
 « Tester » n'a jamais vu un casque.** Les autotests prouvent le câblage, jamais l'ergonomie ni le
@@ -915,6 +918,9 @@ d'abord que le casque est bien posé et mouillé, et que tout est vert.
    sa couleur ; remets-la, attends qu'elle redevienne verte. Recommence sur deux autres :
    ______ : ___ µV (couleur ___) · ______ : ___ µV (___) · ______ : ___ µV (___)
 3. **Toute électrode qui reste rouge malgré tes soins** : nom et σ ______
+4. **La référence** — décolle UNE pastille derrière l'oreille ~10 s : les deux petits cercles
+   passent au **rouge** et le bandeau dit « RÉFÉRENCE DÉCROCHÉE ». Note la corrélation du bandeau
+   pastille décollée ___ , puis recollée ___ (attendu : vers 1, puis 0,3 à 0,5).
 Le bon seuil passe ENTRE les valeurs du 1 et celles du 2. Si une électrode mal posée reste verte,
 ou une bien posée rouge, le seuil est à revoir : rapporte les chiffres.
 
