@@ -860,6 +860,12 @@ le mode qui continue de tourner après un essai libre qu'il n'avait pas commenc�
 
 # Bloc 2 — au casque
 
+> 🔔 **POINT DE VIGILANCE — séance du 2026-10-21 : VÉRIFIER LE SEUIL DE CONTACT.**
+> Le repère vert/rouge de « Contact des électrodes » (**40 µV**, `config.CONTACT_SIGMA_MAX`) est
+> **provisoire** : il ne vient pas de g.tec (qui ne publie aucun chiffre), il a été posé sur trois
+> séances archivées et un seul exemple d'électrode dégradée. **Fais le contraste du point 2.1.0
+> avant tout le reste**, et note les valeurs : c'est ce qui décidera de le garder ou de le changer.
+
 ⚠️ **Sauf le SSVEP, rien de ce bloc n'a jamais décodé un vrai cerveau à travers le moteur, et aucun
 « Tester » n'a jamais vu un casque.** Les autotests prouvent le câblage, jamais l'ergonomie ni le
 décodage. Un point qui tombe ici est **❌ Échec**, pas régression : note ce que tu vois, ne conclus
@@ -899,9 +905,18 @@ Grille → **« Vérifier le casque »** → « Ouvrir » (ou, c'est la même pa
 ✅ **2.1.0** (2026-10-20) **Avant « Commencer »** — vérifie d'abord que le casque est posé, allumé, les
 électrodes mouillées, et attends ~5 s sur la page. « Contact des électrodes » : chaque cercle
 **vert**, et la référence (derrière les oreilles) verte aussi. Une électrode rouge : appuie-la,
-mouille-la, attends quelques secondes. ⚠️ Le repère de **40 µV est provisoire** : note le σ des
-électrodes bien posées, et celui de toute électrode qui reste rouge malgré tes soins — c'est ce
-qui le calera. Un clignement fait passer Fz au rouge un instant : c'est normal.
+mouille-la, attends quelques secondes. Un clignement fait passer Fz au rouge un instant : c'est
+normal.
+⚠️ **Le repère de 40 µV est provisoire : le contraste ci-dessous le calera (~5 min).** Vérifie
+d'abord que le casque est bien posé et mouillé, et que tout est vert.
+1. **Bien posé** — note le σ affiché de chaque électrode, après ~30 s sans bouger :
+   Fz ___ · C3 ___ · Cz ___ · C4 ___ · Pz ___ · PO7 ___ · Oz ___ · PO8 ___ µV
+2. **Mal posé, exprès** — décolle légèrement OU sèche UNE électrode, attends ~10 s, note son σ et
+   sa couleur ; remets-la, attends qu'elle redevienne verte. Recommence sur deux autres :
+   ______ : ___ µV (couleur ___) · ______ : ___ µV (___) · ______ : ___ µV (___)
+3. **Toute électrode qui reste rouge malgré tes soins** : nom et σ ______
+Le bon seuil passe ENTRE les valeurs du 1 et celles du 2. Si une électrode mal posée reste verte,
+ou une bien posée rouge, le seuil est à revoir : rapporte les chiffres.
 
 ✅ **2.1.1** Le mot en face : **« ALPHA NET »** (vert) ou **« ARRÊTE ICI »** (rouge). Ratio et pic dans la
 ligne de chiffres.
