@@ -204,7 +204,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     vient du MOTEUR (`config.contact_bon` → `snapshot()["quality"]` : `contact`, `reference_ok`,
     `seuil_contact`), vidé quand la liaison est perdue ; la console vide aussi tout si son moteur
     est mort. Il ne BLOQUE rien : le contrôle de liaison garde son [0,5 ; 500] µV. Le bruit secteur
-    et l'écrêtage ne sont toujours pas mesurés par voie.
+    et l'écrêtage ne sont toujours pas mesurés par voie. Pour caler ces seuils hors ligne,
+    `research/enregistre_brut.py` enregistre le flux BRUT (comme un client LSL, sans ouvrir le
+    casque) avec des notes horodatées tapées au terminal, dans `seances/` (QA 2.1.0).
   - **`ssvep_taux` — « Tester le SSVEP »** (≈ 3,6 min, 36 essais). Une fenêtre (`src/stimulus/ssvep.py
     --guide --freqs …`) désigne la cible **sur les fréquences du mode**, le moteur applique **sa
     propre règle de décision** et rend le taux d'émission et la justesse à l'émission. ⚠️ **Un

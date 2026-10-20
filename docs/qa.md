@@ -912,6 +912,11 @@ mouille-la, attends quelques secondes. Un clignement fait passer Fz au rouge un 
 normal.
 ⚠️ **Le repère de 40 µV est provisoire : le contraste ci-dessous le calera (~5 min).** Vérifie
 d'abord que le casque est bien posé et mouillé, et que tout est vert.
+0. **Enregistre le signal brut pendant tout le contraste** : dans un second terminal, console
+   ouverte, `python src/research/enregistre_brut.py`. À CHAQUE geste, tape une note puis Entrée
+   (« tout bien posé », « C3 décollée », « C3 remise », « pastille gauche décollée »…) ; « fin »
+   arrête. Il n'ouvre pas le casque : il écoute le flux brut comme une application. Le fichier va
+   dans `seances/brut_….npz` — c'est lui qui servira à essayer la corrélation par électrode.
 1. **Bien posé** — note le σ affiché de chaque électrode, après ~30 s sans bouger :
    Fz ___ · C3 ___ · Cz ___ · C4 ___ · Pz ___ · PO7 ___ · Oz ___ · PO8 ___ µV
 2. **Mal posé, exprès** — décolle légèrement OU sèche UNE électrode, attends ~10 s, note son σ et
