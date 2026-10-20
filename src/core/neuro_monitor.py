@@ -39,6 +39,7 @@ from scipy.integrate import trapezoid
 from scipy.signal import butter, filtfilt, welch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
 from core.config import (FS_UNICORN, NEURO_ARTIFACT_RATIO, NEURO_BANDS,  # noqa: E402
                     NEURO_EMG_RATIO, NEURO_ENGAGEMENT_CH, NEURO_FRONTAL,
                     NEURO_HIGHPASS_HZ, NEURO_PARIETAL, NEURO_REBASELINE_S,
@@ -57,10 +58,16 @@ INDEX_KEYS = ("charge", "somnolence", "engagement")
 # L'ordre est celui de `INDEX_KEYS`, et il est vérifié par l'autotest : deux listes parallèles qui
 # se désalignent afficheraient la formule de la somnolence sous la barre de la charge, sans qu'une
 # seule exception ne soit levée.
+# Lues à l'import : la console les RETRADUIT à l'affichage (`i18n.retraduit`).
 INDEX_DESCRIPTIONS = {
-    "charge":     ("Charge mentale", "θ(Fz,Cz) / α postérieur", "+ = plus chargé"),
-    "somnolence": ("Somnolence",     "α postérieur",            "+ = assoupissement"),
-    "engagement": ("Engagement",     "β / (α+θ) postéro-central", "+ = plus attentif"),
+    "charge": (tr("mode.neuro.indice.charge.nom"), tr("mode.neuro.indice.charge.formule"),
+               tr("mode.neuro.indice.charge.sens")),
+    "somnolence": (tr("mode.neuro.indice.somnolence.nom"),
+                   tr("mode.neuro.indice.somnolence.formule"),
+                   tr("mode.neuro.indice.somnolence.sens")),
+    "engagement": (tr("mode.neuro.indice.engagement.nom"),
+                   tr("mode.neuro.indice.engagement.formule"),
+                   tr("mode.neuro.indice.engagement.sens")),
 }
 
 if set(INDEX_DESCRIPTIONS) != set(INDEX_KEYS):

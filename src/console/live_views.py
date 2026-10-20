@@ -21,7 +21,7 @@ from console.params_form import ACCENT, ListeSansMolette, infobulle  # noqa: E40
 from core import filtres_affichage  # noqa: E402
 from core.config import (FS_UNICORN, NEURO_Z_SPAN, TRACES_AFFICHAGE_S,  # noqa: E402
                          TRACES_AMORCE_S, Z_MIN)
-from core.i18n import nombre, tr  # noqa: E402
+from core.i18n import nombre, retraduit, tr  # noqa: E402
 from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
 
 
@@ -559,15 +559,11 @@ class ActiveView(QWidget):
 # Les deux textes d'échelle de la famille « passif ». Ils sont posés par la BRANCHE qui a
 # mesuré la valeur affichée, jamais par le constructeur — et c'est tout leur intérêt.
 #
-# ⚠️ `AVERTISSEMENT_Z` n'est PAS le texte par défaut du label : affiché avant toute sortie, il
-# apparaîtrait aussi sur la page de l'ErrP, qui n'a JAMAIS de z, et affirmerait que son score est
-# « un z contre TON repos du jour » alors que c'est un log-odds comparé au seuil d'une
-# calibration. Une phrase fausse sur l'unité est pire qu'un silence (cf. le P300 rendu comme un
-# SSVEP dans `ActiveView`).
-#
-# Lus dans le fichier de langue à l'IMPORT, comme les libellés des contrats.
-AVERTISSEMENT_Z = tr("pages.direct.passif.avertissement_z")
-AVERTISSEMENT_ATTENTE = tr("pages.direct.passif.avertissement_attente")
+# ⚠️ L'avertissement sur le z (« pages.direct.passif.avertissement_z ») n'est PAS le texte par
+# défaut du label : affiché avant toute sortie, il apparaîtrait aussi sur la page de l'ErrP, qui
+# n'a JAMAIS de z, et affirmerait que son score est « un z contre TON repos du jour » alors que
+# c'est un log-odds comparé au seuil d'une calibration. Une phrase fausse sur l'unité est pire
+# qu'un silence (cf. le P300 rendu comme un SSVEP dans `ActiveView`).
 
 
 class PassiveView(QWidget):
@@ -589,7 +585,7 @@ class PassiveView(QWidget):
         super().__init__()
         self.etat = QLabel(tr("pages.direct.en_attente"))
         self.barres = QFormLayout()
-        # Vide au départ : voir le commentaire d'`AVERTISSEMENT_Z` ci-dessus.
+        # Vide au départ : voir le commentaire sur l'avertissement du z, ci-dessus.
         self.avertissement = QLabel("")
         self.avertissement.setWordWrap(True)
         self.avertissement.setStyleSheet("color: #8a8f9c; font-size: 11px;")
@@ -624,12 +620,12 @@ class PassiveView(QWidget):
             self.etat.setText(_avec_decompte((mode_state or {}).get("instruction")
                                              or tr("pages.direct.passif.attente_premier"),
                                              mode_state))
-            self.avertissement.setText(AVERTISSEMENT_ATTENTE)
+            self.avertissement.setText(tr("pages.direct.passif.avertissement_attente"))
             return
 
         # Le texte d'échelle est posé ICI, dans la branche qui rend des z — pas dans le
-        # constructeur, où il s'appliquait aussi à l'ErrP (cf. AVERTISSEMENT_Z).
-        self.avertissement.setText(AVERTISSEMENT_Z)
+        # constructeur, où il s'appliquait aussi à l'ErrP (cf. l'avertissement du z, plus haut).
+        self.avertissement.setText(tr("pages.direct.passif.avertissement_z"))
 
         # Un indice qui cesse d'être rapporté perd sa barre. Sans ça elle resterait à l'écran,
         # figée sur sa dernière valeur, sans rien pour dire qu'elle ne mesure plus rien.
@@ -647,7 +643,8 @@ class PassiveView(QWidget):
                 # Une barre sans son sens de montée (« Charge mentale · θ(Fz,Cz) / α postérieur ·
                 # + = plus chargé ») ne dit pas si elle est bon signe ; la clé brute (« charge »)
                 # ne dirait rien.
-                nom, formule, sens = INDEX_DESCRIPTIONS.get(cle, (cle, "", ""))
+                # `retraduit` : lues à l'import du moteur, elles suivent la langue choisie depuis.
+                nom, formule, sens = retraduit(INDEX_DESCRIPTIONS.get(cle, (cle, "", "")))
                 etiquette = QLabel(_etiquette_indice(nom, formule, sens))
                 self.barres.addRow(etiquette, barre)
             # ⚠️ Écrêtage LINÉAIRE, par choix. Une compression en `tanh(z / SPAN)` éviterait un

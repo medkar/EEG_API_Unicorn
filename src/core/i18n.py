@@ -33,7 +33,9 @@ Ce que `controle()` vérifie, et que `server.py --smoke` exécute (`[smoke-texte
   - aucune clé du français n'est orpheline (un texte que plus rien n'affiche se traduirait pour
     rien) ;
   - une autre langue a TOUTES les clés du français, et aucune autre, avec les mêmes `{valeurs}` ;
-  - la console ne passe aucun texte EN DUR à un widget (`setText`, `QLabel`, `QPushButton`…).
+  - la console ne passe aucun texte EN DUR à un widget (`setText`, `QLabel`, `QPushButton`…) ;
+  - la console ne lit aucun texte au CHARGEMENT (`tr` hors de toute fonction) : il resterait dans
+    la langue de départ.
 """
 
 import ast as _ast
@@ -253,6 +255,33 @@ def textes_en_dur(racine_console):
     return trouves
 
 
+def textes_figes(racine_console):
+    """[(chemin, ligne, clé)] : les `tr(…)` de la console lus HORS de toute fonction.
+
+    Au niveau d'un module ou d'une classe, un texte est lu au CHARGEMENT : avant que la console ait
+    choisi sa langue, et jamais relu quand on en change. La console lit ses textes au moment de
+    les afficher (le moteur, lui, a `retraduit`).
+    """
+    figes = []
+    for chemin in _fichiers_py(racine_console):
+        with open(chemin, encoding="utf-8") as f:
+            arbre = _ast.parse(f.read(), chemin)
+
+        def parcourt(noeud, dans_une_fonction):
+            for enfant in _ast.iter_child_nodes(noeud):
+                fonction = dans_une_fonction or isinstance(
+                    enfant, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda))
+                if (not fonction and isinstance(enfant, _ast.Call)
+                        and _nom_appel(enfant) == "tr"):
+                    cle = enfant.args[0].value if enfant.args and isinstance(
+                        enfant.args[0], _ast.Constant) else "?"
+                    figes.append((chemin, enfant.lineno, cle))
+                parcourt(enfant, fonction)
+
+        parcourt(arbre, False)
+    return figes
+
+
 def appels_tr(racine_src):
     """[(fichier, ligne, clé ou None, {noms des valeurs})] : chaque `tr(…)` du dépôt."""
     appels = []
@@ -326,6 +355,11 @@ def controle(racine_src, exiger_zero_en_dur=True):
                                   f"le français ({sorted(champs(texte))} ≠ "
                                   f"{sorted(champs(fr[cle]))})")
 
+    for chemin, ligne, cle in textes_figes(_os.path.join(racine_src, "console")):
+        fautes.append(f"{_os.path.relpath(chemin, racine_src)}:{ligne} : « {cle} » est lu au "
+                      f"CHARGEMENT (hors de toute fonction) — il resterait dans la langue de "
+                      f"départ ; lis-le au moment de l'afficher")
+
     en_dur = textes_en_dur(_os.path.join(racine_src, "console"))
     if exiger_zero_en_dur:
         for chemin, ligne, extrait in en_dur:
@@ -397,6 +431,15 @@ def _selftest():
     vus = [n.lineno for n in _hors_autotest(arbre) if isinstance(n, _ast.Call)
            and _nom_appel(n) in (_WIDGETS | _METHODES) and n.args and _a_une_lettre(n.args[0])]
     chk(vus == [1, 2, 6], f"le scanner voit les textes en dur, pas les symboles ni `tr` ({vus})")
+    # Un texte lu au CHARGEMENT (module, classe) est vu ; un texte lu dans une fonction, non.
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as dossier:
+        with open(_os.path.join(dossier, "page.py"), "w", encoding="utf-8") as f:
+            f.write("\n".join(['TITRE = tr("a")', "class P:", '    X = tr("b")',
+                               "    def f(self):", '        return tr("c")', ""]))
+        figes = sorted(cle for _c, _l, cle in textes_figes(dossier))
+    chk(figes == ["a", "b"],
+        f"un texte lu au chargement est repéré, pas celui d'une fonction ({figes})")
     # …et `tr(…, **d)` est vu comme tel, pour que `controle` le refuse.
     appel = _ast.parse('tr("x", **d)').body[0].value
     chk([k.arg for k in appel.keywords] == [None], "un `**` dans `tr` est repérable")

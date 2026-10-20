@@ -453,24 +453,26 @@ class CalibPage(QWidget):
     # qui se lirait comme un diagnostic précis (« contact des électrodes ») sans rapport avec la
     # vraie cause.
     #
-    # Les libellés sont lus dans le fichier de langue à l'IMPORT, comme les libellés des contrats
-    # (cf. `core/i18n.py` : changer de langue = relancer).
-    MESURES = (
-        ("cv_groupee", tr("pages.calib.mesure.cv_groupee")),
-        ("selection", tr("pages.calib.mesure.selection")),
-        # ⚠️ L'AUC vient EN DERNIER : sa place dans cette liste la rend correcte pour les deux
-        # modes qui la publient. Le P300 la rend AUSSI, mais chez lui le chiffre qui décide est la
-        # sélection ; plus haut, l'AUC ferait afficher la mauvaise mesure. L'ErrP ne publie
-        # qu'elle (il répond oui/non à chaque feedback), et son AUC hors-pli est le seul de ses
-        # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
-        ("auc", tr("pages.calib.mesure.auc")),
-        # Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
-        # qui décide est celle de l'eCCA, arbitrairement : les deux sont indiscernables sur la
-        # seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt que l'autre ne choisit
-        # rien. Celle du rCCA est en détail, et le `verdict` porte le test qui dit s'il y a lieu
-        # de les départager.
-        ("acc_ecca", tr("pages.calib.mesure.acc_ecca")),
-    )
+    # Une MÉTHODE, pas une constante : les libellés sont lus au moment d'afficher, dans la
+    # langue choisie (une constante serait lue au chargement, avant ce choix).
+    @staticmethod
+    def _mesures():
+        return (
+            ("cv_groupee", tr("pages.calib.mesure.cv_groupee")),
+            ("selection", tr("pages.calib.mesure.selection")),
+            # ⚠️ L'AUC vient EN DERNIER : sa place dans cette liste la rend correcte pour les deux
+            # modes qui la publient. Le P300 la rend AUSSI, mais chez lui le chiffre qui décide est
+            # la sélection ; plus haut, l'AUC ferait afficher la mauvaise mesure. L'ErrP ne publie
+            # qu'elle (il répond oui/non à chaque feedback), et son AUC hors-pli est le seul de ses
+            # chiffres qui ne soit pas mesuré au seuil qui l'a choisi.
+            ("auc", tr("pages.calib.mesure.auc")),
+            # Le c-VEP est le seul mode à entraîner DEUX décodeurs sur les mêmes époques. La mesure
+            # qui décide est celle de l'eCCA, arbitrairement : les deux sont indiscernables sur la
+            # seule séance réelle (McNemar p = 0,727), donc en mettre un plutôt que l'autre ne
+            # choisit rien. Celle du rCCA est en détail, et le `verdict` porte le test qui dit s'il
+            # y a lieu de les départager.
+            ("acc_ecca", tr("pages.calib.mesure.acc_ecca")),
+        )
     # Le détail, par clé présente elle aussi. `cv_naive` n'y figure pas : elle est gonflée de 10
     # à 16 points, et l'afficher à côté de l'honnête invite à choisir la plus belle.
     # Une fonction par ligne (valeur -> texte) : le NOMBRE se met en forme ici, le texte vient du
@@ -497,7 +499,7 @@ class CalibPage(QWidget):
     def _mesure(self, resultat):
         """(clé, libellé, valeur) de la mesure qui décide, ou None si le résultat n'en publie
         aucune. La CLÉ est rendue pour que le détail ne répète pas le chiffre principal."""
-        for cle, libelle in self.MESURES:
+        for cle, libelle in self._mesures():
             valeur = resultat.get(cle)
             if valeur is not None:
                 return cle, libelle, float(valeur)

@@ -50,19 +50,24 @@ CASQUES_RETENUS = 5
 # Ce que chaque source est, dit à quelqu'un qui n'a pas lu la documentation. Le second texte est
 # volontairement dissuasif : le board de test produit un signal qui RESSEMBLE à de l'EEG, et c'est
 # précisément ce qui le rend dangereux si on oublie qu'on est dessus.
-DESCRIPTIONS = {
-    UNICORN: (tr("console.demarrage.unicorn"), tr("console.demarrage.unicorn_aide")),
-    SYNTHETIQUE: (tr("console.demarrage.synthetique"), tr("console.demarrage.synthetique_aide")),
-}
+# Une FONCTION, pas une constante : lue au moment d'afficher, dans la langue choisie (une
+# constante serait lue au chargement du module, avant que la console ait choisi sa langue).
+def descriptions():
+    return {
+        UNICORN: (tr("console.demarrage.unicorn"), tr("console.demarrage.unicorn_aide")),
+        SYNTHETIQUE: (tr("console.demarrage.synthetique"),
+                      tr("console.demarrage.synthetique_aide")),
+    }
 
 # Le SECTEUR électrique, un réglage du POSTE : le coupe-bande de tous les décodeurs,
 # que chaque modèle entraîné ENREGISTRE. Un libellé par valeur de `config.SECTEURS_HZ` — une
 # valeur ajoutée là sans libellé ici lève à l'ouverture du dialogue, plutôt que d'afficher un
 # choix muet.
-SECTEURS = {
-    50.0: tr("console.demarrage.secteur_50"),
-    60.0: tr("console.demarrage.secteur_60"),
-}
+def secteurs():
+    return {
+        50.0: tr("console.demarrage.secteur_50"),
+        60.0: tr("console.demarrage.secteur_60"),
+    }
 
 
 # La langue de l'affichage d'un poste neuf. Le français reste la langue SOURCE du catalogue (et
@@ -174,7 +179,7 @@ class DialogueDemarrage(QDialog):
 
         self.boutons = {}
         for cle in (UNICORN, SYNTHETIQUE):
-            titre, aide = DESCRIPTIONS[cle]
+            titre, aide = descriptions()[cle]
             radio = QRadioButton(titre)
             radio.setChecked(cle == defaut)
             etiquette = QLabel(aide)
@@ -222,7 +227,7 @@ class DialogueDemarrage(QDialog):
         # le même filtre d'acquisition, et un modèle entraîné dessus l'enregistre aussi.
         self.choix_secteur = ListeSansMolette()
         for hz in SECTEURS_HZ:
-            self.choix_secteur.addItem(SECTEURS[hz], hz)
+            self.choix_secteur.addItem(secteurs()[hz], hz)
         voulu = memoire.secteur() if secteur is None else float(secteur)
         self.choix_secteur.setCurrentIndex(max(0, self.choix_secteur.findData(voulu)))
         self.bulle_secteur = QLabel("ⓘ")
@@ -489,7 +494,7 @@ def _selftest():
     neuf = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, **rien)
     donnees = [neuf.choix_secteur.itemData(i) for i in range(neuf.choix_secteur.count())]
     chk(donnees == list(SECTEURS_HZ) and neuf.secteur_hz() == SECTEUR_HZ
-        and neuf.choix_secteur.currentText() == SECTEURS[SECTEUR_HZ]
+        and neuf.choix_secteur.currentText() == secteurs()[SECTEUR_HZ]
         and isinstance(neuf.choix_secteur, ListeSansMolette),
         f"l'écran de départ propose les secteurs du poste, sur le défaut, et la molette ne le "
         f"change pas en passant ({donnees}, « {neuf.choix_secteur.currentText()} »)")
@@ -508,7 +513,7 @@ def _selftest():
         f"`ouvrir_session` le lit, board de test compris ({mem_s.secteur()})")
     rouvert = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, **rien)
     chk(rouvert.secteur_hz() == 60.0
-        and rouvert.choix_secteur.currentText() == SECTEURS[60.0],
+        and rouvert.choix_secteur.currentText() == secteurs()[60.0],
         f"…et la liste l'AFFICHE à l'ouverture suivante (« {rouvert.choix_secteur.currentText()} »)")
     impose = DialogueDemarrage(defaut=UNICORN, memoire=mem_s, secteur=50, **rien)
     chk(impose.secteur_hz() == 50.0,
@@ -628,8 +633,8 @@ def _selftest():
 
     # Les deux textes doivent être DIFFÉRENTS et dire ce que la source est. Le board de test
     # produit un signal qui ressemble à de l'EEG : un libellé tiède le ferait oublier.
-    titre_u, aide_u = DESCRIPTIONS[UNICORN]
-    titre_s, aide_s = DESCRIPTIONS[SYNTHETIQUE]
+    titre_u, aide_u = descriptions()[UNICORN]
+    titre_s, aide_s = descriptions()[SYNTHETIQUE]
     chk(titre_u != titre_s and "SANS casque" in titre_s,
         f"le board de test s'annonce comme tel dans son TITRE ({titre_s})")
     chk("FABRIQUÉ" in aide_s and "jamais" in aide_s.lower(),
