@@ -351,6 +351,10 @@ class Console(QMainWindow):
         # même — et le moteur, lui, ne sait pas qu'elle existe.
         texte, alerte = self.lanceur.etat_texte()
         self.banner.set_fenetre(texte, alerte)
+        if mort:
+            # Un moteur mort ne mesure plus rien : aucune page ne peint son dernier σ comme s'il
+            # était d'actualité (une électrode verte sur un casque que plus personne ne lit).
+            state = dict(state or {}, quality=None)
         self.grid.update_from(state)
         page = self.stack.currentWidget()
         if page is not self.grid:
@@ -3355,6 +3359,74 @@ def _smoke():
         "cliquer la tuile ouvre la page de la mesure")
     chk(mod_alpha.BRIEFING[0] in mes.briefing.text(),
         "le briefing affiché vient du contrat de la mesure, pas d'un texte recopié ici")
+
+    # --- Le CONTACT de chaque électrode : sur « Vérifier le casque », et nulle part ailleurs ----
+    from console.contact_vue import POSITIONS, BarreContact, SchemaTete, VueContact
+    from console.banner import ROUGE as _ROUGE, VERT as _VERT
+    from PySide6.QtGui import QColor as _QColor
+    vue = mes.vue_contact
+    chk(isinstance(vue, VueContact)
+        and all(p.vue_contact is None for i, p in console.mesure_pages.items() if i != "alpha"),
+        "la page « Vérifier le casque » montre le contact des électrodes, et elle seule : c'est "
+        "le contrat de la mesure qui le déclare (`montre_contact`)")
+    etat_contact = fake_state()
+    etat_contact["quality"] = dict(
+        etat_contact["quality"], sigmas=[7.2, 55.0, 6.9, 0.1, 5.5, 11.2, 6.1, 7.8],
+        contact=[True, False, True, False, True, True, True, True], seuil_contact=40.0,
+        reference_ok=True)
+    console.apply_state(etat_contact)
+    attendus = dict(zip(POSITIONS, [True, False, True, False, True, True, True, True]))
+    chk(vue.schema.etats == attendus and vue.schema.reference is True
+        and vue.barres["C3"].verdict is False and vue.barres["C3"].seuil == 40.0
+        and vue.barres["Fz"].verdict is True,
+        f"le schéma et les barres peignent les verdicts du MOTEUR, électrode par électrode "
+        f"({vue.schema.etats})")
+    chk("C3" in vue.resume.text() and "C4" in vue.resume.text() and "Fz" not in vue.resume.text()
+        and "40" in vue.repere.text(),
+        f"…une phrase nomme les électrodes à revoir, et le repère dit son seuil "
+        f"({vue.resume.text()!r}, {vue.repere.text()!r})")
+    # Les PIXELS : une barre au-delà du repère est rouge, une barre en deçà est verte ; une
+    # pastille se remplit de la couleur de son verdict, ou reste vide sans mesure.
+    barre = BarreContact()
+    barre.resize(200, 16)
+    barre.montrer(55.0, 40.0, False)
+    image = barre.grab().toImage()
+    rouge_au_dela = image.pixelColor(int(200 * 0.6), 8) == _QColor(_ROUGE)
+    barre.montrer(7.2, 40.0, True)
+    image = barre.grab().toImage()
+    vert_en_deca = image.pixelColor(int(200 * 0.05), 8) == _QColor(_VERT)
+    vide_au_dela = image.pixelColor(int(200 * 0.6), 8) != _QColor(_VERT)
+    schema = SchemaTete()
+    schema.montrer({**attendus, "Oz": None}, True)
+    image = schema.grab().toImage()
+
+    def teinte(nom):
+        centre = schema._point(*POSITIONS[nom])
+        return image.pixelColor(int(centre.x()), int(centre.y()) + 10)
+    chk(rouge_au_dela and vert_en_deca and vide_au_dela
+        and teinte("C3") == _QColor(_ROUGE) and teinte("Fz") == _QColor(_VERT)
+        and teinte("Oz") not in (_QColor(_ROUGE), _QColor(_VERT)),
+        "à l'écran : la barre au-delà du repère est ROUGE, celle en deçà VERTE ; la pastille "
+        "d'une électrode prend la couleur de son verdict, et reste VIDE sans mesure")
+    # Pas de mesure : aucune qualité encore, liaison perdue (le moteur n'envoie alors aucun
+    # verdict), ou moteur mort (son dernier état est figé).
+    console.apply_state({**etat_contact, "quality": None})
+    sans_qualite = (all(v is None for v in vue.schema.etats.values())
+                    and vue.schema.reference is None and "Pas de mesure" in vue.resume.text())
+    console.apply_state({**etat_contact, "quality": dict(etat_contact["quality"],
+                                                         contact=[None] * 8, reference_ok=None)})
+    liaison_perdue = all(v is None for v in vue.schema.etats.values())
+    vivant = console._moteur_vivant
+    console._moteur_vivant = lambda: False
+    try:
+        console.apply_state(etat_contact)
+        moteur_mort = all(v is None for v in vue.schema.etats.values())
+    finally:
+        console._moteur_vivant = vivant
+    chk(sans_qualite and liaison_perdue and moteur_mort,
+        f"sans mesure, tout reste VIDE : avant la première mesure ({sans_qualite}), liaison "
+        f"perdue ({liaison_perdue}), moteur arrêté ({moteur_mort})")
+    console.apply_state(fake_state())
 
     # Le TOP SONORE, et le fait qu'il soit DIT quand il manque. C'est le point n°1 de cette page :
     # la seconde moitié de la mesure se passe les yeux fermés, où l'écran ne sert plus à rien.

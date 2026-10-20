@@ -346,6 +346,8 @@ SPEC = MesureSpec(
     # Les voies MOYENNÉES par la mesure : le contrôle de liaison les entoure. Lues sur la même
     # constante que le calcul, jamais recopiées.
     key_channels=tuple(OCCIPITAL),
+    # La page montre le contact de chaque électrode : c'est ici qu'on règle le casque.
+    montre_contact=True,
 )
 
 

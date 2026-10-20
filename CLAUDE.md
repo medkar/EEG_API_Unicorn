@@ -195,6 +195,16 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     réglage la mesure remplit (`ControleAlpha.REGLAGE_PRODUIT`), et la page propose d'**appliquer
     le pic mesuré** à `alpha_hz`. ⚠️ Ce bouton échouait SYSTÉMATIQUEMENT jusqu'au 2026-09-21
     (`set_params` exigeait un mode démarré) — trouvé par la QA, pas par un test.
+    **Depuis le 2026-10-20, la page s'ouvre sur le CONTACT de chaque électrode**
+    (`console/contact_vue.py`, déclaré par le contrat : `MesureSpec.montre_contact`, sur cette
+    page SEULEMENT pour l'instant) : la tête vue de dessus, un cercle par électrode (vert / rouge /
+    vide sans mesure), la référence derrière les oreilles, et une barre par voie avec un REPÈRE à
+    `config.CONTACT_SIGMA_MAX` — 40 µV, **PROVISOIRE** : posé sur les séances archivées (électrodes
+    saines sous 17 µV neuf fois sur dix, un Cz dégradé au-dessus dans 17 % des essais). Le verdict
+    vient du MOTEUR (`config.contact_bon` → `snapshot()["quality"]` : `contact`, `reference_ok`,
+    `seuil_contact`), vidé quand la liaison est perdue ; la console vide aussi tout si son moteur
+    est mort. Il ne BLOQUE rien : le contrôle de liaison garde son [0,5 ; 500] µV. Le bruit secteur
+    et l'écrêtage ne sont toujours pas mesurés par voie.
   - **`ssvep_taux` — « Tester le SSVEP »** (≈ 3,6 min, 36 essais). Une fenêtre (`src/stimulus/ssvep.py
     --guide --freqs …`) désigne la cible **sur les fréquences du mode**, le moteur applique **sa
     propre règle de décision** et rend le taux d'émission et la justesse à l'émission. ⚠️ **Un

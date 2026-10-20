@@ -107,6 +107,9 @@ def catalogue_mesures():
             # marqueurs que personne n'enverrait.
             "stimulus_id": spec.stimulus_id,
             "key_channels": list(spec.key_channels),
+            # La page montre-t-elle le contact de chaque électrode ? Le moteur le déclare, la
+            # console ne le devine pas d'après un identifiant.
+            "montre_contact": spec.montre_contact,
             "params": _params_serialises(spec.params),
         }
         for spec in MESURES
@@ -514,6 +517,10 @@ def _selftest():
         and all(m.get("yeux_fermes") is False for i, m in par_id.items() if i != "alpha"),
         f"le catalogue dit quelles mesures se font les yeux FERMÉS : le contrôle alpha, et lui "
         f"seul ({ {i: m.get('yeux_fermes') for i, m in par_id.items()} })")
+    chk(par_id.get("alpha", {}).get("montre_contact") is True
+        and all(m.get("montre_contact") is False for i, m in par_id.items() if i != "alpha"),
+        f"le catalogue dit quelles pages montrent le contact des électrodes : « Vérifier le "
+        f"casque », et elle seule ({ {i: m.get('montre_contact') for i, m in par_id.items()} })")
 
     # --- l'assouplissement des choix vides, sur un registre PIÉGÉ ---------------
     # C'est l'état par défaut de tout dépôt fraîchement cloné (`data/` est gitignoré, donc zéro

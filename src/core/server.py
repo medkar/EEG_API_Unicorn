@@ -83,11 +83,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.acquisition import NOTCH_SECTEUR, UnicornAcquisition  # noqa: E402
-from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR,  # noqa: E402
-                    DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
+from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, CONTACT_SIGMA_MAX,  # noqa: E402
+                    DATA_DIR, DECROCHAGE_S, FENETRE_PAQUETS_S, MARKER_LATE_S, MARKER_STREAM_DEFAULT,
                     MI_WINDOW_S, NEURO_WINDOW_S, REESSAI_S, SECTEUR_HZ, SECTEURS_HZ,
                     SEANCES_DIR, TOLERANCE_DIVISEUR, TRACES_AFFICHAGE_S, TRACES_AMORCE_S,
-                    barres_liaison, chemin_libre,
+                    barres_liaison, chemin_libre, contact_bon,
                     choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
@@ -1953,7 +1953,7 @@ class EngineServer:
             # `candidat` retombe à None : plus rien à trancher.
             etat_calib["candidat"] = candidat
         state.update({
-            "quality": self._quality,
+            "quality": self._qualite_affichee(),
             "rest_instruction": self.rest_instruction,
             "modes_state": {mid: r.state() for mid, r in active.items()},
             # La liaison avec le casque : dans `snapshot()` seulement, pas dans le
@@ -2368,6 +2368,15 @@ class EngineServer:
         self._marqueur_curseur[mode_id] = i
         return murs
 
+    def _qualite_affichee(self):
+        """`_quality`, tel que la console le montre. Liaison perdue : plus aucun verdict de
+        contact ni de référence. Le dernier σ date d'avant la coupure, et une électrode peinte en
+        vert sur un casque muet mentirait."""
+        qualite = self._quality
+        if qualite is None or self._liaison != "perdue":
+            return qualite
+        return dict(qualite, contact=[None] * len(qualite["contact"]), reference_ok=None)
+
     def _publish_quality(self, lsl_ts):
         """σ par voie sur les dernières secondes, calculé sur du signal FILTRÉ.
 
@@ -2406,6 +2415,14 @@ class EngineServer:
             "verdicts": [verdict_from_sigma(float(v)) for v in sigmas],
             "common_mode": json_float(common, digits=3),
             "reference_lost": bool(lost),
+            # Le CONTACT de chaque électrode, pour « Vérifier le casque » : True, False, ou None
+            # sans mesure. Plus strict que `verdicts`, qui ne repère que les voies plates ou
+            # saturées : au-delà de `seuil_contact`, l'électrode capte surtout du bruit.
+            "contact": [contact_bon(v) for v in sigmas],
+            "seuil_contact": CONTACT_SIGMA_MAX,
+            # La référence (les pastilles derrière les oreilles) : None sur le board de test, qui
+            # n'a pas d'électrode, ou quand la corrélation n'a pas pu se calculer.
+            "reference_ok": None if self.synthetic or common is None else not lost,
         }
         if lost != self._reference_lost and not self.synthetic:
             self._reference_lost = lost
@@ -4043,6 +4060,24 @@ def _smoke_liaison():
             ssvep.tick = tick_compte
         chk(srv.snapshot()["liaison"]["etat"] == "ok" and ssvep is not None,
             f"au départ la liaison est « ok » ({srv.snapshot()['liaison']})")
+        # Le CONTACT de chaque électrode : un verdict par voie, tiré du σ et du seuil publiés.
+        t0 = time.perf_counter()
+        while srv.snapshot().get("quality") is None and time.perf_counter() - t0 < 5.0:
+            time.sleep(0.05)
+        qualite = srv.snapshot().get("quality") or {}
+        attendus = [None if s is None else 0.5 <= s <= qualite.get("seuil_contact", -1)
+                    for s in qualite.get("sigmas", [])]
+        chk(len(qualite.get("contact", [])) == 8 and qualite.get("contact") == attendus
+            and qualite.get("seuil_contact") == CONTACT_SIGMA_MAX
+            and qualite.get("reference_ok") is None,
+            f"un verdict de contact par électrode, tiré de son σ et du seuil publié ; la référence "
+            f"sans verdict sur le board de test ({qualite.get('contact')}, "
+            f"{qualite.get('sigmas')}, référence {qualite.get('reference_ok')})")
+        chk(contact_bon(0.1) is False and contact_bon(12.0) is True
+            and contact_bon(CONTACT_SIGMA_MAX + 1) is False and contact_bon(None) is None
+            and contact_bon(float("nan")) is None,
+            "une voie plate ou trop bruitée a un MAUVAIS contact, une voie sans mesure n'en a "
+            "aucun")
         # Un test en cours au moment de la coupure : il doit être ANNULÉ, avec sa raison.
         srv.submit("start_mesure", id="alpha")
         t0 = time.perf_counter()
@@ -4058,6 +4093,10 @@ def _smoke_liaison():
         chk(liaison["etat"] == "perdue",
             f"sans échantillon depuis plus de {srv.decrochage_s} s, la liaison est déclarée "
             f"PERDUE ({liaison})")
+        qualite = srv.snapshot().get("quality") or {}
+        chk(qualite.get("contact") == [None] * 8 and qualite.get("reference_ok") is None,
+            f"liaison perdue : plus aucun verdict de contact — le dernier σ date d'avant la "
+            f"coupure ({qualite.get('contact')})")
 
         avant, tours_avant = decisions["n"], tours["n"]
         time.sleep(1.0)

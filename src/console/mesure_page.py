@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import compter  # noqa: E402
 from console.beeps import TOP_ETAPE, connait  # noqa: E402
+from console.contact_vue import VueContact  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
@@ -302,6 +303,11 @@ class MesurePage(QWidget):
         corps = QWidget()
         dedans = QVBoxLayout(corps)
         dedans.setContentsMargins(0, 0, 0, 0)
+        # Le contact de chaque électrode, si le contrat de la mesure le demande (« Vérifier le
+        # casque ») : en tête, et visible avant, pendant et après la mesure.
+        self.vue_contact = VueContact() if spec.get("montre_contact") else None
+        if self.vue_contact is not None:
+            dedans.addWidget(self.vue_contact)
         dedans.addWidget(self.note)
         dedans.addWidget(self.bloc_pendant)
         dedans.addWidget(self.bloc_apres)
@@ -458,6 +464,8 @@ class MesurePage(QWidget):
         que ce soit celle de CETTE page — elle ne doit jamais présenter la séance d'une autre
         comme si c'était la sienne.
         """
+        if self.vue_contact is not None:
+            self.vue_contact.update_from(state)
         etat = (state or {}).get("mesure")
         if etat is not None and etat.get("mode_id") != self.mesure_id:
             etat = None

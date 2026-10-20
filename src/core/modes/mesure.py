@@ -119,6 +119,10 @@ class MesureSpec:
     #                             pour un TEST : la console prête alors celles du mode testé. Le
     #                             contrôle alpha déclare ses occipitales, pour qu'on voie
     #                             quelles voies il utilise.
+    montre_contact: bool = False  # la page montre-t-elle le CONTACT de chaque électrode (schéma
+    #                             de la tête et barres de signal) ? « Vérifier le casque », oui :
+    #                             c'est là qu'on règle le casque. Sérialisé par
+    #                             `registry.catalogue_mesures()` sous la clé « montre_contact ».
     stimulus_id: str = ""       # la CLÉ de la fenêtre à ouvrir en même temps, ou "" si la mesure
     #                             se joue sans écran. Exactement la même clé et le même rôle que
     #                             `Calib.stimulus_id` : `core` ne nomme aucun fichier de fenêtre,

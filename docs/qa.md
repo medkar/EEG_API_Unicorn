@@ -208,7 +208,11 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 3. **Si le flux de marqueurs d'une application n'est pas visible à l'entrée d'une page de mode**,
    la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu. Antérieur au
    chantier ; relève de « Connecter ».
-4. **« Vérifier le casque » ne vérifie que l'alpha** (passe du 2026-09-23, point 1.2). Demandé :
+4. **« Vérifier le casque » ne vérifie que l'alpha** (passe du 2026-09-23, point 1.2). ➜ **En partie
+   traité le 2026-10-20** : la page s'ouvre sur « Contact des électrodes » (point 1.7 bis), qui juge
+   chaque électrode sur son σ (plate, ou trop de bruit au-delà d'un repère de 40 µV, PROVISOIRE)
+   et la référence. Reste : caler le repère au casque (point 2.1.0) ; le bruit secteur et
+   l'écrêtage ne sont pas mesurés par voie. Demandé :
    que cet écran dise si le signal de CHAQUE électrode est bon (contact, bruit, saturation…), pas
    seulement mesurer l'effet de Berger. À retravailler plus tard — chantier à part.
 
@@ -538,6 +542,29 @@ moyenne (passe du 2026-09-23). Le refus porte sur les huit dans tous les cas.
 ⚠️ **Il n'y a AUCUNE porte de sortie, et c'est délibéré** — un contournement à un clic est un
 contournement qu'on prend par réflexe. Si au casque une électrode refuse de descendre sous le
 seuil, **c'est une décision à prendre devant le casque**, pas un bug à corriger dans l'urgence.
+
+### ☐ 1.7 bis — Le contact de chaque électrode, sur « Vérifier le casque » (2026-10-20)
+
+Board de test, aucune séance en cours.
+
+1. Vérifie d'abord que la console est ouverte sur le **board de test** et que rien ne tourne.
+   Grille → **« Vérifier le casque »** → « Ouvrir ».
+   ✅ **1.7 bis.1** En tête de page, **« Contact des électrodes »** : la tête vue de dessus (nez en
+   haut), huit cercles nommés (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8), deux petits cercles derrière les
+   oreilles (la référence) ; à droite, une barre par électrode coupée par un **trait vertical**, et
+   dessous « Repère : 40 µV. Au-delà, le contact n'est pas bon. »
+   ✅ **1.7 bis.2** Chaque cercle a la **couleur de sa barre** : vert si elle reste avant le trait, rouge
+   si elle le dépasse. Le board de test a des voies jusqu'à ~73 µV : du **rouge est attendu**, et
+   la phrase du haut nomme ces électrodes (« À revoir : … »).
+   ✅ **1.7 bis.3** Les deux cercles de la référence restent **vides** : le board de test n'a pas de
+   référence. La bulle ⓘ explique vert, rouge et vide.
+2. Toujours sans séance en cours, ouvre la page **SSVEP**, puis son **« Tester sur une session »**.
+   ✅ **1.7 bis.4** Ni l'une ni l'autre ne montre cette vue : elle n'est que sur « Vérifier le casque ».
+3. Vérifie d'abord que rien ne tourne. Change de langue (🌐), puis reviens sur « Vérifier le casque ».
+   ✅ **1.7 bis.5** Textes traduits ; « 7.2 µV » en anglais, « 7,2 µV » en français.
+
+❌ Régression : un cercle vert à côté d'une barre rouge, ou l'inverse ; une électrode rouge que la
+phrase ne nomme pas ; la vue sur une autre page.
 
 ### ☐ 1.8 — « Mesurer » le pic alpha depuis la page SSVEP, et un résultat en trois lignes
 
@@ -869,6 +896,13 @@ Grille → **« Vérifier le casque »** → « Ouvrir » (ou, c'est la même pa
 **« Mesurer »**) → briefing → **« Commencer »**. **37 s** : stabilisation, 8 s **yeux ouverts**,
 8 s **yeux fermés**, un **top sonore** à chaque changement.
 
+✅ **2.1.0** (2026-10-20) **Avant « Commencer »** — vérifie d'abord que le casque est posé, allumé, les
+électrodes mouillées, et attends ~5 s sur la page. « Contact des électrodes » : chaque cercle
+**vert**, et la référence (derrière les oreilles) verte aussi. Une électrode rouge : appuie-la,
+mouille-la, attends quelques secondes. ⚠️ Le repère de **40 µV est provisoire** : note le σ des
+électrodes bien posées, et celui de toute électrode qui reste rouge malgré tes soins — c'est ce
+qui le calera. Un clignement fait passer Fz au rouge un instant : c'est normal.
+
 ✅ **2.1.1** Le mot en face : **« ALPHA NET »** (vert) ou **« ARRÊTE ICI »** (rouge). Ratio et pic dans la
 ligne de chiffres.
 ✅ **2.1.2** Ratio **> ~1,5** → un bouton propose d'**appliquer le pic mesuré** au « Pic alpha » du SSVEP :
@@ -1112,6 +1146,8 @@ repos… » ; le mode repasse par la stabilisation puis le repos, et décode de 
 relancé la console**.
 ✅ **2.9.4** Un test ou un entraînement en cours pendant la coupure est **annulé**, avec « La liaison avec le
 casque s'est coupée pendant la séance… ».
+✅ **2.9.4 bis** (2026-10-20) Pendant la coupure, sur **« Vérifier le casque »**, tous les cercles sont
+**vides** et la phrase dit « Pas de mesure » ; ils se recolorent quand la liaison revient.
 
 ❌ Régression : l'écran se fige et il faut relancer la console (le comportement d'avant le
 2026-09-25) ; ou le flux décodé continue d'annoncer une cible pendant la coupure ; ou les essais de

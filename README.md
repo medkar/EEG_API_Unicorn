@@ -168,6 +168,11 @@ activity runs at a time — the engine refuses a calibration during a measuremen
 because there is one headset and two protocols would steal each other's windows.
 
 - **Alpha check** (37 s) — eyes open, then eyes closed; the Berger effect on the occipital channels.
+  Its page opens on **Electrode contact**: the head seen from above, one circle per electrode (green:
+  good contact, red: flat or too noisy, empty: no measurement, e.g. the headset is disconnected),
+  two smaller circles for the reference behind the ears, and one signal bar per channel with a mark
+  at 40 µV — beyond it, the contact is not good and the bar turns red. The verdicts come from the
+  engine; the 40 µV mark is provisional, set on this headset's archived sessions.
   It is a **barrier**, and the tile says so: if alpha does not rise, the electrodes or the reference
   are wrong and nothing else you measure today means anything. The verdict is a sentence that stops
   you, not a number to negotiate with, and it names what to check in order. When it passes, one

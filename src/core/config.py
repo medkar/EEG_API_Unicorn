@@ -40,6 +40,14 @@ FS_UNICORN = 250.0  # échantillonnage de l'Unicorn Hybrid Black (Hz)
 SIGNAL_DEAD_SIGMA = 0.5
 SIGNAL_SAT_SIGMA = 500.0
 
+# Au-delà de ce σ, le CONTACT d'une électrode n'est pas bon : elle capte surtout du bruit
+# (électrode mal appuyée, mal mouillée). C'est le repère tracé sur les barres de « Vérifier le
+# casque ». Repère PROVISOIRE, posé sur les séances archivées de ce casque : une électrode bien
+# posée reste sous 17 µV neuf fois sur dix, une électrode dégradée dépasse souvent 40 µV. Un
+# clignement fait passer Fz au-dessus un instant : c'est normal, seule une électrode qui RESTE
+# au-dessus est mal posée.
+CONTACT_SIGMA_MAX = 40.0
+
 
 # Corrélation médiane entre voies au-delà de laquelle la RÉFÉRENCE (mastoïde) est décrochée.
 # Défaut invisible au σ : les 8 voies mesurent alors la même référence flottante avec des
@@ -104,6 +112,14 @@ def signal_verdict(sigma):
     if sigma > SIGNAL_SAT_SIGMA:
         return "saturée"
     return "ok"
+
+
+def contact_bon(sigma):
+    """Le contact d'une électrode, depuis son σ filtré : True s'il est bon (entre
+    `SIGNAL_DEAD_SIGMA` et `CONTACT_SIGMA_MAX`), False sinon, None sans mesure."""
+    if sigma is None or not _math.isfinite(float(sigma)):
+        return None
+    return SIGNAL_DEAD_SIGMA <= float(sigma) <= CONTACT_SIGMA_MAX
 
 
 def json_float(value, digits=2):
