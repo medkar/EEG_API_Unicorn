@@ -1,17 +1,17 @@
-"""Décodeur Motor Imagery (imagerie motrice) : CSP + LDA, deux classes de mouvement imaginé
-(main gauche/droite) + un état REST explicite (indispensable pour distinguer un repos réel
-d'une simple absence de décision).
+"""Décodeur Motor Imagery (imagerie motrice) : CSP + LDA, sur les tâches choisies à
+l'entraînement — par défaut les deux poings (LEFT, RIGHT), souvent avec un repos (REST).
 
 Contrairement au SSVEP (CCA, zéro entraînement), le MI doit être ENTRAÎNÉ :
-  1. calibration  -> essais EEG étiquetés LEFT / RIGHT / REST   [src/core/modes/mi_calib.py]
+  1. calibration  -> essais EEG étiquetés par tâche (LEFT / RIGHT / REST…)  [src/core/modes/mi_calib.py]
   2. entraînement -> CSP (filtres spatiaux) + LDA                    [MIModel.fit]
   3. online       -> MIModel classe la fenêtre en direct            [MIModel.predict_proba]
 
-Pourquoi REST comme 3e classe : un classifieur 2 classes choisit TOUJOURS un côté (même sans
-imagerie) => faux mouvements au repos. En apprenant « repos », le modèle peut dire « la personne
-ne fait rien » — ce qui est une intention à part entière, DIFFÉRENTE de « je ne sais pas ». Ce
-que l'application en fait (s'arrêter, attendre, ignorer) ne regarde pas ce module : le flux
-publie une intention neutre, jamais une commande d'actionneur (docs/SPEC.md §5).
+Pourquoi ajouter un repos : un classifieur à 2 classes choisit TOUJOURS un côté (même sans
+imagerie) => faux mouvements au repos. En apprenant une tâche « repos », le modèle peut dire « la
+personne ne fait rien » — une intention à part entière, DIFFÉRENTE de « je ne sais pas » (-1).
+Pour le modèle, c'est une tâche comme les autres. Ce que l'application en fait (s'arrêter,
+attendre, ignorer) ne regarde pas ce module : le flux publie une intention neutre, jamais une
+commande d'actionneur (docs/SPEC.md §5).
 
 Signal : ERD (désynchronisation) mu/beta du cortex moteur — la puissance chute sur l'hémisphère
 OPPOSÉ à la main imaginée (main droite -> baisse sur C3 ; main gauche -> sur C4). Le CSP apprend
@@ -47,8 +47,9 @@ from core.config import MI_METHOD, MI_REREF, use_utf8_console  # noqa: E402
 from core.filtrage import passe_bande  # noqa: E402
 
 MI_BAND = (8.0, 30.0)                       # mu (8-12) + beta (13-30) = rythmes sensorimoteurs
-MI_CONTROL = ("LEFT", "RIGHT")           # classes actives (hors REST)
-MI_LABELS = ("LEFT", "RIGHT", "REST")   # classes du modèle (REST = état neutre)
+MI_CONTROL = ("LEFT", "RIGHT")           # les deux poings : les tâches par défaut
+MI_LABELS = ("LEFT", "RIGHT", "REST")   # trois tâches, un repos compris : celles de la séance de
+#                                         référence (40 %), et le jeu des autotests
 
 
 def reref(epochs, mode=MI_REREF):

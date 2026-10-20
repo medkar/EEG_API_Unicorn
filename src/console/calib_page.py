@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console import compter  # noqa: E402
+from console.beeps import TOP_ETAPE, connait  # noqa: E402
 from console.params_form import ParamsForm  # noqa: E402
 from console.resultat import BlocResultat  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
@@ -342,10 +343,15 @@ class CalibPage(QWidget):
         premier top sonne, les suivants jamais, à chaque séance. Ce qui distingue de façon fiable
         « un nouvel essai commence » de « la page se repeint pendant le même cue » (~10 fois par
         seconde) est la TRANSITION de `etape` elle-même.
+
+        Une tâche sans son propre (pieds, mains, un repos…) reçoit le top neutre, centré : la même
+        règle que le test (`MesurePage._maybe_beep`). Jamais le silence — l'élève ne saurait pas
+        quand commencer.
         """
         etape = calib_state.get("etape")
         if etape == "cue" and self._etape_precedente != "cue":
-            self.console.beeps.jouer(calib_state.get("classe"))
+            classe = calib_state.get("classe")
+            self.console.beeps.jouer(classe if connait(classe) else TOP_ETAPE)
         self._etape_precedente = etape
 
     def update_from(self, state):

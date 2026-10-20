@@ -130,8 +130,8 @@ class MIRuntime(ModeRuntime):
         # RIGHT : elle peut gagner et se publier avec SON indice. Seul un écart sous le seuil
         # produit None. Sans cette distinction, l'indice de REST est INATTEIGNABLE : le flux
         # répondrait « je ne sais pas » quand le modèle est certain à 99 % que la personne se
-        # repose — exactement ce que `DecodedMIPublisher` interdit (cf. sa docstring : « -1 et
-        # la classe REST sont deux choses différentes »).
+        # repose — exactement ce que `DecodedMIPublisher` interdit (cf. sa docstring : « -1
+        # n'est JAMAIS une tâche »).
         scores = self.decoder.scores(window)
         meilleure = max(scores, key=scores.get)
         proba = float(scores[meilleure])

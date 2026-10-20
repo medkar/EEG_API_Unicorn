@@ -526,7 +526,7 @@ python src/core/modes/affichage.py         # les trois lignes d'un résultat : l
                                            # table du verdict, jamais d'une seconde table d'écran
 python src/core/modes/mesure_marqueurs.py  # le SOCLE des tests à fenêtre : épochage par le chemin du
                                            # décodage, garde de silence, CLOISON de la vérité
-python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REST
+python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais une tâche
 python src/core/modes/p300_test.py         # Tester le P300 : une MANCHE = un essai, hasard 1/6
 python src/core/modes/cvep_test.py         # Tester le c-VEP : un BLOC = une décision, phase APPELÉE
 python src/core/modes/errp_test.py         # 🔴 Tester l'ErrP : l'étiquette au correcteur, JAMAIS au
@@ -670,13 +670,15 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   `text_list`, validé par le moteur : non vide, distinct, court, sans virgule). Le MODÈLE porte ses
   tâches ; le test et le décodage les relisent de lui. `decoded_mi` publie des voies NUMÉROTÉES
   `p_0`, `p_1`… (2026-10-20 : l'application ne change pas quand les tâches changent) et nomme les
-  tâches dans ses métadonnées (`classes`, et `rest_index` pour le repos). Les
-  classes d'origine s'appellent **LEFT, RIGHT, REST** (2026-10-20 : en anglais, comme tout ce que
-  reçoit l'application ; GAUCHE, DROITE, REPOS avant) ; « rest », « gauche », « Droite »… tapés
-  y mènent (consigne validée, top latéralisé, sens de REST dans le flux) ; toute autre tâche est
-  cuée par son nom, top centré, et s'affiche telle que tapée. Les
+  tâches dans ses métadonnées (`classes`). Les deux poings s'appellent **LEFT, RIGHT**
+  (2026-10-20 : en anglais, comme tout ce que reçoit l'application ; GAUCHE, DROITE avant) ;
+  « left », « gauche », « Droite »… tapés y mènent (consigne validée, top latéralisé). **Le repos
+  est une tâche ORDINAIRE** (2026-10-20, choix de l'utilisateur) : plus de `rest_index`, plus de
+  consigne ni de bip propres ; c'est l'application, qui a choisi les tâches, qui sait laquelle veut
+  dire « je ne fais rien ». Toute tâche autre qu'un poing est cuée par son nom, top centré (il
+  était muet à l'entraînement jusqu'au 2026-10-20), et s'affiche telle que tapée. Les
   seuils du verdict d'entraînement sont devenus RELATIFS AU HASARD (kappa 0,40 / 0,175 : 60/45 %
-  inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans REST, le modèle désigne toujours une tâche : seul
+  inchangés à 3 classes, 70/59 % à 2). ⚠️ Sans tâche de repos, le modèle désigne toujours une tâche : seul
   le seuil de probabilité fait taire le flux. **Jamais joué au casque** : tout ce qui précède est
   prouvé sur du signal synthétique.
 - **Revue du décodeur MI (2026-10-15, recommandations d'une autre session, triées avec

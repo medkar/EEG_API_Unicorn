@@ -3239,7 +3239,9 @@ def _smoke():
                     "instruction": "", "rappel": "", "restant_s": 1.5}
             console.apply_state({**mi_state, "calibration": repos})
 
-        chk(console.beeps.appels == classes_echauffement,
+        # Les poings ont leur top latéralisé ; REST, une tâche comme les autres, le top neutre.
+        attendus = [c if c in ("LEFT", "RIGHT") else "TOP" for c in classes_echauffement]
+        chk(console.beeps.appels == attendus,
             f"chacun des SIX essais d'échauffement sonne son propre top, pas un seul sur six, "
             f"et sans doublon sur le rafraîchissement répété du même cue ({console.beeps.appels})")
     finally:
@@ -3290,6 +3292,16 @@ def _smoke():
         console.apply_state({**mi_state, "calibration": cue_relance})
         chk(console.beeps.appels == ["RIGHT"],
             f"et le premier top de la séance RELANCÉE après un abandon sonne aussi — pas muet "
+            f"({console.beeps.appels})")
+
+        # Une tâche LIBRE (pieds, mains, un repos…) n'a pas de son propre : elle reçoit le top
+        # neutre, centré, comme au test — jamais le silence.
+        console.beeps.appels = []
+        console.apply_state({**mi_state, "calibration": {**cue_relance, "etape": "imagerie"}})
+        console.apply_state({**mi_state, "calibration": {**cue_relance, "classe": "repos",
+                                                         "instruction": "Imagine : repos"}})
+        chk(console.beeps.appels == ["TOP"],
+            f"une tâche libre (ici un repos) sonne le top neutre à l'entraînement, pas le silence "
             f"({console.beeps.appels})")
     finally:
         console.beeps = vrais_beeps

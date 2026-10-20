@@ -18,9 +18,10 @@ le contrôle alpha, avec de vraies `Etape`.
    tenue le plus longtemps, ce qu'un client lit alors, un vote fait de CET essai seul (cf. 4). Ni
    la première (vote sans historique), ni une majorité (le produit publie un flux, pas un résumé).
 
-3. **`-1` = « VOTE NON CONCLU », JAMAIS « REST ».** Un essai sans décision compte dans le taux
-   d'émission, jamais comme une erreur, jamais comme REST — une classe du modèle, avec son indice.
-   Le piège tient en une ligne : `classes[-1]` vaut `"REST"`. Le score est donc un COUPLE, comme
+3. **`-1` = « VOTE NON CONCLU », JAMAIS UNE TÂCHE.** Un essai sans décision compte dans le taux
+   d'émission, jamais comme une erreur, jamais comme une tâche — un repos compris, qui est une
+   tâche du modèle, avec son indice. Le piège tient en une ligne : `classes[-1]` est la dernière
+   tâche (souvent le repos). Le score est donc un COUPLE, comme
    le SSVEP : taux d'émission + justesse à l'émission, Wilson sur les essais DÉCIDÉS.
 
 4. **L'ÉTAPE ENREGISTRÉE EST L'ESSAI ENTIER (mise en route + imagerie, 7 s).** Le plus long vote
@@ -80,10 +81,10 @@ EMISSION_MIN_BON = REFERENCE_EMISSION
 # tombe que si le tampon du moteur en a perdu.
 ESSAIS_MIN = 6
 
-# L'étape NON enregistrée. En minuscules : « REST » est une CLASSE, pas une pause, et `_mesurer`
-# ne compte que les étapes dont le nom est une classe du modèle. C'est aussi le texte affiché sous
-# la consigne, donc lu dans le fichier de langue ; les classes (LEFT, RIGHT, REST), elles,
-# restent des identifiants — la console en tire le top latéralisé.
+# L'étape NON enregistrée. En minuscules, pour ne pas se confondre avec une tâche (« REST »…) :
+# `_mesurer` ne compte que les étapes dont le nom est une tâche du modèle. C'est aussi le texte
+# affiché sous la consigne, donc lu dans le fichier de langue ; les tâches (LEFT, RIGHT, PIEDS…),
+# elles, restent des identifiants — la console en tire le top.
 PAUSE = tr("mesure.mi_test.etape.pause")
 
 # Essais PAR CLASSE. Défaut COURT, parce qu'on refait ce test à chaque réglage ; 10 = l'effectif
@@ -204,7 +205,7 @@ class MesureMI(MesureRuntime):
         """**LA décision d'un essai : la DERNIÈRE sortie. Une seule.** La classe, ou None.
 
         ⚠️ Les invariants n°2 et n°3 vivent ici : rendre toutes les sorties multiplierait l'effectif
-        par ~26 ; lire `classes[intent_index]` sans tester `-1` ferait de chaque silence un REST.
+        par ~26 ; lire `classes[intent_index]` sans tester `-1` ferait de chaque silence la dernière tâche.
         """
         index = int(sorties[-1]["intent_index"])
         if index < 0:

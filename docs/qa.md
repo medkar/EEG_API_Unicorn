@@ -389,7 +389,7 @@ Accueil (la grille), aucune séance ni essai en cours.
    ✅ **1.2 bis.6** Les deux tâches par défaut s'appellent **LEFT** et **RIGHT** dans les deux
    langues : ce sont les noms que reçoit ton application (dans la description du flux), ils ne se
    traduisent pas. La bulle ⓘ de « Tâches à imaginer » dit qu'on peut aussi taper gauche, droite,
-   repos, et que les probabilités arrivent numérotées (p_0, p_1…).
+   et que les probabilités arrivent numérotées (p_0, p_1…).
 
 ❌ Régression : un texte resté dans l'ancienne langue après le changement ; le casque rouvert
 (C3/Cz qui saturent) ; un « 9,600 » dans un écran anglais ; une tâche par défaut écrite GAUCHE.
@@ -1019,10 +1019,10 @@ tâche : **~4,8 min à 2 tâches**, ~7,0 min à 3.
 RIGHT), puis autant de champs. Passe à 3 : un 3ᵉ champ apparaît ; repasse à 2 puis 3 : ce que tu y
 avais tapé est toujours là. « Essais par classe » propose aussi **40** (~12 min à 2 tâches : la
 fatigue joue contre, ce n'est pas le défaut). Un champ vide ou deux fois la même tâche → « Commencer » est **refusé**,
-avec la raison. Pendant l'essai, l'écran **nomme** la tâche tapée (« Imagine : PIEDS ») ; LEFT,
-RIGHT et REST gardent leur consigne détaillée et leur top latéralisé, toute autre tâche a un top
-**centré**. « repos » ou « gauche » tapés deviennent REST ou LEFT (2026-10-20 : les noms que reçoit
-l'application sont en anglais). (2026-10-15) Une **croix** « + » au-dessus de
+avec la raison. Pendant l'essai, l'écran **nomme** la tâche tapée (« Imagine : PIEDS ») ; LEFT et
+RIGHT gardent leur consigne détaillée et leur top latéralisé, toute autre tâche — un repos compris
+— a un top **court et centré**. « gauche » tapé devient LEFT (2026-10-20 : les noms que reçoit
+l'application sont en anglais) ; « repos » reste « repos », une tâche comme les autres. (2026-10-15) Une **croix** « + » au-dessus de
 la consigne pendant la mise en route et l'imagerie, pour TOUTES les tâches : fixe-la ; elle s'efface
 pendant la pause **sans que la page bouge**.
 🟡 **2.6.0 bis** (2026-10-15) **« Mise en route »** (1 à 3 s, défaut 3 s) : le temps, après le top,
@@ -1163,7 +1163,7 @@ quand tu changes. Au P300, il apparaît à la fin de chaque manche.
 librement » → contrôle de liaison → la fenêtre s'ouvre : une **croix** pendant la stabilisation
 (~15 s), puis **les tâches du modèle**, en grand (PIEDS, MAINS…). Imagine-en une : son cadre devient
 **vert** et la ligne du bas dit « Décodé : … » ; ne fais rien : « Rien de décodé » (le vote ne
-conclut pas — sauf si REST est une des tâches, qui s'encadre alors comme les autres). Échap
+conclut pas — sauf si un repos est une des tâches, qui s'encadre alors comme les autres). Échap
 ferme, et le mode s'arrête s'il ne tournait pas avant. **Note** le délai entre « j'imagine » et « le
 cadre arrive ».
 

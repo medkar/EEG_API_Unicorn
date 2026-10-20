@@ -249,8 +249,9 @@ probability per task, **numbered** `p_0`, `p_1`… — `p_i` goes with `intent_i
 two fists, or whatever 2 to 5 tasks were typed on the training page (feet, hands, rest…). So the
 channels never carry a task name, and an application does not change when the tasks do. The
 names, in channel order, are in the stream's `classes` description field (`LEFT,RIGHT` by
-default), and `rest_index` says which one, if any, is rest — never assume a fixed list. The
-original classes keep their English names whatever language the console shows.
+default) — never assume a fixed list. No task is set apart, not even a rest: it is a task like
+the others, and your application, which chose the tasks, knows which one means "doing nothing".
+The two fists keep their English names whatever language the console shows.
 
 Unlike SSVEP, this mode **must be trained per person**. It loads a model produced by a calibration
 and **refuses to start without one**, saying so — a mode that started without a model would publish
@@ -258,21 +259,21 @@ probabilities and never decide anything, which is the silent failure this projec
 Train one **from the console itself**: open Motor Imagery and click **Train** — choose the tasks
 (one field per task, 2 to 5), then a few minutes of cued trials, played by the engine, ending in a
 timestamped model and an accuracy figure that is honestly cross-validated **by trial**, so no window
-leaks between folds. The mode page then lists the models it finds, newest first. Typing `rest`,
-`left` or `right` (or their French names `repos`, `gauche`, `droite`, in any case) gives back the
-original class, with its detailed cue and its lateralized beep; any other task is cued by its name,
-with a centred beep.
+leaks between folds. The mode page then lists the models it finds, newest first. Typing `left`
+or `right` (or their French names `gauche`, `droite`, in any case) gives back a fist, with its
+detailed cue and its lateralized beep; any other task, a rest included, is cued by its name, with
+a short centred beep.
 
-Without `REST` among the tasks, the model always names one of the tasks it knows; only the
-probability threshold makes the stream fall silent (`-1`). Add `REST` if the application needs to
-know when the user is doing nothing.
+Without a rest task, the model always names one of the tasks it knows; only the probability
+threshold makes the stream fall silent (`-1`). Add one (for example `REST`) if the application
+needs to know when the user is doing nothing.
 
 Two values are easy to confuse and mean different things:
 
 | `intent_index` | Meaning |
 |---|---|
 | `-1` | the sliding vote did not conclude — not enough recent windows agreed, or the classifier stayed under its threshold |
-| `rest_index` | the model decided the user is at rest (only if rest is one of its tasks; otherwise `rest_index` is `-1`) |
+| the index of your rest task | the model decided the user is at rest (only if a rest is one of its tasks) |
 
 For an application, that is the difference between "wait" and "stop".
 

@@ -179,7 +179,7 @@ python src/core/modes/affichage.py         # les trois lignes d'un résultat : l
 python src/core/modes/mesure_marqueurs.py  # le SOCLE des tests menés par une fenêtre : épochage par
                                            # le chemin du décodage, garde de silence, et la CLOISON
                                            # qui retire la vérité avant la sous-classe
-python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais REST
+python src/core/modes/mi_test.py           # Tester le MI : la DERNIÈRE sortie, -1 jamais une tâche
 python src/core/modes/p300_test.py         # Tester le P300 : une MANCHE = un essai, hasard 1/6
 python src/core/modes/cvep_test.py         # Tester le c-VEP : un BLOC = une décision, phase APPELÉE
 python src/core/modes/errp_test.py         # Tester l'ErrP : 🔴 l'étiquette va au correcteur, JAMAIS
@@ -966,7 +966,7 @@ MI, du P300, du c-VEP et de l'ErrP la comparent, essai par essai, à celle d'un 
 | ErrP (`errp_test.py`) | un feedback | la diagonale : autant d'erreurs attrapées que de bonnes commandes annulées | 80 essais, ≈ 2,4 min | Fisher exact unilatéral p < 0,05, écart TPR − (1 − TNR) ≥ 0,355, et moins de 50 % sans verdict |
 
 - **Un `-1` n'est jamais une bonne réponse.** Au MI, au SSVEP et au c-VEP c'est un silence : il
-  compte dans le taux d'émission, pas comme une erreur (et au MI, jamais comme REST, que
+  compte dans le taux d'émission, pas comme une erreur (et au MI, jamais comme la dernière tâche, que
   `classes[-1]` désignerait). Au P300 c'est une sélection RATÉE (marge nulle : une perte, pas une
   abstention). À l'ErrP il est compté à part, ni erreur attrapée ni bonne commande gardée.
 - 🔴 **La cloison de l'ErrP.** Son étiquette voyage sur le `feedback`, et un test en a besoin pour
@@ -1355,9 +1355,10 @@ python src/console/app.py --mode mi
 - [ ] En parallèle, sur un autre terminal, vérifier que l'intention sort **vraiment** sur le
       réseau : `python -u examples/receiver.py --stream decoded_mi`. Attendu : `intent_index`,
       `confidence`, puis une probabilité par tâche du modèle, numérotée (`p_0`, `p_1`, `p_2` à trois classes) ; les noms des tâches sont dans les métadonnées (`classes`).
-- [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REST (« la personne se
-      repose ») ne veulent **pas** dire la même chose. Le flux donne les deux dans ses
-      métadonnées (`no_decision_index`, `rest_index`) : vérifier qu'ils diffèrent.
+- [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice d'une tâche de repos (« la
+      personne se repose ») ne veulent **pas** dire la même chose. Le flux donne `-1` dans ses
+      métadonnées (`no_decision_index`) ; le repos y est une tâche comme les autres, nommée dans
+      `classes`.
 
 **Au besoin seulement — l'ancien écran, en comparaison.** `archive/mi_calibrate.py` existe encore,
 justement pour ça : comparer minutage, consignes et époques enregistrées si un doute apparaît un

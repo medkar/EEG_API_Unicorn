@@ -45,13 +45,12 @@ from core.modes.contract import Calib, Param, bande_de, params_bande  # noqa: E4
 INSTRUCTIONS = {
     "LEFT": tr("calib.mi.instruction.gauche"),
     "RIGHT": tr("calib.mi.instruction.droite"),
-    "REST": tr("calib.mi.instruction.repos"),
 }
 RAPPEL = tr("calib.mi.rappel")
 
 # Les tâches par défaut : les deux poings, le contraste le mieux mesuré sur ce casque (63 % à deux
-# tâches). Sans REST, le modèle désigne toujours l'une des tâches : c'est le seuil de probabilité du
-# mode qui le fait taire quand il n'est pas sûr.
+# tâches). Sans tâche de repos, le modèle désigne toujours l'une des tâches : c'est le seuil de
+# probabilité du mode qui le fait taire quand il n'est pas sûr.
 TACHES_DEFAUT = MI_CONTROL
 TACHES_MAX = 5
 
@@ -62,21 +61,20 @@ TACHES_MAX = 5
 ESSAIS_MIN_PAR_TACHE = 3
 
 
-# Les classes d'origine portent des noms ANGLAIS : ce sont ceux que reçoit l'application (dans les
+# Les deux poings portent des noms ANGLAIS : ce sont ceux que reçoit l'application (dans les
 # métadonnées `classes` du flux), quelle que soit la langue de la console. Leurs noms français,
 # tapés, y mènent aussi : « gauche » devient la classe LEFT, comme « left ».
-ALIAS_FRANCAIS = {"GAUCHE": "LEFT", "DROITE": "RIGHT", "REPOS": "REST"}
+ALIAS_FRANCAIS = {"GAUCHE": "LEFT", "DROITE": "RIGHT"}
 
 
 def canonique(tache):
-    """Une tâche tapée qui nomme une classe d'origine (« rest », « Gauche », « left ») DEVIENT
-    cette classe.
+    """Une tâche tapée qui nomme un poing (« Gauche », « left », « RIGHT ») DEVIENT cette classe.
 
-    Elle retrouve ainsi sa consigne validée, son top latéralisé (`console/beeps.py` les connaît
-    par leur nom exact) et, pour REST, son sens dans le flux publié (`rest_index`). Toute autre
-    tâche garde le texte tapé.
+    Elle retrouve ainsi sa consigne validée et son top latéralisé (`console/beeps.py` les connaît
+    par leur nom exact). Toute autre tâche garde le texte tapé — un repos compris : c'est une
+    tâche comme les autres.
     """
-    connues = {c.casefold(): c for c in MI_LABELS}
+    connues = {c.casefold(): c for c in MI_CONTROL}
     connues.update({nom.casefold(): c for nom, c in ALIAS_FRANCAIS.items()})
     return connues.get(tache.casefold(), tache)
 
@@ -92,12 +90,10 @@ def consigne(tache):
 
 
 def rappel_de(tache):
-    """Le rappel sous la consigne. Rien pour REST, ni hors d'un essai."""
+    """Le rappel sous la consigne. Rien hors d'un essai."""
     if not tache:
         return ""
-    if tache in MI_CONTROL:
-        return RAPPEL
-    return "" if tache == "REST" else tr("calib.mi.rappel.tache")
+    return RAPPEL if tache in MI_CONTROL else tr("calib.mi.rappel.tache")
 
 BRIEFING = (
     tr("calib.mi.briefing.1"),
@@ -306,7 +302,7 @@ class MICalibration(CalibrationRuntime):
         """Une croix pendant tout l'essai (mise en route et imagerie), pour TOUTES les tâches.
 
         Le regard reste au même endroit quelle que soit la tâche. Sans elle, des yeux qui se
-        relâchent pendant REST font monter l'alpha occipital (PO7, Oz, PO8) ; le CAR l'étale sur
+        relâchent pendant un repos font monter l'alpha occipital (PO7, Oz, PO8) ; le CAR l'étale sur
         C3 et C4, dans la bande du mu, et le modèle apprendrait un contraste qui n'a rien de moteur.
         Rien pendant la pause, qui n'est jamais enregistrée."""
         return self.phase in ("echauffement", "essais") and self.etape in ("cue", "imagerie")
@@ -757,13 +753,14 @@ def _selftest():
 
         # --- LES TÂCHES SE RÈGLENT ---------------------------------------------------------
         # Pieds/mains au lieu de poing droit/poing gauche : l'écran nomme la tâche tapée, le
-        # modèle apprend CES classes, et le flux les publie sous ces noms. « repos » tapé en minuscules redevient REST, la classe d'origine.
+        # modèle apprend CES classes, et le flux les publie sous ces noms. Un repos est une tâche
+        # comme les autres : il garde le nom tapé.
         dossier_libre = _os.path.join(dossier, "libre")
-        chk([canonique(t) for t in ("left", "Right", "REST", "gauche", "DROITE", "repos", "Pieds")]
-            == ["LEFT", "RIGHT", "REST", "LEFT", "RIGHT", "REST", "Pieds"],
-            "les classes d'origine se tapent en anglais ou en français, en majuscules ou non, et "
-            "deviennent toujours LEFT, RIGHT, REST (les noms que reçoit l'application) ; une autre "
-            "tâche garde son nom")
+        chk([canonique(t) for t in ("left", "Right", "gauche", "DROITE", "REST", "repos", "Pieds")]
+            == ["LEFT", "RIGHT", "LEFT", "RIGHT", "REST", "repos", "Pieds"],
+            "les poings se tapent en anglais ou en français, en majuscules ou non, et deviennent "
+            "LEFT, RIGHT (les noms que reçoit l'application) ; toute autre tâche, un repos compris, "
+            "garde le nom tapé")
         libre = MICalibration(_mi.SPEC, {"taches": ("Pieds", "Mains", "repos"),
                                          "trials_per_class": 6, "mise_en_route_s": 1.0}, None,
                               rng=_random.Random(5), dossier=dossier_libre)
@@ -787,23 +784,22 @@ def _selftest():
                 break
             t += 0.25
         res_l = libre.resultat or {}
-        chk(libre.phase == "fini" and libre.classes == ("Pieds", "Mains", "REST")
-            and res_l.get("classes") == ["Pieds", "Mains", "REST"] and res_l.get("n_essais") == 18,
-            f"des tâches libres : la séance cue CES tâches, « repos » redevient REST "
+        chk(libre.phase == "fini" and libre.classes == ("Pieds", "Mains", "repos")
+            and res_l.get("classes") == ["Pieds", "Mains", "repos"] and res_l.get("n_essais") == 18,
+            f"des tâches libres : la séance cue CES tâches, sous les noms tapés "
             f"({libre.phase}, {res_l.get('classes')}, {res_l.get('n_essais')} essais)")
-        chk(vues.get("Pieds") == (tr("calib.mi.instruction.tache", tache="Pieds"),
-                                  tr("calib.mi.rappel.tache"))
-            and vues.get("REST") == (INSTRUCTIONS["REST"], ""),
-            f"l'écran NOMME la tâche tapée ; REST garde sa consigne validée, sans rappel ({vues})")
+        chk(all(vues.get(t) == (tr("calib.mi.instruction.tache", tache=t),
+                                tr("calib.mi.rappel.tache")) for t in ("Pieds", "repos")),
+            f"l'écran NOMME la tâche tapée, et le repos est cué comme les autres ({vues})")
         appris = MIModel.load(res_l["modele"]) if res_l.get("modele") else None
-        chk(appris is not None and list(appris.labels) == ["Pieds", "Mains", "REST"],
+        chk(appris is not None and list(appris.labels) == ["Pieds", "Mains", "repos"],
             f"le MODÈLE porte ces tâches, dans cet ordre : le flux les annoncera dans ses "
             f"métadonnées, et publiera p_0, p_1, p_2 ({appris and appris.labels})")
-        attendu = {(e, c, True) for e in ("cue", "imagerie") for c in ("Pieds", "Mains", "REST")}
-        attendu.add(("repos", "", False))
+        attendu = {(e, c, True) for e in ("cue", "imagerie") for c in ("Pieds", "Mains", "repos")}
+        attendu.add(("repos", "", False))      # l'étape « repos » : la pause entre deux essais
         chk(croix == attendu,
-            f"la croix de fixation : pendant la mise en route ET l'imagerie de CHAQUE tâche, REST "
-            f"compris, jamais pendant la pause ({sorted(croix)})")
+            f"la croix de fixation : pendant la mise en route ET l'imagerie de CHAQUE tâche, le "
+            f"repos compris, jamais pendant la pause ({sorted(croix)})")
         # La MISE EN ROUTE : jouée telle que réglée, et retenue par le modèle, par
         # l'enregistrement et par la ligne « Détails ».
         with np.load(res_l["enregistrement"]) as npz:

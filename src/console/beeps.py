@@ -1,18 +1,17 @@
-"""Les tops de la console : les trois latéralisés de la calibration, plus le top neutre d'étape.
+"""Les tops de la console : les deux latéralisés du Motor Imagery, plus le top neutre.
 
 Le son est de la PRÉSENTATION, pas du protocole. Si l'audio manque — machine sans carte son,
 session distante, pilote absent — la séance se déroule quand même, et la page le DIT. Un top
 silencieux qui ne s'annonce pas ferait croire à l'étudiant qu'il a raté le départ.
 
-Pourquoi latéraliser : le côté est porté par l'oreille (gauche/droite) et le repos par la durée
-(les deux oreilles, plus long). L'étudiant n'a donc rien à LIRE au moment où il doit commencer à
-imaginer — lire déplace le regard et contamine la fenêtre enregistrée.
+Pourquoi latéraliser : le côté est porté par l'oreille (gauche/droite). L'étudiant n'a donc rien à
+LIRE au moment où il doit commencer à imaginer un poing — lire déplace le regard et contamine la
+fenêtre enregistrée.
 
-⚠️ **`TOP_ETAPE` n'est pas un quatrième synonyme des trois autres.** C'est le top d'une MESURE
-(`console/mesure_page.py`), qui ne cue aucune classe : il dit « change d'étape MAINTENANT ». Le
-contrôle alpha en dépend entièrement — la moitié de sa mesure se passe les yeux fermés, où l'écran
-ne sert plus à rien. Court et centré, il ne se confond ni avec le « repos » du MI (centré mais
-deux fois plus long) ni avec un côté.
+`TOP_ETAPE`, court et centré, dit « change d'étape MAINTENANT » : celui d'une MESURE
+(`console/mesure_page.py`), et celui de toute tâche du MI qui n'est pas un poing (pieds, mains, un
+repos…). Le contrôle alpha en dépend entièrement — la moitié de sa mesure se passe les yeux fermés,
+où l'écran ne sert plus à rien.
 """
 
 import os
@@ -26,7 +25,6 @@ from core.i18n import tr  # noqa: E402
 FREQ_HZ = 880.0
 SR = 44100
 DUREE_COTE_S = 0.18
-DUREE_CENTRE_S = 0.40
 
 # La clé du top neutre, EXPORTÉE : `mesure_page.py` l'importe au lieu d'écrire "TOP" chez lui.
 # Une chaîne écrite des deux côtés se serait tue en silence le jour d'un renommage — `jouer()` ne
@@ -40,7 +38,6 @@ TOP_ETAPE = "TOP"
 SONS = {
     "LEFT": (True, False, DUREE_COTE_S),
     "RIGHT": (False, True, DUREE_COTE_S),
-    "REST": (True, True, DUREE_CENTRE_S),
     TOP_ETAPE: (True, True, DUREE_COTE_S),
 }
 
@@ -64,7 +61,7 @@ def _onde(gauche, droite, duree):
 
 
 class Beeps:
-    """Les trois tops. `disponible` dit franchement si le son sortira."""
+    """Les tops. `disponible` dit franchement si le son sortira."""
 
     def __init__(self):
         self.disponible = False

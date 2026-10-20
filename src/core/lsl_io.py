@@ -292,8 +292,7 @@ def mi_channel_labels(classes):
     NUMÉROTÉES, jamais nommées d'après la tâche : les tâches se choisissent à l'entraînement
     (poings, pieds, mains…), et l'application ne doit pas changer de code quand elles changent.
     `p_<i>` va avec `intent_index == i`. Les noms des tâches voyagent dans les métadonnées
-    (`classes`), comme l'indice du repos (`rest_index`). Même forme que les `score_<i>` du P300 et
-    du c-VEP.
+    (`classes`). Même forme que les `score_<i>` du P300 et du c-VEP.
 
     Une seule fonction pour le publieur ET pour le `ModeSpec`, comme pour le SSVEP : les voies
     sont du contrat public, et deux façons de les construire finiraient par diverger.
@@ -320,18 +319,18 @@ class DecodedMIPublisher:
     élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
     jamais du `p_*` de la classe retenue.
 
-    ⚠️ **`-1` et la tâche de repos sont deux choses différentes.** `-1` = le vote n'a pas conclu
-    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; `intent_index == rest_index`
-    = le modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
-    n'appellent pas la même réaction dans une application. Les deux indices voyagent dans les
-    métadonnées (`no_decision_index`, `rest_index`) : un client n'a pas à les deviner, ni à
-    supposer que le repos est toujours la dernière tâche.
+    ⚠️ **`-1` n'est JAMAIS une tâche.** `-1` = le vote n'a pas conclu (pas assez de fenêtres
+    d'accord, ou probabilité sous le seuil). Un repos, s'il fait partie des tâches, est une tâche
+    comme les autres, avec son indice : c'est l'application qui a choisi les tâches, elle sait
+    laquelle veut dire « je ne fais rien ». « Je ne sais pas » et « elle ne fait rien »
+    n'appellent pas la même réaction dans une application ; `no_decision_index` le dit dans les
+    métadonnées.
 
     ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
     entraîné sur quelqu'un d'autre sont plausibles et fausses.
     """
 
-    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance="", rest_label="REST"):
+    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance=""):
         self.classes = [str(c) for c in classes]
         labels = mi_channel_labels(self.classes)
         info = StreamInfo(stream_name("decoded_mi"), "Decoded", len(labels),
@@ -349,15 +348,11 @@ class DecodedMIPublisher:
         desc.append_child_value("threshold", str(prob_min))
         desc.append_child_value("min_votes", str(votes[0]))
         desc.append_child_value("vote_len", str(votes[1]))
-        # La distinction la plus coûteuse à confondre du mode : « je ne sais pas » (-1) contre « la
-        # personne se repose » (l'indice de REST). Ce module promet en tête qu'un client peut se
-        # décrire l'API tout seul — alors les deux indices sont dans les métadonnées, plutôt que
-        # dans une documentation qu'il n'ouvrira pas.
-        # `rest_index` vaut -1 quand le modèle n'a pas de classe de repos : un modèle à deux
-        # classes est possible, et supposer que REST existe toujours serait faux.
+        # « Je ne sais pas » (-1) n'est aucune des tâches. Ce module promet en tête qu'un client
+        # peut se décrire l'API tout seul — alors la valeur est dans les métadonnées, plutôt que
+        # dans une documentation qu'il n'ouvrira pas. Aucune tâche n'y est mise à part, le repos
+        # compris : c'est une tâche comme les autres.
         desc.append_child_value("no_decision_index", "-1")
-        rest_index = self.classes.index(rest_label) if rest_label in self.classes else -1
-        desc.append_child_value("rest_index", str(rest_index))
         self.outlet = StreamOutlet(info)
 
     def push(self, intent_index, confidence, probas, lsl_ts=None):
@@ -766,7 +761,8 @@ def _autotest():
     info_mi = pub.outlet.get_info()       # ⚠️ vivante plus longtemps que l'XMLElement (point 1)
     deco_mi = info_mi.desc().child("decoding")
     assert deco_mi.child_value("classes") == "PIEDS,MAINS,REST", deco_mi.child_value("classes")
-    assert deco_mi.child_value("rest_index") == "2", deco_mi.child_value("rest_index")
+    # Le repos est une tâche comme les autres : aucune métadonnée ne le met à part.
+    assert deco_mi.child_value("rest_index") == "", deco_mi.child_value("rest_index")
     pub.push(0, 0.81, [0.81, 0.12, 0.07])
     pub.push(-1, 0.0, [0.34, 0.33, 0.33])
     print("  [lsl] decoded_mi publie sans lever")
