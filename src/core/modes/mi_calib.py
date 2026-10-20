@@ -62,9 +62,9 @@ TACHES_MAX = 5
 ESSAIS_MIN_PAR_TACHE = 3
 
 
-# Les classes d'origine portent des noms ANGLAIS : ce sont ceux que reçoit l'application
-# (`p_LEFT`…), quelle que soit la langue de la console. Leurs noms français, tapés, y mènent aussi :
-# « gauche » devient la classe LEFT, comme « left ».
+# Les classes d'origine portent des noms ANGLAIS : ce sont ceux que reçoit l'application (dans les
+# métadonnées `classes` du flux), quelle que soit la langue de la console. Leurs noms français,
+# tapés, y mènent aussi : « gauche » devient la classe LEFT, comme « left ».
 ALIAS_FRANCAIS = {"GAUCHE": "LEFT", "DROITE": "RIGHT", "REPOS": "REST"}
 
 
@@ -292,7 +292,8 @@ class MICalibration(CalibrationRuntime):
     @property
     def classes(self):
         """Les tâches de cette séance, réglées dans « Entraîner ». Elles deviennent les classes du
-        modèle, donc les voies `p_<tâche>` du flux publié au décodage."""
+        modèle, et le flux publié au décodage les annonce (métadonnées `classes`) dans l'ordre
+        de ses voies `p_0`, `p_1`…"""
         return tuple(canonique(t) for t in self.params.get("taches") or TACHES_DEFAUT)
 
     def instruction(self):
@@ -795,11 +796,9 @@ def _selftest():
             and vues.get("REST") == (INSTRUCTIONS["REST"], ""),
             f"l'écran NOMME la tâche tapée ; REST garde sa consigne validée, sans rappel ({vues})")
         appris = MIModel.load(res_l["modele"]) if res_l.get("modele") else None
-        from core.lsl_io import mi_channel_labels
-        chk(appris is not None and list(appris.labels) == ["Pieds", "Mains", "REST"]
-            and mi_channel_labels(appris.labels)[2:] == ["p_Pieds", "p_Mains", "p_REST"],
-            f"le MODÈLE porte ces tâches, donc le flux publiera p_Pieds, p_Mains, p_REST "
-            f"({appris and appris.labels})")
+        chk(appris is not None and list(appris.labels) == ["Pieds", "Mains", "REST"],
+            f"le MODÈLE porte ces tâches, dans cet ordre : le flux les annoncera dans ses "
+            f"métadonnées, et publiera p_0, p_1, p_2 ({appris and appris.labels})")
         attendu = {(e, c, True) for e in ("cue", "imagerie") for c in ("Pieds", "Mains", "REST")}
         attendu.add(("repos", "", False))
         chk(croix == attendu,

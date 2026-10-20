@@ -3032,9 +3032,10 @@ def _smoke_mi():
             inlet.open_stream(timeout=5.0)
 
             # Les MÉTADONNÉES relues sur le flux réel, comme le fait `_smoke_neuro` : compter les
-            # voies ne prouve rien sur leurs NOMS, et ce sont les noms que le client lit. Un
-            # `mi_channel_labels` correct câblé sur de mauvaises `classes` publierait cinq voies
-            # bien nommées pour un modèle qui n'a pas ces classes-là — invisible à un compte.
+            # voies ne prouve rien sur ce que le client lit. Les voies sont numérotées (`p_0`…) ;
+            # ce sont les `classes` annoncées qui disent quelle tâche porte chaque numéro. Un
+            # publieur câblé sur de mauvaises `classes` publierait le bon nombre de voies pour un
+            # modèle qui n'a pas ces tâches-là — invisible à un compte.
             etiquettes, noeud = [], inlet.info().desc().child("channels").child("channel")
             while not noeud.empty():
                 etiquettes.append(noeud.child_value("label"))
@@ -3043,9 +3044,13 @@ def _smoke_mi():
             echelle = decodage.child_value("decision_scale")
             sans_decision = decodage.child_value("no_decision_index")
             repos = decodage.child_value("rest_index")
+            classes_annoncees = decodage.child_value("classes")
             attendues = mi_channel_labels(MI_LABELS)
-            chk(etiquettes == attendues,
-                f"les voies annoncées sont celles du contrat ({etiquettes})")
+            chk(etiquettes == attendues and etiquettes[2:] == ["p_0", "p_1", "p_2"],
+                f"les voies annoncées sont celles du contrat, numérotées ({etiquettes})")
+            chk(classes_annoncees == ",".join(MI_LABELS),
+                f"…et les métadonnées nomment les tâches du MODÈLE, dans l'ordre des voies "
+                f"({classes_annoncees!r})")
             chk(echelle == "proba",
                 f"l'échelle de décision annoncée est « proba », pas le z du SSVEP ({echelle!r})")
             # « Je ne sais pas » et « la personne se repose » sont la confusion la plus coûteuse

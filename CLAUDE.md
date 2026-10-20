@@ -668,7 +668,9 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   de poing droit/poing gauche », sans traduire de tête pendant la consigne). Dans « Entraîner » : un
   nombre de 2 à 5 (défaut 2 : LEFT, RIGHT), puis un champ par tâche (`Param` de type
   `text_list`, validé par le moteur : non vide, distinct, court, sans virgule). Le MODÈLE porte ses
-  tâches ; le test et le décodage les relisent de lui, et `decoded_mi` publie `p_<tâche>`. Les
+  tâches ; le test et le décodage les relisent de lui. `decoded_mi` publie des voies NUMÉROTÉES
+  `p_0`, `p_1`… (2026-10-20 : l'application ne change pas quand les tâches changent) et nomme les
+  tâches dans ses métadonnées (`classes`, et `rest_index` pour le repos). Les
   classes d'origine s'appellent **LEFT, RIGHT, REST** (2026-10-20 : en anglais, comme tout ce que
   reçoit l'application ; GAUCHE, DROITE, REPOS avant) ; « rest », « gauche », « Droite »… tapés
   y mènent (consigne validée, top latéralisé, sens de REST dans le flux) ; toute autre tâche est

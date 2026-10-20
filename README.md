@@ -244,11 +244,13 @@ measured on this headset.
 ### Motor Imagery
 
 `--mode mi` publishes `EEG_API_Unicorn_decoded_mi`: `intent_index`, `confidence`, then one
-probability per class, `p_<class>`. **The classes are the tasks the model was trained on**: by
-default the two fists (`LEFT`, `RIGHT`), or whatever 2 to 5 tasks were typed on the training page
-(`FEET`, `HANDS`, `REST`…). Read them from the stream's channel labels, or from its `classes`
-description field — never assume a fixed list. The original classes keep their English names
-whatever language the console shows.
+probability per task, **numbered** `p_0`, `p_1`… — `p_i` goes with `intent_index == i`, like the
+`score_<i>` of P300 and c-VEP. **The tasks are the ones the model was trained on**: by default the
+two fists, or whatever 2 to 5 tasks were typed on the training page (feet, hands, rest…). So the
+channels never carry a task name, and an application does not change when the tasks do. The
+names, in channel order, are in the stream's `classes` description field (`LEFT,RIGHT` by
+default), and `rest_index` says which one, if any, is rest — never assume a fixed list. The
+original classes keep their English names whatever language the console shows.
 
 Unlike SSVEP, this mode **must be trained per person**. It loads a model produced by a calibration
 and **refuses to start without one**, saying so — a mode that started without a model would publish
@@ -270,7 +272,7 @@ Two values are easy to confuse and mean different things:
 | `intent_index` | Meaning |
 |---|---|
 | `-1` | the sliding vote did not conclude — not enough recent windows agreed, or the classifier stayed under its threshold |
-| index of `REST` | the model decided the user is at rest (only if `REST` is one of its tasks) |
+| `rest_index` | the model decided the user is at rest (only if rest is one of its tasks; otherwise `rest_index` is `-1`) |
 
 For an application, that is the difference between "wait" and "stop".
 
@@ -451,7 +453,7 @@ terminal, and its **Record the verdicts** button files the session for you.
 | `EEG_API_Unicorn_status` | engine state, JSON — in English, whatever language the console shows |
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
-| `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_<task>…}` — one `p_` per trained task (default `p_LEFT, p_RIGHT`), ~5 Hz |
+| `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_0…p_<n-1>}` — one probability per trained task; task names in the `classes` description field, ~5 Hz |
 | `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
 | `EEG_API_Unicorn_decoded_errp` | `{error, score, threshold, artifact}`, one sample per feedback |
 | `EEG_API_Unicorn_decoded_cvep` | `{target_index, confidence, score_0…score_5, corr_min, margin}`, ~5 Hz |

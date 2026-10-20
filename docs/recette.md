@@ -1354,7 +1354,7 @@ python src/console/app.py --mode mi
       « Tester » ci-dessus fait proprement : consigne tirée, décision notée, intervalle affiché.)*
 - [ ] En parallèle, sur un autre terminal, vérifier que l'intention sort **vraiment** sur le
       réseau : `python -u examples/receiver.py --stream decoded_mi`. Attendu : `intent_index`,
-      `confidence`, puis un `p_<tâche>` par tâche du modèle (`p_LEFT`, `p_RIGHT`, `p_REST` à trois classes).
+      `confidence`, puis une probabilité par tâche du modèle, numérotée (`p_0`, `p_1`, `p_2` à trois classes) ; les noms des tâches sont dans les métadonnées (`classes`).
 - [ ] ⚠️ `intent_index = -1` (« le vote n'a pas conclu ») et l'indice de REST (« la personne se
       repose ») ne veulent **pas** dire la même chose. Le flux donne les deux dans ses
       métadonnées (`no_decision_index`, `rest_index`) : vérifier qu'ils diffèrent.

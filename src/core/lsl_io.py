@@ -286,12 +286,19 @@ class DecodedNeuroPublisher:
 
 
 def mi_channel_labels(classes):
-    """Voies du flux `decoded_mi` pour ces classes.
+    """Voies du flux `decoded_mi` pour ces classes : `intent_index`, `confidence`, puis `p_0`,
+    `p_1`… — la probabilité de chaque tâche, dans l'ordre de `classes`.
+
+    NUMÉROTÉES, jamais nommées d'après la tâche : les tâches se choisissent à l'entraînement
+    (poings, pieds, mains…), et l'application ne doit pas changer de code quand elles changent.
+    `p_<i>` va avec `intent_index == i`. Les noms des tâches voyagent dans les métadonnées
+    (`classes`), comme l'indice du repos (`rest_index`). Même forme que les `score_<i>` du P300 et
+    du c-VEP.
 
     Une seule fonction pour le publieur ET pour le `ModeSpec`, comme pour le SSVEP : les voies
     sont du contrat public, et deux façons de les construire finiraient par diverger.
     """
-    return ["intent_index", "confidence"] + [f"p_{c}" for c in classes]
+    return ["intent_index", "confidence"] + [f"p_{i}" for i in range(len(classes))]
 
 
 class DecodedMIPublisher:
@@ -301,22 +308,24 @@ class DecodedMIPublisher:
     et JAMAIS une commande d'actionneur. « LEFT » veut dire « imagerie de la main gauche »,
     pas « tourne à gauche » : c'est le client qui décide ce que ça déclenche.
 
-    Voies : `intent_index`, `confidence`, puis une probabilité par classe.
+    Voies : `intent_index`, `confidence`, puis `p_0`, `p_1`… : une probabilité par tâche, dans
+    l'ordre des tâches du modèle (cf. `mi_channel_labels`). Leurs NOMS sont dans les métadonnées
+    (`classes`), jamais dans les voies.
 
     ⚠️ **Les trois ne décrivent pas le même instant.** `intent_index` et `confidence` décrivent
     le **vote** — jusqu'à `vote_len` fenêtres, dont `min_votes` d'accord ; `confidence` est la
     moyenne des probabilités de ces fenêtres-là, donc toujours `>= threshold` quand
     `intent_index >= 0`. Les `p_*`, eux, décrivent la **dernière fenêtre seule**. Pendant un
-    changement d'intention, il est donc NORMAL de lire « intention LEFT » à côté d'un
-    `p_RIGHT` élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
+    changement d'intention, il est donc NORMAL de lire `intent_index = 0` à côté d'un `p_1`
+    élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
     jamais du `p_*` de la classe retenue.
 
-    ⚠️ **`-1` et la classe REST sont deux choses différentes.** `-1` = le vote n'a pas conclu
-    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; l'indice de REST = le
-    modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
+    ⚠️ **`-1` et la tâche de repos sont deux choses différentes.** `-1` = le vote n'a pas conclu
+    (pas assez de fenêtres d'accord, ou probabilité sous le seuil) ; `intent_index == rest_index`
+    = le modèle a décidé que la personne se repose. « Je ne sais pas » et « elle ne fait rien »
     n'appellent pas la même réaction dans une application. Les deux indices voyagent dans les
     métadonnées (`no_decision_index`, `rest_index`) : un client n'a pas à les deviner, ni à
-    supposer que REST est toujours la dernière classe.
+    supposer que le repos est toujours la dernière tâche.
 
     ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
     entraîné sur quelqu'un d'autre sont plausibles et fausses.
@@ -748,11 +757,16 @@ def _autotest():
     print(f"[lsl] verdicts : {[verdict_from_sigma(s) for s in (8.0, 0.1, 600.0)]}")
 
     # 5. decoded_mi : voies attendues, et le publieur pousse sans lever (indice ET repos).
-    labels = mi_channel_labels(("LEFT", "RIGHT", "REST"))
+    labels = mi_channel_labels(("PIEDS", "MAINS", "REST"))
     print(f"  voies decoded_mi : {labels}")
-    assert labels == ["intent_index", "confidence", "p_LEFT", "p_RIGHT", "p_REST"], labels
-    pub = DecodedMIPublisher(("LEFT", "RIGHT", "REST"), prob_min=0.6, votes=(3, 5),
+    assert labels == ["intent_index", "confidence", "p_0", "p_1", "p_2"], labels
+    pub = DecodedMIPublisher(("PIEDS", "MAINS", "REST"), prob_min=0.6, votes=(3, 5),
                              instance="selftest-mi")
+    # Les voies sont numérotées : ce sont les MÉTADONNÉES qui nomment les tâches et le repos.
+    info_mi = pub.outlet.get_info()       # ⚠️ vivante plus longtemps que l'XMLElement (point 1)
+    deco_mi = info_mi.desc().child("decoding")
+    assert deco_mi.child_value("classes") == "PIEDS,MAINS,REST", deco_mi.child_value("classes")
+    assert deco_mi.child_value("rest_index") == "2", deco_mi.child_value("rest_index")
     pub.push(0, 0.81, [0.81, 0.12, 0.07])
     pub.push(-1, 0.0, [0.34, 0.33, 0.33])
     print("  [lsl] decoded_mi publie sans lever")

@@ -387,8 +387,9 @@ Accueil (la grille), aucune séance ni essai en cours.
 5. Vérifie d'abord qu'aucune séance ni essai ne tourne. Ouvre **Motor Imagery** → **« Entraîner »**,
    dans une langue puis dans l'autre.
    ✅ **1.2 bis.6** Les deux tâches par défaut s'appellent **LEFT** et **RIGHT** dans les deux
-   langues : ce sont les noms que reçoit ton application (`p_LEFT`, `p_RIGHT`), ils ne se traduisent
-   pas. La bulle ⓘ de « Tâches à imaginer » dit qu'on peut aussi taper gauche, droite, repos.
+   langues : ce sont les noms que reçoit ton application (dans la description du flux), ils ne se
+   traduisent pas. La bulle ⓘ de « Tâches à imaginer » dit qu'on peut aussi taper gauche, droite,
+   repos, et que les probabilités arrivent numérotées (p_0, p_1…).
 
 ❌ Régression : un texte resté dans l'ancienne langue après le changement ; le casque rouvert
 (C3/Cz qui saturent) ; un « 9,600 » dans un écran anglais ; une tâche par défaut écrite GAUCHE.

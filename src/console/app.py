@@ -1778,7 +1778,7 @@ def _smoke():
         "published": True,
         "params": {"model": "mi_model.joblib", "prob_min": 0.6, "vote_len": 5, "min_votes": 3},
         "instruction": "", "stream": "decoded_mi",
-        "channels": ["intent_index", "confidence", "p_LEFT", "p_RIGHT", "p_REST"],
+        "channels": ["intent_index", "confidence", "p_0", "p_1", "p_2"],
         "rest_report": {"kind": "mi", "model": "mi_model.joblib",
                         "classes": ["LEFT", "RIGHT", "REST"]},
         "output": {"intent_index": 0, "label": "LEFT", "confidence": 0.81,

@@ -384,8 +384,8 @@ def _coerce(param, value):
 
 
 # La longueur d'un texte d'une `text_list`. Ces textes deviennent des IDENTIFIANTS publics — les
-# classes du Motor Imagery nomment les voies `p_<classe>` du flux `decoded_mi` : un paragraphe n'en
-# fait pas un.
+# tâches du Motor Imagery sont annoncées dans les métadonnées `classes` du flux `decoded_mi` : un
+# paragraphe n'en fait pas un.
 TEXTE_MAX = 24
 
 
@@ -394,7 +394,7 @@ def _coerce_textes(param, value):
 
     Les espaces autour sont retirés ; la casse est gardée telle que tapée. Refusés : un texte
     vide, un doublon (sans tenir compte de la casse : « Pieds » et « pieds » nommeraient deux
-    voies que personne ne distingue), une virgule (le flux décrit ses classes en les joignant par
+    tâches que personne ne distingue), une virgule (le flux décrit ses classes en les joignant par
     des virgules), un texte plus long que `TEXTE_MAX`.
     """
     if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):

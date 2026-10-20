@@ -364,9 +364,8 @@ def _selftest():
         values, raison = validate(SPEC, {})
         chk(values is not None, f"avec un modèle, les défauts passent ({raison})")
         chk(values["model"] == chemin, f"et c'est le modèle trouvé qui est pris ({values['model']})")
-        chk(_channels(values) == ["intent_index", "confidence",
-                                  "p_LEFT", "p_RIGHT", "p_REST"],
-            f"les voies viennent des classes DU MODÈLE ({_channels(values)})")
+        chk(_channels(values) == ["intent_index", "confidence", "p_0", "p_1", "p_2"],
+            f"une voie par tâche DU MODÈLE, numérotée ({_channels(values)})")
 
         bruit = rng.normal(0.0, 8.0, (int(5.0 * 250), 8))
         moteur = _FauxMoteur(bruit)
@@ -446,10 +445,10 @@ def _selftest():
         chk(abs(conf_repos - 0.83) < 1e-9,
             f"avec la confiance réellement rapportée par le décodeur, pas une constante "
             f"({conf_repos})")
-        # L'appariement `p_<classe>` ↔ classe est le CONTRAT PUBLIC du flux : `mi_channel_labels`
-        # nomme les voies dans l'ordre de `classes`, et `push` publie dans ce même ordre. Une
+        # L'appariement `p_<i>` ↔ `classes[i]` est le CONTRAT PUBLIC du flux : les métadonnées
+        # annoncent `classes` dans cet ordre, et `push` publie dans ce même ordre. Une
         # inversion ne se voit ni sur les bornes de l'index, ni sur la somme à 1, ni sur le
-        # nombre de voies — seulement ici. Un client lirait p_REST en croyant lire p_LEFT.
+        # nombre de voies — seulement ici. Un client lirait le repos en croyant lire LEFT.
         attendu = [repos_sur[c] for c in rt.classes]
         chk(len(probas_repos) == len(attendu)
             and all(abs(a - b) < 1e-9 for a, b in zip(probas_repos, attendu)),
