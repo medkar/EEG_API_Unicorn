@@ -446,7 +446,7 @@ terminal, and its **Record the verdicts** button files the session for you.
 |---|---|
 | `EEG_API_Unicorn_raw` | 8 channels, µV, unfiltered, 250 Hz |
 | `EEG_API_Unicorn_quality` | per-channel σ, ~1 Hz |
-| `EEG_API_Unicorn_status` | engine state, JSON |
+| `EEG_API_Unicorn_status` | engine state, JSON — in English, whatever language the console shows |
 | `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_<task>…}` — one `p_` per trained task (default `p_GAUCHE, p_DROITE`), ~5 Hz |

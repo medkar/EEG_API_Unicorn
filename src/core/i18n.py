@@ -27,6 +27,10 @@ se souvient de sa clé et de ses valeurs, et `retraduit()` le relit dans la lang
 catalogue que le moteur sérialise pour la console passe par lui, et la console reconstruit ses
 pages. Seul l'AFFICHAGE change : noms de flux, voies et marqueurs ne se traduisent jamais.
 
+Ce qui part vers l'application (les flux LSL) est en ANGLAIS, quelle que soit la langue de
+l'écran : un texte du catalogue qui y voyage (la consigne de repos du flux `status`) passe par
+`pour_le_contrat()`, qui le relit dans le catalogue anglais.
+
 Ce que `controle()` vérifie, et que `server.py --smoke` exécute (`[smoke-textes]`) :
   - chaque `tr("…")` du dépôt nomme une clé qui EXISTE, avec une clé LITTÉRALE (une clé calculée
     échapperait à toute vérification) et exactement les `{valeurs}` que le texte attend ;
@@ -45,6 +49,7 @@ import string as _string
 
 DOSSIER = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "langues")
 LANGUE_DEFAUT = "fr"
+LANGUE_CONTRAT = "en"   # la langue de ce qui part vers l'application (flux LSL)
 
 _cache = {}
 
@@ -103,14 +108,25 @@ class Texte(str):
 def retraduit(x):
     """`x` dans la langue COURANTE. Un `Texte` est relu dans le catalogue, valeurs comprises ; un
     dict, une liste ou un tuple le sont élément par élément ; le reste est rendu tel quel."""
+    return _relit(x, None)
+
+
+def pour_le_contrat(x):
+    """`x` tel qu'il part vers l'application : en ANGLAIS, quelle que soit la langue de l'écran.
+
+    Rend des `str` ordinaires : un texte du contrat ne doit pas changer de langue plus tard."""
+    return _relit(x, LANGUE_CONTRAT)
+
+
+def _relit(x, code):
     if isinstance(x, Texte):
-        return _resoudre(x.cle, {nom: retraduit(v) for nom, v in x.valeurs.items()})
+        return _resoudre(x.cle, {nom: _relit(v, code) for nom, v in x.valeurs.items()}, code)
     if isinstance(x, dict):
-        return {k: retraduit(v) for k, v in x.items()}
+        return {k: _relit(v, code) for k, v in x.items()}
     if isinstance(x, list):
-        return [retraduit(v) for v in x]
+        return [_relit(v, code) for v in x]
     if isinstance(x, tuple):
-        return tuple(retraduit(v) for v in x)
+        return tuple(_relit(v, code) for v in x)
     return x
 
 
@@ -146,16 +162,19 @@ def tr(cle, /, **valeurs):
     return _resoudre(cle, valeurs)
 
 
-def _resoudre(cle, valeurs):
+def _resoudre(cle, valeurs, code=None):
     """Le corps de `tr`, pour une clé connue seulement à l'exécution (`retraduit`). Ailleurs, on
-    écrit `tr("…")` : `controle()` ne vérifie que les clés écrites en toutes lettres."""
-    for code in (langue(), LANGUE_DEFAUT):
-        texte = catalogue(code).get(cle)
+    écrit `tr("…")` : `controle()` ne vérifie que les clés écrites en toutes lettres.
+
+    `code` impose une langue (le contrat) : le texte rendu est alors un `str` ordinaire."""
+    for essai in (code or langue(), LANGUE_DEFAUT):
+        texte = catalogue(essai).get(cle)
         if texte is not None:
             try:
-                return Texte(texte.format(**valeurs), cle, valeurs)
+                rendu = texte.format(**valeurs)
             except (KeyError, IndexError, ValueError):
-                return Texte(texte, cle, valeurs)
+                rendu = texte
+            return str(rendu) if code else Texte(rendu, cle, valeurs)
     return f"⟦{cle}⟧"
 
 
@@ -404,6 +423,9 @@ def _selftest():
             and retraduit({"a": [figee, 3]}) == {"a": ["Hello Léa", 3]},
             f"un texte résolu avant le changement se retraduit ({retraduit(figee)!r})")
         del _os.environ["EEG_LANGUE"]
+        contrat = pour_le_contrat({"instruction": figee})["instruction"]
+        chk(contrat == "Hello Léa" and type(contrat) is str,
+            f"ce qui part vers l'application est en ANGLAIS, l'écran restant en français ({contrat!r})")
         import pickle as _pickle
         chk(type(_pickle.loads(_pickle.dumps(figee))) is str,
             "enregistré (pickle), un `Texte` redevient un `str` : un modèle n'en dépend pas")

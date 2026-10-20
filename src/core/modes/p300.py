@@ -546,9 +546,9 @@ SPEC = ModeSpec(
               affecte_decodage=False,
               help=tr("mode.p300.param.stream_in.aide")),
     ),
-    # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
+    # La consigne part aussi sur le flux LSL `status`, en anglais (cf. `ssvep.py`).
     rest=Rest(warmup_s=SSVEP_WARMUP_S, duration_s=0.0,
-              instruction="Le casque se stabilise — reste immobile."),
+              instruction=tr("mode.repos.chauffe")),
     # ⚠️ `epoch_s` doit être > 0 (`registry.check()` l'exige), mais il ne dimensionne RIEN de plus
     # ici : le tampon d'une calibration à fenêtre vient de `marker_epoch_s` du mode, déjà lié à
     # `pre_s + post_s` du runtime. On y écrit donc la géométrie que cette calibration prélève

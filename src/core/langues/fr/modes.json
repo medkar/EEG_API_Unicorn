@@ -145,6 +145,7 @@
   "mode.errp.param.stream_in.aide": "Le flux où ton application publie l'instant de chaque feedback affiché. Absent de la liste ? Ressors de la page et reviens. Ne s'applique qu'au prochain démarrage du mode.",
   "mode.errp.param.tnr_target.aide": "La part des bonnes commandes à garder. Le moteur en déduit son seuil à partir de ton entraînement. Plus elle est haute, moins il annule de bonnes commandes, mais moins il repère d'erreurs. Repère : garder 95 % des bonnes commandes ne repère que 24 % des erreurs ; 85 % en repère 50 %, 70 % en repère 71 %.",
   "mode.errp.param.tnr_target.label": "Bonnes commandes gardées",
+  "mode.errp.repos": "Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
   "mode.errp.sans_scores_oof": "Ce modèle n'a pas de scores hors-pli, c'est-à-dire calculés sur des essais qu'il n'a pas vus ({cause}) : impossible d'y régler un seuil. Ré-entraîne-le : dans la console, clique « Entraîner » sur la page ErrP.",
   "mode.errp.sans_scores_oof.cause_defaut": "entraînement trop court ou dégénéré",
   "mode.errp.summary": "Après chaque feedback affiché, dit si la machine vient de se tromper, d'après l'onde d'erreur du cerveau.",
@@ -176,6 +177,7 @@
   "mode.neuro.param.rebaseline_s.label": "Re-calage du repos",
   "mode.neuro.param.smoothing.aide": "Lisse les trois indices dans le temps. 0 = brut et nerveux, 0,95 = très lisse mais lent à réagir. Les indices sont bruités : le défaut lisse beaucoup.",
   "mode.neuro.param.smoothing.label": "Lissage",
+  "mode.neuro.repos": "Repos : regarde l'écran, immobile et détendu — on cale TON zéro du jour.",
   "mode.neuro.summary": "Charge mentale, somnolence et engagement, en écart au repos du jour.",
   "mode.p300.label": "P300",
   "mode.p300.modele.herite": "Modèle d'une ancienne version (module {module}, attendu {attendu}), refusé exprès : il faut le ré-entraîner depuis les époques de calibration conservées. Fichier : {nom}",
@@ -188,6 +190,7 @@
   "mode.param.vote_len.label": "Fenêtres du vote",
   "mode.raw.label": "Brut",
   "mode.raw.summary": "Les 8 voies EEG telles que le casque les rend, en µV à 250 Hz.",
+  "mode.repos.chauffe": "Le casque se stabilise — reste immobile.",
   "mode.ssvep.cibles.ecran": "un écran",
   "mode.ssvep.cibles.physiques": "des cibles physiques (LED…)",
   "mode.ssvep.label": "SSVEP",
@@ -202,6 +205,7 @@
   "mode.ssvep.param.refresh_hz.label": "Rafraîchissement de l'écran du stimulus",
   "mode.ssvep.param.z_min.aide": "De combien le signal d'une cible doit dépasser le niveau de bruit au repos (en écarts-types) pour être annoncée. Plus bas : plus d'annonces, mais plus d'erreurs. Plus haut : moins d'annonces, plus sûres. Défaut 2,5. Il se règle dans le bloc « 1. Régler » du mode ; les deux tests l'utilisent, c'est là que tu vois son effet.",
   "mode.ssvep.param.z_min.label": "Seuil de détection",
+  "mode.ssvep.repos": "Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence.",
   "mode.ssvep.summary": "Quelle cible clignotante l'utilisateur regarde, environ 5 fois par seconde.",
   "mode.ssvep.tests_ecran": "Les deux tests affichent leurs cibles à l'écran : ils ne marchent pas avec des cibles physiques. Pour vérifier tes LED, démarre le mode et regarde ce que reçoit ton application (« Ce que voit ton application », sur l'accueil)."
 }

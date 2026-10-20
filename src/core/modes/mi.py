@@ -265,8 +265,8 @@ SPEC = ModeSpec(
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
         duration_s=0.0,
-        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
-        instruction="Le casque se stabilise — reste immobile.",
+        # Part aussi sur le flux LSL `status`, en anglais (cf. `ssvep.py`).
+        instruction=tr("mode.repos.chauffe"),
     ),
     calibration=mi_calib.CALIB,   # la calibration est jouée par le MOTEUR
     # Le TEST : le protocole d'entraînement, rejoué avec le moteur qui DÉCIDE au lieu d'apprendre

@@ -91,7 +91,7 @@ from core.config import (ALPHA_DEFAUT_HZ, CALIB_TMP_PREFIX, CH_NAMES, DATA_DIR, 
                     choose_frequencies,
                     empreinte_dossier, json_float, nom_retenu, propose_frequencies,
                     reference_lost, use_utf8_console)
-from core.i18n import message_erreur, tr  # noqa: E402
+from core.i18n import catalogue, message_erreur, pour_le_contrat, tr  # noqa: E402
 from core.lsl_io import (STREAM_PREFIX, ClockBridge, DecodedNeuroPublisher,  # noqa: E402
                     QualityPublisher, StatusPublisher, default_instance_id, mi_channel_labels,
                     stream_name, verdict_from_sigma)
@@ -1912,7 +1912,9 @@ class EngineServer:
             },
         }
         if self.rest_instruction and phase in ("warmup", "baseline"):
-            state["instruction"] = self.rest_instruction
+            # Le flux `status` est un contrat : la consigne y part en anglais, quelle que soit la
+            # langue de l'écran. La console lit `rest_instruction` dans `snapshot()`.
+            state["instruction"] = pour_le_contrat(self.rest_instruction)
         return state
 
     def snapshot(self):
@@ -5101,6 +5103,10 @@ def _smoke_repos_partage():
         f"une seule chauffe, la plus longue ({a._warmup_s:g} s)")
     chk(server.rest_instruction == neuro.rest.instruction,
         f"la consigne est celle du repos le plus long — « {server.rest_instruction[:40]}… »")
+    publiee = server._state(True, calibration=None).get("instruction")
+    chk(publiee == catalogue("en")["mode.neuro.repos"],
+        f"le flux `status` publie la consigne en ANGLAIS, quelle que soit la langue de l'écran "
+        f"— « {publiee} »")
     # ⚠️ Assertion FAIBLE, même raison : ssvep et neuro démarrent dans le MÊME appel `_start`, au
     # MÊME `now` — donc même si chacun gardait SA PROPRE chauffe (15 s, non partagée),
     # `_warmup_until = now + 15` coïnciderait quand même pour les deux. Ne prouve que « même

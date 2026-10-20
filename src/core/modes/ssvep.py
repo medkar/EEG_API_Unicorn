@@ -344,10 +344,10 @@ SPEC = ModeSpec(
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,
         duration_s=SSVEP_BASELINE_S,
-        # ⚠️ PAS de `tr()` ici, exprès : cette consigne part AUSSI sur le flux LSL `status` (champ
-        # `instruction`, cf. `server._state` et docs/SPEC.md), un contrat public qui ne doit changer
-        # ni de mots ni de langue avec l'écran. Même règle pour les quatre autres `Rest`.
-        instruction="Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence.",
+        # Cette consigne part AUSSI sur le flux LSL `status` (champ `instruction`, cf.
+        # `server._state`) : là, toujours en anglais (`i18n.pour_le_contrat`), quelle que soit la
+        # langue de l'écran. Même règle pour les autres `Rest`.
+        instruction=tr("mode.ssvep.repos"),
     ),
     calibration=None,   # la CCA n'apprend rien ; le repos est un étalonnage, pas un modèle
     stream="decoded_ssvep",

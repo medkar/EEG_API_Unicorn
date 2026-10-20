@@ -215,7 +215,7 @@ le passage au moteur multi-modes :
 | `modes` | **la vérité complète** : tous les modes actifs, `raw` compris |
 | `phase` | `streaming` · `warmup` · `baseline` · `decoding` — vocabulaire public inchangé |
 | `samples_published` · `streams` | compteur, et les noms complets des flux réellement publiés |
-| `instruction` | la consigne de repos, **seulement pendant `warmup` / `baseline`** |
+| `instruction` | la consigne de repos, **seulement pendant `warmup` / `baseline`**, toujours **en anglais** (la langue de la console ne change que l'écran) |
 
 ⚠️ **Trois champs ont été RETIRÉS** en même temps, et c'est un changement de contrat assumé :
 

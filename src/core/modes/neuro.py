@@ -163,8 +163,8 @@ SPEC = ModeSpec(
         duration_s=NEURO_BASELINE_S,
         # Plus long que le SSVEP : les échelles sont calées sur une MÉDIANE et une MAD, qui
         # demandent plus de fenêtres qu'une moyenne.
-        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
-        instruction="Repos : regarde l'écran, immobile et détendu — on cale TON zéro du jour.",
+        # Part aussi sur le flux LSL `status`, en anglais (cf. `ssvep.py`).
+        instruction=tr("mode.neuro.repos"),
     ),
     calibration=None,
     stream="decoded_neuro",

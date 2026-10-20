@@ -766,8 +766,8 @@ SPEC = ModeSpec(
         duration_s=0.0,            # pas de plancher à mesurer : la décision se joue sur une
         #                            corrélation contre un template appris, pas sur un z-score
         #                            contre un repos du jour (contrairement au SSVEP/neuro/ErrP)
-        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
-        instruction="Le casque se stabilise — reste immobile.",
+        # Part aussi sur le flux LSL `status`, en anglais (cf. `ssvep.py`).
+        instruction=tr("mode.repos.chauffe"),
     ),
     calibration=Calib(
         kind="fenetre", stimulus_id="cvep", label=tr("calib.cvep.label"),

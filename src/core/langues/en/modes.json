@@ -145,6 +145,7 @@
   "mode.errp.param.stream_in.aide": "The stream where your application publishes the moment of each feedback shown. Not in the list? Leave the page and come back. Applies only at the next start of the mode.",
   "mode.errp.param.tnr_target.aide": "The share of correct commands to keep. The engine derives its threshold from your training. The higher it is, the fewer correct commands it cancels, but the fewer errors it catches. Reference: keeping 95 % of correct commands catches only 24 % of errors; 85 % catches 50 %, 70 % catches 71 %.",
   "mode.errp.param.tnr_target.label": "Correct commands kept",
+  "mode.errp.repos": "Rest: look at the screen, stay still — measuring the background noise of your channels.",
   "mode.errp.sans_scores_oof": "This model has no out-of-fold scores, that is, scores computed on trials it has not seen ({cause}): no threshold can be set on it. Train it again: in the console, click \"Train\" on the ErrP page.",
   "mode.errp.sans_scores_oof.cause_defaut": "training too short or degenerate",
   "mode.errp.summary": "After each feedback shown, tells whether the machine has just made a mistake, based on the brain's error wave.",
@@ -176,6 +177,7 @@
   "mode.neuro.param.rebaseline_s.label": "Rest baseline reset",
   "mode.neuro.param.smoothing.aide": "Smooths the three indices over time. 0 = raw and jittery; 0.95 = very smooth but slow to react. The indices are noisy: the default smooths a lot.",
   "mode.neuro.param.smoothing.label": "Smoothing",
+  "mode.neuro.repos": "Rest: look at the screen, still and relaxed — setting YOUR baseline for today.",
   "mode.neuro.summary": "Mental load, drowsiness and engagement, as a deviation from today's rest.",
   "mode.p300.label": "P300",
   "mode.p300.modele.herite": "Model from an old version (module {module}, expected {attendu}), refused on purpose: it must be retrained from the kept calibration epochs. File: {nom}",
@@ -188,6 +190,7 @@
   "mode.param.vote_len.label": "Vote windows",
   "mode.raw.label": "Raw",
   "mode.raw.summary": "The 8 EEG channels as the headset returns them, in µV at 250 Hz.",
+  "mode.repos.chauffe": "The headset is settling — stay still.",
   "mode.ssvep.cibles.ecran": "a screen",
   "mode.ssvep.cibles.physiques": "physical targets (LEDs…)",
   "mode.ssvep.label": "SSVEP",
@@ -202,6 +205,7 @@
   "mode.ssvep.param.refresh_hz.label": "Stimulus screen refresh rate",
   "mode.ssvep.param.z_min.aide": "How far a target's signal must rise above the resting noise level (in standard deviations) to be announced. Lower: more announcements, but more errors. Higher: fewer announcements, but safer. Default 2.5. It is set in the \"1. Set up\" block of the mode; both tests use it, and that is where you see its effect.",
   "mode.ssvep.param.z_min.label": "Detection threshold",
+  "mode.ssvep.repos": "Do NOT look at any target: measuring the background noise of each frequency.",
   "mode.ssvep.summary": "Which flashing target the user is looking at, about 5 times per second.",
   "mode.ssvep.tests_ecran": "Both tests show their targets on screen: they do not work with physical targets. To check your LEDs, start the mode and look at what your application receives (\"What your app sees\", on the home page)."
 }

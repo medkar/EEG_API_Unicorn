@@ -663,8 +663,8 @@ SPEC = ModeSpec(
     rest=Rest(
         warmup_s=SSVEP_WARMUP_S,   # 15 s : l'offset DC de l'Unicorn dérive après ouverture
         duration_s=8.0,            # même durée que le SSVEP : deux modes lancés ensemble PARTAGENT
-        # ⚠️ PAS de `tr()` : cette consigne part aussi sur le flux LSL `status` (cf. `ssvep.py`).
-        instruction="Repos : regarde l'écran, immobile — on mesure le bruit de fond de tes voies.",
+        # Part aussi sur le flux LSL `status`, en anglais (cf. `ssvep.py`).
+        instruction=tr("mode.errp.repos"),
     ),
     calibration=Calib(kind="fenetre", stimulus_id="errp",
                       label=tr("calib.errp.label"),
