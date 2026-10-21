@@ -184,7 +184,8 @@ from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
-from stimulus.ecran import EcranRefuse, au_rafraichissement, confirme, hz_positif  # noqa: E402
+from stimulus.ecran import (ECRAN_SDL_PRINCIPAL, EcranRefuse,  # noqa: E402
+                            au_rafraichissement, confirme, hz_positif)
 from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
@@ -630,9 +631,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     # vsync, l'écran affiche à la vitesse du processeur et la phase reconstruite est fausse dès la
     # deuxième frame, sans qu'aucune exception ne le signale.
     try:
-        win = pygame.display.set_mode(size, flags, vsync=1)
+        win = pygame.display.set_mode(size, flags, vsync=1, display=ECRAN_SDL_PRINCIPAL)
     except (TypeError, pygame.error):
-        win = pygame.display.set_mode(size, flags)
+        win = pygame.display.set_mode(size, flags, display=ECRAN_SDL_PRINCIPAL)
     pygame.display.set_caption(tr("fenetre.cvep.titre"))
     pygame.mouse.set_visible(False)
 

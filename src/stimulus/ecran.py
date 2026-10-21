@@ -28,6 +28,14 @@ from core.i18n import nombre, tr  # noqa: E402
 # un marqueur de cycle c-VEP et son modèle : au-delà, il refuserait l'horloge.
 TOLERANCE_HZ = 1.0
 
+# L'écran où s'ouvrent TOUTES les fenêtres de stimulus : l'écran PRINCIPAL, celui que `Bascule`
+# fait passer au rafraîchissement voulu. Sans le demander, pygame ouvre sa fenêtre sur l'écran où
+# se trouve la SOURIS : sur un poste à plusieurs écrans, les cibles clignotaient sur un écran
+# secondaire pendant que l'écran principal changeait de mode. SDL 2 range l'écran principal de
+# Windows en premier : c'est l'indice 0. Chaque `pygame.display.set_mode` des fenêtres le passe
+# en `display=` (vérifié par l'autotest de ce module).
+ECRAN_SDL_PRINCIPAL = 0
+
 
 class EcranRefuse(Exception):
     """Le stimulus ne peut pas s'afficher au rafraîchissement demandé. Le message est la raison,
@@ -442,6 +450,27 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
     chk(abs(sans_chauffe - 240.0) < 0.01 and abs(avec_chauffe - 60.0) < 0.01,
         f"…parce que la mesure laisse l'écran se stabiliser une demi-seconde avant de compter "
         f"({avec_chauffe:.2f} Hz après une mise en route à 240)")
+
+    # --- 9 bis. Toutes les fenêtres s'ouvrent sur l'écran PRINCIPAL ---
+    # Lu dans la source (arbre syntaxique) : sans `display=`, pygame ouvre la fenêtre sur l'écran
+    # de la souris, et les cibles clignotent ailleurs que sur l'écran passé au bon rafraîchissement.
+    import ast
+
+    ici = _os.path.dirname(_os.path.abspath(__file__))
+    oublis, vus = [], 0
+    for fichier in ("ssvep.py", "cvep.py", "p300.py", "errp.py", "mi.py"):
+        with open(_os.path.join(ici, fichier), encoding="utf-8") as f:
+            arbre = ast.parse(f.read())
+        for n in ast.walk(arbre):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "set_mode"):
+                vus += 1
+                if not any(k.arg == "display" and isinstance(k.value, ast.Name)
+                           and k.value.id == "ECRAN_SDL_PRINCIPAL" for k in n.keywords):
+                    oublis.append(f"{fichier}:{n.lineno}")
+    chk(vus >= 10 and not oublis,
+        f"chaque fenêtre de stimulus s'ouvre sur l'écran PRINCIPAL, pas sur celui de la souris "
+        f"({vus} ouverture(s) lue(s), oublis : {oublis or 'aucun'})")
 
     # --- 10. Cette machine, en LECTURE seule ---
     machine = systeme_de_la_machine()

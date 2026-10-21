@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import use_utf8_console  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from stimulus import retour as _retour  # noqa: E402
+from stimulus.ecran import ECRAN_SDL_PRINCIPAL  # noqa: E402 - l'écran des stimulus
 
 FOND = (0, 0, 0)
 CASE = (40, 44, 52)            # le fond d'une case de tâche : discret, jamais vert
@@ -150,11 +151,12 @@ def run(windowed=False, secondes=None, source=None, statut=None):
     pygame.init()
     pygame.font.init()
     if windowed:
-        win = pygame.display.set_mode(TAILLE_FENETRE)
+        win = pygame.display.set_mode(TAILLE_FENETRE, display=ECRAN_SDL_PRINCIPAL)
     else:
         info = pygame.display.Info()
         win = pygame.display.set_mode((info.current_w, info.current_h),
-                                      pygame.FULLSCREEN | pygame.SCALED)
+                                      pygame.FULLSCREEN | pygame.SCALED,
+                                      display=ECRAN_SDL_PRINCIPAL)
     pygame.display.set_caption(tr("fenetre.mi.titre"))
     pygame.mouse.set_visible(False)
     horloge = pygame.time.Clock()
@@ -256,7 +258,7 @@ def _smoke():
     #    seule, rien quand le vote ne conclut pas.
     pygame.init()
     pygame.font.init()
-    surface = pygame.display.set_mode(TAILLE_FENETRE)
+    surface = pygame.display.set_mode(TAILLE_FENETRE, display=ECRAN_SDL_PRINCIPAL)
     classes = ("PIEDS", "MAINS")
     cases = geometrie(TAILLE_FENETRE, len(classes))
 

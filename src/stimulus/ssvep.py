@@ -558,7 +558,8 @@ def bilan_de_seance(frames, sautees, refresh):
 # les écrans de `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 from stimulus.refresh import frequence_mesuree  # noqa: E402
-from stimulus.ecran import EcranRefuse, au_rafraichissement, confirme, hz_positif  # noqa: E402
+from stimulus.ecran import (ECRAN_SDL_PRINCIPAL, EcranRefuse,  # noqa: E402
+                            au_rafraichissement, confirme, hz_positif)
 from stimulus.garde import sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
@@ -686,9 +687,9 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
     # vsync=1 : le clignotement est cadencé par le balayage écran (indispensable au SSVEP)
     try:
-        win = pygame.display.set_mode(size, flags, vsync=1)
+        win = pygame.display.set_mode(size, flags, vsync=1, display=ECRAN_SDL_PRINCIPAL)
     except (TypeError, pygame.error):
-        win = pygame.display.set_mode(size, flags)
+        win = pygame.display.set_mode(size, flags, display=ECRAN_SDL_PRINCIPAL)
     pygame.display.set_caption(tr("fenetre.ssvep.titre_fenetre"))
     pygame.mouse.set_visible(False)
 

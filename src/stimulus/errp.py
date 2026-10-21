@@ -166,6 +166,7 @@ from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E40
 from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
+from stimulus.ecran import ECRAN_SDL_PRINCIPAL  # noqa: E402 - l'écran des stimulus
 
 # Ce que le moteur JETTE avant d'écouter pour de bon. ⚠️ **Ce n'est PAS la même chose en décodage
 # et en calibration** (voir plus bas).
@@ -315,9 +316,9 @@ def run(windowed=False, refresh=None, n_cells=ERRP_TRACK_CELLS, taux_erreur=ERRP
 
     # vsync=1 : le pas est cadencé par le balayage écran, comme les autres stimuli.
     try:
-        win = pygame.display.set_mode(size, flags, vsync=1)
+        win = pygame.display.set_mode(size, flags, vsync=1, display=ECRAN_SDL_PRINCIPAL)
     except (TypeError, pygame.error):
-        win = pygame.display.set_mode(size, flags)
+        win = pygame.display.set_mode(size, flags, display=ECRAN_SDL_PRINCIPAL)
     pygame.display.set_caption(tr("fenetre.errp.titre"))
     pygame.mouse.set_visible(False)
 

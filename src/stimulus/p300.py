@@ -98,6 +98,7 @@ from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  
 from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
+from stimulus.ecran import ECRAN_SDL_PRINCIPAL  # noqa: E402 - l'écran des stimulus
 from stimulus.retour import (ATTENTE_DECISION_S, RETOUR_AFFICHE_S, Retour,  # noqa: E402
                              SourceDecisions, rayon_anneau)
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
@@ -340,9 +341,9 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
 
     # vsync=1 : les flashs sont cadencés par le balayage écran, comme le SSVEP.
     try:
-        win = pygame.display.set_mode(size, flags, vsync=1)
+        win = pygame.display.set_mode(size, flags, vsync=1, display=ECRAN_SDL_PRINCIPAL)
     except (TypeError, pygame.error):
-        win = pygame.display.set_mode(size, flags)
+        win = pygame.display.set_mode(size, flags, display=ECRAN_SDL_PRINCIPAL)
     pygame.display.set_caption(tr("fenetre.p300.titre"))
     pygame.mouse.set_visible(False)
 
