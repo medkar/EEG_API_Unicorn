@@ -84,6 +84,9 @@ class P300Model:
         self.pipe = build_pipe(nfilter)
         self.cv_auc_ = None
         self.n_epoques_ = None
+        # Le NOM de chaque cible de l'entraînement, dans l'ordre des indices (leur nombre est celui
+        # des cibles). None : un modèle d'avant ce champ, qui garde les 6 cibles par défaut.
+        self.noms = None
 
     def _prep(self, epochs):
         """(n_trials, n_samp, n_ch) [ou (n_samp, n_ch)] -> correction de base + passe-bande ->

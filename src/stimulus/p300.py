@@ -93,6 +93,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_CAL_ROUNDS, P300_EPOCH_S,  # noqa: E402
                          P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS, P300_N_TARGETS,
+                         P300_N_TARGETS_MAX, P300_N_TARGETS_MIN,
                          P300_PAUSE_MANCHE_S, P300_REPS, SSVEP_WARMUP_S, p300_targets,
                          use_utf8_console)
 from core.i18n import tr  # noqa: E402
@@ -223,11 +224,11 @@ def valide_reglages(reps, targets):
     de `P300_MIN_REPS`, il refuse de décider (plancher de manche). Un émetteur lancé à
     `--reps 12` ne produirait donc plus une seule sélection.
     """
-    if int(targets) != P300_N_TARGETS:
-        return False, (f"--targets {targets} : le mode P300 du moteur code {P300_N_TARGETS} "
-                       f"cibles EN DUR (core/config.py, P300_N_TARGETS). Avec un autre nombre, "
-                       f"la probabilité oddball change et le modèle décode avec les "
-                       f"probabilités de quelqu'un d'autre — sans jamais rien signaler.")
+    if not P300_N_TARGETS_MIN <= int(targets) <= P300_N_TARGETS_MAX:
+        return False, (f"--targets {targets} : choisis entre {P300_N_TARGETS_MIN} et "
+                       f"{P300_N_TARGETS_MAX} cibles (core/config.py, P300_N_TARGETS_MIN/MAX). À "
+                       f"2, la séquence de flashs alterne et devient prévisible : le contraire "
+                       f"d'un oddball. Le nombre doit être celui du MODÈLE : la console le passe.")
     if not (P300_MIN_REPS <= int(reps) <= P300_REPS):
         return False, (f"--reps {reps} : le moteur exige entre {P300_MIN_REPS} et {P300_REPS} "
                        f"répétitions par cible (core/config.py, P300_MIN_REPS / P300_REPS). "
@@ -286,11 +287,14 @@ def geometrie(size, n_targets):
 def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, seconds=None,
         smoke=False, stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0,
         journal=None, calibrer=False, tester=False, rounds=P300_CAL_ROUNDS, attente_moteur_s=None,
-        sonde_ecran=None, retour=False, source_retour=None):
+        sonde_ecran=None, retour=False, source_retour=None, noms=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
     `retour` (`--retour`) entoure la cible sélectionnée ; `source_retour` n'existe que pour
     `--smoke` (une source de décisions FACTICE à la place de `decoded_p300`).
+
+    `noms` (`--noms`) : le nom de chaque cible, affiché sous son disque ; leur nombre remplace
+    `targets`. C'est ce que la console passe, lu dans le modèle ou dans « Entraîner ».
 
     ⚠️ Les deux modes partagent la MÊME boucle et la MÊME séquence de flashs (`build_markers`).
     Une manche de calibration est une manche normale, précédée d'un `cue` : une seconde boucle
@@ -313,6 +317,8 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
     if smoke:
         return sous_garde_data(lambda: _smoke(reps, targets))
 
+    if noms:
+        targets = len(noms)
     ok, raison = valide_reglages(reps, targets)
     if not ok:
         print(f"[p300-stim] REFUSÉ — {raison}")
@@ -448,7 +454,7 @@ def run(windowed=False, refresh=None, reps=P300_REPS, targets=P300_N_TARGETS, se
             if i == cue_courant:
                 pygame.draw.circle(win, CUE, (x, y), rayon_cue, CUE_EPAISSEUR_PX)
             pygame.draw.circle(win, FIX_DOT, (x, y), FIX_DOT_R)   # ancre le regard
-            lab = font.render(str(i), True, LABEL)
+            lab = font.render(noms[i] if noms else str(i), True, LABEL)
             win.blit(lab, lab.get_rect(center=(x, y + int(rad * 1.9))))
         # L'anneau de RETOUR : après les cibles, AVANT tout texte — au-delà de la désignation.
         if anneau is not None:
@@ -787,10 +793,14 @@ def _smoke(reps, n_targets):
     # ABANDONNER toutes les manches, le moteur appliquant P300_REPS comme plafond par cible.
     chk(valide_reglages(P300_REPS, P300_N_TARGETS)[0],
         "les valeurs par défaut sont, elles, acceptées")
-    for mauvais_t in (0, 2, 4, P300_N_TARGETS + 1):
+    for mauvais_t in (0, 2, P300_N_TARGETS_MAX + 1):
         accepte, raison = valide_reglages(P300_REPS, mauvais_t)
         chk(not accepte and "P300_N_TARGETS" in raison,
-            f"--targets {mauvais_t} est refusé en nommant la constante du moteur ({raison[:60]}…)")
+            f"--targets {mauvais_t} est refusé en nommant les bornes ({raison[:60]}…)")
+    chk(valide_reglages(P300_REPS, P300_N_TARGETS_MIN)[0]
+        and valide_reglages(P300_REPS, P300_N_TARGETS_MAX)[0],
+        f"…et de {P300_N_TARGETS_MIN} à {P300_N_TARGETS_MAX} cibles, c'est accepté : le modèle porte "
+        f"son nombre de cibles, et la console le passe")
     for mauvais_r in (0, P300_MIN_REPS - 1, P300_REPS + 1, 12):
         accepte, raison = valide_reglages(mauvais_r, P300_N_TARGETS)
         chk(not accepte and "P300_REPS" in raison,
@@ -806,6 +816,15 @@ def _smoke(reps, n_targets):
                seconds=6.0, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
                attente_consommateur_s=0.0, journal=journal)
     chk(fait, "run() va au bout sur un écran factice (SDL_VIDEODRIVER=dummy)")
+
+    # `--noms` : 4 cibles NOMMÉES ; seuls leurs 4 indices flashent.
+    journal4 = []
+    run(windowed=True, refresh=60.0, reps=P300_MIN_REPS, seconds=3.0,
+        stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+        journal=journal4, noms=["Oui", "Non", "Stop", "Encore"])
+    flashees4 = {m.get("target") for m, _ts in journal4 if m.get("event") == "flash"}
+    chk(flashees4 == {0, 1, 2, 3},
+        f"lancée avec 4 noms, la fenêtre flashe 4 cibles, pas 6 ({sorted(flashees4)})")
 
     evenements = [m["event"] for m, _ts in journal]
     chk(evenements.count("flash") >= P300_MIN_REPS * n_targets,
@@ -1215,6 +1234,20 @@ def _smoke_bout_en_bout(chk, journal, designees):
             f"ici ({rt.phase})")
 
 
+def _noms_des_cibles(texte):
+    """`--noms` : des noms séparés par des virgules, non vides, tous différents, en nombre
+    permis. Refusés à la ligne de commande, avant que la moindre fenêtre ne s'ouvre."""
+    noms = [n.strip() for n in str(texte).split(",")]
+    if any(not n for n in noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : un nom de cible est vide")
+    if len({n.casefold() for n in noms}) != len(noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : deux cibles portent le même nom")
+    if not P300_N_TARGETS_MIN <= len(noms) <= P300_N_TARGETS_MAX:
+        raise argparse.ArgumentTypeError(f"{len(noms)} cibles : choisis entre {P300_N_TARGETS_MIN} "
+                                         f"et {P300_N_TARGETS_MAX}")
+    return noms
+
+
 def _parse_args(argv):
     p = argparse.ArgumentParser(description="Stimulus P300 (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
@@ -1225,6 +1258,10 @@ def _parse_args(argv):
     p.add_argument("--targets", type=int, default=P300_N_TARGETS,
                    help=f"nombre de cibles (défaut {P300_N_TARGETS} — le mode P300 du moteur "
                         f"n'accepte QUE cette valeur, cf. core/config.py P300_N_TARGETS)")
+    p.add_argument("--noms", type=_noms_des_cibles, default=None,
+                   help="le nom de chaque cible, séparés par des virgules (« Oui,Non,Stop »), "
+                        "affichés sous les disques ; leur nombre remplace --targets. La console le "
+                        "passe elle-même")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit après N secondes")
     p.add_argument("--tester", action="store_true",
                    help="comme --calibrer (même protocole, même vérité-terrain), mais pour un "
@@ -1253,7 +1290,7 @@ if __name__ == "__main__":
     args = _parse_args(sys.argv[1:])
     ok = run(windowed=args.windowed, refresh=args.refresh, reps=args.reps, targets=args.targets,
              seconds=args.seconds, smoke=args.smoke, calibrer=args.calibrer or args.tester, tester=args.tester,
-             rounds=args.rounds, retour=args.retour)
+             rounds=args.rounds, retour=args.retour, noms=args.noms)
     # Un réglage refusé (`valide_reglages`) doit sortir en 1 même hors smoke : lancé depuis un
     # script, « ça n'a rien affiché » et « ça a refusé » ne doivent pas se ressembler.
     sys.exit(0 if ok else 1)

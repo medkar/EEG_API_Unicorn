@@ -26,6 +26,7 @@
   "moteur.contrat.texte_virgule": "« {reglage} » : pas de virgule dans « {texte} »",
   "moteur.contrat.textes_attendus": "« {reglage} » : liste de textes attendue (reçu : {valeur})",
   "moteur.contrat.trop_proches": "« {reglage} » : cibles trop proches ({paires}). Avec une fenêtre de {fenetre} s, il faut au moins {ecart} Hz d'écart.",
+  "moteur.contrat.un_nom_par_cible": "« {reglage} » : {noms} nom(s) pour {freqs} fréquence(s). Donne un nom par fréquence, dans le même ordre, ou aucun.",
   "moteur.contrat.votes_inatteignables": "« {reglage} » : {votes} votes exigés pour seulement {fenetres} fenêtres de vote. Ce n'est jamais atteignable : le mode ne déciderait rien.",
   "moteur.contrat.votes_partenaire": "« {reglage} » : la contrainte « votes_atteignables » a besoin de « {champ} », qui n'a pas de valeur dans ce mode.",
   "moteur.enregistrement.ecriture_impossible": "écriture impossible ({erreur})",

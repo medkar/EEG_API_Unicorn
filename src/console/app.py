@@ -71,6 +71,7 @@ from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
 from core import cvep_models  # noqa: E402  (le rafraîchissement d'un modèle c-VEP, cf. _ecran_hz)
+from core import p300_models  # noqa: E402  (les cibles d'un modèle P300, cf. _noms_cibles)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.i18n import choisir_langue, langue, retraduit, tr  # noqa: E402
 from core.modes import registry  # noqa: E402
@@ -1228,7 +1229,11 @@ class Console(QMainWindow):
         if calibrer:
             return params.get("cibles")
         reglages = self._reglages_du_mode(mode_id) if mode_id else {}
-        return cvep_models.noms_de(params.get("model") or reglages.get("model"))
+        if stimulus_id == "ssvep":
+            # Le SSVEP n'a pas de modèle : ses noms sont un réglage du mode (« Régler »).
+            return list(reglages.get("noms") or ()) or None
+        lire = {"cvep": cvep_models.noms_de, "p300": p300_models.noms_de}.get(stimulus_id)
+        return lire(params.get("model") or reglages.get("model")) if lire else None
 
     def _mode_teste_par(self, mesure_id):
         """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
@@ -2896,7 +2901,11 @@ def _smoke():
 
     # La commande de la fenêtre vient de `stimulus/registry.py`, jamais d'une chaîne écrite ici.
     from stimulus import registry as stim_registry
-    attendue = stim_registry.commande("p300", calibrer=True)
+    from core.config import P300_N_TARGETS as _N_P300, p300_targets as _cibles_p300
+    # Les CIBLES réglées dans « Entraîner » (ici, les 6 par défaut) partent avec la fenêtre.
+    attendue = stim_registry.commande(
+        "p300", calibrer=True,
+        options=stim_registry.option_cibles("p300", [c["name"] for c in _cibles_p300(_N_P300)]))
     lancees = [e[1] for e in journal if e[0] == "fenetre"]
     chk(lancees and list(lancees[0]) == list(attendue),
         f"la ligne de commande est CELLE du registre des stimulus, à l'identique "
@@ -4449,10 +4458,10 @@ def _smoke():
     reelle = Console(moteur)
     reelle.timer.stop()
     page = reelle.pages["ssvep"]
-    chk(set(page.formulaire.champs) == {"cibles", "freqs", "refresh_hz", "alpha_hz", "z_min",
-                                        "bande_bas", "bande_haut"},
-        f"le SSVEP expose ses sept réglages, support des cibles, seuil de détection et bande de "
-        f"filtrage compris "
+    chk(set(page.formulaire.champs) == {"cibles", "freqs", "noms", "refresh_hz", "alpha_hz",
+                                        "z_min", "bande_bas", "bande_haut"},
+        f"le SSVEP expose ses huit réglages, support et noms des cibles, seuil de détection et "
+        f"bande de filtrage compris "
         f"({sorted(page.formulaire.champs)})")
     chk(page.formulaire.champs["freqs"].text().startswith("15"),
         f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
@@ -6172,6 +6181,14 @@ def _smoke():
                          ["Haut", "Bas", "Feu", "Eau"], None),
             f"les cibles d'une fenêtre : celles d'« Entraîner », celles du MODÈLE choisi (c-VEP, "
             f"pour l'essai libre comme pour le test), rien pour une autre fenêtre ({noms_vus})")
+        console._dernier_etat = {"reglages": {"ssvep": {"refresh_hz": 120.0,
+                                                        "noms": ["X", "Y", "Z"]}}}
+        chk(console._noms_cibles("ssvep", "ssvep") == ["X", "Y", "Z"]
+            and console._noms_cibles("p300", "p300", {"cibles": ["A", "B", "C"]},
+                                     calibrer=True) == ["A", "B", "C"],
+            "…les noms du SSVEP viennent de « Régler », ceux du P300 d'« Entraîner »")
+        console._dernier_etat = {"reglages": {"cvep": {"model": modele_75},
+                                              "ssvep": {"refresh_hz": 120.0}}}
         console._lancer_fenetre("cvep", calibrer=True,
                                 params={"refresh_hz": 144.0, "cibles": noms_regles})
         argv_cal = (_fenetres_lancees() or [[]])[-1]

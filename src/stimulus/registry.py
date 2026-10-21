@@ -179,7 +179,7 @@ def option_ecran(stimulus_id, hz):
 
 # Les fenêtres dont les CIBLES (leur nombre et leurs noms) sont un réglage d'entraînement porté
 # par le modèle : la console leur passe les noms (`--noms`), ceux d'« Entraîner » ou du modèle.
-CIBLES = {"cvep"}
+CIBLES = {"cvep", "p300", "ssvep"}
 
 
 def option_cibles(stimulus_id, noms):
@@ -346,11 +346,11 @@ def _selftest():
         and option_ecran("cvep", "abc") == () and option_ecran("p300", 60.0) == (),
         "…et rien sans valeur, sur une valeur absurde, ou pour une fenêtre qui ne fait pas "
         "passer l'écran : elle mesure alors l'écran, comme avant")
-    chk(option_cibles("cvep", ["Haut", "Bas"]) == ("--noms", "Haut,Bas")
+    chk(all(option_cibles(k, ["Haut", "Bas"]) == ("--noms", "Haut,Bas") for k in CIBLES)
         and option_cibles("cvep", None) == () and option_cibles("cvep", "Haut") == ()
-        and option_cibles("ssvep", ["Haut", "Bas"]) == (),
-        f"les noms des cibles ne partent qu'à la fenêtre c-VEP, et seulement s'ils sont lisibles "
-        f"({option_cibles('cvep', ['Haut', 'Bas'])}, {option_cibles('ssvep', ['Haut', 'Bas'])})")
+        and option_cibles("errp", ["Haut", "Bas"]) == () and CIBLES == {"cvep", "p300", "ssvep"},
+        f"les noms des cibles partent aux fenêtres c-VEP, P300 et SSVEP, et seulement s'ils sont "
+        f"lisibles ({option_cibles('cvep', ['Haut', 'Bas'])}, {option_cibles('errp', ['Haut', 'Bas'])})")
     chk(set(ECRAN) == {"ssvep", "cvep"} and set(ECRAN.values()) <= {"reglage", "modele"},
         f"seuls le SSVEP et le c-VEP font passer l'écran, et chacun dit d'où vient la valeur "
         f"({ECRAN})")

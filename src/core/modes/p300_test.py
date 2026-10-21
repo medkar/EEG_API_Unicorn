@@ -103,9 +103,11 @@ PHASE_RETOUR_S = P300_EPOCH_S + LATENCE_DECISION_S + RETOUR_AFFICHE_S
 PAR_MANCHE_S = P300_PAUSE_MANCHE_S + P300_REPS * P300_N_TARGETS * SOA_REFERENCE_S + PHASE_RETOUR_S
 
 
-def duree_protocole_s(manches):
-    """La durée hors chauffe de `manches` manches — plus la dernière époque qui finit de s'écrire."""
-    return float(manches) * PAR_MANCHE_S + P300_EPOCH_S
+def duree_protocole_s(manches, n_cibles=P300_N_TARGETS):
+    """La durée hors chauffe de `manches` manches — plus la dernière époque qui finit de s'écrire.
+    `n_cibles` : celles du modèle testé ; une manche flashe chaque cible `P300_REPS` fois."""
+    par_manche = PAR_MANCHE_S + P300_REPS * (int(n_cibles) - P300_N_TARGETS) * SOA_REFERENCE_S
+    return float(manches) * par_manche + P300_EPOCH_S
 
 
 def _minutes(manches):
@@ -182,7 +184,8 @@ class MesureP300(MesureMarqueurs):
             return MANCHES_DEFAUT
 
     def duree_estimee_s(self):
-        return float(self.warmup_s) + duree_protocole_s(self._manches())
+        return float(self.warmup_s) + duree_protocole_s(self._manches(),
+                                                        self._decideur.n_targets)
 
     def state(self, now=None):
         """L'instantané du socle, l'avancement en MANCHES : l'étudiant a choisi « Manches : 6 », il

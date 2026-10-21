@@ -26,6 +26,7 @@
   "moteur.contrat.texte_virgule": "\"{reglage}\": no comma in \"{texte}\"",
   "moteur.contrat.textes_attendus": "\"{reglage}\": a list of texts was expected (got: {valeur})",
   "moteur.contrat.trop_proches": "\"{reglage}\": targets too close ({paires}). With a {fenetre} s window, they must be at least {ecart} Hz apart.",
+  "moteur.contrat.un_nom_par_cible": "\"{reglage}\": {noms} name(s) for {freqs} frequency(ies). Give one name per frequency, in the same order, or none.",
   "moteur.contrat.votes_inatteignables": "\"{reglage}\": {votes} votes required for only {fenetres} voting windows. This can never be reached: the mode would never decide anything.",
   "moteur.contrat.votes_partenaire": "\"{reglage}\": the constraint \"votes_atteignables\" needs \"{champ}\", which has no value in this mode.",
   "moteur.enregistrement.ecriture_impossible": "cannot write ({erreur})",

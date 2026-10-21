@@ -25,7 +25,7 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from core.config import DATA_DIR, use_utf8_console  # noqa: E402
+from core.config import DATA_DIR, P300_N_TARGETS, p300_targets, use_utf8_console  # noqa: E402
 from core.i18n import tr  # noqa: E402
 
 
@@ -93,6 +93,29 @@ def modeles_disponibles(dossier=DATA_DIR):
     chemins = sorted(_glob.glob(_os.path.join(dossier, MOTIF)),
                      key=_os.path.getmtime, reverse=True)
     return [c for c in chemins if charger(c)[0] is not None]
+
+
+def noms_du_modele(modele):
+    """Le NOM de chaque cible d'un modèle CHARGÉ, dans l'ordre des indices : ceux de son
+    entraînement, ou les 6 par défaut (un modèle d'avant ce champ)."""
+    noms = getattr(modele, "noms", None)
+    if noms:
+        return [str(n) for n in noms]
+    return [c["name"] for c in p300_targets(P300_N_TARGETS)]
+
+
+def noms_de(chemin):
+    """Les noms des cibles d'un modèle, ou None s'il ne se charge pas. Ne lève jamais.
+
+    La console les passe à la fenêtre de « Tester » et de « Tester librement » (`--noms`)."""
+    modele, _raison = charger(chemin) if chemin else (None, None)
+    return noms_du_modele(modele) if modele is not None else None
+
+
+def cibles_de(chemin):
+    """Le nombre de cibles d'un modèle, ou None s'il ne se charge pas. Ne lève jamais."""
+    noms = noms_de(chemin)
+    return len(noms) if noms else None
 
 
 def decrire(chemin):

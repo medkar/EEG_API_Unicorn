@@ -210,7 +210,8 @@ class DecodedSSVEPPublisher:
     sont nommées dans les métadonnées, un client ne doit pas les compter en dur.
     """
 
-    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), instance=""):
+    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), instance="",
+                 noms=None):
         self.freqs = [float(f) for f in freqs]
         labels = ssvep_channel_labels(self.freqs)
         info = StreamInfo(stream_name("decoded_ssvep"), "Decoded", len(labels),
@@ -222,6 +223,9 @@ class DecodedSSVEPPublisher:
         desc = info.desc().append_child("decoding")
         desc.append_child_value("paradigm", "SSVEP")
         desc.append_child_value("frequencies_hz", ",".join(f"{f:g}" for f in self.freqs))
+        # Le NOM de chaque cible, dans l'ordre des fréquences, s'il y en a (réglage « Régler »).
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
         # `decision_scale` dit au client sur quelle échelle lire `confidence` : "rho" =
         # corrélation CCA brute (0-1), "z" = écarts-types au-dessus du bruit de repos une
         # fois le plancher mesuré. Sans cette indication, un seuil côté client n'a pas de sens.
@@ -391,7 +395,7 @@ class DecodedP300Publisher:
     # réécrire le littéral. Deux sources pour un contrat public finissent par diverger.
     SUFFIXE = "decoded_p300"
 
-    def __init__(self, n_targets, max_reps, margin=0.0, instance=""):
+    def __init__(self, n_targets, max_reps, margin=0.0, instance="", noms=None):
         self.n_targets = int(n_targets)
         labels = p300_channel_labels(self.n_targets)
         info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
@@ -403,6 +407,10 @@ class DecodedP300Publisher:
         desc = info.desc().append_child("decoding")
         desc.append_child_value("paradigm", "P300")
         desc.append_child_value("n_targets", str(self.n_targets))
+        # Le NOM de chaque cible, dans l'ordre des `score_*` (joints par des virgules) : ceux que
+        # l'entraînement a donnés. L'indice publié reste la référence.
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
         # ⚠️ Un PLAFOND, pas le nombre de répétitions de la manche : c'est l'application EXTERNE
         # qui décide combien de fois elle fait flasher chaque cible, et le moteur ne le sait pas.
         # Ce champ dit un fait que le moteur APPLIQUE : au-delà de ce nombre de flashs pour une

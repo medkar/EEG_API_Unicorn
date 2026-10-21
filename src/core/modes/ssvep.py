@@ -113,7 +113,7 @@ class SsvepRuntime(ModeRuntime):
         self._out = DecodedSSVEPPublisher(
             list(self.params["freqs"]), decision_scale="z",
             thresholds=(self.decoder.z_min, self.decoder.z_margin),
-            instance=self.engine.instance)
+            instance=self.engine.instance, noms=list(self.params.get("noms") or ()))
 
     def _close(self):
         self._out = None
@@ -289,11 +289,24 @@ SPEC = ModeSpec(
             kind="float_list",
             unit="Hz",
             default=FREQS_60HZ,
-            # Jusqu'à 10 cibles : surtout pour des cibles physiques (un plateau de LED). La
-            # fenêtre de stimulus à l'écran, elle, n'en dessine que 4 (`stimulus/ssvep.py`).
+            # Jusqu'à 10 cibles, sur des LED comme à l'écran (la fenêtre passe en couronne
+            # au-delà de 4). À 60 Hz, peu de fréquences sont des diviseurs hors du pic alpha :
+            # c'est le moteur qui le dit, au clic.
             count=(2, 10),
             constraints=("dans_la_bande", "separables", "divise_le_refresh"),
             help=tr("mode.ssvep.param.freqs.aide"),
+        ),
+        Param(
+            # Le NOM de chaque cible, dans l'ordre des fréquences, ou aucun (0 : les noms par
+            # défaut). La fenêtre les affiche, et `decoded_ssvep` les publie (`target_names`) :
+            # changer un nom recrée donc le flux, comme changer une fréquence.
+            key="noms",
+            label=tr("mode.ssvep.param.noms.label"),
+            kind="text_list",
+            default=(),
+            count=(0, 10),
+            constraints=("un_nom_par_cible",),
+            help=tr("mode.ssvep.param.noms.aide"),
         ),
         Param(
             key="refresh_hz",
@@ -550,6 +563,23 @@ def _selftest():
     chk(v_dix is not None and v_onze is None and "10" in (r_onze or ""),
         f"le SSVEP accepte 10 cibles et refuse la onzième, en disant la borne "
         f"({r_dix or 'dix acceptées'} ; {r_onze})")
+
+    # Les NOMS des cibles : un par fréquence, dans le même ordre, ou aucun.
+    v_noms, r_noms = validate(SPEC, {"freqs": [12.0, 15.0, 20.0], "noms": ["Haut", "Bas", "Feu"]})
+    v_mal, r_mal = validate(SPEC, {"freqs": [12.0, 15.0, 20.0], "noms": ["Haut", "Bas"]})
+    v_aucun, r_aucun = validate(SPEC, {"freqs": [12.0, 15.0, 20.0], "noms": []})
+    chk(v_noms is not None and list(v_noms["noms"]) == ["Haut", "Bas", "Feu"] and v_mal is None
+        and "2 nom" in (r_mal or "") and v_aucun is not None,
+        f"un nom par fréquence est accepté, aucun aussi, mais deux noms pour trois fréquences "
+        f"sont refusés en le disant ({r_noms or 'accepté'} ; {r_mal} ; {r_aucun or 'accepté'})")
+    from core.lsl_io import DecodedSSVEPPublisher
+    publieur_nomme = DecodedSSVEPPublisher([12.0, 15.0, 20.0], instance="autotest-noms",
+                                           noms=["Haut", "Bas", "Feu"])
+    decrit = publieur_nomme.outlet.get_info().desc().child("decoding").child_value("target_names")
+    del publieur_nomme
+    chk(decrit == "Haut,Bas,Feu",
+        f"…et le flux decoded_ssvep les DÉCRIT à l'application, dans l'ordre des fréquences "
+        f"({decrit!r})")
 
     # Les défauts du mode ne bougent PAS : ils sont validés sur casque réel. La proposition est
     # une action que l'étudiant déclenche, jamais un recalcul silencieux au démarrage.

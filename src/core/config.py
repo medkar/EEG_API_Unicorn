@@ -903,6 +903,11 @@ def choose_frequencies(refresh, commands=COMMANDS):
 # Pas de cible STOP dédiée : entre deux sélections le robot est à l'arrêt (modèle en RAFALES),
 # et une marge de confiance (P300_SELECT_MARGIN) peut refuser une sélection ambiguë.
 P300_N_TARGETS = 6            # aligné sur CVEP_N_TARGETS pour la comparaison à cibles égales
+# Les cibles du P300 se règlent dans « Entraîner » (nombre et noms), portées par le modèle, pour
+# expérimenter. Pas sous 3 : à 2 cibles, la séquence de flashs ALTERNE, donc devient prévisible —
+# le contraire d'un oddball. Au plus 10, la couronne de la fenêtre (la même que le c-VEP).
+P300_N_TARGETS_MIN = 3
+P300_N_TARGETS_MAX = 10
 P300_BAND = (1.0, 12.0)       # bande ERP : le P300 est LENT (1-8 Hz) — à NE PAS confondre avec
 #                               la bande SSVEP (5-40) qui couperait justement le P300.
 P300_PRE_S = 0.15             # pré-stimulus conservé pour la correction de ligne de base (s)

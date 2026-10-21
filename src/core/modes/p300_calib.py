@@ -64,7 +64,7 @@ import numpy as np  # noqa: E402
 from core.config import (CALIB_CANDIDAT_PREFIXE, P300_BAND, P300_CAL_ROUNDS,  # noqa: E402
                          P300_EPOCH_S, P300_FLASH_OFF_FR, P300_FLASH_ON_FR, P300_MIN_REPS,
                          P300_N_TARGETS, P300_PAUSE_MANCHE_S, P300_PRE_S, P300_REPS,
-                         SECTEUR_HZ, use_utf8_console)
+                         SECTEUR_HZ, p300_targets, use_utf8_console)
 from core.i18n import tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct, texte_filtre  # noqa: E402
@@ -159,7 +159,7 @@ def horodatage(maintenant=None):
                           _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
-def chemins_libres(dossier, n_manches, prefixe=""):
+def chemins_libres(dossier, n_manches, prefixe="", n_cibles=None):
     """(chemin du modèle, chemin de l'enregistrement), les DEUX garantis libres au retour.
 
     Jumeau exact de `core/modes/mi_calib.py::_chemins_libres`, et pour la même raison : le format
@@ -177,12 +177,14 @@ def chemins_libres(dossier, n_manches, prefixe=""):
     `archive/p300_calibrate.py`, écrit directement dans `data/` un modèle définitif, et doit
     garder le nom que `p300_models` cherche.
     """
+    # `n_cibles` : le nombre de cibles, dans le nom (`…_8targets.joblib`), comme le c-VEP.
+    suffixe = f"_{int(n_cibles)}targets" if n_cibles else ""
     maintenant = _time.time()
     while True:
         stamp = horodatage(maintenant)
-        chemin_modele = _os.path.join(dossier, f"{prefixe}p300_model_{stamp}.joblib")
-        chemin_npz = _os.path.join(dossier,
-                                   f"{prefixe}p300_calib_{stamp}_n{int(n_manches):02d}.npz")
+        chemin_modele = _os.path.join(dossier, f"{prefixe}p300_model_{stamp}{suffixe}.joblib")
+        chemin_npz = _os.path.join(
+            dossier, f"{prefixe}p300_calib_{stamp}_n{int(n_manches):02d}{suffixe}.npz")
         if not _os.path.exists(chemin_modele) and not _os.path.exists(chemin_npz):
             return chemin_modele, chemin_npz
         maintenant += 1.0
@@ -223,7 +225,7 @@ def selection_loro(epochs, flashed, groups, cues, fs, *, pre_s, post_s, band, se
 
 
 def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_npz=None,
-              evaluer=True, *, pre_s, post_s, band=P300_BAND, secteur_hz=None):
+              evaluer=True, *, pre_s, post_s, band=P300_BAND, secteur_hz=None, noms=None):
     """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
     trop pauvre pour valoir un modèle.
 
@@ -292,11 +294,14 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
                  cues=np.asarray(cues), fs=fs, pre_s=pre_s, post_s=post_s,
                  band=np.asarray(modele.band, dtype=float),
                  secteur_hz=float(modele.secteur_hz or 0.0))
+    # Les NOMS des cibles affichées (leur nombre avec) : le mode, les tests et la fenêtre les
+    # relisent du modèle. Sans eux, les 6 cibles par défaut.
+    modele.noms = list(noms) if noms else None
     modele.save(chemin_modele)
 
     auc = modele.cv_auc_
     verdict_txt = verdict(selection)
-    hasard = 1.0 / P300_N_TARGETS
+    hasard = 1.0 / (len(noms) if noms else P300_N_TARGETS)
     auc_txt = "non mesurée" if auc is None else f"{auc * 100:.1f}%"
     sel_txt = ("non mesurée" if selection is None
                else f"{sel_ok}/{sel_tot} = {selection * 100:.0f}% (hasard {hasard * 100:.0f}%)")
@@ -332,17 +337,18 @@ def entrainer(epochs, labels, flashed, groups, cues, fs, chemin_modele, chemin_n
 
 
 def entrainer_dans(dossier, epochs, labels, flashed, groups, cues, fs, evaluer=True,
-                   *, pre_s, post_s, prefixe="", band=P300_BAND, secteur_hz=None):
+                   *, pre_s, post_s, prefixe="", band=P300_BAND, secteur_hz=None, noms=None):
     """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés
     et garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
 
     `prefixe` passe tel quel à `chemins_libres` — voir sa docstring. `band`/`secteur_hz` passent
     tels quels à `entrainer` — voir la sienne.
     """
-    chemin_modele, chemin_npz = chemins_libres(dossier, len(cues), prefixe=prefixe)
+    chemin_modele, chemin_npz = chemins_libres(dossier, len(cues), prefixe=prefixe,
+                                               n_cibles=len(noms) if noms else None)
     return entrainer(epochs, labels, flashed, groups, cues, fs,
                      chemin_modele=chemin_modele, chemin_npz=chemin_npz, evaluer=evaluer,
-                     pre_s=pre_s, post_s=post_s, band=band, secteur_hz=secteur_hz)
+                     pre_s=pre_s, post_s=post_s, band=band, secteur_hz=secteur_hz, noms=noms)
 
 
 class P300Calibration(MarkerCalibrationRuntime):
@@ -373,10 +379,24 @@ class P300Calibration(MarkerCalibrationRuntime):
         sans que personne ait pu la refuser.
         """
         super().__init__(spec, params, engine, rng=rng, dossier=dossier)
+        # Les CIBLES de cet entraînement (son réglage `cibles` : un nom par cible), que le modèle
+        # portera. Sans réglage, les 6 cibles par défaut.
+        noms = self.params.get("cibles")
+        self.noms = ([str(n) for n in noms] if noms
+                     else [c["name"] for c in p300_targets(P300_N_TARGETS)])
+        self.n_cibles = len(self.noms)
         self._attendue = None    # la cible désignée par le dernier `cue` ; None avant le premier
         self._manche = -1        # le numéro de la manche en cours (le GROUPE de la CV)
         self._cues = []          # la cible désignée, manche par manche
         self._refus = 0          # marqueurs refusés : cible illisible, ou flash avant tout `cue`
+
+    def duree_estimee_s(self):
+        """La chauffe, plus le protocole au nombre de cibles RÉGLÉ : une manche flashe chaque cible
+        `P300_REPS` fois, donc dure en proportion."""
+        return (float(self.warmup_s)
+                + P300_CAL_ROUNDS * (P300_PAUSE_MANCHE_S
+                                     + P300_REPS * self.n_cibles * SOA_REFERENCE_S)
+                + P300_EPOCH_S)
 
     # --- ce que le socle demande ---------------------------------------------
 
@@ -454,8 +474,8 @@ class P300Calibration(MarkerCalibrationRuntime):
             self._refuse(f"« {cible!r} » n'est pas un indice de cible ({type(cible).__name__}) "
                          f"sur un marqueur « {quoi} »")
             return None
-        if not 0 <= cible < P300_N_TARGETS:
-            self._refuse(f"« {cible} » est hors de la plage attendue [0, {P300_N_TARGETS}[ "
+        if not 0 <= cible < self.n_cibles:
+            self._refuse(f"« {cible} » est hors de la plage attendue [0, {self.n_cibles}[ "
                          f"sur un marqueur « {quoi} »")
             return None
         return cible
@@ -489,7 +509,8 @@ class P300Calibration(MarkerCalibrationRuntime):
                               pre_s=self.pre_s, post_s=self.post_s,
                               prefixe=CALIB_CANDIDAT_PREFIXE,
                               band=bande_de(self.params, P300_BAND),
-                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
+                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ),
+                              noms=self.noms)
 
     # --- l'état, pour l'afficheur -------------------------------------------
 
@@ -564,7 +585,7 @@ def _selftest():
         def markers_murs(self, mode_id, post_s):
             return self._lots.pop(0) if self._lots else []
 
-    def seance(rounds=ROUNDS, reps=REPS, graine=0, cible_de=None):
+    def seance(rounds=ROUNDS, reps=REPS, graine=0, cible_de=None, n=P300_N_TARGETS):
         """Le plan d'une séance : (marqueurs, tampon EEG, horodatages, cibles cuées).
 
         Le tampon est du bruit + un alpha partagé, DANS lequel on plante une réponse évoquée à
@@ -573,7 +594,7 @@ def _selftest():
         chose du décodage et pas seulement du câblage.
         """
         rng = np.random.default_rng(graine)
-        cible_de = cible_de or (lambda r: r % P300_N_TARGETS)
+        cible_de = cible_de or (lambda r: r % n)
         t0 = 1000.0
         plan, t, cues = [], t0 + 2.0, []
         for r in range(rounds):
@@ -582,7 +603,7 @@ def _selftest():
             plan.append((t, {"mode": "p300", "event": "cue", "target": cue}))
             t += PAUSE
             for _ in range(reps):
-                ordre = list(range(P300_N_TARGETS))
+                ordre = list(range(n))
                 rng.shuffle(ordre)
                 for tgt in ordre:
                     plan.append((t, {"mode": "p300", "event": "flash", "target": tgt}))
@@ -668,6 +689,26 @@ def _selftest():
             f"toutes les époques annoncées sont enregistrées "
             f"({res.get('n_essais')} pour {ROUNDS * REPS * P300_N_TARGETS})")
         chk(res.get("n_manches") == ROUNDS, f"et {ROUNDS} manches ({res.get('n_manches')})")
+
+        # --- 3 bis. Les CIBLES réglées (`cibles`) : 4 cibles NOMMÉES -----------------------------
+        noms4 = ["Oui", "Non", "Stop", "Encore"]
+        plan4, eeg4, ts4, _cues4 = seance(graine=4, n=4)
+        moteur4 = _MoteurFactice(eeg4, ts4)
+        dossier4 = _os.path.join(dossier, "quatre_cibles")
+        _os.makedirs(dossier4, exist_ok=True)
+        rt4 = P300Calibration(_p300.SPEC, {"cibles": noms4}, moteur4, dossier=dossier4)
+        chk(rt4.duree_estimee_s() < rt.duree_estimee_s(),
+            f"la durée annoncée suit le nombre de cibles : 4 cibles, des manches plus courtes "
+            f"({rt4.duree_estimee_s():.0f} s contre {rt.duree_estimee_s():.0f} s à 6)")
+        joue(rt4, moteur4, plan4)
+        res4 = rt4.resultat or {}
+        from core import p300_models as _p300_models
+        chk(rt4.phase == "fini" and _p300_models.noms_de(res4.get("modele", "")) == noms4
+            and "_4targets" in _os.path.basename(res4.get("modele", ""))
+            and abs(res4.get("hasard", 0.0) - 0.25) < 1e-9,
+            f"réglé à 4 cibles nommées : l'entraînement va au bout, le modèle porte les noms et son "
+            f"nom de fichier le nombre, et le hasard est 1/4 ({rt4.phase}, "
+            f"{_os.path.basename(res4.get('modele', ''))}, {res4.get('hasard')})")
 
         # --- 4. L'AUC est une probabilité, la sélection en est une autre -----------------------
         chk(res.get("auc") is not None and 0.0 <= res["auc"] <= 1.0,

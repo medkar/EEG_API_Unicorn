@@ -62,7 +62,8 @@ import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (MARKER_STREAM_DEFAULT, P300_BAND, P300_EPOCH_S,  # noqa: E402
-                         P300_MIN_REPS, P300_N_TARGETS, P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S,
+                         P300_MIN_REPS, P300_N_TARGETS, P300_N_TARGETS_MAX, P300_N_TARGETS_MIN,
+                         P300_PRE_S, P300_REPS, P300_ROUND_TIMEOUT_S, p300_targets,
                          P300_MIDLINE, P300_SELECT_MARGIN, SSVEP_WARMUP_S, use_utf8_console)
 import numpy as np  # noqa: E402
 
@@ -139,16 +140,16 @@ class P300Runtime(ModeRuntime):
         super().__init__(spec, params, engine)
         self._out = None
         self._decoded = None
-        # La géométrie (6 cibles) est FIXE — alignée sur le c-VEP pour comparer les deux
-        # paradigmes à cibles identiques (cf. `core/config.py`, P300_N_TARGETS) — pas un réglage
-        # du mode : contrairement au MI, dont les classes dépendent du modèle choisi.
-        self.n_targets = P300_N_TARGETS
         self.model, raison = p300_models.charger(params["model"])
         if self.model is None:
             # On lève ICI plutôt que de démarrer un mode muet. `validate` a déjà écarté le cas
             # « aucun modèle » ; il reste celui du fichier effacé entre la validation et le
             # démarrage, que seul le moteur peut voir.
             raise ValueError(raison)
+        # Les CIBLES sont celles du MODÈLE (leur nombre et leurs noms, réglés à l'entraînement) :
+        # la console lance la fenêtre avec elles, et un flash d'un autre indice est refusé.
+        self.noms = p300_models.noms_du_modele(self.model)
+        self.n_targets = len(self.noms)
         desaccord = self._desaccord_geometrie(engine)
         if desaccord is not None:
             # Même refus, pour la même raison : un modèle entraîné sur une AUTRE géométrie
@@ -205,7 +206,7 @@ class P300Runtime(ModeRuntime):
         # Comme le SSVEP et le MI : le flux existe TOUT DE SUITE, avant même la fin de la
         # chauffe. Un client qui le cherche au lancement ne doit pas dépendre de l'instant où
         # arrive le premier flash — `resolve_byprop` a un délai fini.
-        self._out = DecodedP300Publisher(self.n_targets, max_reps=_MAX_PAR_CIBLE,
+        self._out = DecodedP300Publisher(self.n_targets, noms=self.noms, max_reps=_MAX_PAR_CIBLE,
                                          margin=P300_SELECT_MARGIN,
                                          instance=self.engine.instance)
 
@@ -515,11 +516,10 @@ class P300Runtime(ModeRuntime):
 
 
 def _channels(params):
-    """Les voies du P300 : `n_targets` est une géométrie FIXE (couronne à 6 cibles, alignée sur
-    le c-VEP), pas un réglage du mode — contrairement au MI, dont les voies dépendent du modèle
-    choisi. `params` n'est donc pas lu ; l'argument existe pour respecter le contrat `channels_fn`.
-    """
-    return p300_channel_labels(P300_N_TARGETS)
+    """Les voies du P300 : un score par cible du MODÈLE choisi (son nombre de cibles est un
+    réglage de son entraînement), comme le MI, dont les voies dépendent du modèle."""
+    n = p300_models.cibles_de((params or {}).get("model"))
+    return p300_channel_labels(n or P300_N_TARGETS)
 
 
 SPEC = ModeSpec(
@@ -567,7 +567,13 @@ SPEC = ModeSpec(
                       # 1 Hz, 44 % à 2 Hz. 0,5 Hz AU MOINS : le filtre agit sur chaque ÉPOQUE
                       # (~0,95 s, après la ligne de base), et plus bas ce qu'il fait tient surtout
                       # aux bords de l'époque, plus à la fréquence de coupure.
-                      params=params_bande(P300_BAND, (0.5, 1.0), (8.0, 40.0),
+                      params=(Param(key="cibles", label=tr("calib.p300.param.cibles.label"),
+                                    kind="text_list",
+                                    default=tuple(c["name"] for c in p300_targets(P300_N_TARGETS)),
+                                    count=(P300_N_TARGETS_MIN, P300_N_TARGETS_MAX),
+                                    help=tr("calib.p300.param.cibles.aide", defaut=P300_N_TARGETS,
+                                            mini=P300_N_TARGETS_MIN, maxi=P300_N_TARGETS_MAX)),)
+                      + params_bande(P300_BAND, (0.5, 1.0), (8.0, 40.0),
                                           tr("calib.p300.param.bande.aide")),
                       epoch_s=P300_PRE_S + P300_EPOCH_S,
                       runtime_cls=P300Calibration),
@@ -831,6 +837,30 @@ def _selftest():
         chk(refus_geo is not None and "fs" in refus_geo and "125" in refus_geo,
             f"un modèle entraîné sur une AUTRE géométrie d'époque est refusé au démarrage, en "
             f"nommant l'écart ({refus_geo})")
+
+        # 3ter. Les CIBLES viennent du MODÈLE : leur nombre et leurs noms, réglés à l'entraînement.
+        modele.noms = ["Oui", "Non", "Stop", "Encore"]
+        chemin_nomme = _os.path.join(dossier, "p300_model_nomme.joblib")
+        modele.save(chemin_nomme)
+        modele.noms = None
+        rt_nomme = P300Runtime(SPEC, dict(values, model=chemin_nomme), moteur)
+        chk(rt_nomme.n_targets == 4 and rt_nomme.noms == ["Oui", "Non", "Stop", "Encore"]
+            and _channels({"model": chemin_nomme}) == list(p300_channel_labels(4)),
+            f"un modèle entraîné à 4 cibles NOMMÉES décode 4 cibles, sous ces noms, et publie 4 "
+            f"scores ({rt_nomme.n_targets}, {rt_nomme.noms})")
+        from core.lsl_io import DecodedP300Publisher
+        publieur_nomme = DecodedP300Publisher(4, max_reps=P300_REPS, instance="autotest-noms",
+                                              noms=["Oui", "Non", "Stop", "Encore"])
+        decrit = publieur_nomme.outlet.get_info().desc().child("decoding").child_value(
+            "target_names")
+        del publieur_nomme
+        chk(decrit == "Oui,Non,Stop,Encore",
+            f"…et le flux decoded_p300 les DÉCRIT à l'application ({decrit!r})")
+        reglage_cibles = {p.key: p for p in SPEC.calibration.params}.get("cibles")
+        chk(reglage_cibles is not None and reglage_cibles.kind == "text_list"
+            and len(reglage_cibles.default) == P300_N_TARGETS
+            and reglage_cibles.count == (P300_N_TARGETS_MIN, P300_N_TARGETS_MAX),
+            f"« Entraîner » règle les cibles comme les tâches du MI ({reglage_cibles and reglage_cibles.count})")
 
         rt = P300Runtime(SPEC, values, moteur)
         rt._out = _FauxPublieur()

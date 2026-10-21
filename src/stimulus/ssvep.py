@@ -1,10 +1,11 @@
 """Stimulus SSVEP — les disques clignotants, et le run GUIDÉ qui permet de le MESURER.
 
-⚠️ **TROIS cibles par défaut, quatre au maximum.** Le nombre vient du PLAN et de nulle part
+⚠️ **TROIS cibles par défaut, dix au maximum.** Le nombre vient du PLAN et de nulle part
 ailleurs : `choose_frequencies` en rend TROIS (AVANT, GAUCHE, DROITE), et quelqu'un qui s'assoit
 3,6 minutes devant cet écran ne doit pas y chercher une cible qui n'existe pas. `--freqs` décide
-de ce plan, donc le nombre de cibles est la LONGUEUR de la liste, entre 2 et 4. Quatre est la
-borne de la GÉOMÉTRIE (elle a quatre places), pas celle du moteur, qui accepte jusqu'à 10 cibles.
+de ce plan, donc le nombre de cibles est la LONGUEUR de la liste, de 2 à 10 (la borne du moteur).
+Jusqu'à 4, les quatre places en croix ; au-delà, une COURONNE (celle du c-VEP), aux disques plus
+petits à partir de 8 pour que deux voisins ne se touchent pas. `--noms` nomme les cibles.
 
 **Des DISQUES.** Le disque est un peu PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une
 cible SSVEP plus petite donne une réponse plus faible, et `--smoke` compte sa surface dans les
@@ -124,6 +125,7 @@ a refusé de s'ouvrir » et « elle s'est arrêtée en route » ne doivent pas s
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -134,7 +136,7 @@ from collections import namedtuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 
-from core.config import (COMMANDS, MARKER_STREAM_DEFAULT,  # noqa: E402
+from core.config import (COMMANDS, MARKER_STREAM_DEFAULT, cvep_targets,  # noqa: E402
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, SSVEP_WARMUP_S,
                          choose_frequencies, use_utf8_console)
@@ -288,7 +290,41 @@ def positions_cibles(plan, size, dist_ratio=DIST_RATIO):
     dist = min(w, h) * dist_ratio
     par_direction = {"up": (cx, cy - dist), "down": (cx, cy + dist),
                      "left": (cx - dist, cy), "right": (cx + dist, cy)}
-    return [tuple(int(round(v)) for v in par_direction[c["dir"]]) for c in plan]
+    # Une cible des quatre places a sa DIRECTION ; une cible de la couronne (plus de 4) son ANGLE,
+    # lu dans le plan comme le fait `stimulus/cvep.py` (0 = haut, sens horaire).
+    return [tuple(int(round(v)) for v in (par_direction[c["dir"]] if "dir" in c else
+                                          (cx + math.sin(c["angle"]) * dist,
+                                           cy - math.cos(c["angle"]) * dist)))
+            for c in plan]
+
+
+def rayon_ratio(plan, dist_ratio=DIST_RATIO):
+    """La taille des disques, en fraction du petit côté de l'écran. `RAYON_RATIO` jusqu'à ce que
+    deux voisins de la couronne se rapprochent : le rayon reste alors sous 35 % de leur écart, pour
+    que ni deux disques ni l'anneau de retour d'une cible n'atteignent sa voisine (8 cibles et
+    plus). Une cible plus petite donne une réponse plus faible : c'est le prix de la place."""
+    if all("dir" in c for c in plan) or len(plan) < 2:
+        return RAYON_RATIO
+    ecart = 2.0 * dist_ratio * math.sin(math.pi / len(plan))
+    return min(RAYON_RATIO, 0.35 * ecart)
+
+
+def ancre_etiquette(c, centre, rayon_retour, ecart=ETIQUETTE_ECART_PX):
+    """`(ancre, point)` de l'étiquette d'une cible : SOUS le disque pour les quatre places, VERS
+    L'EXTÉRIEUR de la couronne sinon — jamais vers une voisine. Une seule écriture pour le rendu
+    et pour `mise_en_page`, qui mesure ce que le rendu pose."""
+    x, y = centre
+    d = rayon_retour + ecart
+    if "dir" in c:
+        return "midtop", (x, y + d)
+    # Au-dessus ou en dessous seulement pour une cible presque VERTICALE (à moins de ~18°) : une
+    # cible en diagonale poserait sinon son étiquette contre sa voisine du haut ou du bas.
+    s, co = math.sin(c["angle"]), math.cos(c["angle"])
+    if co > 0.95:
+        return "midbottom", (x, y - d)
+    if co < -0.95:
+        return "midtop", (x, y + d)
+    return ("midleft", (x + d, y)) if s > 0 else ("midright", (x - d, y))
 
 
 def geometrie(plan, size):
@@ -299,7 +335,7 @@ def geometrie(plan, size):
     sont tracés, donc ceux auxquels le test les RELIT. L'anneau, lui, suit la règle COMMUNE aux
     trois fenêtres (`retour.rayon_anneau`), et `--smoke` la rappelle de son côté au lieu de lire
     `rayon_retour` ici : un écart local serait sinon d'accord avec lui-même."""
-    rayon = int(min(size) * RAYON_RATIO)
+    rayon = int(min(size) * rayon_ratio(plan))
     return (positions_cibles(plan, size), rayon, rayon + CUE_MARGE_PX,
             _retour.rayon_anneau(rayon))
 
@@ -362,14 +398,12 @@ def mise_en_page(pygame, plan, size, n_essais):
 
     p_etiquette = police(max(14, int(span * 0.022)))
     p_hud = police(max(12, int(span * 0.016)))
-    etiquettes = []
-    for c, (x, y) in zip(plan, positions):
-        r = pygame.Rect((0, 0), p_etiquette.size(etiquette(c)))
-        r.midtop = (x, y + rayon_retour + ecart)   # la place exacte où `dessine` la pose
-        etiquettes.append(r)
+    etiquettes = rects_etiquettes(pygame, plan, positions, rayon_retour, p_etiquette)
 
     # Les deux bandes, en lignes de pixels [début, fin) : la ligne `y - garde` est encore permise.
-    bandes = (("en haut", ecart, min(y for _x, y in positions) - garde + 1),
+    # En couronne, l'étiquette du haut est AU-DESSUS de son disque : la bande haute s'arrête avant.
+    bandes = (("en haut", ecart, min([y - garde for _x, y in positions]
+                                     + [r.top - ecart for r in etiquettes]) + 1),
               ("en bas", max([y + garde for _x, y in positions]
                              + [r.bottom + ecart for r in etiquettes]), h - ecart))
     noms = [c["name"] for c in plan]
@@ -405,6 +439,17 @@ def mise_en_page(pygame, plan, size, n_essais):
             break
     return MiseEnPage(p_titre, p_sous, p_etiquette, p_hud,
                       None if bloc is None else bloc.top, ou, echelle, ancre_hud)
+
+
+def rects_etiquettes(pygame, plan, positions, rayon_retour, police):
+    """Les rectangles des étiquettes, posés EXACTEMENT où `dessine` les pose (`ancre_etiquette`)."""
+    out = []
+    for c, centre in zip(plan, positions):
+        r = pygame.Rect((0, 0), police.size(etiquette(c)))
+        ancre, point = ancre_etiquette(c, centre, rayon_retour)
+        setattr(r, ancre, point)
+        out.append(r)
+    return out
 
 
 def pose_texte(win, police, texte, couleur, **ancre):
@@ -450,7 +495,7 @@ def parse_freqs(texte):
     return out, None
 
 
-def commandes_pour(freqs):
+def commandes_pour(freqs, noms=None):
     """Les commandes du plan pour une liste de fréquences IMPOSÉE, dans CET ordre.
 
     ⚠️ L'ordre est celui de la liste, et ce n'est pas cosmétique : l'indice qu'un `cue` publie est
@@ -458,7 +503,12 @@ def commandes_pour(freqs):
     décrire la cible 0 par la fréquence d'une autre — sans qu'aucune exception ne le dise, et avec
     un taux d'émission parfaitement plausible.
     """
-    return [{**EMPLACEMENTS[i], "desired_hz": float(f)} for i, f in enumerate(freqs)]
+    # Jusqu'à 4 cibles, les quatre places en croix ; au-delà, la couronne du c-VEP (ses angles).
+    places = EMPLACEMENTS if len(freqs) <= len(EMPLACEMENTS) else cvep_targets(len(freqs))
+    plan = [{**places[i], "desired_hz": float(f)} for i, f in enumerate(freqs)]
+    if noms:
+        plan = [{**c, "name": str(n)} for c, n in zip(plan, noms)]
+    return plan
 
 
 def verifie_freqs(freqs, refresh):
@@ -488,12 +538,6 @@ def verifie_freqs(freqs, refresh):
     from core.modes.ssvep import SPEC
 
     freqs = list(freqs)
-    if len(freqs) > len(EMPLACEMENTS):
-        return (f"« --freqs » : {len(freqs)} fréquences demandées, mais cet écran n'a que "
-                f"{len(EMPLACEMENTS)} places ("
-                + ", ".join(e["name"] for e in EMPLACEMENTS)
-                + "). Le moteur, lui, en accepte davantage : c'est la GÉOMÉTRIE qui borne, pas le "
-                  "décodage.")
     par_cle = {p.key: p for p in SPEC.params}
     la_plus_large = {"bande_bas": par_cle["bande_bas"].min, "bande_haut": par_cle["bande_haut"].max}
     _valides, raison = validate(SPEC, {"freqs": freqs, "refresh_hz": float(refresh),
@@ -501,7 +545,7 @@ def verifie_freqs(freqs, refresh):
     return raison
 
 
-def plan_du_stimulus(refresh, freqs=None):
+def plan_du_stimulus(refresh, freqs=None, noms=None):
     """Le plan RÉELLEMENT affiché. Lève `FreqsRefusees` si `freqs` n'est pas affichable ici.
 
     `freqs=None` — l'absence de `--freqs` — rend le plan du dépôt, inchangé : c'est le seul chemin
@@ -511,12 +555,17 @@ def plan_du_stimulus(refresh, freqs=None):
     revanche, cet arrondi devient le mensonge qu'on traque : le moteur corrélerait sur ce qu'on a
     demandé pendant que l'écran montre autre chose. On refuse donc au lieu d'arrondir.
     """
+    n = len(freqs) if freqs is not None else len(COMMANDS)
+    if noms and len(noms) != n:
+        raise FreqsRefusees(f"« --noms » : {len(noms)} nom(s) pour {n} cible(s) — un nom par "
+                            f"fréquence, dans le même ordre")
     if freqs is None:
-        return choose_frequencies(refresh)
+        plan = choose_frequencies(refresh)
+        return [{**c, "name": str(nm)} for c, nm in zip(plan, noms)] if noms else plan
     raison = verifie_freqs(freqs, refresh)
     if raison is not None:
         raise FreqsRefusees(raison)
-    return choose_frequencies(refresh, commands=commandes_pour(freqs))
+    return choose_frequencies(refresh, commands=commandes_pour(freqs, noms))
 
 
 # --- Le bilan de fin de séance --------------------------------------------
@@ -613,8 +662,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         stream=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, attente_moteur_s=None,
         journal=None, bilan=None, sonde_ecran=None,
         cue_s=None, fix_s=None, gap_s=None, repos_s=None, retour=False, source_retour=None,
-        source_statut=None, ecran_hz=None):
+        source_statut=None, ecran_hz=None, noms=None):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
+
+    `noms` (`--noms`) : le nom de chaque cible, dans l'ordre des fréquences, affiché sous son
+    disque. C'est ce que la console passe, lu dans « Régler » du mode.
 
     `retour` (`--retour`) entoure la cible décodée — et, sans `guide`, montre l'écran de repos
     tant que le moteur se repose. `source_retour` et `source_statut` n'existent que pour `--smoke`
@@ -710,7 +762,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     elif refresh is None:
         refresh = 60.0 if smoke else measure_refresh(pygame, win)
     try:
-        plan = plan_du_stimulus(refresh, freqs)
+        plan = plan_du_stimulus(refresh, freqs, noms)
     except FreqsRefusees:
         # ⚠️ On FERME avant de propager : un refus qui laisse un écran noir en plein écran par
         # dessus le terminal cache justement le message qui explique le refus.
@@ -723,7 +775,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     print(f"[ssvep-stim] refresh ecran   : {refresh:.0f} Hz")
     print(f"[ssvep-stim] taille fenetre  : {size[0]}x{size[1]}")
     for c in plan:
-        print(f"[ssvep-stim]   {c['name']:<8} {c['dir']:<5} desire={c['desired_hz']:>5.2f} Hz "
+        place = c.get("dir") or f"{math.degrees(c['angle']):.0f}°"   # une couronne n'a qu'un angle
+        print(f"[ssvep-stim]   {c['name']:<8} {place:<5} desire={c['desired_hz']:>5.2f} Hz "
               f"-> {c['actual_hz']:>5.2f} Hz  ({c['frames_per_cycle']} frames/cycle)")
 
     w, h = size
@@ -804,8 +857,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
             # le point de fixation : APRÈS le disque, à CHAQUE image, allumé comme éteint
             pygame.draw.circle(win, FIX_DOT, (px, py), FIX_DOT_R)
             # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
-            pose_texte(win, page.etiquette, etiquette(c), LABEL,
-                       midtop=(px, py + rayon_retour + ETIQUETTE_ECART_PX))
+            ancre, point = ancre_etiquette(c, (px, py), rayon_retour)
+            pose_texte(win, page.etiquette, etiquette(c), LABEL, **{ancre: point})
         if designee is not None:
             pygame.draw.circle(win, CUE, positions[designee], rayon_cue, CUE_EPAISSEUR_PX)
         # L'anneau de RETOUR : après les disques et la consigne, AVANT le texte — au-delà du cercle
@@ -1503,12 +1556,53 @@ def _smoke():
         f"…et le refus propose les deux voisins affichables ({(refuse or '')[-40:]})")
     trop = None
     try:
-        plan_du_stimulus(60.0, [12.0, 15.0, 20.0, 10.0, 6.0])
+        plan_du_stimulus(60.0, [30.0, 20.0, 15.0, 12.0, 10.0, 7.5, 6.0, 6.0, 5.0, 4.0, 3.0])
     except FreqsRefusees as e:
         trop = str(e)
     chk(trop is not None,
-        f"…et cinq cibles sont refusées par la FENÊTRE : le moteur en accepte 8, cet écran a "
-        f"quatre directions et ne sait pas en dessiner plus ({(trop or 'AUCUN REFUS')[:50]}…)")
+        f"…et onze cibles sont refusées, par la règle du MOTEUR (10 au plus) "
+        f"({(trop or 'AUCUN REFUS')[:50]}…)")
+    # Au-delà de 4 : une COURONNE, sous les noms donnés. À 10 cibles, ni deux disques, ni l'anneau
+    # de retour d'une cible n'atteignent sa voisine, et aucune étiquette ne touche un disque.
+    cinq = plan_du_stimulus(60.0, [30.0, 20.0, 15.0, 12.0, 6.0], ["A", "B", "C", "D", "E"])
+    chk([c["name"] for c in cinq] == ["A", "B", "C", "D", "E"] and all("angle" in c for c in cinq),
+        f"cinq cibles : acceptées par la fenêtre, en couronne, sous leurs noms "
+        f"({[c['name'] for c in cinq]})")
+    noms_refuses = None
+    try:
+        plan_du_stimulus(60.0, [12.0, 15.0, 20.0], ["A", "B"])
+    except FreqsRefusees as e:
+        noms_refuses = str(e)
+    chk(noms_refuses is not None and "--noms" in noms_refuses,
+        f"…et deux noms pour trois fréquences sont REFUSÉS ({noms_refuses})")
+    dix = [dict(c, actual_hz=10.0, frames_per_cycle=6)
+           for c in commandes_pour([10.0] * 10, [f"Cible{i}" for i in range(10)])]
+    # La VRAIE boucle, à 6 cibles nommées en couronne : elle va au bout (le plan imprimé, le
+    # rendu et les étiquettes passent par le même chemin qu'une séance).
+    journal6 = []
+    fait6 = run(windowed=True, refresh=60.0, seconds=1.0, freqs=[5.0, 7.5, 12.0, 15.0, 20.0, 30.0],
+                noms=["Haut", "Bas", "Feu", "Eau", "Air", "Terre"],
+                stream=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                attente_moteur_s=0.0, journal=journal6)
+    chk(fait6, "la fenêtre tourne pour de bon avec 6 cibles nommées, en couronne")
+    pygame.font.init()
+    for taille in ((1000, 700), (1920, 1080), (2560, 1440)):
+        pos_dix, r_dix, _cue_dix, anneau_dix = geometrie(dix, taille)
+        ecart_dix = min(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+                        for a, b in zip(pos_dix, pos_dix[1:] + pos_dix[:1]))
+        police_dix = pygame.font.SysFont("consolas", max(14, int(min(taille) * 0.022)))
+        rects_dix = rects_etiquettes(pygame, dix, pos_dix, anneau_dix, police_dix)
+        garde_dix = anneau_dix + _retour.EPAISSEUR_PX
+        # Une étiquette touche le bord de la zone de SON disque (c'est la règle de la page), mais
+        # jamais son anneau, ni la zone d'une VOISINE.
+        etiquettes_libres = all(
+            _hors_des_cibles(r, [p for j, p in enumerate(pos_dix) if j != i], garde_dix)
+            and _hors_des_cibles(r, [pos_dix[i]], anneau_dix)
+            for i, r in enumerate(rects_dix))
+        chk(ecart_dix > r_dix + anneau_dix + 2 and etiquettes_libres
+            and all(pygame.Rect(0, 0, *taille).contains(r) for r in rects_dix),
+            f"10 cibles à {taille[0]}×{taille[1]} : centres à {ecart_dix:.0f} px, rayon {r_dix}, "
+            f"anneau {anneau_dix} ; aucune étiquette sur un anneau, une voisine, ou hors de l'écran")
 
     # --- H bis. LA BANDE N'EST PAS L'AFFAIRE DE LA FENÊTRE ----------------------------
     #
@@ -1994,6 +2088,10 @@ def _parse_args(argv):
                         "fréquence qui ne divise pas le rafraîchissement est REFUSÉE (sortie 2), "
                         "jamais arrondie en silence : arrondie, elle ferait clignoter autre chose "
                         "que ce contre quoi le moteur corrèle")
+    p.add_argument("--noms", type=str, default=None,
+                   help="le nom de chaque cible, séparés par des virgules, dans l'ordre de "
+                        "--freqs (« Haut,Bas,Feu »), affichés sous les disques. C'est ce que la "
+                        "console passe, lu dans « Régler »")
     p.add_argument("--guide", action="store_true",
                    help="run GUIDÉ : désigne une cible par essai et publie la vérité-terrain sur "
                         "le flux de marqueurs. C'est le moteur qui MESURE — la console lance "
@@ -2040,7 +2138,8 @@ if __name__ == "__main__":
         with au_rafraichissement(args.ecran_hz):
             fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
                        guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs,
-                       retour=args.retour, ecran_hz=args.ecran_hz)
+                       retour=args.retour, ecran_hz=args.ecran_hz,
+                       noms=[n.strip() for n in args.noms.split(",")] if args.noms else None)
     except EcranRefuse as refus:
         # Sortie 2, comme un refus de fréquences : la fenêtre n'a rien affiché. L'écran est déjà
         # revenu : la sortie du `with` passe avant ce message.

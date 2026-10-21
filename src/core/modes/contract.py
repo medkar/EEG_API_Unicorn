@@ -522,6 +522,16 @@ def _check_constraints(param, values):
                               proches=(tr("moteur.contrat.paire", a=proches[0], b=proches[1])
                                        if len(proches) == 2 else ", ".join(proches)))
 
+        elif name == "un_nom_par_cible":
+            # Les NOMS des cibles s'accordent à leurs FRÉQUENCES : un nom par fréquence, dans le
+            # même ordre, ou aucun (les noms par défaut). La clé partenaire est nommée en dur,
+            # comme `refresh_hz` chez la voisine.
+            noms = list(values.get(param.key) or ())
+            freqs = _as_list(values.get("freqs") if values.get("freqs") is not None else [])
+            if noms and len(noms) != len(freqs):
+                return tr("moteur.contrat.un_nom_par_cible", reglage=param.label,
+                          noms=len(noms), freqs=len(freqs))
+
         elif name == "votes_atteignables":
             # Deux réglages numériques bornés INDÉPENDAMMENT (chacun dans sa propre plage),
             # mais dont la COMBINAISON peut être irréalisable : exiger plus d'accords qu'il
