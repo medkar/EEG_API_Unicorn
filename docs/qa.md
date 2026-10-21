@@ -114,6 +114,23 @@ Retours d'écran, tous traités le jour même (visibles au lancement suivant) :
 6. la stabilisation puis le repos du Neuro (40 s) sans **indication de temps** → un compte à
    rebours (« décodage dans ≈ 32 s ») sur la tuile, la page du mode et la vue en direct.
 
+**2026-10-21 — nouveau poste (écran à 165 Hz) : blocs 0 et 1 joués en solo par Claude**, avec une
+console pilotée par script (hors écran), un vrai moteur sur le board de test et les vraies fenêtres
+sur l'écran principal ; les captures d'écran relues une à une. Bloc 0 : 30 autotests verts. Bloc 1 :
+1.18, 1.19 et 1.20 (livrés le jour même), 1.2 bis, 1.6 bis, 1.7 bis, et la part OUTIL du MI sur le
+board de test (2.6.0, 2.6.2, `decoded_mi` à 4,9 Hz après sa chauffe, 2.12.4). Quatre défauts,
+corrigés le jour même :
+1. L'entraînement c-VEP abandonnait sur ce poste (« la fenêtre ne s'est pas annoncée en 30 s ») :
+   la découverte LSL du moteur, à délai nul.
+2. Les cibles s'ouvraient sur l'écran de la souris, pas sur l'écran principal.
+3. Juste après le passage à 60 Hz, la mesure du rafraîchissement refusait à tort (61,7 Hz).
+4. Les nombres des messages ne suivaient pas la langue : « 0.5 s » au décompte d'un écran français,
+   des virgules écrites en dur dans les textes du moteur, et un nombre resté dans la langue où son
+   texte était né.
+Et la feuille : le 1.2 bis.3 attendait « 9.6 », le champ affiche « 9.600 » depuis juillet ; c'est
+le séparateur qui compte. Restent au casque : 2.1.0 (le contraste du seuil de contact) et 2.9.4 bis
+(les cercles vides pendant une coupure).
+
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
 essais, les 18 justes** le 22 ; une calibration c-VEP a rendu **25,0 % pour un hasard à 17 %**. Elles
@@ -383,7 +400,7 @@ Accueil (la grille), aucune séance ni essai en cours.
 2. Toujours sans séance en cours, choisis l'autre langue.
    ✅ **1.2 bis.2** Tout l'affichage bascule **tout de suite** : tuiles, boutons, pages des modes,
    bulles ⓘ. Le bandeau continue de vivre (σ, liaison) : le casque n'a pas été rouvert.
-   ✅ **1.2 bis.3** Page SSVEP : le pic alpha s'écrit **9.6** en anglais, **9,6** en français.
+   ✅ **1.2 bis.3** Page SSVEP : le pic alpha s'écrit **9.600** en anglais, **9,600** en français.
 3. Ferme la console et relance-la.
    ✅ **1.2 bis.4** Elle s'ouvre dans la langue choisie en dernier — écran de départ compris.
 4. Lance « Tester librement » sur un mode, puis, pendant l'essai, reviens à l'accueil et change de
@@ -933,17 +950,18 @@ fenêtre dans le bandeau ; un message qui suit l'élève sur la grille.
 > changer. Le signal brut du contraste servira aussi à essayer, hors ligne, un critère de plus :
 > la corrélation de chaque électrode avec les autres.
 
-⚠️ **Sauf le SSVEP, rien de ce bloc n'a jamais décodé un vrai cerveau à travers le moteur, et aucun
-« Tester » n'a jamais vu un casque.** Les autotests prouvent le câblage, jamais l'ergonomie ni le
-décodage. Un point qui tombe ici est **❌ Échec**, pas régression : note ce que tu vois, ne conclus
-pas.
+⚠️ **Ce bloc vérifie l'OUTIL au casque, pas le niveau de décodage.** Il a été joué en entier (le
+2026-09-24, puis le MI le 2026-10-15) : une nouvelle séance ne rejoue que ce qui a été livré depuis.
+Les autotests prouvent le câblage, jamais l'ergonomie. Un point qui tombe ici est **❌ Échec**, pas
+régression : note ce que tu vois, ne conclus pas.
 
 **Ordre arrêté, à ne pas rouvrir : Contact → SSVEP → c-VEP → P300 → ErrP**, puis MI et Neuro si le
 sujet tient. Le SSVEP en référence du jour : s'il échoue, c'est la séance qui est mauvaise, pas le
 mode. Le c-VEP tôt, sur sujet frais, parce que sa panne caractéristique est un décodage *dégradé
 mais plausible*.
 
-⚠️ **On réentraîne TOUT.** Aucun modèle déjà sur le disque n'est utilisé, même vérifié chargeable.
+⚠️ **Un mode à modèle se teste sur un modèle entraîné dans la séance** : un modèle d'une autre
+séance, même chargeable, a appris un autre montage.
 
 ⚠️ **La boucle d'un mode à modèle est toujours la même** : « Entraîner » → lire le chiffre →
 « Enregistrer le modèle » ou « Refaire » → « ← » → « Tester sur une session » (pré-rempli avec ce modèle) → lire le

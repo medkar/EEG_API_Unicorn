@@ -94,7 +94,9 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   retient le choix (`console/demarrage.Memoire`). Comment : `tr` rend un `Texte` qui se souvient
   de sa clé, `retraduit()` le relit dans la langue courante (catalogue des modes, état du moteur),
   et la console reconstruit ses pages (`Console._construire`) ; refusé pendant une séance, un essai
-  ou un lancement. Les champs numériques suivent la langue (`QLocale` : « 9.6 » / « 9,6 »).
+  ou un lancement. Les champs numériques suivent la langue (`QLocale` : « 9.600 » / « 9,600 »),
+  et un nombre dans un texte passe par `i18n.nombre`, qui se RÉÉCRIT au changement de langue (et
+  part avec un point vers l'application) — jamais `f"{x:.1f}"` ni une virgule en dur.
   **Ajouter une langue = copier `fr/` et traduire** : elle apparaît dans le menu. Une langue livrée
   doit avoir TOUTES les clés du français (`[smoke-textes]`). **Tenu par `[smoke-textes]`** (`core/i18n.controle`) : clé littérale qui existe,
   `{valeurs}` exactes, aucun texte orphelin, aucun littéral passé à un widget de la console. Hors
@@ -177,11 +179,11 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   a perdu son second « Proposer » (sous le rafraîchissement, qui faisait le même calcul que celui du
   pic alpha). **Jamais joué avec de vraies LED.**
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
-  c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. ⚠️ **Publié ≠ validé** : seul le
-  SSVEP a été décodé sur un vrai cerveau À TRAVERS le moteur. Les quatre modes à modèle (MI, P300,
-  ErrP, c-VEP) attendent une séance casque — c'est la recette, tests 2.6 à 2.9. **Les chantiers de
-  la console n'y ont rien changé** : ils déplacent des gestes, ils ne décodent aucun cerveau. Leurs
-  autotests prouvent le câblage, jamais l'ergonomie ni le décodage.
+  c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. **La chaîne entière —
+  entraîner, enregistrer, tester, décoder — a tourné au casque À TRAVERS le moteur pour les six
+  modes** (QA bloc 2 : le 2026-09-24, puis le MI le 2026-10-15). ⚠️ **Ça prouve l'OUTIL, pas le
+  niveau de décodage** : la QA ne mesure pas les performances (cf. « Ce qui n'a jamais été
+  vérifié »). Les autotests, eux, prouvent le câblage, jamais l'ergonomie ni le décodage.
 - **Le moteur joue aussi SIX MESURES** (`core/modes/mesure.py`, `MesureRuntime` ; celles qu'une
   fenêtre mène héritent de `core/modes/mesure_marqueurs.py`). Une mesure est un protocole minuté
   qui rend un **verdict**, pas un modèle : elle n'écrit **rien** sur le disque, donc ni
@@ -645,18 +647,20 @@ donc identiques pour toutes les instances : un serveur oublié répond à la pla
 
 ## Ce qui n'a jamais été vérifié
 
-À lire avant de croire qu'un test vert veut dire « ça marche ». **La console n'a vu un casque que
-deux fois, et en partie** (2026-09-21 et 22 : contrôle alpha, taux SSVEP, UN entraînement c-VEP à
-25,0 % pour un hasard à 17 %). Les autotests prouvent le câblage entre deux processus, sur un board
-synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
+À lire avant de croire qu'un test vert veut dire « ça marche ». **L'OUTIL a été vérifié au casque,
+chaîne entière, pour les six modes** (QA bloc 2 : le 2026-09-24 ; le c-VEP et le SSVEP rejoués le
+2026-10-05, le MI le 2026-10-15). **Ce qui reste peu mesuré, c'est le DÉCODAGE** : une personne,
+quelques séances, des chiffres rarement relevés. Les autotests prouvent le câblage entre deux
+processus, sur un board synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage. Une
+séance de QA ne rejoue que ce qui a été livré depuis la précédente.
 
-- **QUATRE des six modes n'ont jamais été décodés au casque À TRAVERS LE MOTEUR** — MI, P300, ErrP,
-  c-VEP. Seul le SSVEP l'a été. Le sixième, le **neuro**, est un cas à part et il ne faut pas le
-  perdre dans l'arithmétique : sa plomberie est testée, mais **son contenu n'a jamais été validé,
-  nulle part** — ni au casque, ni ailleurs (cf. test 2.5). Le moteur joue maintenant leurs quatre calibrations et la console
-  les lance et les juge ; **ça n'ajoute aucune mesure**, ça rend seulement les tests 2.6 à 2.9 de
-  `docs/recette.md` exécutables sans l'appli pygame. Une seule séance casque les couvre, et c'est le
-  travail qui reste.
+- **Le décodage des modes à modèle se compare peu à ses repères À TRAVERS LE MOTEUR.** Leur chaîne
+  tourne au casque, mais le 2026-09-24 les chiffres du c-VEP, du P300 et de l'ErrP n'ont pas été
+  relevés. Le c-VEP a atteint son repère le 2026-10-05, au troisième test de la séance
+  (`docs/recette.md`, séance du 2026-10-05) ; la séance MI MAINS/PIEDS du 2026-10-15 est au hasard,
+  et ces tâches n'ont aucun repère. Le sixième, le **neuro**, est un cas à part : sa plomberie est
+  testée, mais **son contenu n'a jamais été validé, nulle part** — ni au casque, ni ailleurs (cf.
+  test 2.5).
 - **Le chantier « plus une seule commande à taper » (2026-09-09) n'a rien mesuré non plus.** Il
   déplace des gestes : le contrôle alpha et le taux d'émission SSVEP sont désormais des pages du
   moteur, la source se choisit à l'ouverture, le flux sortant se regarde et s'enregistre. **Aucun
@@ -667,8 +671,8 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   toujours d'UNE personne, sur ce casque**, et la seconde cause d'échec du contrôle alpha (« ça
   monte, mais ce n'est pas de l'alpha ») n'a jamais été vue sur un vrai signal.
 - **Le chantier « Configurer · Entraîner · Tester » (2026-09-22) n'a rien mesuré non plus**, et il
-  ne change aucun chiffre du décodage. **Aucun des cinq « Tester » n'a vu un casque** (ils sont nés
-  après la séance). Leurs seuils de couleur sont argumentés sur UNE séance de référence chacun, et
+  ne change aucun chiffre du décodage. **Les « Tester » voient un casque depuis le 2026-09-24**
+  (QA bloc 2). Leurs seuils de couleur sont argumentés sur UNE séance de référence chacun, et
   **deux tests rendent un ROUGE ATTENDU sur un système exactement au repère du projet** — ce qui se
   sait avant de s'asseoir, sinon on cherche une panne qui n'existe pas :
   - **c-VEP** : vert avec une probabilité de **0,22** à 18 blocs (une fois sur quatre ou cinq).
@@ -723,7 +727,8 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   Ce sont des calculs binomiaux, pas des mesures. Le repos de référence du test ErrP (estimé 2-5 s)
   n'a, lui, jamais été mesuré — il est désormais dit dans le verdict, et un repos écourté fait
   REFUSER de conclure.
-- **Le retour en direct (2026-10-01) n'a jamais vu un casque.** Deux inconnues : la latence réelle
+- **Le retour en direct (2026-10-01) a tourné au casque dans les tests guidés du 2026-10-05, sans
+  être mesuré.** Deux inconnues : la latence réelle
   d'une décision face aux pauses entre essais (une décision arrivée après le début de l'essai suivant
   est perdue, pas d'anneau), et l'effet du retour sur l'attention — voir sa réussite ou son échec en
   direct peut changer la façon de fixer. Les chiffres des tests ne se comparent donc plus tels quels
@@ -764,8 +769,8 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   `--cycles 6` sera plus courte que ce que la console annonce. Le moteur ne peut pas le savoir —
   ce n'est pas lui qui mène le protocole. (Le TEST c-VEP, lui, a sa longueur en `Param` et la passe
   à la fenêtre dans son unité : des cycles enregistrés PAR CIBLE.)
-- ⚠️ **Les pages d'entraînement n'ont vu un casque qu'une fois (c-VEP), les pages de test
-  jamais.** Quatre questions n'ont de réponse qu'en séance : est-ce que les ~15 s couvrent vraiment
+- ⚠️ **Les pages d'entraînement et de test ont tourné au casque** (QA bloc 2, du 2026-09-24 au
+  2026-10-15). Quatre questions n'ont pas de réponse écrite : est-ce que les ~15 s couvrent vraiment
   l'écart de lancement *sur cette machine* ; est-ce qu'un étudiant comprend qu'un chiffre affiché
   n'est pas encore un modèle enregistré ; est-ce que le contrôle de liaison est lu ou cliqué au
   travers ; et est-ce que la boucle Régler → Tester → ajuster se comprend sans explication.
