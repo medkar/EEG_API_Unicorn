@@ -1731,11 +1731,15 @@ def _smoke():
     chk(bilan1.get("avertissement") is not None and abs(bilan1.get("derive", 0.0)) >= 0.02,
         f"[C1] ...et il AVERTIT, parce que l'écran factice n'a pas de vsync et dérive de "
         f"{bilan1.get('derive', 0.0):+.1%} — le chemin réel appelle bien le diagnostic")
-    # Tolérance en PROPORTION et non « exactement 0 » : une pause du ramasse-miettes suffit à
-    # dépasser 25 ms sur une frame, et ce test ne doit pas dépendre de la charge de la machine. Ce
-    # qu'il garde, c'est l'absence de FAUX POSITIFS en masse (un seuil mal posé les ferait toutes
-    # compter) ; que le compteur compte VRAIMENT est l'affaire de C3, juste en dessous.
-    chk(bilan1.get("sautees", 0) <= 0.02 * bilan1.get("frames", 1),
+    # Tolérance en PROPORTION et non « exactement 0 » : l'écran factice n'a pas de vsync, la
+    # boucle se cadence par `clock.tick`, et son attente déborde parfois de plus de 25 ms. Mesuré
+    # sur le poste de dev, dans ce smoke (après un `pygame.quit()` dans le même processus) : de 0
+    # à 4,7 % de frames comptées sautées avec le vrai seuil. Une vraie fenêtre ne joue qu'une
+    # séance par processus et ne le voit pas. Ce que la garde attrape, ce sont les FAUX POSITIFS
+    # EN MASSE : un seuil sous une période (0,9) en compte 75 %. Un seuil d'exactement une période
+    # (8 %) ne se distingue pas de ce bruit, et une tolérance plus serrée rougirait sur un code
+    # correct. Que le compteur compte VRAIMENT est l'affaire de C3, juste en dessous.
+    chk(bilan1.get("sautees", 0) <= 0.20 * bilan1.get("frames", 1),
         f"[C1] ...sans fabriquer de fausses frames sautées quand tout va bien "
         f"({bilan1.get('sautees')} sur {bilan1.get('frames')})")
     # ⚠️ **Une borne INFÉRIEURE, pas une égalité.** Une égalité `sautees == C3_CALES` rougirait par
