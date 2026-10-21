@@ -58,9 +58,9 @@ Elle évite aussi une impasse : avec le réglage dans « Régler » et un refus 
 correspondent pas, on ne pourrait jamais appliquer 165 Hz tant que le dernier modèle est à 60 Hz.
 
 - **Le réglage.** `refresh_hz` rejoint les `params` de la calibration c-VEP, à côté de la bande.
-  Libellé « Rafraîchissement de l'écran du stimulus », en Hz, défaut 60, bornes 20 à 480 comme au
-  SSVEP. Il part avec « Commencer », sans « Appliquer » ; une valeur hors bornes est refusée tout
-  de suite, avant le contrôle de liaison.
+  Libellé « Rafraîchissement de l'écran du stimulus », en Hz, défaut 60, bornes 30 à 480. Il part
+  avec « Commencer », sans « Appliquer » ; une valeur hors bornes est refusée tout de suite, avant
+  le contrôle de liaison.
 - **Son aide, deux à quatre phrases.** Le rafraîchissement auquel ton application affichera le
   code. Le modèle ne marchera qu'à ce rafraîchissement. Si l'écran de ce poste n'y est pas, il y
   passe le temps de l'entraînement.
@@ -71,6 +71,10 @@ correspondent pas, on ne pourrait jamais appliquer 165 Hz tant que le dernier mo
   autre rafraîchissement, et la séance n'entraînerait pas ce qui était demandé.
 - **Le modèle le porte.** Les deux décodeurs enregistrent déjà `refresh` dans leur fichier ; c'est
   la valeur des marqueurs, donc celle du réglage.
+- **La durée annoncée le suit.** Le protocole compte des images : à 120 Hz il dure deux fois moins
+  qu'à 60 Hz. La durée de l'entraînement suit le réglage, celle du test le modèle.
+- **Les bornes.** De 30 à 480 Hz : sous 30 Hz, un cycle du code dépasserait la plus longue époque
+  que couvre le tampon du moteur.
 - **Le nom des fichiers.** Les trois fichiers d'un entraînement finissent par le rafraîchissement,
   écrit sans zéro inutile : `cvep_model_20261021-153000_60Hz.npz`,
   `cvep_rcca_model_20261021-153000_60Hz.npz`, `cvep_calib_20261021-153000_n108_60Hz.npz`. Les
@@ -109,17 +113,20 @@ le développement et les autotests. Les deux ensemble sont refusés par l'analys
 
 1. Lire le mode actuel de l'écran principal. S'il est à 1 Hz près de H, rien à faire.
 2. Sinon, lister les rafraîchissements que l'écran propose à sa définition actuelle, et prendre le
-   plus proche de H à 1 Hz près : 60 pour 60, 59 pour 59,94. S'il n'y en a aucun, refuser, avec H
-   et la liste proposée.
+   plus proche de H à 1 Hz près. S'il n'y en a aucun, refuser, avec H et la liste proposée.
 3. Passer l'écran à ce rafraîchissement, de façon temporaire, en ne changeant que la fréquence.
 
 **Puis, la fenêtre ouverte :**
 
 4. Mesurer le rafraîchissement, comme aujourd'hui. S'il s'écarte de H de plus de 1 Hz, refuser,
    fermer et rétablir. Sinon, continuer avec H : c'est H que portent les marqueurs.
-5. À la fermeture, quelle qu'en soit la cause, rétablir le mode d'origine. Windows rétablit aussi
-   un mode temporaire à la fin du processus qui l'a demandé ; à vérifier sur ce poste, y compris
-   quand la fenêtre est tuée.
+5. À la fermeture, quelle qu'en soit la cause, rétablir le mode d'origine. Une fenêtre TUÉE ne
+   passe pas par là, et Windows ne rétablit pas toujours seul un mode temporaire : la console tend
+   donc un filet. Après chaque fenêtre, si l'écran n'est plus au rafraîchissement enregistré dans
+   Windows, elle l'y remet ; sans écart, elle ne fait rien.
+
+La mesure de l'étape 4 prend l'intervalle MÉDIAN entre deux images, sans l'arrondir : une image
+sautée juste après le changement de mode ne doit pas faire croire à un écran plus lent.
 
 **Hors Windows**, les étapes 1 à 3 sont sautées, et l'étape 4 refuse si l'écran ne tient pas H.
 
