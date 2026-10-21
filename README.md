@@ -215,6 +215,13 @@ restarts too, since it is measured per frequency. A frequency set outside the SS
 (a setting, 5–40 Hz by default), or with two targets closer than the `1/WINDOW_S` resolution, is
 rejected with a reason rather than accepted and decoded into the void.
 
+**Targets can be named** in Set up (`Target names`): one name per frequency, in the same order, or
+none. They appear under the discs of the test windows and in the `target_names` field of the
+`decoded_ssvep` description; your app still receives `target_index` and `freq_hz`. The test window
+draws up to 10 targets: four in a cross, more on a ring, with smaller discs from 8 on so neighbours
+never touch. At 60 Hz few frequencies divide the refresh rate outside the alpha peak, so more than 4
+on-screen targets often needs a faster screen — the engine says so when you apply.
+
 Frequencies must be **integer divisors of the refresh rate of the screen showing the targets** — at
 60 Hz: 30, 20, 15, 12, 10, 8.571. Anything else makes the display skip cycles, and the decoder
 correlates against a sinusoid nobody is displaying: no error, no detection, nothing to debug. The
@@ -477,10 +484,10 @@ terminal, and its **Record the verdicts** button files the session for you.
 | `EEG_API_Unicorn_raw` | 8 channels, µV, unfiltered, 250 Hz |
 | `EEG_API_Unicorn_quality` | per-channel σ, ~1 Hz |
 | `EEG_API_Unicorn_status` | engine state, JSON — in English, whatever language the console shows |
-| `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`, ~5 Hz |
+| `EEG_API_Unicorn_decoded_ssvep` | `{target_index, freq_hz, confidence, scores[]}`; target names, if set, in the `target_names` description field, ~5 Hz |
 | `EEG_API_Unicorn_decoded_neuro` | `{charge, somnolence, engagement, artifact}`, ~5 Hz |
 | `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_0…p_<n-1>}` — one probability per trained task; task names in the `classes` description field, ~5 Hz |
-| `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
+| `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_<n-1>}` — one score per target of the model (3 to 10, 6 by default); target names in the `target_names` description field; one sample per round |
 | `EEG_API_Unicorn_decoded_errp` | `{error, score, threshold, artifact}`, one sample per feedback |
 | `EEG_API_Unicorn_decoded_cvep` | `{target_index, confidence, score_0…score_<n-1>, corr_min, margin}` — one score per target of the model (6 by default); target names in the `target_names` description field, ~5 Hz |
 

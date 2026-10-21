@@ -827,6 +827,26 @@ séance de QA ne rejoue que ce qui a été livré depuis la précédente.
   La couronne tient à 10 cibles (vérifié en pixels).
   ⚠️ **Mesuré ici** (`config.py`, une personne) : le débit plafonne vers 6-8 cibles et la justesse
   baisse au-delà ; **au-delà de 8, jamais mesuré, ni au casque ni hors ligne.**
+- **Les cibles P300 se règlent aussi (2026-10-21)**, sur le même modèle : réglage `cibles`
+  d'« Entraîner » (nombre de **3 à 10** — à 2, la séquence de flashs alterne et devient prévisible,
+  le contraire d'un oddball —, puis un nom par cible), PORTÉ PAR LE MODÈLE (`P300Model.noms`,
+  `p300_models.noms_du_modele`/`noms_de`, nom de fichier `…_4targets.joblib`). Le mode en tire
+  son nombre de cibles et ses voies (`channels_fn` lit le modèle), publie `target_names` dans
+  `decoded_p300`, et la console passe `--noms` aux fenêtres d'entraînement, de test et d'essai
+  libre, qui les affichent sous les disques (elles montraient des numéros). Un flash d'un indice
+  hors des cibles du modèle est refusé, comme avant. Un modèle d'avant garde les 6 cibles par
+  défaut. **Seul 6 a été mesuré ici**, au casque comme hors ligne.
+- **Le SSVEP nomme ses cibles, et sa fenêtre en dessine jusqu'à 10 (2026-10-21).** Les noms sont
+  un réglage de « Régler » (`noms`, une `text_list` : un nom par fréquence dans le même ordre, ou
+  aucun — règle croisée `un_nom_par_cible` du contrat), publiés dans `decoded_ssvep`
+  (`target_names`) et passés à la fenêtre (`--noms`) ; les changer recrée le flux, comme une
+  fréquence. La fenêtre garde ses quatre places en croix jusqu'à 4 cibles et passe en COURONNE
+  au-delà (les angles du c-VEP) ; le rayon des disques descend à partir de 8 (`rayon_ratio` : sous
+  35 % de l'écart entre voisines), et les étiquettes vont VERS L'EXTÉRIEUR (`ancre_etiquette`).
+  Vérifié en pixels à 10 cibles et trois tailles d'écran. ⚠️ À 60 Hz, peu de fréquences sont des
+  diviseurs hors du pic alpha : plus de 4 cibles à l'écran demande souvent un écran plus rapide
+  (le moteur le dit au clic). Des disques plus petits donnent une réponse plus faible : jamais
+  mesuré au casque.
 - **La découverte LSL du moteur (2026-10-21).** Le moteur cherchait le flux de marqueurs avec un
   délai NUL à chaque tour. Sur le poste de dev (Wi-Fi, Tailscale, IPv6), la réponse n'arrivait
   presque jamais à temps : la fenêtre publiait son `calib_start` avant que le moteur ne l'entende,

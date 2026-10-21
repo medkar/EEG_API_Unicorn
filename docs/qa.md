@@ -143,7 +143,14 @@ marqueur refusé ; les 8 cibles vues dans les captures, à 60 fps, aucune image 
 rejoué avec les NOMS des cibles (livrés le même soir, réglage « Cibles » comme les tâches du MI) :
 9 vérifications sur 9 — un nom vide ou en double refusé avec sa raison, `--noms` passé aux trois
 fenêtres, `target_names` lu par un client sur `decoded_cvep`, les noms vus sous les disques dans
-l'ordre de la couronne.
+l'ordre de la couronne. Enfin **1.22** (P300 : 4 cibles nommées) — 8 vérifications sur 8, du champ
+borné de 3 à 10 jusqu'à `target_names` lu sur `decoded_p300` — et **1.23** (SSVEP : 6 fréquences
+nommées, en couronne) — 3 sur 3, après un défaut trouvé par cette QA et corrigé le soir même : la
+fenêtre à plus de 4 cibles plantait au démarrage (`KeyError: 'dir'`, l'impression du plan), ce que
+l'autotest ne voyait pas faute de faire tourner sa vraie boucle au-delà de 4 ; il le fait
+désormais. Noté au passage : le [C1] de `stimulus/cvep.py --smoke` (images sautées sur écran
+factice) dépasse parfois son seuil de 2 % quand la machine est chargée — 9 sur 378 deux fois, puis
+1 et 5 au repassage, et 3 sur la version précédente : du bruit de charge, pas une régression.
 
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
@@ -1002,6 +1009,40 @@ Board de test. Page **c-VEP** → **« Entraîner »**.
 
 ❌ Régression : une fenêtre qui montre un autre nombre de cibles, ou d'autres noms, que le modèle ;
 un entraînement abandonné ou des marqueurs refusés alors que la console a tout lancé elle-même.
+
+### ☐ 1.22 — Les cibles P300 se règlent : leur nombre et leurs noms (2026-10-21)
+
+Board de test. Page **P300** → **« Entraîner »**.
+
+1. Vérifie d'abord que rien ne tourne. ✅ **1.22.1** Un champ **« Cibles »** : un nombre de 3 à 10 (6
+   par défaut), puis un nom par cible, pré-remplis ; sa bulle ⓘ dit pourquoi pas sous 3.
+2. Passe à **4**, nomme-les (Oui, Non, Stop, Encore) → « Commencer » → contrôle de liaison →
+   « Commencer l'entraînement ». ✅ **1.22.2** La fenêtre montre **4** cibles, sous TES noms (plus des
+   numéros) ; seules ces 4 flashent ; la durée annoncée est plus courte qu'à 6.
+3. Va au bout → **« Enregistrer le modèle »**. ✅ **1.22.3** Le modèle s'appelle
+   `p300_model_…_4targets.joblib` ; le hasard annoncé est de 25 %.
+4. « ← P300 » → **« Tester sur une session »**, puis **« Tester librement »** avec ce modèle.
+   ✅ **1.22.4** Les deux fenêtres montrent les 4 cibles nommées ; « Ce que voit ton application »
+   décrit `decoded_p300` avec ces noms (`target_names`) et 4 scores.
+
+❌ Régression : une fenêtre qui montre un autre nombre de cibles, ou d'autres noms, que le modèle ;
+un nombre de cibles qui descend sous 3 dans le champ.
+
+### ☐ 1.23 — Le SSVEP nomme ses cibles, et sa fenêtre en dessine plus de 4 (2026-10-21)
+
+Board de test. Page **SSVEP**, mode arrêté.
+
+1. Vérifie d'abord que « Cibles affichées sur » montre **un écran**. Mets **6** fréquences valides
+   (avec « Proposer » sur un nombre de 6, ou à la main) et **« Noms des cibles »** à 6 noms →
+   **Appliquer**. ✅ **1.23.1** Vert. Avec 5 noms pour 6 fréquences : **refusé**, la raison dit
+   « un nom par fréquence, ou aucun ». Avec 0 nom : accepté (noms par défaut).
+2. **« Tester librement »**. ✅ **1.23.2** La fenêtre montre **6** disques en **couronne**, chacun avec
+   son nom et sa fréquence à l'extérieur ; aucun texte sur un disque.
+3. ✅ **1.23.3** « Ce que voit ton application » décrit `decoded_ssvep` avec ces noms
+   (`target_names`).
+
+❌ Régression : plus de 4 fréquences refusées par la fenêtre ; une étiquette sur un disque ; des noms
+absents du flux.
 
 # Bloc 2 — au casque
 
