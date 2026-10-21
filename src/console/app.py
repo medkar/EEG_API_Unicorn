@@ -163,6 +163,9 @@ class Console(QMainWindow):
         self.memoire = memoire if memoire is not None else Memoire()
         self.beeps = Beeps()
         self._origine_mesure = None
+        # La phrase d'une séance annulée parce que sa fenêtre est morte, en attente que la séance
+        # soit VUE terminée (cf. `_annuler_si_fenetre_morte`), ou None.
+        self._avis_fenetre = None
         self._construire()
 
         self.timer = QTimer(self)
@@ -792,6 +795,7 @@ class Console(QMainWindow):
         parle de cette séance-là, pas de toute la console. Une fenêtre fermée par l'élève n'est
         pas une alerte ; un refus ou un plantage, si.
         """
+        self._montrer_avis_fenetre(state)
         lien = self._fenetre_de
         if lien is None or self.lanceur.en_cours():
             return
@@ -803,15 +807,30 @@ class Console(QMainWindow):
         if (seance is None or seance.get("mode_id") != lien["id"]
                 or seance.get("phase") in PHASES_TERMINALES):
             return
-        alerte = self.lanceur.nature_echec(lien["numero"]) != "abandon"
         if lien["cle"] == "mesure":
             self._a_annuler_mesure = False
             self.commande("cancel_mesure")
-            self._avis_mesure(lien["id"], message, alerte=alerte)
         else:
             self._a_annuler = False
             self.commande("cancel_calibration")
-            self._avis(lien["id"], message, alerte=alerte)
+        # La phrase attend que la séance soit VUE terminée : tant qu'elle tourne, sa page efface
+        # son avis à chaque rafraîchissement, et `submit` ne fait que mettre l'annulation en file.
+        self._avis_fenetre = {"cle": lien["cle"], "id": lien["id"], "message": message,
+                              "alerte": self.lanceur.nature_echec(lien["numero"]) != "abandon"}
+
+    def _montrer_avis_fenetre(self, state):
+        """Pose sur sa page la phrase d'une séance annulée par la mort de sa fenêtre, dès que la
+        séance n'apparaît plus en cours. Le bandeau la garde jusque-là."""
+        attente = self._avis_fenetre
+        if attente is None:
+            return
+        seance = (state or {}).get(attente["cle"])
+        if (seance is not None and seance.get("mode_id") == attente["id"]
+                and seance.get("phase") not in PHASES_TERMINALES):
+            return
+        self._avis_fenetre = None
+        avis = self._avis_mesure if attente["cle"] == "mesure" else self._avis
+        avis(attente["id"], attente["message"], alerte=attente["alerte"])
         self.lanceur.oublier_probleme()
 
     def _fermer_fenetre_abandonnee(self, state):
@@ -6102,12 +6121,23 @@ def _smoke():
     console.lanceur._echec = (console.lanceur.numero, abandon[0], "abandon")
     console.lanceur.probleme = abandon[0]
     console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
+    page_mes = console.mesure_pages[mes_id]
+    page_mes.avis.setText("")
     console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "chauffe"}})
-    avis_test = console.mesure_pages[mes_id].avis.text()
-    chk(("cancel_mesure", {}) in moteur_faux.commandes and "abandonnée" in avis_test
-        and console.lanceur.probleme == "" and console._fenetre_de is None,
-        f"fenêtre de test fermée en cours : `cancel_mesure` aussitôt, la phrase sur la page, plus "
-        f"rien au bandeau ({moteur_faux.commandes}, {avis_test!r})")
+    # Le moteur montre encore la séance en cours : la page efface son avis à chaque
+    # rafraîchissement, la phrase doit donc ATTENDRE, et le bandeau la garder jusque-là.
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "chauffe"}})
+    pendant = (page_mes.avis.text(), console.lanceur.probleme)
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "annule"}})
+    avis_test = page_mes.avis.text()
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and pendant[0] == ""
+        and "abandonnée" in pendant[1] and console._fenetre_de is None,
+        f"fenêtre de test fermée en cours : `cancel_mesure` aussitôt ; tant que la séance tourne, "
+        f"la phrase reste au bandeau ({moteur_faux.commandes}, {pendant!r})")
+    chk("abandonnée" in avis_test and console.lanceur.probleme == ""
+        and console._avis_fenetre is None,
+        f"…puis, la séance VUE terminée, la phrase passe sur la page et quitte le bandeau "
+        f"({avis_test!r})")
     moteur_faux.commandes.clear()
     console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
     console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "fini"}})
