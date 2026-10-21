@@ -220,6 +220,9 @@ Frequencies must be **integer divisors of the refresh rate of the screen showing
 correlates against a sinusoid nobody is displaying: no error, no detection, nothing to debug. The
 engine now refuses those, and the console has a **Propose** button that asks it for a valid set.
 
+The SSVEP test windows run at the refresh rate set on the page: if this computer's main screen
+runs at another rate, they switch it for the length of the test, then switch it back.
+
 The proposal steers away from the **individual alpha peak**, which is a per-person trait (population
 mean ≈ 9.6 Hz, range 7–13). A target sitting on someone's peak does not stand out from their own
 resting background — so the set that works for one person can fail for the next. Set `alpha_hz` per
@@ -331,6 +334,13 @@ marker before the flip, or announcing a refresh rate the screen does not hold. T
 what it can see: it **refuses** every marker whose `refresh` is more than 1 Hz from the model's, and
 says so. ⚠️ It refuses the *markers*, not the *start* — the mode keeps running and keeps publishing
 `-1`, so do not wait for a crash.
+
+**Train at your application's refresh rate.** The code changes at every frame, so a c-VEP model
+only works at the refresh rate it was trained at. Set it in **Train** (60 Hz by default). The model
+carries it in its file name (`cvep_model_…_60Hz.npz`) and in the `refresh` field of the
+`decoded_cvep` metadata, which your application can read. A 165 Hz screen cannot show a 60 Hz code
+by itself — each bit would last 2.75 frames — so the training and test windows switch this
+computer's main screen to the wanted rate while they are open, then switch it back.
 
 `target_index = -1` has **four** distinct causes here, and they call for opposite actions: no clock
 marker ever arrived · the clock went stale · correlations missed the thresholds · recent windows

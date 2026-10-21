@@ -1070,6 +1070,38 @@ Filtrer le signal continu AVANT la découpe réduirait cette fuite ; ce n'est pa
 
 ---
 
+### 1.23 — Le rafraîchissement se règle, et l'écran du poste suit (2026-10-21)
+
+**Pourquoi.** Le code c-VEP change à chaque image, donc un modèle n'apprend qu'un rafraîchissement :
+le moteur refuse une horloge à plus de 1 Hz du modèle. L'application d'un étudiant affiche à SON
+rafraîchissement, pas forcément à celui du poste qui entraîne. Le rafraîchissement se règle donc
+dans « Entraîner », et le modèle le porte, jusque dans son nom (`…_60Hz.npz`).
+
+**Pourquoi la fenêtre ne ralentit pas d'elle-même.** À 60 Hz une image dure 16,7 ms, soit 2,75
+images d'un écran à 165 Hz. Tenir les bits 2 ou 3 images, 12 ou 18 ms, déformerait le code, et le
+modèle apprendrait ce code déformé. La fenêtre fait donc passer l'écran principal au
+rafraîchissement voulu, en mode TEMPORAIRE de Windows (`src/stimulus/ecran.py`), le confirme par
+une mesure, et le rétablit en se fermant. La console tend un filet pour une fenêtre tuée. Le SSVEP
+en profite : ses tests suivent le réglage de « Régler ».
+
+**Sur le poste de dev** (écran principal à 165 Hz, qui propose 59 · 60 · 120 · 144 · 165) :
+
+- Windows rétablit SEUL un mode temporaire quand le processus qui l'a demandé est tué ; le filet
+  de la console n'a rien eu à faire, il reste une sécurité.
+- Demandé à 60 Hz, l'écran se déclare à 59 Hz, mais tourne à 60,1 Hz : un cycle c-VEP de 1047,9 ms
+  pour 1050 annoncés.
+- La première mesure prise dès l'ouverture d'une fenêtre donnait 61,7 Hz, puis 60,0 à chacune des
+  suivantes : la fenêtre REFUSAIT à tort. D'où la demi-seconde de stabilisation avant de mesurer.
+  En mode fenêtré, la mesure gigue davantage (59,9 à 60,9 Hz sur 60 images) : la console ouvre en
+  plein écran.
+- Essais réels passés : SSVEP à 60 Hz, plein écran et fenêtré ; refus à 75 Hz, avec la liste ;
+  c-VEP à 60 Hz en plein écran, sans image sautée. L'écran est revenu à 165 Hz à chaque fois.
+
+**Jamais vu au casque** : ni un entraînement à un autre rafraîchissement que 60 Hz, ni l'effet du
+passage de l'écran sur une séance.
+
+---
+
 ## Niveau 2 — au casque
 
 ⚠️ Casque salé, contact vérifié, une seule application ouverte, aucun `python` résiduel.

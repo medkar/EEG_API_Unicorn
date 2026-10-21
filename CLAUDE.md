@@ -557,6 +557,7 @@ python src/core/markers.py                 # l'oreille du moteur : résolution P
 python src/core/modes/marker_calib.py      # ⚠️ le SOCLE des trois calibrations à fenêtre : l'accord
                                            # des DEUX épochages, les trois causes d'abandon
 python src/stimulus/registry.py            # clé -> commande, et la correspondance avec le contrat
+python src/stimulus/ecran.py               # l'écran au rafraîchissement du stimulus (lit l'écran, ne le change pas)
                                            # vérifiée DANS LES DEUX SENS
 python src/core/p300_models.py             # les modèles P300 : refus des hérités, tri par date
 python src/core/modes/p300.py              # le mode : ALIGNEMENT des époques, abandon de manche, appariement score↔cible
@@ -769,6 +770,21 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   n'est pas encore un modèle enregistré ; est-ce que le contrôle de liaison est lu ou cliqué au
   travers ; et est-ce que la boucle Régler → Tester → ajuster se comprend sans explication.
 
+- **Le rafraîchissement se règle (2026-10-21)**, pour un écran ou une application qui ne tourne
+  pas à 60 Hz. Le c-VEP le règle dans « Entraîner » (défaut 60, de 30 à 480) : le modèle le
+  porte, jusque dans son nom (`cvep_model_…_60Hz.npz`), la durée annoncée le suit, et « Tester »
+  comme « Tester librement » le reprennent du modèle choisi (`cvep_models.refresh_de`). Le SSVEP
+  garde le sien dans « Régler ». Les fenêtres SSVEP et c-VEP font passer l'écran PRINCIPAL à ce
+  rafraîchissement le temps de la séance (`stimulus/ecran.py`, `--ecran-hz`, mode temporaire de
+  Windows), le confirment par une mesure (une demi-seconde de stabilisation, puis l'intervalle
+  médian), et refusent sinon ; la console rétablit l'écran après toute fenêtre, tuée comprise
+  (`LanceurFenetre.retablir_ecran`). **Vérifié sur le poste de dev** (écran à 165 Hz) : Windows
+  rétablit SEUL un mode temporaire quand le processus qui l'a demandé est tué, le filet reste une
+  sécurité ; demandé à 60 Hz, l'écran se déclare à 59 Hz mais tourne à 60,1 Hz (cycle c-VEP de
+  1047,9 ms pour 1050 annoncés) ; la mesure prise dès l'ouverture refusait à tort (61,7 Hz), d'où
+  la stabilisation. **Jamais joué au casque** : ni un entraînement à un autre rafraîchissement que
+  60 Hz, ni l'effet du passage de l'écran sur une séance.
+
 ## Pièges matériels à connaître
 
 - **Ne pas fermer/rouvrir la console (ou le moteur)** en cours de séance : les voies C3/Cz saturent
@@ -790,3 +806,6 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
 - **Saliner les électrodes** est le principal levier de qualité du signal (gain mesuré très net).
 - Vérifier le contact **avant** d'enregistrer : une électrode ou une référence décollée produit une
   séance entière inexploitable, sans autre signal d'alerte que l'écran de contrôle de liaison.
+- **Une fenêtre SSVEP ou c-VEP change le rafraîchissement de l'écran principal** le temps de sa
+  séance : noir d'une seconde à l'ouverture et à la fermeture, c'est voulu. Si l'écran restait au
+  mauvais rafraîchissement (console plantée), le remettre dans Paramètres → Affichage.

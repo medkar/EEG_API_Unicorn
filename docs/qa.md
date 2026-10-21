@@ -306,9 +306,10 @@ python src/core/modes/errp_test.py
 python src/core/acquisition.py --synthetic
 python src/core/filtres_affichage.py
 python src/core/i18n.py
+python src/stimulus/ecran.py
 ```
 
-✅ **0.3.1** Quinze sorties à 0.
+✅ **0.3.1** Seize sorties à 0.
 
 ❌ Régression : n'importe lequel en rouge. Ceux dont l'échec compte le plus : `modes/p300.py` et
 `modes/cvep.py` (leur panne caractéristique fait décoder du bruit **avec une confiance élevée**),
@@ -757,8 +758,9 @@ haute (Hz) ⓘ »** à 12. **Aucun bouton « Appliquer »** : les réglages part
 ✅ **1.14.2** Mets la coupure basse à **3** → « Commencer » : **refus en rouge TOUT DE SUITE**, qui donne la
 borne (1 Hz), **avant** le contrôle de liaison, et le mode P300 n'est pas arrêté s'il tournait.
 Remets 1.
-✅ **1.14.3** Même chose sur les pages « Entraîner » de l'**ErrP** (1–10), du **c-VEP** (2–45) et du **MI**
-(8–30, plus une case **« FBCSP (banc de filtres) »** décochée).
+✅ **1.14.3** Même chose sur les pages « Entraîner » de l'**ErrP** (1–10), du **c-VEP** (2–45, plus
+**« Rafraîchissement de l'écran du stimulus ⓘ »** à 60) et du **MI** (8–30, plus une case
+**« FBCSP (banc de filtres) »** décochée).
 ✅ **1.14.4** Après un entraînement P300 sur board de test (~2,2 min, comme au 1.10) : sous « Détails », une
 ligne **« Filtre 1–12 Hz, coupe-bande 50 Hz »**.
 
@@ -855,6 +857,31 @@ Si, seuil à 1,0, le SSVEP ne décide TOUJOURS rien sur 10 essais : note-le et p
 repos ; un anneau sur une cible qui n'est pas celle décodée (compare à « Ce que voit ton
 application ») ; un anneau qui déborde sur une cible ; un anneau d'une autre couleur que le vert ;
 le mode qui continue de tourner après un essai libre qu'il n'avait pas commencé.
+
+### ☐ 1.18 — L'écran passe au rafraîchissement du stimulus (2026-10-21)
+
+Board de test, sur un poste dont l'écran principal ne tourne pas à 60 Hz (le poste de dev : 165 Hz).
+Note d'abord son rafraîchissement, dans Paramètres → Affichage → Affichage avancé : ___ Hz.
+
+1. Page **SSVEP**, « 1. Régler » : « Rafraîchissement de l'écran du stimulus » à **60**,
+   « Proposer », « Appliquer ». Puis **« Tester sur une session »** → « Commencer ».
+   ✅ **1.18.1** L'écran passe au noir une seconde, puis le test clignote. Échap : l'écran revient
+   au rafraîchissement noté plus haut.
+2. Page **c-VEP** → **« Entraîner »**.
+   ✅ **1.18.2** « Avant de commencer » montre **« Rafraîchissement de l'écran du stimulus ⓘ »** à
+   60 ; « 1. Régler » ne le montre pas.
+   « Commencer », laisse tourner ~30 s, puis **« Abandonner »**.
+   ✅ **1.18.3** L'écran passe à 60 Hz pendant l'entraînement, et revient au rafraîchissement noté
+   après l'abandon, alors que la fenêtre a été TUÉE.
+3. Refais l'entraînement c-VEP jusqu'au bout (~3,1 min), et enregistre le modèle.
+   ✅ **1.18.4** Dans la liste des modèles du c-VEP, son nom finit par **`_60Hz.npz`**.
+4. Page **SSVEP** : un rafraîchissement que l'écran ne propose pas (75 sur le poste de dev),
+   « Proposer », « Appliquer », « Tester sur une session » → « Commencer ».
+   ✅ **1.18.5** Le bandeau dit que la fenêtre s'est arrêtée, avec la raison : l'écran ne sait pas
+   afficher à 75 Hz, et la liste de ce qu'il propose. L'écran n'a pas changé.
+
+❌ Régression : un écran qui ne revient pas à son rafraîchissement, une fenêtre qui s'ouvre au
+mauvais rafraîchissement, un modèle c-VEP sans `_…Hz` dans son nom.
 
 ---
 
