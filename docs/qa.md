@@ -139,7 +139,11 @@ Le soir, **1.21** (le nombre de cibles c-VEP, livré le jour même) joué en sol
 le board de test : 6 vérifications sur 6 — entraînement à 8 cibles (fenêtre lancée avec
 `--cibles 8`, 4,0 min annoncées, 246 s, aucun refus, hasard 1/8), modèle
 `…_8targets_60Hz.npz`, « Tester sur une session » et « Tester librement » à 8 cibles, aucun
-marqueur refusé ; les 8 cibles vues dans les captures, à 60 fps, aucune image sautée.
+marqueur refusé ; les 8 cibles vues dans les captures, à 60 fps, aucune image sautée. Puis
+rejoué avec les NOMS des cibles (livrés le même soir, réglage « Cibles » comme les tâches du MI) :
+9 vérifications sur 9 — un nom vide ou en double refusé avec sa raison, `--noms` passé aux trois
+fenêtres, `target_names` lu par un client sur `decoded_cvep`, les noms vus sous les disques dans
+l'ordre de la couronne.
 
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
@@ -975,23 +979,29 @@ fenêtre dans le bandeau ; un message qui suit l'élève sur la grille.
 
 ---
 
-### ☐ 1.21 — Le nombre de cibles c-VEP se règle (2026-10-21)
+### ☐ 1.21 — Les cibles c-VEP se règlent : leur nombre et leurs noms (2026-10-21)
 
 Board de test. Page **c-VEP** → **« Entraîner »**.
 
 1. Vérifie d'abord que rien ne tourne. Regarde « Avant de commencer ».
-   ✅ **1.21.1** Un champ **« Nombre de cibles »**, de 2 à 10, **6** par défaut ; sa bulle ⓘ dit que le
-   modèle retient ce nombre et qu'au-delà de 8, personne ne l'a mesuré.
-2. Règle **8** → « Commencer » → contrôle de liaison → « Commencer l'entraînement ».
-   ✅ **1.21.2** La fenêtre montre **8** cibles en couronne ; la durée annoncée est plus longue qu'à 6.
+   ✅ **1.21.1** Un champ **« Cibles »**, comme les tâches du Motor Imagery : un nombre de 2 à 10 (**6**
+   par défaut), puis un nom par cible, pré-remplis (AVANT, AV-DROITE…). Sa bulle ⓘ dit l'ordre de
+   la couronne, que l'application reçoit les noms dans `target_names`, et qu'au-delà de 8 personne
+   ne l'a mesuré.
+2. Passe à **8**, nomme les cibles (Haut, Bas, Gauche, Droite, Feu, Eau, Air, Terre) →
+   « Commencer » → contrôle de liaison → « Commencer l'entraînement ». Un nom vide ou en double
+   est REFUSÉ, avec la raison.
+   ✅ **1.21.2** La fenêtre montre **8** cibles en couronne, sous TES noms ; la durée annoncée est
+   plus longue qu'à 6.
 3. Va au bout, puis **« Enregistrer le modèle »**.
    ✅ **1.21.3** Le modèle s'appelle `cvep_model_…_8targets_60Hz.npz`.
 4. « ← c-VEP » → **« Tester sur une session »** avec ce modèle, puis **« Tester librement »**.
-   ✅ **1.21.4** Les deux fenêtres montrent **8** cibles ; le verdict du test compte un hasard de 1 sur 8
-   (13 %).
+   ✅ **1.21.4** Les deux fenêtres montrent les **8** cibles sous leurs noms ; le verdict du test compte
+   un hasard de 1 sur 8 (13 %) ; « Ce que voit ton application » décrit `decoded_cvep` avec ces noms
+   (`target_names`).
 
-❌ Régression : une fenêtre qui montre un autre nombre de cibles que le modèle ; un entraînement
-abandonné ou des marqueurs refusés alors que la console a tout lancé elle-même.
+❌ Régression : une fenêtre qui montre un autre nombre de cibles, ou d'autres noms, que le modèle ;
+un entraînement abandonné ou des marqueurs refusés alors que la console a tout lancé elle-même.
 
 # Bloc 2 — au casque
 

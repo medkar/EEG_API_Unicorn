@@ -809,16 +809,22 @@ séance de QA ne rejoue que ce qui a été livré depuis la précédente.
   1047,9 ms pour 1050 annoncés) ; la mesure prise dès l'ouverture refusait à tort (61,7 Hz), d'où
   la stabilisation. **Jamais joué au casque** : ni un entraînement à un autre rafraîchissement que
   60 Hz, ni l'effet du passage de l'écran sur une séance.
-- **Le nombre de cibles c-VEP se règle (2026-10-21)**, de 2 à 10, pour expérimenter (défaut 6,
-  `config.CVEP_N_TARGETS`). C'est un réglage d'« Entraîner » (`n_cibles`) PORTÉ PAR LE MODÈLE,
-  comme le rafraîchissement : son nom le dit (`…_8targets_60Hz.npz`), le mode construit ses cibles
-  depuis lui (`cvep_models.cibles_du_modele`), et la console passe `--cibles` à la fenêtre de
-  « Tester » et de « Tester librement » (`cvep_models.cibles_de`, `registry.option_cibles`). La
+- **Les cibles c-VEP se règlent (2026-10-21) : leur nombre, de 2 à 10 (défaut 6,
+  `config.CVEP_N_TARGETS`), et le NOM de chacune**, comme les tâches du Motor Imagery (réglage
+  `cibles` d'« Entraîner », une `text_list` : un nombre, puis un champ par cible, dans l'ordre de
+  la couronne en partant du haut). C'est PORTÉ PAR LE MODÈLE, comme le rafraîchissement : son nom
+  de fichier dit le nombre (`…_8targets_60Hz.npz`), les deux modèles enregistrent les noms
+  (`noms`), le mode construit ses cibles depuis eux (`cvep_models.noms_du_modele`) et les publie
+  dans la description de `decoded_cvep` (`target_names`, joints par des virgules, dans l'ordre des
+  `score_*`), et la console passe `--noms` à la fenêtre d'« Entraîner », de « Tester » et de
+  « Tester librement » (`cvep_models.noms_de`, `registry.option_cibles`), qui les affiche sous les
+  disques. Un modèle d'avant les noms garde ceux par défaut : les directions (AVANT…), C1… au-delà
+  de 8. Pour décoder, un nom ne change rien : l'application reçoit toujours `target_index`. La
   fenêtre l'annonce sur chaque marqueur de cycle (`targets`, facultatif pour une application) :
   le moteur REFUSE un autre nombre que celui du modèle (marqueur refusé en décodage, séance
   abandonnée en entraînement). Le hasard des verdicts et les durées suivent. Un eCCA enregistre
   les cibles AFFICHÉES (`n_plan`) et VUES (`n_targets`) : une séance interrompue reste refusée.
-  Au-delà de 8, les cibles s'appellent C1, C2… ; la couronne tient à 10 (vérifié en pixels).
+  La couronne tient à 10 cibles (vérifié en pixels).
   ⚠️ **Mesuré ici** (`config.py`, une personne) : le débit plafonne vers 6-8 cibles et la justesse
   baisse au-delà ; **au-delà de 8, jamais mesuré, ni au casque ni hors ligne.**
 - **La découverte LSL du moteur (2026-10-21).** Le moteur cherchait le flux de marqueurs avec un
