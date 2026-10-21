@@ -1103,6 +1103,11 @@ en profite : ses tests suivent le réglage de « Régler ».
 - Essais réels refaits, la souris sur un écran secondaire : la fenêtre SSVEP s'ouvre sur l'écran
   principal, 362 images en 6 s (60,3 par seconde), aucune sautée ; la fenêtre d'entraînement
   c-VEP, tuée, rend l'écran à 165 Hz ; refus à 75 Hz, avec la liste.
+- 🐛 **Une seule mesure ne suffisait pas.** Lancée par la console, la fenêtre a mesuré 61,3 Hz
+  juste après le passage à 60 Hz, malgré la demi-seconde de stabilisation, et a REFUSÉ de
+  s'ouvrir. L'écran met parfois plus d'une seconde à se caler. La fenêtre a maintenant quatre
+  mesures pour confirmer (`ecran.confirme_stable`) ; un écran qui ne tient vraiment pas le
+  rafraîchissement échoue aux quatre. Trouvé par une QA jouée par script, console et moteur réels.
 
 **Jamais vu au casque** : ni un entraînement à un autre rafraîchissement que 60 Hz, ni l'effet du
 passage de l'écran sur une séance.
