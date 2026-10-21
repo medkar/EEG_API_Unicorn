@@ -510,11 +510,13 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
         max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
         settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None,
-        source_statut=None, ecran_hz=None, n_cibles=CVEP_N_TARGETS):
+        source_statut=None, ecran_hz=None, n_cibles=CVEP_N_TARGETS, noms=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
     `n_cibles` (`--cibles`) : le nombre de cibles, celui de l'entraînement que le modèle porte. La
     console le passe ; chaque marqueur de cycle l'annonce, et le moteur refuse un autre nombre.
+    `noms` (`--noms`) : le nom de chaque cible, affiché sous son disque ; leur nombre l'emporte sur
+    `n_cibles`. C'est ce que la console passe, lu dans le modèle ou dans « Entraîner ».
 
     `libre` (`--libre`) retire la consigne et montre la croix de repos tant que le moteur chauffe ;
     `retour` (`--retour`) entoure la cible décodée. `source_retour` et `source_statut` n'existent
@@ -619,7 +621,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     from stimulus.refresh import frequence_mesuree, measure_refresh  # comme les autres stimuli
 
-    plan, code = build_targets(n=n_cibles)
+    plan, code = build_targets(n=n_cibles, noms=noms)
     L = len(code)
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
 
@@ -1777,11 +1779,11 @@ def _smoke():
         f"indistinguable d'un tirage cassé ({consignes4})")
     chk(bilan3.get("graine") == 0,
         f"la graine DONNÉE est celle qui a servi, et le bilan la rend ({bilan3.get('graine')})")
-    # `--cibles 8` : la fenêtre en affiche 8, et CHAQUE marqueur de cycle l'annonce au moteur.
+    # `--noms` : 8 cibles NOMMÉES ; CHAQUE marqueur de cycle annonce leur nombre au moteur.
     journal_n8, bilan_n8 = [], {}
     run(windowed=True, refresh=120.0, max_frames=2 * L, cycles_par_cible=1,
         stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
-        seed=0, journal=journal_n8, bilan=bilan_n8, n_cibles=8)
+        seed=0, journal=journal_n8, bilan=bilan_n8, noms=["Haut", "Bas", "Gauche", "Droite", "Feu", "Eau", "Air", "Terre"])
     cycles8 = [m for m, _ts, _f, _c in journal_n8 if m.get("event") == "cycle"]
     chk(cycles8 and all(m.get("targets") == 8 for m in cycles8),
         f"lancée avec 8 cibles, la fenêtre l'annonce sur chaque marqueur de cycle "
@@ -2316,6 +2318,20 @@ def _nombre_de_cibles(texte):
     return n
 
 
+def _noms_des_cibles(texte):
+    """`--noms` : des noms séparés par des virgules, non vides, tous différents, en nombre
+    permis. Refusés à la ligne de commande, avant que la moindre fenêtre ne s'ouvre."""
+    noms = [n.strip() for n in str(texte).split(",")]
+    if any(not n for n in noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : un nom de cible est vide")
+    if len({n.casefold() for n in noms}) != len(noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : deux cibles portent le même nom")
+    if not CVEP_N_TARGETS_MIN <= len(noms) <= CVEP_N_TARGETS_MAX:
+        raise argparse.ArgumentTypeError(f"{len(noms)} cibles : choisis entre {CVEP_N_TARGETS_MIN} "
+                                         f"et {CVEP_N_TARGETS_MAX}")
+    return noms
+
+
 def _parse_args(argv):
     p = argparse.ArgumentParser(description="Stimulus c-VEP (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
@@ -2361,6 +2377,10 @@ def _parse_args(argv):
                    help=f"nombre de cibles, de {CVEP_N_TARGETS_MIN} à {CVEP_N_TARGETS_MAX} (défaut "
                         f"{CVEP_N_TARGETS}) : celui de l'entraînement, que le modèle porte. La "
                         f"console le passe elle-même")
+    p.add_argument("--noms", type=_noms_des_cibles, default=None,
+                   help="le nom de chaque cible, séparés par des virgules (« Haut,Bas,Feu »), "
+                        "affichés sous les disques ; leur nombre remplace --cibles. La console le "
+                        "passe elle-même")
     p.add_argument("--cycles", type=int, default=CVEP_CAL_CYCLES,
                    help=f"cycles ENREGISTRÉS par cible en calibration (défaut "
                         f"{CVEP_CAL_CYCLES}). Sans --calibrer, ce réglage ne sert à rien. ⚠️ Le "
@@ -2389,7 +2409,7 @@ if __name__ == "__main__":
                      calibrer=args.calibrer or args.tester, tester=args.tester,
                      cycles_calib=args.cycles, libre=args.libre, retour=args.retour,
                      attente_consommateur_s=0.0 if args.no_wait else 5.0,
-                     ecran_hz=args.ecran_hz, n_cibles=args.cibles)
+                     ecran_hz=args.ecran_hz, n_cibles=args.cibles, noms=args.noms)
     except EcranRefuse as refus:
         # Sortie 2 : la fenêtre n'a rien affiché. L'écran est déjà revenu (sortie du `with`).
         print(f"[cvep-stim] ⚠️ REFUS : {refus}")

@@ -494,7 +494,7 @@ class DecodedCVEPPublisher:
     SUFFIXE = "decoded_cvep"
 
     def __init__(self, n_targets, decoder, refresh, code_len, corr_min, margin, cv,
-                 votes=(0, 0), instance=""):
+                 votes=(0, 0), instance="", noms=None):
         self.n_targets = int(n_targets)
         labels = cvep_channel_labels(self.n_targets)
         info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
@@ -506,6 +506,10 @@ class DecodedCVEPPublisher:
         desc = info.desc().append_child("decoding")
         desc.append_child_value("paradigm", "c-VEP")
         desc.append_child_value("n_targets", str(self.n_targets))
+        # Le NOM de chaque cible, dans l'ordre des `score_*` (joints par des virgules, comme les
+        # `classes` du MI) : ceux que l'entraînement a donnés. L'indice publié reste la référence.
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
         # Quel décodeur a produit ces scores. Le c-VEP est le seul mode du produit à en avoir
         # DEUX sur le même stimulus (eCCA et rCCA) : c'est le FICHIER de modèle qui déclare le
         # sien (cf. `core/cvep_models.py`), donc le moteur ne peut pas le deviner d'ici.

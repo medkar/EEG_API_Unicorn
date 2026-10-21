@@ -130,6 +130,7 @@ class CVEPModel:
         self.cv_ = None
         self.n_targets = 0     # renseigné à la sauvegarde (0 = inconnu)
         self.n_plan = 0        # les cibles AFFICHÉES à l'entraînement (0 = inconnu : avant ce champ)
+        self.noms = None       # le NOM de chaque cible de l'entraînement (None : avant ce champ)
 
     # --- géométrie temporelle -------------------------------------------
     @property
@@ -252,6 +253,8 @@ class CVEPModel:
         np.savez(path, w=self.w, template=self.template, fs=self.fs, refresh=self.refresh,
                  code_len=self.code_len, band=np.asarray(self.band), n_targets=int(n_targets),
                  n_plan=int(n_plan),
+                 # Les noms des cibles, en tableau de TEXTES (jamais d'objets : pas de pickle).
+                 **({"noms": np.asarray([str(n) for n in self.noms])} if self.noms else {}),
                  # 0 = pas de coupe-bande (un tableau npz ne porte pas de None).
                  secteur_hz=float(self.secteur_hz or 0.0),
                  channels=np.asarray(self.channels, dtype=int),
@@ -273,6 +276,7 @@ class CVEPModel:
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])
         m.n_targets = int(d["n_targets"]) if "n_targets" in d else 0   # 0 = inconnu
         m.n_plan = int(d["n_plan"]) if "n_plan" in d else 0            # 0 = avant ce champ
+        m.noms = [str(n) for n in d["noms"]] if "noms" in d else None
         return m
 
 

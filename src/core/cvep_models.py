@@ -103,6 +103,33 @@ def cibles_du_modele(modele):
             or CVEP_N_TARGETS)
 
 
+def noms_du_modele(modele):
+    """Le NOM de chaque cible d'un modèle CHARGÉ, dans l'ordre : ceux de son entraînement, ou
+    les noms par défaut pour son nombre de cibles (un modèle d'avant ce champ)."""
+    n = cibles_du_modele(modele)
+    noms = getattr(modele, "noms", None)
+    if noms and len(noms) == n:
+        return [str(x) for x in noms]
+    return [c["name"] for c in build_targets(n=n)[0]]
+
+
+def noms_de(chemin):
+    """Les noms des cibles d'un modèle, LUS sans le charger, ou None. Ne lève jamais.
+
+    La console les passe à la fenêtre de « Tester » et de « Tester librement » (`--noms`)."""
+    n = cibles_de(chemin)
+    if n is None:
+        return None
+    try:
+        with _np.load(chemin) as d:
+            noms = [str(x) for x in d["noms"]] if "noms" in d.files else None
+    except Exception:  # noqa: BLE001 - « ne lève jamais »
+        return None
+    if noms and len(noms) == n:
+        return noms
+    return [c["name"] for c in build_targets(n=n)[0]]
+
+
 def cibles_de(chemin):
     """Le nombre de cibles d'un modèle, LU sans le charger (comme `refresh_de`), ou None.
 

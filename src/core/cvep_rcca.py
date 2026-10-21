@@ -264,6 +264,9 @@ class RCCAModel:
                  # savoir quelle classe instancier (deviner d'après les clés casserait au
                  # premier champ ajouté).
                  decoder=self.decoder,
+                 # Les noms des cibles, en tableau de TEXTES (jamais d'objets : pas de pickle).
+                 **({"noms": np.asarray([str(n) for n in self.noms])}
+                    if getattr(self, "noms", None) else {}),
                  cv=(-1.0 if self.cv_ is None else self.cv_))
         return path
 
@@ -280,6 +283,7 @@ class RCCAModel:
                 secteur_hz=(float(d["secteur_hz"]) or None) if "secteur_hz" in d else None)
         m.fit([e for e in d["epochs"]], d["labels"], compute_cv=False)   # refit rapide (pas de LOO)
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])           # cv_ déjà mesuré à la calib
+        m.noms = [str(n) for n in d["noms"]] if "noms" in d else None     # None : avant ce champ
         return m
 
 

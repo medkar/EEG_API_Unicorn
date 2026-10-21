@@ -177,21 +177,21 @@ def option_ecran(stimulus_id, hz):
     return ("--ecran-hz", f"{hz:g}")
 
 
-# Les fenêtres dont le NOMBRE DE CIBLES est un réglage d'entraînement porté par le modèle : la
-# console le leur passe (`--cibles`), celui d'« Entraîner » ou celui du modèle choisi.
+# Les fenêtres dont les CIBLES (leur nombre et leurs noms) sont un réglage d'entraînement porté
+# par le modèle : la console leur passe les noms (`--noms`), ceux d'« Entraîner » ou du modèle.
 CIBLES = {"cvep"}
 
 
-def option_cibles(stimulus_id, n):
-    """Les arguments qui font afficher `n` cibles. `()` si la fenêtre ne sait pas, ou si `n` n'est
-    pas un entier positif : la fenêtre garde alors son nombre par défaut."""
-    if stimulus_id not in CIBLES or isinstance(n, bool):
+def option_cibles(stimulus_id, noms):
+    """Les arguments qui font afficher ces cibles, sous ces noms. `()` si la fenêtre ne sait pas,
+    ou sans noms lisibles : la fenêtre garde alors ses cibles par défaut."""
+    if stimulus_id not in CIBLES or isinstance(noms, (str, bytes)) or not noms:
         return ()
     try:
-        n = int(n)
-    except (TypeError, ValueError):
+        noms = [str(n).strip() for n in noms]
+    except TypeError:
         return ()
-    return ("--cibles", str(n)) if n > 0 else ()
+    return ("--noms", ",".join(noms)) if all(noms) else ()
 
 
 def commande(stimulus_id, calibrer=False, options=()):
@@ -236,7 +236,7 @@ def _selftest():
     inconnus += [(k, a) for k, args in MESURE_OPTIONS.items() for a in args if not _declare(k, a)]
     inconnus += [(k, a) for k, args in LIBRE.items() for a in args if not _declare(k, a)]
     inconnus += [(k, "--ecran-hz") for k in ECRAN if not _declare(k, "--ecran-hz")]
-    inconnus += [(k, "--cibles") for k in CIBLES if not _declare(k, "--cibles")]
+    inconnus += [(k, "--noms") for k in CIBLES if not _declare(k, "--noms")]
     chk(not inconnus,
         f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
         f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
@@ -346,10 +346,11 @@ def _selftest():
         and option_ecran("cvep", "abc") == () and option_ecran("p300", 60.0) == (),
         "…et rien sans valeur, sur une valeur absurde, ou pour une fenêtre qui ne fait pas "
         "passer l'écran : elle mesure alors l'écran, comme avant")
-    chk(option_cibles("cvep", 8) == ("--cibles", "8") and option_cibles("cvep", None) == ()
-        and option_cibles("cvep", 0) == () and option_cibles("ssvep", 8) == (),
-        f"le nombre de cibles ne part qu'à la fenêtre c-VEP, et seulement s'il est lisible "
-        f"({option_cibles('cvep', 8)}, {option_cibles('ssvep', 8)})")
+    chk(option_cibles("cvep", ["Haut", "Bas"]) == ("--noms", "Haut,Bas")
+        and option_cibles("cvep", None) == () and option_cibles("cvep", "Haut") == ()
+        and option_cibles("ssvep", ["Haut", "Bas"]) == (),
+        f"les noms des cibles ne partent qu'à la fenêtre c-VEP, et seulement s'ils sont lisibles "
+        f"({option_cibles('cvep', ['Haut', 'Bas'])}, {option_cibles('ssvep', ['Haut', 'Bas'])})")
     chk(set(ECRAN) == {"ssvep", "cvep"} and set(ECRAN.values()) <= {"reglage", "modele"},
         f"seuls le SSVEP et le c-VEP font passer l'écran, et chacun dit d'où vient la valeur "
         f"({ECRAN})")

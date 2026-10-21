@@ -183,7 +183,7 @@ class CVEPRuntime(ModeRuntime):
             raise ValueError(raison)
         # Les cibles sont celles du MODÈLE : leur nombre est un réglage de son entraînement, et
         # la fenêtre (lancée par la console avec ce nombre) l'annonce sur chaque marqueur de cycle.
-        self.plan, self.code = build_targets(n=cvep_models.cibles_du_modele(self.model))
+        self.plan, self.code = build_targets(noms=cvep_models.noms_du_modele(self.model))
         desaccord = self._desaccord_code()
         if desaccord is not None:
             raise ValueError(desaccord)
@@ -351,6 +351,7 @@ class CVEPRuntime(ModeRuntime):
             code_len=self.code_len, corr_min=float(self.params["corr_min"]),
             margin=float(self.params["margin"]), cv=getattr(self.model, "cv_", None),
             votes=(int(self.params["min_votes"]), int(self.params["vote_len"])),
+            noms=[c["name"] for c in self.plan],
             instance=self.engine.instance)
 
     def _close(self):
@@ -804,11 +805,13 @@ SPEC = ModeSpec(
                 Param(key="refresh_hz", label=tr("calib.cvep.param.refresh_hz.label"),
                       kind="float", unit="Hz", default=REFRESH_REFERENCE_HZ, min=30.0, max=480.0,
                       help=tr("calib.cvep.param.refresh_hz.aide")),
-                # Le NOMBRE DE CIBLES, pour expérimenter : le modèle le porte (comme le
-                # rafraîchissement), et le décodage, les tests et la fenêtre le relisent de lui.
-                Param(key="n_cibles", label=tr("calib.cvep.param.n_cibles.label"), kind="int",
-                      default=CVEP_N_TARGETS, min=CVEP_N_TARGETS_MIN, max=CVEP_N_TARGETS_MAX,
-                      help=tr("calib.cvep.param.n_cibles.aide", defaut=CVEP_N_TARGETS,
+                # Les CIBLES : leur nombre (de 2 à 10, pour expérimenter) et le NOM de chacune,
+                # comme les tâches du Motor Imagery. Le modèle les porte ; le décodage, les tests,
+                # la fenêtre et le flux `decoded_cvep` (`target_names`) les relisent de lui.
+                Param(key="cibles", label=tr("calib.cvep.param.cibles.label"), kind="text_list",
+                      default=tuple(c["name"] for c in build_targets()[0]),
+                      count=(CVEP_N_TARGETS_MIN, CVEP_N_TARGETS_MAX),
+                      help=tr("calib.cvep.param.cibles.aide", defaut=CVEP_N_TARGETS,
                               mini=CVEP_N_TARGETS_MIN, maxi=CVEP_N_TARGETS_MAX))),
         # ⚠️ **UN CYCLE ENTIER du code**, grandeur distincte de `marker_epoch_s` plus bas : elle
         # dimensionne le tampon du moteur pour ce que la CALIBRATION prélève, `CVEPCalibration`
@@ -1027,6 +1030,31 @@ def _selftest():
         and len({c["lag"] for c in rt_huit.plan}) == 8,
         f"un modèle entraîné à 8 cibles décode 8 cibles, aux lags distincts "
         f"({[c['lag'] for c in rt_huit.plan]})")
+
+    # Les NOMS du modèle sont ceux des cibles décodées, dans l'ordre des scores publiés.
+    modele_nomme = CVEPModel(fs=250.0, refresh=60.0, code_len=63, channels=CVEP_CHANNELS)
+    modele_nomme.w = np.ones(len(CVEP_CHANNELS))
+    modele_nomme.template = np.zeros(63)
+    modele_nomme.cv_ = 0.5
+    modele_nomme.noms = ["Haut", "Bas", "Feu", "Eau"]
+    rt_nomme = _runtime_de_test(modele=modele_nomme, n_targets=4)
+    chk([c["name"] for c in rt_nomme.plan] == ["Haut", "Bas", "Feu", "Eau"],
+        f"un modèle aux cibles NOMMÉES décode sous ces noms, dans leur ordre "
+        f"({[c['name'] for c in rt_nomme.plan]})")
+    from core.lsl_io import DecodedCVEPPublisher
+    publieur_nomme = DecodedCVEPPublisher(4, decoder="eCCA", refresh=60.0, code_len=63,
+                                          corr_min=0.26, margin=0.09, cv=0.5,
+                                          instance="autotest-noms", noms=["Haut", "Bas", "Feu", "Eau"])
+    decrit = publieur_nomme.outlet.get_info().desc().child("decoding").child_value("target_names")
+    del publieur_nomme
+    chk(decrit == "Haut,Bas,Feu,Eau",
+        f"…et le flux decoded_cvep les DÉCRIT à l'application, dans l'ordre des scores ({decrit!r})")
+    reglage_cibles = {p.key: p for p in SPEC.calibration.params}.get("cibles")
+    chk(reglage_cibles is not None and reglage_cibles.kind == "text_list"
+        and tuple(reglage_cibles.default) == tuple(c["name"] for c in build_targets()[0])
+        and reglage_cibles.count == (CVEP_N_TARGETS_MIN, CVEP_N_TARGETS_MAX),
+        f"« Entraîner » règle les cibles comme les tâches du MI : un nombre, puis un nom par cible "
+        f"({reglage_cibles and reglage_cibles.default})")
 
     # --- 4ter. La fenêtre ANNONCE son nombre de cibles : un autre que celui du modèle est refusé
     class _FileMarqueurs:

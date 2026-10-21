@@ -54,7 +54,7 @@ def autocorrelation(code):
     return np.asarray([float(np.dot(x, np.roll(x, k))) for k in range(len(x))])
 
 
-def build_targets(commands=None, n_bits=CVEP_BITS, taps=CVEP_TAPS, n=None):
+def build_targets(commands=None, n_bits=CVEP_BITS, taps=CVEP_TAPS, n=None, noms=None):
     """Plan c-VEP : cibles enrichies du `lag` (en frames) et du code déjà décalé.
 
     La cible j affiche, à la frame f, le bit `code[(f + lag_j) % L]`. Le décodeur
@@ -65,8 +65,14 @@ def build_targets(commands=None, n_bits=CVEP_BITS, taps=CVEP_TAPS, n=None):
 
     `n` : le nombre de cibles (`config.CVEP_N_TARGETS` sans lui). C'est celui de l'entraînement,
     que le modèle porte : le décodage, les tests et la fenêtre le relisent tous du modèle.
+    `noms` : le nom de chaque cible, dans l'ordre (leur nombre fixe alors `n`). Sans eux, les
+    directions de la couronne (AVANT, AV-DROITE…), ou C1, C2… au-delà de 8.
     """
+    if noms:
+        n = len(noms)
     cmds = cvep_targets(n) if commands is None else commands
+    if noms:
+        cmds = [{**c, "name": str(nom)} for c, nom in zip(cmds, noms)]
     code = m_sequence(n_bits, taps)
     lags = cvep_lags(len(cmds), len(code))
     rot = CVEP_LAG_ROTATION % len(cmds)      # décale quel lag va sur quelle position à l'écran
