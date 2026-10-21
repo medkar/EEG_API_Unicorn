@@ -126,13 +126,14 @@ def _blocs(cycles):
     return blocs_entrelaces(_PLAN, int(cycles), CVEP_CAL_BLOCKS, _random.Random(0))
 
 
-def _duree_protocole_s(cycles):
-    """La séance de la fenêtre hors chauffe, à 60 Hz : par bloc le settle, les cycles enregistrés
-    et la phase de retour, plus le cycle de garde dont le marqueur ferme le dernier bloc."""
+def _duree_protocole_s(cycles, refresh=REFRESH_REFERENCE_HZ):
+    """La séance de la fenêtre hors chauffe, à `refresh` Hz : par bloc le settle, les cycles
+    enregistrés et la phase de retour, plus le cycle de garde dont le marqueur ferme le dernier
+    bloc."""
     blocs = _blocs(cycles)
     joues = (len(blocs) * (CVEP_CAL_SETTLE_CYCLES + RETOUR_CYCLES_PAR_BLOC)
              + sum(n for _c, n in blocs) + 1)
-    return joues * len(_CODE) / REFRESH_REFERENCE_HZ
+    return joues * len(_CODE) / float(refresh)
 
 
 def _minutes(cycles):
@@ -230,7 +231,10 @@ class MesureCVEP(MesureMarqueurs):
         return 0.0
 
     def duree_estimee_s(self):
-        return float(self.warmup_s) + _duree_protocole_s(self.params.get("essais", ESSAIS_DEFAUT))
+        """La chauffe, plus la séance au rafraîchissement du MODÈLE testé : la fenêtre affiche à
+        celui-là (la console le lui passe), et le protocole compte des images."""
+        return float(self.warmup_s) + _duree_protocole_s(self.params.get("essais", ESSAIS_DEFAUT),
+                                                         self._decideur.model.refresh)
 
     def rappel(self):
         if self.phase == "essais":
@@ -699,6 +703,13 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             and rt2.duree_estimee_s() < rt3.duree_estimee_s(),
             f"la durée annoncée suit `essais` : 3 -> 18 × (4 jetés + 1 + 2 de retour) + 1 cycles, "
             f"{rt3.duree_estimee_s() / 60:.1f} min ; 2 -> {rt2.duree_estimee_s() / 60:.1f} min")
+        hz_modele = rt3._decideur.model.refresh
+        rt3._decideur.model.refresh = 120.0
+        duree_120 = rt3.duree_estimee_s() - rt3.warmup_s
+        rt3._decideur.model.refresh = hz_modele
+        chk(abs(duree_120 - 127 * L / 120.0) < 1e-6,
+            f"…et le rafraîchissement du MODÈLE : un modèle à 120 Hz fait un test deux fois plus "
+            f"court ({duree_120:.1f} s)")
         rt15 = MesureCVEP(SPEC, dict(valeurs, vote_len=_VOTE_LEN_MAX), moteur)
         chk(rt3.pre_s < rt15.pre_s <= MesureCVEP.epoque_marqueur_s,
             f"l'époque suit `vote_len`, et le tampon couvre le plus long vote ({rt15.pre_s:.2f} s)")
