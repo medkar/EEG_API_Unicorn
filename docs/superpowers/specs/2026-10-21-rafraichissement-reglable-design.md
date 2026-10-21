@@ -125,8 +125,10 @@ le développement et les autotests. Les deux ensemble sont refusés par l'analys
    donc un filet. Après chaque fenêtre, si l'écran n'est plus au rafraîchissement enregistré dans
    Windows, elle l'y remet ; sans écart, elle ne fait rien.
 
-La mesure de l'étape 4 prend l'intervalle MÉDIAN entre deux images, sans l'arrondir : une image
-sautée juste après le changement de mode ne doit pas faire croire à un écran plus lent.
+La mesure de l'étape 4 laisse d'abord l'écran se stabiliser une demi-seconde, puis prend
+l'intervalle MÉDIAN entre deux images, sans l'arrondir. Mesuré sur ce poste : juste après
+l'ouverture, la première mesure donne 61,7 Hz pour un écran passé à 60 Hz, puis 60,0 à chacune des
+suivantes. Une mesure prise trop tôt refusait donc à tort.
 
 **Hors Windows**, les étapes 1 à 3 sont sautées, et l'étape 4 refuse si l'écran ne tient pas H.
 

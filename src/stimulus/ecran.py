@@ -421,14 +421,27 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         def fill(self, _couleur):
             pass
 
-    periodes = [1 / 165] * 121
-    periodes[30] = periodes[80] = 2 / 165          # deux images sautées
-    e = _Ecran(periodes)
+    # La mise en route : une fenêtre qui vient de s'ouvrir, ou un écran qui vient de changer de
+    # mode, rend ses premières images à une cadence qui n'est pas la sienne (mesuré sur le poste
+    # de dev : 61,7 Hz à la première mesure, puis 60,0 à chacune des suivantes).
+    chauffe = [1 / 240] * 80                        # 1/3 s d'images trop rapides : sans la
+    #                                                 stabilisation, plus de la moitié des 120
+    mesurees = [1 / 165] * 121
+    mesurees[30] = mesurees[80] = 2 / 165           # deux images sautées
+    e = _Ecran(chauffe + [1 / 165] * 100 + mesurees + [1 / 165] * 10)
     hz = frequence_mesuree(e, e, images=120, horloge=lambda: e.t)
-    moyenne = 120 / sum(periodes[1:])
+    moyenne = 120 / sum(mesurees[1:])
     chk(abs(hz - 165.0) < 0.01 and moyenne < 163.0,
-        f"deux images sautées ne déplacent pas la mesure : {hz:.2f} Hz (une moyenne dirait "
-        f"{moyenne:.1f} Hz, et refuserait à tort)")
+        f"une mise en route trop rapide et deux images sautées ne déplacent pas la mesure : "
+        f"{hz:.2f} Hz (une moyenne sur les images sautées dirait {moyenne:.1f} Hz, et refuserait "
+        f"à tort)")
+    e = _Ecran([1 / 240] * 400)
+    sans_chauffe = frequence_mesuree(e, e, images=120, horloge=lambda: e.t, chauffe_s=0.0)
+    e = _Ecran([1 / 240] * 60 + [1 / 60] * 200)
+    avec_chauffe = frequence_mesuree(e, e, images=120, horloge=lambda: e.t)
+    chk(abs(sans_chauffe - 240.0) < 0.01 and abs(avec_chauffe - 60.0) < 0.01,
+        f"…parce que la mesure laisse l'écran se stabiliser une demi-seconde avant de compter "
+        f"({avec_chauffe:.2f} Hz après une mise en route à 240)")
 
     # --- 10. Cette machine, en LECTURE seule ---
     machine = systeme_de_la_machine()

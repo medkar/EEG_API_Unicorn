@@ -42,18 +42,25 @@ def measure_refresh(pygame, surface, frames=90):
     return float(min(COMMON_REFRESH, key=lambda r: abs(r - fps)))
 
 
-def frequence_mesuree(pygame, surface, images=120, horloge=_time.perf_counter):
+def frequence_mesuree(pygame, surface, images=120, horloge=_time.perf_counter, chauffe_s=0.5):
     """Le rafraîchissement RÉEL de l'écran, en Hz, sans l'arrondir à une valeur usuelle.
 
-    C'est l'inverse de l'intervalle MÉDIAN entre deux images (vsync). La médiane ignore une image
-    sautée, qui ferait croire à un écran plus lent : juste après un changement de mode, les
-    premières images sont souvent irrégulières. Rend 0.0 si rien n'a pu être mesuré.
+    D'abord `chauffe_s` secondes d'images NON comptées : une fenêtre qui vient de s'ouvrir, ou un
+    écran qui vient de changer de mode, rend ses premières images à une autre cadence (mesuré sur
+    le poste de dev : 61,7 Hz à la première mesure après un passage à 60 Hz, puis 60,0 à chacune
+    des suivantes). Ensuite, l'inverse de l'intervalle MÉDIAN entre deux images (vsync) : la
+    médiane ignore une image sautée, qui ferait croire à un écran plus lent. Rend 0.0 si rien n'a
+    pu être mesuré.
 
     `horloge` n'existe que pour l'autotest de `stimulus/ecran.py`.
     """
-    surface.fill(FOND)
-    pygame.display.flip()
-    pygame.event.pump()
+    debut = horloge()
+    while True:
+        surface.fill(FOND)
+        pygame.display.flip()
+        pygame.event.pump()
+        if horloge() - debut >= chauffe_s:
+            break
     intervalles = []
     avant = horloge()
     for _ in range(int(images)):
