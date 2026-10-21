@@ -136,6 +136,7 @@
   "console.langue.lancement": "a launch",
   "console.langue.nom": "English",
   "console.langue.occupe": "Language unchanged: {quoi} is in progress. Change it from the home screen once it is over.",
+  "console.mode.appliquer_pendant_test": "This mode is being tested: its settings stay as they are until the test ends.",
   "console.mode.arreter": "Stop",
   "console.mode.bloc_entrainer": "{n}. Train",
   "console.mode.bloc_observer": "{n}. Observe",

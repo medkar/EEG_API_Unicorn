@@ -224,9 +224,10 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 
 1. **La console ne descend pas sous ~1 650 px de large** (relevé par l'auteur de la page en blocs,
    préexistant, non remesuré ici). À vérifier sur l'écran de la séance.
-2. **« Appliquer » sur la page d'un mode pendant son test change encore le magasin de réglages.**
-   Le bloquer côté interface serait recopier une règle que le moteur doit porter. Parqué avec
-   « Connecter ».
+2. ~~**« Appliquer » sur la page d'un mode pendant son test change encore le magasin de
+   réglages.**~~ ➜ **Traité le 2026-10-21** : le MOTEUR refuse de changer les réglages d'un mode
+   pendant son test (`_refus_reglage_pendant_test`), et la page grise « Appliquer », sa bulle
+   disant pourquoi. Les réglages des autres modes restent libres.
 3. **Si le flux de marqueurs d'une application n'est pas visible à l'entrée d'une page de mode**,
    la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu. Antérieur au
    chantier ; relève de « Connecter ».

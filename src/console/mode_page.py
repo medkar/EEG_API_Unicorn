@@ -450,6 +450,12 @@ class ModePage(QWidget):
         self.formulaire.show_avertissement(ack.get("warning", ""))
 
     def update_from(self, state):
+        # Pendant le TEST de ce mode, le moteur refuse de changer ses réglages : « Appliquer » se
+        # grise, et sa bulle dit pourquoi. La règle est au moteur ; la page ne fait que la montrer.
+        en_test = self.console.mesure_en_cours(self.spec.get("test_id"))
+        self.formulaire.bouton.setEnabled(not en_test)
+        self.formulaire.bouton.setToolTip(tr("console.mode.appliquer_pendant_test") if en_test
+                                          else "")
         mode_state = (state.get("modes_state") or {}).get(self.mode_id)
         self._marche(mode_state is not None)
         if mode_state is None:

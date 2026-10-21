@@ -69,6 +69,7 @@
   "moteur.refus.ne_propose_rien": "\"{reglage}\" does not suggest any setting for \"{mode}\" (affected modes: {liste}).",
   "moteur.refus.non_demarre": "\"{mode}\" is not started",
   "moteur.refus.pas_dans_le_moteur": "\"{mode}\" does not run in the engine: {raison}",
+  "moteur.refus.reglage_pendant_test": "\"{test}\" is running: the settings of \"{mode}\" stay as they are until the test ends, since it runs on the settings it received at the start.",
   "moteur.refus.rien_a_enregistrer": "nothing to record: no training is waiting for your decision.",
   "moteur.refus.rien_a_jeter": "nothing to discard: no training is waiting for your decision.",
   "moteur.refus.sans_calibration": "\"{mode}\" learns nothing: there is nothing to train.",

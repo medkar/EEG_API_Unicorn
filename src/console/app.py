@@ -4635,6 +4635,16 @@ def _smoke():
         and page.bouton_essayer.isEnabled() and not page.note_tests.isVisibleTo(page),
         "revenir à l'écran rend le rafraîchissement et les deux « Tester »")
 
+    # Pendant le TEST du SSVEP, sa page grise « Appliquer » (le moteur refuserait), avec la
+    # raison dans la bulle ; le test fini, le bouton revient.
+    reelle.show_mode("ssvep")
+    en_test = {**fake_state(), "mesure": {"mode_id": "ssvep_taux", "phase": "essais"}}
+    reelle.apply_state(en_test)
+    grise = (not page.formulaire.bouton.isEnabled()) and bool(page.formulaire.bouton.toolTip())
+    reelle.apply_state({**en_test, "mesure": {"mode_id": "ssvep_taux", "phase": "fini"}})
+    chk(grise and page.formulaire.bouton.isEnabled() and not page.formulaire.bouton.toolTip(),
+        "pendant le test du mode, « Appliquer » est grisé, avec sa raison ; le test fini, il revient")
+
     # Un avertissement (proposition ACCEPTÉE, mais hors de la plage confortable) ne doit PAS
     # ressembler à un refus. Cas connu : 60 Hz, alpha 10,5 Hz, 5 cibles — le même triplet que le
     # test de non-régression `propose_frequencies` de config.py, qui produit cet avertissement.

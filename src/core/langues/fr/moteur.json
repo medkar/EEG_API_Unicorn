@@ -69,6 +69,7 @@
   "moteur.refus.ne_propose_rien": "« {reglage} » ne propose aucun réglage pour « {mode} » (modes concernés : {liste}).",
   "moteur.refus.non_demarre": "« {mode} » n'est pas démarré",
   "moteur.refus.pas_dans_le_moteur": "« {mode} » ne tourne pas dans le moteur : {raison}",
+  "moteur.refus.reglage_pendant_test": "« {test} » est en cours : les réglages de « {mode} » ne changent pas avant la fin du test, qui tourne sur ceux qu'il a reçus au départ.",
   "moteur.refus.rien_a_enregistrer": "rien à enregistrer : aucun entraînement n'attend ta décision.",
   "moteur.refus.rien_a_jeter": "rien à jeter : aucun entraînement n'attend ta décision.",
   "moteur.refus.sans_calibration": "« {mode} » n'apprend rien : il n'y a rien à entraîner.",

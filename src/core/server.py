@@ -627,6 +627,19 @@ class EngineServer:
         reglages = dict(runtime.params) if runtime is not None else self._reglages_de(mode)
         return None if reglages.get(cle, valeur) == valeur else raison
 
+    def _refus_reglage_pendant_test(self, spec, mesure):
+        """Refuser de régler `spec` parce que SON test tourne ? La raison, ou None.
+
+        Le test tourne sur les réglages qu'il a reçus au départ. Les changer en route ne change
+        pas le test, mais change ceux que le mode gardera ensuite : le verdict parlerait alors
+        d'une configuration qui n'est plus celle du mode, sans que rien ne le dise.
+        """
+        if mesure is None or mesure.terminee or not spec.test_id:
+            return None
+        if mesure.spec.id != spec.test_id:
+            return None
+        return tr("moteur.refus.reglage_pendant_test", mode=spec.label, test=mesure.spec.label)
+
     def _refus_mode_pendant_mesure(self, spec, mesure):
         """Refuser de démarrer `spec` parce qu'une mesure lit SES marqueurs ? La raison, ou None.
 
@@ -1475,6 +1488,9 @@ class EngineServer:
                 return {"accepted": False,
                         "reason": tr("moteur.refus.pas_dans_le_moteur", mode=spec.label,
                                      raison=spec.unavailable)}
+            refus = self._refus_reglage_pendant_test(spec, self.mesure)
+            if refus:
+                return {"accepted": False, "reason": refus}
             # Une seule lecture de `self.active` : `submit` tourne sur le fil de l'APPELANT, la
             # boucle peut arrêter ce mode entre deux lignes, et `submit` promet de ne jamais lever.
             # Un mode arrêté entre-temps ne produit pas d'erreur : le réglage devient différé.
@@ -4658,6 +4674,26 @@ def _smoke_vol_marqueurs():
                 f"…et le test SSVEP, qui ne vole rien, est refusé pour le FLUX qu'il partage avec "
                 f"son mode ({refus_ssvep[:70]}…)")
             srv.active.pop("ssvep", None)
+
+            # Pendant le TEST d'un mode, ses réglages ne bougent pas ; ceux des AUTRES modes, si.
+            class _TestSsvepEnCours:
+                spec = _reg.get_mesure("ssvep_taux")
+                marker_mode_id = ""
+                terminee = False
+
+            srv.mesure = _TestSsvepEnCours()
+            pendant = srv.submit("set_params", id="ssvep", params={})
+            autre = srv.submit("set_params", id="neuro", params={})
+            chk(not pendant.get("accepted") and "SSVEP" in (pendant.get("reason") or "")
+                and autre.get("accepted"),
+                f"pendant son test, un mode refuse qu'on change ses réglages, et un autre mode "
+                f"les accepte ({(pendant.get('reason') or 'accepté')[:70]}…)")
+            _TestSsvepEnCours.terminee = True
+            apres = srv.submit("set_params", id="ssvep", params={})
+            chk(apres.get("accepted"),
+                f"…et le test fini, les réglages se changent de nouveau "
+                f"({apres.get('reason', 'accepté')})")
+            srv.mesure = None
         finally:
             _reg.MESURES = vraies
             srv.mesure = None

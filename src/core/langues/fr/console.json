@@ -136,6 +136,7 @@
   "console.langue.lancement": "un lancement",
   "console.langue.nom": "Français",
   "console.langue.occupe": "Langue inchangée : {quoi} est en cours. Change-la depuis l'accueil, une fois terminé.",
+  "console.mode.appliquer_pendant_test": "Un test de ce mode est en cours : ses réglages ne changent pas avant la fin du test.",
   "console.mode.arreter": "Arrêter",
   "console.mode.bloc_entrainer": "{n}. Entraîner",
   "console.mode.bloc_observer": "{n}. Observer",
