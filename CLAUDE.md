@@ -205,8 +205,11 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     (`console/contact_vue.py`, déclaré par le contrat : `MesureSpec.montre_contact`, sur cette
     page SEULEMENT pour l'instant) : la tête vue de dessus, un cercle par électrode (vert / rouge /
     vide sans mesure), la référence derrière les oreilles, et une barre par voie avec un REPÈRE à
-    `config.CONTACT_SIGMA_MAX` — 40 µV, **PROVISOIRE** : posé sur les séances archivées (électrodes
-    saines sous 17 µV neuf fois sur dix, un Cz dégradé au-dessus dans 17 % des essais). Le verdict
+    `config.CONTACT_SIGMA_MAX` — **25 µV** depuis le 2026-10-21, toujours **PROVISOIRE** : calé au
+    casque sur UNE séance (QA 2.1.0, recette 2.1 : bien posées 6 à 15 µV, décollées 33 à 106 µV ;
+    à 40 µV, l'ancien repère, une électrode à peine soulevée restait verte une fois sur deux).
+    ⚠️ Une SEULE pastille décollée ne déclenche pas « RÉFÉRENCE DÉCROCHÉE » (corrélation 0,76
+    pour un seuil à 0,90) : ce sont toutes les électrodes qui rougissent. Le verdict
     vient du MOTEUR (`config.contact_bon` → `snapshot()["quality"]` : `contact`, `reference_ok`,
     `seuil_contact`), vidé quand la liaison est perdue ; la console vide aussi tout si son moteur
     est mort. Il ne BLOQUE rien : le contrôle de liaison garde son [0,5 ; 500] µV. Le bruit secteur
@@ -399,7 +402,11 @@ au casque… », avec « Abandonner »), et un échec rouvre l'écran de départ
 BrainFlow, le casque toujours choisi. Tenu par le smoke (un échec rejoué, et une mutation « repli
 sur le board de test » qui rougit). ⚠️ Du 2026-09-10 au 2026-09-25, elle affichait seulement
 « LE MOTEUR S'EST ARRÊTÉ » sur une console figée ; ce message ne sert plus qu'à une liaison perdue
-EN COURS de séance.
+EN COURS de séance. ⚠️ **Le moteur jeté après un échec RETIRE ses flux** (`EngineServer.retirer_flux`,
+2026-10-21) : vu au casque, ses `quality` et `status` restaient annoncés, MUETS, sous les noms du
+moteur suivant, et `examples/receiver.py` s'y attachait sans rien recevoir. Une minuterie Qt de
+l'attente le retenait en vie (`attendre_ouverture`). Tenu par le smoke de la console, SUR LE
+RÉSEAU : un vrai moteur qui échoue, puis aucun flux annoncé et le moteur libéré.
 
 Dans la console (depuis le 2026-09-22) :
 

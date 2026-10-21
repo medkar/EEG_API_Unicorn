@@ -1172,6 +1172,45 @@ dit si la séance peut continuer, la seconde sert à trouver un réglage. Ouvert
       appliqué ; cliquer **Proposer « Fréquences des cibles »** et noter le jeu obtenu : ______ . S'il diffère de
       8,571/15/20, c'est attendu et c'est tout l'intérêt du réglage.
 
+**Séance du 2026-10-21 — le contraste du contact (QA 2.1.0).** Une personne, montage salé,
+enregistré par `research/enregistre_brut.py` (`seances/brut_20261021-161558.npz`), puis rejoué
+hors ligne par le calcul EXACT du moteur : σ sur 2 s plus 1 s de marge de filtre, chaque seconde ;
+seules les fenêtres entièrement dans une phase comptent.
+
+| Phase | Électrode | σ médian | Au-delà de 40 µV |
+|---|---|---|---|
+| Tout bien posé (37 fenêtres) | les 8 | 6 à 15 µV | 1 sur 37 (C3) |
+| C3 décollée | C3 | 106 µV | 7 sur 7 |
+| Fz à peine soulevée | Fz | 33 µV | 6 sur 13 |
+| Cz décollée | Cz | 61 µV | 5 sur 6 |
+| Cz « remise », en fait mal remise | Cz | 89 µV | 22 sur 23 |
+| Une pastille décollée | référence | corrélation 0,76 (max 0,98) | 1 sur 8 au-delà de 0,90 |
+
+Le seuil, balayé (fenêtres bien posées : 78 × 8 électrodes) :
+
+| Seuil | Fausses alarmes | C3 | Fz | Cz |
+|---|---|---|---|---|
+| 20 µV | 5,0 % | 100 % | 100 % | 100 % |
+| **25 µV** | **3,5 %** | 100 % | 92 % | 100 % |
+| 40 µV (l'ancien) | 2,2 % | 100 % | 46 % | 83 % |
+
+Décision : **25 µV**, toujours provisoire. Le plancher d'environ 2 % de fausses alarmes vient des
+clignements et des mouvements : aucun seuil ne le retire. Un critère relatif (σ d'une électrode
+divisé par la médiane des sept autres) ne fait pas mieux ici (Fz à peine soulevée : rapport 2,4).
+
+- ⚠️ **Une seule pastille décollée ne déclenche pas « RÉFÉRENCE DÉCROCHÉE ».** La corrélation reste
+  sous 0,90 ; c'est le σ de TOUTES les électrodes qui monte (24 à 97 µV). Le +1,000 cité par
+  `common_mode` a été mesuré les DEUX mastoïdes absentes. Idée non décidée : quand presque toutes
+  les électrodes rougissent ensemble, dire « vérifie les pastilles derrière les oreilles ».
+- ⚠️ **Bien posé, la corrélation inter-voies est à 0,68–0,74** ce jour-là, hors du « normal : 0,3 à
+  0,5 » qu'affiche le bandeau. Une séance : à revoir sur d'autres avant de changer le texte.
+- **2.9.4 bis**, le même jour : casque éteint ~20 s sur « Vérifier le casque », cercles vides,
+  recolorés au retour, C3 et Cz vertes en même temps que les autres. Vu par un client LSL : le flux
+  `quality` se tait pendant la coupure (21,8 s) et reprend ; le flux brut garde le même
+  identifiant, une application n'a pas à se réabonner.
+
+Une séance, une personne, une dizaine de fenêtres par geste : des indications, pas une preuve.
+
 ### 2.2 — Non-régression du SSVEP
 
 Le seul point où une régression silencieuse coûterait vraiment cher. Référence mesurée le

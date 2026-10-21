@@ -128,8 +128,13 @@ corrigés le jour même :
    des virgules écrites en dur dans les textes du moteur, et un nombre resté dans la langue où son
    texte était né.
 Et la feuille : le 1.2 bis.3 attendait « 9.6 », le champ affiche « 9.600 » depuis juillet ; c'est
-le séparateur qui compte. Restent au casque : 2.1.0 (le contraste du seuil de contact) et 2.9.4 bis
-(les cercles vides pendant une coupure).
+le séparateur qui compte. Joués au casque l'après-midi : **2.1.0** (le repère de contact passe de
+40 à 25 µV ; une seule pastille décollée ne déclenche pas « RÉFÉRENCE DÉCROCHÉE », cf. recette 2.1)
+et **2.9.4 bis** ✅ (cercles vides pendant la coupure, recolorés au retour, C3 et Cz vertes en même
+temps que les autres). Un défaut de plus, vu au casque : après un premier essai d'ouverture raté,
+l'ancien moteur laissait ses flux `quality` et `status` annoncés, MUETS, sous les mêmes noms, et
+`examples/receiver.py` s'y attachait sans rien recevoir. Corrigé (une minuterie Qt retenait le
+moteur ; un moteur jeté retire ses flux), tenu par le smoke de la console, sur le réseau.
 
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
@@ -227,8 +232,8 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
    chantier ; relève de « Connecter ».
 4. **« Vérifier le casque » ne vérifie que l'alpha** (passe du 2026-09-23, point 1.2). ➜ **En partie
    traité le 2026-10-20** : la page s'ouvre sur « Contact des électrodes » (point 1.7 bis), qui juge
-   chaque électrode sur son σ (plate, ou trop de bruit au-delà d'un repère de 40 µV, PROVISOIRE)
-   et la référence. Reste : caler le repère au casque (point 2.1.0) ; le bruit secteur et
+   chaque électrode sur son σ (plate, ou trop de bruit au-delà d'un repère de 25 µV, PROVISOIRE)
+   et la référence. Repère calé au casque le 2026-10-21 (point 2.1.0, une séance). Reste : le bruit secteur et
    l'écrêtage ne sont pas mesurés par voie. Demandé :
    que cet écran dise si le signal de CHAQUE électrode est bon (contact, bruit, saturation…), pas
    seulement mesurer l'effet de Berger. À retravailler plus tard — chantier à part.
@@ -570,7 +575,7 @@ Board de test, aucune séance en cours.
    ✅ **1.7 bis.1** En tête de page, **« Contact des électrodes »** : la tête vue de dessus (nez en
    haut), huit cercles nommés (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8), deux petits cercles derrière les
    oreilles (la référence) ; à droite, une barre par électrode coupée par un **trait vertical**, et
-   dessous « Repère : 40 µV. Au-delà, le contact n'est pas bon. »
+   dessous « Repère : 25 µV. Au-delà, le contact n'est pas bon. »
    ✅ **1.7 bis.2** Chaque cercle a la **couleur de sa barre** : vert si elle reste avant le trait, rouge
    si elle le dépasse. Le board de test a des voies jusqu'à ~73 µV : du **rouge est attendu**, et
    la phrase du haut nomme ces électrodes (« À revoir : … »).
@@ -941,14 +946,11 @@ fenêtre dans le bandeau ; un message qui suit l'élève sur la grille.
 
 # Bloc 2 — au casque
 
-> 🔔 **POINT DE VIGILANCE — séance du 2026-10-21 : VÉRIFIER LE SEUIL DE CONTACT.**
-> Le repère vert/rouge de « Contact des électrodes » (**40 µV**, `config.CONTACT_SIGMA_MAX`) est
-> **provisoire** : il ne vient pas de g.tec (qui ne publie aucun chiffre), il a été posé sur trois
-> séances archivées et un seul exemple d'électrode dégradée. Même chose pour le seuil de la
-> **référence** (corrélation entre voies > 0,90, une seule séance). **Fais le contraste du point
-> 2.1.0 avant tout le reste**, et note les valeurs : c'est ce qui décidera de les garder ou de les
-> changer. Le signal brut du contraste servira aussi à essayer, hors ligne, un critère de plus :
-> la corrélation de chaque électrode avec les autres.
+> ✅ **Contraste du contact joué le 2026-10-21** (recette 2.1) : le repère vert/rouge passe de 40 à
+> **25 µV** (`config.CONTACT_SIGMA_MAX`), toujours **provisoire** : une séance, une personne.
+> ⚠️ **Une seule pastille décollée ne déclenche PAS « RÉFÉRENCE DÉCROCHÉE »** (corrélation médiane
+> 0,76 pour un seuil à 0,90) : toutes les électrodes rougissent à la place. Rejoue le contraste du
+> 2.1.0 sur une autre personne quand l'occasion se présente.
 
 ⚠️ **Ce bloc vérifie l'OUTIL au casque, pas le niveau de décodage.** Il a été joué en entier (le
 2026-09-24, puis le MI le 2026-10-15) : une nouvelle séance ne rejoue que ce qui a été livré depuis.
@@ -992,7 +994,7 @@ Grille → **« Vérifier le casque »** → « Ouvrir » (ou, c'est la même pa
 **vert**, et la référence (derrière les oreilles) verte aussi. Une électrode rouge : appuie-la,
 mouille-la, attends quelques secondes. Un clignement fait passer Fz au rouge un instant : c'est
 normal.
-⚠️ **Le repère de 40 µV est provisoire : le contraste ci-dessous le calera (~5 min).** Vérifie
+⚠️ **Le repère de 25 µV est provisoire (une séance) : le contraste ci-dessous le recale (~5 min).** Vérifie
 d'abord que le casque est bien posé et mouillé, et que tout est vert.
 0. **Enregistre le signal brut pendant tout le contraste** : dans un second terminal, console
    ouverte, `python src/research/enregistre_brut.py`. À CHAQUE geste, tape une note puis Entrée

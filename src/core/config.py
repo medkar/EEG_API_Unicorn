@@ -42,11 +42,11 @@ SIGNAL_SAT_SIGMA = 500.0
 
 # Au-delà de ce σ, le CONTACT d'une électrode n'est pas bon : elle capte surtout du bruit
 # (électrode mal appuyée, mal mouillée). C'est le repère tracé sur les barres de « Vérifier le
-# casque ». Repère PROVISOIRE, posé sur les séances archivées de ce casque : une électrode bien
-# posée reste sous 17 µV neuf fois sur dix, une électrode dégradée dépasse souvent 40 µV. Un
-# clignement fait passer Fz au-dessus un instant : c'est normal, seule une électrode qui RESTE
-# au-dessus est mal posée.
-CONTACT_SIGMA_MAX = 40.0
+# casque ». Repère PROVISOIRE, calé au casque sur une seule séance (docs/recette.md, 2.1) : les
+# électrodes bien posées y restent entre 6 et 15 µV, une électrode décollée monte entre 33 µV (à
+# peine soulevée) et 106 µV. Un clignement fait passer Fz au-dessus un instant : c'est normal,
+# seule une électrode qui RESTE au-dessus est mal posée.
+CONTACT_SIGMA_MAX = 25.0
 
 
 # Corrélation médiane entre voies au-delà de laquelle la RÉFÉRENCE (mastoïde) est décrochée.
