@@ -305,7 +305,8 @@ class MesurePage(QWidget):
         dedans.setContentsMargins(0, 0, 0, 0)
         # Le contact de chaque électrode, si le contrat de la mesure le demande (« Vérifier le
         # casque ») : en tête, et visible avant, pendant et après la mesure.
-        self.vue_contact = VueContact() if spec.get("montre_contact") else None
+        self.vue_contact = (VueContact(spec.get("key_channels") or ())
+                            if spec.get("montre_contact") else None)
         if self.vue_contact is not None:
             dedans.addWidget(self.vue_contact)
         dedans.addWidget(self.note)

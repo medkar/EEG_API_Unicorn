@@ -202,8 +202,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
     le pic mesuré** à `alpha_hz`. ⚠️ Ce bouton échouait SYSTÉMATIQUEMENT jusqu'au 2026-09-21
     (`set_params` exigeait un mode démarré) — trouvé par la QA, pas par un test.
     **Depuis le 2026-10-20, la page s'ouvre sur le CONTACT de chaque électrode**
-    (`console/contact_vue.py`, déclaré par le contrat : `MesureSpec.montre_contact`, sur cette
-    page SEULEMENT pour l'instant) : la tête vue de dessus, un cercle par électrode (vert / rouge /
+    (`console/contact_vue.py`, déclaré par le contrat : `MesureSpec.montre_contact`) — et, depuis
+    le 2026-10-21, sur le CONTRÔLE DE LIAISON avant chaque « Commencer », à la place de ses barres :
+    une électrode se lit pareil partout. Les électrodes CLÉS de ce qu'on lance (`key_channels`) y
+    sont entourées en bleu, schéma et barres. La tête vue de dessus, un cercle par électrode (vert / rouge /
     vide sans mesure), la référence derrière les oreilles, et une barre par voie avec un REPÈRE à
     `config.CONTACT_SIGMA_MAX` — **25 µV** depuis le 2026-10-21, toujours **PROVISOIRE** : calé au
     casque sur UNE séance (QA 2.1.0, recette 2.1 : bien posées 6 à 15 µV, décollées 33 à 106 µV ;

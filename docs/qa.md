@@ -551,10 +551,13 @@ rafraîchissement qui reste grisé une fois revenu à l'écran.
 Il s'intercale devant **chaque** « Commencer » : Vérifier le casque, Entraîner, Tester. Tu le verras
 aux points 1.8 à 1.10 ; regarde-le une fois pour lui-même.
 
-✅ **1.7.1** Un écran « Contrôle de la liaison casque » montre **le σ de chacune des huit voies**, un verdict par
-voie, et deux boutons : **« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance.
-✅ **1.7.2** **Partout**, une phrase « Voies clés : … (encadrées). Saline-les en priorité. … », et ces lignes-là
-**encadrées en bleu** : les voies du mode sur « Entraîner » et « Tester » (le test prend celles de
+✅ **1.7.1** Un écran « Contrôle de la liaison casque » montre **le schéma de la tête et une barre par
+électrode**, les mêmes que « Vérifier le casque » (vert, rouge, repère à 25 µV), et deux boutons :
+**« ← Annuler »** et un bouton de lancement qui dit ce qu'il lance. Une électrode rouge mais ni plate
+ni saturée ne bloque PAS : le refus ne porte que sur [0,5 ; 500] µV.
+✅ **1.7.2** **Partout**, une phrase « Voies clés : … (entourées en bleu). … », et ces électrodes-là
+**entourées en bleu** sur le schéma, leurs barres encadrées : les voies du mode sur « Entraîner » et
+« Tester » (le test prend celles de
 son mode, `186510f`), et **Pz, PO7, Oz, PO8** sur « Vérifier le casque » — les quatre qu'elle
 moyenne (passe du 2026-09-23). Le refus porte sur les huit dans tous les cas.
 ✅ **1.7.3** Sur board de test, les huit passent (σ mesurés de 7 à 73 µV) et on continue.
@@ -582,12 +585,15 @@ Board de test, aucune séance en cours.
    ✅ **1.7 bis.3** Les deux cercles de la référence restent **vides** : le board de test n'a pas de
    référence. La bulle ⓘ explique vert, rouge et vide.
 2. Toujours sans séance en cours, ouvre la page **SSVEP**, puis son **« Tester sur une session »**.
-   ✅ **1.7 bis.4** Ni l'une ni l'autre ne montre cette vue : elle n'est que sur « Vérifier le casque ».
+   ✅ **1.7 bis.4** Ni l'une ni l'autre ne montre cette vue : elle vit sur « Vérifier le casque » et
+   sur le contrôle de liaison (point 1.7). Sur « Vérifier le casque », **Pz, PO7, Oz et PO8** sont
+   entourées en bleu : ce sont les électrodes que la mesure moyenne.
 3. Vérifie d'abord que rien ne tourne. Change de langue (🌐), puis reviens sur « Vérifier le casque ».
    ✅ **1.7 bis.5** Textes traduits ; « 7.2 µV » en anglais, « 7,2 µV » en français.
 
 ❌ Régression : un cercle vert à côté d'une barre rouge, ou l'inverse ; une électrode rouge que la
-phrase ne nomme pas ; la vue sur une autre page.
+phrase ne nomme pas ; la vue sur une autre page que ces deux-là ; un anneau bleu sur une électrode
+que le mode ne lit pas.
 
 ### ☐ 1.8 — « Mesurer » le pic alpha depuis la page SSVEP, et un résultat en trois lignes
 

@@ -8,6 +8,9 @@ référence (`quality["reference_ok"]`) et le seuil (`quality["seuil_contact"]`)
 - rouge : mauvais contact (signal plat, ou trop de bruit : la barre dépasse le repère) ;
 - cercle vide, barre vide : pas de mesure (casque déconnecté, liaison perdue).
 
+Les électrodes CLÉS de ce qu'on s'apprête à lancer (`key_channels` du contrat : les occipitales
+du SSVEP, C3/Cz/C4 du MI…) sont entourées en bleu sur le schéma, et leur barre est encadrée.
+
 Une ligne de texte nomme aussi les électrodes à revoir : le rouge et le vert se confondent pour
 certaines personnes.
 """
@@ -17,7 +20,7 @@ import sys
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from console.banner import GRIS, ROUGE, VERT  # noqa: E402
@@ -50,17 +53,24 @@ class SchemaTete(QWidget):
     RAYON_TETE = 100.0
     RAYON_ELECTRODE = 15.0
     RAYON_MASTOIDE = 9.0
+    ECART_ANNEAU = 5.0          # l'anneau bleu d'une électrode clé, autour de sa pastille
 
     def __init__(self):
         super().__init__()
         # Le dernier état peint, lisible par les autotests : {nom: True | False | None}.
         self.etats = {nom: None for nom in POSITIONS}
         self.reference = None
+        self.cles = set()       # les NOMS des électrodes clés, entourées en bleu
         self.setFixedSize(QSize(260, 250))
 
     def montrer(self, etats, reference):
         self.etats = dict(etats)
         self.reference = reference
+        self.update()
+
+    def viser(self, cles):
+        """Les noms des électrodes à entourer : celles que lit ce qu'on s'apprête à lancer."""
+        self.cles = set(cles)
         self.update()
 
     def _point(self, x, y):
@@ -104,6 +114,13 @@ class SchemaTete(QWidget):
             self._pastille(p, self._point(x, y), self.RAYON_ELECTRODE, self.etats.get(nom), nom)
         for x, y in MASTOIDES:
             self._pastille(p, self._point(x, y), self.RAYON_MASTOIDE, self.reference, "")
+        # Un anneau, pas un remplissage : la couleur de la pastille reste celle du contact.
+        p.setPen(QPen(QColor(ACCENT), 3))
+        p.setBrush(Qt.NoBrush)
+        rayon = self.RAYON_ELECTRODE + self.ECART_ANNEAU
+        for nom in self.cles:
+            if nom in POSITIONS:
+                p.drawEllipse(self._point(*POSITIONS[nom]), rayon, rayon)
         p.end()
 
 
@@ -145,32 +162,51 @@ class BarreContact(QWidget):
 
 
 class VueContact(QGroupBox):
-    """Le schéma de la tête et les huit barres, côte à côte, sous un titre et sa bulle « ⓘ »."""
+    """Le schéma de la tête et les huit barres, côte à côte, sous un titre et sa bulle « ⓘ ».
 
-    def __init__(self):
+    `cles` : les INDICES des voies clés (`key_channels` du contrat), entourées en bleu.
+    """
+
+    LARGEUR_NOM = 40
+    LARGEUR_VALEUR = 72
+
+    def __init__(self, cles=()):
         super().__init__(tr("pages.electrodes.titre"))
+        self.cles = tuple(cles)
         self.schema = SchemaTete()
         self.bulle = QLabel("ⓘ")
         self.bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
         self.bulle.setCursor(Qt.WhatsThisCursor)
         self.bulle.setToolTip(infobulle(tr("pages.electrodes.aide")))
 
-        self.grille = QGridLayout()
-        self.noms, self.barres, self.valeurs = {}, {}, {}
-        for i, nom in enumerate(POSITIONS):
+        # Une LIGNE par voie (nom, barre, valeur), pour pouvoir l'encadrer d'un bloc. Les largeurs
+        # fixes alignent les barres d'une ligne à l'autre.
+        self.colonne = QVBoxLayout()
+        self.colonne.setSpacing(2)
+        self.noms, self.barres, self.valeurs, self.lignes = {}, {}, {}, {}
+        for nom in POSITIONS:
+            ligne = QFrame()
+            ligne.setObjectName("ligne_voie")
+            rang = QHBoxLayout(ligne)
+            rang.setContentsMargins(4, 1, 4, 1)
             etiquette = QLabel(nom)
-            etiquette.setMinimumWidth(36)
+            etiquette.setFixedWidth(self.LARGEUR_NOM)
             barre = BarreContact()
             valeur = QLabel("—")
-            valeur.setMinimumWidth(70)
-            self.grille.addWidget(etiquette, i, 0)
-            self.grille.addWidget(barre, i, 1)
-            self.grille.addWidget(valeur, i, 2)
+            valeur.setFixedWidth(self.LARGEUR_VALEUR)
+            rang.addWidget(etiquette)
+            rang.addWidget(barre, 1)
+            rang.addWidget(valeur)
+            rang.addStretch(1)          # la valeur reste collée à sa barre
+            self.colonne.addWidget(ligne)
             self.noms[nom], self.barres[nom], self.valeurs[nom] = etiquette, barre, valeur
+            self.lignes[nom] = ligne
         self.repere = QLabel("")
         self.repere.setStyleSheet(f"color: {GRIS};")
-        self.grille.addWidget(self.repere, len(POSITIONS), 1, 1, 2)
-        self.grille.setColumnStretch(1, 1)       # les barres prennent la place, pas les noms
+        sous_les_barres = QHBoxLayout()
+        sous_les_barres.setContentsMargins(4 + self.LARGEUR_NOM + 6, 0, 0, 0)
+        sous_les_barres.addWidget(self.repere)
+        self.colonne.addLayout(sous_les_barres)
 
         self.resume = QLabel("")
         self.resume.setWordWrap(True)
@@ -181,16 +217,26 @@ class VueContact(QGroupBox):
         haut.addWidget(self.resume, 1)
         cote = QHBoxLayout()
         cote.addWidget(self.schema)
-        cote.addLayout(self.grille, 1)
+        cote.addLayout(self.colonne, 1)
         layout = QVBoxLayout(self)
         layout.addLayout(haut)
         layout.addLayout(cote)
         self.update_from(None)
 
+    def viser(self, cles):
+        """Les INDICES des voies clés de ce qu'on s'apprête à lancer (`key_channels`)."""
+        self.cles = tuple(cles or ())
+
     def update_from(self, state):
         """Peint `state["quality"]` : rien à décider ici, tout vient du moteur."""
         qualite = (state or {}).get("quality") or {}
         voies = (state or {}).get("channels") or list(POSITIONS)
+        cles = {voies[i] for i in self.cles if 0 <= i < len(voies)}
+        self.schema.viser(cles)
+        for nom, ligne in self.lignes.items():
+            ligne.setStyleSheet(f"QFrame#ligne_voie {{ border: 1px solid {ACCENT}; }}"
+                                if nom in cles else "")
+            self.noms[nom].setStyleSheet("font-weight: bold;" if nom in cles else "")
         sigmas = qualite.get("sigmas") or []
         contact = qualite.get("contact") or []
         seuil = qualite.get("seuil_contact")

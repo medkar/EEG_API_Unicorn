@@ -73,7 +73,7 @@
   "pages.direct.ssvep.cible": "TARGET {i} · {hz} Hz",
   "pages.direct.ssvep.echelle": "z scale (deviation from noise) · threshold {seuil}: a target is chosen when it is above it",
   "pages.electrodes.a_revoir": "To fix: {liste}.",
-  "pages.electrodes.aide": "Each circle is an electrode, the head seen from above, nose at the top. Green: good contact. Red: the electrode picks up mostly noise (its bar goes past the mark) or picks up nothing (flat signal); press it, wet it, then wait a few seconds. Empty circle: no measurement, the headset is disconnected. A blink turns Fz red for a moment: that is normal; an electrode that STAYS red is badly placed. The two small circles behind the ears are the reference: if its pads come off, all channels measure the same thing.",
+  "pages.electrodes.aide": "Each circle is an electrode, the head seen from above, nose at the top. Green: good contact. Red: the electrode picks up mostly noise (its bar goes past the mark) or picks up nothing (flat signal); press it, wet it, then wait a few seconds. Empty circle: no measurement, the headset is disconnected. A blink turns Fz red for a moment: that is normal; an electrode that STAYS red is badly placed. The two small circles behind the ears are the reference: if its pads come off, all channels measure the same thing. Circled in blue: the electrodes read by what you are about to start; take care of them first.",
   "pages.electrodes.reference_decrochee": "Reference detached: stick the pads behind the ears back on.",
   "pages.electrodes.repere": "Mark: {seuil} µV. Beyond it, the contact is not good.",
   "pages.electrodes.sans_mesure": "No measurement: is the headset on and connected?",

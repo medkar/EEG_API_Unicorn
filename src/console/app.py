@@ -2388,6 +2388,16 @@ def _smoke():
     chk(all(state["channels"][i] in console.contact.cles.text() for i in cles_mi),
         f"les voies clés du MI sont nommées, telles que son contrat les déclare "
         f"({console.contact.cles.text()[:80]}…)")
+    # …et ENTOURÉES : le contrôle de liaison montre le schéma de « Vérifier le casque », les
+    # électrodes clés du mode cerclées de bleu, et leurs barres encadrées.
+    from console.params_form import ACCENT as _ACCENT
+    noms_mi = {state["channels"][i] for i in cles_mi}
+    vue_lc = console.contact.vue
+    chk(vue_lc.schema.cles == noms_mi
+        and all(_ACCENT in vue_lc.lignes[n].styleSheet() for n in noms_mi)
+        and not any(vue_lc.lignes[n].styleSheet() for n in vue_lc.lignes if n not in noms_mi),
+        f"le contrôle de liaison montre le schéma de la tête, les électrodes clés du MI entourées, "
+        f"barres comprises ({sorted(vue_lc.schema.cles)})")
     chk(console.contact.bouton_lancer.isEnabled() and not console.contact.refus.text(),
         "et sur un montage sain, le lancement est permis")
 
@@ -3464,8 +3474,13 @@ def _smoke():
     vue = mes.vue_contact
     chk(isinstance(vue, VueContact)
         and all(p.vue_contact is None for i, p in console.mesure_pages.items() if i != "alpha"),
-        "la page « Vérifier le casque » montre le contact des électrodes, et elle seule : c'est "
-        "le contrat de la mesure qui le déclare (`montre_contact`)")
+        "la page « Vérifier le casque » montre le contact des électrodes, et elle seule parmi les "
+        "mesures : c'est le contrat de la mesure qui le déclare (`montre_contact`)")
+    console.apply_state(fake_state())
+    occipitales = {fake_state()["channels"][i] for i in mod_alpha.SPEC.key_channels}
+    chk(vue.schema.cles == occipitales and len(occipitales) == 4,
+        f"…ses électrodes CLÉS, celles que la mesure moyenne, y sont entourées "
+        f"({sorted(vue.schema.cles)})")
     etat_contact = fake_state()
     etat_contact["quality"] = dict(
         etat_contact["quality"], sigmas=[7.2, 55.0, 6.9, 0.1, 5.5, 11.2, 6.1, 7.8],
@@ -3505,6 +3520,18 @@ def _smoke():
         and teinte("Oz") not in (_QColor(_ROUGE), _QColor(_VERT)),
         "à l'écran : la barre au-delà du repère est ROUGE, celle en deçà VERTE ; la pastille "
         "d'une électrode prend la couleur de son verdict, et reste VIDE sans mesure")
+    from console.params_form import ACCENT as _ACCENT_SCHEMA
+    schema.viser({"C3"})
+    image = schema.grab().toImage()
+
+    def anneau(nom):
+        centre = schema._point(*POSITIONS[nom])
+        rayon = schema.RAYON_ELECTRODE + schema.ECART_ANNEAU
+        return image.pixelColor(int(round(centre.x() + rayon)), int(round(centre.y())))
+    chk(anneau("C3") == _QColor(_ACCENT_SCHEMA) and anneau("C4") != _QColor(_ACCENT_SCHEMA)
+        and teinte("C3") == _QColor(_ROUGE),
+        "à l'écran : une électrode clé porte un ANNEAU bleu autour de sa pastille, qui garde la "
+        "couleur de son contact ; une autre n'en porte pas")
     # Pas de mesure : aucune qualité encore, liaison perdue (le moteur n'envoie alors aucun
     # verdict), ou moteur mort (son dernier état est figé).
     console.apply_state({**etat_contact, "quality": None})

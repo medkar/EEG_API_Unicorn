@@ -18,18 +18,12 @@ import os
 import sys
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config import SIGNAL_SAT_SIGMA  # noqa: E402
-from core.i18n import nombre, tr  # noqa: E402
-
-# Jusqu'où va la barre d'un σ. Pas le seuil de saturation (500 µV) : à cette échelle, un EEG
-# normal (5-20 µV) serait un trait invisible et l'écran ne montrerait plus rien. 40 µV est
-# l'échelle qu'utilise déjà `archive/ui.py:signal_check`, choisie pour que l'EEG occupe le
-# premier tiers et qu'une voie qui grimpe se voie tout de suite.
-SPAN_SIGMA = 40.0
+from console.contact_vue import VueContact  # noqa: E402
+from core.config import CH_NAMES, SIGNAL_SAT_SIGMA  # noqa: E402
+from core.i18n import tr  # noqa: E402
 
 
 class ContactPage(QWidget):
@@ -46,7 +40,6 @@ class ContactPage(QWidget):
         super().__init__()
         self.console = console
         self.spec = None
-        self._lignes = []          # [(cadre, etiquette, barre, verdict)] — une par voie
 
         entete = QHBoxLayout()
         self.bouton_retour = QPushButton(tr("console.contact.annuler"))
@@ -60,8 +53,9 @@ class ContactPage(QWidget):
         self.cles.setWordWrap(True)
         self.cles.setStyleSheet("color: #4c8dff;")
 
-        self.bloc_voies = QGroupBox(tr("console.contact.sigma_par_voie"))
-        self.voies_layout = QVBoxLayout(self.bloc_voies)
+        # Le même schéma et les mêmes barres que « Vérifier le casque » : une électrode se lit
+        # pareil partout. Les voies clés de ce qu'on lance y sont entourées en bleu.
+        self.vue = VueContact()
 
         # Le refus est un TEXTE À L'ÉCRAN, pas seulement un bouton grisé. Un bouton qui ne
         # réagit pas se lit comme une interface cassée.
@@ -78,7 +72,7 @@ class ContactPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
         layout.addWidget(self.cles)
-        layout.addWidget(self.bloc_voies)
+        layout.addWidget(self.vue)
         layout.addWidget(self.refus)
         layout.addWidget(self.conseil)
         layout.addWidget(self.bouton_lancer)
@@ -98,6 +92,7 @@ class ContactPage(QWidget):
         sans qu'on y touche.
         """
         self.spec = spec
+        self.vue.viser(spec.get("key_channels") or ())
         self.titre.setText(tr("console.contact.titre_vise", mode=spec["label"], geste=quoi))
         self.bouton_lancer.setText(quoi)
 
@@ -105,68 +100,25 @@ class ContactPage(QWidget):
         """Les INDICES des voies clés du mode visé, tels que le contrat les déclare."""
         return set((self.spec or {}).get("key_channels") or ())
 
-    def _construire(self, noms):
-        """(Re)construit une ligne par voie. Seulement quand leur NOMBRE change — repeindre huit
-        widgets dix fois par seconde ne coûte rien, en reconstruire dix fois par seconde si."""
-        while self.voies_layout.count():
-            item = self.voies_layout.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
-        self._lignes = []
-        for nom in noms:
-            ligne = QWidget()
-            colonnes = QHBoxLayout(ligne)
-            colonnes.setContentsMargins(0, 0, 0, 0)
-            etiquette = QLabel(nom)
-            etiquette.setMinimumWidth(70)
-            barre = QProgressBar()
-            barre.setTextVisible(False)
-            barre.setRange(0, 100)
-            verdict = QLabel("")
-            verdict.setMinimumWidth(150)
-            colonnes.addWidget(etiquette)
-            colonnes.addWidget(barre, 1)
-            colonnes.addWidget(verdict)
-            self.voies_layout.addWidget(ligne)
-            self._lignes.append((ligne, etiquette, barre, verdict))
-
     def update_from(self, state):
-        """Rend la qualité reçue et décide si le lancement est permis. Ne mesure RIEN."""
+        """Rend la qualité reçue et décide si le lancement est permis. Ne mesure RIEN.
+
+        Le schéma et les barres disent le CONTACT (vert, rouge, repère du moteur) ; le refus, lui,
+        ne porte que sur une voie plate ou saturée. Une électrode rouge mais ni plate ni saturée
+        se signale sans bloquer : c'est à l'élève de la soigner.
+        """
         state = state or {}
         quality = state.get("quality") or {}
-        noms = list(state.get("channels") or ())
-        sigmas = list(quality.get("sigmas") or ())
+        noms = list(state.get("channels") or CH_NAMES)
         verdicts = list(quality.get("verdicts") or ())
         cles = self._cles()
-
-        if not noms:
-            # Le moteur n'a pas encore publié ses voies : on nomme les lignes par leur indice
-            # plutôt que de laisser un écran vide (qui se lit « ça ne marche pas »).
-            noms = [tr("console.contact.voie_numero", i=i) for i in range(len(sigmas))]
-        if len(self._lignes) != len(noms):
-            self._construire(noms)
 
         if cles:
             libelles = ", ".join(noms[i] for i in sorted(cles) if i < len(noms))
             self.cles.setText(tr("console.contact.voies_cles", voies=libelles))
         else:
             self.cles.setText("")
-
-        for i, (ligne, etiquette, barre, verdict) in enumerate(self._lignes):
-            sigma = sigmas[i] if i < len(sigmas) else None
-            v = verdicts[i] if i < len(verdicts) else ""
-            marque = " *" if i in cles else ""
-            # Le gras d'une voie clé passe par le STYLE, pas par du balisage dans le texte.
-            etiquette.setText(noms[i] + marque)
-            etiquette.setStyleSheet("font-weight: bold;" if i in cles else "")
-            barre.setValue(0 if sigma is None
-                           else int(max(0.0, min(sigma / SPAN_SIGMA, 1.0)) * 100))
-            verdict.setText(tr("console.contact.sigma_indisponible") if sigma is None
-                            else tr("console.contact.sigma_voie", sigma=nombre(sigma, ".1f"),
-                                    verdict=v))
-            couleur = "#8a8f9c" if not v else ("#3fae5a" if v == "ok" else "#e5484d")
-            verdict.setStyleSheet(f"color: {couleur};")
-            ligne.setStyleSheet("border: 1px solid #4c8dff;" if i in cles else "")
+        self.vue.update_from(state)
 
         self.refus.setText(self._refus(quality, verdicts, noms))
         self.bouton_lancer.setEnabled(not self.refus.text())

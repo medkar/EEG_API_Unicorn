@@ -73,7 +73,7 @@
   "pages.direct.ssvep.cible": "CIBLE {i} · {hz} Hz",
   "pages.direct.ssvep.echelle": "échelle z (écart au bruit) · seuil {seuil} : une cible est choisie au-dessus",
   "pages.electrodes.a_revoir": "À revoir : {liste}.",
-  "pages.electrodes.aide": "Chaque cercle est une électrode, la tête vue de dessus, le nez en haut. Vert : bon contact. Rouge : l'électrode capte surtout du bruit (sa barre dépasse le repère) ou ne capte rien (signal plat) ; appuie-la, mouille-la, puis attends quelques secondes. Cercle vide : pas de mesure, le casque est déconnecté. Un clignement fait passer Fz au rouge un instant : c'est normal ; une électrode qui RESTE rouge est mal posée. Les deux petits cercles derrière les oreilles sont la référence : si ses pastilles se décollent, toutes les voies mesurent la même chose.",
+  "pages.electrodes.aide": "Chaque cercle est une électrode, la tête vue de dessus, le nez en haut. Vert : bon contact. Rouge : l'électrode capte surtout du bruit (sa barre dépasse le repère) ou ne capte rien (signal plat) ; appuie-la, mouille-la, puis attends quelques secondes. Cercle vide : pas de mesure, le casque est déconnecté. Un clignement fait passer Fz au rouge un instant : c'est normal ; une électrode qui RESTE rouge est mal posée. Les deux petits cercles derrière les oreilles sont la référence : si ses pastilles se décollent, toutes les voies mesurent la même chose. Entourées en bleu : les électrodes que lit ce que tu vas lancer ; soigne-les en priorité.",
   "pages.electrodes.reference_decrochee": "Référence décrochée : recolle les pastilles derrière les oreilles.",
   "pages.electrodes.repere": "Repère : {seuil} µV. Au-delà, le contact n'est pas bon.",
   "pages.electrodes.sans_mesure": "Pas de mesure : le casque est-il allumé et connecté ?",
