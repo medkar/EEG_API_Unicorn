@@ -70,6 +70,7 @@ from console.mesure_page import MesurePage  # noqa: E402
 from console.mode_page import ModePage  # noqa: E402
 from console import live_views  # noqa: E402
 from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
+from core import cvep_models  # noqa: E402  (le rafraîchissement d'un modèle c-VEP, cf. _ecran_hz)
 from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
 from core.i18n import choisir_langue, langue, retraduit, tr  # noqa: E402
 from core.modes import registry  # noqa: E402
@@ -727,7 +728,7 @@ class Console(QMainWindow):
             mode_id, "calibration",
             tr("console.avis.depart_manque_entrainement", delai=f"{DELAI_DEMARRAGE_S:.0f}"),
             avis=self._avis,
-            lancer=lambda: self._lancer_fenetre_calibration(mode_id))
+            lancer=lambda: self._lancer_fenetre_calibration(mode_id, demande["params"]))
 
     def _attente_depart(self, mode_id, cle, echec, lancer, avis):
         """La fiche d'une séance SOUMISE dont on attend de la VOIR démarrer.
@@ -810,9 +811,10 @@ class Console(QMainWindow):
                 self._avis(lien["id"], tr("console.avis.fenetre_fermee_entrainement"),
                            alerte=False)
 
-    def _lancer_fenetre_calibration(self, mode_id):
-        """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir."""
-        ouvert = self._lancer_fenetre(mode_id, calibrer=True)
+    def _lancer_fenetre_calibration(self, mode_id, params=None):
+        """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir. `params` :
+        les réglages d'« Entraîner », dont la fenêtre reçoit le rafraîchissement."""
+        ouvert = self._lancer_fenetre(mode_id, calibrer=True, params=params)
         if ouvert.get("accepted"):
             self._attacher_fenetre("calibration", mode_id)
             return
@@ -840,6 +842,10 @@ class Console(QMainWindow):
             options.extend(stimulus_registry.option_frequences(
                 stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
         options.extend(stimulus_registry.option_compte(stimulus_id, (params or {}).get("essais")))
+        # Et le RAFRAÎCHISSEMENT que la fenêtre doit tenir : le réglage du mode (SSVEP), ou celui
+        # du modèle testé (c-VEP). Sans lui, elle afficherait à celui de l'écran du poste.
+        options.extend(stimulus_registry.option_ecran(
+            stimulus_id, self._ecran_hz(stimulus_id, mode_id, params)))
         ouvert = self.lanceur.lancer(
             stimulus_id, label=spec.get("label", mesure_id), options=options)
         if ouvert.get("accepted"):
@@ -853,11 +859,13 @@ class Console(QMainWindow):
         self._avis_mesure(mesure_id, tr("console.avis.test_annule",
                                         raison=ouvert.get("reason", "")))
 
-    def _lancer_fenetre(self, mode_id, calibrer, libre=False):
+    def _lancer_fenetre(self, mode_id, calibrer, libre=False, params=None):
         """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`.
 
         `libre` : la fenêtre de DÉCODAGE en essai libre — ses arguments sont ceux que le registre
         déclare (`option_libre`), ajoutés à ceux du décodage ordinaire, fréquences comprises.
+
+        `params` : les réglages d'« Entraîner » quand `calibrer`, dont le rafraîchissement.
         """
         spec = self.catalogue.get(mode_id) or {}
         # DEUX clés distinctes : la fenêtre du PROTOCOLE d'entraînement
@@ -888,6 +896,11 @@ class Console(QMainWindow):
         # décide, pas cette ligne, qui ne fait que lui fournir ce qu'il demande.
         options.extend(stimulus_registry.option_frequences(
             stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        # 🔴 Et le RAFRAÎCHISSEMENT que la fenêtre doit tenir, quand elle sait faire passer l'écran.
+        # Sans lui, elle afficherait à celui de l'écran du poste, et un modèle c-VEP ne décode
+        # qu'au rafraîchissement de son entraînement.
+        options.extend(stimulus_registry.option_ecran(
+            stimulus_id, self._ecran_hz(stimulus_id, mode_id, params, calibrer)))
         # L'ESSAI LIBRE ajoute ce que le registre déclare (`--retour`, et `--libre` pour la fenêtre
         # qui désigne sinon des cibles). APRÈS les fréquences, jamais à leur place : sans elles,
         # la fenêtre du SSVEP afficherait le trio du dépôt, et l'indice décodé qu'elle entoure
@@ -1123,6 +1136,26 @@ class Console(QMainWindow):
         return ((etat.get("reglages") or {}).get(mode_id)
                 or ((etat.get("modes_state") or {}).get(mode_id) or {}).get("params") or {})
 
+    def _ecran_hz(self, stimulus_id, mode_id, params=None, calibrer=False):
+        """Le rafraîchissement auquel cette fenêtre doit afficher, ou None : elle mesure alors
+        l'écran, comme avant.
+
+        À l'entraînement : celui des réglages d'« Entraîner ». Sinon, d'où le registre des
+        fenêtres dit qu'il vient : le réglage du mode (SSVEP), ou le MODÈLE choisi (c-VEP), qui
+        ne marche qu'au rafraîchissement de son entraînement — celui du test s'il en porte un,
+        sinon celui du mode.
+        """
+        source = stimulus_registry.ECRAN.get(stimulus_id)
+        if source is None:
+            return None
+        params = params or {}
+        if calibrer:
+            return params.get("refresh_hz")
+        reglages = self._reglages_du_mode(mode_id) if mode_id else {}
+        if source == "modele":
+            return cvep_models.refresh_de(params.get("model") or reglages.get("model"))
+        return reglages.get("refresh_hz")
+
     def _mode_teste_par(self, mesure_id):
         """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
         return next((mid for mid, spec in self.catalogue.items()
@@ -1345,6 +1378,12 @@ def _smoke():
     qu'elle encaisse un état où tout est absent (moteur pas encore démarré), et qu'elle survit à
     une alarme. Le contenu métier, lui, est testé côté moteur — il n'y en a pas ici.
     """
+    # L'autotest ne touche JAMAIS l'écran : le filet qui rétablit le rafraîchissement après chaque
+    # fenêtre est remplacé par un espion, pour tout l'autotest (il tourne dans son propre
+    # processus). L'espion sert aussi à vérifier que le filet est tendu (« 3 bis »).
+    appels_ecran = []
+    LanceurFenetre.retablir_ecran = staticmethod(lambda: appels_ecran.append("retablir"))
+
     class _FauxMoteur:
         """Juste ce que la console lit : un état. Assez pour couvrir `refresh()`, qui est la
         SEULE ligne du fichier à toucher le moteur — sans ça, une faute de nom y passerait
@@ -3804,6 +3843,11 @@ def _smoke():
     chk(apres_freqs == ["12,15,20"],
         f"…et elle part avec les fréquences RETENUES du mode arrêté (12 · 15 · 20), pas celles du "
         f"dépôt ({argv_test[3:]})")
+    apres_ecran = (argv_test[argv_test.index("--ecran-hz") + 1:][:1]
+                   if "--ecran-hz" in argv_test else [])
+    chk(apres_ecran == ["60"],
+        f"…et avec le rafraîchissement RETENU du mode, que l'écran du poste doit tenir pendant le "
+        f"test ({argv_test[3:]})")
 
     # 🔴 Le mode testé TOURNE : on l'arrête D'ABORD. Le moteur refuse le test d'un mode qui
     # décode dès que ce mode lit des marqueurs — une seule file sous un seul identifiant, donc un
@@ -5874,6 +5918,8 @@ def _smoke():
     chk("--freqs" in argv_ess and argv_ess[argv_ess.index("--freqs") + 1:][:1] == ["12,15,20"],
         f"…et les FRÉQUENCES du mode : sans elles, l'indice entouré désignerait une autre flèche "
         f"que celle que le moteur a décodée ({argv_ess[3:]})")
+    chk("--ecran-hz" in argv_ess and argv_ess[argv_ess.index("--ecran-hz") + 1:][:1] == ["60"],
+        f"…et le RAFRAÎCHISSEMENT du mode, que l'écran du poste doit tenir ({argv_ess[3:]})")
     chk("en cours" in page_ess.essai.text() and "croix" in page_ess.essai.text()
         and not page_ess.bouton_essayer.isEnabled(),
         f"…la page dit que l'essai est en cours, et de ne rien fixer tant que la croix est là "
@@ -5933,6 +5979,41 @@ def _smoke():
         chk(moteur_faux.commandes == [("stop_mode", {"id": mid_e})],
             f"{mid_e} : …et la fermeture arrête le mode démarré pour l'essai "
             f"({moteur_faux.commandes})")
+
+    # 3 bis. L'ÉCRAN DU STIMULUS : la fenêtre part avec le rafraîchissement qu'elle doit tenir —
+    #        celui d'« Entraîner », celui du MODÈLE choisi (c-VEP), celui du mode (SSVEP).
+    import tempfile as _tempfile
+
+    import numpy as _np
+
+    _remise_a_zero()
+    with _tempfile.TemporaryDirectory() as dossier_ecran:
+        modele_75 = os.path.join(dossier_ecran, "cvep_model_20261021-120000_75Hz.npz")
+        _np.savez(modele_75, refresh=75.0)
+        sauve_ecran = console._dernier_etat
+        console._dernier_etat = {"reglages": {"cvep": {"model": modele_75},
+                                              "ssvep": {"refresh_hz": 120.0}}}
+        vus = (console._ecran_hz("cvep", "cvep", {"refresh_hz": 144.0}, calibrer=True),
+               console._ecran_hz("cvep", "cvep"),
+               console._ecran_hz("cvep", None, {"model": modele_75}),
+               console._ecran_hz("ssvep", "ssvep"),
+               console._ecran_hz("p300", "p300"))
+        chk(vus == (144.0, 75.0, 75.0, 120.0, None),
+            f"le rafraîchissement d'une fenêtre : celui d'« Entraîner », celui du MODÈLE choisi "
+            f"(c-VEP, lu dans son fichier, pour l'essai libre comme pour le test), celui du mode "
+            f"(SSVEP), et rien pour une fenêtre qui ne fait pas passer l'écran ({vus})")
+        console._lancer_fenetre("cvep", calibrer=True, params={"refresh_hz": 144.0})
+        argv_cal = (_fenetres_lancees() or [[]])[-1]
+        chk("--ecran-hz" in argv_cal and argv_cal[argv_cal.index("--ecran-hz") + 1:][:1] == ["144"]
+            and "--calibrer" in argv_cal,
+            f"« Entraîner » c-VEP lance sa fenêtre avec le rafraîchissement RÉGLÉ ({argv_cal[3:]})")
+        avant_filet = len(appels_ecran)
+        console.lanceur.arreter()
+        chk(len(appels_ecran) == avant_filet + 1,
+            f"une fenêtre TUÉE tend le filet qui rétablit l'écran "
+            f"({len(appels_ecran) - avant_filet} appel(s))")
+        console._dernier_etat = sauve_ecran
+    _remise_a_zero()
 
     # 4. Un mode qui TOURNAIT DÉJÀ (lancé depuis sa tuile, pour une application) : rien à
     #    démarrer, la fenêtre s'ouvre tout de suite, et il CONTINUE après.

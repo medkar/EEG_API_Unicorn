@@ -203,7 +203,7 @@
   "mode.ssvep.param.cibles.label": "Targets shown on",
   "mode.ssvep.param.freqs.aide": "The frequencies your application flashes, one per target. Each must divide the screen's refresh rate (at 60 Hz: 30, 20, 15, 12, 10, 8.571…) and stay far from your alpha peak. Changing this list recreates the stream: your clients must subscribe again.",
   "mode.ssvep.param.freqs.label": "Target frequencies",
-  "mode.ssvep.param.refresh_hz.aide": "The refresh rate of the screen that shows the targets, not necessarily this one: your application may run elsewhere. The possible frequencies are its whole-number divisors. After changing it, click \"Suggest\", under the alpha peak: it computes a set of frequencies for this screen, without redoing the rest. With physical targets, it no longer matters.",
+  "mode.ssvep.param.refresh_hz.aide": "The refresh rate of the screen that shows the targets, not necessarily this one: your application may run elsewhere. The possible frequencies are its whole-number divisors. After changing it, click \"Suggest\", under the alpha peak: it computes a set of frequencies for this screen, without redoing the rest. With physical targets, it no longer matters. During a test, this computer's screen switches to this value, then back.",
   "mode.ssvep.param.refresh_hz.label": "Stimulus screen refresh rate",
   "mode.ssvep.param.z_min.aide": "How far a target's signal must rise above the resting noise level (in standard deviations) to be announced. Lower: more announcements, but more errors. Higher: fewer announcements, but safer. Default 2.5. It is set in the \"1. Set up\" block of the mode; both tests use it, and that is where you see its effect.",
   "mode.ssvep.param.z_min.label": "Detection threshold",

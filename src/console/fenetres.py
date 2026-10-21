@@ -31,6 +31,7 @@ from PySide6.QtCore import QObject, QProcess, Signal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import tr  # noqa: E402
 from stimulus import registry as stimulus_registry  # noqa: E402
+from stimulus import ecran as stimulus_ecran  # noqa: E402
 
 # Combien de lignes de sortie de la fenêtre on garde pour l'écran. Assez pour porter le message
 # d'erreur d'un processus qui vient de mourir (traceback Python : la dernière ligne suffit, celle
@@ -51,6 +52,13 @@ class LanceurFenetre(QObject):
     """
 
     change = Signal()      # l'état a bougé : la console doit repeindre son bandeau
+
+    # Le FILET de l'écran : une fenêtre SSVEP ou c-VEP fait passer l'écran principal au
+    # rafraîchissement de sa séance, et le rétablit en se fermant. Tuée (« Abandonner »,
+    # fermeture de la console), elle ne le fait pas, et Windows ne le rétablit pas toujours seul.
+    # Sans écart, le filet ne fait rien. Remplaçable : l'autotest de la console ne touche jamais
+    # l'écran.
+    retablir_ecran = staticmethod(stimulus_ecran.retablir_si_change)
 
     def __init__(self, fabrique=None):
         super().__init__()
@@ -198,6 +206,7 @@ class LanceurFenetre(QObject):
         # processus, et une fenêtre plein écran orpheline reste devant l'écran de l'étudiant.
         if hasattr(proc, "waitForFinished"):
             proc.waitForFinished(2000)
+        self.retablir_ecran()
         self._quoi = ""
         self._libre = False
         self.change.emit()
@@ -231,6 +240,7 @@ class LanceurFenetre(QObject):
     def _fini(self, code, statut):
         """Le processus s'est terminé. Anormal = code non nul, ou arrêt brutal non demandé."""
         self._encaisser_sortie()
+        self.retablir_ecran()
         self._proc = None
         quoi, self._quoi = self._quoi, ""
         self._libre = False
