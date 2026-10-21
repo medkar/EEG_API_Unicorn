@@ -60,6 +60,26 @@ def confirme(voulu, mesure):
     return float(voulu)
 
 
+# Combien de mesures un écran a pour confirmer le rafraîchissement voulu. Juste après un
+# changement de mode, il lui faut parfois plus d'une seconde pour se stabiliser : mesuré sur le
+# poste de dev, 61,7 puis 61,3 Hz pour un écran passé à 60 Hz, puis 60,0 à chaque mesure suivante.
+ESSAIS_MESURE = 4
+
+
+def confirme_stable(voulu, mesurer, essais=ESSAIS_MESURE):
+    """`confirme`, avec `essais` chances : `mesurer()` est rappelée tant que la mesure tombe à côté.
+
+    Un écran qui ne tient VRAIMENT pas `voulu` échoue à chaque mesure : le refus nomme alors la
+    dernière. Un écran qui se stabilise est confirmé dès la première mesure juste.
+    """
+    mesure = None
+    for _ in range(max(1, int(essais))):
+        mesure = float(mesurer())
+        if abs(mesure - float(voulu)) <= TOLERANCE_HZ:
+            return float(voulu)
+    return confirme(voulu, mesure)
+
+
 class Bascule:
     """L'écran principal à `voulu` Hz le temps d'un `with`, puis son retour.
 
@@ -401,6 +421,32 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
             refus = str(e)
         chk(refus is not None and "60" in refus and nombre(round(mesure, 1)) in refus,
             f"une mesure à {mesure:g} Hz pour 60 demandés : REFUS qui nomme les deux ({refus})")
+
+    # --- 7 bis. Plusieurs chances pour un écran qui se stabilise ---
+    def _suite(valeurs):
+        suite, appels = iter(valeurs), []
+
+        def mesurer():
+            appels.append(1)
+            return next(suite)
+        return mesurer, appels
+
+    mesurer, appels = _suite([61.7, 61.3, 60.0, 60.0])
+    chk(confirme_stable(60.0, mesurer) == 60.0 and len(appels) == 3,
+        f"un écran qui se stabilise (61,7 puis 61,3 puis 60,0 Hz, mesuré sur le poste de dev) est "
+        f"confirmé à la mesure qui tombe juste ({len(appels)} mesures)")
+    mesurer, appels = _suite([165.0] * 10)
+    try:
+        confirme_stable(60.0, mesurer)
+        refus = None
+    except EcranRefuse as e:
+        refus = str(e)
+    chk(refus is not None and "165" in refus and len(appels) == ESSAIS_MESURE,
+        f"…mais un écran qui ne tient VRAIMENT pas 60 Hz échoue à chacune des {ESSAIS_MESURE} "
+        f"mesures, et le refus nomme la dernière ({len(appels)} mesures, {refus})")
+    mesurer, appels = _suite([59.6])
+    chk(confirme_stable(60.0, mesurer) == 60.0 and len(appels) == 1,
+        "…et un écran juste dès la première mesure ne coûte qu'une mesure")
 
     # --- 8. Le filet de la console ---
     f = _Faux(60.0, poste, enregistre=165.0)

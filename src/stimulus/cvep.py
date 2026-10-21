@@ -185,7 +185,7 @@ from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus.ecran import (ECRAN_SDL_PRINCIPAL, EcranRefuse,  # noqa: E402
-                            au_rafraichissement, confirme, hz_positif)
+                            au_rafraichissement, confirme_stable, hz_positif)
 from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
@@ -639,8 +639,10 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     if ecran_hz is not None:
         try:
-            refresh = confirme(ecran_hz, refresh if refresh is not None
-                               else frequence_mesuree(pygame, win))
+            # Plusieurs chances : juste après le changement de mode, l'écran met parfois plus
+            # d'une seconde à se stabiliser (`ecran.ESSAIS_MESURE`).
+            refresh = confirme_stable(ecran_hz, lambda: refresh if refresh is not None
+                                      else frequence_mesuree(pygame, win))
         except EcranRefuse:
             # On FERME tout avant de propager : un plein écran noir cacherait la raison du refus.
             pygame.quit()

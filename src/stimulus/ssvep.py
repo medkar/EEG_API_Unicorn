@@ -4,7 +4,7 @@
 ailleurs : `choose_frequencies` en rend TROIS (AVANT, GAUCHE, DROITE), et quelqu'un qui s'assoit
 3,6 minutes devant cet écran ne doit pas y chercher une cible qui n'existe pas. `--freqs` décide
 de ce plan, donc le nombre de cibles est la LONGUEUR de la liste, entre 2 et 4. Quatre est la
-borne de la GÉOMÉTRIE (elle a quatre places), pas celle du moteur, qui accepte jusqu'à 8 cibles.
+borne de la GÉOMÉTRIE (elle a quatre places), pas celle du moteur, qui accepte jusqu'à 10 cibles.
 
 **Des DISQUES.** Le disque est un peu PLUS grand que la flèche qu'il remplace (`RAYON_RATIO`) : une
 cible SSVEP plus petite donne une réponse plus faible, et `--smoke` compte sa surface dans les
@@ -472,7 +472,7 @@ def verifie_freqs(freqs, refresh):
     exactement la panne que `--freqs` existe pour supprimer.
 
     Le seul refus qui appartienne à la FENÊTRE est le nombre de places. Le moteur accepte jusqu'à
-    8 cibles ; cet écran a quatre directions et ne sait pas en dessiner davantage.
+    10 cibles ; cet écran a quatre directions et ne sait pas en dessiner davantage.
 
     ⚠️ **La BANDE n'est pas l'affaire de la fenêtre.** Elle ne la reçoit pas, et `validate`
     complète ce qu'on ne lui passe pas avec les DÉFAUTS du contrat : juger contre ces défauts
@@ -559,7 +559,7 @@ def bilan_de_seance(frames, sautees, refresh):
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
 from stimulus.refresh import frequence_mesuree  # noqa: E402
 from stimulus.ecran import (ECRAN_SDL_PRINCIPAL, EcranRefuse,  # noqa: E402
-                            au_rafraichissement, confirme, hz_positif)
+                            au_rafraichissement, confirme_stable, hz_positif)
 from stimulus.garde import sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
@@ -695,8 +695,10 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
     if ecran_hz is not None:
         try:
-            refresh = confirme(ecran_hz, refresh if refresh is not None
-                               else frequence_mesuree(pygame, win))
+            # Plusieurs chances : juste après le changement de mode, l'écran met parfois plus
+            # d'une seconde à se stabiliser (`ecran.ESSAIS_MESURE`).
+            refresh = confirme_stable(ecran_hz, lambda: refresh if refresh is not None
+                                      else frequence_mesuree(pygame, win))
         except EcranRefuse:
             # On FERME avant de propager, comme pour un refus de fréquences : un plein écran noir
             # cacherait le message qui explique le refus.
