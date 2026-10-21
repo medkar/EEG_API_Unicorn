@@ -64,6 +64,14 @@ TIME_CORRECTION_TIMEOUT_S = 2.0
 # seule attente longue — le motif de `server._resolve_own`, pour la même raison.
 RESOLVE_PASSE_S = 0.2
 
+# La durée MINIMALE d'une passe, même quand l'appelant demande un délai nul (le moteur, qui
+# cherche à chaque tour). Une passe nulle envoie la requête et rend la main avant que la réponse
+# n'arrive. Mesuré entre deux processus sur un poste à trois interfaces réseau (Wi-Fi, Tailscale,
+# IPv6) : à 0 s, l'émetteur est trouvé en 4 s, en 8 s, ou pas du tout en 12 s ; à 0,05 s, au
+# premier appel, à chaque fois. C'est ce que coûte un tour du moteur tant qu'il n'est pas
+# connecté.
+RESOLVE_PASSE_MIN_S = 0.05
+
 # Borne de `flux_de_marqueurs_visibles()`, en secondes. MESURÉE sur ce poste, et la mesure dit
 # d'abord ceci : avec `minimum=32`, **la borne EST le coût**, pas le pire cas.
 # Chronométré à 0 / 1 / 2 flux publiés, le résultat ne bouge pas d'un cheveu — 0,05 s -> 51 ms,
@@ -315,7 +323,8 @@ class MarkerInlet:
         """
         deadline = time.perf_counter() + self.timeout_s
         while True:
-            passe = min(RESOLVE_PASSE_S, max(0.0, deadline - time.perf_counter()))
+            passe = max(RESOLVE_PASSE_MIN_S,
+                        min(RESOLVE_PASSE_S, deadline - time.perf_counter()))
             flux = resolve_byprop("name", self.nom, minimum=32, timeout=passe)
             if flux:
                 return self._arbitre(flux)
@@ -429,6 +438,14 @@ def _selftest():
     info = StreamInfo(nom, "Markers", 1, IRREGULAR_RATE, "string", "selftest-markers")
     outlet = StreamOutlet(info)
     try:
+        # Le moteur cherche avec un délai NUL, à chaque tour : UN appel doit suffire à trouver un
+        # émetteur vivant, sinon la fenêtre publie son « calib_start » avant que le moteur ne
+        # l'entende, et la séance est perdue.
+        eclair = MarkerInlet(nom, timeout_s=0.0)
+        trouve_eclair = [eclair.resolve() for _ in range(3)]
+        chk(all(trouve_eclair),
+            f"même avec un délai NUL, chaque appel trouve un émetteur vivant ({trouve_eclair})")
+        eclair.lache()
         inlet = MarkerInlet(nom, timeout_s=5.0)
         chk(inlet.resolve() is True, "un flux publié est trouvé PAR SON NOM")
         # resolve() est IDEMPOTENT : un second appel sur un inlet déjà connecté ne doit RIEN
