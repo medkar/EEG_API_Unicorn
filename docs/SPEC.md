@@ -674,6 +674,30 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
   L'avantage visé est atteint (stimulus calib == runtime) et le coût annoncé — « fournir un
   template/SDK » — se réduit à trois émetteurs de référence et une page de contrat
   ([markers.md](markers.md)). ⚠️ **Aucune application tierce ne s'en est encore servie.**
+- **F3 — c-VEP SANS ENTRAÎNEMENT** (noté le 2026-10-21, pas implémenté). Décoder le c-VEP sans
+  passer par « 2. Entraîner » : la personne s'assoit et le mode décode, en apprenant pendant
+  l'usage. Ça existe dans la littérature, par trois voies :
+  - **Zéro entraînement par « reconvolution »** — Thielen, Marsman, Farquhar et Desain (2021),
+    *From full calibration to zero training for a code-modulated visual evoked potentials for
+    brain–computer interface*, J. Neural Eng. 18(5), 056007, doi:10.1088/1741-2552/abecef. Un
+    modèle d'ENCODAGE décrit la réponse à un code comme la somme des réponses à chaque flash : peu
+    de paramètres, donc il se cale avec les données d'une seule cible, ou d'aucune, et s'affine
+    pendant l'usage. ➜ **Le point de départ naturel ici** : le projet a déjà ce modèle,
+    `core/cvep_rcca.py` (rCCA, le second décodeur).
+  - **Non supervisé** — Thielen, Sosulski et Tangermann (2024), *Exploring new territory:
+    Calibration-free decoding for c-VEP BCI*, arXiv:2403.15521 : « unsupervised mean
+    maximization » (UMM), comparé au zéro entraînement par CCA, essai par essai et en cumulant.
+  - **Transfert entre personnes** — un modèle appris sur d'AUTRES sujets : arXiv:2311.11596
+    (une minute de calibration) ; arXiv:2601.06028 (modèle de fondation, aucune calibration :
+    au niveau d'une calibration complète sur un jeu de données, nettement en dessous sur
+    l'autre).
+  ⚠️ Avant d'y croire ici : ces chiffres viennent d'autres casques (électrodes à eau chez
+  Thielen), et les nôtres d'UNE personne sur un Unicorn à électrodes sèches. **À mesurer d'abord
+  HORS LIGNE**, dans `src/research/`, sur les séances c-VEP archivées (justesse par bloc et temps
+  avant la première décision fiable, contre le rCCA entraîné), avant de toucher au produit. Côté
+  produit, il faudrait un mode qui décode SANS modèle et rend ses premières décisions moins sûres
+  (le dire à l'écran), et « 2. Entraîner » deviendrait facultatif. Résumés lus, textes intégraux
+  non relus : à vérifier avant d'en tirer un chiffre.
 
 ## 14. Roadmap / TODO
 
