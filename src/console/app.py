@@ -901,6 +901,9 @@ class Console(QMainWindow):
         # du modèle testé (c-VEP). Sans lui, elle afficherait à celui de l'écran du poste.
         options.extend(stimulus_registry.option_ecran(
             stimulus_id, self._ecran_hz(stimulus_id, mode_id, params)))
+        # …et les CIBLES du modèle testé (c-VEP) : la fenêtre doit afficher celles qu'il a apprises.
+        options.extend(stimulus_registry.option_cibles(
+            stimulus_id, self._n_cibles(stimulus_id, mode_id, params)))
         ouvert = self.lanceur.lancer(
             stimulus_id, label=spec.get("label", mesure_id), options=options)
         if ouvert.get("accepted"):
@@ -956,6 +959,9 @@ class Console(QMainWindow):
         # qu'au rafraîchissement de son entraînement.
         options.extend(stimulus_registry.option_ecran(
             stimulus_id, self._ecran_hz(stimulus_id, mode_id, params, calibrer)))
+        # Et le NOMBRE DE CIBLES : celui d'« Entraîner », ou celui du modèle choisi (c-VEP).
+        options.extend(stimulus_registry.option_cibles(
+            stimulus_id, self._n_cibles(stimulus_id, mode_id, params, calibrer)))
         # L'ESSAI LIBRE ajoute ce que le registre déclare (`--retour`, et `--libre` pour la fenêtre
         # qui désigne sinon des cibles). APRÈS les fréquences, jamais à leur place : sans elles,
         # la fenêtre du SSVEP afficherait le trio du dépôt, et l'indice décodé qu'elle entoure
@@ -1210,6 +1216,18 @@ class Console(QMainWindow):
         if source == "modele":
             return cvep_models.refresh_de(params.get("model") or reglages.get("model"))
         return reglages.get("refresh_hz")
+
+    def _n_cibles(self, stimulus_id, mode_id, params=None, calibrer=False):
+        """Le nombre de cibles que cette fenêtre doit afficher, ou None : elle garde alors son
+        défaut. À l'entraînement : le réglage d'« Entraîner ». Sinon : celui du MODÈLE choisi, lu
+        dans son fichier — celui du test s'il en porte un, sinon celui du mode."""
+        if stimulus_id not in stimulus_registry.CIBLES:
+            return None
+        params = params or {}
+        if calibrer:
+            return params.get("n_cibles")
+        reglages = self._reglages_du_mode(mode_id) if mode_id else {}
+        return cvep_models.cibles_de(params.get("model") or reglages.get("model"))
 
     def _mode_teste_par(self, mesure_id):
         """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
@@ -6130,7 +6148,7 @@ def _smoke():
     _remise_a_zero()
     with _tempfile.TemporaryDirectory() as dossier_ecran:
         modele_75 = os.path.join(dossier_ecran, "cvep_model_20261021-120000_75Hz.npz")
-        _np.savez(modele_75, refresh=75.0)
+        _np.savez(modele_75, refresh=75.0, n_plan=8, n_targets=8)
         sauve_ecran = console._dernier_etat
         console._dernier_etat = {"reglages": {"cvep": {"model": modele_75},
                                               "ssvep": {"refresh_hz": 120.0}}}
@@ -6143,11 +6161,21 @@ def _smoke():
             f"le rafraîchissement d'une fenêtre : celui d'« Entraîner », celui du MODÈLE choisi "
             f"(c-VEP, lu dans son fichier, pour l'essai libre comme pour le test), celui du mode "
             f"(SSVEP), et rien pour une fenêtre qui ne fait pas passer l'écran ({vus})")
-        console._lancer_fenetre("cvep", calibrer=True, params={"refresh_hz": 144.0})
+        cibles_vues = (console._n_cibles("cvep", "cvep", {"n_cibles": 9}, calibrer=True),
+                       console._n_cibles("cvep", "cvep"),
+                       console._n_cibles("cvep", None, {"model": modele_75}),
+                       console._n_cibles("ssvep", "ssvep"))
+        chk(cibles_vues == (9, 8, 8, None),
+            f"le nombre de cibles d'une fenêtre : celui d'« Entraîner », celui du MODÈLE choisi "
+            f"(c-VEP, pour l'essai libre comme pour le test), rien pour une autre fenêtre "
+            f"({cibles_vues})")
+        console._lancer_fenetre("cvep", calibrer=True, params={"refresh_hz": 144.0, "n_cibles": 9})
         argv_cal = (_fenetres_lancees() or [[]])[-1]
         chk("--ecran-hz" in argv_cal and argv_cal[argv_cal.index("--ecran-hz") + 1:][:1] == ["144"]
+            and argv_cal[argv_cal.index("--cibles") + 1:][:1] == ["9"]
             and "--calibrer" in argv_cal,
-            f"« Entraîner » c-VEP lance sa fenêtre avec le rafraîchissement RÉGLÉ ({argv_cal[3:]})")
+            f"« Entraîner » c-VEP lance sa fenêtre avec le rafraîchissement et le nombre de cibles "
+            f"RÉGLÉS ({argv_cal[3:]})")
         avant_filet = len(appels_ecran)
         console.lanceur.arreter()
         chk(len(appels_ecran) == avant_filet + 1,

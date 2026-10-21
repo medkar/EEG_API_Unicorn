@@ -177,6 +177,23 @@ def option_ecran(stimulus_id, hz):
     return ("--ecran-hz", f"{hz:g}")
 
 
+# Les fenêtres dont le NOMBRE DE CIBLES est un réglage d'entraînement porté par le modèle : la
+# console le leur passe (`--cibles`), celui d'« Entraîner » ou celui du modèle choisi.
+CIBLES = {"cvep"}
+
+
+def option_cibles(stimulus_id, n):
+    """Les arguments qui font afficher `n` cibles. `()` si la fenêtre ne sait pas, ou si `n` n'est
+    pas un entier positif : la fenêtre garde alors son nombre par défaut."""
+    if stimulus_id not in CIBLES or isinstance(n, bool):
+        return ()
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ()
+    return ("--cibles", str(n)) if n > 0 else ()
+
+
 def commande(stimulus_id, calibrer=False, options=()):
     """La ligne de commande complète d'une fenêtre. Lève `KeyError` si la clé est inconnue.
 
@@ -219,6 +236,7 @@ def _selftest():
     inconnus += [(k, a) for k, args in MESURE_OPTIONS.items() for a in args if not _declare(k, a)]
     inconnus += [(k, a) for k, args in LIBRE.items() for a in args if not _declare(k, a)]
     inconnus += [(k, "--ecran-hz") for k in ECRAN if not _declare(k, "--ecran-hz")]
+    inconnus += [(k, "--cibles") for k in CIBLES if not _declare(k, "--cibles")]
     chk(not inconnus,
         f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
         f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
@@ -328,6 +346,10 @@ def _selftest():
         and option_ecran("cvep", "abc") == () and option_ecran("p300", 60.0) == (),
         "…et rien sans valeur, sur une valeur absurde, ou pour une fenêtre qui ne fait pas "
         "passer l'écran : elle mesure alors l'écran, comme avant")
+    chk(option_cibles("cvep", 8) == ("--cibles", "8") and option_cibles("cvep", None) == ()
+        and option_cibles("cvep", 0) == () and option_cibles("ssvep", 8) == (),
+        f"le nombre de cibles ne part qu'à la fenêtre c-VEP, et seulement s'il est lisible "
+        f"({option_cibles('cvep', 8)}, {option_cibles('ssvep', 8)})")
     chk(set(ECRAN) == {"ssvep", "cvep"} and set(ECRAN.values()) <= {"reglage", "modele"},
         f"seuls le SSVEP et le c-VEP font passer l'écran, et chacun dit d'où vient la valeur "
         f"({ECRAN})")

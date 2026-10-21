@@ -88,7 +88,8 @@ import time as _time
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (CVEP_BAND, CVEP_BITS, CVEP_CHANNELS, CVEP_CORR_MIN,  # noqa: E402
                          CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
-                         CVEP_MODEL_PATH, CVEP_N_TARGETS, CVEP_PEREMPTION_CYCLES,
+                         CVEP_MODEL_PATH, CVEP_N_TARGETS, CVEP_N_TARGETS_MAX,
+                         CVEP_N_TARGETS_MIN, CVEP_PEREMPTION_CYCLES,
                          CVEP_VOTE_LEN, MARKER_STREAM_DEFAULT, SSVEP_WARMUP_S,
                          use_utf8_console)
 
@@ -180,7 +181,9 @@ class CVEPRuntime(ModeRuntime):
             # « aucun modèle » ; il reste celui du fichier effacé entre la validation et le
             # démarrage, que seul le moteur peut voir (même garde que P300Runtime/ErrPRuntime).
             raise ValueError(raison)
-        self.plan, self.code = build_targets()
+        # Les cibles sont celles du MODÈLE : leur nombre est un réglage de son entraînement, et
+        # la fenêtre (lancée par la console avec ce nombre) l'annonce sur chaque marqueur de cycle.
+        self.plan, self.code = build_targets(n=cvep_models.cibles_du_modele(self.model))
         desaccord = self._desaccord_code()
         if desaccord is not None:
             raise ValueError(desaccord)
@@ -264,10 +267,10 @@ class CVEPRuntime(ModeRuntime):
         if self.model.code_len != len(self.code):
             return tr("mode.cvep.desaccord.code", modele=self.model.code_len, bits=CVEP_BITS,
                       actuel=len(self.code))
-        # ...et le NOMBRE DE CIBLES sur lequel il a été calibré (`CVEPModel.save` enregistre ce
-        # champ pour pouvoir prévenir). Le template eCCA est COMMUN à tous les lags, donc un
-        # modèle calibré sur 3 cibles « marche » techniquement à 6 : il publie six corrélations
-        # d'apparence normale, dont trois sortent de lags que la calibration n'a JAMAIS présentés.
+        # ...et les cibles qu'il a VUES, face à celles que son entraînement affichait (le plan,
+        # `cibles_du_modele`). Une séance interrompue en a vu moins : le template eCCA étant
+        # COMMUN à tous les lags, le modèle « marcherait » quand même, en publiant des corrélations
+        # d'apparence normale pour des lags que la calibration n'a JAMAIS présentés.
         # `0` = champ absent : on ne peut alors rien en dire, et refuser jetterait un modèle
         # valide (par exemple `data/cvep_model.npz`).
         cibles = int(getattr(self.model, "n_targets", 0) or 0)
@@ -464,6 +467,16 @@ class CVEPRuntime(ModeRuntime):
                 self._refuse_marqueur(f"« {refresh!r} » n'est pas un rafraîchissement "
                                       f"({type(refresh).__name__}) — le marqueur de cycle doit "
                                       f"porter un champ `refresh` en Hz")
+                continue
+            # Le NOMBRE DE CIBLES que la fenêtre affiche (champ facultatif : une application qui
+            # ne l'envoie pas n'est pas jugée). Un autre que celui du modèle ferait décoder des
+            # lags qui ne sont pas à l'écran, avec des corrélations d'apparence normale.
+            cibles = marqueur.get("targets")
+            if cibles is not None and (isinstance(cibles, bool) or not isinstance(cibles, int)
+                                       or cibles != len(self.plan)):
+                self._refuse_marqueur(f"la fenêtre annonce {cibles!r} cible(s), le modèle a été "
+                                      f"entraîné avec {len(self.plan)} — relance la fenêtre avec "
+                                      f"--cibles {len(self.plan)}, ou ré-entraîne")
                 continue
             try:
                 self.maj_reference(ts, refresh)
@@ -790,7 +803,13 @@ SPEC = ModeSpec(
                 # (`marker_epoch_s`, plus bas).
                 Param(key="refresh_hz", label=tr("calib.cvep.param.refresh_hz.label"),
                       kind="float", unit="Hz", default=REFRESH_REFERENCE_HZ, min=30.0, max=480.0,
-                      help=tr("calib.cvep.param.refresh_hz.aide"))),
+                      help=tr("calib.cvep.param.refresh_hz.aide")),
+                # Le NOMBRE DE CIBLES, pour expérimenter : le modèle le porte (comme le
+                # rafraîchissement), et le décodage, les tests et la fenêtre le relisent de lui.
+                Param(key="n_cibles", label=tr("calib.cvep.param.n_cibles.label"), kind="int",
+                      default=CVEP_N_TARGETS, min=CVEP_N_TARGETS_MIN, max=CVEP_N_TARGETS_MAX,
+                      help=tr("calib.cvep.param.n_cibles.aide", defaut=CVEP_N_TARGETS,
+                              mini=CVEP_N_TARGETS_MIN, maxi=CVEP_N_TARGETS_MAX))),
         # ⚠️ **UN CYCLE ENTIER du code**, grandeur distincte de `marker_epoch_s` plus bas : elle
         # dimensionne le tampon du moteur pour ce que la CALIBRATION prélève, `CVEPCalibration`
         # découpant `code_len / refresh` secondes JUSTE AVANT chaque marqueur de cycle (cf. sa
@@ -837,7 +856,7 @@ def _selftest():
         ok = ok and bool(cond)
 
     @contextlib.contextmanager
-    def _modele_temporaire(modele=None, n_targets=CVEP_N_TARGETS):
+    def _modele_temporaire(modele=None, n_targets=CVEP_N_TARGETS, n_plan=0):
         """Pointe `CVEP_MODEL_PATH` vers CE modèle (sauvegardé dans un dossier temporaire) le
         temps du bloc `with` — ou vers un chemin qui n'existe pas si `modele` est None (« aucun
         modèle »). Restauré et le dossier nettoyé ENSUITE, quoi qu'il arrive.
@@ -859,7 +878,7 @@ def _selftest():
                 CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model.npz"))
             else:
                 CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model.npz"),
-                                              n_targets=n_targets)
+                                              n_targets=n_targets, n_plan=n_plan)
             yield
         finally:
             CVEP_MODEL_PATH = avant
@@ -981,16 +1000,15 @@ def _selftest():
         f"config actuelle construit, en nommant les deux longueurs ({refus_code})")
 
     # --- 4bis. Le refus de NOMBRE DE CIBLES : `n_targets` PRÉVIENT -----------------------------
-    # ⚠️ `CVEPModel.save` enregistre ce champ pour pouvoir prévenir. Cas concret : une
-    # calibration interrompue après deux cibles sur six, ou un `CVEP_N_TARGETS` remis à 6 après
-    # une calibration rapide à 3. Le template eCCA étant COMMUN à tous les lags, le modèle
-    # « marche » : six corrélations d'apparence normale, dont quatre issues de lags jamais
-    # validés.
+    # ⚠️ `CVEPModel.save` enregistre les cibles VUES (`n_targets`) et AFFICHÉES (`n_plan`). Cas
+    # concret : une calibration interrompue après deux cibles sur six. Le template eCCA étant
+    # COMMUN à tous les lags, le modèle « marche » : six corrélations d'apparence normale, dont
+    # quatre issues de lags jamais validés.
     modele_partiel = CVEPModel(fs=250.0, refresh=60.0, code_len=63, channels=CVEP_CHANNELS)
     modele_partiel.w = np.ones(len(CVEP_CHANNELS))
     modele_partiel.template = np.zeros(63)
     modele_partiel.cv_ = 0.5
-    with _modele_temporaire(modele_partiel, n_targets=2):
+    with _modele_temporaire(modele_partiel, n_targets=2, n_plan=CVEP_N_TARGETS):
         valeurs, raison = validate(SPEC, {})
         chk(valeurs is not None, f"un modèle à 2 cibles passe la validation du CHOIX ({raison})")
         try:
@@ -1003,6 +1021,36 @@ def _selftest():
         f"...et un modèle calibré sur MOINS de cibles que le stimulus n'en affiche est refusé, en "
         f"nommant les deux nombres — sinon les cibles jamais validées publient des corrélations "
         f"plausibles ({refus_cibles})")
+    # Un modèle ENTRAÎNÉ à 8 cibles en affiche 8 : le plan suit le modèle, pas la constante.
+    rt_huit = _runtime_de_test(n_targets=8)
+    chk(len(rt_huit.plan) == 8 and rt_huit._desaccord_code() is None
+        and len({c["lag"] for c in rt_huit.plan}) == 8,
+        f"un modèle entraîné à 8 cibles décode 8 cibles, aux lags distincts "
+        f"({[c['lag'] for c in rt_huit.plan]})")
+
+    # --- 4ter. La fenêtre ANNONCE son nombre de cibles : un autre que celui du modèle est refusé
+    class _FileMarqueurs:
+        def __init__(self, marqueurs):
+            self.marqueurs = marqueurs
+
+        def markers_murs(self, _mode, post_s=0.0):
+            return self.marqueurs
+
+    rt_n = _runtime_de_test()
+    avant_n = rt_n._marqueurs_refuses
+    rt_n._encaisser_marqueurs(_FileMarqueurs([(10.0, {"mode": "cvep", "event": "cycle",
+                                                      "refresh": 60.0, "targets": 8})]))
+    refuse_8 = rt_n._marqueurs_refuses == avant_n + 1 and rt_n._ref_ts is None
+    rt_n._encaisser_marqueurs(_FileMarqueurs([(11.0, {"mode": "cvep", "event": "cycle",
+                                                      "refresh": 60.0,
+                                                      "targets": CVEP_N_TARGETS})]))
+    accepte_n = rt_n._ref_ts == 11.0
+    rt_n._encaisser_marqueurs(_FileMarqueurs([(12.0, {"mode": "cvep", "event": "cycle",
+                                                      "refresh": 60.0})]))
+    chk(refuse_8 and accepte_n and rt_n._ref_ts == 12.0,
+        "une horloge qui annonce 8 cibles face à un modèle à 6 est REFUSÉE ; la bonne annonce, ou "
+        "aucune (une application qui ne l'envoie pas), est acceptée")
+
     # ...mais un modèle sans le champ (`n_targets = 0`) reste accepté : on ne peut rien en dire,
     # et refuser jetterait un modèle valide.
     rt_ancien = _runtime_de_test(n_targets=0)

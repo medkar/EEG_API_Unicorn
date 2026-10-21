@@ -142,7 +142,8 @@ def _fit_et_compte(modele, epochs, labels, **kw):
 
 
 def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_HZ, band=CVEP_BAND,
-                      channels=None, n_cycles=CVEP_DECISION_CYCLES, secteur_hz=None):
+                      channels=None, n_cycles=CVEP_DECISION_CYCLES, secteur_hz=None,
+                      n_cibles=None):
     """Entraîne eCCA ET rCCA sur les MÊMES époques de calibration, PARMI LE MÊME JEU DE CIBLES,
     les note HORS-PLI sur les MÊMES groupes de validation croisée, et rend
     `{"eCCA": {...}, "rCCA": {...}}`.
@@ -212,7 +213,7 @@ def entraine_les_deux(epochs, labels, fs=FS_UNICORN, refresh=REFRESH_REFERENCE_H
                       nécessaire pour un test de McNemar (`gagnant`) — les comparer comme deux
                       échantillons INDÉPENDANTS serait le mauvais test. `None` si rien à mesurer.
     """
-    plan, code = build_targets()
+    plan, code = build_targets(n=n_cibles)
     codes = np.stack([np.asarray(c["code"], dtype=int) for c in plan])
     lag_a_idx = {c["lag"]: i for i, c in enumerate(plan)}
 
@@ -363,7 +364,7 @@ def horodatage(maintenant=None):
                           _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
-def chemins_libres(dossier, n_epoques, prefixe="", refresh=None):
+def chemins_libres(dossier, n_epoques, prefixe="", refresh=None, n_cibles=None):
     """(modèle eCCA, modèle rCCA, enregistrement), les TROIS garantis libres au retour.
 
     Jumeau de `p300_calib.chemins_libres` / `errp_calib.chemins_libres`, avec un fichier de plus :
@@ -381,9 +382,11 @@ def chemins_libres(dossier, n_epoques, prefixe="", refresh=None):
 
     `refresh` : le rafraîchissement de la séance. Les trois noms le portent en suffixe
     (`…_60Hz.npz`) : la liste de la console montre le nom du fichier, c'est le titre du modèle,
-    et un modèle ne marche qu'à ce rafraîchissement.
+    et un modèle ne marche qu'à ce rafraîchissement. `n_cibles` : le nombre de cibles, juste
+    avant (`…_8targets_60Hz.npz`), pour la même raison.
     """
-    suffixe = f"_{float(refresh):g}Hz" if refresh else ""
+    suffixe = ((f"_{int(n_cibles)}targets" if n_cibles else "")
+               + (f"_{float(refresh):g}Hz" if refresh else ""))
     maintenant = _time.time()
     while True:
         stamp = horodatage(maintenant)
@@ -412,7 +415,7 @@ def chemin_modele_horodate(decodeur, dossier=None):
 
 def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=None,
               band=CVEP_BAND, channels=None, n_cycles=CVEP_DECISION_CYCLES, hors_bloc=0,
-              secteur_hz=None):
+              secteur_hz=None, n_cibles=None):
     """Entraîne les DEUX décodeurs, écrit ce qui est écrivable, et rend le dict que la console
     affiche. LÈVE si la séance est trop pauvre pour valoir un modèle.
 
@@ -442,7 +445,7 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
     `entraine_les_deux`). L'archive des époques les note aussi : ses époques sont BRUTES, et un
     ré-entraînement futur doit pouvoir savoir avec quel filtre ce modèle-ci a été appris.
     """
-    plan, _code = build_targets()
+    plan, _code = build_targets(n=n_cibles)
     epochs = [np.asarray(e, dtype=float) for e in epochs]
     labels = [int(l) for l in labels]
     cibles_vues = sorted(set(labels))
@@ -454,7 +457,8 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
             hors_bloc=tr("calib.cvep.hors_bloc", n=hors_bloc) if hors_bloc else ""))
 
     res = entraine_les_deux(epochs, labels, fs=fs, refresh=refresh, band=band,
-                            channels=channels, n_cycles=n_cycles, secteur_hz=secteur_hz)
+                            channels=channels, n_cycles=n_cycles, secteur_hz=secteur_hz,
+                            n_cibles=len(plan))
     mn = gagnant(res)
     cv_e, cv_r = res["eCCA"]["justesse"], res["rCCA"]["justesse"]
     n_cibles = res["eCCA"]["n_cibles"] or len(cibles_vues)
@@ -478,7 +482,7 @@ def entrainer(epochs, labels, fs, refresh, chemin_ecca, chemin_rcca, chemin_npz=
     # 6 et publie six corrélations d'apparence normale, dont trois sortent de lags qu'aucun cerveau
     # n'a jamais vus. C'est exactement la panne invisible que `CVEPRuntime._desaccord_code` refuse
     # — mais ce refus ne peut mordre que si le fichier dit la VÉRITÉ sur lui-même.
-    res["eCCA"]["modele"].save(chemin_ecca, n_targets=len(cibles_vues))
+    res["eCCA"]["modele"].save(chemin_ecca, n_targets=len(cibles_vues), n_plan=len(plan))
     # ⚠️ **Une séance INTERROMPUE ne produit PAS de fichier rCCA, et le dire.** Le modèle rCCA
     # d'une séance à 3 cibles sur 6 porte 3 codes ; `core.cvep_models.charger` exige les codes du
     # stimulus AFFICHÉ (les 6, dans l'ordre du plan) et le refuse — donc le fichier n'apparaîtrait
@@ -553,7 +557,8 @@ def entrainer_dans(dossier, epochs, labels, fs, refresh, *, prefixe="", **kw):
     suffirait à rouvrir le trou qu'on ferme un cran plus bas (cf. `entrainer`).
     """
     chemin_ecca, chemin_rcca, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe,
-                                                          refresh=refresh)
+                                                          refresh=refresh,
+                                                          n_cibles=kw.get("n_cibles"))
     return entrainer(epochs, labels, fs, refresh, chemin_ecca=chemin_ecca,
                      chemin_rcca=chemin_rcca, chemin_npz=chemin_npz, **kw)
 
@@ -602,7 +607,10 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         sans que personne ait pu la refuser.
         """
         super().__init__(spec, params, engine, rng=rng, dossier=dossier)
-        self.plan, code = build_targets()
+        # Le NOMBRE DE CIBLES de cet entraînement (son réglage `n_cibles`), que le modèle portera.
+        # La fenêtre, lancée par la console avec ce nombre, l'annonce sur ses marqueurs de cycle.
+        self.n_cibles = int(self.params.get("n_cibles") or CVEP_N_TARGETS)
+        self.plan, code = build_targets(n=self.n_cibles)
         self.classes = tuple(c["name"] for c in self.plan)
         # `code_len` est le nom que `CVEPRuntime._phase_et_cause` lit sur son `self` : le porter
         # sous CE nom-là est ce qui permet d'appeler sa méthode telle quelle (cf. `phase_a`).
@@ -718,7 +726,9 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         """La chauffe, plus le protocole au rafraîchissement DEMANDÉ : le protocole compte des
         images, et `duree_protocole_s` les compte à `REFRESH_REFERENCE_HZ`."""
         hz = self.refresh_voulu or REFRESH_REFERENCE_HZ
-        return float(self.warmup_s) + self.duree_protocole_s * REFRESH_REFERENCE_HZ / hz
+        # Le protocole est proportionnel au nombre de cibles (blocs et cycles PAR cible).
+        return (float(self.warmup_s) + self.duree_protocole_s * REFRESH_REFERENCE_HZ / hz
+                * self.n_cibles / CVEP_N_TARGETS)
 
     # --- les marqueurs -------------------------------------------------------
 
@@ -762,6 +772,13 @@ class CVEPCalibration(MarkerCalibrationRuntime):
             # écran que celui de l'application : on l'abandonne en le disant, avant toute époque.
             self._abandonne(tr("calib.cvep.refresh_autre", annonce=nombre(float(annonce)),
                                voulu=nombre(self.refresh_voulu)))
+            return None
+        cibles = marqueur.get("targets")
+        if (self._refresh_seance is None and isinstance(cibles, int)
+                and not isinstance(cibles, bool) and cibles != len(self.plan)):
+            # Même règle pour le NOMBRE DE CIBLES (champ facultatif) : une fenêtre qui en affiche
+            # un autre que celui du réglage entraînerait un modèle pour un autre écran.
+            self._abandonne(tr("calib.cvep.cibles_autres", annonce=cibles, voulu=len(self.plan)))
             return None
         refresh, souci = self._refresh_lisible(annonce)
         if souci is not None:
@@ -891,6 +908,7 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         labels = [lag for _e, lag in enregistre]
         return entrainer_dans(self.dossier_ou_lever(), epochs, labels, float(fs), self.refresh,
                               prefixe=CALIB_CANDIDAT_PREFIXE, hors_bloc=self._hors_bloc,
+                              n_cibles=self.n_cibles,
                               band=bande_de(self.params, CVEP_BAND),
                               secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
 
@@ -956,6 +974,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         ok = ok and bool(cond)
 
     plan, code = build_targets()
+    plan_defaut = plan     # `seance` le remplace pour une séance à n cibles
     L = len(code)
 
     # ⚠️ fs et refresh sont choisis pour que `code_len * fs / refresh` soit ENTIER : sans ça, un
@@ -1103,7 +1122,7 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
     # B. Une séance ENTIÈRE, du `calib_start` au modèle relu par le mode
     # =====================================================================================
     def seance(cycles=4, blocs_par_cible=2, settle=2, fs=FS, refresh=REFRESH, snr=-6.0, graine=0,
-               cibles=None):
+               cibles=None, plan_seance=None, annonce=None):
         """(marqueurs, eeg, ts, n_epoques_attendues) — un c-VEP synthétique CONTINU.
 
         Le tampon est fabriqué cycle par cycle : le cycle k porte la réponse au code décalé du lag
@@ -1115,6 +1134,9 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
 
         rng = np.random.default_rng(graine)
         n_cyc = int(round(L * fs / refresh))
+        # `plan_seance` : le plan qu'affiche la fenêtre de CETTE séance (8 cibles…) ; `annonce` :
+        # le nombre de cibles que ses marqueurs de cycle déclarent (aucun champ si None).
+        plan = plan_seance if plan_seance is not None else plan_defaut
         cibles = plan if cibles is None else cibles
         blocs = blocs_entrelaces(cibles, cycles, blocs_par_cible, _random.Random(graine))
 
@@ -1137,7 +1159,10 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         marqueurs = []
         for i, (role, _cible) in enumerate(suite):
             instant = float(ts[0]) + i * n_cyc / fs
-            marqueurs.append((instant, {"mode": "cvep", "event": "cycle", "refresh": refresh}))
+            cycle = {"mode": "cvep", "event": "cycle", "refresh": refresh}
+            if annonce is not None:
+                cycle["targets"] = annonce
+            marqueurs.append((instant, cycle))
             precedent = suite[i - 1][0] if i > 0 else None
             if precedent == "bloc" and role != "bloc":
                 marqueurs.append((instant, {"mode": "cvep", "event": "block_end"}))
@@ -1396,6 +1421,36 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk(len(_glob.glob(_os.path.join(dossier_hz, "*cvep_model*.npz"))) == 1,
             f"…et seule la séance au bon rafraîchissement a écrit un modèle "
             f"({_glob.glob(_os.path.join(dossier_hz, '*cvep_model*.npz'))})")
+
+        # --- 5 bis 0 bis. Le NOMBRE DE CIBLES que l'entraînement DEMANDE (`n_cibles`) -----------
+        dossier_n = _os.path.join(dossier, "cibles_demandees")
+        _os.makedirs(dossier_n, exist_ok=True)
+        plan8, _code8 = build_targets(n=8)
+        marq_8, eeg_8, ts_8, att_8 = seance(graine=3, plan_seance=plan8, annonce=8)
+        moteur_8 = _MoteurFactice(eeg_8, ts_8)
+        rt_8 = CVEPCalibration(_cvep.SPEC, {"n_cibles": 8}, moteur_8, dossier=dossier_n)
+        duree_8 = rt_8.duree_estimee_s() - rt_8.warmup_s
+        chk(abs(duree_8 - CVEPCalibration.duree_protocole_s * 8 / CVEP_N_TARGETS) < 1e-9,
+            f"la durée annoncée suit le nombre de cibles : 8 cibles, c'est 8/6 du protocole "
+            f"({duree_8:.1f} s)")
+        joue(rt_8, moteur_8, marq_8, att_8)
+        res8 = rt_8.resultat or {}
+        nom8 = _os.path.basename(res8.get("modele") or "")
+        decodeur8, refus8 = _accepte(res8.get("modele", ""), REFRESH)
+        chk(rt_8.phase == "fini" and decodeur8 is not None and len(decodeur8.plan) == 8
+            and cvep_models.cibles_de(res8.get("modele", "")) == 8
+            and cvep_models.cibles_de(res8.get("modele_rcca", "")) == 8,
+            f"réglé à 8 cibles, affiché à 8 : l'entraînement va au bout, et le mode décode les 8 "
+            f"cibles du modèle, eCCA comme rCCA ({rt_8.phase}, {refus8 or 'accepté'})")
+        chk("_8targets_" in nom8 and nom8.endswith(f"_{REFRESH:g}Hz.npz"),
+            f"…et le nom du modèle dit son nombre de cibles ({nom8})")
+        moteur_6 = _MoteurFactice(eeg_8, ts_8)
+        rt_6 = CVEPCalibration(_cvep.SPEC, {}, moteur_6, dossier=dossier_n)
+        joue(rt_6, moteur_6, marq_8, att_8)
+        chk(rt_6.phase == "annule" and rt_6.resultat is None and rt_6.essai == 0
+            and "8" in (rt_6.probleme or "") and str(CVEP_N_TARGETS) in (rt_6.probleme or ""),
+            f"réglé à {CVEP_N_TARGETS} cibles mais la fenêtre en annonce 8 : ABANDONNÉ au premier "
+            f"marqueur, en nommant les deux ({rt_6.phase}, {(rt_6.probleme or '')[:80]})")
 
         # --- 5 bis. LE FILTRE : les DEUX fichiers portent la bande et le secteur --------------
         # Relus par `cvep_models.charger`, le chemin par lequel le moteur les chargera : un

@@ -129,6 +129,7 @@ class CVEPModel:
         self.template = None
         self.cv_ = None
         self.n_targets = 0     # renseigné à la sauvegarde (0 = inconnu)
+        self.n_plan = 0        # les cibles AFFICHÉES à l'entraînement (0 = inconnu : avant ce champ)
 
     # --- géométrie temporelle -------------------------------------------
     @property
@@ -239,13 +240,18 @@ class CVEPModel:
                       n_cycles), phase, lags)
 
     # --- persistance -----------------------------------------------------
-    def save(self, path=CVEP_MODEL_PATH, n_targets=0):
+    def save(self, path=CVEP_MODEL_PATH, n_targets=0, n_plan=0):
         """`n_targets` : nombre de cibles utilisées à la calibration. Le template est commun à
         tous les lags, donc un modèle à 3 cibles « marche » techniquement à 6 — mais les lags
-        supplémentaires n'auront jamais été validés. On le mémorise pour pouvoir prévenir."""
+        supplémentaires n'auront jamais été validés. On le mémorise pour pouvoir prévenir.
+
+        `n_plan` : le nombre de cibles AFFICHÉES pendant l'entraînement (son réglage). Le décodage
+        affiche ce nombre-là ; une séance interrompue en a vu moins (`n_targets`), et le mode la
+        refuse plutôt que de la faire passer pour un modèle à moins de cibles."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         np.savez(path, w=self.w, template=self.template, fs=self.fs, refresh=self.refresh,
                  code_len=self.code_len, band=np.asarray(self.band), n_targets=int(n_targets),
+                 n_plan=int(n_plan),
                  # 0 = pas de coupe-bande (un tableau npz ne porte pas de None).
                  secteur_hz=float(self.secteur_hz or 0.0),
                  channels=np.asarray(self.channels, dtype=int),
@@ -266,6 +272,7 @@ class CVEPModel:
         m.w, m.template = d["w"], d["template"]
         m.cv_ = None if float(d["cv"]) < 0 else float(d["cv"])
         m.n_targets = int(d["n_targets"]) if "n_targets" in d else 0   # 0 = inconnu
+        m.n_plan = int(d["n_plan"]) if "n_plan" in d else 0            # 0 = avant ce champ
         return m
 
 

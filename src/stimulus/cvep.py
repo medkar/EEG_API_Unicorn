@@ -13,7 +13,10 @@ et surtout l'endroit exact où prendre l'horodatage.
 Protocole publié (figé, cf. docs/SPEC.md) — UNE SEULE forme de marqueur, sur le flux
 `MARKER_STREAM_DEFAULT` (core/config.py), type "Markers", 1 voie "string", cadence irrégulière :
 
-    {"mode": "cvep", "event": "cycle", "refresh": 60.0}   # la m-séquence vient de repartir à 0
+    {"mode": "cvep", "event": "cycle", "refresh": 60.0, "targets": 6}   # le code repart à 0
+
+`targets` : le nombre de cibles affichées (`--cibles`), facultatif pour une application. Le moteur
+refuse un marqueur qui en annonce un autre que son modèle : il décoderait des cibles absentes.
 
 ⚠️ **Ce marqueur ne délimite AUCUNE époque — il tient une HORLOGE**, et c'est toute la différence
 avec `p300_stimulus.py` et `errp_stimulus.py`. Là-bas un marqueur dit « un événement a eu lieu,
@@ -39,7 +42,8 @@ Le premier est le geste critique, identique aux deux autres émetteurs :
     # pas — sans qu'aucune exception ne le signale.
     if frame % len(code) == 0:
         outlet.push_sample([json.dumps({"mode": "cvep", "event": "cycle",
-                                        "refresh": refresh})], local_clock())
+                                        "refresh": refresh, "targets": len(plan)})],
+                           local_clock())
 
 C'est LA raison d'être de ce fichier, donc ce que `--smoke` vérifie le plus durement — mais **pas
 comme `errp_stimulus.py`, et la différence vaut d'être lue avant de recopier son test.** Là-bas,
@@ -178,7 +182,8 @@ import time
 # `python src/stimulus/cvep.py` ou importé comme `stimulus.cvep`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E402
-                         CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_VOTE_LEN,
+                         CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_N_TARGETS,
+                         CVEP_N_TARGETS_MAX, CVEP_N_TARGETS_MIN, CVEP_VOTE_LEN,
                          MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from core.i18n import tr  # noqa: E402
@@ -505,8 +510,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
         max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
         settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None,
-        source_statut=None, ecran_hz=None):
+        source_statut=None, ecran_hz=None, n_cibles=CVEP_N_TARGETS):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
+
+    `n_cibles` (`--cibles`) : le nombre de cibles, celui de l'entraînement que le modèle porte. La
+    console le passe ; chaque marqueur de cycle l'annonce, et le moteur refuse un autre nombre.
 
     `libre` (`--libre`) retire la consigne et montre la croix de repos tant que le moteur chauffe ;
     `retour` (`--retour`) entoure la cible décodée. `source_retour` et `source_statut` n'existent
@@ -611,7 +619,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     from stimulus.refresh import frequence_mesuree, measure_refresh  # comme les autres stimuli
 
-    plan, code = build_targets()
+    plan, code = build_targets(n=n_cibles)
     L = len(code)
     attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
 
@@ -684,7 +692,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
               f"toutes les {L / refresh:.3f} s ; consigne tenue {cycles_par_cible} cycles "
               f"({cycles_par_cible * L / refresh:.1f} s)")
     print(f"[cvep-stim] marqueurs publiés sur « {stream_name} » : "
-          f'{{"mode": "cvep", "event": "cycle", "refresh": {refresh:.1f}}}')
+          f'{{"mode": "cvep", "event": "cycle", "refresh": {refresh:.1f}, '
+          f'"targets": {len(plan)}}}')
     print(f"[cvep-stim] ⚠️ le moteur REFUSE ces marqueurs si son modèle a été calibré à plus de "
           f"1 Hz d'écart de {refresh:.1f} Hz — il le dit, mais lis ses premières lignes")
     # ⚠️ La graine est TIRÉE quand elle n'est pas donnée, et IMPRIMÉE dans TOUS les cas. Sans ça,
@@ -981,7 +990,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         # où il n'est pas — sans qu'aucune exception ne le signale, avec des corrélations qui
         # baissent juste assez pour qu'on accuse la personne de mal fixer.
         if frame % L == 0:
-            ts = emet({"mode": "cvep", "event": "cycle", "refresh": float(refresh)},
+            ts = emet({"mode": "cvep", "event": "cycle", "refresh": float(refresh),
+                       "targets": len(plan)},
                       None if i_cible is None else plan[i_cible]["name"])
             onsets.append(ts)
             cycles += 1
@@ -1586,10 +1596,23 @@ def _smoke():
         return False
 
     # --- Le CONTRAT du marqueur : exactement ce que le moteur sait lire, rien de plus -------
-    chk(all(m == {"mode": "cvep", "event": "cycle", "refresh": 60.0} for m, _ts, _f, _c in journal),
-        "chaque marqueur est EXACTEMENT {mode: cvep, event: cycle, refresh: <float>} — le "
-        "`refresh` est OBLIGATOIRE (sans lui `CVEPRuntime._encaisser_marqueurs` les refuse tous) "
-        "et la cible consignée n'y figure PAS (cf. ⚠️ de la docstring du module)")
+    chk(all(m == {"mode": "cvep", "event": "cycle", "refresh": 60.0, "targets": len(plan)}
+            for m, _ts, _f, _c in journal),
+        "chaque marqueur est EXACTEMENT {mode: cvep, event: cycle, refresh: <float>, targets: "
+        "<nombre de cibles>} — le `refresh` est OBLIGATOIRE (sans lui "
+        "`CVEPRuntime._encaisser_marqueurs` les refuse tous) et la cible consignée n'y figure PAS "
+        "(cf. ⚠️ de la docstring du module)")
+    # Jusqu'à 10 cibles en couronne : deux disques voisins ne se touchent pas, et l'anneau de
+    # retour d'une cible n'atteint pas la suivante — à la plus petite taille de fenêtre.
+    for n_couronne in (CVEP_N_TARGETS_MIN, CVEP_N_TARGETS_MAX):
+        spots_n = positions_cibles(build_targets(n=n_couronne)[0], TAILLE_FENETRE)
+        ecart_n = min(math.dist(a[:2], b[:2]) for a, b in zip(spots_n, spots_n[1:] + spots_n[:1]))
+        r_n = spots_n[0][2]
+        chk(len(spots_n) == n_couronne
+            and ecart_n > r_n + _retour.rayon_anneau(r_n) + 2,
+            f"{n_couronne} cibles : {n_couronne} disques, et l'anneau de retour d'une cible "
+            f"n'atteint pas sa voisine (centres à {ecart_n:.0f} px, rayon {r_n}, anneau "
+            f"{_retour.rayon_anneau(r_n)})")
     chk(all(isinstance(m["refresh"], float) and not isinstance(m["refresh"], bool)
             for m, _ts, _f, _c in journal),
         "...et le `refresh` est un FLOTTANT : `bool` hérite de `int` en Python, donc un `true` "
@@ -1754,6 +1777,15 @@ def _smoke():
         f"indistinguable d'un tirage cassé ({consignes4})")
     chk(bilan3.get("graine") == 0,
         f"la graine DONNÉE est celle qui a servi, et le bilan la rend ({bilan3.get('graine')})")
+    # `--cibles 8` : la fenêtre en affiche 8, et CHAQUE marqueur de cycle l'annonce au moteur.
+    journal_n8, bilan_n8 = [], {}
+    run(windowed=True, refresh=120.0, max_frames=2 * L, cycles_par_cible=1,
+        stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+        seed=0, journal=journal_n8, bilan=bilan_n8, n_cibles=8)
+    cycles8 = [m for m, _ts, _f, _c in journal_n8 if m.get("event") == "cycle"]
+    chk(cycles8 and all(m.get("targets") == 8 for m in cycles8),
+        f"lancée avec 8 cibles, la fenêtre l'annonce sur chaque marqueur de cycle "
+        f"({len(cycles8)} marqueur(s), {sorted({m.get('targets') for m in cycles8})})")
     bilan_sans_graine = {}
     run(windowed=True, refresh=120.0, max_frames=L, cycles_par_cible=1,
         stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
@@ -2271,6 +2303,19 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
     rt.autotest_statut(chk)
 
 
+def _nombre_de_cibles(texte):
+    """`--cibles` : un entier dans les bornes du réglage d'entraînement, sinon refusé à la ligne
+    de commande, avant que la moindre fenêtre ne s'ouvre."""
+    try:
+        n = int(texte)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"« {texte} » n'est pas un nombre entier de cibles")
+    if not CVEP_N_TARGETS_MIN <= n <= CVEP_N_TARGETS_MAX:
+        raise argparse.ArgumentTypeError(f"{n} cibles : choisis entre {CVEP_N_TARGETS_MIN} et "
+                                         f"{CVEP_N_TARGETS_MAX}")
+    return n
+
+
 def _parse_args(argv):
     p = argparse.ArgumentParser(description="Stimulus c-VEP (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
@@ -2312,6 +2357,10 @@ def _parse_args(argv):
                         "block_end / calib_end autour, et un ordre de cibles ENTRELACÉ au lieu "
                         "d'un tirage. C'est la console qui la lance ; le moteur entraîne et "
                         "affiche le résultat")
+    p.add_argument("--cibles", type=_nombre_de_cibles, default=CVEP_N_TARGETS,
+                   help=f"nombre de cibles, de {CVEP_N_TARGETS_MIN} à {CVEP_N_TARGETS_MAX} (défaut "
+                        f"{CVEP_N_TARGETS}) : celui de l'entraînement, que le modèle porte. La "
+                        f"console le passe elle-même")
     p.add_argument("--cycles", type=int, default=CVEP_CAL_CYCLES,
                    help=f"cycles ENREGISTRÉS par cible en calibration (défaut "
                         f"{CVEP_CAL_CYCLES}). Sans --calibrer, ce réglage ne sert à rien. ⚠️ Le "
@@ -2340,7 +2389,7 @@ if __name__ == "__main__":
                      calibrer=args.calibrer or args.tester, tester=args.tester,
                      cycles_calib=args.cycles, libre=args.libre, retour=args.retour,
                      attente_consommateur_s=0.0 if args.no_wait else 5.0,
-                     ecran_hz=args.ecran_hz)
+                     ecran_hz=args.ecran_hz, n_cibles=args.cibles)
     except EcranRefuse as refus:
         # Sortie 2 : la fenêtre n'a rien affiché. L'écran est déjà revenu (sortie du `with`).
         print(f"[cvep-stim] ⚠️ REFUS : {refus}")

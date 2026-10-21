@@ -59,7 +59,8 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from core.config import CVEP_LAG_ROTATION, DATA_DIR, use_utf8_console  # noqa: E402
+from core.config import (CVEP_LAG_ROTATION, CVEP_N_TARGETS, CVEP_N_TARGETS_MAX,  # noqa: E402
+                         CVEP_N_TARGETS_MIN, DATA_DIR, use_utf8_console)
 
 
 import glob as _glob  # noqa: E402
@@ -92,8 +93,37 @@ _CLASSES = {
 }
 
 
-def _codes_affiches():
-    """Les codes que le stimulus affiche AUJOURD'HUI, un par cible, dans l'ordre des cibles.
+def cibles_du_modele(modele):
+    """Le nombre de cibles qu'un modèle CHARGÉ fait afficher : celui de son entraînement.
+
+    rCCA : ses codes, une ligne par cible. eCCA : `n_plan` (les cibles affichées), sinon
+    `n_targets` (un modèle d'avant ce champ), sinon le défaut du projet (`n_targets = 0`).
+    """
+    return (int(getattr(modele, "n_plan", 0) or 0) or int(getattr(modele, "n_targets", 0) or 0)
+            or CVEP_N_TARGETS)
+
+
+def cibles_de(chemin):
+    """Le nombre de cibles d'un modèle, LU sans le charger (comme `refresh_de`), ou None.
+
+    La console le passe à la fenêtre de « Tester » et de « Tester librement » : elle doit
+    afficher les cibles que le modèle a apprises. Ne lève jamais.
+    """
+    if not chemin or not _os.path.isfile(chemin):
+        return None
+    try:
+        with _np.load(chemin) as d:
+            if "codes" in d.files:
+                return int(_np.asarray(d["codes"]).shape[0])
+            n_plan = int(d["n_plan"]) if "n_plan" in d.files else 0
+            n_vues = int(d["n_targets"]) if "n_targets" in d.files else 0
+    except Exception:  # noqa: BLE001 - « ne lève jamais » : tout fichier illisible rend None
+        return None
+    return n_plan or n_vues or CVEP_N_TARGETS
+
+
+def _codes_affiches(n=None):
+    """Les codes que le stimulus affiche pour `n` cibles, un par cible, dans l'ordre des cibles.
 
     C'est `build_targets()` qui fait autorité — donc `CVEP_BITS`, `CVEP_TAPS`, `CVEP_N_TARGETS` et
     `CVEP_LAG_ROTATION` de `core/config.py`. Un modèle rCCA doit porter EXACTEMENT ces codes,
@@ -101,7 +131,7 @@ def _codes_affiches():
     simple permutation des lignes (ce que produit un changement de `CVEP_LAG_ROTATION`) ferait
     nommer la cible voisine sans que rien ne lève.
     """
-    plan, _code = build_targets()
+    plan, _code = build_targets(n=n)
     return _np.stack([_np.asarray(c["code"], dtype=int) for c in plan])
 
 
@@ -155,7 +185,11 @@ def charger(chemin):
     # sur les époques stockées (~0,3 s), inutile pour un fichier qu'on va refuser. Pourquoi :
     # voir le n° 2 de la docstring du module.
     if decodeur == "rCCA":
-        attendus = _codes_affiches()
+        # Le nombre de cibles est celui du MODÈLE (ses lignes de codes), dans les bornes du
+        # réglage ; hors bornes, on compare au défaut, et le refus dit les deux dimensions.
+        lignes = int(codes.shape[0]) if codes is not None and codes.ndim == 2 else 0
+        attendus = _codes_affiches(lignes if CVEP_N_TARGETS_MIN <= lignes <= CVEP_N_TARGETS_MAX
+                                   else None)
         if codes is None or codes.shape != attendus.shape or not _np.array_equal(codes, attendus):
             # Dire LEQUEL des deux désaccords, parce qu'ils se réparent différemment : une
             # dimension qui change vient de la config (CVEP_BITS/CVEP_N_TARGETS), un contenu qui

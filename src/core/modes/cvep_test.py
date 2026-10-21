@@ -121,16 +121,17 @@ def _label(cle):
     return next(p.label for p in SPEC_CVEP.params if p.key == cle)
 
 
-def _blocs(cycles):
-    """Les blocs que joue la fenêtre pour `cycles` par cible — la RÈGLE PARTAGÉE, pas recopiée."""
-    return blocs_entrelaces(_PLAN, int(cycles), CVEP_CAL_BLOCKS, _random.Random(0))
+def _blocs(cycles, plan=_PLAN):
+    """Les blocs que joue la fenêtre pour `cycles` par cible — la RÈGLE PARTAGÉE, pas recopiée.
+    `plan` : celui du modèle testé (ses cibles) ; le plan par défaut pour les aides du réglage."""
+    return blocs_entrelaces(plan, int(cycles), CVEP_CAL_BLOCKS, _random.Random(0))
 
 
-def _duree_protocole_s(cycles, refresh=REFRESH_REFERENCE_HZ):
+def _duree_protocole_s(cycles, refresh=REFRESH_REFERENCE_HZ, plan=_PLAN):
     """La séance de la fenêtre hors chauffe, à `refresh` Hz : par bloc le settle, les cycles
     enregistrés et la phase de retour, plus le cycle de garde dont le marqueur ferme le dernier
     bloc."""
-    blocs = _blocs(cycles)
+    blocs = _blocs(cycles, plan)
     joues = (len(blocs) * (CVEP_CAL_SETTLE_CYCLES + RETOUR_CYCLES_PAR_BLOC)
              + sum(n for _c, n in blocs) + 1)
     return joues * len(_CODE) / float(refresh)
@@ -231,10 +232,11 @@ class MesureCVEP(MesureMarqueurs):
         return 0.0
 
     def duree_estimee_s(self):
-        """La chauffe, plus la séance au rafraîchissement du MODÈLE testé : la fenêtre affiche à
-        celui-là (la console le lui passe), et le protocole compte des images."""
+        """La chauffe, plus la séance au rafraîchissement et aux cibles du MODÈLE testé : la
+        fenêtre affiche ceux-là (la console les lui passe), et le protocole compte des images."""
         return float(self.warmup_s) + _duree_protocole_s(self.params.get("essais", ESSAIS_DEFAUT),
-                                                         self._decideur.model.refresh)
+                                                         self._decideur.model.refresh,
+                                                         self._decideur.plan)
 
     def rappel(self):
         if self.phase == "essais":
@@ -710,6 +712,19 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas
         chk(abs(duree_120 - 127 * L / 120.0) < 1e-6,
             f"…et le rafraîchissement du MODÈLE : un modèle à 120 Hz fait un test deux fois plus "
             f"court ({duree_120:.1f} s)")
+        # …et les CIBLES du modèle : à 8 cibles, le test en note 8 (hasard 1/8) et dure plus.
+        chemin_6 = _cvep.CVEP_MODEL_PATH
+        _cvep.CVEP_MODEL_PATH = modele.save(_os.path.join(dossier, "cvep_model_8.npz"),
+                                            n_targets=8, n_plan=8)
+        valeurs_8, raison_8 = validate(SPEC, {"essais": 3})
+        rt8 = MesureCVEP(SPEC, valeurs_8, moteur)
+        duree_8 = rt8.duree_estimee_s() - rt8.warmup_s
+        chk(len(rt8._decideur.plan) == 8 and len(_blocs(3, rt8._decideur.plan)) == 24
+            and abs(duree_8 - _duree_protocole_s(3, REFRESH_REFERENCE_HZ, rt8._decideur.plan)) < 1e-6
+            and duree_8 > rt3.duree_estimee_s() - rt3.warmup_s,
+            f"…et les CIBLES du modèle : à 8 cibles, le test en joue 8 (24 blocs) et dure plus "
+            f"({duree_8 / 60:.1f} min, {raison_8 or 'accepté'})")
+        _cvep.CVEP_MODEL_PATH = chemin_6
         rt15 = MesureCVEP(SPEC, dict(valeurs, vote_len=_VOTE_LEN_MAX), moteur)
         chk(rt3.pre_s < rt15.pre_s <= MesureCVEP.epoque_marqueur_s,
             f"l'époque suit `vote_len`, et le tampon couvre le plus long vote ({rt15.pre_s:.2f} s)")

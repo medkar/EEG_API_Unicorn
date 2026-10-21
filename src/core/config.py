@@ -683,6 +683,11 @@ CVEP_RCCA_MARGIN = 0.08       # écart mini 1er - 2e          (35 % d'émission,
 # de justesse contre 38,1 % — 6,5 points de moins d'erreurs pour piloter, et la couronne à 6
 # couvre déjà marche arrière et arcs. Le choix se fait sur la justesse, pas sur l'ITR.
 CVEP_N_TARGETS = 6
+# Le nombre de cibles est un RÉGLAGE de « Entraîner » (`n_cibles`), porté par le modèle, pour
+# expérimenter : 6 par défaut, de 2 à 10. Au-delà de 8, les deux voisines ne sont plus qu'à 6
+# images l'une de l'autre à 60 Hz (~105 ms), sous la durée d'une réponse VEP : jamais mesuré ici.
+CVEP_N_TARGETS_MIN = 2
+CVEP_N_TARGETS_MAX = 10
 
 # Rotation de l'affectation lag <-> POSITION à l'écran. Servait à tester si une cible faible
 # suivait sa POSITION ou son LAG. Expérience close : les deux prédictions ont été réfutées, et le
