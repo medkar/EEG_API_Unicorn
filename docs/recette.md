@@ -1094,8 +1094,15 @@ en profite : ses tests suivent le réglage de « Régler ».
   suivantes : la fenêtre REFUSAIT à tort. D'où la demi-seconde de stabilisation avant de mesurer.
   En mode fenêtré, la mesure gigue davantage (59,9 à 60,9 Hz sur 60 images) : la console ouvre en
   plein écran.
-- Essais réels passés : SSVEP à 60 Hz, plein écran et fenêtré ; refus à 75 Hz, avec la liste ;
-  c-VEP à 60 Hz en plein écran, sans image sautée. L'écran est revenu à 165 Hz à chaque fois.
+- 🐛 **La fenêtre s'ouvrait sur l'écran de la SOURIS**, pas sur l'écran principal : vu en QA le
+  2026-10-21, les cibles clignotaient sur un écran secondaire (60 Hz de lui-même) pendant que
+  l'écran principal passait à 60 Hz pour rien. La mesure confirmait donc 60 Hz pour une mauvaise
+  raison, et les essais réels faits jusque-là ne prouvent rien de l'écran principal. Les cinq
+  fenêtres demandent maintenant l'écran principal (`ecran.ECRAN_SDL_PRINCIPAL`, gardé par
+  l'autotest de `ecran.py`).
+- Essais réels refaits, la souris sur un écran secondaire : la fenêtre SSVEP s'ouvre sur l'écran
+  principal, 362 images en 6 s (60,3 par seconde), aucune sautée ; la fenêtre d'entraînement
+  c-VEP, tuée, rend l'écran à 165 Hz ; refus à 75 Hz, avec la liste.
 
 **Jamais vu au casque** : ni un entraînement à un autre rafraîchissement que 60 Hz, ni l'effet du
 passage de l'écran sur une séance.

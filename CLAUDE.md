@@ -778,12 +778,21 @@ synthétique ; ils ne peuvent rien dire de l'ergonomie ni du décodage.
   rafraîchissement le temps de la séance (`stimulus/ecran.py`, `--ecran-hz`, mode temporaire de
   Windows), le confirment par une mesure (une demi-seconde de stabilisation, puis l'intervalle
   médian), et refusent sinon ; la console rétablit l'écran après toute fenêtre, tuée comprise
-  (`LanceurFenetre.retablir_ecran`). **Vérifié sur le poste de dev** (écran à 165 Hz) : Windows
+  (`LanceurFenetre.retablir_ecran`). Les fenêtres s'ouvrent sur l'écran PRINCIPAL, où que soit la
+  souris (`ECRAN_SDL_PRINCIPAL`) : sans ça, pygame suivait la souris, et les cibles clignotaient
+  sur un écran secondaire. **Vérifié sur le poste de dev** (écran à 165 Hz) : Windows
   rétablit SEUL un mode temporaire quand le processus qui l'a demandé est tué, le filet reste une
   sécurité ; demandé à 60 Hz, l'écran se déclare à 59 Hz mais tourne à 60,1 Hz (cycle c-VEP de
   1047,9 ms pour 1050 annoncés) ; la mesure prise dès l'ouverture refusait à tort (61,7 Hz), d'où
   la stabilisation. **Jamais joué au casque** : ni un entraînement à un autre rafraîchissement que
   60 Hz, ni l'effet du passage de l'écran sur une séance.
+- **La découverte LSL du moteur (2026-10-21).** Le moteur cherchait le flux de marqueurs avec un
+  délai NUL à chaque tour. Sur le poste de dev (Wi-Fi, Tailscale, IPv6), la réponse n'arrivait
+  presque jamais à temps : la fenêtre publiait son `calib_start` avant que le moteur ne l'entende,
+  et l'entraînement c-VEP abandonnait au bout de 30 s (« la fenêtre ne s'est pas annoncée »).
+  Chaque passe dure maintenant au moins 0,05 s (`markers.RESOLVE_PASSE_MIN_S`) : trouvé au
+  premier appel, `calib_start` reçu 5,8 s après le lancement de la fenêtre, et
+  `[smoke-marqueurs-relance]`, qui rougissait sur ce poste, passe.
 
 ## Pièges matériels à connaître
 

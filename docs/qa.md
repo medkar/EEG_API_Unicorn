@@ -864,9 +864,11 @@ Board de test, sur un poste dont l'écran principal ne tourne pas à 60 Hz (le p
 Note d'abord son rafraîchissement, dans Paramètres → Affichage → Affichage avancé : ___ Hz.
 
 1. Page **SSVEP**, « 1. Régler » : « Rafraîchissement de l'écran du stimulus » à **60**,
-   « Proposer », « Appliquer ». Puis **« Tester sur une session »** → « Commencer ».
-   ✅ **1.18.1** L'écran passe au noir une seconde, puis le test clignote. Échap : l'écran revient
-   au rafraîchissement noté plus haut.
+   « Proposer », « Appliquer ». Puis **« Tester sur une session »**, place la souris sur un écran
+   SECONDAIRE, et « Commencer ».
+   ✅ **1.18.1** L'écran principal passe au noir une seconde, puis le test clignote SUR L'ÉCRAN
+   PRINCIPAL, pas sur celui de la souris. Échap : l'écran revient au rafraîchissement noté plus
+   haut.
 2. Page **c-VEP** → **« Entraîner »**.
    ✅ **1.18.2** « Avant de commencer » montre **« Rafraîchissement de l'écran du stimulus ⓘ »** à
    60 ; « 1. Régler » ne le montre pas.
@@ -877,32 +879,46 @@ Note d'abord son rafraîchissement, dans Paramètres → Affichage → Affichage
    ✅ **1.18.4** Dans la liste des modèles du c-VEP, son nom finit par **`_60Hz.npz`**.
 4. Page **SSVEP** : un rafraîchissement que l'écran ne propose pas (75 sur le poste de dev),
    « Proposer », « Appliquer », « Tester sur une session » → « Commencer ».
-   ✅ **1.18.5** Le bandeau dit que la fenêtre s'est arrêtée, avec la raison : l'écran ne sait pas
-   afficher à 75 Hz, et la liste de ce qu'il propose. L'écran n'a pas changé.
+   ✅ **1.18.5** La page dit que la fenêtre a refusé de s'ouvrir, avec la raison : l'écran ne sait
+   pas afficher à 75 Hz, et la liste de ce qu'il propose. L'écran n'a pas changé (cf. 1.20).
 
 ❌ Régression : un écran qui ne revient pas à son rafraîchissement, une fenêtre qui s'ouvre au
 mauvais rafraîchissement, un modèle c-VEP sans `_…Hz` dans son nom.
 
 ### ☐ 1.19 — L'avertissement des lumières clignotantes (2026-10-21)
 
-Console fraîchement ouverte, board de test.
+Board de test.
 
 1. Grille → ouvre la page **SSVEP**.
-   ✅ **1.19.1** Une boîte « ⚠ ATTENTION — LUMIÈRES CLIGNOTANTES » s'ouvre par-dessus la page :
-   le risque d'épilepsie, quoi faire, et « J'ai compris ». Clique dessus.
-   ✅ **1.19.2** Sous l'en-tête de la page, un grand cadre rouge porte le même avertissement. Fais
-   défiler la page : il reste visible. Rien ne le ferme.
-2. Reviens à la grille, puis rouvre la page **SSVEP**.
-   ✅ **1.19.3** Pas de boîte cette fois ; le cadre rouge est toujours là.
-3. Ouvre les pages **c-VEP** et **P300**.
-   ✅ **1.19.4** La boîte à la première ouverture de chacune, puis le cadre rouge.
-4. Ouvre les pages **Motor Imagery**, **ErrP**, **Neuro** et **Brut**.
-   ✅ **1.19.5** Ni boîte ni cadre : elles ne font rien clignoter.
-5. Change de langue (🌐), rouvre la page SSVEP.
-   ✅ **1.19.6** Le cadre est en anglais (« ⚠ WARNING — FLASHING LIGHTS »).
+   ✅ **1.19.1** Sous l'en-tête, un grand cadre rouge « ⚠ ATTENTION — LUMIÈRES CLIGNOTANTES » : le
+   risque d'épilepsie, et quoi faire. Aucune boîte à valider.
+   ✅ **1.19.2** Fais défiler la page : le cadre reste visible. Rien ne le ferme.
+2. Ouvre les pages **c-VEP** et **P300**.
+   ✅ **1.19.3** Le même cadre.
+3. Ouvre les pages **Motor Imagery**, **ErrP**, **Neuro** et **Brut**.
+   ✅ **1.19.4** Pas de cadre : elles ne font rien clignoter.
+4. Change de langue (🌐), rouvre la page SSVEP.
+   ✅ **1.19.5** Le cadre est en anglais (« ⚠ WARNING — FLASHING LIGHTS »).
 
 ❌ Régression : un mode qui fait clignoter un stimulus sans avertissement, un cadre qui disparaît en
-faisant défiler, une boîte qui revient à chaque passage sur la page.
+faisant défiler.
+
+### ☐ 1.20 — Une fenêtre qui s'arrête avant la fin (2026-10-21)
+
+Board de test.
+
+1. Page **SSVEP** → « Tester sur une session » → « Commencer ». Dès que la fenêtre clignote,
+   **Échap**.
+   ✅ **1.20.1** La séance s'arrête AUSSITÔT, sans finir son décompte. La page dit en une phrase
+   « séance abandonnée, la fenêtre a été fermée avant la fin », sans le journal de la fenêtre.
+   ✅ **1.20.2** Reviens à la grille : plus aucun message de la fenêtre dans le bandeau.
+2. Page **SSVEP** : rafraîchissement à une valeur que l'écran ne propose pas (75 sur le poste de
+   dev), « Proposer », « Appliquer », puis « Tester sur une session » → « Commencer ».
+   ✅ **1.20.3** La séance s'arrête aussitôt. La page dit, en rouge, que la fenêtre a refusé de
+   s'ouvrir, avec la seule raison : l'écran ne sait pas afficher à 75 Hz, et ce qu'il propose.
+
+❌ Régression : un décompte qui continue après la fermeture de la fenêtre ; le journal entier de la
+fenêtre dans le bandeau ; un message qui suit l'élève sur la grille.
 
 ---
 
