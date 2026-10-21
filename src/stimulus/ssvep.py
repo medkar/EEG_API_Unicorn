@@ -557,6 +557,8 @@ def bilan_de_seance(frames, sautees, refresh):
 # `measure_refresh` vit dans `stimulus/refresh.py`. Réexporté ici sous son nom : `archive/ui.py` et
 # les écrans de `archive/` l'importent encore d'ici.
 from stimulus.refresh import measure_refresh  # noqa: E402,F401
+from stimulus.refresh import frequence_mesuree  # noqa: E402
+from stimulus.ecran import EcranRefuse, au_rafraichissement, confirme, hz_positif  # noqa: E402
 from stimulus.garde import sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
@@ -610,7 +612,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         stream=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, attente_moteur_s=None,
         journal=None, bilan=None, sonde_ecran=None,
         cue_s=None, fix_s=None, gap_s=None, repos_s=None, retour=False, source_retour=None,
-        source_statut=None):
+        source_statut=None, ecran_hz=None):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
 
     `retour` (`--retour`) entoure la cible décodée — et, sans `guide`, montre l'écran de repos
@@ -622,6 +624,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     duplication que ce dépôt a passé son temps à supprimer ailleurs — et surtout, le clignotement
     du guidé cesserait d'être exactement celui du décodage, donc le taux mesuré ne dirait plus rien
     du taux réel.
+
+    `ecran_hz` (`--ecran-hz`) : le rafraîchissement auquel la séance DOIT tourner. L'écran a été
+    passé à cette valeur avant l'appel (`stimulus/ecran.py`) ; ici, on le MESURE, et on lève
+    `EcranRefuse` s'il ne la tient pas, avant de créer le moindre flux. `refresh`, s'il est
+    donné aussi, tient lieu de mesure : c'est l'écran factice de l'autotest.
 
     `freqs` IMPOSE le jeu de cibles (l'option `--freqs`, celle que la console passe). `None` garde
     le jeu du dépôt. Une liste inaffichable à ce rafraîchissement lève `FreqsRefusees` **sans rien
@@ -685,7 +692,19 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     pygame.display.set_caption(tr("fenetre.ssvep.titre_fenetre"))
     pygame.mouse.set_visible(False)
 
-    if refresh is None:
+    if ecran_hz is not None:
+        try:
+            refresh = confirme(ecran_hz, refresh if refresh is not None
+                               else frequence_mesuree(pygame, win))
+        except EcranRefuse:
+            # On FERME avant de propager, comme pour un refus de fréquences : un plein écran noir
+            # cacherait le message qui explique le refus.
+            pygame.quit()
+            for s in (source_dec, source_rep):
+                if s is not None:
+                    s.fermer()
+            raise
+    elif refresh is None:
         refresh = 60.0 if smoke else measure_refresh(pygame, win)
     try:
         plan = plan_du_stimulus(refresh, freqs)
@@ -1219,6 +1238,37 @@ def _smoke():
     # --- A. le rendu libre ---------------------------------------------------------
     chk(run(smoke=True, refresh=60.0),
         "le décodage libre rend 30 frames sans erreur (aucun écran requis)")
+
+    # --- A ter. L'ÉCRAN DU STIMULUS (`ecran_hz`) -----------------------------------------
+    # `refresh` tient ici le rôle de la MESURE : l'écran factice n'a pas de vsync. 165 Hz mesurés
+    # pour 60 demandés : la fenêtre refuse AVANT de créer son flux de marqueurs, sinon un émetteur
+    # fantôme resterait sur le réseau. En mode guidé, parce que c'est lui qui en crée un.
+    module = globals()
+    vrai_outlet, crees = module["StreamOutlet"], []
+
+    def _espion(*a, **k):
+        crees.append(a)
+        return vrai_outlet(*a, **k)
+
+    module["StreamOutlet"] = _espion
+    try:
+        try:
+            run(smoke=True, refresh=165.0, ecran_hz=60.0, guide=True, per_target=1, seed=5,
+                stream=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                attente_moteur_s=0.0)
+            refus_ecran = None
+        except EcranRefuse as e:
+            refus_ecran = str(e)
+    finally:
+        module["StreamOutlet"] = vrai_outlet
+    chk(refus_ecran is not None and "165" in refus_ecran and "60" in refus_ecran and not crees,
+        f"un écran mesuré à 165 Hz pour 60 Hz demandés : REFUS qui nomme les deux, avant tout "
+        f"flux de marqueurs ({refus_ecran}, {len(crees)} flux créé(s))")
+    bilan_ecran = {}
+    chk(run(smoke=True, refresh=59.6, ecran_hz=60.0, bilan=bilan_ecran)
+        and bilan_ecran.get("refresh") == 60.0,
+        f"un écran mesuré à 59,6 Hz pour 60 demandés : la séance tourne à 60 Hz, le VOULU "
+        f"({bilan_ecran.get('refresh')})")
 
     # --- A bis. CE QUI CLIGNOTE, lu dans les PIXELS ----------------------------------
     # Chaque disque clignote à SA période, dans l'ordre de `--freqs` (réordonné exprès), et garde au
@@ -1925,7 +1975,14 @@ def _rejouer_guide(per_target, seed, seconds=None, journal=None):
 def _parse_args(argv):
     p = argparse.ArgumentParser(description="Stimulus SSVEP (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenetre au lieu du plein ecran")
-    p.add_argument("--refresh", type=float, default=None, help="forcer le refresh (Hz)")
+    rafraichissement = p.add_mutually_exclusive_group()
+    rafraichissement.add_argument("--refresh", type=float, default=None,
+                                  help="forcer le refresh (Hz), sans le mesurer")
+    rafraichissement.add_argument(
+        "--ecran-hz", type=hz_positif, default=None,
+        help="le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+             "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+             "C'est ce que la console passe")
     p.add_argument("--seconds", type=float, default=None, help="auto-quit apres N secondes")
     p.add_argument("--freqs", type=str, default=None,
                    help="LES FRÉQUENCES DU MODE, séparées par des virgules (ex. « 12,15,20 ») — "
@@ -1978,9 +2035,15 @@ if __name__ == "__main__":
         if raison is not None:
             _refuse(raison)
     try:
-        fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
-                   guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs,
-                   retour=args.retour)
+        with au_rafraichissement(args.ecran_hz):
+            fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
+                       guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs,
+                       retour=args.retour, ecran_hz=args.ecran_hz)
+    except EcranRefuse as refus:
+        # Sortie 2, comme un refus de fréquences : la fenêtre n'a rien affiché. L'écran est déjà
+        # revenu : la sortie du `with` passe avant ce message.
+        print(f"[ssvep-stim] ⚠️ REFUS : {refus}")
+        sys.exit(2)
     except FreqsRefusees as refus:
         # ⚠️ Le refus ne peut tomber qu'ICI, et pas plus tôt : sans `--refresh`, le
         # rafraîchissement est MESURÉ, donc on ne sait qu'après l'ouverture de l'écran si ces
