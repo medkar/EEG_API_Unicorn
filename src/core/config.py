@@ -1189,11 +1189,12 @@ def _selftest():
 
     # 4. Un écran rapide et beaucoup de cibles : la force brute ferait 314 millions de
     # combinaisons. Ce test échoue en TIMEOUT si quelqu'un la réintroduit un jour.
+    # 10 cibles : le maximum que le SSVEP accepte (`core/modes/ssvep.py`).
     debut = _time.perf_counter()
-    jeu, _note = propose_frequencies(240.0, 8, 9.6)
+    jeu, _note = propose_frequencies(240.0, 10, 9.6)
     duree = _time.perf_counter() - debut
-    chk(len(jeu) == 8 and duree < 0.5,
-        f"240 Hz et 8 cibles en {duree * 1000:.1f} ms ({len(jeu)} cibles)")
+    chk(len(jeu) == 10 and duree < 0.5,
+        f"240 Hz et 10 cibles en {duree * 1000:.1f} ms ({len(jeu)} cibles)")
 
     # 5. L'élargissement et l'impossibilité DISENT ce qui se passe.
     _jeu, note = propose_frequencies(60.0, 5, 10.5)

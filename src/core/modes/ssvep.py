@@ -289,7 +289,9 @@ SPEC = ModeSpec(
             kind="float_list",
             unit="Hz",
             default=FREQS_60HZ,
-            count=(2, 8),
+            # Jusqu'à 10 cibles : surtout pour des cibles physiques (un plateau de LED). La
+            # fenêtre de stimulus à l'écran, elle, n'en dessine que 4 (`stimulus/ssvep.py`).
+            count=(2, 10),
             constraints=("dans_la_bande", "separables", "divise_le_refresh"),
             help=tr("mode.ssvep.param.freqs.aide"),
         ),
@@ -539,6 +541,15 @@ def _selftest():
         f"🔴 à la coupure haute maximale ({SSVEP_BANDE_HAUT[1]:g} Hz), aucune cible ni harmonique "
         f"corrélée ne tombe dans le coupe-bande secteur : la pire ressort à {pire[0]:.3f} "
         f"({pire[1]:g} Hz, secteur {pire[2]:g} Hz ; {sorted(correles)} ; {refus_max})")
+
+    # Jusqu'à DIX cibles : des cibles physiques (des LED) n'ont pas la contrainte des diviseurs du
+    # rafraîchissement, et un plateau de jeu peut en porter plus que l'écran.
+    dix = [11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
+    v_dix, r_dix = validate(SPEC, {"cibles": CIBLES_PHYSIQUES, "freqs": dix})
+    v_onze, r_onze = validate(SPEC, {"cibles": CIBLES_PHYSIQUES, "freqs": dix + [21.0]})
+    chk(v_dix is not None and v_onze is None and "10" in (r_onze or ""),
+        f"le SSVEP accepte 10 cibles et refuse la onzième, en disant la borne "
+        f"({r_dix or 'dix acceptées'} ; {r_onze})")
 
     # Les défauts du mode ne bougent PAS : ils sont validés sur casque réel. La proposition est
     # une action que l'étudiant déclenche, jamais un recalcul silencieux au démarrage.
