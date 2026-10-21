@@ -881,6 +881,18 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        sa page : `stream_in` devient un choix OUVERT dans le moteur (avertissement, pas refus,
        pour un nom absent du réseau), et la console garde la valeur retenue dans sa liste.
        Détail : `docs/qa.md`, constat ouvert n° 3.
+     - **[à faire — décidé le 2026-10-21]** le **nombre de cibles c-VEP réglable jusqu'à 10**,
+       pour expérimenter. Aujourd'hui c'est une constante (`config.CVEP_N_TARGETS = 6`). À faire :
+       un réglage de « 2. Entraîner » (2 à 10, défaut 6), PORTÉ PAR LE MODÈLE comme le
+       rafraîchissement ; « Tester » et « Tester librement » le relisent du modèle ; le hasard des
+       verdicts suit 1/n ; la durée annoncée de l'entraînement suit n (cycles PAR cible) ; la
+       fenêtre place n cibles en couronne (`cvep_targets` : la rose des vents ne nomme que 8
+       directions, au-delà les noms se numérotent — à vérifier) ; vérifier que l'eCCA et le rCCA
+       ne supposent nulle part 6 lags. À 60 Hz, 10 cibles = 6 images (~105 ms) entre lags
+       voisins, sous la durée d'une réponse VEP. ⚠️ Mesuré ici (`config.py`, une personne) : le
+       débit plafonne vers 6-8 cibles et la justesse baisse au-delà (38,1 % à 8 contre 44,6 % à
+       6) ; les erreurs ne se concentraient pas sur les lags voisins à 131 ms. 10 n'a jamais été
+       mesuré : c'est pour l'expérience, le défaut reste 6.
      - **[fait 2026-09-09 — chantier « plus une seule commande à taper »]** **il ne reste aucune
        commande d'usage réel.** La règle est passée d'une intention à un test que le dépôt peut
        échouer (§3.2). Livré : les **deux mesures** du §6.2 (contrôle alpha, taux d'émission SSVEP,

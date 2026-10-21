@@ -34,6 +34,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   l'ouverture de sa page. Le scénario, la cause et le correctif en deux parties (choix OUVERT
   dans le moteur, avec avertissement ; valeur retenue gardée dans la liste) sont dans
   `docs/qa.md`, constat ouvert n° 3.
+- **À FAIRE aussi, décidé le 2026-10-21 (pas fait)** : le **nombre de cibles c-VEP réglable
+  jusqu'à 10**, pour expérimenter (aujourd'hui `config.CVEP_N_TARGETS = 6`, une constante). Un
+  réglage d'« Entraîner » porté par le modèle, défaut 6 ; ce qu'il entraîne est listé dans
+  `docs/SPEC.md` §14.
 - **Le code se divise en QUATRE paquets, sur une règle vérifiable** : `src/core/` = ce dont le
   moteur (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/stimulus/` = les
   **quatre** fenêtres pygame qui affichent un stimulus verrouillé à la frame et publient des
