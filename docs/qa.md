@@ -135,6 +135,11 @@ temps que les autres). Un défaut de plus, vu au casque : après un premier essa
 l'ancien moteur laissait ses flux `quality` et `status` annoncés, MUETS, sous les mêmes noms, et
 `examples/receiver.py` s'y attachait sans rien recevoir. Corrigé (une minuterie Qt retenait le
 moteur ; un moteur jeté retire ses flux), tenu par le smoke de la console, sur le réseau.
+Le soir, **1.21** (le nombre de cibles c-VEP, livré le jour même) joué en solo de bout en bout, sur
+le board de test : 6 vérifications sur 6 — entraînement à 8 cibles (fenêtre lancée avec
+`--cibles 8`, 4,0 min annoncées, 246 s, aucun refus, hasard 1/8), modèle
+`…_8targets_60Hz.npz`, « Tester sur une session » et « Tester librement » à 8 cibles, aucun
+marqueur refusé ; les 8 cibles vues dans les captures, à 60 fps, aucune image sautée.
 
 **2026-09-21 après-midi et 2026-09-22 matin — deux séances au casque, partielles.** Le SSVEP y a été
 mesuré à 100 % de justesse le 21 (avec ~0,7 % de frames sautées), puis à **18 annonces sur 36
@@ -969,6 +974,24 @@ Board de test.
 fenêtre dans le bandeau ; un message qui suit l'élève sur la grille.
 
 ---
+
+### ☐ 1.21 — Le nombre de cibles c-VEP se règle (2026-10-21)
+
+Board de test. Page **c-VEP** → **« Entraîner »**.
+
+1. Vérifie d'abord que rien ne tourne. Regarde « Avant de commencer ».
+   ✅ **1.21.1** Un champ **« Nombre de cibles »**, de 2 à 10, **6** par défaut ; sa bulle ⓘ dit que le
+   modèle retient ce nombre et qu'au-delà de 8, personne ne l'a mesuré.
+2. Règle **8** → « Commencer » → contrôle de liaison → « Commencer l'entraînement ».
+   ✅ **1.21.2** La fenêtre montre **8** cibles en couronne ; la durée annoncée est plus longue qu'à 6.
+3. Va au bout, puis **« Enregistrer le modèle »**.
+   ✅ **1.21.3** Le modèle s'appelle `cvep_model_…_8targets_60Hz.npz`.
+4. « ← c-VEP » → **« Tester sur une session »** avec ce modèle, puis **« Tester librement »**.
+   ✅ **1.21.4** Les deux fenêtres montrent **8** cibles ; le verdict du test compte un hasard de 1 sur 8
+   (13 %).
+
+❌ Régression : une fenêtre qui montre un autre nombre de cibles que le modèle ; un entraînement
+abandonné ou des marqueurs refusés alors que la console a tout lancé elle-même.
 
 # Bloc 2 — au casque
 

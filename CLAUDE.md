@@ -34,10 +34,6 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   l'ouverture de sa page. Le scénario, la cause et le correctif en deux parties (choix OUVERT
   dans le moteur, avec avertissement ; valeur retenue gardée dans la liste) sont dans
   `docs/qa.md`, constat ouvert n° 3.
-- **À FAIRE aussi, décidé le 2026-10-21 (pas fait)** : le **nombre de cibles c-VEP réglable
-  jusqu'à 10**, pour expérimenter (aujourd'hui `config.CVEP_N_TARGETS = 6`, une constante). Un
-  réglage d'« Entraîner » porté par le modèle, défaut 6 ; ce qu'il entraîne est listé dans
-  `docs/SPEC.md` §14.
 - **Le code se divise en QUATRE paquets, sur une règle vérifiable** : `src/core/` = ce dont le
   moteur (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/stimulus/` = les
   **quatre** fenêtres pygame qui affichent un stimulus verrouillé à la frame et publient des
@@ -799,7 +795,7 @@ séance de QA ne rejoue que ce qui a été livré depuis la précédente.
 
 - **Le rafraîchissement se règle (2026-10-21)**, pour un écran ou une application qui ne tourne
   pas à 60 Hz. Le c-VEP le règle dans « Entraîner » (défaut 60, de 30 à 480) : le modèle le
-  porte, jusque dans son nom (`cvep_model_…_60Hz.npz`), la durée annoncée le suit, et « Tester »
+  porte, jusque dans son nom (`cvep_model_…_6targets_60Hz.npz`), la durée annoncée le suit, et « Tester »
   comme « Tester librement » le reprennent du modèle choisi (`cvep_models.refresh_de`). Le SSVEP
   garde le sien dans « Régler ». Les fenêtres SSVEP et c-VEP font passer l'écran PRINCIPAL à ce
   rafraîchissement le temps de la séance (`stimulus/ecran.py`, `--ecran-hz`, mode temporaire de
@@ -813,6 +809,18 @@ séance de QA ne rejoue que ce qui a été livré depuis la précédente.
   1047,9 ms pour 1050 annoncés) ; la mesure prise dès l'ouverture refusait à tort (61,7 Hz), d'où
   la stabilisation. **Jamais joué au casque** : ni un entraînement à un autre rafraîchissement que
   60 Hz, ni l'effet du passage de l'écran sur une séance.
+- **Le nombre de cibles c-VEP se règle (2026-10-21)**, de 2 à 10, pour expérimenter (défaut 6,
+  `config.CVEP_N_TARGETS`). C'est un réglage d'« Entraîner » (`n_cibles`) PORTÉ PAR LE MODÈLE,
+  comme le rafraîchissement : son nom le dit (`…_8targets_60Hz.npz`), le mode construit ses cibles
+  depuis lui (`cvep_models.cibles_du_modele`), et la console passe `--cibles` à la fenêtre de
+  « Tester » et de « Tester librement » (`cvep_models.cibles_de`, `registry.option_cibles`). La
+  fenêtre l'annonce sur chaque marqueur de cycle (`targets`, facultatif pour une application) :
+  le moteur REFUSE un autre nombre que celui du modèle (marqueur refusé en décodage, séance
+  abandonnée en entraînement). Le hasard des verdicts et les durées suivent. Un eCCA enregistre
+  les cibles AFFICHÉES (`n_plan`) et VUES (`n_targets`) : une séance interrompue reste refusée.
+  Au-delà de 8, les cibles s'appellent C1, C2… ; la couronne tient à 10 (vérifié en pixels).
+  ⚠️ **Mesuré ici** (`config.py`, une personne) : le débit plafonne vers 6-8 cibles et la justesse
+  baisse au-delà ; **au-delà de 8, jamais mesuré, ni au casque ni hors ligne.**
 - **La découverte LSL du moteur (2026-10-21).** Le moteur cherchait le flux de marqueurs avec un
   délai NUL à chaque tour. Sur le poste de dev (Wi-Fi, Tailscale, IPv6), la réponse n'arrivait
   presque jamais à temps : la fenêtre publiait son `calib_start` avant que le moteur ne l'entende,

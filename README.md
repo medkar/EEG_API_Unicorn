@@ -337,10 +337,17 @@ says so. ⚠️ It refuses the *markers*, not the *start* — the mode keeps run
 
 **Train at your application's refresh rate.** The code changes at every frame, so a c-VEP model
 only works at the refresh rate it was trained at. Set it in **Train** (60 Hz by default). The model
-carries it in its file name (`cvep_model_…_60Hz.npz`) and in the `refresh` field of the
+carries it in its file name (`cvep_model_…_6targets_60Hz.npz`) and in the `refresh` field of the
 `decoded_cvep` metadata, which your application can read. A 165 Hz screen cannot show a 60 Hz code
 by itself — each bit would last 2.75 frames — so the training and test windows switch this
 computer's main screen to the wanted rate while they are open, then switch it back.
+
+**The number of targets is a training setting too**, from 2 to 10 (6 by default), for
+experimenting. The model carries it (`…_8targets_60Hz.npz`), `decoded_cvep` publishes one score per
+target, and the test windows show that many. If you render the stimulus yourself, show the model's
+number of targets and say it in each `cycle` marker (`"targets": 8`): the engine refuses a clock
+that announces another number. Measured here, throughput levels off around 6-8 targets and accuracy
+drops beyond; above 8 has never been measured.
 
 `target_index = -1` has **four** distinct causes here, and they call for opposite actions: no clock
 marker ever arrived · the clock went stale · correlations missed the thresholds · recent windows
@@ -472,7 +479,7 @@ terminal, and its **Record the verdicts** button files the session for you.
 | `EEG_API_Unicorn_decoded_mi` | `{intent_index, confidence, p_0…p_<n-1>}` — one probability per trained task; task names in the `classes` description field, ~5 Hz |
 | `EEG_API_Unicorn_decoded_p300` | `{target_index, confidence, n_flashes, score_0…score_5}`, one sample per round |
 | `EEG_API_Unicorn_decoded_errp` | `{error, score, threshold, artifact}`, one sample per feedback |
-| `EEG_API_Unicorn_decoded_cvep` | `{target_index, confidence, score_0…score_5, corr_min, margin}`, ~5 Hz |
+| `EEG_API_Unicorn_decoded_cvep` | `{target_index, confidence, score_0…score_<n-1>, corr_min, margin}` — one score per target of the model (6 by default), ~5 Hz |
 
 ⚠️ **Two stream metadata fields are frozen when the stream opens, and two channels are not.** LSL
 fixes `desc()` at creation. The c-VEP thresholds (`corr_min`, `margin`) can be retuned mid-session

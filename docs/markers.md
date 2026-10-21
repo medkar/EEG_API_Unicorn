@@ -123,6 +123,10 @@ cadence. The engine publishes what it sees and never cancels anything.
 {"mode": "cvep", "event": "cycle", "refresh": 60.0}
 ```
 
+Optionally add **`"targets": 6`**, the number of targets your screen shows. The engine then
+refuses a clock that announces another number than its model's: it would correlate against targets
+that are not on screen. Leave it out and nothing is checked.
+
 Send it **every time the code restarts** — every 63 frames, so roughly once per second (1.05 s at
 60 Hz). Nothing is epoched around it. It tells the engine one thing: *at this instant, the displayed
 code was back at frame 0*. From there the engine extrapolates, at `refresh` Hz, where the code is at
@@ -356,6 +360,7 @@ simply never fire. So each of these is announced, in the engine's terminal:
 | `round_end` with too few flashes | `target_index = -1` **and** the reason |
 | No `round_end` for 10 s, or a target past its ceiling | `manche ABANDONNÉE`, counted in `manches_abandonnees` |
 | A c-VEP `cycle` marker has no usable `refresh`, or one the model was not calibrated at | refused and named, counted in `marqueurs_refuses`, printed at 1/10/100/1000 |
+| A c-VEP `cycle` marker announces `targets` other than the model's | refused the same way (during training: the session is abandoned) |
 | No c-VEP clock for 3 cycles (3.15 s at 60 Hz) | the phase reference expires, counted in `reference_perimee` |
 
 That last one matters if your application crashes mid-round: the engine throws the orphans away

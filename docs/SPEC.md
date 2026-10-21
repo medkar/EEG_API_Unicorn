@@ -881,8 +881,8 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        sa page : `stream_in` devient un choix OUVERT dans le moteur (avertissement, pas refus,
        pour un nom absent du réseau), et la console garde la valeur retenue dans sa liste.
        Détail : `docs/qa.md`, constat ouvert n° 3.
-     - **[à faire — décidé le 2026-10-21]** le **nombre de cibles c-VEP réglable jusqu'à 10**,
-       pour expérimenter. Aujourd'hui c'est une constante (`config.CVEP_N_TARGETS = 6`). À faire :
+     - **[fait 2026-10-21]** le **nombre de cibles c-VEP réglable jusqu'à 10**, pour
+       expérimenter (cf. CLAUDE.md, « Le nombre de cibles c-VEP se règle »). Ce qui était prévu :
        un réglage de « 2. Entraîner » (2 à 10, défaut 6), PORTÉ PAR LE MODÈLE comme le
        rafraîchissement ; « Tester » et « Tester librement » le relisent du modèle ; le hasard des
        verdicts suit 1/n ; la durée annoncée de l'entraînement suit n (cycles PAR cible) ; la
