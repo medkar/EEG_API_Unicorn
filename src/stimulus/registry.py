@@ -156,6 +156,27 @@ def option_frequences(stimulus_id, freqs):
     return (argument, ",".join(f"{float(f):g}" for f in freqs))
 
 
+# Les fenêtres qui font passer l'écran principal au rafraîchissement voulu (`--ecran-hz`), et
+# d'où vient ce rafraîchissement hors entraînement : le RÉGLAGE du mode pour le SSVEP, le MODÈLE
+# choisi pour le c-VEP, qui ne marche qu'au rafraîchissement de son entraînement. À
+# l'entraînement, il vient des réglages d'« Entraîner ». La console demande, elle ne sait pas.
+ECRAN = {"ssvep": "reglage", "cvep": "modele"}
+
+
+def option_ecran(stimulus_id, hz):
+    """Les arguments qui font passer l'écran à `hz` Hz. `()` si la fenêtre ne sait pas, ou si `hz`
+    n'est pas un nombre positif : la fenêtre mesure alors l'écran, comme avant."""
+    if stimulus_id not in ECRAN:
+        return ()
+    try:
+        hz = float(hz)
+    except (TypeError, ValueError):
+        return ()
+    if hz <= 0:
+        return ()
+    return ("--ecran-hz", f"{hz:g}")
+
+
 def commande(stimulus_id, calibrer=False, options=()):
     """La ligne de commande complète d'une fenêtre. Lève `KeyError` si la clé est inconnue.
 
@@ -197,6 +218,7 @@ def _selftest():
                 if not _declare(k, a)]
     inconnus += [(k, a) for k, args in MESURE_OPTIONS.items() for a in args if not _declare(k, a)]
     inconnus += [(k, a) for k, args in LIBRE.items() for a in args if not _declare(k, a)]
+    inconnus += [(k, "--ecran-hz") for k in ECRAN if not _declare(k, "--ecran-hz")]
     chk(not inconnus,
         f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
         f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
@@ -296,6 +318,19 @@ def _selftest():
         f"({sans_flux or 'aucune orpheline'}) — sinon l'anneau n'aurait rien à lire")
     chk(not any("--libre" in a for a in MESURE_OPTIONS.values()),
         "…et `--libre` n'est JAMAIS passé à un test : il retire la vérité-terrain que le test note")
+
+    # --- L'ÉCRAN DU STIMULUS ----------------------------------------------
+    chk(option_ecran("cvep", 60.0) == ("--ecran-hz", "60")
+        and option_ecran("ssvep", "59.94") == ("--ecran-hz", "59.94"),
+        f"le rafraîchissement part sous `--ecran-hz`, écrit sans zéro inutile "
+        f"({option_ecran('cvep', 60.0)}, {option_ecran('ssvep', '59.94')})")
+    chk(option_ecran("cvep", None) == () and option_ecran("cvep", 0) == ()
+        and option_ecran("cvep", "abc") == () and option_ecran("p300", 60.0) == (),
+        "…et rien sans valeur, sur une valeur absurde, ou pour une fenêtre qui ne fait pas "
+        "passer l'écran : elle mesure alors l'écran, comme avant")
+    chk(set(ECRAN) == {"ssvep", "cvep"} and set(ECRAN.values()) <= {"reglage", "modele"},
+        f"seuls le SSVEP et le c-VEP font passer l'écran, et chacun dit d'où vient la valeur "
+        f"({ECRAN})")
 
     print(f"[stim-registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

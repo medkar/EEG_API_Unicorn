@@ -816,12 +816,14 @@ par :
     rafraichissement = p.add_mutually_exclusive_group()
     rafraichissement.add_argument("--refresh", type=float, default=None,
                                   help="forcer le refresh (Hz), sans le mesurer")
-    rafraichissement.add_argument(
-        "--ecran-hz", type=hz_positif, default=None,
-        help="le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
-             "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
-             "C'est ce que la console passe")
+    rafraichissement.add_argument("--ecran-hz", type=hz_positif, default=None, help=(
+        "le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+        "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+        "C'est ce que la console passe"))
 ```
+
+⚠️ `add_argument("--ecran-hz"` doit tenir sur UNE ligne : l'autotest du registre (tâche 5) cherche
+cette chaîne dans la source de la fenêtre.
 
 - [ ] **Step 3.6 : le bloc `__main__`**
 
@@ -1009,16 +1011,14 @@ par :
 
 ```python
     rafraichissement = p.add_mutually_exclusive_group()
-    rafraichissement.add_argument(
-        "--refresh", type=float, default=None,
-        help="forcer le refresh (Hz) — sinon auto-mesuré. C'est la valeur PUBLIÉE dans chaque "
-             "marqueur : le moteur refuse tout marqueur qui s'écarte de plus de 1 Hz du refresh "
-             "auquel le modèle a été calibré, et le dit")
-    rafraichissement.add_argument(
-        "--ecran-hz", type=hz_positif, default=None,
-        help="le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
-             "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
-             "C'est ce que la console passe : le réglage d'« Entraîner », ou celui du modèle")
+    rafraichissement.add_argument("--refresh", type=float, default=None, help=(
+        "forcer le refresh (Hz) — sinon auto-mesuré. C'est la valeur PUBLIÉE dans chaque "
+        "marqueur : le moteur refuse tout marqueur qui s'écarte de plus de 1 Hz du refresh "
+        "auquel le modèle a été calibré, et le dit"))
+    rafraichissement.add_argument("--ecran-hz", type=hz_positif, default=None, help=(
+        "le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+        "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+        "C'est ce que la console passe : le réglage d'« Entraîner », ou celui du modèle"))
 ```
 
 - [ ] **Step 4.6 : le bloc `__main__`**

@@ -1978,11 +1978,10 @@ def _parse_args(argv):
     rafraichissement = p.add_mutually_exclusive_group()
     rafraichissement.add_argument("--refresh", type=float, default=None,
                                   help="forcer le refresh (Hz), sans le mesurer")
-    rafraichissement.add_argument(
-        "--ecran-hz", type=hz_positif, default=None,
-        help="le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
-             "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
-             "C'est ce que la console passe")
+    rafraichissement.add_argument("--ecran-hz", type=hz_positif, default=None, help=(
+        "le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+        "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+        "C'est ce que la console passe"))
     p.add_argument("--seconds", type=float, default=None, help="auto-quit apres N secondes")
     p.add_argument("--freqs", type=str, default=None,
                    help="LES FRÉQUENCES DU MODE, séparées par des virgules (ex. « 12,15,20 ») — "
