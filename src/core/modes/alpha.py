@@ -35,7 +35,7 @@ from brainflow.data_filter import DataFilter, DetrendOperations  # noqa: E402
 from core.acquisition import NOTCH_SECTEUR  # noqa: E402
 from core.config import (CH_NAMES, OCCIPITAL, SECTEUR_HZ, SIGNAL_DEAD_SIGMA,  # noqa: E402
                          signal_verdict, use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import lignes, pct  # noqa: E402
 from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
@@ -84,12 +84,7 @@ VOIES = [CH_NAMES[i] for i in OCCIPITAL]
 # retrouvera sur la page du SSVEP.
 PARAM_CIBLE = next(p for p in SPEC_SSVEP.params if p.key == "alpha_hz")
 
-def _virgule(texte):
-    """`"1.5"` -> `"1,5"` : les nombres de cet écran s'écrivent à la française, comme `pct`."""
-    return texte.replace(".", ",")
-
-
-HONNETETE = tr("mesure.alpha.honnetete", repere=_virgule(f"{RATIO_MIN:g}"))
+HONNETETE = tr("mesure.alpha.honnetete", repere=nombre(RATIO_MIN, "g"))
 
 BRIEFING = (
     tr("mesure.alpha.briefing.1"),
@@ -244,8 +239,8 @@ class ControleAlpha(MesureRuntime):
             if all(signal_verdict(s) == "morte" for s in sigmas):
                 raise ValueError(tr(
                     "mesure.alpha.erreur.voies_plates", n=len(VOIES), voies=", ".join(VOIES),
-                    etape=etiquette, sigmas=", ".join(_virgule(f"{s:.2f}") for s in sigmas),
-                    seuil=_virgule(f"{SIGNAL_DEAD_SIGMA:g}")))
+                    etape=etiquette, sigmas=", ".join(nombre(s, ".2f") for s in sigmas),
+                    seuil=nombre(SIGNAL_DEAD_SIGMA, "g")))
 
         p_ouvert = _puissance_bande(freqs, psd_ouvert, *BANDE_ALPHA)
         p_ferme = _puissance_bande(freqs, psd_ferme, *BANDE_ALPHA)
@@ -293,8 +288,8 @@ class ControleAlpha(MesureRuntime):
 
     def _lignes(self, ratio, pic_hz, monte, au_bon_endroit):
         """Le verdict en trois lignes. La réserve est le GESTE, jamais un rappel du chiffre."""
-        chiffres = tr("mesure.alpha.chiffres", ratio=_virgule(f"{ratio:.2f}"),
-                      repere=_virgule(f"{RATIO_MIN:g}"), pic=_virgule(f"{pic_hz:.1f}"))
+        chiffres = tr("mesure.alpha.chiffres", ratio=nombre(ratio, ".2f"),
+                      repere=nombre(RATIO_MIN, "g"), pic=nombre(pic_hz, ".1f"))
         if monte and au_bon_endroit:
             return lignes("bon", tr("mesure.alpha.mot.net"), chiffres,
                           tr("mesure.alpha.reserve.net"), conclusion=True)
@@ -315,8 +310,8 @@ class ControleAlpha(MesureRuntime):
         # la phrase s'ouvre donc sur le mot affiché en face dans toutes les langues, ce que
         # `affichage.verifier` exige.
         voies = "/".join(VOIES)
-        r, repere, pic = (_virgule(f"{ratio:.2f}"), _virgule(f"{RATIO_MIN:g}"),
-                          _virgule(f"{pic_hz:.1f}"))
+        r, repere, pic = (nombre(ratio, ".2f"), nombre(RATIO_MIN, "g"),
+                          nombre(pic_hz, ".1f"))
         if monte and au_bon_endroit:
             return tr("mesure.alpha.verdict.net", mot=tr("mesure.alpha.mot.net"), ratio=r,
                       repere=repere, pic=pic, voies=voies)
@@ -325,7 +320,7 @@ class ControleAlpha(MesureRuntime):
                       ratio=r, repere=repere, voies=voies)
         return tr("mesure.alpha.verdict.hors_bande", mot=tr("mesure.alpha.mot.arrete"),
                   ratio=r, pic=pic, voies=voies,
-                  bas=_virgule(f"{PIC_ATTENDU[0]:g}"), haut=_virgule(f"{PIC_ATTENDU[1]:g}"))
+                  bas=nombre(PIC_ATTENDU[0], "g"), haut=nombre(PIC_ATTENDU[1], "g"))
 
 
 SPEC = MesureSpec(
@@ -461,7 +456,7 @@ def _selftest():
     chk(not _verifier_affichage(res),
         f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
     chk("séance peut commencer" in res["verdict"]
-        and _virgule(f"{res['ratio']:.2f}") in res["verdict"],
+        and nombre(res['ratio'], ".2f") in res["verdict"],
         f"…et le verdict le DIT, avec son chiffre ({res['verdict'][:60]}…)")
     chk(res["voies"] == VOIES and "Pz" in res["voies"],
         f"les voies moyennées sont NOMMÉES par le moteur, pas devinées par l'écran — et Pz en "
@@ -510,7 +505,7 @@ def _selftest():
         f"un pic HORS de la plage de l'alpha ne franchit pas la barrière, même avec un ratio de "
         f"{lent['ratio']:.2f} — le ratio seul ne dit pas que c'est de l'alpha")
     chk("arrête" in lent["verdict"].lower()
-        and _virgule(f"{lent['pic_hz']:.1f}") in lent["verdict"],
+        and nombre(lent['pic_hz'], ".1f") in lent["verdict"],
         f"…et le verdict nomme le pic fautif ({lent['verdict'][:70]}…)")
 
     # === L'OFFSET DC de l'Unicorn : 10⁵ µV, et le verdict ne doit pas bouger ==================
@@ -600,7 +595,7 @@ def _selftest():
         chk(False, "quatre voies PLATES doivent être refusées, pas transformées en ratio")
     except ValueError as e:
         chk("plates" in str(e).lower() and "liaison" in str(e)
-            and _virgule(f"{SIGNAL_DEAD_SIGMA:g}") in str(e),
+            and nombre(SIGNAL_DEAD_SIGMA, "g") in str(e),
             f"…en disant que c'est une panne de liaison, au seuil de voie morte que le moteur "
             f"applique déjà à ses huit voies ({str(e)[:70]}…)")
 

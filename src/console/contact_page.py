@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPu
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import SIGNAL_SAT_SIGMA  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 
 # Jusqu'où va la barre d'un σ. Pas le seuil de saturation (500 µV) : à cette échelle, un EEG
 # normal (5-20 µV) serait un trait invisible et l'écran ne montrerait plus rien. 40 µV est
@@ -162,7 +162,7 @@ class ContactPage(QWidget):
             barre.setValue(0 if sigma is None
                            else int(max(0.0, min(sigma / SPAN_SIGMA, 1.0)) * 100))
             verdict.setText(tr("console.contact.sigma_indisponible") if sigma is None
-                            else tr("console.contact.sigma_voie", sigma=f"{sigma:.1f}",
+                            else tr("console.contact.sigma_voie", sigma=nombre(sigma, ".1f"),
                                     verdict=v))
             couleur = "#8a8f9c" if not v else ("#3fae5a" if v == "ok" else "#e5484d")
             verdict.setStyleSheet(f"color: {couleur};")

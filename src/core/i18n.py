@@ -119,6 +119,8 @@ def pour_le_contrat(x):
 
 
 def _relit(x, code):
+    if isinstance(x, Nombre):
+        return x.ecrit(code)
     if isinstance(x, Texte):
         return _resoudre(x.cle, {nom: _relit(v, code) for nom, v in x.valeurs.items()}, code)
     if isinstance(x, dict):
@@ -191,13 +193,37 @@ def message_erreur(e):
     return tr("moteur.erreur_interne", type=type(e).__name__, detail=str(e))
 
 
+class Nombre(str):
+    """Un nombre écrit dans la langue de l'écran, qui se RÉÉCRIT avec `retraduit()`.
+
+    Comme un `Texte`, c'est un `str`. Un texte fabriqué en français dit « 2,4 min » ; passé par
+    `retraduit()` une fois l'écran en anglais, il dit « 2.4 min ». Sans ça, le nombre resterait
+    figé dans la langue où le texte est né.
+    """
+
+    def __new__(cls, x, format_, code=None):
+        # `tr` en toutes lettres pour la langue de l'écran : c'est lui que `controle()` repère.
+        separateur = str(tr("moteur.format.decimale") if code is None
+                         else _resoudre("moteur.format.decimale", {}, code))
+        objet = super().__new__(cls, f"{x:{format_}}".replace(".", separateur))
+        objet.x, objet.format_ = x, format_
+        return objet
+
+    def ecrit(self, code=None):
+        """Le même nombre dans la langue `code` (None : celle de l'écran)."""
+        return str(Nombre(self.x, self.format_, code)) if code else Nombre(self.x, self.format_)
+
+    def __reduce__(self):
+        return (str, (str(self),))
+
+
 def nombre(x, format_="g"):
     """Un nombre écrit dans la langue de l'écran : `1.5` -> « 1,5 » en français.
 
     Le séparateur décimal appartient à la LANGUE, pas au code : il est lu dans le catalogue.
     Seulement pour du texte affiché — jamais pour une valeur qu'un champ de saisie relira.
     """
-    return f"{x:{format_}}".replace(".", tr("moteur.format.decimale"))
+    return Nombre(x, format_)
 
 
 def champs(texte):
@@ -426,7 +452,23 @@ def _selftest():
         contrat = pour_le_contrat({"instruction": figee})["instruction"]
         chk(contrat == "Hello Léa" and type(contrat) is str,
             f"ce qui part vers l'application est en ANGLAIS, l'écran restant en français ({contrat!r})")
+        # Un NOMBRE dans un texte se réécrit aussi : « 2,5 » en français, « 2.5 » en anglais, et
+        # « 2.5 » vers l'application.
+        with open(_os.path.join(tmp, "fr", "d.json"), "w", encoding="utf-8") as f:
+            _json.dump({"moteur.format.decimale": ",", "x.duree": "{m} min"}, f)
+        with open(_os.path.join(tmp, "en", "d.json"), "w", encoding="utf-8") as f:
+            _json.dump({"moteur.format.decimale": ".", "x.duree": "{m} min"}, f)
+        _cache.clear()
+        duree = tr("x.duree", m=nombre(2.46, ".1f"))
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(duree == "2,5 min" and retraduit(duree) == "2.5 min",
+            f"un nombre se réécrit au changement de langue ({duree!r} -> {retraduit(duree)!r})")
+        del _os.environ["EEG_LANGUE"]
+        chk(pour_le_contrat(duree) == "2.5 min",
+            f"…et part en anglais vers l'application ({pour_le_contrat(duree)!r})")
         import pickle as _pickle
+        chk(type(_pickle.loads(_pickle.dumps(nombre(2.5)))) is str,
+            "enregistré (pickle), un nombre redevient un `str`")
         chk(type(_pickle.loads(_pickle.dumps(figee))) is str,
             "enregistré (pickle), un `Texte` redevient un `str` : un modèle n'en dépend pas")
         with open(_os.path.join(tmp, "fr", "c.json"), "w", encoding="utf-8") as f:

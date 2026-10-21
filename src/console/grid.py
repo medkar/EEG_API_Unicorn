@@ -24,7 +24,7 @@ from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # no
 # l'échelle la sortie d'un mode sans seuil avec la constante d'un autre (cf.
 # `ModeTile._apercu_scores`).
 from core.config import NEURO_Z_SPAN  # noqa: E402
-from core.i18n import langue, langues_disponibles, nom_de_langue, tr  # noqa: E402
+from core.i18n import langue, langues_disponibles, nom_de_langue, nombre, tr  # noqa: E402
 # Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
 # ici : un renommage côté moteur laisserait la tuile sur « en cours » pour toujours.
 from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
@@ -266,7 +266,7 @@ def _resume(mode_state):
             # vocabulaire côté interface finirait par ne plus dire la même chose que le terminal.
             return sortie.get("motif") or tr("console.grille.resume.aucune_cible")
         return tr("console.grille.resume.cible_correlation", cible=index,
-                  correlation=f"{sortie.get('confidence', 0.0):.2f}")
+                  correlation=nombre(sortie.get('confidence', 0.0), ".2f"))
     if "scores" in sortie:
         # `.get` et pas `[...]` : cette ligne tourne 10 fois par seconde dans le rafraîchissement
         # de la grille. Un mode actif qui publierait des scores sans cible nommée y ferait tomber
@@ -283,7 +283,7 @@ def _resume(mode_state):
         index = sortie.get("intent_index", -1)
         return (tr("console.grille.resume.vote_non_conclu") if index < 0
                 else tr("console.grille.resume.intention", intention=sortie.get("label", ""),
-                        confiance=f"{sortie.get('confidence', 0):.2f}"))
+                        confiance=nombre(sortie.get('confidence', 0), ".2f")))
     if "z" in sortie:
         return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
     if "error" in sortie:

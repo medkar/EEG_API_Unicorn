@@ -44,7 +44,7 @@ from core.config import (ERRP_EPOCH_S, ERRP_ERROR_RATE, ERRP_FEEDBACK_S,  # noqa
                          ERRP_TNR_TARGET, use_utf8_console)
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import MOT_NON_MESURE, lignes, non_mesure, pct, texte_p  # noqa: E402
 from core.modes.contract import Param  # noqa: E402
 from core.modes.errp import SPEC as SPEC_ERRP  # noqa: E402
@@ -83,7 +83,7 @@ def _duree_protocole_s(essais):
 
 def _minutes(essais):
     """La durée d'un test de `essais` pas, chauffe comprise, en minutes (« 2,4 »)."""
-    return f"{(MesureMarqueurs.warmup_s + _duree_protocole_s(essais)) / 60:.1f}".replace(".", ",")
+    return nombre((MesureMarqueurs.warmup_s + _duree_protocole_s(essais)) / 60, ".1f")
 
 
 def _label(cle):
@@ -203,8 +203,8 @@ class MesureErrP(MesureMarqueurs):
         court = self._repos_trop_court()
         if court is not None:
             return tr("mesure.errp_test.erreur.repos_court",
-                      duree=f"{court:.1f}".replace(".", ","),
-                      mode=f"{dec._rest_s:g}".replace(".", ","))
+                      duree=nombre(court, ".1f"),
+                      mode=nombre(dec._rest_s, "g"))
         dec._rest_until = self._maintenant
         dec._rest_step(_VueEEG(engine), self._maintenant)
         if dec._sigmas_repos is None:
@@ -362,10 +362,10 @@ def noter(essais, tnr_vise, essais_demandes=None, artefacts=0, perdus=0, chauffe
     if repos:
         secondes, fenetres, du_mode = repos
         verdict += tr("mesure.errp_test.verdict.repos",
-                      secondes=f"{secondes:.1f}".replace(".", ","),
+                      secondes=nombre(secondes, ".1f"),
                       fenetres=(tr("mesure.errp_test.verdict.repos_fenetres", n=fenetres)
                                 if fenetres else ""),
-                      mode=f"{du_mode:g}".replace(".", ","))
+                      mode=nombre(du_mode, "g"))
     verdict += tr("mesure.errp_test.verdict.repere", defaut=pct(ERRP_TNR_TARGET),
                   tpr=pct(REPERE_TPR), tnr=pct(REPERE_TNR, 1), ecart=f"{REPERE_ECART * 100:.0f}",
                   ici=f"{ecart * 100:.0f}")

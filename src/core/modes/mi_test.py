@@ -50,7 +50,7 @@ import numpy as np  # noqa: E402
 from core.config import (MI_CUE_S, MI_IMAGERY_S, MI_MISES_EN_ROUTE, MI_REST_S,  # noqa: E402
                          MI_WINDOW_S,
                          use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.mi_decoder import MI_CONTROL  # noqa: E402
 from core.modes.affichage import (NIVEAUX, au_dessus_du_hasard, lignes, p_hasard,  # noqa: E402
                                   pct, texte_p, verifier)
@@ -223,8 +223,8 @@ class MesureMI(MesureRuntime):
             sorties = self._sorties_de_l_essai(epoque, fs)
             if not sorties:
                 raise ValueError(tr("mesure.mi_test.erreur.sans_fenetre",
-                                    duree=f"{len(epoque) / fs:.1f}".replace(".", ","),
-                                    fenetre=f"{MI_WINDOW_S:g}".replace(".", ",")))
+                                    duree=nombre(len(epoque) / fs, ".1f"),
+                                    fenetre=nombre(MI_WINDOW_S, "g")))
             fenetres.append(len(sorties))
             decisions.append((cible, self._decision_de_l_essai(sorties)))
         reglages = dict(self.params, model=_os.path.basename(str(self.params.get("model", ""))))
@@ -349,7 +349,7 @@ def _duree_min(par_classe, n_classes):
 BRIEFING = (
     tr("mesure.mi_test.briefing.1"),
     tr("mesure.mi_test.briefing.2", chauffe=f"{MesureRuntime.warmup_s:.0f}",
-       pause=f"{MI_REST_S:g}".replace(".", ","), imagerie=f"{MI_IMAGERY_S:.0f}"),
+       pause=nombre(MI_REST_S, "g"), imagerie=f"{MI_IMAGERY_S:.0f}"),
     tr("mesure.mi_test.briefing.3"),
     tr("mesure.mi_test.briefing.4"),
     tr("mesure.commun.modele_requis"),
@@ -373,7 +373,7 @@ SPEC = MesureSpec(
             # L'aide de la bulle ⓘ : ce que ça change, quand le changer, la durée de chaque choix.
             help=tr("mesure.mi_test.param.essais.aide", long=max(ESSAIS_PAR_CLASSE),
                     durees=", ".join(tr("mesure.commun.duree", n=n,
-                                        minutes=f"{_duree_min(n, 3):.1f}".replace(".", ","))
+                                        minutes=nombre(_duree_min(n, 3), ".1f"))
                                      for n in ESSAIS_PAR_CLASSE)),
         ),
     ),

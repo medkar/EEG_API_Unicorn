@@ -70,7 +70,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_BAND, ERRP_CAL_BLOCKS,  # 
 from core.errp_decoder import CORRECT, ERROR, ErrPModel  # noqa: E402
 from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
                              PAUSE_NOUVELLE_COURSE_S)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import (depuis_table, lignes, non_mesure, pct,  # noqa: E402
                                   texte_filtre)
@@ -166,7 +166,7 @@ def _lignes_errp(auc, perm_p, mesures, n, n_erreurs):
     """
     if auc is None:
         return non_mesure(tr("calib.errp.non_mesure.raison"), tr("calib.errp.non_mesure.conseil"))
-    chiffres = tr("calib.errp.chiffres", auc=f"{auc:.2f}".replace(".", ","),
+    chiffres = tr("calib.errp.chiffres", auc=nombre(auc, ".2f"),
                   tnr=pct(mesures["tnr"]), tpr=pct(mesures["tpr"]), n=n, n_erreurs=n_erreurs)
     if perm_p is not None and perm_p >= PERM_ALPHA:
         return lignes("faible", tr("calib.mot.non_significatif"), chiffres,

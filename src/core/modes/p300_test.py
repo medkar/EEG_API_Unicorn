@@ -47,7 +47,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
 from core.config import (P300_CAL_ROUNDS, P300_EPOCH_S, P300_N_TARGETS,  # noqa: E402
                          P300_PAUSE_MANCHE_S, P300_REPS, use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import (MOT_NON_MESURE, NIVEAUX, au_dessus_du_hasard,  # noqa: E402
                                   lignes, mot_de, non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
@@ -110,7 +110,7 @@ def duree_protocole_s(manches):
 
 def _minutes(manches):
     """La durée d'un test de `manches` manches, chauffe comprise, en minutes (« 3,1 »)."""
-    return f"{(MesureMarqueurs.warmup_s + duree_protocole_s(manches)) / 60:.1f}".replace(".", ",")
+    return nombre((MesureMarqueurs.warmup_s + duree_protocole_s(manches)) / 60, ".1f")
 
 
 def _hasard_de(n_cibles):

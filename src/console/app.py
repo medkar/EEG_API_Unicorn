@@ -2654,7 +2654,7 @@ def _smoke():
                      "honnetete": p300_calib.HONNETETE},
         "candidat": {"modele": "/tmp/calib/candidat_p300_model_20260907_101500.joblib"}}}
     console.apply_state(p300_fini)
-    chk("83.3" in cal_p3.resultat.text() and "17 %" in cal_p3.resultat.text(),
+    chk("83,3" in cal_p3.resultat.text() and "17 %" in cal_p3.resultat.text(),
         f"le P300 affiche SA mesure — la sélection — et SON hasard (1/6) "
         f"({cal_p3.resultat.text()})")
     chk("fenêtres" not in cal_p3.details.text() and "classes" not in cal_p3.details.text(),

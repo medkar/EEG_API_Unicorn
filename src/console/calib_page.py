@@ -380,7 +380,7 @@ class CalibPage(QWidget):
         if calib_state is not None:
             minutes = calib_state.get("duree_estimee_s", 0.0) / 60.0
             self.duree.setText(tr(
-                "pages.calib.duree", minutes=f"{minutes:.1f}",
+                "pages.calib.duree", minutes=nombre(minutes, ".1f"),
                 compte=compter(int(calib_state.get("total", 0)), unite)))
         else:
             self.duree.setText("")
@@ -410,7 +410,7 @@ class CalibPage(QWidget):
             self.classe_cuee.setText(calib_state.get("classe") or "")
             self.rappel.setText(calib_state.get("rappel") or "")
             self.decompte.setText(tr(
-                "pages.commun.decompte", s=f"{float(calib_state.get('restant_s', 0.0)):.1f}"))
+                "pages.commun.decompte", s=nombre(float(calib_state.get('restant_s', 0.0)), ".1f")))
             essai = int(calib_state.get("essai", 0))
             total = int(calib_state.get("total", 0))
             self.progression.setText(tr("pages.calib.progression", unite=unite, n=essai,
@@ -527,11 +527,11 @@ class CalibPage(QWidget):
             if hasard is None:
                 self.resultat.setText(tr(
                     "pages.calib.ligne_mesure", verdict=resultat.get("verdict", ""),
-                    libelle=libelle, valeur=f"{valeur*100:.1f}"))
+                    libelle=libelle, valeur=nombre(valeur*100, ".1f")))
             else:
                 self.resultat.setText(tr(
                     "pages.calib.ligne_mesure_hasard", verdict=resultat.get("verdict", ""),
-                    libelle=libelle, valeur=f"{valeur*100:.1f}",
+                    libelle=libelle, valeur=nombre(valeur*100, ".1f"),
                     hasard=f"{float(hasard)*100:.0f}"))
 
         lignes = [tr("pages.calib.detail.modele", nom=resultat.get("nom", ""))]

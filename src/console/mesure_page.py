@@ -518,7 +518,7 @@ class MesurePage(QWidget):
             self.etape.setText(etat.get("classe") or "")
             self.rappel.setText(etat.get("rappel") or "")
             self.decompte.setText(tr(
-                "pages.commun.decompte", s=f"{float(etat.get('restant_s', 0.0)):.1f}"))
+                "pages.commun.decompte", s=nombre(float(etat.get('restant_s', 0.0)), ".1f")))
             fait = int(etat.get("essai", 0))
             total = int(etat.get("total", 0))
             self.progression.setText(tr("pages.mesure.progression",

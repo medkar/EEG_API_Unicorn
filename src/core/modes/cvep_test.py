@@ -56,7 +56,7 @@ from core.config import (CH_NAMES, CVEP_CAL_BLOCKS, CVEP_CAL_SETTLE_CYCLES,  # n
                          CVEP_CORR_MIN, CVEP_DECISION_CYCLES, CVEP_MARGIN, CVEP_MIN_VOTES,
                          CVEP_VOTE_LEN, FILTER_MARGIN_S, use_utf8_console)
 from core.cvep_code import blocs_entrelaces, build_targets  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import (MOT_NON_MESURE, au_dessus_du_hasard, lignes,  # noqa: E402
                                   non_mesure, p_hasard, pct, texte_p, verifier)
 from core.modes.contract import Param  # noqa: E402
@@ -137,7 +137,7 @@ def _duree_protocole_s(cycles, refresh=REFRESH_REFERENCE_HZ):
 
 
 def _minutes(cycles):
-    return f"{(MesureMarqueurs.warmup_s + _duree_protocole_s(cycles)) / 60.0:.1f}".replace(".", ",")
+    return nombre((MesureMarqueurs.warmup_s + _duree_protocole_s(cycles)) / 60.0, ".1f")
 
 
 def _compteurs(decideur):

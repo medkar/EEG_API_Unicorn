@@ -445,7 +445,7 @@ class ActiveView(QWidget):
             # ont voté pour cette classe, pas la probabilité de la dernière fenêtre affichée
             # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
             self.verdict.setText(tr("pages.direct.mi.intention", label=sortie.get("label", ""),
-                                    confiance=f"{sortie.get('confidence', 0.0):.2f}"))
+                                    confiance=nombre(sortie.get('confidence', 0.0), ".2f")))
 
     def _update_correlations(self, mode_state, sortie):
         """c-VEP : une corrélation par cible, sur une échelle ABSOLUE bornée à 1.
