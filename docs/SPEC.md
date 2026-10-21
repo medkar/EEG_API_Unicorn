@@ -834,8 +834,24 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
          existe aucune : la console soumet `start_calibration` puis lance la fenêtre, et c'est
          l'initialisation de pygame qui couvre les 15 s de chauffe du moteur. Ça tient, ce n'est pas
          garanti.
-     - **[à faire]** le **control plane** (commandes JSON entrantes, §12.1) reste entier : ce
-       chantier n'a livré que les marqueurs de STIMULUS, qui ne partagent que le mot « marqueur ».
+     - **[à faire — PROCHAIN CHANTIER, noté le 2026-10-21, après la QA au casque]** le **control
+       plane** (commandes JSON entrantes, §12.1) reste entier : ce chantier n'a livré que les
+       marqueurs de STIMULUS, qui ne partagent que le mot « marqueur ». Le besoin, dit par
+       l'utilisateur : **l'application externe définit ses paramètres et les transmet à l'API pour
+       qu'elle décode correctement, sans que personne ne lance rien à la main depuis la console**.
+       Aujourd'hui, une application LIT les flux décodés et ENVOIE ses marqueurs (le `cycle` du
+       c-VEP annonce même son rafraîchissement, refusé s'il diffère du modèle), mais il faut
+       démarrer le mode, régler et cliquer « Entraîner » dans la console. Ce qui existe déjà : l'API
+       de commande INTERNE du moteur (`EngineServer.submit` : démarrer, arrêter, `set_params`
+       validé, entraînements), celle de chaque bouton de la console — il manque l'adaptateur LSL
+       (`EEG_API_Unicorn_control`, réponse lue sur `status`), un exemple client et la doc. À
+       trancher en conception : les commandes permises (démarrer/arrêter/régler ; un entraînement,
+       qui suppose quelqu'un sous le casque ?) ; qui l'emporte quand la console et l'application
+       règlent la même chose ; comment l'application apprend un REFUS et sa raison (LSL n'a pas
+       d'accusé de réception) ; comment elle ne pilote pas le moteur du poste voisin (en salle,
+       tous publient sous les mêmes noms). ⚠️ Il touche au CONTRAT PUBLIC. Il recoupe « Connecter »
+       (spec du 2026-09-22, qui excluait les paramètres déclarés par le client) : décider en
+       conception si l'un absorbe l'autre.
      - **[fait 2026-09-09 — chantier « plus une seule commande à taper »]** **il ne reste aucune
        commande d'usage réel.** La règle est passée d'une intention à un test que le dépôt peut
        échouer (§3.2). Livré : les **deux mesures** du §6.2 (contrôle alpha, taux d'émission SSVEP,

@@ -25,6 +25,10 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   `outils/Console EEG.bat` l'ouvre par un double-clic, sans terminal. `src/core/server.py` reste
   lançable seul : c'est l'accès *headless*, pour une machine sans écran ou un montage à deux
   terminaux, et c'est lui que consomme un client LSL.
+- **PROCHAIN CHANTIER, noté le 2026-10-21 : le control plane** (`docs/SPEC.md` §14) —
+  l'application externe transmet ses paramètres au moteur et le pilote, sans lancement à la main
+  dans la console. **À concevoir APRÈS la QA au casque**, à la demande de l'utilisateur. Il
+  recoupe « Connecter » : trancher en conception si l'un absorbe l'autre.
 - **Le code se divise en QUATRE paquets, sur une règle vérifiable** : `src/core/` = ce dont le
   moteur (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/stimulus/` = les
   **quatre** fenêtres pygame qui affichent un stimulus verrouillé à la frame et publient des
