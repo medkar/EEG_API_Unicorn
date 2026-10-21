@@ -41,6 +41,11 @@ LIGNES_RETENUES = 6
 BILAN_LIGNES = 2
 # Une ligne du journal INTERNE de liblsl (loguru) : « data_receiver.cpp:344   ERR| … ».
 JOURNAL_LIBLSL = re.compile(r"\.cpp:\d+\s+(ERR|WARN|INFO)\|")
+# La ligne d'une exception Python (« ValueError: … », « ModuleNotFoundError: … ») : la fenêtre a
+# PLANTÉ. Et le refus qu'une fenêtre annonce elle-même (« ⚠️ REFUS : … », « REFUSÉ — … ») : ce
+# qui suit est la raison, la seule chose à montrer.
+LIGNE_EXCEPTION = re.compile(r"^(Traceback\b|[A-Za-z_][\w.]*(Error|Exception)\b)")
+LIGNE_REFUS = re.compile(r"REFUSÉ?\s*[:—-]\s*")
 
 
 class LanceurFenetre(QObject):
@@ -79,7 +84,9 @@ class LanceurFenetre(QObject):
         # (numéro, message) de la dernière fenêtre morte ANORMALEMENT. Rangé par numéro, et non lu
         # dans `probleme` : celui-ci reçoit aussi les REFUS d'un autre lancement (« une fenêtre
         # tourne déjà »), qui ne disent rien de la fin de celle qui tournait. Cf. `echec_de`.
-        self._echec = (None, "")
+        # La NATURE dit à la console comment le montrer : « abandon » (fermée avant la fin),
+        # « refus » (elle a refusé de s'ouvrir) ou « plantage ».
+        self._echec = (None, "", "")
 
     # --- lecture ----------------------------------------------------------------
 
@@ -98,8 +105,14 @@ class LanceurFenetre(QObject):
         l'essai libre de dire « erreur » plutôt que « terminé » sans confondre la
         mort de SA fenêtre avec le refus d'une autre.
         """
-        n, message = self._echec
+        n, message, _nature = self._echec
         return message if numero is not None and n == numero else ""
+
+    def nature_echec(self, numero):
+        """« abandon », « refus » ou « plantage » pour la fenêtre n° `numero` morte anormalement,
+        sinon ""."""
+        n, _message, nature = self._echec
+        return nature if numero is not None and n == numero else ""
 
     def etat_texte(self):
         """(texte à afficher, est-ce une alerte). Chaîne vide = rien à dire.
@@ -250,12 +263,11 @@ class LanceurFenetre(QObject):
             self._tue = False
         elif brutal:
             self.probleme = tr("pages.fenetre.anormale_brutale", quoi=quoi, code=code,
-                               sortie=self._derniere_sortie())
-            self._echec = (self.numero, self.probleme)
+                               sortie=self._derniere_sortie(1))
+            self._echec = (self.numero, self.probleme, "plantage")
         elif code != 0:
-            self.probleme = tr("pages.fenetre.anormale", quoi=quoi, code=code,
-                               sortie=self._derniere_sortie())
-            self._echec = (self.numero, self.probleme)
+            self.probleme, nature = self._message_de_fin(quoi, code)
+            self._echec = (self.numero, self.probleme, nature)
         else:
             # Une fin normale a aussi quelque chose à dire : la dernière ligne d'une fenêtre est
             # son BILAN (« N frames affichées, M sautée(s) »), le chiffre qui QUALIFIE la séance
@@ -271,6 +283,31 @@ class LanceurFenetre(QObject):
                               bilan=self._derniere_sortie(BILAN_LIGNES, sans_liblsl=True))
                            if self._lignes else "")
         self.change.emit()
+
+    def _message_de_fin(self, quoi, code):
+        """(message, nature) d'une fenêtre sortie avec un code NON NUL, en UNE phrase.
+
+        - « plantage » : une ligne d'exception Python ; on montre CETTE ligne, pas le journal.
+        - « refus » : la fenêtre a refusé de s'ouvrir et dit pourquoi (« REFUS : … ») ; on montre
+          la raison seule.
+        - « abandon » : sortie 1 sans erreur ni refus, une séance que l'élève a fermée avant la
+          fin (Échap). Il le sait : une phrase suffit.
+        - tout autre code : « plantage », avec la dernière ligne.
+        """
+        lignes = [l for l in self._lignes if not JOURNAL_LIBLSL.search(l)]
+        exceptions = [l for l in lignes if LIGNE_EXCEPTION.match(l)
+                      and not l.startswith("Traceback")]
+        if exceptions or any(l.startswith("Traceback") for l in lignes):
+            ligne = exceptions[-1] if exceptions else lignes[-1]
+            return tr("pages.fenetre.anormale", quoi=quoi, code=code, sortie=ligne), "plantage"
+        refus = next((l for l in reversed(lignes) if LIGNE_REFUS.search(l)), None)
+        if refus is not None:
+            return (tr("pages.fenetre.refus", quoi=quoi,
+                       raison=LIGNE_REFUS.split(refus, maxsplit=1)[-1].strip()), "refus")
+        if code == 1:
+            return tr("pages.fenetre.abandonnee", quoi=quoi), "abandon"
+        return (tr("pages.fenetre.anormale", quoi=quoi, code=code,
+                   sortie=self._derniere_sortie(1, sans_liblsl=True)), "plantage")
 
     def _erreur(self, erreur):
         """`errorOccurred` : le cas où `finished` n'arrivera JAMAIS.
@@ -288,8 +325,8 @@ class LanceurFenetre(QObject):
         self._libre = False
         self._proc = None
         self.probleme = tr("pages.fenetre.pas_demarre", quoi=quoi,
-                           sortie=self._derniere_sortie())
-        self._echec = (self.numero, self.probleme)
+                           sortie=self._derniere_sortie(1))
+        self._echec = (self.numero, self.probleme, "plantage")
         self.change.emit()
 
     def _derniere_sortie(self, n=None, sans_liblsl=False):
@@ -306,4 +343,12 @@ class LanceurFenetre(QObject):
         """Efface le message. Appelée quand on relance : un vieux problème affiché à côté d'une
         fenêtre qui tourne se lit comme un problème ACTUEL."""
         self.probleme = ""
+        self.change.emit()
+
+    def oublier_messages(self):
+        """Efface le problème ET le bilan de la dernière fenêtre. Appelée quand on revient à la
+        grille : ces messages parlaient de la page qu'on vient de quitter. Ne touche pas à ce qui
+        TOURNE, ni à `echec_de`, que l'essai libre lit pour conclure."""
+        self.probleme = ""
+        self.resume = ""
         self.change.emit()

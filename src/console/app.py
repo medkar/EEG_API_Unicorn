@@ -54,7 +54,7 @@ if _ARGS.smoke:
 
 from PySide6.QtCore import QLocale, QObject, QProcess, QTimer, Signal  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: E402
-                               QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
@@ -112,24 +112,8 @@ def appliquer_langue(code):
     QLocale.setDefault(QLocale(code))
 
 
-def _boite_avertissement(parent, spec):
-    """L'avertissement de sécurité d'un mode, à valider par « J'ai compris » : la page reste
-    derrière, et le bandeau, lui, ne se ferme pas."""
-    boite = QMessageBox(parent)
-    boite.setIcon(QMessageBox.Icon.Warning)
-    boite.setWindowTitle(tr("console.avertissement.titre"))
-    boite.setText(tr("console.avertissement.titre"))
-    boite.setInformativeText(spec["avertissement"])
-    boite.addButton(tr("console.avertissement.compris"), QMessageBox.ButtonRole.AcceptRole)
-    boite.exec()
-
-
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
-
-    # La boîte qui fait valider l'avertissement d'un mode. Remplaçable : l'autotest ne peut pas
-    # ouvrir une boîte modale, qui attendrait un clic.
-    boite_avertissement = staticmethod(_boite_avertissement)
 
     def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None,
                  memoire=None):
@@ -179,9 +163,6 @@ class Console(QMainWindow):
         self.memoire = memoire if memoire is not None else Memoire()
         self.beeps = Beeps()
         self._origine_mesure = None
-        # Les modes dont l'avertissement de sécurité a déjà été validé dans cette séance : la
-        # boîte ne revient pas à chaque passage sur la page, le bandeau y reste.
-        self._avertis = set()
         self._construire()
 
         self.timer = QTimer(self)
@@ -659,12 +640,17 @@ class Console(QMainWindow):
         #        mesure.
         self._lancer_quand_partie(state)
 
-        # 1 quater. Et une séance que le moteur a ABANDONNÉE ferme la fenêtre qu'elle avait
-        #           ouverte — le jumeau, côté moteur, de « Abandonner ».
+        # 1 quater. La fenêtre d'une séance s'est ARRÊTÉE avant la fin (fermée par l'élève, refus,
+        #           plantage) : la séance ne peut plus aboutir. On l'annule tout de suite, au lieu
+        #           de laisser le moteur attendre son silence avec le décompte qui continue.
+        self._annuler_si_fenetre_morte(state)
+
+        # 1 quinquies. Et une séance que le moteur a ABANDONNÉE ferme la fenêtre qu'elle avait
+        #              ouverte — le jumeau, côté moteur, de « Abandonner ».
         self._fermer_fenetre_abandonnee(state)
 
-        # 1 quinquies. L'essai libre : le mode décode-t-il ENFIN (on ouvre sa fenêtre), sa
-        #              fenêtre s'est-elle fermée (on arrête ce qu'on avait démarré) ?
+        # 1 sexies. L'essai libre : le mode décode-t-il ENFIN (on ouvre sa fenêtre), sa
+        #           fenêtre s'est-elle fermée (on arrête ce qu'on avait démarré) ?
         self._suivre_essai(state)
 
         if self._attente is None:
@@ -796,6 +782,37 @@ class Console(QMainWindow):
     def _attacher_fenetre(self, cle, ident):
         """Retient que la fenêtre qu'on vient d'ouvrir SERT la séance `snapshot()[cle]` n° `ident`."""
         self._fenetre_de = {"cle": cle, "id": ident, "numero": self.lanceur.numero}
+
+    def _annuler_si_fenetre_morte(self, state):
+        """La fenêtre qui SERT une séance est morte avant la fin : on annule la séance, et on le
+        dit sur sa page, en une phrase.
+
+        Sans ça, le moteur attend son silence (15 à 30 s) et la page continue son décompte comme
+        si de rien n'était. Le message part sur la PAGE de la séance, et quitte le bandeau : il
+        parle de cette séance-là, pas de toute la console. Une fenêtre fermée par l'élève n'est
+        pas une alerte ; un refus ou un plantage, si.
+        """
+        lien = self._fenetre_de
+        if lien is None or self.lanceur.en_cours():
+            return
+        message = self.lanceur.echec_de(lien["numero"])
+        if not message:
+            return       # fermée normalement : son signal de fin est parti, le moteur conclut
+        self._fenetre_de = None
+        seance = (state or {}).get(lien["cle"])
+        if (seance is None or seance.get("mode_id") != lien["id"]
+                or seance.get("phase") in PHASES_TERMINALES):
+            return
+        alerte = self.lanceur.nature_echec(lien["numero"]) != "abandon"
+        if lien["cle"] == "mesure":
+            self._a_annuler_mesure = False
+            self.commande("cancel_mesure")
+            self._avis_mesure(lien["id"], message, alerte=alerte)
+        else:
+            self._a_annuler = False
+            self.commande("cancel_calibration")
+            self._avis(lien["id"], message, alerte=alerte)
+        self.lanceur.oublier_probleme()
 
     def _fermer_fenetre_abandonnee(self, state):
         """Une séance que le MOTEUR a abandonnée ferme la fenêtre qu'elle avait ouverte.
@@ -1270,6 +1287,9 @@ class Console(QMainWindow):
 
     def show_grid(self):
         self.stack.setCurrentWidget(self.grid)
+        # Les messages de la dernière fenêtre parlaient de la page qu'on quitte : ils ne suivent
+        # pas l'élève sur la grille. Une fenêtre qui TOURNE reste annoncée.
+        self.lanceur.oublier_messages()
 
     def show_calibration(self, mode_id):
         page = self.calib_pages.get(mode_id)
@@ -1346,11 +1366,6 @@ class Console(QMainWindow):
             # qu'un modèle fraîchement entraîné doit apparaître dans la liste.
             page.rafraichir_choix()
             self.stack.setCurrentWidget(page)
-            # L'avertissement de SÉCURITÉ d'un mode qui fait clignoter un stimulus : à valider à
-            # la PREMIÈRE ouverture de sa page dans la séance, la page déjà affichée derrière.
-            if page.spec.get("avertissement") and mode_id not in self._avertis:
-                self._avertis.add(mode_id)
-                self.boite_avertissement(self, page.spec)
 
 
 def fake_state():
@@ -1407,10 +1422,6 @@ def _smoke():
     # processus). L'espion sert aussi à vérifier que le filet est tendu (« 3 bis »).
     appels_ecran = []
     LanceurFenetre.retablir_ecran = staticmethod(lambda: appels_ecran.append("retablir"))
-    # De même, la boîte d'avertissement d'un mode : une boîte MODALE attendrait un clic. L'espion
-    # note quel mode l'a ouverte (« 3 ter »).
-    avertissements = []
-    Console.boite_avertissement = staticmethod(lambda parent, spec: avertissements.append(spec["id"]))
 
     class _FauxMoteur:
         """Juste ce que la console lit : un état. Assez pour couvrir `refresh()`, qui est la
@@ -6043,8 +6054,7 @@ def _smoke():
         console._dernier_etat = sauve_ecran
     _remise_a_zero()
 
-    # 3 ter. L'AVERTISSEMENT des lumières clignotantes : en gros sur la page, hors du défilement,
-    #        et à valider à la PREMIÈRE ouverture de la page dans la séance.
+    # 3 ter. L'AVERTISSEMENT des lumières clignotantes : en gros sur la page, hors du défilement.
     avec_avert = sorted(m for m, s in console.catalogue.items() if s.get("avertissement"))
     chk(avec_avert == ["cvep", "p300", "ssvep"],
         f"le CONTRAT déclare l'avertissement des trois modes qui font clignoter un stimulus "
@@ -6060,14 +6070,59 @@ def _smoke():
         "ssvep") else ""
     chk("CLIGNOTANTES" in lu and "épilepsie" in lu and "Échap" in lu,
         f"…qui dit le risque, et comment arrêter ({lu[:90]!r})")
-    avertissements.clear()
-    console._avertis = set()
-    for m in ("ssvep", "ssvep", "cvep", "mi", "p300", "cvep", "errp"):
-        console.show_mode(m)
-    chk(avertissements == ["ssvep", "cvep", "p300"],
-        f"la boîte à valider s'ouvre à la PREMIÈRE ouverture de chacune de ces pages, une seule "
-        f"fois par séance, et jamais ailleurs ({avertissements})")
+
+    # 3 quater. LA FIN D'UNE FENÊTRE, en une phrase : fermée par l'élève, refus, plantage.
+    sonde = LanceurFenetre()
+
+    def _fin(lignes, code):
+        sonde._lignes.clear()
+        sonde._lignes.extend(lignes)
+        return sonde._message_de_fin("Tester le SSVEP", code)
+
+    abandon = _fin(["[ssvep-stim] cibles : AVANT@15.00Hz", "[ssvep-stim] ⚠️ PERSONNE n'écoute",
+                    "[ssvep-stim] ⚠️ run guidé INTERROMPU à l'essai 3/36",
+                    "[ssvep-stim] fin : 127 frames affichées, 0 sautée(s) (0.0%)"], 1)
+    refus = _fin(["Écran passé à 60 Hz le temps de la séance (il était à 165 Hz).",
+                  "[ssvep-stim] ⚠️ REFUS : Cet écran ne sait pas afficher à 75 Hz."], 2)
+    plante = _fin(["Traceback (most recent call last):", '  File "ssvep.py", line 3',
+                   "ValueError: ecran perdu"], 1)
+    chk(abandon[1] == "abandon" and "abandonnée" in abandon[0] and "PERSONNE" not in abandon[0]
+        and "frames" not in abandon[0],
+        f"une fenêtre fermée avant la fin : UNE phrase, sans son journal ({abandon[0]!r})")
+    chk(refus[1] == "refus" and "75 Hz" in refus[0] and "Écran passé" not in refus[0]
+        and "[ssvep-stim]" not in refus[0],
+        f"…un refus : sa raison SEULE ({refus[0]!r})")
+    chk(plante[1] == "plantage" and "ValueError: ecran perdu" in plante[0] and "File" not in plante[0],
+        f"…un plantage : la ligne de l'exception, pas la pile ({plante[0]!r})")
+
+    # La fenêtre d'une séance meurt avant la fin : la séance est annulée TOUT DE SUITE, et le
+    # message passe du bandeau à la page de la séance.
+    _remise_a_zero()
+    mes_id = "ssvep_taux"
+    console.lanceur._echec = (console.lanceur.numero, abandon[0], "abandon")
+    console.lanceur.probleme = abandon[0]
+    console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "chauffe"}})
+    avis_test = console.mesure_pages[mes_id].avis.text()
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and "abandonnée" in avis_test
+        and console.lanceur.probleme == "" and console._fenetre_de is None,
+        f"fenêtre de test fermée en cours : `cancel_mesure` aussitôt, la phrase sur la page, plus "
+        f"rien au bandeau ({moteur_faux.commandes}, {avis_test!r})")
+    moteur_faux.commandes.clear()
+    console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "fini"}})
+    chk(not moteur_faux.commandes,
+        f"…mais une séance déjà TERMINÉE n'est pas annulée ({moteur_faux.commandes})")
+
+    # Revenir à la grille efface les messages de la dernière fenêtre.
+    console.lanceur.probleme, console.lanceur.resume = "un problème", "un bilan"
     console.show_grid()
+    chk(console.lanceur.probleme == "" and console.lanceur.resume == ""
+        and console.lanceur.etat_texte()[0] == "",
+        f"revenir à la grille efface le message de la dernière fenêtre "
+        f"({console.lanceur.etat_texte()[0]!r})")
+    console.lanceur._echec = (None, "", "")
+    _remise_a_zero()
 
     # 4. Un mode qui TOURNAIT DÉJÀ (lancé depuis sa tuile, pour une application) : rien à
     #    démarrer, la fenêtre s'ouvre tout de suite, et il CONTINUE après.

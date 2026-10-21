@@ -1,5 +1,4 @@
 {
-  "console.avertissement.compris": "J'ai compris",
   "console.avertissement.titre": "⚠ ATTENTION — LUMIÈRES CLIGNOTANTES",
   "console.avis.arret_trop_long_entrainement": "« {mode} » ne s'est pas arrêté en {delai} s : l'entraînement n'a pas été lancé. Arrête-le depuis sa tuile, puis reclique « Commencer ».",
   "console.avis.arret_trop_long_test": "« {mode} » ne s'est pas arrêté en {delai} s : le test n'a pas été lancé. Arrête-le depuis sa tuile, puis reclique « Commencer ».",

@@ -269,9 +269,8 @@ class ModeSpec:
                                   # contrat n'en annonce, sans la moindre erreur.
     runtime_cls: object = None  # la classe ModeRuntime, ou None si le moteur ne sait pas le faire
     avertissement: str = ""    # un avertissement de SÉCURITÉ, ou "" : la page du mode le montre
-                               # en gros, en tête, et la console le fait valider à la première
-                               # ouverture de la page dans la séance. Les modes qui font clignoter
-                               # un stimulus y portent `AVERTISSEMENT_CLIGNOTEMENT`.
+                               # en gros, en tête, en permanence. Les modes qui font clignoter un
+                               # stimulus y portent `AVERTISSEMENT_CLIGNOTEMENT`.
 
     def defaults(self):
         """Le jeu de réglages par défaut de ce mode, résolu maintenant."""

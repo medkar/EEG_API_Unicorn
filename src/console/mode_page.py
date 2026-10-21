@@ -274,8 +274,7 @@ class ModePage(QWidget):
         # --- l'AVERTISSEMENT de sécurité, quand le mode en déclare un ---------------------------
         # Les modes qui font clignoter un stimulus (SSVEP, c-VEP, P300) : risque d'épilepsie
         # photosensible. En GROS, sous l'en-tête et HORS du défilement : il reste visible où qu'on
-        # soit dans la page, et rien ne le ferme. La console le fait aussi valider à la première
-        # ouverture de la page (`Console.show_mode`).
+        # soit dans la page, et rien ne le ferme.
         self.avertissement = None
         if spec.get("avertissement"):
             self.avertissement = QFrame()

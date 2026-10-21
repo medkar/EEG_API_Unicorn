@@ -1,5 +1,4 @@
 {
-  "console.avertissement.compris": "I understand",
   "console.avertissement.titre": "⚠ WARNING — FLASHING LIGHTS",
   "console.avis.arret_trop_long_entrainement": "\"{mode}\" did not stop within {delai} s: training was not started. Stop it from its tile, then click \"Begin\" again.",
   "console.avis.arret_trop_long_test": "\"{mode}\" did not stop within {delai} s: the test was not started. Stop it from its tile, then click \"Begin\" again.",
