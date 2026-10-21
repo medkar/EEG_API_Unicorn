@@ -21,8 +21,8 @@ import numpy as np  # noqa: E402
 from core.cca_decoder import CCADecoder  # noqa: E402
 from core.i18n import nombre, tr  # noqa: E402
 from core.lsl_io import DecodedSSVEPPublisher, ssvep_channel_labels, stream_name  # noqa: E402
-from core.modes.contract import (CIBLES_PHYSIQUES, ModeSpec, Param, Rest,  # noqa: E402
-                                 bande_de, params_bande, validate)
+from core.modes.contract import (AVERTISSEMENT_CLIGNOTEMENT, CIBLES_PHYSIQUES,  # noqa: E402
+                                 ModeSpec, Param, Rest, bande_de, params_bande, validate)
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Le défaut vient de `choose_frequencies`, la MÊME fonction que le stimulus : passer le même
@@ -255,6 +255,7 @@ SPEC = ModeSpec(
     label=tr("mode.ssvep.label"),
     family="actif",
     summary=tr("mode.ssvep.summary"),
+    avertissement=AVERTISSEMENT_CLIGNOTEMENT,   # des cibles, ou des LED, qui clignotent
     status="moteur",
     key_channels=tuple(OCCIPITAL),   # les 4 occipitales : le SSVEP y est maximal
     # La fenêtre qui fait clignoter les cibles PENDANT le décodage. Le SSVEP n'a aucune

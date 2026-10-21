@@ -54,7 +54,7 @@ if _ARGS.smoke:
 
 from PySide6.QtCore import QLocale, QObject, QProcess, QTimer, Signal  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: E402
-                               QStackedWidget, QVBoxLayout, QWidget)
+                               QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from console.banner import Banner  # noqa: E402
 from console.beeps import Beeps  # noqa: E402
@@ -112,8 +112,24 @@ def appliquer_langue(code):
     QLocale.setDefault(QLocale(code))
 
 
+def _boite_avertissement(parent, spec):
+    """L'avertissement de sécurité d'un mode, à valider par « J'ai compris » : la page reste
+    derrière, et le bandeau, lui, ne se ferme pas."""
+    boite = QMessageBox(parent)
+    boite.setIcon(QMessageBox.Icon.Warning)
+    boite.setWindowTitle(tr("console.avertissement.titre"))
+    boite.setText(tr("console.avertissement.titre"))
+    boite.setInformativeText(spec["avertissement"])
+    boite.addButton(tr("console.avertissement.compris"), QMessageBox.ButtonRole.AcceptRole)
+    boite.exec()
+
+
 class Console(QMainWindow):
     """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
+
+    # La boîte qui fait valider l'avertissement d'un mode. Remplaçable : l'autotest ne peut pas
+    # ouvrir une boîte modale, qui attendrait un clic.
+    boite_avertissement = staticmethod(_boite_avertissement)
 
     def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None,
                  memoire=None):
@@ -163,6 +179,9 @@ class Console(QMainWindow):
         self.memoire = memoire if memoire is not None else Memoire()
         self.beeps = Beeps()
         self._origine_mesure = None
+        # Les modes dont l'avertissement de sécurité a déjà été validé dans cette séance : la
+        # boîte ne revient pas à chaque passage sur la page, le bandeau y reste.
+        self._avertis = set()
         self._construire()
 
         self.timer = QTimer(self)
@@ -1327,6 +1346,11 @@ class Console(QMainWindow):
             # qu'un modèle fraîchement entraîné doit apparaître dans la liste.
             page.rafraichir_choix()
             self.stack.setCurrentWidget(page)
+            # L'avertissement de SÉCURITÉ d'un mode qui fait clignoter un stimulus : à valider à
+            # la PREMIÈRE ouverture de sa page dans la séance, la page déjà affichée derrière.
+            if page.spec.get("avertissement") and mode_id not in self._avertis:
+                self._avertis.add(mode_id)
+                self.boite_avertissement(self, page.spec)
 
 
 def fake_state():
@@ -1383,6 +1407,10 @@ def _smoke():
     # processus). L'espion sert aussi à vérifier que le filet est tendu (« 3 bis »).
     appels_ecran = []
     LanceurFenetre.retablir_ecran = staticmethod(lambda: appels_ecran.append("retablir"))
+    # De même, la boîte d'avertissement d'un mode : une boîte MODALE attendrait un clic. L'espion
+    # note quel mode l'a ouverte (« 3 ter »).
+    avertissements = []
+    Console.boite_avertissement = staticmethod(lambda parent, spec: avertissements.append(spec["id"]))
 
     class _FauxMoteur:
         """Juste ce que la console lit : un état. Assez pour couvrir `refresh()`, qui est la
@@ -6014,6 +6042,32 @@ def _smoke():
             f"({len(appels_ecran) - avant_filet} appel(s))")
         console._dernier_etat = sauve_ecran
     _remise_a_zero()
+
+    # 3 ter. L'AVERTISSEMENT des lumières clignotantes : en gros sur la page, hors du défilement,
+    #        et à valider à la PREMIÈRE ouverture de la page dans la séance.
+    avec_avert = sorted(m for m, s in console.catalogue.items() if s.get("avertissement"))
+    chk(avec_avert == ["cvep", "p300", "ssvep"],
+        f"le CONTRAT déclare l'avertissement des trois modes qui font clignoter un stimulus "
+        f"({avec_avert})")
+    bandeaux = {m: getattr(p, "avertissement", None) for m, p in console.pages.items()}
+    chk(all((b is not None) == (m in avec_avert) for m, b in bandeaux.items())
+        and all(bandeaux[m] is not None and bandeaux[m].isVisibleTo(console.pages[m])
+                and not console.pages[m].defilement.isAncestorOf(bandeaux[m])
+                for m in avec_avert),
+        f"leurs pages, et elles seules, portent le bandeau, HORS du défilement : il reste visible "
+        f"où qu'on soit dans la page ({sorted(m for m, b in bandeaux.items() if b is not None)})")
+    lu = " ".join(l.text() for l in bandeaux["ssvep"].findChildren(_QLabel)) if bandeaux.get(
+        "ssvep") else ""
+    chk("CLIGNOTANTES" in lu and "épilepsie" in lu and "Échap" in lu,
+        f"…qui dit le risque, et comment arrêter ({lu[:90]!r})")
+    avertissements.clear()
+    console._avertis = set()
+    for m in ("ssvep", "ssvep", "cvep", "mi", "p300", "cvep", "errp"):
+        console.show_mode(m)
+    chk(avertissements == ["ssvep", "cvep", "p300"],
+        f"la boîte à valider s'ouvre à la PREMIÈRE ouverture de chacune de ces pages, une seule "
+        f"fois par séance, et jamais ailleurs ({avertissements})")
+    console.show_grid()
 
     # 4. Un mode qui TOURNAIT DÉJÀ (lancé depuis sa tuile, pour une application) : rien à
     #    démarrer, la fenêtre s'ouvre tout de suite, et il CONTINUE après.

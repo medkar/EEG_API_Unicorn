@@ -268,6 +268,10 @@ class ModeSpec:
                                   # silence — le décodeur recevrait moins de signal que le
                                   # contrat n'en annonce, sans la moindre erreur.
     runtime_cls: object = None  # la classe ModeRuntime, ou None si le moteur ne sait pas le faire
+    avertissement: str = ""    # un avertissement de SÉCURITÉ, ou "" : la page du mode le montre
+                               # en gros, en tête, et la console le fait valider à la première
+                               # ouverture de la page dans la séance. Les modes qui font clignoter
+                               # un stimulus y portent `AVERTISSEMENT_CLIGNOTEMENT`.
 
     def defaults(self):
         """Le jeu de réglages par défaut de ce mode, résolu maintenant."""
@@ -327,6 +331,10 @@ def _check_bounds(param, value):
 # Le refus d'un mode à modèle quand aucun modèle n'existe. UNE phrase, partagée par les quatre
 # (MI, P300, ErrP, c-VEP) et par leurs tests, qui reprennent les `Param` du mode.
 SANS_MODELE = tr("moteur.contrat.sans_modele")
+
+# L'avertissement des modes qui font clignoter un stimulus (SSVEP, c-VEP, P300) : des lumières qui
+# clignotent peuvent déclencher une crise d'épilepsie photosensible. UNE phrase, partagée.
+AVERTISSEMENT_CLIGNOTEMENT = tr("mode.avertissement.epilepsie")
 
 
 def _coerce(param, value):

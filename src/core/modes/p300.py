@@ -71,8 +71,8 @@ from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedP300Publisher, p300_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
 from core.p300_decoder import epoch_from_stream  # noqa: E402
-from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
-                                  params_bande, validate)
+from core.modes.contract import (AVERTISSEMENT_CLIGNOTEMENT, Calib, ModeSpec, Param,  # noqa: E402
+                                  Rest, SANS_MODELE, params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `p300_calib` ne nous importe pas en retour (il lit
 # `P300Runtime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, et le cycle CASSE dès qu'on lance l'un des deux fichiers directement,
@@ -527,6 +527,7 @@ SPEC = ModeSpec(
     label=tr("mode.p300.label"),
     family="actif",
     summary=tr("mode.p300.summary"),
+    avertissement=AVERTISSEMENT_CLIGNOTEMENT,   # des flashs à ~7 Hz (67 ms allumés, 83 éteints)
     status="moteur",
     key_channels=tuple(P300_MIDLINE),   # Fz, Cz, Pz — la ligne médiane, où le P300 culmine
     stimulus_id="p300",

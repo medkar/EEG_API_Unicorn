@@ -103,8 +103,8 @@ from core.cvep_rcca import RCCADecoder  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from core.lsl_io import DecodedCVEPPublisher, cvep_channel_labels, stream_name  # noqa: E402
 from core.markers import flux_de_marqueurs_visibles  # noqa: E402
-from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # noqa: E402
-                                  params_bande, validate)
+from core.modes.contract import (AVERTISSEMENT_CLIGNOTEMENT, Calib, ModeSpec, Param,  # noqa: E402
+                                  Rest, SANS_MODELE, params_bande, validate)
 # ⚠️ L'arête ne va QUE dans ce sens : `cvep_calib` ne nous importe pas en retour (il lit
 # `CVEPRuntime` tardivement, dans une propriété — voir son ⚠️). Un import en tête là-bas
 # refermerait un cycle, qui casse dès qu'on lance l'un des deux fichiers directement,
@@ -727,6 +727,7 @@ _COUPURE_HAUTE = (30.0, 60.0)
 SPEC = ModeSpec(
     id="cvep", label=tr("mode.cvep.label"), family="actif",
     summary=tr("mode.cvep.summary"),
+    avertissement=AVERTISSEMENT_CLIGNOTEMENT,   # le code change d'état jusqu'à chaque image
     status="moteur",
     key_channels=tuple(CVEP_CHANNELS),   # Pz, PO7, Oz, PO8 — le filtre spatial fait le tri
     stimulus_id="cvep",   # la même fenêtre que sa calibration, mais la question est distincte

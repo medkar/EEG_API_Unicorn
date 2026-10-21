@@ -112,6 +112,7 @@
   "calib.p300.verdict.utilisable": "USABLE",
   "calib.unite.epoque": "epoch",
   "calib.unite.essai": "trial",
+  "mode.avertissement.epilepsie": "This mode makes lights flash. In some people, flashing lights can trigger an epileptic seizure, even with no known history of epilepsy. If the person being tested has ever had a seizure, or is sensitive to flashing lights, do not use this mode. Stop at once at any dizziness, blurred vision, involuntary movement or feeling unwell: Esc closes the flashing window.",
   "mode.cvep.desaccord.cibles": "This model was trained with {modele} targets, but the stimulus shows {actuel}: it no longer matches. Train it again (\"Train\" on the c-VEP page).",
   "mode.cvep.desaccord.code": "This model expects a code of {modele} frames, but the stimulus shows one of {actuel} (code on {bits} bits): it no longer matches. Train it again (\"Train\" on the c-VEP page).",
   "mode.cvep.label": "c-VEP",

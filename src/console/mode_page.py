@@ -33,7 +33,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,6 +44,10 @@ from core.modes import registry  # noqa: E402
 
 GRIS = "color: #8a8f9c; font-size: 11px;"
 ROUGE = "color: #e5484d;"
+# Le cadre de l'avertissement de sécurité : le sélecteur par NOM, pour que la bordure ne descende
+# pas sur les étiquettes qu'il contient.
+CADRE_AVERTISSEMENT = ("QFrame#avertissement { border: 2px solid #e5484d; border-radius: 6px; "
+                       "background-color: rgba(229, 72, 77, 0.12); }")
 
 
 def _phrase(texte):
@@ -267,8 +271,29 @@ class ModePage(QWidget):
         self.defilement.setWidgetResizable(True)     # sinon le corps garde sa taille d'origine
         self.defilement.setFrameShape(QScrollArea.NoFrame)
 
+        # --- l'AVERTISSEMENT de sécurité, quand le mode en déclare un ---------------------------
+        # Les modes qui font clignoter un stimulus (SSVEP, c-VEP, P300) : risque d'épilepsie
+        # photosensible. En GROS, sous l'en-tête et HORS du défilement : il reste visible où qu'on
+        # soit dans la page, et rien ne le ferme. La console le fait aussi valider à la première
+        # ouverture de la page (`Console.show_mode`).
+        self.avertissement = None
+        if spec.get("avertissement"):
+            self.avertissement = QFrame()
+            self.avertissement.setObjectName("avertissement")
+            self.avertissement.setStyleSheet(CADRE_AVERTISSEMENT)
+            dedans = QVBoxLayout(self.avertissement)
+            titre = QLabel(tr("console.avertissement.titre"))
+            titre.setStyleSheet("color: #e5484d; font-size: 18px; font-weight: bold;")
+            texte = QLabel(spec["avertissement"])
+            texte.setWordWrap(True)
+            texte.setStyleSheet("font-size: 14px;")
+            dedans.addWidget(titre)
+            dedans.addWidget(texte)
+
         layout = QVBoxLayout(self)
         layout.addLayout(entete)
+        if self.avertissement is not None:
+            layout.addWidget(self.avertissement)
         layout.addWidget(self.defilement, 1)
 
     def _appliquer_avant_de_partir(self):

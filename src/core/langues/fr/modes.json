@@ -112,6 +112,7 @@
   "calib.p300.verdict.utilisable": "UTILISABLE",
   "calib.unite.epoque": "époque",
   "calib.unite.essai": "essai",
+  "mode.avertissement.epilepsie": "Ce mode fait clignoter des lumières. Chez certaines personnes, des lumières qui clignotent peuvent déclencher une crise d'épilepsie, même sans antécédent connu. Si la personne testée a déjà fait une crise, ou si elle est sensible aux lumières clignotantes, n'utilise pas ce mode. Arrête tout de suite au moindre vertige, trouble de la vue, mouvement involontaire ou malaise : Échap ferme la fenêtre qui clignote.",
   "mode.cvep.desaccord.cibles": "Ce modèle a été entraîné avec {modele} cibles, le stimulus en affiche {actuel} : il ne correspond plus. Ré-entraîne-le (« Entraîner » sur la page c-VEP).",
   "mode.cvep.desaccord.code": "Ce modèle attend un code de {modele} images, le stimulus en affiche un de {actuel} (code sur {bits} bits) : il ne correspond plus. Ré-entraîne-le (« Entraîner » sur la page c-VEP).",
   "mode.cvep.label": "c-VEP",

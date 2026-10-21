@@ -883,6 +883,27 @@ Note d'abord son rafraîchissement, dans Paramètres → Affichage → Affichage
 ❌ Régression : un écran qui ne revient pas à son rafraîchissement, une fenêtre qui s'ouvre au
 mauvais rafraîchissement, un modèle c-VEP sans `_…Hz` dans son nom.
 
+### ☐ 1.19 — L'avertissement des lumières clignotantes (2026-10-21)
+
+Console fraîchement ouverte, board de test.
+
+1. Grille → ouvre la page **SSVEP**.
+   ✅ **1.19.1** Une boîte « ⚠ ATTENTION — LUMIÈRES CLIGNOTANTES » s'ouvre par-dessus la page :
+   le risque d'épilepsie, quoi faire, et « J'ai compris ». Clique dessus.
+   ✅ **1.19.2** Sous l'en-tête de la page, un grand cadre rouge porte le même avertissement. Fais
+   défiler la page : il reste visible. Rien ne le ferme.
+2. Reviens à la grille, puis rouvre la page **SSVEP**.
+   ✅ **1.19.3** Pas de boîte cette fois ; le cadre rouge est toujours là.
+3. Ouvre les pages **c-VEP** et **P300**.
+   ✅ **1.19.4** La boîte à la première ouverture de chacune, puis le cadre rouge.
+4. Ouvre les pages **Motor Imagery**, **ErrP**, **Neuro** et **Brut**.
+   ✅ **1.19.5** Ni boîte ni cadre : elles ne font rien clignoter.
+5. Change de langue (🌐), rouvre la page SSVEP.
+   ✅ **1.19.6** Le cadre est en anglais (« ⚠ WARNING — FLASHING LIGHTS »).
+
+❌ Régression : un mode qui fait clignoter un stimulus sans avertissement, un cadre qui disparaît en
+faisant défiler, une boîte qui revient à chaque passage sur la page.
+
 ---
 
 # Bloc 2 — au casque

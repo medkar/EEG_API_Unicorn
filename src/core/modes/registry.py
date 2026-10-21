@@ -225,6 +225,9 @@ def _serialize(spec, params=None):
         # La MESURE qui éprouve ce mode. C'est ce champ que la console lit pour décider d'afficher
         # « Tester » — elle ne tient aucune liste des modes testables, elle demande au contrat.
         "test_id": spec.test_id,
+        # L'avertissement de SÉCURITÉ du mode, ou "" : la console le montre en gros sur la page,
+        # et le fait valider à sa première ouverture. Elle ne tient aucune liste de modes à risque.
+        "avertissement": spec.avertissement,
         "calibration": None if spec.calibration is None else {
             "kind": spec.calibration.kind,
             "stimulus_id": spec.calibration.stimulus_id,
