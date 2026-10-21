@@ -229,8 +229,27 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
    pendant son test (`_refus_reglage_pendant_test`), et la page grise « Appliquer », sa bulle
    disant pourquoi. Les réglages des autres modes restent libres.
 3. **Si le flux de marqueurs d'une application n'est pas visible à l'entrée d'une page de mode**,
-   la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu. Antérieur au
-   chantier ; relève de « Connecter ».
+   la liste retombe sur le flux par défaut et écrase en silence le `stream_in` retenu.
+   ➜ **Analysé le 2026-10-21, correctif DÉCIDÉ, à faire** (sur une autre machine). Le scénario
+   (P300, ErrP, c-VEP) : on choisit `MonJeu_markers` pendant que le jeu tourne, le moteur le
+   retient ; plus tard on rouvre la page, jeu fermé ; `mode_page.rafraichir_choix` relit la liste
+   (`markers.flux_de_marqueurs_visibles`), `MonJeu_markers` n'y est plus, et
+   `ParamsForm.set_choices` retombe sur la première ligne, le flux par défaut. La page montre
+   alors autre chose que le magasin du moteur, et le prochain « Appliquer » — ou « Tester », qui
+   applique d'abord l'écran — l'écrase. Le mode écoute notre fenêtre au lieu du jeu, sans un mot.
+   ⚠️ Corriger l'écran SEUL ne suffit pas : `contract._coerce` refuse tout `choice` absent de
+   `choices_now()`, donc un flux non visible à cet instant ferait refuser CHAQUE « Appliquer »
+   tant que le jeu est fermé — et la doc apprend à lancer le moteur AVANT l'application, alors que
+   le moteur sait déjà attendre un flux absent (« pas encore là — j'attends »).
+   **Le correctif décidé, en deux parties :**
+   1. **Moteur** : `stream_in` devient un choix OUVERT. Tout nom non vide est accepté ; un nom
+      absent du réseau l'est avec un AVERTISSEMENT (« pas vu sur le réseau pour l'instant : le
+      moteur l'attendra »), jamais un refus. La liste n'est plus qu'une suggestion, et on peut
+      taper le nom de son flux à l'avance (liste éditable dans la console).
+   2. **Console** : la liste garde TOUJOURS la valeur retenue, même absente du réseau, marquée
+      « (pas vu sur le réseau) » ; plus rien n'est remplacé en silence.
+   Recoupe le control plane (une application pourrait y annoncer son flux), mais reste utile à
+   qui règle à la main dans la console.
 4. **« Vérifier le casque » ne vérifie que l'alpha** (passe du 2026-09-23, point 1.2). ➜ **En partie
    traité le 2026-10-20** : la page s'ouvre sur « Contact des électrodes » (point 1.7 bis), qui juge
    chaque électrode sur son σ (plate, ou trop de bruit au-delà d'un repère de 25 µV, PROVISOIRE)

@@ -852,6 +852,11 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        tous publient sous les mêmes noms). ⚠️ Il touche au CONTRAT PUBLIC. Il recoupe « Connecter »
        (spec du 2026-09-22, qui excluait les paramètres déclarés par le client) : décider en
        conception si l'un absorbe l'autre.
+     - **[à faire — correctif DÉCIDÉ le 2026-10-21]** le flux de marqueurs choisi (`stream_in`)
+       ne doit plus être écrasé en silence quand l'application n'est pas visible à l'ouverture de
+       sa page : `stream_in` devient un choix OUVERT dans le moteur (avertissement, pas refus,
+       pour un nom absent du réseau), et la console garde la valeur retenue dans sa liste.
+       Détail : `docs/qa.md`, constat ouvert n° 3.
      - **[fait 2026-09-09 — chantier « plus une seule commande à taper »]** **il ne reste aucune
        commande d'usage réel.** La règle est passée d'une intention à un test que le dépôt peut
        échouer (§3.2). Livré : les **deux mesures** du §6.2 (contrôle alpha, taux d'émission SSVEP,

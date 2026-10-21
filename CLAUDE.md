@@ -29,6 +29,11 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
   l'application externe transmet ses paramètres au moteur et le pilote, sans lancement à la main
   dans la console. **À concevoir APRÈS la QA au casque**, à la demande de l'utilisateur. Il
   recoupe « Connecter » : trancher en conception si l'un absorbe l'autre.
+- **À FAIRE aussi, correctif DÉCIDÉ le 2026-10-21 (pas fait)** : le flux de marqueurs choisi
+  (`stream_in` : P300, ErrP, c-VEP) est écrasé EN SILENCE quand l'application n'est pas lancée à
+  l'ouverture de sa page. Le scénario, la cause et le correctif en deux parties (choix OUVERT
+  dans le moteur, avec avertissement ; valeur retenue gardée dans la liste) sont dans
+  `docs/qa.md`, constat ouvert n° 3.
 - **Le code se divise en QUATRE paquets, sur une règle vérifiable** : `src/core/` = ce dont le
   moteur (`server.py`) a besoin pour tourner, `core/modes/` compris ; `src/stimulus/` = les
   **quatre** fenêtres pygame qui affichent un stimulus verrouillé à la frame et publient des
