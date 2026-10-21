@@ -235,8 +235,28 @@ def modeles_disponibles(dossier=DATA_DIR):
     return utilisables
 
 
+def refresh_de(chemin):
+    """Le rafraîchissement auquel ce modèle a été entraîné, en Hz, ou None s'il ne se lit pas.
+
+    Ne lit QUE le champ `refresh`, sans charger le modèle : un rCCA ré-ajuste au chargement, et la
+    console pose la question à chaque lancement de fenêtre. Sans `allow_pickle`, comme `charger` :
+    un champ en pickle rend None au lieu d'exécuter quoi que ce soit. Ne lève jamais.
+    """
+    if not chemin or not _os.path.isfile(chemin):
+        return None
+    try:
+        with _np.load(chemin) as d:
+            if "refresh" not in d.files:
+                return None
+            valeur = float(d["refresh"])
+    except Exception:  # noqa: BLE001 - « ne lève jamais » : tout fichier illisible rend None
+        return None
+    return valeur if valeur > 0 else None
+
+
 def decrire(chemin):
-    """Une ligne lisible pour la liste de la console : date, décodeur, justesse honnête, cibles.
+    """Une ligne lisible pour la liste de la console : date, décodeur, justesse honnête, cibles,
+    et le rafraîchissement de l'entraînement, le seul auquel le modèle marche.
     Ne lève jamais, exactement comme `charger`, sa fonction sœur.
 
     `cv_loo` est la justesse **leave-one-out** mesurée à la calibration : chaque cycle est classé
@@ -259,11 +279,13 @@ def decrire(chemin):
         "cv_loo": None,
         "n_targets": None,
         "n_epoques": None,
+        "refresh": None,
         "probleme": raison,
     }
     if modele is None:
         return infos
     infos["decodeur"] = modele.decoder
+    infos["refresh"] = float(modele.refresh)
     cv = getattr(modele, "cv_", None)
     infos["cv_loo"] = float(cv) if cv is not None else None
     # eCCA : `n_targets` est ce que la calibration a ENREGISTRÉ (0 = inconnu) ;
@@ -663,6 +685,28 @@ def _selftest():
                 f"({leve or liste_course})")
         finally:
             shutil.rmtree(vide, ignore_errors=True)
+        # --- Le RAFRAÎCHISSEMENT d'un modèle, lu sans le recharger ---------------------------
+        ecca_hz = _ecca().save(_os.path.join(dossier, "cvep_model_hz.npz"), n_targets=6)
+        rcca_hz = _rcca(codes_du_jour).save(_os.path.join(dossier, "cvep_rcca_model_hz.npz"))
+        chk(refresh_de(ecca_hz) == 60.0 and refresh_de(rcca_hz) == 60.0
+            and decrire(ecca_hz)["refresh"] == 60.0,
+            f"un modèle dit le rafraîchissement de son entraînement, eCCA comme rCCA "
+            f"({refresh_de(ecca_hz)}, {refresh_de(rcca_hz)}, {decrire(ecca_hz)['refresh']})")
+        seul = _os.path.join(dossier, "seul_refresh.npz")
+        _np.savez(seul, refresh=75.0)
+        chk(refresh_de(seul) == 75.0 and charger(seul)[0] is None,
+            "…lu dans le SEUL champ `refresh`, sans charger le modèle : un rCCA ré-ajuste au "
+            "chargement, et la console le lit à chaque lancement de fenêtre")
+        sans = _os.path.join(dossier, "sans_refresh.npz")
+        _np.savez(sans, w=_np.ones(3))
+        piege = _os.path.join(dossier, "refresh_pickle.npz")
+        _np.savez(piege, refresh=_np.array([{"x": 1}], dtype=object))
+        chk(all(refresh_de(c) is None for c in (None, "", _os.path.join(dossier, "absent.npz"),
+                                                sans, piege)),
+            "…et None, sans lever ni dépickler, pour un chemin vide ou absent, un fichier sans "
+            "champ `refresh`, ou un `refresh` en pickle")
+        chk(decrire(_os.path.join(dossier, "absent.npz"))["refresh"] is None,
+            "…et `decrire` d'un fichier absent porte la clé, à None")
     finally:
         shutil.rmtree(dossier, ignore_errors=True)
 
