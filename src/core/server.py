@@ -1304,6 +1304,17 @@ class EngineServer:
             shutil.rmtree(self.calib_dir, ignore_errors=True)
             self.calib_dir = None
 
+    def retirer_flux(self):
+        """Retire du réseau les flux `quality` et `status` de CE moteur, sans attendre le
+        ramasse-miettes.
+
+        Pour un moteur qu'on JETTE : la console qui repose la question après un casque qui refuse
+        de s'ouvrir. Le moteur suivant publie sous les mêmes noms, et un client qui tomberait sur
+        l'ancien flux, muet, conclurait que rien n'est publié. À n'appeler qu'une fois le fil du
+        moteur terminé : il ne publie plus rien ensuite.
+        """
+        self.quality_out = self.status_out = None
+
     # --- API de commande interne (SPEC §12.1) --------------------------------
     # La console et, plus tard, l'adaptateur de commandes LSL passent tous les deux PAR ICI.
     # Un seul chemin à tester, et le protocole de contrôle reste remplaçable sans réécrire le

@@ -5259,6 +5259,52 @@ def _smoke():
         f"…jusqu'au constructeur du moteur, par le vrai `_lancer_moteur` "
         f"({recu.get('secteur_hz')!r})")
 
+    # --- Un moteur JETÉ ne laisse aucun flux sur le réseau ------------------------------------
+    # Les scénarios ci-dessus vérifient l'ORDRE des appels sur un faux moteur. Ici : un VRAI
+    # moteur (board de test) dont l'ouverture échoue, la VRAIE attente, puis le réseau vu comme
+    # une application le voit. Vu au casque le 2026-10-21 : les flux `quality` et `status` d'un
+    # premier essai raté restaient annoncés, muets, sous les noms du moteur suivant.
+    import gc as _gc
+    import weakref as _weakref
+
+    from pylsl import resolve_byprop as _resolve
+    instance_jetee = f"smoke-jete-{os.getpid()}"
+    jete = {}
+
+    def lancer_echec(_args, _modes, _synth, _numero, secteur_hz):
+        moteur = EngineServer(synthetic=True, modes=(), instance=instance_jetee,
+                              secteur_hz=secteur_hz)
+
+        def refuse():
+            raise RuntimeError("UNABLE_TO_OPEN_PORT_ERROR:2 (simulé)")
+        moteur.acq.start = refuse
+        jete["moteur"] = _weakref.ref(moteur)
+        issue = {}
+
+        def cible():
+            try:
+                moteur.run()
+            except Exception as e:  # noqa: BLE001 - l'échec simulé est attendu
+                issue["raison"] = str(e)
+        fil = threading.Thread(target=cible, daemon=True)
+        fil.start()
+        return moteur, fil, issue
+
+    choix_jete = [(UNICORN, "UN-JETE"), None]
+    ouvrir_session(_argparse.Namespace(synthetic=False, serial=None, secteur=50), ["raw"],
+                   lancer=lancer_echec, choisir=lambda **kw: choix_jete.pop(0),
+                   memoire=_FausseMemoire())
+    _gc.collect()
+    restants = [s.source_id() for nom in ("quality", "status")
+                for s in _resolve("name", f"EEG_API_Unicorn_{nom}", minimum=10, timeout=1.0)
+                if instance_jetee in s.source_id()]
+    chk(not restants,
+        f"un moteur JETÉ après un échec d'ouverture ne laisse AUCUN flux annoncé : le suivant "
+        f"publie sous les mêmes noms, et un client tomberait sur un flux muet ({restants})")
+    chk(jete["moteur"]() is None,
+        "…et il est LIBÉRÉ : l'attente « Connexion au casque… » ne le retient plus (sa minuterie "
+        "Qt gardait une référence, que le ramasse-miettes ne voit pas)")
+
     # --- Un casque qui DÉCROCHE, dit par le bandeau -------------------------------------------
     # Le moteur réessaie seul (`server.py`, `[smoke-liaison]`) ; l'écran doit le DIRE — sinon il
     # montre des σ figés, l'écran « où plus rien ne bouge » qu'on fermait pour relancer.
@@ -6557,6 +6603,11 @@ def ouvrir_session(args, modes, lancer=_lancer_moteur, choisir=choisir_source,
         engine.stop()
         thread.join(timeout=5.0)
         engine.close()
+        # Ses flux sont RETIRÉS du réseau, pas laissés au ramasse-miettes : une référence
+        # oubliée les garderait annoncés, muets, sous les noms du moteur suivant (vu au casque le
+        # 2026-10-21 : une minuterie Qt retenait l'ancien moteur, cf. `attendre_ouverture`).
+        if not thread.is_alive():
+            engine.retirer_flux()
         del engine
         if etat == "abandon":
             print("[console] ouverture abandonnée — la console ne démarre pas.")

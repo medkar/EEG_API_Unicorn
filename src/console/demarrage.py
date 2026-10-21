@@ -413,6 +413,10 @@ def attendre_ouverture(engine, vivant, texte, intervalle_ms=100):
     if issue["etat"] is None:
         boucle.exec()
     attente.close()
+    # La minuterie TIENT `sonder` par sa connexion, et `sonder` tient le moteur : un cycle qui
+    # passe par Qt, que le ramasse-miettes de Python ne voit pas. Sans cette déconnexion, un
+    # moteur jeté après un échec d'ouverture restait en vie, et ses flux LSL avec lui.
+    minuterie.timeout.disconnect(sonder)
     return issue["etat"]
 
 
