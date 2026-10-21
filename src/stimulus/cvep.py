@@ -184,6 +184,7 @@ from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
 from core.i18n import tr  # noqa: E402
 from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
 from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
+from stimulus.ecran import EcranRefuse, au_rafraichissement, confirme, hz_positif  # noqa: E402
 from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
 from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
 from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
@@ -503,13 +504,18 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
         seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
         max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
         settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None,
-        source_statut=None):
+        source_statut=None, ecran_hz=None):
     """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
 
     `libre` (`--libre`) retire la consigne et montre la croix de repos tant que le moteur chauffe ;
     `retour` (`--retour`) entoure la cible décodée. `source_retour` et `source_statut` n'existent
     que pour `--smoke` : des sources FACTICES à la place des vrais flux `decoded_cvep` et `status`
     (cf. `stimulus/retour.py`).
+
+    `ecran_hz` (`--ecran-hz`) : le rafraîchissement auquel la séance DOIT tourner, celui que
+    portera chaque marqueur, donc le modèle. L'écran a été passé à cette valeur avant l'appel
+    (`stimulus/ecran.py`) ; ici, on le MESURE, et on lève `EcranRefuse` s'il ne la tient pas,
+    avant de créer le moindre flux. `refresh`, s'il est donné aussi, tient lieu de mesure.
 
     ⚠️ **`--calibrer` joue EXACTEMENT le même stimulus**, à la frame près : même code, même
     couronne, même géométrie, même geste flip→horodatage, même marqueur `cycle`. C'est la
@@ -602,7 +608,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
 
     import pygame  # import tardif : le module s'importe même sans pygame installé
 
-    from stimulus.refresh import measure_refresh  # même mesure que les autres stimuli
+    from stimulus.refresh import frequence_mesuree, measure_refresh  # comme les autres stimuli
 
     plan, code = build_targets()
     L = len(code)
@@ -630,7 +636,20 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False,
     pygame.display.set_caption(tr("fenetre.cvep.titre"))
     pygame.mouse.set_visible(False)
 
-    if refresh is None:
+    if ecran_hz is not None:
+        try:
+            refresh = confirme(ecran_hz, refresh if refresh is not None
+                               else frequence_mesuree(pygame, win))
+        except EcranRefuse:
+            # On FERME tout avant de propager : un plein écran noir cacherait la raison du refus.
+            pygame.quit()
+            for s in (source_dec, source_rep):
+                if s is not None:
+                    s.fermer()
+            if fichier_log is not None:
+                fichier_log.close()
+            raise
+    elif refresh is None:
         refresh = measure_refresh(pygame, win)
 
     # Le flux de marqueurs : nom et type FIGÉS (contrat public, core/config.py). `source_id`
@@ -1380,6 +1399,40 @@ def _smoke():
                 stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0) is False,
             f"--refresh {mauvais:g} est REFUSÉ avant d'ouvrir la moindre fenêtre (il divisait par "
             f"zéro après, donc traceback nu et plein écran resté à l'écran)")
+
+    # --- `ecran_hz` : l'écran du stimulus ------------------------------------------------------
+    # `refresh` tient ici le rôle de la MESURE : l'écran factice n'a pas de vsync. Le refus arrive
+    # AVANT le flux de marqueurs : sinon une horloge fantôme resterait sur le réseau.
+    module = globals()
+    vrai_outlet, crees = module["StreamOutlet"], []
+
+    def _espion(*a, **k):
+        crees.append(a)
+        return vrai_outlet(*a, **k)
+
+    module["StreamOutlet"] = _espion
+    try:
+        try:
+            run(windowed=True, refresh=165.0, ecran_hz=60.0, max_frames=L,
+                stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0)
+            refus_ecran = None
+        except EcranRefuse as e:
+            refus_ecran = str(e)
+        chk(refus_ecran is not None and "165" in refus_ecran and "60" in refus_ecran
+            and not crees,
+            f"un écran mesuré à 165 Hz pour 60 Hz demandés : REFUS qui nomme les deux, avant "
+            f"tout flux de marqueurs ({refus_ecran}, {len(crees)} flux créé(s))")
+        journal_ecran = []
+        run(windowed=True, refresh=59.6, ecran_hz=60.0, max_frames=2 * L,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            journal=journal_ecran)
+        cycles_ecran = [m for m, _ts, _f, _c in journal_ecran if m.get("event") == "cycle"]
+        chk(len(crees) == 1 and cycles_ecran
+            and all(m.get("refresh") == 60.0 for m in cycles_ecran),
+            f"un écran mesuré à 59,6 Hz pour 60 demandés : chaque marqueur de cycle porte 60, le "
+            f"VOULU, celui que le modèle apprendra ({[m.get('refresh') for m in cycles_ecran]})")
+    finally:
+        module["StreamOutlet"] = vrai_outlet
 
     # =====================================================================================
     # C. run() POUR DE VRAI, sur un écran factice
@@ -2218,10 +2271,17 @@ def _smoke_retour(chk, plan, L, table, fen_sonde):
 def _parse_args(argv):
     p = argparse.ArgumentParser(description="Stimulus c-VEP (EEG_API_Unicorn).")
     p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
-    p.add_argument("--refresh", type=float, default=None,
-                   help="forcer le refresh (Hz) — sinon auto-mesuré. C'est la valeur PUBLIÉE dans "
-                        "chaque marqueur : le moteur refuse tout marqueur qui s'écarte de plus de "
-                        "1 Hz du refresh auquel le modèle a été calibré, et le dit")
+    rafraichissement = p.add_mutually_exclusive_group()
+    rafraichissement.add_argument(
+        "--refresh", type=float, default=None,
+        help="forcer le refresh (Hz) — sinon auto-mesuré. C'est la valeur PUBLIÉE dans chaque "
+             "marqueur : le moteur refuse tout marqueur qui s'écarte de plus de 1 Hz du refresh "
+             "auquel le modèle a été calibré, et le dit")
+    rafraichissement.add_argument(
+        "--ecran-hz", type=hz_positif, default=None,
+        help="le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+             "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+             "C'est ce que la console passe : le réglage d'« Entraîner », ou celui du modèle")
     p.add_argument("--seconds", type=float, default=None,
                    help="auto-quit après N secondes de stimulation DÉCODABLE (le décompte démarre "
                         "après la chauffe du moteur, pas pendant)")
@@ -2272,9 +2332,16 @@ def _parse_args(argv):
 if __name__ == "__main__":
     use_utf8_console()
     args = _parse_args(sys.argv[1:])
-    ok = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
-             smoke=args.smoke, seed=args.seed, log_path=args.log,
-             calibrer=args.calibrer or args.tester, tester=args.tester,
-             cycles_calib=args.cycles, libre=args.libre, retour=args.retour,
-             attente_consommateur_s=0.0 if args.no_wait else 5.0)
+    try:
+        with au_rafraichissement(args.ecran_hz):
+            ok = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
+                     smoke=args.smoke, seed=args.seed, log_path=args.log,
+                     calibrer=args.calibrer or args.tester, tester=args.tester,
+                     cycles_calib=args.cycles, libre=args.libre, retour=args.retour,
+                     attente_consommateur_s=0.0 if args.no_wait else 5.0,
+                     ecran_hz=args.ecran_hz)
+    except EcranRefuse as refus:
+        # Sortie 2 : la fenêtre n'a rien affiché. L'écran est déjà revenu (sortie du `with`).
+        print(f"[cvep-stim] ⚠️ REFUS : {refus}")
+        sys.exit(2)
     sys.exit(0 if ok else 1)
