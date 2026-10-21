@@ -71,7 +71,7 @@ from core.config import (CALIB_CANDIDAT_PREFIXE, CH_NAMES, CVEP_BAND,  # noqa: E
 from core.cvep_code import build_targets  # noqa: E402
 from core.cvep_decoder import CVEPModel, groupes_de_cycles  # noqa: E402
 from core.cvep_rcca import SEUIL_MCNEMAR, RCCAModel, _mcnemar_p  # noqa: E402
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
 from core.modes.affichage import depuis_table, non_mesure, pct, texte_filtre  # noqa: E402
 from core.modes.contract import bande_de  # noqa: E402
@@ -363,7 +363,7 @@ def horodatage(maintenant=None):
                           _time.localtime(_time.time() if maintenant is None else maintenant))
 
 
-def chemins_libres(dossier, n_epoques, prefixe=""):
+def chemins_libres(dossier, n_epoques, prefixe="", refresh=None):
     """(modèle eCCA, modèle rCCA, enregistrement), les TROIS garantis libres au retour.
 
     Jumeau de `p300_calib.chemins_libres` / `errp_calib.chemins_libres`, avec un fichier de plus :
@@ -378,14 +378,19 @@ def chemins_libres(dossier, n_epoques, prefixe=""):
 
     `prefixe` : `CALIB_CANDIDAT_PREFIXE` quand ce qu'on écrit est un CANDIDAT — un fichier qui ne
     doit correspondre à aucun motif de découverte tant que personne ne l'a retenu.
+
+    `refresh` : le rafraîchissement de la séance. Les trois noms le portent en suffixe
+    (`…_60Hz.npz`) : la liste de la console montre le nom du fichier, c'est le titre du modèle,
+    et un modèle ne marche qu'à ce rafraîchissement.
     """
+    suffixe = f"_{float(refresh):g}Hz" if refresh else ""
     maintenant = _time.time()
     while True:
         stamp = horodatage(maintenant)
-        ecca = _os.path.join(dossier, f"{prefixe}cvep_model_{stamp}.npz")
-        rcca = _os.path.join(dossier, f"{prefixe}cvep_rcca_model_{stamp}.npz")
+        ecca = _os.path.join(dossier, f"{prefixe}cvep_model_{stamp}{suffixe}.npz")
+        rcca = _os.path.join(dossier, f"{prefixe}cvep_rcca_model_{stamp}{suffixe}.npz")
         npz = _os.path.join(dossier,
-                            f"{prefixe}cvep_calib_{stamp}_n{int(n_epoques):03d}.npz")
+                            f"{prefixe}cvep_calib_{stamp}_n{int(n_epoques):03d}{suffixe}.npz")
         if not any(_os.path.exists(p) for p in (ecca, rcca, npz)):
             return ecca, rcca, npz
         maintenant += 1.0
@@ -547,7 +552,8 @@ def entrainer_dans(dossier, epochs, labels, fs, refresh, *, prefixe="", **kw):
     `fs`/`refresh` restent positionnels et sans défaut ici aussi : un défaut posé sur ce passe-plat
     suffirait à rouvrir le trou qu'on ferme un cran plus bas (cf. `entrainer`).
     """
-    chemin_ecca, chemin_rcca, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe)
+    chemin_ecca, chemin_rcca, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe,
+                                                          refresh=refresh)
     return entrainer(epochs, labels, fs, refresh, chemin_ecca=chemin_ecca,
                      chemin_rcca=chemin_rcca, chemin_npz=chemin_npz, **kw)
 
@@ -608,6 +614,10 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         self._refus = 0                # marqueurs refusés : cible/refresh illisible, phase perdue
         self._hors_bloc = 0            # cycles reçus hors bloc (settle, pauses) — ATTENDUS
         self._blocs = 0                # blocs ouverts par un `cue`
+        # Le rafraîchissement que cet entraînement DEMANDE (son réglage `refresh_hz`), ou None sans
+        # réglage. La fenêtre le tient ; le PREMIER marqueur de cycle le confirme (`_etiquette`).
+        voulu = self.params.get("refresh_hz")
+        self.refresh_voulu = float(voulu) if voulu is not None else None
 
     # --- ce que le socle demande ---------------------------------------------
 
@@ -665,11 +675,14 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         ±1 Hz suffit à déplacer `n_pre` de quatre échantillons. Les marqueurs qui s'en écartent
         sont refusés et comptés — un écran ne change pas de mode d'affichage en cours de séance.
 
-        Avant le premier marqueur : `REFRESH_REFERENCE_HZ`, pour que `pre_s` ait une valeur
-        (le socle la lit à chaque tour, y compris pendant la chauffe). Aucune époque n'est
-        enregistrée dans cet état — `phase_a` rend None tant qu'aucune référence n'existe.
+        Avant le premier marqueur : le rafraîchissement DEMANDÉ, sinon `REFRESH_REFERENCE_HZ`, pour
+        que `pre_s` ait une valeur (le socle la lit à chaque tour, y compris pendant la chauffe).
+        Aucune époque n'est enregistrée dans cet état — `phase_a` rend None tant qu'aucune
+        référence n'existe.
         """
-        return REFRESH_REFERENCE_HZ if self._refresh_seance is None else self._refresh_seance
+        if self._refresh_seance is None:
+            return self.refresh_voulu or REFRESH_REFERENCE_HZ
+        return self._refresh_seance
 
     @property
     def pre_s(self):
@@ -700,6 +713,12 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         celui qui commence.
         """
         return 0.0
+
+    def duree_estimee_s(self):
+        """La chauffe, plus le protocole au rafraîchissement DEMANDÉ : le protocole compte des
+        images, et `duree_protocole_s` les compte à `REFRESH_REFERENCE_HZ`."""
+        hz = self.refresh_voulu or REFRESH_REFERENCE_HZ
+        return float(self.warmup_s) + self.duree_protocole_s * REFRESH_REFERENCE_HZ / hz
 
     # --- les marqueurs -------------------------------------------------------
 
@@ -736,7 +755,15 @@ class CVEPCalibration(MarkerCalibrationRuntime):
         if event != "cycle":
             return None      # un événement inconnu s'ignore : le protocole grandira
 
-        refresh, souci = self._refresh_lisible(marqueur.get("refresh"))
+        annonce = marqueur.get("refresh")
+        if self._refresh_seance is None and self._ecran_autre(annonce):
+            # Le PREMIER marqueur dit à quel rafraîchissement la fenêtre affiche. S'il n'est pas
+            # celui que l'entraînement demande, la séance entraînerait un modèle pour un autre
+            # écran que celui de l'application : on l'abandonne en le disant, avant toute époque.
+            self._abandonne(tr("calib.cvep.refresh_autre", annonce=nombre(float(annonce)),
+                               voulu=nombre(self.refresh_voulu)))
+            return None
+        refresh, souci = self._refresh_lisible(annonce)
         if souci is not None:
             # Le marqueur ne peut pas recaler l'horloge : il ne délimite donc rien. UN seul
             # message, celui de la cause RACINE — dire ensuite « la phase ne tient pas » ajouterait
@@ -793,6 +820,16 @@ class CVEPCalibration(MarkerCalibrationRuntime):
                          f"sur un marqueur « cue »")
             return None
         return cible
+
+    def _ecran_autre(self, annonce):
+        """Vrai si `annonce` est un rafraîchissement LISIBLE à plus de 1 Hz de celui que
+        l'entraînement demande. Sans réglage, ou sur une valeur illisible, rien n'est jugé ici :
+        `_refresh_lisible` refuse l'illisible."""
+        if self.refresh_voulu is None:
+            return False
+        if isinstance(annonce, bool) or not isinstance(annonce, (int, float)) or annonce <= 0:
+            return False
+        return abs(float(annonce) - self.refresh_voulu) > 1.0
 
     def _refresh_lisible(self, refresh):
         """`(rafraîchissement, None)` s'il est utilisable, `(None, raison)` sinon.
@@ -1249,6 +1286,11 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
             "…et ils existent vraiment sur le disque")
         chk(bool(res.get("enregistrement")) and _os.path.exists(res["enregistrement"]),
             f"…et les époques BRUTES sont archivées à côté ({res.get('enregistrement')})")
+        noms = [_os.path.basename(res.get(c) or "") for c in ("modele", "modele_rcca",
+                                                              "enregistrement")]
+        chk(all(n.endswith(f"_{REFRESH:g}Hz.npz") for n in noms),
+            f"les TROIS fichiers portent le rafraîchissement de la séance dans leur nom : c'est le "
+            f"titre que la console affiche dans la liste des modèles ({noms})")
 
         from core import cvep_models
 
@@ -1324,6 +1366,36 @@ def _selftest():  # noqa: C901 - un autotest se lit de haut en bas, pas en morce
         chk(_d60 is None and "80" in (refus60 or ""),
             f"…tandis qu'un émetteur à 60 Hz est REFUSÉ, en nommant les deux chiffres : c'est ce "
             f"refus qui rend le test précédent falsifiable ({refus60})")
+        chk(_os.path.basename(res80.get("modele") or "").endswith("_80Hz.npz"),
+            f"…et son nom le DIT ({_os.path.basename(res80.get('modele') or '')})")
+
+        # --- 5 bis 0. Le rafraîchissement que l'entraînement DEMANDE (`refresh_hz`) --------------
+        # Dans un SOUS-dossier : le compte des modèles écrits à la racine, plus bas, reste le sien.
+        dossier_hz = _os.path.join(dossier, "refresh_demande")
+        _os.makedirs(dossier_hz, exist_ok=True)
+        marq_hz, eeg_hz, ts_hz, att_hz = seance(refresh=80.0, graine=2)
+        moteur_ok = _MoteurFactice(eeg_hz, ts_hz)
+        rt_ok = CVEPCalibration(_cvep.SPEC, {"refresh_hz": 80.0}, moteur_ok, dossier=dossier_hz)
+        duree_80 = rt_ok.duree_estimee_s() - rt_ok.warmup_s
+        chk(abs(duree_80 - CVEPCalibration.duree_protocole_s * 60.0 / 80.0) < 1e-9,
+            f"la durée annoncée suit le rafraîchissement demandé : le protocole compte des images, "
+            f"plus courtes à 80 Hz ({duree_80:.1f} s, contre "
+            f"{CVEPCalibration.duree_protocole_s:.1f} s à 60 Hz)")
+        joue(rt_ok, moteur_ok, marq_hz, att_hz)
+        chk(rt_ok.phase == "fini" and rt_ok.resultat is not None,
+            f"réglé à 80 Hz, affiché à 80 Hz : l'entraînement va au bout "
+            f"({rt_ok.phase}, {rt_ok.probleme})")
+        moteur_ko = _MoteurFactice(eeg_hz, ts_hz)
+        rt_ko = CVEPCalibration(_cvep.SPEC, {"refresh_hz": 60.0}, moteur_ko, dossier=dossier_hz)
+        joue(rt_ko, moteur_ko, marq_hz, att_hz)
+        chk(rt_ko.phase == "annule" and rt_ko.resultat is None and rt_ko.essai == 0
+            and "80" in (rt_ko.probleme or "") and "60" in (rt_ko.probleme or ""),
+            f"réglé à 60 Hz mais affiché à 80 Hz : ABANDONNÉ au premier marqueur de cycle, sans "
+            f"une époque, en nommant les deux ({rt_ko.phase}, {rt_ko.essai} époque(s), "
+            f"{(rt_ko.probleme or '')[:90]})")
+        chk(len(_glob.glob(_os.path.join(dossier_hz, "*cvep_model*.npz"))) == 1,
+            f"…et seule la séance au bon rafraîchissement a écrit un modèle "
+            f"({_glob.glob(_os.path.join(dossier_hz, '*cvep_model*.npz'))})")
 
         # --- 5 bis. LE FILTRE : les DEUX fichiers portent la bande et le secteur --------------
         # Relus par `cvep_models.charger`, le chemin par lequel le moteur les chargera : un

@@ -110,6 +110,7 @@ from core.modes.contract import (Calib, ModeSpec, Param, Rest, SANS_MODELE,  # n
 # refermerait un cycle, qui casse dès qu'on lance l'un des deux fichiers directement,
 # `python src/core/modes/cvep.py` compris. Même montage que côté P300.
 from core.modes.cvep_calib import BRIEFING as BRIEFING_CALIB, CVEPCalibration  # noqa: E402
+from core.modes.cvep_calib import REFRESH_REFERENCE_HZ  # noqa: E402
 from core.modes.runtime import ModeRuntime  # noqa: E402
 
 # Quel décodeur pour quel modèle. C'est le FICHIER qui déclare le sien (`cvep_models.charger` rend
@@ -778,8 +779,17 @@ SPEC = ModeSpec(
         # changer au décodage ferait corréler un template contre un signal filtré autrement que
         # celui qu'il a appris — sans la moindre erreur. Les bornes (`_COUPURE_BASSE`,
         # `_COUPURE_HAUTE`, juste au-dessus de `SPEC`) gardent toujours 5-30 Hz dedans.
-        params=params_bande(CVEP_BAND, _COUPURE_BASSE, _COUPURE_HAUTE,
-                            tr("calib.cvep.param.bande.aide", plancher=_COUPURE_BASSE[0])),
+        params=(*params_bande(CVEP_BAND, _COUPURE_BASSE, _COUPURE_HAUTE,
+                              tr("calib.cvep.param.bande.aide", plancher=_COUPURE_BASSE[0])),
+                # Le RAFRAÎCHISSEMENT auquel l'application affichera le code : le modèle n'apprend
+                # que celui-là, et le moteur refuse une horloge à plus de 1 Hz de lui. Il se règle
+                # donc ICI, comme la bande, jamais dans « Régler ». La fenêtre d'entraînement fait
+                # passer l'écran du poste à cette valeur (`stimulus/ecran.py`). Pas sous 30 Hz : un
+                # cycle y dure 2,1 s, la plus longue époque que couvre le tampon du moteur
+                # (`marker_epoch_s`, plus bas).
+                Param(key="refresh_hz", label=tr("calib.cvep.param.refresh_hz.label"),
+                      kind="float", unit="Hz", default=REFRESH_REFERENCE_HZ, min=30.0, max=480.0,
+                      help=tr("calib.cvep.param.refresh_hz.aide"))),
         # ⚠️ **UN CYCLE ENTIER du code**, grandeur distincte de `marker_epoch_s` plus bas : elle
         # dimensionne le tampon du moteur pour ce que la CALIBRATION prélève, `CVEPCalibration`
         # découpant `code_len / refresh` secondes JUSTE AVANT chaque marqueur de cycle (cf. sa
@@ -1009,6 +1019,13 @@ def _selftest():
         and SPEC.calibration.stimulus_id == "cvep",
         "sa calibration est menée par une FENÊTRE : le code doit défiler frame par frame, et le "
         "marqueur de cycle qu'elle publie est l'horloge sans laquelle il n'y a pas de phase")
+    p_ecran = {p.key: p for p in SPEC.calibration.params}.get("refresh_hz")
+    chk(p_ecran is not None and p_ecran.default == 60.0
+        and (p_ecran.min, p_ecran.max) == (30.0, 480.0)
+        and "refresh_hz" not in {p.key for p in SPEC.params},
+        f"le rafraîchissement se règle à l'ENTRAÎNEMENT (60 Hz par défaut, de 30 à 480), jamais "
+        f"dans « Régler » : le modèle n'apprend que lui "
+        f"({p_ecran and (p_ecran.default, p_ecran.min, p_ecran.max)})")
     chk(SPEC.rest is not None and SPEC.rest.warmup_s == SSVEP_WARMUP_S
         and SPEC.rest.duration_s == 0.0,
         f"chauffe seule, pas de repos à mesurer — le c-VEP ne normalise pas contre un plancher "
