@@ -238,8 +238,10 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 
 **Ouverts :**
 
-1. **La console ne descend pas sous ~1 650 px de large** (relevé par l'auteur de la page en blocs,
-   préexistant, non remesuré ici). À vérifier sur l'écran de la séance.
+1. **La console ne descend pas sous 1 344 px de large** (mesuré le 2026-10-22 par
+   `console/app.py --smoke`, qui l'imprime : c'est l'accueil qui l'impose, aucune page de mode
+   n'exige plus). Elle tient de justesse sur un écran de 1 366 px, mais PAS sur un portable
+   1920 × 1080 réglé à 150 % dans Windows (1 280 px utiles). À vérifier sur l'écran de la séance.
 2. ~~**« Appliquer » sur la page d'un mode pendant son test change encore le magasin de
    réglages.**~~ ➜ **Traité le 2026-10-21** : le MOTEUR refuse de changer les réglages d'un mode
    pendant son test (`_refus_reglage_pendant_test`), et la page grise « Appliquer », sa bulle
@@ -279,9 +281,10 @@ bref (le pourquoi est en recette 1.19 à 1.21) :
 - **❌ Régression** — ça a déjà marché ici. Si ça tombe, quelque chose s'est cassé, et le point est
   bloquant.
 - **❌ Échec** — ça n'a **jamais** été vérifié. Si ça tombe, c'est peut-être une découverte, pas une
-  casse : note ce que tu as vu, ne conclus pas, et continue. **Tout le bloc 2 sauf le SSVEP est
-  dans ce cas** — quatre modes n'ont jamais décodé un cerveau à travers le moteur, et **aucun
-  « Tester » n'a jamais vu un casque** (ils datent du 2026-09-22, après la séance).
+  casse : note ce que tu as vu, ne conclus pas, et continue. **L'OUTIL n'est plus dans ce cas** :
+  le bloc 2 a tourné au casque pour les six modes, « Tester » compris (2026-09-24, puis le MI le
+  2026-10-15). **Restent dans ce cas** : le NIVEAU de décodage (une personne, chiffres rarement
+  relevés), et tout ce qui a été livré depuis la dernière séance casque.
 
 ## Trois règles qui tiennent pendant toute la feuille
 

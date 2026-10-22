@@ -428,8 +428,9 @@ réserve —, le reste replié sous « Détails » (`core/modes/affichage.py`).
   obtenus sous l'ANCIENNE règle, donc **les chiffres de ce test ne s'y comparent plus tels quels**.
   §4 et §9 tranchent ainsi — un test décide comme le produit, la comparabilité est une NOTE (elle
   est dans le texte d'honnêteté du résultat), pas une contrainte de protocole.
-- ⚠️ **Ni l'une ni l'autre n'a jamais vu un cerveau.** Elles ont été éprouvées sur du bruit blanc et
-  des sinusoïdes posées à la main. Ce sont les tests 2.1 et 2.2 de la recette.
+- ⚠️ **Les deux ont vu un casque, sur UNE personne** (le 2026-09-21, puis le 2026-09-24 : tests
+  2.1 et 2.2 de la recette). Leurs repères (ratio alpha > ~1,5 ; 100 %/44 % du SSVEP) n'ont pas
+  d'autre provenance.
 
 ## 7. Stimulus : natif vs externalisé
 
@@ -817,12 +818,13 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        produit, et la raison pour laquelle ils voyagent aussi **par échantillon** : les métadonnées
        LSL, figées à l'ouverture, ne suffiraient plus à dire contre quel seuil une décision a été
        prise.
-       - **[à faire — LE point ouvert]** la **séance casque**. Rien de ce mode n'a été vu sur un
-         vrai cerveau à travers le moteur : la chaîne est vérifiée de bout en bout en synthétique et
-         la phase gardée à la frame, mais le premier signal réel passera après. C'est la
-         **recette 2.9**, qui porte la comparaison contre l'écran archivé (`archive/cvep_pilot.py`)
-         — la seule mesure qui sépare « le décodage réseau est moins bon » de « la séance est moins
-         bonne ».
+       - **[fait en partie, 2026-09-24 et 2026-10-05]** la **séance casque**. La chaîne entière
+         (entraîner, tester, décoder) a tourné au casque à travers le moteur, et le test a atteint
+         le repère le 2026-10-05, au troisième essai de la séance (recette, niveau 3).
+         **[à faire]** la **recette 2.9** : la comparaison contre l'écran archivé
+         (`archive/cvep_pilot.py`), la seule mesure qui sépare « le décodage réseau est moins bon »
+         de « la séance est moins bonne ». Elle attend le journal de séance, qui reviendra avec
+         « Connecter ».
        - **[à faire]** les **codes Gold** restent **RÉFUTÉS et hors du produit** (35,6 % contre
          ~48 % pour les deux décodeurs sur le stimulus décalé partagé). Ce n'est pas une dette,
          c'est une hypothèse close ; `archive/cvep_rcca_pilot.py` la garde vérifiable.
@@ -847,10 +849,10 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
          pilotages, trois calibrations) sont dans `archive/`, avec leur `--smoke`, gardés comme la
          référence LOCALE d'une séance casque. La console est devenue le point d'entrée du produit,
          et `outils/Console EEG.bat` l'ouvre sans terminal.
-       - **[à faire — LE point ouvert, toujours le même]** la **séance casque**. Les quatre
-         calibrations du moteur n'ont jamais vu un cerveau, et quatre modes sur six non plus. Le
-         chantier de la console **n'a mesuré strictement rien** : il déplace un geste. Recette 2.6
-         à 2.9.
+       - **[fait 2026-09-24, le MI le 2026-10-15]** la **séance casque** : les quatre
+         calibrations et les six modes ont tourné au casque à travers le moteur (QA bloc 2). Ça
+         prouve l'OUTIL ; le niveau de décodage reste peu mesuré (une personne, chiffres du c-VEP,
+         du P300 et de l'ErrP non relevés le 2026-09-24).
        - **[à faire]** trancher, DEVANT UN CASQUE, si le **contrôle de liaison** de la console est
          trop strict : il refuse dès qu'une voie sort de [0,5 ; 500] µV et n'offre aucune porte de
          sortie, là où `archive/ui.py:signal_check` laissait passer sur n'importe quelle touche.
@@ -903,10 +905,9 @@ réglage de **tout** mode, pas seulement aux fréquences SSVEP.
        (`start_enregistrement`, JSONL dans `seances/`, hors de `data/`). Retraits : `alpha_check.py`,
        `live_ssvep.py` et `ui.py` vers `archive/` ; `ssvep_stimulus.py` vers `src/stimulus/ssvep.py`,
        où il gagne `--guide`.
-       - **[à faire — LE point ouvert, toujours le même]** la **séance casque**. Ce chantier
-         **n'a mesuré strictement rien** : aucun repère chiffré du projet n'a bougé, aucun n'a été
-         produit. Les deux mesures neuves n'ont vu que du bruit blanc et des sinusoïdes posées à la
-         main. Ce sont les tests **2.1** et **2.2** de la recette, devenus des clics.
+       - **[fait 2026-09-21, rejoué le 2026-09-24]** la **séance casque** des deux mesures neuves
+         (tests **2.1** et **2.2** de la recette, devenus des clics). Ce chantier, lui, n'a produit
+         aucun repère chiffré : ceux des deux mesures viennent toujours d'UNE personne.
        - **[fait 2026-09-23, `b618035`]** le **désaccord de σ** entre `modes/ssvep.py` (4 voies
          occipitales filtrées) et `core/modes/ssvep_mesure.py` (8 voies) est TRANCHÉ : le test
          décide par le runtime du mode (§6.2). Le prix, écrit dans le verdict : ses chiffres ne se

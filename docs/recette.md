@@ -44,8 +44,8 @@ lieu d'un `--synthetic`, et le journal de séance du **2.9** est une case coché
 choses s'ajoutent, sans rien remplacer : la page **« Ce que voit ton application »**, qui montre le
 flux sortant lu comme un client, et son bouton **« Enregistrer les verdicts »**, qui écrit l'autre
 moitié du dépouillement du 2.9. **Aucun repère chiffré n'a bougé, et aucun n'a été produit.** Les
-deux mesures nouvelles n'ont jamais vu un cerveau : elles ont été éprouvées sur du bruit blanc et
-des sinusoïdes posées à la main.
+deux mesures nouvelles avaient été éprouvées sur du bruit blanc et des sinusoïdes posées à la
+main ; elles ont vu un casque depuis, sur une personne (le 2026-09-21, puis le 2026-09-24).
 
 ⚠️ **Et ce que le chantier « Configurer · Entraîner · Tester » (2026-09-22) y a changé** — né de la
 séance casque du même matin : dix minutes de fixation perdues sur un mode arrêté, puis « je ne
