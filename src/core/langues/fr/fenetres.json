@@ -53,6 +53,8 @@
   "fenetre.p300.titre_test_fin": "Test terminé",
   "fenetre.ssvep.etiquette": "{nom}  {hz:.2f} Hz",
   "fenetre.ssvep.hud": "{fps:.0f} fps  |  images sautées {sautees}  |  ESC = quitter",
+  "fenetre.ssvep.physique_hz": "{hz} Hz",
+  "fenetre.ssvep.physique_rien": "-",
   "fenetre.ssvep.sous_chauffe": "installe-toi, ne fixe aucune cible — la mesure commence après",
   "fenetre.ssvep.sous_consigne": "essai {i}/{n}",
   "fenetre.ssvep.sous_fixation": "fixe la cible entourée",

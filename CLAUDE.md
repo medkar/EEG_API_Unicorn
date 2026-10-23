@@ -180,13 +180,23 @@ par n'importe quelle application externe (Unity, Python, MATLAB, web).
 - **Le SSVEP accepte des CIBLES PHYSIQUES** (2026-10-19 : des LED pilotées par un microcontrôleur).
   « Cibles affichées sur » : un écran / des cibles physiques, dans « 1. Régler ». Sur des LED, la
   règle des diviseurs du rafraîchissement tombe (`contract.CIBLES_PHYSIQUES`), le rafraîchissement
-  se grise, « Proposer » choisit au demi-hertz (`config.PAS_CIBLES_PHYSIQUES_HZ`), et les deux
-  « Tester » sont refusés par le moteur et grisés par la page : notre fenêtre fait clignoter des
+  se grise, « Proposer » choisit au demi-hertz (`config.PAS_CIBLES_PHYSIQUES_HZ`), et « Tester
+  sur une session » est refusé par le moteur et grisé par la page : sa fenêtre guidée désigne des
   disques à l'écran. Trois champs DÉCLARATIFS du contrat portent tout ça, la console ne fait que
   les lire : `Param.libelles` (le nom de chaque option ; un choix qui en a s'affiche en boutons radio), `Param.actif_si` (quand un réglage compte)
-  et `ModeSpec.tests_si` (quand les tests ont un sens, avec la raison). Le même jour, la page SSVEP
-  a perdu son second « Proposer » (sous le rafraîchissement, qui faisait le même calcul que celui du
-  pic alpha). **Jamais joué avec de vraies LED.**
+  et `ModeSpec.tests_si` (quand le test GUIDÉ a un sens, avec la raison). Le même jour, la page
+  SSVEP a perdu son second « Proposer » (sous le rafraîchissement, qui faisait le même calcul que
+  celui du pic alpha).
+  **« Tester librement » marche avec des LED** (2026-10-22, demandé pour un essai à 4 LED à 6 · 8 ·
+  12 · 14 Hz, refusées sur un écran à 60 Hz) : la console passe `--physiques` à la fenêtre
+  (`stimulus/registry.py:PHYSIQUES`, qui recopie la valeur du contrat — l'autotest du registre tient
+  l'accord) et NE passe PAS `--ecran-hz` : rien ne clignote à l'écran, l'écran du poste garde son
+  rafraîchissement. La fenêtre ne dessine aucun disque ; chauffe et repos gardent leur croix et
+  leurs consignes, puis le CENTRE dit « - » (gris) ou le nom et la fréquence de la cible décodée,
+  dans le vert de l'anneau (`texte_central`), et la fréquence seule sans noms réglés. Même règle
+  que l'anneau : un −1 n'efface rien, le texte expire après `retour.PERIME_S`. Tenu par la section
+  M de `stimulus/ssvep.py --smoke` (lu dans les pixels), l'autotest du registre et le smoke de la
+  console. **Jamais joué avec de vraies LED.**
 - **Le moteur publie les SIX modes** depuis le 2026-08-21 (SSVEP, neuro, Motor Imagery, P300, ErrP,
   c-VEP) **et joue les QUATRE calibrations** depuis le 2026-09-08. **La chaîne entière —
   entraîner, enregistrer, tester, décoder — a tourné au casque À TRAVERS le moteur pour les six

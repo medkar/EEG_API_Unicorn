@@ -140,7 +140,7 @@ from core.config import (COMMANDS, MARKER_STREAM_DEFAULT, cvep_targets,  # noqa:
                          SSVEP_GUIDE_CUE_S, SSVEP_GUIDE_FIX_S, SSVEP_GUIDE_GAP_S,
                          SSVEP_GUIDE_REPOS_S, SSVEP_GUIDE_TRIALS_PER_TARGET, SSVEP_WARMUP_S,
                          choose_frequencies, use_utf8_console)
-from core.i18n import tr  # noqa: E402
+from core.i18n import nombre, tr  # noqa: E402
 from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
 
 # --- Réglages d'affichage (les fréquences/commandes viennent de config.py) --
@@ -360,6 +360,21 @@ def etiquette(c):
     return tr("fenetre.ssvep.etiquette", nom=c["name"], hz=c["actual_hz"])
 
 
+def texte_central(cible, plan, noms_donnes):
+    """Ce que l'essai libre à CIBLES PHYSIQUES montre au centre de l'écran : `(lignes, couleur)`.
+
+    Rien de décodé : « - », en gris. Une cible décodée (`cible`, son rang dans le plan) : son nom
+    puis sa fréquence, dans le vert du retour — celui de l'anneau des cibles à l'écran. Sans noms
+    réglés (`noms_donnes` faux), la fréquence seule : le nom par défaut d'une cible est celui d'une
+    PLACE à l'écran (« AVANT »), que des LED n'ont pas.
+    """
+    if cible is None:
+        return [tr("fenetre.ssvep.physique_rien")], DIM
+    c = plan[cible]
+    hz = tr("fenetre.ssvep.physique_hz", hz=nombre(c["actual_hz"]))
+    return ([c["name"], hz] if noms_donnes else [hz]), _retour.COULEUR_DECODEE
+
+
 def _hors_des_cibles(rect, centres, garde):
     """True si AUCUN pixel de `rect` n'est à moins de `garde` du centre d'une cible."""
     for x, y in centres:
@@ -511,8 +526,12 @@ def commandes_pour(freqs, noms=None):
     return plan
 
 
-def verifie_freqs(freqs, refresh):
+def verifie_freqs(freqs, refresh, physiques=False):
     """`None` si ce jeu est affichable ET décodable ici, sinon la RAISON en clair.
+
+    `physiques` : les cibles sont des LED (`--physiques`). Le contrat lève alors la règle des
+    diviseurs du rafraîchissement (`contract.CIBLES_PHYSIQUES`) — c'est lui qui le décide, pas
+    cette fonction, qui ne fait que lui dire sur quoi les cibles clignotent.
 
     ⚠️ **La règle n'est pas réécrite ici, elle est APPELÉE.** Bande passante, séparabilité et
     surtout « diviseur entier du rafraîchissement » — avec sa tolérance RELATIVE, celle qui
@@ -534,19 +553,24 @@ def verifie_freqs(freqs, refresh):
     """
     # Import TARDIF : la fenêtre doit rester importable et lançable sans traîner le décodeur du
     # mode derrière elle. Même geste que `stimulus/cvep.py` pour `core.modes`.
-    from core.modes.contract import validate
+    from core.modes.contract import CIBLES_PHYSIQUES, validate
     from core.modes.ssvep import SPEC
 
     freqs = list(freqs)
     par_cle = {p.key: p for p in SPEC.params}
     la_plus_large = {"bande_bas": par_cle["bande_bas"].min, "bande_haut": par_cle["bande_haut"].max}
+    support = {"cibles": CIBLES_PHYSIQUES} if physiques else {}
     _valides, raison = validate(SPEC, {"freqs": freqs, "refresh_hz": float(refresh),
-                                       **la_plus_large})
+                                       **la_plus_large, **support})
     return raison
 
 
-def plan_du_stimulus(refresh, freqs=None, noms=None):
+def plan_du_stimulus(refresh, freqs=None, noms=None, physiques=False):
     """Le plan RÉELLEMENT affiché. Lève `FreqsRefusees` si `freqs` n'est pas affichable ici.
+
+    `physiques` (`--physiques`) : ce sont des LED qui clignotent, pas l'écran. Aucun diviseur du
+    rafraîchissement à respecter, donc aucun arrondi : la fréquence « affichée » est la fréquence
+    demandée, et le plan ne porte pas de frames par cycle — rien ne clignote ici.
 
     `freqs=None` — l'absence de `--freqs` — rend le plan du dépôt, inchangé : c'est le seul chemin
     qui n'est pas validé, et c'est voulu. `choose_frequencies` y ARRONDIT au diviseur le plus
@@ -559,6 +583,12 @@ def plan_du_stimulus(refresh, freqs=None, noms=None):
     if noms and len(noms) != n:
         raise FreqsRefusees(f"« --noms » : {len(noms)} nom(s) pour {n} cible(s) — un nom par "
                             f"fréquence, dans le même ordre")
+    if physiques:
+        freqs = [c["desired_hz"] for c in COMMANDS] if freqs is None else list(freqs)
+        raison = verifie_freqs(freqs, refresh, physiques=True)
+        if raison is not None:
+            raise FreqsRefusees(raison)
+        return [{**c, "actual_hz": c["desired_hz"]} for c in commandes_pour(freqs, noms)]
     if freqs is None:
         plan = choose_frequencies(refresh)
         return [{**c, "name": str(nm)} for c, nm in zip(plan, noms)] if noms else plan
@@ -662,11 +692,15 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         stream=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, attente_moteur_s=None,
         journal=None, bilan=None, sonde_ecran=None,
         cue_s=None, fix_s=None, gap_s=None, repos_s=None, retour=False, source_retour=None,
-        source_statut=None, ecran_hz=None, noms=None):
+        source_statut=None, ecran_hz=None, noms=None, physiques=False):
     """La boucle du stimulus — décodage libre (défaut) ou run GUIDÉ (`guide=True`).
 
     `noms` (`--noms`) : le nom de chaque cible, dans l'ordre des fréquences, affiché sous son
     disque. C'est ce que la console passe, lu dans « Régler » du mode.
+
+    `physiques` (`--physiques`) : les cibles sont des LED, qui clignotent sans cette fenêtre.
+    Aucun disque n'est dessiné ; hors repos, le CENTRE de l'écran dit ce que le moteur décode
+    (`texte_central`, avec `retour`). La croix et les textes du repos ne changent pas.
 
     `retour` (`--retour`) entoure la cible décodée — et, sans `guide`, montre l'écran de repos
     tant que le moteur se repose. `source_retour` et `source_statut` n'existent que pour `--smoke`
@@ -762,7 +796,7 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     elif refresh is None:
         refresh = 60.0 if smoke else measure_refresh(pygame, win)
     try:
-        plan = plan_du_stimulus(refresh, freqs, noms)
+        plan = plan_du_stimulus(refresh, freqs, noms, physiques)
     except FreqsRefusees:
         # ⚠️ On FERME avant de propager : un refus qui laisse un écran noir en plein écran par
         # dessus le terminal cache justement le message qui explique le refus.
@@ -777,7 +811,8 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
     for c in plan:
         place = c.get("dir") or f"{math.degrees(c['angle']):.0f}°"   # une couronne n'a qu'un angle
         print(f"[ssvep-stim]   {c['name']:<8} {place:<5} desire={c['desired_hz']:>5.2f} Hz "
-              f"-> {c['actual_hz']:>5.2f} Hz  ({c['frames_per_cycle']} frames/cycle)")
+              f"-> {c['actual_hz']:>5.2f} Hz  "
+              + ("(cible physique)" if physiques else f"({c['frames_per_cycle']} frames/cycle)"))
 
     w, h = size
     cx, cy = w / 2, h / 2
@@ -794,6 +829,11 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
 
     # Les polices et la PLACE de chaque texte, une fois pour la séance : jamais sur une cible.
     page = mise_en_page(pygame, plan, size, len(plan) * per_target)
+    # Le texte du CENTRE, avec des cibles physiques : grand, puisque c'est tout ce que l'écran dit.
+    p_centre = p_centre_hz = None
+    if physiques:
+        p_centre = pygame.font.SysFont("consolas", max(28, int(min(size) * 0.12)))
+        p_centre_hz = pygame.font.SysFont("consolas", max(20, int(min(size) * 0.07)))
     print(f"[ssvep-stim] textes          : "
           + (f"{page.ou} (titre {page.titre.get_height()} px, police à {page.echelle:.0%})"
              if page.y_bloc is not None
@@ -849,22 +889,34 @@ def run(windowed=False, refresh=None, seconds=None, smoke=False, guide=False,
         taux mesuré inutilisable pour prédire le décodage.
         """
         win.fill(BG)
-        for i, c in enumerate(plan):
-            px, py = positions[i]
-            pygame.draw.circle(win, OUTLINE, (px, py), rayon, 2)  # repère statique
-            if is_on(frame, c["frames_per_cycle"]):
-                pygame.draw.circle(win, ON_COLOR, (px, py), rayon)  # phase ON
-            # le point de fixation : APRÈS le disque, à CHAQUE image, allumé comme éteint
-            pygame.draw.circle(win, FIX_DOT, (px, py), FIX_DOT_R)
-            # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
-            ancre, point = ancre_etiquette(c, (px, py), rayon_retour)
-            pose_texte(win, page.etiquette, etiquette(c), LABEL, **{ancre: point})
-        if designee is not None:
-            pygame.draw.circle(win, CUE, positions[designee], rayon_cue, CUE_EPAISSEUR_PX)
-        # L'anneau de RETOUR : après les disques et la consigne, AVANT le texte — au-delà du cercle
-        # de consigne, dans le noir (cf. `retour.rayon_anneau`).
-        if anneau is not None:
-            anneau.dessiner(pygame, win, positions, rayon_retour)
+        if physiques:
+            # Des LED clignotent, pas l'écran : aucun disque. Hors repos, le centre dit ce que le
+            # moteur décode, à la place de l'anneau.
+            if not croix:
+                lignes, couleur = texte_central(None if anneau is None else anneau.cible,
+                                                plan, bool(noms))
+                polices = [p_centre] + [p_centre_hz] * (len(lignes) - 1)
+                y = int(cy - sum(p.get_height() for p in polices) / 2)
+                for police, ligne in zip(polices, lignes):
+                    pose_texte(win, police, ligne, couleur, midtop=(int(cx), y))
+                    y += police.get_height()
+        else:
+            for i, c in enumerate(plan):
+                px, py = positions[i]
+                pygame.draw.circle(win, OUTLINE, (px, py), rayon, 2)  # repère statique
+                if is_on(frame, c["frames_per_cycle"]):
+                    pygame.draw.circle(win, ON_COLOR, (px, py), rayon)  # phase ON
+                # le point de fixation : APRÈS le disque, à CHAQUE image, allumé comme éteint
+                pygame.draw.circle(win, FIX_DOT, (px, py), FIX_DOT_R)
+                # étiquette statique, SOUS l'anneau de retour (n'interfère pas avec le clignotement)
+                ancre, point = ancre_etiquette(c, (px, py), rayon_retour)
+                pose_texte(win, page.etiquette, etiquette(c), LABEL, **{ancre: point})
+            if designee is not None:
+                pygame.draw.circle(win, CUE, positions[designee], rayon_cue, CUE_EPAISSEUR_PX)
+            # L'anneau de RETOUR : après les disques et la consigne, AVANT le texte — au-delà du
+            # cercle de consigne, dans le noir (cf. `retour.rayon_anneau`).
+            if anneau is not None:
+                anneau.dessiner(pygame, win, positions, rayon_retour)
         if croix:
             _retour.dessine_croix(pygame, win, (cx, cy), DIM)
         # ⚠️ Les titres, dans la bande LIBRE que `mise_en_page` a choisie — jamais sur un disque
@@ -1644,6 +1696,9 @@ def _smoke():
     # --- J. `--retour` ----------------------------------------------------------------
     _smoke_retour(chk)
 
+    # --- M. DES CIBLES PHYSIQUES (`--physiques`) : le centre dit ce qui est décodé ---------
+    _smoke_physiques(chk)
+
     # --- K. AUCUN TEXTE SUR UNE CIBLE, à plusieurs résolutions --------------------------
     _smoke_textes(chk)
 
@@ -1841,6 +1896,100 @@ def _smoke_retour(chk):
     rt.autotest_couleurs(chk)
     rt.autotest_resolution(chk, run, "ssvep")
     rt.autotest_statut(chk)
+
+
+def _smoke_physiques(chk):
+    """M. Des CIBLES PHYSIQUES — des LED pilotées par un microcontrôleur —, en essai libre.
+
+    Aucun disque n'est dessiné : ce sont les LED qui clignotent. Le repos garde sa croix, puis le
+    CENTRE de l'écran dit ce que le moteur décode — « - » tant que rien, sinon le nom de la cible
+    et sa fréquence, en vert. Le texte est comparé à des LITTÉRAUX ; l'écran est lu dans les PIXELS.
+    """
+    import numpy as np
+    import pygame
+
+    from stimulus import retour as rt
+
+    leds = [6.0, 8.0, 12.0, 14.0]
+    noms = ["LED 1", "LED 2", "LED 3", "LED 4"]
+    # 8 et 14 Hz ne divisent pas 60 : refusés pour un écran, acceptés TELS QUELS pour des LED.
+    try:
+        plan_du_stimulus(60.0, leds)
+        refuse_ecran = False
+    except FreqsRefusees:
+        refuse_ecran = True
+    plan = plan_du_stimulus(60.0, leds, noms, physiques=True)
+    chk(refuse_ecran and [c["actual_hz"] for c in plan] == leds
+        and [c["name"] for c in plan] == noms,
+        f"[M] 6 · 8 · 12 · 14 Hz : refusés sur un écran à 60 Hz, acceptés sans arrondi pour des "
+        f"LED, dans l'ordre et sous leurs noms ({[(c['name'], c['actual_hz']) for c in plan]})")
+
+    demi = plan_du_stimulus(60.0, [13.5, 20.0], physiques=True)
+    chk(texte_central(None, plan, True) == (["-"], DIM)
+        and texte_central(1, plan, True) == (["LED 2", "8 Hz"], rt.COULEUR_DECODEE)
+        and texte_central(1, plan, False) == (["8 Hz"], rt.COULEUR_DECODEE)
+        and texte_central(0, demi, False) == (["13,5 Hz"], rt.COULEUR_DECODEE),
+        f"[M] le centre : « - » sans décision, sinon le NOM puis la fréquence en vert, la "
+        f"fréquence seule sans noms réglés, et 13,5 écrit en français "
+        f"({texte_central(None, plan, True)}, {texte_central(1, plan, True)}, "
+        f"{texte_central(1, plan, False)}, {texte_central(0, demi, False)})")
+
+    w, h = TAILLE_FENETRE
+    milieu = (w / 2, h / 2)
+    centre = (slice(int(w * 0.2), int(w * 0.8)), slice(int(h * 0.25), int(h * 0.75)))
+    interdits = (ON_COLOR, OUTLINE, FIX_DOT, LABEL)
+    images, vrai_flip = [], pygame.display.flip
+
+    def flip(*a, **k):
+        r = vrai_flip(*a, **k)
+        s = pygame.display.get_surface()
+        arr = pygame.surfarray.array3d(s)
+        vert = (arr == rt.COULEUR_DECODEE).all(axis=2)
+        gris = (arr[centre] == DIM).all(axis=2)
+        xs, ys = np.nonzero(vert)
+        images.append({
+            "croix": rt.croix_a_l_ecran(s, milieu, DIM),
+            "vert": vert,
+            "gris_centre": int(gris.sum()),
+            "milieu_vert": ((xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2)
+            if len(xs) else None,
+            "cibles": sum(int((arr == c).all(axis=2).sum()) for c in interdits)})
+        return r
+
+    statut = rt.StatutScripte({1: "warmup", 10: "decoding"})
+    source = rt.SourceScriptee({15: 1, 22: -1, 26: 2})
+    pygame.display.flip = flip
+    try:
+        run(smoke=True, refresh=60.0, retour=True, physiques=True, freqs=leds, noms=noms,
+            source_retour=source, source_statut=statut)
+    finally:
+        pygame.display.flip = vrai_flip
+
+    chk(len(images) == 30 and all(im["cibles"] == 0 for im in images),
+        f"[M] aucun disque, aucun contour, aucun point, aucune étiquette n'est dessiné : ce sont "
+        f"les LED qui clignotent ({[im['cibles'] for im in images if im['cibles']][:3]} pixel(s) "
+        f"de cible sur {len(images)} images)")
+    croix = [im["croix"] for im in images]
+    chk(croix == [i < 10 for i in range(len(images))]
+        and not any(im["vert"].any() for im in images[:10]),
+        f"[M] la croix du repos tant que le moteur se repose, sans rien de décodé à l'écran "
+        f"(images {[i for i, c in enumerate(croix) if c != (i < 10)][:5]} en désaccord)")
+    tiret = images[10:15]
+    chk(all(im["gris_centre"] > 0 and not im["vert"].any() and not im["croix"] for im in tiret),
+        f"[M] le repos fini et rien de décodé : « - » au centre, en gris, rien en vert "
+        f"({[(im['gris_centre'], int(im['vert'].sum())) for im in tiret]})")
+    premiere, seconde = images[15:26], images[26:]
+    chk(all(im["vert"].any() and im["gris_centre"] == 0 for im in premiere + seconde)
+        and all((im["vert"] == premiere[0]["vert"]).all() for im in premiere)
+        and all((im["vert"] == seconde[0]["vert"]).all() for im in seconde)
+        and not (premiere[0]["vert"] == seconde[0]["vert"]).all(),
+        "[M] une décision met son texte VERT au centre dès l'image suivante, un −1 ne l'efface "
+        "pas, et la décision suivante le remplace")
+    decentres = [im["milieu_vert"] for im in premiere + seconde
+                 if abs(im["milieu_vert"][0] - milieu[0]) > 3
+                 or abs(im["milieu_vert"][1] - milieu[1]) > 0.05 * h]
+    chk(not decentres,
+        f"[M] …et ce texte est CENTRÉ sur l'écran ({decentres[:2]}, centre {milieu})")
 
 
 # Les tailles que la section K joue : les trois écrans courants, et une petite fenêtre qui force les
@@ -2106,6 +2255,12 @@ def _parse_args(argv):
     p.add_argument("--retour", action="store_true",
                    help="entoure en vert la cible que le moteur DÉCODE, lue sur le flux public "
                         "decoded_ssvep en tâche de fond (avec --guide : après chaque essai)")
+    p.add_argument("--physiques", action="store_true",
+                   help="les cibles sont PHYSIQUES (des LED pilotées par un microcontrôleur) : "
+                        "aucun disque à l'écran, aucun diviseur du rafraîchissement à respecter. "
+                        "Avec --retour, le centre de l'écran dit le nom et la fréquence de la "
+                        "cible décodée, « - » sinon. C'est ce que la console passe quand le mode "
+                        "a des cibles physiques")
     p.add_argument("--smoke", action="store_true", help="test headless (SDL dummy), n'affiche rien")
     return p.parse_args(argv)
 
@@ -2138,7 +2293,7 @@ if __name__ == "__main__":
         with au_rafraichissement(args.ecran_hz):
             fait = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
                        guide=args.guide, per_target=args.trials, seed=args.seed, freqs=freqs,
-                       retour=args.retour, ecran_hz=args.ecran_hz,
+                       retour=args.retour, ecran_hz=args.ecran_hz, physiques=args.physiques,
                        noms=[n.strip() for n in args.noms.split(",")] if args.noms else None)
     except EcranRefuse as refus:
         # Sortie 2, comme un refus de fréquences : la fenêtre n'a rien affiché. L'écran est déjà

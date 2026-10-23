@@ -194,6 +194,23 @@ def option_cibles(stimulus_id, noms):
     return ("--noms", ",".join(noms)) if all(noms) else ()
 
 
+# Les fenêtres qui savent tenir des CIBLES PHYSIQUES — des LED pilotées par un microcontrôleur —,
+# le réglage du mode qui le dit, et l'argument qui le leur dit. Une telle fenêtre ne dessine alors
+# aucune cible, et n'a aucun rafraîchissement à tenir : rien ne clignote à l'écran. La valeur est
+# `contract.CIBLES_PHYSIQUES`, RECOPIÉE pour garder ce module léger (le contrat traîne pylsl) ;
+# l'autotest vérifie l'accord.
+PHYSIQUES = {"ssvep": ("cibles", "physiques", "--physiques")}
+
+
+def option_physiques(stimulus_id, reglages):
+    """`("--physiques",)` si les réglages du mode disent des cibles physiques et que la fenêtre
+    sait les tenir, sinon `()`."""
+    cle, valeur, argument = PHYSIQUES.get(stimulus_id, (None, None, None))
+    if argument is None or (reglages or {}).get(cle) != valeur:
+        return ()
+    return (argument,)
+
+
 def commande(stimulus_id, calibrer=False, options=()):
     """La ligne de commande complète d'une fenêtre. Lève `KeyError` si la clé est inconnue.
 
@@ -237,6 +254,7 @@ def _selftest():
     inconnus += [(k, a) for k, args in LIBRE.items() for a in args if not _declare(k, a)]
     inconnus += [(k, "--ecran-hz") for k in ECRAN if not _declare(k, "--ecran-hz")]
     inconnus += [(k, "--noms") for k in CIBLES if not _declare(k, "--noms")]
+    inconnus += [(k, a) for k, (_cle, _valeur, a) in PHYSIQUES.items() if not _declare(k, a)]
     chk(not inconnus,
         f"chaque argument ajouté par la console EXISTE dans la fenêtre visée "
         f"({inconnus or 'aucun inconnu'}) — sinon elle meurt au démarrage sur « unrecognized "
@@ -354,6 +372,23 @@ def _selftest():
     chk(set(ECRAN) == {"ssvep", "cvep"} and set(ECRAN.values()) <= {"reglage", "modele"},
         f"seuls le SSVEP et le c-VEP font passer l'écran, et chacun dit d'où vient la valeur "
         f"({ECRAN})")
+
+    # --- LES CIBLES PHYSIQUES ----------------------------------------------
+    chk(option_physiques("ssvep", {"cibles": "physiques", "freqs": [6.0, 8.0]}) == ("--physiques",)
+        and option_physiques("ssvep", {"cibles": "ecran"}) == ()
+        and option_physiques("ssvep", {}) == () and option_physiques("ssvep", None) == ()
+        and option_physiques("cvep", {"cibles": "physiques"}) == (),
+        f"des cibles PHYSIQUES dans les réglages du mode partent sous `--physiques`, à la seule "
+        f"fenêtre qui sait les tenir ({option_physiques('ssvep', {'cibles': 'physiques'})}, "
+        f"{option_physiques('ssvep', {'cibles': 'ecran'})}, "
+        f"{option_physiques('cvep', {'cibles': 'physiques'})})")
+    from core.modes.contract import CIBLES_PHYSIQUES
+    from core.modes.ssvep import SPEC as _SSVEP
+    choix = {p.key: p.choices for p in _SSVEP.params}
+    chk(all(v == CIBLES_PHYSIQUES and v in (choix.get(c) or ()) for c, v, _a in PHYSIQUES.values()),
+        f"…et le réglage lu est celui du CONTRAT : la clé est un paramètre du mode et la valeur "
+        f"est `contract.CIBLES_PHYSIQUES` — recopiée ici, elle pourrait sinon diverger sans bruit "
+        f"({PHYSIQUES}, {CIBLES_PHYSIQUES!r})")
 
     print(f"[stim-registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
     return ok

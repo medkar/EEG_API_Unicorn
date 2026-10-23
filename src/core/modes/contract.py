@@ -247,11 +247,12 @@ class ModeSpec:
                                # distinctes : « avec quoi décode-t-on » et « avec quoi
                                # calibre-t-on ». Le SSVEP montre qu'il faut les séparer : il a un
                                # stimulus et AUCUNE calibration (la CCA n'apprend rien).
-    tests_si: tuple = ()       # (clé, valeur, raison) : les deux « Tester » de ce mode exigent
-                               # que le réglage `clé` vaille `valeur` (le SSVEP : des cibles à
-                               # l'écran, que la fenêtre de test sait afficher). Sinon le moteur
-                               # refuse le test, et la console grise les deux boutons en disant
-                               # `raison`.
+    tests_si: tuple = ()       # (clé, valeur, raison) : « Tester sur une session » (le test
+                               # GUIDÉ, `test_id`) exige que le réglage `clé` vaille `valeur` (le
+                               # SSVEP : des cibles à l'écran, que sa fenêtre guidée sait
+                               # afficher). Sinon le moteur refuse le test, et la console grise
+                               # son bouton en disant `raison`. « Tester librement » n'en dépend
+                               # pas : c'est la fenêtre qui sait, ou non, tenir ce réglage.
     test_id: str = ""          # la CLÉ de la MESURE qui ÉPROUVE ce mode, ou "" s'il n'est pas
                                # testable. Même forme que `stimulus_id` : une clé, jamais une
                                # classe — c'est `registry.MESURES` qui la résout, et `core` n'a

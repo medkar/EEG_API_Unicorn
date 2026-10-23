@@ -53,6 +53,8 @@
   "fenetre.p300.titre_test_fin": "Test finished",
   "fenetre.ssvep.etiquette": "{nom}  {hz:.2f} Hz",
   "fenetre.ssvep.hud": "{fps:.0f} fps  |  frames skipped {sautees}  |  ESC = quit",
+  "fenetre.ssvep.physique_hz": "{hz} Hz",
+  "fenetre.ssvep.physique_rien": "-",
   "fenetre.ssvep.sous_chauffe": "get comfortable, look at no target — measuring starts after",
   "fenetre.ssvep.sous_consigne": "trial {i}/{n}",
   "fenetre.ssvep.sous_fixation": "look at the circled target",

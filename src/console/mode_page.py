@@ -186,9 +186,10 @@ class ModePage(QWidget):
                 dedans.addWidget(self.bouton_tester)
             blocs.append(self.bloc_tester)
 
-        # Les deux « Tester » sous condition d'un réglage (`tests_si`) : le SSVEP à cibles
-        # physiques, que notre fenêtre de test ne sait pas montrer. Ils se grisent dès que le choix
-        # change À L'ÉCRAN, avec la raison que donne le contrat — celle du refus du moteur.
+        # « Tester sur une session » sous condition d'un réglage (`tests_si`) : le SSVEP à cibles
+        # physiques, que sa fenêtre guidée ne sait pas montrer. Il se grise dès que le choix change
+        # À L'ÉCRAN, avec la raison que donne le contrat — celle du refus du moteur. « Tester
+        # librement » n'en dépend pas : sa fenêtre montre alors la cible décodée sans disques.
         self.tests_si = spec.get("tests_si") or []
         self.note_tests = None
         if self.bloc_tester is not None and self.tests_si:
@@ -364,21 +365,19 @@ class ModePage(QWidget):
         self.essai.setText(texte or "")
         self.essai.setStyleSheet(ROUGE if alerte else "")
         self.essai.setVisible(bool(texte))
-        self.bouton_essayer.setEnabled(not en_cours and self._tests_possibles())
+        self.bouton_essayer.setEnabled(not en_cours)
 
     def _tests_possibles(self):
-        """Les réglages À L'ÉCRAN permettent-ils les deux « Tester » (`tests_si`) ?"""
+        """Les réglages À L'ÉCRAN permettent-ils « Tester sur une session » (`tests_si`) ?"""
         if not getattr(self, "tests_si", None):
             return True
         return self.formulaire.values().get(self.tests_si[0]) == self.tests_si[1]
 
     def _maj_tests(self, *_):
-        """Grise ou rend les deux « Tester », et montre la raison quand ils sont grisés."""
+        """Grise ou rend « Tester sur une session », et montre la raison quand il est grisé."""
         possible = self._tests_possibles()
         self.note_tests.setVisible(not possible)
         self.bouton_tester.setEnabled(possible and self._tester_jouable)
-        if self.bouton_essayer is not None:
-            self.bouton_essayer.setEnabled(possible)
 
     def _mesurer(self, mesure_id):
         """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester ».

@@ -955,11 +955,17 @@ class Console(QMainWindow):
         # décide, pas cette ligne, qui ne fait que lui fournir ce qu'il demande.
         options.extend(stimulus_registry.option_frequences(
             stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        # Des CIBLES PHYSIQUES (des LED) : la fenêtre ne dessine aucune cible, donc n'a aucun
+        # rafraîchissement à tenir. Le registre dit quel réglage le décide ; jamais en calibration.
+        physiques = () if calibrer else stimulus_registry.option_physiques(
+            stimulus_id, self._reglages_du_mode(mode_id))
+        options.extend(physiques)
         # 🔴 Et le RAFRAÎCHISSEMENT que la fenêtre doit tenir, quand elle sait faire passer l'écran.
         # Sans lui, elle afficherait à celui de l'écran du poste, et un modèle c-VEP ne décode
         # qu'au rafraîchissement de son entraînement.
-        options.extend(stimulus_registry.option_ecran(
-            stimulus_id, self._ecran_hz(stimulus_id, mode_id, params, calibrer)))
+        if not physiques:
+            options.extend(stimulus_registry.option_ecran(
+                stimulus_id, self._ecran_hz(stimulus_id, mode_id, params, calibrer)))
         # Et les CIBLES : celles d'« Entraîner », ou celles du modèle choisi (c-VEP), par leurs noms.
         options.extend(stimulus_registry.option_cibles(
             stimulus_id, self._noms_cibles(stimulus_id, mode_id, params, calibrer)))
@@ -4634,7 +4640,8 @@ def _smoke():
     page.formulaire.champs["refresh_hz"].setValue(60.0)
 
     # Cibles PHYSIQUES (des LED) : la liste MONTRE un libellé et envoie la valeur du contrat ; le
-    # rafraîchissement se grise, les deux « Tester » aussi, avec la raison que le moteur donne.
+    # rafraîchissement se grise, « Tester sur une session » aussi, avec la raison que le moteur
+    # donne. « Tester librement » reste : sa fenêtre sait montrer la cible décodée sans disques.
     from PySide6.QtWidgets import QRadioButton as _QRadioButton
     cibles = page.formulaire.champs["cibles"]
     chk([r.text() for r in cibles.findChildren(_QRadioButton)]
@@ -4649,11 +4656,11 @@ def _smoke():
     cibles.setCurrentIndex(cibles.findData("physiques"))
     chk(page.formulaire.values()["cibles"] == "physiques"
         and not page.formulaire.champs["refresh_hz"].isEnabled()
-        and not page.bouton_tester.isEnabled() and not page.bouton_essayer.isEnabled()
+        and not page.bouton_tester.isEnabled() and page.bouton_essayer.isEnabled()
         and page.note_tests.isVisibleTo(page)
         and page.note_tests.text() == tr("mode.ssvep.tests_ecran"),
-        f"des cibles physiques grisent le rafraîchissement et les deux « Tester », en disant "
-        f"pourquoi ({page.note_tests.text()[:50]}…)")
+        f"des cibles physiques grisent le rafraîchissement et « Tester sur une session », en "
+        f"disant pourquoi, mais PAS « Tester librement » ({page.note_tests.text()[:50]}…)")
     page.formulaire.boutons_proposer["alpha_hz"].click()
     led = page.formulaire.values()["freqs"]
     chk(isinstance(led, list) and led and all(abs(f * 2 - round(f * 2)) < 1e-9 for f in led),
@@ -6122,6 +6129,34 @@ def _smoke():
     chk("arrêté" in page_ess.essai.text() and page_ess.bouton_essayer.isEnabled()
         and console._essai is None and ROUGE_ESSAI not in page_ess.essai.styleSheet(),
         f"…le DIT sur la page, sans alerte, et rend le bouton ({page_ess.essai.text()!r})")
+
+    # 2 bis. Des CIBLES PHYSIQUES (des LED) : 8 et 14 Hz ne divisent pas 60, et l'essai libre part
+    #    quand même — fenêtre avec `--physiques`, les fréquences du mode, et AUCUN rafraîchissement
+    #    à tenir : rien ne clignote à l'écran.
+    _remise_a_zero()
+    page_ess.formulaire.set_values({"cibles": "physiques", "freqs": [6.0, 8.0, 12.0, 14.0],
+                                    "refresh_hz": 60.0, "alpha_hz": 10.0})
+    reglages_led = _a_plat(page_ess.formulaire.values())
+    led_arrete = {**ss_arrete, "reglages": {"ssvep": dict(reglages_led)}}
+    console.apply_state(led_arrete)
+    chk(page_ess.bouton_essayer.isEnabled() and not page_ess.bouton_tester.isEnabled(),
+        "cibles physiques : « Tester librement » cliquable, « Tester sur une session » grisé")
+    _essayer(page_ess, "ssvep, cibles physiques")
+    console.apply_state(_avec_mode(led_arrete, "ssvep", "warmup", avant=20.0,
+                                   params=reglages_led, instruction=consigne_ss))
+    argv_led = (_fenetres_lancees() or [[]])[-1]
+    freqs_led = (argv_led[argv_led.index("--freqs") + 1:][:1] if "--freqs" in argv_led else [])
+    chk(argv_led[:3] == stim_registry.commande("ssvep")
+        and "--physiques" in argv_led and "--retour" in argv_led
+        and freqs_led == ["6,8,12,14"] and "--ecran-hz" not in argv_led,
+        f"🔴 …la fenêtre de l'essai libre part avec `--physiques`, les fréquences du mode "
+        f"(6 · 8 · 12 · 14) et SANS `--ecran-hz` : l'écran du poste n'a rien à tenir "
+        f"({argv_led[3:]})")
+    _echap()
+    console.apply_state(_avec_mode(led_arrete, "ssvep", "running", params=reglages_led))
+    page_ess.formulaire.set_values({"cibles": "ecran", "freqs": [12.0, 15.0, 20.0],
+                                    "refresh_hz": 60.0, "alpha_hz": 10.0})
+    _remise_a_zero()
 
     # 3. Le c-VEP et le P300 : même séquence, et LEURS options d'essai libre (`--libre` pour le
     #    c-VEP, qui désigne sinon des cibles).

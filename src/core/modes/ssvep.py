@@ -265,9 +265,9 @@ SPEC = ModeSpec(
     # Le « Tester » de ce mode : la mesure du taux d'émission, jouée sur les réglages COURANTS
     # (la console passe les fréquences retenues à sa fenêtre guidée, qui les annonce au moteur).
     test_id="ssvep_taux",
-    # Les deux « Tester » ouvrent NOTRE fenêtre, qui fait clignoter les cibles à l'écran : avec des
-    # LED, elle montrerait des disques que personne ne regarde, à des fréquences que l'écran ne
-    # sait peut-être pas afficher.
+    # « Tester sur une session » ouvre NOTRE fenêtre guidée, qui désigne des disques clignotants à
+    # l'écran : avec des LED, elle désignerait des disques que personne ne regarde. « Tester
+    # librement », lui, marche avec des LED (`stimulus/ssvep.py --physiques`).
     tests_si=("cibles", "ecran", tr("mode.ssvep.tests_ecran")),
     params=(
         # Sur quoi clignotent les cibles : un écran (la règle des diviseurs du rafraîchissement

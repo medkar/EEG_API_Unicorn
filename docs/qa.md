@@ -568,20 +568,29 @@ Page **SSVEP**, mode **arrêté**, dans cet ordre.
 
 1. Vérifie d'abord que « Cibles affichées sur » montre **un écran**, puis choisis **des cibles
    physiques (LED…)**. Ne clique rien d'autre.
-   ✅ **1.6 bis.1** Le champ « Rafraîchissement de l'écran du stimulus » se **grise**, les deux boutons
-   « Tester sur une session » et « Tester librement » aussi, et une phrase apparaît dessous :
-   « Les deux tests affichent leurs cibles à l'écran : ils ne marchent pas avec des cibles physiques… ».
+   ✅ **1.6 bis.1** Le champ « Rafraîchissement de l'écran du stimulus » se **grise**, le bouton
+   « Tester sur une session » aussi, et une phrase apparaît dessous : « « Tester sur une session »
+   affiche ses cibles à l'écran : il ne marche pas avec des cibles physiques… ». **« Tester
+   librement » reste cliquable.**
 2. Toujours sur **des cibles physiques**, mode arrêté : « Fréquences des cibles » à `12, 17, 20` →
    **Appliquer**.
    ✅ **1.6 bis.2** **Vert** : 17 Hz est accepté. (Sur un écran à 60 Hz, il est refusé : point 1.6.4.)
 3. Toujours sur **des cibles physiques**, mode arrêté : **« Proposer « Fréquences des cibles » »**.
    ✅ **1.6 bis.3** Des fréquences au **demi-hertz** (des valeurs en ,5 ou entières), pas seulement les
    diviseurs de 60 (12 · 15 · 20…).
-4. Repasse « Cibles affichées sur » à **un écran**, remets `12, 15, 20` → **Appliquer**.
-   ✅ **1.6 bis.4** Vert ; le rafraîchissement et les deux « Tester » redeviennent cliquables, la phrase
-   disparaît.
+4. Toujours sur **des cibles physiques**, « Fréquences des cibles » à `6, 8, 12, 14`, « Noms des cibles » à
+   `LED 1, LED 2, LED 3, LED 4` → **Appliquer**, puis **« Tester librement »** et le contrôle de
+   liaison.
+   ✅ **1.6 bis.4** La fenêtre s'ouvre **sans aucun disque**, l'écran du poste **garde** son
+   rafraîchissement ; « Le casque se stabilise » puis « REPOS », avec la croix ; ensuite un **« - »**
+   gris au centre, et dès qu'une cible est décodée, son **nom et sa fréquence en vert** au centre
+   (« LED 2 » / « 8 Hz »). Échap ferme la fenêtre et arrête le mode.
+5. Repasse « Cibles affichées sur » à **un écran**, remets `12, 15, 20` → **Appliquer**.
+   ✅ **1.6 bis.5** Vert ; le rafraîchissement et « Tester sur une session » redeviennent cliquables,
+   la phrase disparaît.
 
-❌ Régression : un « Tester » cliquable sur des cibles physiques ; 17 Hz refusé sur des cibles
+❌ Régression : « Tester sur une session » cliquable sur des cibles physiques ; « Tester librement »
+grisé sur des cibles physiques, ou dont la fenêtre dessine des disques ; 17 Hz refusé sur des cibles
 physiques ; « Proposer » qui ne rend que des diviseurs de 60 sur des cibles physiques ; le
 rafraîchissement qui reste grisé une fois revenu à l'écran.
 

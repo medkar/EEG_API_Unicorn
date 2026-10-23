@@ -76,8 +76,9 @@ Six published modes, and a client should not treat them alike. **SSVEP is active
 a target, there is a right answer, and your application must render the flickering stimulus — on a
 screen, or on physical targets such as LEDs driven by a microcontroller: set « Cibles affichées
 sur » to « des cibles physiques » and any frequency in the band is accepted (on a screen, only
-integer divisors of its refresh rate are). The two SSVEP tests draw their targets on screen, so they
-are screen-only. **Motor
+integer divisors of its refresh rate are). The guided SSVEP test draws its targets on screen, so it
+is screen-only; the free test works with LEDs too — its window then draws no target and writes the
+name and frequency of the decoded target in the middle of the screen. **Motor
 Imagery is active** too, but it decodes an imagined movement — no stimulus to render, and a model
 trained per person (its own section below). **P300 is active and the most demanding**: your
 application renders the flashes *and* tells the engine when each one happened, because the whole

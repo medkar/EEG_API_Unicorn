@@ -205,7 +205,7 @@
   "mode.ssvep.param.alpha_hz.aide": "The alpha peak varies from person to person (6 to 14 Hz, 9.6 Hz on average): a target placed on it blends in with rest, and the suggested frequencies move away from it. To measure yours, click \"Measure\" (~40 s), then \"Apply\". Changing it does not redo the rest.",
   "mode.ssvep.param.alpha_hz.label": "Person's alpha peak",
   "mode.ssvep.param.bande.aide": "The filter applied to the signal before decoding ({bas}-{haut} Hz by default). It must let through your frequencies and their harmonics (2 and 3 times the frequency): narrowing the band removes noise, but also signal. Limits: not below {plancher} Hz (the filter would not have time to settle within the window), not above {plafond} Hz (a target would fall into the mains filter, 50 or 60 Hz). Changing it redoes the rest, and both tests use it.",
-  "mode.ssvep.param.cibles.aide": "What your targets flash on. On a screen, each frequency must be a whole-number divisor of its refresh rate. With physical targets (LEDs driven by a board such as an Arduino), any frequency in the band is possible: the refresh rate no longer matters, and \"Suggest\" picks frequencies in half-hertz steps. Both \"Test\" buttons show their targets on screen: they only work with a screen.",
+  "mode.ssvep.param.cibles.aide": "What your targets flash on. On a screen, each frequency must be a whole-number divisor of its refresh rate. With physical targets (LEDs driven by a board such as an Arduino), any frequency in the band is possible: the refresh rate no longer matters, and \"Suggest\" picks frequencies in half-hertz steps. \"Guided test\" shows its targets on screen: it only works with a screen. \"Free test\" works with both: with LEDs, it shows no target and writes the name and frequency of the decoded target in the middle of the screen.",
   "mode.ssvep.param.cibles.label": "Targets shown on",
   "mode.ssvep.param.freqs.aide": "The frequencies your application flashes, one per target. Each must divide the screen's refresh rate (at 60 Hz: 30, 20, 15, 12, 10, 8.571…) and stay far from your alpha peak. Changing this list recreates the stream: your clients must subscribe again.",
   "mode.ssvep.param.freqs.label": "Target frequencies",
@@ -217,5 +217,5 @@
   "mode.ssvep.param.z_min.label": "Detection threshold",
   "mode.ssvep.repos": "Do NOT look at any target: measuring the background noise of each frequency.",
   "mode.ssvep.summary": "Which flashing target the user is looking at, about 5 times per second.",
-  "mode.ssvep.tests_ecran": "Both tests show their targets on screen: they do not work with physical targets. To check your LEDs, start the mode and look at what your application receives (\"What your app sees\", on the home page)."
+  "mode.ssvep.tests_ecran": "\"Guided test\" shows its targets on screen: it does not work with physical targets. To check your LEDs, use \"Free test\": the screen shows the cross during the rest, then the name and frequency of the decoded target."
 }
