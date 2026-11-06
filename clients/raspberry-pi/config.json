@@ -1,0 +1,15 @@
+{
+  "app_name": "my-device",
+  "device_id": "",
+  "device_port": 5011,
+  "engine_host": "255.255.255.255",
+  "engine_port": 5010,
+  "mode": "ssvep",
+  "params": {
+    "targets_on": "physical",
+    "freqs": [13, 15],
+    "target_names": ["left", "right"]
+  },
+  "propose_refresh_hz": 0,
+  "stop_mode_on_exit": true
+}

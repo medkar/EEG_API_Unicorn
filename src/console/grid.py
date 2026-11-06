@@ -1,0 +1,534 @@
+"""La grille : une tuile par mode, l'état du produit d'un seul coup d'œil.
+
+Ce n'est pas un menu. Une tuile porte les quatre choses qu'on veut savoir sans cliquer :
+l'état réel, un aperçu vivant de ce que le mode produit, s'il est publié, et pour les non publiés
+POURQUOI (« demande des marqueurs », « verrouillé à la frame »).
+
+Les modes que le moteur ne sait pas faire sont affichés, grisés, avec leur raison. Sans eux, un
+élève croirait que le produit fait moins de choses qu'il n'en fait. Les sept tuiles sont
+toutes du moteur : cette grille EST le catalogue.
+"""
+
+import os
+import sys
+
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
+                               QPushButton, QToolButton, QVBoxLayout, QWidget)
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # noqa: E402
+                     span_correlation)
+# `Z_MIN` (le seuil du SSVEP) n'est volontairement PAS importé : l'utiliser en repli mettrait à
+# l'échelle la sortie d'un mode sans seuil avec la constante d'un autre (cf.
+# `ModeTile._apercu_scores`).
+from console.params_form import ACCENT  # noqa: E402
+from core.config import NEURO_Z_SPAN  # noqa: E402
+from core.i18n import langue, langues_disponibles, nom_de_langue, nombre, tr  # noqa: E402
+# Le vocabulaire des phases terminales vient du MOTEUR — jamais un `("fini", "annule")` recopié
+# ici : un renommage côté moteur laisserait la tuile sur « en cours » pour toujours.
+from core.modes.mesure import PHASES_TERMINALES  # noqa: E402
+
+COLONNES = 4
+BLEU, GRIS = QColor("#4c8dff"), QColor("#8a8f9c")
+
+# Les deux boutons vers l'application, en bas de l'accueil, sont un peu plus grands que ceux des
+# tuiles : police ×1,15, hauteur ×1,4. « Connecter une application » porte en plus la couleur
+# d'accent de la console, texte blanc en gras : c'est le geste par lequel une application
+# commence. Ces couleurs ne dépendent pas du thème de Windows, elles restent donc lisibles en
+# clair comme en sombre ; grisé, le bouton garde un texte clair sur un gris franc.
+AGRANDI_POLICE, AGRANDI_HAUTEUR = 1.15, 1.4
+STYLE_CONNEXION = (
+    f"QPushButton {{ background-color: {ACCENT}; color: white; font-weight: bold;"
+    f" border: none; border-radius: 4px; padding: 4px 18px; }}"
+    f" QPushButton:hover {{ background-color: #3a78e8; }}"
+    f" QPushButton:pressed {{ background-color: #2f63c4; }}"
+    f" QPushButton:disabled {{ background-color: #6b7080; color: #e8e8e8; }}")
+
+
+def agrandir(bouton):
+    """La police du bouton, un peu plus grande (en points, ou en pixels si la police est donnée
+    ainsi)."""
+    police = bouton.font()
+    if police.pointSizeF() > 0:
+        police.setPointSizeF(police.pointSizeF() * AGRANDI_POLICE)
+    elif police.pixelSize() > 0:
+        police.setPixelSize(round(police.pixelSize() * AGRANDI_POLICE))
+    bouton.setFont(police)
+
+
+class MiniBars(QWidget):
+    """Quelques barres, dessinées à la main. L'aperçu vivant d'une tuile.
+
+    Au QPainter plutôt qu'en pyqtgraph : une tuile en montre trois ou quatre, elles sont
+    redessinées 10 fois par seconde, et un widget de tracé complet par tuile coûterait cher
+    pour trois rectangles.
+
+    **Deux rendus, choisis par la famille du mode, comme les vues de la page.** Un mode ACTIF a
+    une décision : la barre mise en avant est celle que le MOTEUR a retenue, jamais un maximum
+    recalculé ici. Un mode PASSIF n'a aucune décision et ses valeurs sont signées : elles se
+    dessinent de part et d'autre d'un axe, et rien n'est mis en avant. Colorier le plus grand
+    indice comme une sélection laisserait croire qu'un z d'engagement est une commande — le
+    contresens exact que le contrat des flux cherche à empêcher.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(26)
+        self._values, self._span = [], 1.0
+        self._retenue, self._centre = -1, False
+
+    def set_values(self, values, span=1.0, retenue=-1, centre=False):
+        """`retenue` : l'indice choisi par le MOTEUR (-1 = aucun). `centre` : valeurs signées."""
+        self._values = [float(v) for v in (values or [])]
+        self._span = max(float(span), 1e-6)
+        self._retenue, self._centre = int(retenue), bool(centre)
+        self.update()
+
+    def paintEvent(self, _event):
+        if not self._values:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        largeur = self.width() / max(len(self._values), 1)
+        haut, demi = self.height(), self.height() / 2.0
+        for i, valeur in enumerate(self._values):
+            part = max(-1.0, min(valeur / self._span, 1.0))
+            if self._centre:
+                # Passif : un -3 et un +3 ne doivent PAS se ressembler, c'est tout ce que
+                # l'indice dit. On dessine donc de part et d'autre de l'axe médian.
+                h = part * demi
+                y, hauteur = (demi - h, h) if h >= 0 else (demi, -h)
+            else:
+                # Actif : un score négatif veut dire « aucune preuve », donc rien à montrer.
+                hauteur = max(part, 0.0) * haut
+                y = haut - hauteur
+            painter.fillRect(int(i * largeur) + 2, int(y), int(largeur) - 4,
+                             max(2, int(hauteur)), BLEU if i == self._retenue else GRIS)
+
+
+class ModeTile(QFrame):
+    """Une tuile. Elle ne décide de rien : elle rend un `ModeSpec` et un état."""
+
+    ouvrir = Signal(str)
+    publier = Signal(str, bool)
+    demarrer = Signal(str, bool)     # (id, on) — on=True pour démarrer, False pour arrêter
+
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumHeight(130)
+
+        self.titre = QLabel(spec["label"])
+        self.titre.setStyleSheet("font-weight: bold;")
+        self.etat = QLabel("")
+        self.detail = QLabel(spec["summary"])
+        self.detail.setWordWrap(True)
+        self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.apercu = MiniBars()
+        self.publie = QCheckBox(tr("console.grille.publie"))
+        self._arrete = True
+        # Démarrer / arrêter. Le moteur possède déjà les deux commandes et les valide (mode
+        # inconnu, réglages invalides ; démarrer un mode qui tourne ne fait que le régler) : la
+        # tuile ne fait que les poster. Elle n'affiche AUCUN état déduit — c'est le prochain
+        # `snapshot()` qui dira ce qui s'est réellement passé.
+        self.demarrage = QPushButton(tr("console.grille.demarrer"))
+        self.demarrage.clicked.connect(
+            lambda: self.demarrer.emit(self.spec["id"], self._arrete))
+        self.bouton = QPushButton(tr("console.grille.ouvrir"))
+        self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
+        self.publie.toggled.connect(lambda on: self.publier.emit(self.spec["id"], on))
+
+        haut = QHBoxLayout()
+        haut.addWidget(self.titre)
+        haut.addStretch(1)
+        haut.addWidget(self.etat)
+        bas = QHBoxLayout()
+        bas.addWidget(self.publie)
+        bas.addStretch(1)
+        bas.addWidget(self.demarrage)
+        bas.addWidget(self.bouton)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(haut)
+        layout.addWidget(self.detail)
+        layout.addWidget(self.apercu, 1)
+        layout.addLayout(bas)
+
+        if spec["status"] != "moteur":
+            # Grisée mais LISIBLE, et surtout : elle dit pourquoi.
+            self.setEnabled(False)
+            self.detail.setText(spec["unavailable"])
+            statuts = {"appli_pygame": tr("console.grille.statut_appli_pygame"),
+                       "prevu": tr("console.grille.statut_prevu")}
+            self.etat.setText(statuts.get(spec["status"], spec["status"]))
+            self.publie.hide()
+            self.demarrage.hide()
+            self.bouton.hide()
+
+    def update_from(self, mode_state):
+        """`mode_state` = None quand le mode n'est pas démarré."""
+        if self.spec["status"] != "moteur":
+            return
+        if mode_state is None:
+            self._arrete = True
+            self.demarrage.setText(tr("console.grille.demarrer"))
+            self.etat.setText(tr("console.etat.arrete"))
+            # ⚠️ `blockSignals` ICI AUSSI, comme en bas de cette méthode : décocher la case ÉMET
+            # `set_published(id, False)`. Sans lui, un simple AFFICHAGE posterait une commande
+            # que personne n'a demandée ; si le mode est redémarré dans la même seconde, la
+            # commande en file arrive APRÈS et retire silencieusement le flux du réseau.
+            self.publie.blockSignals(True)
+            self.publie.setChecked(False)
+            self.publie.blockSignals(False)
+            self.publie.setEnabled(False)
+            self.apercu.set_values([])
+            self.detail.setText(self.spec["summary"])
+            return
+
+        attente = decompte(mode_state)
+        self.etat.setText(nom_phase(mode_state["phase"]) + (f" · {attente}" if attente else ""))
+        self.publie.setEnabled(True)
+        self.publie.blockSignals(True)     # sinon régler la case RÉÉMET la commande, en boucle
+        self.publie.setChecked(bool(mode_state["published"]))
+        self.publie.blockSignals(False)
+        self._arrete = False
+        self.demarrage.setText(tr("console.grille.arreter"))
+
+        if mode_state["instruction"]:
+            self.detail.setText(mode_state["instruction"])
+        else:
+            self.detail.setText(_resume(mode_state) or self.spec["summary"])
+
+        sortie = mode_state.get("output") or {}
+        if "scores" in sortie:
+            self._apercu_scores(sortie)
+        elif "probas" in sortie:
+            # Motor Imagery : une probabilité par classe, déjà bornée à 1 — pas de seuil à
+            # dépasser pour l'échelle du dessin, contrairement au z du SSVEP.
+            self.apercu.set_values(list(sortie["probas"].values()), span=1.0,
+                                   retenue=sortie.get("intent_index", -1))
+        elif "z" in sortie:
+            self.apercu.set_values(list(sortie["z"].values()), span=NEURO_Z_SPAN, centre=True)
+        elif "error" in sortie:
+            # ErrP : `error < 0` (pas de verdict) : `score`/`threshold` valent 0.0 par CONVENTION,
+            # jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — les montrer fabriquerait
+            # un chiffre, donc rien plutôt qu'un faux zéro.
+            if sortie.get("error", -1) < 0:
+                self.apercu.set_values([])
+            else:
+                score = sortie.get("score", 0.0)
+                seuil = sortie.get("threshold", 0.0)
+                # Échelle qui s'adapte à SA PROPRE amplitude, jamais NEURO_Z_SPAN (un z n'a rien
+                # à voir avec un log-odds) ni un axe fixe inventé — le même piège que le P300
+                # rendu comme un SSVEP (cf. `live_views.ActiveView`).
+                self.apercu.set_values([score, seuil],
+                                       span=max(abs(score), abs(seuil), 1.0), centre=True)
+        else:
+            self.apercu.set_values([])
+
+    def _apercu_scores(self, sortie):
+        """Un score par cible. TROIS échelles, choisies sur ce que la sortie DÉCLARE.
+
+        ⚠️ Appliquer un seuil unique à tout le monde (`max(sortie.get("threshold", Z_MIN), 1.0)`)
+        est faux : la sortie du P300 n'a PAS de clé `threshold`, et c'est délibéré — le moteur
+        prend l'argmax, il ne compare ces scores à rien (cf.
+        `live_views.ActiveView._update_selection`). Le seuil du SSVEP (2,5) appliqué à des
+        LOG-ODDS, avec `centre=False` qui écrase à zéro tout ce qui est négatif, donnerait SIX
+        MOIGNONS DE 2 PX sur une manche P300 ordinaire (les scores sont le plus souvent négatifs :
+        une cible flashe une fois sur six). L'élève y lirait « aucune preuve », ce qui est faux :
+        c'est l'ÉCART 1er-2e qui décide, et il peut être franc. Sans `threshold`, aucune échelle
+        absolue n'existe, donc on montre le CLASSEMENT, comme la page.
+        """
+        scores = [float(s) for s in (sortie.get("scores") or [])]
+        seuil = sortie.get("threshold")
+        corr_min = sortie.get("corr_min")
+        retenue = sortie.get("target_index", -1)
+        if seuil is not None:
+            # SSVEP : un z, comparé à un seuil publié. L'échelle absolue a un sens.
+            # ⚠️ `SPAN_SEUILS × seuil`, pas `seuil` : c'est l'échelle de la PAGE
+            # (`live_views._update_scores`). À 1×, un score de 3,1 pour un seuil de 2,5 montrerait
+            # une barre PLEINE sur la grille et « 62 % » sur la page : mêmes données, deux
+            # lectures.
+            # `max(..., 1.0)` est un PLANCHER : un z n'a pas de plafond naturel, et un seuil
+            # minuscule ferait déborder toutes les barres.
+            self.apercu.set_values(scores, span=max(SPAN_SEUILS * float(seuil), 1.0),
+                                   retenue=retenue)
+            return
+        if corr_min is not None:
+            # c-VEP : une corrélation de Pearson, bornée dans [-1, 1], comparée au seuil que le
+            # mode PUBLIE (`corr_min`). Échelle absolue, mais surtout PAS celle du SSVEP :
+            # `max(2 × 0,26, 1.0)` vaudrait 1,0, et les corrélations réelles de ce mode (0,33
+            # quand c'est juste, 0,21 quand c'est faux, sur la seule séance mesurée)
+            # s'écraseraient dans le tiers bas de la barre, visuellement identiques. On PLAFONNE
+            # donc à 1 au lieu de plancher à 1 : la barre va jusqu'à `SPAN_SEUILS × corr_min`
+            # (0,52 par défaut), et le seuil tombe à mi-hauteur.
+            # ⚠️ La formule vit dans `console/__init__.py`, PAS ici : écrite des deux côtés, elle
+            # diverge (à `corr_min = 0`, réglage légal, la tuile montrerait tout PLEIN et la page
+            # 33 %). Même règle que `classement_relatif` : appeler le MÊME code.
+            self.apercu.set_values(scores, span=span_correlation(corr_min), retenue=retenue)
+            return
+        # P300 (et tout futur mode qui ACCUMULE des preuves sans seuil) : échelle RELATIVE,
+        # recalculée à chaque manche. La règle vit dans `console.classement_relatif` — la MÊME
+        # fonction que la page appelle, parce qu'écrite deux fois elle diverge.
+        self.apercu.set_values(classement_relatif(scores), span=1.0, retenue=retenue)
+
+
+def _resume(mode_state):
+    """Une ligne : ce que le mode produit en ce moment. "" si rien de parlant."""
+    sortie = mode_state.get("output") or {}
+    if "corr_min" in sortie:
+        # c-VEP : AVANT la branche `scores` juste en dessous, qui lui inventerait une fréquence.
+        # ⚠️ `freq_hz` n'existe pas dans cette sortie : la branche `scores` en fabriquerait un
+        # avec `.get(..., 0)` (« CIBLE 3 · 0 Hz »), et l'élève lirait une grandeur que personne
+        # n'a mesurée. Ce mode ne cherche pas une fréquence mais une PHASE.
+        index = sortie.get("target_index", -1)
+        if index < 0:
+            # Le motif vient du MOTEUR, en clair (`core/modes/cvep.py::_MOTIFS_FR`). La console ne
+            # le traduit pas : trois causes appellent trois gestes opposés, et un second
+            # vocabulaire côté interface finirait par ne plus dire la même chose que le terminal.
+            return sortie.get("motif") or tr("console.grille.resume.aucune_cible")
+        return tr("console.grille.resume.cible_correlation", cible=index,
+                  correlation=nombre(sortie.get('confidence', 0.0), ".2f"))
+    if "scores" in sortie:
+        # `.get` et pas `[...]` : cette ligne tourne 10 fois par seconde dans le rafraîchissement
+        # de la grille. Un mode actif qui publierait des scores sans cible nommée y ferait tomber
+        # TOUTE l'interface sur un KeyError, pas seulement sa propre tuile.
+        index = sortie.get("target_index", -1)
+        if sortie.get("artifact"):
+            return tr("console.grille.resume.artefact")
+        return (tr("console.grille.resume.aucune_cible") if index < 0
+                else tr("console.grille.resume.cible_frequence", cible=index,
+                        hz=f"{sortie.get('freq_hz', 0):g}"))
+    if "probas" in sortie:
+        # Motor Imagery : pas de "cible", une INTENTION — les deux mots ne sont pas
+        # interchangeables (cf. DecodedMIPublisher), donc pas le même résumé que le SSVEP.
+        index = sortie.get("intent_index", -1)
+        return (tr("console.grille.resume.vote_non_conclu") if index < 0
+                else tr("console.grille.resume.intention", intention=sortie.get("label", ""),
+                        confiance=nombre(sortie.get('confidence', 0), ".2f")))
+    if "z" in sortie:
+        return "  ".join(f"{k} {v:+.1f}" for k, v in sortie["z"].items())
+    if "error" in sortie:
+        # Sans cette branche, le résumé retomberait sur `spec["summary"]` (le texte STATIQUE du
+        # mode), jamais sur ce que ce feedback précis vient de décider. Le verdict ne se montre
+        # JAMAIS seul : ce détecteur n'attrape qu'une partie des erreurs, `pdf['tpr']` le rappelle
+        # à chaque ligne.
+        error = sortie.get("error", -1)
+        if sortie.get("artifact"):
+            return tr("console.grille.resume.artefact")
+        if error < 0:
+            return tr("console.grille.resume.pas_de_verdict")
+        pdf = mode_state.get("point_de_fonctionnement") or {}
+        verdict = (tr("console.grille.resume.erreur") if error == 1
+                   else tr("console.grille.resume.correct"))
+        # `.get` ici aussi, comme plus haut : `if pdf` protège du dict VIDE,
+        # pas du dict INCOMPLET. Un `point_de_fonctionnement` qui évoluerait (une clé `auc`
+        # ajoutée, `tpr` renommé `tpr_oof`) ferait tomber `ModeGrid.update_from` sur un
+        # KeyError — donc TOUTE la grille, pas seulement cette tuile, en pleine séance.
+        score = f"{sortie.get('score', 0.0):+.2f}"
+        if pdf:
+            return tr("console.grille.resume.errp_taux", verdict=verdict, score=score,
+                      taux=f"{pdf.get('tpr', 0.0):.0%}")
+        return tr("console.grille.resume.errp", verdict=verdict, score=score)
+    params = mode_state.get("params") or {}
+    if "freqs" in params:
+        return " · ".join(tr("console.grille.resume.frequence", hz=f"{f:g}")
+                          for f in params["freqs"])
+    return ""
+
+
+class MesureTile(QFrame):
+    """Une tuile de MESURE. Beaucoup plus courte qu'une tuile de mode, et c'est le sujet.
+
+    Une mesure ne publie aucun flux (donc pas de case « publié »), ne se démarre pas depuis la
+    grille (elle a un briefing à lire et un protocole à suivre : ça se fait sur sa page), et ne
+    produit aucune sortie en direct à prévisualiser. Il reste : ce qu'elle répond, si elle est une
+    BARRIÈRE, et où elle en est.
+    """
+
+    ouvrir = Signal(str)
+
+    def __init__(self, spec):
+        super().__init__()
+        self.spec = spec
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumHeight(130)
+
+        self.titre = QLabel(spec["label"])
+        self.titre.setStyleSheet("font-weight: bold;")
+        self.etat = QLabel("")
+        self.detail = QLabel(spec.get("summary") or "")
+        self.detail.setWordWrap(True)
+        self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        # Le mot BARRIÈRE est le seul de cette tuile qui change un comportement : il dit qu'un
+        # échec ARRÊTE la séance. Il vient du contrat (`MesureSpec.barriere`), jamais d'une liste
+        # d'identifiants écrite ici.
+        self.marque = QLabel(tr("console.grille.barriere") if spec.get("barriere") else "")
+        self.marque.setWordWrap(True)
+        self.marque.setStyleSheet("color: #b8860b; font-size: 11px; font-weight: bold;")
+        self.bouton = QPushButton(tr("console.grille.ouvrir"))
+        self.bouton.clicked.connect(lambda: self.ouvrir.emit(self.spec["id"]))
+
+        haut = QHBoxLayout()
+        haut.addWidget(self.titre)
+        haut.addStretch(1)
+        haut.addWidget(self.etat)
+        bas = QHBoxLayout()
+        bas.addStretch(1)
+        bas.addWidget(self.bouton)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(haut)
+        layout.addWidget(self.detail)
+        layout.addWidget(self.marque)
+        layout.addStretch(1)
+        layout.addLayout(bas)
+
+        if not spec.get("jouable"):
+            # Même point d'honnêteté que pour un mode hors moteur : montrée, grisée, avec sa
+            # raison. Une mesure décrite mais pas livrée doit se voir — sinon le produit paraît
+            # se limiter à ce qui est chargé aujourd'hui.
+            self.setEnabled(False)
+            self.etat.setText(tr("console.grille.mesure_pas_livree"))
+            self.bouton.hide()
+
+    def update_from(self, etat):
+        """`etat` = `snapshot()["mesure"]` quand c'est CELLE-CI qui tourne, sinon None."""
+        if not self.spec.get("jouable"):
+            return
+        if etat is None:
+            self.etat.setText("")
+            self.detail.setText(self.spec.get("summary") or "")
+            return
+        if etat.get("phase") in PHASES_TERMINALES:
+            resultat = etat.get("resultat") or {}
+            self.etat.setText(tr("console.grille.mesure_terminee"))
+            # Le verdict du MOTEUR, en clair et jamais retraduit. `barriere_franchie` ne sert ici
+            # qu'à la COULEUR : recomposer une phrase à partir du booléen ferait dire à la grille
+            # autre chose qu'à la page, sur les mêmes données.
+            self.detail.setText(resultat.get("verdict") or etat.get("probleme") or "")
+            franchie = resultat.get("barriere_franchie")
+            self.detail.setStyleSheet(
+                "font-size: 11px; color: "
+                + ("#8a8f9c" if franchie is None else
+                   ("#3fae5a" if franchie else "#e5484d")))
+            return
+        self.etat.setText(tr("console.grille.mesure_en_cours"))
+        self.detail.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self.detail.setText(etat.get("instruction") or "")
+
+
+class ModeGrid(QWidget):
+    """Toutes les tuiles, construites UNE FOIS depuis le catalogue, mises à jour ensuite.
+
+    Deux familles, deux rangées de tuiles : les MODES (ce que le produit publie sur le réseau) et
+    les MESURES (ce qu'on contrôle avant de croire à ce qu'il publie). Elles ne se mélangent pas —
+    une mesure n'a ni flux, ni case « publié », ni bouton « Démarrer » — mais elles vivent sur le
+    MÊME écran, parce que « faire le contrôle alpha » et « lancer le SSVEP » sont deux gestes de
+    la même séance, et qu'un menu séparé serait un menu qu'on oublie d'ouvrir.
+    """
+
+    ouvrir = Signal(str)
+    publier = Signal(str, bool)
+    demarrer = Signal(str, bool)
+    ouvrir_mesure = Signal(str)
+    ouvrir_flux = Signal()
+    connecter_application = Signal()   # « Connecter une application »
+    choix_langue = Signal(str)  # le code de la langue d'affichage choisie dans le menu
+
+    def __init__(self, catalog, mesures=()):
+        super().__init__()
+        self.tuiles = {}
+        self.tuiles_mesure = {}
+
+        # La langue de l'AFFICHAGE, en haut à droite de l'accueil. Chaque langue est écrite dans
+        # SA langue (« English », « Français ») : on la reconnaît même sans lire la langue en cours.
+        # Les flux envoyés à l'application ne changent pas, eux (cf. la bulle).
+        self.bouton_langue = QToolButton()
+        self.bouton_langue.setText(f"🌐 {tr('console.langue.nom')}")
+        self.bouton_langue.setToolTip(tr("console.langue.bulle"))
+        self.bouton_langue.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.bouton_langue)
+        for code in langues_disponibles():
+            action = menu.addAction(nom_de_langue(code))
+            action.setCheckable(True)
+            action.setChecked(code == langue())
+            action.triggered.connect(lambda _c=False, c=code: self.choix_langue.emit(c))
+        self.bouton_langue.setMenu(menu)
+        ligne_langue = QHBoxLayout()
+        ligne_langue.addStretch(1)
+        ligne_langue.addWidget(self.bouton_langue)
+
+        modes_layout = QGridLayout()
+        modes_layout.setSpacing(10)
+        for i, spec in enumerate(catalog):
+            tuile = ModeTile(spec)
+            tuile.ouvrir.connect(self.ouvrir)
+            tuile.publier.connect(self.publier)
+            tuile.demarrer.connect(self.demarrer)
+            self.tuiles[spec["id"]] = tuile
+            modes_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
+
+        mesures_layout = QGridLayout()
+        mesures_layout.setSpacing(10)
+        for i, spec in enumerate(mesures):
+            tuile = MesureTile(spec)
+            tuile.ouvrir.connect(self.ouvrir_mesure)
+            self.tuiles_mesure[spec["id"]] = tuile
+            mesures_layout.addWidget(tuile, i // COLONNES, i % COLONNES)
+
+        self.titre_mesures = QLabel(tr("console.grille.titre_avant_tout"))
+        self.titre_mesures.setWordWrap(True)
+        # Caché seulement : `setVisible(True)` sur un widget SANS parent en ferait une fenêtre à
+        # part, qui s'ouvre et se referme à l'écran.
+        if not mesures:
+            self.titre_mesures.hide()
+
+        # La sortie du produit, vue du DEHORS. Ce n'est ni un mode ni une mesure — c'est le
+        # réseau —, donc pas une tuile de plus : une ligne à part, en bas, qui répond à la seule
+        # question qu'un élève se pose une fois son décodage lancé (« est-ce que mon appli
+        # reçoit quelque chose ? »).
+        self.bouton_flux = QPushButton(tr("console.grille.flux"))
+        self.bouton_flux.setToolTip(tr("console.grille.flux_aide"))
+        self.bouton_flux.clicked.connect(self.ouvrir_flux)
+        # Connecter son application : le moteur ne l'écoute qu'une fois choisie ici.
+        self.bouton_connexion = QPushButton(tr("console.grille.connecter"))
+        self.bouton_connexion.setToolTip(tr("console.grille.connecter_aide"))
+        self.bouton_connexion.clicked.connect(self.connecter_application)
+        for bouton in (self.bouton_connexion, self.bouton_flux):
+            agrandir(bouton)
+        self.bouton_connexion.setStyleSheet(STYLE_CONNEXION)
+        # Une seule hauteur pour les deux, tirée du bouton au style de Windows : ils restent
+        # alignés. Le second reçoit à la main la marge de côté que le style donne au premier.
+        hauteur = round(self.bouton_flux.sizeHint().height() * AGRANDI_HAUTEUR)
+        for bouton in (self.bouton_connexion, self.bouton_flux):
+            bouton.setMinimumHeight(hauteur)
+        self.bouton_flux.setMinimumWidth(self.bouton_flux.sizeHint().width() + 24)
+        ligne_flux = QHBoxLayout()
+        ligne_flux.addWidget(QLabel(tr("console.grille.titre_sortie")))
+        ligne_flux.addStretch(1)
+        ligne_flux.addWidget(self.bouton_connexion)
+        ligne_flux.addWidget(self.bouton_flux)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.addLayout(ligne_langue)
+        layout.addLayout(modes_layout)
+        layout.addWidget(self.titre_mesures)
+        layout.addLayout(mesures_layout)
+        layout.addStretch(1)
+        layout.addLayout(ligne_flux)
+
+    def update_from(self, state):
+        etats = state.get("modes_state") or {}
+        for mode_id, tuile in self.tuiles.items():
+            tuile.update_from(etats.get(mode_id))
+        # ⚠️ Le moteur ne tient qu'UNE mesure à la fois : chaque tuile filtre sur `mode_id` plutôt
+        # que de recevoir l'état sans vérifier à qui il appartient. Sans ce filtre, le verdict du
+        # contrôle alpha s'afficherait sur la tuile du taux SSVEP dès qu'il y en aura deux.
+        mesure = state.get("mesure")
+        for mesure_id, tuile in self.tuiles_mesure.items():
+            tuile.update_from(mesure if (mesure or {}).get("mode_id") == mesure_id else None)

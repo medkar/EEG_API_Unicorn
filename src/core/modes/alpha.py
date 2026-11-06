@@ -1,0 +1,644 @@
+"""Le contrôle alpha (effet de Berger) : la BARRIÈRE d'entrée d'une séance au casque.
+
+Le protocole tient en deux phases : **8 s les yeux ouverts**, puis **8 s les yeux fermés**. Sur
+les voies occipitales, la bande 8-12 Hz doit monter FRANCHEMENT à la fermeture des yeux. Si elle
+ne monte pas, trois choses sont en cause — les électrodes occipitales ne touchent pas, la
+référence (mastoïdes) a lâché, ou l'ordre des voies est faux — et **aucun autre test de la séance
+ne veut plus rien dire** : ni le SSVEP, ni les quatre modes à modèle, qui lisent tous ce même
+signal.
+
+D'où le mot BARRIÈRE, et le fait que le verdict soit une **phrase qui arrête** plutôt qu'un
+chiffre à interpréter. Un étudiant qui lit « ratio 1,04 » ne sait pas quoi en faire ; un étudiant
+qui lit « ARRÊTE, re-saline les occipitales » sait.
+
+⚠️ **Le protocole, les durées et les bandes sont ceux qui ont été validés au casque.** Le repère « ratio > ~1,5 » a été observé sous CES durées, sur CE casque. Raccourcir une phase à
+4 s diviserait la résolution spectrale par deux et rendrait le repère faux, sans qu'aucun test ne
+le dise, parce que le calcul continuerait à rendre un nombre parfaitement plausible.
+
+Le pic alpha mesuré ici est exactement la valeur que le réglage « Pic alpha » du SSVEP attend
+(`core/modes/ssvep.py`, `alpha_hz`, borné 6-14 Hz comme la recherche de pic ci-dessous). La
+console le renvoie au moteur d'un clic : une valeur recopiée à la main entre deux écrans finit
+par diverger.
+
+Autotest :
+    python src/core/modes/alpha.py
+"""
+
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+import numpy as np  # noqa: E402
+from brainflow.data_filter import DataFilter, DetrendOperations  # noqa: E402
+
+from core.acquisition import NOTCH_SECTEUR  # noqa: E402
+from core.config import (CH_NAMES, OCCIPITAL, SECTEUR_HZ, SIGNAL_DEAD_SIGMA,  # noqa: E402
+                         signal_verdict, use_utf8_console)
+from core.i18n import nombre, tr  # noqa: E402
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import lignes, pct  # noqa: E402
+from core.modes.mesure import Etape, MesureRuntime, MesureSpec  # noqa: E402
+# Importé pour UNE chose : le réglage que ce pic alimente (`alpha_hz`), avec son libellé et le
+# mode qui le porte. La console peut ainsi PROPOSER l'application du pic sans écrire « ssvep »
+# ni « alpha_hz » dans son propre code (pas de catalogue recopié). Aucun cycle :
+# `modes/ssvep.py` n'importe ni `mesure` ni `registry`.
+from core.modes.ssvep import SPEC as SPEC_SSVEP  # noqa: E402
+
+# --- les constantes du protocole ----------------------------------------------------------------
+# ⚠️ Les quatre valeurs ci-dessous forment un TOUT avec le repère `RATIO_MIN`. Elles ne se règlent
+# pas depuis l'interface, et `SPEC.params` est vide pour cette raison précise : un réglage
+# « durée » exposé à l'étudiant lui laisserait invalider le seul repère chiffré de la mesure en
+# croyant gagner du temps, et le verdict continuerait de s'afficher avec le même aplomb.
+DUREE_PHASE_S = 8.0        # la partie ENREGISTRÉE de chaque phase
+DUREE_PREP_S = 3.0         # « ferme les yeux dans 3… 2… 1 » — jouée, montrée, PAS enregistrée
+SEGMENT_S = 2.0            # segments de Welch (Hann, 50 % de recouvrement) -> 0,5 Hz de résolution
+
+BANDE_ALPHA = (8.0, 12.0)  # la bande dont on compare la PUISSANCE entre les deux phases
+BANDE_PIC = (6.0, 14.0)    # la plage où l'on CHERCHE le pic — plus large, pour le voir sortir
+# La plage où un pic est réellement de l'alpha. Plus étroite que `BANDE_PIC` À DESSEIN : c'est
+# précisément parce qu'on cherche large qu'on peut constater qu'un pic est tombé à 6,5 Hz, donc
+# que ce n'est pas de l'alpha mais une dérive lente. Chercher directement dans 8-12 rendrait
+# toujours un pic « valide », y compris sur du bruit.
+PIC_ATTENDU = (8.0, 12.5)
+RATIO_MIN = 1.5            # le repère : « attendu > ~1,5 », observé sur ce casque
+
+# Les noms des deux étapes ENREGISTRÉES. Des constantes, et pas deux chaînes écrites à deux
+# endroits : `protocole()` les pose sur ses `Etape`, `_mesurer()` les cherche dans ce qu'il reçoit.
+# Écrites deux fois, une faute de frappe donnerait « phase manquante » sur une séance parfaitement
+# jouée.
+# ⚠️ Ce sont AUSSI les textes affichés sous la consigne (`classe`), donc lus dans le fichier de
+# langue. La comparaison reste juste dans toutes les langues : les deux côtés lisent la MÊME
+# constante, résolue une fois à l'import.
+OUVERT = tr("mesure.alpha.etape.ouvert")
+FERME = tr("mesure.alpha.etape.ferme")
+PREPARATION = tr("mesure.alpha.etape.preparation")
+
+# Les voies moyennées, NOMMÉES. `OCCIPITAL` vaut [4, 5, 6, 7] : Pz en fait partie parce qu'il
+# aide la projection SSVEP. Les noms sont calculés depuis `OCCIPITAL` plutôt qu'écrits à la main,
+# pour que le texte affiché reste vrai si cette liste change.
+VOIES = [CH_NAMES[i] for i in OCCIPITAL]
+
+# Le réglage que ce pic alimente : mode SSVEP, clé `alpha_hz`. Lu dans le CONTRAT du mode, jamais
+# réécrit — le libellé du bouton de la console est donc exactement celui du champ que l'étudiant
+# retrouvera sur la page du SSVEP.
+PARAM_CIBLE = next(p for p in SPEC_SSVEP.params if p.key == "alpha_hz")
+
+HONNETETE = tr("mesure.alpha.honnetete", repere=nombre(RATIO_MIN, "g"))
+
+BRIEFING = (
+    tr("mesure.alpha.briefing.1"),
+    tr("mesure.alpha.briefing.2", duree=f"{DUREE_PHASE_S:.0f}"),
+    tr("mesure.alpha.briefing.3"),
+    tr("mesure.alpha.briefing.4"),
+    tr("mesure.alpha.briefing.5"),
+    tr("mesure.alpha.briefing.6"),
+)
+
+
+def _welch(x, fs, seg_s=SEGMENT_S):
+    """PSD (Welch : segments Hann à 50 % de recouvrement) d'un signal 1D. Rend (freqs, psd).
+
+    Un `scipy.signal.welch` ferait la même chose en une ligne ; on garde CETTE écriture parce
+    que c'est elle qui a produit le repère 1,5 : les deux ne normalisent pas pareil, et un ratio
+    survit à une normalisation tant que les deux termes passent par la MÊME.
+    """
+    n = len(x)
+    seg = min(n, int(seg_s * fs))
+    win = np.hanning(seg)
+    step = max(1, seg // 2)
+    powers = []
+    for start in range(0, n - seg + 1, step):
+        spec = np.fft.rfft(x[start:start + seg] * win)
+        powers.append(np.abs(spec) ** 2)
+    if not powers:                      # signal plus court qu'un segment
+        spec = np.fft.rfft(x * np.hanning(n))
+        return np.fft.rfftfreq(n, 1 / fs), np.abs(spec) ** 2
+    return np.fft.rfftfreq(seg, 1 / fs), np.mean(powers, axis=0)
+
+
+def _nettoyer(sig, fs, secteur_hz=SECTEUR_HZ):
+    """Détrend (constant) + notch du SECTEUR, voie par voie. Le large bande est GARDÉ.
+
+    `secteur_hz` : celui du POSTE, que le moteur porte (`EngineServer.secteur_hz`) — 60 Hz aux
+    Amériques. Un notch à 50 y laisserait tout le secteur dans le spectre : sans effet sur la
+    bande alpha (loin de 60 Hz), mais une mesure qui prétend nettoyer le secteur doit couper
+    CELUI de la prise murale.
+
+    ⚠️ Le détrend n'est pas une politesse : l'Unicorn sort un offset DC de l'ordre de 10⁵ µV
+    (mesuré). Une fenêtre non détrendue le fait FUIR à travers la fenêtre de Hann
+    jusque dans la bande alpha, où il domine l'EEG de plusieurs ordres de grandeur — les deux
+    phases y ressemblent alors à la même chose, et le ratio tombe à 1 quel que soit le sujet.
+    L'autotest le vérifie en ajoutant 10⁵ µV aux deux phases.
+
+    Et surtout : on ne filtre PAS en passe-bande. Le verdict a besoin de VOIR où tombe le pic —
+    couper hors 8-12 Hz garantirait de trouver un pic dans 8-12 Hz, y compris sur du bruit.
+    """
+    notch = NOTCH_SECTEUR[float(secteur_hz)]
+    out = np.ascontiguousarray(sig, dtype=np.float64)
+    for c in range(out.shape[1]):
+        col = np.ascontiguousarray(out[:, c])
+        DataFilter.detrend(col, DetrendOperations.CONSTANT.value)
+        DataFilter.remove_environmental_noise(col, int(round(fs)), notch.value)
+        out[:, c] = col
+    return out
+
+
+def _psd_occipitale(fenetre, fs, secteur_hz=SECTEUR_HZ):
+    """(freqs, PSD moyennée sur les voies occipitales, σ par voie) d'une fenêtre BRUTE (n, 8).
+
+    Les σ sortent d'ici parce qu'ils sont mesurés sur le MÊME signal nettoyé que la PSD : c'est
+    ce qui permet à `_mesurer` de refuser une liaison morte au lieu d'en tirer un rapport (cf.
+    son garde-fou), sans refaire un second nettoyage qui pourrait diverger du premier.
+    """
+    if fenetre.ndim != 2 or fenetre.shape[1] <= max(OCCIPITAL):
+        raise ValueError(
+            f"fenêtre de forme {getattr(fenetre, 'shape', '?')} : le contrôle alpha attend les "
+            f"{len(CH_NAMES)} voies du casque pour y prendre {VOIES}")
+    sig = _nettoyer(np.asarray(fenetre, dtype=np.float64)[:, OCCIPITAL], fs, secteur_hz)
+    freqs, psds = None, []
+    for c in range(sig.shape[1]):
+        freqs, psd = _welch(sig[:, c], fs)
+        psds.append(psd)
+    return freqs, np.mean(psds, axis=0), sig.std(axis=0)
+
+
+def _puissance_bande(freqs, psd, lo, hi):
+    return float(psd[(freqs >= lo) & (freqs < hi)].sum())
+
+
+def _pic(freqs, psd, lo, hi):
+    """La fréquence du maximum de `psd` dans [lo, hi]. En Hz."""
+    bande = (freqs >= lo) & (freqs <= hi)
+    return float(freqs[bande][int(np.argmax(psd[bande]))])
+
+
+class ControleAlpha(MesureRuntime):
+    """Yeux ouverts, yeux fermés, un rapport de puissances, une phrase qui arrête.
+
+    Deux méthodes, comme tout `MesureRuntime` : `protocole()` (la suite d'étapes) et `_mesurer()`
+    (le calcul). Le reste — chauffe, minutage, prélèvement, état pour l'écran, abandon — vient du
+    socle et n'est pas redéfini.
+    """
+
+    # Deux PHASES enregistrées, yeux ouverts puis yeux fermés : l'unité de l'avancement affiché.
+    unite = tr("mesure.unite.phase")
+
+    # Le réglage que cette mesure sait REMPLIR : (mode, clé). C'est ce qui pose le bouton
+    # « Mesurer » à côté du champ « Pic alpha » de la page SSVEP — la console le LIT ici, elle
+    # n'écrit ni « alpha » ni « alpha_hz ». Même source que `reglage_propose` ci-dessous : la
+    # porte d'entrée et le retour ne peuvent pas désigner deux champs différents.
+    REGLAGE_PRODUIT = (SPEC_SSVEP.id, PARAM_CIBLE.key)
+
+    def protocole(self):
+        """Prép. → yeux OUVERTS → prép. → yeux FERMÉS. Les deux préparations ne prélèvent rien.
+
+        L'ordre compte, et il n'est pas symétrique : ouvert D'ABORD. La personne arrive les yeux
+        ouverts ; commencer par la fermeture obligerait à lui faire lire une consigne… qu'elle
+        appliquerait pendant qu'on l'enregistre.
+        """
+        return (
+            Etape(PREPARATION, DUREE_PREP_S, enregistre=False,
+                  instruction=tr("mesure.alpha.consigne.prep_ouvert"),
+                  rappel=tr("mesure.alpha.rappel.prep_ouvert")),
+            Etape(OUVERT, DUREE_PHASE_S,
+                  instruction=tr("mesure.alpha.consigne.ouvert"),
+                  rappel=tr("mesure.alpha.rappel.ouvert")),
+            Etape(PREPARATION, DUREE_PREP_S, enregistre=False,
+                  instruction=tr("mesure.alpha.consigne.prep_ferme"),
+                  rappel=tr("mesure.alpha.rappel.prep_ferme")),
+            Etape(FERME, DUREE_PHASE_S,
+                  instruction=tr("mesure.alpha.consigne.ferme"),
+                  rappel=tr("mesure.alpha.rappel.ferme")),
+        )
+
+    def _mesurer(self, enregistre, fs):
+        """Le verdict. Rend le dict lu par l'écran, ou lève avec un message lisible."""
+        par_etape = {}
+        for fenetre, nom in enregistre:
+            par_etape.setdefault(nom, []).append(fenetre)
+        manquantes = [nom for nom in (OUVERT, FERME) if nom not in par_etape]
+        if manquantes:
+            raise ValueError(tr("mesure.alpha.erreur.phase_manquante",
+                                phases=", ".join(manquantes)))
+
+        # Le secteur du POSTE, que porte le moteur. `getattr` avec le défaut : un autotest joue
+        # la mesure sans moteur (`self.engine` vaut None).
+        secteur = getattr(self.engine, "secteur_hz", SECTEUR_HZ)
+        freqs, psd_ouvert, sigmas_ouvert = _psd_occipitale(par_etape[OUVERT][-1], fs, secteur)
+        _f, psd_ferme, sigmas_ferme = _psd_occipitale(par_etape[FERME][-1], fs, secteur)
+
+        # ⚠️ LA LIAISON MORTE, avant tout calcul. Quatre voies plates donnent une puissance de
+        # l'ordre de 10⁻²⁷ des DEUX côtés, et leur rapport est alors du bruit d'arrondi : il vaut
+        # 0,3 ou 4,1 au hasard des derniers bits, donc il FRANCHIT la barrière une fois sur
+        # deux, et afficherait « le montage est bon » sur un câble débranché.
+        # Le seuil est celui de `signal_verdict`, la règle que le moteur applique déjà à ses huit
+        # voies (`SIGNAL_DEAD_SIGMA`) : une seconde règle de qualité écrite ici finirait par
+        # contredire celle du bandeau.
+        for etiquette, sigmas in ((OUVERT, sigmas_ouvert), (FERME, sigmas_ferme)):
+            if all(signal_verdict(s) == "morte" for s in sigmas):
+                raise ValueError(tr(
+                    "mesure.alpha.erreur.voies_plates", n=len(VOIES), voies=", ".join(VOIES),
+                    etape=etiquette, sigmas=", ".join(nombre(s, ".2f") for s in sigmas),
+                    seuil=nombre(SIGNAL_DEAD_SIGMA, "g")))
+
+        p_ouvert = _puissance_bande(freqs, psd_ouvert, *BANDE_ALPHA)
+        p_ferme = _puissance_bande(freqs, psd_ferme, *BANDE_ALPHA)
+        ratio = p_ferme / p_ouvert
+        pic_hz = _pic(freqs, psd_ferme, *BANDE_PIC)
+        pic_ouvert_hz = _pic(freqs, psd_ouvert, *BANDE_PIC)
+
+        # Les DEUX critères de l'écran d'origine, et ils ne disent pas la même chose : le ratio
+        # dit que quelque chose a monté, le pic dit que ce quelque chose est bien de l'alpha.
+        monte = ratio > RATIO_MIN
+        au_bon_endroit = PIC_ATTENDU[0] <= pic_hz <= PIC_ATTENDU[1]
+        franchie = bool(monte and au_bon_endroit)
+
+        pic_arrondi = round(float(pic_hz), 1)
+        return {
+            "ratio": round(float(ratio), 2),
+            "pic_hz": pic_arrondi,
+            "pic_ouvert_hz": round(float(pic_ouvert_hz), 1),
+            "p_ouvert": float(p_ouvert),
+            "p_ferme": float(p_ferme),
+            "repere_ratio": RATIO_MIN,
+            "voies": list(VOIES),
+            "barriere_franchie": franchie,
+            "verdict": self._verdict(ratio, pic_hz, monte, au_bon_endroit),
+            # Ce qui s'affiche EN FACE (cf. `core/modes/affichage.py`). Une barrière n'a que
+            # deux issues — elle se franchit ou elle ARRÊTE —, donc jamais d'orange ici.
+            **self._lignes(ratio, pic_hz, monte, au_bon_endroit),
+            "honnetete": HONNETETE,
+            # Le réglage à appliquer : la console renvoie le pic au moteur d'un clic, et c'est le
+            # MOTEUR qui dit vers quel mode et quelle clé, pour que l'interface n'ait ni « ssvep »
+            # ni « alpha_hz » écrit dans son propre code.
+            #
+            # ⚠️ **Absent quand la barrière n'est pas franchie**, et la décision vit ICI plutôt
+            # que dans l'écran : sur un signal sans alpha, le « pic » est le plus grand bin d'un
+            # spectre de bruit, et le proposer ferait appliquer d'un clic une valeur fausse.
+            "reglage_propose": None if not franchie else {
+                "mode": self.REGLAGE_PRODUIT[0],
+                "mode_label": SPEC_SSVEP.label,
+                "cle": self.REGLAGE_PRODUIT[1],
+                "label": PARAM_CIBLE.label,
+                "valeur": pic_arrondi,
+                "unite": PARAM_CIBLE.unit,
+            },
+        }
+
+    def _lignes(self, ratio, pic_hz, monte, au_bon_endroit):
+        """Le verdict en trois lignes. La réserve est le GESTE, jamais un rappel du chiffre."""
+        chiffres = tr("mesure.alpha.chiffres", ratio=nombre(ratio, ".2f"),
+                      repere=nombre(RATIO_MIN, "g"), pic=nombre(pic_hz, ".1f"))
+        if monte and au_bon_endroit:
+            return lignes("bon", tr("mesure.alpha.mot.net"), chiffres,
+                          tr("mesure.alpha.reserve.net"), conclusion=True)
+        if not monte:
+            return lignes("faible", tr("mesure.alpha.mot.arrete"), chiffres,
+                          tr("mesure.alpha.reserve.ne_monte_pas"))
+        return lignes("faible", tr("mesure.alpha.mot.arrete"), chiffres,
+                      tr("mesure.alpha.reserve.hors_bande"))
+
+    def _verdict(self, ratio, pic_hz, monte, au_bon_endroit):
+        """LA phrase. Elle dit quoi faire, et quand s'arrêter — jamais un chiffre tout seul.
+
+        Trois cas, parce que les deux critères appellent deux gestes différents : un alpha qui ne
+        monte pas est un problème de CONTACT ; un pic qui monte hors de la plage attendue est
+        presque toujours un artefact (mouvement, dérive lente), donc un problème de POSTURE.
+        """
+        # Le MOT (« ALPHA NET », « ARRÊTE ICI ») est passé à la phrase au lieu d'y être recopié :
+        # la phrase s'ouvre donc sur le mot affiché en face dans toutes les langues, ce que
+        # `affichage.verifier` exige.
+        voies = "/".join(VOIES)
+        r, repere, pic = (nombre(ratio, ".2f"), nombre(RATIO_MIN, "g"),
+                          nombre(pic_hz, ".1f"))
+        if monte and au_bon_endroit:
+            return tr("mesure.alpha.verdict.net", mot=tr("mesure.alpha.mot.net"), ratio=r,
+                      repere=repere, pic=pic, voies=voies)
+        if not monte:
+            return tr("mesure.alpha.verdict.ne_monte_pas", mot=tr("mesure.alpha.mot.arrete"),
+                      ratio=r, repere=repere, voies=voies)
+        return tr("mesure.alpha.verdict.hors_bande", mot=tr("mesure.alpha.mot.arrete"),
+                  ratio=r, pic=pic, voies=voies,
+                  bas=nombre(PIC_ATTENDU[0], "g"), haut=nombre(PIC_ATTENDU[1], "g"))
+
+
+SPEC = MesureSpec(
+    id="alpha",
+    # « Vérifier le casque » : nommé d'après son BUT, pas d'après sa métrique. C'est le geste que
+    # l'étudiant fait ; l'effet de Berger est le moyen, pas ce qu'il vient chercher.
+    label=tr("mesure.alpha.label"),
+    summary=tr("mesure.alpha.summary"),
+    briefing=BRIEFING,
+    # Aucun réglage, et c'est un choix : cf. le commentaire des constantes du protocole. Les
+    # durées sont celles sous lesquelles le repère 1,5 a été observé.
+    params=(),
+    runtime_cls=ControleAlpha,
+    barriere=True,
+    # La seconde moitié se fait LES YEUX FERMÉS : sans top sonore, la personne ne saura pas quand
+    # rouvrir. C'est ce champ, et lui seul, qui fait avertir la console quand il n'y a pas de son.
+    yeux_fermes=True,
+    # Les voies MOYENNÉES par la mesure : le contrôle de liaison les entoure. Lues sur la même
+    # constante que le calcul, jamais recopiées.
+    key_channels=tuple(OCCIPITAL),
+    # La page montre le contact de chaque électrode : c'est ici qu'on règle le casque.
+    montre_contact=True,
+)
+
+
+def _selftest():
+    """Sur un signal dont on CONNAÎT la réponse : du bruit, plus une sinusoïde qu'on a posée.
+
+    Aucun casque, aucune attente réelle — `tick` reçoit son horloge, donc les 37 s du protocole
+    se jouent en quelques millisecondes.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    from core.config import DATA_DIR, empreinte_dossier
+    from core.modes import registry
+
+    empreinte_avant = empreinte_dossier(DATA_DIR)
+    FS = 250.0
+    N = int(DUREE_PHASE_S * FS)
+
+    def _bruit(rng, sigma=8.0):
+        """Du bruit blanc sur les 8 voies. σ = 8 µV : l'ordre de grandeur d'un EEG sain."""
+        return rng.normal(0.0, sigma, (N, len(CH_NAMES)))
+
+    def _bruit_plus_alpha(rng, f_hz, gain, sigma=8.0):
+        """Le même bruit, plus une sinusoïde sur les SEULES voies occipitales."""
+        x = _bruit(rng, sigma)
+        t = np.arange(N) / FS
+        onde = gain * np.sin(2 * np.pi * f_hz * t)
+        for c in OCCIPITAL:
+            x[:, c] += onde
+        return x
+
+    class _FausseAcq:
+        fs = FS
+
+    class _FauxMoteur:
+        """Rend la fenêtre de l'étape EN COURS. C'est ce qui rend le test de bout en bout."""
+
+        def __init__(self, fenetres):
+            self.acq = _FausseAcq()
+            self.fenetres = fenetres        # {nom d'étape : fenêtre (n, 8)}
+            self.rt = None
+            self.demandes = []
+
+        def recent_window(self, seconds):
+            self.demandes.append(seconds)
+            nom = self.rt.classe
+            return self.fenetres.get(nom, np.zeros((N, len(CH_NAMES))))
+
+    def _jouer(ouvert, ferme, secteur_hz=None):
+        """Joue le protocole ENTIER et rend (runtime, résultat). Pas d'appel direct à `_mesurer`.
+
+        ⚠️ Passer par la ligne du temps est le point : les noms d'étapes que `protocole()` pose
+        et ceux que `_mesurer()` cherche doivent être les MÊMES. Appeler `_mesurer` avec des
+        étiquettes écrites dans le test prouverait le calcul et laisserait passer la faute de
+        frappe qui rend « phase manquante » après 37 s de casque.
+
+        `secteur_hz` : posé sur le faux moteur comme `EngineServer` le porte. Absent, le faux
+        moteur n'en déclare aucun — la mesure retombe sur le défaut du dépôt.
+        """
+        moteur = _FauxMoteur({OUVERT: ouvert, FERME: ferme})
+        if secteur_hz is not None:
+            moteur.secteur_hz = secteur_hz
+        rt = ControleAlpha(SPEC, {}, moteur)
+        moteur.rt = rt
+        t = 0.0
+        for _ in range(4000):
+            rt.tick(moteur, t)
+            if rt.terminee:
+                break
+            t += 0.25
+        return rt, rt.resultat
+
+    # === Le protocole : ce que la personne VIT ==============================================
+    rt0 = ControleAlpha(SPEC, {}, None)
+    etapes = rt0._etapes
+    chk([e.nom for e in etapes] == [PREPARATION, OUVERT, PREPARATION, FERME],
+        f"quatre étapes, ouvert AVANT fermé ({[e.nom for e in etapes]})")
+    chk([e.enregistre for e in etapes] == [False, True, False, True],
+        "…dont seules les deux phases sont enregistrées : le signal d'une préparation est celui "
+        "d'un sujet qui bouge encore")
+    chk(all(e.duree_s == DUREE_PHASE_S for e in etapes if e.enregistre)
+        and all(e.duree_s == DUREE_PREP_S for e in etapes if not e.enregistre),
+        f"les durées sont les CONSTANTES du protocole ({[e.duree_s for e in etapes]})")
+    chk(rt0.total() == 2 and abs(rt0.duree_estimee_s() - (15.0 + 3.0 + 8.0 + 3.0 + 8.0)) < 1e-9,
+        f"deux fenêtres prélevées, ≈ {rt0.duree_estimee_s():.0f} s vécues (chauffe comprise)")
+
+    # === Le cas NOMINAL : on a POSÉ l'alpha, on doit le retrouver ============================
+    rng = np.random.default_rng(20260909)
+    rt, res = _jouer(_bruit(rng), _bruit_plus_alpha(rng, 10.5, gain=4.0))
+    chk(rt.phase == "fini" and res is not None,
+        f"la séance se termine ({rt.phase}, problème={rt.probleme!r})")
+    # Le contrat avec la console : l'unité de l'avancement, et « yeux fermés ». Le second est ce
+    # qui autorise l'avertissement « sans top, tu ne sauras pas quand rouvrir » — sur CETTE page
+    # seulement ; les cinq tests se font les yeux ouverts.
+    chk(rt.state(now=0.0).get("unite") == "phase" and getattr(SPEC, "yeux_fermes", None) is True,
+        f"le contrôle alpha compte des PHASES et se déclare « yeux fermés » "
+        f"({rt.state(now=0.0).get('unite')!r}, {getattr(SPEC, 'yeux_fermes', None)})")
+    chk(res["ratio"] > RATIO_MIN,
+        f"l'alpha monte à la fermeture des yeux : ratio {res['ratio']:.2f} "
+        f"(repère > ~{RATIO_MIN:g})")
+    chk(abs(res["pic_hz"] - 10.5) < 1.0,
+        f"…et le pic est trouvé là où on l'a mis ({res['pic_hz']:.1f} Hz pour 10,5)")
+    chk(res["barriere_franchie"] is True, "la barrière est franchie")
+    # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+    # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+    chk(not _verifier_affichage(res),
+        f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
+    chk("séance peut commencer" in res["verdict"]
+        and nombre(res['ratio'], ".2f") in res["verdict"],
+        f"…et le verdict le DIT, avec son chiffre ({res['verdict'][:60]}…)")
+    chk(res["voies"] == VOIES and "Pz" in res["voies"],
+        f"les voies moyennées sont NOMMÉES par le moteur, pas devinées par l'écran — et Pz en "
+        f"fait partie, contrairement à ce qu'annonçait l'écran d'origine ({res['voies']})")
+
+    # LA BOUCLE QUE LA RECETTE FAIT FAIRE À LA MAIN : noter le pic, le retaper dans « Pic alpha ».
+    propose = res["reglage_propose"]
+    chk(propose and propose["mode"] == "ssvep" and propose["cle"] == "alpha_hz"
+        and propose["valeur"] == res["pic_hz"],
+        f"le résultat PORTE le réglage à appliquer — mode, clé et valeur — pour que la console "
+        f"n'ait ni « ssvep » ni « alpha_hz » écrit dans son propre code ({propose})")
+    chk(propose and propose["label"] == PARAM_CIBLE.label,
+        f"…avec le libellé EXACT du champ que l'étudiant retrouvera sur la page du SSVEP "
+        f"({propose['label']!r}) — lu dans le contrat du mode, pas réécrit ici")
+
+    # === Le cas qui ARRÊTE la séance : pas d'alpha du tout ===================================
+    plat_rt, plat = _jouer(_bruit(rng), _bruit(rng))
+    chk(plat["barriere_franchie"] is False,
+        f"sans montée d'alpha, la barrière n'est PAS franchie (ratio {plat['ratio']:.2f})")
+    # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+    # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+    chk(not _verifier_affichage(plat),
+        f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(plat)})")
+    chk("arrête" in plat["verdict"].lower() and "électrodes" in plat["verdict"].lower(),
+        f"…et le verdict dit d'ARRÊTER et quoi vérifier, il ne rend pas qu'un chiffre "
+        f"({plat['verdict'][:70]}…)")
+    chk("mastoïdes" in plat["verdict"].lower() and "eau salée" in plat["verdict"].lower(),
+        "…en nommant les TROIS gestes : occipitales, mastoïdes, eau salée")
+    chk(plat["reglage_propose"] is None,
+        f"…et RIEN n'est proposé à appliquer : sur un signal sans alpha, le « pic » est le plus "
+        f"grand bin d'un spectre de bruit ({plat['pic_hz']} Hz ici). Le proposer d'un clic serait "
+        f"pire que le carnet qu'on remplace — une valeur fausse, sans l'hésitation qui va avec")
+    chk(plat_rt.phase == "fini",
+        f"une barrière non franchie est une mesure RÉUSSIE qui rend un verdict négatif, pas une "
+        f"séance en échec ({plat_rt.phase}) — sinon l'écran afficherait « mesure abandonnée » et "
+        f"cacherait ce qu'il faut lire")
+
+    # === Le second critère, celui qu'on oublie : ça monte, mais ce n'est pas de l'alpha =======
+    # 7,5 Hz est DANS la plage de recherche (6-14) et HORS de la plage attendue (8-12,5) : c'est
+    # la forme d'une dérive lente ou d'un artefact de mouvement. Il tombe à un bin de la bande
+    # alpha, donc le lobe principal de la fenêtre de Hann y fuit largement : le ratio 8-12 Hz
+    # monte à ~9 et le seul critère de ratio déclarerait « montage bon ». C'est précisément le
+    # cas que le second critère existe pour attraper.
+    _rt, lent = _jouer(_bruit(rng), _bruit_plus_alpha(rng, 7.5, gain=15.0))
+    chk(lent["ratio"] > RATIO_MIN and lent["barriere_franchie"] is False,
+        f"un pic HORS de la plage de l'alpha ne franchit pas la barrière, même avec un ratio de "
+        f"{lent['ratio']:.2f} — le ratio seul ne dit pas que c'est de l'alpha")
+    chk("arrête" in lent["verdict"].lower()
+        and nombre(lent['pic_hz'], ".1f") in lent["verdict"],
+        f"…et le verdict nomme le pic fautif ({lent['verdict'][:70]}…)")
+
+    # === L'OFFSET DC de l'Unicorn : 10⁵ µV, et le verdict ne doit pas bouger ==================
+    # Mesuré sur ce casque. Sans détrend, il fuit à travers la fenêtre de Hann
+    # jusque dans la bande alpha, où il domine l'EEG de plusieurs ordres de grandeur : les deux
+    # phases se ressemblent alors, le ratio tombe vers 1, et TOUTE séance échoue à la barrière —
+    # y compris celles où le casque est parfait.
+    rng2 = np.random.default_rng(20260909)
+    ouvert_dc = _bruit(rng2) + 1e5
+    ferme_dc = _bruit_plus_alpha(rng2, 10.5, gain=4.0) + 1e5
+    _rt, avec_dc = _jouer(ouvert_dc, ferme_dc)
+    chk(avec_dc["barriere_franchie"] is True
+        and abs(avec_dc["ratio"] - res["ratio"]) < 0.05 * res["ratio"],
+        f"un offset DC de 10⁵ µV ne change pas le verdict ({avec_dc['ratio']:.2f} contre "
+        f"{res['ratio']:.2f} sans lui) — c'est le détrend qui tient ça, et rien d'autre")
+
+    # === Le SECTEUR du POSTE : à 60 Hz, c'est le 60 Hz qui part ===============================
+    # 20 µV à 50 Hz ET 20 µV à 60 Hz sur les occipitales, et le protocole ENTIER joué par un
+    # moteur qui porte son secteur. Un espion lit ce que le nettoyage rend réellement : c'est le
+    # SIGNAL qu'on regarde, pas l'argument passé. Deux pannes le font rougir, à deux endroits :
+    # `_mesurer` qui ne lit pas le secteur du moteur, `_nettoyer` qui coupe 50 Hz en dur.
+    def _amplitude(x, f_hz):
+        """Amplitude max (sur les voies) de la composante à `f_hz`, au MILIEU du bloc — loin des
+        bords, où le coupe-bande s'établit."""
+        n = x.shape[0]
+        milieu = slice(n // 4, 3 * n // 4)
+        onde = np.exp(-2j * np.pi * f_hz * np.arange(n)[milieu] / FS)
+        return float(np.max(2.0 * np.abs(onde @ x[milieu]) / len(onde)))
+
+    t_s = np.arange(N) / FS
+    secteurs = 20.0 * (np.sin(2 * np.pi * 50.0 * t_s) + np.sin(2 * np.pi * 60.0 * t_s))
+
+    def _avec_secteurs(x):
+        x = x.copy()
+        for c in OCCIPITAL:
+            x[:, c] += secteurs
+        return x
+
+    vrai_nettoyer = globals()["_nettoyer"]
+    vus = []
+
+    def _espion(sig, fs, secteur_hz=SECTEUR_HZ):
+        propre = vrai_nettoyer(sig, fs, secteur_hz)
+        vus.append((secteur_hz, _amplitude(propre, 60.0), _amplitude(propre, 50.0)))
+        return propre
+
+    globals()["_nettoyer"] = _espion
+    try:
+        rng3 = np.random.default_rng(20260930)
+        ouvert_s = _avec_secteurs(_bruit(rng3))
+        ferme_s = _avec_secteurs(_bruit_plus_alpha(rng3, 10.5, gain=4.0))
+        _rt, res_60 = _jouer(ouvert_s, ferme_s, secteur_hz=60.0)
+        a_60 = list(vus)
+        vus.clear()
+        _jouer(ouvert_s, ferme_s)
+        a_50 = list(vus)
+    finally:
+        globals()["_nettoyer"] = vrai_nettoyer
+    chk(len(a_60) == 2 and all(r60 < 2.0 and r50 > 15.0 for _s, r60, r50 in a_60),
+        f"un moteur réglé à 60 Hz : le nettoyage retire le 60 Hz et laisse le 50 — "
+        f"{[(round(r60, 2), round(r50, 1)) for _s, r60, r50 in a_60]} µV restants (60 Hz, "
+        f"50 Hz) pour 20 posés")
+    chk(len(a_50) == 2 and all(r50 < 2.0 and r60 > 15.0 for _s, r60, r50 in a_50),
+        f"…et un moteur qui ne déclare aucun secteur retombe sur le défaut du dépôt (50 Hz) "
+        f"{[(round(r60, 1), round(r50, 2)) for _s, r60, r50 in a_50]}")
+    chk(res_60 and res_60["barriere_franchie"] is True,
+        f"…sans rien changer au verdict : l'alpha reste net, le secteur est loin de 8-12 Hz "
+        f"(ratio {res_60 and res_60['ratio']})")
+
+    # === Une phase manquante : un refus lisible, pas un chiffre calculé sur une moitié ========
+    rt5 = ControleAlpha(SPEC, {}, None)
+    try:
+        rt5._mesurer([(np.zeros((N, len(CH_NAMES))), OUVERT)], FS)
+        chk(False, "un protocole amputé d'une phase doit être REFUSÉ")
+    except ValueError as e:
+        chk(FERME in str(e) and "deux phases" in str(e),
+            f"…en nommant la phase absente et pourquoi elle est indispensable ({str(e)[:60]}…)")
+
+    # === LA LIAISON MORTE : quatre voies plates ne rendent PAS un verdict =====================
+    # ⚠️ Sur des voies plates la puissance vaut ~10⁻²⁷ des deux côtés, donc le rapport est du
+    # bruit d'arrondi. Mesuré sur cette implémentation, il vaut 0,3 ou 4,1 selon les derniers
+    # bits : il FRANCHIT la barrière une fois sur deux, et l'écran annoncerait « le montage est
+    # bon » sur un câble débranché.
+    plat_signal = np.zeros((N, len(CH_NAMES)))
+    try:
+        rt5._mesurer([(plat_signal, OUVERT), (plat_signal, FERME)], FS)
+        chk(False, "quatre voies PLATES doivent être refusées, pas transformées en ratio")
+    except ValueError as e:
+        chk("plates" in str(e).lower() and "liaison" in str(e)
+            and nombre(SIGNAL_DEAD_SIGMA, "g") in str(e),
+            f"…en disant que c'est une panne de liaison, au seuil de voie morte que le moteur "
+            f"applique déjà à ses huit voies ({str(e)[:70]}…)")
+
+    # === Le contrat public de la mesure ======================================================
+    chk(SPEC.id == "alpha" and SPEC.runtime_cls is ControleAlpha and SPEC.barriere is True,
+        f"la mesure est déclarée BARRIÈRE — c'est ce champ que l'écran lit pour dire « arrête » "
+        f"au lieu de « note ce chiffre » ({SPEC.barriere})")
+    # ⚠️ Par IDENTIFIANT, pas par `SPEC in registry.MESURES` : lancé en autotest, ce fichier est
+    # `__main__` et `registry` importe `core.modes.alpha` — deux modules distincts, donc deux
+    # classes `ControleAlpha` distinctes, donc une égalité de dataclass qui échoue alors que le
+    # catalogue est parfaitement correct.
+    # ⚠️ La PREMIÈRE du catalogue, et pas « la seule » : une égalité de liste rougirait à chaque
+    # mesure nouvelle, sans rien dire sur l'alpha. Ce qui compte est le rang : l'alpha est la
+    # barrière d'entrée, l'écran range les tuiles dans cet ordre, et une mesure jouée avant elle
+    # rendrait un chiffre qui décrit le montage plutôt que le décodage.
+    ids_mesures = [s.id for s in registry.MESURES]
+    chk(ids_mesures and ids_mesures[0] == "alpha",
+        f"…et elle ouvre le catalogue du moteur : sans ça, `start_mesure` ne l'atteindrait "
+        f"pas et aucune tuile n'existerait — et le rang dit que la barrière passe EN PREMIER "
+        f"({ids_mesures})")
+    sain, defauts = registry.check()
+    chk(sain and not defauts, f"le registre reste sain avec elle ({defauts})")
+    chk(SPEC.params == (),
+        "aucun réglage : les durées et les bandes forment un tout avec le repère 1,5, et les "
+        "exposer laisserait l'invalider en croyant gagner du temps")
+
+    # Le pic rendu est DIRECTEMENT la valeur du réglage « Pic alpha » du SSVEP — c'est ce qui
+    # permet à l'écran de le renvoyer au moteur d'un clic au lieu de le faire recopier à la main.
+    from core.modes.ssvep import SPEC as SPEC_SSVEP
+
+    alpha_param = next(p for p in SPEC_SSVEP.params if p.key == "alpha_hz")
+    chk(alpha_param.min <= BANDE_PIC[0] and BANDE_PIC[1] <= alpha_param.max,
+        f"la plage de recherche du pic ({BANDE_PIC}) tient dans les bornes du réglage "
+        f"« {alpha_param.label} » ([{alpha_param.min:g} ; {alpha_param.max:g}]) : tout pic "
+        f"mesurable est donc APPLICABLE, et le bouton de l'écran ne peut pas proposer une valeur "
+        f"que le moteur refusera")
+
+    chk(empreinte_dossier(DATA_DIR) == empreinte_avant,
+        "et tout ce test n'a rien écrit dans `data/` — une mesure ne produit aucun fichier")
+
+    print(f"[alpha] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)

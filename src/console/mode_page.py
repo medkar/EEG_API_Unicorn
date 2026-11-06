@@ -1,0 +1,533 @@
+"""La page d'un mode : des blocs NUMÉROTÉS, dans l'ordre où on les fait, et rien d'autre.
+
+    ← Modes   SSVEP — quelle cible clignotante l'utilisateur regarde          arrêté
+
+    ┌ 1. Régler ──────────────────────────┐   tous les modes
+    ┌ 2. Entraîner ───────────────────────┐   si le contrat déclare une calibration
+    ┌ 3. Tester ──────────────────────────┐   si le contrat déclare un `test_id`
+    │ [Tester] [Tester librement] ⓘ      │   le second si la fenêtre sait l'essai libre
+    ☐ Décodage en direct                       replié : la vue en direct, toujours à jour
+
+    …ou, pour un mode sans vérité-terrain (le Neuro, le Brut) :
+
+    ┌ 1. Régler ──────────────────────────┐
+    ┌ 2. Observer ────────────────────────┐   la vue en direct, en face ; aucun score
+
+🔴 **Pourquoi cette forme.** Des gestes à plat (« Démarrer », « Calibrer », « Lancer le
+stimulus »), comme s'ils étaient de même rang, cacheraient qu'il existe un ORDRE : en sauter un
+rend les autres inutiles sans que rien ne le dise (un stimulus lancé sur un mode arrêté, c'est
+dix minutes de fixation perdues). La boucle réelle est « régler → tester → ajuster → re-tester » ;
+« Tester » possède sa séquence entière (la mesure, le contrôle de liaison, la fenêtre, le
+verdict), donc il n'y a pas d'ordre à respecter.
+
+Ne figurent pas sur la page : « Démarrer/Arrêter », « Lancer le stimulus », « Journal de séance »,
+« Brancher un client » (ils reviendront avec « Connecter »). La machinerie de la `Console` qui
+les servait (`demander_stimulus`, le journal de `_lancer_fenetre`, les boutons des tuiles de la
+grille) reste en place.
+
+Rien ici ne sait qu'un SSVEP a des fréquences ou qu'un MI s'entraîne : c'est le CONTRAT qui le dit
+(`calibration`, `test_id`), et le moteur qui déclare quelle mesure sait remplir quel réglage.
+"""
+
+import os
+import sys
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (QCheckBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import decompte, live_views, nom_phase  # noqa: E402
+from console.params_form import ACCENT, ParamsForm, infobulle  # noqa: E402
+from core.i18n import tr  # noqa: E402
+from core.modes import registry  # noqa: E402
+
+GRIS = "color: #8a8f9c; font-size: 11px;"
+ROUGE = "color: #e5484d;"
+# Le cadre de l'avertissement de sécurité : le sélecteur par NOM, pour que la bordure ne descende
+# pas sur les étiquettes qu'il contient.
+CADRE_AVERTISSEMENT = ("QFrame#avertissement { border: 2px solid #e5484d; border-radius: 6px; "
+                       "background-color: rgba(229, 72, 77, 0.12); }")
+
+
+def _phrase(texte):
+    """Une ligne d'explication sous un geste : courte, grise. Pas un mur de texte."""
+    etiquette = QLabel(texte)
+    etiquette.setWordWrap(True)
+    etiquette.setStyleSheet(GRIS)
+    return etiquette
+
+
+def _bulle(texte):
+    """Une bulle « ⓘ » qui montre `texte` au survol, posée juste APRÈS le geste qu'elle explique."""
+    bulle = QLabel("ⓘ")
+    bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+    bulle.setCursor(Qt.WhatsThisCursor)
+    bulle.setToolTip(infobulle(texte))
+    return bulle
+
+
+class ModePage(QWidget):
+    """Une page par mode, construite une fois, mise à jour à chaque rafraîchissement."""
+
+    retour = Signal()
+    marche = Signal(str, bool)      # (id, on) — exactement le signal de la tuile de la grille
+
+    def __init__(self, spec, console):
+        super().__init__()
+        self.spec = spec
+        self.console = console
+        self.mode_id = spec["id"]
+        self._derniers_params = None
+        self._arrete = True
+
+        # --- l'en-tête : où l'on est, et rien d'autre ------------------------------------------
+        entete = QHBoxLayout()
+        self.bouton_retour = QPushButton(tr("console.nav.retour_modes"))
+        self.bouton_retour.clicked.connect(self.retour)
+        entete.addWidget(self.bouton_retour)
+        # Le résumé PASSE À LA LIGNE : sur une seule ligne, celui de l'ErrP exigerait ~1 400 px,
+        # et Qt réserve la largeur de la page la plus large même quand elle est cachée — la
+        # console ne tiendrait plus sur un écran de portable (1366 px).
+        resume = QLabel(tr("console.mode.entete", mode=spec["label"], resume=spec["summary"]))
+        resume.setWordWrap(True)
+        entete.addWidget(resume, 1)
+        # L'état du décodage (« arrêté », « décodage »…). Placé UNE fois, plus bas, selon la page :
+        # en tête quand la page l'observe, dans le repli « Décodage en direct » sinon.
+        self.etat = QLabel("")
+        self.etat.setStyleSheet(GRIS)
+
+        # --- 1. Régler ---------------------------------------------------------------------------
+        self.formulaire = ParamsForm(spec["params"])
+        self.formulaire.appliquer.connect(self._appliquer)
+        self.formulaire.proposer.connect(self._proposer)
+        # « Mesurer » à côté d'un champ, quand le MOTEUR déclare une mesure qui sait le remplir (le
+        # pic alpha, pour le SSVEP). Même page de mesure que « Vérifier le casque » sur l'accueil :
+        # deux portes, un seul runtime. La page ne nomme aucune mesure — elle demande.
+        self.boutons_mesurer = {}
+        for param in spec["params"]:
+            mesure_id = console.mesure_qui_remplit(self.mode_id, param["key"])
+            if mesure_id is None:
+                continue
+            bouton = QPushButton(tr("console.mode.mesurer"))
+            bouton.setToolTip(tr("console.mode.mesurer_aide",
+                                 mesure=console.mesures[mesure_id]["label"]))
+            bouton.clicked.connect(lambda _c=False, m=mesure_id: self._mesurer(m))
+            self.formulaire.ajouter_a_cote(param["key"], bouton)
+            self.boutons_mesurer[param["key"]] = bouton
+
+        numero = 1
+        self.bloc_regler = QGroupBox(tr("console.mode.bloc_regler", n=numero))
+        QVBoxLayout(self.bloc_regler).addWidget(self.formulaire)
+        blocs = [self.bloc_regler]
+
+        # --- 2. Entraîner (si le contrat déclare une calibration) --------------------------------
+        # ⚠️ Le critère d'activation est `jouable` — le moteur a-t-il un runtime pour cette
+        # calibration — et non `kind` (qui dit seulement QUI mène le protocole). Un critère sur
+        # une valeur de `kind` que le contrat n'a pas ferait DISPARAÎTRE le bouton de tous les
+        # modes, sans qu'une erreur le signale.
+        calib = spec.get("calibration") or {}
+        self.bloc_entrainer = self.bouton_entrainer = None
+        if calib:
+            numero += 1
+            self.bloc_entrainer = QGroupBox(tr("console.mode.bloc_entrainer", n=numero))
+            self.bouton_entrainer = QPushButton(tr("console.mode.entrainer"))
+            self.bouton_entrainer.clicked.connect(lambda: console.show_calibration(self.mode_id))
+            if not calib.get("jouable"):
+                # Déclarée mais pas livrée : le bouton reste VISIBLE — c'est ainsi qu'on apprend
+                # que ce mode s'entraîne — mais grisé, et il DIT pourquoi.
+                self.bouton_entrainer.setEnabled(False)
+                self.bouton_entrainer.setToolTip(
+                    tr("console.mode.entrainer_pas_livre", mode=spec["label"]))
+            dedans = QVBoxLayout(self.bloc_entrainer)
+            dedans.addWidget(_phrase(tr("console.mode.entrainer_phrase")))
+            dedans.addWidget(self.bouton_entrainer)
+            blocs.append(self.bloc_entrainer)
+
+        # --- 3. Tester (si le contrat déclare un `test_id`) --------------------------------------
+        # « Tester » ouvre la page de la mesure désignée : elle porte déjà le briefing,
+        # « Commencer », le contrôle de liaison, la fenêtre et le verdict. La recopier ici serait
+        # un second écran de protocole à tenir d'accord avec le premier. « Tester librement », à
+        # côté, n'a ni protocole ni verdict : sa séquence vit dans la console (`essayer_librement`).
+        test_id = spec.get("test_id") or ""
+        self.bloc_tester = self.bouton_tester = None
+        self.bouton_essayer = self.essai = None
+        if test_id:
+            numero += 1
+            self.bloc_tester = QGroupBox(tr("console.mode.bloc_tester", n=numero))
+            self.bouton_tester = QPushButton(tr("console.mode.tester"))
+            self.bouton_tester.clicked.connect(self._tester)
+            if not (console.mesures.get(test_id) or {}).get("jouable"):
+                self.bouton_tester.setEnabled(False)
+                self.bouton_tester.setToolTip(
+                    tr("console.mode.tester_pas_livre", mode=spec["label"]))
+            dedans = QVBoxLayout(self.bloc_tester)
+            dedans.addWidget(_phrase(tr("console.mode.tester_phrase")))
+            # « Tester librement » : DANS le bloc « Tester », à côté de son bouton —
+            # c'est la même boucle (régler -> essayer -> ajuster), sans score. Il n'existe que si
+            # la fenêtre du mode SAIT tenir un essai libre : la page le DEMANDE à la console, qui
+            # le demande au registre des fenêtres. Aucune liste de modes ici.
+            if console.sait_essayer(self.mode_id):
+                self.bouton_essayer = QPushButton(tr("console.mode.essayer"))
+                self.bouton_essayer.clicked.connect(self._essayer)
+                rang = QHBoxLayout()
+                rang.addWidget(self.bouton_tester, 1)
+                rang.addWidget(self.bouton_essayer, 1)
+                rang.addWidget(_bulle(tr("console.mode.essayer_aide")))
+                dedans.addLayout(rang)
+                # Où l'essai DIT ce qu'il fait : le démarrage, puis « en cours » (et la croix du
+                # repos à respecter), puis comment il s'est terminé — ou pourquoi il est refusé.
+                # Vide et caché tant qu'aucun essai n'a été demandé.
+                self.essai = QLabel("")
+                self.essai.setWordWrap(True)
+                self.essai.setVisible(False)
+                dedans.addWidget(self.essai)
+            else:
+                dedans.addWidget(self.bouton_tester)
+            blocs.append(self.bloc_tester)
+
+        # « Tester sur une session » sous condition d'un réglage (`tests_si`) : le SSVEP à cibles
+        # physiques, que sa fenêtre guidée ne sait pas montrer. Il se grise dès que le choix change
+        # À L'ÉCRAN, avec la raison que donne le contrat — celle du refus du moteur. « Tester
+        # librement » n'en dépend pas : sa fenêtre montre alors la cible décodée sans disques.
+        self.tests_si = spec.get("tests_si") or []
+        self.note_tests = None
+        if self.bloc_tester is not None and self.tests_si:
+            self._tester_jouable = self.bouton_tester.isEnabled()
+            self.note_tests = QLabel(self.tests_si[2])
+            self.note_tests.setWordWrap(True)
+            self.bloc_tester.layout().addWidget(self.note_tests)
+            source = self.formulaire.champs.get(self.tests_si[0])
+            if source is not None:
+                source.currentIndexChanged.connect(self._maj_tests)
+            self._maj_tests()
+
+        # --- la vue en direct : en face (Observer) ou repliée ------------------------------------
+        self.vue = live_views.build(spec["family"], spec["channels"])
+        if hasattr(self.vue, "set_source") and console.engine is not None:
+            # L'accesseur PUBLIC du moteur, qui rend une copie. Jamais `engine.recent`. Et le
+            # SECTEUR du poste qu'il porte : le coupe-bande des tracés est le sien,
+            # fixé à sa construction, pas le défaut du dépôt.
+            self.vue.set_source(console.engine.recent_window,
+                                getattr(getattr(console.engine, "acq", None), "fs", None),
+                                getattr(console.engine, "secteur_hz", None))
+        self.vue.setMinimumHeight(200)
+
+        self.bloc_observer = self.bouton_observer = None
+        self.direct = self.pli_direct = None
+        if not calib and not test_id:
+            # Aucune vérité-terrain (le Neuro, le Brut) : rien à entraîner, rien à noter. On
+            # REGARDE, et on n'annonce aucun chiffre de justesse — il n'y a pas de bonne réponse.
+            numero += 1
+            self.bloc_observer = QGroupBox(tr("console.mode.bloc_observer", n=numero))
+            dedans = QVBoxLayout(self.bloc_observer)
+            # Le bouton n'existe que si la vue a BESOIN que le mode tourne. Le Brut lit le tampon
+            # d'acquisition (`set_source`), pas la sortie de son mode : il n'y a rien à démarrer
+            # pour le regarder. Le libellé vient de l'ÉTAT REÇU (`_marche`), jamais d'une bascule
+            # tenue ici, qui se désynchroniserait au premier refus du moteur.
+            if not hasattr(self.vue, "set_source"):
+                self.bouton_observer = QPushButton(tr("console.mode.observer"))
+                self.bouton_observer.clicked.connect(
+                    lambda: self.marche.emit(self.mode_id, self._arrete))
+                haut = QHBoxLayout()
+                haut.addWidget(self.bouton_observer)
+                haut.addStretch(1)
+                dedans.addLayout(haut)
+            dedans.addWidget(self.vue, 1)
+            blocs.append(self.bloc_observer)
+            entete.addWidget(self.etat)      # ici l'état EST l'objet de la page
+        else:
+            # ⚠️ REPLIÉE, pas supprimée : elle sert à regarder un décodage lancé depuis la grille.
+            # Cachée SANS case pour l'ouvrir, elle serait un widget testé que personne ne peut
+            # voir.
+            self.direct = QCheckBox(tr("console.mode.direct"))
+            self.direct.setToolTip(tr("console.mode.direct_aide"))
+            self.pli_direct = QWidget()
+            pli = QVBoxLayout(self.pli_direct)
+            pli.setContentsMargins(0, 0, 0, 0)
+            pli.addWidget(_phrase(tr("console.mode.direct_vide")))
+            # L'état du décodage (« arrêté », « décodage »…) vit ICI, pas dans l'en-tête : une page
+            # testable ne démarre ni n'arrête rien, donc un « arrêté » en tête de page laisserait
+            # croire qu'il faut démarrer quelque chose avant de tester.
+            pli.addWidget(self.etat)
+            pli.addWidget(self.vue, 1)
+            self.pli_direct.setVisible(False)
+            self.direct.toggled.connect(self.pli_direct.setVisible)
+
+        # ⚠️ Le corps DÉFILE : sans ça, une page plus haute que la fenêtre est TRONQUÉE — Qt
+        # écrase les blocs du bas, il ne les rend pas défilables. L'en-tête, lui, reste FIXE : « ← Modes » doit rester atteignable du bas.
+        corps = QWidget()
+        dedans = QVBoxLayout(corps)
+        dedans.setContentsMargins(0, 0, 0, 0)
+        for bloc in blocs:
+            dedans.addWidget(bloc, 1 if bloc is self.bloc_observer else 0)
+        if self.direct is not None:
+            dedans.addWidget(self.direct)
+            dedans.addWidget(self.pli_direct, 1)
+            dedans.addStretch(1)       # repliée, la vue ne prend rien : les blocs restent en haut
+
+        self.defilement = QScrollArea()
+        self.defilement.setWidget(corps)
+        self.defilement.setWidgetResizable(True)     # sinon le corps garde sa taille d'origine
+        self.defilement.setFrameShape(QScrollArea.NoFrame)
+
+        # --- l'AVERTISSEMENT de sécurité, quand le mode en déclare un ---------------------------
+        # Les modes qui font clignoter un stimulus (SSVEP, c-VEP, P300) : risque d'épilepsie
+        # photosensible. En GROS, sous l'en-tête et HORS du défilement : il reste visible où qu'on
+        # soit dans la page, et rien ne le ferme.
+        self.avertissement = None
+        if spec.get("avertissement"):
+            self.avertissement = QFrame()
+            self.avertissement.setObjectName("avertissement")
+            self.avertissement.setStyleSheet(CADRE_AVERTISSEMENT)
+            dedans = QVBoxLayout(self.avertissement)
+            titre = QLabel(tr("console.avertissement.titre"))
+            titre.setStyleSheet("color: #e5484d; font-size: 18px; font-weight: bold;")
+            texte = QLabel(spec["avertissement"])
+            texte.setWordWrap(True)
+            texte.setStyleSheet("font-size: 14px;")
+            dedans.addWidget(titre)
+            dedans.addWidget(texte)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(entete)
+        if self.avertissement is not None:
+            layout.addWidget(self.avertissement)
+        layout.addWidget(self.defilement, 1)
+
+    def _appliquer_avant_de_partir(self):
+        """Envoie ce qui est À L'ÉCRAN avant de quitter la page. Rend (parti, réglages validés).
+
+        Le geste commun à « Tester » et à « Mesurer » : les deux quittent la page, et les deux
+        reviennent dessus. `parti` faux = le moteur a refusé ; le refus s'affiche dans « Régler »,
+        et l'on RESTE — partir tester (ou mesurer) une configuration que le moteur refuse ne
+        mesurerait rien, et la saisie fautive serait perdue au retour.
+
+        ⚠️ Pendant que le TEST de ce mode tourne, rien n'est envoyé : il est parti avec ses
+        réglages, et changer le magasin sous lui ferait afficher à cette page une configuration
+        que son verdict ne décrira pas. Le clic mène alors simplement à la page du test en cours.
+        """
+        if self.console.mesure_en_cours(self.spec.get("test_id") or ""):
+            return True, None
+        ack = self.console.commande("set_params", id=self.mode_id,
+                                    params=self.formulaire.values())
+        if not ack.get("accepted"):
+            self.formulaire.show_refus(ack.get("reason", ""))
+            return False, None
+        self.formulaire.show_refus("")
+        # Accepté avec une réserve (un flux de marqueurs qui ne changera qu'au prochain
+        # démarrage…) : elle reste sous « Régler », lisible au retour sur la page.
+        avertissement = ack.get("warning")
+        self.formulaire.show_avertissement(str(avertissement) if avertissement else "")
+        return True, ack.get("params")
+
+    def _tester(self):
+        """« Tester » teste CE QUI EST À L'ÉCRAN, et pas ce qui avait été appliqué avant.
+
+        ⚠️ Sans ce premier geste, on change une fréquence, on clique « Tester » sans passer par
+        « Appliquer », et c'est l'ANCIENNE configuration qui est testée, sans que rien ne le
+        dise. Dans la boucle régler → tester → ajuster, c'est le piège exact. Le formulaire part
+        donc d'abord au moteur comme par « Appliquer » ; s'il est refusé (17 Hz ne divise pas
+        60), le refus s'affiche dans « Régler » et le test n'est PAS ouvert — tester une
+        configuration impossible ne mesurerait rien.
+        """
+        parti, reglages = self._appliquer_avant_de_partir()
+        if not parti:
+            return
+        # Les valeurs VALIDÉES par le moteur, pour pré-remplir le test tout de suite : l'état
+        # sondé n'aura rattrapé ce réglage qu'au prochain tour de `QTimer`.
+        self.console.show_mesure(self.spec["test_id"], depuis=self, reglages=reglages)
+
+    def _essayer(self):
+        """« Tester librement » essaie, lui aussi, CE QUI EST À L'ÉCRAN.
+
+        Même premier geste que « Tester », et pour la même raison : on change une fréquence, on
+        clique sans passer par « Appliquer », et l'essai tournerait sur l'ANCIENNE configuration
+        sans que rien ne le dise. Refusé (17 Hz ne divise pas 60) -> le refus s'affiche dans
+        « Régler » et rien ne démarre. Accepté, le réglage est RETENU par le moteur : le
+        `start_mode` qui suit part avec, sans en porter aucun lui-même.
+
+        Le reste — refuser pendant un entraînement ou un test, le contrôle de liaison, démarrer
+        le mode, ouvrir la fenêtre DÈS qu'il tourne (elle montre une croix pendant le repos), la
+        surveiller, arrêter le mode à la fermeture — est la séquence de la console
+        (`Console.essayer_librement`), pas de la page.
+        """
+        parti, reglages = self._appliquer_avant_de_partir()
+        if parti:
+            self.console.essayer_librement(self.mode_id, reglages)
+
+    def montrer_essai(self, texte, alerte=False, en_cours=False):
+        """Ce que l'essai libre a à dire, et si le bouton doit attendre qu'il se termine.
+
+        `en_cours` grise « Tester librement » : un second clic pendant l'attente démarrerait un
+        second essai sur le même mode, et la console n'en tient qu'un. Le texte, lui, RESTE après
+        la fin — c'est là qu'on lit si le décodage a été arrêté ou s'il continue.
+        """
+        if self.essai is None:
+            return
+        self.essai.setText(texte or "")
+        self.essai.setStyleSheet(ROUGE if alerte else "")
+        self.essai.setVisible(bool(texte))
+        self.bouton_essayer.setEnabled(not en_cours)
+
+    def _tests_possibles(self):
+        """Les réglages À L'ÉCRAN permettent-ils « Tester sur une session » (`tests_si`) ?"""
+        if not getattr(self, "tests_si", None):
+            return True
+        return self.formulaire.values().get(self.tests_si[0]) == self.tests_si[1]
+
+    def _maj_tests(self, *_):
+        """Grise ou rend « Tester sur une session », et montre la raison quand il est grisé."""
+        possible = self._tests_possibles()
+        self.note_tests.setVisible(not possible)
+        self.bouton_tester.setEnabled(possible and self._tester_jouable)
+
+    def _mesurer(self, mesure_id):
+        """« Mesurer » applique d'abord ce qui est à l'écran, comme « Tester ».
+
+        🔴 Sans ce geste, l'aller-retour ÉCRASERAIT la saisie : on tape « Rafraîchissement 30 » et
+        de nouvelles fréquences sans « Appliquer », on clique « Mesurer », on applique le pic
+        alpha — qui écrit le magasin du mode —, on revient, et `update_from` recharge le
+        formulaire depuis ce magasin : 60 Hz et le trio du dépôt seraient de retour, et « Tester »
+        testerait ce que l'élève vient d'effacer sans le savoir.
+        """
+        parti, _ = self._appliquer_avant_de_partir()
+        if parti:
+            self.console.show_mesure(mesure_id, depuis=self)
+
+    def _appliquer(self, values):
+        """Envoie les réglages. Le moteur accepte ou refuse ; on affiche ce qu'il dit.
+
+        ⚠️ Appliquer un réglage que le DÉCODEUR lit — les fréquences, par exemple — relance le
+        repos de ce mode et recrée son flux. C'est obligatoire, pas prudent : un plancher mesuré
+        sous d'autres réglages est faux, et pour le SSVEP il est mesuré PAR FRÉQUENCE. Les clients
+        doivent alors se réabonner. Les réglages qui ne servent qu'à proposer ou à valider — le
+        rafraîchissement de l'écran, le pic alpha — ne coûtent rien de tout ça : c'est le contrat
+        qui le déclare, et le moteur qui en décide.
+        """
+        ack = self.console.commande("set_params", id=self.mode_id, params=values)
+        if ack.get("accepted"):
+            self.formulaire.show_refus("")
+            # Accepté sur un mode ARRÊTÉ : validé et retenu. En VERT, pas en orange — il n'y a
+            # aucune réserve à émettre, c'est un succès. La nuance « pas encore en vigueur » est
+            # un fait de CALENDRIER, et elle est dans le texte ; la couleur ne répond qu'à « est-ce
+            # accepté ». L'orange le ferait lire comme un problème (`mesure_page.py` dit vert pour
+            # le même fait). La page ne démarre rien : ce sont « Tester » et le décodage continu
+            # qui partiront avec ce réglage.
+            avertissement = ack.get("warning")
+            self.formulaire.show_confirmation(
+                tr("console.mode.reglage_retenu", mode=self.spec["label"])
+                if ack.get("differe") and not avertissement else "")
+            # Accepté, mais avec une réserve (un flux de marqueurs pas encore sur le réseau) : en
+            # orange, comme l'avertissement d'une proposition. TOUJOURS posé, vide sans réserve :
+            # sinon la réserve d'un « Appliquer » précédent resterait sous un réglage qui n'en a plus.
+            self.formulaire.show_avertissement(str(avertissement) if avertissement else "")
+            return
+        # Un refus laisse la saisie fautive dans le champ — on la corrige plutôt qu'on la retape.
+        # Mais il DIT ce qui reste en vigueur : sans ça, un champ rouge oublié finit par se lire
+        # comme l'état du moteur, et l'élève croit décoder sur des réglages jamais appliqués.
+        vigueur = self._derniers_params or {}
+        raison = ack.get("reason", "")
+        self.formulaire.show_refus(
+            tr("console.mode.refus_en_vigueur", raison=raison,
+               valeurs=", ".join(f"{c} = {v}" for c, v in vigueur.items()))
+            if vigueur else raison)
+
+    def _proposer(self, cle):
+        """Demande une proposition au MOTEUR et la met dans le champ. La console ne calcule rien.
+
+        Envoie ce que le formulaire contient EN CE MOMENT (`params`) : sans ça, la proposition se
+        calcule sur les réglages STOCKÉS plutôt que sur ce que l'étudiant est en train d'éditer —
+        déclarer un nouvel écran ne servirait à rien tant qu'il n'a pas cliqué « Appliquer ».
+
+        Le refus et l'avertissement sont deux étiquettes distinctes : un avertissement dit qu'un
+        réglage a été ACCEPTÉ, avec réserve ; un refus dit qu'il ne l'a PAS été. Les confondre
+        ferait passer un succès pour une panne.
+        """
+        ack = self.console.commande("propose_params", id=self.mode_id, key=cle,
+                                    params=self.formulaire.values())
+        if not ack.get("accepted"):
+            self.formulaire.show_refus(ack.get("reason", ""))
+            return
+        # Un accusé incomplet (clé ou valeur absente) ne doit pas planter l'interface en séance :
+        # on ne remplit rien plutôt que de lever, comme `_appliquer` le fait déjà pour son refus.
+        cle_recue, valeur_recue = ack.get("key"), ack.get("value")
+        if cle_recue is not None and valeur_recue is not None:
+            self.formulaire.remplir(cle_recue, valeur_recue)
+        self.formulaire.show_avertissement(ack.get("warning", ""))
+
+    def update_from(self, state):
+        # Pendant le TEST de ce mode, le moteur refuse de changer ses réglages : « Appliquer » se
+        # grise, et sa bulle dit pourquoi. La règle est au moteur ; la page ne fait que la montrer.
+        en_test = self.console.mesure_en_cours(self.spec.get("test_id"))
+        self.formulaire.bouton.setEnabled(not en_test)
+        self.formulaire.bouton.setToolTip(tr("console.mode.appliquer_pendant_test") if en_test
+                                          else "")
+        mode_state = (state.get("modes_state") or {}).get(self.mode_id)
+        self._marche(mode_state is not None)
+        if mode_state is None:
+            self.etat.setText(tr("console.etat.arrete"))
+            self.vue.update_from(None)
+            # ⚠️ Les RÉGLAGES RETENUS se montrent. `modes_state` ne contient que les modes
+            # actifs : sans cette branche, un réglage posé sur un mode arrêté serait accepté par
+            # le moteur, retenu, appliqué au démarrage — et INVISIBLE, le champ gardant
+            # l'ancienne valeur. L'écran dirait le contraire de la vérité, ce qui est pire qu'un
+            # refus franc (« mon pic alpha n'a pas été reporté »).
+            retenus = (state.get("reglages") or {}).get(self.mode_id)
+            if retenus and retenus != self._derniers_params:
+                self._ecrire_changements(retenus)
+            elif not retenus:
+                self._derniers_params = None   # forcer la régénération au redémarrage
+            return
+        attente = decompte(mode_state)
+        phase = nom_phase(mode_state["phase"]) + (f" · {attente}" if attente else "")
+        self.etat.setText(phase if mode_state["published"]
+                          else tr("console.etat.non_publie", phase=phase))
+        self.vue.update_from(mode_state)
+        params = mode_state.get("params") or {}
+        if params != self._derniers_params:
+            self._ecrire_changements(params)
+
+    def _ecrire_changements(self, nouveaux):
+        """Écrit dans les champs les réglages que le MOTEUR a changés, et eux seuls.
+
+        Une application peut changer UN réglage par le réseau pendant que l'élève en édite un
+        autre : tout réécrire effacerait sa saisie pas encore appliquée. La première fois (aucun
+        réglage connu), tout est écrit.
+        """
+        avant, self._derniers_params = self._derniers_params, dict(nouveaux)
+        if avant is None:
+            self.formulaire.set_values(nouveaux)
+            return
+        changes = {cle: v for cle, v in nouveaux.items() if cle not in avant or avant[cle] != v}
+        if changes:
+            self.formulaire.set_values(changes)
+
+    def _marche(self, tourne):
+        """Le libellé de « Observer » vient de l'ÉTAT REÇU, jamais d'une bascule tenue ici.
+
+        Même discipline que la tuile de la grille, et pour la même raison : une bascule locale se
+        désynchronise au premier refus du moteur, et l'écran finit par proposer « Arrêter » sur un
+        mode qui n'a jamais démarré.
+        """
+        self._arrete = not tourne
+        if self.bouton_observer is not None:
+            self.bouton_observer.setText(tr("console.mode.observer") if self._arrete
+                                         else tr("console.mode.arreter"))
+
+    def rafraichir_choix(self):
+        """Recharge les listes de choix DYNAMIQUES de ce mode (les modèles entraînés).
+
+        Appelée sur ÉVÉNEMENT — à l'entrée dans la page (cf. `Console.show_mode`) — jamais dans le
+        rafraîchissement périodique : résoudre ces choix lit le disque, et le faire dix fois par
+        seconde coûterait environ 30 % d'un cœur (mesuré). Revenir d'un entraînement, d'un test ou
+        d'une mesure ramène sur CETTE page par `show_mode`, donc par ce même événement : un modèle
+        fraîchement enregistré est dans la liste dès le retour. Quel modèle y est SÉLECTIONNÉ,
+        c'est le magasin du moteur qui le dit (`update_from`), pas cette liste.
+        """
+        spec = registry.get(self.mode_id)
+        if spec is None:
+            return
+        for param in spec.params:
+            if param.choices_fn is not None:
+                self.formulaire.set_choices(param.key, param.choices_now())

@@ -1,0 +1,867 @@
+"""Ce qu'un mode produit, rendu selon sa FAMILLE — pas selon son identifiant.
+
+Un mode **actif** propose des cibles et un seuil : l'utilisateur choisit, il y a une bonne
+réponse. Un mode **passif** rend des indices qui divergent autour d'un repos : il n'y a rien à
+choisir, et aucune bonne réponse. Les afficher pareil laisserait croire qu'un z d'engagement est
+une sélection, ce qui est exactement le contresens que le contrat des flux cherche à éviter.
+"""
+
+import os
+import sys
+
+import numpy as np
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QCheckBox, QFormLayout, QHBoxLayout, QLabel, QProgressBar,
+                               QPushButton, QVBoxLayout, QWidget)
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from console import (SPAN_SEUILS, classement_relatif, decompte, nom_phase,  # noqa: E402
+                     span_correlation)
+from console.banner import LigneAbregee  # noqa: E402
+from console.params_form import ACCENT, ListeSansMolette, infobulle  # noqa: E402
+from core import filtres_affichage  # noqa: E402
+from core.config import (FS_UNICORN, NEURO_Z_SPAN, TRACES_AFFICHAGE_S,  # noqa: E402
+                         TRACES_AMORCE_S, Z_MIN)
+from core.i18n import nombre, retraduit, tr  # noqa: E402
+from core.neuro_monitor import INDEX_DESCRIPTIONS  # noqa: E402
+
+
+def _avec_decompte(texte, mode_state):
+    """La consigne du repos, suivie du temps qu'il reste avant le décodage (s'il n'a pas commencé).
+
+    Sans lui, la stabilisation puis le repos (40 s pour le Neuro) défileraient sans une seule
+    indication de temps.
+    """
+    attente = decompte(mode_state)
+    return f"{texte}\n{attente}" if attente else texte
+
+
+def nom_filtre(filtre):
+    """Le libellé d'un filtre d'affichage : « Passe-haut 1 Hz », « Passe-bande 1–30 Hz »…"""
+    bas, haut = filtre
+    if bas is not None and haut is not None:
+        return tr("pages.traces.passe_bande", bas=nombre(bas), haut=nombre(haut))
+    if bas is not None:
+        return tr("pages.traces.passe_haut", hz=nombre(bas))
+    return tr("pages.traces.aucun_filtre")
+
+
+def _bulle(texte):
+    """Une bulle « ⓘ » qui montre `texte` au survol — à poser juste APRÈS ce qu'elle explique."""
+    bulle = QLabel("ⓘ")
+    bulle.setStyleSheet(f"color: {ACCENT}; font-size: 13px;")
+    bulle.setCursor(Qt.WhatsThisCursor)
+    bulle.setToolTip(infobulle(texte))
+    return bulle
+
+
+class TracesView(QWidget):
+    """Les 8 voies en direct. La seule vue qui lit le SIGNAL et pas une décision.
+
+    Elle ne touche pas au tampon du moteur : `set_source` lui donne un accesseur
+    (`engine.recent_window`) qui rend une COPIE. Le tampon est réécrit par le fil d'acquisition ;
+    le lire depuis le fil Qt donnerait, tôt ou tard, une vue à moitié écrite.
+
+    Les voies sont DÉCALÉES verticalement plutôt que superposées : superposées, une seule voie
+    qui dérive écrase les sept autres et on ne voit plus rien — or la dérive d'une voie est
+    précisément ce qu'on cherche à repérer ici.
+
+    ⚠️ **L'écart entre deux voies est MESURÉ sur le signal, et le tracé est ROGNÉ à son couloir.**
+    Un écart fixe (100 µV) ne convient pas : sur un vrai casque, le brut non filtré respire de
+    plusieurs centaines de µV, les huit tracés se chevaucheraient et le contrôle de contact à
+    l'œil — l'étape 1 de toute séance — ne montrerait qu'un enchevêtrement.
+
+    Le rognage est ce qui rend le non-chevauchement **garanti** plutôt que probable : une voie
+    hors échelle vient s'aplatir sur le rail de son couloir au lieu de passer devant ses voisines.
+    Une échelle mesurée SANS rognage rendrait le chevauchement rare — et « rare » est exactement
+    ce qu'aucun test ne peut vérifier. Le prix est que les pointes des 4 % extrêmes sont écrêtées ;
+    c'est le bon prix ici, où l'on cherche « cette voie est-elle plus agitée que les autres », pas
+    l'amplitude exacte d'un clignement.
+
+    **Un filtre d'AFFICHAGE au choix**, pour retirer la dérive de certaines voies. Aucun, plusieurs
+    passe-haut, quelques passe-bande, plus un coupe-bande
+    secteur, comme dans la Unicorn Suite ; le calcul vit dans `core/filtres_affichage.py`. Il ne
+    filtre que la COPIE qu'on dessine : le tampon du moteur reste brut, parce que le Motor
+    Imagery s'entraîne dessus. On demande `AMORCE` secondes de plus que ce qu'on montre, pour que
+    le démarrage du filtre tombe hors de l'écran.
+    """
+
+    SECONDES = TRACES_AFFICHAGE_S
+    AMORCE = TRACES_AMORCE_S
+    #: Graduations rondes. L'écart se pose sur l'une d'elles pour que l'étiquette reste lisible et
+    #: que l'échelle ne se remette pas à un chiffre différent à chaque rafraîchissement.
+    GRADUATIONS_UV = (20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
+    ECART_DEPART_UV = 100.0     # avant la première mesure, et quand le signal est plat
+
+    def __init__(self, ch_names):
+        super().__init__()
+        import pyqtgraph as pg
+
+        self.source = None
+        self.fs = FS_UNICORN
+        self.ch_names = list(ch_names)
+        self.ecart = self.ECART_DEPART_UV
+        self.filtre = filtres_affichage.FILTRE_DEFAUT
+        self.coupe_bande = False
+        # Le secteur que coupe la case « Coupe-bande » : celui du MOTEUR, donné par `set_source`.
+        # Le défaut n'est que celui du dépôt, le temps qu'un moteur soit branché.
+        self.secteur_hz = filtres_affichage.SECTEUR_HZ
+        self._recaler = False
+        self._ferme = False         # cf. `fermer`
+        self.plot = pg.PlotWidget()
+        self.plot.setMenuEnabled(False)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.showGrid(x=True, y=False, alpha=0.2)
+        self.plot.setLabel("bottom", tr("pages.traces.axe_temps"))
+        self.courbes = [self.plot.plot(pen=pg.mkPen(width=1)) for _ in self.ch_names]
+        self._pose_axe()
+
+        self.echelle = QLabel("")
+        self.echelle.setWordWrap(True)
+        self.echelle.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        self._dis_echelle(())
+
+        # Le choix du filtre, au-dessus du tracé. La liste ignore la molette, comme tous les
+        # champs de la console : on fait défiler la page sans changer de filtre en passant.
+        self.choix_filtre = ListeSansMolette()
+        for filtre in filtres_affichage.FILTRES:
+            self.choix_filtre.addItem(nom_filtre(filtre))
+        self.choix_filtre.setCurrentIndex(filtres_affichage.FILTRES.index(self.filtre))
+        self.choix_filtre.currentIndexChanged.connect(self._choisit_filtre)
+        self.case_secteur = QCheckBox("")
+        self.case_secteur.toggled.connect(self._choisit_secteur)
+        self.bulle_secteur = _bulle("")
+        self._nomme_secteur()
+        rang = QHBoxLayout()
+        rang.setSpacing(4)
+        rang.addWidget(QLabel(tr("pages.traces.filtre")))
+        rang.addWidget(_bulle(tr("pages.traces.filtre_aide")))
+        rang.addWidget(self.choix_filtre)
+        rang.addSpacing(16)
+        rang.addWidget(self.case_secteur)
+        rang.addWidget(self.bulle_secteur)
+        rang.addStretch(1)
+        # Le même « Rétablir les valeurs par défaut » que les formulaires, au bout de la ligne de
+        # ces deux réglages.
+        self.bouton_defauts = QPushButton(tr("console.formulaire.defauts"))
+        self.bouton_defauts.setToolTip(infobulle(tr("pages.traces.defauts_aide")))
+        self.bouton_defauts.clicked.connect(self.retablir_defauts)
+        rang.addWidget(self.bouton_defauts)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(rang)
+        layout.addWidget(self.plot, 1)
+        layout.addWidget(self.echelle)
+
+    def set_source(self, source, fs=None, secteur_hz=None):
+        """`source(seconds) -> (n, 8) ou None`. En pratique : `engine.recent_window`, la
+        fréquence d'échantillonnage de son casque (celle de l'Unicorn si on ne la donne pas), et
+        le SECTEUR du poste que porte le moteur — celui que la case « Coupe-bande » retire."""
+        self.source = source
+        if fs:
+            self.fs = float(fs)
+        if secteur_hz:
+            self.secteur_hz = float(secteur_hz)
+            self._nomme_secteur()
+            self._dis_echelle(())
+
+    def _nomme_secteur(self):
+        """Le libellé de la case et sa bulle disent le secteur QU'ELLE COUPE, jamais le défaut."""
+        secteur = nombre(self.secteur_hz)
+        self.case_secteur.setText(tr("pages.traces.secteur", hz=secteur))
+        self.bulle_secteur.setToolTip(infobulle(tr("pages.traces.secteur_aide", hz=secteur)))
+
+    def retablir_defauts(self):
+        """Le filtre par défaut (`filtres_affichage.FILTRE_DEFAUT`), coupe-bande décoché. Ce sont
+        des réglages d'AFFICHAGE : ils prennent effet tout de suite, il n'y a rien à appliquer."""
+        self.choix_filtre.setCurrentIndex(
+            filtres_affichage.FILTRES.index(filtres_affichage.FILTRE_DEFAUT))
+        self.case_secteur.setChecked(False)
+
+    def _choisit_filtre(self, index):
+        self.filtre = filtres_affichage.FILTRES[index]
+        self._change()
+
+    def _choisit_secteur(self, coche):
+        self.coupe_bande = bool(coche)
+        self._change()
+
+    def fermer(self):
+        """Referme le tracé comme pyqtgraph le demande, AVANT que sa fenêtre soit détruite.
+
+        Détruit avec sa fenêtre sans avoir été refermé, un `PlotWidget` peut faire appeler
+        `abort()` à Qt (code 0xC0000409) : mesuré dans le smoke de la console, qui détruit ses
+        consoles d'un bloc sans quitter l'application. La console qui se ferme normalement ne l'a
+        pas montré ; le geste est celui que pyqtgraph demande. Idempotente ; un tracé refermé ne
+        se redessine plus.
+        """
+        if not self._ferme:
+            self._ferme = True
+            self.plot.close()
+
+    def _change(self):
+        """Un autre filtre change l'amplitude : l'échelle se recale TOUT DE SUITE, même d'une
+        seule graduation. La zone morte sert à ne pas faire clignoter l'échelle sur un signal qui
+        ondule, pas à ignorer un choix qu'on vient de faire : sans ce recalage, cocher le
+        coupe-bande laissait des tracés à mi-couloir, au lieu de les montrer plus grands."""
+        self._recaler = True
+        self._dis_echelle(())
+        self.update_from(None)
+
+    def _pose_axe(self):
+        """Replace les étiquettes de voies et fige la vue sur les couloirs de l'écart courant.
+
+        Sans vue figée, pyqtgraph recadre tout seul sur ce qu'on lui donne : l'écart mesuré ne se
+        verrait pas à l'écran, et deux blocs d'amplitudes différentes s'afficheraient pareil.
+        """
+        if not self.ch_names or self._ferme:
+            return
+        self.plot.getAxis("left").setTicks([[
+            (-i * self.ecart, nom) for i, nom in enumerate(self.ch_names)]])
+        self.plot.setYRange(-(len(self.ch_names) - 0.5) * self.ecart, 0.5 * self.ecart,
+                            padding=0)
+
+    def _dis_echelle(self, rognees):
+        """L'étiquette grise. Elle annonce l'écart RÉELLEMENT en vigueur, jamais une constante.
+
+        Et elle NOMME les voies qui débordent : une voie rognée n'est pas un défaut d'affichage à
+        cacher, c'est le signal qu'on vient chercher ici — celle-là est bien plus agitée que les
+        sept autres, donc son contact est suspect.
+        """
+        filtre = nom_filtre(self.filtre)
+        if self.coupe_bande:
+            filtre = tr("pages.traces.avec_secteur", filtre=filtre, hz=nombre(self.secteur_hz))
+        texte = tr("pages.traces.echelle", filtre=filtre, ecart=nombre(self.ecart, "g"),
+                   secondes=nombre(self.SECONDES))
+        if rognees:
+            texte += "  ·  " + tr("pages.traces.rognees", voies=", ".join(rognees))
+        self.echelle.setText(texte)
+
+    def _etendues(self, bloc):
+        """L'étendue de chaque voie, entre ses 2e et 98e centiles.
+
+        Pas entre son min et son max : un seul clignement fixerait sinon l'échelle de tout l'écran
+        pour quatre secondes, et les sept autres voies s'écraseraient à plat.
+        """
+        n = min(bloc.shape[1], len(self.courbes))
+        return [float(np.subtract(*np.percentile(bloc[:, i], (98.0, 2.0)))) for i in range(n)]
+
+    def _echelle_utile(self, etendues):
+        """L'écart qui convient à ces étendues, posé sur une graduation ronde.
+
+        La référence entre voies est le **75e centile** des huit étendues. Ni la médiane, qui
+        laisserait la moitié des voies déborder ; ni le maximum, qui laisserait UNE voie saturée
+        — C3 et Cz le font à la réouverture de session — écraser les sept autres à plat.
+        """
+        if not etendues:
+            return self.ecart
+        besoin = float(np.percentile(etendues, 75.0)) * 1.2
+        for graduation in self.GRADUATIONS_UV:
+            if graduation >= besoin:
+                return graduation
+        return self.GRADUATIONS_UV[-1]
+
+    def update_from(self, _mode_state):
+        if self.source is None or self._ferme:
+            return
+        bloc = self.source(self.SECONDES + self.AMORCE)
+        if bloc is None or len(bloc) < 2:
+            return
+        # Filtré sur TOUT le bloc, amorce comprise, puis coupé : le démarrage du filtre reste
+        # hors de l'écran. `filtrer` rend une copie — le bloc n'est déjà lui-même qu'une copie.
+        bloc = filtres_affichage.filtrer(bloc, self.fs, self.filtre, self.coupe_bande,
+                                         self.secteur_hz)
+        bloc = bloc[-int(round(self.SECONDES * self.fs)):]
+        etendues = self._etendues(bloc)
+        utile = self._echelle_utile(etendues)
+        # On MONTE dès que c'est trop serré, on ne DESCEND qu'à deux graduations d'écart. Les
+        # graduations sont espacées d'un facteur 2 à 2,5 : sans cette zone morte, une amplitude
+        # qui oscille autour d'une borne ferait clignoter l'échelle dix fois par seconde.
+        if self._recaler or utile > self.ecart or utile * 4.0 <= self.ecart:
+            self.ecart = utile
+            self._recaler = False
+            self._pose_axe()
+
+        t = np.arange(len(bloc)) / self.fs
+        demi = self.ecart / 2.0
+        rognees = [self.ch_names[i] for i, e in enumerate(etendues)
+                   if i < len(self.ch_names) and e > self.ecart]
+        for i, courbe in enumerate(self.courbes):
+            if i >= bloc.shape[1]:
+                break
+            # Centré voie par voie : l'Unicorn sort un offset DC énorme (10⁵ µV, en rampe après
+            # l'ouverture de session). Sans ce centrage, les 8 courbes sortiraient de l'écran.
+            voie = bloc[:, i] - float(np.median(bloc[:, i]))
+            courbe.setData(t, np.clip(voie, -demi, demi) - i * self.ecart)
+        self._dis_echelle(rognees)
+
+
+class ActiveView(QWidget):
+    """Une barre par cible, plus le seuil de décision, plus la cible retenue.
+
+    Le seuil est affiché À CÔTÉ des scores, et pas seulement la décision : c'est ce qui permet
+    de dire si une non-détection vient d'un signal absent ou d'un seuil trop haut. Sans ça, une
+    séance muette n'a qu'une explication apparente — « l'utilisateur fixe mal ».
+
+    ⚠️ **La famille « actif » recouvre QUATRE formes de sortie, pas une.** Chacune a sa propre
+    échelle, et les confondre produit un écran qui a l'air de marcher :
+
+    | mode | ce que la sortie porte | échelle |
+    |---|---|---|
+    | SSVEP | `scores`, `target_index`, `freq_hz`, **`threshold`** | z contre le repos du jour |
+    | Motor Imagery | **`probas`**, `intent_index`, `label`, `threshold` | probabilité, bornée à 1 |
+    | P300 | `scores`, `target_index`, `confidence`, **`n_flashes`** | log-odds moyens, SANS seuil |
+    | c-VEP | `scores`, `target_index`, **`corr_min`**, `margin`, `motif` | corrélation, dans [-1, 1] |
+
+    Le rendu est choisi sur une **CLÉ PRÉSENTE DANS LA SORTIE**, jamais sur l'identifiant du
+    mode : la console est un client du moteur, et recopier ici une liste de modes ferait deux
+    catalogues qui divergeraient au prochain mode ajouté. La question posée à la sortie est donc
+    « qu'est-ce que tu déclares ? » — `probas` pour un vote de classes, `threshold` pour une
+    échelle en z avec un déclenchement, `corr_min` pour une corrélation bornée avec son seuil,
+    et à défaut une accumulation de preuves dont seul le CLASSEMENT a un sens.
+
+    Deux pannes silencieuses justifient cet aiguillage :
+
+    1. **le MI** afficherait « aucune cible » en PERMANENCE, `target_index` n'existant pas dans
+       sa sortie ;
+    2. **le P300**, rendu comme un SSVEP : `params["freqs"]` absent donnerait six barres SANS
+       ÉTIQUETTE, `threshold` absent retomberait sur `Z_MIN`, et l'écran annoncerait
+       « échelle z · seuil 3 — un score au-dessus déclenche » AU-DESSUS de log-odds (normalement
+       NÉGATIFS, donc toutes les barres à zéro), puis « CIBLE 3 · 0 Hz ». Aucune de ces quatre
+       affirmations ne serait vraie, et rien ne le dirait.
+
+    C'est pourquoi le troisième rendu n'est pas branché sur `"p300"` : la prochaine sortie d'une
+    forme inconnue doit tomber dans le rendu le plus PRUDENT (celui qui n'invente ni seuil ni
+    unité), pas dans celui du SSVEP. Le c-VEP a sa propre clé pour la même raison : dans le rendu
+    prudent, qui montre un CLASSEMENT, « tout le monde à 0,05 » (rien de fixé) aurait la même
+    tête que « les deux premières à 0,45 » (une hésitation entre deux cibles), alors que ses
+    corrélations ont une échelle absolue. Deux diagnostics opposés, une seule image.
+
+    **`fixe=True` : la mise en page qui ne bouge pas** (la page de contrôle). Chaque ligne existe
+    dès le départ, sur une seule ligne, et seules les valeurs changent : la phase et son décompte,
+    « Cible décodée : aucune » puis le nom de la cible (« Tâche décodée » pour un vote de
+    tâches, cf. `_vote_de_taches`), la consigne ou le détail de la décision — jamais la cible
+    elle-même, que la ligne du dessus dit déjà —, le seuil (« — » tant qu'aucune sortie ne l'a
+    dit), et une barre par cible. Les barres viennent des noms que l'état du moteur porte (`noms`)
+    ou des fréquences réglées (`freqs`), donc avant la première sortie. Le rendu des valeurs reste
+    celui des quatre formes ci-dessus.
+    """
+
+    def __init__(self, fixe=False):
+        super().__init__()
+        self.fixe = bool(fixe)
+        # Vote de tâches (« Tâche décodée ») ou cibles (« Cible décodée ») ? Retenu d'un état à
+        # l'autre : un état vide (la vue repeinte sans état) ne dit rien de la forme du mode.
+        self._taches = False
+        # Sans `fixe`, le texte du verdict et celui du seuil changent de longueur et de nombre de
+        # lignes. Avec, des lignes qui s'abrègent plutôt que de passer à la ligne : leur hauteur
+        # ne change jamais, et un texte long n'élargit pas la fenêtre (il reste dans la bulle).
+        ligne = LigneAbregee if self.fixe else QLabel
+        self.phase = ligne(tr("console.controle.vide")) if self.fixe else None
+        self.cible = ligne(tr("pages.direct.cible_decodee", cible=tr("pages.direct.aucune"))) \
+            if self.fixe else None
+        self.verdict = ligne(tr("console.controle.vide") if self.fixe
+                             else tr("pages.direct.en_attente"))
+        self.seuil = ligne(tr("pages.direct.seuil_inconnu") if self.fixe else "")
+        self.seuil.setStyleSheet("color: #8a8f9c;")
+        self.barres = QFormLayout()
+        layout = QVBoxLayout(self)
+        if self.fixe:
+            self.phase.setStyleSheet("color: #8a8f9c;")
+            self.cible.setStyleSheet("font-size: 16px; font-weight: bold;")
+            layout.addWidget(self.phase)
+            layout.addWidget(self.cible)
+        else:
+            self.verdict.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(self.verdict)
+        layout.addWidget(self.seuil)
+        layout.addLayout(self.barres)
+        layout.addStretch(1)
+        self._barres = []
+
+    def _assure(self, n, etiquettes):
+        """Exactement `n` barres : on en ajoute, et surtout on en RETIRE.
+
+        Le retrait compte autant que l'ajout : régler moins de fréquences en cours de séance
+        laisserait sinon une barre orpheline, figée sur le score d'une cible qui n'existe plus.
+        """
+        while len(self._barres) < n:
+            barre = QProgressBar()
+            barre.setRange(0, 100)
+            barre.setTextVisible(False)
+            self._barres.append((QLabel(""), barre))
+            self.barres.addRow(self._barres[-1][0], barre)
+        while len(self._barres) > n:
+            self._barres.pop()
+            self.barres.removeRow(self.barres.rowCount() - 1)
+        for i, (etiquette, _b) in enumerate(self._barres):
+            etiquette.setText(etiquettes[i] if i < len(etiquettes) else "")
+
+    def update_from(self, mode_state):
+        sortie = (mode_state or {}).get("output") or {}
+        if self.fixe:
+            self._peindre_fixe(mode_state, sortie)
+            if not sortie:
+                return
+        elif not sortie:
+            self.verdict.setText(_avec_decompte(mode_state["instruction"], mode_state)
+                                 if mode_state else tr("pages.direct.en_attente"))
+            return
+        # L'ordre compte, et il va du plus SPÉCIFIQUE au plus prudent. `threshold` est la clé qui
+        # autorise à parler de seuil : sans elle, aucun repli sur une constante — c'est
+        # exactement ce repli (`Z_MIN`) qui faisait annoncer « seuil 3 » au-dessus de log-odds.
+        if "probas" in sortie:
+            self._update_probas(mode_state, sortie)
+        elif "threshold" in sortie:
+            self._update_scores(mode_state, sortie)
+        elif "corr_min" in sortie:
+            self._update_correlations(mode_state, sortie)
+        else:
+            self._update_selection(mode_state, sortie)
+
+    # --- la mise en page fixe (`fixe=True`) ------------------------------------------------
+
+    def _peindre_fixe(self, mode_state, sortie):
+        """Les lignes qui ne dépendent pas de la forme de la sortie : la phase et son décompte, la
+        cible décodée. Sans sortie, aussi : la consigne, le seuil inconnu, et une barre à zéro par
+        cible. Sans état, les barres déjà là restent : seules leurs valeurs s'effacent."""
+        etat = mode_state or {}
+        phase, attente = etat.get("phase"), decompte(mode_state)
+        if not phase:
+            self.phase.setText(tr("pages.direct.phase", phase=tr("console.controle.vide")))
+        elif attente:
+            self.phase.setText(tr("pages.direct.phase_decompte", phase=nom_phase(phase),
+                                  decompte=attente))
+        else:
+            self.phase.setText(tr("pages.direct.phase", phase=nom_phase(phase)))
+        if etat:
+            self._taches = self._vote_de_taches(etat, sortie)
+        decide = self._cible_decodee(etat, sortie)
+        self.cible.setText(tr("pages.direct.tache_decodee", tache=decide) if self._taches
+                           else tr("pages.direct.cible_decodee", cible=decide))
+        if sortie:
+            return
+        self.verdict.setText(etat.get("instruction") or tr("console.controle.vide"))
+        self.seuil.setText(tr("pages.direct.seuil_inconnu"))
+        n = len(etat.get("noms") or ()) or len((etat.get("params") or {}).get("freqs") or ())
+        if n:
+            self._assure(n, self._designations(etat, n))
+        for _e, barre in self._barres:
+            barre.setValue(0)
+
+    @staticmethod
+    def _vote_de_taches(etat, sortie):
+        """Ce mode décode-t-il une TÂCHE (un vote de classes : le Motor Imagery) plutôt qu'une
+        cible ? Lu sur la FORME de ce qu'il publie, jamais sur son identifiant : `probas` dans sa
+        sortie (la clé qui choisit aussi son rendu, cf. `update_from`), ou, avant la première
+        sortie, `intent_index` en voie 0 de son flux (`channels`)."""
+        if sortie:
+            return "probas" in sortie
+        voies = etat.get("channels") or ()
+        return bool(voies) and voies[0] == "intent_index"
+
+    @staticmethod
+    def _nom(etat, i):
+        """Le nom de la cible `i` (celui que l'état du moteur porte), ou « cible i »."""
+        noms = etat.get("noms") or ()
+        return str(noms[i]) if i < len(noms) and noms[i] else tr("pages.direct.cible_n", i=i)
+
+    def _designations(self, etat, n):
+        """Le nom de chaque cible, avec sa fréquence quand le mode en règle une (le SSVEP)."""
+        freqs = (etat.get("params") or {}).get("freqs") or ()
+        return [tr("pages.direct.nom_hz", nom=self._nom(etat, i), hz=nombre(freqs[i], "g"))
+                if i < len(freqs) else self._nom(etat, i) for i in range(n)]
+
+    def _etiquettes_scores(self, mode_state, scores):
+        """Les étiquettes des barres d'un mode qui montre ses scores à côté (c-VEP, P300) :
+        « cible 2 · +0,31 », ou, en mise en page fixe, le nom de la cible à la place du numéro."""
+        if self.fixe:
+            return [tr("pages.direct.nom_score", nom=nom, score=nombre(v, "+.2f"))
+                    for nom, v in zip(self._designations(mode_state, len(scores)), scores)]
+        return [tr("pages.direct.cible_score", i=i, score=nombre(v, "+.2f"))
+                for i, v in enumerate(scores)]
+
+    def _cible_decodee(self, etat, sortie):
+        """« aucune » sans décision (pas de sortie, -1, fenêtre rejetée), sinon le nom de la
+        cible décidée, et sa fréquence quand la sortie en porte une (`freq_hz`). L'indice est
+        `target_index`, ou `intent_index` pour un vote de tâches (le Motor Imagery)."""
+        index = sortie.get("target_index", sortie.get("intent_index", -1)) if sortie else -1
+        if index is None or int(index) < 0 or sortie.get("artifact"):
+            return tr("pages.direct.aucune")
+        nom = sortie.get("label") or self._nom(etat, int(index))
+        hz = sortie.get("freq_hz")
+        return tr("pages.direct.nom_hz", nom=nom, hz=nombre(hz, "g")) if hz else nom
+
+    # --- les quatre formes de sortie --------------------------------------------------------
+
+    def _update_scores(self, mode_state, sortie):
+        """SSVEP (et tout futur mode à score continu) : un score par cible, sur l'échelle z."""
+        freqs = (mode_state.get("params") or {}).get("freqs") or []
+        scores = sortie.get("scores") or []
+        seuil = float(sortie.get("threshold", Z_MIN))
+        self._assure(len(scores), self._designations(mode_state, len(scores)) if self.fixe
+                     else [tr("pages.direct.frequence", hz=nombre(f, "g")) for f in freqs])
+        self.seuil.setText(tr("pages.direct.ssvep.echelle", seuil=nombre(seuil, "g")))
+
+        # L'échelle du remplissage va jusqu'à `SPAN_SEUILS` (2×) fois le seuil : une barre
+        # pleine à ras le seuil laisserait croire qu'on est au maximum alors qu'on vient à peine
+        # de déclencher. Le facteur vit dans `console/__init__.py` — la TUILE l'applique aussi
+        # (cf. `grid.ModeTile._apercu_scores`).
+        for i, (_e, barre) in enumerate(self._barres):
+            valeur = scores[i] if i < len(scores) else 0.0
+            barre.setValue(int(max(0.0, min(valeur / (SPAN_SEUILS * seuil), 1.0)) * 100))
+
+        index = sortie.get("target_index", -1)
+        if sortie.get("artifact"):
+            self.verdict.setText(tr("pages.direct.ssvep.artefact"))
+        elif index < 0:
+            self.verdict.setText(tr("pages.direct.ssvep.aucune_cible", seuil=nombre(seuil, "g")))
+        elif self.fixe:
+            # La ligne « Cible décodée », juste au-dessus, dit déjà la cible et sa fréquence.
+            self.verdict.setText(tr("console.controle.vide"))
+        else:
+            self.verdict.setText(tr("pages.direct.ssvep.cible", i=index,
+                                    hz=nombre(sortie.get("freq_hz", 0), "g")))
+
+    def _update_probas(self, mode_state, sortie):
+        """Motor Imagery (et tout futur mode à vote de classe) : une probabilité par classe.
+
+        Pas d'échelle 2× ici : une probabilité est déjà bornée à 1, contrairement au z du
+        SSVEP qui n'a pas de plafond naturel.
+
+        ⚠️ **Les barres et le verdict ne décrivent pas le même instant.** Les barres montrent la
+        dernière fenêtre, le verdict sort du VOTE sur les `vote_len` dernières. Il est donc
+        NORMAL de les voir se contredire pendant que l'utilisateur change d'intention — d'où la
+        règle affichée en toutes lettres au-dessus des barres.
+
+        Cette règle est celle du MOTEUR, écrite avec les valeurs que le moteur publie
+        (`threshold` dans la sortie, `min_votes` et `vote_len` dans les réglages) : rien n'est
+        décidé ici. Annoncer « la classe gagnante doit dépasser le seuil » serait faux : le seuil
+        filtre CHAQUE fenêtre, puis c'est le vote qui décide, et l'écran afficherait « 0,99 » à
+        côté de « vote non conclu ».
+        """
+        params = (mode_state or {}).get("params") or {}
+        probas = sortie.get("probas") or {}
+        classes = list(probas.keys())
+        seuil = float(sortie.get("threshold", 0.0))
+        min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
+        vote_connu = min_votes is not None and vote_len is not None
+        self._assure(len(classes), classes)
+        if vote_connu:
+            self.seuil.setText(tr("pages.direct.mi.echelle", seuil=nombre(seuil, "g"),
+                                  min_votes=min_votes, vote_len=vote_len))
+        else:
+            self.seuil.setText(tr("pages.direct.mi.echelle_vote_inconnu", seuil=nombre(seuil, "g")))
+
+        for i, (_e, barre) in enumerate(self._barres):
+            valeur = probas.get(classes[i], 0.0) if i < len(classes) else 0.0
+            barre.setValue(int(max(0.0, min(valeur, 1.0)) * 100))
+
+        index = sortie.get("intent_index", -1)
+        if index < 0:
+            if vote_connu:
+                self.verdict.setText(tr("pages.direct.mi.non_conclu", min_votes=min_votes,
+                                        vote_len=vote_len))
+            else:
+                self.verdict.setText(tr("pages.direct.mi.non_conclu_vote_inconnu"))
+        else:
+            # « du vote » n'est pas décoratif : le moteur publie ici la moyenne des fenêtres qui
+            # ont voté pour cette classe, pas la probabilité de la dernière fenêtre affichée
+            # au-dessus. Sans ce mot, les deux chiffres semblent devoir coïncider.
+            self.verdict.setText(tr("pages.direct.mi.intention", label=sortie.get("label", ""),
+                                    confiance=nombre(sortie.get('confidence', 0.0), ".2f")))
+
+    def _update_correlations(self, mode_state, sortie):
+        """c-VEP : une corrélation par cible, sur une échelle ABSOLUE bornée à 1.
+
+        Ce que ce rendu a de particulier, et qu'aucun des trois autres n'a :
+
+        1. **Une échelle absolue ET un plafond.** Une corrélation de Pearson vit dans [-1, 1] :
+           `SPAN_SEUILS × corr_min` est donc PLAFONNÉ à 1 (le SSVEP, dont le z n'a pas de
+           plafond, applique la même formule avec un PLANCHER à 1 — le contraire).
+        2. **Deux seuils ET un vote, pas un seuil.** Un gagnant doit dépasser `corr_min`,
+           devancer le deuxième de `margin`, **et** être désigné par `min_votes` des `vote_len`
+           dernières fenêtres. Afficher le premier seuil seul ferait lire « 0,40 > 0,26, ça
+           aurait dû déclencher » sur une fenêtre où la deuxième cible était à 0,38 — ou sur une
+           fenêtre franche que le vote n'a pas encore confirmée.
+        3. **Un motif quand rien n'est décidé.** Le moteur distingue quatre causes de -1 (horloge
+           jamais reçue, horloge périmée, corrélations trop serrées, fenêtres qui se
+           contredisent) et les compte séparément : elles appellent des gestes OPPOSÉS. Le texte
+           vient de lui, en clair — la console ne traduit rien, sans quoi le terminal et l'écran
+           finiraient par ne plus dire pareil.
+
+        ⚠️ Comme chez le MI, **les barres et le verdict ne décrivent pas le même instant** : les
+        barres montrent la dernière fenêtre, le verdict sort du VOTE sur les `vote_len`
+        dernières. Il est donc normal de les voir se contredire pendant un changement de cible.
+        """
+        params = (mode_state or {}).get("params") or {}
+        scores = list(sortie.get("scores") or [])
+        corr_min = float(sortie.get("corr_min", 0.0))
+        marge = float(sortie.get("margin", 0.0))
+        index = sortie.get("target_index", -1)
+        min_votes, vote_len = params.get("min_votes"), params.get("vote_len")
+        vote_connu = min_votes is not None and vote_len is not None
+
+        self._assure(len(scores), self._etiquettes_scores(mode_state, scores))
+        if vote_connu:
+            self.seuil.setText(tr("pages.direct.cvep.echelle", corr_min=nombre(corr_min, "g"),
+                                  marge=nombre(marge, "g"), min_votes=min_votes, vote_len=vote_len))
+        else:
+            self.seuil.setText(tr("pages.direct.cvep.echelle_vote_inconnu",
+                                  corr_min=nombre(corr_min, "g"), marge=nombre(marge, "g")))
+
+        # ⚠️ L'échelle vit dans `console/__init__.py`, PAS ici : la TUILE l'applique aussi
+        # (`grid.ModeTile._apercu_scores`), et deux copies diffèrent — à `corr_min = 0` (réglage
+        # légal et courant en séance) la page montrerait 33 % là où la tuile montrerait tout
+        # PLEIN.
+        span = span_correlation(corr_min)
+        for i, (_e, barre) in enumerate(self._barres):
+            valeur = scores[i] if i < len(scores) else 0.0
+            barre.setValue(int(max(0.0, min(valeur / span, 1.0)) * 100))
+
+        if index < 0:
+            # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et -1
+            # n'est pas la cible 0. Le motif est le seul contenu utile de cette ligne — c'est lui
+            # qui dit s'il faut relancer l'émetteur, vérifier le nom du flux, ou saliner.
+            motif = sortie.get("motif") or tr("pages.direct.cvep.pas_de_decision")
+            self.verdict.setText(f"— ({motif})")
+        else:
+            self.verdict.setText(tr("pages.direct.cvep.cible", i=index,
+                                    correlation=nombre(sortie.get("confidence", 0.0), "+.2f")))
+
+    def _update_selection(self, mode_state, sortie):
+        """P300 (et tout futur mode qui ACCUMULE des preuves) : un score par cible, sans seuil.
+
+        Trois choses distinguent ce rendu de celui du SSVEP, et toutes les trois viennent de la
+        sortie elle-même :
+
+        1. **Aucun seuil.** Le moteur ne compare ces scores à rien : il prend l'argmax (la marge
+           `P300_SELECT_MARGIN` porte sur l'ÉCART 1er-2e, pas sur une valeur absolue). Afficher
+           un seuil ici — a fortiori le `Z_MIN` du SSVEP — inventerait une règle de décision qui
+           n'existe pas.
+        2. **Aucune échelle absolue.** Ce sont des log-odds moyens : non bornés, **négatifs le
+           plus souvent** (une cible flashe une fois sur six, le classifieur dit « non-cible »
+           presque toujours), et non comparables entre personnes ni entre manches. Une barre
+           remplie « à 40 % d'un maximum » n'aurait donc aucun sens. Les barres sont **relatives
+           entre elles** : la plus faible vide, la plus forte pleine — ce qui montre ce qui
+           décide vraiment, l'écart entre la 1re et la 2e. La valeur chiffrée est à côté du nom,
+           parce que la barre seule ne dit plus rien d'absolu.
+        3. **Un échantillon par MANCHE**, pas 5 Hz. L'écran reste figé sur la dernière sélection
+           entre deux manches ; c'est normal, et `n_flashes` dit sur combien d'époques elle
+           repose — 48 pour une manche complète, 12 pour le plancher.
+        """
+        scores = list(sortie.get("scores") or [])
+        n_flashes = sortie.get("n_flashes")
+        index = sortie.get("target_index", -1)
+
+        # Échelle RELATIVE, recalculée à chaque manche : c'est le classement qu'on montre, pas une
+        # position sur une règle graduée. La règle vit dans `console.classement_relatif` — la MÊME
+        # fonction que la tuile de la grille appelle (cf. sa docstring : écrite deux fois, elle
+        # diverge).
+        parts = classement_relatif(scores)
+        self._assure(len(scores), self._etiquettes_scores(mode_state, scores))
+        for i, (_e, barre) in enumerate(self._barres):
+            barre.setValue(int(parts[i] * 100))
+
+        # Le nombre de flashs, quand la sortie le porte : un fragment glissé dans les trois
+        # phrases ci-dessous (« CIBLE 3 sur 48 flash(s) »), vide sinon.
+        sur = "" if n_flashes is None else " " + tr("pages.direct.p300.sur", n=n_flashes)
+        self.seuil.setText(tr("pages.direct.p300.echelle", sur=sur))
+
+        if index < 0:
+            # ⚠️ Jamais « aucune cible (rien au-dessus de z=…) » : il n'y a pas de z ici, et
+            # surtout -1 n'est pas la cible 0. Cf. `no_decision_index` dans les métadonnées du
+            # flux, que ce texte ne fait que rendre lisible.
+            self.verdict.setText(tr("pages.direct.p300.non_conclu", sur=sur))
+        else:
+            self.verdict.setText(tr("pages.direct.p300.cible", i=index, sur=sur,
+                                    score=nombre(sortie.get("confidence", 0.0), "+.2f")))
+
+
+# Les deux textes d'échelle de la famille « passif ». Ils sont posés par la BRANCHE qui a
+# mesuré la valeur affichée, jamais par le constructeur — et c'est tout leur intérêt.
+#
+# ⚠️ L'avertissement sur le z (« pages.direct.passif.avertissement_z ») n'est PAS le texte par
+# défaut du label : affiché avant toute sortie, il apparaîtrait aussi sur la page de l'ErrP, qui
+# n'a JAMAIS de z, et affirmerait que son score est « un z contre TON repos du jour » alors que
+# c'est un log-odds comparé au seuil d'une calibration. Une phrase fausse sur l'unité est pire
+# qu'un silence (cf. le P300 rendu comme un SSVEP dans `ActiveView`).
+
+
+class PassiveView(QWidget):
+    """Un indice par ligne, en ÉCART au repos. Aucune sélection, aucune bonne réponse.
+
+    ⚠️ **Deux formes de sortie, deux UNITÉS.** Le neuro rend des `z` contre le repos du jour de
+    CET utilisateur : `+1` veut dire « au-dessus de mon propre repos », pas « chargé », les trois
+    indices dérivent du même calcul spectral et restent corrélés. L'ErrP, lui, rend un log-odds
+    comparé au seuil de SA calibration — rien à voir. C'est écrit sous les barres, pas dans une
+    documentation que personne n'ouvrira : un affichage qui présenterait l'un comme l'autre
+    mentirait. D'où deux textes séparés, posés par la branche qui a produit la valeur.
+    """
+
+    # Au-delà de ±NEURO_Z_SPAN, la barre est pleine. La constante vient de `core/config.py` : la
+    # recopier ici ferait diverger les affichages le jour où quelqu'un la retouche.
+    SPAN = NEURO_Z_SPAN
+
+    def __init__(self):
+        super().__init__()
+        self.etat = QLabel(tr("pages.direct.en_attente"))
+        self.barres = QFormLayout()
+        # Vide au départ : voir le commentaire sur l'avertissement du z, ci-dessus.
+        self.avertissement = QLabel("")
+        self.avertissement.setWordWrap(True)
+        self.avertissement.setStyleSheet("color: #8a8f9c; font-size: 11px;")
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.etat)
+        layout.addLayout(self.barres)
+        layout.addWidget(self.avertissement)
+        layout.addStretch(1)
+        self._barres = {}
+
+    def update_from(self, mode_state):
+        sortie = (mode_state or {}).get("output") or {}
+        # La famille « passif » a une DEUXIÈME forme de sortie, celle de l'ErrP —
+        # `{"error", "score", "threshold", "artifact"}` — qui n'a JAMAIS de clé "z". Router
+        # uniquement sur "z" laisserait la page perpétuellement muette pour l'ErrP : ni crash ni
+        # mensonge, un SILENCE. On aiguille donc ICI AUSSI sur ce que la sortie DÉCLARE, jamais
+        # sur l'identifiant du mode — même principe que `ActiveView.update_from` juste au-dessus.
+        if "error" in sortie:
+            self._update_errp(mode_state, sortie)
+            return
+        z = sortie.get("z") or {}
+        if not z:
+            # Mode démarré mais rien de décodé encore (chauffe, repos, ou en attente d'un
+            # marqueur). On dit qu'on attend — et surtout on n'affirme AUCUNE unité, puisqu'on
+            # ne sait pas encore laquelle des deux formes de sortie ce mode va rendre.
+            #
+            # ⚠️ `or` et pas seulement `[...]` : après son repos, `ErrPRuntime.instruction()` rend
+            # une chaîne VIDE (il n'y a plus de consigne à donner, c'est au stimulus de jouer).
+            # Ce label est le texte principal de la page : vide, il donnerait un écran blanc, qui
+            # se lit « ça ne marche pas ». On ne route PAS sur l'identifiant du mode pour autant :
+            # la phrase est vraie pour n'importe quel mode qui attend.
+            self.etat.setText(_avec_decompte((mode_state or {}).get("instruction")
+                                             or tr("pages.direct.passif.attente_premier"),
+                                             mode_state))
+            self.avertissement.setText(tr("pages.direct.passif.avertissement_attente"))
+            return
+
+        # Le texte d'échelle est posé ICI, dans la branche qui rend des z — pas dans le
+        # constructeur, où il s'appliquait aussi à l'ErrP (cf. l'avertissement du z, plus haut).
+        self.avertissement.setText(tr("pages.direct.passif.avertissement_z"))
+
+        # Un indice qui cesse d'être rapporté perd sa barre. Sans ça elle resterait à l'écran,
+        # figée sur sa dernière valeur, sans rien pour dire qu'elle ne mesure plus rien.
+        for disparu in [c for c in self._barres if c not in z]:
+            self.barres.removeRow(self._barres.pop(disparu))
+
+        for cle, valeur in z.items():
+            if cle not in self._barres:
+                barre = QProgressBar()
+                barre.setRange(-100, 100)
+                barre.setFormat("%v")
+                self._barres[cle] = barre
+                # Le nom en clair, la formule et le SENS de la montée viennent du MOTEUR
+                # (`core.neuro_monitor.INDEX_DESCRIPTIONS`), jamais d'une liste recopiée ici.
+                # Une barre sans son sens de montée (« Charge mentale · θ(Fz,Cz) / α postérieur ·
+                # + = plus chargé ») ne dit pas si elle est bon signe ; la clé brute (« charge »)
+                # ne dirait rien.
+                # `retraduit` : lues à l'import du moteur, elles suivent la langue choisie depuis.
+                nom, formule, sens = retraduit(INDEX_DESCRIPTIONS.get(cle, (cle, "", "")))
+                etiquette = QLabel(_etiquette_indice(nom, formule, sens))
+                self.barres.addRow(etiquette, barre)
+            # ⚠️ Écrêtage LINÉAIRE, par choix. Une compression en `tanh(z / SPAN)` éviterait un
+            # plafond brutal au-delà de ±SPAN, mais comprime aussi À L'INTÉRIEUR de la plage
+            # (z = +1,2 sur ±3 donne 37 % au lieu de 40 %) : la barre cesserait d'être un relevé
+            # linéaire du z reçu, ce que le test de cette page vérifie. Perdre la lisibilité du
+            # cas courant pour gagner un cas rare serait l'inverse du compromis voulu.
+            part = max(-1.0, min(float(valeur) / self.SPAN, 1.0))
+            self._barres[cle].setValue(int(part * 100))
+
+        artefacts = sortie.get("artifacts", 0)
+        if sortie.get("artifact"):
+            self.etat.setText(tr("pages.direct.passif.fenetre_rejetee",
+                                 raison=sortie.get("reason", tr("pages.direct.passif.artefact"))))
+        else:
+            self.etat.setText(tr("pages.direct.passif.rejets", n=artefacts))
+
+    def _update_errp(self, mode_state, sortie):
+        """ErrP : un verdict par feedback, jamais montré comme un interrupteur propre.
+
+        ⚠️ Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs et annule une
+        part des bonnes commandes — `error=1` seul affirmerait un verdict fiable. Le score ET le
+        POINT DE FONCTIONNEMENT (`tpr`/`tnr` MESURÉS, pas seulement `tnr_target` VISÉ) voyagent
+        donc CÔTE À CÔTE, dans le même texte. `point_de_fonctionnement` vit dans `mode_state`
+        (posé par `ErrPRuntime.state()`) et pas dans `sortie` : c'est une mesure de SESSION,
+        constante d'un échantillon à l'autre, contrairement à `threshold` qui EST sur le flux.
+
+        ⚠️ `error = -1` (pas de verdict : époque perdue ou artefact) est un texte VISUELLEMENT
+        DISTINCT de `error = 0` (verdict « correct ») : les confondre affirmerait un « pas
+        d'erreur » qu'on n'a pas observé. `score`/`threshold` valent alors 0.0 par CONVENTION,
+        jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — on ne les affiche donc pas.
+        """
+        error = sortie.get("error", -1)
+        if sortie.get("artifact"):
+            self.etat.setText(tr("pages.direct.errp.artefact"))
+        elif error < 0:
+            self.etat.setText(tr("pages.direct.errp.perdu"))
+        elif error == 1:
+            self.etat.setText(tr("pages.direct.errp.erreur"))
+        else:
+            self.etat.setText(tr("pages.direct.errp.correct"))
+
+        sante = self._sante(mode_state)
+        if error < 0:
+            self.avertissement.setText(tr("pages.direct.errp.sans_mesure") + sante)
+            return
+        score = nombre(float(sortie.get("score", 0.0)), "+.3f")
+        seuil = nombre(float(sortie.get("threshold", 0.0)), "+.3f")
+        pdf = mode_state.get("point_de_fonctionnement") or {}
+        if pdf:
+            self.avertissement.setText(tr(
+                "pages.direct.errp.score_et_fonctionnement", score=score, seuil=seuil,
+                tnr=nombre(pdf.get("tnr", 0.0), ".0%"), tpr=nombre(pdf.get("tpr", 0.0), ".0%"),
+                vise=nombre(pdf.get("tnr_target", 0.0), ".0%")) + sante)
+        else:
+            self.avertissement.setText(tr("pages.direct.errp.score", score=score, seuil=seuil)
+                                       + sante)
+
+    @staticmethod
+    def _sante(mode_state):
+        """Le taux de rejet pour artefact, en queue de l'avertissement. "" s'il n'y a rien vu.
+
+        ⚠️ `ErrPRuntime.state()` calcule `epoques_vues`/`artefacts`/`taux_rejet` EXPRÈS pour ça,
+        et la console est le SEUL client qui lit `state()` (le flux `status` ne transporte pas
+        `modes_state`). Sans cette ligne, ces compteurs seraient reçus dix fois par seconde et
+        JETÉS : une séance où 36 feedbacks sur 40 partent en artefact publie 36 × `error=-1`
+        — honnêtes, et indiscernables de 36 clignements isolés. L'élève conclurait « ça ne marche
+        pas » alors que le diagnostic (contact des électrodes) est dans ces compteurs.
+
+        La FRACTION est affichée à côté du pourcentage, et pas seulement le pourcentage : elle
+        dit toute seule ce qu'un taux vaut. « 100 % » sur une époque alarmerait pour rien ;
+        « 100 % (1/1) » se lit pour ce que c'est. Aucun plancher n'est donc recopié ici — celui
+        du moteur (`_TAUX_REJET_MIN_ECHANTILLONS`) sert à décider quand ALARMER, ce qui n'est pas
+        la même question qu'informer.
+        """
+        taux = mode_state.get("taux_rejet")
+        vues = mode_state.get("epoques_vues") or 0
+        if taux is None or not vues:
+            return ""
+        return " · " + tr("pages.direct.errp.sante", taux=nombre(taux, ".0%"),
+                          n=mode_state.get("artefacts", 0), vues=vues)
+
+
+def _etiquette_indice(nom, formule, sens):
+    """L'étiquette d'un indice passif : son nom en gras, et dessous, en petit, sa formule et le
+    sens de sa montée. Les trois textes viennent du MOTEUR ; ici, rien que de la mise en page."""
+    if not formule:
+        return f"<b>{nom}</b>"
+    return (f"<b>{nom}</b><br><span style='color:#8a8f9c; font-size:10px'>"
+            f"{formule}<br>{sens}</span>")
+
+
+def build(family, ch_names=(), fixe=False):
+    """Le rendu qui convient à cette famille — jamais à un identifiant de mode. `fixe` : la mise
+    en page qui ne change pas de taille, pour un mode actif (cf. `ActiveView`)."""
+    if family == "brut":
+        return TracesView(ch_names)
+    return PassiveView() if family == "passif" else ActiveView(fixe=fixe)

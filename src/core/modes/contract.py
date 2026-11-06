@@ -1,0 +1,1348 @@
+"""Le contrat d'un mode : ce qu'il est, ce qui s'y règle, et comment un réglage est validé.
+
+Un `ModeSpec` est déclaré **à côté de son décodeur** (`modes/ssvep.py` déclare le SSVEP), jamais
+dans un fichier de configuration séparé : deux vérités finissent toujours par diverger.
+
+Le même `Param` sert TROIS usages, et c'est tout l'intérêt de l'objet :
+    1. la console en génère un champ de formulaire (`src/console/params_form.py`) ;
+    2. le moteur s'en sert pour VALIDER ce qu'on lui soumet (`validate` ci-dessous) ;
+    3. son `help` explique à l'étudiant ce qu'il doit comprendre avant d'y toucher.
+
+⚠️ La validation est la pièce sérieuse. Un réglage SSVEP invalide — une fréquence hors bande
+passante, deux cibles plus proches que la résolution de la fenêtre — ne lève AUCUNE erreur à
+l'exécution : le décodage ne détecte simplement jamais rien, ce qui ressemble à « l'utilisateur
+fixe mal ». C'est le mode de panne le plus coûteux du projet, et la raison pour laquelle un refus
+part avec sa raison en clair.
+
+Autotest :
+    python src/core/modes/contract.py
+"""
+
+import math as _math
+import os as _os
+import sys as _sys
+from dataclasses import dataclass
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+from core.config import (BANDPASS, TOLERANCE_DIVISEUR, WINDOW_S,  # noqa: E402
+                         available_frequencies, use_utf8_console)
+# Les refus sont lus dans `core/langues/<langue>/moteur.json`. `core.i18n` n'importe rien du dépôt :
+# aucun cycle possible, alors que ce module-ci est importé par tous les modes.
+from core.i18n import joint, nombre, reglage, tr  # noqa: E402
+from core.lsl_io import stream_name as _stream_name  # noqa: E402
+from core.markers import NOM_FLUX_MAX, nom_reserve  # noqa: E402
+
+
+# Les deux valeurs du réglage `targets_on` (SSVEP) : sur quoi clignotent les cibles. La seconde
+# lève la règle des diviseurs du rafraîchissement.
+CIBLES_ECRAN = "screen"
+CIBLES_PHYSIQUES = "physical"
+
+
+@dataclass(frozen=True)
+class Param:
+    """Un réglage exposé à l'utilisateur : son type, ses bornes, son aide."""
+
+    key: str                  # "freqs" — identifiant stable, la clé côté commande
+    label: str                # "Fréquences des cibles" — ce que lit l'étudiant
+    kind: str                 # "float" | "int" | "bool" | "choice" | "float_list" | "text_list"
+    unit: str = ""            # "Hz"
+    default: object = None
+    min: float = None         # bornes par VALEUR (pour une liste : chaque élément)
+    max: float = None
+    count: tuple = None       # (mini, maxi) d'éléments, pour les listes
+    choices: tuple = ()
+    choices_fn: object = None  # () -> choix, quand ils sont DÉCOUVERTS à l'exécution (modèles MI)
+    libelles: tuple = ()      # ce que l'écran MONTRE pour chaque choix, dans le même ordre
+    #                           (« un écran ») ; la valeur envoyée au moteur reste le choix (« ecran »)
+    actif_si: tuple = ()      # (clé, valeur) : ce réglage ne compte que si le réglage `clé` vaut
+    #                           `valeur`. Sinon la console le grise — elle lit la règle ici.
+    constraints: tuple = ()   # contraintes CROISÉES nommées, cf. _check_constraint
+    proposes: str = ""        # ce paramètre en PROPOSE un autre
+    affecte_decodage: bool = True   # False = changer ce réglage n'exige PAS de reconstruire le
+                                    # runtime (donc pas de flux recréé, pas de chauffe refaite).
+                                    # ⚠️ C'est TOUT ce que ce drapeau promet — pas « le changement
+                                    # prend effet tout de suite ». Ce n'est pas non plus « le
+                                    # décodeur ne le lit jamais » : le c-VEP lit `corr_min` et
+                                    # `margin` à CHAQUE décision, et c'est justement ce qui les
+                                    # rend réglables À CHAUD. Pour qu'un réglage `False` prenne
+                                    # effet sans reconstruction, sa valeur ne doit être FIGÉE
+                                    # NULLE PART : ni dans le `__init__` du runtime, ni dans un
+                                    # objet du MOTEUR construit à partir d'elle.
+                                    # ⚠️ `stream_in` (cvep/errp/p300) est `False` pour une AUTRE
+                                    # raison, et il ne prend PAS effet à chaud : il sert à ouvrir
+                                    # l'inlet de marqueurs UNIQUE du moteur, dont le nom est
+                                    # résolu une fois pour toutes (`server._ouvre_marker_inlet`,
+                                    # qui refuse de recréer un inlet existant et le dit en ⚠️).
+                                    # Le changer pendant que le mode tourne ne fait rien : il faut
+                                    # ARRÊTER puis redémarrer le mode. Il est `False` seulement
+                                    # pour éviter de refaire 23 s de chauffe pour rien, et son
+                                    # `help` le dit à l'étudiant — c'est le seul endroit où il
+                                    # l'apprend. Un contributeur qui n'appliquerait que la
+                                    # première condition livrerait un no-op silencieux en croyant
+                                    # respecter le contrat.
+    help: str = ""
+    si_vide: str = ""         # le refus ENTIER quand un `choice` n'a aucun choix, s'il en faut un
+    #                           plus court que « aucun choix disponible — <help> » : l'aide
+    #                           complète d'un modèle, recopiée dans un refus affiché au bandeau,
+    #                           serait un paragraphe là où il faut une ligne.
+    ouvert: bool = False      # un `choice` OUVERT, pour un NOM DE FLUX (`stream_in`) : il accepte
+    #                           tout nom non vide, même absent de sa liste (la liste reste une
+    #                           suggestion), sauf un flux du moteur lui-même et un nom trop long
+    #                           (`markers.nom_reserve`, `NOM_FLUX_MAX`). La validation n'interroge
+    #                           PAS le réseau : c'est `avertissements` qui dit « pas encore vu ».
+    #                           Il exige un `default` non vide (`registry.check`) : sans lui, son
+    #                           défaut serait le premier choix de la liste, que la validation irait
+    #                           chercher sur le réseau à chaque appel.
+
+    def choices_status(self):
+        """(choix, None) si la source a répondu, ((), raison) si elle a LEVÉ.
+
+        `choices_now` confond les deux exprès — un affichage ne doit pas tomber parce qu'une
+        liste est illisible. Mais `registry.check()`, lui, doit les séparer : une liste vide est
+        l'état normal d'un dépôt fraîchement cloné (aucun modèle entraîné), tandis qu'un
+        `choices_fn` qui lève est un DÉFAUT de déclaration. Les rapporter pareil ferait passer
+        le second pour une situation normale.
+        """
+        if not self.choices_fn:
+            return tuple(self.choices), None
+        try:
+            return tuple(self.choices_fn()), None
+        except Exception as e:  # noqa: BLE001 - une source de choix casse de mille façons
+            return (), f"{type(e).__name__}: {e}"
+
+    def choices_now(self):
+        """Les choix, résolus maintenant. `()` si la source a levé — jamais d'exception.
+
+        Un modèle entraîné apparaît dans `data/` à la fin d'une calibration, donc bien après que
+        ce contrat a été déclaré. Résoudre à l'appel — sans cache — est ce qui fait qu'il est
+        proposable tout de suite au lieu du prochain démarrage du moteur.
+        """
+        choix, erreur = self.choices_status()
+        if erreur:
+            # Un echec d'affichage ne doit jamais arreter une fonction. Le texte ECRIT ICI reste
+            # ASCII, car cette fonction peut etre appelee avant use_utf8_console() (le `label`
+            # interpole, lui, vient du contrat et peut porter des accents — meme regle que
+            # `client_snippet`). L'ASCII etait la contrainte, pas l'anglais : ce message est lu
+            # par un etudiant, il est donc en francais.
+            try:
+                print(f"ATTENTION : impossible de lister les choix de "
+                      f"'{self.label}' ({self.key}) - {erreur}")
+            except Exception:
+                pass  # Affichage echoue (pipe ferme, encodage impossible, etc.), silencieusement
+        return choix
+
+    def default_now(self):
+        """Le défaut de ce réglage. Pour un « choice » sans défaut : le PREMIER choix.
+
+        Les listes dynamiques sont rendues du plus récent au plus ancien, donc « le premier »
+        veut dire « le dernier entraîné » — le choix qu'un étudiant attend après une calibration.
+        None quand il n'y a rien : c'est `validate` qui le refusera, avec l'aide du réglage.
+        """
+        if self.default is not None:
+            return self.default
+        if self.kind == "choice":
+            choix = self.choices_now()
+            return choix[0] if choix else None
+        return None
+
+
+def _defaults_of(params):
+    """Les réglages par défaut d'un jeu de `Param`, résolus maintenant.
+
+    Partagée entre `Calib.defaults` et `ModeSpec.defaults` : un corps unique garantit en
+    STRUCTURE que les deux se comportent pareil, là où une convention (« même corps que… »)
+    pourrait diverger silencieusement le jour où l'un des deux changerait sans l'autre.
+    """
+    return {p.key: p.default_now() for p in params}
+
+
+@dataclass(frozen=True)
+class Rest:
+    """Le plancher de repos exigé par un mode avant de pouvoir décoder."""
+
+    warmup_s: float      # stabilisation JETÉE : l'Unicorn sort un offset DC qui DÉRIVE pendant
+    #                      des dizaines de secondes après l'ouverture de session (10⁵ µV en
+    #                      rampe, mesuré). Un plancher mesuré là-dedans hérite d'un σ gonflé, et
+    #                      comme on décide sur z, le seuil devient INATTEIGNABLE.
+    duration_s: float
+    instruction: str     # consigne à AFFICHER pendant la mesure — sans elle, le plancher est
+    #                      mesuré pendant que l'étudiant fixe une cible, et il est faux.
+
+
+@dataclass(frozen=True)
+class Calib:
+    """Comment ce mode s'entraîne : par qui, avec quels réglages, et pour quel coût en signal.
+
+    Deux valeurs de `kind`, qui disent **qui mène la ligne du temps** (les quatre calibrations
+    sont jouées par le MOTEUR et affichées par la console) :
+      - "moteur" — le moteur mène. Les consignes sont du texte et un décompte. C'est le cas du
+        Motor Imagery : il est ENDOGÈNE, il n'a aucun stimulus à afficher à la frame près.
+      - "fenetre" — une fenêtre de `src/stimulus/` mène, parce que le protocole exige un stimulus
+        verrouillé à la frame que Qt ne sait pas rendre. Le moteur est alors PASSIF : il écoute les
+        marqueurs, découpe ses époques par le chemin du décodage, et entraîne quand la fenêtre
+        annonce la fin. `stimulus_id` dit laquelle.
+
+    ⚠️ `stimulus_id` est une CLÉ, jamais un chemin de module. `core` ne nomme aucune fenêtre — il
+    tournerait sinon sur une machine sans écran en important du pygame. La résolution clé ->
+    commande vit dans `stimulus/registry.py`, et c'est la console qui fait le pont.
+
+    ⚠️ `epoch_s` n'est pas décoratif : c'est la plus longue tranche que cette calibration
+    prélèvera dans le tampon glissant du moteur. `EngineServer` dimensionne son tampon dessus. La
+    déclarer trop courte tronquerait chaque époque enregistrée SANS erreur — l'entraînement
+    porterait sur trois fois moins de données que l'écran n'en annonce.
+    """
+
+    kind: str              # "moteur" (le moteur mène) | "fenetre" (une fenêtre de stimulus mène)
+    stimulus_id: str = ""  # la CLÉ que `stimulus/registry.py` résout ; "" si kind == "moteur"
+    label: str = ""        # "Entraîner le Motor Imagery" — le titre de la page
+    briefing: tuple = ()   # les consignes à lire AVANT de commencer, une ligne par élément
+    params: tuple = ()     # les `Param` de la calibration (durée de séance…)
+    epoch_s: float = 0.0   # la plus longue tranche prélevée dans le tampon du moteur
+    runtime_cls: object = None   # la classe du runtime, ou None si le moteur ne sait pas la jouer
+
+    def __post_init__(self):
+        if self.kind not in ("moteur", "fenetre"):
+            raise ValueError(f"kind inconnu : « {self.kind} » (attendu « moteur » ou « fenetre »)")
+        if self.kind == "fenetre" and not self.stimulus_id:
+            raise ValueError(
+                "une calibration « fenetre » doit déclarer son stimulus_id : sans lui, le bouton "
+                "« Entraîner » n'a aucune fenêtre à lancer, et le clic reste SILENCIEUX — le défaut "
+                "que ce chantier répare, réintroduit par le contrat lui-même")
+        if self.kind == "moteur" and self.stimulus_id:
+            raise ValueError(
+                f"une calibration « moteur » ne lance aucune fenêtre : stimulus_id "
+                f"« {self.stimulus_id} » est de trop (il ferait apparaître un bouton « Lancer le "
+                f"stimulus » sur un mode qui n'a pas de stimulus)")
+
+    def defaults(self):
+        """Les réglages par défaut de cette calibration, résolus maintenant.
+
+        Partage sa mécanique avec `ModeSpec.defaults` (`_defaults_of`) — c'est ce qui permet à
+        `validate` de traiter les deux sans distinction.
+        """
+        return _defaults_of(self.params)
+
+
+@dataclass(frozen=True)
+class ModeSpec:
+    """Tout ce que le produit sait d'un mode — y compris d'un mode qu'il ne sait pas faire.
+
+    Le registre décrit **tous** les modes, publiés ou non. C'est lui qui porte l'honnêteté de
+    l'interface : sans ça, la grille ne montrerait que ce qui est chargé, et les modes manquants
+    seraient invisibles.
+    """
+
+    id: str                    # "ssvep" — clé stable, partout
+    label: str                 # "SSVEP"
+    family: str                # "actif" (l'utilisateur choisit) | "passif" (on observe)
+    summary: str               # une phrase : ce que le mode produit
+    status: str                # "moteur" | "appli_pygame" | "prevu"
+    unavailable: str = ""      # POURQUOI il n'est pas dans le moteur ; "" si status == "moteur"
+    params: tuple = ()
+    rest: Rest = None
+    calibration: Calib = None
+    stream: str = None         # suffixe du flux publié, ex. "decoded_ssvep"
+    channels: tuple = ()       # voies de ce flux, quand elles sont FIXES
+    channels_fn: object = None  # (params) -> voies, quand elles dépendent d'un réglage (SSVEP)
+    key_channels: tuple = ()   # les voies où CE mode lit son signal, pour le contrôle de liaison
+                               # de la console. Elles viennent de `core/config.py` (OCCIPITAL,
+                               # P300_MIDLINE…) : le mode les DÉCLARE, la console les surligne,
+                               # et aucune liste n'est recopiée dans l'interface.
+    stimulus_id: str = ""      # la CLÉ de la fenêtre qui affiche le stimulus de CE mode pendant
+                               # qu'il DÉCODE — jamais un chemin : `core` ne nomme aucune fenêtre,
+                               # c'est `src/stimulus/registry.py` qui résout clé -> commande.
+                               # ⚠️ À NE PAS confondre avec `Calib.stimulus_id`, qui désigne la
+                               # fenêtre du PROTOCOLE DE CALIBRATION. Les deux valent la même
+                               # chose là où les deux existent, mais ce sont deux questions
+                               # distinctes : « avec quoi décode-t-on » et « avec quoi
+                               # calibre-t-on ». Le SSVEP montre qu'il faut les séparer : il a un
+                               # stimulus et AUCUNE calibration (la CCA n'apprend rien).
+    tests_si: tuple = ()       # (clé, valeur, raison) : « Tester sur une session » (le test
+                               # GUIDÉ, `test_id`) exige que le réglage `clé` vaille `valeur` (le
+                               # SSVEP : des cibles à l'écran, que sa fenêtre guidée sait
+                               # afficher). Sinon le moteur refuse le test, et la console grise
+                               # son bouton en disant `raison`. « Tester librement » n'en dépend
+                               # pas : c'est la fenêtre qui sait, ou non, tenir ce réglage.
+    test_id: str = ""          # la CLÉ de la MESURE qui ÉPROUVE ce mode, ou "" s'il n'est pas
+                               # testable. Même forme que `stimulus_id` : une clé, jamais une
+                               # classe — c'est `registry.MESURES` qui la résout, et `core` n'a
+                               # donc rien de neuf à nommer.
+                               # ⚠️ Un mode n'est testable que s'il existe une VÉRITÉ-TERRAIN à
+                               # comparer : on désigne quelque chose, le moteur décide, on
+                               # vérifie. Le Neuro (charge, somnolence, engagement) et le Brut
+                               # n'en ont AUCUNE — il n'y a pas de bonne réponse. Ils
+                               # s'OBSERVENT, et annoncer une justesse là où rien ne peut être
+                               # juste ou faux serait une mesure inventée.
+    marker_epoch_s: float = 0.0   # tranche prélevée autour d'un marqueur (pré + post), 0 = ce
+                                  # mode n'écoute pas les marqueurs. Dimensionne le tampon du
+                                  # moteur : sous-dimensionné, CHAQUE époque serait tronquée en
+                                  # silence — le décodeur recevrait moins de signal que le
+                                  # contrat n'en annonce, sans la moindre erreur.
+    runtime_cls: object = None  # la classe ModeRuntime, ou None si le moteur ne sait pas le faire
+    avertissement: str = ""    # un avertissement de SÉCURITÉ, ou "" : la page du mode le montre
+                               # en gros, en tête, en permanence. Les modes qui font clignoter un
+                               # stimulus y portent `AVERTISSEMENT_CLIGNOTEMENT`.
+
+    def defaults(self):
+        """Le jeu de réglages par défaut de ce mode, résolu maintenant."""
+        return _defaults_of(self.params)
+
+    def channels_for(self, params):
+        """Les voies réellement publiées pour ces réglages.
+
+        Le SSVEP nomme ses voies d'après ses fréquences (`score_15Hz`) : une liste figée dans le
+        contrat mentirait dès le premier changement de réglage.
+        """
+        return tuple(self.channels_fn(params)) if self.channels_fn else tuple(self.channels)
+
+
+# Une valeur de l'appelant citée dans un refus est COUPÉE à cette longueur : une application peut
+# envoyer n'importe quoi (un nom de 10 000 caractères), et le refus part sur le réseau et
+# s'affiche dans le bandeau de la console.
+RECOPIE_MAX = 60
+
+
+def _nom(param):
+    """Le nom d'un réglage dans un refus : son libellé à l'écran, et sa clé en plus vers
+    l'application (`i18n.reglage`)."""
+    return reglage(param.label, param.key)
+
+
+def recopie(valeur, brut=False):
+    """La valeur d'un appelant telle qu'un refus la cite : `repr` (ou le texte tel quel avec
+    `brut`), coupé à `RECOPIE_MAX` caractères."""
+    texte = str(valeur) if brut else repr(valeur)
+    return texte if len(texte) <= RECOPIE_MAX else texte[:RECOPIE_MAX] + "…"
+
+
+def validate(spec, params):
+    """(réglages complets, None) si tout passe, sinon (None, raison en clair).
+
+    Les clés absentes prennent leur défaut : un appelant peut ne soumettre que ce qu'il change.
+    """
+    known = {p.key: p for p in spec.params}
+    inconnus = sorted(k for k in params if k not in known)
+    if inconnus:
+        cites = [recopie(k, brut=True) for k in inconnus[:5]] + (["…"] if len(inconnus) > 5
+                                                                   else [])
+        return None, tr("moteur.contrat.inconnu", mode=spec.label, cles=joint(", ", cites),
+                        attendus=joint(", ", sorted(known)) or tr("moteur.contrat.aucun_reglage"))
+
+    values = spec.defaults()
+    for key, param in known.items():
+        # Toujours coercer les défauts aussi : un défaut hors de ses propres bornes doit être
+        # refusé comme tout réglage, sinon le mode démarre et refuse ses propres valeurs.
+        value_to_coerce = params[key] if key in params else values[key]
+        value, reason = _coerce(param, value_to_coerce)
+        if reason:
+            return None, reason
+        values[key] = value
+
+    for param in spec.params:
+        reason = _check_constraints(param, values)
+        if reason:
+            return None, reason
+    return values, None
+
+
+def avertissements(spec, values):
+    """Les avertissements d'une validation réussie : un `Texte` par réglage OUVERT absent de sa liste.
+
+    C'est le SEUL endroit de la validation qui interroge le réseau. Un nom absent est accepté
+    quand même : l'application qui le publie peut ne pas être lancée encore.
+    """
+    textes = []
+    for p in spec.params:
+        if p.kind == "choice" and p.ouvert and p.key in values:
+            if values[p.key] not in p.choices_now():
+                textes.append(tr("moteur.contrat.flux_pas_vu", reglage=_nom(p),
+                                 nom=values[p.key]))
+    return textes
+
+
+def _avec_unite(param, valeur):
+    """`valeur` (un nombre) suivi de l'unité du réglage, en gardant le nombre réécrivable."""
+    return joint(" ", [nombre(valeur), param.unit]) if param.unit else nombre(valeur)
+
+
+def _check_bounds(param, value):
+    if param.min is not None and value < param.min:
+        return tr("moteur.contrat.sous_minimum", reglage=_nom(param),
+                  valeur=_avec_unite(param, value), borne=_avec_unite(param, param.min))
+    if param.max is not None and value > param.max:
+        return tr("moteur.contrat.au_dessus_maximum", reglage=_nom(param),
+                  valeur=_avec_unite(param, value), borne=_avec_unite(param, param.max))
+    return None
+
+
+# Le refus d'un mode à modèle quand aucun modèle n'existe. UNE phrase, partagée par les quatre
+# (MI, P300, ErrP, c-VEP) et par leurs tests, qui reprennent les `Param` du mode.
+SANS_MODELE = tr("moteur.contrat.sans_modele")
+
+# L'avertissement des modes qui font clignoter un stimulus (SSVEP, c-VEP, P300) : des lumières qui
+# clignotent peuvent déclencher une crise d'épilepsie photosensible. UNE phrase, partagée.
+AVERTISSEMENT_CLIGNOTEMENT = tr("mode.avertissement.epilepsie")
+
+
+def _coerce(param, value):
+    """(valeur convertie, None) ou (None, raison). Convertit AVANT de vérifier les bornes."""
+    if param.kind == "bool":
+        return bool(value), None
+
+    if param.kind == "choice" and param.ouvert:
+        # Pas d'appel à `choices_now()` : valider ne doit jamais attendre le réseau.
+        if not isinstance(value, str) or not value.strip():
+            return None, tr("moteur.contrat.nom_vide", reglage=_nom(param))
+        nom = value.strip()
+        if len(nom) > NOM_FLUX_MAX:
+            return None, tr("moteur.contrat.nom_long", reglage=_nom(param), n=len(nom),
+                            maxi=NOM_FLUX_MAX)
+        # Un flux du moteur lui-même (`status`, les flux du pilotage) : la liste déroulante le
+        # cache, la saisie doit le refuser aussi, sinon le moteur s'écouterait lui-même.
+        if nom_reserve(nom):
+            return None, tr("moteur.contrat.nom_reserve", reglage=_nom(param), nom=nom)
+        return nom, None
+
+    if param.kind == "choice":
+        choix = param.choices_now()
+        if not choix:
+            # Cas courant, pas exceptionnel : aucun modèle entraîné encore. Le refus doit dire
+            # comment en obtenir un, sinon l'étudiant voit un champ vide et rien d'autre.
+            if param.si_vide:
+                return None, param.si_vide
+            if param.help:
+                return None, tr("moteur.contrat.aucun_choix_aide", reglage=_nom(param),
+                                aide=param.help)
+            return None, tr("moteur.contrat.aucun_choix", reglage=_nom(param))
+        if value not in choix:
+            # Une application ne connaît pas les chemins du poste : elle désigne un modèle par
+            # son nom de fichier. Il faut qu'un seul choix le porte, sinon on devinerait.
+            if isinstance(value, str):
+                portes = [c for c in choix
+                          if isinstance(c, str) and _os.path.basename(c) == value]
+                if len(portes) == 1:
+                    return portes[0], None
+            # Le refus liste des NOMS DE FICHIER : jamais les dossiers du poste — pas plus
+            # dans la valeur citée (un chemin retenu dont le fichier a disparu).
+            cite = (_os.path.basename(value) if isinstance(value, str) and _os.path.isabs(value)
+                    else value)
+            return None, tr("moteur.contrat.choix_invalide", reglage=_nom(param),
+                            valeur=recopie(cite),
+                            choix=joint(", ", [_os.path.basename(str(c)) or str(c)
+                                               for c in choix]))
+        return value, None
+
+    if param.kind == "float_list":
+        if isinstance(value, (str, bytes)):
+            return None, tr("moteur.contrat.liste_attendue", reglage=_nom(param),
+                            valeur=recopie(value))
+        try:
+            values = tuple(_flottant(v) for v in value)
+        except (TypeError, ValueError, OverflowError):
+            return None, tr("moteur.contrat.liste_attendue", reglage=_nom(param),
+                            valeur=recopie(value))
+        if param.count:
+            lo, hi = param.count
+            if not lo <= len(values) <= hi:
+                return None, tr("moteur.contrat.nombre_elements", reglage=_nom(param),
+                                mini=lo, maxi=hi, n=len(values))
+        for v in values:
+            reason = _refus_non_fini(param, v) or _check_bounds(param, v)
+            if reason:
+                return None, reason
+        return values, None
+
+    if param.kind == "text_list":
+        return _coerce_textes(param, value)
+
+    try:
+        converted = int(value) if param.kind == "int" else _flottant(value)
+    except (TypeError, ValueError, OverflowError):
+        # `OverflowError` : `int(float("inf"))` lève CELLE-LÀ, pas `ValueError` — et `submit`
+        # promet de ne jamais lever.
+        return None, tr("moteur.contrat.nombre_attendu", reglage=_nom(param), valeur=recopie(value))
+    reason = _refus_non_fini(param, converted) or _check_bounds(param, converted)
+    return (None, reason) if reason else (converted, None)
+
+
+# La longueur d'un texte d'une `text_list`. Ces textes deviennent des IDENTIFIANTS publics — les
+# tâches du Motor Imagery sont annoncées dans les métadonnées `classes` du flux `decoded_mi` : un
+# paragraphe n'en fait pas un.
+TEXTE_MAX = 24
+
+
+def _coerce_textes(param, value):
+    """Une liste de textes COURTS, chacun nommé une seule fois (les tâches du MI).
+
+    Les espaces autour sont retirés ; la casse est gardée telle que tapée. Refusés : un texte
+    vide, un doublon (sans tenir compte de la casse : « Pieds » et « pieds » nommeraient deux
+    tâches que personne ne distingue), une virgule (le flux décrit ses classes en les joignant par
+    des virgules), un texte plus long que `TEXTE_MAX`.
+    """
+    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+        return None, tr("moteur.contrat.textes_attendus", reglage=_nom(param), valeur=recopie(value))
+    textes = tuple(str(v).strip() for v in value)
+    if param.count:
+        lo, hi = param.count
+        if not lo <= len(textes) <= hi:
+            return None, tr("moteur.contrat.nombre_elements", reglage=_nom(param),
+                            mini=lo, maxi=hi, n=len(textes))
+    vus = set()
+    for rang, texte in enumerate(textes, start=1):
+        if not texte:
+            return None, tr("moteur.contrat.texte_vide", reglage=_nom(param), rang=rang)
+        if "," in texte:
+            return None, tr("moteur.contrat.texte_virgule", reglage=_nom(param), texte=texte)
+        if len(texte) > TEXTE_MAX:
+            return None, tr("moteur.contrat.texte_long", reglage=_nom(param), texte=texte,
+                            maxi=TEXTE_MAX)
+        if texte.casefold() in vus:
+            return None, tr("moteur.contrat.texte_doublon", reglage=_nom(param), texte=texte)
+        vus.add(texte.casefold())
+    return textes, None
+
+
+def _refus_non_fini(param, valeur):
+    """La raison de refuser NaN ou l'infini, ou None.
+
+    ⚠️ `_check_bounds` ne les voit pas : `nan < min` et `nan > max` sont FAUX tous les deux, donc
+    un NaN traverse n'importe quelles bornes. Et l'infini traverse un réglage sans `max` : un
+    rafraîchissement infini ferait lever `divise_le_refresh` (`round(inf)`) et tourner sans fin
+    la boucle des diviseurs de `config.available_frequencies`.
+
+    ⚠️ Un ENTIER trop grand pour un flottant (JSON en permet de plus de 308 chiffres) fait LEVER
+    `isfinite`, qui le convertit : il est refusé comme l'infini qu'il deviendrait. Sans ça, une
+    application qui envoie un entier de 400 chiffres ferait lever `submit`.
+    """
+    try:
+        if _math.isfinite(valeur):
+            return None
+    except OverflowError:
+        valeur = _math.inf if valeur > 0 else -_math.inf
+    return tr("moteur.contrat.nombre_non_fini", reglage=_nom(param), valeur=nombre(valeur))
+
+
+def _flottant(v):
+    """`float(v)`, sauf pour un ENTIER trop grand pour un flottant : ±inf au lieu de lever
+    `OverflowError` (`_refus_non_fini` le refuse ensuite, comme l'infini)."""
+    try:
+        return float(v)
+    except OverflowError:
+        if isinstance(v, int):
+            return _math.inf if v > 0 else -_math.inf
+        raise
+
+
+def valider_un(param, valeur):
+    """(valeur convertie, None) ou (None, raison) — un réglage SEUL : son type et ses bornes.
+
+    Sans les contraintes CROISÉES, exprès : c'est ce qu'il faut à « Proposer », qui lit le
+    rafraîchissement, l'alpha et la bande À L'ÉCRAN pour calculer les fréquences — les
+    fréquences, elles, sont ce qu'on va remplacer, et juger leur accord avec le reste refuserait
+    la proposition pour la raison même qu'on la demande. Le refus est celui de `validate`, mot
+    pour mot : c'est la même fonction.
+    """
+    return _coerce(param, valeur)
+
+
+def _check_constraints(param, values):
+    """Contraintes CROISÉES, nommées dans le contrat et implémentées ICI — jamais dans l'interface.
+
+    Elles reçoivent tous les réglages du mode, pas seulement le leur : c'est ce qui permet de
+    vérifier, par exemple, qu'un nombre de cibles s'accorde à une liste de fréquences.
+    """
+    for name in param.constraints:
+        if name == "dans_la_bande":
+            # La bande EN VIGUEUR : celle que le mode règle (`params_bande`, le SSVEP), sinon celle
+            # de l'acquisition. Juger contre `BANDPASS` un mode qui filtre sur 8-20 Hz laisserait
+            # passer 30 Hz — que son filtre supprime avant le décodage.
+            lo, hi = bande_de(values, BANDPASS)
+            hors = [v for v in _as_list(values.get(param.key)) if not lo <= v <= hi]
+            if hors:
+                valeurs = joint(", ", [nombre(v) for v in hors])
+                if "band_low" in values and "band_high" in values:
+                    # Le refus dit où la bande se change : elle est réglable, sur la même page.
+                    return tr("moteur.contrat.hors_bande_reglee", reglage=_nom(param),
+                              valeurs=valeurs, bas=nombre(lo), haut=nombre(hi),
+                              reglage_bas=tr("moteur.bande.bas"),
+                              reglage_haut=tr("moteur.bande.haut"))
+                return tr("moteur.contrat.hors_bande", reglage=_nom(param),
+                          valeurs=valeurs, bas=nombre(lo), haut=nombre(hi))
+
+        elif name == "separables":
+            # Résolution fréquentielle d'une fenêtre de WINDOW_S : deux cibles plus proches que
+            # 1/WINDOW_S ne sont pas séparables, quelle que soit la qualité du signal.
+            ecart_min = 1.0 / WINDOW_S
+            ordonne = sorted(_as_list(values.get(param.key)))
+            proches = [(a, b) for a, b in zip(ordonne, ordonne[1:]) if b - a < ecart_min]
+            if proches:
+                return tr("moteur.contrat.trop_proches", reglage=_nom(param),
+                          paires=joint(", ", [tr("moteur.contrat.paire", a=nombre(a), b=nombre(b))
+                                            for a, b in proches]),
+                          fenetre=nombre(WINDOW_S), ecart=nombre(ecart_min, ".2f"))
+
+        elif name == "divise_le_refresh":
+            # Une fréquence n'est affichable sans jitter que si c'est un diviseur ENTIER du
+            # rafraîchissement : sinon l'écran saute des cycles, et le décodeur corrèle contre une
+            # sinusoïde que personne n'affiche. Panne parfaitement silencieuse — aucune erreur,
+            # juste zéro détection — donc on la refuse ICI plutôt que de la laisser en séance.
+            # Des cibles PHYSIQUES (des LED) clignotent à la fréquence qu'on leur donne : aucun
+            # écran, donc aucun diviseur à respecter. La clé est nommée en dur, comme `refresh_hz`.
+            if values.get("targets_on") == CIBLES_PHYSIQUES:
+                return None
+            refresh = float(values.get("refresh_hz") or 0.0)
+            if refresh <= 0:
+                return tr("moteur.contrat.refresh_positif", reglage=_nom(param),
+                          valeur=nombre(refresh))
+            for v in _as_list(values.get(param.key)):
+                if v <= 0:
+                    return tr("moteur.contrat.frequence_positive", reglage=_nom(param),
+                              valeur=nombre(v))
+                k = round(refresh / v)
+                exact = refresh / k if k >= 2 else 0.0
+                # k < 2 : soit la fréquence dépasse le refresh, soit elle l'égale — dans les
+                # deux cas il n'y a pas de clignotement du tout.
+                if k < 2 or abs(v - exact) > TOLERANCE_DIVISEUR * exact:
+                    # Les plus proches DANS la bande en vigueur : suggérer un diviseur que
+                    # `dans_la_bande` refuserait au clic suivant serait une porte qui se referme.
+                    lo_b, hi_b = bande_de(values, BANDPASS)
+                    proches = [nombre(f) for f in sorted(
+                        (f for _n, f in available_frequencies(refresh, bande=(lo_b, hi_b))
+                         if f <= hi_b),
+                        key=lambda f: abs(f - v))[:2]]
+                    return tr("moteur.contrat.pas_diviseur", reglage=_nom(param),
+                              valeur=nombre(v), refresh=nombre(refresh),
+                              proches=(tr("moteur.contrat.paire", a=proches[0], b=proches[1])
+                                       if len(proches) == 2 else joint(", ", proches)))
+
+        elif name == "un_nom_par_cible":
+            # Les NOMS des cibles s'accordent à leurs FRÉQUENCES : un nom par fréquence, dans le
+            # même ordre, ou aucun (les noms par défaut). La clé partenaire est nommée en dur,
+            # comme `refresh_hz` chez la voisine.
+            noms = list(values.get(param.key) or ())
+            freqs = _as_list(values.get("freqs") if values.get("freqs") is not None else [])
+            if noms and len(noms) != len(freqs):
+                return tr("moteur.contrat.un_nom_par_cible", reglage=_nom(param),
+                          noms=len(noms), freqs=len(freqs))
+
+        elif name == "votes_atteignables":
+            # Deux réglages numériques bornés INDÉPENDAMMENT (chacun dans sa propre plage),
+            # mais dont la COMBINAISON peut être irréalisable : exiger plus d'accords qu'il
+            # n'y a de fenêtres pour les compter ne peut JAMAIS être satisfait, quel que soit
+            # le signal — le mode ne publierait plus jamais que -1, en silence. C'est la panne
+            # que ce produit existe pour éliminer : aucune erreur à l'exécution, juste un
+            # décodage qui ne conclut plus rien, ce qui ressemble à un signal absent.
+            #
+            # La clé partenaire est nommée en dur ici, comme `refresh_hz` chez la voisine. Si
+            # elle manque, on REFUSE au lieu de laisser passer : une contrainte croisée déclarée
+            # mais jamais évaluée est une garantie qui n'existe pas, et personne ne s'en
+            # apercevrait — c'est le mode de panne que ce module entier existe pour éliminer.
+            min_votes = values.get(param.key)
+            vote_len = values.get("vote_len")
+            if vote_len is None or min_votes is None:
+                manquante = "vote_len" if vote_len is None else param.key
+                return tr("moteur.contrat.votes_partenaire", reglage=_nom(param), champ=manquante)
+            if min_votes > vote_len:
+                return tr("moteur.contrat.votes_inatteignables", reglage=_nom(param),
+                          votes=min_votes, fenetres=vote_len)
+
+        else:
+            return tr("moteur.contrat.contrainte_inconnue", nom=name, reglage=_nom(param))
+    return None
+
+
+def _as_list(value):
+    return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def params_bande(defaut, bas, haut, aide):
+    """Les deux réglages d'une BANDE de fréquences : `band_low` et `band_high`.
+
+    `defaut` : la bande de toujours du mode. `bas` et `haut` : les bornes (mini, maxi) de chaque
+    coupure. Elles sont choisies pour que la bande contienne TOUJOURS le cœur du signal du
+    paradigme — tout ce qui va de `bas[1]` à `haut[0]`. Une bande qui retirerait le signal (8-30 Hz
+    pour un P300, qui vit sous 8 Hz) ne lève rien : elle décode du bruit avec des scores
+    plausibles. Elle est donc refusée ICI, bornes comprises dans le refus.
+
+    Et comme `bas[1] < haut[0]`, une bande acceptée n'est jamais vide ni inversée : les bornes
+    suffisent, sans contrainte croisée à écrire ni à tenir d'accord. Et comme `bas[0] > 0`, la
+    coupure basse n'est jamais nulle : `config.available_frequencies` refuse une fréquence minimale
+    nulle ou négative (sans ce refus, sa boucle ne s'arrêterait jamais).
+
+    `aide` : la bulle des deux réglages — ce que ce mode cherche dans cette bande, dit par lui.
+    """
+    if not 0 < bas[0] <= float(defaut[0]) <= bas[1] < haut[0] <= float(defaut[1]) <= haut[1]:
+        raise ValueError(f"bande mal déclarée : défaut {defaut}, coupure basse dans {bas}, "
+                         f"coupure haute dans {haut} — la basse doit rester strictement "
+                         f"positive, et strictement sous la haute")
+    return (
+        Param(key="band_low", label=tr("moteur.bande.bas"), kind="float", unit="Hz",
+              default=float(defaut[0]), min=float(bas[0]), max=float(bas[1]), help=aide),
+        Param(key="band_high", label=tr("moteur.bande.haut"), kind="float", unit="Hz",
+              default=float(defaut[1]), min=float(haut[0]), max=float(haut[1]), help=aide),
+    )
+
+
+def bande_de(params, defaut):
+    """La bande `(bas, haut)` de ces réglages validés, ou `defaut` s'ils n'en déclarent pas."""
+    if "band_low" not in params or "band_high" not in params:
+        return tuple(defaut)
+    return float(params["band_low"]), float(params["band_high"])
+
+
+def _selftest():
+    """Contrôle la validation : ce qui passe, ce qui est refusé, et avec quelle raison.
+
+    Le refus DOIT porter sa raison en clair. Un paramètre invalide ne produit aucune erreur à
+    l'exécution, seulement un décodage muet — le mode de panne le plus coûteux du projet.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    spec = ModeSpec(
+        id="essai", label="Essai", family="actif", summary="mode de test", status="moteur",
+        params=(
+            Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                  default=(15.0, 20.0, 8.57), count=(2, 8),
+                  constraints=("dans_la_bande", "separables")),
+            Param("gain", "Gain", "float", default=1.0, min=0.0, max=10.0),
+            Param("actif", "Activé", "bool", default=True),
+            Param("methode", "Méthode", "choice", default="cca", choices=("cca", "fbcca")),
+        ))
+
+    values, reason = validate(spec, {})
+    chk(values == {"freqs": (15.0, 20.0, 8.57), "gain": 1.0, "actif": True, "methode": "cca"},
+        f"sans rien fournir, on obtient les défauts ({values})")
+    chk(reason is None, "aucune raison de refus sur les défauts")
+
+    values, reason = validate(spec, {"gain": 3})
+    chk(values is not None and values["gain"] == 3.0 and values["freqs"] == (15.0, 20.0, 8.57),
+        "un réglage partiel garde les défauts des autres")
+
+    for params, attendu in (
+            ({"freqs": [15.0, 60.0]}, "hors bande passante"),
+            ({"freqs": [15.0, 15.2]}, "trop proches"),
+            ({"freqs": [15.0]}, "il en faut entre 2 et 8"),
+            ({"freqs": [15.0] * 9}, "il en faut entre 2 et 8"),
+            ({"freqs": "quinze"}, "liste de nombres attendue"),
+            ({"gain": 99.0}, "dépasse le maximum"),
+            ({"gain": -1.0}, "sous le minimum"),
+            ({"gain": "beaucoup"}, "nombre attendu"),
+            ({"methode": "magie"}, "n'est pas un choix valide"),
+            ({"couleur": "rouge"}, "réglage inconnu")):
+        values, reason = validate(spec, params)
+        chk(values is None and reason and attendu in reason,
+            f"{params} refusé : {reason}")
+
+    # `separables` porte sur la résolution de la fenêtre, pas sur un goût : deux cibles
+    # distantes de moins de 1/WINDOW_S ne sont PAS séparables, quelle que soit la qualité.
+    ecart = 1.0 / WINDOW_S
+    values, _ = validate(spec, {"freqs": [15.0, 15.0 + ecart + 0.01]})
+    chk(values is not None, f"deux cibles à {ecart + 0.01:.2f} Hz d'écart passent")
+    values, _ = validate(spec, {"freqs": [15.0, 15.0 + ecart - 0.01]})
+    chk(values is None, f"deux cibles à {ecart - 0.01:.2f} Hz d'écart sont refusées")
+
+    # Un float_list qui déclare des bornes SANS contrainte doit quand même être borné :
+    # sinon un futur mode accepterait des valeurs hors plage en silence.
+    borne = ModeSpec(id="borne", label="Borné", family="actif", summary="", status="moteur",
+                     params=(Param("liste", "Liste bornée", "float_list", default=(1.0,),
+                                   min=0.0, max=10.0),))
+    values, reason = validate(borne, {"liste": [5.0, 99.0]})
+    chk(values is None and reason and "dépasse le maximum" in reason,
+        f"un float_list borné sans contrainte reste borné : {reason}")
+
+    # Une `text_list` (les tâches du MI) : des textes courts, distincts, comptés.
+    taches = ModeSpec(id="taches", label="Tâches", family="actif", summary="", status="moteur",
+                      params=(Param("taches", "Tâches", "text_list", default=("A", "B"),
+                                    count=(2, 5)),))
+    values, reason = validate(taches, {"taches": ["  Pieds ", "Mains"]})
+    chk(values is not None and values["taches"] == ("Pieds", "Mains"),
+        f"des tâches valides passent, sans les espaces autour ({values}, {reason})")
+    for mauvais, quoi in ((["Pieds"], "une seule"), (["a", "b", "c", "d", "e", "f"], "six"),
+                          (["Pieds", " "], "une vide"), (["Pieds", "pieds"], "un doublon"),
+                          (["Pieds, mains", "Repos"], "une virgule"),
+                          (["x" * (TEXTE_MAX + 1), "Repos"], "trop longue"),
+                          ("Pieds,Mains", "une chaîne au lieu d'une liste")):
+        values, reason = validate(taches, {"taches": mauvais})
+        chk(values is None and bool(reason), f"tâches refusées — {quoi} : {reason}")
+
+    # « Brancher un client » : un extrait par mode, vérifié sur TOUT le registre. Le SSVEP seul ne
+    # suffit pas : son résumé n'a aucun accent, il validerait une règle fausse pour le brut
+    # (« µV ») et le neuro (« écart »).
+    from core.modes import registry
+
+    for spec in registry.MODES:
+        extrait = client_snippet(spec)
+        if not spec.stream:
+            chk(extrait == "", f"{spec.id} ne publie rien -> aucun extrait proposé")
+            continue
+        try:
+            compile(extrait, f"<{spec.id}>", "exec")
+            compile_ok = True
+        except SyntaxError as e:
+            compile_ok, erreur = False, e
+        chk(compile_ok, f"{spec.id} : l'extrait est du Python valide"
+                        + ("" if compile_ok else f" — {erreur}"))
+        chk(_stream_name(spec.stream) in extrait, f"{spec.id} : l'extrait nomme le vrai flux")
+        chk(all(v in extrait for v in spec.channels_for(spec.defaults())),
+            f"{spec.id} : toutes les voies annoncées figurent dans l'extrait")
+        chk("open_stream" in extrait,
+            f"{spec.id} : open_stream est là — sans lui, un client perd le début du signal")
+
+    # Test complémentaire : les voies DÉPENDENT des réglages (SSVEP avec freqs différentes).
+    # La boucle ci-dessus ne teste que les défauts.
+    from core.modes import ssvep as _ssvep
+
+    extrait_ssvep = client_snippet(_ssvep.SPEC, {"freqs": (15.0, 20.0, 8.57)})
+    chk("score_15Hz" in extrait_ssvep and "score_8.57Hz" in extrait_ssvep,
+        "SSVEP : les voies reflètent les fréquences réglées, pas seulement les défauts")
+
+    chk(client_snippet(ModeSpec(id="x", label="X", family="actif", summary="", status="prevu",
+                                unavailable="pas encore")) == "",
+        "un mode sans flux ne propose aucun extrait")
+
+    # `divise_le_refresh` : la contrainte regarde un AUTRE réglage du mode, ce que
+    # `_check_constraints` permet.
+    ecran = ModeSpec(
+        id="essai_refresh", label="Essai", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(
+            Param(key="refresh_hz", label="Rafraîchissement", kind="float", unit="Hz",
+                  default=60.0, affecte_decodage=False),
+            Param(key="freqs", label="Fréquences des cibles", kind="float_list", unit="Hz",
+                  default=(15.0, 20.0), count=(2, 8), constraints=("divise_le_refresh",)),
+        ),
+    )
+    _v, raison = validate(ecran, {"freqs": [15.0, 20.0]})
+    chk(raison is None, f"des diviseurs de 60 Hz passent ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [15.0, 17.0]})
+    chk(raison is not None and "17" in raison and "60" in raison,
+        f"17 Hz est refusé, en nommant le refresh déclaré ({raison})")
+    chk(raison is not None and "20" in raison and "15" in raison,
+        f"et le refus donne les diviseurs les plus proches ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [24.0, 18.0], "refresh_hz": 144.0})
+    chk(raison is None, f"les mêmes valeurs jugées contre 144 Hz passent ({raison})")
+
+    # TOLERANCE_DIVISEUR : une saisie humaine doit passer, même très arrondie par rapport au
+    # flottant exact que Python calcule en interne (60/7 = 8.571428571428571). Une tolérance
+    # ABSOLUE (1e-6) refuserait sa PROPRE valeur affichée.
+    for valeur in (8.571, 8.57143, 60.0 / 7):
+        _v, raison = validate(ecran, {"freqs": [15.0, valeur]})
+        chk(raison is None, f"{valeur!r} Hz (diviseur 60/7 arrondi ou exact) est accepté ({raison})")
+
+    for valeur in (8.5, 17.0):
+        _v, raison = validate(ecran, {"freqs": [15.0, valeur]})
+        chk(raison is not None, f"{valeur:g} Hz n'est pas un diviseur de 60 Hz : refusé ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [15.0, 70.0]})
+    chk(raison is not None,
+        f"une fréquence supérieure au refresh ne peut pas clignoter : refusée ({raison})")
+
+    chk(ecran.params[0].affecte_decodage is False and ecran.params[1].affecte_decodage is True,
+        "un Param déclare s'il affecte le décodage, et le défaut est « oui »")
+
+    # --- le contrat d'une CALIBRATION ---------------------------------------------
+    # `Calib` réutilise `validate` : elle expose `.label`, `.params` et `.defaults()`, exactement
+    # ce que le validateur lit. Un second validateur pour les calibrations serait une deuxième
+    # vérité, avec ses propres messages de refus — le défaut que ce module existe pour éliminer.
+    calib = Calib(
+        kind="moteur", label="Calibration d'essai",
+        briefing=("Première ligne.", "Deuxième ligne."),
+        epoch_s=4.0,
+        params=(Param("trials_per_class", "Essais par classe", "int", default=14,
+                      min=2, max=40, help="Plus d'essais = plus long, pas forcément mieux."),),
+    )
+    chk(calib.defaults() == {"trials_per_class": 14},
+        f"une calibration a des défauts comme un mode ({calib.defaults()})")
+    values, raison = validate(calib, {})
+    chk(values == {"trials_per_class": 14} and raison is None,
+        f"et le MÊME validateur les accepte ({values}, {raison})")
+    values, raison = validate(calib, {"trials_per_class": 999})
+    chk(values is None and raison and "maximum" in raison,
+        f"les bornes s'appliquent, avec la même formulation de refus ({raison})")
+    values, raison = validate(calib, {"duree": "longue"})
+    chk(values is None and raison and "réglage inconnu" in raison,
+        f"et un réglage inconnu est refusé pareil ({raison})")
+
+    vide = Calib(kind="fenetre", stimulus_id="p300")
+    chk(vide.defaults() == {} and vide.runtime_cls is None and vide.epoch_s == 0.0,
+        "une calibration peut ne déclarer ni réglage, ni runtime, ni époque")
+
+    # --- `kind` et `stimulus_id` vont par paire ------------------------------------
+    # Les deux refus ci-dessous ferment la même porte par ses deux côtés, et chacun correspond à
+    # un défaut VISIBLE de l'interface : sans `stimulus_id`, le bouton « Entraîner » n'a aucune
+    # fenêtre à lancer et le clic reste SILENCIEUX (des clics d'affilée sur un bouton muet) ; avec un `stimulus_id` de trop, un bouton « Lancer le
+    # stimulus » apparaît sur un mode qui n'a pas de stimulus.
+    try:
+        Calib(kind="fenetre")
+        chk(False, "une calibration « fenetre » SANS stimulus_id doit être refusée")
+    except ValueError as e:
+        chk("stimulus_id" in str(e) and "SILENCIEUX" in str(e).upper(),
+            f"…et le refus nomme le champ ET la conséquence ({str(e)[:70]}…)")
+
+    try:
+        Calib(kind="moteur", stimulus_id="p300")
+        chk(False, "une calibration « moteur » AVEC un stimulus_id doit être refusée")
+    except ValueError as e:
+        chk("moteur" in str(e), f"…et le refus dit pourquoi ({str(e)[:70]}…)")
+
+    try:
+        Calib(kind="natif", stimulus_id="p300")
+        chk(False, "l'ancien vocabulaire (« natif », « console ») doit être REFUSÉ, pas ignoré")
+    except ValueError as e:
+        chk("moteur" in str(e) and "fenetre" in str(e),
+            f"…en nommant les deux valeurs attendues ({str(e)[:70]}…)")
+
+    # Cas limites : rafraîchissement négatif, nul, fréquence négative
+    _v, raison = validate(ecran, {"refresh_hz": -60.0, "freqs": [17.0, 18.0]})
+    chk(raison is not None and "strictement positif" in raison and "-60" in raison,
+        f"refresh négatif est refusé ({raison})")
+
+    _v, raison = validate(ecran, {"refresh_hz": 0.0, "freqs": [17.0, 18.0]})
+    chk(raison is not None and "strictement positif" in raison and "0" in raison,
+        f"refresh nul est refusé ({raison})")
+
+    _v, raison = validate(ecran, {"freqs": [-20.0, -15.0]})
+    chk(raison is not None and "strictement positive" in raison and "-20" in raison,
+        f"fréquence négative est refusée ({raison})")
+
+    # `votes_atteignables` : une contrainte croisée entre DEUX réglages NUMÉRIQUES simples
+    # (pas des float_list comme `divise_le_refresh`) — chacun borné indépendamment, mais dont
+    # la combinaison peut être irréalisable.
+    vote = ModeSpec(
+        id="essai_vote", label="Essai vote", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(
+            Param(key="vote_len", label="Fenêtres du vote", kind="int", default=5, min=1, max=15),
+            Param(key="min_votes", label="Votes concordants", kind="int", default=3, min=1,
+                  max=15, constraints=("votes_atteignables",)),
+        ),
+    )
+    _v, raison = validate(vote, {"vote_len": 5, "min_votes": 3})
+    chk(raison is None, f"moins de votes exigés que de fenêtres : accepté ({raison})")
+    _v, raison = validate(vote, {"vote_len": 5, "min_votes": 5})
+    chk(raison is None, f"autant de votes que de fenêtres : accepté, c'est la limite ({raison})")
+    _v, raison = validate(vote, {"vote_len": 3, "min_votes": 10})
+    chk(raison is not None and "3" in raison and "10" in raison,
+        f"plus de votes que de fenêtres : refusé, en nommant les deux valeurs ({raison})")
+
+    # La clé partenaire ABSENTE doit être refusée, pas ignorée. Sans ce refus, un mode qui
+    # déclare la contrainte sans déclarer `vote_len` serait accepté EN SILENCE : la contrainte
+    # figurerait dans le contrat, ne s'évaluerait jamais, et rien ne le dirait. Sa voisine
+    # `divise_le_refresh` refuse dans le même cas : les deux contraintes se comportent pareil.
+    vote_orphelin = ModeSpec(
+        id="essai_vote_orphelin", label="Essai vote orphelin", family="actif", summary="",
+        status="prevu", unavailable="jeu d'essai du contrat",
+        params=(Param(key="min_votes", label="Votes concordants", kind="int", default=3, min=1,
+                      max=15, constraints=("votes_atteignables",)),),
+    )
+    _v, raison = validate(vote_orphelin, {})
+    chk(raison is not None and "vote_len" in raison,
+        f"la contrainte sans sa clé partenaire est refusée, en la nommant ({raison})")
+
+    # --- choix dynamiques : la liste n'existe qu'à l'exécution -------------------
+    dispo = ["a.joblib", "b.joblib"]
+    spec_dyn = ModeSpec(
+        id="dyn", label="Dynamique", family="actif", summary="", status="moteur",
+        params=(Param(key="modele", label="Modèle entraîné", kind="choice",
+                      choices_fn=lambda: list(dispo),
+                      help="Produit par une calibration."),),
+        stream="decoded_dyn", channels=("x",))
+    p = spec_dyn.params[0]
+    chk(p.choices_now() == ("a.joblib", "b.joblib"),
+        f"les choix sont résolus à l'appel ({p.choices_now()})")
+    chk(spec_dyn.defaults()["modele"] == "a.joblib",
+        f"sans défaut déclaré, un « choice » prend le PREMIER choix ({spec_dyn.defaults()})")
+
+    _v, raison = validate(spec_dyn, {"modele": "b.joblib"})
+    chk(raison is None, f"un choix présent dans la liste est accepté ({raison})")
+    _v, raison = validate(spec_dyn, {"modele": "z.joblib"})
+    chk(raison is not None and "n'est pas un choix valide" in raison,
+        f"un choix absent de la liste est refusé ({raison})")
+
+    # Un modèle se désigne aussi par son NOM DE FICHIER : une application ne connaît pas les
+    # chemins du poste. La valeur rendue est le choix complet.
+    dispo[:] = ["C:/d/mi_model_A.joblib", "C:/d/mi_model_B.joblib"]
+    v_nom, raison = validate(spec_dyn, {"modele": "mi_model_A.joblib"})
+    chk(raison is None and v_nom["modele"] == "C:/d/mi_model_A.joblib",
+        f"un nom de fichier rend le choix complet ({v_nom}, {raison})")
+    _v, raison = validate(spec_dyn, {"modele": "nope"})
+    chk(raison is not None and "mi_model_A.joblib" in raison and "C:/d/" not in raison,
+        f"un nom inconnu est refusé et la raison liste des NOMS, pas des chemins ({raison})")
+    _v, raison = validate(spec_dyn, {"modele": 3})
+    chk(raison is not None, f"une valeur qui n'est pas un texte est refusée sans lever ({raison})")
+    dispo[:] = [3, 1.5]
+    _v, raison = validate(spec_dyn, {"modele": "3"})
+    chk(raison is not None, f"un nom de fichier ne remplace pas un choix NUMÉRIQUE ({raison})")
+    dispo[:] = ["C:/d/x/m.joblib", "C:/e/y/m.joblib"]
+    _v, raison = validate(spec_dyn, {"modele": "m.joblib"})
+    chk(raison is not None, f"un nom porté par DEUX choix est ambigu, donc refusé ({raison})")
+    dispo[:] = ["a.joblib", "b.joblib"]
+
+    # La liste change SANS que le contrat soit rechargé : c'est tout l'intérêt.
+    dispo.append("c.joblib")
+    chk(p.choices_now()[-1] == "c.joblib",
+        "un nouveau choix apparaît sans redémarrer — aucun cache ne le masque")
+
+    # Liste VIDE : le refus doit dire quoi faire, sinon l'étudiant reste devant un champ mort.
+    dispo.clear()
+    chk(spec_dyn.defaults()["modele"] is None,
+        f"sans aucun choix, le défaut est None ({spec_dyn.defaults()})")
+    _v, raison = validate(spec_dyn, {})
+    chk(raison is not None and "aucun choix disponible" in raison
+        and "Produit par une calibration." in raison,
+        f"et le refus reprend l'aide du réglage ({raison})")
+    # …sauf si le réglage déclare son refus COURT (`si_vide`) : c'est lui, et lui seul, qui part
+    # — pas l'aide recopiée derrière (qui ferait un paragraphe dans le bandeau).
+    spec_court = ModeSpec(
+        id="dyn2", label="Dyn2", family="actif", summary="", status="moteur",
+        params=(Param(key="modele", label="Modèle entraîné", kind="choice",
+                      choices_fn=lambda: [], si_vide=SANS_MODELE,
+                      help="Une aide longue qui ne doit PAS finir dans le refus."),),
+        stream="decoded_dyn2", channels=("x",))
+    _v, raison = validate(spec_court, {})
+    chk(raison == SANS_MODELE, f"un `si_vide` déclaré EST le refus, sans l'aide ({raison})")
+
+    # « Liste vide » et « la source a LEVÉ » sont deux situations opposées : la première est
+    # normale sur un dépôt fraîchement cloné, la seconde est un défaut de déclaration.
+    # `choices_now` les confond exprès (un affichage ne doit pas tomber), `choices_status` les
+    # sépare — c'est de cette distinction que `registry.check()` a besoin pour ne pas classer un
+    # vrai bug en « situation normale ».
+    chk(p.choices_status() == ((), None),
+        f"une liste vide est rapportée sans erreur ({p.choices_status()})")
+    p_casse = Param(key="modele", label="Modèle entraîné", kind="choice",
+                    choices_fn=lambda: 1 / 0, help="Produit par une calibration.")
+    choix_casse, erreur_casse = p_casse.choices_status()
+    chk(choix_casse == () and erreur_casse and "ZeroDivisionError" in erreur_casse,
+        f"une source qui lève est rapportée AVEC sa raison ({erreur_casse})")
+    chk(p_casse.choices_now() == (),
+        "et `choices_now` rend quand même une liste vide, sans propager l'exception")
+
+    # --- choix OUVERT : un nom absent de la liste est accepté, avec un avertissement ----------
+    appels = []
+
+    def espion():
+        appels.append(1)
+        return ("Present_markers",)
+
+    spec_ouvert = ModeSpec(
+        id="ouv", label="Ouvert", family="actif", summary="", status="moteur",
+        params=(Param(key="stream_in", label="Flux", kind="choice", ouvert=True,
+                      choices_fn=espion, default="Present_markers"),),
+        stream="decoded_ouv", channels=("x",))
+    appels.clear()
+    _v, raison = validate(spec_ouvert, {"stream_in": " MonJeu_markers "})
+    chk(raison is None and _v["stream_in"] == "MonJeu_markers",
+        f"un nom absent de la liste est accepté, espaces retirés ({_v}, {raison})")
+    chk(appels == [], f"valider un choix ouvert n'appelle jamais la liste ({len(appels)} appel(s))")
+    for mauvais in ("", "   ", 3, None):
+        _v, raison = validate(spec_ouvert, {"stream_in": mauvais})
+        chk(_v is None and raison, f"{mauvais!r} est refusé pour un choix ouvert ({raison})")
+    # Les flux du moteur lui-même : la liste déroulante les cache, la saisie les REFUSE (le moteur
+    # s'écouterait sinon lui-même). Un nom qui leur ressemble seulement reste accepté.
+    from core.lsl_io import NOM_FLUX_COMMANDES, NOM_FLUX_REPONSES
+    for reserve in (_stream_name("status"), NOM_FLUX_REPONSES, NOM_FLUX_COMMANDES,
+                    NOM_FLUX_COMMANDES + "_smoke_12"):
+        _v, raison = validate(spec_ouvert, {"stream_in": f" {reserve} "})
+        chk(_v is None and raison and reserve in raison,
+            f"« {reserve} », un flux du moteur lui-même, est refusé ({raison})")
+    _v, raison = validate(spec_ouvert, {"stream_in": NOM_FLUX_COMMANDES + "ler"})
+    chk(raison is None, f"« {NOM_FLUX_COMMANDES}ler » n'est pas le flux des commandes : accepté "
+                        f"({raison})")
+    # Un nom BORNÉ : il est recopié dans les réponses, les avertissements et l'écran.
+    _v, raison = validate(spec_ouvert, {"stream_in": "x" * NOM_FLUX_MAX})
+    _v2, raison2 = validate(spec_ouvert, {"stream_in": "x" * (NOM_FLUX_MAX + 1)})
+    chk(raison is None and _v2 is None and raison2 and str(NOM_FLUX_MAX) in raison2,
+        f"un nom de {NOM_FLUX_MAX} caractères passe, un de plus est refusé ({raison2})")
+    chk(len(avertissements(spec_ouvert, {"stream_in": "Absent_xyz"})) == 1,
+        "un nom absent de la liste donne UN avertissement")
+    chk(avertissements(spec_ouvert, {"stream_in": "Present_markers"}) == [],
+        "un nom présent n'en donne aucun")
+
+    # --- validation des défauts : un défaut hors de ses propres bornes doit être refusé -------
+    # Protège contre un contrat mal écrit qui déclare default=99 avec max=10. Sans cette
+    # vérification, le mode démarre en silence puis refuse ses propres valeurs à la première
+    # soumission, en pleine séance.
+    bad_default = ModeSpec(
+        id="bad", label="Mauvais défaut", family="actif", summary="", status="moteur",
+        params=(Param("valeur", "Valeur", "float", default=99.0, max=10.0, help="Entre 0 et 10"),),
+        stream="decoded_bad", channels=("x",))
+    _v, raison = validate(bad_default, {})
+    chk(raison is not None and "dépasse le maximum" in raison,
+        f"un défaut hors de bornes est refusé, pas caché ({raison})")
+
+    # Un Param numérique sans défaut explicite doit aussi être validé : sa valeur par défaut
+    # (None) est souvent invalide pour un type numérique.
+    no_default = ModeSpec(
+        id="nodef", label="Sans défaut", family="actif", summary="", status="moteur",
+        params=(Param("gain", "Gain", "float", min=0.0, max=1.0, help="Gain [0-1]"),),
+        stream="decoded_nodef", channels=("x",))
+    _v, raison = validate(no_default, {})
+    chk(raison is not None and "nombre attendu" in raison,
+        f"un défaut None pour un nombre est refusé ({raison})")
+
+    # --- une bande réglable ------------------------------------------------------------------
+    bande = ModeSpec(id="bande", label="Bande", family="actif", summary="test", status="moteur",
+                     params=params_bande((1.0, 12.0), (0.1, 2.0), (8.0, 40.0), "aide"))
+    valeurs, raison = validate(bande, {})
+    chk(raison is None and bande_de(valeurs, (9.0, 9.0)) == (1.0, 12.0),
+        f"une bande se règle, et par défaut c'est celle de toujours ({raison})")
+    _v, raison = validate(bande, {"band_low": 8.0, "band_high": 30.0})
+    chk(raison is not None and "2" in raison,
+        f"une bande qui retirerait le signal du paradigme est REFUSÉE, borne dans le refus "
+        f"({raison})")
+    chk(bande_de({"autre": 1}, (5.0, 40.0)) == (5.0, 40.0),
+        "un mode sans bande réglable garde la sienne")
+    try:
+        params_bande((1.0, 12.0), (0.1, 9.0), (8.0, 40.0), "aide")
+        chk(False, "une déclaration où la coupure basse peut dépasser la haute doit lever")
+    except ValueError:
+        chk(True, "une déclaration où la coupure basse peut dépasser la haute lève à l'import")
+    # Les deux BORDS de la déclaration. Le cas croisé ci-dessus ne tient pas le `<` strict : écrit
+    # `<=`, une coupure basse maxi ÉGALE à la coupure haute mini passerait, et la bande 8-8 Hz —
+    # vide — serait réglable. Ni la coupure basse nulle ou négative, que
+    # `config.available_frequencies` refuse (sa boucle des diviseurs ne s'arrêterait jamais).
+    for bas_d, haut_d, quoi in (((0.5, 8.0), (8.0, 40.0),
+                                 "coupure basse maxi ÉGALE à la coupure haute mini (bande vide)"),
+                                ((0.0, 2.0), (8.0, 40.0), "coupure basse mini NULLE"),
+                                ((-1.0, 2.0), (8.0, 40.0), "coupure basse mini NÉGATIVE")):
+        try:
+            params_bande((1.0, 12.0), bas_d, haut_d, "aide")
+            leve = False
+        except ValueError:
+            leve = True
+        chk(leve, f"une déclaration à {quoi} lève à l'import (bas {bas_d}, haut {haut_d})")
+
+    # --- NaN et l'infini sont REFUSÉS ----------------------------------------------------------
+    # `nan < min` et `nan > max` sont faux tous les deux : un NaN traverse n'importe quelles
+    # bornes. Et l'infini traverse un réglage sans `max`. Le refus dit « nombre fini ».
+    # (Un jeu à part : `spec` a été réaffecté par la boucle du registre plus haut.)
+    finis = ModeSpec(
+        id="finis", label="Finis", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),
+                Param("gain", "Gain", "float", default=1.0, min=0.0, max=10.0)))
+    for brut in (float("nan"), "nan", float("inf"), "-inf"):
+        _v, raison = validate(finis, {"gain": brut})
+        chk(_v is None and raison and "fini" in raison,
+            f"« Gain » = {brut!r} est refusé comme nombre NON FINI, pas jugé contre ses bornes "
+            f"({raison})")
+    _v, raison = validate(finis, {"freqs": [15.0, float("nan")]})
+    chk(_v is None and raison and "fini" in raison,
+        f"…un NaN dans une LISTE aussi, avant toute contrainte ({raison})")
+    # Deux exceptions que `submit` ne doit jamais laisser remonter jusqu'au fil de l'interface :
+    # `int(inf)` lève `OverflowError` (pas `ValueError`), et un rafraîchissement infini ferait
+    # lever `round(inf / f)` dans `divise_le_refresh` (réglage SANS `max`).
+    for jeu, cas, attendu in ((vote, {"vote_len": float("inf")}, "nombre attendu"),
+                              (ecran, {"refresh_hz": float("inf")}, "fini")):
+        try:
+            _v, raison = validate(jeu, cas)
+            leve = None
+        except Exception as e:  # noqa: BLE001 - c'est précisément ce qu'on vérifie
+            _v, raison, leve = None, None, e
+        chk(leve is None and _v is None and raison and attendu in raison,
+            f"{cas} est REFUSÉ, sans lever ({raison or repr(leve)})")
+    # Un ENTIER de plus de 308 chiffres (JSON le permet) : trop grand pour un flottant, il fait
+    # lever `float()` et `math.isfinite()`. Refusé comme l'infini qu'il deviendrait, sans lever —
+    # dans un réglage entier, dans un réglage réel, et dans une liste.
+    geant = 10 ** 400
+    for jeu, cas in ((vote, {"vote_len": geant}), (vote, {"vote_len": -geant}),
+                     (finis, {"gain": geant}), (finis, {"freqs": [15.0, geant]})):
+        try:
+            _v, raison = validate(jeu, cas)
+            leve = None
+        except Exception as e:  # noqa: BLE001 - c'est précisément ce qu'on vérifie
+            _v, raison, leve = None, None, e
+        quoi = {k: (f"entier de {len(str(abs(geant)))} chiffres" if v in (geant, -geant)
+                    else "liste avec un entier géant") for k, v in cas.items()}
+        chk(leve is None and _v is None and raison and "fini" in raison,
+            f"{quoi} est REFUSÉ comme nombre non fini, sans lever ({raison or repr(leve)})")
+    # `valider_un` (« Proposer ») rend le refus de `validate` MOT POUR MOT : c'est la même fonction.
+    bas_bande = bande.params[0]
+    chk(valider_un(bas_bande, 0.0)[1] == validate(bande, {"band_low": 0.0})[1]
+        and valider_un(bas_bande, 0.0)[0] is None
+        and valider_un(bas_bande, "1.5") == (1.5, None),
+        f"un réglage SEUL se juge comme dans `validate`, refus identique "
+        f"({valider_un(bas_bande, 0.0)[1]})")
+
+    # --- `dans_la_bande` juge contre la bande RÉGLÉE, pas contre BANDPASS -----------------------
+    # Le SSVEP règle sa bande. Si la contrainte de ses fréquences restait sur 5-40 Hz, 30 Hz
+    # passerait sous une coupure haute à 20 — et le filtre la supprimerait avant le décodage :
+    # zéro détection, aucune erreur, « l'utilisateur fixe mal ». Les DEUX sens sont vérifiés : une
+    # contrainte figée sur BANDPASS rougit au premier (30 accepté), une contrainte figée sur une
+    # autre bande au second (45 refusé alors que la bande réglée le contient).
+    reglee = ModeSpec(
+        id="bande_reglee", label="Bande réglée", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),
+                *params_bande(BANDPASS, (1.0, 8.0), (20.0, 60.0), "aide")))
+    _v, raison = validate(reglee, {"freqs": [15.0, 30.0], "band_high": 20.0})
+    chk(_v is None and raison and "30" in raison and "5-20" in raison
+        and tr("moteur.bande.haut") in raison,
+        f"30 Hz sous une coupure haute RÉGLÉE à 20 Hz est refusé, en nommant la bande en vigueur "
+        f"et le réglage qui la change ({raison})")
+    _v, raison = validate(reglee, {"freqs": [15.0, 45.0], "band_high": 50.0})
+    chk(raison is None,
+        f"…et 45 Hz, hors de {nombre(BANDPASS[0])}-{nombre(BANDPASS[1])} Hz mais DANS une bande "
+        f"réglée à 50 Hz, passe ({raison})")
+    _v, raison = validate(reglee, {"freqs": [6.0, 15.0], "band_low": 8.0})
+    chk(_v is None and raison and "6" in raison and "8-40" in raison,
+        f"la coupure BASSE réglée compte aussi ({raison})")
+    sans_bande = ModeSpec(
+        id="sans_bande", label="Sans bande", family="actif", summary="", status="moteur",
+        params=(Param("freqs", "Fréquences des cibles", "float_list", unit="Hz",
+                      default=(15.0, 20.0), count=(2, 8), constraints=("dans_la_bande",)),))
+    _v, raison = validate(sans_bande, {"freqs": [15.0, 60.0]})
+    chk(_v is None and raison and "hors bande passante" in raison
+        and tr("moteur.bande.haut") not in raison,
+        f"un mode SANS bande réglable garde le refus d'origine, sans renvoyer à un réglage qu'il "
+        f"n'a pas ({raison})")
+
+    # Le vrai contrat du SSVEP, et la suggestion de `divise_le_refresh` : les diviseurs proposés
+    # en remplacement restent DANS la bande réglée — sinon le refus conseillerait une fréquence
+    # que le clic suivant refuserait.
+    _v, raison = validate(_ssvep.SPEC, {"band_high": 20.0, "freqs": [15.0, 30.0]})
+    chk(_v is None and raison and "30" in raison and "5-20" in raison,
+        f"SSVEP : 30 Hz est refusé sous une bande réglée à 5-20 Hz ({raison})")
+    _v, raison = validate(_ssvep.SPEC, {"band_high": 25.0, "freqs": [15.0, 24.0]})
+    chk(_v is None and raison and "diviseur" in raison and "20" in raison and "30" not in raison,
+        f"…et 24 Hz (pas un diviseur de 60) se voit proposer 20 et 15, pas 30 qui est hors de la "
+        f"bande réglée ({raison})")
+    _v, raison = validate(_ssvep.SPEC, {"freqs": [15.0, 24.0]})
+    chk(_v is None and raison and "30" in raison,
+        f"…alors qu'à la bande par défaut, 30 Hz est bien le voisin proposé ({raison})")
+    # Le côté BAS de la même suggestion. Les trois contrôles ci-dessus ne regardent que la coupure
+    # haute : `available_frequencies(refresh)` appelée SANS la bande (donc bornée en bas par 5 Hz)
+    # les passerait tous. 8,2 Hz sous une coupure basse à 8 : le plus proche est 8,571, puis 7,5 —
+    # que le clic suivant refuserait (hors bande) ; 10 est le bon second voisin.
+    # (Une cible SOUS la coupure, 7,9 Hz, n'atteint jamais cette suggestion : `dans_la_bande`,
+    # évaluée avant, la refuse la première.)
+    _v, raison = validate(_ssvep.SPEC, {"band_low": 8.0, "freqs": [8.2, 15.0]})
+    chk(_v is None and raison and "diviseur" in raison and "10" in raison
+        and nombre(7.5) not in raison,
+        f"…et sous une coupure BASSE réglée à 8 Hz, 8,2 Hz se voit proposer 8,571 et 10, jamais "
+        f"7,5 qui est sous la bande ({raison})")
+
+    # Un refus part vers l'application en ANGLAIS, quelle que soit la langue de l'écran. Pour
+    # chaque famille de refus : la raison produite écran en français, puis écran en anglais, doit
+    # donner le même texte une fois relue en anglais, sans virgule décimale. Un nombre ou une liste
+    # écrits à la main (`nombre(x) + unité`, `", ".join(…)`) figent la langue de l'écran : « 9,6 »
+    # resterait dans un refus censé être en anglais.
+    import re as _re
+    from core import config as _config
+    from core.i18n import choisir_langue, pour_le_contrat
+
+    def _refus_en_anglais():
+        familles = {
+            "hors bornes": lambda: validate(_ssvep.SPEC, {"alpha_hz": 99.5})[1],
+            "diviseur": lambda: validate(_ssvep.SPEC, {"refresh_hz": 60.0,
+                                                       "freqs": [17.5, 15.0, 20.0]})[1],
+            "diviseur décimal": lambda: validate(_ssvep.SPEC, {"band_low": 8.0,
+                                                               "freqs": [8.2, 15.0]})[1],
+            "hors bande": lambda: validate(_ssvep.SPEC, {"freqs": [15.0, 52.5]})[1],
+            "trop proches": lambda: validate(_ssvep.SPEC, {"freqs": [15.0, 15.2]})[1],
+            "clé inconnue": lambda: validate(_ssvep.SPEC, {"couleur": "rouge"})[1],
+            "choix invalide": lambda: validate(_ssvep.SPEC, {"targets_on": "magie"})[1],
+            "proposition hors plage confortable":
+                lambda: _config.propose_frequencies(60.0, 6, alpha=9.6)[1],
+            "proposition impossible": lambda: _config.propose_frequencies(60.0, 9, alpha=9.6)[1],
+        }
+        avant = _os.environ.get("EEG_LANGUE")
+        try:
+            for famille, produit in familles.items():
+                choisir_langue("fr")
+                raison_fr = produit()
+                choisir_langue("en")
+                raison_en = produit()
+                chk(raison_fr and raison_en,
+                    f"refus {famille} : une raison est produite ({raison_fr})")
+                contrat = pour_le_contrat(raison_fr)
+                chk(contrat == pour_le_contrat(raison_en)
+                    and not _re.search(r"\d,\d", contrat),
+                    f"refus {famille} : identique en anglais quelle que soit la langue de "
+                    f"l'écran ({contrat})")
+        finally:
+            if avant is None:
+                _os.environ.pop("EEG_LANGUE", None)
+            else:
+                _os.environ["EEG_LANGUE"] = avant
+
+    _refus_en_anglais()
+
+    # Ce qu'un appelant envoie, cité dans un refus, est COUPÉ : le refus part sur le réseau et
+    # s'affiche dans le bandeau. Et un chemin du poste n'y montre que son nom de fichier.
+    spec_cite = ModeSpec(
+        id="cite", label="Cité", family="actif", summary="", status="moteur",
+        params=(Param(key="model", label="Modèle", kind="choice",
+                      choices_fn=lambda: (_os.path.join(_os.sep, "poste", "data", "a.joblib"),),
+                      default=None),),
+        stream="decoded_cite", channels=("x",))
+    _v, raison_cles = validate(spec_cite, {"k" * 500: 1, "z" * 300: 2})
+    disparu = _os.path.abspath(_os.path.join("dossier_du_poste", "disparu.joblib"))
+    _v, raison_chemin = validate(spec_cite, {"model": disparu})
+    _v, raison_long = validate(spec_cite, {"model": "m" * 400})
+    chk(raison_cles is not None and "k" * 500 not in str(raison_cles)
+        and len(str(raison_cles)) < 400,
+        f"une clé inconnue de 500 caractères est citée COUPÉE ({len(str(raison_cles))} car.)")
+    chk(raison_chemin is not None and "disparu.joblib" in str(raison_chemin)
+        and "dossier_du_poste" not in str(raison_chemin),
+        f"un modèle refusé par son CHEMIN n'est cité que par son nom de fichier ({raison_chemin})")
+    chk(raison_long is not None and "m" * 400 not in str(raison_long)
+        and recopie("m" * 400).endswith("…") and len(recopie("m" * 400)) == RECOPIE_MAX + 1,
+        f"une valeur de 400 caractères est citée coupée à {RECOPIE_MAX} ({len(str(raison_long))} "
+        f"car. de refus)")
+
+    print(f"[contract] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def client_snippet(spec, params=None):
+    """Un extrait Python prêt à coller pour consommer le flux de ce mode. "" s'il n'en a pas.
+
+    Généré depuis le contrat, jamais écrit à la main dans l'interface : les voies d'un flux
+    SSVEP dépendent des fréquences réglées, et un exemple qui vieillit mal est pire que pas
+    d'exemple — l'étudiant croit avoir copié le bon code.
+
+    `open_stream()` est dans l'extrait pour une raison : un StreamInlet n'ouvre sa connexion
+    qu'au premier `pull_*`, et LSL ne rejoue RIEN de ce qui a été publié avant. Sans cette
+    ligne on perd la première seconde de signal. C'est le piège classique de LSL, à répéter
+    dans tout ce qu'on met sous les yeux d'un étudiant.
+
+    ⚠️ La TEMPLATE (les lignes écrites ici) reste ASCII, mais le texte INTERPOLÉ vient du
+    contrat : `spec.label`, `spec.summary`, noms de voies. Ils peuvent porter des accents ou
+    des caractères spéciaux (µV, écart). Stripping les accents transformerait le contrat
+    (« µV » -> « V » silencieusement casserait une unité). Python 3 source est UTF-8 par
+    défaut (PEP 3120) : une docstring accentuée est du Python ordinaire valide.
+    """
+    if not spec.stream:
+        return ""
+    voies = spec.channels_for(spec.defaults() if params is None else params)
+    return f'''"""{spec.label} - {spec.summary}
+
+Voies publiees : {", ".join(voies)}
+"""
+from pylsl import StreamInlet, resolve_byprop
+
+flux = resolve_byprop("name", "{_stream_name(spec.stream)}", timeout=10)
+if not flux:
+    raise SystemExit("flux introuvable - le moteur tourne-t-il, et ce mode est-il demarre ?")
+
+inlet = StreamInlet(flux[0])
+inlet.open_stream()   # AVANT le premier pull : LSL ne rejoue rien de ce qui precede
+
+while True:
+    valeurs, horodatage = inlet.pull_sample()
+    print(horodatage, dict(zip({list(voies)!r}, valeurs)))
+'''
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)

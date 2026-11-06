@@ -1,0 +1,644 @@
+"""Le catalogue de TOUS les modes — ceux que le moteur fait tourner, et les autres.
+
+L'ordre de `MODES` est celui de l'affichage dans la grille, et il sert aussi d'arbitre : quand
+deux modes lancés ensemble demandent un repos de même durée, c'est le premier d'ici qui donne la
+consigne affichée. Une règle déterministe vaut mieux qu'un « ça dépend ».
+
+Autotest :
+    python src/core/modes/registry.py
+"""
+
+import os as _os
+import sys as _sys
+from dataclasses import replace
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+from core.config import use_utf8_console  # noqa: E402
+from core.i18n import retraduit  # noqa: E402
+from core.modes import alpha, cvep, errp, mi, neuro, p300, raw, ssvep, ssvep_mesure  # noqa: E402
+from core.modes import cvep_test, errp_test, mi_test, p300_test  # noqa: E402
+from core.modes.contract import validate  # noqa: E402
+
+# Tous les modes de ce catalogue tournent dans le moteur. Les statuts « appli_pygame » et
+# « prevu » restent pourtant vérifiés par `check()` ci-dessous : un mode décrit avant d'être fait
+# n'a qu'à déclarer son `ModeSpec` et sa raison d'`unavailable` (un `ModeSpec` sans runtime évite
+# que la grille laisse croire que le produit se limite à ce qui est chargé).
+# ⚠️ Cet ordre est celui de la GRILLE de la console (4 colonnes) : il se lit, il n'est pas
+# arbitraire. Les modes sont rangés par GESTE DEMANDÉ À L'UTILISATEUR, ce qu'un étudiant compare
+# vraiment.
+#
+#   rangée 1  Brut · SSVEP · c-VEP · Neuro     ce qu'on peut lancer sans rien apprendre du sujet
+#   rangée 2  MI · P300 · ErrP                 ce qui exige un modèle entraîné par personne
+MODES = (
+    raw.SPEC,           # le brut d'abord : c'est ce qui existe même sans décodage
+    ssvep.SPEC,         # SSVEP et c-VEP CÔTE À CÔTE : les deux seuls modes où l'on fixe une cible
+    cvep.SPEC,          # qui clignote. C'est la paire qu'on compare : l'ITR du c-VEP
+                        # se mesure contre la référence SSVEP. ⚠️ Le c-VEP exige un
+                        # modèle ET une HORLOGE (ses marqueurs ne délimitent rien) ; il est ici
+                        # pour la comparaison, pas parce qu'il serait aussi immédiat.
+    neuro.SPEC,         # passif : on observe un état, il n'y a rien à choisir
+    mi.SPEC,            # à partir d'ici : un modèle entraîné par personne est indispensable
+    p300.SPEC,          # 1er client du tuyau des marqueurs (un flash déclaré = une époque)
+    errp.SPEC,          # 2e client, même tuyau, un seul événement : le feedback affiché
+)
+
+BY_ID = {spec.id: spec for spec in MODES}
+
+# --- LES MESURES ------------------------------------------------------------------------------
+# Une mesure n'est PAS un mode : elle ne publie aucun flux, ne se règle pas en cours de route, et
+# rend un VERDICT qu'on lit à l'écran plutôt qu'un modèle sur le disque (cf. `core/modes/mesure.py`).
+# Son catalogue vit néanmoins ICI, avec celui des modes, pour une raison d'IMPORTS : une mesure
+# concrète (`core/modes/alpha.py`) importe `MesureRuntime` de `mesure.py`, donc `mesure.py` ne peut
+# pas importer les mesures en retour sans cycle. Rassembler les modules d'un paquet pour en faire
+# une liste est exactement ce que ce fichier fait déjà, une ligne plus haut.
+#
+# ⚠️ L'ORDRE est celui de la séance, pas celui de la livraison : le contrôle alpha est une
+# BARRIÈRE — tant qu'il n'est pas franchi, aucune autre mesure ne veut rien dire — donc il vient
+# en premier, et l'écran le range en premier sans avoir à le savoir.
+MESURES = (
+    alpha.SPEC,         # la barrière d'entrée : les électrodes occipitales captent-elles ?
+    ssvep_mesure.SPEC,  # puis le taux d'émission du SSVEP : le moteur a-t-il raison quand il parle ?
+    #                     Après la barrière, et jamais avant : un taux mesuré sur des occipitales
+    #                     qui ne captent pas est un chiffre qui décrit le montage, pas le décodage.
+    mi_test.SPEC,       # le « Tester » du Motor Imagery, désigné par `mi.SPEC.test_id`
+    p300_test.SPEC,     # le « Tester » du P300 : le protocole d'entraînement, le moteur DÉCIDE
+    cvep_test.SPEC,     # le « Tester » du c-VEP : justesse ET taux d'émission, ensemble
+    errp_test.SPEC,     # le « Tester » de l'ErrP : un COUPLE, et une cloison d'étiquette
+)
+
+
+def get_mesure(mesure_id):
+    """Le `MesureSpec` de cet identifiant, ou None.
+
+    Parcourt `MESURES` plutôt qu'un dictionnaire pré-calculé à l'import, à la différence de
+    `get()` : l'autotest de `core/modes/mesure.py` REMPLACE `MESURES` le temps de son passage
+    (comme `_selftest` d'ici le fait déjà pour `MODES`), et un index figé à l'import continuerait
+    à répondre sur l'ancienne liste — le test passerait alors pour la mauvaise raison. Deux
+    mesures dans le produit : le coût du parcours ne se mesure pas.
+    """
+    return next((s for s in MESURES if s.id == mesure_id), None)
+
+
+def catalogue_mesures():
+    """Toutes les mesures, sérialisées — ce que la console reçoit pour peindre ses tuiles.
+
+    Même geste que `catalog()` pour les modes : la console lit un ÉTAT et ne recopie aucun
+    catalogue (règle du projet). Sans ça, elle réécrirait les libellés et les briefings dans
+    son propre code, et les deux vérités divergeraient au premier réglage ajouté.
+    """
+    # Les textes des contrats sont résolus à l'import : `retraduit` les rend dans la langue
+    # COURANTE, pour que la console change de langue sans redémarrer.
+    return retraduit([
+        {
+            "id": spec.id,
+            "label": spec.label,
+            "summary": spec.summary,
+            "briefing": list(spec.briefing),
+            # Le moteur sait-il JOUER cette mesure ? Même champ, même usage que pour une
+            # calibration : la tuile reste, et le bouton ne ment pas.
+            "jouable": spec.runtime_cls is not None,
+            "barriere": spec.barriere,
+            # Une partie du protocole se fait-elle les yeux FERMÉS ? La console n'avertit « sans
+            # top, tu ne sauras pas quand rouvrir » que si c'est vrai — elle ne le devine pas.
+            "yeux_fermes": spec.yeux_fermes,
+            # La CLÉ de la fenêtre à ouvrir en même temps, ou "" — même champ et même rôle que
+            # `calibration.stimulus_id` d'un mode. Sans lui dans le catalogue, la console ne
+            # saurait pas qu'une mesure a besoin d'un stimulus, et le moteur attendrait 30 s des
+            # marqueurs que personne n'enverrait.
+            "stimulus_id": spec.stimulus_id,
+            "key_channels": list(spec.key_channels),
+            # La page montre-t-elle le contact de chaque électrode ? Le moteur le déclare, la
+            # console ne le devine pas d'après un identifiant.
+            "montre_contact": spec.montre_contact,
+            "params": _params_serialises(spec.params),
+        }
+        for spec in MESURES
+    ])
+
+
+def _params_serialises(params):
+    """Des `Param` en dictionnaires JSON-ables — la forme que `console/params_form.py` consomme.
+
+    Partagée entre la calibration d'un mode et une mesure. Le bloc des params du MODE, lui, garde
+    sa propre écriture : il tire son `default` de `defauts`, résolu UNE fois pour tout le
+    `serialize` (cf. son long commentaire), là où ces deux-ci résolvent à l'appel.
+    """
+    return [
+        {
+            "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
+            "default": p.default_now(), "min": p.min, "max": p.max,
+            "count": list(p.count) if p.count else None, "proposes": p.proposes,
+            "choices": list(p.choices_now()), "help": p.help,
+            "libelles": list(p.libelles), "actif_si": list(p.actif_si),
+            "ouvert": p.ouvert,
+        }
+        for p in params
+    ]
+
+# Tolérance des comparaisons de DURÉES de `check()`. Mesuré : `0.15 + 0.80` vaut
+# 0.9500000000000001 en flottant, donc `0.95 < 0.15 + 0.80` est VRAI. Sans tolérance, un auteur
+# de mode qui écrit `marker_epoch_s=0.95` en clair — la valeur exacte et juste — s'entendrait dire
+# « est SOUS pre_s+post_s=0.95 s […] chaque époque serait tronquée en silence ». Un garde-fou qui
+# accuse une déclaration correcte est pire qu'absent : on apprend à ignorer ce qu'il dit. Le vrai
+# P300 y échappe par hasard, en réécrivant la MÊME expression (`P300_PRE_S + P300_EPOCH_S`).
+# 1e-9 s = 1 nanoseconde : sans commune mesure avec un échantillon (4 ms à 250 Hz), donc aucune
+# vraie troncature ne peut se glisser dessous.
+_EPS_S = 1e-9
+
+
+def get(mode_id):
+    """Le `ModeSpec` de cet identifiant, ou None."""
+    return BY_ID.get(mode_id)
+
+
+def runnable():
+    """Les modes que le moteur sait faire tourner, dans l'ordre du registre."""
+    return tuple(spec for spec in MODES if spec.runtime_cls is not None)
+
+
+def serialize(spec, params=None):
+    """Le `ModeSpec` en dictionnaire, ses textes dans la langue COURANTE (cf. `_serialize`)."""
+    return retraduit(_serialize(spec, params))
+
+
+def _serialize(spec, params=None):
+    """Le `ModeSpec` en dictionnaire JSON-able — ce que la console reçoit.
+
+    On sérialise plutôt que de passer l'objet : la console lit un ÉTAT, pas des références vers
+    l'intérieur du moteur, et ce même dictionnaire pourra partir sur le flux `status` le jour où
+    un client voudra découvrir les modes tout seul.
+    """
+    # Défauts résolus UNE SEULE fois, et réutilisés pour DEUX usages : le repli quand `params`
+    # est absent (juste en dessous), et la clé "default" plus bas (qui doit rester le défaut
+    # DÉCLARÉ même quand `params` est fourni — voir son commentaire).
+    #
+    # ⚠️ Ce n'est PAS une optimisation de chemin chaud : le catalogue n'est pas dans `snapshot()`,
+    # donc cette fonction n'est appelée qu'à l'ouverture de la console. Une seule résolution parce
+    # qu'une source dynamique (`choices_fn`) peut lire le disque et que deux appels pourraient
+    # rendre deux réponses DIFFÉRENTES — un modèle apparu entre les deux, et un catalogue qui se
+    # contredirait lui-même. C'est de la cohérence, pas de la vitesse : ne pas « ré-optimiser ».
+    #
+    # Il reste malgré tout DEUX résolutions par choix dynamique par appel, pas une seule :
+    # default_now() appelle choices_now() en interne pour un « choice » sans défaut déclaré, et
+    # la clé "choices" plus bas a besoin de la liste ENTIÈRE, pas seulement du premier élément
+    # que default_now() en tire. Recopier ici la logique de default_now() pour descendre à un
+    # seul appel créerait deux vérités qui finiraient par diverger — la dépense reste à 2, pas 1.
+    defauts = {p.key: p.default_now() for p in spec.params}
+    params = defauts if params is None else params
+
+    return {
+        "id": spec.id,
+        "label": spec.label,
+        "family": spec.family,
+        "summary": spec.summary,
+        "status": spec.status,
+        "unavailable": spec.unavailable,
+        "stream": spec.stream,
+        "channels": list(spec.channels_for(params)),
+        "params": [
+            {
+                "key": p.key, "label": p.label, "kind": p.kind, "unit": p.unit,
+                # Le défaut DÉCLARÉ, jamais la valeur courante : toujours tiré de `defauts`,
+                # jamais de `params`, même quand l'appelant a soumis des `params` explicites.
+                "default": list(defauts[p.key]) if isinstance(defauts[p.key], tuple) else defauts[p.key],
+                "min": p.min, "max": p.max,
+                "count": list(p.count) if p.count else None,
+                "proposes": p.proposes,
+                "choices": list(p.choices_now()), "help": p.help,
+                "libelles": list(p.libelles), "actif_si": list(p.actif_si),
+                "ouvert": p.ouvert,
+            }
+            for p in spec.params
+        ],
+        # (clé, valeur, raison) : la condition des deux « Tester ». La console grise les boutons
+        # en disant `raison` ; le moteur refuse le test pour la même raison.
+        "tests_si": list(spec.tests_si),
+        "rest": None if spec.rest is None else {
+            "warmup_s": spec.rest.warmup_s,
+            "duration_s": spec.rest.duration_s,
+            "instruction": spec.rest.instruction,
+        },
+        "key_channels": list(spec.key_channels),
+        # La fenêtre de stimulus de CE MODE, distincte de celle de sa calibration (cf. la
+        # docstring de `ModeSpec.stimulus_id`). C'est ce champ que la console lit pour décider
+        # d'afficher son stimulus — pas `calibration.stimulus_id`, qui ne répond pas à la même
+        # question (le SSVEP a un stimulus et aucune calibration).
+        "stimulus_id": spec.stimulus_id,
+        # La MESURE qui éprouve ce mode. C'est ce champ que la console lit pour décider d'afficher
+        # « Tester » — elle ne tient aucune liste des modes testables, elle demande au contrat.
+        "test_id": spec.test_id,
+        # L'avertissement de SÉCURITÉ du mode, ou "" : la console le montre en gros sur la page.
+        # Elle ne tient aucune liste de modes à risque.
+        "avertissement": spec.avertissement,
+        "calibration": None if spec.calibration is None else {
+            "kind": spec.calibration.kind,
+            "stimulus_id": spec.calibration.stimulus_id,
+            # Le moteur sait-il JOUER cette calibration ? La console en a besoin pour décider si
+            # elle ouvre une page — et elle ne peut pas le déduire de `kind`, qui dit seulement
+            # qui mène le protocole. Un `runtime_cls` à None est une calibration déclarée mais pas
+            # encore livrée : la tuile reste, le bouton ne ment pas.
+            "jouable": spec.calibration.runtime_cls is not None,
+            "label": spec.calibration.label,
+            "briefing": list(spec.calibration.briefing),
+            "epoch_s": spec.calibration.epoch_s,
+            # Même forme que les `params` d'un mode, juste au-dessus : la console réutilise
+            # `ParamsForm` sans une ligne de code particulière. La MESURE emprunte la même
+            # fonction (`catalogue_mesures`) — trois écritures du même dictionnaire auraient fini
+            # par diverger sur le champ ajouté à l'une des trois.
+            "params": _params_serialises(spec.calibration.params),
+        },
+    }
+
+
+def catalog():
+    """Tout le registre, sérialisé. C'est ce qui remplit la grille de la console."""
+    return [serialize(spec) for spec in MODES]
+
+
+def check():
+    """(tout va bien, liste des défauts). Un défaut ici ne lève AUCUNE erreur au démarrage.
+
+    C'est pour ça que ce test existe : un `default` hors de ses propres bornes ne casse rien
+    visiblement — le mode refuse simplement d'appliquer ses réglages, et on le découvre en
+    séance, casque sur la tête. Deux modes qui publieraient le même suffixe de flux seraient
+    pires encore : LSL les accepterait tous les deux, et un client recevrait un mélange.
+
+    Un seul réglage échappe au contrôle de son défaut : celui dont la liste de choix est VIDE
+    (aucun modèle entraîné). Les autres réglages du même mode, eux, restent vérifiés — voir le
+    commentaire dans la boucle.
+    """
+    defauts = []
+    vus_id, vus_stream = set(), {}
+
+    for spec in MODES:
+        if spec.id in vus_id:
+            defauts.append(f"identifiant en double : {spec.id}")
+        vus_id.add(spec.id)
+
+        if spec.status not in ("moteur", "appli_pygame", "prevu"):
+            defauts.append(f"{spec.id} : status « {spec.status} » inconnu")
+        if spec.family not in ("actif", "passif", "brut"):
+            defauts.append(f"{spec.id} : family « {spec.family} » inconnue")
+        if spec.status != "moteur" and not spec.unavailable:
+            defauts.append(f"{spec.id} : status « {spec.status} » sans explication (unavailable vide)")
+        if spec.status == "moteur" and spec.unavailable:
+            defauts.append(f"{spec.id} : status « moteur » mais unavailable renseigné")
+
+        if spec.stream:
+            if spec.stream in vus_stream:
+                defauts.append(f"suffixe de flux en double : {spec.stream} "
+                               f"({vus_stream[spec.stream]} et {spec.id})")
+            vus_stream[spec.stream] = spec.id
+        if spec.status == "moteur" and not spec.stream:
+            defauts.append(f"{spec.id} : mode du moteur sans flux à publier")
+
+        # Chaque défaut doit respecter les bornes de son PROPRE paramètre. Sinon le mode
+        # démarre et refuse ses propres réglages à la première soumission.
+        #
+        # Une seule exception, et elle porte sur LE PARAMÈTRE, pas sur le mode : un choix
+        # dynamique peut être vide (aucun modèle entraîné encore), ce qui est l'état normal de
+        # tout dépôt fraîchement cloné — `data/` est gitignoré. Exempter le mode ENTIER ferait
+        # cesser toute vérification de ses autres défauts (`prob_min`, `vote_len`, `min_votes`…)
+        # dans l'état le plus courant qui soit. On retire donc le seul paramètre sans choix, et
+        # on valide tout le reste.
+        #
+        # Une source de choix qui LÈVE, elle, n'est pas une situation normale : c'est un défaut
+        # de déclaration, et il part dans `defauts`. `choices_now()` rend `()` dans les deux cas
+        # (à dessein : un affichage ne doit pas tomber), d'où `choices_status()`.
+        sans_choix, sources_cassees = [], []
+        for p in spec.params:
+            if not p.choices_fn:
+                continue
+            choix, erreur = p.choices_status()
+            if erreur:
+                sources_cassees.append(f"{spec.id}.{p.key} : la source de choix a levé — {erreur}")
+            elif not choix:
+                sans_choix.append(p.key)
+        defauts.extend(sources_cassees)
+
+        if sans_choix:
+            print(f"  NORMAL {spec.id}: {', '.join(sans_choix)} sans choix pour l'instant "
+                  f"(aucun modele encore - sera valide quand rempli) ; les autres defauts du "
+                  f"mode sont verifies")
+        verifiable = replace(spec, params=tuple(p for p in spec.params if p.key not in sans_choix))
+        values, reason = validate(verifiable, {})
+        if values is None:
+            defauts.append(f"{spec.id} : ses valeurs par défaut sont refusées — {reason}")
+
+        cles = {p.key for p in spec.params}
+        for p in spec.params:
+            if p.proposes and p.proposes not in cles:
+                defauts.append(f"{spec.id}.{p.key} : propose « {p.proposes} », "
+                               f"qui n'est pas un paramètre de ce mode")
+            if p.kind not in ("float", "int", "bool", "choice", "float_list", "text_list"):
+                defauts.append(f"{spec.id}.{p.key} : kind « {p.kind} » inconnu")
+            if p.kind == "choice" and not p.choices and not p.choices_fn:
+                defauts.append(f"{spec.id}.{p.key} : un choix sans choices")
+            # Un choix OUVERT (un nom de flux) sans défaut prendrait le premier de sa liste — que
+            # `validate` irait chercher sur le RÉSEAU à chaque appel, ce que l'ouverture évite.
+            if p.ouvert and (p.kind != "choice" or not isinstance(p.default, str)
+                             or not p.default.strip()):
+                defauts.append(f"{spec.id}.{p.key} : un choix OUVERT doit être un « choice » avec "
+                               f"un défaut non vide (sans lui, chaque validation interrogerait "
+                               f"le réseau pour lister ses choix)")
+            if p.libelles and len(p.libelles) != len(p.choices):
+                defauts.append(f"{spec.id}.{p.key} : {len(p.libelles)} libellé(s) pour "
+                               f"{len(p.choices)} choix")
+            if p.actif_si and p.actif_si[0] not in cles:
+                defauts.append(f"{spec.id}.{p.key} : actif si « {p.actif_si[0]} », qui n'est pas "
+                               f"un paramètre de ce mode")
+            if not p.help:
+                defauts.append(f"{spec.id}.{p.key} : pas de texte d'aide "
+                               f"(un étudiant doit savoir ce qu'il règle)")
+        if spec.tests_si:
+            cle, valeur = spec.tests_si[0], spec.tests_si[1]
+            reglage = next((p for p in spec.params if p.key == cle), None)
+            if reglage is None or valeur not in reglage.choices:
+                defauts.append(f"{spec.id} : ses tests exigent « {cle} » = « {valeur} », qui "
+                               f"n'est pas un choix de ce mode")
+
+        # Les voies annoncées doivent correspondre à ce qui sera réellement publié.
+        if spec.stream and not spec.channels_for(spec.defaults()):
+            defauts.append(f"{spec.id} : publie {spec.stream} sans annoncer ses voies")
+
+        # La calibration de ce mode, si le moteur sait la jouer. `check()` est appelée EN
+        # PREMIER par le smoke, précisément parce qu'« un défaut là-dedans explique tous les
+        # suivants » (cf. sa docstring) : sans ce contrôle, un défaut invalide dans un
+        # `Calib.params` traverserait les tests et ne serait découvert qu'au clic « Entraîner ».
+        # Une calibration dont le `runtime_cls` est encore
+        # `None` n'est en revanche jamais jouée par le moteur — vérifier ses défauts ici
+        # signalerait des « défauts » qui n'en sont pas.
+        calib = spec.calibration
+        if calib is not None and calib.runtime_cls is not None:
+            # Même traitement que les params du MODE juste au-dessus : un choix dynamique
+            # vide reste normal sur un dépôt fraîchement cloné, une source qui LÈVE ne l'est
+            # jamais.
+            calib_sans_choix, calib_sources_cassees = [], []
+            for p in calib.params:
+                if not p.choices_fn:
+                    continue
+                choix, erreur = p.choices_status()
+                if erreur:
+                    calib_sources_cassees.append(
+                        f"{spec.id}.calibration.{p.key} : la source de choix a levé — {erreur}")
+                elif not choix:
+                    calib_sans_choix.append(p.key)
+            defauts.extend(calib_sources_cassees)
+
+            calib_verifiable = replace(
+                calib, params=tuple(p for p in calib.params if p.key not in calib_sans_choix))
+            calib_values, calib_reason = validate(calib_verifiable, {})
+            if calib_values is None:
+                defauts.append(f"{spec.id} : les défauts de sa calibration sont refusés — "
+                               f"{calib_reason}")
+
+            # Le contrôle de cohérence : `epoch_s` (ici) dimensionne le
+            # tampon du moteur (et, via lui, la fenêtre de mesure de la qualité) ;
+            # `imagery_s` (côté runtime) décide combien on en PRÉLÈVE à la fin de chaque essai.
+            # Deux sources de vérité pour le MÊME nombre, et rien ne les liait : un `epoch_s`
+            # sous `imagery_s` tronquerait CHAQUE époque enregistrée EN SILENCE — un modèle
+            # entraîné sur moins de signal que l'écran ne l'annonce, sans la moindre erreur.
+            imagery_s = getattr(calib.runtime_cls, "imagery_s", None)
+            if calib.epoch_s <= 0:
+                defauts.append(f"{spec.id} : sa calibration a un runtime_cls mais "
+                               f"epoch_s={calib.epoch_s:g} — le moteur ne dimensionnerait "
+                               f"aucun tampon pour elle")
+            elif imagery_s is not None and calib.epoch_s + _EPS_S < imagery_s:
+                defauts.append(f"{spec.id} : epoch_s={calib.epoch_s:g} s de sa calibration est "
+                               f"SOUS imagery_s={imagery_s:g} s de son runtime — chaque époque "
+                               f"serait tronquée en silence")
+
+        # ⚠️ **Le contrôle « chaque `stimulus_id` désigne une fenêtre qui existe » n'est PAS ici**
+        # importer `stimulus.registry` localement violerait la frontière AST de
+        # `server.py --smoke`. `core` ne connaît pas les fenêtres, il ne connaît que des clés.
+        # Le contrôle vit donc chez celui qui détient la correspondance :
+        # `python src/stimulus/registry.py` lit le registre des modes et vérifie les deux sens.
+
+        # Les voies clés annoncées doivent exister sur le montage 8 voies de l'Unicorn. Une voie
+        # hors bornes ne lèverait rien : la console surlignerait dans le vide, et le contrôle de
+        # liaison validerait un contact qu'il n'a pas regardé.
+        hors_bornes = [c for c in spec.key_channels if not 0 <= int(c) < 8]
+        if hors_bornes:
+            defauts.append(f"{spec.id} : voies clés hors du montage 8 voies : {hors_bornes}")
+
+        # Le même piège que pour la calibration, un cran plus loin : `marker_epoch_s` (ici)
+        # dimensionne le tampon du moteur ; `pre_s`/`post_s` (côté runtime) décident ce qu'on en
+        # PRÉLÈVE. Deux sources de vérité pour le même nombre, et rien ne les lie : un
+        # `marker_epoch_s` trop court tronquerait CHAQUE époque EN SILENCE.
+        #
+        # DEUX cas, deux messages — comme le contrôle jumeau d'`epoch_s` juste au-dessus. Le
+        # champ vaut 0.0 par défaut, donc l'OUBLI est le cas par défaut du prochain auteur de
+        # mode ; lui servir « marker_epoch_s=0 s est
+        # SOUS pre_s+post_s=0,95 s » l'envoie vérifier une arithmétique alors qu'il lui manque un
+        # CHAMP. Et l'oubli est le plus grave des deux : sans `marker_epoch_s > 0` le moteur
+        # n'ouvre jamais d'inlet, `markers_murs` rend [] pour toujours, et le mode tourne sans
+        # jamais rien publier.
+        pre_s = getattr(spec.runtime_cls, "pre_s", None)
+        post_s = getattr(spec.runtime_cls, "post_s", None)
+        if pre_s is not None and post_s is not None:
+            if spec.marker_epoch_s <= 0:
+                defauts.append(f"{spec.id} : son runtime découpe des époques de "
+                               f"pre_s+post_s={pre_s + post_s:g} s mais le mode ne déclare AUCUN "
+                               f"marker_epoch_s — le moteur n'ouvrirait aucun inlet de marqueurs "
+                               f"et le mode tournerait sans jamais rien publier. Ajouter "
+                               f"marker_epoch_s={pre_s + post_s:g} à son ModeSpec")
+            elif spec.marker_epoch_s + _EPS_S < pre_s + post_s:
+                defauts.append(f"{spec.id} : marker_epoch_s={spec.marker_epoch_s:g} s est SOUS "
+                               f"pre_s+post_s={pre_s + post_s:g} s de son runtime — chaque "
+                               f"époque serait tronquée en silence")
+        if spec.marker_epoch_s > 0 and spec.runtime_cls is None:
+            defauts.append(f"{spec.id} : déclare marker_epoch_s sans runtime pour les consommer")
+
+    # --- les MESURES, par les mêmes contrôles que ce qui compte pour elles ---------------------
+    # Beaucoup plus court que pour un mode : une mesure n'a ni flux, ni voies, ni repos, ni
+    # marqueurs. Restent les trois défauts qui ne lèveraient rien à l'exécution — un identifiant en
+    # double (la commande `start_mesure` en atteindrait un seul, au hasard de l'ordre), une mesure
+    # sans runtime (le clic partirait sur un `None(spec, …)` incompréhensible), et un défaut hors
+    # de ses propres bornes (la mesure refuserait ses propres valeurs au premier démarrage).
+    vus_mesure = set()
+    for spec in MESURES:
+        if spec.id in vus_mesure:
+            defauts.append(f"mesure : identifiant en double : {spec.id}")
+        vus_mesure.add(spec.id)
+        if spec.id in vus_id:
+            defauts.append(f"mesure « {spec.id} » : porte le même identifiant qu'un MODE — les "
+                           f"deux catalogues sont distincts, mais un étudiant qui lit « alpha » "
+                           f"dans un journal ne saurait pas duquel il s'agit")
+        if spec.runtime_cls is None:
+            defauts.append(f"mesure « {spec.id} » : aucun runtime_cls — le moteur ne saurait pas "
+                           f"la jouer, et le clic partirait sur un None(spec, …)")
+        if not spec.label:
+            defauts.append(f"mesure « {spec.id} » : sans libellé, sa tuile serait vide")
+        # Le même tri que pour un MODE, plus haut : un TEST exige un modèle, et une liste VIDE est
+        # l'état normal d'un dépôt cloné — sans ce tri, tout le registre serait « malsain » sur un
+        # poste sans modèle MI. Une source qui LÈVE reste un défaut.
+        mesure_sans_choix = []
+        for p in spec.params:
+            if not p.choices_fn:
+                continue
+            choix, erreur = p.choices_status()
+            if erreur:
+                defauts.append(f"mesure {spec.id}.{p.key} : la source de choix a levé — {erreur}")
+            elif not choix:
+                mesure_sans_choix.append(p.key)
+        values, reason = validate(
+            replace(spec, params=tuple(p for p in spec.params if p.key not in mesure_sans_choix)),
+            {})
+        if values is None:
+            defauts.append(f"mesure « {spec.id} » : ses valeurs par défaut sont refusées — {reason}")
+        for p in spec.params:
+            if not p.help:
+                defauts.append(f"mesure {spec.id}.{p.key} : pas de texte d'aide "
+                               f"(un étudiant doit savoir ce qu'il règle)")
+
+    return (not defauts), defauts
+
+
+def _selftest():
+    ok, defauts = check()
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    for spec in MODES:
+        marque = {"moteur": "●", "appli_pygame": "○", "prevu": "·"}[spec.status]
+        detail = f" — {spec.unavailable}" if spec.unavailable else ""
+        print(f"  {marque} {spec.id:<7} {spec.label:<14} {spec.family:<7} {spec.status}{detail}")
+    for d in defauts:
+        print(f"  ÉCHEC {d}")
+    print(f"[registry] {len(MODES)} modes, dont {len(runnable())} dans le moteur")
+
+    # Le catalogue doit porter `proposes`, sinon la console ne peut pas savoir qu'un réglage en
+    # propose un autre — et le bouton correspondant n'apparaîtrait jamais, sans erreur.
+    ssvep_serialise = serialize(get("ssvep"))
+    par_cle = {p["key"]: p for p in ssvep_serialise["params"]}
+    chk(par_cle["alpha_hz"]["proposes"] == "freqs",
+        f"le catalogue transmet `proposes` ({par_cle['alpha_hz'].get('proposes')!r})")
+    chk("affecte_decodage" not in par_cle["freqs"],
+        "et NE transmet PAS `affecte_decodage`, qui ne regarde que le moteur")
+
+    # --- Le contrat avec la console : « yeux_fermes », dans le catalogue des mesures ---------
+    # Sans lui, la console avertirait « la seconde moitié se fait LES YEUX FERMÉS » sous les CINQ
+    # pages de test dès qu'il n'y a pas de son — faux pour toutes, sauf le contrôle alpha. Le
+    # moteur le DÉCLARE ; la console le lit (`spec.get("yeux_fermes", False)`), elle ne le devine
+    # pas d'après un identifiant.
+    par_id = {m["id"]: m for m in catalogue_mesures()}
+    chk(par_id.get("alpha", {}).get("yeux_fermes") is True
+        and all(m.get("yeux_fermes") is False for i, m in par_id.items() if i != "alpha"),
+        f"le catalogue dit quelles mesures se font les yeux FERMÉS : le contrôle alpha, et lui "
+        f"seul ({ {i: m.get('yeux_fermes') for i, m in par_id.items()} })")
+    chk(par_id.get("alpha", {}).get("montre_contact") is True
+        and all(m.get("montre_contact") is False for i, m in par_id.items() if i != "alpha"),
+        f"le catalogue dit quelles pages montrent le contact des électrodes : « Vérifier le "
+        f"casque », et elle seule ({ {i: m.get('montre_contact') for i, m in par_id.items()} })")
+
+    # --- l'assouplissement des choix vides, sur un registre PIÉGÉ ---------------
+    # C'est l'état par défaut de tout dépôt fraîchement cloné (`data/` est gitignoré, donc zéro
+    # modèle MI). On ne peut pas le prouver sur les
+    # vrais modes — leur état dépend du poste — donc on remplace le registre le temps du test.
+    from core.modes.contract import ModeSpec, Param
+
+    def defauts_de(*params, **extra):
+        """Les défauts que `check()` signale sur un registre fabriqué d'un seul mode.
+
+        `extra` passe tel quel au `ModeSpec` : c'est ce qui permet de piéger aussi des champs qui
+        ne sont pas des paramètres (`runtime_cls`, `marker_epoch_s`…).
+        """
+        global MODES
+        vrais = MODES
+        MODES = (ModeSpec(id="piege", label="Piégé", family="actif", summary="",
+                          status="moteur", params=params, stream="decoded_piege",
+                          channels=("x",), **extra),)
+        try:
+            return check()[1]
+        finally:
+            MODES = vrais
+
+    vide = Param(key="modele", label="Modèle", kind="choice", choices_fn=lambda: [],
+                 help="aucun modèle entraîné pour l'instant")
+    d = defauts_de(vide, Param(key="gain", label="Gain", kind="float", default=99.0, max=10.0,
+                               help="entre 0 et 10"))
+    chk(any("dépasse le maximum" in x for x in d),
+        f"un choix vide n'exempte plus les AUTRES défauts du mode ({d})")
+
+    d = defauts_de(vide,
+                   Param(key="vote_len", label="Fenêtres du vote", kind="int", default=3,
+                         min=1, max=15, help="fenêtres"),
+                   Param(key="min_votes", label="Votes concordants", kind="int", default=10,
+                         min=1, max=15, constraints=("votes_atteignables",), help="votes"))
+    chk(any("jamais atteignable" in x for x in d),
+        f"les contraintes croisées sont évaluées elles aussi ({d})")
+
+    d = defauts_de(Param(key="modele", label="Modèle", kind="choice",
+                         choices_fn=lambda: 1 / 0, help="source cassée"))
+    chk(any("a levé" in x and "ZeroDivisionError" in x for x in d),
+        f"une source de choix qui LÈVE est un défaut, pas une situation normale ({d})")
+
+    # Un choix OUVERT (un nom de flux) exige un défaut : sans lui, `validate` irait lister ses
+    # choix sur le réseau à chaque appel. Les deux sens : sans défaut signalé, avec défaut muet.
+    def flux(**extra):
+        return Param(key="stream_in", label="Flux", kind="choice", ouvert=True,
+                     choices_fn=lambda: ("Flux_A",), help="le flux de marqueurs", **extra)
+
+    sans_defaut, avec_defaut = defauts_de(flux()), defauts_de(flux(default="Flux_A"))
+    chk(any("OUVERT" in x for x in sans_defaut) and not any("OUVERT" in x for x in avec_defaut),
+        f"un choix OUVERT sans défaut est un défaut de déclaration, avec un défaut il ne l'est "
+        f"pas ({sans_defaut} / {avec_defaut})")
+
+    # --- le même tri pour une MESURE (un test exige un modèle), sur un registre PIÉGÉ : l'état
+    # réel dépend du poste, et une machine qui a un modèle MI ne prouverait rien.
+    from core.modes.mesure import MesureSpec
+
+    global MESURES
+    vraies = MESURES
+    MESURES = (MesureSpec(id="piege_mesure", label="Piégée", runtime_cls=object, params=(
+        vide, Param(key="gain", label="Gain", kind="float", default=99.0, max=10.0,
+                    help="entre 0 et 10"),
+        Param(key="casse", label="Cassé", kind="choice", choices_fn=lambda: 1 / 0,
+              help="source cassée"))),)
+    try:
+        d = check()[1]
+    finally:
+        MESURES = vraies
+    chk(not any("aucun choix disponible" in x for x in d)
+        and any("dépasse le maximum" in x for x in d)
+        and any("casse" in x and "a levé" in x for x in d),
+        f"une mesure dont la liste de modèles est VIDE n'est pas un défaut ; ses autres réglages "
+        f"restent vérifiés, et une source qui lève reste un défaut ({d})")
+
+    # --- `marker_epoch_s` : ABSENT et SOUS-DIMENSIONNÉ ne sont pas le même défaut ---
+    # Le champ vaut 0.0 par défaut : l'OUBLI est donc l'état par défaut du prochain auteur de
+    # mode à marqueurs. Un message unique lui ferait relire une soustraction (« 0 s est SOUS
+    # 0,95 s ») au lieu de lui dire qu'il manque un champ. Les deux cas sont vérifiés sur un
+    # registre fabriqué, parce qu'aucun vrai mode ne peut être laissé fautif pour le test.
+    class _RuntimeQuiDecoupe:
+        """Juste les deux attributs que `check()` lit sur un runtime à marqueurs."""
+
+        pre_s, post_s = 0.15, 0.80
+
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe)         # marker_epoch_s laissé à son défaut
+    chk(any("AUCUN marker_epoch_s" in x and "0.95" in x.replace(",", ".") for x in d),
+        f"un mode à marqueurs qui OUBLIE marker_epoch_s s'entend dire ce qui manque, et la "
+        f"valeur à écrire ({d})")
+
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe, marker_epoch_s=0.5)
+    chk(any("est SOUS" in x for x in d) and not any("AUCUN" in x for x in d),
+        f"...et un marker_epoch_s TROP COURT reçoit l'autre message, celui de la troncature ({d})")
+
+    # 0.95 ÉCRIT EN CLAIR, et pas `0.15 + 0.80` : c'est la seule forme qui attrape le défaut
+    # mesuré ci-dessus (`_EPS_S`). Réécrire la même somme des deux côtés ferait passer ce test
+    # même sans tolérance, exactement comme le vrai P300 y échappait par hasard.
+    d = defauts_de(runtime_cls=_RuntimeQuiDecoupe, marker_epoch_s=0.95)
+    chk(not any("marker_epoch_s" in x for x in d),
+        f"...et pile la bonne valeur, ÉCRITE EN CLAIR, ne signale rien — le flottant "
+        f"0.15+0.80 = {0.15 + 0.80!r} ne doit accuser personne ({d})")
+
+    print(f"[registry] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)

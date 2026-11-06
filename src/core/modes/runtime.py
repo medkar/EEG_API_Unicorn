@@ -1,0 +1,353 @@
+"""`ModeRuntime` — l'état vivant d'un mode qui tourne : sa phase, son décodeur, son publieur.
+
+Ce qui est ICI est ce que **tous** les modes partagent : la séquence chauffe → repos → décodage,
+la publication activable, et le compte-rendu de repos. Ce qui est dans les sous-classes est ce qui
+diffère vraiment : ce qu'on collecte pendant le repos, et ce qu'on publie ensuite.
+
+Chaque mode porte sa propre séquence, et non une seule pour tout le moteur : quand deux modes
+tournent ensemble, ils sont à des phases différentes — l'un mesure encore son plancher pendant
+que l'autre décode déjà. L'état vit donc dans le mode.
+
+⚠️ **Un runtime ne lit jamais l'horloge lui-même** : `tick` reçoit `now`. C'est ce qui rend la
+machine de phases testable sans dormir, et ce qui garantit que tous les modes d'un même tour de
+boucle raisonnent sur le MÊME instant.
+
+Autotest :
+    python src/core/modes/runtime.py
+"""
+
+import os as _os
+import sys as _sys
+import time as _time
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+from core.config import use_utf8_console  # noqa: E402
+from core.modes.contract import ModeSpec, Rest  # noqa: E402
+
+
+class ModeRuntime:
+    """Un mode en train de tourner. Une instance par mode actif ; le moteur en tient un dict."""
+
+    def __init__(self, spec, params, engine):
+        self.spec = spec
+        self.params = dict(params)
+        self.engine = engine
+        self.published = True
+        self.phase = "running" if spec.rest is None else "warmup"
+        self.rest_report = None
+        self._warmup_s = 0.0 if spec.rest is None else spec.rest.warmup_s
+        self._rest_s = 0.0 if spec.rest is None else spec.rest.duration_s
+        self._warmup_until = None
+        self._rest_until = None
+        self._opened = False
+
+    # --- cycle de vie --------------------------------------------------------
+
+    def open(self):
+        """Crée le flux de ce mode. Idempotent : ré-ouvrir un mode ouvert ne fait rien."""
+        if not self._opened:
+            self._open()
+            self._opened = True
+
+    def close(self):
+        """Libère le flux. Le mode continue d'exister et de décoder pour l'affichage."""
+        if self._opened:
+            self._close()
+            self._opened = False
+
+    def set_published(self, on):
+        """Publier sur le réseau, ou décoder pour soi seul.
+
+        Couper la publication LIBÈRE vraiment le flux : il disparaît du réseau. On préfère ça à
+        un flux vivant qui n'émettrait plus rien — un client verrait un flux sain et attendrait
+        indéfiniment, ce qui est exactement le genre de silence que ce projet combat. Le
+        rallumer recrée le flux, donc les clients doivent se réabonner (le NOM ne change pas).
+        """
+        self.published = bool(on)
+        self.open() if self.published else self.close()
+
+    def begin_rest(self, now, warmup_s=None, duration_s=None):
+        """(Re)part pour une chauffe puis un repos. `None` = les durées du contrat.
+
+        Indispensable après avoir touché une électrode, et après tout changement de réglage : un
+        plancher mesuré sous d'autres réglages, ou pendant qu'un contact se stabilisait, reste
+        faux pour toute la séance.
+        """
+        self.rest_report = None
+        self._reset_rest()
+        if self.spec.rest is None:
+            self.phase = "running"
+            return
+        self._warmup_s = self.spec.rest.warmup_s if warmup_s is None else float(warmup_s)
+        self._rest_s = self.spec.rest.duration_s if duration_s is None else float(duration_s)
+        self._warmup_until = now + self._warmup_s
+        self._rest_until = None
+        self.phase = "warmup"
+
+    # --- la boucle -----------------------------------------------------------
+
+    def period_s(self):
+        """Délai minimum entre deux `tick`. 0 = à chaque tour de boucle du moteur."""
+        return 0.2
+
+    def tick(self, engine, lsl_ts, now):
+        """Un pas de ce mode. Appelé par la boucle du moteur, jamais par une interface."""
+        if self.phase == "warmup":
+            # Chauffe : on JETTE ces secondes au lieu de les verser dans le plancher.
+            if self._warmup_until is not None and now < self._warmup_until:
+                return
+            self.phase = "rest"
+
+        if self.phase == "rest":
+            if self._rest_until is None:
+                # Le décompte part de la PREMIÈRE fenêtre exploitable, pas du démarrage : le
+                # tampon met WINDOW_S + la marge de filtre à en produire une. Compter depuis le
+                # lancement rognerait le repos d'autant (mesuré : 3 fenêtres au lieu de 15, donc
+                # plancher rejeté faute d'effectif).
+                self._rest_until = now + self._rest_s
+            if self._rest_step(engine, now):
+                self.phase = "running"
+            return
+
+        self._run_step(engine, lsl_ts)
+
+    # --- état, pour l'afficheur ---------------------------------------------
+
+    def instruction(self):
+        """Ce que l'utilisateur doit faire MAINTENANT, dans ce mode."""
+        if self.phase in ("warmup", "rest") and self.spec.rest is not None:
+            return self.spec.rest.instruction
+        return ""
+
+    def output(self):
+        """La dernière sortie du mode, pour l'affichage. None si rien encore."""
+        return None
+
+    def noms_cibles(self):
+        """Le nom de chaque cible (ou tâche) de ce mode, dans l'ordre des indices qu'il publie, ou
+        None s'il n'en a pas. La console en tire ses barres et la cible décodée AVANT la première
+        décision : un mode à modèle tient ces noms de son modèle, qu'elle ne lit pas."""
+        return None
+
+    def channels(self):
+        """Les voies de ce mode, d'après le contrat et les paramètres.
+
+        Point d'extension pour les modes dont les voies dépendent d'un MODÈLE CHARGÉ : plutôt que
+        de relire le modèle via le contrat (qui n'a que le disque pour savoir), la sous-classe
+        peut surcharger cette méthode pour retourner les voies du modèle EN MÉMOIRE. Utile quand
+        la calibration écrit dans `data/` pendant qu'un mode tourne : l'état publié ne mentirait
+        jamais sur ses voies.
+        """
+        return list(self.spec.channels_for(self.params))
+
+    def a_un_lecteur(self):
+        """Quelqu'un lit-il le flux décodé de ce mode ? True / False, ou None sans flux ouvert.
+
+        LSL dit s'il y a AU MOINS un lecteur, jamais lequel : la fenêtre « Ce que voit ton
+        application » compte aussi. « Personne » est donc sûr, « quelqu'un » ne l'est pas.
+        Le publieur de chaque mode s'appelle `_out` et porte son `outlet`.
+        """
+        outlet = getattr(getattr(self, "_out", None), "outlet", None)
+        if outlet is None:
+            return None
+        try:
+            return bool(outlet.have_consumers())
+        except Exception:  # noqa: BLE001 - un flux qui se ferme pendant la question
+            return None
+
+    def avant_decodage_s(self, now=None):
+        """Secondes avant que le décodage commence, ou None s'il a commencé (ou s'il n'y a pas de
+        repos). Une ESTIMATION, et elle le dit : le repos peut se prolonger au-delà (le SSVEP
+        attend d'avoir assez de fenêtres), et son décompte ne part qu'à la première fenêtre
+        exploitable — d'où les deux branches. À 0, la console dit « encore un instant ».
+
+        La stabilisation puis le repos du Neuro durent 40 s : ce décompte évite de les laisser
+        sans indication de temps à l'écran. Même horloge que la boucle (`perf_counter`).
+        """
+        if self.phase not in ("warmup", "rest") or self.spec.rest is None:
+            return None
+        now = _time.perf_counter() if now is None else now
+        rest_s = float(getattr(self, "_rest_s", self.spec.rest.duration_s))
+        if self.phase == "warmup":
+            fin = self._warmup_until if self._warmup_until is not None else now
+            return max(0.0, fin - now) + rest_s
+        if self._rest_until is None:
+            return rest_s
+        return max(0.0, self._rest_until - now)
+
+    def state(self):
+        """L'état de ce mode, en dictionnaire JSON-able. Sûr depuis un autre fil."""
+        avant = self.avant_decodage_s()
+        return {
+            "id": self.spec.id,
+            "label": self.spec.label,
+            "family": self.spec.family,
+            "phase": self.phase,
+            "published": self.published,
+            "params": {k: (list(v) if isinstance(v, tuple) else v)
+                       for k, v in self.params.items()},
+            "instruction": self.instruction(),
+            # Pas dans le flux `status` (contrat public) : seulement dans `snapshot()`.
+            "avant_decodage_s": None if avant is None else round(avant, 1),
+            "stream": self.spec.stream,
+            "channels": self.channels(),
+            "rest_report": self.rest_report,
+            "output": self.output(),
+            # Ces deux-là ne sont pas dans le flux `status` : seulement dans `snapshot()`, pour la
+            # page de contrôle.
+            "noms": self.noms_cibles(),
+            "lu": self.a_un_lecteur(),
+        }
+
+    # --- à redéfinir dans les sous-classes -----------------------------------
+
+    def _open(self):
+        """Créer le(s) publieur(s) de ce mode."""
+
+    def _close(self):
+        """Libérer le(s) publieur(s). Laisser tomber la référence suffit : pylsl ferme l'outlet."""
+
+    def _reset_rest(self):
+        """Jeter tout ce qui a été mesuré : échantillons du plancher, décodeur, dernière sortie."""
+
+    def _rest_step(self, engine, now):
+        """Un pas de mesure du repos. True quand le plancher tient, False pour prolonger."""
+        return True
+
+    def _run_step(self, engine, lsl_ts):
+        """Un pas de décodage : mesurer, décider, publier."""
+
+    # Un mode qui écoute des marqueurs déclare `marker_epoch_s` dans son `ModeSpec` et appelle
+    # `engine.markers_murs(self.spec.id, post_s)` depuis son `_run_step`. Le moteur lui rend des
+    # marqueurs SITUÉS (horodatés dans la même horloge que `engine.recent_ts`) et MÛRS. Le
+    # découpage reste au mode : les bornes ne sont pas les mêmes d'un paradigme à l'autre.
+    #
+    # ⚠️ « MÛR » NE VEUT DIRE QUE : le POST est arrivé. `markers_murs` compare l'instant du
+    # marqueur + `post_s` au dernier échantillon du tampon — elle ne regarde PAS le côté PRÉ.
+    # Un marqueur peut donc être mûr et son époque déjà TRONQUÉE par la tête : le tampon est
+    # glissant, et une manche qui a pris du retard (un tour de boucle long, une purge) laisse
+    # sortir les plus vieux échantillons. Découper rend alors `None`.
+    #
+    # Conséquence pour qui écrit un mode à marqueurs :
+    # **garder la garde `if epoque is None: continue` et COMPTER ce qu'elle jette** — c'est ce
+    # que fait `_epoques_perdues` dans `modes/p300.py`. La retirer en croyant la maturité
+    # suffisante ne lèverait rien : le mode perdrait des époques en silence, exactement la panne
+    # muette que ce produit combat. `marker_epoch_s` dimensionne le tampon pour que ce cas soit
+    # RARE, il ne le rend pas impossible.
+
+
+def _selftest():
+    """La machine de phases, sur une horloge FABRIQUÉE. Aucun casque, aucune attente réelle."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    class _Compteur(ModeRuntime):
+        """Runtime d'essai : son repos se termine au bout de 3 pas, puis il compte ses décisions."""
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.vus, self.decisions, self.remises_a_zero = 0, 0, 0
+
+        def _reset_rest(self):
+            self.remises_a_zero += 1
+            self.vus = 0
+
+        def _rest_step(self, engine, now):
+            self.vus += 1
+            if self.vus < 3:
+                return False
+            self.rest_report = {"windows": self.vus}
+            return True
+
+        def _run_step(self, engine, lsl_ts):
+            self.decisions += 1
+
+    avec_repos = ModeSpec(id="a", label="Avec repos", family="actif", summary="", status="moteur",
+                          rest=Rest(warmup_s=10.0, duration_s=20.0, instruction="ne bouge pas"),
+                          stream="decoded_a", channels=("x",))
+    sans_repos = ModeSpec(id="b", label="Sans repos", family="brut", summary="", status="moteur",
+                          stream="raw", channels=("x",))
+
+    # 1. Un mode SANS repos décode tout de suite : rien à mesurer avant de diffuser.
+    rt = _Compteur(sans_repos, {}, engine=None)
+    rt.begin_rest(now=100.0)
+    chk(rt.phase == "running", f"sans repos, on démarre en « running » (phase={rt.phase})")
+    rt.tick(engine=None, lsl_ts=0.0, now=100.0)
+    chk(rt.decisions == 1, "et il décode dès le premier tick")
+
+    # 2. Un mode AVEC repos passe par chauffe -> repos -> décodage, dans cet ordre.
+    rt = _Compteur(avec_repos, {}, engine=None)
+    rt.begin_rest(now=100.0)
+    chk(rt.phase == "warmup", "avec repos, on commence par la chauffe")
+    chk(rt.remises_a_zero == 1, "le début de repos remet l'état du mode à zéro")
+
+    rt.tick(None, 0.0, now=105.0)     # encore dans la chauffe (10 s)
+    # Le temps avant le décodage : le reste de la chauffe PLUS tout le repos.
+    chk(rt.avant_decodage_s(now=105.0) == 25.0,
+        f"pendant la chauffe, le décodage est à « reste de chauffe + repos » "
+        f"({rt.avant_decodage_s(now=105.0)} s au lieu de 5 + 20)")
+    chk(rt.phase == "warmup" and rt.vus == 0,
+        "pendant la chauffe on ne collecte RIEN (la dérive DC fausserait le plancher)")
+
+    rt.tick(None, 0.0, now=111.0)     # chauffe finie -> repos, 1re fenêtre
+    chk(rt.phase == "rest" and rt.vus == 1, f"la chauffe finie, le repos commence (vus={rt.vus})")
+    chk(rt.avant_decodage_s(now=116.0) == 15.0 and rt.avant_decodage_s(now=140.0) == 0.0,
+        f"pendant le repos, il décompte depuis la 1re fenêtre, sans jamais passer sous zéro "
+        f"({rt.avant_decodage_s(now=116.0)}, {rt.avant_decodage_s(now=140.0)})")
+
+    rt.tick(None, 0.0, now=112.0)
+    rt.tick(None, 0.0, now=113.0)     # 3e fenêtre -> le plancher tient
+    chk(rt.phase == "running", f"le plancher mesuré, on décode (phase={rt.phase})")
+    chk(rt.avant_decodage_s() is None and rt.state()["avant_decodage_s"] is None,
+        "une fois le décodage commencé, plus de décompte — ni dans l'état publié")
+    chk(rt.rest_report == {"windows": 3}, f"le repos laisse un compte-rendu ({rt.rest_report})")
+    chk(rt.decisions == 0, "aucune décision n'a été publiée avant la fin du repos")
+
+    rt.tick(None, 0.0, now=114.0)
+    chk(rt.decisions == 1, "puis les décisions partent")
+
+    # 3. Refaire le repos repart de zéro — indispensable après avoir touché une électrode.
+    rt.begin_rest(now=200.0)
+    chk(rt.phase == "warmup" and rt.remises_a_zero == 2 and rt.rest_report is None,
+        "« refaire le repos » remet chauffe, état et compte-rendu à zéro")
+
+    # 4. Les durées peuvent être RACCOURCIES (c'est ce dont les smokes ont besoin).
+    rt = _Compteur(avec_repos, {}, engine=None)
+    rt.begin_rest(now=0.0, warmup_s=1.0, duration_s=2.0)
+    rt.tick(None, 0.0, now=1.5)
+    chk(rt.phase == "rest", "une chauffe raccourcie est bien plus courte")
+
+    # 5. Le voyant « lu » : quelqu'un lit-il le flux du mode ? LSL dit s'il y a AU MOINS un
+    # lecteur, jamais lequel. Sans flux ouvert, on ne sait pas : None, jamais « non ».
+    class _Sortie:
+        def __init__(self, lecteurs):
+            self.lecteurs = lecteurs
+
+        def have_consumers(self):
+            if self.lecteurs is None:
+                raise RuntimeError("flux en train de se fermer")
+            return self.lecteurs
+
+    class _Publieur:
+        def __init__(self, lecteurs):
+            self.outlet = _Sortie(lecteurs)
+
+    rt = _Compteur(avec_repos, {}, engine=None)
+    vus = []
+    for publieur in (None, _Publieur(False), _Publieur(True), _Publieur(None)):
+        rt._out = publieur
+        vus.append((rt.a_un_lecteur(), rt.state()["lu"]))
+    chk(vus == [(None, None), (False, False), (True, True), (None, None)],
+        f"« lu » : None sans flux, la réponse de LSL sinon, None si LSL lève ({vus})")
+
+    print(f"[runtime] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)

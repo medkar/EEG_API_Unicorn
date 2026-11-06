@@ -1,0 +1,493 @@
+"""`CalibrationRuntime` — la ligne du temps d'une calibration, jouée par le MOTEUR.
+
+Ce qui est ICI est ce que **toute** calibration partage : la chauffe, l'échauffement non
+enregistré, la suite d'essais tirés au hasard, l'entraînement, le résultat. Ce qui est dans les
+sous-classes est ce qui diffère : les classes à cuer, les consignes, et ce qu'on fait des époques
+à la fin.
+
+⚠️ **Une calibration n'est PAS un mode.** Elle vit dans un emplacement propre du moteur
+(`EngineServer.calibration`), pas dans `self.active`. La raison est concrète : le mode Motor
+Imagery REFUSE de démarrer sans modèle entraîné, donc une calibration hébergée par ce mode serait
+inatteignable pour la seule personne qui en a besoin — celle qui n'a pas encore de modèle.
+
+⚠️ **Un runtime ne lit jamais l'horloge lui-même** : `tick` reçoit `now`, comme `ModeRuntime`.
+C'est ce qui permet de jouer une séance de sept minutes en quelques millisecondes dans un test.
+
+Autotest :
+    python src/core/modes/calibration.py
+"""
+
+import os as _os
+import random as _random
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+from core.config import use_utf8_console  # noqa: E402
+from core.i18n import message_erreur, tr  # noqa: E402
+
+# Les phases publiques, dans l'ordre où elles s'enchaînent. Elles sortent telles quelles dans
+# `snapshot()["calibration"]["phase"]` : la console les traduit, elle n'en invente aucune.
+PHASES = ("chauffe", "echauffement", "essais", "entrainement", "fini", "annule")
+
+# Le sous-ensemble TERMINAL de PHASES — dérivé d'elle, pas recopié : `terminee` (juste plus bas)
+# s'en sert, et c'est la constante que la console doit IMPORTER plutôt que redéclarer sa propre
+# copie de ("fini", "annule") (le « catalogue recopié » que la règle du projet interdit — renommer une
+# phase ici sans y penser laisserait la console sans écran de résultat).
+PHASES_TERMINALES = PHASES[-2:]
+
+# Les étapes À L'INTÉRIEUR d'un essai.
+ETAPES = ("cue", "imagerie", "repos")
+
+
+class CalibrationRuntime:
+    """Une calibration en cours. Le moteur en tient AU PLUS UNE — le casque est unique."""
+
+    # --- à renseigner par la sous-classe ------------------------------------
+    classes = ()            # les étiquettes à cuer, dans l'ordre de déclaration
+    cue_s = 3.0             # mise en route, JETÉE
+    imagery_s = 4.0         # la partie ENREGISTRÉE
+    rest_s = 1.5            # pause entre deux essais
+    warmup_s = 15.0         # stabilisation du casque, JETÉE (dérive DC de l'Unicorn)
+    warmup_per_class = 2    # essais d'échauffement NON enregistrés
+
+    # Comment cette séance se NOMME dans le journal, et comment s'appelle son calcul final. Deux
+    # attributs de classe plutôt qu'un texte en dur dans `_terminer` : cette méthode est héritée
+    # TELLE QUELLE par `modes/mesure.py`, qui n'entraîne RIEN. Sinon un contrôle alpha raté
+    # s'annoncerait « [calib] entraînement impossible » — et on y chercherait un modèle que
+    # personne n'a demandé.
+    _journal = "calib"
+    _nom_du_calcul = "entraînement"
+
+    # Le NOM de ce que comptent `essai` et `total`, au singulier. Publié dans `state()` parce que
+    # c'est le moteur qui sait ce qu'il compte : une console qui écrirait « phase(s)
+    # enregistrée(s) » sous toutes les pages afficherait « sur 288 » pour un test P300 de
+    # 6 manches. Une sous-classe
+    # qui compte autre chose (une époque, une manche, un cycle) le redéclare.
+    unite = tr("calib.unite.essai")
+
+    def __init__(self, spec, params, engine, rng=None, dossier=None):
+        """`spec` : le `ModeSpec` du mode calibré. `params` : les réglages VALIDÉS de la calibration.
+
+        `rng` est injectable pour que le test obtienne un ordre reproductible. En séance il est
+        tiré au hasard, et il DOIT l'être : un ordre fixe apprendrait au sujet à anticiper la
+        classe suivante, ce qui contamine l'imagerie par de l'attente motrice.
+
+        `dossier` : OÙ écrire le modèle et son enregistrement. Il vit sur la classe de BASE, donc
+        toute calibration l'accepte, et le moteur peut le passer sans savoir laquelle il
+        construit (`EngineServer._start_calibration`). ⚠️ **Aucun défaut, surtout pas `DATA_DIR`** :
+        une calibration qui choisirait elle-même son dossier écrirait dans `data/` AVANT
+        d'annoncer sa précision, donc une séance ratée y deviendrait le modèle le plus récent —
+        donc le défaut proposé — sans que personne ait pu la refuser. Une calibration ne décide
+        pas où elle écrit ; cf. `dossier_ou_lever`.
+        """
+        self.spec = spec
+        self.dossier = dossier
+        self.calib = spec.calibration
+        self.params = dict(params)
+        self.engine = engine
+        self.rng = rng or _random.Random()
+
+        self.phase = "chauffe"
+        self.etape = ""
+        self.classe = ""
+        self.essai = 0            # essais ENREGISTRÉS déjà terminés
+        self.resultat = None
+        self.probleme = ""
+        self._echeance = None     # instant de fin de l'étape en cours (horloge de l'appelant)
+        self._suite = []          # les étiquettes restantes de la phase en cours
+        self._enregistre = []     # [(époque (n, 8), étiquette)]
+        self._demarre = False
+
+    # --- ce que la sous-classe fournit ---------------------------------------
+
+    def instruction(self):
+        """La consigne à afficher MAINTENANT, en grand."""
+        return ""
+
+    def rappel(self):
+        """La ligne secondaire, sous la consigne. "" s'il n'y en a pas."""
+        return ""
+
+    def croix(self):
+        """La croix de fixation : None si ce protocole n'en a pas, sinon True/False — à afficher
+        MAINTENANT ou non.
+
+        C'est le PROTOCOLE qui le décide (le Motor Imagery), pas la page : l'écran
+        générique ne connaît aucun mode, il dessine la croix quand l'instantané la demande. Trois
+        valeurs et pas deux : la croix est ce qu'on FIXE, elle garde sa place pendant les pauses
+        (False) — une page qui sauterait à chaque essai déplacerait le regard qu'elle doit tenir.
+        """
+        return None
+
+    def _entrainer(self, enregistre, fs):
+        """Entraîne et sauvegarde. Rend le dict de résultat, ou lève avec un message lisible.
+
+        ⚠️ Le chemin d'écriture vient de `dossier_ou_lever()` et de NULLE PART ailleurs — pas
+        d'un défaut de configuration, pas d'un `or DATA_DIR`.
+        """
+        raise NotImplementedError
+
+    def dossier_ou_lever(self):
+        """Le dossier d'écriture, ou une exception LISIBLE — jamais un repli silencieux.
+
+        `_terminer` attrape déjà ce qui lève et le solde en « annulé » avec sa raison affichée :
+        un oubli se voit donc à l'écran, sur la calibration qui l'a commis, plutôt que de
+        produire un modèle à un endroit que personne n'a demandé.
+        """
+        if not self.dossier:
+            raise ValueError(
+                f"{type(self).__name__} n'a reçu aucun dossier d'écriture. C'est le MOTEUR qui le "
+                f"donne (`EngineServer.calib_dir`, un dossier CANDIDAT temporaire), pour que le "
+                f"résultat soit ANNONCÉ avant d'être retenu. Retomber sur `data/` est exactement "
+                f"ce qui faisait proposer une calibration ratée comme modèle par défaut.")
+        return self.dossier
+
+    # --- la ligne du temps ---------------------------------------------------
+
+    @property
+    def terminee(self):
+        return self.phase in PHASES_TERMINALES
+
+    def trials_per_class(self):
+        return int(self.params.get("trials_per_class", 0))
+
+    def total(self):
+        """Le nombre d'essais ENREGISTRÉS de la séance. L'échauffement n'en fait pas partie."""
+        return self.trials_per_class() * len(self.classes)
+
+    def duree_estimee_s(self):
+        """Le temps total, échauffement et chauffe compris. Calculé, jamais stocké."""
+        par_essai = self.cue_s + self.imagery_s + self.rest_s
+        n = self.total() + self.warmup_per_class * len(self.classes)
+        return self.warmup_s + n * par_essai
+
+    def cancel(self):
+        """Abandon. Ce qui est déjà enregistré n'est PAS entraîné ni sauvegardé.
+
+        Choix délibéré : une séance interrompue à cinq essais produirait un modèle que rien ne
+        distingue d'un modèle complet dans la liste, et qui donnerait des probabilités plausibles
+        et fausses.
+        """
+        if not self.terminee:
+            self.phase = "annule"
+            self.etape, self.classe, self._echeance = "", "", None
+        # `run()` (server.py) casse le cycle self.active <-> ModeRuntime.engine en vidant
+        # `self.active`. Pour la calibration, c'est ICI que se fait le nettoyage : `self.engine`
+        # (une référence vers le moteur ENTIER) et les époques déjà enregistrées (plusieurs
+        # minutes de signal, mortes dès qu'on renonce à entraîner) sont libérés
+        # inconditionnellement — même sur une calibration déjà "fini" (le `finally` de `run()`
+        # appelle `cancel()` sans regarder `terminee`) — pour qu'un abandon EN COURS DE SÉANCE
+        # (`cancel_calibration`, sans arrêt du moteur) ne les garde pas vivantes jusqu'au
+        # prochain passage du ramasse-miettes cyclique.
+        self._enregistre = []
+        self.engine = None
+
+    def tick(self, engine, now):
+        """Un pas. Appelé par la boucle du moteur, jamais par une interface."""
+        if self.terminee:
+            return
+        if not self._demarre:
+            self._demarre = True
+            self._echeance = now + self.warmup_s
+            return
+
+        if self._echeance is not None and now < self._echeance:
+            return
+
+        if self.phase == "chauffe":
+            self._commencer_echauffement(now)
+        elif self.phase in ("echauffement", "essais"):
+            self._pas_essai(engine, now)
+        elif self.phase == "entrainement":
+            self._terminer(engine)
+
+    def _commencer_echauffement(self, now):
+        self._suite = self._tirage(self.warmup_per_class)
+        if not self._suite:
+            self._commencer_essais(now)
+            return
+        self.phase = "echauffement"
+        self._prochain_essai(now)
+
+    def _commencer_essais(self, now):
+        self.phase = "essais"
+        self._suite = self._tirage(self.trials_per_class())
+        if not self._suite:
+            self.phase = "entrainement"
+            self.etape, self.classe, self._echeance = "", "", now
+            return
+        self._prochain_essai(now)
+
+    def _tirage(self, par_classe):
+        """Les étiquettes d'une phase, MÉLANGÉES. Un ordre fixe s'anticipe (cf. `__init__`)."""
+        suite = [c for c in self.classes for _ in range(par_classe)]
+        self.rng.shuffle(suite)
+        return suite
+
+    def _prochain_essai(self, now):
+        self.classe = self._suite.pop(0)
+        self.etape = "cue"
+        self._echeance = now + self.cue_s
+
+    def _pas_essai(self, engine, now):
+        if self.etape == "cue":
+            self.etape = "imagerie"
+            self._echeance = now + self.imagery_s
+            return
+
+        if self.etape == "imagerie":
+            # L'époque est prélevée À LA FIN de l'imagerie, pas au fil de l'eau : le tampon
+            # glissant du moteur contient les `imagery_s` dernières secondes, et c'est exactement
+            # celles-là qu'on veut. `epoch_s` du contrat garantit que le tampon est assez long.
+            if self.phase == "essais":
+                epoque = engine.recent_window(self.imagery_s)
+                attendu = int(round(self.imagery_s * engine.acq.fs))
+                if epoque is not None and len(epoque) >= attendu:
+                    self._enregistre.append((epoque, self.classe))
+                    self.essai += 1
+                else:
+                    # On le DIT plutôt que d'enregistrer une époque courte : un essai tronqué
+                    # produit moins de fenêtres d'entraînement, en silence.
+                    obtenu = 0 if epoque is None else len(epoque)
+                    print(f"[calib] essai IGNORÉ ({self.classe}) : {obtenu} échantillons au lieu "
+                          f"de {attendu} — le tampon du moteur n'était pas encore rempli")
+            self.etape = "repos"
+            self._echeance = now + self.rest_s
+            return
+
+        # repos terminé
+        if self._suite:
+            self._prochain_essai(now)
+        elif self.phase == "echauffement":
+            self._commencer_essais(now)
+        else:
+            self.phase = "entrainement"
+            self.etape, self.classe, self._echeance = "", "", now
+
+    def _terminer(self, engine):
+        """L'entraînement. Bloque la boucle du moteur le temps du `fit` — quelques secondes.
+
+        C'est assumé : à cet instant, plus rien ne doit être acquis pour cette séance, et
+        déporter l'entraînement dans un fil ferait toucher `data/` par deux fils. Le décodage des
+        autres modes est simplement suspendu pendant ce temps.
+        """
+        try:
+            self.resultat = self._entrainer(self._enregistre, float(engine.acq.fs))
+            self.phase = "fini"
+        except Exception as e:  # noqa: BLE001 - l'échec de l'entraînement ne tue pas le moteur
+            self.probleme = message_erreur(e)
+            self.phase = "annule"
+            print(f"[{self._journal}] {self._nom_du_calcul} impossible : {self.probleme}")
+        self.etape, self.classe, self._echeance = "", "", None
+
+    # --- l'état, pour l'afficheur -------------------------------------------
+
+    def restant_s(self, now):
+        """Secondes restantes sur l'étape en cours. 0 quand il n'y a rien à décompter.
+
+        ⚠️ Copie LOCALE de `self._echeance` avant de la tester : `state()` (donc cette méthode)
+        est appelée depuis le fil de l'afficheur (cf. sa docstring) pendant que la boucle du
+        moteur peut la remettre à `None` entre-temps — dans `cancel()` et `_terminer()`. Sans
+        cette copie, `self._echeance` pourrait valoir `None` ici même après avoir passé le test
+        `is None` juste au-dessus : `None - now` lève `TypeError` chez l'appelant. Même motif
+        que `_status_key` dans `server.py`.
+        """
+        echeance = self._echeance
+        if echeance is None:
+            return 0.0
+        return max(0.0, echeance - now)
+
+    def state(self, now=None):
+        """L'état complet, en dictionnaire JSON-able. Sûr depuis un autre fil.
+
+        `now` est facultatif : sans lui, le décompte vaut 0. Le moteur le passe depuis sa boucle,
+        et c'est la seule horloge qui fait foi.
+        """
+        return {
+            "mode_id": self.spec.id,
+            "label": self.calib.label or tr("calib.label_defaut", mode=self.spec.label),
+            "phase": self.phase,
+            "etape": self.etape,
+            "classe": self.classe,
+            "instruction": self.instruction(),
+            "rappel": self.rappel(),
+            "croix": self.croix(),
+            "essai": self.essai,
+            "total": self.total(),
+            "unite": self.unite,
+            "restant_s": round(self.restant_s(now), 1) if now is not None else 0.0,
+            "duree_estimee_s": round(self.duree_estimee_s(), 1),
+            "params": dict(self.params),
+            "classes": list(self.classes),
+            "resultat": self.resultat,
+            "probleme": self.probleme,
+        }
+
+
+def _selftest():
+    """La ligne du temps sur une horloge FABRIQUÉE. Aucune séance, aucune attente réelle."""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    import numpy as np
+
+    from core.modes.contract import Calib, ModeSpec, Param
+
+    class _FausseAcq:
+        fs = 250.0
+
+    class _FauxMoteur:
+        """Rend toujours une époque de la bonne longueur : on teste la LIGNE DU TEMPS, pas
+        l'acquisition."""
+
+        def __init__(self):
+            self.acq = _FausseAcq()
+            self.demandes = []
+
+        def recent_window(self, seconds):
+            self.demandes.append(seconds)
+            return np.zeros((int(round(seconds * self.acq.fs)), 8))
+
+    class _Essai(CalibrationRuntime):
+        classes = ("A", "B")
+        cue_s, imagery_s, rest_s, warmup_s, warmup_per_class = 3.0, 4.0, 1.5, 15.0, 2
+
+        def instruction(self):
+            return f"Fais {self.classe}" if self.classe else ""
+
+        def _entrainer(self, enregistre, fs):
+            return {"n_essais": len(enregistre), "fs": fs,
+                    "classes": sorted({lab for _e, lab in enregistre})}
+
+    spec = ModeSpec(
+        id="essai", label="Essai", family="actif", summary="", status="moteur",
+        calibration=Calib(kind="moteur", label="Calibration d'essai", epoch_s=4.0,
+                          params=(Param("trials_per_class", "Essais par classe", "int",
+                                        default=3, min=1, max=40),),
+                          runtime_cls=_Essai))
+
+    moteur = _FauxMoteur()
+    rt = _Essai(spec, {"trials_per_class": 3}, moteur, rng=_random.Random(0))
+
+    chk(rt.total() == 6, f"3 essais par classe sur 2 classes = 6 essais enregistrés ({rt.total()})")
+    chk(abs(rt.duree_estimee_s() - (15.0 + 10 * 8.5)) < 1e-6,
+        f"la durée estimée compte l'échauffement ET la chauffe ({rt.duree_estimee_s():.1f} s)")
+
+    # La chauffe est JETÉE : rien n'est enregistré pendant, et elle dure ce qu'elle annonce.
+    t = 100.0
+    rt.tick(moteur, t)
+    chk(rt.phase == "chauffe", f"on commence par la chauffe ({rt.phase})")
+    # `now=0.0` est une horloge VALIDE (l'instant zéro d'une séance), pas une absence d'horloge —
+    # confusion qu'un `if now else ...` ferait puisque 0.0 est aussi FALSY en Python. La
+    # distinction que documente `state(now=None)` (« sans lui, le décompte vaut 0 ») porte sur
+    # l'ABSENCE de l'argument, jamais sur sa valeur.
+    chk(rt.state(now=0.0).get("croix", "absente") is None,
+        "un protocole qui ne déclare pas de croix publie `croix: None` : la page ne lui réserve "
+        "aucune place")
+    chk(rt.state(now=0.0)["restant_s"] == round(rt.restant_s(0.0), 1) > 0.0,
+        f"now=0.0 est une horloge valide, distincte de l'absence d'horloge "
+        f"({rt.state(now=0.0)['restant_s']})")
+    rt.tick(moteur, t + 14.9)
+    chk(rt.phase == "chauffe" and not moteur.demandes,
+        "pendant la chauffe, RIEN n'est prélevé (la dérive DC fausserait les époques)")
+
+    # Une horloge fabriquée, pas à pas : on avance par petits sauts jusqu'à la fin de la séance.
+    t = 115.0
+    for _ in range(4000):
+        rt.tick(moteur, t)
+        if rt.terminee:
+            break
+        t += 0.25
+
+    chk(rt.phase == "fini", f"la séance se termine ({rt.phase}, problème={rt.probleme!r})")
+    chk(rt.essai == 6, f"6 essais enregistrés, pas un de plus ({rt.essai})")
+    chk(rt.resultat and rt.resultat["n_essais"] == 6,
+        f"et c'est ce qui part à l'entraînement ({rt.resultat})")
+    chk(rt.resultat and sorted(rt.resultat["classes"]) == ["A", "B"],
+        f"les deux classes sont représentées ({rt.resultat})")
+    # 10 essais joués (4 d'échauffement + 6 enregistrés), 6 prélèvements : l'échauffement ne
+    # prélève RIEN. C'est le seul test qui distingue « non enregistré » de « enregistré puis jeté ».
+    chk(len(moteur.demandes) == 6,
+        f"l'échauffement ne prélève aucune époque ({len(moteur.demandes)} prélèvements pour "
+        f"{4 + 6} essais joués)")
+    chk(all(abs(s - 4.0) < 1e-9 for s in moteur.demandes),
+        f"et chaque prélèvement demande imagery_s, pas la durée de l'essai ({set(moteur.demandes)})")
+
+    # L'abandon : ni entraînement, ni modèle. Une séance à moitié faite ne doit pas produire un
+    # modèle indiscernable d'un modèle complet.
+    rt2 = _Essai(spec, {"trials_per_class": 3}, _FauxMoteur(), rng=_random.Random(1))
+    t = 0.0
+    for _ in range(200):
+        rt2.tick(rt2.engine, t)
+        t += 0.25
+    rt2.cancel()
+    chk(rt2.phase == "annule" and rt2.resultat is None,
+        f"un abandon ne produit AUCUN modèle ({rt2.phase}, {rt2.resultat})")
+    avant = rt2.essai
+    rt2.tick(rt2.engine, t + 100.0)
+    chk(rt2.essai == avant and rt2.phase == "annule",
+        "et une calibration annulée ne repart pas toute seule au tick suivant")
+
+    # Un entraînement qui lève ne doit pas tuer le moteur : il se solde en « annulé » + raison.
+    class _Casse(_Essai):
+        def _entrainer(self, enregistre, fs):
+            raise ValueError("pas assez de données")
+
+    rt3 = _Casse(spec, {"trials_per_class": 1}, _FauxMoteur(), rng=_random.Random(2))
+    t = 0.0
+    for _ in range(4000):
+        rt3.tick(rt3.engine, t)
+        if rt3.terminee:
+            break
+        t += 0.25
+    chk(rt3.phase == "annule" and "pas assez de données" in rt3.probleme,
+        f"un entraînement qui lève se solde par un refus lisible ({rt3.phase}, {rt3.probleme})")
+
+    # La branche « tampon pas encore rempli » : c'est elle qui décide ce qui entre dans le jeu
+    # d'entraînement, et rien ne l'exerçait. Le moteur rend une fenêtre plus COURTE que demandée
+    # au TOUT PREMIER prélèvement (`recent_window` n'est appelée que pendant "essais", jamais
+    # pendant l'échauffement — vérifié plus haut — donc son premier appel EST le premier essai de
+    # cette phase) ; l'essai correspondant doit être ignoré, sans faire échouer la séance.
+    class _MoteurTronque(_FauxMoteur):
+        def recent_window(self, seconds):
+            fenetre = super().recent_window(seconds)
+            return fenetre[:-1] if len(self.demandes) == 1 else fenetre
+
+    rt4 = _Essai(spec, {"trials_per_class": 3}, _MoteurTronque(), rng=_random.Random(3))
+    t = 0.0
+    for _ in range(4000):
+        rt4.tick(rt4.engine, t)
+        if rt4.terminee:
+            break
+        t += 0.25
+    chk(rt4.phase == "fini" and rt4.essai == rt4.total() - 1,
+        f"un tampon pas encore rempli au premier essai en ignore UN, pas plus "
+        f"({rt4.essai} sur {rt4.total()})")
+
+    # L'état est JSON-able : il part dans `snapshot()`, que la console sérialise. `chk(True, ...)`
+    # ne prouverait rien par elle-même (un `json.dumps` qui lève ferait planter la ligne d'AVANT,
+    # jamais échouer celle-ci) : on capture donc le VRAI résultat de la sérialisation.
+    import json
+
+    try:
+        json.dumps(rt.state(now=t))
+        serialisable = True
+    except (TypeError, ValueError):
+        serialisable = False
+    chk(serialisable, "l'état est sérialisable en JSON")
+    etat = rt.state(now=t)
+    chk(set(etat) >= {"phase", "etape", "classe", "instruction", "essai", "total", "unite",
+                      "restant_s", "resultat", "probleme"},
+        f"et il porte tout ce que la console doit peindre ({sorted(etat)})")
+
+    print(f"[calibration] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)

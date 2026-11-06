@@ -1,0 +1,22 @@
+# The settings of the two nodes. This is the only file to edit.
+
+eeg_api_bridge:
+  ros__parameters:
+    app_name: "my-robot"                # the name the console lists under "Connect an application"
+    device_id: ""                       # empty: the end of this computer's MAC address
+    device_port: 5011                   # the UDP port this node listens to, and announces
+    engine_host: "255.255.255.255"      # where the hellos go: broadcast, or the console's IP address
+    engine_port: 5010                   # the UDP port of the console
+    mode: "ssvep"                       # ssvep, mi or neuro (the modes served over UDP)
+    # The settings of the mode, as JSON (keys and ranges: docs/control.md). Here: two physical
+    # targets (LEDs) blinking at 13 and 15 Hz.
+    settings: '{"targets_on": "physical", "freqs": [13, 15], "target_names": ["forward", "turn"]}'
+    propose_refresh_hz: 0.0             # > 0: SSVEP on a screen, ask the engine for frequencies
+    stop_mode_on_exit: true
+
+intent_to_twist:
+  ros__parameters:
+    linear_x: [0.1, 0.0]                # m/s for target 0, target 1...
+    angular_z: [0.0, 0.5]               # rad/s for target 0, target 1...
+    timeout_s: 1.0                      # no decision for this long: zero velocity
+    cmd_vel_topic: "cmd_vel"

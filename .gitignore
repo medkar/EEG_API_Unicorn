@@ -1,0 +1,48 @@
+# --- Données de recherche : NON versionnées ---------------------------------
+# data/ = enregistrements EEG (données biométriques) + modèles entraînés + logs de séance (~85 Mo).
+# Régénérables par calibration, et le repo "produit" n'en a pas besoin -> à archiver À PART, hors git.
+data/
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Environnements virtuels ------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- Modèles / artefacts entraînés (régénérables) ---------------------------
+*.joblib
+*.npz
+
+# --- OS / éditeurs ----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Divers -----------------------------------------------------------------
+*.log
+crash.txt
+
+# Journaux de séance écrits par les fenêtres de stimulus et par le moteur (chantier « plus une
+# seule commande à taper », 2026-09-09). Ce ne sont ni des modèles ni des enregistrements EEG —
+# ils vivent hors de `data/`, dont l'autorité d'écriture reste au moteur seul — mais ils portent
+# le déroulé d'une séance d'une personne identifiable : ils ne partent pas sur un dépôt public.
+seances/
+
+# The Wi-Fi credentials of the ESP32 example (examples/esp32_leds/): copied from
+# secrets.example.h by whoever flashes the board, never committed.
+examples/esp32_leds/secrets.h
+
+# --- Installeur Windows (build/) : ce que la construction produit -----------
+# Le dossier du programme (PyInstaller), le dossier de travail de PyInstaller et l'installeur
+# (Inno Setup) se refabriquent par `build/construire_installeur.ps1` : jamais commités.
+dist/
+build/eeg_api_unicorn/
+build/sortie/

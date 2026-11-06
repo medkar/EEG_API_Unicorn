@@ -1,0 +1,958 @@
+"""Publication des flux LSL — le contrat d'API de l'outil.
+
+Un client (Unity, Python, MATLAB…) ne connaît de nous que ces flux : leur nom, leurs voies,
+leurs unités. Tout ce qui est publié ici est donc du **contrat public** — le renommer casse le
+code des étudiants. C'est aussi pour ça que chaque flux porte ses métadonnées (noms de voies,
+unité, seuils) : un client peut se décrire l'API tout seul, sans documentation externe.
+
+Les flux publiés, dans l'ordre où ce fichier les définit :
+    <PREFIX>_raw            8 voies µV @ 250 Hz    — le signal brut
+    <PREFIX>_quality        8 σ par voie, ~1 Hz    — la santé des électrodes
+    <PREFIX>_decoded_ssvep  ~5 Hz                  — quelle cible l'utilisateur regarde
+    <PREFIX>_decoded_neuro  ~5 Hz                  — trois indices d'état mental (BCI passive)
+    <PREFIX>_decoded_mi     ~5 Hz                  — quelle imagerie motrice
+    <PREFIX>_decoded_p300   une fois par manche    — quelle cible a été sélectionnée
+    <PREFIX>_decoded_errp   un échantillon/feedback — la machine vient-elle de se tromper
+    <PREFIX>_decoded_cvep   ~5 Hz                  — quelle cible fixée, lue dans la PHASE d'un code
+    <PREFIX>_status         JSON, événementiel     — l'état du moteur
+Un flux `decoded_*` par mode publié par le moteur.
+
+Autotest (sans casque, sans LSL entrant) :
+    python src/core/lsl_io.py
+"""
+
+import json
+import os
+import socket
+import sys
+import time
+
+import numpy as np
+from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.config import (CH_NAMES, FS_UNICORN, SIGNAL_DEAD_SIGMA,  # noqa: E402
+                    SIGNAL_SAT_SIGMA, UNICORN_SERIAL)
+
+# Préfixe de TOUS les flux. Figé avant diffusion aux étudiants : le changer
+# après coup casserait leur code, puisque c'est par ce nom qu'ils trouvent le flux.
+STREAM_PREFIX = "EEG_API_Unicorn"
+
+
+def stream_name(suffix):
+    """Nom public d'un flux, ex. `stream_name("raw")` -> "EEG_API_Unicorn_raw"."""
+    return f"{STREAM_PREFIX}_{suffix}"
+
+
+# Les deux flux du plan de contrôle : l'application crée `control` (commandes entrantes), le
+# moteur crée `replies` (réponses). Ce sont des flux de type Markers, à ne jamais proposer
+# comme source de marqueurs.
+NOM_FLUX_COMMANDES = stream_name("control")
+NOM_FLUX_REPONSES = stream_name("replies")
+
+
+def default_instance_id(serial=None, synthetic=False):
+    """Identité de CETTE instance du moteur — ce qui distingue deux casques sur un réseau.
+
+    ⚠️ Sans identité distincte, deux moteurs qui tournent en même temps (une salle de TP
+    entière) publient des flux de MÊME nom ET de même `source_id`. Or LSL se sert du
+    `source_id` pour rattacher un flux après une coupure : deux sources identiques et il
+    entremêle les deux casques dans un seul flux, en silence (mesuré : 1509 échantillons reçus
+    pour 1491 publiés, cadence apparente 401 Hz au lieu de 250).
+
+    On prend le numéro de série du casque (identité stable, propre à l'étudiant) plutôt
+    qu'un identifiant de processus : `source_id` doit rester le MÊME d'un lancement à
+    l'autre, sinon les clients perdent la capacité de se reconnecter après un redémarrage.
+    """
+    if synthetic:
+        return f"synthetic-{socket.gethostname()}"
+    return serial or UNICORN_SERIAL or socket.gethostname()
+
+
+def _source_id(suffix, instance):
+    """Identifiant LSL d'un flux : le nom du flux, plus l'instance qui le produit."""
+    return f"{STREAM_PREFIX}_{suffix}@{instance}" if instance else f"{STREAM_PREFIX}_{suffix}"
+
+
+# --- Ponts d'horloge ---------------------------------------------------------
+# BrainFlow horodate chaque échantillon en temps UNIX (le domaine de `time.time()`).
+# LSL, lui, travaille dans le domaine de `local_clock()` — une horloge monotone dont
+# l'origine est arbitraire (typiquement le démarrage de la machine). Pousser un timestamp
+# BrainFlow tel quel dans LSL produirait donc des dates absurdes, décalées de plusieurs
+# années, et l'alignement EEG/marqueurs — l'atout principal de LSL — serait perdu.
+#
+# On mesure donc UNE FOIS l'écart entre les deux horloges, et on l'applique partout.
+# Pourquoi une seule fois et pas en continu : les deux horloges peuvent dériver
+# différemment (`time.time()` est recalé par NTP, pas `local_clock()`), mais re-mesurer
+# introduirait des SAUTS dans la suite des timestamps publiés. Or, pour épocher un ERP,
+# la cohérence relative des dates compte bien plus que leur justesse absolue. Un décalage
+# constant est inoffensif ; un saut de 10 ms au milieu d'une époque ne l'est pas.
+def _measure_clock_offset(n=11):
+    """Écart `local_clock() - time.time()`, médiane de n lectures.
+
+    La médiane plutôt qu'une lecture unique : entre les deux appels d'une paire, le système
+    peut préempter le thread et gonfler l'écart de quelques ms. La médiane écarte ces
+    lectures parasites pour quelques microsecondes de coût total.
+    """
+    deltas = []
+    for _ in range(n):
+        t_unix = time.time()
+        t_lsl = local_clock()
+        deltas.append(t_lsl - t_unix)
+    return float(np.median(deltas))
+
+
+class ClockBridge:
+    """Convertit les horodatages BrainFlow (Unix) vers l'horloge LSL."""
+
+    def __init__(self):
+        self.offset = _measure_clock_offset()
+
+    def to_lsl(self, unix_ts):
+        """Accepte un scalaire ou un tableau d'horodatages Unix."""
+        return np.asarray(unix_ts, dtype=np.float64) + self.offset
+
+
+# --- Flux sortants -----------------------------------------------------------
+
+def _describe_eeg_channels(info, labels, unit):
+    """Écrit les noms/unités de voies dans les métadonnées du flux.
+
+    C'est ce qui rend l'API auto-documentée : côté client, `inlet.info().desc()` permet de
+    retrouver que la voie 3 s'appelle "C4" sans que personne n'ait eu à le dire.
+    """
+    chans = info.desc().append_child("channels")
+    for label in labels:
+        ch = chans.append_child("channel")
+        ch.append_child_value("label", label)
+        ch.append_child_value("unit", unit)
+        ch.append_child_value("type", "EEG")
+
+
+class RawPublisher:
+    """`<PREFIX>_raw` : les 8 voies EEG brutes, en µV, à 250 Hz.
+
+    « Brut » = tel que le casque le rend, SANS filtrage : c'est un choix, pas un oubli.
+    Chaque mode a besoin d'une bande différente (le passe-bande SSVEP 5-40 Hz couperait le
+    P300 et le bas du thêta) — filtrer ici imposerait à tous les clients le compromis d'un
+    seul mode. Le décodage filtré est publié séparément par les flux `decoded_*`.
+    """
+
+    def __init__(self, ch_names=CH_NAMES, fs=FS_UNICORN, instance=""):
+        self.ch_names = list(ch_names)
+        info = StreamInfo(stream_name("raw"), "EEG", len(self.ch_names), float(fs),
+                          "float32", _source_id("raw", instance))
+        _describe_eeg_channels(info, self.ch_names, "microvolts")
+        info.desc().append_child_value("manufacturer", "g.tec Unicorn Hybrid Black")
+        # chunk_size=25 : on regroupe les échantillons par paquets de 100 ms au lieu d'un
+        # datagramme par échantillon. Divise par 25 le nombre d'envois réseau pour un délai
+        # ajouté négligeable devant la fenêtre de décision d'un mode BCI (1-2 s).
+        self.outlet = StreamOutlet(info, chunk_size=25)
+
+    def push(self, eeg, lsl_ts):
+        """Publie un bloc d'échantillons. `eeg` = (n, 8) en µV, `lsl_ts` = (n,) horloge LSL."""
+        if eeg is None or len(eeg) == 0:
+            return 0
+        # from_buffer (dans pylsl) exige un tableau float32 contigu et inscriptible.
+        block = np.ascontiguousarray(eeg, dtype=np.float32)
+        self.outlet.push_chunk(block, list(np.asarray(lsl_ts, dtype=np.float64)))
+        return len(block)
+
+    def has_consumers(self):
+        return self.outlet.have_consumers()
+
+
+class QualityPublisher:
+    """`<PREFIX>_quality` : σ par voie, ~1 Hz — la santé des électrodes.
+
+    Pourquoi ce flux existe : une électrode décollée ne produit AUCUN message d'erreur, juste
+    des données inexploitables : on peut enregistrer plusieurs minutes dans le vide sans le
+    moindre avertissement. Un client qui affiche ce flux voit le problème AVANT d'enregistrer.
+
+    On publie le σ NUMÉRIQUE plutôt qu'un verdict textuel : c'est traçable sur une courbe, et
+    les seuils voyagent dans les métadonnées du flux pour que le client reconstitue le verdict
+    lui-même (cf. `verdict_from_sigma`).
+    """
+
+    def __init__(self, ch_names=CH_NAMES, instance=""):
+        self.ch_names = list(ch_names)
+        info = StreamInfo(stream_name("quality"), "Quality", len(self.ch_names),
+                          IRREGULAR_RATE, "float32", _source_id("quality", instance))
+        _describe_eeg_channels(info, self.ch_names, "microvolts_stddev")
+        thr = info.desc().append_child("thresholds")
+        thr.append_child_value("dead_below", str(SIGNAL_DEAD_SIGMA))
+        thr.append_child_value("saturated_above", str(SIGNAL_SAT_SIGMA))
+        self.outlet = StreamOutlet(info)
+
+    def push(self, sigmas, lsl_ts=None):
+        if sigmas is None:
+            return False
+        block = np.ascontiguousarray(np.asarray(sigmas).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+        return True
+
+
+def ssvep_channel_labels(freqs):
+    """Voies du flux `decoded_ssvep` pour ce jeu de fréquences.
+
+    Une seule fonction pour le publieur ET pour le `ModeSpec` : les voies sont du contrat public
+    (un client les lit dans les métadonnées), et deux façons de les construire finiraient par
+    diverger d'un espace ou d'une décimale.
+    """
+    return (["target_index", "freq_hz", "confidence"]
+            + [f"score_{float(f):g}Hz" for f in freqs])
+
+
+class DecodedSSVEPPublisher:
+    """`<PREFIX>_decoded_ssvep` : quelle cible l'utilisateur regarde, ~5 Hz.
+
+    Le contrat : on publie une **intention neutre** — quelle cible, à quelle
+    fréquence, avec quelle confiance — et JAMAIS une commande d'actionneur. C'est ce qui
+    rend le même flux utilisable par un jeu, une visualisation ou un robot : la traduction
+    en action appartient au client.
+
+    Voies : `target_index` (-1 = aucune cible fixée de façon fiable), `freq_hz` (0 si
+    aucune), `confidence` (le score du gagnant sur l'échelle de décision), puis un score
+    par cible. Le nombre de voies dépend donc du nombre de fréquences déclarées — elles
+    sont nommées dans les métadonnées, un client ne doit pas les compter en dur.
+    """
+
+    def __init__(self, freqs, decision_scale="rho", thresholds=(0.0, 0.0), instance="",
+                 noms=None):
+        self.freqs = [float(f) for f in freqs]
+        labels = ssvep_channel_labels(self.freqs)
+        info = StreamInfo(stream_name("decoded_ssvep"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_ssvep", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "SSVEP")
+        desc.append_child_value("frequencies_hz", ",".join(f"{f:g}" for f in self.freqs))
+        # Le NOM de chaque cible, dans l'ordre des fréquences, s'il y en a (réglage « Régler »).
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
+        # `decision_scale` dit au client sur quelle échelle lire `confidence` : "rho" =
+        # corrélation CCA brute (0-1), "z" = écarts-types au-dessus du bruit de repos une
+        # fois le plancher mesuré. Sans cette indication, un seuil côté client n'a pas de sens.
+        desc.append_child_value("decision_scale", decision_scale)
+        desc.append_child_value("threshold", str(thresholds[0]))
+        desc.append_child_value("margin", str(thresholds[1]))
+        # Le sens de -1 voyage dans les MÉTADONNÉES ici aussi, comme pour le MI et le P300 : un
+        # client Unity ou MATLAB ne lit que `desc()`, pas la docstring.
+        desc.append_child_value("no_decision_index", "-1")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, freq_hz, confidence, scores, lsl_ts=None):
+        """`scores` : liste des scores dans le MÊME ordre que `freqs`."""
+        row = [float(target_index), float(freq_hz), float(confidence)] + [float(s) for s in scores]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+class DecodedNeuroPublisher:
+    """`<PREFIX>_decoded_neuro` : trois indices d'état mental, ~5 Hz. BCI **passif**.
+
+    Passif = l'utilisateur ne commande rien, on observe un état. C'est la différence de nature
+    avec `decoded_ssvep` : il n'y a pas de « cible », donc pas de bonne ou de mauvaise réponse,
+    et un client ne doit PAS traiter ces valeurs comme une sélection.
+
+    Voies : `charge`, `somnolence`, `engagement` (z lissés), puis `artifact` (1 = fenêtre
+    rejetée : clignement, mouvement ou EMG). Sur une fenêtre rejetée on republie les DERNIERS
+    z valides avec `artifact=1` plutôt que des indices calculés sur un clignement — ceux-ci
+    seraient parfaitement plausibles, donc indétectables en aval.
+
+    ⚠️ **L'échelle est un z contre le repos du jour de CET utilisateur**, mesuré au début du
+    mode. Les valeurs ne sont comparables ni entre deux personnes, ni entre deux séances, ni
+    dans l'absolu : `+1` veut dire « au-dessus de mon propre repos », pas « chargé ». Les trois
+    indices dérivent en outre du même calcul spectral et restent corrélés entre eux. À lire en
+    TENDANCE. Un client qui afficherait ça comme une mesure de fatigue mentirait à son
+    utilisateur.
+    """
+
+    KEYS = ("charge", "somnolence", "engagement")
+
+    def __init__(self, instance="", smoothing=0.0, rebaseline_s=0.0):
+        labels = list(self.KEYS) + ["artifact"]
+        info = StreamInfo(stream_name("decoded_neuro"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_neuro", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "neuro-passive")
+        desc.append_child_value("decision_scale", "z")
+        desc.append_child_value("reference", "repos mesure en debut de mode, par utilisateur")
+        desc.append_child_value("smoothing_ema", str(smoothing))
+        desc.append_child_value("rebaseline_s", str(rebaseline_s))
+        self.outlet = StreamOutlet(info)
+
+    def push(self, z, artifact=False, lsl_ts=None):
+        """`z` : dict {charge, somnolence, engagement}. Ordre de voies garanti par KEYS."""
+        row = [float(z.get(k, 0.0)) for k in self.KEYS] + [1.0 if artifact else 0.0]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+def mi_channel_labels(classes):
+    """Voies du flux `decoded_mi` pour ces classes : `intent_index`, `confidence`, puis `p_0`,
+    `p_1`… — la probabilité de chaque tâche, dans l'ordre de `classes`.
+
+    NUMÉROTÉES, jamais nommées d'après la tâche : les tâches se choisissent à l'entraînement
+    (poings, pieds, mains…), et l'application ne doit pas changer de code quand elles changent.
+    `p_<i>` va avec `intent_index == i`. Les noms des tâches voyagent dans les métadonnées
+    (`classes`). Même forme que les `score_<i>` du P300 et du c-VEP.
+
+    Une seule fonction pour le publieur ET pour le `ModeSpec`, comme pour le SSVEP : les voies
+    sont du contrat public, et deux façons de les construire finiraient par diverger.
+    """
+    return ["intent_index", "confidence"] + [f"p_{i}" for i in range(len(classes))]
+
+
+class DecodedMIPublisher:
+    """`<PREFIX>_decoded_mi` : quelle imagerie motrice l'utilisateur produit, ~5 Hz. BCI **active**.
+
+    Le contrat : une **intention neutre** — quelle classe, avec quelle probabilité —
+    et JAMAIS une commande d'actionneur. « LEFT » veut dire « imagerie de la main gauche »,
+    pas « tourne à gauche » : c'est le client qui décide ce que ça déclenche.
+
+    Voies : `intent_index`, `confidence`, puis `p_0`, `p_1`… : une probabilité par tâche, dans
+    l'ordre des tâches du modèle (cf. `mi_channel_labels`). Leurs NOMS sont dans les métadonnées
+    (`classes`), jamais dans les voies.
+
+    ⚠️ **Les trois ne décrivent pas le même instant.** `intent_index` et `confidence` décrivent
+    le **vote** — jusqu'à `vote_len` fenêtres, dont `min_votes` d'accord ; `confidence` est la
+    moyenne des probabilités de ces fenêtres-là, donc toujours `>= threshold` quand
+    `intent_index >= 0`. Les `p_*`, eux, décrivent la **dernière fenêtre seule**. Pendant un
+    changement d'intention, il est donc NORMAL de lire `intent_index = 0` à côté d'un `p_1`
+    élevé : le vote n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`,
+    jamais du `p_*` de la classe retenue.
+
+    ⚠️ **`-1` n'est JAMAIS une tâche.** `-1` = le vote n'a pas conclu (pas assez de fenêtres
+    d'accord, ou probabilité sous le seuil). Un repos, s'il fait partie des tâches, est une tâche
+    comme les autres, avec son indice : c'est l'application qui a choisi les tâches, elle sait
+    laquelle veut dire « je ne fais rien ». « Je ne sais pas » et « elle ne fait rien »
+    n'appellent pas la même réaction dans une application ; `no_decision_index` le dit dans les
+    métadonnées.
+
+    ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à une personne. Les probabilités d'un modèle
+    entraîné sur quelqu'un d'autre sont plausibles et fausses.
+    """
+
+    def __init__(self, classes, prob_min=0.0, votes=(0, 0), instance=""):
+        self.classes = [str(c) for c in classes]
+        labels = mi_channel_labels(self.classes)
+        info = StreamInfo(stream_name("decoded_mi"), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id("decoded_mi", instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "motor-imagery")
+        desc.append_child_value("classes", ",".join(self.classes))
+        # L'échelle est une PROBABILITÉ de classifieur, pas un z comme le SSVEP : sans cette
+        # indication, un seuil posé côté client n'a pas le même sens d'un mode à l'autre.
+        desc.append_child_value("decision_scale", "proba")
+        desc.append_child_value("threshold", str(prob_min))
+        desc.append_child_value("min_votes", str(votes[0]))
+        desc.append_child_value("vote_len", str(votes[1]))
+        # « Je ne sais pas » (-1) n'est aucune des tâches. Ce module promet en tête qu'un client
+        # peut se décrire l'API tout seul — alors la valeur est dans les métadonnées, plutôt que
+        # dans une documentation qu'il n'ouvrira pas. Aucune tâche n'y est mise à part, le repos
+        # compris : c'est une tâche comme les autres.
+        desc.append_child_value("no_decision_index", "-1")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, intent_index, confidence, probas, lsl_ts=None):
+        """`probas` : les probabilités dans le MÊME ordre que `classes`."""
+        row = [float(intent_index), float(confidence)] + [float(p) for p in probas]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+def p300_channel_labels(n_targets):
+    """Voies du flux `decoded_p300`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+    return (["target_index", "confidence", "n_flashes"]
+            + [f"score_{i}" for i in range(int(n_targets))])
+
+
+class DecodedP300Publisher:
+    """`<PREFIX>_decoded_p300` : quelle cible l'utilisateur a sélectionnée. Une fois par manche.
+
+    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 », jamais
+    « repos ». C'est la même confusion que pour le MI, et elle se reproduira chez le premier
+    client qui lira ce flux sans lire la doc — c'est pour ça
+    que `no_decision_index` voyage aussi dans les métadonnées, pas seulement ici : un client
+    Unity ou MATLAB qui lit `inlet.info().desc()` sans jamais ouvrir ce fichier doit pouvoir le
+    découvrir tout seul, exactement comme `DecodedMIPublisher` le fait juste au-dessus.
+
+    Ce flux est IRRÉGULIER et rare : un échantillon par `round_end`, pas ~5 Hz comme le SSVEP.
+    Un client qui attend un débit régulier attendrait pour rien.
+
+    ⚠️ **Quand `target_index` vaut -1, ni `confidence` ni les `score_*` ne sont des mesures.**
+    Ils valent 0 — et 0 n'est PAS une valeur basse sur une échelle de log-odds : un gagnant P300
+    a couramment un score négatif. Ne les lis que lorsque `target_index >= 0` ; le journal du
+    moteur, lui, imprime la raison du refus.
+    """
+
+    # Le nom du flux, écrit UNE fois : `modes/p300.py` le reprend pour son `ModeSpec` au lieu de
+    # réécrire le littéral. Deux sources pour un contrat public finissent par diverger.
+    SUFFIXE = "decoded_p300"
+
+    def __init__(self, n_targets, max_reps, margin=0.0, instance="", noms=None):
+        self.n_targets = int(n_targets)
+        labels = p300_channel_labels(self.n_targets)
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "P300")
+        desc.append_child_value("n_targets", str(self.n_targets))
+        # Le NOM de chaque cible, dans l'ordre des `score_*` (joints par des virgules) : ceux que
+        # l'entraînement a donnés. L'indice publié reste la référence.
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
+        # ⚠️ Un PLAFOND, pas le nombre de répétitions de la manche : c'est l'application EXTERNE
+        # qui décide combien de fois elle fait flasher chaque cible, et le moteur ne le sait pas.
+        # Ce champ dit un fait que le moteur APPLIQUE : au-delà de ce nombre de flashs pour une
+        # même cible, la manche est abandonnée (cf. `_MAX_PAR_CIBLE`).
+        desc.append_child_value("max_reps_per_target", str(int(max_reps)))
+        # « logodds » : les scores sont les log-odds moyens de la régression logistique, additifs
+        # sur les répétitions. Ils ne sont ni bornés ni comparables d'une personne à l'autre —
+        # sans cette indication, un seuil côté client n'aurait aucun sens.
+        desc.append_child_value("decision_scale", "logodds")
+        # L'écart 1er-2e exigé pour émettre autre chose que -1 : chaque publieur `decoded_*` dit sa
+        # règle de décision (SSVEP : `threshold` et `margin` ; MI : `threshold`, `min_votes`,
+        # `vote_len`). Le P300 n'a pas de seuil absolu (les log-odds ne sont pas comparables
+        # d'une personne à l'autre), donc `margin` seule.
+        desc.append_child_value("margin", str(margin))
+        desc.append_child_value("no_decision_index", "-1")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, confidence, n_flashes, scores, lsl_ts=None):
+        """`scores` : un score par cible, dans l'ordre des indices 0..n_targets-1."""
+        row = ([float(target_index), float(confidence), float(n_flashes)]
+               + [float(s) for s in scores])
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+def cvep_channel_labels(n_targets):
+    """Voies du flux `decoded_cvep`. Une seule fonction pour le publieur ET le `ModeSpec`.
+
+    ⚠️ `corr_min`/`margin` EN DERNIER : ce mode est le premier du produit dont les seuils de
+    décision se règlent SANS reconstruire le runtime (`affecte_decodage=False`, cf. `contract.py`)
+    — donc sans recréer le flux ni ses métadonnées. Les métadonnées LSL (`desc()`, figées à
+    l'ouverture) ne restent correctes qu'au moment où elles ont été écrites ; sans ces deux
+    voies, un client qui dépouille un enregistrement plus tard n'aurait AUCUN moyen de savoir
+    contre quel seuil chaque décision a été prise. Même geste que `threshold` chez l'ErrP
+    (`errp_channel_labels`), pour la même raison. Ajoutées à la FIN parce que `score_i` est un
+    bloc de longueur VARIABLE (une par cible) : rien ne peut s'intercaler dedans sans casser
+    l'indexation `score_<i>`."""
+    return (["target_index", "confidence"] + [f"score_{i}" for i in range(int(n_targets))]
+            + ["corr_min", "margin"])
+
+
+class DecodedCVEPPublisher:
+    """`<PREFIX>_decoded_cvep` : quelle cible l'utilisateur fixe, ~5 Hz. BCI **active**.
+
+    Même intention neutre que le SSVEP — quelle cible, avec quelle confiance — et jamais une
+    commande d'actionneur. Ce qui change est l'ÉCHELLE : `decision_scale = "correlation"`, une
+    corrélation de Pearson entre la fenêtre filtrée et le template appris, bornée dans [-1, 1].
+    Ce n'est ni le z du SSVEP (pas de plancher de repos ici), ni les log-odds du P300 (pas de
+    classifieur), et un client qui poserait le seuil de l'un sur l'échelle de l'autre se
+    tromperait d'un ordre de grandeur : c'est pour ça que `corr_min` et `margin` voyagent à côté
+    de l'échelle qui leur donne un sens — et qu'ils voyagent à DEUX ENDROITS À LA FOIS.
+
+    ⚠️ **`corr_min`/`margin` voyagent aux DEUX endroits, et ils NE DISENT PAS la même chose**.
+    Ceux des MÉTADONNÉES (`desc()`, juste en dessous) sont
+    figés à l'OUVERTURE du flux : ce mode rend ces deux seuils réglables en pleine séance SANS
+    reconstruire le runtime (`affecte_decodage=False` dans `contract.py`), donc SANS recréer ce
+    flux — les métadonnées ne bougent alors plus, elles décrivent le seuil qui était en vigueur
+    à l'ouverture, pas une promesse de rester à jour. Ceux des DEUX DERNIÈRES VOIES
+    (`cvep_channel_labels` : `corr_min`, `margin`, après les `score_*`) sont ceux réellement EN
+    VIGUEUR pour CETTE décision, à CHAQUE échantillon — c'est sur elles qu'il faut lire un
+    enregistrement dépouillé de sa description LSL. Même dispositif que `threshold` chez l'ErrP
+    (`errp_channel_labels`), pour la même raison : une métadonnée figée ne suffit pas dès que le
+    réglage qu'elle décrit peut changer sans reconstruire le flux qui la porte.
+
+    ⚠️ **`confidence` décrit le VOTE, pas la dernière fenêtre.** Une cible n'est émise que si
+    `min_votes` des `vote_len` dernières fenêtres l'ont désignée ; `confidence` est la moyenne
+    des corrélations de CES fenêtres-là, donc toujours `>= corr_min` quand `target_index >= 0`.
+    Les `score_*`, eux, décrivent la **dernière fenêtre seule** — il est donc normal, pendant un
+    changement de cible, de lire un `score_i` élevé à côté d'un autre `target_index` : le vote
+    n'a pas encore basculé. Pour filtrer, sers-toi de `confidence`, jamais des `score_*`.
+
+    ⚠️ `target_index = -1` signifie **« pas de décision »** — jamais « la cible 0 ». QUATRE causes
+    différentes le produisent, et elles n'appellent pas la même réaction : le moteur ne sait pas
+    où en est le code (aucun marqueur d'horloge reçu), sa référence est PÉRIMÉE (l'émetteur s'est
+    tu), les corrélations ne passent pas `corr_min`/`margin`, ou elles passent mais les fenêtres
+    récentes ne s'accordent pas. Le flux ne porte que le -1 ; les quatre compteurs qui les
+    séparent sont dans l'état du moteur (`CVEPRuntime.state`), parce qu'une séance casque ne se
+    répète pas et que « ça ne détecte pas » sans la cause envoie chercher au mauvais endroit.
+
+    ⚠️ Ce mode exige un modèle ENTRAÎNÉ, propre à UNE personne, et un stimulus verrouillé à la
+    frame qui publie un marqueur de cycle. `decoder` dit lequel des deux décodeurs du produit
+    (`eCCA` | `rCCA`) a produit ces scores : ils sont mesurés à jeu égal mais leurs seuils de
+    rejet DIFFÈRENT, donc un client qui journalise des scores doit savoir lequel il regarde.
+    """
+
+    # Le nom du flux, écrit UNE fois — même raison que `DecodedP300Publisher.SUFFIXE` : deux
+    # sources pour un contrat public finissent par diverger. `modes/cvep.py` le reprend pour son
+    # `ModeSpec` au lieu de réécrire le littéral.
+    SUFFIXE = "decoded_cvep"
+
+    def __init__(self, n_targets, decoder, refresh, code_len, corr_min, margin, cv,
+                 votes=(0, 0), instance="", noms=None):
+        self.n_targets = int(n_targets)
+        labels = cvep_channel_labels(self.n_targets)
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "c-VEP")
+        desc.append_child_value("n_targets", str(self.n_targets))
+        # Le NOM de chaque cible, dans l'ordre des `score_*` (joints par des virgules, comme les
+        # `classes` du MI) : ceux que l'entraînement a donnés. L'indice publié reste la référence.
+        if noms:
+            desc.append_child_value("target_names", ",".join(str(n) for n in noms))
+        # Quel décodeur a produit ces scores. Le c-VEP est le seul mode du produit à en avoir
+        # DEUX sur le même stimulus (eCCA et rCCA) : c'est le FICHIER de modèle qui déclare le
+        # sien (cf. `core/cvep_models.py`), donc le moteur ne peut pas le deviner d'ici.
+        desc.append_child_value("decoder", str(decoder))
+        desc.append_child_value("decision_scale", "correlation")
+        # La règle de décision COMPLÈTE : un gagnant doit dépasser `corr_min` ET devancer le
+        # deuxième de `margin`. Publier l'une sans l'autre laisserait un client conclure qu'une
+        # corrélation de 0,40 aurait dû déclencher alors que la deuxième était à 0,38.
+        # ⚠️ Valeur À L'OUVERTURE du flux, PAS forcément celle de la décision en cours : ces deux
+        # seuils se règlent en pleine séance sans recréer ce flux (cf. la docstring de la
+        # classe). Les deux VOIES de même nom, à la fin de chaque échantillon, portent la valeur
+        # VIVANTE.
+        desc.append_child_value("corr_min", f"{float(corr_min):g}")
+        desc.append_child_value("margin", f"{float(margin):g}")
+        # ...et le VOTE GLISSANT, qui fait partie de la même règle : passer les deux seuils ne
+        # suffit pas, il faut encore que `min_votes` des `vote_len` dernières fenêtres désignent
+        # la même cible. Sans ces deux champs, un client mesurerait une latence de décision de
+        # `vote_len / 5 Hz` sans pouvoir l'expliquer, et croirait le décodage lent.
+        desc.append_child_value("min_votes", str(int(votes[0])))
+        desc.append_child_value("vote_len", str(int(votes[1])))
+        # La géométrie du stimulus, pour qu'un client puisse vérifier qu'il affiche bien ce que
+        # le moteur décode : un modèle calibré à 60 Hz sur un code de 63 frames ne décode pas ce
+        # qu'un écran 144 Hz affiche.
+        desc.append_child_value("code_len", str(int(code_len)))
+        desc.append_child_value("refresh", f"{float(refresh):g}")
+        # La justesse leave-one-out de la calibration, à lire contre le hasard à `n_targets`
+        # cibles (16,7 % à 6), jamais contre 50 %. VIDE — pas « -1 », qui se lirait comme une
+        # mesure — quand le modèle n'en porte pas.
+        desc.append_child_value("cv", "" if cv is None else f"{float(cv):.4f}")
+        desc.append_child_value("no_decision_index", "-1")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, target_index, confidence, scores, corr_min, margin, lsl_ts=None):
+        """`scores` : une corrélation par cible, dans l'ordre des indices 0..n_targets-1.
+
+        `corr_min`/`margin` : les seuils réellement EN VIGUEUR pour CETTE décision — PAS de
+        défaut, comme `threshold` chez `DecodedErrPPublisher.push` : un appelant qui les
+        oublierait doit lever, pas publier une valeur plausible et fausse en silence. C'est ce
+        qui rend un enregistrement interprétable même sans sa description LSL (cf. la docstring
+        de la classe), maintenant que ces deux réglages peuvent changer SANS que ce flux soit
+        recréé.
+        """
+        row = ([float(target_index), float(confidence)] + [float(s) for s in scores]
+               + [float(corr_min), float(margin)])
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+def errp_channel_labels():
+    """Voies du flux `decoded_errp`. Une seule fonction pour le publieur ET le `ModeSpec`."""
+    return ["error", "score", "threshold", "artifact"]
+
+
+class DecodedErrPPublisher:
+    """`<PREFIX>_decoded_errp` : la machine vient-elle de se tromper. Un échantillon par feedback.
+
+    ⚠️ `error = -1` signifie **« pas de verdict »** — époque perdue ou rejetée pour artefact — et
+    jamais « pas d'erreur ». Un clignement au moment où la machine se trompe est le cas FRÉQUENT :
+    publier 0 affirmerait qu'il n'y a pas eu d'erreur alors qu'on n'a rien vu.
+
+    ⚠️ **Les métadonnées portent le POINT DE FONCTIONNEMENT mesuré**, et c'est une exigence, pas un
+    ornement. Au réglage par défaut ce détecteur attrape UNE ERREUR SUR DEUX et annule une bonne
+    commande sur sept. Une application qui lit `error = 1` doit pouvoir savoir qu'elle tient une
+    pièce légèrement biaisée, pas un verdict — sinon elle traitera le flux comme fiable.
+    """
+
+    # Le nom du flux, écrit UNE fois — même raison que `DecodedP300Publisher.SUFFIXE` : deux
+    # sources pour un contrat public finissent par diverger. `modes/errp.py` porte son propre
+    # littéral (`stream="decoded_errp"`) ; c'est l'autotest §8 plus bas qui LIE les deux — il
+    # compare le nom que l'outlet publie RÉELLEMENT à `registry.get("errp").stream`, ce qui est
+    # plus fort qu'une égalité de constantes : un renommage d'un seul côté rougit, quel que soit
+    # le côté.
+    SUFFIXE = "decoded_errp"
+
+    def __init__(self, point, n_calib, instance=""):
+        labels = errp_channel_labels()
+        info = StreamInfo(stream_name(self.SUFFIXE), "Decoded", len(labels),
+                          IRREGULAR_RATE, "float32", _source_id(self.SUFFIXE, instance))
+        chans = info.desc().append_child("channels")
+        for label in labels:
+            ch = chans.append_child("channel")
+            ch.append_child_value("label", label)
+        desc = info.desc().append_child("decoding")
+        desc.append_child_value("paradigm", "ErrP")
+        desc.append_child_value("decision_scale", "logodds")
+        desc.append_child_value("no_decision_index", "-1")
+        desc.append_child_value("threshold", f"{point['seuil']:.6f}")
+        desc.append_child_value("tnr_target", f"{point['tnr_target']:.4f}")
+        desc.append_child_value("tpr_measured", f"{point['tpr']:.4f}")
+        desc.append_child_value("tnr_measured", f"{point['tnr']:.4f}")
+        desc.append_child_value("calibration_epochs", str(int(n_calib)))
+        # ⚠️ Ce champ dit d'où viennent `tpr_measured`/`tnr_measured`, et il doit dire aussi ce
+        # qui les rend OPTIMISTES. `pick_threshold` (core/errp_decoder.py) balaie tous les seuils
+        # candidats et retient, parmi ceux qui atteignent la cible, celui qui MAXIMISE la TPR —
+        # puis rend la TPR et la TNR de ce seuil-là, sur les mêmes scores. Les scores sont bien
+        # hors-pli (`cross_val_predict`), donc honnêtes ; le SEUIL, lui, est choisi en regardant
+        # la réponse. `tnr_measured >= tnr_target` est donc vrai PAR CONSTRUCTION, et `tpr_
+        # measured` est un maximum sur N candidats. Une application qui règle sa politique
+        # d'annulation sur ces deux nombres observera en usage un taux de faux vetos plus élevé,
+        # sans que rien n'ait changé : le suffixe `_measured` promet des performances constatées.
+        # Il faut donc que le contrat publié dise à quoi il engage vraiment.
+        #
+        # « 1 person » est un littéral : c'est le seul champ du point de fonctionnement qui ne
+        # dérive de rien. Le dériver demanderait que le modèle expose son nombre de blocs de
+        # calibration (`core/errp_models.py`).
+        desc.append_child_value("measured_on",
+                                "1 person; threshold picked on these same out-of-fold scores, "
+                                "so tpr/tnr are optimistic")
+        self.outlet = StreamOutlet(info)
+
+    def push(self, error, score, threshold, artifact, lsl_ts=None):
+        row = [float(error), float(score), float(threshold), float(artifact)]
+        block = np.ascontiguousarray(np.asarray(row).reshape(1, -1), dtype=np.float32)
+        self.outlet.push_chunk(block, [float(lsl_ts) if lsl_ts else local_clock()])
+
+
+class StatusPublisher:
+    """`<PREFIX>_status` : état du moteur, en JSON, événementiel.
+
+    Indispensable parce que LSL est *fire-and-forget* : un client qui envoie une commande ne
+    reçoit aucun accusé de réception. Il constate l'effet de sa commande ICI. Le
+    moteur republie donc son état à chaque changement, et périodiquement pour qu'un client
+    qui se connecte en cours de route sache où on en est.
+    """
+
+    def __init__(self, instance=""):
+        info = StreamInfo(stream_name("status"), "Markers", 1, IRREGULAR_RATE,
+                          "string", _source_id("status", instance))
+        self.outlet = StreamOutlet(info)
+        self._last_key = None
+
+    def push(self, state, key=None, force=False):
+        """Publie `state` (dict). Sans `force`, ne réémet que si `key` a changé.
+
+        `key` (n'importe quoi de hachable) désigne ce qui compte comme « changement d'état ».
+        Il est SÉPARÉ du contenu publié pour une raison concrète : l'état contient des
+        compteurs qui bougent en permanence (échantillons publiés). Dédupliquer sur le
+        message complet reviendrait à ne jamais dédupliquer — mesuré : 19,6 Hz de messages
+        d'état au lieu de 0,5 Hz. Sans `key`, on retombe sur la comparaison du message entier.
+        """
+        payload = json.dumps(state, separators=(",", ":"), sort_keys=True)
+        marker = payload if key is None else key
+        if marker == self._last_key and not force:
+            return False
+        self._last_key = marker
+        self.outlet.push_sample([payload])
+        return True
+
+
+def verdict_from_sigma(sigma):
+    """'morte' | 'saturée' | 'ok' — le même verdict que côté serveur, reproductible client."""
+    if sigma < SIGNAL_DEAD_SIGMA:
+        return "morte"
+    if sigma > SIGNAL_SAT_SIGMA:
+        return "saturée"
+    return "ok"
+
+
+# --- Autotest ----------------------------------------------------------------
+
+def _autotest():
+    """Publie les 3 flux, les relit avec un client local, vérifie le contrat.
+
+    Ne teste PAS le casque : uniquement que ce qu'on publie est bien ce qu'un étudiant
+    recevra (noms de voies, unités, horodatage cohérent, valeurs intactes).
+    """
+    from pylsl import StreamInlet, resolve_byprop
+
+    bridge = ClockBridge()
+    instance = "autotest"
+    raw = RawPublisher(instance=instance)
+    qual, status = QualityPublisher(instance=instance), StatusPublisher(instance=instance)
+    ok = True
+
+    # 1. Découverte + métadonnées du flux brut.
+    # On exige NOTRE instance : les noms de flux sont un contrat public, donc identiques pour
+    # tous les moteurs. Sans ce filtre, un serveur laissé ouvert sur le poste répond à la
+    # place du nôtre et l'autotest compare ses données à notre motif (échec sur « valeurs
+    # altérées »). `minimum` élevé force à attendre tout le monde.
+    found = [i for i in resolve_byprop("name", stream_name("raw"), minimum=32, timeout=2.0)
+             if i.source_id().endswith(f"@{instance}")]
+    if not found:
+        print("[lsl] ÉCHEC : flux 'raw' introuvable")
+        return False
+    inlet = StreamInlet(found[0])
+    # ⚠️ **UN `XMLElement` NE POSSÈDE RIEN.** `StreamInfo.desc()` rend un `XMLElement` qui ne garde
+    # qu'un pointeur NU vers l'arbre pugixml (`pylsl/info.py`), sans aucune référence vers le
+    # `StreamInfo` propriétaire — et `inlet.info()` / `outlet.get_info()` rendent chacun une COPIE
+    # possédée par l'appelant, que `StreamInfo.__del__` DÉTRUIT inconditionnellement. Écrit
+    # `desc = inlet.info().desc()`, le `StreamInfo` temporaire meurt à la fin de la ligne, liblsl
+    # libère le document, et toute lecture d'après lit un bloc de tas déjà rendu à l'allocateur :
+    # le plus souvent les octets y sont encore intacts, de temps en temps le bloc a été réutilisé
+    # et `child_value` rend `""`. Mesuré : avec 8 Mo alloués entre la lecture et l'assertion, elle
+    # échoue à TOUS LES COUPS. Ce n'est donc pas un test instable, c'est un use-after-free — et le
+    # comportement est indéfini, le même code pouvant aussi faire tomber le processus.
+    # La règle, ici et partout : **le `StreamInfo` doit rester référencé tant qu'on lit dedans.**
+    # (`examples/receiver.py` est le seul endroit du dépôt qui l'a toujours fait correctement.)
+    info_in = inlet.info()
+    desc = info_in.desc()
+    labels, node = [], desc.child("channels").child("channel")
+    for _ in range(inlet.info().channel_count()):
+        labels.append(node.child_value("label"))
+        node = node.next_sibling()
+    print(f"[lsl] raw : {inlet.info().channel_count()} voies @ {inlet.info().nominal_srate()} Hz")
+    print(f"[lsl] voies annoncées : {labels}")
+    if labels != CH_NAMES:
+        print(f"[lsl] ÉCHEC : voies annoncées != CH_NAMES ({CH_NAMES})")
+        ok = False
+
+    # 2. Aller-retour de données : on pousse un motif reconnaissable et on le relit.
+    # ⚠️ `open_stream()` est OBLIGATOIRE avant de publier : un StreamInlet n'ouvre sa
+    # connexion qu'au premier `pull_*`, et LSL ne rejoue RIEN de ce qui a été publié avant.
+    # Sans cette ligne on perd la première seconde de signal — piège classique, à répéter
+    # dans les exemples destinés aux étudiants.
+    inlet.open_stream(timeout=5.0)
+    time.sleep(0.2)
+    n = 50
+    unix_now = time.time()
+    ts = unix_now + np.arange(n) / FS_UNICORN
+    sent = np.tile(np.arange(n, dtype=np.float32).reshape(-1, 1), (1, len(CH_NAMES)))
+    sent[:, 1] = 42.0  # une voie constante : détecte un mélange de voies (transposition)
+    raw.push(sent, bridge.to_lsl(ts))
+    time.sleep(0.5)
+    chunk, stamps = inlet.pull_chunk(timeout=2.0, max_samples=n)
+    print(f"[lsl] aller-retour : {len(chunk)}/{n} échantillons")
+    if len(chunk) != n:
+        print("[lsl] ÉCHEC : échantillons perdus ou incomplets")
+        ok = False
+    elif not np.allclose(np.asarray(chunk), sent):
+        print("[lsl] ÉCHEC : valeurs altérées entre l'envoi et la réception")
+        ok = False
+
+    # 3. Horodatage : les dates reçues doivent coller à l'horloge LSL locale, pas au temps Unix.
+    if stamps:
+        drift_ms = (local_clock() - stamps[-1]) * 1000.0
+        print(f"[lsl] dernier horodatage reçu : {drift_ms:+.1f} ms avant maintenant (horloge LSL)")
+        if abs(drift_ms) > 2000.0:
+            print("[lsl] ÉCHEC : horodatage hors du domaine local_clock() (pont d'horloge cassé ?)")
+            ok = False
+
+    # 4. Les deux autres flux publient sans erreur.
+    qual.push(np.array([8.0, 0.1, 12.0, 9.0, 7.0, 11.0, 600.0, 10.0]))
+    status.push({"running": True, "mode": None, "calibrated": {}})
+    print(f"[lsl] verdicts : {[verdict_from_sigma(s) for s in (8.0, 0.1, 600.0)]}")
+
+    # 5. decoded_mi : voies attendues, et le publieur pousse sans lever (indice ET repos).
+    labels = mi_channel_labels(("PIEDS", "MAINS", "REST"))
+    print(f"  voies decoded_mi : {labels}")
+    assert labels == ["intent_index", "confidence", "p_0", "p_1", "p_2"], labels
+    pub = DecodedMIPublisher(("PIEDS", "MAINS", "REST"), prob_min=0.6, votes=(3, 5),
+                             instance="selftest-mi")
+    # Les voies sont numérotées : ce sont les MÉTADONNÉES qui nomment les tâches et le repos.
+    info_mi = pub.outlet.get_info()       # ⚠️ vivante plus longtemps que l'XMLElement (point 1)
+    deco_mi = info_mi.desc().child("decoding")
+    assert deco_mi.child_value("classes") == "PIEDS,MAINS,REST", deco_mi.child_value("classes")
+    # Le repos est une tâche comme les autres : aucune métadonnée ne le met à part.
+    assert deco_mi.child_value("rest_index") == "", deco_mi.child_value("rest_index")
+    pub.push(0, 0.81, [0.81, 0.12, 0.07])
+    pub.push(-1, 0.0, [0.34, 0.33, 0.33])
+    print("  [lsl] decoded_mi publie sans lever")
+
+    # 6. decoded_p300 : voies attendues (target_index/confidence/n_flashes puis un score par
+    # cible), et le publieur pousse sans lever (une décision ET un refus, -1).
+    labels = p300_channel_labels(6)
+    print(f"  voies decoded_p300 : {labels}")
+    assert labels == ["target_index", "confidence", "n_flashes",
+                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5"], labels
+    pub = DecodedP300Publisher(6, max_reps=8, margin=0.75, instance="selftest-p300")
+    pub.push(2, 4.1, 48, [-1.0, 0.5, 4.1, -0.2, 1.0, -3.0])
+    pub.push(-1, 0.0, 12, [0.0] * 6)
+    print("  [lsl] decoded_p300 publie sans lever")
+    # Le sens de -1 doit être lisible dans les MÉTADONNÉES, pas seulement dans une docstring
+    # qu'un client Unity/MATLAB n'ouvrira jamais — même exigence que `DecodedMIPublisher`
+    # (no_decision_index) juste au-dessus.
+    info_p300 = pub.outlet.get_info()     # ⚠️ la référence DOIT vivre plus longtemps que
+    deco = info_p300.desc().child("decoding")   # l'XMLElement (cf. le ⚠️ du point 1)
+    no_decision = deco.child_value("no_decision_index")
+    print(f"  decoded_p300 no_decision_index (métadonnées) : {no_decision!r}")
+    assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
+    # La RÈGLE DE DÉCISION doit voyager comme celle du SSVEP et du MI : sans la marge, un client
+    # ne peut pas savoir pourquoi une manche complète a rendu -1.
+    marge = deco.child_value("margin")
+    print(f"  decoded_p300 margin (métadonnées) : {marge!r}")
+    assert marge == "0.75", f"margin attendue '0.75', reçue {marge!r}"
+    # Le champ s'appelle `max_reps_per_target` (l'ancien `reps` n'est plus publié) : un PLAFOND
+    # que le moteur applique, pas une affirmation sur une application externe qu'il ne voit pas.
+    plafond = deco.child_value("max_reps_per_target")
+    ancien = deco.child_value("reps")
+    print(f"  decoded_p300 max_reps_per_target : {plafond!r} (ancien champ `reps` : {ancien!r})")
+    assert plafond == "8", f"max_reps_per_target attendu '8', reçu {plafond!r}"
+    assert ancien == "", "le champ `reps` (le nombre de l'appli externe) ne doit plus être publié"
+
+    # 7. Le sens de -1 voyage aussi dans les métadonnées du SSVEP, le plus ancien des publieurs.
+    pub_ssvep = DecodedSSVEPPublisher((15.0, 20.0), decision_scale="z", thresholds=(3.0, 0.5),
+                                      instance="selftest-ssvep")
+    info_ssvep = pub_ssvep.outlet.get_info()    # ⚠️ idem : la référence doit vivre tout le temps
+    ssvep_deco = info_ssvep.desc().child("decoding")   # de la lecture (échec ~1 fois sur 6)
+    print(f"  decoded_ssvep no_decision_index : "
+          f"{ssvep_deco.child_value('no_decision_index')!r}")
+    assert ssvep_deco.child_value("no_decision_index") == "-1", "no_decision_index manquant (SSVEP)"
+
+    # 8. decoded_errp : voies attendues, le sens de -1, et le POINT DE FONCTIONNEMENT mesuré dans
+    # les métadonnées — l'exigence qui donne son sens à ce flux (cf. la docstring de
+    # `DecodedErrPPublisher`) : au réglage par défaut ce détecteur attrape une erreur sur deux et
+    # annule une bonne commande sur sept, une application qui lit `error = 1` doit pouvoir le savoir.
+    labels = errp_channel_labels()
+    print(f"  voies decoded_errp : {labels}")
+    assert labels == ["error", "score", "threshold", "artifact"], labels
+    point = {"tnr_target": 0.85, "seuil": 0.42, "tpr": 0.50, "tnr": 0.855}
+    pub_errp = DecodedErrPPublisher(point, n_calib=112, instance="selftest-errp")
+    pub_errp.push(1, 0.91, point["seuil"], 0)     # un verdict
+    pub_errp.push(-1, 0.0, point["seuil"], 1)     # un refus (artefact) : jamais 0
+    print("  [lsl] decoded_errp publie sans lever")
+    info_errp = pub_errp.outlet.get_info()      # ⚠️ idem (7 lectures derrière)
+    errp_deco = info_errp.desc().child("decoding")
+    no_decision = errp_deco.child_value("no_decision_index")
+    print(f"  decoded_errp no_decision_index (métadonnées) : {no_decision!r}")
+    assert no_decision == "-1", f"no_decision_index attendu '-1', reçu {no_decision!r}"
+    seuil_pub = errp_deco.child_value("threshold")
+    cible_pub = errp_deco.child_value("tnr_target")
+    tpr_pub = errp_deco.child_value("tpr_measured")
+    tnr_pub = errp_deco.child_value("tnr_measured")
+    n_pub = errp_deco.child_value("calibration_epochs")
+    print(f"  decoded_errp point de fonctionnement (métadonnées) : seuil={seuil_pub!r} "
+          f"tnr_target={cible_pub!r} tpr={tpr_pub!r} tnr={tnr_pub!r} calibration_epochs={n_pub!r}")
+    assert seuil_pub == f"{point['seuil']:.6f}", f"threshold attendu {point['seuil']:.6f}, reçu {seuil_pub!r}"
+    assert cible_pub == f"{point['tnr_target']:.4f}", f"tnr_target inattendu : {cible_pub!r}"
+    assert tpr_pub == f"{point['tpr']:.4f}", f"tpr_measured inattendu : {tpr_pub!r}"
+    assert tnr_pub == f"{point['tnr']:.4f}", f"tnr_measured inattendu : {tnr_pub!r}"
+    assert n_pub == "112", f"calibration_epochs attendu '112', reçu {n_pub!r}"
+    # `tpr_measured`/`tnr_measured` sont OPTIMISTES : le seuil qui les produit a été choisi sur
+    # ces mêmes scores hors-pli (cf. le commentaire du champ). Le dire est le contrat, pas un
+    # ornement — une application qui règle sa politique d'annulation dessus doit pouvoir
+    # découvrir la réserve dans les métadonnées, comme elle y découvre `no_decision_index`.
+    mesure_sur = errp_deco.child_value("measured_on")
+    print(f"  decoded_errp measured_on (métadonnées) : {mesure_sur!r}")
+    assert "threshold" in mesure_sur and "optimistic" in mesure_sur, \
+        f"measured_on doit dire que le seuil est choisi sur ces mêmes scores : {mesure_sur!r}"
+
+    # 8bis. LE NOM DU FLUX est un contrat PUBLIC, et il est écrit à deux endroits : ici
+    # (`DecodedErrPPublisher.SUFFIXE`) et dans le `ModeSpec` de `core/modes/errp.py`. L'autotest du
+    # mode compare un littéral à un littéral, les contrôles précédents vérifient les voies et le
+    # point de fonctionnement mais pas le NOM. Un renommage d'un seul côté laisserait donc les
+    # autotests verts, et le seul symptôme arriverait en séance : la page ErrP affiche un nom,
+    # l'extrait « Brancher un client » que l'étudiant COPIE demande ce nom-là, et son
+    # `resolve_byprop` ne trouve rien — un `SystemExit` qui accuse l'étudiant.
+    #
+    # On compare le nom que l'outlet publie RÉELLEMENT à celui que le contrat du mode annonce :
+    # plus fort qu'une égalité de constantes, puisque n'importe lequel des deux côtés fait rougir.
+    from core.modes import registry as _registry
+    spec_errp = _registry.get("errp")
+    nom_publie = pub_errp.outlet.get_info().name()
+    nom_annonce = stream_name(spec_errp.stream)
+    print(f"  decoded_errp nom publié={nom_publie!r} · annoncé par le ModeSpec={nom_annonce!r}")
+    assert nom_publie == nom_annonce, (
+        f"le flux publié ({nom_publie!r}) et celui que le contrat du mode annonce "
+        f"({nom_annonce!r}) ont divergé — un client s'abonnerait dans le vide")
+
+    # 9. decoded_cvep : voies attendues, et surtout l'ÉCHELLE. C'est le troisième mode « actif » à
+    # cibles, et le troisième à décider sur une grandeur DIFFÉRENTE (z pour le SSVEP, log-odds
+    # pour le P300, corrélation ici). Un client qui poserait le seuil de l'un sur l'échelle de
+    # l'autre se tromperait d'un ordre de grandeur — d'où `decision_scale` ET les deux seuils.
+    # ⚠️ `corr_min`/`margin` EN DERNIER : les deux seuils du c-VEP se règlent en pleine séance
+    # SANS recréer ce flux, donc les métadonnées seules (ci-dessous) ne suffisent pas à dire
+    # contre quel seuil une décision a été prise — cf. la docstring de `DecodedCVEPPublisher` et
+    # `errp_channel_labels` pour le même geste chez l'ErrP.
+    labels = cvep_channel_labels(6)
+    print(f"  voies decoded_cvep : {labels}")
+    assert labels == ["target_index", "confidence",
+                      "score_0", "score_1", "score_2", "score_3", "score_4", "score_5",
+                      "corr_min", "margin"], labels
+    pub_cvep = DecodedCVEPPublisher(6, decoder="eCCA", refresh=60.0, code_len=63,
+                                    corr_min=0.26, margin=0.09, cv=0.4778, votes=(2, 3),
+                                    instance="selftest-cvep")
+    # `push` exige `corr_min`/`margin` À CHAQUE appel (pas de défaut, comme `threshold` chez
+    # l'ErrP) — ICI volontairement DIFFÉRENTS de ceux passés au constructeur ci-dessus, pour
+    # bien montrer que ce sont deux choses distinctes : la voie porte la valeur VIVANTE de CETTE
+    # décision, les métadonnées celle figée à l'ouverture du flux.
+    pub_cvep.push(2, 0.41, [0.11, 0.19, 0.41, 0.08, 0.15, 0.12], corr_min=0.30, margin=0.11)
+    pub_cvep.push(-1, 0.0, [0.05] * 6, corr_min=0.26, margin=0.09)  # pas de décision : jamais « la cible 0 »
+    print("  [lsl] decoded_cvep publie sans lever")
+    info_cvep = pub_cvep.outlet.get_info()      # ⚠️ idem, et c'est l'exposition la plus large du
+    cvep_deco = info_cvep.desc().child("decoding")   # fichier : 12 lectures dans la compréhension
+    lu = {k: cvep_deco.child_value(k) for k in
+          ("paradigm", "decision_scale", "no_decision_index", "corr_min", "margin",
+           "min_votes", "vote_len", "code_len", "refresh", "n_targets", "decoder", "cv")}
+    print(f"  decoded_cvep métadonnées : {lu}")
+    assert lu["paradigm"] == "c-VEP", lu
+    # ⚠️ « correlation », JAMAIS « z » ni « rho » : ces scores ne sont normalisés contre aucun
+    # plancher de repos (le c-VEP n'en mesure pas), et `corr_min`=0,26 lu sur l'échelle z du
+    # SSVEP passerait pour du bruit. C'est l'unique champ qui donne son sens aux deux seuils.
+    assert lu["decision_scale"] == "correlation", lu
+    assert lu["no_decision_index"] == "-1", lu
+    assert lu["corr_min"] == "0.26" and lu["margin"] == "0.09", lu
+    # La règle de décision est en TROIS morceaux, et le troisième est le vote glissant. Sans lui
+    # dans les métadonnées, un client mesure une latence de `vote_len / 5 Hz` sans pouvoir
+    # l'expliquer, et conclut que le décodage est lent.
+    assert lu["min_votes"] == "2" and lu["vote_len"] == "3", lu
+    assert lu["code_len"] == "63" and lu["refresh"] == "60" and lu["n_targets"] == "6", lu
+    # Le c-VEP est le seul mode à DEUX décodeurs sur le même stimulus : c'est le fichier de
+    # modèle qui déclare le sien, donc un client qui journalise des scores doit pouvoir savoir
+    # lequel il regarde — leurs seuils de rejet ne sont pas les mêmes.
+    assert lu["decoder"] == "eCCA", lu
+    assert lu["cv"] == "0.4778", lu
+    # `cv` VIDE quand le modèle n'en porte pas — pas « -1 », qui se lirait comme une justesse.
+    sans_cv = DecodedCVEPPublisher(6, decoder="rCCA", refresh=60.0, code_len=63,
+                                   corr_min=0.24, margin=0.08, cv=None,
+                                   instance="selftest-cvep-sanscv")
+    assert sans_cv.outlet.get_info().desc().child("decoding").child_value("cv") == "", \
+        "un modèle sans justesse mesurée doit publier un champ VIDE, pas un nombre"
+
+    # 9bis. Le NOM du flux, lié au contrat du mode — même assertion que 8bis pour l'ErrP, et pour
+    # la même raison : l'extrait « Brancher un client » que l'étudiant COPIE vient du `ModeSpec`,
+    # tandis que le flux réel vient d'ici. Un renommage d'un seul côté laisse tout vert et ne se
+    # voit qu'en séance, sous la forme d'un `resolve_byprop` qui ne trouve rien.
+    spec_cvep = _registry.get("cvep")
+    nom_publie = pub_cvep.outlet.get_info().name()
+    nom_annonce = stream_name(spec_cvep.stream)
+    print(f"  decoded_cvep nom publié={nom_publie!r} · annoncé par le ModeSpec={nom_annonce!r}")
+    assert nom_publie == nom_annonce, (
+        f"le flux publié ({nom_publie!r}) et celui que le contrat du mode annonce "
+        f"({nom_annonce!r}) ont divergé — un client s'abonnerait dans le vide")
+
+    print(f"[lsl] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    from core.config import use_utf8_console
+    use_utf8_console()
+    sys.exit(0 if _autotest() else 1)

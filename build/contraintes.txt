@@ -1,0 +1,57 @@
+# Les versions EXACTES des bibliothèques Python qui entrent dans l'installeur Windows.
+#
+# Le workflow de release les installe ainsi :
+#     pip install -r requirements.txt -c build/contraintes.txt pyinstaller==6.22.3
+#
+# Pourquoi : `requirements.txt` ne dit que des MINIMUMS (numpy>=1.24, PySide6>=6.6…). Sans ce
+# fichier, la machine de GitHub installerait, le jour du tag, les versions que PyPI propose ce
+# jour-là : l'installeur embarquerait des bibliothèques que personne n'a essayées avec le
+# logiciel. Avec lui, il embarque celles de l'environnement où les tests ont tourné.
+#
+# Un fichier de « contraintes » (option -c de pip) n'ajoute rien à installer : il fixe la version
+# de ce que requirements.txt et PyInstaller demandent, leurs propres dépendances comprises.
+#
+# Le refaire après une mise à jour de l'environnement du projet, et APRÈS avoir rejoué les tests :
+# garder cet en-tête, et remplacer les lignes qui suivent par la sortie de
+#     .venv\Scripts\python.exe -m pip freeze --exclude-editable
+# (l'environnement ne doit contenir que requirements.txt et PyInstaller : un paquet installé en
+# plus pour un essai serait figé ici sans raison).
+
+altgraph==0.17.5
+array-api-compat==1.15.0
+array-api-extra==0.11.4
+brainflow==5.23.0
+cloudpickle==3.1.2
+colorama==0.4.6
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.67.0
+joblib==1.6.0
+kiwisolver==1.5.1
+matplotlib==3.11.2
+narwhals==2.27.1
+numpy==2.5.4
+packaging==26.3
+pefile==2024.8.26
+pillow==13.0.0
+pygame==2.6.1
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+pylsl==1.18.6
+pyntbci==1.9.0
+pyparsing==3.3.3
+pyqtgraph==0.14.0
+pyriemann==0.12
+PySide6==6.12.0
+PySide6_Addons==6.12.0
+PySide6_Essentials==6.12.0
+PySide6_Pdf==6.12.0.140
+PySide6_WebEngine==6.12.0.140
+python-dateutil==2.9.0.post0
+pywin32-ctypes==0.2.3
+scikit-learn==1.9.1
+scipy==1.18.1
+setuptools==84.2.1
+shiboken6==6.12.0
+six==1.17.0
+threadpoolctl==3.7.0

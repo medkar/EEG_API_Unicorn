@@ -1,0 +1,8237 @@
+"""La console d'expérimentation : régler, observer, publier — mode par mode.
+
+Lancer :
+    python src/console/app.py --synthetic          # sans casque (board de test BrainFlow)
+    python src/console/app.py                      # vrai Unicorn, brut seul
+    python src/console/app.py --mode ssvep         # + décodage SSVEP
+    python src/console/app.py --mode ssvep,neuro   # les deux en même temps
+    python src/console/app.py --smoke              # test headless (CI), puis quitte
+
+⚠️ Ne jamais la lancer en même temps que `src/core/server.py` : le
+casque n'accepte qu'une connexion, et les noms de flux sont un contrat public — deux moteurs
+publient sous le même nom.
+"""
+
+import argparse
+import os
+import sys
+import threading
+import time
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _parse_args(argv):
+    from core.config import SECTEURS_HZ
+
+    p = argparse.ArgumentParser(description="EEG_API_Unicorn — console d'expérimentation.")
+    p.add_argument("--synthetic", action="store_true", help="board de test BrainFlow (sans casque)")
+    p.add_argument("--serial", default=None, help="numéro de série Unicorn")
+    p.add_argument("--secteur", type=int, choices=[int(s) for s in SECTEURS_HZ], default=None,
+                   help="secteur électrique du poste, en Hz — l'emporte sur celui que retient "
+                        "l'écran de départ (qui le présélectionne alors)")
+    p.add_argument("--mode", default=None, help="modes à démarrer, séparés par des virgules")
+    p.add_argument("--no-raw", action="store_true", help="ne pas diffuser le signal brut")
+    p.add_argument("--id", dest="instance", default=None, help="identité de cette instance")
+    p.add_argument("--baseline", type=float, default=None,
+                   help="raccourcir le repos — pour REGARDER l'interface sans attendre. Jamais "
+                        "pour une vraie séance : le plancher serait mesuré sur trop peu de "
+                        "fenêtres et fausserait toute la suite")
+    p.add_argument("--warmup", type=float, default=None,
+                   help="raccourcir la stabilisation (même réserve que --baseline)")
+    p.add_argument("--smoke", action="store_true", help="test headless, puis quitte")
+    p.add_argument("--verbose", action="store_true", help="logs BrainFlow détaillés")
+    return p.parse_args(argv)
+
+
+# QT_QPA_PLATFORM doit être posé AVANT le premier import de PySide6 : Qt choisit son backend
+# d'affichage à l'import, pas à la création de la QApplication. Posé après, il n'a aucun effet
+# et le test headless échoue sur une machine sans écran (la CI, plus tard).
+_ARGS = _parse_args(sys.argv[1:])
+if _ARGS.smoke:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QLocale, QObject, QProcess, QTimer, Signal  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QFormLayout, QMainWindow,  # noqa: E402
+                               QStackedWidget, QVBoxLayout, QWidget)
+
+from console.banner import Banner  # noqa: E402
+from console.beeps import Beeps  # noqa: E402
+from console.calib_page import CalibPage  # noqa: E402
+from console.demarrage import (SYNTHETIQUE, UNICORN, Memoire,  # noqa: E402
+                               attendre_ouverture, choisir_source)
+from stimulus import registry as stimulus_registry  # noqa: E402
+from console.contact_page import ContactPage  # noqa: E402
+from console.fenetres import LanceurFenetre  # noqa: E402
+from console.flux_page import FenetreFlux, FluxPage  # noqa: E402
+from console.connexion_page import ControlePage, RecherchePage, hote_du_moteur  # noqa: E402
+from console.grid import ModeGrid  # noqa: E402
+from console.mesure_page import MesurePage  # noqa: E402
+from console.mode_page import ModePage  # noqa: E402
+from console import live_views  # noqa: E402
+from core import neuro_monitor  # noqa: E402  (les descriptions des indices, cf. _smoke)
+from core import cvep_models  # noqa: E402  (le rafraîchissement d'un modèle c-VEP, cf. _ecran_hz)
+from core import p300_models  # noqa: E402  (les cibles d'un modèle P300, cf. _noms_cibles)
+from core import config  # noqa: E402  (l'icône, cf. poser_icone ; le journal, cf. _moteur_mort)
+from core.config import TOLERANCE_DIVISEUR, use_utf8_console  # noqa: E402
+from core.i18n import choisir_langue, langue, retraduit, tr  # noqa: E402
+from core.modes import registry  # noqa: E402
+from core.modes.calibration import PHASES_TERMINALES  # noqa: E402
+from core.version import VERSION  # noqa: E402
+from core.server import EngineServer  # noqa: E402
+
+REFRESH_MS = 100    # ~10 Hz : le moteur décide à 5 Hz, sonder plus vite ne montrerait rien de plus
+
+# Combien de temps on attend qu'un mode rende la main avant de lancer SA calibration. `stop_mode`
+# est mis en FILE : la boucle l'applique à sa cadence (~50 ms), donc l'attente normale est d'un ou
+# deux tours. Ce délai évite d'attendre en SILENCE si la boucle est bloquée ou arrêtée : un écran
+# muet serait indiscernable d'une chauffe qui démarre.
+DELAI_ARRET_S = 5.0
+
+# Combien de temps la console attend de VOIR une séance apparaître dans l'état du moteur avant de
+# lancer sa fenêtre de stimulus.
+#
+# 🔴 `submit` ne promet qu'une mise en FILE, jamais une application (cf. `DELAI_ARRET_S`). Or
+# `_start_calibration` peut sortir sans rien créer, par trois portes silencieuses : une séance déjà
+# en cours, le refus du vol de marqueurs côté boucle, ou une exception dans `runtime_cls(...)`
+# avalée par `_drain_commands`. La fenêtre plein écran jouerait alors le protocole ENTIER dans le
+# vide (200 essais d'ErrP, sept minutes), sans rien à l'écran pour le dire. La console lance donc
+# la fenêtre seulement après avoir VU la séance dans `snapshot()`.
+DELAI_DEMARRAGE_S = 5.0
+
+
+def _a_plat(valeurs):
+    """Des réglages COMPARABLES : `state()` rend des listes là où le contrat valide des tuples."""
+    return {k: list(v) if isinstance(v, (list, tuple)) else v for k, v in (valeurs or {}).items()}
+
+
+def appliquer_langue(code):
+    """La langue de l'affichage, et l'écriture des nombres des champs avec elle.
+
+    Un champ numérique suit la convention de Qt (`QLocale`), pas le catalogue : laissé à la
+    française dans un écran anglais, « 9,600 » se lirait neuf mille six cents.
+    """
+    choisir_langue(code)
+    QLocale.setDefault(QLocale(code))
+
+
+class Console(QMainWindow):
+    """La fenêtre. Elle ne fait que deux choses : lire un état, envoyer des commandes."""
+
+    def __init__(self, engine, fabrique_fenetre=None, horloge=None, moteur_vivant=None,
+                 memoire=None):
+        super().__init__()
+        self.engine = engine
+        self.resize(1100, 720)
+
+        # Le lanceur de fenêtres de stimulus. `fabrique_fenetre` est injectable pour que le smoke
+        # n'ait JAMAIS à démarrer un vrai pygame ; `horloge` l'est pour que le délai d'attente
+        # ci-dessous soit testable sans attendre cinq secondes.
+        self.lanceur = LanceurFenetre(fabrique_fenetre)
+        self._horloge = horloge or time.monotonic
+        # « Le fil du moteur tourne-t-il encore ? » — un prédicat, pas le fil : la console ne
+        # possède pas le fil (c'est `run()` qui le crée), et lui passer un objet `Thread` la
+        # rendrait intestable sans en démarrer un. `run()` y branche `thread.is_alive` ; `None`
+        # veut dire « personne ne surveille », ce qui est le cas des tests qui n'ont pas de fil.
+        self._moteur_vivant = moteur_vivant
+        self._dernier_etat = {}
+        # Ce qu'on s'apprête à lancer, le temps du contrôle de liaison. Et, une fois le contrôle
+        # passé, le mode qu'on attend de voir s'arrêter avant de démarrer sa calibration.
+        self._demande = None
+        self._attente = None
+        # Une calibration soumise dont la fenêtre a refusé de s'ouvrir. Elle doit être annulée,
+        # mais pas avant que le moteur ne l'ait réellement démarrée — cf. `_suivre_attente`.
+        self._a_annuler = False
+        # Ce qu'il reste à lancer quand la séance apparaîtra (cf. DELAI_DEMARRAGE_S).
+        self._a_lancer = None
+        # Le jumeau, côté MESURE. Une mesure à fenêtre dont la fenêtre ne s'ouvre pas laisserait le
+        # moteur attendre `CALIB_FENETRE_ATTENTE_S` avant d'abandonner : trente secondes pendant
+        # lesquelles l'écran annonce une séance qui n'aura jamais lieu.
+        self._a_annuler_mesure = False
+        # Le jumeau de `_a_lancer` côté mesure : la fenêtre n'est lancée qu'une fois la mesure
+        # VUE dans l'état, jamais sur l'accusé de `start_mesure`.
+        self._a_lancer_mesure = None
+        # La séance à laquelle appartient la fenêtre ouverte : {cle, id, numero}, ou None. Quand le
+        # MOTEUR abandonne cette séance (aucun `calib_start` en 30 s, silence, erreur), c'est ce
+        # lien qui permet de fermer la fenêtre — sans lui, elle continue plein écran à désigner des
+        # cibles pour une séance qui n'existe plus, devant une console qu'elle recouvre.
+        self._fenetre_de = None
+        # L'ESSAI LIBRE en cours (« Tester librement »), ou None. Une fiche, tenue
+        # du clic à la fermeture de sa fenêtre : quel mode, si c'est l'essai qui l'a démarré (donc
+        # s'il faudra l'arrêter), et le numéro de sa fenêtre une fois ouverte. Cf. `_suivre_essai`.
+        self._essai = None
+
+        # Les préférences du POSTE (la langue de l'affichage, comme le secteur) : injectables, pour
+        # que l'autotest n'écrive rien dans la base de registre.
+        self.memoire = memoire if memoire is not None else Memoire()
+        self.beeps = Beeps()
+        self._origine_mesure = None
+        # Ce qu'une page de « Tester » montre des réglages de son mode, par mesure : elle les suit
+        # tant que le test n'est pas parti (cf. `_suivre_reglages_du_test`).
+        self._prerempli = {}
+        # La phrase d'une séance annulée parce que sa fenêtre est morte, en attente que la séance
+        # soit VUE terminée (cf. `_annuler_si_fenetre_morte`), ou None.
+        self._avis_fenetre = None
+        # La recherche des applications tourne-t-elle (la page « Connecter une application »
+        # ouverte) ? Quitter la page l'arrête (`_page_changee`).
+        self._recherche_active = False
+        self._construire()
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(REFRESH_MS)
+
+    def _construire(self):
+        """Toutes les pages, dans la langue COURANTE : au démarrage, et à chaque changement de langue.
+
+        Le moteur, le casque, le lanceur de fenêtres et le minuteur ne sont pas reconstruits : seul
+        l'AFFICHAGE change. Le catalogue est resérialisé, donc retraduit (`registry`).
+        """
+        # Les pages d'avant (un changement de langue) partent avec l'ancien widget central :
+        # leurs tracés sont refermés d'abord (cf. `fermer_graphiques`).
+        self.fermer_graphiques()
+        self.setWindowTitle(tr("console.fenetre.titre", version=VERSION))
+        self.banner = Banner(lambda mode_id: (self.catalogue.get(mode_id) or {}).get("label"))
+        self.stack = QStackedWidget()
+        # Un SEUL appel, réutilisé par les boucles ci-dessous : le « Flux de marqueurs » du P300 et
+        # de l'ErrP se remplit en DÉCOUVRANT les émetteurs du réseau
+        # (`markers.flux_de_marqueurs_visibles`), donc sérialiser le catalogue coûte une
+        # résolution LSL bornée par mode marqueur (mesuré sur un poste : ~1 s l'appel, soit
+        # presque 2 s de fenêtre gelée si on l'appelle trois fois). Le catalogue est une
+        # DÉCLARATION : il ne change pas entre deux lignes de ce constructeur.
+        catalogue = registry.catalog()
+        # Le catalogue des MESURES, sérialisé par le moteur comme celui des modes : la console ne
+        # recopie ni libellés, ni briefings, ni réglages. Un appel séparé, mais sans résolution
+        # LSL derrière lui (une mesure n'a ni flux ni marqueurs) — donc rien de comparable au coût
+        # de `registry.catalog()` juste au-dessus.
+        mesures = registry.catalogue_mesures()
+        # Les catalogues indexés, pour retrouver un contrat sans le resérialiser (ce qui relirait
+        # le disque : `choices_fn` charge les modèles entraînés).
+        self.catalogue = {spec["id"]: spec for spec in catalogue}
+        self.mesures = {spec["id"]: spec for spec in mesures}
+        # Quelle mesure sait REMPLIR quel réglage d'un mode : DÉCLARÉ par le moteur, sur le
+        # runtime de la mesure (`REGLAGE_PRODUIT`, cf. `core/modes/alpha.py`). C'est ce qui pose
+        # « Mesurer » à côté du « Pic alpha » sans qu'aucune page écrive « alpha ».
+        self._mesure_par_reglage = {
+            tuple(m.runtime_cls.REGLAGE_PRODUIT): m.id for m in registry.MESURES
+            if getattr(m.runtime_cls, "REGLAGE_PRODUIT", None) and m.id in self.mesures}
+        # La grille ne porte que les mesures de SÉANCE (le contrôle alpha). Une mesure qui ÉPROUVE
+        # un mode (celle que désigne son `test_id`) a sa page, ouverte par le bouton « Tester » de
+        # ce mode, mais PAS de tuile : sinon chaque mode testable ajouterait un bouton sur
+        # l'accueil, loin du mode qu'il teste. La règle est lue dans le CONTRAT, pas dans une
+        # liste tenue ici.
+        tests_de_modes = {spec.get("test_id") for spec in catalogue if spec.get("test_id")}
+        self.grid = ModeGrid(catalogue,
+                             [spec for spec in mesures if spec["id"] not in tests_de_modes])
+        self.grid.ouvrir.connect(self.show_mode)
+        self.grid.publier.connect(self._publier)
+        self.grid.demarrer.connect(self._demarrer)
+        self.grid.ouvrir_mesure.connect(self.show_mesure)
+        self.grid.ouvrir_flux.connect(self.show_flux)
+        self.grid.choix_langue.connect(self.changer_langue)
+        self.grid.connecter_application.connect(self.show_recherche)
+        self.stack.addWidget(self.grid)
+
+        self.pages = {}
+        for spec in catalogue:
+            if spec["status"] != "moteur":
+                continue          # pas de page pour un mode que le moteur ne sait pas faire
+            page = ModePage(spec, self)
+            page.retour.connect(self.show_grid)
+            # Le MÊME point d'arrivée que la tuile de la grille : un seul endroit décide ce que
+            # « démarrer » veut dire, donc un refus se comporte pareil des deux côtés.
+            page.marche.connect(self._demarrer)
+            self.pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
+        # Une page de calibration par mode que LE MOTEUR sait jouer. Le critère est `jouable`, que
+        # le contrat calcule depuis son `runtime_cls` (`kind` dit seulement qui mène le protocole).
+        # Un mode dont la calibration est déclarée mais pas livrée n'a donc pas de page, et son
+        # bouton ne ment pas.
+        self.calib_pages = {}
+        for spec in catalogue:
+            calib = spec.get("calibration") or {}
+            if not calib.get("jouable") or spec["status"] != "moteur":
+                continue
+            page = CalibPage(spec, self)
+            # « ← » ramène au MODE qu'on entraîne : on y est arrivé par son bouton « Entraîner »,
+            # et la suite de la boucle (tester) se fait là.
+            page.retour.connect(lambda _c=False, m=spec["id"]: self.show_mode(m))
+            page.bouton_retour.setText(tr("console.nav.retour_vers", mode=spec["label"]))
+            self.calib_pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
+        # Une page par MESURE que le moteur sait jouer. Même critère que pour les calibrations
+        # (`jouable`) : une mesure déclarée mais pas livrée garde sa tuile, grisée avec sa raison,
+        # et n'a pas de page, donc son bouton ne ment pas.
+        self.mesure_pages = {}
+        for spec in mesures:
+            if not spec.get("jouable"):
+                continue
+            # Le mode que cette mesure TESTE, s'il y en a un : sa page en tire les réglages qui
+            # viennent de lui (en lecture seule) et le nom de la page où ils se changent.
+            page = MesurePage(spec, self,
+                              mode=self.catalogue.get(self._mode_teste_par(spec["id"])))
+            page.retour.connect(self._retour_de_mesure)
+            self.mesure_pages[spec["id"]] = page
+            self.stack.addWidget(page)
+
+        # UNE page de contrôle de liaison pour tous les modes : les huit voies sont les mêmes,
+        # seul le surlignage des voies clés change d'un mode à l'autre (`viser`).
+        self.contact = ContactPage(self)
+        self.contact.lancer.connect(self._contact_lance)
+        self.contact.annuler.connect(self._contact_annule)
+        self.stack.addWidget(self.contact)
+
+        # « Connecter une application » : la recherche, puis la page de CONTRÔLE, seule page
+        # affichée pendant une connexion (le moteur refuse tout autre geste de la console).
+        # Le nom de ce PC, tel que le moteur le connaît : la ligne d'une application de ce PC dit
+        # « ce PC ». Lu à chaque peinture, jamais recopié.
+        self.recherche = RecherchePage(hote=lambda: hote_du_moteur(self.engine))
+        self.recherche.retour.connect(self.quitter_recherche)
+        self.recherche.connecter.connect(self.connecter_application)
+        self.recherche.identifier.connect(self.identifier_application)
+        self.stack.addWidget(self.recherche)
+        self.controle = ControlePage(self)
+        self.stack.addWidget(self.controle)
+        # Branché APRÈS l'ajout des pages : les premiers `addWidget` changent eux aussi la page
+        # courante.
+        self.stack.currentChanged.connect(self._page_changee)
+
+        # « Ce que voit ton application » : le flux sortant, lu PAR LSL. On lui passe `self` pour
+        # qu'elle ait un canal de COMMANDES (l'enregistrement de séance) ; elle n'en garde que
+        # `self.commande` et jamais le moteur, cf. l'en-tête de `console/flux_page.py`. Si elle
+        # lisait `snapshot()`, elle afficherait des données pendant que le réseau est muet,
+        # c'est-à-dire exactement la panne qu'on vient y voir.
+        # Elle vit dans SA fenêtre, hors de la pile : c'est PENDANT un test qu'on veut la
+        # regarder, et l'ouvrir ne doit pas remplacer la page du test (cf. `FenetreFlux`).
+        # Une fenêtre des flux déjà OUVERTE (changement de langue) est remplacée par la nouvelle,
+        # rouverte aussitôt : elle lit le réseau, rien ne se perd à la reconstruire.
+        ancienne = getattr(self, "fenetre_flux", None)
+        rouvrir = ancienne is not None and ancienne.isVisible()
+        if ancienne is not None:
+            ancienne.close()
+            self.flux_page.quitter()
+            ancienne.deleteLater()
+        self.flux_page = FluxPage(self)
+        self.fenetre_flux = FenetreFlux(self.flux_page)
+        if rouvrir:
+            self.fenetre_flux.ouvrir()
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.banner)
+        layout.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+
+    def _occupation(self):
+        """Ce qui empêche de reconstruire l'affichage maintenant, en clair — sinon "".
+
+        Une séance minutée, un essai libre ou un lancement en cours tiennent des pages et des
+        fenêtres : les reconstruire sous eux les couperait de leur écran.
+        """
+        if (self._dernier_etat or {}).get("connexion"):
+            return tr("console.langue.connexion")
+        return self._geste_en_cours()
+
+    def _geste_en_cours(self):
+        """Le geste de la CONSOLE en cours, en clair — sinon "" : une séance minutée, un essai
+        libre, une fenêtre de stimulus encore ouverte, un lancement. Le moteur ne connaît pas
+        tous ces gestes (l'essai libre, le lancement d'une fenêtre) : c'est la console qui les
+        compte. Sert au changement de langue et à « Connecter »."""
+        seance = self._seance_minutee()
+        if seance:
+            return seance
+        if self._essai is not None:
+            return tr("console.langue.essai")
+        if self._fenetre_de is not None:
+            return tr("console.langue.fenetre")
+        if (self._demande is not None or self._attente is not None or self._a_lancer
+                or self._a_lancer_mesure):
+            return tr("console.langue.lancement")
+        return ""
+
+    def changer_langue(self, code):
+        """L'icône de la grille : l'affichage passe dans `code`, tout de suite, et le poste le retient.
+
+        Seul l'AFFICHAGE change : les flux envoyés à l'application (noms, voies, valeurs) ne se
+        traduisent jamais. Refusé pendant une séance, un essai ou un lancement (`_occupation`).
+        """
+        if code == langue():
+            return
+        occupe = self._occupation()
+        if occupe:
+            self.banner.set_refus(f"⚠ {tr('console.langue.occupe', quoi=occupe)}")
+            return
+        appliquer_langue(code)
+        # Un widget hérite la convention des nombres de sa FENÊTRE, pas du défaut de Qt.
+        self.setLocale(QLocale(code))
+        self.memoire.retenir_langue(code)
+        self._construire()
+        self.show_grid()
+        if self.engine is not None:
+            self.refresh()
+
+    def refresh(self):
+        """Sonde le moteur et redistribue l'état. Le SEUL endroit qui appelle `snapshot()`.
+
+        `retraduit` : les textes que le moteur a résolus à l'import (consignes, notes d'honnêteté)
+        suivent la langue CHOISIE depuis, comme ceux qu'il produit en direct.
+        """
+        self.apply_state(retraduit(self.engine.snapshot()))
+
+    def apply_state(self, state):
+        self._dernier_etat = state or {}
+        # Le fil du moteur est-il mort ? Décidé AVANT de peindre le bandeau : peindre l'état FIGÉ
+        # d'un moteur mort puis l'effacer par `set_moteur` fait recalculer la mise en page à chaque
+        # rafraîchissement, et tout ce qui est sous le bandeau sauterait de haut en bas.
+        mort = self._moteur_mort()
+        if not mort:
+            self.banner.update_from(state)
+        # L'état de la fenêtre de stimulus est poussé À CHAQUE rafraîchissement, et dans le
+        # bandeau : une fenêtre qui meurt pendant qu'on regarde une autre page doit se voir quand
+        # même — et le moteur, lui, ne sait pas qu'elle existe.
+        texte, alerte = self.lanceur.etat_texte()
+        self.banner.set_fenetre(texte, alerte)
+        if mort:
+            # Un moteur mort ne mesure plus rien : aucune page ne peint son dernier σ comme s'il
+            # était d'actualité (une électrode verte sur un casque que plus personne ne lit).
+            state = dict(state or {}, quality=None)
+        self.grid.update_from(state)
+        # Une application CONNECTÉE : la page de contrôle, et elle seule. Elle reste après le
+        # départ de l'application pour dire ce qui s'est passé ; « Retour à l'accueil » la quitte.
+        if (state or {}).get("connexion") and self.stack.currentWidget() is not self.controle:
+            self.stack.setCurrentWidget(self.controle)
+        page = self.stack.currentWidget()
+        if page is not self.grid:
+            page.update_from(state)
+            self._suivre_reglages_du_test(page)
+        # La fenêtre des flux vit À CÔTÉ de la pile : servie tant qu'elle est ouverte, quelle que
+        # soit la page devant — c'est tout son intérêt. `state` n'y nourrit que l'enregistrement
+        # (le panneau, lui, tire sur son inlet LSL : cf. `FluxPage.update_from`).
+        if self.fenetre_flux.isVisible():
+            self.flux_page.update_from(state)
+        # Quand le fil est mort, ce message prend la place des champs d'un état qui ne bougera
+        # plus — que le bandeau n'a, du coup, même pas repeints ci-dessus.
+        self.banner.set_moteur(mort)
+        self._suivre_attente(state)
+
+    def _moteur_mort(self):
+        """Le message à afficher si le fil du moteur s'est arrêté tout seul. `""` sinon.
+
+        🔴 `prepare_session()` n'est appelée que dans `acquisition.start()`, donc dans
+        `server.run()`, donc DANS LE FIL, hors de son `try`. Un `BrainFlowError` (casque éteint,
+        non appairé, `BOARD_NOT_READY` parce qu'une session traîne ailleurs) tue le fil avec un
+        traceback sur stderr, que personne ne lit : la console est une fenêtre Qt.
+
+        Sans ce message, l'écran resterait plausible : `snapshot()["running"]` vaut toujours
+        `True` (calculé avant), le bandeau annonce « Unicorn · 250 Hz · 0 mode actif », et les σ
+        restent « en attente du tampon… » indéfiniment. L'étudiant attendrait un tampon qui ne
+        viendra jamais.
+
+        On ne REPROPOSE pas la source ici : ce serait reconstruire le moteur, son fil et la
+        fenêtre entière.
+
+        Le message dit où lire l'erreur : le JOURNAL quand le programme installé y écrit
+        (`config.journal_actif`, rempli par le point d'entrée), le terminal sinon.
+        """
+        if self._moteur_vivant is None or self._moteur_vivant():
+            return ""
+        if config.journal_actif:
+            detail = tr("console.moteur_mort.journal", chemin=config.journal_actif)
+        else:
+            detail = tr("console.moteur_mort.terminal")
+        return tr("console.moteur_mort", detail=detail)
+
+    def _publier(self, mode_id, on):
+        """Publier ou non le flux de ce mode. Passe par la file de commandes, comme tout."""
+        self.commande("set_published", id=mode_id, on=on)
+
+    def _demarrer(self, mode_id, on):
+        """Démarrer ou arrêter un mode. Le moteur valide et refuse ; on affiche ce qu'il dit.
+
+        Ce geste évite de fermer et rouvrir la console (`--mode mi` au lancement) pour utiliser un
+        modèle qu'on vient d'entraîner : **les voies C3/Cz saturent à la réouverture**
+        (redémarrage de l'amplificateur), et ce sont celles que lit le Motor Imagery.
+
+        On n'envoie AUCUN réglage : le moteur applique les défauts du contrat, qui pour le MI
+        désignent le modèle le plus récemment entraîné. Les changer se fait ensuite dans la page
+        du mode, avec les refus en clair — c'est déjà là.
+        """
+        self.commande("start_mode", id=mode_id) if on else self.commande("stop_mode", id=mode_id)
+
+    def commande(self, name, **params):
+        """Soumet une commande et retient le refus, s'il y en a un, pour l'afficher."""
+        if self.engine is None:
+            return {"accepted": False, "reason": tr("console.refus.aucun_moteur")}
+        ack = self.engine.submit(name, **params)
+        if not ack.get("accepted"):
+            # Le refus s'affiche À L'ÉCRAN, pas seulement dans le terminal : un refus que
+            # personne ne lit (par exemple « aucun choix disponible » sur « Démarrer » d'un mode
+            # à modèle, dans un dépôt sans modèle) est indiscernable d'un bouton cassé.
+            print(f"[console] refusé : {ack.get('reason')}")
+            self.banner.set_refus(f"⚠ {ack.get('reason')}")
+        else:
+            # Une commande ACCEPTÉE efface le refus précédent : le laisser à l'écran ferait lire
+            # un refus périmé comme le verdict de l'action qu'on vient de réussir.
+            self.banner.set_refus("")
+        return ack
+
+    # --- lancer quelque chose : le contact d'abord, puis l'ORDRE ---------------------------
+    #
+    # 🔴 L'ordre est le piège de tout ce sous-système, et il ne lève aucune exception quand il est
+    # faux. La fenêtre de stimulus attend ~15 s À PARTIR DE SON PROPRE LANCEMENT ; le moteur
+    # compte sa chauffe À PARTIR DE `start_calibration`. Il n'existe AUCUNE poignée de main entre
+    # les deux processus, et c'est délibéré.
+    #
+    # Donc : `start_calibration` D'ABORD, la fenêtre ENSUITE. L'initialisation de pygame (~3 s)
+    # plus l'attente propre de la fenêtre couvrent alors la chauffe du moteur. Dans l'autre sens,
+    # les premières manches tombent dans la chauffe : elles sont jetées, comptées et dites — mais
+    # la séance est plus courte que ce que l'écran annonce, et c'est indiscernable d'un protocole
+    # qui s'est bien passé.
+
+    def demander_calibration(self, mode_id, params):
+        """« Commencer » sur une page de calibration : le MOTEUR juge les réglages, puis le
+        contrôle de liaison.
+
+        Rien n'est soumis ici. Le lancement réel est dans `_contact_lance`, et il n'a lieu que si
+        le contrôle de liaison ne refuse pas.
+
+        🔴 Les réglages sont jugés AVANT tout le reste, par le moteur
+        (`EngineServer.valider_calibration`, la méthode que `start_calibration` appelle aussi ; la
+        console ne recopie aucune règle). Jugés plus tard, APRÈS le contrôle de liaison et l'arrêt
+        du décodage, une faute de frappe couperait le flux de l'application de l'étudiant pour un
+        entraînement qui n'a pas lieu. Un refus s'affiche en rouge sur la page, et rien d'autre
+        ne se passe.
+        """
+        _valeurs, raison = self._valider_calibration(mode_id, params)
+        if raison:
+            self._avis(mode_id, raison)
+            return
+        self._demande = {"quoi": "calibration", "mode_id": mode_id,
+                         "params": dict(params or {}),
+                         "retour": self.calib_pages.get(mode_id)}
+        self._montrer_contact(self.catalogue.get(mode_id),
+                              tr("console.geste.commencer_entrainement"))
+
+    def _valider_calibration(self, mode_id, params):
+        """(réglages, None) ou (None, raison), selon le MOTEUR. Une question : rien n'est soumis."""
+        if self.engine is None:
+            return None, tr("console.refus.aucun_moteur")
+        return self.engine.valider_calibration(mode_id, dict(params or {}))
+
+    def entrainement_en_route(self, mode_id):
+        """Un « Commencer » de l'entraînement de ce mode est-il EN ROUTE : cliqué, ni parti ni refusé ?
+
+        Vrai du clic jusqu'à ce que la séance apparaisse dans l'état, ou qu'on y renonce — au
+        contrôle de liaison, à l'arrêt du mode, au départ. C'est ce qui FIGE le formulaire de la
+        page (`CalibPage`) : les réglages sont déjà copiés dans la demande, donc une valeur changée
+        entre-temps ne partirait pas, et la séance démarrerait avec l'ancienne, sans un mot. Lu
+        dans les trois fiches que la console tient déjà, jamais dans un drapeau de plus qui
+        pourrait leur survivre.
+        """
+        for fiche in (self._demande, self._attente):
+            if fiche and fiche.get("quoi") == "calibration" and fiche.get("mode_id") == mode_id:
+                return True
+        return bool(self._a_lancer) and self._a_lancer.get("mode_id") == mode_id
+
+    def demander_mesure(self, mesure_id, params):
+        """« Commencer » sur une page de mesure : même chemin, et pour une raison de plus.
+
+        Une mesure ne lit aucun marqueur et n'entre en conflit avec aucun mode démarré — il n'y a
+        donc rien à arrêter avant elle, à la différence d'une calibration. Mais le contrôle de
+        liaison, lui, s'interpose exactement pareil : le contrôle alpha calculé sur quatre voies
+        plates rend un rapport de bruit d'arrondi, et le moteur ne peut le refuser qu'APRÈS
+        37 secondes de casque. Autant le refuser avant.
+
+        Les voies entourées sont celles que la MESURE déclare (`key_channels` du catalogue : le
+        contrôle alpha déclare ses occipitales). Un TEST n'en déclare pas : on lui prête celles du
+        mode testé, lues dans son contrat (« Tester le P300 » entoure Fz/Cz/Pz comme
+        « Entraîner le P300 »). Le refus, lui, porte toujours sur les huit.
+        """
+        self._demande = {"quoi": "mesure", "mode_id": mesure_id, "params": dict(params or {}),
+                         "retour": self.mesure_pages.get(mesure_id)}
+        spec = self.mesures.get(mesure_id)
+        mode = self.catalogue.get(self._mode_teste_par(mesure_id))
+        if spec is not None and mode is not None and not spec.get("key_channels"):
+            spec = {**spec, "key_channels": mode.get("key_channels")}
+        # Le bouton dit ce qu'on lance, dans les mots de l'étudiant — jamais « la mesure ».
+        self._montrer_contact(spec, tr("console.geste.commencer_test") if mode is not None
+                              else tr("console.geste.commencer"))
+
+    def demander_stimulus(self, mode_id):
+        """« Lancer le stimulus » sur une page de mode : même chemin, sans calibration.
+
+        La fenêtre est alors lancée en mode DÉCODAGE : c'est elle qui affiche les cibles et publie
+        les marqueurs que le mode découpe. Elle n'ouvre pas le casque, donc elle vit à côté du
+        moteur — c'est exactement pour ça qu'elle est un second processus.
+        """
+        self._demande = {"quoi": "stimulus", "mode_id": mode_id, "params": {},
+                         "retour": self.pages.get(mode_id)}
+        self._montrer_contact(self.catalogue.get(mode_id), tr("console.geste.lancer_stimulus"))
+
+    def _montrer_contact(self, spec, quoi):
+        """`spec` : le contrat SÉRIALISÉ de ce qu'on s'apprête à lancer — un mode ou une mesure.
+
+        C'est l'appelant qui le résout, plutôt que cette méthode qui chercherait un identifiant
+        dans le bon catalogue : les deux catalogues sont distincts et un identifiant seul ne dit
+        pas duquel il vient (`registry.check` refuse d'ailleurs qu'un même mot serve aux deux).
+        """
+        if spec is None:
+            self._demande = None
+            return
+        self.contact.viser(spec, quoi)
+        # L'état DÉJÀ reçu, tout de suite : sans lui, la page resterait sur « en attente de la
+        # première mesure » jusqu'au prochain tour de `QTimer`, et un écran qui refuse pour une
+        # raison périmée se lit comme un écran cassé.
+        self.contact.update_from(self._dernier_etat)
+        self.stack.setCurrentWidget(self.contact)
+
+    def _contact_annule(self):
+        demande, self._demande = self._demande, None
+        retour = (demande or {}).get("retour")
+        self.stack.setCurrentWidget(retour if retour is not None else self.grid)
+
+    def _contact_lance(self):
+        """Le contrôle de liaison est passé. On revient sur la page d'origine, puis on lance."""
+        demande, self._demande = self._demande, None
+        if demande is None:
+            return
+        retour = demande.get("retour")
+        # Revenir AVANT de lancer : c'est sur cette page-là que s'affichera un éventuel refus du
+        # moteur, et la page de contact ne doit pas rester devant un refus qu'elle ne porte pas.
+        self.stack.setCurrentWidget(retour if retour is not None else self.grid)
+        if demande["quoi"] == "stimulus":
+            self._lancer_fenetre(demande["mode_id"], calibrer=False)
+            return
+        if demande["quoi"] == "essai":
+            # « Tester librement » : rien à arrêter avant lui — il DÉMARRE le mode, ou s'en sert.
+            self._commencer_essai(demande["mode_id"], demande.get("reglages"))
+            return
+        # ⚠️ Le mode doit être ARRÊTÉ avant que sa calibration — ou son TEST — ne démarre : les
+        # deux liraient la même file de marqueurs, et `submit` refuse. On l'arrête donc nous-mêmes
+        # plutôt que d'infliger deux gestes à l'étudiant — mais `stop_mode` est mis en FILE, et la
+        # commande soumise dans la foulée verrait encore le mode actif et serait refusée. On
+        # attend donc de le voir DISPARAÎTRE de l'état.
+        #
+        # Règle UNIFORME, SSVEP compris : la console ne recopie pas la table des conflits que le
+        # moteur possède (qui lit des marqueurs, qui non). Une mesure qui n'est le test d'aucun
+        # mode (le contrôle alpha) n'arrête rien.
+        a_arreter = (demande["mode_id"] if demande["quoi"] == "calibration"
+                     else self._mode_teste_par(demande["mode_id"]))
+        if a_arreter is not None and a_arreter in (self._dernier_etat.get("modes_state") or {}):
+            self.commande("stop_mode", id=a_arreter)
+            self._attente = dict(demande, arreter=a_arreter,
+                                 echeance=self._horloge() + DELAI_ARRET_S)
+            # Le décodage RESTE arrêté après : le relancer tout seul referait son repos et
+            # recréerait son flux sans qu'on l'ait demandé. On le DIT, pour qu'une application
+            # branchée sur ce flux ne tombe pas en silence, et dans la NOTE de la page, pas dans
+            # son avis : l'avis vit dans le bloc « Avant de commencer », qui disparaît dès que la
+            # séance démarre. La note reste jusqu'au prochain « Commencer ».
+            nom = self._nom_du_mode(a_arreter)
+            self._note_de(demande)(
+                demande["mode_id"],
+                tr("console.note.arret_pour_test", mode=nom) if demande["quoi"] == "mesure"
+                else tr("console.note.arret_pour_entrainement", mode=nom))
+            return
+        self._demarrer_selon(demande)
+
+    def _demarrer_selon(self, demande):
+        """Lance ce que le contrôle de liaison a laissé passer : une mesure ou une calibration."""
+        if demande["quoi"] == "mesure":
+            self._demarrer_mesure(demande)
+        else:
+            self._demarrer_calibration(demande)
+
+    def _avis_de(self, demande):
+        """Où s'affiche ce qu'on a à dire d'une demande : sa page de mesure, ou de calibration."""
+        return self._avis_mesure if demande["quoi"] == "mesure" else self._avis
+
+    def _note_de(self, demande):
+        """Où poser une note DURABLE sur une demande : sa page de mesure, ou de calibration."""
+        pages = self.mesure_pages if demande["quoi"] == "mesure" else self.calib_pages
+
+        def noter(page_id, texte):
+            print(f"[console] {page_id} : {texte}")
+            page = pages.get(page_id)
+            if page is not None:
+                page.montrer_note(texte)
+        return noter
+
+    def _nom_du_mode(self, mode_id):
+        return (self.catalogue.get(mode_id) or {}).get("label", mode_id)
+
+    def _suivre_attente(self, state):
+        """Ce qu'on attend du moteur, tour par tour. Appelée à chaque rafraîchissement.
+
+        Deux attentes, et toutes les deux existent pour la MÊME raison : `submit` ne fait que
+        mettre en file, donc une commande soumise juste après une autre juge un moteur qui n'a pas
+        encore appliqué la première.
+        """
+        # 1. Une calibration soumise dont la fenêtre a refusé de s'ouvrir : on l'annule dès
+        #    qu'elle existe pour de bon. Sans ça, l'écran annonce une annulation qui n'a pas eu
+        #    lieu, avec le décompte de la chauffe qui démarre juste en dessous.
+        if self._a_annuler:
+            calib = (state or {}).get("calibration")
+            if calib is not None and calib.get("phase") not in PHASES_TERMINALES:
+                self._a_annuler = False
+                self.commande("cancel_calibration")
+                self._fermer_fenetre_sauf_essai()
+
+        # 1 bis. Le même, côté MESURE. Une mesure à fenêtre dont la fenêtre ne s'est pas ouverte
+        #        attendrait 30 s en accusant un stimulus que l'étudiant vient de voir échouer.
+        if self._a_annuler_mesure:
+            mesure = (state or {}).get("mesure")
+            if mesure is not None and mesure.get("phase") not in PHASES_TERMINALES:
+                self._a_annuler_mesure = False
+                self.commande("cancel_mesure")
+                self._fermer_fenetre_sauf_essai()
+
+        # 1 ter. Les séances soumises sont-elles VRAIMENT parties ? Tant qu'on ne les a pas vues
+        #        dans l'état, lancer leur fenêtre serait parier — et perdre le pari coûte le
+        #        protocole entier joué dans le vide. Les DEUX sortes y passent : calibration et
+        #        mesure.
+        self._lancer_quand_partie(state)
+
+        # 1 quater. La fenêtre d'une séance s'est ARRÊTÉE avant la fin (fermée par l'élève, refus,
+        #           plantage) : la séance ne peut plus aboutir. On l'annule tout de suite, au lieu
+        #           de laisser le moteur attendre son silence avec le décompte qui continue.
+        self._annuler_si_fenetre_morte(state)
+
+        # 1 quinquies. Et une séance que le moteur a ABANDONNÉE ferme la fenêtre qu'elle avait
+        #              ouverte — le jumeau, côté moteur, de « Abandonner ».
+        self._fermer_fenetre_abandonnee(state)
+
+        # 1 sexies. L'essai libre : le mode décode-t-il ENFIN (on ouvre sa fenêtre), sa
+        #           fenêtre s'est-elle fermée (on arrête ce qu'on avait démarré) ?
+        self._suivre_essai(state)
+
+        if self._attente is None:
+            return
+        a_arreter = self._attente["arreter"]
+        if a_arreter not in ((state or {}).get("modes_state") or {}):
+            attente, self._attente = self._attente, None
+            self._demarrer_selon(attente)
+        elif self._horloge() > self._attente["echeance"]:
+            attente, self._attente = self._attente, None
+            nom, delai = self._nom_du_mode(a_arreter), f"{DELAI_ARRET_S:.0f}"
+            self._avis_de(attente)(
+                attente["mode_id"],
+                tr("console.avis.arret_trop_long_test", mode=nom, delai=delai)
+                if attente["quoi"] == "mesure"
+                else tr("console.avis.arret_trop_long_entrainement", mode=nom, delai=delai))
+
+    def _demarrer_mesure(self, demande):
+        """`start_mesure` D'ABORD, la fenêtre de stimulus ENSUITE — et seulement quand elle EXISTE.
+
+        Exactement la discipline de `_demarrer_calibration`, et pour les deux mêmes raisons.
+
+        L'ORDRE : la fenêtre attend ~15 s à partir de SON lancement, le moteur compte sa chauffe à
+        partir de la commande, et il n'existe AUCUNE poignée de main entre les deux processus. Dans
+        l'autre sens, les premiers essais tombent dans la chauffe : ils sont jetés, comptés et dits
+        — mais la séance est plus courte que ce que l'écran annonce, et c'est indiscernable d'un
+        protocole réussi.
+
+        L'ATTENTE : `submit` ne promet qu'une mise en FILE (cf. `DELAI_DEMARRAGE_S`), donc l'accusé
+        ne prouve pas que `_start_mesure` a créé quoi que ce soit — il peut sortir sans rien faire
+        par trois portes silencieuses (une mesure déjà en cours, une calibration en cours, une
+        exception avalée par `_drain_commands`). La fenêtre jouerait alors **3,5 minutes de
+        fixation guidée dans le vide** pendant que la page reste sur « Avant de commencer ».
+
+        ⚠️ Toutes les mesures n'ont pas de fenêtre : le contrôle alpha n'en a aucune (les yeux sont
+        fermés la moitié du temps, il n'y a rien à montrer). C'est le CONTRAT qui le dit
+        (`stimulus_id`), jamais une liste tenue ici.
+        """
+        mesure_id = demande["mode_id"]
+        ack = self.commande("start_mesure", id=mesure_id, params=demande["params"])
+        if not ack.get("accepted"):
+            self._avis_mesure(mesure_id, ack.get("reason", ""))
+            return
+        spec = self.mesures.get(mesure_id) or {}
+        if not spec.get("stimulus_id"):
+            return          # le moteur mène tout seul le protocole (contrôle alpha)
+        params = dict(demande["params"] or {})
+        delai = f"{DELAI_DEMARRAGE_S:.0f}"
+        self._a_lancer_mesure = self._attente_depart(
+            mesure_id, "mesure",
+            tr("console.avis.depart_manque_test", delai=delai) if self._mode_teste_par(mesure_id)
+            else tr("console.avis.depart_manque_verification", delai=delai),
+            avis=self._avis_mesure,
+            lancer=lambda: self._lancer_fenetre_mesure(mesure_id, spec, params))
+
+    def _demarrer_calibration(self, demande):
+        """`start_calibration` D'ABORD, la fenêtre de stimulus ENSUITE. Jamais l'inverse."""
+        mode_id = demande["mode_id"]
+        ack = self.commande("start_calibration", id=mode_id, params=demande["params"])
+        if not ack.get("accepted"):
+            self._avis(mode_id, ack.get("reason", ""))
+            return
+        spec = self.catalogue.get(mode_id) or {}
+        stimulus_id = (spec.get("calibration") or {}).get("stimulus_id")
+        if not stimulus_id:
+            # Le moteur mène tout seul le protocole (Motor Imagery) : aucune fenêtre à lancer. On
+            # attend QUAND MÊME de voir la séance : c'est jusque-là que la page garde son
+            # formulaire figé (`entrainement_en_route`), et une séance que la boucle aurait
+            # refusée en silence le dit au bout du délai, au lieu de laisser la page figée.
+            self._a_lancer = self._attente_depart(
+                mode_id, "calibration",
+                tr("console.avis.depart_manque_entrainement_moteur",
+                   delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+                avis=self._avis, lancer=lambda: None)
+            return
+        # ⚠️ **On ne lance PAS la fenêtre ici.** L'accusé qu'on vient de recevoir dit « mise en
+        # file », pas « démarrée » (cf. `DELAI_DEMARRAGE_S`). On note ce qu'il reste à faire, et
+        # `_suivre_attente` lance la fenêtre quand la séance apparaît VRAIMENT dans l'état.
+        self._a_lancer = self._attente_depart(
+            mode_id, "calibration",
+            tr("console.avis.depart_manque_entrainement", delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+            avis=self._avis,
+            lancer=lambda: self._lancer_fenetre_calibration(mode_id, demande["params"]))
+
+    def _attente_depart(self, mode_id, cle, echec, lancer, avis):
+        """La fiche d'une séance SOUMISE dont on attend de la VOIR démarrer.
+
+        `cle` : où la séance apparaît dans `snapshot()`. `echec` : la phrase à afficher si elle
+        n'apparaît pas à temps (une phrase ENTIÈRE, prise dans le fichier de langue : un morceau
+        de phrase recollé ici ne se traduirait pas). `lancer` : ce qu'on fait quand elle y est.
+        `avis` : où le renoncement s'affiche.
+
+        Tout ce qui SÉPARE une calibration d'une mesure tient dans ces quatre valeurs ; le reste —
+        la course, le délai, le renoncement — est écrit une seule fois, dans
+        `_lancer_quand_partie`.
+        """
+        return {"mode_id": mode_id, "cle": cle, "echec": echec, "lancer": lancer, "avis": avis,
+                "echeance": self._horloge() + DELAI_DEMARRAGE_S}
+
+    def _lancer_quand_partie(self, state):
+        """Lance la fenêtre dès que la séance existe pour de bon — ou renonce en le disant.
+
+        Jumeau de l'attente d'arrêt : `submit` met en file, donc l'accusé ne prouve rien. Tant que
+        la séance n'apparaît pas dans `snapshot()`, la lancer serait parier.
+
+        UN seul corps pour les DEUX activités minutées (calibration et mesure) : un second corps
+        recopié obligerait à refaire chaque correctif deux fois.
+        """
+        # La fiche est RETIRÉE pendant son tour, puis rendue si l'attente continue : un renoncement
+        # s'affiche alors sur une page qui ne se croit plus « en route », et dont le formulaire se
+        # dégèle avec l'avis au lieu d'un tour de `QTimer` plus tard (`CalibPage.montrer_avis`).
+        attente, self._a_lancer = self._a_lancer, None
+        self._a_lancer = self._un_tour_d_attente(attente, state)
+        self._a_lancer_mesure = self._un_tour_d_attente(self._a_lancer_mesure, state)
+
+    def _un_tour_d_attente(self, attente, state):
+        """Un tour d'attente. Rend l'attente à GARDER — `None` dès qu'elle est réglée."""
+        if not attente:
+            return None
+        seance = (state or {}).get(attente["cle"])
+        if seance is not None and seance.get("phase") not in PHASES_TERMINALES:
+            attente["lancer"]()
+            return None
+        if self._horloge() >= attente["echeance"]:
+            attente["avis"](attente["mode_id"], attente["echec"])
+            return None
+        return attente
+
+    def _attacher_fenetre(self, cle, ident):
+        """Retient que la fenêtre qu'on vient d'ouvrir SERT la séance `snapshot()[cle]` n° `ident`."""
+        self._fenetre_de = {"cle": cle, "id": ident, "numero": self.lanceur.numero}
+
+    def _annuler_si_fenetre_morte(self, state):
+        """La fenêtre qui SERT une séance est morte avant la fin : on annule la séance, et on le
+        dit sur sa page, en une phrase.
+
+        Sans ça, le moteur attend son silence (15 à 30 s) et la page continue son décompte comme
+        si de rien n'était. Le message part sur la PAGE de la séance, et quitte le bandeau : il
+        parle de cette séance-là, pas de toute la console. Une fenêtre fermée par l'élève n'est
+        pas une alerte ; un refus ou un plantage, si.
+        """
+        self._montrer_avis_fenetre(state)
+        lien = self._fenetre_de
+        if lien is None or self.lanceur.en_cours():
+            return
+        message = self.lanceur.echec_de(lien["numero"])
+        if not message:
+            return       # fermée normalement : son signal de fin est parti, le moteur conclut
+        self._fenetre_de = None
+        seance = (state or {}).get(lien["cle"])
+        if (seance is None or seance.get("mode_id") != lien["id"]
+                or seance.get("phase") in PHASES_TERMINALES):
+            return
+        if lien["cle"] == "mesure":
+            self._a_annuler_mesure = False
+            self.commande("cancel_mesure")
+        else:
+            self._a_annuler = False
+            self.commande("cancel_calibration")
+        # La phrase attend que la séance soit VUE terminée : tant qu'elle tourne, sa page efface
+        # son avis à chaque rafraîchissement, et `submit` ne fait que mettre l'annulation en file.
+        self._avis_fenetre = {"cle": lien["cle"], "id": lien["id"], "message": message,
+                              "alerte": self.lanceur.nature_echec(lien["numero"]) != "abandon"}
+
+    def _montrer_avis_fenetre(self, state):
+        """Pose sur sa page la phrase d'une séance annulée par la mort de sa fenêtre, dès que la
+        séance n'apparaît plus en cours. Le bandeau la garde jusque-là."""
+        attente = self._avis_fenetre
+        if attente is None:
+            return
+        seance = (state or {}).get(attente["cle"])
+        if (seance is not None and seance.get("mode_id") == attente["id"]
+                and seance.get("phase") not in PHASES_TERMINALES):
+            return
+        self._avis_fenetre = None
+        avis = self._avis_mesure if attente["cle"] == "mesure" else self._avis
+        avis(attente["id"], attente["message"], alerte=attente["alerte"])
+        self.lanceur.oublier_probleme()
+
+    def _fermer_fenetre_abandonnee(self, state):
+        """Une séance que le MOTEUR a abandonnée ferme la fenêtre qu'elle avait ouverte.
+
+        🔴 Le moteur abandonne aussi TOUT SEUL : 30 s sans `calib_start` (un inlet lent à
+        résoudre, un flux mal nommé), un silence, un signal inexploitable. La page passe alors à
+        « Séance interrompue », mais la fenêtre plein écran la recouvre et continue de désigner
+        des cibles jusqu'au bout de son protocole : l'élève fixerait des cibles pour rien. Cette
+        méthode ferme donc la fenêtre dès que l'état montre l'abandon.
+
+        « Abandonnée » = terminée SANS résultat, lu dans l'état et jamais deviné. Une séance FINIE
+        avec un résultat laisse sa fenêtre conclure d'elle-même : la tuer effacerait le bilan
+        qu'elle imprime en dernier (« N frames, M sautées »), qui qualifie la séance qu'on vient
+        de jouer.
+        """
+        lien = self._fenetre_de
+        if lien is None:
+            return
+        seance = (state or {}).get(lien["cle"])
+        if seance is not None and seance.get("mode_id") != lien["id"]:
+            seance = None                      # une autre séance a pris la place : plus de lien
+        if seance is not None and seance.get("phase") not in PHASES_TERMINALES:
+            return                             # elle tourne : la fenêtre la sert
+        self._fenetre_de = None
+        if seance is None or seance.get("resultat") is not None:
+            return
+        if self.lanceur.arreter_si(lien["numero"]):
+            if lien["cle"] == "mesure":
+                self._avis_mesure(lien["id"], tr("console.avis.fenetre_fermee_test"),
+                                  alerte=False)
+            else:
+                self._avis(lien["id"], tr("console.avis.fenetre_fermee_entrainement"),
+                           alerte=False)
+
+    def _lancer_fenetre_calibration(self, mode_id, params=None):
+        """La fenêtre d'une calibration, et l'annulation si elle refuse de s'ouvrir. `params` :
+        les réglages d'« Entraîner », dont la fenêtre reçoit le rafraîchissement."""
+        ouvert = self._lancer_fenetre(mode_id, calibrer=True, params=params)
+        if ouvert.get("accepted"):
+            self._attacher_fenetre("calibration", mode_id)
+            return
+        self._a_annuler = True
+        self._avis(mode_id, tr("console.avis.entrainement_annule",
+                               raison=ouvert.get("reason", "")))
+
+    def _lancer_fenetre_mesure(self, mesure_id, spec, params=None):
+        """La fenêtre guidée d'une mesure. Jumeau exact du cas calibration, ci-dessus.
+
+        La ligne de commande vient de `stimulus/registry.py` — la console ne nomme aucun fichier.
+
+        🔴 Quand la mesure est le « Tester » d'un mode, la fenêtre part avec les réglages DE CE
+        MODE. Lancée avec `--guide` seul, elle afficherait le trio du dépôt quel que soit le
+        réglage, et le test ne testerait pas ta configuration. Les réglages sont résolus par le
+        MÊME chemin que la fenêtre de décodage (`_reglages_du_mode`), et la fenêtre annonce ses
+        fréquences au moteur dans `calib_start` : le moteur mesure donc sur ce qu'elle affiche.
+        La LONGUEUR vient du réglage `essais` de la mesure (ce qui part avec `start_mesure`), pas
+        du mode.
+        """
+        stimulus_id = spec["stimulus_id"]
+        options = list(stimulus_registry.options_de_mesure(stimulus_id))
+        mode_id = self._mode_teste_par(mesure_id)
+        if mode_id is not None:
+            options.extend(stimulus_registry.option_frequences(
+                stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        options.extend(stimulus_registry.option_compte(stimulus_id, (params or {}).get("essais")))
+        # Et le RAFRAÎCHISSEMENT que la fenêtre doit tenir : le réglage du mode (SSVEP), ou celui
+        # du modèle testé (c-VEP). Sans lui, elle afficherait à celui de l'écran du poste.
+        options.extend(stimulus_registry.option_ecran(
+            stimulus_id, self._ecran_hz(stimulus_id, mode_id, params)))
+        # …et les CIBLES du modèle testé (c-VEP) : la fenêtre doit afficher celles qu'il a apprises.
+        options.extend(stimulus_registry.option_cibles(
+            stimulus_id, self._noms_cibles(stimulus_id, mode_id, params)))
+        ouvert = self.lanceur.lancer(
+            stimulus_id, label=spec.get("label", mesure_id), options=options)
+        if ouvert.get("accepted"):
+            self._attacher_fenetre("mesure", mesure_id)
+            return
+        # La mesure EST PARTIE, mais personne ne lui enverra de marqueurs : elle attendrait trente
+        # secondes avant d'abandonner, en accusant une fenêtre que l'étudiant vient de voir refuser
+        # de s'ouvrir. On note l'annulation ; `_suivre_attente` la soumet au tour suivant (`submit`
+        # ne fait que mettre en file).
+        self._a_annuler_mesure = True
+        self._avis_mesure(mesure_id, tr("console.avis.test_annule",
+                                        raison=ouvert.get("reason", "")))
+
+    def _lancer_fenetre(self, mode_id, calibrer, libre=False, params=None):
+        """Demande la fenêtre au lanceur. La ligne de commande vient de `stimulus/registry.py`.
+
+        `libre` : la fenêtre de DÉCODAGE en essai libre — ses arguments sont ceux que le registre
+        déclare (`option_libre`), ajoutés à ceux du décodage ordinaire, fréquences comprises.
+
+        `params` : les réglages d'« Entraîner » quand `calibrer`, dont le rafraîchissement.
+        """
+        spec = self.catalogue.get(mode_id) or {}
+        # DEUX clés distinctes : la fenêtre du PROTOCOLE d'entraînement
+        # (`calibration.stimulus_id`) n'est pas celle du DÉCODAGE (`spec["stimulus_id"]`). Elles
+        # coïncident pour le P300, l'ErrP et le c-VEP ; le SSVEP a un stimulus et aucune
+        # calibration.
+        stimulus_id = ((spec.get("calibration") or {}).get("stimulus_id") if calibrer
+                       else spec.get("stimulus_id"))
+        if not stimulus_id:
+            nom = spec.get("label", mode_id)
+            return {"accepted": False,
+                    "reason": tr("console.refus.aucune_fenetre_entrainement", mode=nom)
+                    if calibrer else tr("console.refus.aucune_fenetre_decodage", mode=nom)}
+        # La case « Journal de séance » de la page, si la fenêtre sait la tenir. `--log` SANS
+        # valeur : c'est la fenêtre qui choisit son nom horodaté, la console ne compose aucun
+        # chemin — elle reste un client qui n'écrit jamais sur le disque.
+        options = []
+        page = self.pages.get(mode_id)
+        journal = getattr(page, "journal", None)
+        if journal is not None and journal.isChecked():
+            options.append(stimulus_registry.JOURNAL[stimulus_id])
+        # 🔴 Et les FRÉQUENCES du mode, quand la fenêtre sait les recevoir. Sans elles, le
+        # stimulus affiche le jeu du dépôt pendant que le moteur corrèle sur celui de la console :
+        # aucune exception, aucun compteur, le mode ne détecte simplement plus rien.
+        #
+        # En CALIBRATION elles ne servent pas : aucune des trois fenêtres de calibration n'affiche
+        # de fréquences, et `option_frequences` rend () de toute façon. C'est le REGISTRE qui le
+        # décide, pas cette ligne, qui ne fait que lui fournir ce qu'il demande.
+        options.extend(stimulus_registry.option_frequences(
+            stimulus_id, self._reglages_du_mode(mode_id).get("freqs")))
+        # Des CIBLES PHYSIQUES (des LED) : la fenêtre ne dessine aucune cible, donc n'a aucun
+        # rafraîchissement à tenir. Le registre dit quel réglage le décide ; jamais en calibration.
+        physiques = () if calibrer else stimulus_registry.option_physiques(
+            stimulus_id, self._reglages_du_mode(mode_id))
+        options.extend(physiques)
+        # 🔴 Et le RAFRAÎCHISSEMENT que la fenêtre doit tenir, quand elle sait faire passer l'écran.
+        # Sans lui, elle afficherait à celui de l'écran du poste, et un modèle c-VEP ne décode
+        # qu'au rafraîchissement de son entraînement.
+        if not physiques:
+            options.extend(stimulus_registry.option_ecran(
+                stimulus_id, self._ecran_hz(stimulus_id, mode_id, params, calibrer)))
+        # Et les CIBLES : celles d'« Entraîner », ou celles du modèle choisi (c-VEP), par leurs noms.
+        options.extend(stimulus_registry.option_cibles(
+            stimulus_id, self._noms_cibles(stimulus_id, mode_id, params, calibrer)))
+        # L'ESSAI LIBRE ajoute ce que le registre déclare (`--retour`, et `--libre` pour la fenêtre
+        # qui désigne sinon des cibles). APRÈS les fréquences, jamais à leur place : sans elles,
+        # la fenêtre du SSVEP afficherait le trio du dépôt, et l'indice décodé qu'elle entoure
+        # désignerait une autre flèche que celle que le moteur a vue.
+        if libre and not calibrer:
+            options.extend(stimulus_registry.option_libre(stimulus_id))
+        return self.lanceur.lancer(stimulus_id, calibrer=calibrer,
+                                   label=spec.get("label", mode_id), options=options,
+                                   libre=libre and not calibrer)
+
+    # --- « Tester librement » ---------------------------------------------------------------
+    #
+    # Le mode DÉCODE, sa fenêtre affiche ses cibles sans rien désigner, et entoure ce que le
+    # moteur publie sur le flux décodé du mode, celui que lit l'application d'un étudiant. Aucun
+    # score, rien d'écrit.
+    #
+    # 🔴 La fenêtre s'ouvre DÈS que le mode tourne, chauffe et repos compris. Le plancher du SSVEP
+    # se mesure AVEC les cibles qui clignotent, sans en fixer aucune (`stimulus/ssvep.py`,
+    # `_guide`) ; ouvrir après le repos ferait décoder sur un fond qui n'est pas celui du repos.
+    # C'est la FENÊTRE qui montre une croix « ne fixe aucune cible » tant que le flux `status` dit
+    # chauffe ou repos.
+    #
+    # La console ne tient AUCUNE table de conflits. Un mode qui ne peut pas tourner, c'est le
+    # MOTEUR qui le refuse (`start_mode`) ; deux fenêtres, c'est le LANCEUR. Les deux refus propres
+    # à la console sont des QUESTIONS au moteur : une séance minutée en cours (`_seance_minutee`,
+    # lue dans l'état), et un mode qui n'entendrait pas la fenêtre (`_essai_sourd`, posée à
+    # `flux_a_ecouter`).
+
+    def sait_essayer(self, mode_id):
+        """La fenêtre de ce mode sait-elle tenir un essai libre ? Demandé au REGISTRE des fenêtres."""
+        stimulus_id = (self.catalogue.get(mode_id) or {}).get("stimulus_id") or ""
+        return bool(stimulus_registry.option_libre(stimulus_id))
+
+    def _seance_minutee(self):
+        """Le nom de l'entraînement ou du test EN COURS, lu dans le dernier état — sinon "".
+
+        Pas une table de conflits : une seule question, « une séance minutée occupe-t-elle le
+        casque ? », et sa réponse est dans `snapshot()`.
+        """
+        etat = self._dernier_etat or {}
+        mesure = etat.get("mesure")
+        if mesure and mesure.get("phase") not in PHASES_TERMINALES:
+            mid = mesure.get("mode_id")
+            return mesure.get("label") or (self.mesures.get(mid) or {}).get("label", mid)
+        calib = etat.get("calibration")
+        if calib and calib.get("phase") not in PHASES_TERMINALES:
+            return tr("pages.fenetre.quoi_entrainement",
+                      quoi=self._nom_du_mode(calib.get("mode_id")))
+        return ""
+
+    def essayer_librement(self, mode_id, reglages=None):
+        """Le clic : refusé pendant une séance minutée, sinon le contrôle de liaison D'ABORD.
+
+        `reglages` : ce que la page vient de faire valider ; ils voyagent jusqu'à `_commencer_essai`.
+
+        🔴 Refusé pendant un entraînement ou un test : le contrôle alpha et l'entraînement MI n'ont
+        pas de fenêtre, le lanceur ne verrait aucune rivale, et l'essai plein écran s'ouvrirait
+        PAR-DESSUS leur consigne. Le contrôle de liaison passe d'abord, comme pour « Tester » :
+        un essai sur une électrode décollée entoure n'importe quoi, sans que rien ne le dise.
+        """
+        if self._essai is not None:
+            return                      # un seul essai à la fois ; le bouton est d'ailleurs grisé
+        occupe = self._seance_minutee()
+        if occupe:
+            print(f"[console] {mode_id} : essai libre refusé — {occupe} en cours")
+            self._dire_essai(mode_id, tr("console.essai.refus_seance", quoi=occupe), alerte=True)
+            return
+        sourd = self._essai_sourd(mode_id, reglages)
+        if sourd:
+            print(f"[console] {mode_id} : essai libre refusé — le mode écoute un autre flux")
+            self._dire_essai(mode_id, sourd, alerte=True)
+            return
+        self._demande = {"quoi": "essai", "mode_id": mode_id, "reglages": reglages,
+                         "retour": self.pages.get(mode_id)}
+        self._montrer_contact(self.catalogue.get(mode_id), tr("console.geste.commencer_essai"))
+
+    def _essai_sourd(self, mode_id, reglages=None):
+        """Le refus d'un essai que le mode n'ENTENDRAIT pas, ou "".
+
+        Notre fenêtre publie ses marqueurs sur SON flux (le registre le déclare). Un mode à
+        marqueurs écoute le flux de son réglage `stream_in` — celui d'une application, si elle l'a
+        réglé —, ou celui que le moteur écoute déjà : l'écoute est partagée entre les modes à
+        marqueurs, et ne change qu'au prochain démarrage. Sur un autre flux, le mode n'entendrait
+        rien : un c-VEP sans horloge, un P300 muet, aucun anneau — indiscernable d'un regard qui
+        ne fixe pas.
+        """
+        stimulus_id = (self.catalogue.get(mode_id) or {}).get("stimulus_id") or ""
+        publie = stimulus_registry.flux_de_marqueurs(stimulus_id)
+        question = getattr(self.engine, "flux_a_ecouter", None)
+        if publie is None or question is None:
+            return ""
+        # La règle d'écoute est au MOTEUR : on lui demande ce que ce mode entendrait.
+        reponse = question(mode_id, reglages) or {}
+        ecoute = reponse.get("flux")
+        if not ecoute or ecoute == publie:
+            return ""
+        nom = self._nom_du_mode(mode_id)
+        tenu_par = reponse.get("tenu_par") or []
+        if tenu_par:
+            # L'écoute est TENUE par ce qui tourne : changer le réglage n'y ferait rien, il ne
+            # vaudrait qu'au prochain démarrage. Il faut d'abord arrêter ce qui la tient.
+            return tr("console.essai.flux_tenu", mode=nom, ecoute=ecoute, publie=publie,
+                      modes=", ".join(str(m) for m in tenu_par))
+        return tr("console.essai.flux_autre", mode=nom, ecoute=ecoute, publie=publie,
+                  champ=tr("mode.param.stream_in.label"))
+
+    @staticmethod
+    def _repris_par_application(mode_id, depuis, state):
+        """Une application a-t-elle démarré ou réglé `mode_id` par le réseau après `depuis` (un
+        `time.monotonic()`) ? Lu dans le journal du pilotage, `snapshot()["pilotage"]`."""
+        return any(e.get("mode") == mode_id and e.get("cmd") in ("start_mode", "set_params")
+                   and e.get("accepted") and e.get("event") != "failed"
+                   and e.get("t", float("-inf")) > depuis
+                   for e in (state or {}).get("pilotage") or ())
+
+    def _commencer_essai(self, mode_id, reglages=None):
+        """Contrôle passé : démarre le mode s'il ne tourne pas ; `_suivre_essai` ouvre la fenêtre.
+
+        Sur un mode qui TOURNE, `set_params` n'est que mis en FILE : on attend de voir CES réglages
+        en vigueur (la fenêtre reçoit ses fréquences au lancement). Sur un mode ARRÊTÉ, le réglage
+        est retenu sur-le-champ, et le `start_mode` qui suit part avec.
+        """
+        # L'instant du clic, AVANT notre `start_mode` : une commande de l'application qui le
+        # suit reprend le mode (les commandes de la console ne vont jamais au journal).
+        depuis = time.monotonic()
+        # La même question qu'au clic : le contrôle de liaison a pu durer, et une application
+        # a pu régler le mode entre-temps.
+        sourd = self._essai_sourd(mode_id, reglages)
+        if sourd:
+            print(f"[console] {mode_id} : essai libre refusé — le mode écoute un autre flux")
+            self._dire_essai(mode_id, sourd, alerte=True)
+            return
+        tourne = mode_id in ((self._dernier_etat or {}).get("modes_state") or {})
+        deja = False
+        if not tourne:
+            ack = self.commande("start_mode", id=mode_id)
+            if not ack.get("accepted"):
+                # Le refus du moteur, tel quel (pas de modèle, son test ou son entraînement en
+                # cours…) : sur la page, ET dans le bandeau (`commande` l'y a déjà mis).
+                print(f"[console] {mode_id} : essai libre refusé — {ack.get('reason')}")
+                self._dire_essai(mode_id, ack.get("reason", ""), alerte=True)
+                return
+            # Le moteur dit « deja » quand le mode tournait depuis le dernier état reçu (une
+            # application l'a démarré entre-temps) : il n'est pas à nous, on ne l'arrêtera pas.
+            deja = mode_id in (ack.get("deja") or [])
+        self._essai = {
+            "mode_id": mode_id,
+            # C'est l'ESSAI qui l'a démarré : c'est donc à lui de l'arrêter. Un mode qui tournait
+            # avant (lancé depuis sa tuile, pour une application) continue après.
+            "demarre": not tourne and not deja,
+            # L'instant du clic, sur l'horloge du journal du pilotage : une application qui
+            # démarre ou règle CE mode après lui le reprend (cf. `_suivre_essai`).
+            "depuis": depuis,
+            "repris": False,
+            "vu": tourne,
+            # Un mode qui tourne — ou qu'une application a démarré entre-temps (`deja`) — ne
+            # prend ces réglages qu'au tour de boucle suivant : on attend de les voir en vigueur.
+            "attendus": _a_plat(reglages) if (tourne or deja) and reglages else None,
+            "numero": None,             # celui de la fenêtre, une fois ouverte
+            "params": None,             # les réglages qu'elle montre : la surveillance les compare
+            "echeance": self._horloge() + DELAI_DEMARRAGE_S,
+        }
+        self._suivre_essai(self._dernier_etat)
+
+    def _suivre_essai(self, state):
+        """Un tour de l'essai libre. Appelée à chaque rafraîchissement, et tout de suite au clic."""
+        essai = self._essai
+        if essai is None:
+            return
+        mode_id = essai["mode_id"]
+        nom = self._nom_du_mode(mode_id)
+        mode = ((state or {}).get("modes_state") or {}).get(mode_id)
+        if essai["demarre"] and self._repris_par_application(mode_id, essai["depuis"], state):
+            # Une application a démarré ou réglé CE mode pendant l'essai : il est désormais à
+            # elle, et l'essai ne l'arrêtera pas en se fermant.
+            essai["demarre"], essai["repris"] = False, True
+
+        # --- la fenêtre est ouverte : l'essai dure tant qu'elle vit, et tant qu'elle dit vrai ---
+        if essai["numero"] is not None:
+            if self.lanceur.en_cours() and self.lanceur.numero == essai["numero"]:
+                self._surveiller_essai(essai, mode, nom)
+                return
+            # Elle s'est fermée : à la main (Échap), le cas normal, ou sur une ERREUR. Un traceback
+            # n'est pas une fin d'essai : afficher « terminé » en noir le ferait passer pour une.
+            echec = self.lanceur.echec_de(essai["numero"])
+            self._finir_essai(tr("console.essai.fenetre_erreur", raison=echec) if echec
+                              else tr("console.essai.termine"),
+                              alerte=bool(echec), tourne=mode is not None)
+            return
+
+        # --- on attend que le mode EXISTE (et, s'il tournait, qu'il ait pris CES réglages) ----
+        if mode is None:
+            if essai["vu"]:
+                self._finir_essai(tr("console.essai.mode_arrete_attente", mode=nom),
+                                  alerte=True, tourne=False)
+            elif self._horloge() >= essai["echeance"]:
+                # `start_mode` accepté, mais la boucle n'a rien créé (exception avalée…).
+                self._finir_essai(tr("console.essai.pas_demarre", mode=nom,
+                                     delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+                                  alerte=True, tourne=False)
+            else:
+                self._dire_essai(mode_id, "\n".join((tr("console.essai.demarrage", mode=nom),
+                                                     tr("console.essai.attente"))),
+                                 en_cours=True)
+            return
+        essai["vu"] = True
+        attendus = essai["attendus"]
+        if attendus is not None and _a_plat(mode.get("params")) != attendus:
+            if self._horloge() >= essai["echeance"]:
+                self._finir_essai(tr("console.essai.reglages_pas_pris", mode=nom,
+                                     delai=f"{DELAI_DEMARRAGE_S:.0f}"),
+                                  alerte=True, tourne=True)
+            else:
+                self._dire_essai(mode_id, "\n".join((tr("console.essai.demarrage", mode=nom),
+                                                     tr("console.essai.attente"))),
+                                 en_cours=True)
+            return
+
+        if not mode.get("published", True):
+            # L'anneau se lit sur le flux décodé PUBLIC du mode. Un mode qui décode pour
+            # l'affichage seul (« publié » décoché sur sa tuile) n'a pas de flux : la fenêtre
+            # afficherait ses cibles sans jamais rien entourer, indiscernable d'un regard qui ne
+            # fixe pas. On le dit plutôt que d'ouvrir.
+            self._finir_essai(tr("console.essai.non_publie", mode=nom), alerte=True, tourne=True)
+            return
+        ouvert = self._lancer_fenetre(mode_id, calibrer=False, libre=True)
+        if not ouvert.get("accepted"):
+            # Une autre fenêtre occupe la place (un test d'un autre mode…) : l'essai n'a pas lieu,
+            # et le mode qu'il avait démarré pour rien s'arrête.
+            self._finir_essai(tr("console.essai.annule", raison=ouvert.get("reason", "")),
+                              alerte=True, tourne=True)
+            return
+        essai["numero"] = self.lanceur.numero
+        essai["params"] = _a_plat(mode.get("params"))
+        self._dire_essai(mode_id, tr("console.essai.en_cours"), en_cours=True)
+
+    def _surveiller_essai(self, essai, mode, nom):
+        """La fenêtre ouverte ne survit pas à ce qu'elle montre.
+
+        Mode ARRÊTÉ (tuile, test, moteur mort), publication COUPÉE, RÉGLAGES changés (l'anneau
+        tomberait sur la mauvaise flèche) : chaque fois, indiscernable d'un regard qui ne fixe
+        pas. On la ferme, et on le dit. Un repos REFAIT (reconnexion) ne ment pas : la fenêtre
+        lit le flux `status` et réaffiche sa croix.
+        """
+        if mode is None or self._moteur_mort():
+            texte, tourne = tr("console.essai.mode_arrete_fenetre", mode=nom), False
+        elif not mode.get("published", True):
+            texte, tourne = tr("console.essai.non_publie", mode=nom), True
+        elif _a_plat(mode.get("params")) != essai["params"]:
+            texte, tourne = tr("console.essai.reglages_changes", mode=nom), True
+        else:
+            return
+        self.lanceur.arreter_si(essai["numero"])
+        self._finir_essai(texte, alerte=True, tourne=tourne)
+
+    def _fermer_fenetre_sauf_essai(self):
+        """Ferme la fenêtre d'une SÉANCE, jamais celle de l'essai libre.
+
+        Une séance dont la fenêtre a refusé de s'ouvrir PARCE QUE l'essai occupait la place
+        s'annulerait par `arreter()`, qui tuerait l'ESSAI.
+        """
+        essai = self._essai
+        if (essai is not None and essai.get("numero") is not None
+                and essai["numero"] == self.lanceur.numero and self.lanceur.en_cours()):
+            return
+        self.lanceur.arreter()
+
+    def _finir_essai(self, texte, alerte, tourne):
+        """Clôt l'essai : arrête le mode SI c'est l'essai qui l'a démarré, et le dit sur la page.
+
+        `tourne` : le mode est-il encore là ? On ne lui envoie `stop_mode` que s'il est là : le
+        moteur accepterait l'arrêt d'un mode arrêté, mais la commande n'aurait aucun sens.
+        """
+        essai, self._essai = self._essai, None
+        mode_id = essai["mode_id"]
+        nom = self._nom_du_mode(mode_id)
+        suite = ""
+        if tourne and essai["demarre"]:
+            self.commande("stop_mode", id=mode_id)
+            suite = tr("console.essai.arrete", mode=nom)
+        elif tourne and essai.get("repris"):
+            suite = tr("console.essai.repris", mode=nom)
+        elif tourne:
+            suite = tr("console.essai.continue", mode=nom)
+        message = "\n".join(t for t in (texte, suite) if t)
+        print(f"[console] {mode_id} : {message}")
+        self._dire_essai(mode_id, message, alerte=alerte)
+
+    def _dire_essai(self, mode_id, texte, alerte=False, en_cours=False):
+        """Ce que l'essai a à dire, sur la page de SON mode (dans le bloc « Tester »)."""
+        page = self.pages.get(mode_id)
+        if page is not None:
+            page.montrer_essai(texte, alerte=alerte, en_cours=en_cours)
+
+    def _reglages_du_mode(self, mode_id):
+        """Les réglages d'un mode tels que le MOTEUR les tient : en vigueur s'il tourne, sinon
+        RETENUS (`snapshot()["reglages"]`). UN seul chemin, pour la fenêtre de décodage, pour la
+        fenêtre d'un test et pour le formulaire d'un test : trois lectures recopiées finiraient
+        par ne plus désigner la même configuration."""
+        etat = self._dernier_etat or {}
+        # Le MAGASIN d'abord, le runtime ensuite. `submit("set_params")` écrit le magasin
+        # SUR-LE-CHAMP, alors que le runtime d'un mode qui tourne ne prend le réglage qu'au tour de
+        # boucle suivant : dans cet intervalle, le runtime rendrait l'ANCIENNE valeur. Le magasin
+        # est la dernière configuration voulue, que le mode tourne ou non.
+        return ((etat.get("reglages") or {}).get(mode_id)
+                or ((etat.get("modes_state") or {}).get(mode_id) or {}).get("params") or {})
+
+    def _ecran_hz(self, stimulus_id, mode_id, params=None, calibrer=False):
+        """Le rafraîchissement auquel cette fenêtre doit afficher, ou None : elle mesure alors
+        l'écran, comme avant.
+
+        À l'entraînement : celui des réglages d'« Entraîner ». Sinon, d'où le registre des
+        fenêtres dit qu'il vient : le réglage du mode (SSVEP), ou le MODÈLE choisi (c-VEP), qui
+        ne marche qu'au rafraîchissement de son entraînement — celui du test s'il en porte un,
+        sinon celui du mode.
+        """
+        source = stimulus_registry.ECRAN.get(stimulus_id)
+        if source is None:
+            return None
+        params = params or {}
+        if calibrer:
+            return params.get("refresh_hz")
+        reglages = self._reglages_du_mode(mode_id) if mode_id else {}
+        if source == "modele":
+            return cvep_models.refresh_de(params.get("model") or reglages.get("model"))
+        return reglages.get("refresh_hz")
+
+    def _noms_cibles(self, stimulus_id, mode_id, params=None, calibrer=False):
+        """Les noms des cibles que cette fenêtre doit afficher (leur nombre avec), ou None : elle
+        garde alors ses cibles par défaut. À l'entraînement : le réglage d'« Entraîner ». Sinon :
+        ceux du MODÈLE choisi, lus dans son fichier — celui du test s'il en porte un, sinon celui
+        du mode."""
+        if stimulus_id not in stimulus_registry.CIBLES:
+            return None
+        params = params or {}
+        if calibrer:
+            return params.get("cibles")
+        reglages = self._reglages_du_mode(mode_id) if mode_id else {}
+        if stimulus_id == "ssvep":
+            # Le SSVEP n'a pas de modèle : ses noms sont un réglage du mode (« Régler »).
+            return list(reglages.get("target_names") or ()) or None
+        lire = {"cvep": cvep_models.noms_de, "p300": p300_models.noms_de}.get(stimulus_id)
+        return lire(params.get("model") or reglages.get("model")) if lire else None
+
+    def _mode_teste_par(self, mesure_id):
+        """Le mode dont `test_id` désigne cette mesure, lu dans le CATALOGUE — ou None."""
+        return next((mid for mid, spec in self.catalogue.items()
+                     if spec.get("test_id") == mesure_id), None)
+
+    def mesure_en_cours(self, mesure_id):
+        """Cette mesure tourne-t-elle (vue dans le dernier état, et pas encore terminée) ?"""
+        mesure = self._dernier_etat.get("mesure") or {}
+        return (bool(mesure_id) and mesure.get("mode_id") == mesure_id
+                and mesure.get("phase") not in PHASES_TERMINALES)
+
+    def mesure_qui_remplit(self, mode_id, cle):
+        """La mesure qui sait remplir ce réglage de ce mode (cf. `REGLAGE_PRODUIT`), ou None."""
+        return self._mesure_par_reglage.get((mode_id, cle))
+
+    def arreter_calibration(self):
+        """« Abandonner » : la commande au moteur ET la fenêtre. Les deux, toujours.
+
+        Abandonner sans fermer la fenêtre laisserait un émetteur publier des marqueurs pour une
+        séance qui n'existe plus — et la calibration SUIVANTE hériterait de ses premières manches.
+        """
+        self._attente = None
+        self._a_annuler = False       # le geste explicite prime sur l'annulation en attente
+        # …et sur le LANCEMENT en attente : abandonner puis voir la fenêtre s'ouvrir toute seule
+        # au tour suivant serait le contraire de ce qu'on vient de cliquer.
+        self._a_lancer = None
+        self._fenetre_de = None       # la fenêtre part avec le geste, pas avec l'état suivant
+        self.commande("cancel_calibration")
+        self._fermer_fenetre_sauf_essai()
+
+    def arreter_mesure(self):
+        """« Abandonner » sur une page de mesure : la commande au moteur ET la fenêtre.
+
+        Les DEUX, comme pour une calibration : abandonner sans fermer la fenêtre laisserait un
+        émetteur désigner des cibles pour une séance qui n'existe plus, et la mesure SUIVANTE
+        hériterait de ses premiers essais.
+
+        `arreter()` est idempotente : sur le contrôle alpha, qui n'a pas de fenêtre, elle ne fait
+        rien. Tester `stimulus_id` ici serait une seconde règle de décision dans l'interface.
+        """
+        if (self._attente or {}).get("quoi") == "mesure":
+            self._attente = None          # …et sur un test qui attendait l'arrêt de son mode
+        self._a_annuler_mesure = False    # le geste explicite prime sur l'annulation en attente
+        self._a_lancer_mesure = None      # …et sur le lancement en attente (cf. l'abandon
+                                          #    de calibration, juste au-dessus)
+        self._fenetre_de = None
+        self.commande("cancel_mesure")
+        self._fermer_fenetre_sauf_essai()
+
+    def _avis_mesure(self, mesure_id, texte, alerte=True):
+        """Affiche sur la page de la mesure ce que le moteur a répondu. Jumeau de `_avis`."""
+        print(f"[console] {mesure_id} : {texte}")
+        page = self.mesure_pages.get(mesure_id)
+        if page is not None:
+            page.montrer_avis(texte, alerte=alerte)
+
+    def _avis(self, mode_id, texte, alerte=True):
+        """Affiche un message sur la page de calibration du mode, s'il en a une.
+
+        Un refus doit se VOIR à l'écran, pas seulement exister dans le terminal.
+        """
+        print(f"[console] {mode_id} : {texte}")
+        page = self.calib_pages.get(mode_id)
+        if page is not None:
+            page.montrer_avis(texte, alerte=alerte)
+
+    def closeEvent(self, event):
+        """Fermer la console doit fermer ce qu'elle a ouvert : la fenêtre, puis le moteur.
+
+        `EngineServer.close()` est idempotente et supprime le dossier temporaire des candidats de
+        calibration. Sans cet appel, un modèle EEG d'une personne identifiable pourrait survivre à
+        la fermeture dans `%TEMP%` — inoffensif tant qu'il y reste, mais le premier remaniement
+        qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
+        """
+        self.lanceur.arreter()
+        # La fenêtre des flux part avec la console : sans parent Qt (cf. `FenetreFlux`), rien
+        # d'autre ne la fermerait — elle resterait à l'écran, son inlet abonné, devant une console
+        # disparue. Sa fermeture lâche l'inlet ; `quitter()` derrière est idempotente et couvre
+        # une fenêtre déjà cachée.
+        self.fenetre_flux.close()
+        self.flux_page.quitter()
+        if self.engine is not None:
+            # ⚠️ `stop()` ICI, et `close()` seulement APRÈS que la boucle se soit arrêtée
+            # (`run()`, plus bas, dans son `finally`). Appeler `close()` depuis le FIL QT pendant
+            # que la boucle tourne encore ouvre une course perdante : `close()` supprime le
+            # dossier des candidats, puis `_entrainer` (qui peut être en plein `fit`, plusieurs
+            # secondes) fait `os.makedirs(..., exist_ok=True)` et le RECRÉE, modèle compris. Le
+            # dossier survit alors à la fermeture, et le garde « candidat découvrable » ne peut
+            # plus rougir parce que `calib_dir` est déjà `None`.
+            self.engine.stop()
+        self.fermer_graphiques()
+        super().closeEvent(event)
+
+    def fermer_graphiques(self):
+        """Referme les tracés pyqtgraph de la console (`TracesView.fermer`) AVANT que leurs pages
+        soient détruites : à sa fermeture, et quand elle reconstruit ses pages. Détruit sans avoir
+        été refermé, un tracé peut faire appeler `abort()` à Qt (cf. `TracesView.fermer`)."""
+        from console.live_views import TracesView
+        for vue in self.findChildren(TracesView):
+            vue.fermer()
+
+    def show_grid(self):
+        self.stack.setCurrentWidget(self.grid)
+        # Les messages de la dernière fenêtre parlaient de la page qu'on quitte : ils ne suivent
+        # pas l'élève sur la grille. Une fenêtre qui TOURNE reste annoncée.
+        self.lanceur.oublier_messages()
+
+    def show_calibration(self, mode_id):
+        page = self.calib_pages.get(mode_id)
+        if page is not None:
+            self.stack.setCurrentWidget(page)
+
+    def show_mesure(self, mesure_id, depuis=None, reglages=None):
+        """Ouvre la page d'une mesure. `depuis` : la page de mode d'où l'on vient, ou None.
+
+        🔴 Le « Tester » d'un mode doit tester TES réglages. Sa page reçoit donc, pour chaque
+        réglage qu'elle partage avec le mode (le modèle, les seuils du MI…), la valeur COURANTE du
+        mode, par le même chemin que la fenêtre (`_reglages_du_mode`). Sinon elle montrerait les
+        défauts et le test tournerait sur des réglages que personne n'a choisis, sans que rien ne
+        le dise. Rien n'est remplacé pendant qu'un test tourne : la page montre alors ce qui est
+        PARTI avec `start_mesure`.
+        """
+        page = self.mesure_pages.get(mesure_id)
+        if page is None:
+            return
+        self._origine_mesure = depuis
+        page.bouton_retour.setText(tr("console.nav.retour_vers", mode=depuis.spec["label"])
+                                   if depuis is not None else tr("console.nav.retour_modes"))
+        mode_id = self._mode_teste_par(mesure_id)
+        if mode_id is not None and not self.mesure_en_cours(mesure_id):
+            # Les listes d'abord (un modèle fraîchement entraîné doit y être), puis les valeurs.
+            # Seulement les clés que le test PARTAGE avec le mode (le modèle, les seuils…) : ce
+            # sont elles que la page montre en lecture seule. Un test n'a pas de « Flux de
+            # marqueurs » à lui (il écoute toujours NOTRE fenêtre) ; si un contrat de test en
+            # déclarait un, ce rafraîchissement résoudrait le réseau LSL (~1 s de fenêtre gelée)
+            # à chaque clic sur « Tester ».
+            page.rafraichir_choix([p["key"] for p in self.catalogue[mode_id]["params"]])
+            self._preremplir_test(page, mesure_id, reglages if reglages is not None
+                                  else self._reglages_du_mode(mode_id))
+        # L'état DÉJÀ reçu, tout de suite — même geste que `_montrer_contact` : sans lui, la page
+        # reste sur son briefing jusqu'au prochain tour de `QTimer`, y compris quand une mesure
+        # vient de se terminer et que le verdict est là, à lire.
+        page.ouvrir(self._dernier_etat)
+        page.update_from(self._dernier_etat)
+        self.stack.setCurrentWidget(page)
+
+    def _preremplir_test(self, page, mesure_id, valeurs, seulement=None):
+        """Montre sur la page d'un « Tester » les réglages de son mode, et les retient.
+
+        `seulement` : les clés à réécrire (toutes par défaut). Les FRÉQUENCES que la fenêtre du
+        test recevra sont montrées aussi : le test du SSVEP n'a aucun réglage à lui, et l'élève
+        doit voir sur quoi il va tourner. Le registre décide si la fenêtre les reçoit, la même
+        question que pose `_lancer_fenetre_mesure` au lancement, sur les mêmes réglages.
+        """
+        self._prerempli[mesure_id] = dict(valeurs)
+        page.formulaire.set_values(valeurs if seulement is None
+                                   else {cle: valeurs[cle] for cle in seulement})
+        freqs = valeurs.get("freqs")
+        page.montrer_frequences(
+            freqs if stimulus_registry.option_frequences(page.spec.get("stimulus_id") or "",
+                                                         freqs) else None)
+
+    def _suivre_reglages_du_test(self, page):
+        """La page d'un « Tester » suit les réglages de son mode, tant que le test ne tourne pas.
+
+        Une application peut changer un réglage par le réseau pendant que l'élève lit le
+        briefing : sans ce suivi, « Commencer » soumettrait le test avec l'ancien modèle ou les
+        anciennes fréquences, sans que rien ne le dise. Seules les clés changées sont réécrites.
+        Pendant le test, rien ne bouge : la page montre ce qui est PARTI avec `start_mesure`.
+        """
+        mesure_id = next((m for m, p in self.mesure_pages.items() if p is page), None)
+        mode_id = self._mode_teste_par(mesure_id) if mesure_id is not None else None
+        if (mode_id is None or mesure_id not in self._prerempli
+                or self.mesure_en_cours(mesure_id)):
+            return
+        avant, actuels = self._prerempli[mesure_id], self._reglages_du_mode(mode_id)
+        changes = [cle for cle, v in actuels.items() if cle not in avant or avant[cle] != v]
+        if changes:
+            # Les listes d'abord : un modèle que l'application vient de choisir n'était peut-être
+            # pas dans celle chargée à l'ouverture. Rare (sur événement), donc la lecture du
+            # disque est permise ici.
+            page.rafraichir_choix(changes)
+            self._preremplir_test(page, mesure_id, actuels, seulement=changes)
+
+    def _retour_de_mesure(self):
+        """« ← » d'une page de mesure : vers la page de mode d'où l'on venait, sinon l'accueil."""
+        origine, self._origine_mesure = self._origine_mesure, None
+        if origine is None:
+            self.show_grid()
+        else:
+            self.show_mode(origine.mode_id)
+
+    def show_flux(self):
+        """Ouvre « Ce que voit ton application » dans SA fenêtre, ou la ramène devant.
+
+        La pile n'est PAS touchée : la page courante (un test en cours, la page d'un mode) reste
+        devant dans la console.
+
+        La découverte LSL se fait à l'OUVERTURE de la fenêtre (`FenetreFlux.ouvrir`). Même règle
+        que `show_mode` et `rafraichir_choix` : résoudre le réseau coûte sa borne entière, donc ça
+        se fait sur un ÉVÉNEMENT — jamais dans le rafraîchissement périodique, qui gèlerait la
+        fenêtre 0,3 s dix fois par seconde.
+        """
+        self.fenetre_flux.ouvrir()
+
+    def show_mode(self, mode_id):
+        page = self.pages.get(mode_id)
+        if page is not None:
+            # Entrer dans la page est l'événement qui justifie de relire le disque : c'est là
+            # qu'un modèle fraîchement entraîné doit apparaître dans la liste.
+            page.rafraichir_choix()
+            self.stack.setCurrentWidget(page)
+
+    # --- connecter une application -------------------------------------------------------------
+
+    def show_recherche(self):
+        """« Connecter une application » : la recherche tourne tant que la page est ouverte.
+        Quitter la page, par n'importe quel chemin, l'arrête (`_page_changee`)."""
+        ack = self.commande("chercher_applications", on=True)
+        if ack.get("accepted"):
+            self._recherche_active = True
+            self.recherche.vider()
+            self.stack.setCurrentWidget(self.recherche)
+
+    def quitter_recherche(self):
+        """« ← Accueil » de la recherche. Quitter la page arrête la recherche."""
+        self.show_grid()
+
+    def _page_changee(self, _index):
+        """La pile a changé de page. Si l'on vient de QUITTER la recherche, on l'arrête : elle
+        ne tourne que tant que sa page est ouverte, quel que soit le chemin pris pour en sortir."""
+        if self._recherche_active and self.stack.currentWidget() is not self.recherche:
+            self._recherche_active = False
+            # Une connexion a déjà arrêté la recherche, côté moteur ; et le moteur refuserait
+            # cette commande pendant la connexion (un refus rouge pour rien dans le bandeau).
+            if not (self._dernier_etat or {}).get("connexion"):
+                self.commande("chercher_applications", on=False)
+
+    def connecter_application(self, uid):
+        """Demande au moteur de connecter l'application `uid`. Un essai libre, une fenêtre de
+        stimulus ouverte ou un lancement sont des gestes de la console, que le moteur ne connaît
+        pas tous : c'est elle qui les refuse."""
+        if self._essai is not None:
+            self.recherche.dire_refus(tr("console.connexion.essai_en_cours"))
+            return
+        occupe = self._geste_en_cours()
+        if occupe:
+            self.recherche.dire_refus(tr("console.connexion.occupe", quoi=occupe))
+            return
+        ack = self.commande("connecter", uid=uid)
+        if ack.get("accepted"):
+            # Le moteur a lui-même arrêté la recherche en connectant : on ne lui demande pas de
+            # l'arrêter en quittant la page (il refuserait, puisqu'une application est connectée).
+            self._recherche_active = False
+            self.stack.setCurrentWidget(self.controle)
+            # La page de la NOUVELLE connexion tout de suite, pas celle d'avant pendant 100 ms.
+            self.refresh()
+        else:
+            self.recherche.dire_refus(ack.get("reason"))
+
+    def identifier_application(self, uid):
+        """« Identifier » : le moteur demande à l'appareil réseau `uid` de se signaler (une LED
+        qui clignote, par exemple), pour qu'on reconnaisse le sien avant de le connecter. La page
+        reste ouverte ; un refus du moteur s'y écrit. Une demande acceptée n'efface rien : un
+        refus de « Connecter » déjà affiché pour cet appareil reste vrai."""
+        ack = self.commande("identifier", uid=uid)
+        if not ack.get("accepted"):
+            self.recherche.dire_refus(ack.get("reason"))
+
+    def deconnecter(self):
+        """« Déconnecter » : le moteur arrête ce que l'application a démarré ; retour à
+        l'accueil, où le bandeau le dit."""
+        if self.commande("deconnecter").get("accepted"):
+            self.show_grid()
+
+    def lancer_decodage(self, mode_id, chemin):
+        """« Lancer le décodage » (ou « Relancer avec ce modèle ») d'un mode à modèle."""
+        self.commande("lancer_decodage", id=mode_id, model=chemin)
+
+
+def fake_state():
+    """Un `snapshot()` fabriqué, pour monter l'interface sans casque ni moteur.
+
+    Construit depuis le VRAI registre : si un `ModeSpec` change, ce qu'on teste change avec lui.
+    Un état factice écrit à la main deviendrait faux en silence — exactement le défaut qu'on
+    reproche à un catalogue de modes recopié dans l'interface.
+    """
+    return {
+        "running": True, "board": "synthetic", "instance": "faux", "fs_hz": 250.0,
+        "channels": ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"],
+        "mode": "ssvep", "modes": ["raw", "ssvep"], "phase": "decoding",
+        "samples_published": 12345,
+        "streams": ["EEG_API_Unicorn_raw", "EEG_API_Unicorn_quality",
+                    "EEG_API_Unicorn_status", "EEG_API_Unicorn_decoded_ssvep"],
+        "quality": {"sigmas": [7.2, 8.1, 6.9, 9.4, 5.5, 11.2, 6.1, 7.8],
+                    "verdicts": ["ok"] * 8, "common_mode": 0.38, "reference_lost": False},
+        "rest_instruction": "",
+        "calibration": None,
+        "mesure": None,
+        # `None` = aucun enregistrement n'a jamais été demandé sur ce moteur. La clé EXISTE quand
+        # même : une page qui la lit doit voir la même forme d'état ici et en séance, sinon le
+        # smoke ne couvre pas le chemin qu'un étudiant emprunte.
+        "enregistrement": None,
+        "modes_state": {
+            "raw": {"id": "raw", "label": "Brut", "family": "brut", "phase": "running",
+                    "published": True, "params": {}, "instruction": "", "stream": "raw",
+                    "channels": ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"],
+                    "rest_report": None, "output": None},
+            "ssvep": {"id": "ssvep", "label": "SSVEP", "family": "actif", "phase": "running",
+                      "published": True, "params": {"freqs": [15.0, 20.0, 8.57]},
+                      "instruction": "", "stream": "decoded_ssvep",
+                      "channels": ["target_index", "freq_hz", "confidence",
+                                   "score_15Hz", "score_20Hz", "score_8.57Hz"],
+                      "rest_report": {"kind": "ssvep", "windows": 40, "targets": []},
+                      "output": {"target_index": 0, "freq_hz": 15.0,
+                                 "scores": [3.1, 0.4, 0.9], "artifact": False,
+                                 "threshold": 2.5}},
+        },
+        "catalog": registry.catalog(),
+    }
+
+
+def _smoke():
+    """Monte l'interface sans écran, depuis un état factice. Même philosophie que app.py --smoke.
+
+    Ce qu'on vérifie ici est ce qui casse le plus souvent dans une interface : qu'elle se monte,
+    qu'elle encaisse un état où tout est absent (moteur pas encore démarré), et qu'elle survit à
+    une alarme. Le contenu métier, lui, est testé côté moteur — il n'y en a pas ici.
+    """
+    # L'autotest ne touche JAMAIS l'écran : le filet qui rétablit le rafraîchissement après chaque
+    # fenêtre est remplacé par un espion, pour tout l'autotest (il tourne dans son propre
+    # processus). L'espion sert aussi à vérifier que le filet est tendu (« 3 bis »).
+    appels_ecran = []
+    LanceurFenetre.retablir_ecran = staticmethod(lambda: appels_ecran.append("retablir"))
+
+    class _FauxMoteur:
+        """Juste ce que la console lit : un état. Assez pour couvrir `refresh()`, qui est la
+        SEULE ligne du fichier à toucher le moteur — sans ça, une faute de nom y passerait
+        tous les tests et n'échouerait que devant un étudiant."""
+
+        def __init__(self, journal):
+            self.appels = 0
+            self.commandes = []
+            self.fermetures = 0
+            # Le journal PARTAGÉ avec les faux processus. C'est lui, et lui seul, qui permet de
+            # vérifier un ORDRE entre deux mécanismes différents (une commande au moteur, un
+            # processus lancé) : deux listes séparées diraient que les deux ont eu lieu, jamais
+            # lequel a précédé l'autre — or c'est exactement là qu'est le piège de cette page.
+            self.journal = journal
+            self.refus = {}       # {nom de commande : raison} — pour éprouver le chemin du refus
+            self.en_plus = {}     # {nom de commande : champs ajoutés à l'accusé} (ex. `deja`)
+            # Les QUESTIONS posées à `valider_calibration`, chacune avec une copie du journal À
+            # CET INSTANT : c'est ce qui prouve qu'elle précède le contrôle de liaison et
+            # `stop_mode`. Hors du journal partagé, exprès : ce n'est ni une commande ni une
+            # fenêtre, et les assertions d'ordre existantes y comptent des rangs.
+            self.validations = []
+            # L'état que la console tient pour vrai, branché après sa construction : `set_params`
+            # en a besoin pour répondre comme le vrai moteur, qui sait si le mode tourne.
+            self.etat = dict
+            # La réponse que `flux_a_ecouter` doit rendre, posée par un test ; None = calculée.
+            self.ecoute = None
+
+        def flux_a_ecouter(self, mode_id, params=None):
+            """Le jumeau de `EngineServer.flux_a_ecouter` : la réponse posée par le test
+            (`ecoute`), sinon le `stream_in` des réglages — le vrai, quand personne ne tient
+            l'écoute. La règle elle-même est éprouvée côté moteur (`server.py --smoke`)."""
+            if self.ecoute is not None:
+                return dict(self.ecoute)
+            spec = registry.get(mode_id)
+            if spec is None or "stream_in" not in {p.key for p in spec.params}:
+                return None
+            retenus = ((self.etat() or {}).get("reglages") or {}).get(mode_id)
+            reglages = params if params is not None else (retenus or spec.defaults())
+            return {"flux": reglages.get("stream_in") or spec.defaults().get("stream_in"),
+                    "tenu_par": []}
+
+        def valider_calibration(self, mode_id, params=None):
+            """Le jumeau de `EngineServer.valider_calibration` : une question, sans effet.
+
+            Refuse si `refus["valider_calibration"]` est posé — la vraie règle (les bornes du
+            contrat) est éprouvée contre le VRAI moteur plus bas, et dans `server.py --smoke`.
+            """
+            self.validations.append((mode_id, dict(params or {}), list(self.journal)))
+            if "valider_calibration" in self.refus:
+                return None, self.refus["valider_calibration"]
+            return dict(params or {}), None
+
+        def snapshot(self):
+            self.appels += 1
+            return fake_state()
+
+        def submit(self, name, **params):
+            """Simule la soumission d'une commande, et RETIENT ce qui a été soumis.
+
+            Retenir compte : c'est ce qui permet de vérifier qu'un geste de l'interface arrive
+            bien au moteur, avec les bons arguments. Sans ça, une case à cocher débranchée
+            passerait tous les tests.
+            """
+            self.commandes.append((name, params))
+            self.journal.append(("commande", name))
+            if name in self.refus:
+                return {"accepted": False, "reason": self.refus[name]}
+            if name == "set_params":
+                # 🔴 La FORME du vrai accusé : `params` fusionnés sur les courants, `differe` vrai
+                # sur un mode arrêté. Sans eux, le chemin du clic (« Tester » pré-rempli,
+                # « Tester librement » qui attend CES réglages) ne serait jamais exercé.
+                etat = self.etat() or {}
+                mid = params.get("id")
+                actif = (etat.get("modes_state") or {}).get(mid)
+                base = dict((actif.get("params") if actif is not None
+                             else (etat.get("reglages") or {}).get(mid)) or {})
+                base.update(params.get("params") or {})
+                return {"accepted": True, "command": name, "id": mid, "params": base,
+                        "differe": actif is None, "warning": None}
+            return {"accepted": True, **self.en_plus.get(name, {})}
+
+        def close(self):
+            """`EngineServer.close()` : libère le dossier temporaire des candidats. Comptée ici
+            parce que la console DOIT l'appeler en se fermant — sans ça, un modèle EEG d'une
+            personne identifiable survit à la fermeture dans `%TEMP%`."""
+            self.fermetures += 1
+
+        def stop(self):
+            """Le vrai moteur l'a ; la console l'appelle à la fermeture, pour que `close()`
+            n'arrive qu'une fois la boucle arrêtée."""
+            self.arrete = True
+
+        def recent_window(self, seconds):
+            """Un moteur factice n'a pas de tampon d'acquisition. La TracesView demande cette
+            méthode, mais sur le faux moteur elle rend None. Le vrai tracé est éprouvé plus bas
+            contre un vrai EngineServer."""
+            return None
+
+    class _FauxProcessus(QObject):
+        """Un `QProcess` de façade : il n'exécute RIEN, il RETIENT ce qu'on lui a demandé.
+
+        Aucun VRAI processus dans ce smoke. Un test qui démarre un pygame plein écran en CI finit
+        désactivé, et on perd alors d'un coup les trois règles du lanceur (une seule fenêtre, la
+        commande vient du registre, une mort se voit). La surface imitée est exactement celle que
+        `LanceurFenetre` utilise.
+        """
+
+        readyReadStandardOutput = Signal()
+        finished = Signal(int, object)
+        errorOccurred = Signal(object)
+
+        def __init__(self, journal):
+            super().__init__()
+            self.journal = journal
+            self.argv = None
+            self.tue = False
+            self.sortie = b""
+
+        def setProcessChannelMode(self, mode):
+            pass
+
+        def start(self, program, args):
+            self.argv = [program] + list(args)
+            self.journal.append(("fenetre", tuple(self.argv)))
+
+        def kill(self):
+            self.tue = True
+
+        def waitForFinished(self, ms=0):
+            return True
+
+        def readAllStandardOutput(self):
+            sortie, self.sortie = self.sortie, b""
+            return sortie
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    def rang(suite, valeur, depart=0):
+        """L'indice de `valeur` à partir de `depart`, ou -1. Ne LÈVE jamais.
+
+        `list.index` lèverait `ValueError` quand l'élément manque, et une assertion qui lève
+        emporte avec elle TOUTES celles qui la suivent, c'est-à-dire exactement quand on a besoin
+        de les lire (une mutation « le mode n'est pas arrêté avant sa calibration » ferait sauter
+        la moitié de ce smoke sur un `index()` d'ordre).
+        """
+        try:
+            return suite.index(valeur, depart)
+        except ValueError:
+            return -1
+
+    def cliquer(bouton, quoi):
+        """Clique `bouton` s'il existe ; sinon ROUGIT au lieu de planter.
+
+        `.click()` sur un bouton qui vaut `None` lève `AttributeError`, et une exception emporte
+        TOUT ce qui suit dans ce smoke : la mutation qui retire le bouton passerait pour
+        « prouvée » sur une seule ligne, pendant que des centaines d'assertions ne tourneraient
+        plus.
+        """
+        chk(bouton is not None, f"{quoi} existe")
+        if bouton is not None:
+            bouton.click()
+
+    app = QApplication.instance() or QApplication([])
+    icone = poser_icone(app)
+    tailles = sorted(t.width() for t in icone.availableSizes())
+    chk(not app.windowIcon().isNull() and 16 in tailles and 256 in tailles,
+        f"icône de l'application posée (tailles {tailles})")
+    # Les autotests lisent les textes FRANÇAIS, la langue source du catalogue : quelle que soit la
+    # langue retenue sur ce poste ou `EEG_LANGUE`, le smoke tourne en français.
+    os.environ["EEG_LANGUE"] = "fr"
+    journal = []                  # la ligne du temps commune : commandes ET fenêtres
+    processus = []                # les faux processus fabriqués, dans l'ordre
+    horloge = [0.0]               # une horloge PILOTÉE : le délai d'attente doit être testable
+
+    def _fabrique():
+        processus.append(_FauxProcessus(journal))
+        return processus[-1]
+
+    moteur_faux = _FauxMoteur(journal)
+    console = Console(moteur_faux, fabrique_fenetre=_fabrique, horloge=lambda: horloge[0])
+    console.timer.stop()          # pas de moteur : on pilote l'état à la main
+    console.show()
+    moteur_faux.etat = lambda: console._dernier_etat      # cf. `_FauxMoteur.submit("set_params")`
+
+    state = fake_state()
+    console.apply_state(state)
+    chk("Unicorn" not in console.banner.liaison.text(),
+        f"le bandeau dit que c'est un board de test — « {console.banner.liaison.text()} »")
+    chk("niveau du signal" in console.banner.sigmas.text(),
+        f"et le niveau du signal — « {console.banner.sigmas.text()} »")
+    chk(console.banner.alarme.text() == "", "aucune alarme sur un montage sain")
+
+    console.apply_state(state)
+    chk(len(console.grid.tuiles) == len(registry.MODES),
+        f"une tuile par mode du registre ({len(console.grid.tuiles)})")
+
+    # Les modes que le moteur ne sait pas faire sont MONTRÉS, grisés, avec leur raison. Le
+    # compte attendu est LU DANS LE REGISTRE, pas écrit ici : ce qui est vérifié est que la
+    # grille ressort exactement ce que le moteur déclare : un chiffre en dur redeviendrait faux
+    # au premier mode qui migre dans le moteur.
+    attendu_externes = sorted(s["id"] for s in registry.catalog() if s["status"] != "moteur")
+    externes = [t for t in console.grid.tuiles.values() if t.spec["status"] != "moteur"]
+    # Les IDENTITÉS, pas seulement le compte : « deux tuiles » resterait vrai si la grille
+    # montrait le c-VEP deux fois.
+    chk(sorted(t.spec["id"] for t in externes) == attendu_externes,
+        f"exactement les modes que le moteur ne fait pas ont une tuile grisée "
+        f"({sorted(t.spec['id'] for t in externes)} pour {attendu_externes})")
+    chk(all(not t.isEnabled() and t.detail.text() for t in externes),
+        "chacune est grisée ET dit pourquoi elle ne démarre pas")
+    # Les DEUX assertions ci-dessus sont VIDES tant qu'aucun mode n'a un statut autre que
+    # « moteur » ; elles s'activent dès qu'un mode est décrit avant d'être fait. Celle-ci prend
+    # le relais, dans l'autre sens : un mode du moteur doit être CLIQUABLE. C'est le seul
+    # contrôle qui rougirait si un `ModeSpec` repassait « appli_pygame », ou si `status`
+    # cessait d'être ce qui dégrise la tuile.
+    chk(all(t.isEnabled() for t in console.grid.tuiles.values()),
+        f"...et toutes les autres sont dégrisées, c-VEP compris — 7 modes, 7 dans le moteur "
+        f"({sorted(i for i, t in console.grid.tuiles.items() if not t.isEnabled())} grisée(s))")
+
+    # ...et la branche INVERSE, sur un mode FABRIQUÉ. Aucun `ModeSpec` du registre n'a
+    # `status != "moteur"` : sans spec fabriquée, le grisage, le message `unavailable` et le
+    # masquage des boutons seraient du code à ZÉRO couverture (retirer `self.setEnabled(False)`
+    # de `grid.ModeTile.__init__` laisserait ce smoke vert). C'est pourtant le « point
+    # d'honnêteté de l'interface » : elle montre à l'étudiant les modes que le produit décrit
+    # mais que le moteur ne sait pas faire, ET pourquoi. On fabrique donc le `ModeSpec` que le
+    # registre n'a pas, comme `core/modes/contract.py` pour ses propres tests, plutôt que de
+    # laisser un vrai mode fautif pour un test.
+    from console.grid import ModeTile
+    from core.modes.contract import ModeSpec as _ModeSpec
+
+    def _tuile_fabriquee(**champs):
+        return ModeTile(registry.serialize(_ModeSpec(
+            id="pasfait", label="Pas fait", family="actif",
+            summary="le résumé statique du mode", **champs)))
+
+    grisee = _tuile_fabriquee(status="prevu",
+                              unavailable="Demande un stimulus que le moteur ne rend pas.")
+    chk(not grisee.isEnabled(), "une tuile de mode HORS moteur est grisée")
+    chk(grisee.detail.text() == "Demande un stimulus que le moteur ne rend pas.",
+        f"...et elle dit POURQUOI, à la place du résumé statique ({grisee.detail.text()!r})")
+    chk(grisee.etat.text() == "prévu",
+        f"...son statut est rendu en français, pas laissé en clé ({grisee.etat.text()!r})")
+    chk(grisee.demarrage.isHidden() and grisee.bouton.isHidden() and grisee.publie.isHidden(),
+        "...et ses trois boutons sont MASQUÉS : rien à cliquer sur un mode qui ne démarre pas")
+    # Le CONTRASTE, sans quoi les quatre assertions ci-dessus passeraient sur une tuile qui
+    # masquerait ses boutons pour tout le monde.
+    active = _tuile_fabriquee(status="moteur", stream="decoded_pasfait", channels=("x",))
+    chk(active.isEnabled() and not active.demarrage.isHidden()
+        and active.detail.text() == "le résumé statique du mode",
+        "...alors qu'un mode du MOTEUR reste cliquable et garde son résumé")
+    # Un état reçu ne réanime pas la tuile grisée : `update_from` rend la main tout de suite.
+    grisee.update_from({"phase": "running", "published": True, "output": None, "params": {}})
+    chk(not grisee.isEnabled()
+        and grisee.detail.text() == "Demande un stimulus que le moteur ne rend pas.",
+        f"...et un état qui lui arriverait par erreur ne la réanime pas ({grisee.detail.text()!r})")
+
+    chk(console.grid.tuiles["ssvep"].etat.text() == "décodage",
+        f"le SSVEP est annoncé « {console.grid.tuiles['ssvep'].etat.text()} »")
+    chk(console.grid.tuiles["neuro"].etat.text() == "arrêté",
+        "un mode non démarré est annoncé arrêté, pas absent")
+    chk(console.grid.tuiles["ssvep"].publie.isChecked(), "et coché comme publié")
+
+    # Le chemin « publier » de bout en bout : case cochée -> signal de la tuile -> signal de la
+    # grille -> commande au moteur. C'est le seul geste de la grille qui change quelque chose sur
+    # le RÉSEAU, et rien ne l'exerçait : une case débranchée aurait passé tous les tests.
+    moteur_faux.commandes.clear()
+    console.grid.tuiles["ssvep"].publie.click()
+    chk(("set_published", {"id": "ssvep", "on": False}) in moteur_faux.commandes,
+        f"décocher « publié » ordonne au moteur de retirer le flux ({moteur_faux.commandes})")
+    console.grid.tuiles["ssvep"].publie.click()
+    chk(("set_published", {"id": "ssvep", "on": True}) in moteur_faux.commandes,
+        "et le recocher le remet")
+
+    # ...et le rafraîchissement suivant ne doit PAS renvoyer la commande : la case se règle sur
+    # l'état reçu, ce qui rejouerait le signal en boucle si `blockSignals` sautait un jour.
+    moteur_faux.commandes.clear()
+    console.apply_state(state)
+    chk(not moteur_faux.commandes,
+        f"et afficher l'état ne réémet aucune commande ({moteur_faux.commandes})")
+    # ...y compris quand un mode PUBLIÉ vient de s'ARRÊTER. C'est l'autre branche de la même
+    # méthode : décocher la case émet `set_published`, donc la tuile d'un mode arrêté posterait
+    # une commande que personne n'a demandée, engendrée par un simple affichage, et ce
+    # `set_published` fantôme s'intercalerait entre `stop_mode` et `start_calibration`.
+    console.apply_state({**state, "modes_state": {}})
+    chk(not moteur_faux.commandes,
+        f"...et un mode publié qui s'ARRÊTE n'en réémet pas non plus ({moteur_faux.commandes})")
+    console.apply_state(state)
+
+    # Démarrer / arrêter de bout en bout : clic -> signal de la tuile -> signal de la grille ->
+    # commande au moteur. Le bouton est CLIQUÉ, pas contourné : c'est la seule façon de prouver
+    # que le lambda capture le bon identifiant et le bon sens.
+    moteur_faux.commandes.clear()
+    etiquette_avant_clic = console.grid.tuiles["neuro"].demarrage.text()
+    console.grid.tuiles["neuro"].demarrage.click()      # neuro est arrêté dans l'état factice
+    chk(("start_mode", {"id": "neuro"}) in moteur_faux.commandes,
+        f"un mode arrêté se DÉMARRE depuis sa tuile ({moteur_faux.commandes})")
+    # La règle centrale du sous-système : la tuile RESSORT l'état reçu, elle n'en déduit aucun.
+    # Le clic poste une commande et rien d'autre — muter l'étiquette ICI la ferait mentir tant
+    # que le moteur (le vrai, pas ce double factice) n'a pas réellement traité la commande.
+    # 🔴 Le refus de la GRILLE arrive-t-il à l'ÉCRAN ? C'est le cas le plus banal du produit :
+    # un dépôt fraîchement cloné, aucun modèle entraîné, un clic sur « Démarrer » d'un mode à
+    # modèle. Le moteur refuse (« aucun choix disponible ») ; si la console l'imprimait
+    # seulement dans le TERMINAL, l'écran resterait STRICTEMENT immobile (la tuile ne mute
+    # délibérément pas son étiquette, cf. plus bas) : un bouton muet.
+    moteur_faux.refus["start_mode"] = "« Modèle entraîné » : aucun choix disponible"
+    console.banner.set_refus("")
+    console.grid.tuiles["mi"].demarrage.click()
+    chk(console.banner.refus.text() and "aucun choix" in console.banner.refus.text(),
+        f"un refus de la grille arrive DANS LE BANDEAU, visible depuis n'importe quelle page "
+        f"({console.banner.refus.text()!r})")
+    # Et il s'efface quand une commande passe : un refus périmé se lirait comme le verdict de
+    # l'action qu'on vient de réussir.
+    moteur_faux.refus.pop("start_mode")
+    console.grid.tuiles["neuro"].demarrage.click()
+    chk(not console.banner.refus.text(),
+        f"…et une commande acceptée l'efface ({console.banner.refus.text()!r})")
+
+    chk(console.grid.tuiles["neuro"].demarrage.text() == etiquette_avant_clic,
+        f"et le clic ne mute PAS l'étiquette de sa propre tuile — seul le PROCHAIN état reçu le "
+        f"fera ({console.grid.tuiles['neuro'].demarrage.text()})")
+    chk(console.grid.tuiles["ssvep"].demarrage.text() == "Arrêter",
+        f"et un mode qui décode propose « Arrêter » "
+        f"({console.grid.tuiles['ssvep'].demarrage.text()})")
+
+    moteur_faux.commandes.clear()
+    console.grid.tuiles["ssvep"].demarrage.click()
+    chk(("stop_mode", {"id": "ssvep"}) in moteur_faux.commandes,
+        f"et un mode démarré s'ARRÊTE ({moteur_faux.commandes})")
+
+    # Les modes que le moteur ne sait pas faire n'ont PAS de bouton : il ne mènerait qu'à un refus.
+    chk(all(t.demarrage.isHidden() for t in console.grid.tuiles.values()
+            if t.spec["status"] != "moteur"),
+        "les modes de l'appli pygame n'exposent aucun bouton de démarrage")
+
+    # Pendant un repos, la tuile porte la CONSIGNE — sans elle, le plancher est mesuré pendant
+    # que l'étudiant fixe une cible, et il est faux pour toute la séance.
+    en_repos = {**state, "modes_state": {**state["modes_state"], "ssvep": {
+        **state["modes_state"]["ssvep"], "phase": "rest",
+        "instruction": "Ne fixe AUCUNE cible : on mesure le bruit de fond."}}}
+    console.apply_state(en_repos)
+    chk("AUCUNE cible" in console.grid.tuiles["ssvep"].detail.text(),
+        "pendant le repos, la tuile affiche la consigne")
+
+    # Référence décrochée : le défaut qui rend une séance inexploitable sans autre symptôme.
+    state["quality"] = {**state["quality"], "reference_lost": True, "common_mode": 1.0}
+    console.apply_state(state)
+    chk("RÉFÉRENCE DÉCROCHÉE" in console.banner.alarme.text(),
+        "l'alarme de référence s'affiche, en clair")
+
+    # Entrer dans une page de mode, en ressortir.
+    console.apply_state(state)
+    console.show_mode("ssvep")
+    page = console.stack.currentWidget()
+    chk(page is console.pages["ssvep"], "on entre dans la page du SSVEP")
+    page.update_from(state)
+    chk("CIBLE 0" in page.vue.verdict.text(),
+        f"la sortie en direct montre la cible ({page.vue.verdict.text()})")
+    # Le seuil du fixture vaut 2.5 : écrit dans la langue de l'écran (`core.i18n.nombre`), donc
+    # « 2,5 » en français, jamais « 2.5 ».
+    chk(state["modes_state"]["ssvep"]["output"]["threshold"] == 2.5
+        and "2,5" in page.vue.seuil.text() and "2.5" not in page.vue.seuil.text(),
+        f"et le seuil CHIFFRÉ, à côté des scores, avec la virgule du français "
+        f"({page.vue.seuil.text()})")
+    chk(len(page.vue._barres) == 3, "une barre par cible")
+
+    # 🔴 La vue en direct est REPLIÉE, pas supprimée, et on peut l'OUVRIR. Les assertions juste
+    # au-dessus testent son rendu ; cachée sans chemin pour la voir, elle serait un widget testé
+    # que personne ne peut regarder.
+    chk(not page.vue.isVisibleTo(page) and not page.direct.isChecked(),
+        "sur un mode TESTABLE, le décodage en direct est replié par défaut : la page commence "
+        "par « Régler », pas par un tracé")
+    page.direct.click()
+    chk(page.vue.isVisibleTo(page),
+        "…et la case « Décodage en direct » le rouvre d'un clic")
+    page.direct.click()
+
+    # Retirer une fréquence retire sa barre : sinon la vue garderait le score d'une cible morte.
+    moins = {**state, "modes_state": {**state["modes_state"], "ssvep": {
+        **state["modes_state"]["ssvep"], "params": {"freqs": [15.0, 20.0]},
+        "output": {**state["modes_state"]["ssvep"]["output"], "scores": [3.1, 0.4]}}}}
+    page.update_from(moins)
+    chk(len(page.vue._barres) == 2,
+        f"régler deux fréquences ne laisse que deux barres ({len(page.vue._barres)})")
+    page.update_from(state)
+
+    # Un mode PASSIF ne se rend pas comme un mode actif.
+    neuro_state = {**state, "modes_state": {**state["modes_state"], "neuro": {
+        "id": "neuro", "label": "Neuro", "family": "passif", "phase": "running",
+        "published": True, "params": {"smoothing": 0.85, "rebaseline_s": 180.0},
+        "instruction": "", "stream": "decoded_neuro",
+        "channels": ["charge", "somnolence", "engagement", "artifact"], "rest_report": None,
+        "output": {"z": {"charge": 1.2, "somnolence": -0.4, "engagement": 0.3},
+                   "raw": {}, "artifact": False, "reason": "", "artifacts": 2}}}}
+    console.show_mode("neuro")
+    console.apply_state(neuro_state)
+    page = console.pages["neuro"]
+    chk(isinstance(page.vue, live_views.PassiveView), "le neuro a le rendu PASSIF, pas des cibles")
+    chk("TENDANCE" in page.vue.avertissement.text().upper(),
+        "et l'avertissement sur l'échelle est sous les yeux, pas dans une doc")
+    chk(page.vue.isVisibleTo(page) and page.direct is None,
+        "…vraiment SOUS LES YEUX : sans vérité-terrain, le mode s'OBSERVE, et sa vue est en face, "
+        "pas dans un repli")
+
+    # L'APERÇU DE LA TUILE suit la même règle que la page : c'est la famille qui décide.
+    # Un mode actif met en avant la cible que le MOTEUR a retenue ; un mode passif ne met rien
+    # en avant du tout — surligner le plus grand indice le ferait passer pour une sélection.
+    chk(console.grid.tuiles["ssvep"].apercu._retenue == 0
+        and not console.grid.tuiles["ssvep"].apercu._centre,
+        "la tuile d'un mode ACTIF montre la cible retenue par le moteur")
+    chk(console.grid.tuiles["neuro"].apercu._retenue == -1
+        and console.grid.tuiles["neuro"].apercu._centre,
+        "celle d'un mode PASSIF ne désigne aucun gagnant, et signe ses valeurs")
+
+    # Un indice qui cesse d'être rapporté perd sa barre, au lieu de rester figé sur sa dernière
+    # valeur — le même défaut que la barre orpheline d'une cible SSVEP retirée.
+    sans_engagement = {**neuro_state, "modes_state": {**neuro_state["modes_state"], "neuro": {
+        **neuro_state["modes_state"]["neuro"],
+        "output": {**neuro_state["modes_state"]["neuro"]["output"],
+                   "z": {"charge": 1.2, "somnolence": -0.4}}}}}
+    console.apply_state(sans_engagement)
+    chk(set(page.vue._barres) == {"charge", "somnolence"},
+        f"un indice qui disparaît perd sa barre ({sorted(page.vue._barres)})")
+    z = neuro_state["modes_state"]["neuro"]["output"]["z"]
+    attendu = int(z["charge"] / live_views.PassiveView.SPAN * 100)
+    chk(page.vue._barres["charge"].value() == attendu,
+        f"et la barre porte le z réellement reçu ({page.vue._barres['charge'].value()} pour "
+        f"z={z['charge']:+.1f} sur ±{live_views.PassiveView.SPAN:g})")
+
+    # Chaque barre porte le NOM en clair, la formule et le SENS de la montée — et les trois
+    # viennent du moteur (`core.neuro_monitor.INDEX_DESCRIPTIONS`), pas d'une liste recopiée dans
+    # l'interface. Afficher la CLÉ brute (« charge ») laisserait l'élève sans formule ni sens
+    # pour le chiffre qu'il lit.
+    console.apply_state(neuro_state)
+    etiquettes = [page.vue.barres.itemAt(i, QFormLayout.LabelRole).widget().text()
+                  for i in range(page.vue.barres.rowCount())]
+    nom, formule, sens = neuro_monitor.INDEX_DESCRIPTIONS["charge"]
+    porteuse = [t for t in etiquettes if nom in t]
+    chk(porteuse and formule in porteuse[0] and sens in porteuse[0],
+        f"la barre « charge » porte son nom, sa formule et son sens de montée "
+        f"({porteuse[0][:70] if porteuse else 'AUCUNE étiquette ne porte le nom'}…)")
+    chk(all(cle in neuro_monitor.INDEX_DESCRIPTIONS for cle in neuro_monitor.INDEX_KEYS),
+        "…et les trois indices publiés ont tous leur description : une clé sans description "
+        "retomberait en silence sur son nom brut, sans formule ni sens")
+
+    # Le bouton « ← Modes » est CLIQUÉ, pas contourné : c'est la seule sortie de la page.
+    page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et « ← Modes » ramène sur la grille")
+
+    # Motor Imagery : même famille « actif » que le SSVEP (donc la MÊME classe de vue), mais une
+    # sortie de forme DIFFÉRENTE — des probabilités par classe, pas un score par cible. C'est
+    # justement ce que la vue doit encaisser sans se mettre à mentir : si elle cherchait
+    # `target_index` (absent de la sortie du MI), elle afficherait « aucune cible » en
+    # PERMANENCE, quelle que soit l'intention réellement décodée.
+    mi_state = {**state, "modes_state": {**state["modes_state"], "mi": {
+        "id": "mi", "label": "Motor Imagery", "family": "actif", "phase": "running",
+        "published": True,
+        "params": {"model": "mi_model.joblib", "prob_min": 0.6, "vote_len": 5, "min_votes": 3},
+        "instruction": "", "stream": "decoded_mi",
+        "channels": ["intent_index", "confidence", "p_0", "p_1", "p_2"],
+        "rest_report": {"kind": "mi", "model": "mi_model.joblib",
+                        "classes": ["LEFT", "RIGHT", "REST"]},
+        "output": {"intent_index": 0, "label": "LEFT", "confidence": 0.81,
+                   "probas": {"LEFT": 0.81, "RIGHT": 0.12, "REST": 0.07},
+                   "threshold": 0.6}}}}
+    console.show_mode("mi")
+    console.apply_state(mi_state)
+    mi_page = console.pages["mi"]
+    chk(isinstance(mi_page.vue, live_views.ActiveView),
+        "le MI a le rendu ACTIF, comme le SSVEP — même famille")
+    chk("INTENTION LEFT" in mi_page.vue.verdict.text(),
+        f"mais la sortie en direct nomme l'INTENTION décodée, pas une cible "
+        f"({mi_page.vue.verdict.text()})")
+    chk("probabilité" in mi_page.vue.seuil.text() and "z" not in mi_page.vue.seuil.text(),
+        f"et l'échelle affichée est la PROBABILITÉ, jamais le z du SSVEP "
+        f"({mi_page.vue.seuil.text()})")
+    chk(len(mi_page.vue._barres) == 3,
+        f"une barre par classe du modèle, pas par cible ({len(mi_page.vue._barres)})")
+    chk(console.grid.tuiles["mi"].apercu._retenue == 0,
+        "la tuile MI met aussi en avant la classe retenue par le moteur")
+
+    # Vote non conclu (intent_index = -1) : ni cible, ni z — un message propre au MI, qui ne
+    # doit jamais se lire comme le « aucune cible (rien au-dessus de z=...) » du SSVEP.
+    mi_indecis = {**mi_state, "modes_state": {**mi_state["modes_state"], "mi": {
+        **mi_state["modes_state"]["mi"],
+        "output": {**mi_state["modes_state"]["mi"]["output"], "intent_index": -1}}}}
+    console.apply_state(mi_indecis)
+    chk("vote non conclu" in mi_page.vue.verdict.text() and "cible" not in mi_page.vue.verdict.text(),
+        f"un vote non conclu le dit sans jamais parler de « cible » ({mi_page.vue.verdict.text()})")
+
+    mi_page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le MI ramène aussi sur la grille")
+
+    # --- P300 : la TROISIÈME forme de sortie de la famille « actif » -------------
+    # Elle n'a ni `probas` (ce n'est pas un vote de classes) ni `threshold` (le moteur prend
+    # l'argmax, il ne compare ces scores à rien). Rendue comme un SSVEP, elle donnerait :
+    # `params["freqs"]` absent -> six barres SANS ÉTIQUETTE, `threshold` absent -> repli sur
+    # `Z_MIN`, « échelle z · seuil 3 » AU-DESSUS de log-odds (négatifs, donc toutes les barres à
+    # zéro), puis « CIBLE 3 · 0 Hz » : quatre affirmations fausses, aucun message. D'où des
+    # assertions sur ce que l'écran DIT, pas seulement sur la classe de vue instanciée.
+    from console import SPAN_SEUILS
+    from core.config import Z_MIN
+    p300_state = {**state, "modes_state": {**state["modes_state"], "p300": {
+        "id": "p300", "label": "P300", "family": "actif", "phase": "running", "published": True,
+        "params": {"model": "p300_model_20260818_101500.joblib",
+                   "stream_in": "EEG_API_Unicorn_stim"},
+        "instruction": "", "stream": "decoded_p300",
+        "channels": ["target_index", "confidence", "n_flashes"] + [f"score_{i}" for i in range(6)],
+        "rest_report": {"kind": "p300", "model": "p300_model_20260818_101500.joblib",
+                        "n_targets": 6},
+        # Des log-odds RÉALISTES : tous négatifs, gagnant en 3. Des scores positifs cacheraient
+        # la moitié du défaut (avec `Z_MIN` en seuil, des valeurs négatives donnent SIX barres à
+        # zéro — un écran parfaitement muet).
+        "output": {"target_index": 3, "confidence": -0.42, "n_flashes": 48,
+                   "scores": [-1.9, -2.4, -1.2, -0.42, -2.0, -1.5]}}}}
+    console.show_mode("p300")
+    console.apply_state(p300_state)
+    p3 = console.pages["p300"].vue
+    chk(isinstance(p3, live_views.ActiveView),
+        "le P300 a le rendu ACTIF, comme le SSVEP et le MI — même famille")
+    chk(f"seuil {Z_MIN:g}" not in p3.seuil.text() and "échelle z" not in p3.seuil.text(),
+        f"mais il n'annonce NI le z NI le seuil du SSVEP, qu'il n'a pas ({p3.seuil.text()})")
+    chk("score moyen" in p3.seuil.text() and "aucun seuil" in p3.seuil.text().lower(),
+        f"il nomme son échelle et dit qu'il n'y a pas de seuil ({p3.seuil.text()})")
+    chk(len(p3._barres) == 6 and all(e.text() for e, _b in p3._barres),
+        f"six barres, et chacune porte une ÉTIQUETTE — pas six barres muettes "
+        f"({[e.text() for e, _b in p3._barres]})")
+    chk("CIBLE 3" in p3.verdict.text() and "Hz" not in p3.verdict.text(),
+        f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence "
+        f"({p3.verdict.text()})")
+    chk("48" in p3.verdict.text(),
+        f"et dit sur combien de flashs elle repose — 48 et 12 ne se valent pas "
+        f"({p3.verdict.text()})")
+    # Les barres sont RELATIVES entre elles : la meilleure pleine, la pire vide. C'est le
+    # classement qui décide, pas une position sur une règle graduée qui n'existe pas.
+    valeurs = [b.value() for _e, b in p3._barres]
+    chk(valeurs[3] == 100 and valeurs[1] == 0,
+        f"la cible qui domine remplit sa barre, la plus faible est vide ({valeurs})")
+
+    # L'APERÇU DE LA TUILE, sur les MÊMES données : il ne doit pas contredire la page.
+    # Un repli sur `Z_MIN` écraserait tout : le seuil du SSVEP (2,5) appliqué à des log-odds,
+    # avec `centre=False`, met tout score négatif à zéro. Or les scores P300 sont le plus
+    # souvent négatifs (une cible flashe une fois sur six) : la tuile montrerait SIX MOIGNONS DE
+    # 2 PX pendant que sa propre page montre un classement lisible. Deux écrans, mêmes données,
+    # verdicts opposés.
+    apercu_p3 = console.grid.tuiles["p300"].apercu
+    chk(apercu_p3._span != Z_MIN,
+        f"la tuile P300 n'emprunte PAS le seuil du SSVEP pour mettre des log-odds à l'échelle "
+        f"(span={apercu_p3._span}, Z_MIN={Z_MIN})")
+    chk(apercu_p3._values and max(apercu_p3._values) == 1.0 and min(apercu_p3._values) == 0.0
+        and apercu_p3._values.index(1.0) == 3,
+        f"...elle montre le CLASSEMENT, comme la page : la cible qui domine pleine, la plus "
+        f"faible vide — et AUCUNE écrasée à zéro parce qu'elle est négative ({apercu_p3._values})")
+    chk(apercu_p3._retenue == 3,
+        f"...et met en avant la cible que le MOTEUR a retenue, pas un maximum recalculé "
+        f"({apercu_p3._retenue})")
+    # L'assertion qui LIE les deux : les deux précédentes lisent la page et la tuile SÉPARÉMENT,
+    # donc rien n'interdirait qu'elles se contredisent. Elles appellent la MÊME fonction,
+    # `console.classement_relatif` ; cette ligne le vérifie sur les mêmes données. `int()` et
+    # pas `round()` : c'est la conversion que la page applique (`QProgressBar` prend un entier).
+    # Comparer deux arrondis différents ferait rougir sur 60,61 % contre 61 %.
+    chk([int(v * 100) for v in apercu_p3._values] == [b.value() for _e, b in p3._barres],
+        f"la tuile et la page rendent le MÊME classement sur les mêmes données "
+        f"({[int(v * 100) for v in apercu_p3._values]} contre "
+        f"{[b.value() for _e, b in p3._barres]})")
+
+    # Le SSVEP, lui, a bien un `threshold` publié : son échelle reste ABSOLUE, contre ce
+    # seuil-là. Sans cette assertion, « ne plus jamais utiliser de seuil » passerait aussi.
+    # `SPAN_SEUILS ×` le seuil, pas le seuil nu : la tuile et la page vont à la même échelle.
+    # Avec 1× d'un côté et 2× de l'autre, sur ce fixture (score 3,1, seuil 2,5) la grille
+    # afficherait une barre PLEINE et la page 62 %.
+    seuil_ssvep = state["modes_state"]["ssvep"]["output"]["threshold"]
+    chk(console.grid.tuiles["ssvep"].apercu._span == SPAN_SEUILS * seuil_ssvep,
+        f"et la tuile SSVEP garde son échelle absolue, contre le seuil qu'elle PUBLIE, à la MÊME "
+        f"échelle que sa page ({console.grid.tuiles['ssvep'].apercu._span} pour un seuil de "
+        f"{seuil_ssvep})")
+    # ...et on le VÉRIFIE sur le RENDU, pas seulement sur le réglage. Les deux côtés sont lus sur
+    # les objets eux-mêmes (`_values`/`_span` pour la tuile, `value()` pour la page) : rien n'est
+    # recalculé ici avec la formule de production, sans quoi le test ne prouverait que sa propre
+    # arithmétique. `max(0, min(v/span, 1))` est la règle de dessin de `MiniBars.paintEvent`.
+    console.apply_state(state)
+    apercu_ssvep = console.grid.tuiles["ssvep"].apercu
+    parts_tuile = [int(max(0.0, min(v / apercu_ssvep._span, 1.0)) * 100)
+                   for v in apercu_ssvep._values]
+    parts_page = [b.value() for _e, b in console.pages["ssvep"].vue._barres]
+    chk(bool(parts_page) and parts_page == parts_tuile,
+        f"la page SSVEP et sa tuile remplissent leurs barres à la MÊME hauteur "
+        f"({parts_page} contre {parts_tuile}) — mêmes données, une seule lecture")
+
+    # Manche non conclue : jamais le « aucune cible (rien au-dessus de z=...) » du SSVEP, et
+    # surtout -1 n'est pas la cible 0 (cf. `no_decision_index` dans les métadonnées du flux).
+    p300_indecis = {**p300_state, "modes_state": {**p300_state["modes_state"], "p300": {
+        **p300_state["modes_state"]["p300"],
+        "output": {**p300_state["modes_state"]["p300"]["output"], "target_index": -1}}}}
+    console.apply_state(p300_indecis)
+    chk("z=" not in p3.verdict.text() and "CIBLE" not in p3.verdict.text(),
+        f"une manche non conclue le dit sans parler ni de z ni d'une cible retenue "
+        f"({p3.verdict.text()})")
+
+    console.pages["p300"].bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le P300 ramène aussi sur la grille")
+
+    # --- ErrP : la famille « passif » a une DEUXIÈME forme de sortie, différente du neuro -------
+    # `PassiveView` et `grid.py` (aperçu de la tuile + résumé) doivent router aussi sur la
+    # sortie de l'ErrP, qui n'a pas de clé "z" : sinon la page et la tuile restent muettes, et
+    # rien ne rougit puisqu'aucune valeur fabriquée n'est montrée (un SILENCE, pas un mensonge).
+    # Ce détecteur, au réglage courant, n'attrape qu'une partie des erreurs : l'écran ne doit
+    # donc JAMAIS afficher « ERREUR détectée » seul, comme un verdict fiable. Le score ET le
+    # point de fonctionnement doivent être lisibles ensemble, et `error=-1` (pas de verdict)
+    # doit se lire différemment de `error=0` (correct).
+    #
+    # Le point de fonctionnement de ce fixture est CALQUÉ sur la seule séance réellement
+    # mesurée du projet (à `tnr_target = 0.85`, TPR 0,500 / TNR 0,855), pour ne
+    # pas donner au contributeur qui ouvre ce fichier un chiffre contradictoire avec la doc, le
+    # contrat et l'autotest de `lsl_io.py`.
+    errp_state = {**state, "modes_state": {**state["modes_state"], "errp": {
+        "id": "errp", "label": "ErrP", "family": "passif", "phase": "running", "published": True,
+        "params": {"model": "errp_model_20260818_150000.joblib", "tnr_target": 0.85},
+        "instruction": "", "stream": "decoded_errp",
+        "channels": ["error", "score", "threshold", "artifact"], "rest_report": None,
+        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "tpr": 0.500,
+                                    "tnr": 0.855},
+        "output": {"error": 1, "score": 5.044, "artifact": 0, "threshold": 0.044}}}}
+    console.show_mode("errp")
+    errp_page = console.pages["errp"]
+
+    # DÉMARRÉ, MAIS AUCUN FEEDBACK ENCORE (`output: None`) : l'état dans lequel la page vit ses
+    # 23 premières secondes (chauffe + repos) et jusqu'au premier feedback. Si `PassiveView`
+    # initialisait son avertissement avec le texte du NEURO, la page de l'ErrP affirmerait
+    # pendant tout ce temps que son score est « un z contre TON repos du jour », alors que c'est
+    # un log-odds contre le seuil d'une calibration. Une phrase FAUSSE sur l'unité est pire
+    # qu'un silence.
+    errp_demarre = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"], "output": None}}}
+    console.apply_state(errp_demarre)
+    avant = errp_page.vue.avertissement.text()
+    chk("z contre" not in avant and "TENDANCE" not in avant.upper(),
+        f"avant le premier feedback, la page ErrP ne parle JAMAIS d'un z contre le repos du "
+        f"jour — c'est l'unité d'un AUTRE mode ({avant!r})")
+    # ...et elle ne reste pas MUETTE pour autant. `ErrPRuntime.instruction()` rend "" une fois le
+    # repos fini (il n'y a plus de consigne : c'est au stimulus de jouer), donc le label principal
+    # de la page serait VIDE. Un écran vide se lit « ça ne marche pas » : l'étudiant traverse
+    # chauffe et repos, l'écran se vide, et rien ne lui dit ce qu'il lui reste à faire.
+    chk(errp_page.vue.etat.text().strip() != "",
+        f"...et elle dit tout de même quelque chose plutôt que de rester vide "
+        f"({errp_page.vue.etat.text()!r})")
+
+    console.apply_state(errp_state)
+    chk(isinstance(errp_page.vue, live_views.PassiveView),
+        "l'ErrP a le rendu PASSIF, comme le neuro — une réaction observée, pas un choix fait")
+    chk("ERREUR" in errp_page.vue.etat.text(),
+        f"un score au-dessus du seuil se lit comme une détection ({errp_page.vue.etat.text()!r})")
+    chk("5,044" in errp_page.vue.avertissement.text()
+        and "0,044" in errp_page.vue.avertissement.text(),
+        f"...le score ET le seuil, CHIFFRÉS, côte à côte, jamais l'un sans l'autre "
+        f"({errp_page.vue.avertissement.text()!r})")
+    # Chaque taux ANCRÉ À SON LIBELLÉ, jamais « "50%" in texte ». Avec deux `in` indépendants,
+    # échanger `tpr` et `tnr` dans `live_views._update_errp` (une ligne) laisserait le test VERT
+    # pendant que l'écran annoncerait l'inverse exact de la vérité, sur le seul écran dont la
+    # raison d'être est d'empêcher qu'on prenne ce verdict pour fiable.
+    texte_errp = errp_page.vue.avertissement.text()
+    chk("garde 86%" in texte_errp and "repère 50%" in texte_errp,
+        f"...ET le point de fonctionnement MESURÉ (pas seulement visé), chaque taux CÔTÉ SON "
+        f"LIBELLÉ : « garde 86% des bonnes commandes » / « repère 50% des erreurs » — un "
+        f"échange tpr↔tnr doit rougir ICI ({texte_errp!r})")
+    chk("visé 85%" in texte_errp,
+        f"...et le taux VISÉ reste distinct des deux mesurés ({texte_errp!r})")
+
+    # LE TAUX DE REJET ARTEFACT, que `ErrPRuntime.state()` calcule EXPRÈS pour cet écran : la
+    # console est le SEUL client qui lit `state()` (le flux `status` ne porte pas
+    # `modes_state`). Une séance à 36 rejets sur 40 publie 36 × `error=-1`, honnêtes et
+    # indiscernables de 36 clignements : la page doit dire de vérifier le contact des électrodes.
+    errp_rejet = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "taux_rejet": 0.9, "epoques_vues": 40, "artefacts": 36,
+        "output": {"error": -1, "score": 0.0, "artifact": 1, "threshold": 0.044}}}}
+    console.apply_state(errp_rejet)
+    texte_rejet = errp_page.vue.avertissement.text()
+    chk("90%" in texte_rejet and "36 sur 40" in texte_rejet,
+        f"un sur-rejet d'artefact se VOIT sur la page, taux ET effectif — sans quoi 36 refus de "
+        f"suite ressemblent à 36 clignements ({texte_rejet!r})")
+
+    # `error = 0` (correct) ne doit plus jamais parler d'erreur.
+    errp_correct = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": 0, "score": -4.956, "artifact": 0, "threshold": 0.044}}}}
+    console.apply_state(errp_correct)
+    texte_correct = errp_page.vue.etat.text()
+    chk("ERREUR" not in texte_correct,
+        f"un score sous le seuil ne parle plus d'erreur ({texte_correct!r})")
+
+    # `error = -1` (pas de verdict, ÉPOQUE PERDUE) : un troisième texte, distinct des deux autres
+    # — le confondre avec « correct » affirmerait un « pas d'erreur » qu'on n'a pas observé.
+    errp_perdu = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": -1, "score": 0.0, "artifact": 0, "threshold": 0.044}}}}
+    console.apply_state(errp_perdu)
+    texte_perdu = errp_page.vue.etat.text()
+    chk(texte_perdu != texte_correct and "ERREUR" not in texte_perdu,
+        f"« pas de verdict » (-1, époque perdue) est un texte DIFFÉRENT de « correct » (0), et "
+        f"ne parle jamais d'erreur ({texte_perdu!r} vs correct={texte_correct!r})")
+
+    # `error = -1` mais ARTEFACT : un QUATRIÈME texte, distinct des trois autres — un rejet
+    # d'artefact et une époque simplement hors du tampon ne sont pas la même panne.
+    errp_artefact = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "output": {"error": -1, "score": 0.0, "artifact": 1, "threshold": 0.044}}}}
+    console.apply_state(errp_artefact)
+    texte_artefact = errp_page.vue.etat.text()
+    chk("artefact" in texte_artefact.lower() and texte_artefact != texte_perdu,
+        f"...et un refus pour ARTEFACT se distingue lui aussi d'une époque simplement perdue "
+        f"({texte_artefact!r} vs perdu={texte_perdu!r})")
+
+    # L'APERÇU DE LA TUILE : deux valeurs signées (score, seuil), sur une échelle qui s'adapte à
+    # LEUR PROPRE amplitude — jamais un axe fixe inventé (le même piège que le P300 rendu comme
+    # un SSVEP, cf. `live_views.ActiveView`). Vide quand `error < 0` : `score`/`threshold` valent
+    # alors 0.0 par CONVENTION, jamais une mesure (cf. `ErrPRuntime._traiter_feedback`) — les
+    # montrer fabriquerait un chiffre.
+    console.apply_state(errp_state)      # retour au verdict "erreur" : score=5.044, seuil=0.044
+    chk(console.grid.tuiles["errp"].apercu._values == [5.044, 0.044]
+        and console.grid.tuiles["errp"].apercu._centre
+        and console.grid.tuiles["errp"].apercu._retenue == -1,
+        f"la tuile montre score ET seuil, signés, sans rien mettre en avant "
+        f"({console.grid.tuiles['errp'].apercu._values})")
+    # `_span` est la valeur que le commentaire de `grid.py` présente comme le point important :
+    # remplacer `max(abs(score), abs(seuil), 1.0)` par `NEURO_Z_SPAN` laisserait les trois
+    # assertions ci-dessus vertes et remettrait la tuile ErrP dans le piège que sa branche
+    # existe pour éviter (un log-odds rendu sur une échelle de z).
+    chk(console.grid.tuiles["errp"].apercu._span == 5.044,
+        f"...sur SA PROPRE amplitude, jamais l'échelle de z du neuro ni un axe fixe inventé "
+        f"(span={console.grid.tuiles['errp'].apercu._span}, "
+        f"NEURO_Z_SPAN={live_views.PassiveView.SPAN:g})")
+    console.apply_state(errp_perdu)
+    chk(console.grid.tuiles["errp"].apercu._values == [],
+        f"...et rien quand il n'y a rien à montrer, pas un 0.0 fabriqué "
+        f"({console.grid.tuiles['errp'].apercu._values})")
+
+    # LE RÉSUMÉ de la tuile (`_resume`, affiché hors instruction active) porte lui aussi le
+    # verdict ET le taux d'erreurs attrapées — jamais le texte statique du mode.
+    console.apply_state(errp_state)
+    resume_errp = console.grid.tuiles["errp"].detail.text()
+    chk("ERREUR" in resume_errp and "repère 50%" in resume_errp,
+        f"le résumé de la tuile porte le verdict ET le point de fonctionnement "
+        f"({resume_errp!r})")
+
+    # ...et il l'encaisse INCOMPLET. `if pdf` protège du dict vide, pas du dict amputé : un
+    # accès direct `pdf['tpr']` dans `_resume` ferait tomber TOUTE l'interface sur un
+    # `KeyError` (la ligne tourne 10 fois par seconde), et faire évoluer
+    # `point_de_fonctionnement` (ajouter `auc`, renommer `tpr`) figerait la grille entière en
+    # pleine séance. D'où `.get`.
+    errp_pdf_partiel = {**errp_state, "modes_state": {**errp_state["modes_state"], "errp": {
+        **errp_state["modes_state"]["errp"],
+        "point_de_fonctionnement": {"tnr_target": 0.85, "seuil": 0.044, "auc": 0.71}}}}
+    console.apply_state(errp_pdf_partiel)
+    chk("ERREUR" in console.grid.tuiles["errp"].detail.text(),
+        f"un point de fonctionnement INCOMPLET ne fait tomber NI la tuile NI la grille entière "
+        f"({console.grid.tuiles['errp'].detail.text()!r})")
+
+    errp_page.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et l'ErrP ramène aussi sur la grille")
+
+    # --- c-VEP : la QUATRIÈME forme de sortie de la famille « actif » ---------------------------
+    # Des corrélations de Pearson, bornées dans [-1, 1], avec un seuil PUBLIÉ (`corr_min`) et une
+    # marge. Ni le z du SSVEP (aucun plancher de repos n'est mesuré ici), ni les log-odds du P300
+    # (aucun classifieur). Les valeurs du fixture sont celles de la seule séance réellement
+    # mesurée du projet : ρ ≈ 0,33 quand la décision est juste, ≈ 0,21 quand elle est fausse
+    # (cf. `core/config.py`, CVEP_CORR_MIN) — pas des chiffres ronds inventés, parce que c'est
+    # justement à cette hauteur-là que l'échelle se joue.
+    from core.lsl_io import cvep_channel_labels
+
+    cvep_state = {**state, "modes_state": {**state["modes_state"], "cvep": {
+        "id": "cvep", "label": "c-VEP", "family": "actif", "phase": "running", "published": True,
+        "params": {"model": "cvep_model.npz", "stream_in": "EEG_API_Unicorn_stim",
+                   "vote_len": 3, "min_votes": 2},
+        "instruction": "", "stream": "decoded_cvep",
+        # DÉRIVÉE de sa source, pas recopiée : une liste écrite à la main dériverait de la forme
+        # réelle du flux. Elle est inerte pour la console (`mode_page` construit la vue avec
+        # `spec["channels"]` du registre), mais `modes_state[*]["channels"]` part sur le flux
+        # `status` et un client le lit.
+        "channels": cvep_channel_labels(6),
+        "rest_report": None,
+        "decodages": 12, "sans_reference": 0, "reference_perimee": 0,
+        "sous_les_seuils": 5, "vote_non_conclu": 2,
+        "age_reference_s": 0.42, "corr_gagnant": 0.33, "corr_second": 0.21,
+        "output": {"target_index": 2, "confidence": 0.33,
+                   "scores": [0.11, 0.19, 0.33, 0.08, 0.21, 0.12],
+                   "corr_min": 0.26, "margin": 0.09, "motif": ""}}}}
+    console.show_mode("cvep")
+    console.apply_state(cvep_state)
+    cv = console.pages["cvep"].vue
+    chk(isinstance(cv, live_views.ActiveView),
+        "le c-VEP a le rendu ACTIF, comme le SSVEP, le MI et le P300 — même famille")
+    chk("corrélation" in cv.seuil.text() and "échelle z" not in cv.seuil.text()
+        and "score moyen" not in cv.seuil.text(),
+        f"et il nomme SON échelle, ni celle du SSVEP ni celle du P300 ({cv.seuil.text()})")
+    chk("0,26" in cv.seuil.text() and "0,09" in cv.seuil.text(),
+        f"...avec SES DEUX seuils : `corr_min` seul ferait lire « 0,40 > 0,26, ça aurait dû "
+        f"déclencher » sur une fenêtre où la 2e était à 0,38 ({cv.seuil.text()})")
+    # ...ET le vote, qui fait partie de la même règle : sans lui, un étudiant qui voit une barre
+    # franche sans verdict croit à un bug. La latence de `vote_len / 5 Hz` s'explique ici.
+    chk("2 fenêtres sur les 3 dernières" in cv.seuil.text(),
+        f"...et le VOTE, troisième moitié de la règle de décision ({cv.seuil.text()})")
+    chk("CIBLE 2" in cv.verdict.text() and "Hz" not in cv.verdict.text(),
+        f"le verdict nomme la cible retenue, et ne lui invente pas une fréquence — le c-VEP "
+        f"cherche une PHASE ({cv.verdict.text()})")
+
+    # L'APERÇU DE LA TUILE, sur les mêmes données. Pour le P300 le piège est le repli sur
+    # `Z_MIN` ; ici il est SYMÉTRIQUE : le c-VEP publie bien un seuil, donc rien n'empêcherait de
+    # lui appliquer la formule du SSVEP, `max(2 × 0,26, 1.0)` = 1,0, sur des corrélations qui
+    # valent 0,21 à 0,33. Toutes les barres s'écraseraient dans le tiers bas, visuellement
+    # identiques, alors que 0,33 et 0,21 sont exactement ce qui sépare une décision juste d'une
+    # fausse.
+    from console import SPAN_SEUILS
+    apercu_cv = console.grid.tuiles["cvep"].apercu
+    corr_min = cvep_state["modes_state"]["cvep"]["output"]["corr_min"]
+    chk(apercu_cv._span == SPAN_SEUILS * corr_min,
+        f"la tuile c-VEP met ses corrélations à l'échelle de SON `corr_min` publié "
+        f"(span={apercu_cv._span} pour corr_min={corr_min})")
+    chk(apercu_cv._span != Z_MIN and apercu_cv._span < 1.0,
+        f"...donc NI le seuil du SSVEP, NI le plafond 1,0 de la formule du SSVEP, qui écraserait "
+        f"0,21 et 0,33 dans le tiers bas de la barre (span={apercu_cv._span}, Z_MIN={Z_MIN})")
+    chk(apercu_cv._values == cvep_state["modes_state"]["cvep"]["output"]["scores"]
+        and apercu_cv._retenue == 2 and not apercu_cv._centre,
+        f"...elle montre les corrélations TELLES QUELLES (échelle absolue, pas un classement) et "
+        f"met en avant la cible que le MOTEUR a retenue ({apercu_cv._values}, {apercu_cv._retenue})")
+    # L'assertion qui LIE la tuile et la page : les deux précédentes les lisent séparément, donc
+    # rien ne leur interdirait de se contredire (cf. le bloc P300 ci-dessus).
+    # `max(0, min(v/span, 1))` est la règle de dessin de `MiniBars.paintEvent`.
+    parts_tuile = [int(max(0.0, min(v / apercu_cv._span, 1.0)) * 100) for v in apercu_cv._values]
+    chk(parts_tuile == [b.value() for _e, b in cv._barres],
+        f"la tuile et la page remplissent leurs barres à la MÊME hauteur "
+        f"({parts_tuile} contre {[b.value() for _e, b in cv._barres]})")
+
+    # ...ET À `corr_min = 0`, LE SEUL CAS QUI SÉPARE LES DEUX ÉCRITURES. C'est une valeur
+    # LÉGALE (`min=0.0` sur le réglage) et ENCOURAGÉE en séance : l'aide dit « DESCENDS cette
+    # valeur… SANS risque », et descendre le seuil est un geste de routine.
+    # Avec une échelle nulle, la page affiche 33 % et la tuile TOUTES LES BARRES PLEINES (span 0
+    # rattrapé à 1e-6 par `MiniBars.set_values`) : mêmes données, deux diagnostics opposés
+    # (« rien n'est fixé » d'un côté, « tout sature » de l'autre). L'assertion précédente ne
+    # tourne que sur 0,26 et ne l'attrape pas.
+    cvep_zero = {**cvep_state, "modes_state": {**cvep_state["modes_state"], "cvep": {
+        **cvep_state["modes_state"]["cvep"],
+        "output": {**cvep_state["modes_state"]["cvep"]["output"], "corr_min": 0.0}}}}
+    console.apply_state(cvep_zero)
+    chk(apercu_cv._span == 1.0,
+        f"à `corr_min = 0` l'échelle retombe sur celle d'une corrélation entière (1,0), jamais "
+        f"sur 0 — une échelle nulle rendrait TOUTE barre pleine ({apercu_cv._span})")
+    parts_zero = [int(max(0.0, min(v / apercu_cv._span, 1.0)) * 100) for v in apercu_cv._values]
+    chk(parts_zero == [b.value() for _e, b in cv._barres] and max(parts_zero) < 100,
+        f"...et la tuile et la page restent d'accord — c'est le cas où elles divergeaient "
+        f"({parts_zero} contre {[b.value() for _e, b in cv._barres]})")
+    console.apply_state(cvep_state)      # on rend l'état attendu par la suite du bloc
+
+    # Pas de décision : le MOTIF est ce que l'écran doit montrer, pas « aucune cible ». Les trois
+    # causes appellent trois gestes OPPOSÉS (relancer l'émetteur · vérifier le nom du flux ·
+    # saliner), et la console ne les traduit pas — la phrase vient du moteur.
+    cvep_muet = {**cvep_state, "modes_state": {**cvep_state["modes_state"], "cvep": {
+        **cvep_state["modes_state"]["cvep"],
+        "output": {**cvep_state["modes_state"]["cvep"]["output"], "target_index": -1,
+                   "scores": [0.0] * 6, "confidence": 0.0,
+                   "motif": "horloge PÉRIMÉE — l'émetteur s'est tu (planté ? fenêtre fermée ?)"}}}}
+    console.apply_state(cvep_muet)
+    chk("PÉRIMÉE" in cv.verdict.text() and "CIBLE" not in cv.verdict.text()
+        and "z=" not in cv.verdict.text(),
+        f"sans décision, l'écran dit LAQUELLE des trois causes — jamais « aucune cible » nu, "
+        f"jamais le « rien au-dessus de z » du SSVEP ({cv.verdict.text()})")
+    resume_cvep = console.grid.tuiles["cvep"].detail.text()
+    chk("PÉRIMÉE" in resume_cvep and "Hz" not in resume_cvep,
+        f"...et le résumé de la tuile aussi, sans inventer de fréquence ({resume_cvep!r})")
+
+    console.pages["cvep"].bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid, "et le c-VEP ramène aussi sur la grille")
+
+    # --- la page de calibration -------------------------------------------------
+    # Elle est éprouvée sur des états FABRIQUÉS, phase par phase : c'est le seul moyen de
+    # vérifier chaque écran sans jouer sept minutes de séance.
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+    chk(cal is console.calib_pages["mi"], "« Calibrer » ouvre la page de calibration du MI")
+    # Là encore le compte vient du CONTRAT, et le critère est `jouable` (le moteur a-t-il un
+    # runtime pour elle), pas `kind` (QUI mène le protocole). Les deux divergent dès qu'une
+    # calibration menée par une FENÊTRE est jouable par le moteur : prendre `kind` ici laisserait
+    # ces pages invisibles.
+    attendu_calib = [s["id"] for s in registry.catalog()
+                     if s["status"] == "moteur" and (s.get("calibration") or {}).get("jouable")]
+    chk(sorted(console.calib_pages) == sorted(attendu_calib),
+        f"et exactement les modes dont le moteur sait JOUER la calibration en ont une "
+        f"({sorted(console.calib_pages)} pour {sorted(attendu_calib)})")
+
+    # 1. Avant : le briefing du CONTRAT, pas un texte recopié dans l'interface.
+    console.apply_state({**mi_state, "calibration": None})
+    from core.modes import mi_calib
+    from core.modes.affichage import depuis_table
+    chk(mi_calib.BRIEFING[0] in cal.briefing.text(),
+        "le briefing affiché vient du contrat du mode")
+    chk(cal.bouton_commencer.isEnabled(), "et « Commencer » est actif")
+
+    # --- le CONTRÔLE DE LIAISON s'interpose, et il REFUSE ---------------------------------
+    # Il protège d'un câble débranché, qui laisserait enregistrer plusieurs minutes de signal
+    # plat puis produire un modèle à 0 %. Les fenêtres de
+    # `src/stimulus/` ne peuvent pas le porter : elles n'ouvrent pas le casque, elles n'ont aucun
+    # σ à montrer. La console, elle, sonde `snapshot()`.
+    # Une qualité NEUVE, relue depuis `fake_state()` : l'état `state` de ce smoke a été muté plus
+    # haut pour éprouver l'alarme du bandeau (`reference_lost: True`), et tous les fixtures qui
+    # en descendent (`mi_state`, `p300_state`) portent cette référence décrochée. Les réutiliser
+    # ici ferait refuser le contrôle de liaison pour la MAUVAISE raison.
+    qualite_saine = fake_state()["quality"]
+    # Le MI est ARRÊTÉ ici (`modes_state` sans lui) : c'est le chemin nominal d'une calibration.
+    # La console arrête toujours le mode avant SA calibration — règle uniforme, elle ne recopie
+    # PAS la table du moteur disant lesquels se voleraient les marqueurs — et ce chemin-là est
+    # éprouvé plus bas, sur le P300 qui décode.
+    mi_sain = {**mi_state, "calibration": None, "quality": qualite_saine,
+               "modes_state": state["modes_state"]}
+
+    moteur_faux.commandes.clear()
+    # Capturé AVANT le clic : c'est ce que le formulaire contient RÉELLEMENT en ce moment, pas une
+    # valeur supposée — un formulaire qui soumettrait 999 en dur, peu importe ce qu'il affiche,
+    # doit faire échouer la comparaison plus bas.
+    valeurs_formulaire = cal.formulaire.values()
+    moteur_faux.validations.clear()
+    cal.bouton_commencer.click()
+    chk(console.stack.currentWidget() is console.contact,
+        "« Commencer » passe D'ABORD par le contrôle de la liaison casque")
+    chk(not moteur_faux.commandes,
+        f"et RIEN n'est encore soumis au moteur à ce stade ({moteur_faux.commandes})")
+    # …mais le MOTEUR a déjà jugé les réglages : une question, pas une commande.
+    chk([(m, p) for m, p, _j in moteur_faux.validations] == [("mi", valeurs_formulaire)],
+        f"…le moteur a JUGÉ les réglages à l'écran avant le contrôle de liaison "
+        f"({moteur_faux.validations})")
+    # 🔴 Et le formulaire est FIGÉ dès le clic : les valeurs sont copiées dans la demande, une
+    # valeur changée maintenant ne partirait pas.
+    chk(not cal.formulaire.isEnabled() and not cal.bouton_commencer.isEnabled(),
+        "…et le formulaire est FIGÉ dès le clic, avec « Commencer » : ce qui partira est déjà "
+        "copié")
+
+    # Une voie MORTE : le lancement doit être refusé, et le refus doit se LIRE. Un bouton
+    # simplement grisé se lit comme une interface cassée.
+    mauvais = {**mi_sain, "quality": {
+        **qualite_saine, "sigmas": [7.2, 0.0, 6.9, 9.4, 5.5, 11.2, 6.1, 7.8],
+        "verdicts": ["ok", "morte", "ok", "ok", "ok", "ok", "ok", "ok"]}}
+    console.apply_state(mauvais)
+    chk(not console.contact.bouton_lancer.isEnabled(),
+        "une voie morte empêche le lancement")
+    chk("C3" in console.contact.refus.text() and "morte" in console.contact.refus.text(),
+        f"...et le DIT à l'écran, en nommant la voie — pas seulement en grisant un bouton "
+        f"({console.contact.refus.text()[:90]}…)")
+    # La RÉFÉRENCE DÉCROCHÉE, le défaut que les huit σ ne montrent PAS : les voies mesurent alors
+    # toutes la même référence flottante, avec des amplitudes parfaitement plausibles.
+    reference = {**mi_sain, "quality": {
+        **qualite_saine, "reference_lost": True, "common_mode": 0.99}}
+    console.apply_state(reference)
+    chk(not console.contact.bouton_lancer.isEnabled()
+        and "mastoïdes" in console.contact.refus.text().lower(),
+        f"une référence décrochée refuse elle aussi, en nommant le geste qui la répare "
+        f"({console.contact.refus.text()[:70]}…)")
+    # ...et un état SANS qualité (tampon pas encore rempli) refuse aussi : lancer là reviendrait à
+    # enregistrer à l'aveugle, ce qui est exactement l'accident d'origine.
+    console.apply_state({**mi_sain, "quality": None})
+    chk(not console.contact.bouton_lancer.isEnabled() and console.contact.refus.text(),
+        f"...et tant qu'AUCUN σ n'est mesuré, on ne lance pas non plus "
+        f"({console.contact.refus.text()[:70]}…)")
+
+    # Les voies CLÉS du mode visé sont surlignées, et la liste vient du CONTRAT.
+    console.apply_state(mi_sain)
+    cles_mi = registry.get("mi").key_channels
+    chk(all(state["channels"][i] in console.contact.cles.text() for i in cles_mi),
+        f"les voies clés du MI sont nommées, telles que son contrat les déclare "
+        f"({console.contact.cles.text()[:80]}…)")
+    # …et ENTOURÉES : le contrôle de liaison montre le schéma de « Vérifier le casque », les
+    # électrodes clés du mode cerclées de bleu, et leurs barres encadrées.
+    from console.params_form import ACCENT as _ACCENT
+    noms_mi = {state["channels"][i] for i in cles_mi}
+    vue_lc = console.contact.vue
+    chk(vue_lc.schema.cles == noms_mi
+        and all(_ACCENT in vue_lc.lignes[n].styleSheet() for n in noms_mi)
+        and not any(vue_lc.lignes[n].styleSheet() for n in vue_lc.lignes if n not in noms_mi),
+        f"le contrôle de liaison montre le schéma de la tête, les électrodes clés du MI entourées, "
+        f"barres comprises ({sorted(vue_lc.schema.cles)})")
+    chk(console.contact.bouton_lancer.isEnabled() and not console.contact.refus.text(),
+        "et sur un montage sain, le lancement est permis")
+
+    # Le clic qui lance pour de bon. Le bouton dit ce qu'on lance dans les mots de l'étudiant,
+    # qui n'a cliqué que sur « Entraîner ».
+    chk(console.contact.bouton_lancer.text() == "Commencer l'entraînement",
+        f"le contrôle de liaison d'un entraînement dit « Commencer l'entraînement » "
+        f"({console.contact.bouton_lancer.text()!r})")
+    moteur_faux.commandes.clear()
+    console.contact.bouton_lancer.click()
+    chk(console.stack.currentWidget() is cal,
+        "cliquer « Commencer l'entraînement » ramène sur la page d'entraînement")
+    envoyees = [c for c in moteur_faux.commandes if c[0] == "start_calibration"]
+    chk(envoyees and envoyees[0][1]["id"] == "mi"
+        and envoyees[0][1]["params"] == valeurs_formulaire,
+        f"...et soumet EXACTEMENT ce que le formulaire contenait ({envoyees} "
+        f"pour un formulaire à {valeurs_formulaire})")
+    chk(not processus,
+        f"le MI ne lance AUCUNE fenêtre : son contrat ne déclare pas de stimulus, le moteur mène "
+        f"seul son protocole ({processus})")
+    # Accepté, mais la séance n'est pas encore dans l'état : le formulaire RESTE figé — c'est
+    # jusqu'à la séance qu'il l'est, pas jusqu'à l'accusé.
+    console.apply_state(mi_sain)
+    chk(not cal.formulaire.isEnabled(),
+        "l'entraînement ACCEPTÉ mais pas encore vu dans l'état : le formulaire reste figé")
+    # …et si la séance n'apparaît JAMAIS (la boucle peut la refuser en silence), on renonce en le
+    # DISANT au bout du délai, et le formulaire se rouvre — sans quoi il resterait figé à jamais.
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(mi_sain)
+    chk("n'a pas démarré l'entraînement" in cal.avis.text() and cal.formulaire.isEnabled()
+        and cal.bouton_commencer.isEnabled(),
+        f"…une séance MI jamais apparue fait renoncer au bout de {DELAI_DEMARRAGE_S:.0f} s, À "
+        f"L'ÉCRAN, et rouvre le formulaire dans le même tour ({cal.avis.text()[:60]!r})")
+
+    # Un refus du moteur DOIT s'afficher sur la page, pas seulement sur stdout.
+    moteur_faux.refus["start_calibration"] = "une calibration est déjà en cours (P300)"
+    console.apply_state(mi_sain)
+    cal.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk("déjà en cours" in cal.avis.text(),
+        f"un refus du moteur est AFFICHÉ sur la page, mot pour mot ({cal.avis.text()!r})")
+    chk(cal.formulaire.isEnabled() and cal.bouton_commencer.isEnabled(),
+        "…et le refus ROUVRE le formulaire tout de suite, pour corriger et recommencer")
+    moteur_faux.refus.clear()
+    # « Annuler » sur le contrôle de liaison rouvre aussi le formulaire : rien n'est plus en route.
+    # (Un clic sur un « Commencer » resté figé n'ouvre rien : on ne clique alors pas « Annuler »,
+    # qui ramènerait à l'accueil et ferait tomber toutes les assertions qui suivent.)
+    cal.bouton_commencer.click()
+    ouvert = console.stack.currentWidget() is console.contact
+    if ouvert:
+        console.contact.bouton_retour.click()
+    console.apply_state(mi_sain)
+    chk(ouvert and console.stack.currentWidget() is cal and cal.formulaire.isEnabled(),
+        "« Annuler » au contrôle de liaison ramène sur la page, formulaire rouvert")
+
+    # 2. Pendant : la consigne, la classe, le décompte, la progression — tous reçus, aucun calculé.
+    en_cours = {**mi_state, "calibration": {
+        "mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "essais",
+        "etape": "imagerie", "classe": "LEFT",
+        "instruction": "Imagine : SERRE le POING GAUCHE", "rappel": "sens le serrement",
+        "essai": 7, "total": 42, "restant_s": 2.4, "duree_estimee_s": 400.0,
+        "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
+        "resultat": None, "probleme": ""}}
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"], "croix": True}})
+    avec = (cal.croix.isVisibleTo(cal), cal.croix.text(), cal.croix.height())
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"], "croix": False,
+                                                     "etape": "repos"}})
+    pause = (cal.croix.isVisibleTo(cal), cal.croix.text(), cal.croix.height())
+    console.apply_state(en_cours)       # sans `croix` : un protocole qui n'en a pas
+    sans = cal.croix.isVisibleTo(cal)
+    chk(avec[:2] == (True, "+") and pause[:2] == (True, "") and avec[2] == pause[2] > 0
+        and not sans,
+        f"la croix de fixation : affichée quand le moteur la demande, sa place GARDÉE pendant la "
+        f"pause (même hauteur), absente d'un protocole sans croix ({avec} / {pause} / {sans})")
+    chk("SERRE le POING GAUCHE" in cal.consigne.text(),
+        f"la consigne du moteur est affichée telle quelle ({cal.consigne.text()})")
+    chk("2.4" in cal.decompte.text() or "2,4" in cal.decompte.text(),
+        f"le décompte vient du moteur, pas d'un timer local ({cal.decompte.text()})")
+    # Égalité, pas sous-chaîne : un mutant qui inverserait en « essai 42 sur 7 » contient
+    # toujours « 7 » et « 42 » et passerait un test par `in`.
+    chk(cal.progression.text() == "essai 7 sur 42",
+        f"et la progression nomme les deux nombres, à l'identique ({cal.progression.text()!r})")
+    # …dans l'UNITÉ que le moteur publie (`unite`), « essai » quand il n'en publie pas.
+    console.apply_state({**en_cours, "calibration": {**en_cours["calibration"],
+                                                     "unite": "manche"}})
+    chk(cal.progression.text() == "manche 7 sur 42" and "42 manches" in cal.duree.text(),
+        f"…dans l'unité PUBLIÉE par le moteur, pas une unité écrite ici "
+        f"({cal.progression.text()!r}, {cal.duree.text()[-20:]!r})")
+    console.apply_state(en_cours)
+    chk(not cal.formulaire.isEnabled(),
+        "le formulaire est verrouillé pendant la séance : le changer n'aurait aucun effet")
+
+    moteur_faux.commandes.clear()
+    cal.bouton_abandon.click()
+    chk(("cancel_calibration", {}) in moteur_faux.commandes,
+        f"« Abandonner » passe par la file de commandes ({moteur_faux.commandes})")
+
+    # 3. Après : l'accuracy HONNÊTE, le hasard à côté, et la phrase qui dit ce que ça vaut.
+    fini = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "fini",
+            "etape": "", "classe": "", "instruction": "", "restant_s": 0.0,
+            "resultat": {"modele": "/tmp/mi_model_20260730-141205.joblib",
+                         "nom": "mi_model_20260730-141205.joblib",
+                         "enregistrement": "/tmp/mi_calib_20260730-141205_n42.npz",
+                         "n_essais": 42, "n_fenetres": 126, "cv_groupee": 0.401,
+                         "cv_naive": 0.556, "hasard": 1 / 3,
+                         "classes": ["LEFT", "RIGHT", "REST"],
+                         # Rédigé par le MOTEUR, par la même fonction que ses entraînements.
+                         "filtre": mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0),
+                         "honnetete": mi_calib.HONNETETE,
+                         "verdict": "FAIBLE — ré-essaie",
+                         # Les trois lignes d'affichage, par la VRAIE table du MI et le même
+                         # appel que le moteur (`affichage.depuis_table`) — pas écrites à la main.
+                         **depuis_table(0.401, mi_calib.VERDICTS,
+                                        "40 % de classes justes (hasard 33 %) sur 42 essais")},
+            # Le CANDIDAT : le modèle est écrit, mais dans un dossier temporaire. Tant que ce
+            # champ est renseigné, RIEN n'est dans `data/` et il reste une décision.
+            "candidat": {"modele": "/tmp/calib/candidat_mi_model_20260730-141205.joblib"}}}
+    console.apply_state(fini)
+    # 🔴 EN FACE : trois lignes ; le mur de texte est replié.
+    chk(cal.bloc.verdict.text() == "FAIBLE" and "#e5484d" in cal.bloc.verdict.styleSheet(),
+        f"la page de calibration montre UN mot, en rouge ({cal.bloc.verdict.text()!r})")
+    chk("hasard 33 %" in cal.bloc.chiffres.text(),
+        f"…la mesure avec son hasard ({cal.bloc.chiffres.text()!r})")
+    chk(not cal.resultat.isVisibleTo(cal) and not cal.honnetete.isVisibleTo(cal),
+        "…et la phrase complète et l'honnêteté sont REPLIÉES : elles ne noient plus le chiffre")
+    cal.bloc.details.setChecked(True)
+    # Le tour de `QTimer` SUIVANT, sur la VRAIE page, avant de lire : c'est la page
+    # d'entraînement, repeinte avec le même état (un `BlocResultat(corps_auto=True)` isolé
+    # n'est utilisé par aucune page).
+    console.apply_state(fini)
+    chk(cal.resultat.isVisibleTo(cal) and cal.honnetete.isVisibleTo(cal),
+        "…mais un clic sur « Détails » les ramène, et ils RESTENT au rafraîchissement suivant : "
+        "rangées, pas supprimées")
+    cal.bloc.details.setChecked(False)
+    chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
+        f"l'accuracy affichée est l'HONNÊTE ({cal.resultat.text()})")
+    chk("55.6" not in cal.resultat.text() and "55,6" not in cal.resultat.text(),
+        f"et JAMAIS la naïve, qui est gonflée de 10 à 16 points ({cal.resultat.text()})")
+    chk("33" in cal.resultat.text(),
+        f"le niveau du hasard est à côté — sans lui, 40 % ne veut rien dire ({cal.resultat.text()})")
+    chk("mi_model_20260730-141205.joblib" in cal.details.text(),
+        f"le nom du modèle produit est donné ({cal.details.text()})")
+    chk(mi_calib.filtre_de("fbcsp", (4.0, 40.0), 60.0) in cal.details.text()
+        and "FBCSP" in cal.details.text() and "60 Hz" in cal.details.text(),
+        f"…et AVEC QUOI il a appris : méthode, bande, coupe-bande "
+        f"({cal.details.text()!r})")
+    # La phrase d'honnêteté vient du RÉSULTAT du moteur, pas de la page : chaque entraînement porte
+    # la sienne (celle du MI parle de tâches, celle du P300 de cibles), et la page est la même pour
+    # tous.
+    chk("un score modeste est normal" in cal.honnetete.text(),
+        "et la page dit franchement ce qu'un résultat modeste signifie")
+    chk(cal.honnetete.text() == mi_calib.HONNETETE,
+        "...avec la phrase que la calibration MI publie elle-même, pas une constante d'interface")
+
+    # --- LA DÉCISION : « Enregistrer » ou « Refaire » -------------------------------------
+    # Sans ces deux boutons, AUCUNE calibration n'atteint `data/` : l'écriture est derrière un
+    # geste explicite, pour qu'un modèle soit JUGÉ avant d'être gardé.
+    # 🔴 Les compteurs de refus de `snapshot()` arrivent-ils à l'ÉCRAN ? Un compteur que rien ne
+    # peint est aussi invisible qu'une ligne de terminal. Le cas qu'ils rattrapent : la fenêtre
+    # lancée sans `--calibrer`, où l'écran affiche une progression normale à zéro essai pendant
+    # six minutes.
+    _en_cours = {"mode_id": "p300", "phase": "essais", "instruction": "", "classe": "",
+                 "rappel": "", "restant_s": 3.0, "total": 12, "resultat": None, "probleme": "",
+                 "candidat": None}
+    # La console ne rafraîchit que la page VISIBLE : il faut donc être dessus pour la voir peindre.
+    cal_diag = console.calib_pages["p300"]
+    console.show_calibration("p300")
+    console.apply_state({**state, "calibration": {**_en_cours, "essai": 0, "refus_cible": 7}})
+    chk("7" in cal_diag.diagnostic.text() and "REFUS" in cal_diag.diagnostic.text().upper(),
+        f"les marqueurs refusés s'affichent PENDANT la séance ({cal_diag.diagnostic.text()!r})")
+    chk("entraînement" in cal_diag.diagnostic.text().lower()
+        and "marqueur" not in cal_diag.diagnostic.text().lower(),
+        f"…et la ligne dit quoi VÉRIFIER, dans les mots de l'étudiant — la fenêtre lancée sans "
+        f"`--calibrer`, la panne la plus banale de ce sous-système ({cal_diag.diagnostic.text()!r})")
+    console.apply_state({**state, "calibration": {**_en_cours, "essai": 4}})
+    chk(not cal_diag.diagnostic.text(),
+        f"…et rien ne s'affiche quand le moteur ne refuse rien ({cal_diag.diagnostic.text()!r})")
+    console.show_calibration("mi")      # on rend la page au test suivant, dans l'état qu'il attend
+    console.apply_state(fini)
+
+    chk(cal.bouton_enregistrer.isVisibleTo(cal) and cal.bouton_refaire.isVisibleTo(cal),
+        "un candidat en attente fait apparaître « Enregistrer » et « Refaire »")
+    chk("temporaire" in cal.decision.text()
+        and "« Enregistrer le modèle » le garde" in cal.decision.text(),
+        f"...et l'écran DIT qu'un chiffre affiché n'est pas encore un modèle enregistré "
+        f"({cal.decision.text()[:80]}…)")
+
+    # ⚠️ La console n'écrit JAMAIS sur le disque : elle envoie des commandes. On le PROUVE en
+    # comparant l'empreinte du VRAI `data/` avant et après le clic, servi par un moteur FACTICE
+    # (qui ne fait rien d'autre que retenir la commande). `git status` ne prouverait rien : `data/`
+    # est gitignoré.
+    from core.config import DATA_DIR, empreinte_dossier
+    avant_disque = empreinte_dossier(DATA_DIR)
+    moteur_faux.commandes.clear()
+    cal.bouton_enregistrer.click()
+    chk(("save_calibration", {}) in moteur_faux.commandes,
+        f"« Enregistrer » envoie `save_calibration` au moteur ({moteur_faux.commandes})")
+    cal.bouton_refaire.click()
+    chk(("discard_calibration", {}) in moteur_faux.commandes,
+        f"« Refaire » envoie `discard_calibration` ({moteur_faux.commandes})")
+    chk(empreinte_dossier(DATA_DIR) == avant_disque,
+        "et NI l'un NI l'autre n'a touché au disque : c'est la boucle du moteur qui déplace les "
+        "fichiers, depuis le fil qui les a écrits")
+
+    # Le candidat RETIRÉ (« Enregistrer » appliqué par le moteur) : plus rien à décider, mais le
+    # verdict RESTE à l'écran — il faut pouvoir le lire après avoir enregistré.
+    enregistre = {**fini, "calibration": {**fini["calibration"], "candidat": None,
+                  "resultat": {**fini["calibration"]["resultat"],
+                               "modele": "data/mi_model_20260730-141205.joblib"}}}
+    console.apply_state(enregistre)
+    chk("40.1" in cal.resultat.text() or "40,1" in cal.resultat.text(),
+        f"une fois enregistré, le verdict reste lisible ({cal.resultat.text()[:60]}…)")
+    chk(not cal.bouton_enregistrer.isVisibleTo(cal),
+        "mais « Enregistrer » disparaît : il n'y a plus rien à trancher")
+    chk("data/mi_model_20260730-141205.joblib" in cal.decision.text(),
+        f"...et l'écran dit OÙ le modèle est désormais ({cal.decision.text()!r})")
+
+    # Un refus de `save_calibration` (candidat déjà tranché ailleurs) doit se VOIR lui aussi.
+    console.apply_state(fini)
+    moteur_faux.refus["save_calibration"] = "rien à enregistrer : aucune calibration n'attend"
+    cal.bouton_enregistrer.click()
+    # 🔴 Le tour de `QTimer` SUIVANT, avant de lire : lu tout de suite après le clic, le refus
+    # est là ; 100 ms plus tard, un rafraîchissement qui le remplacerait par « ⚠ Pas encore
+    # enregistré » laisserait l'étudiant recliquer sans savoir pourquoi.
+    console.apply_state(fini)
+    chk("rien à enregistrer" in cal.refus_decision.text()
+        and cal.refus_decision.isVisibleTo(cal),
+        f"un refus d'enregistrement s'affiche mot pour mot, et il SURVIT au rafraîchissement "
+        f"suivant ({cal.refus_decision.text()[:60]!r})")
+    chk("temporaire" in cal.decision.text(),
+        f"…à côté de ce qui reste vrai : le modèle n'est toujours pas enregistré "
+        f"({cal.decision.text()[:50]!r})")
+    moteur_faux.refus.clear()
+    moteur_faux.refus["discard_calibration"] = "rien à jeter"
+    cal.bouton_refaire.click()
+    console.apply_state(fini)
+    chk("rien à jeter" in cal.refus_decision.text(),
+        f"…et un refus de « Refaire » aussi ({cal.refus_decision.text()!r})")
+    moteur_faux.refus.clear()
+    # Une NOUVELLE séance l'efface : il parlait d'une décision qui n'a plus cours.
+    console.apply_state(en_cours)
+    console.apply_state(fini)
+    chk(cal.refus_decision.text() == "",
+        f"…jusqu'à la séance suivante, qui l'efface ({cal.refus_decision.text()!r})")
+
+    # --- le résultat d'un AUTRE mode : aucun chiffre fabriqué -----------------------------
+    # Le P300 ne mesure ni « fenêtres d'entraînement » ni « classes » : il compte des manches et
+    # une SÉLECTION. Si la page écrivait les lignes du MI en dur, elle afficherait sous un
+    # résultat P300 « 0 fenêtres d'entraînement — classes : » : deux chiffres inventés et une
+    # liste vide, sur le seul écran qui sert à décider si on garde le modèle.
+    from core.modes import p300_calib
+    cal_p3 = console.calib_pages["p300"]
+    console.show_calibration("p300")
+    p300_fini = {**state, "calibration": {
+        "mode_id": "p300", "label": "Calibrer le P300", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 12,
+        "total": 12, "duree_estimee_s": 132.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_p300_model_20260907_101500.joblib",
+                     "nom": "p300_model_20260907_101500.joblib",
+                     "enregistrement": "/tmp/calib/candidat_p300_calib_20260907_101500.npz",
+                     "n_essais": 576, "n_manches": 12, "auc": 0.71,
+                     "selection": 10 / 12, "selection_ok": 10, "selection_total": 12,
+                     "hasard": 1 / 6, "verdict": "EXCELLENT",
+                     "honnetete": p300_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_p300_model_20260907_101500.joblib"}}}
+    console.apply_state(p300_fini)
+    chk("83,3" in cal_p3.resultat.text() and "17 %" in cal_p3.resultat.text(),
+        f"le P300 affiche SA mesure — la sélection — et SON hasard (1/6) "
+        f"({cal_p3.resultat.text()})")
+    chk("fenêtres" not in cal_p3.details.text() and "classes" not in cal_p3.details.text(),
+        f"...et AUCUN chiffre du MI n'est fabriqué à côté ({cal_p3.details.text()!r})")
+    chk("12 manches" in cal_p3.details.text() and "576 essais" in cal_p3.details.text(),
+        f"...seulement ce que son résultat porte vraiment ({cal_p3.details.text()!r})")
+    # L'AUC du P300 est un DÉTAIL — elle accompagne la sélection sans jamais la remplacer. Cette
+    # ligne est le pendant de celle de l'ErrP juste en dessous : la page n'affiche l'AUC en détail
+    # que lorsqu'elle n'est PAS la mesure qui décide, et retirer ce détail pour l'ErrP ne doit pas
+    # le retirer ici du même geste.
+    chk("AUC cible/non-cible 71 %" in cal_p3.details.text(),
+        f"...dont son AUC, en DÉTAIL et jamais comme mesure qui décide ({cal_p3.details.text()!r})")
+    chk(cal_p3.honnetete.text() == p300_calib.HONNETETE
+        and "40 %" not in cal_p3.honnetete.text(),
+        "et sa phrase d'honnêteté est CELLE DU P300, jamais celle du MI")
+
+    # --- et le TROISIÈME mode qui se calibre ici : l'ErrP -----------------------------------
+    # Il ne mesure NI accuracy par essai (MI), NI sélection parmi six cibles (P300) : il répond
+    # oui/non à chaque feedback, et le seul de ses chiffres qui ne soit pas mesuré au seuil qui l'a
+    # choisi est son AUC hors-pli. La page doit donc l'afficher COMME MESURE, contre un hasard de
+    # 50 %, sans rien fabriquer des deux autres modes. Les valeurs sont celles de la seule séance
+    # ErrP réellement enregistrée sur un cerveau (AUC 0,776, p = 0,0099, 200 essais).
+    from core.modes import errp_calib
+    cal_errp = console.calib_pages["errp"]
+    console.show_calibration("errp")
+    errp_fini = {**state, "calibration": {
+        "mode_id": "errp", "label": "Calibrer l'ErrP", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 200,
+        "total": 200, "duree_estimee_s": 420.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_errp_model_20260907_101500.joblib",
+                     "nom": "errp_model_20260907_101500.joblib",
+                     "enregistrement": "/tmp/calib/candidat_errp_calib_20260907_101500_n200.npz",
+                     "n_essais": 200, "n_erreurs": 56, "auc": 0.776, "perm_p": 0.0099,
+                     "tpr": 0.500, "tnr": 0.855, "hasard": 0.5,
+                     "verdict": "BON pour un ErrP mono-essai",
+                     "honnetete": errp_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_errp_model_20260907_101500.joblib"}}}
+    console.apply_state(errp_fini)
+    chk(("77.6" in cal_errp.resultat.text() or "77,6" in cal_errp.resultat.text())
+        and "50 %" in cal_errp.resultat.text(),
+        f"l'ErrP affiche SA mesure — l'AUC hors-pli — et SON hasard (50 %, pas 33 % ni 17 %) "
+        f"({cal_errp.resultat.text()})")
+    chk("AUC" in cal_errp.resultat.text() and "sélection" not in cal_errp.resultat.text(),
+        f"...sous SON libellé : ce mode n'a aucune cible à retrouver ({cal_errp.resultat.text()})")
+    chk("fenêtres" not in cal_errp.details.text() and "classes" not in cal_errp.details.text()
+        and "manches" not in cal_errp.details.text(),
+        f"...et AUCUN chiffre du MI ni du P300 n'est fabriqué à côté ({cal_errp.details.text()!r})")
+    chk("200 essais" in cal_errp.details.text() and "dont 56 erreurs" in cal_errp.details.text(),
+        f"...le nombre d'époques ET celui d'ERREURS, qui est la classe minoritaire dont tout "
+        f"dépend ({cal_errp.details.text()!r})")
+    # « attrape 50% » / « garde 86% » sans espace insécable : c'est la MÊME formulation, au
+    # caractère près, que la tuile ErrP de `live_views` — le même taux doit se lire pareil sur les
+    # deux écrans qui le montrent, et l'écart typographique avec le « 50 % » de la ligne du dessus
+    # est le prix assumé de cet alignement-là.
+    chk("repère 50%" in cal_errp.details.text()
+        and "garde 86%" in cal_errp.details.text()
+        and "permutation : p = 0,010" in cal_errp.details.text(),
+        f"...son point de fonctionnement et sa p-value, en DÉTAIL — jamais comme mesure qui "
+        f"décide : ces deux taux sont mesurés au seuil qui les a choisis "
+        f"({cal_errp.details.text()!r})")
+    # ⚠️ L'AUC est ici la mesure qui DÉCIDE : la répéter en détail l'afficherait deux fois, la
+    # seconde sous « cible/non-cible » — le vocabulaire du P300, qui n'a aucun sens pour un mode
+    # qui n'a ni cible ni non-cible mais des feedbacks corrects et erronés.
+    chk("cible/non-cible" not in cal_errp.details.text(),
+        f"...et l'AUC n'est PAS répétée sous le libellé d'un autre paradigme "
+        f"({cal_errp.details.text()!r})")
+    chk(cal_errp.honnetete.text() == errp_calib.HONNETETE
+        and "optimiste" in cal_errp.honnetete.text().lower(),
+        "et sa phrase d'honnêteté est CELLE DE L'ErrP — celle qui dit que ses deux taux sont "
+        "eux-mêmes optimistes, le seuil ayant été choisi sur les scores qui le mesurent")
+    chk("40 %" not in cal_errp.honnetete.text()
+        and "leave-one-round-out" not in cal_errp.honnetete.text(),
+        "...ni celle du MI, ni celle du P300")
+
+    # --- et le QUATRIÈME : le c-VEP, le seul à entraîner DEUX décodeurs ----------------------
+    # Il ne mesure ni accuracy par essai (MI), ni sélection (P300), ni AUC (ErrP) : une justesse
+    # hors-pli à SIX cibles, donc contre un hasard de 16,7 % — et il en rend DEUX, une par
+    # décodeur. Les valeurs sont celles de la séance de référence (k=2) : eCCA 59,5 %, rCCA
+    # 64,9 %, 8 décisions discordantes sur 37, McNemar p = 0,727.
+    # Le point de cet écran-ci : les cinq points d'écart entre les deux décodeurs sont du
+    # BRUIT, et la page ne doit pas les présenter comme un choix à faire. C'est le `verdict` qui
+    # porte le test, et le second décodeur qui reste en DÉTAIL.
+    from core.modes import cvep_calib
+    cal_cvep = console.calib_pages["cvep"]
+    console.show_calibration("cvep")
+    cvep_fini = {**state, "calibration": {
+        "mode_id": "cvep", "label": "Calibrer le c-VEP", "phase": "fini", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 0.0, "essai": 90,
+        "total": 90, "duree_estimee_s": 185.0, "params": {}, "probleme": "",
+        "resultat": {"modele": "/tmp/calib/candidat_cvep_model_20260907-101500.npz",
+                     "modele_rcca": "/tmp/calib/candidat_cvep_rcca_model_20260907-101500.npz",
+                     "nom": "cvep_model_20260907-101500.npz",
+                     "enregistrement": "/tmp/calib/candidat_cvep_calib_20260907-101500_n090.npz",
+                     "n_essais": 90, "n_cibles": 6, "acc_ecca": 22 / 37, "acc_rcca": 24 / 37,
+                     "mcnemar_p": 0.7265625, "n_discordantes": 8, "n_decisions": 37,
+                     "hasard": 1 / 6,
+                     "verdict": cvep_calib.verdict(24 / 37, {"gagnant": None, "p": 0.7265625,
+                                                             "b": 3, "c": 5, "n_discordantes": 8}),
+                     "honnetete": cvep_calib.HONNETETE},
+        "candidat": {"modele": "/tmp/calib/candidat_cvep_model_20260907-101500.npz"}}}
+    console.apply_state(cvep_fini)
+    chk(("59.5" in cal_cvep.resultat.text() or "59,5" in cal_cvep.resultat.text())
+        and "17 %" in cal_cvep.resultat.text(),
+        f"le c-VEP affiche SA mesure — une justesse hors-pli — contre SON hasard (1/6 = 17 %, "
+        f"jamais 50 %) ({cal_cvep.resultat.text()})")
+    chk("INDISCERNABLES" in cal_cvep.resultat.text()
+        and "0.727" in cal_cvep.resultat.text().replace(",", "."),
+        f"...et son verdict rend le TEST qui compare les deux décodeurs, avec sa p-value — pas "
+        f"l'écart de cinq points, qui est du bruit ({cal_cvep.resultat.text()})")
+    chk("fenêtres" not in cal_cvep.details.text() and "manches" not in cal_cvep.details.text()
+        and "AUC" not in cal_cvep.details.text(),
+        f"...et AUCUN chiffre des trois autres modes n'est fabriqué à côté "
+        f"({cal_cvep.details.text()!r})")
+    chk("90 essais" in cal_cvep.details.text()
+        and "rCCA" in cal_cvep.details.text()
+        and "8 décision(s) discordante(s)" in cal_cvep.details.text(),
+        f"...le second décodeur reste en DÉTAIL, à côté du nombre de décisions DISCORDANTES — "
+        f"c'est LUI qui porte l'information, pas les deux pourcentages pris isolément "
+        f"({cal_cvep.details.text()!r})")
+    chk(cal_cvep.honnetete.text() == cvep_calib.HONNETETE
+        and "16,7" in cal_cvep.honnetete.text() and "46 %" in cal_cvep.honnetete.text(),
+        "et sa phrase d'honnêteté est CELLE DU c-VEP — le hasard à six cibles, et le couple "
+        "émission/justesse que le moteur produira vraiment")
+    console.show_calibration("mi")      # la suite éprouve de nouveau la page du MI
+
+    # 3bis. Après, mais SANS CV honnête mesurable : `cv_groupee: None`, pas assez d'essais
+    # DISTINCTS par classe pour former deux plis, cf. mi_calib.py. La page ne doit JAMAIS
+    # afficher « 0 % » dans ce cas (`calib_page.py` ne doit pas effondrer `None` en 0.0, comme
+    # le moteur) : « 0 % » suggère un diagnostic (contact des électrodes, immobilité…) sans
+    # rapport avec la vraie cause. Elle doit montrer la raison à la place.
+    sans_cv = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "fini",
+              "etape": "", "classe": "", "instruction": "", "restant_s": 0.0,
+              "resultat": {"modele": "/tmp/mi_model_20260731-090000.joblib",
+                           "nom": "mi_model_20260731-090000.joblib",
+                           "enregistrement": "/tmp/mi_calib_20260731-090000_n06.npz",
+                           "n_essais": 6, "n_fenetres": 18, "cv_groupee": None,
+                           "cv_naive": 0.50, "hasard": 1 / 3,
+                           "classes": ["LEFT", "RIGHT", "REST"],
+                           "verdict": "justesse non mesurable : pas assez d'essais distincts "
+                                      "par classe pour une validation croisée"}}}
+    console.apply_state(sans_cv)
+    chk("non mesurable" in cal.resultat.text(),
+        f"une CV absente affiche la RAISON en clair, jamais un chiffre inventé "
+        f"({cal.resultat.text()})")
+    chk("0.0" not in cal.resultat.text() and "0,0" not in cal.resultat.text()
+        and "0 %" not in cal.resultat.text(),
+        f"et surtout pas « 0 % », qui se lirait comme un vrai score nul "
+        f"({cal.resultat.text()})")
+
+    # 4. Abandon : pas de modèle, et la raison.
+    annule = {**mi_state, "calibration": {**en_cours["calibration"], "phase": "annule",
+              "resultat": None, "probleme": "ValueError : pas assez de données"}}
+    console.apply_state(annule)
+    chk("pas assez de données" in cal.bloc.verdict.text() and cal.bloc.verdict.isVisibleTo(cal),
+        f"une calibration annulée dit pourquoi, EN FACE — pas seulement dans un label replié "
+        f"({cal.bloc.verdict.text()})")
+
+    # L'état du décodage (« arrêté »…) n'est pas en tête d'une page TESTABLE : elle ne démarre
+    # rien, et un « arrêté » en tête ferait croire qu'il faut démarrer avant de tester. Il vit
+    # dans le repli « Décodage en direct ». Sur une page qui OBSERVE (le Neuro), il reste en tête.
+    ss, ne = console.pages["ssvep"], console.pages["neuro"]
+    chk(ss.pli_direct is not None and ss.pli_direct.isAncestorOf(ss.etat),
+        "l'état d'une page testable vit dans le repli « Décodage en direct », pas en tête")
+    chk(ne.pli_direct is None and ne.bloc_observer is not None
+        and not ne.bloc_observer.isAncestorOf(ne.etat),
+        "…et reste en tête d'une page qui observe, où il est l'objet même de la page")
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.pages["mi"],
+        "et la page d'entraînement ramène au MODE entraîné — la suite de la boucle, tester, se "
+        "fait là")
+
+    # --- 🔴 L'ORDRE DE LANCEMENT, et la fenêtre de stimulus --------------------------------
+    # C'est le piège de tout ce sous-système, et il ne lève aucune exception quand il est faux.
+    # La fenêtre attend ~15 s À PARTIR DE SON PROPRE lancement ; le moteur compte sa chauffe À
+    # PARTIR DE `start_calibration`. Il n'existe aucune poignée de main entre les deux processus.
+    # Dans le mauvais ordre, les premières manches tombent dans la chauffe : elles sont jetées,
+    # comptées et dites — mais la séance est PLUS COURTE que ce que l'écran annonce, et c'est
+    # indiscernable d'un protocole qui s'est bien passé.
+    console.show_calibration("p300")
+    cal_p3 = console.stack.currentWidget()
+    # Le P300 est ARRÊTÉ dans cet état : le chemin nominal, sans arrêt préalable à attendre. La
+    # qualité est la SAINE (cf. plus haut : `state` porte une référence décrochée depuis le test
+    # du bandeau), sans quoi le contrôle de liaison refuserait avant même d'arriver au sujet.
+    p300_pret = {**state, "calibration": None, "quality": qualite_saine}
+    console.apply_state(p300_pret)
+    journal.clear()
+    processus.clear()
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+
+    # 🔴 La fenêtre n'est PAS encore lancée : l'accusé de `start_calibration` dit « mise en
+    # file », pas « démarrée ». La lancer maintenant serait parier, et perdre le pari coûte le
+    # protocole ENTIER joué dans le vide (200 essais d'ErrP, sept minutes, sans rien à l'écran
+    # pour le dire).
+    chk([e[0] for e in journal] == ["commande"],
+        f"après le clic, la commande est SOUMISE et la fenêtre attend ({journal})")
+
+    # La séance apparaît vraiment dans l'état : ALORS la fenêtre part.
+    console.apply_state({**p300_pret,
+                         "calibration": {"mode_id": "p300", "phase": "chauffe", "restant_s": 15.0,
+                                         "instruction": "", "essai": 0, "total": 12,
+                                         "resultat": None, "probleme": "", "candidat": None}})
+    noms = [e[0] for e in journal]
+    chk(("commande", "start_calibration") in journal and ("fenetre" in noms),
+        f"une calibration P300 soumet la commande, puis lance la fenêtre quand la séance EXISTE "
+        f"pour de bon ({journal})")
+    chk(0 <= rang(noms, "commande") < rang(noms, "fenetre"),
+        f"🔴 et dans CET ordre : `start_calibration` AVANT la fenêtre — sinon les premières "
+        f"manches tombent dans la chauffe du moteur ({journal})")
+
+    # La commande de la fenêtre vient de `stimulus/registry.py`, jamais d'une chaîne écrite ici.
+    from stimulus import registry as stim_registry
+    from core.config import P300_N_TARGETS as _N_P300, p300_targets as _cibles_p300
+    # Les CIBLES réglées dans « Entraîner » (ici, les 6 par défaut) partent avec la fenêtre.
+    attendue = stim_registry.commande(
+        "p300", calibrer=True,
+        options=stim_registry.option_cibles("p300", [c["name"] for c in _cibles_p300(_N_P300)]))
+    lancees = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(lancees and list(lancees[0]) == list(attendue),
+        f"la ligne de commande est CELLE du registre des stimulus, à l'identique "
+        f"({lancees} pour {list(attendue)})")
+    chk(lancees and "--calibrer" in lancees[0],
+        f"...et elle porte `--calibrer` : c'est la fenêtre en mode CALIBRATION ({lancees})")
+
+    # Deux fenêtres publieraient les mêmes marqueurs sous le même nom, et le moteur mélangerait
+    # les deux séances sans rien signaler. Le second lancement est refusé — et le refus se VOIT.
+    avant_second = len(processus)
+    refus = console.lanceur.lancer("p300", calibrer=True)
+    chk(not refus.get("accepted") and len(processus) == avant_second,
+        f"une SECONDE fenêtre est refusée, et aucun processus de plus n'est créé ({refus})")
+    console.apply_state(p300_pret)
+    chk("tourne déjà" in console.banner.fenetre.text(),
+        f"...et le refus est AFFICHÉ dans le bandeau, pas seulement rendu à l'appelant "
+        f"({console.banner.fenetre.text()[:70]}…)")
+
+    # Une fenêtre qui MEURT anormalement doit le dire. Le silence est le défaut d'origine : le
+    # moteur attendrait alors des marqueurs qui ne viendront plus, indiscernable d'un étudiant
+    # qui fixe mal.
+    fenetre = processus[-1]
+    fenetre.sortie = b"ModuleNotFoundError: No module named 'pygame'\n"
+    fenetre.readyReadStandardOutput.emit()
+    fenetre.finished.emit(1, QProcess.ExitStatus.NormalExit)
+    console.apply_state(p300_pret)
+    chk("pygame" in console.banner.fenetre.text()
+        and "anormalement" in console.banner.fenetre.text(),
+        f"une fenêtre morte le DIT à l'écran, avec sa dernière sortie ({console.banner.fenetre.text()})")
+    chk(not console.lanceur.en_cours(),
+        "...et le lanceur la considère bien terminée : on peut en relancer une")
+
+    # Une fenêtre qu'on tue SOI-MÊME (abandon, fermeture) n'est pas une panne : ne pas crier.
+    console.lanceur.lancer("p300", calibrer=True)
+    console.lanceur.arreter()
+    console.apply_state(p300_pret)
+    chk(console.banner.fenetre.text() == "",
+        f"une fenêtre arrêtée par la console ne s'annonce pas comme une panne "
+        f"({console.banner.fenetre.text()!r})")
+
+    # --- le lanceur contre un VRAI `QProcess` ------------------------------------------------
+    # Tout ce qui précède tourne sur un `QProcess` de façade : ça prouve la LOGIQUE du lanceur, et
+    # rien du contact avec Qt. Une signature qui changerait (`finished(int, ExitStatus)`, un
+    # `readAllStandardOutput` qui rend un `QByteArray`) laisserait ces assertions vertes et
+    # n'échouerait qu'en séance : la fenêtre meurt, et rien ne le dit.
+    #
+    # Ce n'est PAS un pygame : c'est un `python -c` qui écrit sur stderr et sort en 3, borné par
+    # `waitForFinished`. Un smoke qui ouvre une fenêtre plein écran en CI finit désactivé. La
+    # commande est détournée le temps de ce test SEULEMENT : en production,
+    # `stimulus/registry.py` en reste la seule source, et c'est vérifié plus haut sur la ligne
+    # de commande réellement lancée.
+    from console import fenetres as mod_fenetres
+    vraie_commande = mod_fenetres.stimulus_registry.commande
+    try:
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
+            sys.executable, "-u", "-c",
+            "import sys; sys.stderr.write('BOUM : dépendance absente\\n'); sys.exit(3)"]
+        vrai = LanceurFenetre()
+        chk(vrai.lancer("p300", calibrer=True).get("accepted"),
+            "un VRAI QProcess démarre")
+        vrai._proc.waitForFinished(5000)
+        app.processEvents()
+        chk(not vrai.en_cours(), "...et le lanceur le voit terminé (signal `finished` reçu)")
+        chk("code 3" in vrai.probleme and "BOUM" in vrai.probleme,
+            f"...avec son code de sortie ET sa dernière ligne de stderr, non tamponnée grâce au "
+            f"`-u` du registre ({vrai.probleme})")
+        # L'autre mort, celle où `finished` n'arrive JAMAIS : exécutable introuvable. Sans la
+        # branche `errorOccurred`, le lanceur resterait « en cours » pour toujours et le bouton
+        # redeviendrait silencieux.
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
+            "programme-qui-nexiste-pas-12345"]
+        introuvable = vrai.lancer("p300")
+        app.processEvents()
+        chk(not introuvable.get("accepted") and not vrai.en_cours(),
+            f"un exécutable introuvable est rendu comme un REFUS, pas comme un succès qui "
+            f"n'arrivera jamais ({introuvable})")
+        chk("n'a pas démarré" in vrai.probleme,
+            f"...et il le dit à l'écran ({vrai.probleme[:60]}…)")
+
+        # 🔴 UNE FIN NORMALE A AUSSI QUELQUE CHOSE À DIRE. La dernière ligne d'une fenêtre est son
+        # BILAN (« N frames affichées, M sautée(s) »), c'est-à-dire le chiffre qui QUALIFIE la
+        # séance qu'on vient de jouer ; si seule une mort anormale affichait les lignes, il serait
+        # perdu dans le terminal (comme pour un refus qu'on ne voit pas : ici ce qu'on perd
+        # est une mesure).
+        # `reconfigure(utf-8)` n'est pas du décor : c'est ce que `use_utf8_console()` fait en tête
+        # de CHAQUE fenêtre du projet. Sans lui, Python écrit dans la page de code de la console
+        # Windows et « sautée » arrive mutilé : le bilan serait affiché, et illisible.
+        mod_fenetres.stimulus_registry.commande = lambda sid, calibrer=False, options=(): [
+            sys.executable, "-u", "-c",
+            "import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+            "print('[ssvep-stim] t=1.0 essai 16/18 : fixe « AVANT » (cible 0)'); "
+            "print('[ssvep-stim] t=2.0 essai 17/18 : fixe « ARRIERE » (cible 2)'); "
+            "print('[ssvep-stim] test terminé : 18 essais, « calib_end » envoyé'); "
+            "print('[ssvep-stim] fin : 600 frames affichées, 4 sautée(s) (0.7%)'); "
+            # Le journal de liblsl, imprimé APRÈS le bilan (le moteur ferme son flux décodé
+            # pendant que la fenêtre l'écoute encore).
+            "print('2026-10-05 13:45:48.827 ( 218.143s) [R_EEG_API_Unic ]  data_receiver.cpp:344"
+            "   ERR| Stream transmission broke off (Input stream error.); re-connecting...')"]
+        propre = LanceurFenetre()
+        propre.lancer("ssvep")
+        propre._proc.waitForFinished(5000)
+        app.processEvents()
+        texte, alerte = propre.etat_texte()
+        chk("4 sautée(s)" in texte,
+            f"une fenêtre fermée NORMALEMENT laisse son bilan à l'écran ({texte[:70]}…)")
+        chk(not alerte,
+            "…sans le peindre en alerte : une séance qui s'est bien passée le dit aussi, et "
+            "« 0 sautée » doit se LIRE plutôt que se deviner")
+        chk("ERR|" not in texte and "data_receiver" not in texte,
+            f"…sans le journal interne de liblsl, même imprimé en dernier : il prenait la place "
+            f"du bilan et se lisait comme une panne ({texte[:90]}…)")
+        chk("essai 16/18" not in texte and "essai 17/18" not in texte,
+            f"…et SEULEMENT son bilan : le journal essai par essai qui le précède ne remonte pas "
+            f"dans le bandeau, où il noyait le chiffre utile ({texte[:90]}…)")
+        chk(propre.probleme == "",
+            f"…et ce n'est PAS un problème : le canal des morts anormales reste vide "
+            f"({propre.probleme[:40]})")
+        propre.lancer("ssvep")
+        # On teste l'ABSENCE du bilan, pas la présence d'un mot que les deux textes partagent :
+        # « fenêtre … en cours » et « fenêtre … fermée » commencent tous les deux par « fenêtre »,
+        # donc un `startswith` serait vrai des deux côtés et l'assertion ne pourrait pas rougir.
+        chk(propre.resume == "" and "sautée" not in propre.etat_texte()[0]
+            and "en cours" in propre.etat_texte()[0],
+            f"…et relancer efface le bilan de la précédente, qui coifferait celle qui tourne "
+            f"(« {propre.etat_texte()[0][:60]}… »)")
+        propre.arreter()
+    finally:
+        mod_fenetres.stimulus_registry.commande = vraie_commande
+
+    # Une calibration dont la FENÊTRE refuse de s'ouvrir : le moteur attendrait des marqueurs qui
+    # ne viendront jamais, en comptant une chauffe qui ne mène nulle part. La console l'annule —
+    # mais PAS tout de suite : `start_calibration` vient d'être mise en file, donc
+    # `cancel_calibration` soumise dans la foulée s'entendrait dire « aucune calibration en
+    # cours », et l'écran annoncerait une annulation qui n'a pas eu lieu, décompte à l'appui.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    console.lanceur.lancer("p300")                 # une fenêtre occupe déjà la place
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk([e[1] for e in journal if e[0] == "commande"] == ["start_calibration"],
+        f"...sans soumettre `cancel_calibration` à un moteur qui n'a encore rien démarré "
+        f"({journal})")
+    # La séance apparaît : la console tente ALORS de lancer la fenêtre, se la voit refuser, et
+    # note l'annulation (la fenêtre est lancée à l'APPARITION de la séance, pas à l'accusé :
+    # c'est ici que le refus de fenêtre se découvre).
+    en_chauffe = {**p300_pret, "calibration": {
+        "mode_id": "p300", "label": "Calibrer le P300", "phase": "chauffe", "etape": "",
+        "classe": "", "instruction": "", "rappel": "", "restant_s": 12.0, "essai": 0,
+        "total": 12, "duree_estimee_s": 132.0, "params": {}, "resultat": None, "probleme": "",
+        "candidat": None}}
+    console.apply_state(en_chauffe)
+    chk("tourne déjà" in cal_p3.avis.text() and "annulé" in cal_p3.avis.text(),
+        f"une fenêtre indisponible annule l'entraînement, et le DIT ({cal_p3.avis.text()[:80]}…)")
+    console.apply_state(en_chauffe)
+    chk([e[1] for e in journal if e[0] == "commande"]
+        == ["start_calibration", "cancel_calibration"],
+        f"...et l'annulation part toute seule au tour suivant, sans un clic de plus ({journal})")
+    console.lanceur.arreter()
+
+    # ⚠️ Le mode P300 qui DÉCODE pendant qu'on lance sa calibration : les deux liraient la même
+    # file de marqueurs, et le moteur REFUSE. La console arrête donc le mode elle-même —
+    # mais `stop_mode` est mis en FILE : soumettre `start_calibration` dans la foulée serait
+    # refusé. Elle attend de voir le mode DISPARAÎTRE de l'état.
+    journal.clear()
+    processus.clear()
+    p300_actif = {**p300_state, "calibration": None, "quality": qualite_saine}
+
+    # 🔴 UN RÉGLAGE INVALIDE EST REFUSÉ AU CLIC, AVANT TOUT LE RESTE. Refusé seulement au
+    # `start_calibration`, le contrôle de liaison passerait, `stop_mode` partirait, la note
+    # dirait « décodage arrêté pour cet entraînement » et SEULEMENT ENSUITE viendrait le refus :
+    # le flux de l'application de l'étudiant serait coupé pour rien. L'espion : le P300 DÉCODE,
+    # la coupure haute à l'écran est hors bornes, et le moteur (factice ici ; le vrai plus bas)
+    # refuse.
+    console.apply_state(p300_actif)
+    moteur_faux.commandes.clear()
+    moteur_faux.validations.clear()
+    moteur_faux.refus["valider_calibration"] = "« Coupure haute » : 50 Hz dépasse le maximum (40 Hz)"
+    # `.get` : une page sans ce champ ROUGIT plus bas (les quatre pages portent la bande), elle ne
+    # fait pas tomber tout le smoke sur un `KeyError`.
+    haut_p3 = cal_p3.formulaire.champs.get("band_high")
+    if haut_p3 is not None:
+        haut_p3.setValue(50.0)
+    cal_p3.bouton_commencer.click()
+    chk(console.stack.currentWidget() is cal_p3,
+        "un réglage refusé par le moteur n'ouvre PAS le contrôle de liaison")
+    chk(not moteur_faux.commandes and not [e for e in journal if e[0] == "commande"],
+        f"…et rien ne part : ni `stop_mode` — le décodage continue, le flux de l'application "
+        f"aussi —, ni `start_calibration` ({moteur_faux.commandes})")
+    chk("50 Hz dépasse le maximum" in cal_p3.avis.text() and "e5484d" in cal_p3.avis.styleSheet()
+        and cal_p3.note.text() == "",
+        f"…le refus s'affiche EN ROUGE sur la page, sans note « décodage arrêté » "
+        f"({cal_p3.avis.text()!r}, note {cal_p3.note.text()!r})")
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire reste ouvert, pour corriger la valeur")
+    chk([p.get("band_high") for _m, p, _j in moteur_faux.validations] == [50.0],
+        f"…le moteur a jugé la valeur À L'ÉCRAN ({moteur_faux.validations})")
+    moteur_faux.refus.pop("valider_calibration")
+    if haut_p3 is not None:
+        haut_p3.setValue(cal_p3.formulaire._params_par_cle["band_high"]["default"])
+    journal.clear()
+    moteur_faux.validations.clear()
+
+    console.apply_state(p300_actif)
+    cal_p3.bouton_commencer.click()
+    chk(not cal_p3.formulaire.isEnabled(),
+        "(P300 qui décode) le formulaire est figé dès le clic, contrôle de liaison ouvert")
+    console.contact.bouton_lancer.click()
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
+        f"le mode qui décode est ARRÊTÉ d'abord, et rien d'autre n'est soumis ({journal})")
+    chk(len(moteur_faux.validations) == 1 and not moteur_faux.validations[0][2],
+        f"…et la validation a eu lieu AVANT tout : le journal était vide quand le moteur a été "
+        f"interrogé ({moteur_faux.validations})")
+    chk(not processus, f"...et AUCUNE fenêtre n'est lancée tant qu'il décode ({processus})")
+    chk("arrêté pour cet entraînement" in cal_p3.note.text(),
+        f"...et l'écran dit ce qu'on attend, au lieu de ne rien faire ({cal_p3.note.text()[:70]}…)")
+    console.apply_state(p300_actif)          # il n'a pas encore rendu la main
+    chk(not cal_p3.formulaire.isEnabled() and not cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire RESTE figé pendant qu'on attend l'arrêt du mode (passe C1)")
+    # Le mode a rendu la main : la calibration part, dans le bon ordre, sans autre clic.
+    console.apply_state(p300_pret)
+    noms = [e[0] for e in journal]
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode", "start_calibration"],
+        f"dès qu'il a rendu la main, la calibration part toute seule ({journal})")
+    chk(not processus,
+        f"...et la fenêtre attend encore : la commande n'est que MISE EN FILE ({processus})")
+    console.apply_state(p300_pret)
+    chk(not cal_p3.formulaire.isEnabled(),
+        "…et figé encore tant que la séance soumise n'apparaît pas dans l'état")
+    # Un tour de plus, la séance existe : la fenêtre part, et forcément après.
+    console.apply_state({**p300_pret, "calibration": {
+        "mode_id": "p300", "phase": "chauffe", "restant_s": 15.0, "instruction": "", "essai": 0,
+        "total": 12, "resultat": None, "probleme": "", "candidat": None}})
+    noms = [e[0] for e in journal]
+    chk(0 <= rang(noms, "commande", 1) < rang(noms, "fenetre"),
+        f"...et la fenêtre vient encore APRÈS `start_calibration` ({journal})")
+    console.lanceur.arreter()
+    console.apply_state(p300_pret)
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et plus rien n'est en route ni ne tourne : le formulaire se rouvre")
+
+    # 🔴 Et si le moteur n'A JAMAIS démarré la séance ? C'est le cas que ce garde-fou existe
+    # pour couvrir : `_start_calibration` peut sortir sans rien créer par trois portes
+    # silencieuses (séance déjà en cours, refus du vol de marqueurs côté boucle, exception
+    # avalée par `_drain_commands`). Lancée sur l'ACCUSÉ, la fenêtre jouerait plein écran 200
+    # essais d'ErrP, sept minutes dans le vide, avec pour seul témoin une ligne dans la console
+    # cmd derrière la fenêtre Qt.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    console.apply_state(p300_pret)          # la séance n'apparaît PAS
+    chk(not processus,
+        f"le moteur n'ayant rien démarré, la fenêtre n'est PAS lancée ({processus})")
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(p300_pret)
+    chk(not processus and "n'a pas démarré" in cal_p3.avis.text(),
+        f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
+        f"jouer un protocole entier dans le vide ({cal_p3.avis.text()[:80]}…)")
+    # Le renoncement rouvre le formulaire DANS LE MÊME TOUR que l'avis : la fiche
+    # d'attente est retirée avant son tour, donc la page ne se croit plus « en route ».
+    chk(cal_p3.formulaire.isEnabled() and cal_p3.bouton_commencer.isEnabled(),
+        "…et le formulaire se rouvre avec l'avis, pas un tour plus tard")
+
+    # ...et si le mode ne s'arrête JAMAIS, on renonce en le DISANT. Sans ce délai, l'écran
+    # attendrait en silence — indiscernable d'une chauffe qui démarre.
+    journal.clear()
+    console.apply_state(p300_actif)
+    cal_p3.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    horloge[0] += DELAI_ARRET_S + 1.0
+    console.apply_state(p300_actif)          # il décode toujours
+    chk("n'a pas été lancé" in cal_p3.avis.text(),
+        f"un mode qui ne s'arrête pas fait renoncer l'entraînement, à l'écran "
+        f"({cal_p3.avis.text()[:80]}…)")
+    chk([e[1] for e in journal if e[0] == "commande"] == ["stop_mode"],
+        f"...et `start_calibration` n'est JAMAIS soumise ({journal})")
+    chk(cal_p3.formulaire.isEnabled(),
+        "…et ce renoncement-là rouvre aussi le formulaire")
+
+    # « Lancer le stimulus » : la même fenêtre, SANS `--calibrer`. AUCUN bouton de page n'y mène
+    # (il reviendra avec « Connecter »). La MACHINERIE reste (`Console.demander_stimulus`), et
+    # reste éprouvée ici par appel direct : une machinerie gardée sans test pourrit en silence
+    # jusqu'au jour où on la rebranche.
+    journal.clear()
+    processus.clear()
+    console.show_mode("p300")
+    page_p3 = console.pages["p300"]
+    console.apply_state(p300_pret)
+    console.demander_stimulus("p300")
+    chk(console.stack.currentWidget() is console.contact,
+        "« Lancer le stimulus » passe lui aussi par le contrôle de liaison")
+    console.contact.bouton_lancer.click()
+    lancees = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(lancees and list(lancees[0]) == list(stim_registry.commande("p300")),
+        f"...et lance la fenêtre en mode DÉCODAGE, sans --calibrer ({lancees})")
+    chk(not [e for e in journal if e[0] == "commande"],
+        f"...sans soumettre la moindre commande au moteur : le mode se démarre depuis la grille "
+        f"({journal})")
+    console.lanceur.arreter()
+
+    # « Annuler » sur le contrôle de liaison ne lance rien et ramène d'où l'on vient.
+    journal.clear()
+    processus.clear()
+    console.apply_state(p300_pret)
+    console.demander_stimulus("p300")
+    console.contact.bouton_retour.click()
+    chk(console.stack.currentWidget() is page_p3 and not journal,
+        f"« Annuler » revient sur la page d'origine sans rien lancer ({journal})")
+
+    # --- Le flux de marqueurs est un choix OUVERT : jamais remplacé en silence -----
+    # Le scénario : l'application n'est pas lancée à l'ouverture de la page, la liste retombe sur
+    # le flux par défaut, et le prochain « Appliquer » écrase le nom retenu sans un mot.
+    from core.config import MARKER_STREAM_DEFAULT as _FLUX_DEFAUT
+    form_p3 = page_p3.formulaire
+    form_p3.set_values({"stream_in": "MonJeu_markers"})
+    form_p3.set_choices("stream_in", [_FLUX_DEFAUT])            # le jeu est fermé
+    chk(form_p3.values()["stream_in"] == "MonJeu_markers"
+        and tr("console.params.pas_vu_reseau") in form_p3.champs["stream_in"].currentText(),
+        "le flux retenu reste choisi même absent de la liste, marqué « pas vu sur le réseau », "
+        "et le formulaire rend son nom BRUT")
+    form_p3.set_choices("stream_in", [_FLUX_DEFAUT, "MonJeu_markers"])
+    chk(form_p3.values()["stream_in"] == "MonJeu_markers"
+        and tr("console.params.pas_vu_reseau") not in form_p3.champs["stream_in"].currentText(),
+        "…et la marque tombe dès que le flux devient visible sur le réseau")
+    form_p3.champs["stream_in"].setEditText("  Tape_avant ")
+    chk(form_p3.values()["stream_in"] == "Tape_avant",
+        "on peut taper le nom de son flux à l'avance (espaces autour retirés)")
+    form_p3.set_choices("stream_in", [_FLUX_DEFAUT])
+    chk(form_p3.values()["stream_in"] == "Tape_avant",
+        "…et un nom tapé survit au rechargement de la liste")
+    champ_flux = form_p3.champs["stream_in"]
+    chk(champ_flux.completer() is None,
+        "aucune complétion automatique dans la liste des flux : elle ignore la casse, et un nom "
+        "de flux LSL la respecte (« Mon » finirait en « MonJeu_markers », un autre flux)")
+    champ_flux.choisir_ouvert("Ancien_flux")
+    marquee = champ_flux.itemText(champ_flux.count() - 1)
+    champ_flux.setCurrentIndex(0)
+    champ_flux.setEditText(marquee)
+    chk(form_p3.values()["stream_in"] == "Ancien_flux",
+        f"le texte d'une ligne MARQUÉE alors que l'indice n'est pas encore à jour (le champ garde "
+        f"le focus) : le nom part BRUT, sans sa marque ({form_p3.values()['stream_in']!r})")
+    # Un accusé « accepté, avec réserve » montre la réserve (et pas le vert « retenu »).
+    commande_reelle = console.commande
+    console.commande = lambda *_a, **_k: {"accepted": True, "differe": True, "warning": "W-reserve"}
+    try:
+        page_p3._appliquer(form_p3.values())
+    finally:
+        console.commande = commande_reelle
+    chk(form_p3.avertissement.text() == "W-reserve" and form_p3.confirmation.text() == "",
+        f"un accusé accepté AVEC avertissement l'affiche ({form_p3.avertissement.text()!r})")
+    console.commande = lambda *_a, **_k: {"accepted": True, "differe": False, "warning": None}
+    try:
+        page_p3._appliquer(form_p3.values())
+    finally:
+        console.commande = commande_reelle
+    chk(form_p3.avertissement.text() == "",
+        f"…et le « Appliquer » suivant, accepté SANS réserve, l'efface : elle ne parlait plus du "
+        f"réglage en vigueur ({form_p3.avertissement.text()!r})")
+    console.commande = lambda *_a, **_k: {"accepted": True, "differe": False,
+                                          "warning": "W-au-depart", "params": {}}
+    try:
+        parti_p3, _r = page_p3._appliquer_avant_de_partir()
+    finally:
+        console.commande = commande_reelle
+    chk(parti_p3 and form_p3.avertissement.text() == "W-au-depart",
+        f"les réglages appliqués en partant TESTER gardent leur réserve sous « Régler », lisible "
+        f"au retour ({form_p3.avertissement.text()!r})")
+    form_p3.show_avertissement("")
+    form_p3.set_choices("stream_in", [_FLUX_DEFAUT])
+    form_p3.champs["stream_in"].setCurrentIndex(0)
+
+    # --- Une application change UN réglage : la saisie en cours dans les AUTRES champs reste ----
+    # Sinon un « set_params » de l'application, sur le rafraîchissement, effacerait le pic alpha
+    # que l'élève vient de taper et n'a pas encore appliqué.
+    page_r = console.pages["ssvep"]
+    console.show_mode("ssvep")
+    retenus_r = {"targets_on": "screen", "freqs": [12.0, 15.0, 20.0], "target_names": [],
+                 "refresh_hz": 60.0, "alpha_hz": 10.0}
+    arrete_r = {**state, "modes_state": {k: v for k, v in state["modes_state"].items()
+                                         if k != "ssvep"},
+                "reglages": {"ssvep": dict(retenus_r)}}
+    console.apply_state(arrete_r)
+    page_r.formulaire.champs["alpha_hz"].setValue(11.5)            # tapé, pas appliqué
+    console.apply_state({**arrete_r, "reglages": {"ssvep": {**retenus_r, "refresh_hz": 120.0}}})
+    vals_r = page_r.formulaire.values()
+    chk(abs(vals_r["refresh_hz"] - 120.0) < 1e-9 and abs(vals_r["alpha_hz"] - 11.5) < 1e-9,
+        f"une application change le rafraîchissement : son champ suit, et le pic alpha TAPÉ mais "
+        f"pas appliqué reste ({vals_r['refresh_hz']}, {vals_r['alpha_hz']})")
+    console.apply_state(arrete_r)
+    page_r.formulaire.set_values(retenus_r)
+    console.show_grid()
+
+    # --- 🔴 UNE PAGE DE MODE = DES BLOCS NUMÉROTÉS, ET RIEN D'AUTRE -------------------------
+    # Les blocs sont posés par le CONTRAT : « Entraîner » si `calibration`, « Tester » si
+    # `test_id`, « Observer » sinon. Le NUMÉRO suit : le SSVEP n'a rien à entraîner, donc son
+    # test est le 2 ; le MI s'entraîne, donc le sien est le 3.
+    def _titres(p):
+        return [b.title() for b in (p.bloc_regler, p.bloc_entrainer, p.bloc_tester,
+                                    p.bloc_observer) if b is not None]
+
+    chk(_titres(console.pages["ssvep"]) == ["1. Régler", "2. Tester"],
+        f"SSVEP : « 1. Régler » puis « 2. Tester » — la CCA n'apprend rien, rien à entraîner "
+        f"({_titres(console.pages['ssvep'])})")
+    chk(_titres(console.pages["mi"]) == ["1. Régler", "2. Entraîner", "3. Tester"],
+        f"MI : régler, entraîner, tester — dans cet ordre, numérotés "
+        f"({_titres(console.pages['mi'])})")
+    chk(_titres(console.pages["neuro"]) == ["1. Régler", "2. Observer"]
+        and console.pages["neuro"].bouton_tester is None
+        and console.pages["neuro"].bouton_entrainer is None,
+        f"Neuro : aucune vérité-terrain, donc ni « Entraîner » ni « Tester » — on OBSERVE "
+        f"({_titres(console.pages['neuro'])})")
+    chk(_titres(console.pages["raw"]) == ["1. Régler", "2. Observer"]
+        and console.pages["raw"].bouton_observer is None,
+        f"Brut : on observe aussi, SANS bouton — ses tracés lisent le tampon d'acquisition, il "
+        f"n'y a rien à démarrer ({_titres(console.pages['raw'])})")
+    # Ce qui a QUITTÉ la page — lu dans l'ARBRE des widgets, pas dans des attributs : un attribut
+    # mis à `None` n'empêcherait pas un bouton oublié de rester affiché.
+    from PySide6.QtWidgets import QAbstractButton
+    partis = {"Démarrer", "Arrêter", "Lancer le stimulus", "Copier", "Journal de séance",
+              "Calibrer"}
+    restes = sorted({(mid, b.text()) for mid, p in console.pages.items()
+                     for b in p.findChildren(QAbstractButton) if b.text() in partis
+                     and not (p.bouton_observer is b)})
+    chk(not restes,
+        f"…et plus AUCUNE page ne porte « Démarrer », « Lancer le stimulus », « Journal de "
+        f"séance », « Copier » ni « Calibrer » : ils reviendront avec « Connecter » ({restes})")
+
+    # Et la réciproque, sur le contrat lui-même : aucune clé de stimulus ne sort de nulle part.
+    orphelines = [s["id"] for s in registry.catalog()
+                  if s.get("stimulus_id") and s["stimulus_id"] not in stim_registry.FENETRES]
+    chk(not orphelines,
+        f"…et chaque `stimulus_id` déclaré par un mode désigne une fenêtre que le registre sait "
+        f"lancer ({orphelines or 'aucune orpheline'})")
+
+    # --- 🔴 LE STIMULUS SSVEP PART AVEC LES FRÉQUENCES DU MODE -----------------------------
+    #
+    # Sans ça, la fenêtre affiche le jeu du DÉPÔT pendant que le moteur corrèle sur celui de la
+    # console : aucune exception, aucun compteur, le mode ne détecte simplement plus rien. C'est
+    # ce que le réglage « Fréquences des cibles » promet.
+    ssvep_qui_tourne = {**state, "quality": qualite_saine, "calibration": None}
+    ssvep_qui_tourne["modes_state"] = {**(state.get("modes_state") or {}), "ssvep": {
+        "id": "ssvep", "label": "SSVEP", "family": "actif", "phase": "running", "published": True,
+        "params": {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.0},
+        "instruction": "", "stream": "decoded_ssvep", "channels": [], "rest_report": None,
+        "output": None}}
+    console.apply_state(ssvep_qui_tourne)
+    journal.clear()
+    processus.clear()
+    console.demander_stimulus("ssvep")      # machinerie sans bouton de page (cf. plus haut)
+    console.contact.bouton_lancer.click()
+    argv = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(argv and "--freqs" in argv[0],
+        f"« Lancer le stimulus » passe les fréquences À LA FENÊTRE ({argv})")
+    chk(argv and "12,15,20" in argv[0],
+        f"…et ce sont celles du MODE, pas celles du dépôt (15, 20, 8.571) ({argv[0][-2:]})")
+    chk(argv and "--calibrer" not in argv[0],
+        f"…sans --calibrer : on décode, on n'entraîne pas ({argv[0][-3:]})")
+    console.lanceur.arreter()
+
+    # --- 🔴 « OBSERVER » DÉMARRE LE NEURO, ET UNE PAGE MONTRE UN RÉGLAGE RETENU -------------
+    #
+    # Deux culs-de-sac à éviter. Une page qui affiche « arrêté » doit offrir de quoi y remédier ;
+    # et un réglage posé sur un mode arrêté est accepté, retenu, appliqué au démarrage : le
+    # champ doit donc montrer la valeur retenue, sinon l'écran dit le contraire de la vérité.
+    # Seul un mode SANS vérité-terrain garde ce bouton : on ne peut rien regarder du neuro sans
+    # le faire tourner. Les autres se TESTENT.
+    page_ne = console.pages["neuro"]
+    console.show_mode("neuro")          # `apply_state` ne peint que la page COURANTE
+    console.apply_state(neuro_state)
+    chk(page_ne.bouton_observer is not None and page_ne.bouton_observer.text() == "Arrêter",
+        f"neuro qui TOURNE : « Observer » est devenu « Arrêter » "
+        f"({None if page_ne.bouton_observer is None else page_ne.bouton_observer.text()})")
+    ssvep_arrete = {**state, "quality": qualite_saine, "calibration": None,
+                    "modes_state": {}, "reglages": {"ssvep": {
+                        "freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0, "alpha_hz": 10.5}}}
+    console.apply_state(ssvep_arrete)
+    chk(page_ne.bouton_observer.text() == "Observer",
+        f"…neuro ARRÊTÉ : « Observer », et le sens vient de l'état REÇU, jamais d'une bascule "
+        f"tenue dans l'interface ({page_ne.bouton_observer.text()})")
+    journal.clear()
+    moteur_faux.commandes.clear()
+    page_ne.bouton_observer.click()
+    chk(("start_mode", {"id": "neuro"}) in moteur_faux.commandes,
+        f"…et le bouton SOUMET vraiment, par le même chemin que la tuile ({moteur_faux.commandes})")
+    page_ss = console.pages["ssvep"]
+    console.show_mode("ssvep")
+    console.apply_state(ssvep_arrete)
+    chk(abs(page_ss.formulaire.champs["alpha_hz"].value() - 10.5) < 1e-9,
+        f"le réglage RETENU s'affiche, alors que le mode ne tourne pas : sinon l'écran dit le "
+        f"contraire de la vérité ({page_ss.formulaire.champs['alpha_hz'].value()})")
+    # « Entraîner » est CLIQUÉ, pas contourné : appeler `show_calibration()` en direct laisserait
+    # le bouton disparaître de TOUS les modes sans qu'un test le voie.
+    console.show_mode("mi")
+    console.pages["mi"].bouton_entrainer.click()
+    chk(console.stack.currentWidget() is console.calib_pages["mi"],
+        "« Entraîner » ouvre la page d'entraînement du mode")
+    errp_calib = (console.pages["errp"].spec.get("calibration") or {})
+    chk(console.pages["errp"].bouton_entrainer.isEnabled() == bool(errp_calib.get("jouable")),
+        f"et « Entraîner » n'est actif que si le moteur sait JOUER l'entraînement "
+        f"(errp jouable={errp_calib.get('jouable')})")
+    chk(bool(console.pages["errp"].bouton_entrainer.toolTip())
+        or errp_calib.get("jouable"),
+        "...un bouton grisé DIT pourquoi il l'est, il ne se contente pas de ne rien faire")
+    console.show_grid()
+
+    # --- régression : les tops de l'ÉCHAUFFEMENT, pas seulement ceux des essais enregistrés ----
+    # `essai` (le compteur d'essais ENREGISTRÉS) ne bouge JAMAIS pendant l'échauffement : seule
+    # la phase « essais » l'incrémente (core/modes/calibration.py::_pas_essai, `if self.phase ==
+    # "essais":`). Et `phase` elle-même reste constante tout du long d'une même phase. Une clé
+    # anti-répétition assise sur (phase, essai, etape) vaudrait donc EXACTEMENT la même chose
+    # pour les six essais d'échauffement du MI (2 par classe × 3 classes), quelle que soit la
+    # classe tirée : le premier top sonnerait, les cinq suivants produiraient la MÊME clé et ne
+    # sonneraient JAMAIS, à chaque séance. La fixture « en_cours » démarre directement en phase
+    # « essais » et ne le voit pas ; celui-ci exerce l'échauffement pour de vrai.
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+
+    class _BeepsEnregistreur:
+        """Remplace `console.beeps` le temps du test : compte les tops RÉELLEMENT déclenchés par
+        `_maybe_beep`, sans dépendre d'une vraie sortie audio (présente ou non sur la machine qui
+        lance ce smoke)."""
+
+        def __init__(self):
+            self.appels = []
+
+        def jouer(self, classe):
+            self.appels.append(classe)
+
+    vrais_beeps = console.beeps
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
+                "essai": 0, "total": 42, "duree_estimee_s": 400.0,
+                "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
+                "resultat": None, "probleme": ""}
+        # Six essais d'échauffement (2 par classe × 3 classes) ; classes délibérément PAS toutes
+        # distinctes d'un essai au suivant (comme un mélange aléatoire peut en produire) : la clé
+        # correcte ne doit dépendre NI de la classe NI d'un compteur qui ne bouge pas ici.
+        classes_echauffement = ["LEFT", "RIGHT", "REST", "LEFT", "RIGHT", "REST"]
+        for classe in classes_echauffement:
+            cue = {**base, "etape": "cue", "classe": classe,
+                  "instruction": f"Imagine : {classe}", "rappel": "", "restant_s": 3.0}
+            console.apply_state({**mi_state, "calibration": cue})
+            # Le MÊME état, rejoué (la page est repeinte ~10 fois par seconde pendant les 3 s du
+            # cue) : ça ne doit PAS déclencher un second top pour le même essai.
+            console.apply_state({**mi_state, "calibration": cue})
+            imagerie = {**base, "etape": "imagerie", "classe": classe,
+                       "instruction": "", "rappel": "", "restant_s": 4.0}
+            console.apply_state({**mi_state, "calibration": imagerie})
+            repos = {**base, "etape": "repos", "classe": "",
+                    "instruction": "", "rappel": "", "restant_s": 1.5}
+            console.apply_state({**mi_state, "calibration": repos})
+
+        # Les poings ont leur top latéralisé ; REST, une tâche comme les autres, le top neutre.
+        attendus = [c if c in ("LEFT", "RIGHT") else "TOP" for c in classes_echauffement]
+        chk(console.beeps.appels == attendus,
+            f"chacun des SIX essais d'échauffement sonne son propre top, pas un seul sur six, "
+            f"et sans doublon sur le rafraîchissement répété du même cue ({console.beeps.appels})")
+    finally:
+        console.beeps = vrais_beeps
+
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.pages[cal.mode_id],
+        "et la page d'entraînement ramène au mode entraîné, après ce test aussi")
+
+    # --- le premier top d'une séance RELANCÉE après un ABANDON ---------------------------------
+    # `cancel()` (core/modes/calibration.py) pose l'étape vide ET la phase terminale dans le MÊME
+    # appel : contrairement à la fin NORMALE (qui traverse la phase "entrainement", non
+    # terminale, étape vide, capturée par `_maybe_beep` toute seule), il n'existe AUCUN état
+    # intermédiaire où `en_cours` est vrai avec une étape vide à observer. Sans remise à zéro
+    # explicite de `_etape_precedente`, la page (jamais recréée : elle vit tant que la console
+    # tourne) reste bloquée sur la dernière étape non vide vue avant l'abandon, ici "cue", et le
+    # tout premier top de la séance SUIVANTE ne sonnerait pas, silencieusement. L'étudiant
+    # relance justement pour de MEILLEURES données après avoir repéré une électrode mal placée,
+    # et perdrait le seul repère qui lui évite de LIRE l'instruction à l'écran (la contamination
+    # du regard que les tops existent pour empêcher).
+    console.show_calibration("mi")
+    cal = console.stack.currentWidget()
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base = {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "echauffement",
+                "essai": 0, "total": 42, "duree_estimee_s": 400.0,
+                "params": {"trials_per_class": 14}, "classes": ["LEFT", "RIGHT", "REST"],
+                "resultat": None, "probleme": ""}
+
+        # Première séance : elle sonne son premier top, pendant la mise en route (échauffement)
+        # — le moment le plus probable pour s'apercevoir d'une électrode mal placée...
+        premier_cue = {**base, "etape": "cue", "classe": "LEFT",
+                       "instruction": "Imagine : GAUCHE", "rappel": "", "restant_s": 3.0}
+        console.apply_state({**mi_state, "calibration": premier_cue})
+        chk(console.beeps.appels == ["LEFT"],
+            f"la première séance sonne son premier top normalement ({console.beeps.appels})")
+
+        # ...et qu'on ABANDONNE EN PLEIN dedans : le moteur livre directement l'état terminal,
+        # comme `cancel()` le fait réellement — jamais d'étape vide non terminale entre les deux.
+        annule = {**base, "phase": "annule", "etape": "", "classe": "",
+                 "instruction": "", "rappel": "", "restant_s": 0.0}
+        console.apply_state({**mi_state, "calibration": annule})
+
+        # Relance, sur la MÊME page : son tout premier "cue" doit sonner, sans exception.
+        console.beeps.appels = []
+        cue_relance = {**base, "etape": "cue", "classe": "RIGHT",
+                       "instruction": "Imagine : DROITE", "rappel": "", "restant_s": 3.0}
+        console.apply_state({**mi_state, "calibration": cue_relance})
+        chk(console.beeps.appels == ["RIGHT"],
+            f"et le premier top de la séance RELANCÉE après un abandon sonne aussi — pas muet "
+            f"({console.beeps.appels})")
+
+        # Une tâche LIBRE (pieds, mains, un repos…) n'a pas de son propre : elle reçoit le top
+        # neutre, centré, comme au test — jamais le silence.
+        console.beeps.appels = []
+        console.apply_state({**mi_state, "calibration": {**cue_relance, "etape": "imagerie"}})
+        console.apply_state({**mi_state, "calibration": {**cue_relance, "classe": "repos",
+                                                         "instruction": "Imagine : repos"}})
+        chk(console.beeps.appels == ["TOP"],
+            f"une tâche libre (ici un repos) sonne le top neutre à l'entraînement, pas le silence "
+            f"({console.beeps.appels})")
+    finally:
+        console.beeps = vrais_beeps
+
+    cal.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.pages[cal.mode_id],
+        "et la page d'entraînement ramène au mode entraîné, après l'abandon aussi")
+
+    # --- LA PAGE D'UNE MESURE : le contrôle alpha, de bout en bout -----------------------------
+    # Jumelle de la page de calibration, éprouvée de la même façon : sur des états FABRIQUÉS,
+    # phase par phase. Ce qui est PROPRE à cette page — et ce que les blocs ci-dessous existent
+    # pour tenir — tient en trois points : le TOP SONORE (le sujet a les yeux fermés et ne peut
+    # rien lire), la BARRIÈRE (un échec arrête la séance et l'écran doit le dire comme tel), et
+    # le RÉGLAGE renvoyé au moteur d'un clic (la boucle qu'on ferait sinon à la main).
+    # `MARKER_STREAM_DEFAULT` est lu dans `core.config`, et PAS dans le catalogue que la console
+    # vient d'afficher : le vérifier contre sa propre source ne prouverait que « la console recopie
+    # ce qu'elle a lu ». Le nom du flux de marqueurs est un contrat public entre la fenêtre de
+    # stimulus et le moteur ; c'est cette valeur-là que la mesure doit recevoir.
+    from core.config import MARKER_STREAM_DEFAULT
+    from core.modes import alpha as mod_alpha
+
+    tests_de_modes = {s.test_id for s in registry.MODES if s.test_id}
+    attendu_mesures = [s["id"] for s in registry.catalogue_mesures()
+                       if s["id"] not in tests_de_modes]
+    chk(sorted(console.grid.tuiles_mesure) == sorted(attendu_mesures)
+        and "alpha" in attendu_mesures,
+        f"la grille porte une tuile par mesure de SÉANCE du registre, contrôle alpha compris "
+        f"({sorted(console.grid.tuiles_mesure)} pour {sorted(attendu_mesures)})")
+    chk(not set(console.grid.tuiles_mesure) & tests_de_modes,
+        f"…et AUCUNE mesure qui éprouve un mode n'y a sa tuile : elle se lance depuis la page de "
+        f"ce mode (« Tester »), pas depuis l'accueil ({sorted(tests_de_modes)})")
+    chk(all(t in console.mesure_pages for t in tests_de_modes),
+        f"…mais sa PAGE existe bien, pour que « Tester » ait où aller ({sorted(tests_de_modes)})")
+    chk(len(console.grid.tuiles) == len(registry.MODES),
+        f"…sans que les mesures se mélangent aux modes : ce sont deux catalogues, et une mesure "
+        f"n'a ni flux, ni case « publié », ni bouton « Démarrer » ({len(console.grid.tuiles)})")
+    chk("BARRIÈRE" in console.grid.tuiles_mesure["alpha"].marque.text(),
+        f"…et la tuile du contrôle alpha annonce qu'il est une BARRIÈRE, depuis le CONTRAT "
+        f"({console.grid.tuiles_mesure['alpha'].marque.text()!r})")
+    # Nommée d'après son BUT, et ce nom vient du CONTRAT (`alpha.SPEC.label`) : la grille n'en
+    # écrit aucun. Le taux d'émission SSVEP n'est pas sur l'accueil : c'est le « Tester » de la
+    # page SSVEP, cf. l'assertion `tests_de_modes` juste au-dessus.
+    chk("Vérifier le casque" in console.grid.tuiles_mesure["alpha"].titre.text()
+        and "ssvep_taux" in tests_de_modes,
+        f"la tuile s'appelle « Vérifier le casque », et le taux SSVEP est devenu un « Tester » "
+        f"({console.grid.tuiles_mesure['alpha'].titre.text()!r}, tests={sorted(tests_de_modes)})")
+
+    console.grid.tuiles_mesure["alpha"].bouton.click()
+    mes = console.stack.currentWidget()
+    chk(mes is console.mesure_pages["alpha"],
+        "cliquer la tuile ouvre la page de la mesure")
+    chk(mod_alpha.BRIEFING[0] in mes.briefing.text(),
+        "le briefing affiché vient du contrat de la mesure, pas d'un texte recopié ici")
+
+    # --- Le CONTACT de chaque électrode : sur « Vérifier le casque », et nulle part ailleurs ----
+    from console.contact_vue import POSITIONS, BarreContact, SchemaTete, VueContact
+    from console.banner import ROUGE as _ROUGE, VERT as _VERT
+    from PySide6.QtGui import QColor as _QColor
+    vue = mes.vue_contact
+    chk(isinstance(vue, VueContact)
+        and all(p.vue_contact is None for i, p in console.mesure_pages.items() if i != "alpha"),
+        "la page « Vérifier le casque » montre le contact des électrodes, et elle seule parmi les "
+        "mesures : c'est le contrat de la mesure qui le déclare (`montre_contact`)")
+    console.apply_state(fake_state())
+    occipitales = {fake_state()["channels"][i] for i in mod_alpha.SPEC.key_channels}
+    chk(vue.schema.cles == occipitales and len(occipitales) == 4,
+        f"…ses électrodes CLÉS, celles que la mesure moyenne, y sont entourées "
+        f"({sorted(vue.schema.cles)})")
+    etat_contact = fake_state()
+    etat_contact["quality"] = dict(
+        etat_contact["quality"], sigmas=[7.2, 55.0, 6.9, 0.1, 5.5, 11.2, 6.1, 7.8],
+        contact=[True, False, True, False, True, True, True, True], seuil_contact=40.0,
+        reference_ok=True)
+    console.apply_state(etat_contact)
+    attendus = dict(zip(POSITIONS, [True, False, True, False, True, True, True, True]))
+    chk(vue.schema.etats == attendus and vue.schema.reference is True
+        and vue.barres["C3"].verdict is False and vue.barres["C3"].seuil == 40.0
+        and vue.barres["Fz"].verdict is True,
+        f"le schéma et les barres peignent les verdicts du MOTEUR, électrode par électrode "
+        f"({vue.schema.etats})")
+    chk("C3" in vue.resume.text() and "C4" in vue.resume.text() and "Fz" not in vue.resume.text()
+        and "40" in vue.repere.text(),
+        f"…une phrase nomme les électrodes à revoir, et le repère dit son seuil "
+        f"({vue.resume.text()!r}, {vue.repere.text()!r})")
+    # Les PIXELS : une barre au-delà du repère est rouge, une barre en deçà est verte ; une
+    # pastille se remplit de la couleur de son verdict, ou reste vide sans mesure.
+    barre = BarreContact()
+    barre.resize(200, 16)
+    barre.montrer(55.0, 40.0, False)
+    image = barre.grab().toImage()
+    rouge_au_dela = image.pixelColor(int(200 * 0.6), 8) == _QColor(_ROUGE)
+    barre.montrer(7.2, 40.0, True)
+    image = barre.grab().toImage()
+    vert_en_deca = image.pixelColor(int(200 * 0.05), 8) == _QColor(_VERT)
+    vide_au_dela = image.pixelColor(int(200 * 0.6), 8) != _QColor(_VERT)
+    schema = SchemaTete()
+    schema.montrer({**attendus, "Oz": None}, True)
+    image = schema.grab().toImage()
+
+    def teinte(nom):
+        centre = schema._point(*POSITIONS[nom])
+        return image.pixelColor(int(centre.x()), int(centre.y()) + 10)
+    chk(rouge_au_dela and vert_en_deca and vide_au_dela
+        and teinte("C3") == _QColor(_ROUGE) and teinte("Fz") == _QColor(_VERT)
+        and teinte("Oz") not in (_QColor(_ROUGE), _QColor(_VERT)),
+        "à l'écran : la barre au-delà du repère est ROUGE, celle en deçà VERTE ; la pastille "
+        "d'une électrode prend la couleur de son verdict, et reste VIDE sans mesure")
+    from console.params_form import ACCENT as _ACCENT_SCHEMA
+    schema.viser({"C3"})
+    image = schema.grab().toImage()
+
+    def anneau(nom):
+        centre = schema._point(*POSITIONS[nom])
+        rayon = schema.RAYON_ELECTRODE + schema.ECART_ANNEAU
+        return image.pixelColor(int(round(centre.x() + rayon)), int(round(centre.y())))
+    chk(anneau("C3") == _QColor(_ACCENT_SCHEMA) and anneau("C4") != _QColor(_ACCENT_SCHEMA)
+        and teinte("C3") == _QColor(_ROUGE),
+        "à l'écran : une électrode clé porte un ANNEAU bleu autour de sa pastille, qui garde la "
+        "couleur de son contact ; une autre n'en porte pas")
+    # Pas de mesure : aucune qualité encore, liaison perdue (le moteur n'envoie alors aucun
+    # verdict), ou moteur mort (son dernier état est figé).
+    console.apply_state({**etat_contact, "quality": None})
+    sans_qualite = (all(v is None for v in vue.schema.etats.values())
+                    and vue.schema.reference is None and "Pas de mesure" in vue.resume.text())
+    console.apply_state({**etat_contact, "quality": dict(etat_contact["quality"],
+                                                         contact=[None] * 8, reference_ok=None)})
+    liaison_perdue = all(v is None for v in vue.schema.etats.values())
+    vivant = console._moteur_vivant
+    console._moteur_vivant = lambda: False
+    try:
+        console.apply_state(etat_contact)
+        moteur_mort = all(v is None for v in vue.schema.etats.values())
+    finally:
+        console._moteur_vivant = vivant
+    chk(sans_qualite and liaison_perdue and moteur_mort,
+        f"sans mesure, tout reste VIDE : avant la première mesure ({sans_qualite}), liaison "
+        f"perdue ({liaison_perdue}), moteur arrêté ({moteur_mort})")
+    console.apply_state(fake_state())
+
+    # Le TOP SONORE, et le fait qu'il soit DIT quand il manque. C'est le point n°1 de cette page :
+    # la seconde moitié de la mesure se passe les yeux fermés, où l'écran ne sert plus à rien.
+    # La page est reconstruite contre une console SANS son — la machine qui lance ce smoke en a
+    # peut-être, et l'avertissement ne serait alors jamais exercé.
+    class _ConsoleSansSon:
+        class beeps:
+            disponible = False
+            raison = "aucune sortie audio sur cette machine"
+
+    mes_muette = MesurePage(dict(console.mesures["alpha"]), _ConsoleSansSon())
+    chk("YEUX FERMÉS" in mes_muette.audio_avertissement.text().upper()
+        and "rouvrir" in mes_muette.audio_avertissement.text(),
+        f"sans sortie audio, la page DIT que la mesure se fait les yeux fermés et qu'on ne "
+        f"saura pas quand rouvrir — plutôt que de laisser un top silencieux passer pour un "
+        f"départ manqué ({mes_muette.audio_avertissement.text()[:60]}…)")
+    # 🔴 …et SEULEMENT là où c'est vrai. Posé sur TOUTE page de mesure, l'avertissement ferait
+    # annoncer aux pages « Tester » une « seconde moitié les yeux fermés », alors qu'on y fixe
+    # une fenêtre ou qu'on lit une consigne. C'est le MOTEUR qui déclare quel protocole se fait
+    # les yeux fermés (`yeux_fermes` dans le catalogue). Deux pages FABRIQUÉES d'abord, pour
+    # éprouver la règle de la page quel que soit le catalogue…
+    ferme_fab = MesurePage({**console.mesures["p300_test"], "yeux_fermes": True},
+                           _ConsoleSansSon())
+    ouvert_fab = MesurePage({**console.mesures["alpha"], "yeux_fermes": False}, _ConsoleSansSon())
+    chk("YEUX FERMÉS" in ferme_fab.audio_avertissement.text().upper()
+        and "YEUX FERMÉS" not in ouvert_fab.audio_avertissement.text().upper()
+        and "ne sonneront pas" in ouvert_fab.audio_avertissement.text(),
+        f"la page lit `yeux_fermes` dans le contrat, et rien d'autre : sans lui, un avertissement "
+        f"générique ({ouvert_fab.audio_avertissement.text()[:70]!r}…)")
+    # …puis le VRAI catalogue : chaque page de test dit la vérité sur son propre protocole.
+    # (Les pages sont GARDÉES le temps de les lire : une page temporaire est détruite par Qt avant
+    # qu'on ait lu son label.)
+    muettes = {mid: MesurePage(dict(sp), _ConsoleSansSon()) for mid, sp in console.mesures.items()}
+    fausses = [mid for mid, pg in muettes.items()
+               if not console.mesures[mid].get("yeux_fermes", False)
+               and "YEUX FERMÉS" in pg.audio_avertissement.text().upper()]
+    chk(not fausses and console.mesures["alpha"].get("yeux_fermes") is True,
+        f"…et sur le vrai catalogue, aucune page dont le protocole ne ferme pas les yeux ne le "
+        f"prétend ({fausses or 'aucune'}) — seul le contrôle alpha le déclare "
+        f"({console.mesures['alpha'].get('yeux_fermes')!r})")
+
+    # Le contrôle alpha n'expose AUCUN réglage — ses durées font corps avec le repère « > 1,5 »,
+    # et les exposer laisserait l'invalider en croyant gagner du temps. La page doit donc le DIRE,
+    # comme la page du mode « brut ».
+    chk(len(mes.formulaire.champs) == 0 and mes.formulaire.vide is not None
+        and mes.formulaire.bouton.isHidden(),
+        "sans réglage, le formulaire l'écrit et ne montre pas un bouton « Appliquer » sans effet")
+
+    console.beeps = _BeepsEnregistreur()
+    try:
+        base_m = {"mode_id": "alpha", "label": "Contrôle alpha", "phase": "essais", "etape": "",
+                  "essai": 0, "total": 2, "duree_estimee_s": 37.0, "params": {},
+                  "classes": [], "resultat": None, "probleme": ""}
+        # La CHAUFFE d'abord, comme le moteur la publie réellement (15 s avant la 1re étape).
+        chauffe = {**base_m, "phase": "chauffe", "classe": "", "rappel": "",
+                   "instruction": "Le casque se stabilise…", "restant_s": 15.0}
+        console.apply_state({**state, "mesure": chauffe})
+        console.apply_state({**state, "mesure": chauffe})
+        chk(console.beeps.appels == [],
+            f"la chauffe ne sonne PAS : un top pendant la stabilisation ferait fermer les yeux "
+            f"15 s trop tôt, et la fenêtre enregistrée tomberait à côté ({console.beeps.appels})")
+
+        etapes = ["préparation", mod_alpha.OUVERT, "préparation", mod_alpha.FERME]
+        for nom in etapes:
+            etat = {**base_m, "classe": nom, "instruction": f"consigne {nom}",
+                    "rappel": "immobile", "restant_s": 3.0}
+            console.apply_state({**state, "mesure": etat})
+            # Le MÊME état, rejoué : la page est repeinte ~10 fois par seconde pendant l'étape.
+            console.apply_state({**state, "mesure": etat})
+        chk(console.beeps.appels == ["TOP"] * 4,
+            f"UN top par changement d'étape, quatre en tout, et pas un de plus sur les "
+            f"rafraîchissements répétés ({console.beeps.appels})")
+        chk(mes.consigne.text() == f"consigne {mod_alpha.FERME}"
+            and mes.etape.text() == mod_alpha.FERME and mes.rappel.text() == "immobile",
+            f"…et l'écran montre la consigne de l'étape en cours ({mes.consigne.text()!r})")
+        chk(mes.bloc_pendant.isVisibleTo(mes) and not mes.bloc_apres.isVisibleTo(mes),
+            "pendant la mesure, l'écran de verdict reste caché")
+
+        # LE TOP QUI COMPTE LE PLUS n'est pas un changement d'ÉTAPE : la fin de « yeux fermés »
+        # fait passer le moteur en phase « mesure » (non terminale) avec une étape vide. C'est le
+        # SEUL signal qui dise « tu peux rouvrir les yeux » ; sans lui, la personne attend dans le
+        # noir jusqu'à ce qu'elle se décide toute seule, ce qui contamine la dernière seconde de
+        # la fenêtre qu'on vient d'enregistrer.
+        calcul = {**base_m, "phase": "mesure", "classe": "", "essai": 2,
+                  "instruction": "Calcul du verdict…", "rappel": "", "restant_s": 0.0}
+        console.apply_state({**state, "mesure": calcul})
+        console.apply_state({**state, "mesure": calcul})
+        chk(console.beeps.appels == ["TOP"] * 5,
+            f"…plus UN à la fin de « yeux fermés » : c'est le seul signal qui dise de rouvrir "
+            f"les yeux ({console.beeps.appels})")
+        # Le top est assis sur `classe`, pas sur `etape`, qui reste VIDE de bout en bout sur une
+        # mesure (choix explicite de `core/modes/mesure.py`, pour ne pas faire sonner la page de
+        # CALIBRATION au hasard des noms d'étapes). Un `_maybe_beep` recopié depuis
+        # `calib_page.py` serait donc parfaitement MUET ici, sans lever quoi que ce soit.
+        chk(base_m["etape"] == "" and console.beeps.appels == ["TOP"] * 5,
+            "…et il est assis sur `classe` : `etape` reste VIDE de bout en bout sur une mesure "
+            "(choix explicite de core/modes/mesure.py), donc un `_maybe_beep` recopié depuis "
+            "calib_page.py serait parfaitement MUET ici, sans lever quoi que ce soit")
+
+        # 🔴 Le TEST du Motor Imagery rejoue le protocole d'entraînement, dont le repère est un top
+        # LATÉRALISÉ (oreille gauche = poing gauche). Les noms d'étapes viennent du VRAI protocole
+        # du test (`MesureMI._essai`), pas d'une liste écrite ici.
+        from core.modes.mi_test import MesureMI
+        noms = [e.nom for classe in ("LEFT", "RIGHT")
+                for e in MesureMI._essai(classe)]
+        console.beeps.appels = []
+        mes._etape_precedente = None
+        for nom in [""] + noms:
+            console.apply_state({**state, "mesure": {**base_m, "classe": nom}})
+        chk(console.beeps.appels == ["TOP", "LEFT", "TOP", "RIGHT"],
+            f"le test MI joue le top LATÉRALISÉ de la classe, comme l'entraînement, et le top "
+            f"neutre sur la pause ({console.beeps.appels})")
+    finally:
+        console.beeps = vrais_beeps
+
+    # LE VERDICT, et la BARRIÈRE. Les deux résultats sont produits par le VRAI code du moteur sur
+    # des signaux fabriqués — pas écrits à la main ici : un dictionnaire de résultat recopié dans
+    # ce fichier deviendrait faux en silence à la première clé ajoutée côté moteur.
+    def _verdict_alpha(avec_alpha):
+        """Rejoue `_mesurer` sur du bruit, plus une sinusoïde à 10,5 Hz si `avec_alpha`."""
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        n = int(mod_alpha.DUREE_PHASE_S * 250.0)
+
+        def fenetre(pose):
+            x = rng.normal(0.0, 8.0, (n, 8))
+            if pose:
+                t = np.arange(n) / 250.0
+                for c in (4, 5, 6, 7):
+                    x[:, c] += 4.0 * np.sin(2 * np.pi * 10.5 * t)
+            return x
+
+        runtime = mod_alpha.ControleAlpha(mod_alpha.SPEC, {}, None)
+        return runtime._mesurer([(fenetre(False), mod_alpha.OUVERT),
+                                 (fenetre(avec_alpha), mod_alpha.FERME)], 250.0)
+
+    reussi = _verdict_alpha(True)
+    fini = {**base_m, "phase": "fini", "classe": "", "instruction": "", "rappel": "",
+            "restant_s": 0.0, "essai": 2, "resultat": reussi}
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.bloc_apres.isVisibleTo(mes) and mes.verdict.text() == reussi["verdict"],
+        f"le verdict affiché est CELUI DU MOTEUR, mot pour mot ({mes.verdict.text()[:50]}…)")
+    # EN FACE : les trois lignes que le VRAI `_mesurer` d'alpha vient d'écrire (`reussi` sort
+    # du moteur, pas d'un dictionnaire posé ici). La phrase complète ci-dessus est, elle, repliée.
+    chk(mes.bloc.verdict.text() == reussi["mot"] == "ALPHA NET"
+        and "#3fae5a" in mes.bloc.verdict.styleSheet() and mes.bloc.verdict.isVisibleTo(mes),
+        f"en face, le MOT du moteur, en vert ({mes.bloc.verdict.text()!r})")
+    chk("repère > 1,5" in mes.bloc.chiffres.text() and "pic à" in mes.bloc.chiffres.text(),
+        f"…le ratio avec son repère sur la même ligne ({mes.bloc.chiffres.text()!r})")
+    chk(not mes.verdict.isVisibleTo(mes) and not mes.honnetete.isVisibleTo(mes),
+        "…et la phrase complète comme l'honnêteté sont REPLIÉES sous « Détails »")
+    mes.bloc.details.setChecked(True)
+    console.apply_state({**state, "mesure": fini})       # le tour de `QTimer` suivant
+    chk(mes.verdict.isVisibleTo(mes) and mes.honnetete.isVisibleTo(mes),
+        "…qu'un clic RAMÈNE, et qui restent ouvertes au rafraîchissement suivant")
+    mes.bloc.details.setChecked(False)
+    chk("FRANCHIE" in mes.barriere.text() and "🛑" not in mes.barriere.text(),
+        f"…et la barrière franchie autorise la suite ({mes.barriere.text()})")
+    chk(f"{reussi['ratio']:.2f}".replace(".", ",") in mes.details.text()
+        and "Pz/PO7/Oz/PO8" in mes.details.text(),
+        f"le détail porte le ratio et les voies RÉELLEMENT moyennées ({mes.details.text()})")
+    chk(mes.honnetete.text() == reussi["honnetete"] and mes.honnetete.text(),
+        "la phrase d'honnêteté vient du résultat, comme pour une calibration")
+    chk("terminée" in console.grid.tuiles_mesure["alpha"].etat.text()
+        and console.grid.tuiles_mesure["alpha"].detail.text() == reussi["verdict"],
+        f"…et la TUILE porte le même verdict, sans le retraduire "
+        f"({console.grid.tuiles_mesure['alpha'].detail.text()[:40]}…)")
+
+    # LA BOUCLE FERMÉE : le pic mesuré part au moteur d'un clic. C'est ce qu'on ferait
+    # sinon à la main — noter le pic sur un carnet, ouvrir la page du SSVEP, le retaper.
+    moteur_faux.commandes.clear()
+    chk(mes.appliquer_pic.isVisibleTo(mes)
+        and f"{reussi['pic_hz']:g}" in mes.appliquer_pic.text(),
+        f"le bouton propose la valeur MESURÉE, pas un texte générique "
+        f"({mes.appliquer_pic.text()!r})")
+    mes.appliquer_pic.click()
+    chk(("set_params", {"id": "ssvep", "params": {"alpha_hz": reussi["pic_hz"]}})
+        in moteur_faux.commandes,
+        f"« Appliquer » envoie le RÉGLAGE au moteur — la valeur ne se recopie plus à la main "
+        f"d'un écran à l'autre ({moteur_faux.commandes})")
+    # 🔴 Le tour de `QTimer` SUIVANT, avant de lire : une confirmation effacée 100 ms après le
+    # clic ne serait lue que dans l'intervalle.
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.reponse_pic.text() and "SSVEP" in mes.reponse_pic.text()
+        and "Proposer" in mes.reponse_pic.text(),
+        f"…et l'écran confirme où c'est parti, et ce que « Proposer » en fera — encore là au "
+        f"rafraîchissement suivant ({mes.reponse_pic.text()[:60]!r})")
+
+    # Le refus du moteur s'AFFICHE : `set_params` n'atteint qu'un mode DÉMARRÉ, et c'est un refus
+    # que l'étudiant rencontrera pour de vrai (le SSVEP n'a aucune raison de tourner pendant un
+    # contrôle alpha). Un bouton qui échoue en silence est la panne à éviter.
+    moteur_faux.refus["set_params"] = "« SSVEP » n'est pas démarré"
+    mes.appliquer_pic.click()
+    console.apply_state({**state, "mesure": fini})
+    chk("pas démarré" in mes.reponse_pic.text(),
+        f"un refus du moteur est montré tel quel, et il SURVIT au rafraîchissement suivant "
+        f"({mes.reponse_pic.text()!r})")
+    moteur_faux.refus.pop("set_params")
+    # …jusqu'à une NOUVELLE séance, dont il ne dit rien.
+    console.apply_state({**state, "mesure": {**base_m, "classe": mod_alpha.OUVERT,
+                                             "instruction": "x", "rappel": "", "restant_s": 3.0}})
+    console.apply_state({**state, "mesure": fini})
+    chk(mes.reponse_pic.text() == "",
+        f"…et une nouvelle séance l'efface : il parlait de la précédente "
+        f"({mes.reponse_pic.text()!r})")
+
+    # LA BARRIÈRE NON FRANCHIE : la phrase qui ARRÊTE, et AUCUN pic à appliquer.
+    rate = _verdict_alpha(False)
+    console.apply_state({**state, "mesure": {**fini, "resultat": rate}})
+    chk(rate["barriere_franchie"] is False and "🛑" in mes.barriere.text()
+        and "ARRÊTE" in mes.barriere.text(),
+        f"une barrière non franchie s'affiche comme un ARRÊT, pas comme un chiffre à négocier "
+        f"({mes.barriere.text()[:60]}…)")
+    chk("arrête" in mes.verdict.text().lower() and "électrodes" in mes.verdict.text().lower(),
+        f"…et le verdict dit QUOI vérifier ({mes.verdict.text()[:60]}…)")
+    chk(not mes.appliquer_pic.isVisibleTo(mes),
+        "…et AUCUN pic n'est proposé à appliquer : sur un signal sans alpha, le « pic » est le "
+        "plus grand bin d'un spectre de bruit, et l'appliquer d'un clic serait pire que le "
+        "carnet qu'on remplace")
+
+    # Une mesure ABANDONNÉE : ni verdict, ni barrière. La distinction compte — « barrière non
+    # franchie » accuse le MONTAGE, alors qu'un abandon ne dit rien du tout.
+    console.apply_state({**state, "mesure": {**base_m, "phase": "annule", "classe": "",
+                                             "instruction": "", "rappel": "", "restant_s": 0.0,
+                                             "probleme": "abandon demandé"}})
+    chk(mes.barriere.text() == "" and "interrompue" in mes.bloc.verdict.text()
+        and mes.bloc.verdict.isVisibleTo(mes) and "#8a8f9c" in mes.bloc.verdict.styleSheet()
+        and not mes.appliquer_pic.isVisibleTo(mes),
+        f"un abandon n'accuse PAS le montage : pas de barrière, pas de chiffre, pas de couleur — "
+        f"et la raison se VOIT en face, pas dans un label replié ({mes.bloc.verdict.text()})")
+
+    # Les deux gestes qui partent au moteur, cliqués pour de vrai.
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "mesure": {**base_m, "classe": mod_alpha.FERME,
+                                             "instruction": "x", "rappel": "", "restant_s": 1.0}})
+    mes.bouton_abandon.click()
+    chk(("cancel_mesure", {}) in moteur_faux.commandes,
+        f"« Abandonner » émet `cancel_mesure` ({moteur_faux.commandes})")
+
+    # « Commencer » passe par le CONTRÔLE DE LIAISON, comme une calibration — et pour une raison
+    # de plus : quatre voies plates donneraient un rapport de bruit d'arrondi après 37 s de casque.
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    chk(console.stack.currentWidget() is console.contact,
+        "« Commencer » montre d'abord le contrôle de liaison")
+    chk(not moteur_faux.commandes,
+        f"…et RIEN n'est soumis tant qu'il n'est pas passé ({moteur_faux.commandes})")
+    # Les voies que la mesure MOYENNE sont entourées — lues dans son contrat, pas écrites ici.
+    # L'élève doit savoir quelles voies sont utilisées.
+    console.contact.update_from({**state, "quality": qualite_saine})
+    cles_a = [state["channels"][i] for i in mod_alpha.SPEC.key_channels]
+    chk(cles_a and all(n in console.contact.cles.text() for n in cles_a),
+        f"le contrôle de liaison de « Vérifier le casque » nomme ses voies ({cles_a}, "
+        f"{console.contact.cles.text()[:60]!r})")
+    console.contact.bouton_lancer.click()
+    chk(("start_mesure", {"id": "alpha", "params": {}}) in moteur_faux.commandes,
+        f"…puis « Lancer » soumet `start_mesure` ({moteur_faux.commandes})")
+    chk(console.stack.currentWidget() is mes,
+        "et on revient sur la page de la mesure, là où le refus éventuel s'affichera")
+
+    moteur_faux.refus["start_mesure"] = "une CALIBRATION est en cours"
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk("CALIBRATION" in mes.avis.text(),
+        f"un refus du moteur s'AFFICHE sur la page, pas seulement dans le terminal "
+        f"({mes.avis.text()})")
+    moteur_faux.refus.pop("start_mesure")
+
+    # Le contrôle alpha n'a AUCUNE fenêtre, et c'est le contrat qui le dit : les yeux sont fermés
+    # la moitié du temps, il n'y a rien à montrer. Vérifié ici pour que le bloc suivant — qui
+    # exige une fenêtre pour le taux SSVEP — ne puisse pas passer en lançant TOUJOURS quelque
+    # chose.
+    console.lanceur.arreter()
+    journal.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    mes.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(not [e for e in journal if e[0] == "fenetre"] and not console.lanceur.en_cours(),
+        f"le contrôle alpha ne lance AUCUNE fenêtre — son contrat n'en déclare pas "
+        f"({console.mesures['alpha'].get('stimulus_id')!r})")
+
+    mes.bouton_retour.click()
+    chk(console.stack.currentWidget() is console.grid,
+        "et la page de mesure ramène sur la grille")
+
+    # --- LE TAUX D'ÉMISSION SSVEP : la mesure qui a BESOIN d'une fenêtre ------------------------
+    # C'est la seule vérification du chemin graphique de cette mesure. Sans fenêtre, le moteur
+    # attend `CALIB_FENETRE_ATTENTE_S` puis abandonne en accusant un stimulus que personne n'a
+    # lancé : trente secondes de casque pour un message faux.
+    #
+    # 🔴 C'est aussi LE CRITÈRE D'ACCEPTATION du parcours « Régler · Entraîner · Tester ». On y
+    # arrive par le bouton « Tester » de la page SSVEP, sur un mode ARRÊTÉ dont les réglages
+    # RETENUS ne sont pas ceux du dépôt. Un stimulus lancé sur un mode arrêté fait fixer des
+    # minutes dans le vide : « Tester » possède sa séquence entière, donc il n'y a pas d'ordre
+    # à respecter côté élève.
+    console.lanceur.arreter()
+    ssvep_regle = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                   "modes_state": {k: v for k, v in state["modes_state"].items() if k != "ssvep"},
+                   "reglages": {"ssvep": {"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0,
+                                          "alpha_hz": 10.0}}}
+    console.show_mode("ssvep")
+    console.apply_state(ssvep_regle)
+    page_ss = console.pages["ssvep"]
+    chk(page_ss.bouton_tester is not None and getattr(page_ss, "bouton_marche", None) is None
+        and getattr(page_ss, "bouton_stimulus", None) is None,
+        "la page SSVEP a « Tester », et plus ni « Démarrer » ni « Lancer le stimulus »")
+    journal.clear()
+    moteur_faux.commandes.clear()
+    cliquer(page_ss.bouton_tester, "le bouton « Tester » du SSVEP")
+    mes_ssvep = console.stack.currentWidget()
+    chk(mes_ssvep is console.mesure_pages["ssvep_taux"] and journal == [("commande", "set_params")],
+        f"« Tester » APPLIQUE d'abord ce qui est à l'écran, puis ouvre la page du test — sans "
+        f"soumettre la mesure ni lancer de fenêtre : c'est « Commencer » qui part ({journal})")
+    # 🔴 …et la page DIT sur quelles fréquences le test va tourner : elle n'a aucun champ, et
+    # « Tester teste TES réglages » doit se vérifier à l'écran.
+    chk(mes_ssvep.frequences.isVisibleTo(mes_ssvep)
+        and "12 · 15 · 20" in mes_ssvep.frequences.text()
+        and "SSVEP" in mes_ssvep.frequences.text(),
+        f"la page du test montre les fréquences RETENUES du mode, celles que la fenêtre recevra "
+        f"({mes_ssvep.frequences.text()!r})")
+    # `[-1:]` et non `[-1]` : sans commande soumise, l'assertion doit ROUGIR, pas faire planter
+    # le smoke — un plantage masquerait toutes les assertions suivantes, dont celles du vrai
+    # moteur, et une mutation passerait pour prouvée sur une seule ligne.
+    appliques = [c[1].get("params", {}) for c in moteur_faux.commandes[-1:] if c[0] == "set_params"]
+    chk(appliques and appliques[0].get("freqs") == [12.0, 15.0, 20.0],
+        f"…et ce qu'il applique, ce sont les réglages AFFICHÉS ({appliques})")
+    # Le MAGASIN prime sur le runtime : `submit("set_params")` l'écrit sur-le-champ, alors qu'un
+    # mode qui tourne ne prend le réglage qu'au tour de boucle suivant. Préférer le runtime
+    # relirait l'ANCIENNE valeur juste après un réglage.
+    sauve = console._dernier_etat
+    console._dernier_etat = {"modes_state": {"ssvep": {"params": {"freqs": [15.0, 20.0]}}},
+                             "reglages": {"ssvep": {"freqs": [12.0, 15.0, 20.0]}}}
+    chk(console._reglages_du_mode("ssvep") == {"freqs": [12.0, 15.0, 20.0]},
+        f"les réglages d'un mode se lisent dans le MAGASIN d'abord, le runtime ne rattrapant un "
+        f"réglage qu'au tour de boucle suivant ({console._reglages_du_mode('ssvep')})")
+    console._dernier_etat = sauve
+    journal.clear()
+    valeurs_test = mes_ssvep.formulaire.values()
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(("start_mesure", {"id": "ssvep_taux", "params": valeurs_test}) in moteur_faux.commandes
+        and valeurs_test.get("stream_in", MARKER_STREAM_DEFAULT) == MARKER_STREAM_DEFAULT,
+        f"« Commencer » soumet `start_mesure` avec ses réglages — et un test n'écoute jamais "
+        f"d'autre flux que celui de NOTRE fenêtre ({moteur_faux.commandes[-1:]})")
+
+    # 🔴 La fenêtre n'est PAS encore lancée, comme pour la calibration. L'accusé de
+    # `start_mesure` dit « mise en file », pas « démarrée » : `_start_mesure` peut sortir sans
+    # rien créer par trois portes silencieuses (mesure déjà en cours, calibration en cours,
+    # exception avalée par `_drain_commands`). Lancée sur l'accusé, la fenêtre jouerait 3,5
+    # minutes de fixation guidée plein écran dans le vide pendant que la page resterait sur
+    # « Avant de commencer ».
+    chk(not [e for e in journal if e[0] == "fenetre"],
+        f"après le clic, `start_mesure` est SOUMISE et la fenêtre attend ({journal})")
+
+    # La mesure apparaît vraiment dans l'état : ALORS la fenêtre part.
+    en_cours = {**base_m, "mode_id": "ssvep_taux", "phase": "chauffe"}
+    console.apply_state({**ssvep_regle, "mesure": en_cours})
+    ordre = [e[0] for e in journal]
+    lancees_m = [e[1] for e in journal if e[0] == "fenetre"]
+    chk(ordre == ["commande", "fenetre"],
+        f"UN « Tester » soumet la mesure PUIS ouvre la fenêtre, dans cet ORDRE et rien d'autre : "
+        f"l'inverse ferait tomber les premiers essais dans la chauffe du moteur, qui les jette — "
+        f"une séance plus courte que ce que l'écran annonce, et rien pour le dire ({ordre})")
+    argv_test = list(lancees_m[-1]) if lancees_m else []
+    chk(argv_test[:len(stim_registry.commande("ssvep"))] == stim_registry.commande("ssvep")
+        and "--guide" in argv_test and "--calibrer" not in argv_test,
+        f"…la fenêtre GUIDÉE, depuis le registre des stimulus ({argv_test[2:]})")
+    # 🔴 « Tester » teste TA configuration. Lancée avec `--guide` seul, la fenêtre afficherait le
+    # trio du DÉPÔT (15 · 20 · 8,571) quel que soit le réglage : le score rendu décrirait une
+    # configuration que l'étudiant n'a pas choisie, sans que rien ne le dise.
+    apres_freqs = argv_test[argv_test.index("--freqs") + 1:][:1] if "--freqs" in argv_test else []
+    chk(apres_freqs == ["12,15,20"],
+        f"…et elle part avec les fréquences RETENUES du mode arrêté (12 · 15 · 20), pas celles du "
+        f"dépôt ({argv_test[3:]})")
+    apres_ecran = (argv_test[argv_test.index("--ecran-hz") + 1:][:1]
+                   if "--ecran-hz" in argv_test else [])
+    chk(apres_ecran == ["60"],
+        f"…et avec le rafraîchissement RETENU du mode, que l'écran du poste doit tenir pendant le "
+        f"test ({argv_test[3:]})")
+
+    # 🔴 Le mode testé TOURNE : on l'arrête D'ABORD. Le moteur refuse le test d'un mode qui
+    # décode dès que ce mode lit des marqueurs — une seule file sous un seul identifiant, donc un
+    # vol de marqueurs silencieux. La console ne recopie pas cette table : elle arrête TOUT mode
+    # testé, SSVEP compris, par le MÊME mécanisme que pour une calibration (`_attente`).
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    ssvep_tourne = {**state, "quality": qualite_saine, "calibration": None, "mesure": None}
+    console.apply_state(ssvep_tourne)
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})]
+        and "arrêté pour ce test" in mes_ssvep.note.text(),
+        f"mode testé qui TOURNE : `stop_mode` d'abord, et rien d'autre tant qu'il n'a pas rendu "
+        f"la main — l'écran dit ce qu'on attend ({moteur_faux.commandes}, "
+        f"{mes_ssvep.note.text()[:40]}…)")
+    # …et il dit que le décodage RESTERA arrêté : une application branchée sur ce flux tomberait
+    # sinon en silence après le test.
+    chk("restera arrêté" in mes_ssvep.note.text(),
+        f"…et qu'il RESTERA arrêté après le test ({mes_ssvep.note.text()[-90:]!r})")
+    console.apply_state(ssvep_regle)                          # il a rendu la main
+    console.apply_state({**ssvep_regle, "mesure": en_cours})  # le test existe pour de bon
+    # 🔴 …et la note est TOUJOURS LÀ, visible, une fois le test parti. Dans le bloc « Avant de
+    # commencer », caché dès que la séance démarre, avec un avis vidé au même tour, elle ne
+    # s'afficherait qu'une fraction de seconde.
+    chk("restera arrêté" in mes_ssvep.note.text() and mes_ssvep.note.isVisibleTo(mes_ssvep)
+        and not mes_ssvep.bloc_avant.isVisibleTo(mes_ssvep),
+        f"…et la note RESTE lisible pendant le test, hors du bloc « Avant » caché "
+        f"({mes_ssvep.note.text()[:40]!r})")
+    suite = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
+    chk(suite == ["stop_mode", "start_mesure", "fenetre"],
+        f"…puis `start_mesure` part tout seul, et la fenêtre après : arrêter, mesurer, montrer "
+        f"({suite})")
+
+    # 🔴 Et si le moteur n'a JAMAIS démarré la mesure ? C'est le cas que ce garde-fou existe
+    # pour couvrir. Sans lui, la fenêtre plein écran jouerait le protocole ENTIER pendant que la
+    # page de la mesure reste sur son briefing. (Mode ARRÊTÉ : il n'y a rien à attendre avant.)
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.apply_state(ssvep_regle)
+    mes_ssvep.bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    console.apply_state(ssvep_regle)                          # rien n'apparaît
+    chk(not [e for e in journal if e[0] == "fenetre"],
+        f"le moteur n'ayant rien démarré, la fenêtre guidée n'est PAS lancée ({journal})")
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(ssvep_regle)
+    chk(not [e for e in journal if e[0] == "fenetre"]
+        and "n'a pas démarré" in mes_ssvep.avis.text(),
+        f"…et au bout de {DELAI_DEMARRAGE_S:.0f} s on RENONCE en le disant, au lieu de faire "
+        f"fixer 3,5 min de consignes dans le vide ({mes_ssvep.avis.text()[:80]}…)")
+
+    # Une fenêtre qui refuse de s'ouvrir : la mesure est ANNULÉE, pas laissée à attendre 30 s.
+    console.lanceur.arreter()
+    journal.clear()
+    moteur_faux.commandes.clear()
+    console.apply_state({**state, "quality": qualite_saine, "mesure": None})
+    console.lanceur.probleme = ""
+    console.lanceur.lancer("ssvep")            # une fenêtre occupe déjà la place
+    console._demarrer_mesure({"mode_id": "ssvep_taux", "params": {}})
+    chk(not console._a_annuler_mesure,
+        f"…sans soumettre `cancel_mesure` à un moteur qui n'a encore rien démarré "
+        f"({moteur_faux.commandes})")
+    console.apply_state({**state, "mesure": en_cours})
+    chk(console._a_annuler_mesure and "fenêtre" in mes_ssvep.avis.text(),
+        f"une fenêtre qui refuse de s'ouvrir fait ANNULER la mesure, et le dit sur sa page "
+        f"({mes_ssvep.avis.text()[:60]}…)")
+    console.apply_state({**state, "mesure": en_cours})
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and not console._a_annuler_mesure,
+        f"…et l'annulation part toute seule au tour suivant, sans un clic de plus "
+        f"({moteur_faux.commandes})")
+    console.lanceur.arreter()
+
+    # --- 🔴 LE « TESTER » DU MI PART AVEC LES RÉGLAGES DU MODE --------------------------------
+    # La page de ce test porte les `Param` du MODE (modèle, seuil, vote). Ouverte sur ses défauts,
+    # elle ferait tester des réglages que personne n'a choisis — et le score rendu décrirait une
+    # configuration qui n'est pas la tienne, sans que rien ne le dise.
+    mi_regle = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                "modes_state": {k: v for k, v in state["modes_state"].items() if k != "mi"},
+                "reglages": {"mi": {"prob_min": 0.8}}}
+    defaut_prob = next(p["default"] for p in console.mesures["mi_test"]["params"]
+                       if p["key"] == "prob_min")
+    console.show_mode("mi")
+    console.apply_state(mi_regle)
+    moteur_faux.commandes.clear()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    mes_mi = console.stack.currentWidget()
+    chk(mes_mi is console.mesure_pages["mi_test"] and abs(defaut_prob - 0.8) > 1e-9,
+        f"« Tester » ouvre le test du MI — et 0,8 n'est PAS son défaut ({defaut_prob}), sinon ce "
+        f"qui suit serait vrai à vide")
+    chk(abs(mes_mi.formulaire.values()["prob_min"] - 0.8) < 1e-9,
+        f"…PRÉ-REMPLI avec le seuil RETENU du mode arrêté, pas avec le défaut "
+        f"({mes_mi.formulaire.values()['prob_min']})")
+    appels_choix = []
+    vrai_rafraichir = mes_mi.rafraichir_choix
+    mes_mi.rafraichir_choix = lambda cles: (appels_choix.append(list(cles)),
+                                            vrai_rafraichir(cles))
+    console.apply_state({**mi_regle, "reglages": {"mi": {"prob_min": 0.65}}})
+    del mes_mi.rafraichir_choix
+    chk(appels_choix == [["prob_min"]],
+        f"…ses listes de choix rechargées pour la clé changée (un modèle que l'application vient "
+        f"de choisir doit y être) ({appels_choix})")
+    chk(abs(mes_mi.formulaire.values()["prob_min"] - 0.65) < 1e-9,
+        f"…et elle SUIT le mode tant que le test n'est pas parti : un seuil changé par une "
+        f"application avant « Commencer » s'y affiche ({mes_mi.formulaire.values()['prob_min']})")
+    console.apply_state(mi_regle)
+
+    # 🔴 …et ces réglages-là sont en LECTURE SEULE sur la page de test. Éditables, ils feraient
+    # une seconde copie : on monterait le seuil ICI, le verdict passerait au vert, et le mode
+    # (son décodage, l'application de l'étudiant) garderait l'ancienne valeur.
+    # Le critère est lu dans le CATALOGUE du mode, pas dans une liste : les clés qu'il déclare.
+    cles_mi = {p["key"] for p in console.catalogue["mi"]["params"]}
+    champs_mi = mes_mi.formulaire.champs
+    fige = {k for k, c in champs_mi.items() if not c.isEnabled()}
+    chk(fige and fige == {k for k in champs_mi if k in cles_mi}
+        and any(c.isEnabled() for c in champs_mi.values()),
+        f"les réglages qui VIENNENT du mode sont grisés ({sorted(fige)}), ceux du test seul "
+        f"restent modifiables ({sorted(set(champs_mi) - fige)})")
+    chk(mes_mi.origine.isVisibleTo(mes_mi)
+        and console.catalogue["mi"]["label"] in mes_mi.origine.text(),
+        f"…et la page dit OÙ ils se changent : sur celle du mode ({mes_mi.origine.text()[:60]!r})")
+    cliquer(mes_mi.bouton_commencer, "« Commencer » du test MI")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+    soumis = [p for nom, p in moteur_faux.commandes if nom == "start_mesure"]
+    chk(soumis and soumis[-1]["id"] == "mi_test"
+        and abs(soumis[-1]["params"].get("prob_min", -1.0) - 0.8) < 1e-9,
+        f"…et c'est CETTE valeur qui part avec `start_mesure` ({soumis[-1:] or 'rien'})")
+    # Une séance, puis sa fin : `update_from` réactive le formulaire ENTIER une fois le test
+    # terminé. Les champs du mode doivent rester gris — un `setEnabled(True)` du parent ne réactive
+    # pas un enfant désactivé explicitement, et c'est ce qu'on vérifie ici plutôt que de le croire.
+    mi_test_en_cours = {"mode_id": "mi_test", "phase": "essais", "essai": 1, "total": 12,
+                        "unite": "essai", "restant_s": 2.0, "instruction": "", "classe": "",
+                        "resultat": None, "probleme": ""}
+    mi_test_fini = {**mi_test_en_cours, "phase": "fini", "essai": 12, "resultat": {
+        "verdict": "UTILISABLE", "mot": "UTILISABLE", "niveau": "moyen"}}
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not champs_mi["prob_min"].isEnabled()
+        and all(c.isEnabled() for k, c in champs_mi.items() if k not in cles_mi),
+        "…et ils le RESTENT après une séance, quand la page réactive son formulaire")
+    chk(mes_mi.bloc_apres.title() == "Résultat" and not mes_mi.precedent.isVisibleTo(mes_mi),
+        f"un résultat obtenu SOUS NOS YEUX s'appelle « Résultat », sans réserve "
+        f"({mes_mi.bloc_apres.title()!r})")
+
+    # 🔴 Un modèle entraîné mais PAS ENREGISTRÉ n'est pas dans la liste : « Tester avant de
+    # garder » testerait en silence le modèle précédent.
+    console.apply_state({**mi_regle, "mesure": mi_test_fini, "calibration": {
+        "mode_id": "mi", "phase": "fini", "resultat": {"verdict": "x"},
+        "candidat": {"modele": "/tmp/calib/candidat_mi_model.joblib"}}})
+    chk(mes_mi.candidat.isVisibleTo(mes_mi) and "pas encore enregistré" in mes_mi.candidat.text(),
+        f"un modèle entraîné qui attend « Enregistrer » est SIGNALÉ sur la page de test : ce test "
+        f"porterait sur le précédent ({mes_mi.candidat.text()[:60]!r})")
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not mes_mi.candidat.isVisibleTo(mes_mi),
+        "…et rien n'est signalé quand aucun modèle n'attend")
+
+    cliquer(mes_mi.bouton_retour, "« ← » de la page de test MI")
+    chk(console.stack.currentWidget() is console.pages["mi"],
+        "« ← » ramène sur la page du MI, d'où l'on venait : la boucle est « régler → tester → "
+        "ajuster », pas un détour par l'accueil")
+
+    # 🔴 On revient re-tester : le verdict d'avant est encore là, en tête. Il est DIT précédent,
+    # car les réglages ont pu changer entre-temps sur la page du mode.
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk(mes_mi.precedent.isVisibleTo(mes_mi) and mes_mi.bloc_apres.title() == "Résultat précédent",
+        f"revenu sur la page, l'ancien verdict est annoncé comme celui d'une séance PRÉCÉDENTE "
+        f"({mes_mi.bloc_apres.title()!r})")
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    chk(not mes_mi.precedent.isVisibleTo(mes_mi) and mes_mi.bloc_apres.title() == "Résultat",
+        f"…jusqu'à la séance suivante, dont le résultat redevient « Résultat » "
+        f"({mes_mi.bloc_apres.title()!r})")
+
+    # 🔴 « Tester » PENDANT le test de ce mode ne réapplique rien : le
+    # test est parti avec ses réglages, et changer le magasin sous lui ferait afficher à la page
+    # du mode une configuration que son verdict ne décrira pas. Le clic mène au test en cours.
+    console.show_mode("mi")
+    console.apply_state({**mi_regle, "mesure": mi_test_en_cours})
+    console.pages["mi"].formulaire.champs["prob_min"].setValue(0.9)
+    moteur_faux.commandes.clear()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk(not [c for c in moteur_faux.commandes if c[0] == "set_params"]
+        and console.stack.currentWidget() is mes_mi,
+        f"« Tester » pendant le test de ce mode n'envoie AUCUN réglage et montre le test en cours "
+        f"({moteur_faux.commandes})")
+    # …et une fois le test fini, il réapplique de nouveau ce qui est à l'écran.
+    console.show_mode("mi")
+    console.apply_state({**mi_regle, "mesure": mi_test_fini})
+    console.pages["mi"].formulaire.champs["prob_min"].setValue(0.9)
+    moteur_faux.commandes.clear()
+    cliquer(console.pages["mi"].bouton_tester, "le bouton « Tester » du MI")
+    chk([c for c in moteur_faux.commandes if c[0] == "set_params"],
+        f"…mais le test FINI, « Tester » applique de nouveau l'écran ({moteur_faux.commandes})")
+    cliquer(mes_mi.bouton_retour, "« ← » de la page de test MI")
+
+    # --- 🔴 LES TESTS À FENÊTRE : `--tester`, la LONGUEUR choisie, et la fenêtre FERMÉE ----------
+    # Ce bloc vérifie, côté console, la ligne de commande des tests P300, ErrP et c-VEP. La table
+    # attendue est écrite ICI, à la main : la relire dans `stimulus/registry.py` ne prouverait
+    # que « la console recopie ce qu'elle a lu ».
+    #
+    # Et quand le MOTEUR abandonne un test (30 s sans `calib_start`, silence…), la fenêtre plein
+    # écran ne doit pas continuer son protocole jusqu'au bout, devant une console qu'elle
+    # recouvre et qui dit « interrompue ».
+    attendus_tests = {"p300": "--rounds", "errp": "--essais", "cvep": "--cycles"}
+    for mode_t, argument in attendus_tests.items():
+        test_t = console.pages[mode_t].spec.get("test_id")
+        pret_t = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+                  "modes_state": {k: v for k, v in state["modes_state"].items() if k != mode_t}}
+        console.lanceur.arreter()
+        console.show_mode(mode_t)
+        console.apply_state(pret_t)
+        cliquer(console.pages[mode_t].bouton_tester, f"le bouton « Tester » du {mode_t}")
+        mes_t = console.stack.currentWidget()
+        chk(mes_t is console.mesure_pages.get(test_t) and not mes_t.frequences.isVisibleTo(mes_t),
+            f"{mode_t} : « Tester » ouvre SA page de test ({test_t}), sans y annoncer de "
+            f"fréquences : sa fenêtre n'en reçoit pas")
+        # Une longueur qui n'est PAS le défaut : sinon « la bonne longueur » serait vraie à vide,
+        # la fenêtre partant de toute façon sur son défaut.
+        param_t = next((p for p in console.mesures[test_t]["params"] if p["key"] == "essais"), {})
+        autre = next((c for c in param_t.get("choices") or () if c != param_t.get("default")), None)
+        if autre is not None and "essais" in mes_t.formulaire.champs:
+            mes_t.formulaire.champs["essais"].setCurrentText(str(autre))
+        longueur = mes_t.formulaire.values().get("essais")
+        journal.clear()
+        processus.clear()
+        cliquer(mes_t.bouton_commencer, f"« Commencer » du test {mode_t}")
+        # Le contrôle de liaison d'un TEST : son bouton dit « Commencer le test » (jamais « la
+        # mesure ») et il entoure les voies clés du MODE testé, comme « Entraîner » le fait,
+        # lues dans le contrat du mode, pas écrites ici.
+        cles_t = [state["channels"][i] for i in registry.get(mode_t).key_channels]
+        chk(console.contact.bouton_lancer.text() == "Commencer le test"
+            and cles_t and all(n in console.contact.cles.text() for n in cles_t),
+            f"{mode_t} : le contrôle de liaison dit « Commencer le test » et entoure les voies "
+            f"clés du mode ({console.contact.bouton_lancer.text()!r}, "
+            f"{console.contact.cles.text()[:50]!r})")
+        cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+        en_cours_t = {"mode_id": test_t, "phase": "chauffe", "essai": 2, "total": 6,
+                      "unite": "manche", "restant_s": 15.0, "instruction": "", "classe": "",
+                      "resultat": None, "probleme": ""}
+        console.apply_state({**pret_t, "mesure": en_cours_t})
+        # L'avancement dans l'UNITÉ que le moteur publie : on choisit « Manches : 6 »,
+        # on lit « 2 manches sur 6 » — plus « 12 phase(s) enregistrée(s) sur 288 ».
+        chk(mes_t.progression.text() == "2 manches sur 6" and "6 manches" in mes_t.duree.text()
+            and "phase" not in mes_t.progression.text() + mes_t.duree.text()
+            and "fenêtre(s)" not in mes_t.duree.text(),
+            f"{mode_t} : l'avancement et la durée sont comptés dans l'unité PUBLIÉE par le moteur "
+            f"({mes_t.progression.text()!r}, {mes_t.duree.text()[-30:]!r})")
+        lances_t = [list(e[1]) for e in journal if e[0] == "fenetre"]
+        argv_t = lances_t[-1] if lances_t else []
+        chk("--tester" in argv_t and "--calibrer" not in argv_t,
+            f"{mode_t} : la fenêtre du test part avec `--tester`, JAMAIS `--calibrer` — elle "
+            f"entraînerait un modèle au lieu de laisser le moteur noter ({argv_t[2:]})")
+        i_t = rang(argv_t, argument)
+        chk(autre is not None and longueur == autre and i_t >= 0
+            and argv_t[i_t + 1:i_t + 2] == [str(longueur)],
+            f"{mode_t} : …et la LONGUEUR choisie sur la page ({longueur}, pas le défaut "
+            f"{param_t.get('default')}) part dans l'unité de SA fenêtre, `{argument}` "
+            f"({argv_t[2:]})")
+        # Le moteur ABANDONNE : la fenêtre qu'il servait est fermée, sans un clic.
+        fenetre_t = processus[-1] if processus else None
+        console.apply_state({**pret_t, "mesure": {
+            **en_cours_t, "phase": "annule",
+            "probleme": "aucun « calib_start » reçu en 30 s : la fenêtre publie-t-elle ?"}})
+        chk(fenetre_t is not None and fenetre_t.tue and not console.lanceur.en_cours(),
+            f"{mode_t} : un test que le MOTEUR abandonne FERME sa fenêtre — sinon elle continue "
+            f"plein écran jusqu'au bout de son protocole, devant une console qui dit "
+            f"« interrompu » et qu'elle recouvre")
+        chk("fermée" in mes_t.avis.text(),
+            f"{mode_t} : …et la page dit pourquoi la fenêtre a disparu ({mes_t.avis.text()!r})")
+
+    # Un protocole qui ne publie pas son unité est compté en « étapes » — jamais dans l'unité d'un
+    # autre protocole.
+    console.apply_state({**pret_t, "mesure": {k: v for k, v in en_cours_t.items() if k != "unite"}})
+    chk(mes_t.progression.text() == "2 étapes sur 6",
+        f"sans unité publiée, « étapes » ({mes_t.progression.text()!r})")
+
+    # …mais un test FINI, avec son résultat, laisse sa fenêtre conclure : la tuer effacerait le
+    # bilan qu'elle imprime en dernier (« N frames, M sautées »).
+    journal.clear()
+    processus.clear()
+    console.lanceur.arreter()
+    console.show_mode("p300")
+    pret_t = {**state, "quality": qualite_saine, "calibration": None, "mesure": None,
+              "modes_state": {k: v for k, v in state["modes_state"].items() if k != "p300"}}
+    console.apply_state(pret_t)
+    cliquer(console.pages["p300"].bouton_tester, "le bouton « Tester » du P300")
+    mes_t = console.stack.currentWidget()
+    cliquer(mes_t.bouton_commencer, "« Commencer » du test P300")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+    en_cours_t = {"mode_id": "p300_test", "phase": "essais", "essai": 3, "total": 6,
+                  "restant_s": 0.0, "instruction": "", "classe": "", "resultat": None,
+                  "probleme": ""}
+    console.apply_state({**pret_t, "mesure": en_cours_t})
+    fenetre_t = processus[-1] if processus else None
+    console.apply_state({**pret_t, "mesure": {**en_cours_t, "phase": "fini", "resultat": {
+        "verdict": "UTILISABLE", "mot": "UTILISABLE", "niveau": "moyen"}}})
+    chk(fenetre_t is not None and not fenetre_t.tue and console.lanceur.en_cours(),
+        "un test FINI laisse sa fenêtre conclure d'elle-même : seul un ABANDON la ferme")
+    console.lanceur.arreter()
+
+    # --- « Détails » d'un test SSVEP : CIBLE PAR CIBLE ------------------------------------------
+    # Une cible peut ne jamais être reconnue à un test, puis une AUTRE au test suivant. La ligne
+    # par cible montre sa barre (ρ à atteindre) à côté de ses annonces : une cible muette à
+    # barre haute accuse le plancher de CE repos. Le payload vient de la fonction du MOTEUR
+    # (`_par_cible`), pas d'une forme recopiée ici.
+    from core.modes.ssvep_mesure import _par_cible as _par_cible_moteur
+    _plancher = {"targets": [{"freq_hz": 15.0, "mu": 0.31, "sigma": 0.12, "rho_needed": 0.61},
+                             {"freq_hz": 12.0, "mu": 0.29, "sigma": 0.04, "rho_needed": 0.39}]}
+    _decisions = [(0, None), (0, None), (1, 1), (1, 0), (1, None)]
+    page_ss_t = console.mesure_pages["ssvep_taux"]
+    page_ss_t._montrer_resultat({"verdict": "MOYEN — x", "mot": "MOYEN", "niveau": "moyen",
+                                 "n_essais": 5, "par_frequence": _par_cible_moteur(
+                                     [12.0, 15.0], _decisions, _plancher)}, "")
+    _det = page_ss_t.details.text()
+    chk("12 Hz : 0 annonce(s) sur 2 essais, dont 0 juste(s)" in _det
+        and "15 Hz : 2 annonce(s) sur 3 essais, dont 1 juste(s)" in _det
+        and "ρ = 0,39" in _det and "ρ = 0,61" in _det and _det.count("\n") == 2,
+        f"« Détails » d'un test SSVEP donne UNE ligne par cible : annonces, justes, et la barre de "
+        f"SON plancher, appariée par fréquence ({_det!r})")
+    # 🔴 Et le résultat RÉEL d'un AUTRE test passe par la même page sans lever : la clé du SSVEP
+    # ne doit pas entrer en collision avec « par_cible », que le test P300 publie sous une autre
+    # forme (la console lèverait à CHAQUE rafraîchissement). Le résultat vient de la fonction du
+    # moteur (`p300_test.noter`), pas d'une forme recopiée ici.
+    from core.modes.p300_test import noter as _noter_p300
+    _res_p300 = _noter_p300([(i, i) for i in range(6)], 6, n_epoques=244)
+    try:
+        page_ss_t._montrer_resultat(_res_p300, "")
+        _leve = ""
+    except Exception as e:  # noqa: BLE001 - c'est précisément ce qu'on vérifie
+        _leve = repr(e)
+    chk(not _leve and "par_cible" in _res_p300,
+        f"le résultat d'un test P300 (qui porte SA clé « par_cible ») s'affiche sur la page de "
+        f"mesure sans lever ({_leve or 'aucune exception'})")
+
+    # Le même geste côté ENTRAÎNEMENT : un entraînement abandonné par le moteur ferme aussi sa
+    # fenêtre.
+    journal.clear()
+    processus.clear()
+    console.show_calibration("p300")
+    console.apply_state(pret_t)
+    cliquer(console.calib_pages["p300"].bouton_commencer, "« Commencer » de l'entraînement P300")
+    cliquer(console.contact.bouton_lancer, "« Lancer » du contrôle de liaison")
+    cal_t = {"mode_id": "p300", "phase": "chauffe", "restant_s": 15.0, "instruction": "",
+             "essai": 0, "total": 12, "resultat": None, "probleme": "", "candidat": None}
+    console.apply_state({**pret_t, "calibration": cal_t})
+    fenetre_t = processus[-1] if processus else None
+    console.apply_state({**pret_t, "calibration": {
+        **cal_t, "phase": "annule", "probleme": "aucun « calib_start » reçu en 30 s"}})
+    chk(fenetre_t is not None and fenetre_t.tue and not console.lanceur.en_cours(),
+        "un ENTRAÎNEMENT que le moteur abandonne ferme sa fenêtre lui aussi")
+    console.lanceur.arreter()
+    journal.clear()
+    processus.clear()
+
+    # --- « MESURER » : LE PIC ALPHA SE MESURE DEPUIS LE CHAMP QUI L'ATTEND ---------------------
+    # Deux portes, UN runtime : « Vérifier le casque » sur l'accueil, et « Mesurer » à côté du
+    # « Pic alpha ». La page ne nomme aucune mesure — le moteur déclare laquelle sait remplir
+    # quel réglage (`REGLAGE_PRODUIT`, cf. `core/modes/alpha.py`).
+    avec_mesurer = sorted((mid, cle) for mid, p in console.pages.items()
+                          for cle in p.boutons_mesurer)
+    chk(avec_mesurer == [("ssvep", "alpha_hz")],
+        f"« Mesurer » n'existe qu'à côté du pic alpha du SSVEP ({avec_mesurer})")
+    console.show_mode("ssvep")
+    console.apply_state(ssvep_regle)
+    cliquer(page_ss.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
+    chk(console.stack.currentWidget() is console.mesure_pages["alpha"]
+        and "SSVEP" in console.mesure_pages["alpha"].bouton_retour.text(),
+        f"« Mesurer » ouvre la MÊME page que « Vérifier le casque », et son « ← » dit où il "
+        f"ramène ({console.mesure_pages['alpha'].bouton_retour.text()!r})")
+    moteur_faux.commandes.clear()
+    console.mesure_pages["alpha"].bouton_commencer.click()
+    console.contact.bouton_lancer.click()
+    chk(("start_mesure", {"id": "alpha", "params": {}}) in moteur_faux.commandes,
+        f"…et « Commencer » y soumet `start_mesure` pour « alpha » ({moteur_faux.commandes})")
+    console.mesure_pages["alpha"].bouton_retour.click()
+    chk(console.stack.currentWidget() is page_ss,
+        "…puis « ← » ramène sur la page SSVEP, là où la valeur est attendue")
+
+    # --- 🔴 RIEN N'EST TRONQUÉ, ET L'AIDE N'EST PAS UN MUR DE GRIS ---------------------------
+    #
+    # Deux exigences distinctes, et la première est fonctionnelle : une page plus haute que la
+    # fenêtre doit défiler, sinon son bas est INATTEIGNABLE (Qt écrase les blocs du bas, il ne
+    # les rend pas défilables). La seconde : l'aide ne doit pas être verbeuse pour un étudiant.
+    #
+    # Le c-VEP est le cas extrême : six réglages, 2 719 caractères d'aide, et c'est le mode dont
+    # la séance dépend le plus d'un réglage bien compris.
+    # Avec des aides en bulles « ⓘ », la page c-VEP repliée tient dans la plus petite fenêtre
+    # que la console accepte : le défilement ne serait plus éprouvé du tout. On l'éprouve donc
+    # sur la page la plus HAUTE qu'un étudiant obtienne en vrai : « Décodage en direct »
+    # déplié, ce qui ajoute la vue en direct sous les blocs.
+    page_cvep = console.pages["cvep"]
+    contrat_cvep = {p["key"]: p["help"] for p in registry.serialize(registry.get("cvep"))["params"]
+                    if p["help"]}
+    console.show_mode("cvep")
+    page_cvep.direct.setChecked(True)
+    console.resize(1100, 420)               # un portable, ou une fenêtre pas maximisée
+    app.processEvents()
+
+    corps = page_cvep.defilement.widget()
+    barre = page_cvep.defilement.verticalScrollBar()
+    # Ce que le corps DEMANDE à sa largeur réelle. `sizeHint()` ne le dit que si rien ne
+    # s'enroule : une phrase enroulée (les blocs « Entraîner », « Tester ») calcule son
+    # sizeHint à une largeur de convenance, plus étroite — mesuré : 910 px « demandés » pour un
+    # corps qui en occupe 897 SANS rien couper, soit exactement sa hauteur-pour-largeur.
+    lay = corps.layout()
+    demande = (lay.totalHeightForWidth(corps.width()) if lay.hasHeightForWidth()
+               else corps.sizeHint().height())
+    chk(corps.height() >= demande,
+        f"dans une fenêtre trop courte, le corps de la page garde SA hauteur au lieu d'être "
+        f"écrasé ({corps.height()} px pour {demande} px demandés à sa largeur)")
+    chk(barre.maximum() > 0,
+        f"...et le bas se rejoint en DÉFILANT, au lieu d'être tronqué "
+        f"(course de la barre : {barre.maximum()} px)")
+    chk(page_cvep.bouton_retour.isVisible() and not page_cvep.defilement.isAncestorOf(
+            page_cvep.bouton_retour),
+        "l'en-tête, lui, ne défile pas : « ← Modes » reste atteignable depuis le bas de la page")
+
+    # 🔴 L'aide d'un réglage vit dans une bulle « ⓘ » juste après son libellé, lue au SURVOL.
+    # Pas de ligne grise sous chaque champ, pas de case « Aide détaillée » (la page c-VEP en
+    # porterait un mur de trente lignes). Rien n'est perdu pour autant, et ces assertions le
+    # tiennent : la bulle porte le texte ENTIER du contrat.
+    import html as _html
+    from PySide6.QtWidgets import QAbstractButton as _QAbstractButton, QLabel as _QLabel
+    form_cvep = page_cvep.formulaire
+    chk(set(form_cvep.aides) == set(contrat_cvep),
+        f"chaque réglage qui a une aide a SA bulle « ⓘ », et aucun autre "
+        f"({sorted(form_cvep.aides)} pour {sorted(contrat_cvep)})")
+    chk(all(form_cvep.aides[c][0].text() == "ⓘ"
+            and _html.escape(t, quote=False) in form_cvep.aides[c][0].toolTip()
+            and form_cvep.aides[c][1] == t
+            for c, t in contrat_cvep.items() if c in form_cvep.aides),
+        "…et l'infobulle de chaque bulle porte le texte ENTIER du contrat : rien n'est perdu")
+    chk(all(form_cvep.titres[c].indexOf(form_cvep.aides[c][0]) == 1
+            and form_cvep.titres[c].itemAt(0).widget().text().startswith(
+                form_cvep._params_par_cle[c]["label"])
+            and form_cvep.lignes[c].indexOf(form_cvep.aides[c][0]) < 0
+            for c in form_cvep.aides),
+        "…posée JUSTE APRÈS le libellé du réglage — ni au bout de la ligne du champ, ni sous "
+        "lui")
+    chk(all(_html.escape(t, quote=False) in form_cvep.champs[c].toolTip()
+            for c, t in contrat_cvep.items() if c in form_cvep.champs),
+        "…et le champ lui-même porte la même infobulle")
+    en_clair = sorted({c for c, t in contrat_cvep.items()
+                       for lbl in page_cvep.findChildren(_QLabel) if t[:40] in lbl.text()})
+    chk(not en_clair,
+        f"…et AUCUNE aide n'est plus affichée en clair sur la page, pas même sa première phrase "
+        f"({en_clair or 'aucune'})")
+    # La MOLETTE ne change aucun réglage : elle fait défiler la page. Qt fait tourner la valeur
+    # d'une liste ou d'un champ numérique sous la souris, donc en parcourant la page on
+    # modifierait un seuil ou un modèle sans le voir. Témoin : un QDoubleSpinBox ordinaire BOUGE.
+    from PySide6.QtCore import QPoint as _QPoint, QPointF as _QPointF, Qt as _Qt
+    from PySide6.QtGui import QWheelEvent as _QWheelEvent
+    from PySide6.QtWidgets import QApplication as _QApp, QDoubleSpinBox as _QDoubleSpinBox
+
+    def _molette(widget):
+        evenement = _QWheelEvent(_QPointF(5, 5), _QPointF(5, 5), _QPoint(0, 0), _QPoint(0, 120),
+                                 _Qt.NoButton, _Qt.NoModifier, _Qt.ScrollUpdate, False)
+        _QApp.sendEvent(widget, evenement)
+        return evenement.isAccepted()
+
+    temoin = _QDoubleSpinBox()
+    temoin.setValue(2.5)
+    _molette(temoin)
+    avant_molette = form_cvep.values()
+    acceptes = [cle for cle, champ in form_cvep.champs.items() if _molette(champ)]
+    chk(temoin.value() != 2.5 and form_cvep.values() == avant_molette and not acceptes,
+        f"la molette sur un champ ne change PAS sa valeur (un champ Qt ordinaire, lui, passe de "
+        f"2,5 à {temoin.value():g}) et l'événement remonte à la page, qui défile "
+        f"({acceptes or 'aucun champ ne le garde'})")
+    chk(not [b for b in page_cvep.findChildren(_QAbstractButton) if b.text() == "Aide détaillée"]
+        and not hasattr(form_cvep, "detail"),
+        "…et la case « Aide détaillée » a disparu : il n'y a plus rien à déplier")
+    # Le rafraîchissement DÉTECTÉ de l'écran vit dans l'infobulle de « Rafraîchissement », comme
+    # un paragraphe de plus.
+    form_ss = console.pages["ssvep"].formulaire
+    ecran = QApplication.primaryScreen()
+    if ecran is not None and ecran.refreshRate() > 0:
+        chk(f"{ecran.refreshRate():g} Hz" in form_ss.aides["refresh_hz"][0].toolTip(),
+            f"le rafraîchissement détecté de l'écran est dans la bulle de « Rafraîchissement » "
+            f"({ecran.refreshRate():g} Hz)")
+    chk(not [lbl.text() for lbl in console.pages["ssvep"].findChildren(_QLabel)
+             if "écran à" in lbl.text()],
+        "…et plus sur une ligne grise à part")
+    # La page du brut porte DEUX bulles, celles de son filtre d'AFFICHAGE (dans la vue des
+    # tracés). Son formulaire « Régler », lui, reste sans réglage, donc sans bulle.
+    page_brut = console.pages["raw"]
+    bulles_brut = [lbl for lbl in page_brut.findChildren(_QLabel) if lbl.text() == "ⓘ"]
+    chk(not page_brut.formulaire.aides
+        and len(bulles_brut) == 2
+        and all(page_brut.vue.isAncestorOf(b) and b.toolTip() for b in bulles_brut),
+        f"le brut n'a aucun réglage, donc son formulaire n'a aucune bulle : une bulle sans aide "
+        f"serait un réglage-décor. Les {len(bulles_brut)} bulles de la page sont celles du filtre "
+        f"d'affichage, et chacune porte son aide")
+    page_cvep.direct.setChecked(False)
+    console.resize(1100, 720)
+    console.show_grid()
+
+    # Le formulaire contre un VRAI moteur : c'est le seul moyen de prouver que ce qu'il produit
+    # est ce que le moteur attend. Le moteur n'est pas démarré — `submit` valide à la
+    # soumission, sans avoir besoin de la boucle.
+    # Au secteur des AMÉRIQUES : le coupe-bande des tracés du Brut doit être celui du MOTEUR. Au
+    # défaut (50 Hz), une page qui lirait le défaut du dépôt passerait inaperçue.
+    moteur = EngineServer(synthetic=True, modes=("raw", "ssvep", "neuro"),
+                          instance="console-smoke", secteur_hz=60.0)
+    reelle = Console(moteur)
+    reelle.timer.stop()
+    page = reelle.pages["ssvep"]
+    chk(set(page.formulaire.champs) == {"targets_on", "freqs", "target_names", "refresh_hz", "alpha_hz",
+                                        "z_min", "band_low", "band_high"},
+        f"le SSVEP expose ses huit réglages, support et noms des cibles, seuil de détection et "
+        f"bande de filtrage compris "
+        f"({sorted(page.formulaire.champs)})")
+    chk(page.formulaire.champs["freqs"].text().startswith("15"),
+        f"pré-rempli avec le défaut du contrat ({page.formulaire.champs['freqs'].text()})")
+
+    # --- 🔴 RÉGLER AVANT DE DÉMARRER, ET LE VOIR À L'ÉCRAN ----------------------------------
+    #
+    # Le mode n'est pas encore démarré à cet instant : c'est la situation de quelqu'un qui ouvre
+    # la page pour caler ses fréquences sur son écran avant de lancer quoi que ce soit. Le moteur
+    # doit juger les valeurs plutôt que répondre « « SSVEP » n'est pas démarré »,
+    # comme le fait « Proposer » sur le même mode arrêté.
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page._appliquer(page.formulaire.values())
+    chk("diviseur" in page.formulaire.refus.text(),
+        f"mode ARRÊTÉ : le refus porte sur les RÉGLAGES, pas sur « n'est pas démarré » "
+        f"(« {page.formulaire.refus.text()[:64]}… »)")
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page.formulaire.champs["alpha_hz"].setValue(10.5)
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"…un réglage valide passe ({page.formulaire.refus.text()[:50]})")
+    chk("RETENU" in page.formulaire.confirmation.text()
+        and "arrêté" in page.formulaire.confirmation.text()
+        # …et il dit QUI partira avec : la page ne démarre rien, « il démarrera avec »
+        # promettrait un démarrage qu'aucun bouton de cette page ne fait.
+        and "Tester" in page.formulaire.confirmation.text(),
+        f"…et l'écran dit qu'il est RETENU et qu'il démarrera avec — un « appliqué » nu ferait "
+        f"croire que le mode décode déjà sous ces réglages "
+        f"(« {page.formulaire.confirmation.text()[:60]}… »)")
+    # En VERT, pas en orange : rien ne cloche, il n'y a aucune réserve à émettre, et l'orange le
+    # ferait lire comme un problème. La couleur ne répond qu'à « est-ce accepté » ; le « pas
+    # encore en vigueur » est un fait de calendrier, il vit dans le TEXTE.
+    chk(page.formulaire.avertissement.text() == "",
+        f"…et le canal ORANGE reste vide : il est réservé aux « accepté, MAIS » "
+        f"(« {page.formulaire.avertissement.text()[:40]} »)")
+    chk("3fae5a" in page.formulaire.confirmation.styleSheet(),
+        f"…et c'est bien le vert du succès, celui que `mesure_page.py` emploie déjà pour le même "
+        f"fait ({page.formulaire.confirmation.styleSheet()})")
+
+    # 🔴 Le FAUX `set_params` rend la forme du VRAI, interrogé sur l'état du vrai
+    # moteur le temps d'une question (ses deux lignes de journal retirées : ce n'est pas un geste).
+    moteur_faux.etat = moteur.snapshot
+    vrai_ack = moteur.submit("set_params", id="ssvep", params=page.formulaire.values())
+    faux_ack = moteur_faux.submit("set_params", id="ssvep", params=page.formulaire.values())
+    del moteur_faux.commandes[-1], journal[-1]
+    moteur_faux.etat = lambda: console._dernier_etat
+    chk(set(faux_ack) == set(vrai_ack) and faux_ack.get("differe") is vrai_ack.get("differe") is True
+        and set(faux_ack.get("params") or {}) == set(vrai_ack.get("params") or {})
+        and _a_plat(faux_ack.get("params")).get("freqs") == _a_plat(vrai_ack.get("params")).get("freqs"),
+        f"le faux `set_params` rend la forme du vrai : {sorted(faux_ack)} contre {sorted(vrai_ack)}, "
+        f"differe {faux_ack.get('differe')} contre {vrai_ack.get('differe')}")
+
+    # --- 🔴 LA BOUCLE DU PIC ALPHA, CONTRE LE VRAI MOTEUR : Mesurer → Appliquer → le champ ------
+    # « Le retour doit être VISIBLE » : « Appliquer » sur la page de la mesure pose le réglage sur
+    # le SSVEP ARRÊTÉ (accepté et RETENU), et revenir sur la page SSVEP doit le montrer DANS LE
+    # CHAMP. Contre le VRAI `EngineServer`, parce que c'est lui qui retient et publie
+    # `snapshot()["reglages"]` — un état fabriqué ne prouverait que ce qu'on y a mis.
+    page.formulaire.champs["alpha_hz"].setValue(9.0)
+    page._appliquer(page.formulaire.values())
+    reelle.show_mode("ssvep")
+    reelle.apply_state(moteur.snapshot())
+    # 🔴 « Mesurer » applique d'abord ce qui est à l'écran, comme « Tester ». Une saisie
+    # IMPOSSIBLE n'ouvre donc pas la mesure : le refus reste dans « Régler »…
+    page.formulaire.champs["freqs"].setText("15, 17")
+    cliquer(page.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
+    chk(reelle.stack.currentWidget() is page and "diviseur" in page.formulaire.refus.text(),
+        f"« Mesurer » sur une saisie que le moteur refuse RESTE sur la page, refus affiché "
+        f"(« {page.formulaire.refus.text()[:50]}… »)")
+    # …et une saisie valide NON appliquée — l'écran d'un portable à 30 Hz, deux fréquences qui
+    # le divisent — part au moteur avant l'aller-retour, qui ne l'écrase donc plus.
+    page.formulaire.champs["refresh_hz"].setValue(30.0)
+    page.formulaire.champs["freqs"].setText("15, 10")
+    cliquer(page.boutons_mesurer.get("alpha_hz"), "« Mesurer » à côté du pic alpha")
+    mes_r = reelle.stack.currentWidget()
+    reussi_r = _verdict_alpha(True)
+    pic_r = reussi_r["reglage_propose"]["valeur"]
+    chk(mes_r is reelle.mesure_pages["alpha"] and abs(pic_r - 9.0) > 0.4,
+        f"« Mesurer » ouvre la mesure — et le pic ({pic_r}) diffère de la valeur en place (9), "
+        f"sinon ce qui suit serait vrai à vide")
+    reelle.apply_state({**moteur.snapshot(), "mesure": {**fini, "resultat": reussi_r}})
+    mes_r.appliquer_pic.click()
+    chk("SSVEP" in mes_r.reponse_pic.text() and "3fae5a" in mes_r.reponse_pic.styleSheet(),
+        f"« Appliquer » est ACCEPTÉ par le vrai moteur, SSVEP arrêté ({mes_r.reponse_pic.text()})")
+    mes_r.bouton_retour.click()
+    reelle.apply_state(moteur.snapshot())            # le tour de QTimer suivant
+    chk(reelle.stack.currentWidget() is page
+        and abs(page.formulaire.champs["alpha_hz"].value() - pic_r) < 1e-9,
+        f"…et revenu sur la page SSVEP, le champ « Pic alpha » MONTRE la valeur mesurée, sans "
+        f"qu'on la retape ({page.formulaire.champs['alpha_hz'].value()} pour {pic_r})")
+    chk(page.formulaire.champs["refresh_hz"].value() == 30.0
+        and page.formulaire.values()["freqs"] == [15.0, 10.0],
+        f"…ET la saisie faite avant « Mesurer » a survécu à l'aller-retour : sans quoi « Tester » "
+        f"testerait 60 Hz et le trio du dépôt, effacés en silence "
+        f"({page.formulaire.champs['refresh_hz'].value()} Hz, {page.formulaire.values()['freqs']})")
+    # On rend l'écran de 60 Hz à la suite, qui teste des diviseurs de 60.
+    page.formulaire.champs["refresh_hz"].setValue(60.0)
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page._appliquer(page.formulaire.values())
+
+    # --- 🔴 « TESTER » TESTE CE QUI EST À L'ÉCRAN — contre le VRAI moteur --------------------
+    # Le piège relevé à la livraison de la page en blocs : on change une fréquence, on clique
+    # « Tester » SANS « Appliquer », et l'ancienne configuration était testée sans rien pour le
+    # dire. Ici, rien n'est appliqué à la main : c'est le clic sur « Tester » qui doit le faire.
+    page.formulaire.champs["freqs"].setText("12, 15, 20")
+    page.bouton_tester.click()
+    chk(tuple(moteur.reglages["ssvep"]["freqs"]) == (12.0, 15.0, 20.0),
+        f"une saisie NON appliquée part au moteur au clic sur « Tester » — c'est elle qui sera "
+        f"testée ({moteur.reglages['ssvep']['freqs']})")
+    chk(reelle.stack.currentWidget() is reelle.mesure_pages["ssvep_taux"],
+        "…puis la page du test s'ouvre")
+    reelle.show_mode("ssvep")
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page.bouton_tester.click()
+    chk(reelle.stack.currentWidget() is page and "diviseur" in page.formulaire.refus.text(),
+        f"…mais une saisie IMPOSSIBLE n'ouvre pas le test : le refus s'affiche dans « Régler », "
+        f"et l'on ne mesure pas une configuration qu'aucun écran ne peut afficher "
+        f"(« {page.formulaire.refus.text()[:50]}… »)")
+    chk(tuple(moteur.reglages["ssvep"]["freqs"]) == (12.0, 15.0, 20.0),
+        "…et le moteur garde la dernière configuration VALIDE")
+    page.formulaire.champs["freqs"].setText("15, 20, 8.571")
+    page._appliquer(page.formulaire.values())
+
+    # On applique la commande à la main, comme la boucle le ferait.
+    moteur._start(["raw", "ssvep", "neuro"], {s.id: v for s, v in moteur._pending}, now=0.0)
+
+    page.formulaire.champs["freqs"].setText("12, 15, 20")
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"un jeu valide est accepté ({page.formulaire.refus.text()})")
+
+    page.formulaire.champs["freqs"].setText("15, 60")
+    page._appliquer(page.formulaire.values())
+    chk("hors bande passante" in page.formulaire.refus.text(),
+        f"et un jeu hors bande est refusé AVEC sa raison — « {page.formulaire.refus.text()[:60]}… »")
+
+    page.formulaire.champs["freqs"].setText("15, 15.2")
+    page._appliquer(page.formulaire.values())
+    chk("trop proches" in page.formulaire.refus.text(),
+        "deux cibles trop proches pour la fenêtre : refusées, avec l'écart minimum indiqué")
+
+    page.formulaire.champs["freqs"].setText("quinze, vingt")
+    page._appliquer(page.formulaire.values())
+    chk("liste de nombres" in page.formulaire.refus.text(),
+        "une saisie illisible est refusée par le MOTEUR, pas par le formulaire")
+
+    # Le bouton « Proposer » de bout en bout : clic -> commande au moteur -> champ rempli -> et la
+    # valeur obtenue est ACCEPTÉE. C'est ce dernier point qui compte : une proposition que la
+    # validation refuse serait le pire des deux mondes. Le bouton est CLIQUÉ, pas contourné en
+    # appelant `_proposer` directement — sinon une clé mal capturée par le lambda du bouton, ou un
+    # `proposes` sur le mauvais champ, passerait tous les tests sans jamais être exercé.
+    page = reelle.pages["ssvep"]
+    page.formulaire.champs["freqs"].setText("15, 20, 8.57143")
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    propose = page.formulaire.values()["freqs"]
+    chk(len(propose) == 3, f"« Proposer » remplit le champ ({propose})")
+    chk(all(abs(60.0 / f - round(60.0 / f)) < TOLERANCE_DIVISEUR for f in propose),
+        "avec des diviseurs du rafraîchissement déclaré")
+    page._appliquer(page.formulaire.values())
+    chk(page.formulaire.refus.text() == "",
+        f"et le moteur accepte ce qu'il a lui-même proposé ({page.formulaire.refus.text()})")
+    # UN seul « Proposer » sur la page SSVEP, sous le pic alpha : il lit aussi le rafraîchissement
+    # à l'écran, donc un second bouton sous le rafraîchissement ferait exactement le même calcul.
+    chk(list(page.formulaire.boutons_proposer) == ["alpha_hz"],
+        f"un seul bouton « Proposer », sous le pic alpha ({list(page.formulaire.boutons_proposer)})")
+    page.formulaire.champs["refresh_hz"].setValue(144.0)
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    chk(all(abs(144.0 / f - round(144.0 / f)) < TOLERANCE_DIVISEUR
+            for f in page.formulaire.values()["freqs"]),
+        f"…et il calcule sur le rafraîchissement en cours d'édition, sans « Appliquer » "
+        f"({page.formulaire.values()['freqs']})")
+    page.formulaire.champs["refresh_hz"].setValue(60.0)
+
+    # Cibles PHYSIQUES (des LED) : la liste MONTRE un libellé et envoie la valeur du contrat ; le
+    # rafraîchissement se grise, « Tester sur une session » aussi, avec la raison que le moteur
+    # donne. « Tester librement » reste : sa fenêtre sait montrer la cible décodée sans disques.
+    from PySide6.QtWidgets import QRadioButton as _QRadioButton
+    cibles = page.formulaire.champs["targets_on"]
+    chk([r.text() for r in cibles.findChildren(_QRadioButton)]
+        == [tr("mode.ssvep.cibles.ecran"), tr("mode.ssvep.cibles.physiques")],
+        "le support des cibles est un choix en boutons radio, les deux options visibles")
+    chk(cibles.currentText() == tr("mode.ssvep.cibles.ecran")
+        and page.formulaire.values()["targets_on"] == "screen"
+        and page.formulaire.champs["refresh_hz"].isEnabled()
+        and page.bouton_tester.isEnabled() and page.bouton_essayer.isEnabled()
+        and not page.note_tests.isVisibleTo(page),
+        f"par défaut, des cibles sur « {cibles.currentText()} » : rafraîchissement et tests actifs")
+    cibles.setCurrentIndex(cibles.findData("physical"))
+    chk(page.formulaire.values()["targets_on"] == "physical"
+        and not page.formulaire.champs["refresh_hz"].isEnabled()
+        and not page.bouton_tester.isEnabled() and page.bouton_essayer.isEnabled()
+        and page.note_tests.isVisibleTo(page)
+        and page.note_tests.text() == tr("mode.ssvep.tests_ecran"),
+        f"des cibles physiques grisent le rafraîchissement et « Tester sur une session », en "
+        f"disant pourquoi, mais PAS « Tester librement » ({page.note_tests.text()[:50]}…)")
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    led = page.formulaire.values()["freqs"]
+    chk(isinstance(led, list) and led and all(abs(f * 2 - round(f * 2)) < 1e-9 for f in led),
+        f"…et « Proposer » choisit au demi-hertz ({led})")
+    cibles.setCurrentIndex(cibles.findData("screen"))
+    chk(page.formulaire.champs["refresh_hz"].isEnabled() and page.bouton_tester.isEnabled()
+        and page.bouton_essayer.isEnabled() and not page.note_tests.isVisibleTo(page),
+        "revenir à l'écran rend le rafraîchissement et les deux « Tester »")
+
+    # Pendant le TEST du SSVEP, sa page grise « Appliquer » (le moteur refuserait), avec la
+    # raison dans la bulle ; le test fini, le bouton revient.
+    reelle.show_mode("ssvep")
+    en_test = {**fake_state(), "mesure": {"mode_id": "ssvep_taux", "phase": "essais"}}
+    reelle.apply_state(en_test)
+    grise = (not page.formulaire.bouton.isEnabled()) and bool(page.formulaire.bouton.toolTip())
+    reelle.apply_state({**en_test, "mesure": {"mode_id": "ssvep_taux", "phase": "fini"}})
+    chk(grise and page.formulaire.bouton.isEnabled() and not page.formulaire.bouton.toolTip(),
+        "pendant le test du mode, « Appliquer » est grisé, avec sa raison ; le test fini, il revient")
+
+    # Un avertissement (proposition ACCEPTÉE, mais hors de la plage confortable) ne doit PAS
+    # ressembler à un refus. Cas connu : 60 Hz, alpha 10,5 Hz, 5 cibles — le même triplet que le
+    # test de non-régression `propose_frequencies` de config.py, qui produit cet avertissement.
+    # Seule la LONGUEUR du texte tapé dans « freqs » compte ici (c'est elle qui fixe `n`) : les
+    # valeurs elles-mêmes n'ont pas besoin d'être un jeu SSVEP valide, on ne les applique jamais.
+    page.formulaire.champs["alpha_hz"].setValue(10.5)
+    page.formulaire.champs["freqs"].setText("1, 2, 3, 4, 5")
+    page.formulaire.boutons_proposer["alpha_hz"].click()
+    chk(len(page.formulaire.values()["freqs"]) == 5,
+        f"la proposition avec avertissement remplit quand même le champ "
+        f"({page.formulaire.values()['freqs']})")
+    chk("hors de la plage confortable" in page.formulaire.avertissement.text(),
+        f"l'avertissement est affiché, en ambre — « {page.formulaire.avertissement.text()[:60]}… »")
+    chk(page.formulaire.refus.text() == "",
+        f"et rien dans l'étiquette de refus ({page.formulaire.refus.text()!r})")
+
+    # Le refus qui ferme le trou, vu depuis l'interface.
+    page.formulaire.champs["freqs"].setText("15, 17")
+    page._appliquer(page.formulaire.values())
+    chk("diviseur entier" in page.formulaire.refus.text(),
+        f"17 Hz est refusé avec sa raison ({page.formulaire.refus.text()[:70]}…)")
+
+    # Un réglage BORNÉ par le contrat (le lissage du neuro, 0 à 0.99) : le champ ne doit PAS
+    # écrêter la saisie. Un QSpinBox réglé sur les bornes du contrat transformerait « 5 » en
+    # « 0.99 » sans un mot, et le moteur n'aurait jamais l'occasion de dire pourquoi 5 est exclu.
+    neuro = reelle.pages["neuro"]
+    reelle.show_mode("neuro")
+    reelle.apply_state(moteur.snapshot())      # comme le ferait le QTimer : la page apprend l'état
+    neuro.formulaire.champs["smoothing"].setValue(5.0)
+    chk(neuro.formulaire.values()["smoothing"] == 5.0,
+        f"une valeur hors bornes SORT du formulaire telle quelle "
+        f"({neuro.formulaire.values()['smoothing']}, et non écrêtée à 0.99)")
+    neuro._appliquer(neuro.formulaire.values())
+    chk(neuro.formulaire.refus.text() != "",
+        "et c'est le MOTEUR qui la refuse, avec sa raison")
+    chk("en vigueur" in neuro.formulaire.refus.text(),
+        f"le refus rappelle ce qui reste appliqué — « {neuro.formulaire.refus.text()[-40:]} »")
+    chk(neuro.formulaire.champs["smoothing"].value() == 5.0,
+        "et la saisie fautive reste dans le champ, pour être corrigée plutôt que retapée")
+
+    # Le mode « brut » n'a aucun réglage : la page doit le DIRE, pas afficher un cadre vide.
+    chk(len(reelle.pages["raw"].formulaire.champs) == 0,
+        "le brut n'a aucun réglage")
+    chk(reelle.pages["raw"].formulaire.vide is not None
+        and reelle.pages["raw"].formulaire.vide.isVisibleTo(reelle.pages["raw"]),
+        "et le formulaire l'écrit, au lieu de laisser un cadre vide")
+    # …et il ne montre PAS de bouton « Appliquer » : il soumettrait un dictionnaire VIDE, que le
+    # moteur accepterait sans que rien ne change. La règle
+    # « un bouton sans effet est un mensonge » vaut pour toute page, pas seulement celle des
+    # mesures (`mesure_page.py`).
+    chk(reelle.pages["raw"].formulaire.bouton.isHidden(),
+        "…et surtout AUCUN bouton « Appliquer » : il soumettrait un dictionnaire vide")
+    chk(not reelle.pages["ssvep"].formulaire.bouton.isHidden(),
+        "…alors qu'une page QUI a des réglages le garde — la règle ne tire pas trop large")
+    # Les pages d'ENTRAÎNEMENT n'ont AUCUN bouton « Appliquer », réglages ou pas : leurs
+    # réglages partent avec « Commencer ». Un bouton « Appliquer » que rien ne brancherait serait
+    # le bouton fantôme que la règle ci-dessus combat.
+    avec_bouton = [m for m in ("mi", "p300", "errp", "cvep")
+                   if not reelle.calib_pages[m].formulaire.bouton.isHidden()]
+    chk(not avec_bouton,
+        f"…et aucune page d'entraînement ne montre « Appliquer » : ses réglages partent avec "
+        f"« Commencer » ({avec_bouton or 'aucune ne le montre'})")
+    # Les QUATRE pages portent la bande réglable : un entraînement à fenêtre qui perdrait ses
+    # deux champs réglerait sa bande… nulle part.
+    sans_bande = [m for m in ("mi", "p300", "errp", "cvep")
+                  if not {"band_low", "band_high"} <= set(reelle.calib_pages[m].formulaire.champs)]
+    chk(not sans_bande,
+        f"…et les QUATRE pages d'entraînement — P300, ErrP et c-VEP compris — portent les deux "
+        f"coupures de leur bande ({sans_bande or 'toutes les portent'})")
+    # 🔴 La validation au clic contre le VRAI moteur : le faux moteur ci-dessus refuse
+    # sur commande, celui-ci par les bornes du contrat. Une coupure haute à 50 Hz sur le MI
+    # (maximum 40) est refusée SUR la page : ni contrôle de liaison, ni commande.
+    cal_r = reelle.calib_pages["mi"]
+    reelle.show_calibration("mi")
+    reelle.apply_state(moteur.snapshot())
+    haut_r = cal_r.formulaire.champs.get("band_high")
+    if haut_r is not None:
+        haut_r.setValue(50.0)
+        en_file_avant = moteur._commands.qsize()
+        cal_r.bouton_commencer.click()
+    chk(haut_r is not None and reelle.stack.currentWidget() is cal_r
+        and "40" in cal_r.avis.text() and "maximum" in cal_r.avis.text()
+        and moteur._commands.qsize() == en_file_avant and cal_r.formulaire.isEnabled(),
+        f"contre le VRAI moteur, une coupure haute hors bornes est refusée AU CLIC, avec la raison "
+        f"du contrat, rien en file, formulaire ouvert ({cal_r.avis.text()[:70]!r})")
+    if haut_r is not None:
+        haut_r.setValue(cal_r.formulaire._params_par_cle["band_high"]["default"])
+    reelle.show_grid()
+    chk(reelle.calib_pages["mi"].formulaire.champs,
+        "…la calibration MI a pourtant des réglages : le bouton est caché exprès, pas faute de "
+        "réglage")
+
+    # --- « Rétablir les valeurs par défaut », partout où il y a des réglages ------------------
+    # Les défauts viennent du CATALOGUE du moteur ; le bouton REMPLIT les champs et n'applique
+    # rien, même règle que « Proposer ».
+    f_ss = reelle.pages["ssvep"].formulaire
+    defauts_ss = {p["key"]: p["default"] for p in f_ss.params}
+    emis = []
+    f_ss.appliquer.connect(emis.append)
+    # Le défaut, écrit comme le champ l'écrit (8,571… y devient « 8.57143 ») — pas le texte affiché
+    # au départ : plus haut, ce smoke a déjà rempli la page avec d'autres fréquences.
+    freqs_defaut = ", ".join(f"{float(v):g}" for v in defauts_ss["freqs"])
+    f_ss.champs["z_min"].setValue(5.0)
+    f_ss.champs["band_high"].setValue(25.0)
+    f_ss.champs["freqs"].setText("12, 20")
+    f_ss.bouton_defauts.click()
+    remis = f_ss.values()
+    chk(remis["z_min"] == defauts_ss["z_min"] and remis["band_high"] == defauts_ss["band_high"]
+        and f_ss.champs["freqs"].text() == freqs_defaut,
+        f"« Rétablir les valeurs par défaut » remet les champs du SSVEP aux défauts du contrat "
+        f"({remis['z_min']}, {remis['band_high']}, {remis['freqs']})")
+    chk(not emis, "…sans rien appliquer : ce qui part au moteur part avec « Appliquer »")
+    f_ss.appliquer.disconnect(emis.append)
+    bas_ss = f_ss.ligne_bas
+    chk(bas_ss.indexOf(f_ss.bouton_defauts) == bas_ss.count() - 1
+        and bas_ss.itemAt(bas_ss.count() - 2).spacerItem() is not None,
+        "…et il est EN BAS À DROITE du formulaire, après l'espace qui pousse")
+    f_p3 = reelle.calib_pages["p300"].formulaire
+    f_p3.champs["band_low"].setValue(0.7)
+    f_p3.bouton_defauts.click()
+    chk(f_p3.values()["band_low"] == 1.0 and not f_p3.bouton_defauts.isHidden(),
+        f"…sur une page d'ENTRAÎNEMENT aussi ({f_p3.values()['band_low']})")
+    f_t3 = reelle.mesure_pages["p300_test"].formulaire
+    defaut_essais = {p["key"]: p["default"] for p in f_t3.params}["essais"]
+    f_t3.champs["essais"].setCurrentIndex(
+        (f_t3.champs["essais"].currentIndex() + 1) % f_t3.champs["essais"].count())
+    f_t3.bouton_defauts.click()
+    chk(f_t3.values()["essais"] == defaut_essais and "model" in f_t3.lecture_seule,
+        f"…sur une page de TEST, pour ses réglages PROPRES ({f_t3.values()['essais']}), et le "
+        f"modèle, qui vient du mode, reste figé")
+    f_ts = reelle.mesure_pages["ssvep_taux"].formulaire
+    chk(f_ts.bouton_defauts.isHidden() and set(f_ts.lecture_seule) == set(f_ts.champs),
+        "…mais PAS sur le test SSVEP, dont tous les réglages viennent du mode : un bouton qui ne "
+        "rétablirait rien serait un mensonge")
+    f_ts.champs["z_min"].setValue(4.5)      # la valeur du MODE, pas le défaut
+    f_ts.retablir_defauts()
+    chk(f_ts.values()["z_min"] == 4.5,
+        f"…et même appelé à la main, il ne touche aucun champ figé : il montre la valeur du mode, "
+        f"pas le défaut ({f_ts.values()['z_min']})")
+    chk(reelle.pages["raw"].formulaire.bouton_defauts.isHidden(),
+        "…ni sur le formulaire du Brut, qui n'a aucun réglage")
+    vue_brut = reelle.pages["raw"].vue
+    vue_brut.choix_filtre.setCurrentIndex(0)
+    vue_brut.case_secteur.setChecked(True)
+    vue_brut.bouton_defauts.click()
+    from core import filtres_affichage as _filtres
+    chk(vue_brut.filtre == _filtres.FILTRE_DEFAUT and not vue_brut.case_secteur.isChecked(),
+        "…et les filtres d'AFFICHAGE du Brut ont le leur : passe-haut 1 Hz, coupe-bande décoché")
+
+    # --- un « choice » NUMÉRIQUE conserve son TYPE, contre le VRAI validateur ----------------
+    # `trials_per_class` (calibration MI) est un « choice » dont le défaut n'est PAS le premier
+    # choix (MI_SESSIONS[1] = 14, pas 10) et dont les choix sont des ENTIERS, pas des chemins
+    # de fichiers (`model`). `ParamsForm` (`_champ` et `values`) doit donc afficher le défaut
+    # déclaré et rendre un entier, sinon `contract.validate` refuse une CHAÎNE ("10") contre
+    # (10, 14, 18, 26). Vérifié contre le VRAI validateur : le moteur FACTICE du bloc
+    # « calibration » plus haut n'appelle jamais `contract.validate` et ne détecterait rien.
+    cal_reelle = reelle.calib_pages["mi"]
+    chk(cal_reelle.formulaire.champs["trials_per_class"].currentText() == "14",
+        f"le formulaire de calibration affiche le DÉFAUT déclaré (14), pas le premier choix "
+        f"({cal_reelle.formulaire.champs['trials_per_class'].currentText()})")
+    # --- Les TÂCHES du MI : un nombre, puis autant de champs ----------------------------------
+    # 2 tâches, deux champs à remplir ; 3 tâches, trois champs. Un champ caché garde sa saisie ;
+    # un champ vide part au moteur, qui le refuse avec sa raison.
+    from console.params_form import ListeDeTextes
+    from core.modes.contract import validate as _valider
+    from core.modes.mi_calib import CALIB as _CALIB_MI
+    taches = cal_reelle.formulaire.champs.get("taches")
+    visibles = (lambda: [c.text() for c in taches.textes if not c.isHidden()]) if taches else list
+    chk(isinstance(taches, ListeDeTextes) and visibles() == ["LEFT", "RIGHT"],
+        f"« Entraîner » le MI : deux champs de tâches par défaut, les poings ({visibles()})")
+    if taches is not None:
+        taches.nombre.setValue(3)
+        taches.textes[2].setText("Pieds")
+        a_trois = cal_reelle.formulaire.values()["taches"]
+        taches.nombre.setValue(2)
+        a_deux = cal_reelle.formulaire.values()["taches"]
+        taches.nombre.setValue(3)
+        revenu = visibles()
+        accepte, _r = _valider(_CALIB_MI, {"taches": a_trois})
+        taches.textes[2].setText("")
+        _v, refus_vide = _valider(_CALIB_MI, cal_reelle.formulaire.values())
+        cal_reelle.formulaire.retablir_defauts()
+        chk(a_trois == ["LEFT", "RIGHT", "Pieds"] and a_deux == ["LEFT", "RIGHT"]
+            and revenu == ["LEFT", "RIGHT", "Pieds"] and accepte is not None
+            and bool(refus_vide) and visibles() == ["LEFT", "RIGHT"],
+            f"3 tâches = 3 champs, et le moteur les accepte ; repasser à 2 puis 3 rend la 3e telle "
+            f"que tapée ; un champ vide est REFUSÉ par le moteur ({refus_vide}) ; « Rétablir » "
+            f"rend les deux poings ({a_trois} / {a_deux} / {revenu} / {visibles()})")
+    valeurs_calib = cal_reelle.formulaire.values()
+    chk(valeurs_calib["trials_per_class"] == 14
+        and isinstance(valeurs_calib["trials_per_class"], int),
+        f"et rend un ENTIER, pas '14' — sinon le moteur le refuse comme choix invalide "
+        f"({valeurs_calib['trials_per_class']!r})")
+    ack_calib = reelle.commande("start_calibration", id="mi", params=valeurs_calib)
+    chk(ack_calib.get("accepted"),
+        f"soumis au VRAI validateur (pas au moteur factice), ce défaut est accepté ({ack_calib})")
+
+    # Les tracés, contre un vrai tampon. `recent_window` rend une COPIE : la modifier ne doit
+    # rien changer au moteur — c'est ce qui protège l'acquisition du fil Qt.
+    import numpy as np
+
+    moteur_channels = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
+    moteur.recent = np.random.default_rng(0).normal(0.0, 20.0, (1000, 8))
+    bloc = moteur.recent_window(2.0)
+    chk(bloc is not None and bloc.shape == (500, 8),
+        f"recent_window rend 2 s de signal ({None if bloc is None else bloc.shape})")
+    bloc[0, 0] = 999999.0
+    chk(moteur.recent[-500, 0] != 999999.0,
+        "et c'est une COPIE : l'afficheur ne peut pas abîmer le tampon d'acquisition")
+
+    page = reelle.pages["raw"]
+    etat_brut = {"modes_state": {"raw": {
+        "id": "raw", "label": "Brut", "family": "brut", "phase": "running", "published": True,
+        "params": {}, "instruction": "", "stream": "raw", "channels": list(moteur_channels),
+        "rest_report": None, "output": None}}}
+    page.update_from(etat_brut)
+    chk(len(page.vue.courbes) == 8, f"huit courbes, une par voie ({len(page.vue.courbes)})")
+    chk(page.vue.courbes[0].xData is not None and len(page.vue.courbes[0].xData) > 100,
+        "et elles portent des données après un rafraîchissement")
+    from console.live_views import nom_filtre
+    from console.params_form import ListeSansMolette
+    from core import filtres_affichage
+    from core.i18n import nombre
+
+    chk(page.vue.filtre == filtres_affichage.FILTRE_DEFAUT and not page.vue.case_secteur.isChecked()
+        and page.vue.choix_filtre.currentText() == nom_filtre(filtres_affichage.FILTRE_DEFAUT)
+        and page.vue.echelle.text().startswith(nom_filtre(filtres_affichage.FILTRE_DEFAUT)),
+        f"les tracés s'ouvrent sur le filtre d'affichage par défaut, et l'étiquette le NOMME "
+        f"(« {page.vue.echelle.text()[:40]}… »)")
+    chk(isinstance(page.vue.choix_filtre, ListeSansMolette)
+        and page.vue.choix_filtre.count() == len(filtres_affichage.FILTRES)
+        and page.vue.fs == moteur.acq.fs,
+        f"la liste propose les {len(filtres_affichage.FILTRES)} filtres, ignore la molette, et "
+        f"filtre à la fréquence du casque ({page.vue.fs:g} Hz)")
+
+    # --- 🔴 LES HUIT TRACÉS NE SE CHEVAUCHENT PAS, ET C'EST GARANTI ---------------------------
+    #
+    # Un écart fixe entre voies (100 µV) chevaucherait les tracés, car le brut non filtré d'un
+    # vrai casque respire de plusieurs centaines de µV. Ce n'est
+    # pas cosmétique : le contrôle de contact à l'œil est l'ÉTAPE 1 de toute séance, et c'est ce
+    # tracé-là qu'on regarde.
+    #
+    # Ce qui est vérifié ici n'est pas « l'échelle a l'air bonne » (invérifiable sans œil) mais
+    # la propriété GÉOMÉTRIQUE qui remplace le jugement : rogné à son couloir, un tracé ne PEUT
+    # PAS entrer dans celui du voisin. C'est le rognage, pas l'échelle mesurée, qui rend le
+    # non-chevauchement démontrable ; une échelle mesurée seule le rendrait rare, et « rare » est
+    # exactement ce qu'aucun test ne sait vérifier.
+    vue = page.vue
+
+    def _redessine(signal):
+        moteur.recent = signal
+        page.update_from(etat_brut)
+
+    def _empietement():
+        """La pire remontée d'une voie dans le couloir de la suivante, en µV. ≤ 0 = disjoints."""
+        pire = -1e9
+        for i in range(len(vue.courbes) - 1):
+            haut, bas = vue.courbes[i].yData, vue.courbes[i + 1].yData
+            if haut is None or bas is None:
+                continue
+            pire = max(pire, float(np.max(bas)) - float(np.min(haut)))
+        return pire
+
+    # Des sinusoïdes plutôt qu'un tirage aléatoire : l'étendue d'une sinusoïde vaut deux fois son
+    # amplitude à 0,2 % près, donc chaque graduation attendue ci-dessous est CALCULABLE. Un
+    # `normal(0, σ)` la laisserait à la merci du tirage — et une assertion qu'un autre tirage
+    # rendrait fausse n'est pas une assertion, c'est un pari.
+    _phase = 2 * np.pi * 8.0 * np.arange(1000) / 1000.0 * 4.0
+    def _sinus(amplitudes):
+        return np.stack([a * np.sin(_phase + i) for i, a in enumerate(amplitudes)], axis=1)
+
+    # Ces trois épreuves portent sur l'ÉCHELLE du signal brut : on retire le filtre d'affichage,
+    # qui n'est pas leur sujet (il a les siennes plus bas).
+    vue.choix_filtre.setCurrentIndex(filtres_affichage.FILTRES.index((None, None)))
+
+    # (1) Un brut qui respire fort : l'écart MONTE (un écart fixe de 100 µV serait la panne).
+    _redessine(_sinus([300.0] * 8))
+    chk(vue.ecart == 1000.0,
+        f"l'écart entre voies est MESURÉ sur le signal, pas fixé : 8 voies à ±300 µV le portent "
+        f"à 1000 µV ({vue.ecart:g})")
+    chk(f"{vue.ecart:g} µV" in vue.echelle.text(),
+        f"et l'étiquette annonce l'écart RÉELLEMENT en vigueur, pas une constante "
+        f"(« {vue.echelle.text()[:60]}… »)")
+    chk(_empietement() <= 1e-6,
+        f"aucune voie n'entre dans le couloir de sa voisine ({_empietement():+.1f} µV)")
+
+    # (2) UNE voie déchaînée sur huit — C3 et Cz le font à la réouverture de session. L'échelle
+    # est prise au 75e centile des huit étendues, donc elle suit les SEPT voies saines : avec un
+    # max, l'écart monterait à 10 000 µV et les sept tracés utiles seraient des traits plats.
+    _redessine(_sinus([30.0, 30.0, 30.0, 3000.0, 30.0, 30.0, 30.0, 30.0]))
+    chk(vue.ecart == 100.0,
+        f"une seule voie déchaînée n'écrase PAS les sept autres à plat : l'écart suit les voies "
+        f"saines ({vue.ecart:g} µV, et non 10000)")
+    chk(_empietement() <= 1e-6,
+        f"...et elle ne passe pas non plus devant ses voisines : elle est rognée à son couloir "
+        f"({_empietement():+.1f} µV)")
+    chk("C4" in vue.echelle.text() and "rogné" in vue.echelle.text(),
+        f"...et le rognage est DIT, en nommant la voie — c'est le signal qu'on vient chercher "
+        f"ici, pas un défaut d'affichage à cacher (« {vue.echelle.text()[-90:]} »)")
+
+    # (3) La zone morte. Sans elle, une amplitude qui oscille autour d'une graduation ferait
+    # clignoter l'échelle dix fois par seconde et l'écran serait illisible. ±20 µV « appelle »
+    # 50 µV — une graduation plus bas — et ne doit RIEN changer.
+    _redessine(_sinus([20.0] * 8))
+    chk(vue.ecart == 100.0,
+        f"une baisse d'UNE graduation ne redescend pas l'échelle ({vue.ecart:g} µV)")
+    _redessine(_sinus([5.0] * 8))
+    chk(vue.ecart == 20.0,
+        f"...mais deux graduations plus bas, oui : l'échelle sait descendre, elle n'est pas "
+        f"qu'un cliquet ({vue.ecart:g} µV)")
+    chk("rogné" not in vue.echelle.text(),
+        f"et sur un signal calme, plus aucune voie n'est annoncée rognée "
+        f"(« {vue.echelle.text()[:70]}… »)")
+
+    # --- 🔴 LE FILTRE D'AFFICHAGE ----------------------------------------------------------
+    #
+    # L'offset de l'Unicorn rampe, et sur le brut la rampe écrase l'EEG. Ce qui est vérifié : un
+    # passe-haut rend l'alpha lisible sous la dérive, sans toucher au tampon du moteur, sur
+    # lequel le MI s'entraîne.
+    chk(moteur.keep >= int(round((vue.SECONDES + vue.AMORCE) * moteur.acq.fs)),
+        f"le tampon du moteur tient ce qu'on affiche PLUS l'amorce du filtre ({moteur.keep} "
+        f"échantillons)")
+    duree_n = int(round((vue.SECONDES + vue.AMORCE) * moteur.acq.fs))
+    temps = np.arange(duree_n) / moteur.acq.fs
+    alpha_10 = 10.0 * np.sin(2 * np.pi * 10.0 * temps)
+    _redessine(np.stack([1e5 + (100.0 + 50.0 * i) * temps + alpha_10 for i in range(8)], axis=1))
+    chk(vue.ecart >= 1000.0,
+        f"sans filtre, la dérive (100 à 450 µV/s) impose son échelle : {vue.ecart:g} µV par "
+        f"couloir, l'alpha de 10 µV y est un trait plat")
+    garde = moteur.recent.copy()
+    vue.choix_filtre.setCurrentIndex(
+        filtres_affichage.FILTRES.index(filtres_affichage.FILTRE_DEFAUT))
+    residus = [float(np.max(np.abs(c.yData + i * vue.ecart))) for i, c in enumerate(vue.courbes)]
+    chk(vue.ecart == 50.0 and max(residus) < 12.0,
+        f"passe-haut : la dérive disparaît et l'alpha remplit son couloir — {vue.ecart:g} µV par "
+        f"couloir, chaque voie à ±{max(residus):.1f} µV")
+    chk(np.array_equal(moteur.recent, garde),
+        "…et le tampon du moteur n'est PAS filtré : seule la copie dessinée l'est")
+
+    # Le coupe-bande, et le RECALAGE : 30 µV de secteur sur 10 µV d'alpha. Retirer le secteur
+    # fait passer l'échelle de 100 à 50 µV — une seule graduation, que la zone morte aurait
+    # gardée : le choix qu'on vient de faire doit se voir tout de suite.
+    # Le secteur est celui du MOTEUR, 60 Hz ici (cf. sa construction) : la case le NOMME, et
+    # c'est lui qui part ; un 50 Hz resterait.
+    chk(vue.secteur_hz == moteur.secteur_hz == 60.0
+        and vue.case_secteur.text() == tr("pages.traces.secteur", hz=nombre(60.0))
+        and nombre(60.0) in vue.bulle_secteur.toolTip(),
+        f"sur un moteur réglé à 60 Hz, la case du coupe-bande et sa bulle disent 60 Hz, pas le "
+        f"défaut du dépôt (« {vue.case_secteur.text()} »)")
+    secteur_30 = 30.0 * np.sin(2 * np.pi * moteur.secteur_hz * temps)
+    _redessine(np.stack([alpha_10 + secteur_30] * 8, axis=1))
+    avant = vue.ecart
+    vue.case_secteur.setChecked(True)
+    reste = float(np.ptp(vue.courbes[0].yData[len(temps) // 4:]))
+    chk(avant == 100.0 and vue.ecart == 50.0 and reste < 25.0,
+        f"coupe-bande : le secteur part ({reste:.0f} µV crête à crête pour 20 d'alpha) et "
+        f"l'échelle se recale aussitôt ({avant:g} → {vue.ecart:g} µV)")
+    avec = tr("pages.traces.avec_secteur", filtre=nom_filtre(filtres_affichage.FILTRE_DEFAUT),
+              hz=nombre(moteur.secteur_hz))
+    chk(vue.echelle.text().startswith(avec),
+        f"…et l'étiquette le dit (« {vue.echelle.text()[:50]}… »)")
+    _redessine(np.stack([alpha_10 + 30.0 * np.sin(2 * np.pi * 50.0 * temps)] * 8, axis=1))
+    reste_50 = float(np.ptp(vue.courbes[0].yData[len(temps) // 4:]))
+    chk(reste_50 > 60.0,
+        f"…et c'est bien 60 Hz qui part, pas 50 : un bourdonnement à 50 Hz traverse le "
+        f"coupe-bande d'un poste à 60 Hz ({reste_50:.0f} µV crête à crête)")
+    vue.case_secteur.setChecked(False)
+
+    # --- 🔴 LE BLOC DE RÉSULTAT : TROIS LIGNES, LE RESTE RANGÉ -----------------------------
+    #
+    # Le chiffre utile (25 % pour un hasard à 17 %) ne doit pas être enterré au milieu d'une
+    # phrase. Le résultat est construit ici par la VRAIE table du c-VEP (`cvep_calib.VERDICTS`),
+    # via le même appel que le moteur : ce test ne fabrique pas un verdict à sa convenance.
+    from console.resultat import BlocResultat, COULEURS, RESERVE
+    from core.modes.cvep_calib import VERDICTS as VERDICTS_CVEP
+
+    bloc = BlocResultat()
+    faible = {**depuis_table(0.25, VERDICTS_CVEP,
+                             "25 % de cibles justes (hasard 17 %) sur 90 essais"),
+              "verdict": "FAIBLE — ré-essaie : saline Pz/PO7/Oz/PO8 — les deux décodeurs sont "
+                         "INDISCERNABLES (McNemar p = 0.267)",
+              "honnetete": "ces deux chiffres sont HORS LIGNE : ils viennent d'une validation "
+                           "croisée sur les époques d'une calibration",
+              "nom": "candidat_cvep_model_20260922-104204.npz"}
+    bloc.montrer(faible)
+    chk(bloc.verdict.text() == "FAIBLE" and COULEURS["faible"] in bloc.verdict.styleSheet(),
+        f"en face : UN mot, peint en ROUGE ({bloc.verdict.text()!r})")
+    chk("25 %" in bloc.chiffres.text() and "hasard 17 %" in bloc.chiffres.text(),
+        f"…la mesure ET son hasard sur la même ligne, jamais un pourcentage seul "
+        f"({bloc.chiffres.text()!r})")
+    chk(bloc.reserve.text().startswith("⚠ ré-essaie"),
+        f"…et une seule réserve : le CONSEIL, puisque le résultat est faible, précédé du ⚠ de la "
+        f"maquette ({bloc.reserve.text()[:40]!r})")
+    # 🔴 La réserve n'a PAS la couleur du verdict : sous un BON résultat, peinte en vert, la
+    # phrase qui dit de quoi se méfier se lirait comme un encouragement.
+    bloc.montrer({"niveau": "bon", "mot": "AU NIVEAU DU REPÈRE", "chiffres": "x",
+                  "reserve": "mesuré hors ligne : en séance le moteur se tait souvent"})
+    chk(COULEURS["bon"] not in bloc.reserve.styleSheet() and bloc.reserve.text().startswith("⚠")
+        and COULEURS["bon"] in bloc.verdict.styleSheet(),
+        f"sous un verdict VERT, une MISE EN GARDE reste une mise en garde : ni verte, ni sans son ⚠ "
+        f"({bloc.reserve.styleSheet()!r})")
+    # …mais une CONCLUSION (« Le casque est bien posé », déclarée par le moteur) s'écrit sans ⚠
+    # ni ambre : un panneau orange sous « tu peux la reporter » se lirait « attention ». Le
+    # drapeau vient du résultat — l'écran ne devine pas d'après le niveau.
+    bloc.montrer({"niveau": "bon", "mot": "ALPHA NET", "chiffres": "x", "conclusion": True,
+                  "reserve": "Le casque est bien posé : la séance peut commencer."})
+    chk(not bloc.reserve.text().startswith("⚠") and RESERVE not in bloc.reserve.styleSheet()
+        and COULEURS["bon"] not in bloc.reserve.styleSheet(),
+        f"une CONCLUSION sous un vert s'écrit sans ⚠ ni ambre ({bloc.reserve.text()[:30]!r}, "
+        f"{bloc.reserve.styleSheet()!r})")
+    bloc.montrer(faible)
+    chk(not bloc.corps.isVisibleTo(bloc) and "McNemar" not in bloc.verdict.text()
+        + bloc.chiffres.text() + bloc.reserve.text(),
+        "McNemar, l'honnêteté et le fichier sont REPLIÉS par défaut — c'est eux qui noyaient "
+        "le chiffre")
+    bloc.details.setChecked(True)
+    # Le rafraîchissement suivant, avec le MÊME résultat — ce que la page fait dix fois par
+    # seconde. Sans cette ligne, l'assertion cocherait puis lirait sans jamais rafraîchir, et ne
+    # verrait pas que le repli se referme 100 ms plus tard.
+    bloc.montrer(dict(faible))
+    chk(bloc.corps.isVisibleTo(bloc) and "HORS LIGNE" in bloc.corps.text()
+        and "McNemar" in bloc.corps.text() and "candidat_cvep" in bloc.corps.text(),
+        "…et un clic les ramène TOUS, et ils RESTENT ouverts au rafraîchissement suivant : "
+        "rangés, pas supprimés")
+    bloc.montrer({**faible, "nom": "un_autre_modele.npz"})
+    chk(not bloc.corps.isVisibleTo(bloc),
+        "…tandis qu'un NOUVEAU résultat repart replié")
+
+    # La couleur vient du NIVEAU publié par le moteur, jamais d'un pourcentage. Un résultat que le
+    # moteur juge « moyen » reste ORANGE même avec 25 % : c'est le moteur qui connaît le hasard
+    # de CE mode (25 % est bon à 6 cibles, catastrophique à 2).
+    moyen_bas = {**faible, "niveau": "moyen", "mot": "FAIBLE"}
+    bloc.montrer(moyen_bas)
+    chk(COULEURS["moyen"] in bloc.verdict.styleSheet(),
+        "la couleur suit le NIVEAU du moteur, pas le pourcentage : aucune seconde table de "
+        "seuils côté écran")
+    # Un résultat ANCIEN, sans les quatre clés : gris, et son verdict tel quel. Rien d'inventé.
+    bloc.montrer({"verdict": "Sur 36 ESSAIS, le moteur a annoncé une cible 18 fois"})
+    chk("#8a8f9c" in bloc.verdict.styleSheet() and "36 ESSAIS" in bloc.verdict.text(),
+        f"un résultat sans niveau reste GRIS, avec son verdict tel quel — on ne devine pas "
+        f"({bloc.verdict.text()[:30]!r})")
+
+    # Moteur pas encore démarré : rien ne doit lever.
+    etat_vide = {"running": False, "board": "unicorn", "fs_hz": 250.0,
+                 "modes": [], "quality": None, "catalog": []}
+    console.apply_state(etat_vide)
+    chk("attente" in console.banner.sigmas.text(),
+        f"un état vide est encaissé — « {console.banner.sigmas.text()} »")
+
+    # --- 🔴 LE FIL DU MOTEUR QUI MEURT ------------------------------------------------------
+    #
+    # `prepare_session()` n'est appelée que dans `acquisition.start()`, donc dans `server.run()`,
+    # donc DANS LE FIL, hors de son `try`. Un `BrainFlowError` (casque éteint, non appairé,
+    # `BOARD_NOT_READY`) le tue avec un traceback sur stderr, que personne ne lit : la console est
+    # une fenêtre Qt.
+    #
+    # Sans message, l'écran resterait parfaitement plausible : l'état figé dit encore « running »,
+    # le bandeau annonce « Unicorn · 250 Hz · 0 mode actif », et les σ restent « en attente du
+    # tampon… » **indéfiniment**. L'étudiant attendrait un tampon qui ne viendra jamais.
+    vivant = [True]
+    console._moteur_vivant = lambda: vivant[0]
+    console.apply_state(etat_vide)
+    chk(console.banner.moteur.text() == "",
+        f"un moteur vivant n'affiche RIEN de plus ({console.banner.moteur.text()!r})")
+    vivant[0] = False
+    console.apply_state(etat_vide)
+    chk("ARRÊTÉ" in console.banner.moteur.text() and "casque" in console.banner.moteur.text(),
+        f"un fil mort le DIT à l'écran, avec la cause la plus fréquente "
+        f"({console.banner.moteur.text()[:70]}…)")
+    # Et il écrase l'attente. Sans ça le bandeau garderait « σ : en attente du tampon… » à côté
+    # du message : deux phrases contradictoires, dont une qui promet que ça va venir.
+    chk("attente" not in console.banner.sigmas.text(),
+        f"…et le bandeau cesse d'annoncer un tampon qui ne viendra jamais "
+        f"({console.banner.sigmas.text()!r})")
+    # Le message dit où lire l'erreur : le terminal depuis les sources, le JOURNAL quand le
+    # programme installé y écrit. Le chemin vient de `config.journal_actif`, que le point d'entrée
+    # remplit avec le fichier qu'il a vraiment ouvert.
+    chk(config.journal_actif is None and "terminal" in console.banner.moteur.text(),
+        f"sans journal, le détail est dans le terminal ({console.banner.moteur.text()[-40:]!r})")
+    faux_journal = os.path.join("C:\\", "Documents", "EEG API Unicorn", "journaux", "console.log")
+    config.journal_actif = faux_journal
+    try:
+        console.apply_state(etat_vide)
+        texte = console.banner.moteur.text()
+    finally:
+        config.journal_actif = None
+    chk(faux_journal in texte and "terminal" not in texte,
+        f"…avec un journal, le message donne son chemin, pas le terminal ({texte[-70:]!r})")
+    console.apply_state(etat_vide)
+    console._moteur_vivant = None
+
+    # 🔴 Le prédicat est-il BRANCHÉ en production ? Tout ce qui précède tourne sur un `lambda`
+    # posé par ce test : sans cette assertion, `run()` pourrait ne jamais passer `moteur_vivant`
+    # et le message n'apparaîtrait sur aucun écran réel — un garde-fou vert et mort. On lit donc
+    # l'appel `Console(...)` de `run()` dans l'AST, plutôt que le texte du fichier (une chaîne
+    # cherchée dans un commentaire passerait).
+    import ast
+    import inspect
+
+    appel = next(n for n in ast.walk(ast.parse(inspect.getsource(run)))
+                 if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "Console")
+    branche = [kw for kw in appel.keywords if kw.arg == "moteur_vivant"]
+    chk(branche and ast.unparse(branche[0].value) == "thread.is_alive",
+        f"…et `run()` branche VRAIMENT le prédicat sur le fil du moteur "
+        f"({[ast.unparse(kw.value) for kw in appel.keywords]})")
+
+    # --- L'OUVERTURE de la session : un casque qui refuse, et la question REPOSÉE -------------
+    # `ouvrir_session` rejouée sans casque : ses quatre dépendances sont injectées. Le scénario est
+    # celui d'une salle de TP — un casque éteint (ou le mauvais numéro), puis le bon.
+    import argparse as _argparse
+
+    ordre = []
+    lances = []         # (numéro, secteur) de chaque moteur construit
+
+    class _FauxFil:
+        def __init__(self, vivant):
+            self.vivant = vivant
+
+        def is_alive(self):
+            return self.vivant
+
+        def join(self, timeout=None):
+            ordre.append("join")
+
+    class _FauxMoteurOuverture:
+        def __init__(self, numero):
+            self.numero = numero
+
+        def stop(self):
+            ordre.append(f"stop {self.numero}")
+
+        def close(self):
+            ordre.append(f"close {self.numero}")
+
+    class _FausseMemoire:
+        def __init__(self, secteur_hz=50.0):
+            self.retenus = []
+            self.secteur_hz = secteur_hz        # le secteur que retient le poste
+
+        def retenir(self, numero):
+            self.retenus.append(numero)
+
+        def secteur(self):
+            return self.secteur_hz
+
+        def retenir_secteur(self, hz):
+            self.secteur_hz = float(hz)
+
+    def _scenario(issues, reponses, synthetic=False, secteur_poste=50.0, secteur_cli=None,
+                  secteur_valide=None):
+        """Rejoue `ouvrir_session` : `issues` = ce que rend l'attente à chaque essai, `reponses` =
+        ce que choisit l'étudiant à chaque fois que la question lui est posée. `secteur_valide` :
+        le secteur que le faux dialogue écrit dans la mémoire en validant, comme le vrai."""
+        ordre.clear()
+        lances.clear()
+        questions, memoire = [], _FausseMemoire(secteur_poste)
+        issues, reponses = list(issues), list(reponses)
+
+        def choisir(**kw):
+            questions.append(kw)
+            reponse = reponses.pop(0)
+            if reponse is not None and secteur_valide is not None:
+                memoire.retenir_secteur(secteur_valide)
+            return reponse
+
+        def lancer(_args, _modes, synth, numero, secteur_hz):
+            ordre.append(f"lancer {numero or 'test'}")
+            lances.append((numero, secteur_hz))
+            return (_FauxMoteurOuverture(numero), _FauxFil(True),
+                    {"raison": "UNABLE_TO_OPEN_PORT_ERROR"})
+
+        def attendre(_engine, _vivant, _texte):
+            return issues.pop(0)
+
+        args = _argparse.Namespace(synthetic=synthetic, serial=None, secteur=secteur_cli)
+        rendu = ouvrir_session(args, ["raw"], lancer=lancer, choisir=choisir, attendre=attendre,
+                               memoire=memoire)
+        return rendu, questions, memoire.retenus
+
+    rendu, questions, retenus = _scenario(["echec", "ouvert"],
+                                          [(UNICORN, "UN-ETEINT"), (UNICORN, "UN-BON")])
+    chk(rendu is not None and rendu[0].numero == "UN-BON" and len(questions) == 2,
+        f"un casque qui refuse de s'ouvrir REPOSE la question, et la session s'ouvre sur le "
+        f"casque choisi ensuite ({len(questions)} question(s))")
+    chk("UN-ETEINT" in questions[1]["erreur"] and "UNABLE_TO_OPEN_PORT_ERROR" in questions[1]["erreur"]
+        and questions[1]["defaut"] == UNICORN and questions[1]["numero"] == "UN-ETEINT",
+        f"…avec la RAISON du refus, et le casque toujours choisi : aucun repli sur le board de test "
+        f"({questions[1]['defaut']}, {questions[1]['erreur'][:50]!r}…)")
+    chk(ordre == ["lancer UN-ETEINT", "stop UN-ETEINT", "join", "close UN-ETEINT", "lancer UN-BON"],
+        f"…le moteur mort est arrêté et fermé AVANT qu'un autre ne soit construit — ses flux LSL "
+        f"portent les mêmes noms ({ordre})")
+    chk(retenus == ["UN-BON"],
+        f"…et seul le casque OUVERT est retenu pour la prochaine fois, pas celui qui a échoué "
+        f"({retenus})")
+    rendu, _q, retenus = _scenario(["abandon"], [(UNICORN, "UN-LENT")])
+    chk(rendu is None and "close UN-LENT" in ordre and not retenus,
+        f"« Abandonner » pendant l'attente : pas de console, et le moteur est quand même fermé "
+        f"({ordre})")
+    rendu, _q, _r = _scenario([], [None])
+    chk(rendu is None and not ordre,
+        "fermer le dialogue sans choisir n'ouvre RIEN — pas même un moteur")
+    rendu, questions, retenus = _scenario(["ouvert"], [], synthetic=True)
+    chk(rendu is not None and not questions and not retenus,
+        "`--synthetic` saute le dialogue, et le board de test n'entre pas dans la mémoire des "
+        "casques")
+
+    # --- Le SECTEUR du poste jusqu'au moteur ------------------------------------------------
+    # Le dialogue l'écrit dans la mémoire en validant ; `ouvrir_session` l'y relit et le passe à
+    # CHAQUE moteur construit — celui d'après un échec compris. 60 Hz, pas le défaut : un
+    # secteur perdu en route retomberait sur 50 sans rien casser.
+    _scenario(["echec", "ouvert"], [(UNICORN, "UN-ETEINT"), (UNICORN, "UN-BON")],
+              secteur_poste=50.0, secteur_valide=60.0)
+    chk(lances == [("UN-ETEINT", 60.0), ("UN-BON", 60.0)],
+        f"le secteur VALIDÉ dans l'écran de départ part au moteur, et au suivant après un échec "
+        f"({lances})")
+    _rendu, questions, _r = _scenario(["echec", "ouvert"], [(UNICORN, "A"), (UNICORN, "B")],
+                                      secteur_poste=50.0, secteur_valide=60.0)
+    chk([q.get("secteur") for q in questions] == [None, 60.0],
+        f"…et la question REPOSÉE présélectionne le secteur qu'on vient de choisir, pas un autre "
+        f"({[q.get('secteur') for q in questions]})")
+    _scenario(["ouvert"], [], synthetic=True, secteur_poste=60.0)
+    chk(lances == [(None, 60.0)],
+        f"`--synthetic` saute le dialogue et prend le secteur que RETIENT le poste ({lances})")
+    memoire_cli = _FausseMemoire(60.0)
+    lances.clear()
+
+    def lancer_cli(_args, _modes, _synth, numero, secteur_hz):
+        lances.append((numero, secteur_hz))
+        return _FauxMoteurOuverture(numero), _FauxFil(True), {}
+
+    ouvrir_session(_argparse.Namespace(synthetic=True, serial=None, secteur=50), ["raw"],
+                   lancer=lancer_cli, choisir=lambda **kw: None, attendre=lambda *_: "ouvert",
+                   memoire=memoire_cli)
+    chk(lances == [(None, 50.0)] and memoire_cli.secteur_hz == 60.0,
+        f"`--secteur` l'emporte sur la mémoire, SANS y être écrit : un drapeau de développeur ne "
+        f"règle pas le poste de l'étudiant suivant ({lances}, mémoire {memoire_cli.secteur_hz})")
+    _rendu, questions, _r = _scenario(["ouvert"], [(UNICORN, "UN-BON")], secteur_cli=60,
+                                      secteur_poste=50.0, secteur_valide=50.0)
+    chk(questions and questions[0].get("secteur") == 60.0 and lances == [("UN-BON", 50.0)],
+        f"…et sans `--synthetic`, il PRÉSÉLECTIONNE sa valeur dans l'écran de départ — mais le "
+        f"choix VALIDÉ à l'écran l'emporte sur le drapeau ({questions and questions[0].get('secteur')}"
+        f" présélectionné, {lances} lancé)")
+    # Le DERNIER maillon, que les scénarios ci-dessus remplacent : le vrai `_lancer_moteur` passe
+    # le secteur au constructeur du moteur. Un espion remplace `EngineServer` et n'ouvre rien.
+    recu = {}
+
+    class _MoteurEspion:
+        def __init__(self, **kw):
+            recu.update(kw)
+
+        def run(self, **_kw):
+            pass
+
+    vrai_moteur = globals()["EngineServer"]
+    globals()["EngineServer"] = _MoteurEspion
+    try:
+        _e, fil_espion, _i = _lancer_moteur(
+            _argparse.Namespace(verbose=False, instance="smoke", baseline=None, warmup=None),
+            ["raw"], True, None, 60.0)
+        fil_espion.join(timeout=5.0)
+    finally:
+        globals()["EngineServer"] = vrai_moteur
+    chk(recu.get("secteur_hz") == 60.0,
+        f"…jusqu'au constructeur du moteur, par le vrai `_lancer_moteur` "
+        f"({recu.get('secteur_hz')!r})")
+    chk(recu.get("ecoute") == "sur_demande",
+        f"le moteur de la console n'écoute aucune application avant « Connecter une "
+        f"application » ({recu.get('ecoute')!r})")
+
+    # --- Un moteur JETÉ ne laisse aucun flux sur le réseau ------------------------------------
+    # Les scénarios ci-dessus vérifient l'ORDRE des appels sur un faux moteur. Ici : un VRAI
+    # moteur (board de test) dont l'ouverture échoue, la VRAIE attente, puis le réseau vu comme
+    # une application le voit. Vu au casque le 2026-10-21 : les flux `quality` et `status` d'un
+    # premier essai raté restaient annoncés, muets, sous les noms du moteur suivant.
+    import gc as _gc
+    import weakref as _weakref
+
+    from pylsl import resolve_byprop as _resolve
+    instance_jetee = f"smoke-jete-{os.getpid()}"
+    jete = {}
+
+    def lancer_echec(_args, _modes, _synth, _numero, secteur_hz):
+        moteur = EngineServer(synthetic=True, modes=(), instance=instance_jetee,
+                              secteur_hz=secteur_hz)
+
+        def refuse():
+            raise RuntimeError("UNABLE_TO_OPEN_PORT_ERROR:2 (simulé)")
+        moteur.acq.start = refuse
+        jete["moteur"] = _weakref.ref(moteur)
+        issue = {}
+
+        def cible():
+            try:
+                moteur.run()
+            except Exception as e:  # noqa: BLE001 - l'échec simulé est attendu
+                issue["raison"] = str(e)
+        fil = threading.Thread(target=cible, daemon=True)
+        fil.start()
+        return moteur, fil, issue
+
+    choix_jete = [(UNICORN, "UN-JETE"), None]
+    ouvrir_session(_argparse.Namespace(synthetic=False, serial=None, secteur=50), ["raw"],
+                   lancer=lancer_echec, choisir=lambda **kw: choix_jete.pop(0),
+                   memoire=_FausseMemoire())
+    _gc.collect()
+    from core.lsl_io import NOM_FLUX_REPONSES as _NOM_REPONSES
+    from core.lsl_io import stream_name as _stream_name
+    # Les trois flux qu'un moteur annonce dès sa construction : `quality`, `status` et les
+    # réponses au pilotage par le réseau.
+    restants = [s.source_id() for nom in (_stream_name("quality"), _stream_name("status"),
+                                          _NOM_REPONSES)
+                for s in _resolve("name", nom, minimum=10, timeout=1.0)
+                if instance_jetee in s.source_id()]
+    chk(not restants,
+        f"un moteur JETÉ après un échec d'ouverture ne laisse AUCUN flux annoncé : le suivant "
+        f"publie sous les mêmes noms, et un client tomberait sur un flux muet ({restants})")
+    chk(jete["moteur"]() is None,
+        "…et il est LIBÉRÉ : l'attente « Connexion au casque… » ne le retient plus (sa minuterie "
+        "Qt gardait une référence, que le ramasse-miettes ne voit pas)")
+
+    # --- Un casque qui DÉCROCHE, dit par le bandeau -------------------------------------------
+    # Le moteur réessaie seul (`server.py`, `[smoke-liaison]`) ; l'écran doit le DIRE — sinon il
+    # montre des σ figés, l'écran « où plus rien ne bouge » qu'on fermait pour relancer.
+    perdue = {**fake_state(), "liaison": {"etat": "perdue", "depuis_s": 4.2, "tentatives": 2,
+                                           "erreur": "UNABLE_TO_OPEN_PORT_ERROR",
+                                           "retablie_depuis_s": None, "coupure_s": None}}
+    console.banner.update_from(perdue)
+    chk("LIAISON PERDUE" in console.banner.alarme.text()
+        and "UNABLE_TO_OPEN_PORT_ERROR" in console.banner.alarme.text()
+        and "fermer" in console.banner.alarme.text()
+        and "aucun échantillon" in console.banner.sigmas.text(),
+        f"une liaison perdue se DIT au bandeau, avec la raison, et qu'il est inutile de fermer la "
+        f"console — les σ ne restent pas figés sur le dernier tampon "
+        f"({console.banner.alarme.text()[:60]!r}…, {console.banner.sigmas.text()!r})")
+    retablie = {**fake_state(), "liaison": {"etat": "ok", "depuis_s": None, "tentatives": 3,
+                                             "erreur": "", "retablie_depuis_s": 5.0,
+                                             "coupure_s": 7.4}}
+    console.banner.update_from(retablie)
+    chk(not console.banner.alarme.text() and "rétablie" in console.banner.reprise.text()
+        and "repos" in console.banner.reprise.text(),
+        f"…puis son retour, et que les modes refont leur repos ({console.banner.reprise.text()!r})")
+    console.banner.update_from({**retablie, "liaison": {**retablie["liaison"],
+                                                        "retablie_depuis_s": 120.0}})
+    chk(not console.banner.reprise.text(),
+        "…et cette ligne s'efface une fois les repos refaits")
+    console.banner.update_from(fake_state())
+
+    # --- 🔴 LE CONTENU NE SAUTE PAS ---------------------------------------------------------
+    # Moteur arrêté, ce qui est sous « Unicorn · 250 Hz… » ne doit pas sauter de haut en bas.
+    # Peindre à chaque rafraîchissement l'état FIGÉ du moteur mort (icônes de batterie et de
+    # liaison VISIBLES, ce qui agrandit le bandeau sur-le-champ : Qt recalcule la mise en page
+    # dès qu'un widget apparaît) puis le cacher par « moteur arrêté » ferait un aller-retour par
+    # seconde. On compte ici les déplacements et redimensionnements SYNCHRONES, sans rendre la
+    # main à Qt entre deux rafraîchissements : c'est exactement ce que l'œil voit.
+    from PySide6.QtCore import QEvent as _QEvent
+    from PySide6.QtCore import QObject as _QObject
+
+    class _Mouvements(_QObject):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def eventFilter(self, _obj, evenement):  # noqa: N802 - nom imposé par Qt
+            if evenement.type() in (_QEvent.Move, _QEvent.Resize):
+                self.n += 1
+            return False
+
+    class _Fige:
+        """Un moteur dont `snapshot()` rend toujours le même état — ce que rend un moteur mort."""
+
+        def __init__(self, etat):
+            self.etat = etat
+
+        def snapshot(self):
+            return self.etat
+
+        def submit(self, *_a, **_k):
+            return {"accepted": True}
+
+        def recent_window(self, _s):
+            return None
+
+        def close(self):
+            pass
+
+        def stop(self):
+            pass
+
+    def _sauts(etat, vivant, entre=None):
+        """Les déplacements du contenu pendant trois rafraîchissements. `entre(i)` change l'état
+        entre deux (pour éprouver une icône qui apparaît et disparaît)."""
+        fige = _Fige(etat)
+        fenetre = Console(fige, moteur_vivant=vivant)
+        fenetre.timer.stop()
+        fenetre.resize(1400, 900)
+        fenetre.show()
+        fenetre.refresh()
+        for _ in range(5):
+            app.processEvents()
+        espion = _Mouvements()
+        fenetre.stack.installEventFilter(espion)
+        fenetre.banner.installEventFilter(espion)
+        for i in range(3):
+            if entre is not None:
+                fige.etat = entre(i)
+            fenetre.refresh()
+        for _ in range(5):
+            app.processEvents()
+        n = espion.n
+        fenetre.close()
+        return n
+
+    sur_casque = {**fake_state(), "board": "unicorn",
+                  "casque": {"batterie_pc": 73, "perte_pc": 0.0, "signal_barres": 4,
+                             "perdus_total": 0}}
+    # L'état figé RÉALISTE : un moteur qui meurt après une coupure garde son alarme « liaison
+    # perdue » — peinte, elle ouvre la ligne des messages, que « moteur arrêté » refermait.
+    fige_coupure = {**sur_casque, "liaison": {"etat": "perdue", "depuis_s": 12, "tentatives": 4,
+                                              "erreur": "BOARD_NOT_READY"}}
+    n_mort = _sauts(fige_coupure, lambda: False)
+    chk(n_mort == 0,
+        f"moteur MORT sur le casque : le contenu ne bouge plus à chaque rafraîchissement "
+        f"({n_mort} déplacement(s) en 3 rafraîchissements)")
+    # Et une icône qui APPARAÎT ou DISPARAÎT (batterie inconnue pendant une coupure, puis
+    # revenue) ne déplace rien non plus : les icônes gardent leur place, vides quand le moteur
+    # ne sait pas. Sinon chaque coupure ferait sauter la fenêtre deux fois.
+    sans_batterie = {**sur_casque, "casque": {"batterie_pc": None, "perte_pc": None,
+                                              "signal_barres": None, "perdus_total": 0}}
+    n_icones = _sauts(sur_casque, lambda: True,
+                      entre=lambda i: sans_batterie if i % 2 == 0 else sur_casque)
+    chk(n_icones == 0,
+        f"…et une batterie qui devient inconnue puis revient ne déplace rien non plus "
+        f"({n_icones} déplacement(s))")
+
+    # --- 🔴 LA LARGEUR NE BOUGE PAS SANS L'UTILISATEUR ---------------------------------------
+    # La largeur de la fenêtre ne doit pas changer selon les messages du bandeau. Une étiquette
+    # sans retour à la ligne exige la largeur de TOUT son texte, et Windows élargit la fenêtre
+    # pour la respecter (la largeur minimale du bandeau passerait de ~130 px à ~2 700 px avec
+    # une ligne d'état longue).
+    # La fenêtre a AUSSI une largeur minimale propre, venue des pages de mode (en-tête, liste des
+    # modèles) : elle ne varie pas, et ce n'est pas ce qu'on teste ici. La fenêtre part donc un
+    # peu AU-DESSUS de son minimum, et c'est le bandeau qu'on éprouve.
+    large = Console(_Fige(sur_casque), moteur_vivant=lambda: True)
+    large.timer.stop()
+    large.show()
+    large.refresh()
+    for _ in range(5):
+        app.processEvents()
+    large.resize(large.minimumSizeHint().width() + 200, 800)
+    for _ in range(5):
+        app.processEvents()
+    largeur_avant, minimum_avant = large.width(), large.minimumSizeHint().width()
+    tres_long = "Unicorn · 250 Hz · 1 mode actif · σ 7,4–9,7 µV sur 8 voies · " * 8
+    for etiquette in (large.banner.liaison, large.banner.sigmas, large.banner.alarme):
+        etiquette.setText(tres_long)
+    for _ in range(5):
+        app.processEvents()
+    chk(large.width() == largeur_avant and large.minimumSizeHint().width() == minimum_avant
+        and large.banner.sigmas.text() == tres_long,
+        f"un texte de bandeau très long n'ÉLARGIT pas la fenêtre ({largeur_avant} -> "
+        f"{large.width()} px, largeur minimale {minimum_avant} -> "
+        f"{large.minimumSizeHint().width()} px) — la ligne s'abrège, son texte entier reste "
+        f"lisible (`text()`, bulle)")
+
+    # --- LE BANDEAU DIT CE QUE L'APPLICATION VIENT DE DEMANDER, REFUS COMPRIS ------------------
+    # Une application qui pilote le moteur par le réseau ne lit sa réponse que dans son code :
+    # sans cette ligne, l'élève voit un mode qui ne démarre pas et ne sait pas pourquoi.
+    from console.banner import AFFICHAGE_PILOTAGE_S, GRIS as _GRIS, ROUGE as _ROUGE_B
+    ban_app = large.banner
+    libelle_ssvep = large.catalogue["ssvep"]["label"]
+    maintenant = time.monotonic()
+
+    def _entree(**champs):
+        base = {"t": time.monotonic(), "cmd": "start_mode", "mode": "ssvep", "accepted": True,
+                "raison": None, "event": None, "deja": False, "differe": False}
+        return {**base, **champs}
+
+    # Calculé UNE fois : `fake_state()` sérialise le registre (jusqu'à plusieurs secondes sur un
+    # poste chargé), et ce délai, écoulé entre la date d'une entrée et son affichage, la ferait
+    # expirer (`AFFICHAGE_PILOTAGE_S`) avant qu'on la lise.
+    etat_de_base = fake_state()
+
+    def _etat_app(*entrees):
+        return {**etat_de_base, "pilotage": list(entrees)}
+
+    large.banner.update_from(_etat_app())
+    chk(large.banner.application.text() == "",
+        f"sans commande de l'application, la ligne est vide ({large.banner.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree()))
+    chk(libelle_ssvep in ban_app.application.text() and "démarrage" in ban_app.application.text()
+        and _GRIS in ban_app.application.styleSheet(),
+        f"un « start_mode » accepté: le libellé du mode, en gris ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(differe=True, warning=tr("moteur.connexion.attend_un_modele"))))
+    chk("modèle" in ban_app.application.text() and "attention" not in ban_app.application.text()
+        and _GRIS in ban_app.application.styleSheet(),
+        f"un « start_mode » mis en attente d'un modèle: texte dédié, en gris, sans la réserve "
+        f"({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(cmd="set_params", differe=True)))
+    chk("retenus" in ban_app.application.text(),
+        f"des réglages posés sur un mode arrêté sont dits « retenus » ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(cmd="set_params")))
+    chk("appliqués" in ban_app.application.text(),
+        f"…et sur un mode qui tourne, « appliqués » ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(cmd="stop_mode"), _entree(cmd="propose_params")))
+    chk("propositions" in ban_app.application.text(),
+        f"seule la DERNIÈRE commande s'affiche ({ban_app.application.text()!r})")
+    raison_app = tr("console.bandeau.batterie_faible", pc=5)
+    ban_app.update_from(_etat_app(_entree(accepted=False, raison=raison_app)))
+    chk("refusé" in ban_app.application.text() and "batterie 5" in ban_app.application.text()
+        and _ROUGE_B in ban_app.application.styleSheet(),
+        f"un refus: sa raison, en rouge ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(), _entree(accepted=False, event="failed",
+                                                     raison=raison_app)))
+    chk("échec" in ban_app.application.text() and _ROUGE_B in ban_app.application.styleSheet(),
+        f"un échec après acceptation, plus récent que son accusé, s'affiche en rouge "
+        f"({ban_app.application.text()!r})")
+    # Un refus suivi d'une AUTRE commande acceptée (régler, refusé ; puis démarrer) : le refus
+    # reste, sinon il disparaîtrait sous « démarrage demandé » en moins d'une seconde.
+    ban_app.update_from(_etat_app(_entree(cmd="set_params", accepted=False, raison=raison_app),
+                                  _entree(cmd="start_mode")))
+    chk("refusé" in ban_app.application.text() and _ROUGE_B in ban_app.application.styleSheet(),
+        f"un refus suivi d'une AUTRE commande acceptée reste affiché ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(cmd="set_params", accepted=False, raison=raison_app),
+                                  _entree(cmd="set_params")))
+    chk("appliqués" in ban_app.application.text() and _GRIS in ban_app.application.styleSheet(),
+        f"…mais la MÊME commande, acceptée ensuite sur le même mode, le remplace "
+        f"({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(accepted=False, event="failed", raison=raison_app),
+                                  _entree()))
+    chk("démarrage" in ban_app.application.text() and "échec" not in ban_app.application.text(),
+        f"…un échec aussi, quand l'application redemande et que c'est accepté "
+        f"({ban_app.application.text()!r})")
+    # Le refus doit être ENCORE au journal pour être montré : le journal du pilotage couvre les
+    # `AFFICHAGE_PILOTAGE_S` du bandeau, même pour une application à la cadence maximale.
+    from core.pilotage import DEBIT_MAX as _DEBIT_MAX, JOURNAL_N as _JOURNAL_N
+    chk(_JOURNAL_N >= AFFICHAGE_PILOTAGE_S * _DEBIT_MAX,
+        f"le journal du pilotage garde au moins {AFFICHAGE_PILOTAGE_S:.0f} s de commandes à "
+        f"{_DEBIT_MAX}/s ({_JOURNAL_N} entrées) : un refus n'en sort pas avant d'avoir été montré")
+    ban_app.update_from(_etat_app(
+        _entree(cmd="set_params", accepted=False, raison=raison_app,
+                t=time.monotonic() - (AFFICHAGE_PILOTAGE_S + 1)),
+        _entree(cmd="start_mode")))
+    chk("démarrage" in ban_app.application.text() and "refusé" not in ban_app.application.text(),
+        f"…et un refus de plus de {AFFICHAGE_PILOTAGE_S:.0f} s ne compte plus "
+        f"({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(deja=True)))
+    deja_marche = ban_app.application.text()
+    ban_app.update_from(_etat_app(_entree(cmd="stop_mode", deja=True)))
+    deja_arrete = ban_app.application.text()
+    chk("tournait déjà" in deja_marche and "déjà arrêté" in deja_arrete,
+        f"un démarrage sur un mode qui tourne, un arrêt sur un mode arrêté : le bandeau le dit "
+        f"({deja_marche!r}, {deja_arrete!r})")
+    from console.banner import AMBRE as _AMBRE_B
+    reserve_app = tr("moteur.contrat.flux_pas_vu", reglage="stream_in", nom="MonJeu_markers")
+    ban_app.update_from(_etat_app(_entree(cmd="set_params", warning=reserve_app)))
+    chk("appliqués" in ban_app.application.text() and "MonJeu_markers" in ban_app.application.text()
+        and _AMBRE_B in ban_app.application.styleSheet(),
+        f"accepté AVEC une réserve : la réserve que l'application a reçue, en ambre "
+        f"({ban_app.application.text()!r})")
+    appliquer_langue("en")
+    ban_app.update_from(_etat_app(_entree(cmd="set_params", warning=reserve_app)))
+    reserve_en = ban_app.application.text()
+    appliquer_langue("fr")
+    chk("not visible" in reserve_en,
+        f"…et elle suit la langue de l'écran ({reserve_en!r})")
+    from PySide6.QtCore import Qt as _Qt_bandeau
+    chk(ban_app.application.textFormat() == _Qt_bandeau.PlainText,
+        "ce que l'application envoie s'affiche en TEXTE : une commande « <h1>… » n'est pas "
+        "dessinée en HTML")
+    ban_app.update_from(_etat_app(_entree(mode=None)))
+    chk("None" not in ban_app.application.text() and "démarrage" in ban_app.application.text(),
+        f"un mode absent ne s'écrit pas « None » ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(mode="inconnu")))
+    chk("inconnu" in ban_app.application.text(),
+        f"un mode inconnu du catalogue s'écrit tel quel ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(t=time.monotonic() - (AFFICHAGE_PILOTAGE_S + 1))))
+    chk(ban_app.application.text() == "" and not ban_app.application.isVisibleTo(ban_app),
+        f"après {AFFICHAGE_PILOTAGE_S:.0f} s la ligne s'efface ({ban_app.application.text()!r})")
+    ban_app.update_from(_etat_app(_entree(accepted=False, raison=raison_app)))
+    ban_app.set_moteur("MOTEUR ARRÊTÉ")
+    chk(ban_app.application.text() == "",
+        f"un moteur mort n'affiche plus ce que l'application a fait ({ban_app.application.text()!r})")
+    ban_app.set_moteur("")
+    ban_app.update_from(_etat_app(_entree(accepted=False, raison=raison_app)))
+    avant_langue = ban_app.application.text()
+    appliquer_langue("en")
+    ban_app.update_from(_etat_app(_entree(accepted=False, raison=raison_app)))
+    apres_langue = ban_app.application.text()
+    appliquer_langue("fr")
+    chk("refusé" in avant_langue and "refused" in apres_langue and "battery 5" in apres_langue,
+        f"au changement de langue, la ligne et sa raison suivent ({apres_langue!r})")
+    ban_app.update_from(_etat_app(_entree(accepted=False, raison=tres_long)))
+    for _ in range(5):
+        app.processEvents()
+    chk(large.width() == largeur_avant and large.minimumSizeHint().width() == minimum_avant,
+        f"une raison très longue ne grandit pas la fenêtre ({largeur_avant} -> {large.width()} px)")
+    # Ce que l'APPLICATION envoie peut n'avoir aucune espace (JSON encodé deux fois, nom collé), et
+    # un refus le recopie : « mode inconnu : mmm…mmm ». Un mot plus large que la fenêtre ne se
+    # coupe pas.
+    ban_app.update_from(_etat_app(_entree(cmd="x" * 60 + "…", mode="m" * 60 + "…",
+                                          accepted=False, raison="m" * 400)))
+    for _ in range(5):
+        app.processEvents()
+    chk(large.width() == largeur_avant and large.minimumSizeHint().width() == minimum_avant,
+        f"une commande de l'application SANS espace ne grandit pas la fenêtre ({largeur_avant} -> "
+        f"{large.width()} px, largeur minimale {minimum_avant} -> "
+        f"{large.minimumSizeHint().width()} px)")
+    ban_app.update_from(_etat_app())
+
+    # --- 🔴 UNE PAGE DE MODE TIENT DANS LA LARGEUR DE L'ACCUEIL -------------------------------
+    # Deux débordements possibles, plus larges qu'un portable (1366) :
+    #  - la FENÊTRE : Qt réserve la largeur de la page la plus large, même cachée, donc un
+    #    résumé d'ErrP sur une ligne (~1 400 px) imposerait une console d'au moins 1 538 px ;
+    #  - le CORPS d'une page (il défile, donc il n'élargit pas la fenêtre) : une liste des modèles
+    #    qui affiche le chemin complet donne ~1 460 px de réglages, à faire défiler DE CÔTÉ.
+    # Repère RELATIF, pas un nombre de pixels qui dépend des polices : ni une page, ni son corps
+    # qui défile, n'exigent plus que l'accueil.
+    from PySide6.QtWidgets import QScrollArea as _QScrollArea
+    pages_mode = [large.stack.widget(i) for i in range(large.stack.count())
+                  if isinstance(large.stack.widget(i), ModePage)]
+    accueil = large.grid.minimumSizeHint().width()
+
+    def _exige(page):
+        corps = [z.widget() for z in page.findChildren(_QScrollArea) if z.widget() is not None]
+        return max([page.minimumSizeHint().width()]
+                   + [c.minimumSizeHint().width() for c in corps])
+
+    plus_large = max(pages_mode, key=_exige)
+    chk(pages_mode and _exige(plus_large) <= accueil,
+        f"aucune page de mode — ni son corps qui défile — n'exige plus de largeur que l'accueil "
+        f"(la plus exigeante : {_exige(plus_large)} px, accueil {accueil} px ; console "
+        f"{large.minimumSizeHint().width()} px)")
+    # La liste des modèles MONTRE le nom du fichier, mais ENVOIE le chemin complet, et sa largeur
+    # ne suit pas la longueur des chemins.
+    from PySide6.QtCore import QLocale as _QLocale, Qt as _Qt
+    from console.params_form import ParamsForm
+    formes = [f for p in pages_mode for f in p.findChildren(ParamsForm) if "model" in f.champs]
+    forme = formes[0]
+    liste = forme.champs["model"]
+    largeur_liste = liste.minimumSizeHint().width()
+    chemin = os.path.abspath(os.path.join("data", "cvep_rcca_model_" + "0" * 200 + ".npz"))
+    forme.set_choices("model", [chemin], garder=False)
+    # Le délégué par défaut d'un QComboBox n'a pas de `displayText` : sans le nôtre, la ligne
+    # montre son texte tel quel.
+    afficher = getattr(liste.itemDelegate(), "displayText", None)
+    affiche = afficher(liste.itemText(0), _QLocale()) if afficher else liste.itemText(0)
+    chk(forme.values()["model"] == chemin and affiche == os.path.basename(chemin)
+        and liste.itemData(0, _Qt.ToolTipRole) == chemin
+        and liste.minimumSizeHint().width() == largeur_liste,
+        f"la liste des modèles montre le NOM du fichier ({affiche[:24]}…), envoie le chemin "
+        f"complet, le garde en bulle, et ne s'élargit pas avec lui ({largeur_liste} -> "
+        f"{liste.minimumSizeHint().width()} px)")
+    large.close()
+
+    # --- L'état du casque au bandeau : deux icônes à droite, les messages en dessous -------------
+    ban = console.banner
+    # Un bandeau VIDE de messages d'abord : les étapes précédentes de ce smoke y ont laissé un
+    # refus et une fenêtre morte, qui occupent légitimement la seconde ligne.
+    ban.set_refus("")
+    ban.set_fenetre("")
+    ban.set_moteur("")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": 73, "perte_pc": 0.0,
+                                                "signal_barres": 4, "perdus_total": 0}})
+    chk(ban.batterie.niveau == 73 and ban.batterie_pc.text() == "73 %"
+        and not ban.batterie.isHidden() and ban.signal.barres == 4 and not ban.signal.isHidden()
+        and "0,0 %" in ban.signal.toolTip(),
+        f"la batterie et les barres de liaison s'affichent en ICÔNES, le taux de perte au survol "
+        f"({ban.batterie.niveau}, {ban.batterie_pc.text()!r}, {ban.signal.barres} barres)")
+    haut = ban.layout().itemAt(0).layout()
+    ordre = [haut.itemAt(i).widget() for i in range(haut.count())]
+    chk(ordre.index(ban.signal) > ordre.index(ban.batterie) > ordre.index(ban.sigmas),
+        "…TOUT À DROITE de la première ligne, après les σ")
+    chk(ban.messages.isHidden(),
+        "…et quand tout va bien, la seconde ligne — celle des messages — n'existe pas")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": 12, "perte_pc": 4.2,
+                                                "signal_barres": 2, "perdus_total": 105}})
+    chk(ban.batterie.niveau == 12 and ban.signal.barres == 2 and not ban.messages.isHidden()
+        and "recharge" in ban.alerte_casque.text() and "4,2 %" in ban.alerte_casque.text()
+        and ban.ligne_messages.indexOf(ban.alerte_casque) >= 0,
+        f"batterie faible et liaison dégradée : les icônes baissent ET un message PRÉVIENT, sur "
+        f"la seconde ligne, avant la coupure ({ban.alerte_casque.text()!r})")
+    ban.update_from({**fake_state(), "quality": {**fake_state()["quality"], "common_mode": 1.0,
+                                                 "reference_lost": True}})
+    chk(ban.ligne_messages.indexOf(ban.alarme) >= 0 and "1,00" in ban.alarme.text()
+        and not ban.messages.isHidden(),
+        f"« référence décrochée » passe sur la ligne du DESSOUS ({ban.alarme.text()[:40]!r}…)")
+    ban.update_from({**fake_state(), "casque": {"batterie_pc": None, "perte_pc": None,
+                                                "signal_barres": None, "perdus_total": 0}})
+    chk(ban.batterie.niveau is None and not ban.batterie_pc.text() and ban.signal.barres is None
+        and not ban.batterie.toolTip() and not ban.signal.toolTip(),
+        "…et rien n'est affiché de ce que le moteur ne sait pas (board de test : ni batterie, ni "
+        "liaison radio) — les icônes restent à leur place, VIDES, pour ne rien déplacer")
+    ban.update_from(fake_state())
+
+    # `refresh()` est la SEULE ligne qui touche le moteur : assurer qu'elle fonctionne.
+    console.refresh()
+    chk(moteur_faux.appels == 1,
+        f"refresh() a consulté le moteur (appels={moteur_faux.appels})")
+
+    # --- « Ce que voit ton application » : le flux sortant, LU PAR LSL ---------------------
+    #
+    # Aucun vrai flux LSL ici. On injecte un faux inlet de la même surface que `FluxLSL`
+    # (`nom`, `type`, `voies`, `tirer()`, `fermer()`). Un smoke qui dépend du réseau finit
+    # désactivé, et un vrai flux y serait fragile : les noms sont un contrat PUBLIC, un moteur
+    # oublié sur le poste répondrait à la place de celui qu'on teste.
+    class _FauxInlet:
+        def __init__(self, voies, echantillons, nom="EEG_API_Unicorn_decoded_ssvep"):
+            self.nom, self.type, self.voies = nom, "Decoded", list(voies)
+            self.echantillons = list(echantillons)
+            self.ferme = 0
+
+        def tirer(self):
+            lus, self.echantillons = self.echantillons, []
+            return [(1000.0 + i, valeurs) for i, valeurs in enumerate(lus)]
+
+        def fermer(self):
+            self.ferme += 1
+
+    class _FauxInfo:
+        """Ce que `resolve_streams` rendrait, réduit à ce que la page en lit."""
+
+        def __init__(self, nom, type_="Decoded", voies=2, source=""):
+            self._n, self._t, self._v, self._s = nom, type_, voies, source
+
+        def name(self):
+            return self._n
+
+        def type(self):
+            return self._t
+
+        def channel_count(self):
+            return self._v
+
+        def source_id(self):
+            return self._s
+
+    from console.flux_page import FenetreFlux, FluxPage, _ligne
+
+    page_flux = console.flux_page
+    chk(isinstance(page_flux, FluxPage), "la console porte une page « flux sortant »")
+    # LES DEUX COUTURES, posées AVANT le premier clic : à partir d'ici, plus une seule ligne de
+    # ce smoke ne touche le réseau. Sans elles, `chercher()` résoudrait pour de vrai — et
+    # trouverait les flux du moteur qu'un autre bloc de ce même smoke fait tourner, ce qui rend le
+    # test dépendant de l'ordre d'exécution ET du poste.
+    visibles = []
+    inlets = []
+    page_flux._decouvrir = lambda: list(visibles)
+
+    def _ouvre_faux(info):
+        inlets.append(_FauxInlet(voies=["target_index", "confidence"],
+                                 echantillons=[[2.0, 0.81]], nom=info.name()))
+        return inlets[-1]
+
+    page_flux._fabrique_inlet = _ouvre_faux
+
+    # 🔴 DANS SA FENÊTRE, À CÔTÉ DE LA PAGE COURANTE : on veut avoir un test en cours ET voir
+    # « Ce que voit ton application ». Dans la pile, l'ouvrir REMPLACERAIT le test en cours. On
+    # se place donc sur une autre page que la grille, et le clic ne doit pas l'en déloger. Posée
+    # DIRECTEMENT, la page d'un mode :
+    # `show_mode` relirait les modèles et, pour un mode à marqueurs, résoudrait le réseau.
+    # Mutations qui rougissent : remettre la page dans la pile (`stack.setCurrentWidget` dans
+    # `show_flux`) → les deux ; construire `FenetreFlux` avec la console pour parent, sans
+    # `Qt.Window` → la première.
+    page_devant = next(iter(console.pages.values()))
+    console.stack.setCurrentWidget(page_devant)
+    fenetre_flux = console.fenetre_flux
+    console.grid.bouton_flux.click()
+    chk(isinstance(fenetre_flux, FenetreFlux) and fenetre_flux.isWindow()
+        and fenetre_flux.isVisible() and page_flux.window() is fenetre_flux,
+        "…et la grille y mène par un bouton, qui l'ouvre dans SA fenêtre — sans quoi la capacité "
+        "existerait sans chemin")
+    chk(console.stack.currentWidget() is page_devant and console.stack.indexOf(page_flux) == -1,
+        f"…SANS toucher à la page courante de la console : un test en cours reste devant "
+        f"({type(console.stack.currentWidget()).__name__})")
+    # Un second clic la RAMÈNE devant. Mutation : `show_flux` qui construit une nouvelle
+    # `FenetreFlux` à chaque clic → deux fenêtres ouvertes, deux inlets sur le même flux.
+    console.grid.bouton_flux.click()
+    ouvertes = [w for w in QApplication.topLevelWidgets()
+                if isinstance(w, FenetreFlux) and w.isVisible()]
+    chk(len(ouvertes) == 1 and ouvertes[0] is fenetre_flux and console.fenetre_flux is fenetre_flux,
+        f"un second clic la ramène devant au lieu d'en ouvrir une deuxième "
+        f"({len(ouvertes)} fenêtre(s) des flux ouverte(s))")
+    chk(page_flux.etat.text() and "aucun" in page_flux.etat.text().lower(),
+        f"aucun flux visible se DIT, plutôt qu'un panneau vide ({page_flux.etat.text()})")
+
+    # La découverte de bout en bout : la liste se remplit, on choisit PAR NOM, un inlet s'ouvre.
+    visibles = [_FauxInfo("EEG_API_Unicorn_decoded_ssvep", voies=6),
+                _FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
+    page_flux.chercher()
+    chk(page_flux.choix.count() == 2
+        and "EEG_API_Unicorn_decoded_ssvep" in page_flux.choix.itemText(0),
+        f"la liste porte les flux découverts, le NOM COMPLET en tête "
+        f"({[page_flux.choix.itemText(i) for i in range(page_flux.choix.count())]})")
+    # 🔴 Le flux AFFICHÉ est le flux OUVERT, sans clic dans la liste : sinon la liste montrerait
+    # « decoded_ssvep » et le panneau resterait vide tant qu'on ne le re-choisit pas. Aucun
+    # signal `activated` n'est émis ici — c'est `chercher()` seul qui doit ouvrir.
+    chk(len(inlets) == 1 and page_flux._inlet is inlets[-1]
+        and inlets[-1].nom == "EEG_API_Unicorn_decoded_ssvep"
+        and page_flux.choix.currentIndex() == 0,
+        f"…et le flux que la liste AFFICHE est OUVERT, sans clic ({len(inlets)} inlet(s), "
+        f"{page_flux.etat.text()[:50]!r})")
+    avant = len(inlets)
+    chk(page_flux.choisir("stim_du_voisin") and len(inlets) == avant + 1
+        and page_flux.choix.currentIndex() == 1,
+        "choisir un flux PAR SON NOM ouvre un inlet dessus, et la liste suit")
+    chk(page_flux.choisir("EEG_API_Unicorn_decoded_ssvep") and page_flux.choix.currentIndex() == 0,
+        "…dans les deux sens")
+    page_flux.rafraichir()
+    chk("0.81" in page_flux.lignes.toPlainText(),
+        f"…et ce qui en sort défile ({page_flux.lignes.toPlainText()!r})")
+
+    page_flux._inlet = _FauxInlet(voies=["target_index", "confidence"],
+                                  echantillons=[[2.0, 0.81]])
+    page_flux.rafraichir()
+    chk("target_index" in page_flux.entetes.text() and "0.81" in page_flux.lignes.toPlainText(),
+        f"le panneau montre les VOIES et les VALEURS du flux choisi "
+        f"({page_flux.entetes.text()!r} / {page_flux.lignes.toPlainText()!r})")
+
+    # LA règle de cette page, en trois assertions qui se complètent. La première est littérale,
+    # la deuxième ferme la porte de côté (un objet stocké par lequel l'état serait ATTEIGNABLE),
+    # la troisième est la seule qui prouve vraiment quelque chose : un état COMPLET du moteur
+    # arrive, et le panneau reste vide. Lire `snapshot()` donnerait un panneau qui défile pendant
+    # que le réseau est muet — c'est-à-dire exactement la panne qu'on vient regarder ici.
+    chk(not hasattr(page_flux, "engine") and "engine" not in page_flux.__dict__,
+        "…et il ne tient AUCUNE référence vers le moteur : il lit le réseau comme un client")
+    porteurs = [nom for nom, valeur in page_flux.__dict__.items()
+                if hasattr(valeur, "snapshot") or hasattr(valeur, "recent_window")]
+    chk(not porteurs,
+        f"…ni aucun objet par lequel l'état du moteur serait ATTEIGNABLE ({porteurs}) — la "
+        f"console garde un canal de commandes, jamais une source d'état")
+    page_flux._inlet = None
+    page_flux._derniers = []
+    page_flux.lignes.setPlainText("")
+    page_flux.entetes.setText("")
+    page_flux.update_from(fake_state())      # un état COMPLET, avec des scores plein `modes_state`
+    chk(not page_flux.lignes.toPlainText() and not page_flux.entetes.text(),
+        f"…et un état complet du moteur ne remplit RIEN sans inlet : la preuve que le panneau "
+        f"vient du RÉSEAU ({page_flux.lignes.toPlainText()!r})")
+    # Des flux VISIBLES mais aucun d'ouvert : troisième phrase, distincte des deux autres. Sans
+    # elle, l'étudiant qui a bien trouvé ses flux mais n'en a choisi aucun lirait le message
+    # « aucun flux sur le réseau » et irait chercher une panne qui n'existe pas.
+    chk("choisis" in page_flux.etat.text().lower() and "2 flux" in page_flux.etat.text(),
+        f"…et quand des flux existent sans qu'aucun soit ouvert, la page dit d'en CHOISIR un "
+        f"({page_flux.etat.text()})")
+
+    # 🔴 Naviguer dans la console ne FERME rien : c'est tout l'objet de la fenêtre. Lâcher
+    # l'inlet en quittant la page le ferait au moment précis où l'on part lancer le test qu'on
+    # veut regarder. Mutation : un nettoyage sur `stack.currentChanged` qui appelle `quitter()`
+    # → rouge.
+    inlet_espion = _FauxInlet(voies=["a"], echantillons=[])
+    page_flux._inlet = inlet_espion
+    console.show_grid()
+    chk(fenetre_flux.isVisible() and inlet_espion.ferme == 0 and page_flux._inlet is inlet_espion,
+        f"naviguer dans la console laisse la fenêtre des flux OUVERTE, son flux avec "
+        f"({inlet_espion.ferme} fermeture(s))")
+    # …et l'état continue de la servir, quelle que soit la page devant : un enregistrement lancé
+    # se suit pendant le test. Mutation : retirer de `apply_state` la ligne qui sert la fenêtre
+    # (qui ne servirait que la page COURANTE) → rouge.
+    console.apply_state({**fake_state(), "enregistrement": {
+        "actif": True, "chemin": "seances/en_cours.jsonl", "lignes": 3,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    chk("en_cours.jsonl" in page_flux.etat_enregistrement.text(),
+        f"…et la console la sert à chaque tour, page de la pile ou pas "
+        f"({page_flux.etat_enregistrement.text()[:50]!r})")
+    page_flux.update_from({**fake_state(), "enregistrement": None})   # le bouton redevient
+    page_flux.etat_enregistrement.setText("")                         # « Enregistrer »
+    # Fermer la FENÊTRE lâche l'inlet — un abonné LSL laissé derrière une fenêtre qu'on ne regarde
+    # plus est l'habitude que le moteur corrige de son côté (`_libere_marker_inlet`). Mutation :
+    # retirer `FenetreFlux.closeEvent` → rouge.
+    fenetre_flux.close()
+    chk(not fenetre_flux.isVisible() and inlet_espion.ferme == 1 and page_flux._inlet is None,
+        f"fermer la fenêtre des flux ferme le flux ouvert ({inlet_espion.ferme} fermeture(s))")
+    # La ROUVRIR refait `entrer()` : la découverte, et le flux que la liste affiche rouvert.
+    # Mutation : `ouvrir()` qui se contente de `show()` → panneau vide, aucun inlet → rouge.
+    avant = len(inlets)
+    console.grid.bouton_flux.click()
+    chk(fenetre_flux.isVisible() and len(inlets) == avant + 1 and page_flux._inlet is inlets[-1],
+        f"…et la rouvrir refait la découverte et rouvre le flux affiché "
+        f"({len(inlets) - avant} inlet(s) ouvert(s))")
+    # Fermée pour la suite : les blocs suivants appellent la page directement, et une fenêtre
+    # ouverte recevrait en plus chaque `apply_state` des autres sections du smoke.
+    fenetre_flux.close()
+
+    # Un flux MUET (l'émetteur est là, il n'envoie rien) ne doit pas se lire comme un flux absent :
+    # c'est la différence entre « mon mode ne décode pas » et « mon mode n'est pas publié », et
+    # c'est tout ce qu'un étudiant vient chercher ici.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[])
+    page_flux.rafraichir()
+    chk("rien" in page_flux.etat.text().lower() and "ouvert" in page_flux.etat.text().lower(),
+        f"un flux OUVERT mais muet le dit, sans se confondre avec « aucun flux » "
+        f"({page_flux.etat.text()})")
+
+    # Un émetteur qui MEURT lève (`recover=False`, cf. `FluxLSL`). La page doit le dire et lâcher,
+    # jamais garder un inlet mort en se croyant connectée — la panne des 4 pannes de `MarkerInlet`.
+    class _InletMort(_FauxInlet):
+        def tirer(self):
+            raise RuntimeError("the stream has been lost.")
+
+    page_flux._inlet = _InletMort(voies=["a"], echantillons=[])
+    page_flux.rafraichir()
+    chk(page_flux._inlet is None and "disparu" in page_flux.etat.text().lower(),
+        f"un émetteur disparu est LÂCHÉ et DIT ({page_flux.etat.text()[:60]})")
+
+    # 🔴 LE MESSAGE SURVIT AU TOUR SUIVANT. Sans ce second `rafraichir()`, l'assertion
+    # ci-dessus ne peut PAS rougir : la page est peinte à ~10 Hz, et un tour suivant qui
+    # repasserait par `_dire_etat` (qui ne connaît que trois phrases neutres) écraserait le
+    # diagnostic par « 2 flux visible(s) — choisis-en un dans la liste ». Le message ne vivrait
+    # que 100 ms, sur la page dont la raison d'être est de VOIR les pannes réseau.
+    page_flux.rafraichir()
+    page_flux.rafraichir()
+    chk("disparu" in page_flux.etat.text().lower(),
+        f"…et il RESTE à l'écran aux tours suivants, au lieu d'être effacé par une phrase neutre "
+        f"({page_flux.etat.text()[:60]})")
+    # Il tient jusqu'au GESTE qui y répond — pas au-delà : rechercher, c'est reposer la question.
+    # (Le flux affiché étant revenu, `chercher()` le rouvre : le diagnostic cède la place.)
+    page_flux.chercher()
+    chk("disparu" not in page_flux.etat.text() and page_flux._inlet is not None,
+        f"…jusqu'à « Chercher les flux », qui reprend la question à zéro "
+        f"({page_flux.etat.text()})")
+    # Et si le flux qu'on regardait a VRAIMENT disparu (mode arrêté, « publié » décoché), on
+    # revient sur la page — qui avait lâché son inlet en sortant — et on ne bascule PAS en douce
+    # sur le voisin : ses valeurs défileraient à la place de celles qu'on vient chercher.
+    page_flux._fermer()
+    ouverts = len(inlets)
+    visibles = [_FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
+    page_flux.chercher()
+    chk(page_flux._inlet is None and len(inlets) == ouverts
+        and page_flux.choix.currentIndex() == -1
+        and "decoded_ssvep" in page_flux.etat.text() and "plus visible" in page_flux.etat.text(),
+        f"un flux DISPARU se dit, sans ouvrir le voisin à sa place ({page_flux.etat.text()[:70]})")
+    visibles = [_FauxInfo("EEG_API_Unicorn_decoded_ssvep", voies=6),
+                _FauxInfo("stim_du_voisin", type_="Markers", voies=1)]
+
+    # Les DEUX autres diagnostics, mêmes rétention et falsifiabilité : un nom introuvable, et un
+    # inlet qui refuse de s'ouvrir. Les trois laissent `_inlet` à None, donc les trois tombaient
+    # sur la même phrase neutre au tour suivant.
+    page_flux.choisir("un_flux_qui_nexiste_pas")
+    page_flux.rafraichir()
+    chk("un_flux_qui_nexiste_pas" in page_flux.etat.text(),
+        f"« aucun flux nommé X » survit lui aussi au rafraîchissement ({page_flux.etat.text()})")
+
+    def _refuse_ouverture(_info):
+        raise RuntimeError("timeout")
+
+    page_flux._fabrique_inlet = _refuse_ouverture
+    page_flux.choisir("EEG_API_Unicorn_decoded_ssvep")
+    page_flux.rafraichir()
+    chk("n'a pas pu être ouvert" in page_flux.etat.text(),
+        f"…et « X n'a pas pu être ouvert » aussi ({page_flux.etat.text()[:60]})")
+    page_flux._fabrique_inlet = _ouvre_faux
+    page_flux.chercher()
+
+    # Les marqueurs voyagent en CHAÎNES : `float(valeur)` lèverait ici, dans le fil Qt, sur un flux
+    # parfaitement normal — et emporterait toute la console avec lui.
+    texte = _ligne(1234.5678, ['{"mode": "cvep", "event": "cycle"}'])
+    chk("cvep" in texte and "1234.568" in texte,
+        f"un échantillon TEXTE (flux de marqueurs) s'affiche sans lever ({texte})")
+
+    # --- enregistrer la séance : la console DEMANDE, le MOTEUR écrit -----------------------
+    #
+    # Ce que ce bloc protège n'est pas le fichier (il est éprouvé côté moteur, avec l'empreinte
+    # de `data/` de part et d'autre) : c'est que la console reste un CLIENT. Elle envoie deux
+    # commandes et LIT un état ; elle ne compose aucun chemin et n'ouvre aucun fichier.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[],
+                                  nom="EEG_API_Unicorn_decoded_ssvep")
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(("start_enregistrement", {"stream": "EEG_API_Unicorn_decoded_ssvep"})
+        in moteur_faux.commandes,
+        f"« Enregistrer » demande au MOTEUR d'écrire, en nommant le flux OUVERT "
+        f"({moteur_faux.commandes})")
+    ecritures = [n for n, _p in moteur_faux.commandes if "enregistr" in n]
+    chk(ecritures == ["start_enregistrement"],
+        f"…et c'est TOUT ce que la console fait : aucune écriture de son côté ({ecritures})")
+
+    # L'état reçu retourne le bouton ET donne le chemin. Le chemin vient de l'ÉTAT, jamais de
+    # l'accusé : `start_enregistrement` n'en promet aucun (deux clics dans la même fenêtre de
+    # sondage sont tous deux acceptés, et le second annoncerait un fichier jamais créé).
+    page_flux.update_from({**fake_state(), "enregistrement": {
+        "actif": True, "chemin": "seances/moteur_decoded_ssvep_20260909-101500.jsonl",
+        "lignes": 42, "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}})
+    chk("Arrêter" in page_flux.bouton_enregistrer.text()
+        and "42" in page_flux.etat_enregistrement.text()
+        and "seances/" in page_flux.etat_enregistrement.text(),
+        f"pendant l'enregistrement, le bouton s'inverse et l'écran dit OÙ et COMBIEN "
+        f"({page_flux.bouton_enregistrer.text()} / {page_flux.etat_enregistrement.text()})")
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(("stop_enregistrement", {}) in moteur_faux.commandes,
+        f"…et le même bouton l'ARRÊTE : le sens vient de l'état reçu, pas d'une bascule tenue "
+        f"dans l'interface, qui se désynchroniserait au premier refus ({moteur_faux.commandes})")
+
+    # Un refus du moteur s'AFFICHE, pas seulement dans le terminal.
+    moteur_faux.refus["start_enregistrement"] = "« SSVEP » n'est pas démarré"
+    page_flux.update_from({**fake_state(), "enregistrement": None})
+    page_flux.bouton_enregistrer.click()
+    chk("pas démarré" in page_flux.etat_enregistrement.text(),
+        f"un refus du moteur s'affiche SUR LA PAGE ({page_flux.etat_enregistrement.text()})")
+    moteur_faux.refus.clear()
+
+    # Sans flux ouvert, on ne devine PAS lequel enregistrer : le moteur enregistre les verdicts
+    # d'UN mode, pas tout le réseau. On le dit, et on n'envoie rien.
+    page_flux._inlet = None
+    moteur_faux.commandes.clear()
+    page_flux.bouton_enregistrer.click()
+    chk(not moteur_faux.commandes and "Choisis" in page_flux.etat_enregistrement.text(),
+        f"sans flux choisi, rien n'est envoyé et la page dit quoi faire "
+        f"({page_flux.etat_enregistrement.text()[:50]})")
+
+    # 🔴 Il SURVIT, lui aussi, comme les trois messages de flux ci-dessus : si
+    # `_montrer_enregistrement` repeignait l'état du moteur par-dessus dès qu'un enregistrement
+    # existe dans l'état (même TERMINÉ), l'étudiant qui clique sans avoir choisi de flux lirait
+    # le chemin d'un fichier 100 ms après la raison du refus.
+    fini = {**fake_state(), "enregistrement": {
+        "actif": False, "chemin": "seances/fini.jsonl", "lignes": 7,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep", "probleme": ""}}
+    page_flux.update_from(fini)
+    page_flux.update_from(fini)
+    chk("Choisis" in page_flux.etat_enregistrement.text(),
+        f"…et ce refus RESTE à l'écran aux tours suivants "
+        f"({page_flux.etat_enregistrement.text()[:50]})")
+
+    # Un enregistrement TERMINÉ garde son chemin à l'écran : c'est ce qu'on vient chercher pour
+    # dépouiller. Un écran qui l'oublie au clic « Arrêter » oblige à fouiller le dossier.
+    # Le CLIC suivant reprend la question : c'est lui qui rend la main au moteur, jamais
+    # l'horloge. Ici on choisit un flux et on reclique — le geste que le refus demandait.
+    page_flux._inlet = _FauxInlet(voies=["target_index"], echantillons=[],
+                                  nom="EEG_API_Unicorn_decoded_ssvep")
+    page_flux.bouton_enregistrer.click()
+    page_flux.update_from(fini)
+    chk("fini.jsonl" in page_flux.etat_enregistrement.text()
+        and "Enregistrer" in page_flux.bouton_enregistrer.text(),
+        f"…et une fois terminé le chemin RESTE lisible ({page_flux.etat_enregistrement.text()})")
+
+    # La seule chose qui passe DEVANT un diagnostic retenu est une INTERRUPTION. C'est une
+    # nouvelle du moteur sur un fichier qui EXISTE, elle annonce une PERTE, et il ne la dit qu'une
+    # fois. Un refus de clic, lui, se rejoue en recliquant : le masquer un instant ne coûte rien,
+    # masquer celle-ci coûterait la séance. Sans cette précédence, la rétention des diagnostics
+    # cacherait le seul message de cette page qui parle de données perdues.
+    page_flux._inlet = None
+    page_flux.bouton_enregistrer.click()            # on repose un diagnostic retenu
+    chk("Choisis" in page_flux.etat_enregistrement.text(),
+        f"(le diagnostic est bien reposé — {page_flux.etat_enregistrement.text()[:40]}…)")
+    page_flux.update_from({**fake_state(), "enregistrement": {
+        "actif": False, "chemin": "seances/coupe.jsonl", "lignes": 3,
+        "flux": "EEG_API_Unicorn_decoded_ssvep", "mode": "ssvep",
+        "probleme": "OSError : disque plein"}})
+    chk("INTERROMPU" in page_flux.etat_enregistrement.text().upper()
+        and "coupe.jsonl" in page_flux.etat_enregistrement.text(),
+        f"une interruption passe DEVANT le diagnostic retenu, avec ce qui a été sauvé "
+        f"({page_flux.etat_enregistrement.text()[:60]}…)")
+
+    # --- 🔴 « TESTER LIBREMENT » -------------------------------------------------------------
+    #
+    # Regarder une cible, et voir le logiciel entourer celle qu'il décode. Le bouton vit DANS le
+    # bloc « Tester », et il possède sa séquence : refuser pendant une séance minutée, le
+    # contrôle de liaison, démarrer le mode s'il ne tourne pas, ouvrir la fenêtre DÈS qu'il
+    # tourne, la surveiller, l'arrêter à la fermeture s'il l'avait démarré.
+    #
+    # 🔴 La fenêtre s'ouvre PENDANT la chauffe et le repos. Le plancher du SSVEP se mesure AVEC
+    # les cibles qui clignotent (sans en fixer aucune : la fenêtre montre une croix) ; l'ouvrir
+    # après le repos soustrairait au décodage un fond qui n'est pas le sien.
+    console.lanceur.arreter()
+    moteur_faux.refus.clear()
+    ROUGE_ESSAI = "#e5484d"         # le rouge d'alerte de `mode_page.montrer_essai`
+
+    def _fenetres_lancees():
+        return [list(e[1]) for e in journal if e[0] == "fenetre"]
+
+    def _remise_a_zero():
+        console.lanceur.arreter()
+        console._essai = None
+        console._demande = None
+        for p in console.pages.values():
+            p.montrer_essai("")          # rend le bouton, sans quoi un clic ne ferait RIEN
+        journal.clear()
+        processus.clear()
+        moteur_faux.commandes.clear()
+
+    def _avec_mode(base, mid, phase, avant=None, params=None, instruction=""):
+        """`base` où le mode `mid` tourne, dans la `phase` donnée — la forme de `state()`."""
+        spec_m = console.catalogue[mid]
+        return {**base, "modes_state": {**(base.get("modes_state") or {}), mid: {
+            "id": mid, "label": spec_m["label"], "family": spec_m["family"], "phase": phase,
+            "published": True, "params": dict(params or {}), "instruction": instruction,
+            "avant_decodage_s": avant, "stream": spec_m.get("stream"), "channels": [],
+            "rest_report": None, "output": None}}}
+
+    def _sans_mode(base, mid):
+        return {**base, "modes_state": {k: v for k, v in (base.get("modes_state") or {}).items()
+                                        if k != mid}}
+
+    def _echap():
+        """Échap dans la fenêtre de l'essai. Sans fenêtre, ne LÈVE pas : l'assertion suivante
+        rougit, et celles d'après tournent encore (cf. `rang`)."""
+        if processus:
+            processus[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)
+
+    def _essayer(page_m, quoi):
+        """Le geste complet : « Tester librement », puis « Commencer l'essai » du contrôle."""
+        cliquer(page_m.bouton_essayer, f"« Tester librement » ({quoi})")
+        cliquer(console.contact.bouton_lancer if console.stack.currentWidget() is console.contact
+                else None, f"« Commencer l'essai » du contrôle de liaison ({quoi})")
+
+    # 1. LE BOUTON : présent là où la fenêtre sait l'essai libre, et seulement là. La liste
+    #    attendue est écrite ici exprès (c'est la décision du chantier), et la règle qui la
+    #    produit est vérifiée juste après, dans le registre.
+    avec_essai = sorted(mid for mid, p in console.pages.items() if p.bouton_essayer is not None)
+    chk(avec_essai == ["cvep", "mi", "p300", "ssvep"],
+        f"« Tester librement » est sur les pages c-VEP, MI, P300 et SSVEP "
+        f"({avec_essai})")
+    sans_essai = [mid for mid in ("errp", "neuro", "raw")
+                  if mid in console.pages and console.pages[mid].bouton_essayer is None]
+    chk(sans_essai == ["errp", "neuro", "raw"],
+        f"…et ABSENT des pages ErrP, Neuro et Brut : rien à entourer ({sans_essai})")
+    chk(all((p.bouton_essayer is not None)
+            == bool(stim_registry.option_libre(p.spec.get("stimulus_id") or ""))
+            for p in console.pages.values()),
+        "…et c'est le REGISTRE des fenêtres qui en décide (`option_libre`), pas une liste de "
+        "l'interface")
+    bulles_essai = {
+        mid: [lbl.toolTip() for lbl in console.pages[mid].bloc_tester.findChildren(_QLabel)
+              if lbl.text() == "ⓘ"] for mid in avec_essai}
+    chk(all(console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_essayer)
+            and console.pages[mid].bloc_tester.isAncestorOf(console.pages[mid].bouton_tester)
+            and console.pages[mid].bouton_essayer.text() == "Tester librement"
+            and any("Aucun score" in b and "fermes la fenêtre" in b and "croix" in b
+                    for b in bulles_essai[mid])
+            for mid in avec_essai),
+        f"…DANS le bloc « Tester », à côté de son bouton, avec sa bulle « ⓘ » : ce qu'on fait, la "
+        f"croix du repos, aucun score, l'arrêt à la fermeture "
+        f"({ {m: len(b) for m, b in bulles_essai.items()} })")
+
+    # 2. L'ORDRE, sur le SSVEP ARRÊTÉ — le cas qui a un repos à mesurer AVEC ses cibles.
+    _remise_a_zero()
+    page_ess = console.pages["ssvep"]
+    # Les réglages COMPLETS du formulaire, comme le vrai `state()` et l'accusé de `set_params`.
+    page_ess.formulaire.set_values({"freqs": [12.0, 15.0, 20.0], "refresh_hz": 60.0,
+                                    "alpha_hz": 10.0})
+    reglages_ss = _a_plat(page_ess.formulaire.values())
+    ss_arrete = {**_sans_mode(state, "ssvep"), "quality": qualite_saine, "calibration": None,
+                 "mesure": None, "reglages": {"ssvep": dict(reglages_ss)}}
+    consigne_ss = "Ne fixe AUCUNE cible : on mesure le bruit de fond de chaque fréquence."
+    console.show_mode("ssvep")
+    console.apply_state(ss_arrete)
+    cliquer(page_ess.bouton_essayer, "« Tester librement » du SSVEP")
+    chk(console.stack.currentWidget() is console.contact
+        and [c[0] for c in moteur_faux.commandes] == ["set_params"] and not _fenetres_lancees(),
+        f"🔴 le clic applique l'écran puis passe par le CONTRÔLE DE LIAISON, comme « Tester » : "
+        f"rien n'est démarré avant ({moteur_faux.commandes})")
+    chk(console.contact.bouton_lancer.text() == "Commencer l'essai",
+        f"…dont le bouton dit ce qu'on lance ({console.contact.bouton_lancer.text()!r})")
+    cliquer(console.contact.bouton_lancer, "« Commencer l'essai » du contrôle de liaison")
+    chk(("start_mode", {"id": "ssvep"}) in moteur_faux.commandes and not _fenetres_lancees()
+        and console.stack.currentWidget() is page_ess,
+        f"le contrôle passé, `start_mode` sans aucun réglage — le moteur part avec ceux qu'il a "
+        f"retenus —, retour sur la page, et RIEN d'ouvert tant que le mode n'existe pas ({journal})")
+    console.apply_state(ss_arrete)                       # pas encore visible dans l'état
+    chk(not _fenetres_lancees() and "croix" in page_ess.essai.text()
+        and page_ess.essai.isVisibleTo(page_ess) and not page_ess.bouton_essayer.isEnabled(),
+        f"…pendant le démarrage, la page annonce la fenêtre ET sa croix, bouton grisé "
+        f"({page_ess.essai.text()!r})")
+    chauffe_ss = _avec_mode(ss_arrete, "ssvep", "warmup", avant=20.0, params=reglages_ss,
+                            instruction=consigne_ss)
+    avant_chauffe = len(journal)
+    console.apply_state(chauffe_ss)
+    suite_ess = [e[1] if e[0] == "commande" else "fenetre" for e in journal]
+    chk(suite_ess == ["set_params", "start_mode", "fenetre"]
+        and rang(suite_ess, "fenetre") >= avant_chauffe,
+        f"🔴 L'ORDRE : l'écran appliqué, le mode démarré, PUIS la fenêtre — DÈS que le mode est vu, "
+        f"en CHAUFFE : le plancher du SSVEP se mesure avec les cibles qui clignotent ({suite_ess}, "
+        f"fenêtre au rang {rang(suite_ess, 'fenetre')}, mode vu à partir du rang {avant_chauffe})")
+    argv_ess = (_fenetres_lancees() or [[]])[-1]
+    chk(argv_ess[:3] == stim_registry.commande("ssvep")
+        and all(o in argv_ess for o in stim_registry.option_libre("ssvep"))
+        and not {"--guide", "--calibrer", "--tester"} & set(argv_ess),
+        f"…la fenêtre de DÉCODAGE du mode, avec les options de l'essai libre que le registre "
+        f"déclare, sans consigne ni protocole ({argv_ess[3:]})")
+    chk("--freqs" in argv_ess and argv_ess[argv_ess.index("--freqs") + 1:][:1] == ["12,15,20"],
+        f"…et les FRÉQUENCES du mode : sans elles, l'indice entouré désignerait une autre flèche "
+        f"que celle que le moteur a décodée ({argv_ess[3:]})")
+    chk("--ecran-hz" in argv_ess and argv_ess[argv_ess.index("--ecran-hz") + 1:][:1] == ["60"],
+        f"…et le RAFRAÎCHISSEMENT du mode, que l'écran du poste doit tenir ({argv_ess[3:]})")
+    chk("en cours" in page_ess.essai.text() and "croix" in page_ess.essai.text()
+        and not page_ess.bouton_essayer.isEnabled(),
+        f"…la page dit que l'essai est en cours, et de ne rien fixer tant que la croix est là "
+        f"({page_ess.essai.text()[:60]!r})")
+    texte_bandeau, _alerte = console.lanceur.etat_texte()
+    chk("ferme-la" in texte_bandeau and "ne la ferme pas" not in texte_bandeau,
+        f"…et le BANDEAU ne contredit pas la page : une fenêtre d'essai libre se ferme à la main, "
+        f"c'est même le seul moyen de finir ({texte_bandeau!r})")
+    restes_essai = sorted({(mid, b.text()) for mid, p in console.pages.items()
+                           for b in p.findChildren(QAbstractButton) if b.text() in partis
+                           and not (p.bouton_observer is b)})
+    chk(not restes_essai,
+        f"…et PENDANT l'essai, aucune page ne porte « Démarrer », « Arrêter », « Lancer le "
+        f"stimulus »… : le geste n'a pas ramené ce qui a quitté la page ({restes_essai})")
+    fenetre_ss = processus[-1] if processus else None
+    moteur_faux.commandes.clear()
+    repos_ss = _avec_mode(ss_arrete, "ssvep", "rest", avant=6.0, params=reglages_ss,
+                          instruction=consigne_ss)
+    decode_ss = _avec_mode(ss_arrete, "ssvep", "running", params=reglages_ss)
+    console.apply_state(repos_ss)
+    console.apply_state(decode_ss)
+    chk(fenetre_ss is not None and not fenetre_ss.tue and console.lanceur.en_cours()
+        and not moteur_faux.commandes and console._essai is not None,
+        f"…et elle RESTE ouverte de la chauffe au repos puis au décodage : changer de phase n'est "
+        f"pas changer de cibles ({moteur_faux.commandes})")
+    _echap()
+    console.apply_state(decode_ss)
+    chk(moteur_faux.commandes == [("stop_mode", {"id": "ssvep"})],
+        f"la fenêtre FERMÉE, la console arrête le mode qu'elle avait démarré pour l'essai "
+        f"({moteur_faux.commandes})")
+    chk("arrêté" in page_ess.essai.text() and page_ess.bouton_essayer.isEnabled()
+        and console._essai is None and ROUGE_ESSAI not in page_ess.essai.styleSheet(),
+        f"…le DIT sur la page, sans alerte, et rend le bouton ({page_ess.essai.text()!r})")
+
+    # 2 bis. Des CIBLES PHYSIQUES (des LED) : 8 et 14 Hz ne divisent pas 60, et l'essai libre part
+    #    quand même — fenêtre avec `--physiques`, les fréquences du mode, et AUCUN rafraîchissement
+    #    à tenir : rien ne clignote à l'écran.
+    _remise_a_zero()
+    page_ess.formulaire.set_values({"targets_on": "physical", "freqs": [6.0, 8.0, 12.0, 14.0],
+                                    "refresh_hz": 60.0, "alpha_hz": 10.0})
+    reglages_led = _a_plat(page_ess.formulaire.values())
+    led_arrete = {**ss_arrete, "reglages": {"ssvep": dict(reglages_led)}}
+    console.apply_state(led_arrete)
+    chk(page_ess.bouton_essayer.isEnabled() and not page_ess.bouton_tester.isEnabled(),
+        "cibles physiques : « Tester librement » cliquable, « Tester sur une session » grisé")
+    _essayer(page_ess, "ssvep, cibles physiques")
+    console.apply_state(_avec_mode(led_arrete, "ssvep", "warmup", avant=20.0,
+                                   params=reglages_led, instruction=consigne_ss))
+    argv_led = (_fenetres_lancees() or [[]])[-1]
+    freqs_led = (argv_led[argv_led.index("--freqs") + 1:][:1] if "--freqs" in argv_led else [])
+    chk(argv_led[:3] == stim_registry.commande("ssvep")
+        and "--physiques" in argv_led and "--retour" in argv_led
+        and freqs_led == ["6,8,12,14"] and "--ecran-hz" not in argv_led,
+        f"🔴 …la fenêtre de l'essai libre part avec `--physiques`, les fréquences du mode "
+        f"(6 · 8 · 12 · 14) et SANS `--ecran-hz` : l'écran du poste n'a rien à tenir "
+        f"({argv_led[3:]})")
+    _echap()
+    console.apply_state(_avec_mode(led_arrete, "ssvep", "running", params=reglages_led))
+    page_ess.formulaire.set_values({"targets_on": "screen", "freqs": [12.0, 15.0, 20.0],
+                                    "refresh_hz": 60.0, "alpha_hz": 10.0})
+    _remise_a_zero()
+
+    # 3. Le c-VEP et le P300 : même séquence, et LEURS options d'essai libre (`--libre` pour le
+    #    c-VEP, qui désigne sinon des cibles).
+    for mid_e in ("cvep", "p300"):
+        _remise_a_zero()
+        arrete_e = {**_sans_mode(state, mid_e), "quality": qualite_saine, "calibration": None,
+                    "mesure": None}
+        console.show_mode(mid_e)
+        console.apply_state(arrete_e)
+        _essayer(console.pages[mid_e], mid_e)
+        console.apply_state(_avec_mode(arrete_e, mid_e, "warmup", avant=10.0))
+        argv_e = (_fenetres_lancees() or [[]])[-1]
+        stim_e = console.catalogue[mid_e]["stimulus_id"]
+        chk(("start_mode", {"id": mid_e}) in moteur_faux.commandes
+            and argv_e[:3] == stim_registry.commande(stim_e)
+            and all(o in argv_e for o in stim_registry.option_libre(stim_e))
+            and ("--libre" in argv_e) == (mid_e == "cvep")
+            and not {"--calibrer", "--tester"} & set(argv_e),
+            f"{mid_e} : `start_mode`, puis sa fenêtre dès la chauffe, avec `option_libre` "
+            f"({stim_registry.option_libre(stim_e)}) et sans protocole ({argv_e[3:]})")
+        moteur_faux.commandes.clear()
+        _echap()
+        console.apply_state(_avec_mode(arrete_e, mid_e, "running"))
+        chk(moteur_faux.commandes == [("stop_mode", {"id": mid_e})],
+            f"{mid_e} : …et la fermeture arrête le mode démarré pour l'essai "
+            f"({moteur_faux.commandes})")
+
+    # 3 bis. L'ÉCRAN DU STIMULUS : la fenêtre part avec le rafraîchissement qu'elle doit tenir —
+    #        celui d'« Entraîner », celui du MODÈLE choisi (c-VEP), celui du mode (SSVEP).
+    import tempfile as _tempfile
+
+    import numpy as _np
+
+    _remise_a_zero()
+    with _tempfile.TemporaryDirectory() as dossier_ecran:
+        modele_75 = os.path.join(dossier_ecran, "cvep_model_20261021-120000_75Hz.npz")
+        _np.savez(modele_75, refresh=75.0, n_plan=4, n_targets=4,
+                  noms=_np.asarray(["Haut", "Bas", "Feu", "Eau"]))
+        sauve_ecran = console._dernier_etat
+        console._dernier_etat = {"reglages": {"cvep": {"model": modele_75},
+                                              "ssvep": {"refresh_hz": 120.0}}}
+        vus = (console._ecran_hz("cvep", "cvep", {"refresh_hz": 144.0}, calibrer=True),
+               console._ecran_hz("cvep", "cvep"),
+               console._ecran_hz("cvep", None, {"model": modele_75}),
+               console._ecran_hz("ssvep", "ssvep"),
+               console._ecran_hz("p300", "p300"))
+        chk(vus == (144.0, 75.0, 75.0, 120.0, None),
+            f"le rafraîchissement d'une fenêtre : celui d'« Entraîner », celui du MODÈLE choisi "
+            f"(c-VEP, lu dans son fichier, pour l'essai libre comme pour le test), celui du mode "
+            f"(SSVEP), et rien pour une fenêtre qui ne fait pas passer l'écran ({vus})")
+        noms_regles = ["Haut", "Bas", "Feu"]
+        noms_vus = (console._noms_cibles("cvep", "cvep", {"cibles": noms_regles}, calibrer=True),
+                    console._noms_cibles("cvep", "cvep"),
+                    console._noms_cibles("cvep", None, {"model": modele_75}),
+                    console._noms_cibles("ssvep", "ssvep"))
+        chk(noms_vus == (noms_regles, ["Haut", "Bas", "Feu", "Eau"],
+                         ["Haut", "Bas", "Feu", "Eau"], None),
+            f"les cibles d'une fenêtre : celles d'« Entraîner », celles du MODÈLE choisi (c-VEP, "
+            f"pour l'essai libre comme pour le test), rien pour une autre fenêtre ({noms_vus})")
+        console._dernier_etat = {"reglages": {"ssvep": {"refresh_hz": 120.0,
+                                                        "target_names": ["X", "Y", "Z"]}}}
+        chk(console._noms_cibles("ssvep", "ssvep") == ["X", "Y", "Z"]
+            and console._noms_cibles("p300", "p300", {"cibles": ["A", "B", "C"]},
+                                     calibrer=True) == ["A", "B", "C"],
+            "…les noms du SSVEP viennent de « Régler », ceux du P300 d'« Entraîner »")
+        console._dernier_etat = {"reglages": {"cvep": {"model": modele_75},
+                                              "ssvep": {"refresh_hz": 120.0}}}
+        console._lancer_fenetre("cvep", calibrer=True,
+                                params={"refresh_hz": 144.0, "cibles": noms_regles})
+        argv_cal = (_fenetres_lancees() or [[]])[-1]
+        chk("--ecran-hz" in argv_cal and argv_cal[argv_cal.index("--ecran-hz") + 1:][:1] == ["144"]
+            and argv_cal[argv_cal.index("--noms") + 1:][:1] == ["Haut,Bas,Feu"]
+            and "--calibrer" in argv_cal,
+            f"« Entraîner » c-VEP lance sa fenêtre avec le rafraîchissement et les cibles RÉGLÉS "
+            f"({argv_cal[3:]})")
+        avant_filet = len(appels_ecran)
+        console.lanceur.arreter()
+        chk(len(appels_ecran) == avant_filet + 1,
+            f"une fenêtre TUÉE tend le filet qui rétablit l'écran "
+            f"({len(appels_ecran) - avant_filet} appel(s))")
+        console._dernier_etat = sauve_ecran
+    _remise_a_zero()
+
+    # 3 ter. L'AVERTISSEMENT des lumières clignotantes : en gros sur la page, hors du défilement.
+    avec_avert = sorted(m for m, s in console.catalogue.items() if s.get("avertissement"))
+    chk(avec_avert == ["cvep", "p300", "ssvep"],
+        f"le CONTRAT déclare l'avertissement des trois modes qui font clignoter un stimulus "
+        f"({avec_avert})")
+    bandeaux = {m: getattr(p, "avertissement", None) for m, p in console.pages.items()}
+    chk(all((b is not None) == (m in avec_avert) for m, b in bandeaux.items())
+        and all(bandeaux[m] is not None and bandeaux[m].isVisibleTo(console.pages[m])
+                and not console.pages[m].defilement.isAncestorOf(bandeaux[m])
+                for m in avec_avert),
+        f"leurs pages, et elles seules, portent le bandeau, HORS du défilement : il reste visible "
+        f"où qu'on soit dans la page ({sorted(m for m, b in bandeaux.items() if b is not None)})")
+    lu = " ".join(l.text() for l in bandeaux["ssvep"].findChildren(_QLabel)) if bandeaux.get(
+        "ssvep") else ""
+    chk("CLIGNOTANTES" in lu and "épilepsie" in lu and "Échap" in lu,
+        f"…qui dit le risque, et comment arrêter ({lu[:90]!r})")
+
+    # 3 quater. LA FIN D'UNE FENÊTRE, en une phrase : fermée par l'élève, refus, plantage.
+    sonde = LanceurFenetre()
+
+    def _fin(lignes, code):
+        sonde._lignes.clear()
+        sonde._lignes.extend(lignes)
+        return sonde._message_de_fin("Tester le SSVEP", code)
+
+    abandon = _fin(["[ssvep-stim] cibles : AVANT@15.00Hz", "[ssvep-stim] ⚠️ PERSONNE n'écoute",
+                    "[ssvep-stim] ⚠️ run guidé INTERROMPU à l'essai 3/36",
+                    "[ssvep-stim] fin : 127 frames affichées, 0 sautée(s) (0.0%)"], 1)
+    refus = _fin(["Écran passé à 60 Hz le temps de la séance (il était à 165 Hz).",
+                  "[ssvep-stim] ⚠️ REFUS : Cet écran ne sait pas afficher à 75 Hz."], 2)
+    plante = _fin(["Traceback (most recent call last):", '  File "ssvep.py", line 3',
+                   "ValueError: ecran perdu"], 1)
+    chk(abandon[1] == "abandon" and "abandonnée" in abandon[0] and "PERSONNE" not in abandon[0]
+        and "frames" not in abandon[0],
+        f"une fenêtre fermée avant la fin : UNE phrase, sans son journal ({abandon[0]!r})")
+    chk(refus[1] == "refus" and "75 Hz" in refus[0] and "Écran passé" not in refus[0]
+        and "[ssvep-stim]" not in refus[0],
+        f"…un refus : sa raison SEULE ({refus[0]!r})")
+    chk(plante[1] == "plantage" and "ValueError: ecran perdu" in plante[0] and "File" not in plante[0],
+        f"…un plantage : la ligne de l'exception, pas la pile ({plante[0]!r})")
+
+    # La fenêtre d'une séance meurt avant la fin : la séance est annulée TOUT DE SUITE, et le
+    # message passe du bandeau à la page de la séance.
+    _remise_a_zero()
+    mes_id = "ssvep_taux"
+    console.lanceur._echec = (console.lanceur.numero, abandon[0], "abandon")
+    console.lanceur.probleme = abandon[0]
+    console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
+    page_mes = console.mesure_pages[mes_id]
+    page_mes.avis.setText("")
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "chauffe"}})
+    # Le moteur montre encore la séance en cours : la page efface son avis à chaque
+    # rafraîchissement, la phrase doit donc ATTENDRE, et le bandeau la garder jusque-là.
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "chauffe"}})
+    pendant = (page_mes.avis.text(), console.lanceur.probleme)
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "annule"}})
+    avis_test = page_mes.avis.text()
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and pendant[0] == ""
+        and "abandonnée" in pendant[1] and console._fenetre_de is None,
+        f"fenêtre de test fermée en cours : `cancel_mesure` aussitôt ; tant que la séance tourne, "
+        f"la phrase reste au bandeau ({moteur_faux.commandes}, {pendant!r})")
+    chk("abandonnée" in avis_test and console.lanceur.probleme == ""
+        and console._avis_fenetre is None,
+        f"…puis, la séance VUE terminée, la phrase passe sur la page et quitte le bandeau "
+        f"({avis_test!r})")
+    moteur_faux.commandes.clear()
+    console._fenetre_de = {"cle": "mesure", "id": mes_id, "numero": console.lanceur.numero}
+    console._annuler_si_fenetre_morte({"mesure": {"mode_id": mes_id, "phase": "fini"}})
+    chk(not moteur_faux.commandes,
+        f"…mais une séance déjà TERMINÉE n'est pas annulée ({moteur_faux.commandes})")
+
+    # Revenir à la grille efface les messages de la dernière fenêtre.
+    console.lanceur.probleme, console.lanceur.resume = "un problème", "un bilan"
+    console.show_grid()
+    chk(console.lanceur.probleme == "" and console.lanceur.resume == ""
+        and console.lanceur.etat_texte()[0] == "",
+        f"revenir à la grille efface le message de la dernière fenêtre "
+        f"({console.lanceur.etat_texte()[0]!r})")
+    console.lanceur._echec = (None, "", "")
+    _remise_a_zero()
+
+    # 4. Un mode qui TOURNAIT DÉJÀ (lancé depuis sa tuile, pour une application) : rien à
+    #    démarrer, la fenêtre s'ouvre tout de suite, et il CONTINUE après.
+    _remise_a_zero()
+    console.show_mode("ssvep")
+    console.apply_state(decode_ss)
+    _essayer(page_ess, "SSVEP qui décode")
+    chk(not [c for c in moteur_faux.commandes if c[0] == "start_mode"] and _fenetres_lancees(),
+        f"mode qui décode déjà : aucun `start_mode`, la fenêtre s'ouvre au clic ({journal})")
+    moteur_faux.commandes.clear()
+    _echap()
+    console.apply_state(decode_ss)
+    chk(not moteur_faux.commandes and "continue" in page_ess.essai.text(),
+        f"…et la fermeture n'envoie RIEN : il tournait avant, il tourne après, et la page le dit "
+        f"({moteur_faux.commandes}, {page_ess.essai.text()!r})")
+
+    # 4 bis. …et si CE QUI EST À L'ÉCRAN vient de changer ses réglages, `set_params` n'est que
+    #        mis en file : le dernier état montre encore l'ANCIEN runtime. La fenêtre attend d'y
+    #        voir les réglages de l'ACCUSÉ — le chemin du clic.
+    _remise_a_zero()
+    anciens = _avec_mode(ss_arrete, "ssvep", "running",
+                         params={**reglages_ss, "freqs": [15.0, 20.0, 8.571]})
+    console.apply_state(anciens)
+    page_ess.formulaire.champs["freqs"].setText("12, 15, 20")       # tapé, pas « Appliqué »
+    _essayer(page_ess, "réglages changés sur un SSVEP qui décode")
+    console.apply_state(anciens)
+    chk(not _fenetres_lancees() and console._essai is not None,
+        f"réglages tout juste appliqués à un mode qui tourne : PAS de fenêtre tant que l'état "
+        f"montre l'ancien runtime ({_fenetres_lancees()})")
+    console.apply_state(decode_ss)
+    chk(len(_fenetres_lancees()) == 1,
+        f"…elle s'ouvre quand les réglages de l'accusé SONT en vigueur ({_fenetres_lancees()})")
+
+    # 4 ter. Les réglages changent PENDANT l'essai (« Appliquer », « Mesurer » le pic alpha) : la
+    #        fenêtre montre les anciennes cibles, l'anneau tomberait sur la mauvaise flèche.
+    fenetre_ss = processus[-1] if processus else None
+    moteur_faux.commandes.clear()
+    console.apply_state(anciens)
+    chk(fenetre_ss is not None and fenetre_ss.tue and console._essai is None
+        and "ont changé" in page_ess.essai.text() and ROUGE_ESSAI in page_ess.essai.styleSheet()
+        and not moteur_faux.commandes,
+        f"🔴 réglages changés sous la fenêtre ouverte : elle est FERMÉE, et la page le dit en "
+        f"rouge — le mode, qui tournait avant, continue ({page_ess.essai.text()!r})")
+
+    # 4 quater. Des réglages qui n'entrent JAMAIS en vigueur : on renonce, en le disant.
+    _remise_a_zero()
+    console.apply_state(anciens)
+    page_ess.formulaire.champs["freqs"].setText("12, 15, 20")
+    _essayer(page_ess, "réglages jamais pris")
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(anciens)
+    chk(console._essai is None and "toujours pas en vigueur" in page_ess.essai.text()
+        and not _fenetres_lancees()
+        and not [c for c in moteur_faux.commandes if c[0] == "stop_mode"],
+        f"réglages jamais vus en vigueur : renoncement DIT au bout de {DELAI_DEMARRAGE_S:.0f} s, "
+        f"et le mode qui tournait avant n'est pas arrêté ({page_ess.essai.text()!r})")
+
+    # 5. Un REFUS du moteur (pas de modèle…) s'affiche, et n'ouvre RIEN.
+    _remise_a_zero()
+    arrete_cv = {**_sans_mode(state, "cvep"), "quality": qualite_saine, "calibration": None,
+                 "mesure": None}
+    page_ecv = console.pages["cvep"]
+    console.show_mode("cvep")
+    console.apply_state(arrete_cv)
+    moteur_faux.refus["start_mode"] = "« Modèle entraîné » : aucun choix disponible"
+    _essayer(page_ecv, "c-VEP, sans modèle")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    chk(not _fenetres_lancees() and console._essai is None,
+        f"`start_mode` refusé : aucune fenêtre, même si l'état bougeait ensuite ({journal})")
+    chk("aucun choix disponible" in page_ecv.essai.text()
+        and "aucun choix disponible" in console.banner.refus.text()
+        and page_ecv.bouton_essayer.isEnabled(),
+        f"…et le refus du MOTEUR se lit sur la page ET dans le bandeau, bouton rendu "
+        f"({page_ecv.essai.text()!r})")
+    moteur_faux.refus.pop("start_mode")
+
+    # 5 ter. Le mode tournait déjà côté moteur (une application l'a démarré après le dernier état
+    #        que la console a reçu) : `start_mode` répond « deja ». L'essai n'est pas à l'origine
+    #        de ce démarrage, donc il ne doit PAS l'arrêter en se fermant.
+    _remise_a_zero()
+    console.show_mode("cvep")
+    console.apply_state(arrete_cv)
+    moteur_faux.en_plus["start_mode"] = {"deja": ["cvep"]}
+    try:
+        _essayer(page_ecv, "c-VEP démarré entre-temps par une application")
+    finally:
+        moteur_faux.en_plus.pop("start_mode")
+    chk(console._essai is not None and console._essai["demarre"] is False,
+        f"`start_mode` accepté avec « deja » : l'essai ne s'attribue pas le mode "
+        f"({console._essai})")
+    chk(console._essai is not None and console._essai["attendus"] is not None,
+        f"…et il ATTEND de voir en vigueur les réglages que la page vient d'appliquer : le mode "
+        f"de l'application ne les prend qu'au tour de boucle suivant "
+        f"({(console._essai or {}).get('attendus')})")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    if console._essai is not None:
+        console._finir_essai("fin de test", False, True)
+    chk(not [c for c in moteur_faux.commandes if c[0] == "stop_mode"],
+        "...et la fin de l'essai n'envoie pas `stop_mode` au mode de l'application")
+
+    # 5 quater. Une application REPREND le mode PENDANT l'essai : un `set_params` de CE mode,
+    #    accepté, au journal du pilotage APRÈS le clic. Le mode est à elle : la fermeture ne
+    #    l'arrête pas. Une commande d'AVANT le clic ne compte pas.
+    for quand, doit_arreter in (("avant", True), ("pendant", False)):
+        _remise_a_zero()
+        console.show_mode("cvep")
+        console.apply_state(arrete_cv)
+        t_avant_clic = time.monotonic()
+        _essayer(page_ecv, f"c-VEP, une application le règle {quand} l'essai")
+        cv_libre = _avec_mode(arrete_cv, "cvep", "running")
+        console.apply_state(cv_libre)
+        if quand == "pendant":
+            # Sous Windows, `time.monotonic()` avance par pas de 15,6 ms : sans cette attente, la
+            # commande « pendant » porte parfois l'instant même du clic, et la comparaison
+            # stricte (`>`) la classe « avant ».
+            depuis = (console._essai or {}).get("depuis", t_avant_clic)
+            while time.monotonic() <= depuis:
+                time.sleep(0.002)
+        entree_app = {"t": t_avant_clic - 1.0 if quand == "avant" else time.monotonic(),
+                      "cmd": "set_params", "mode": "cvep", "accepted": True, "raison": None,
+                      "event": None, "deja": False, "differe": False, "warning": None}
+        avec_app = {**cv_libre, "pilotage": [entree_app]}
+        console.apply_state(avec_app)
+        _echap()
+        console.apply_state(avec_app)
+        arrets = [c for c in moteur_faux.commandes if c[0] == "stop_mode"]
+        chk(bool(arrets) == doit_arreter
+            and ("application" in page_ecv.essai.text()) == (not doit_arreter),
+            f"une application règle le c-VEP {quand} l'essai : "
+            + ("la fermeture l'arrête, c'est l'essai qui l'a démarré" if doit_arreter
+               else "🔴 la fermeture ne l'arrête PAS, il est à elle désormais, et la page le dit")
+            + f" ({arrets}, {page_ecv.essai.text()!r})")
+
+    # 5 quinquies. 🔴 Le mode ÉCOUTE un autre flux que celui de notre fenêtre (une application
+    #    a réglé `stream_in`, ou le moteur écoute déjà son flux) : il ne l'entendrait pas, et
+    #    l'anneau n'entourerait jamais rien. Refusé au clic, AVANT le contrôle de liaison, en
+    #    nommant les deux flux et le champ à changer.
+    from core.config import MARKER_STREAM_DEFAULT as _FLUX_FENETRE
+    page_ep3 = console.pages["p300"]
+    arrete_p3 = {**_sans_mode(state, "p300"), "quality": qualite_saine, "calibration": None,
+                 "mesure": None}
+    tenu_ailleurs = {"flux": "MonJeu_markers", "tenu_par": ["P300"]}
+    for cas, etat_p3, ecoute, conseil in (
+            ("réglé sur le flux d'une application",
+             {**arrete_p3, "reglages": {"p300": {"stream_in": "MonJeu_markers"}}}, None,
+             "champ"),
+            ("dont l'écoute est TENUE sur le flux d'une application par un mode en marche",
+             {**arrete_p3, "reglages": {"p300": {"stream_in": _FLUX_FENETRE}}}, tenu_ailleurs,
+             "arrêter"),
+            ("sur le flux de la fenêtre",
+             {**arrete_p3, "reglages": {"p300": {"stream_in": _FLUX_FENETRE}}}, None, None)):
+        _remise_a_zero()
+        moteur_faux.ecoute = ecoute
+        console.show_mode("p300")
+        console.apply_state(etat_p3)
+        cliquer(page_ep3.bouton_essayer, f"« Tester librement » du P300 {cas}")
+        texte_p3 = page_ep3.essai.text()
+        champ_flux_p3 = tr("mode.param.stream_in.label")
+        if conseil is None:
+            chk(console.stack.currentWidget() is console.contact,
+                f"P300 {cas} : le clic mène au contrôle de liaison ({texte_p3!r})")
+            console._contact_annule()
+        else:
+            refuse_net = (console.stack.currentWidget() is page_ep3 and console._essai is None
+                          and not [c for c in moteur_faux.commandes if c[0] == "start_mode"]
+                          and "MonJeu_markers" in texte_p3 and _FLUX_FENETRE in texte_p3
+                          and ROUGE_ESSAI in page_ep3.essai.styleSheet())
+            bon_conseil = (champ_flux_p3 in texte_p3 if conseil == "champ"
+                           else "Arrête" in texte_p3 and "P300" in texte_p3
+                           and champ_flux_p3 not in texte_p3)
+            chk(refuse_net and bon_conseil,
+                f"🔴 P300 {cas} : l'essai est REFUSÉ au clic, en rouge, en nommant les deux flux ; "
+                + ("le remède est de choisir le flux de la fenêtre dans le champ" if conseil == "champ"
+                   else "le remède est d'ARRÊTER ce qui tient l'écoute — changer le champ n'y "
+                        "ferait rien")
+                + f" ({texte_p3!r})")
+    # …et la question est REPOSÉE après le contrôle de liaison : une application a pu prendre
+    # l'écoute pendant qu'on le lisait.
+    _remise_a_zero()
+    moteur_faux.ecoute = None
+    console.show_mode("p300")
+    console.apply_state({**arrete_p3, "reglages": {"p300": {"stream_in": _FLUX_FENETRE}}})
+    cliquer(page_ep3.bouton_essayer, "« Tester librement » du P300, l'écoute prise pendant le contrôle")
+    moteur_faux.ecoute = tenu_ailleurs
+    cliquer(console.contact.bouton_lancer if console.stack.currentWidget() is console.contact
+            else None, "« Commencer l'essai » du contrôle de liaison")
+    chk(console._essai is None and not [c for c in moteur_faux.commandes if c[0] == "start_mode"]
+        and "MonJeu_markers" in page_ep3.essai.text(),
+        f"une écoute prise PENDANT le contrôle de liaison : l'essai est refusé au « Commencer », "
+        f"sans `start_mode` ({page_ep3.essai.text()!r})")
+    moteur_faux.ecoute = None
+    _remise_a_zero()
+
+    # 5 bis. 🔴 Une SÉANCE MINUTÉE en cours : l'essai plein écran s'ouvrirait par-dessus le
+    #        contrôle alpha ou l'entraînement MI. Refusé au clic, sur lecture de l'état.
+    seances = {
+        "mesure": {"mode_id": "alpha", "label": "Contrôle alpha", "phase": "essais", "essai": 1,
+                   "total": 2, "restant_s": 9.0, "instruction": "", "classe": "",
+                   "resultat": None, "probleme": ""},
+        "calibration": {"mode_id": "mi", "label": "Calibration Motor Imagery", "phase": "essais",
+                        "essai": 3, "total": 42, "restant_s": 2.0, "instruction": "",
+                        "classe": "", "resultat": None, "probleme": "", "candidat": None}}
+    for cle_s, seance in seances.items():
+        _remise_a_zero()
+        console.show_mode("cvep")
+        console.apply_state({**arrete_cv, cle_s: seance})
+        cliquer(page_ecv.bouton_essayer, f"« Tester librement » pendant une {cle_s}")
+        nom_s = ("Contrôle alpha" if cle_s == "mesure" else console._nom_du_mode("mi"))
+        chk(console.stack.currentWidget() is page_ecv and console._essai is None
+            and not [c for c in moteur_faux.commandes if c[0] == "start_mode"]
+            and not _fenetres_lancees()
+            and nom_s in page_ecv.essai.text() and "en cours" in page_ecv.essai.text()
+            and ROUGE_ESSAI in page_ecv.essai.styleSheet() and page_ecv.bouton_essayer.isEnabled(),
+            f"{cle_s} en cours : l'essai est REFUSÉ au clic, en rouge, en nommant la séance — pas "
+            f"de contrôle de liaison, pas de `start_mode` ({page_ecv.essai.text()!r})")
+    # …et une séance TERMINÉE ne bloque plus rien.
+    _remise_a_zero()
+    console.apply_state({**arrete_cv, "mesure": {**seances["mesure"], "phase": "fini"}})
+    cliquer(page_ecv.bouton_essayer, "« Tester librement » après une mesure finie")
+    chk(console.stack.currentWidget() is console.contact,
+        "…une séance FINIE ne bloque plus : le clic mène au contrôle de liaison")
+    console._contact_annule()
+
+    # 6. Un mode qui n'apparaît JAMAIS doit le DIRE au lieu d'attendre pour toujours.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    _essayer(page_ecv, "le moteur ne démarre rien")
+    console.apply_state(arrete_cv)
+    horloge[0] += DELAI_DEMARRAGE_S + 1.0
+    console.apply_state(arrete_cv)
+    chk(console._essai is None and "n'a pas démarré" in page_ecv.essai.text()
+        and not _fenetres_lancees() and ("stop_mode", {"id": "cvep"}) not in moteur_faux.commandes,
+        f"`start_mode` accepté mais le mode n'apparaît jamais : renoncement DIT au bout de "
+        f"{DELAI_DEMARRAGE_S:.0f} s ({page_ecv.essai.text()!r})")
+
+    # 7. La fenêtre REFUSE de s'ouvrir (une autre occupe la place) : l'essai est annulé, et le
+    #    mode qu'il avait démarré pour rien s'arrête.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    console.lanceur.lancer("errp", label="ErrP")          # une autre fenêtre tourne
+    journal.clear()
+    _essayer(page_ecv, "une fenêtre occupe la place")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    chk(console._essai is None and "Essai annulé" in page_ecv.essai.text()
+        and "Une fenêtre tourne déjà" in page_ecv.essai.text()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes and not _fenetres_lancees(),
+        f"fenêtre refusée : essai annulé, raison dite, mode arrêté ({page_ecv.essai.text()!r})")
+
+    # 7 bis. Un mode qui décode SANS publier (« publié » décoché sur sa tuile) n'a pas de flux
+    #        décodé : l'anneau n'aurait rien à lire. On le dit au lieu d'ouvrir une fenêtre muette.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    _essayer(page_ecv, "mode non publié")
+    muet = _avec_mode(arrete_cv, "cvep", "running")
+    muet["modes_state"]["cvep"]["published"] = False
+    console.apply_state(muet)
+    chk(console._essai is None and not _fenetres_lancees()
+        and "publié" in page_ecv.essai.text()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes,
+        f"mode qui décode sans publier : pas de fenêtre muette, la page dit quoi cocher, et le "
+        f"mode démarré pour l'essai est arrêté ({page_ecv.essai.text()!r})")
+
+    # 8. SOUS la fenêtre ouverte : le mode s'ARRÊTE, cesse de PUBLIER, le MOTEUR meurt —
+    #    des cibles sans anneau, indiscernables d'un regard qui ne fixe pas. On la ferme, et on
+    #    le dit.
+    for cas, etat_apres, attendu, arrete_le_mode in (
+            ("mode arrêté", arrete_cv, "pendant l'essai", False),
+            ("publication coupée", muet, "publié", True),
+            ("moteur mort", _avec_mode(arrete_cv, "cvep", "running"), "pendant l'essai", False)):
+        _remise_a_zero()
+        console.apply_state(arrete_cv)
+        _essayer(page_ecv, f"{cas} sous la fenêtre")
+        console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+        fenetre_essai = processus[-1] if processus else None
+        moteur_faux.commandes.clear()
+        if cas == "moteur mort":
+            console._moteur_vivant = lambda: False
+        console.apply_state(etat_apres)
+        console._moteur_vivant = None
+        chk(fenetre_essai is not None and fenetre_essai.tue and not console.lanceur.en_cours()
+            and attendu in page_ecv.essai.text() and ROUGE_ESSAI in page_ecv.essai.styleSheet()
+            and (moteur_faux.commandes == [("stop_mode", {"id": "cvep"})] if arrete_le_mode
+                 else not moteur_faux.commandes),
+            f"{cas} sous la fenêtre : elle est FERMÉE, la page le dit en rouge "
+            f"({page_ecv.essai.text()!r}, {moteur_faux.commandes})")
+    console.apply_state(arrete_cv)                       # le bandeau oublie le moteur « mort »
+
+    # 9. La fenêtre MEURT sur une erreur : ce n'est pas une fin d'essai, et
+    #    « Essai libre terminé », en noir, la ferait passer pour une.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    _essayer(page_ecv, "la fenêtre plantera")
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    if processus:
+        processus[-1].sortie = b"Traceback (most recent call last):\nValueError: ecran perdu\n"
+        processus[-1].finished.emit(1, QProcess.ExitStatus.NormalExit)
+    console.apply_state(_avec_mode(arrete_cv, "cvep", "running"))
+    chk(console._essai is None and "ERREUR" in page_ecv.essai.text()
+        and "ecran perdu" in page_ecv.essai.text() and "terminé" not in page_ecv.essai.text()
+        and ROUGE_ESSAI in page_ecv.essai.styleSheet()
+        and ("stop_mode", {"id": "cvep"}) in moteur_faux.commandes,
+        f"🔴 fenêtre morte en erreur : la page dit ERREUR, en rouge, avec la cause — pas "
+        f"« terminé » — et le mode démarré pour l'essai est arrêté ({page_ecv.essai.text()!r})")
+
+    # 10. 🔴 Une AUTRE séance ne tue pas la fenêtre de l'essai : un test dont la fenêtre est
+    #     refusée s'annule, et ni son annulation ni son « Abandonner » ne doivent tuer l'ESSAI.
+    _remise_a_zero()
+    console.apply_state(arrete_cv)
+    _essayer(page_ecv, "un test s'annulera à côté")
+    cv_essai = _avec_mode(arrete_cv, "cvep", "running")
+    console.apply_state(cv_essai)
+    fenetre_essai = processus[-1] if processus else None
+    test_voisin = {"mode_id": "p300_test", "phase": "chauffe", "essai": 0, "total": 6,
+                   "restant_s": 10.0, "instruction": "", "classe": "", "resultat": None,
+                   "probleme": ""}
+    console._a_annuler_mesure = True
+    console.apply_state({**cv_essai, "mesure": test_voisin})
+    console.arreter_mesure()
+    console.apply_state({**cv_essai, "mesure": {**test_voisin, "phase": "annule"}})
+    chk(("cancel_mesure", {}) in moteur_faux.commandes and fenetre_essai is not None
+        and not fenetre_essai.tue and console.lanceur.en_cours() and console._essai is not None,
+        f"le test voisin est annulé, et la fenêtre de l'essai SURVIT à son annulation comme à son "
+        f"« Abandonner » ({moteur_faux.commandes})")
+    _remise_a_zero()
+    console.show_grid()
+
+    # --- la FERMETURE : ce que la console a ouvert, elle le referme ------------------------
+    # `EngineServer.close()` supprime le dossier temporaire des candidats de calibration. Sans cet
+    # appel, un modèle EEG d'une personne identifiable survit à la fermeture dans `%TEMP%` — et
+    # le premier remaniement qui le déplacerait le ferait ÉLIRE comme « modèle le plus récent ».
+    console.apply_state(p300_pret)
+    console.lanceur.lancer("p300", calibrer=True)
+    fenetre_ouverte = processus[-1]
+    # La fenêtre des flux, OUVERTE au moment de fermer, avec un flux. Elle n'a pas de parent Qt :
+    # rien d'autre que `Console.closeEvent` ne la ferme.
+    console.grid.bouton_flux.click()
+    inlet_au_depart = _FauxInlet(voies=["a"], echantillons=[])
+    page_flux._fermer()
+    page_flux._inlet = inlet_au_depart
+    from console.live_views import TracesView as _TracesView
+    traces_avant = console.findChildren(_TracesView)
+    console.close()
+    chk(traces_avant and all(t._ferme for t in traces_avant),
+        f"fermer la console referme ses tracés pyqtgraph AVANT leur destruction, comme pyqtgraph "
+        f"le demande ({len(traces_avant)} tracé(s))")
+    # Mutation : retirer `self.fenetre_flux.close()` de `Console.closeEvent` → la fenêtre reste
+    # à l'écran devant une console disparue → rouge.
+    chk(not console.fenetre_flux.isVisible() and inlet_au_depart.ferme >= 1
+        and page_flux._inlet is None,
+        f"fermer la console ferme aussi la fenêtre des flux, et lâche son flux "
+        f"(visible={console.fenetre_flux.isVisible()}, {inlet_au_depart.ferme} fermeture(s))")
+    # ⚠️ `stop()`, pas `close()`. Fermer la fenêtre demande l'ARRÊT de la boucle ; `close()`,
+    # qui supprime le dossier des candidats, n'arrive qu'après le `join`, dans le `finally` de
+    # `run()`. Appelé depuis le fil Qt pendant que la boucle tourne, il ouvrirait une course
+    # perdante : `_entrainer`, en plein `fit`, recréerait le dossier avec `exist_ok=True` juste
+    # après sa suppression, et le candidat survivrait à la fermeture, dans un dossier que le
+    # moteur ne suivrait plus.
+    chk(getattr(moteur_faux, "arrete", False) and moteur_faux.fermetures == 0,
+        f"fermer la console DEMANDE l'arrêt du moteur, sans supprimer quoi que ce soit tant que "
+        f"sa boucle tourne (arrêté={getattr(moteur_faux, 'arrete', False)}, "
+        f"fermetures={moteur_faux.fermetures})")
+    chk(fenetre_ouverte.tue and not console.lanceur.en_cours(),
+        "...et tue la fenêtre de stimulus restée ouverte, plutôt que de la laisser plein écran "
+        "devant l'étudiant")
+
+    # --- La LANGUE de l'affichage : l'icône de l'accueil, sans redémarrer -------------------
+    # Le choix est RETENU par les préférences du poste — ici en mémoire, l'autotest n'écrit rien
+    # dans la base de registre.
+    from console.demarrage import Memoire as _Memoire
+
+    class _Prefs(dict):
+        def value(self, cle, defaut=None):
+            return self.get(cle, defaut)
+
+        def setValue(self, cle, valeur):  # noqa: N802 - nom de l'API Qt
+            self[cle] = valeur
+
+    prefs = _Prefs()
+    from PySide6.QtCore import QEvent as _QEvent, QObject as _QObject
+
+    class _Parasites(_QObject):
+        """Toute fenêtre de premier niveau qui s'AFFICHE. Un widget rendu visible avant d'avoir un
+        parent en est une : elle s'ouvre et se referme à l'écran, au lancement comme à chaque
+        changement de langue (les pages sont reconstruites)."""
+
+        def __init__(self):
+            super().__init__()
+            self.vues = []
+
+        def eventFilter(self, objet, evenement):  # noqa: N802 - nom imposé par Qt
+            if evenement.type() == _QEvent.Show and objet.isWidgetType() and objet.isWindow():
+                self.vues.append(objet)
+            return False
+
+    parasites = _Parasites()
+    app.installEventFilter(parasites)
+    bilingue = Console(None, fabrique_fenetre=_fabrique, memoire=_Memoire(prefs))
+    bilingue.timer.stop()        # sans moteur : rien à sonder
+    bilingue.show()
+    menu = [a.text() for a in bilingue.grid.bouton_langue.menu().actions()]
+    chk(bilingue.grid.bouton_langue.text() == "🌐 Français" and menu == ["English", "Français"],
+        f"l'accueil porte l'icône de langue, et son menu nomme chaque langue dans SA langue "
+        f"({bilingue.grid.bouton_langue.text()!r}, {menu})")
+    chk(_Memoire(_Prefs()).langue() == "en", "un poste neuf démarre en anglais")
+    bilingue.changer_langue("en")
+    page_ssvep = bilingue.pages["ssvep"]
+    libelles = {p["key"]: p["label"] for p in bilingue.catalogue["ssvep"]["params"]}
+    chk(prefs.get("langue") == "en" and bilingue.grid.bouton_langue.text() == "🌐 English"
+        and "9.6" in page_ssvep.formulaire.champs["alpha_hz"].text()
+        and page_ssvep.bloc_regler.title() == "1. Set up"
+        and libelles["freqs"] == "Target frequencies"
+        and bilingue.windowTitle() == tr("console.fenetre.titre", version=VERSION) != ""
+        and VERSION in bilingue.windowTitle(),
+        f"« English » : les pages sont reconstruites en anglais — titres de blocs, et libellés que "
+        f"le MOTEUR a résolus à l'import — et le choix est retenu "
+        f"({page_ssvep.bloc_regler.title()!r}, {libelles['freqs']!r}, prefs={prefs})")
+    bilingue._essai = {"mode_id": "ssvep"}
+    bilingue.changer_langue("fr")
+    chk(langue() == "en" and "free test" in bilingue.banner.refus.text(),
+        f"pendant un essai libre, la langue ne change pas, et le bandeau dit pourquoi "
+        f"({bilingue.banner.refus.text()!r})")
+    bilingue._essai = None
+    bilingue.changer_langue("fr")
+    chk(prefs.get("langue") == "fr" and bilingue.pages["ssvep"].bloc_regler.title() == "1. Régler",
+        "…et l'essai fini, retour au français, retenu lui aussi")
+    for mid in bilingue.pages:
+        bilingue.show_mode(mid)
+    for mid in bilingue.calib_pages:
+        bilingue.show_calibration(mid)
+    for mid in bilingue.mesure_pages:
+        bilingue.show_mesure(mid)
+    app.processEvents()
+    app.removeEventFilter(parasites)
+    bilingue.hide()
+    etrangeres = [type(f).__name__ for f in parasites.vues if f is not bilingue]
+    chk(not etrangeres,
+        f"aucune fenêtre parasite ne s'ouvre et ne se referme — construction, deux changements de "
+        f"langue, toutes les pages visitées ({etrangeres})")
+    os.environ["EEG_LANGUE"] = "fr"
+
+    # --- « Connecter une application » : la recherche, la page de contrôle, la fin -------------
+    # Le MOTEUR tient la connexion (`server.py`, `[smoke-connexion]`). Ici : ce que la console en
+    # montre, et ce qu'elle lui demande, sur des états fabriqués.
+    import shiboken6 as _sb_cx
+    from PySide6.QtCore import QEvent as _QEvent_cx
+    from PySide6.QtWidgets import (QAbstractButton as _BoutonQt, QAbstractSlider as _Glissiere,
+                                   QAbstractSpinBox as _Spin, QComboBox as _Combo,
+                                   QLineEdit as _Ligne, QRadioButton as _Radio)
+    from console.connexion_page import heure as _heure_cx
+    from console.flux_page import _sans_flux_de_commandes
+    journal_cx = []
+    moteur_cx = _FauxMoteur(journal_cx)
+    cx = Console(moteur_cx, fabrique_fenetre=_fabrique)
+    cx.timer.stop()
+    cx.show()
+    base_cx = {**fake_state(), "ecoute": "sur_demande", "applications": [], "connexion": None,
+               "fin_connexion": None, "reglages": {}, "pilotage": [],
+               "marqueurs": {"connecte": False}}
+    cx.apply_state(base_cx)
+    bouton_cx = getattr(cx.grid, "bouton_connexion", None)
+    # Les deux boutons vers l'application, en bas de l'accueil : plus hauts qu'un bouton
+    # ordinaire, et « Connecter une application » sur le fond d'accent de la console. Les boutons
+    # des tuiles gardent leur taille.
+    from PySide6.QtWidgets import QPushButton as _QPushButton_cx
+    from console.params_form import ACCENT as _ACCENT_cx
+    hauteur_ordinaire = _QPushButton_cx("x").sizeHint().height()
+    flux_cx = getattr(cx.grid, "bouton_flux", None)
+    tuile_cx = next(iter(cx.grid.tuiles.values()))
+    hauteurs_cx = [b.minimumHeight() for b in (bouton_cx, flux_cx) if b is not None]
+    chk(bouton_cx is not None and _ACCENT_cx in bouton_cx.styleSheet()
+        and len(hauteurs_cx) == 2 and min(hauteurs_cx) > hauteur_ordinaire
+        and tuile_cx.demarrage.minimumHeight() == 0 and not tuile_cx.demarrage.styleSheet(),
+        f"« Connecter une application » est sur fond d'accent ({_ACCENT_cx}), et lui et « Ce que "
+        f"voit ton application » sont plus hauts qu'un bouton ordinaire ; les boutons des tuiles "
+        f"ne changent pas (hauteurs {hauteurs_cx}, ordinaire {hauteur_ordinaire} px)")
+    cliquer(bouton_cx, "le bouton « Connecter une application » de l'accueil")
+    chk(cx.stack.currentWidget() is getattr(cx, "recherche", None)
+        and moteur_cx.commandes[-1:] == [("chercher_applications", {"on": True})],
+        f"il ouvre la page de recherche et lance la recherche ({moteur_cx.commandes[-1:]})")
+    cx.apply_state(base_cx)
+    rech = getattr(cx, "recherche", None)
+    chk(rech is not None and rech.liste.count() == 0 and rech.vide.isVisible()
+        and not rech.bouton_connecter.isEnabled(),
+        "sans application : liste vide, la page dit quoi faire, « Connecter » est grisé")
+    appli_cx = {"uid": "u-1", "nom": "pont-esp32-1234", "illisible": False,
+                "depuis": time.time()}
+    cx.apply_state({**base_cx, "applications": [appli_cx]})
+    chk(rech is not None and rech.liste.count() == 1
+        and "pont-esp32-1234" in rech.liste.item(0).text()
+        and _heure_cx(appli_cx["depuis"]) in rech.liste.item(0).text()
+        and not rech.vide.isVisible(),
+        f"l'application apparaît, par son nom et son heure d'apparition "
+        f"({rech.liste.item(0).text() if rech is not None and rech.liste.count() else ''!r})")
+    muette_cx = {"uid": "u-2", "nom": "", "illisible": True, "depuis": time.time()}
+    anonyme_cx = {"uid": "u-3", "nom": "", "illisible": False, "depuis": time.time()}
+    cx.apply_state({**base_cx, "applications": [appli_cx, muette_cx, anonyme_cx]})
+    lignes_rech = ([rech.liste.item(i).text() for i in range(rech.liste.count())]
+                   if rech is not None else [])
+    chk(len(lignes_rech) == 3 and tr("console.connexion.illisible") in lignes_rech[1]
+        and tr("console.connexion.sans_nom") in lignes_rech[2],
+        f"un nom illisible et un nom absent se disent chacun à leur façon ({lignes_rech})")
+    cx.apply_state({**base_cx, "applications": [appli_cx]})
+    if rech is not None:
+        rech.liste.setCurrentRow(0)
+    cx._essai = {"mode_id": "ssvep"}
+    cliquer(rech.bouton_connecter if rech else None, "« Connecter »")
+    chk(not any(c[0] == "connecter" for c in moteur_cx.commandes)
+        and rech is not None and tr("console.connexion.essai_en_cours") in rech.refus.text(),
+        "pendant un essai libre, la console refuse elle-même de connecter")
+    cx._essai = None
+    # Les autres gestes de la console que le moteur ne connaît pas tous : une fenêtre de séance
+    # encore ouverte, un lancement en cours. Refusés eux aussi, avec ce qui est en cours.
+    for attribut, valeur, quoi in (("_fenetre_de", {"cle": "p300", "id": "p300", "numero": 1},
+                                    "console.langue.fenetre"),
+                                   ("_attente", {"mode_id": "p300"}, "console.langue.lancement")):
+        setattr(cx, attribut, valeur)
+        cliquer(rech.bouton_connecter if rech else None, "« Connecter »")
+        setattr(cx, attribut, None)
+        attendu = str(tr("console.connexion.occupe", quoi=tr(quoi)))
+        chk(not any(c[0] == "connecter" for c in moteur_cx.commandes)
+            and rech is not None and rech.refus.text() == attendu,
+            f"pendant {tr(quoi)}, la console refuse aussi de connecter, et dit pourquoi "
+            f"({rech.refus.text() if rech else ''!r})")
+    # Un refus du MOTEUR : la console reste sur la recherche et l'écrit en rouge.
+    moteur_cx.refus["connecter"] = "REFUS-DU-MOTEUR"
+    cliquer(rech.bouton_connecter if rech else None, "« Connecter »")
+    del moteur_cx.refus["connecter"]
+    chk(rech is not None and cx.stack.currentWidget() is rech and rech.refus.isVisible()
+        and "REFUS-DU-MOTEUR" in rech.refus.text()
+        and moteur_cx.commandes[-1:] == [("connecter", {"uid": "u-1"})],
+        "un « Connecter » refusé par le moteur laisse la console sur la recherche, refus affiché")
+    # La personne reclique la MÊME ligne : le refus parle toujours d'elle, il reste.
+    if rech is not None and rech.liste.count():
+        rech.liste.clearSelection()
+        rech.liste.item(0).setSelected(True)
+    chk(rech is not None and rech.refus.isVisible() and "REFUS-DU-MOTEUR" in rech.refus.text()
+        and rech.uid_choisi() == "u-1",
+        "...et il reste quand la personne reclique la MÊME application")
+    # Le refus le plus probable (« n'est plus sur le réseau ») arrive quand l'application SORT
+    # de la liste : une repeinte ne l'efface pas, ni l'arrivée d'une autre application.
+    autre_cx = {"uid": "u-9", "nom": "autre-appli", "illisible": False, "depuis": time.time()}
+    cx.apply_state({**base_cx, "applications": []})
+    cx.apply_state({**base_cx, "applications": [autre_cx]})
+    chk(rech is not None and rech.refus.isVisible() and "REFUS-DU-MOTEUR" in rech.refus.text(),
+        "le refus reste à l'écran quand la liste change (l'application refusée en sort, une "
+        "autre arrive)")
+    if rech is not None:
+        rech.liste.setCurrentRow(0)                 # la personne choisit une AUTRE ligne
+    chk(rech is not None and not rech.refus.isVisible(),
+        "...et s'efface quand la personne choisit une autre application")
+    cx.apply_state({**base_cx, "applications": [appli_cx]})
+    if rech is not None:
+        rech.liste.setCurrentRow(0)
+    appels_cx = moteur_cx.appels
+    cliquer(rech.bouton_connecter if rech else None, "« Connecter »")
+    # `[-1:]` et non `[-1]` : une liste vide (la page absente) rougit au lieu de lever.
+    chk(moteur_cx.commandes[-1:] == [("connecter", {"uid": "u-1"})]
+        and cx.stack.currentWidget() is getattr(cx, "controle", None)
+        and moteur_cx.appels == appels_cx + 1,
+        f"« Connecter » envoie l'uid, ouvre la page de contrôle et la peint tout de suite, sans "
+        f"arrêter la recherche (le moteur l'a fait) ({moteur_cx.commandes[-1:]})")
+
+    t_cx = time.monotonic()
+    ssvep_cx = {**fake_state()["modes_state"]["ssvep"], "lu": True,
+                "params": {"targets_on": "physical", "freqs": [13.0, 15.0],
+                           "target_names": ["haut/bas", "gauche"], "z_min": 2.5, "band_low": 5.0,
+                           "band_high": 40.0, "refresh_hz": 60.0, "alpha_hz": 9.6}}
+    connexion_cx = {"uid": "u-1", "nom": "pont-esp32-1234", "depuis": time.time(), "t": t_cx,
+                    "branchee": True, "demarres": ["ssvep"], "regles": ["ssvep"],
+                    "en_attente": {}, "suggestions": {}}
+    entree_cx = {"t": t_cx + 1.0, "cmd": "start_mode", "mode": "ssvep", "accepted": True,
+                 "raison": None, "event": None, "deja": False, "differe": False,
+                 "warning": None}
+    # Une qualité mesurée par le moteur : PO8 décollée, les sept autres bonnes.
+    qualite_cx = {**fake_state()["quality"], "contact": [True] * 7 + [False],
+                  "seuil_contact": 25.0, "reference_ok": True}
+    connecte_cx = {**base_cx, "connexion": connexion_cx, "pilotage": [entree_cx],
+                   "quality": qualite_cx,
+                   "modes_state": {"raw": fake_state()["modes_state"]["raw"], "ssvep": ssvep_cx}}
+    cx.show_grid()
+    cx.apply_state(connecte_cx)
+    page_cx = getattr(cx, "controle", None)
+    chk(page_cx is not None and cx.stack.currentWidget() is page_cx
+        and "pont-esp32-1234" in page_cx.titre.text(),
+        "une connexion ramène sur la page de contrôle, même depuis l'accueil, et la nomme")
+    libelle_freqs = next(p["label"] for p in cx.catalogue["ssvep"]["params"]
+                         if p["key"] == "freqs")
+    libelle_brut = cx.catalogue["raw"]["label"]
+    libelle_rafraichissement = next(p["label"] for p in cx.catalogue["ssvep"]["params"]
+                                    if p["key"] == "refresh_hz")
+    texte_reglages = page_cx.reglages.text() if page_cx else ""
+    chk(libelle_freqs in texte_reglages and "13" in texte_reglages
+        and libelle_brut not in texte_reglages,
+        f"les réglages envoyés s'affichent sous leurs libellés, et seulement ceux de "
+        f"l'application ({texte_reglages!r})")
+    chk("haut/bas · gauche" in texte_reglages,
+        f"...un nom de cible qui contient « / » s'affiche en entier, seul un modèle est réduit "
+        f"à son nom de fichier ({texte_reglages!r})")
+    chk(libelle_rafraichissement not in texte_reglages,
+        "...sauf un réglage qui ne compte pas ici : sur des cibles physiques, le rafraîchissement "
+        "de l'écran n'est pas montré (`actif_si`)")
+    # Les électrodes : le verdict du moteur, voies clés du SSVEP encadrées.
+    contact_cx = page_cx.contact if page_cx else None
+    cles_cx = [fake_state()["channels"][i] for i in cx.catalogue["ssvep"]["key_channels"]]
+    chk(contact_cx is not None and "PO8" in contact_cx.resume.text()
+        and all("border" in contact_cx.lignes[n].styleSheet() for n in cles_cx)
+        and "border" not in contact_cx.lignes["Fz"].styleSheet(),
+        f"les électrodes montrent le contact mesuré, voies clés du mode encadrées "
+        f"({contact_cx.resume.text() if contact_cx else ''!r}, clés {cles_cx})")
+    vue_ssvep = (page_cx._vues.get("ssvep") if page_cx else None) or (None,) * 5
+    chk(vue_ssvep[3] is not None and vue_ssvep[3].text() == tr("console.controle.lu")
+        and "start_mode" in page_cx.commandes.text(),
+        "le voyant dit « lu », et la commande de l'application est listée")
+    # La décision s'y lit sur la ligne « Cible décodée » (numérotée depuis 0, comme le
+    # `target_index` de l'API) ; la ligne du dessous ne la répète pas (« CIBLE 0 · 15 Hz »).
+    verdict_cx = vue_ssvep[2].verdict.text() if vue_ssvep[2] is not None else ""
+    cible_cx = vue_ssvep[2].cible.text() if vue_ssvep[2] is not None else ""
+    chk(cible_cx == str(tr("pages.direct.cible_decodee", cible=tr(
+            "pages.direct.nom_hz", nom=tr("pages.direct.cible_n", i=0), hz="15")))
+        and verdict_cx == str(tr("console.controle.vide")),
+        f"la vue « Décodage » montre la décision du moteur sur la ligne « Cible décodée », "
+        f"sans la répéter dessous ({cible_cx!r}, {verdict_cx!r})")
+    # L'heure d'une commande : son `t` (l'horloge monotone du journal) ramené à la montre. Une
+    # seconde de marge de part et d'autre : la page et ce test ne lisent pas l'heure au même
+    # instant.
+    heures_cx = {time.strftime("%H:%M:%S", time.localtime(
+        time.time() - (time.monotonic() - entree_cx["t"]) + d)) for d in (-1, 0, 1)}
+    ligne_cx = page_cx.commandes.text().split("\n")[0] if page_cx else ""
+    chk(ligne_cx[:8] in heures_cx
+        and ligne_cx.endswith(str(tr("console.controle.commande_ok", cmd="start_mode",
+                                     mode=cx.catalogue["ssvep"]["label"]))),
+        f"chaque commande porte son heure, à la seconde ({ligne_cx!r}, attendu {heures_cx})")
+    chk("pont-esp32-1234" in cx.banner.connexion_app.text(),
+        f"le bandeau répète la connexion ({cx.banner.connexion_app.text()!r})")
+    permis_cx = {str(tr(k)) for k in ("console.controle.deconnecter", "console.grille.flux",
+                                      "console.controle.retour", "console.controle.lancer",
+                                      "console.controle.relancer")}
+
+    def aucun_autre_geste(quand):
+        """Le parcours de l'ARBRE de la page : aucun bouton (case, bouton-outil… : tout
+        `QAbstractButton`) hors des gestes permis — les choix de modèle exceptés —, aucun champ
+        de réglage ni curseur. Refait à chaque état qui ajoute des widgets (vues, modèles)."""
+        if page_cx is None:
+            chk(False, f"{quand} : la page de contrôle existe")
+            return
+        boutons = {b.text() for b in page_cx.findChildren(_BoutonQt)
+                   if not (isinstance(b, _Radio) and page_cx.zone_modeles.isAncestorOf(b))}
+        champs = [type(w).__name__ for t in (_Ligne, _Spin, _Combo, _Glissiere)
+                  for w in page_cx.findChildren(t)]
+        chk(boutons <= permis_cx and not champs,
+            f"{quand} : la page de contrôle n'offre AUCUN autre geste — ni Tester, ni Entraîner, "
+            f"ni Démarrer, ni champ de réglage ({sorted(boutons - permis_cx)}, {champs})")
+
+    aucun_autre_geste("SSVEP en marche")
+    cx.apply_state({**connecte_cx, "modes_state": {"ssvep": {**ssvep_cx, "lu": False}}})
+    chk(vue_ssvep[3] is not None and vue_ssvep[3].text() == tr("console.controle.pas_lu"),
+        "personne ne lit le flux : le voyant le dit")
+    # Un appareil réseau ne lit pas le flux LSL : le moteur lui envoie les décisions des modes
+    # qu'il a demandés. Le voyant ne doit pas dire « personne ne le lit ».
+    cx.apply_state({**connecte_cx, "connexion": {**connexion_cx, "origine": "udp",
+                                                  "demandes": ["ssvep"]},
+                    "modes_state": {"ssvep": {**ssvep_cx, "lu": False}}})
+    chk(vue_ssvep[3] is not None
+        and vue_ssvep[3].text() == tr("console.controle.envoye_appareil"),
+        f"connectée à un appareil réseau qui a demandé le SSVEP : le voyant dit que ses décisions "
+        f"lui sont envoyées, pas « personne ne le lit » "
+        f"({vue_ssvep[3].text() if vue_ssvep[3] is not None else ''!r})")
+    # Un mode que l'appareil n'a PAS demandé garde le voyant LSL : rien ne lui est envoyé.
+    cx.apply_state({**connecte_cx, "connexion": {**connexion_cx, "origine": "udp",
+                                                  "demandes": []},
+                    "modes_state": {"ssvep": {**ssvep_cx, "lu": False}}})
+    chk(vue_ssvep[3] is not None and vue_ssvep[3].text() == tr("console.controle.pas_lu"),
+        "...un mode que l'appareil réseau n'a pas demandé garde le voyant LSL")
+    # Une application LSL lit le flux elle-même : jamais « envoyées à l'appareil ».
+    cx.apply_state({**connecte_cx, "connexion": {**connexion_cx, "origine": "lsl",
+                                                  "demandes": ["ssvep"]},
+                    "modes_state": {"ssvep": {**ssvep_cx, "lu": False}}})
+    chk(vue_ssvep[3] is not None and vue_ssvep[3].text() == tr("console.controle.pas_lu"),
+        "...et une application LSL qui a demandé le SSVEP aussi : elle lit le flux elle-même")
+    cx.apply_state({**connecte_cx, "modes_state": {"ssvep": {**ssvep_cx, "lu": False}}})
+    cx.changer_langue("en")
+    chk(langue() == "fr" and tr("console.langue.connexion") in cx.banner.refus.text(),
+        f"pendant une connexion, la langue ne change pas ({cx.banner.refus.text()!r})")
+
+    if page_cx is not None:
+        page_cx.choix_modeles = lambda mid: ["C:/m/mi_model_a.joblib", "C:/m/mi_model_b.joblib"]
+    attente_cx = {**connexion_cx, "regles": ["ssvep", "mi"],
+                  "en_attente": {"mi": {"suggestion": "mi_model_b.joblib"}},
+                  "suggestions": {"mi": "mi_model_b.joblib"}}
+    cx.apply_state({**connecte_cx, "connexion": attente_cx,
+                    "reglages": {"mi": {"model": "C:/m/mi_model_a.joblib"}}})
+    groupe_mi = page_cx._choix.get("mi") if page_cx else None
+    chk(groupe_mi is not None and groupe_mi[1]["C:/m/mi_model_b.joblib"].isChecked()
+        and groupe_mi[2].text() == tr("console.controle.lancer"),
+        "un mode à modèle en attente : ses modèles, la suggestion présélectionnée, "
+        "« Lancer le décodage »")
+    texte_attente = page_cx.reglages.text() if page_cx else ""
+    chk(str(tr("console.controle.etat.en_attente")) in texte_attente
+        and "mi_model_a" not in texte_attente,
+        f"un mode qui attend son modèle ne montre pas, dans ses réglages, le modèle retenu par "
+        f"le moteur : le choix est juste en dessous ({texte_attente!r})")
+    aucun_autre_geste("MI en attente d'un modèle")
+    cliquer(groupe_mi[2] if groupe_mi else None, "« Lancer le décodage »")
+    chk(moteur_cx.commandes[-1:] == [("lancer_decodage",
+                                      {"id": "mi", "model": "C:/m/mi_model_b.joblib"})],
+        f"...qui envoie le mode et le modèle choisi ({moteur_cx.commandes[-1:]})")
+    mi_cx = {"id": "mi", "label": "Motor Imagery", "family": "actif", "phase": "running",
+             "published": True, "params": {"model": "C:/m/mi_model_b.joblib"},
+             "instruction": "", "stream": "decoded_mi", "channels": ["intent_index"],
+             "rest_report": None, "output": None, "lu": True}
+    cx.apply_state({**connecte_cx,
+                    "connexion": {**attente_cx, "en_attente": {}, "demarres": ["ssvep", "mi"]},
+                    "modes_state": {"ssvep": ssvep_cx, "mi": mi_cx}})
+    chk(groupe_mi is not None and groupe_mi[2].text() == tr("console.controle.relancer"),
+        "en marche, le bouton devient « Relancer avec ce modèle »")
+    aucun_autre_geste("MI en marche")
+    p300_cx = {"id": "p300", "label": "P300", "family": "actif", "phase": "running",
+               "published": True, "params": {"stream_in": "MonJeu_markers",
+                                             "model": "C:/m/p300_model.joblib"},
+               "instruction": "", "stream": "decoded_p300", "channels": ["target_index"],
+               "rest_report": None, "output": None, "lu": True}
+    # Le brut, réglé par l'application, a son cadre : une phrase, pas les tracés de sa page (ni
+    # leur filtre, ni leur case « Coupe-bande » : des gestes).
+    cx.apply_state({**connecte_cx, "connexion": {**connexion_cx, "regles": ["p300", "raw"],
+                                                 "demarres": ["p300"]},
+                    "modes_state": {"p300": p300_cx, "raw": fake_state()["modes_state"]["raw"]},
+                    "marqueurs": {"connecte": False}})
+    vue_p300 = (page_cx._vues.get("p300") if page_cx else None) or (None,) * 5
+    chk(vue_p300[4] is not None
+        and vue_p300[4].text() == tr("console.controle.marqueurs_absents",
+                                     flux="MonJeu_markers"),
+        "un mode à marqueurs : le second voyant dit que son flux n'est pas encore vu")
+    chk(page_cx is not None and "raw" in page_cx._vues,
+        "le brut réglé par l'application a son cadre dans « Décodage »")
+    aucun_autre_geste("P300 et brut en marche")
+
+    # La MÊME application reconnectée : même flux, donc même uid, mais un autre `t`. C'est une
+    # NOUVELLE connexion : la liste des modèles est relue (on a pu en entraîner un entre-temps).
+    lectures_cx = []
+
+    def _modeles_cx(mid):
+        lectures_cx.append(mid)
+        return ["C:/m/mi_model_a.joblib", "C:/m/mi_model_b.joblib", "C:/m/mi_model_c.joblib"]
+
+    if page_cx is not None:
+        page_cx.choix_modeles = _modeles_cx
+    retour_cx = {**connexion_cx, "t": t_cx + 100.0, "regles": ["mi"], "demarres": [],
+                 "en_attente": {"mi": {"suggestion": None}}, "suggestions": {}}
+    # Le journal du pilotage garde aussi les commandes de la connexion d'AVANT (`entree_cx`) :
+    # la page ne montre que celles d'après `t`.
+    entree_retour = {**entree_cx, "t": t_cx + 101.0, "cmd": "set_params", "mode": "mi"}
+    etat_retour = {**base_cx, "connexion": retour_cx, "pilotage": [entree_cx, entree_retour],
+                   "reglages": {"mi": {"model": "C:/m/mi_model_a.joblib"}}}
+    cx.apply_state(etat_retour)
+    texte_commandes = page_cx.commandes.text() if page_cx else ""
+    chk("set_params" in texte_commandes and "start_mode" not in texte_commandes,
+        f"une connexion ne montre que SES commandes, pas celles de la précédente "
+        f"({texte_commandes!r})")
+    # Les widgets de la connexion d'avant sont DÉTRUITS (pas seulement cachés) : sans ça, chaque
+    # reconnexion empilerait des listes de modèles et des vues dans la page.
+    anciens_cx = [w for w in ((groupe_mi or (None,))[0], vue_ssvep[0], vue_p300[0]) if w]
+    app.sendPostedEvents(None, _QEvent_cx.Type.DeferredDelete)
+    chk(len(anciens_cx) == 3 and not any(_sb_cx.isValid(w) for w in anciens_cx),
+        f"les vues et la liste de modèles de la connexion précédente sont détruites "
+        f"({[_sb_cx.isValid(w) for w in anciens_cx]})")
+    groupe_retour = page_cx._choix.get("mi") if page_cx else None
+    radios_retour = groupe_retour[1] if groupe_retour else {}
+    a_cx, b_cx, c_cx = (f"C:/m/mi_model_{x}.joblib" for x in "abc")
+
+    def coche(chemin):
+        return radios_retour.get(chemin) is not None and radios_retour[chemin].isChecked()
+
+    chk(lectures_cx == ["mi"] and groupe_retour is not groupe_mi and c_cx in radios_retour
+        and coche(a_cx),
+        f"la même application reconnectée (même uid, autre `t`) : la liste des modèles est "
+        f"relue, avec le modèle neuf, et le modèle retenu est présélectionné ({lectures_cx})")
+    if radios_retour.get(b_cx) is not None:
+        radios_retour[b_cx].setChecked(True)          # la personne choisit b
+    cx.apply_state(etat_retour)
+    chk(coche(b_cx), "le choix de la personne tient d'un rafraîchissement à l'autre")
+    etat_suggere = {**etat_retour, "connexion": {
+        **retour_cx, "en_attente": {"mi": {"suggestion": "mi_model_c.joblib"}},
+        "suggestions": {"mi": "mi_model_c.joblib"}}}
+    cx.apply_state(etat_suggere)
+    chk(coche(c_cx), "une suggestion de l'application arrivée APRÈS la liste devient la "
+                     "présélection du mode qui attend")
+    if radios_retour.get(a_cx) is not None:
+        radios_retour[a_cx].setChecked(True)          # la personne préfère a
+    cx.apply_state(etat_suggere)
+    chk(coche(a_cx) and lectures_cx == ["mi"],
+        f"...une seule fois : la page ne reprend pas le choix de la personne à chaque "
+        f"rafraîchissement, et ne relit pas le disque ({lectures_cx})")
+    # Un nom illisible reste « illisible » une fois connecté : dans le titre et dans le bandeau.
+    cx.apply_state({**etat_suggere, "connexion": {**etat_suggere["connexion"], "nom": "",
+                                                  "illisible": True}})
+    illisible_cx = str(tr("console.connexion.illisible"))
+    chk(page_cx is not None and illisible_cx in page_cx.titre.text()
+        and illisible_cx in cx.banner.connexion_app.text(),
+        f"connectée, une application au nom illisible est dite telle, page et bandeau "
+        f"({page_cx.titre.text() if page_cx else ''!r})")
+
+    cliquer(page_cx.bouton_deconnecter if page_cx else None, "« Déconnecter »")
+    chk(moteur_cx.commandes[-1:] == [("deconnecter", {})] and cx.stack.currentWidget() is cx.grid,
+        "« Déconnecter » envoie la commande et ramène à l'accueil")
+    fin_cx = {"nom": "pont-esp32-1234", "raison": "deconnectee", "arretes": ["ssvep"],
+              "t": time.monotonic()}
+    cx.apply_state({**base_cx, "fin_connexion": fin_cx})
+    chk(cx.stack.currentWidget() is cx.grid
+        and "pont-esp32-1234" in cx.banner.connexion_app.text()
+        and cx.catalogue["ssvep"]["label"] in cx.banner.connexion_app.text(),
+        f"le bandeau dit la fin et ce qu'elle a arrêté ({cx.banner.connexion_app.text()!r})")
+    # La page de contrôle affichée SANS connexion, quelle que soit la fin : elle garde une sortie.
+    if page_cx is not None:
+        cx.stack.setCurrentWidget(page_cx)
+    cx.apply_state({**base_cx, "fin_connexion": fin_cx})
+    chk(page_cx is not None and page_cx.bouton_retour.isVisible()
+        and not page_cx.fin.isVisible() and not page_cx.bouton_deconnecter.isEnabled(),
+        "sans connexion, la page de contrôle garde « Retour à l'accueil », même après une "
+        "déconnexion (le texte orange est réservé au départ de l'application)")
+    cx.show_grid()
+
+    # Un mode à modèle qui TOURNE quand sa liste se construit : c'est le modèle EN USAGE qui est
+    # coché, pas la suggestion de l'application.
+    mi_a_cx = {**mi_cx, "params": {"model": a_cx}}
+    cx.apply_state({**connecte_cx,
+                    "connexion": {**connexion_cx, "regles": ["ssvep", "mi"],
+                                  "demarres": ["ssvep", "mi"],
+                                  "suggestions": {"mi": "mi_model_b.joblib"}},
+                    "modes_state": {"ssvep": ssvep_cx, "mi": mi_a_cx}})
+    groupe_fin = page_cx._choix.get("mi") if page_cx else None
+    cadre_fin = page_cx._vues.get("ssvep") if page_cx else None
+    chk(groupe_fin is not None and groupe_fin[1][a_cx].isChecked()
+        and not groupe_fin[1][b_cx].isChecked(),
+        "un mode qui tourne : son modèle en usage est coché, pas la suggestion")
+    titre_connecte = page_cx.titre.text() if page_cx else ""
+    libelle_ssvep = cx.catalogue["ssvep"]["label"]
+    en_marche = str(tr("console.controle.mode_titre", mode=libelle_ssvep,
+                       etat=tr("console.controle.etat.en_marche")))
+    arrete = str(tr("console.controle.mode_titre", mode=libelle_ssvep,
+                    etat=tr("console.controle.etat.arrete")))
+    reglages_connecte = page_cx.reglages.text() if page_cx else ""
+    # L'application part seule, juste après avoir arrêté le SSVEP (le dernier `stop_mode` du
+    # journal) : le moteur arrête ce qu'elle avait démarré, le casque tourne toujours (toutes
+    # les électrodes décollées, cette fois).
+    stop_cx = {**entree_cx, "t": t_cx + 2.0, "cmd": "stop_mode", "mode": "ssvep"}
+    cx.apply_state({**base_cx, "fin_connexion": {**fin_cx, "raison": "partie", "nom": "",
+                                                 "illisible": True},
+                    "pilotage": [entree_cx, stop_cx],
+                    "modes_state": {}, "quality": {**qualite_cx, "contact": [False] * 8}})
+    reglages_fini = page_cx.reglages.text() if page_cx else ""
+    commandes_fini = page_cx.commandes.text() if page_cx else ""
+    chk(en_marche in reglages_connecte and arrete in reglages_fini
+        and en_marche not in reglages_fini,
+        f"la connexion finie, les réglages restent peints avec l'état COURANT : le SSVEP arrêté "
+        f"dit « arrêté » ({reglages_connecte.splitlines()[:1]} -> "
+        f"{reglages_fini.splitlines()[:1]})")
+    chk("stop_mode" in commandes_fini and "start_mode" in commandes_fini,
+        f"...et le dernier `stop_mode` de l'application est dans ses commandes "
+        f"({commandes_fini!r})")
+    titre_fini = page_cx.titre.text() if page_cx else ""
+    chk("pont-esp32-1234" in titre_connecte and titre_fini != titre_connecte
+        and titre_fini == str(tr("console.controle.titre_fin")),
+        f"la connexion finie, le titre ne dit plus « Connectée à … » "
+        f"({titre_connecte!r} -> {titre_fini!r})")
+    chk(page_cx is not None and cx.stack.currentWidget() is page_cx and page_cx.fin.isVisible()
+        and cx.catalogue["ssvep"]["label"] in page_cx.fin.text()
+        and str(tr("console.connexion.illisible")) in page_cx.fin.text()
+        and page_cx.bouton_retour.isVisible() and not page_cx.bouton_deconnecter.isEnabled(),
+        "l'application part seule : la page reste et dit ce qui s'est arrêté")
+    chk(groupe_fin is not None and not groupe_fin[2].isVisible()
+        and not groupe_fin[2].isEnabled() and cadre_fin is not None
+        and not cadre_fin[0].isVisible() and page_cx.decodage_aucun.isVisible(),
+        "...et ne montre plus rien de vivant : ni « Relancer avec ce modèle », ni voyant « lu »")
+    chk(page_cx is not None and "Fz" in page_cx.contact.resume.text(),
+        f"...mais les électrodes restent peintes : le casque tourne toujours "
+        f"({page_cx.contact.resume.text() if page_cx else ''!r})")
+    cliquer(page_cx.bouton_retour if page_cx else None, "« Retour à l'accueil »")
+    chk(cx.stack.currentWidget() is cx.grid, "...« Retour à l'accueil » y ramène")
+    # Rouvrir la recherche la remet à neuf : ni la liste ni le refus d'avant.
+    if rech is not None:
+        rech.dire_refus("refus d'avant")
+    cliquer(bouton_cx, "« Connecter une application »")
+    chk(rech is not None and cx.stack.currentWidget() is rech and rech.liste.count() == 0
+        and not rech.refus.isVisible(),
+        "rouvrir la page de recherche la remet à neuf : liste vide, aucun refus d'avant")
+    cliquer(rech.bouton_retour if rech else None, "« ← Accueil » de la recherche")
+    chk(moteur_cx.commandes[-1:] == [("chercher_applications", {"on": False})]
+        and cx.stack.currentWidget() is cx.grid,
+        "quitter la page de recherche arrête la recherche")
+    cliquer(bouton_cx, "« Connecter une application »")
+    n_cx = len(moteur_cx.commandes)
+    cx.stack.setCurrentWidget(cx.grid)          # un autre chemin que « ← Accueil »
+    if page_cx is not None:
+        cx.stack.setCurrentWidget(page_cx)      # puis une autre page encore
+    cx.show_grid()
+    chk(moteur_cx.commandes[n_cx:] == [("chercher_applications", {"on": False})],
+        f"...par n'importe quel chemin, et une seule fois ({moteur_cx.commandes[n_cx:]})")
+    # Une connexion apparaît pendant la recherche : le moteur l'a déjà arrêtée, la console ne
+    # lui demande pas de l'arrêter (il refuserait, et le bandeau afficherait un refus pour rien).
+    cliquer(bouton_cx, "« Connecter une application »")
+    n_cx = len(moteur_cx.commandes)
+    cx.apply_state(connecte_cx)
+    chk(cx.stack.currentWidget() is page_cx and moteur_cx.commandes[n_cx:] == []
+        and not cx._recherche_active,
+        f"une connexion qui remplace la recherche ne fait envoyer aucun arrêt "
+        f"({moteur_cx.commandes[n_cx:]})")
+    cx.apply_state(base_cx)
+    cx.show_grid()
+
+    # --- La liste mêle les applications LSL de tout le réseau et les appareils réseau (UDP) ----
+    # Chaque ligne dit d'où vient l'application : « ce PC », le nom d'une autre machine, ou
+    # l'adresse IP d'un appareil. Deux appareils du même programme restent deux lignes : c'est
+    # ce qui permet de ne pas connecter celui du voisin.
+    from console.banner import AMBRE as _AMBRE_res
+    from console.banner import texte_arretes as _texte_arretes_res
+
+    class _PilotageCx:
+        hote = "Poste-Labo"         # le nom de ce PC, tel que le moteur le connaît
+
+    moteur_cx.pilotage = _PilotageCx()
+    cliquer(bouton_cx, "« Connecter une application »")
+    t_res = time.time()
+    loin_res = {"uid": "l-loin", "nom": "jeu-unity", "illisible": False, "depuis": t_res,
+                "origine": "lsl", "machine": "AUTRE-PC", "id": None}
+    ici_res = {"uid": "l-ici", "nom": "mon-script", "illisible": False, "depuis": t_res,
+               "origine": "lsl", "machine": "POSTE-LABO", "id": None}
+    led1_res = {"uid": "udp:192.168.1.23:5011", "nom": "JeuLed", "illisible": False,
+                "depuis": t_res, "origine": "udp", "machine": "192.168.1.23", "id": "AB:CD:01",
+                "adresse": "192.168.1.23:5011"}
+    led2_res = {**led1_res, "uid": "udp:192.168.1.24:5011", "machine": "192.168.1.24",
+                "id": "AB:CD:02", "adresse": "192.168.1.24:5011"}
+    reseau_res = {**base_cx, "udp": {"ouvert": True, "raison": None, "port": 5010},
+                  "applications": [loin_res, ici_res, led1_res, led2_res]}
+    cx.apply_state(reseau_res)
+    lignes_res = ([rech.liste.item(i).text() for i in range(rech.liste.count())]
+                  if rech is not None else [])
+    ce_pc_res = str(tr("console.connexion.ce_pc"))
+    chk(len(lignes_res) == 4 and "AUTRE-PC" in lignes_res[0] and ce_pc_res not in lignes_res[0]
+        and ce_pc_res in lignes_res[1] and "POSTE-LABO" not in lignes_res[1]
+        and all(_heure_cx(t_res) in ligne for ligne in lignes_res),
+        f"une application LSL dit sa machine, ou « {ce_pc_res} » quand c'est celle du moteur "
+        f"(casse ignorée), et depuis quand elle est vue ({lignes_res[:2]})")
+    chk(len(lignes_res) == 4 and lignes_res[2] != lignes_res[3]
+        and all(ip in ligne and ident in ligne for ligne, ip, ident in
+                ((lignes_res[2], "192.168.1.23", "AB:CD:01"),
+                 (lignes_res[3], "192.168.1.24", "AB:CD:02"))),
+        f"deux appareils réseau du même programme : deux lignes, chacune avec son adresse IP et "
+        f"son identifiant ({lignes_res[2:]})")
+    identifier_res = getattr(rech, "bouton_identifier", None)
+    if rech is not None:
+        rech.liste.setCurrentRow(0)
+    chk(identifier_res is not None and not identifier_res.isEnabled()
+        and rech.bouton_connecter.isEnabled(),
+        "une application LSL choisie : « Identifier » est grisé (seul un appareil réseau sait "
+        "se signaler), « Connecter » reste possible")
+    if rech is not None:
+        rech.liste.setCurrentRow(3)
+    n_res = len(moteur_cx.commandes)
+    cliquer(identifier_res, "« Identifier »")
+    chk(moteur_cx.commandes[n_res:] == [("identifier", {"uid": led2_res["uid"]})]
+        and cx.stack.currentWidget() is rech,
+        f"« Identifier » sur un appareil réseau envoie `identifier` avec l'uid de la ligne "
+        f"choisie, et seulement elle ; la page reste ouverte ({moteur_cx.commandes[n_res:]})")
+    moteur_cx.refus["identifier"] = "REFUS-IDENTIFIER"
+    cliquer(identifier_res, "« Identifier »")
+    del moteur_cx.refus["identifier"]
+    chk(rech is not None and rech.refus.isVisible() and "REFUS-IDENTIFIER" in rech.refus.text(),
+        "un « Identifier » refusé par le moteur : la page écrit le refus")
+    # Un « Identifier » accepté n'efface pas un refus de « Connecter » qui reste vrai.
+    if rech is not None:
+        rech.dire_refus("REFUS-CONNECTER")
+    cliquer(identifier_res, "« Identifier »")
+    chk(rech is not None and rech.refus.isVisible() and "REFUS-CONNECTER" in rech.refus.text(),
+        "un « Identifier » accepté laisse affiché le refus de « Connecter » du même appareil")
+    if rech is not None:
+        rech.dire_refus("")
+    # Une liste vide depuis 5 s : la page conseille de vérifier le réseau et le pare-feu. Une
+    # horloge posée à la main : le test n'attend pas 5 vraies secondes.
+    horloge_res = [100.0]
+    if rech is not None:
+        rech.horloge = lambda: horloge_res[0]
+        rech.vider()
+    vide_res = {**reseau_res, "applications": []}
+    cx.apply_state(vide_res)
+    pare_feu_res = getattr(rech, "pare_feu", None)
+    chk(pare_feu_res is not None and rech.vide.isVisible() and not pare_feu_res.isVisible(),
+        "liste vide depuis moins de 5 s : pas encore de conseil sur le pare-feu")
+    horloge_res[0] += 5.5
+    cx.apply_state(vide_res)
+    chk(pare_feu_res is not None and pare_feu_res.isVisible()
+        and pare_feu_res.text() == str(tr("console.connexion.pare_feu")),
+        f"liste vide depuis 5 s : la page dit de vérifier le réseau et le pare-feu de Windows "
+        f"({pare_feu_res.text() if pare_feu_res is not None else ''!r})")
+    cx.apply_state(reseau_res)
+    horloge_res[0] += 1.0
+    vu_res = pare_feu_res is not None and pare_feu_res.isVisible()
+    cx.apply_state(vide_res)
+    chk(pare_feu_res is not None and not vu_res and not pare_feu_res.isVisible(),
+        "une application apparaît : le conseil s'efface, et une liste revidée recompte ses 5 s")
+    # L'écoute UDP manque (le port est pris par une autre console) : une ligne orange le dit,
+    # et les applications LSL restent dans la liste.
+    raison_res = "Écoute réseau (UDP) indisponible : le port 5010 est déjà pris. " * 6
+    cx.apply_state({**reseau_res, "udp": {"ouvert": False, "raison": raison_res, "port": None}})
+    udp_res = getattr(rech, "udp", None)
+    chk(udp_res is not None and udp_res.isVisible() and udp_res.text() == raison_res
+        and _AMBRE_res in udp_res.styleSheet() and rech.liste.count() == 4,
+        "écoute UDP indisponible : une ligne orange donne la raison du moteur, la liste reste")
+    cx.apply_state(reseau_res)
+    chk(udp_res is not None and not udp_res.isVisible(),
+        "écoute UDP ouverte : pas de ligne orange")
+    # Des noms et des adresses très longs ne font pas élargir la fenêtre.
+    largeur_res = cx.minimumSizeHint().width()
+    page_res = rech.minimumSizeHint().width() if rech is not None else 0
+    long_res = {**led1_res, "uid": "udp:long", "nom": "Nom-tres-long-" * 20, "id": "I" * 120,
+                "machine": "fe80::1234:5678:9abc:def0" * 6, "adresse": "x"}
+    cx.apply_state({**reseau_res, "applications": [loin_res, long_res],
+                    "udp": {"ouvert": False, "raison": raison_res, "port": None}})
+    chk(rech is not None and cx.minimumSizeHint().width() == largeur_res
+        and rech.minimumSizeHint().width() == page_res,
+        f"un nom, un identifiant ou une adresse très longs n'élargissent ni la page ni la "
+        f"fenêtre ({page_res} -> {rech.minimumSizeHint().width() if rech else 0} px)")
+    # La page de contrôle dit d'où vient l'application connectée.
+    t_ctl = time.monotonic()
+    udp_ctl = {"uid": led2_res["uid"], "nom": "JeuLed", "illisible": False, "depuis": time.time(),
+               "t": t_ctl, "origine": "udp", "machine": "192.168.1.24", "id": "AB:CD:02",
+               "adresse": "192.168.1.24:5011", "branchee": True, "demarres": [], "regles": [],
+               "en_attente": {}, "suggestions": {}}
+    cx.apply_state({**reseau_res, "connexion": udp_ctl})
+    origine_ctl = getattr(page_cx, "origine", None)
+    texte_ctl = origine_ctl.text() if origine_ctl is not None else ""
+    chk(cx.stack.currentWidget() is page_cx and origine_ctl is not None
+        and origine_ctl.isVisible() and "192.168.1.24:5011" in texte_ctl
+        and "AB:CD:02" in texte_ctl,
+        f"connectée à un appareil réseau, la page de contrôle montre son adresse et son "
+        f"identifiant ({texte_ctl!r})")
+    lsl_ctl = {**udp_ctl, "uid": "l-loin", "origine": "lsl", "machine": "AUTRE-PC", "id": None,
+               "adresse": None, "t": t_ctl + 1.0}
+    cx.apply_state({**reseau_res, "connexion": lsl_ctl})
+    texte_loin = origine_ctl.text() if origine_ctl is not None else ""
+    cx.apply_state({**reseau_res, "connexion": {**lsl_ctl, "machine": "poste-labo",
+                                                "t": t_ctl + 2.0}})
+    texte_ici = origine_ctl.text() if origine_ctl is not None else ""
+    chk("AUTRE-PC" in texte_loin and ce_pc_res not in texte_loin and ce_pc_res in texte_ici,
+        f"...et pour une application LSL, sa machine ou « {ce_pc_res} » "
+        f"({texte_loin!r}, {texte_ici!r})")
+    # Les fins propres aux appareils réseau ont chacune leur texte, sur la page ET dans le
+    # bandeau ; aucune ne se dit comme un « Déconnecter » de la personne.
+    arretes_res = _texte_arretes_res(["ssvep"], lambda m: cx.catalogue[m]["label"])
+    attendus_res = {
+        "silence": str(tr("console.controle.fin.silence", nom="JeuLed", arretes=arretes_res)),
+        "bye": str(tr("console.controle.fin.bye", nom="JeuLed", arretes=arretes_res)),
+        "occupee": str(tr("console.controle.fin.occupee", nom="JeuLed", hote="PC-VOISIN",
+                          arretes=arretes_res)),
+        "ne_repond_pas": str(tr("console.controle.fin.ne_repond_pas", nom="JeuLed",
+                                arretes=arretes_res)),
+    }
+    deconnectee_res = str(tr("console.bandeau.connexion.deconnectee", nom="JeuLed",
+                             arretes=arretes_res))
+    for raison_fin, attendu_fin in attendus_res.items():
+        cx.apply_state({**reseau_res, "fin_connexion": {
+            "nom": "JeuLed", "illisible": False, "raison": raison_fin, "origine": "udp",
+            "hote": "PC-VOISIN" if raison_fin == "occupee" else None, "arretes": ["ssvep"],
+            "t": time.monotonic()}})
+        chk(page_cx is not None and cx.stack.currentWidget() is page_cx
+            and page_cx.fin.isVisible() and page_cx.fin.text() == attendu_fin
+            and cx.banner.connexion_app.text() == attendu_fin and attendu_fin != deconnectee_res
+            and origine_ctl is not None and not origine_ctl.isVisible(),
+            f"fin « {raison_fin} » : la page et le bandeau disent ce qui s'est passé, jamais un "
+            f"« Déconnecter » de la personne ({page_cx.fin.text() if page_cx else ''!r}, "
+            f"{cx.banner.connexion_app.text()!r})")
+    chk(len(set(attendus_res.values())) == 4 and "PC-VOISIN" in attendus_res["occupee"]
+        and not any("⟦" in t for t in attendus_res.values()),
+        f"...chaque fin a son propre texte, et « occupée » nomme le PC de l'autre console "
+        f"({attendus_res['occupee']!r})")
+    cx.apply_state(base_cx)
+    cx.show_grid()
+
+    class _InfoCx:
+        def __init__(self, nom):
+            self._nom = nom
+
+        def name(self):
+            return self._nom
+
+    gardes = [i.name() for i in _sans_flux_de_commandes(
+        [_InfoCx("EEG_API_Unicorn_control"), _InfoCx("EEG_API_Unicorn_status"),
+         _InfoCx("MonJeu_markers")])]
+    chk(gardes == ["EEG_API_Unicorn_status", "MonJeu_markers"],
+        f"la fenêtre des flux n'ouvre pas les flux de commandes ({gardes})")
+
+    # --- Le cadre « Décodage » de la page de contrôle garde sa taille --------------------------
+    # Toutes ses lignes sont là dès que le cadre apparaît, et seules leurs valeurs changent : rien
+    # ne saute quand le mode passe de la stabilisation au repos, puis au décodage. Les barres
+    # existent dès le départ, une par cible : leurs noms viennent de l'état du moteur (`noms`),
+    # leurs fréquences des réglages du SSVEP.
+    from PySide6.QtWidgets import QProgressBar as _QProgressBar_fx
+    page_fx = ControlePage(cx)
+    page_fx.resize(1100, 900)
+    page_fx.show()
+    aucune_fx = str(tr("pages.direct.cible_decodee", cible=tr("pages.direct.aucune")))
+    aucune_tache_fx = str(tr("pages.direct.tache_decodee", tache=tr("pages.direct.aucune")))
+
+    def _cadre_fx(mid, etats):
+        """Le cadre du mode `mid` sur la page de contrôle : construit par la page sur le PREMIER
+        état (le cadre n'existe que pour un mode qui tourne), puis repeint avec chacun des
+        suivants — None : la vue repeinte sans état. Rend, pour chaque état, la hauteur que le
+        cadre demande, le texte de la ligne « Cible décodée », le nombre de barres, et le texte
+        des lignes de la phase et du détail (`(phase, verdict)`)."""
+        ancien = page_fx._vues.pop(mid, None)
+        if ancien is not None:
+            ancien[0].hide()
+            ancien[0].deleteLater()
+        hauteurs, cibles, barres, lignes = [], [], [], []
+        for etat in etats:
+            if etat is None:
+                page_fx._vues[mid][2].update_from(None)
+            else:
+                page_fx._peindre_decodage([mid], {mid: etat}, {})
+            app.processEvents()
+            cadre, _titre, vue, *_reste = page_fx._vues[mid]
+            hauteurs.append(cadre.sizeHint().height())
+            ligne = getattr(vue, "cible", None)
+            cibles.append(ligne.text() if ligne is not None else None)
+            barres.append(len(cadre.findChildren(_QProgressBar_fx)))
+            phase = getattr(vue, "phase", None)
+            lignes.append((phase.text() if phase is not None else None, vue.verdict.text()))
+        return hauteurs, cibles, barres, lignes
+
+    def _etapes_fx(base, repos, sans_decision, decision):
+        """Stabilisation (le cadre apparaît), l'état vide, stabilisation, repos, une sortie sans
+        décision (-1), puis une décision."""
+        chauffe = {**base, "phase": "warmup", "instruction": str(tr("mode.repos.chauffe")),
+                   "output": None}
+        decode = {**base, "phase": "running", "instruction": "", "avant_decodage_s": None}
+        return [{**chauffe, "avant_decodage_s": 21.0}, None, {**chauffe, "avant_decodage_s": 12.0},
+                {**base, "phase": "rest", "instruction": repos, "avant_decodage_s": 5.0,
+                 "output": None},
+                {**decode, "output": sans_decision}, {**decode, "output": decision}]
+
+    base_ss_fx = {"id": "ssvep", "label": "SSVEP", "family": "actif", "published": True,
+                  "lu": True, "stream": "decoded_ssvep", "rest_report": None,
+                  "channels": ["target_index", "freq_hz", "confidence", "score_7.5Hz",
+                               "score_12Hz"],
+                  "params": {"freqs": [7.5, 12.0], "target_names": ["LEFT", "RIGHT"],
+                             "z_min": 2.5},
+                  "noms": ["LEFT", "RIGHT"]}
+    h_ss, c_ss, b_ss, l_ss = _cadre_fx("ssvep", _etapes_fx(
+        base_ss_fx, str(tr("mode.ssvep.repos")),
+        {"target_index": -1, "freq_hz": 0.0, "scores": [1.2, 0.4], "artifact": False,
+         "threshold": 2.5},
+        {"target_index": 0, "freq_hz": 7.5, "scores": [3.1, 0.4], "artifact": False,
+         "threshold": 2.5}))
+    chk(len(set(h_ss)) == 1,
+        f"SSVEP : le cadre « Décodage » de la page de contrôle garde la même hauteur de la "
+        f"stabilisation à la décision ({h_ss} px)")
+    chk(c_ss[:-1] == [aucune_fx] * (len(c_ss) - 1) and b_ss[0] == 2,
+        f"...la ligne « Cible décodée » est là dès le départ et dit « aucune » tant que rien "
+        f"n'est décidé, et les deux barres aussi ({c_ss[:-1]}, {b_ss[0]} barre(s))")
+    chk(c_ss[-1] is not None and "LEFT · 7,5 Hz" in c_ss[-1],
+        f"...puis le NOM de la cible décodée et sa fréquence ({c_ss[-1]!r})")
+    # La ligne du détail ne répète pas la cible décodée (« CIBLE 0 · 7,5 Hz ») : elle dit ce
+    # que l'autre ligne ne dit pas — la consigne, une fenêtre rejetée, « rien au-dessus du
+    # seuil » — et « — » sur une décision. La phase se lit « décodage », pas « décode ».
+    chk(l_ss[-1] == (str(tr("pages.direct.phase", phase="décodage")),
+                     str(tr("console.controle.vide")))
+        and l_ss[-2][1] == str(tr("pages.direct.ssvep.aucune_cible", seuil="2,5")),
+        f"...la ligne du dessous ne répète pas la cible (« — » sur une décision, « aucune cible "
+        f"(…) » sans décision), et la phase se lit « Phase : décodage » ({l_ss[-2:]})")
+    sans_noms_fx = {**base_ss_fx, "noms": None,
+                    "params": {"freqs": [7.5, 12.0], "z_min": 2.5}}
+    _h, c_sans, _b, _l = _cadre_fx("ssvep", [
+        {**sans_noms_fx, "phase": "running", "instruction": "", "avant_decodage_s": None,
+         "output": {"target_index": 1, "freq_hz": 12.0, "scores": [0.4, 3.1],
+                    "artifact": False, "threshold": 2.5}}])
+    chk(c_sans[-1] is not None and "cible 1 · 12 Hz" in c_sans[-1],
+        f"...ou, sans noms réglés, son numéro et sa fréquence ({c_sans[-1]!r})")
+    base_mi_fx = {"id": "mi", "label": "Motor Imagery", "family": "actif", "published": True,
+                  "lu": True, "stream": "decoded_mi", "rest_report": None,
+                  "channels": ["intent_index", "confidence", "p_0", "p_1"],
+                  "params": {"model": "C:/m/mi_model_b.joblib", "prob_min": 0.5,
+                             "min_votes": 3, "vote_len": 5},
+                  "noms": ["LEFT", "RIGHT"]}
+    sans_decision_mi_fx = {"intent_index": -1, "label": "", "confidence": 0.0,
+                           "probas": {"LEFT": 0.45, "RIGHT": 0.55}, "threshold": 0.5}
+    decision_mi_fx = {"intent_index": 1, "label": "RIGHT", "confidence": 0.81,
+                      "probas": {"LEFT": 0.2, "RIGHT": 0.8}, "threshold": 0.5}
+    h_mi, c_mi, b_mi, _l = _cadre_fx("mi", _etapes_fx(
+        base_mi_fx, str(tr("mode.repos.chauffe")), sans_decision_mi_fx, decision_mi_fx))
+    # Un vote de TÂCHES (la sortie porte `probas`, et son flux `intent_index` en voie 0) : la
+    # ligne dit « Tâche décodée », de la stabilisation à la décision, état vide compris.
+    chk(len(set(h_mi)) == 1 and c_mi[:-1] == [aucune_tache_fx] * (len(c_mi) - 1)
+        and b_mi[0] == 2,
+        f"Motor Imagery : même hauteur à chaque état, « Tâche décodée : aucune » puis la tâche, "
+        f"deux barres dès le départ ({h_mi} px, {c_mi[:-1]}, {b_mi[0]} barre(s))")
+    chk(c_mi[-1] == str(tr("pages.direct.tache_decodee", tache="RIGHT")),
+        f"...la tâche décodée s'affiche par son nom, sans fréquence ({c_mi[-1]!r})")
+    # Choisi sur la FORME de la sortie (ou de son flux, avant la première), jamais sur
+    # l'identifiant du mode : la même sortie sous un autre identifiant dit la même chose.
+    vue_id_fx = live_views.ActiveView(fixe=True)
+    vue_id_fx.update_from({**base_mi_fx, "id": "ssvep", "label": "SSVEP", "phase": "warmup",
+                           "instruction": "", "avant_decodage_s": 3.0, "output": None})
+    avant_id_fx = vue_id_fx.cible.text()
+    vue_id_fx.update_from({**base_mi_fx, "id": "ssvep", "label": "SSVEP", "phase": "running",
+                           "instruction": "", "avant_decodage_s": None,
+                           "output": decision_mi_fx})
+    chk(avant_id_fx == aucune_tache_fx
+        and vue_id_fx.cible.text() == str(tr("pages.direct.tache_decodee", tache="RIGHT")),
+        f"...lu sur la forme de la sortie et de son flux, pas sur l'identifiant du mode (sous "
+        f"l'identifiant « ssvep » : {avant_id_fx!r}, puis {vue_id_fx.cible.text()!r})")
+    vue_id_fx.deleteLater()
+    page_fx.hide()
+    cx.hide()
+
+    # La FIN : le smoke défait ce qu'il a construit, pendant que Qt et Python sont entiers.
+    # Laissées à la sortie de Python, ses six consoles et leurs ~250 fenêtres étaient détruites
+    # dans le désordre, et le processus finissait une fois sur deux sur un `abort()` de Qt (code
+    # 0xC0000409), après un VERDICT OK. D'abord ce que fait une console en se fermant (ses
+    # tracés pyqtgraph refermés : sans ça, détruire une console appelle `abort()` à coup sûr),
+    # puis chaque fenêtre détruite, une à une. Les consoles ne sont pas FERMÉES : `closeEvent`
+    # relancerait des gestes de séance. Et le vrai moteur du smoke retire ses flux LSL.
+    import gc as _gc_fin
+
+    import shiboken6 as _sb_fin
+    from PySide6.QtCore import QEvent as _QEvent_fin
+
+    moteur.retirer_flux()
+    moteur.close()
+    consoles = [f for f in app.topLevelWidgets() if isinstance(f, Console)]
+    for une in consoles:
+        une.fermer_graphiques()
+    for fenetre in consoles + app.topLevelWidgets():
+        if _sb_fin.isValid(fenetre):
+            fenetre.hide()
+            fenetre.deleteLater()
+            app.sendPostedEvents(None, _QEvent_fin.Type.DeferredDelete)
+    _gc_fin.collect()
+    print(f"[console-smoke] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _lancer_moteur(args, modes, synthetic, numero, secteur_hz):
+    """Construit le moteur et démarre SON fil. Rend `(engine, thread, issue)`.
+
+    `issue["raison"]` est rempli par le fil s'il meurt sur une exception — typiquement le casque
+    qui refuse de s'ouvrir (`prepare_session()`) : c'est cette raison que l'écran de départ
+    affichera en reposant la question. La trace complète part quand même au terminal.
+
+    `secteur_hz` : le secteur électrique du poste (cf. `ouvrir_session`), que le moteur coupe et
+    que chaque entraînement enregistre dans son modèle.
+    """
+    # Le moteur de la CONSOLE n'écoute une application qu'une fois choisie (« Connecter une
+    # application ») ; `server.py` seul écoute en permanence.
+    engine = EngineServer(serial=numero, synthetic=synthetic, verbose=args.verbose,
+                          modes=modes, instance=args.instance, secteur_hz=secteur_hz,
+                          ecoute="sur_demande")
+    issue = {}
+
+    def cible():
+        try:
+            engine.run(baseline_s=args.baseline, warmup_s=args.warmup)
+        except Exception as e:  # noqa: BLE001 - la raison est rendue à l'écran, la trace au terminal
+            issue["raison"] = str(e) or type(e).__name__
+            traceback.print_exc()
+
+    # Le moteur tourne dans SON fil et possède seul la session BrainFlow. Le fil Qt ne fait que
+    # lire `snapshot()` et poser des commandes en file.
+    thread = threading.Thread(target=cible, daemon=True)
+    thread.start()
+    return engine, thread, issue
+
+
+def ouvrir_session(args, modes, lancer=_lancer_moteur, choisir=choisir_source,
+                   attendre=attendre_ouverture, memoire=None):
+    """Demande la source, ouvre le casque, et REPOSE la question tant qu'il refuse de s'ouvrir.
+
+    Rend `(engine, thread)` quand le casque (ou le board de test) est ouvert, ou None si
+    l'utilisateur ferme le dialogue ou abandonne l'attente. On attend l'ouverture AVANT
+    d'afficher la console : un casque éteint tue le fil du moteur, et une console affichée quand
+    même resterait figée, avec pour seule issue de la fermer et la relancer.
+
+    ⚠️ Aucun repli. Après un échec, la question est reposée avec la raison, et la source reste
+    celle que l'étudiant avait choisie (cf. `console/demarrage.py`) : jamais le board de test à
+    sa place. Les dépendances s'injectent pour que le smoke rejoue un échec sans casque.
+
+    Le SECTEUR électrique : celui que le dialogue vient d'écrire dans `memoire` en
+    validant. `--secteur` le présélectionne dans le dialogue, et quand `--synthetic` saute le
+    dialogue, il l'emporte sur la mémoire — sans y être écrit : un drapeau de développeur ne
+    change pas le réglage du poste pour l'étudiant suivant.
+    """
+    memoire = memoire if memoire is not None else Memoire()
+    source = SYNTHETIQUE if args.synthetic else None
+    numero = args.serial
+    secteur = None if args.secteur is None else float(args.secteur)
+    erreur = ""
+    while True:
+        # `--synthetic` reste accepté et SAUTE le dialogue : c'est le raccourci du développeur et
+        # des smokes, pas le chemin normal. Mais un ÉCHEC repose la question, même alors.
+        if source is None or erreur:
+            choix = choisir(defaut=source or UNICORN, numero=numero, erreur=erreur,
+                            memoire=memoire, secteur=secteur)
+            if choix is None:
+                print("[console] aucune source choisie — la console ne démarre pas.")
+                return None
+            source, numero = choix
+            secteur = memoire.secteur()     # écrit par le dialogue, à la validation
+        if secteur is None:
+            secteur = memoire.secteur()     # `--synthetic` sans `--secteur`
+        synthetic = source == SYNTHETIQUE
+        # `EngineServer` valide les modes demandés dans son constructeur et lève un `ValueError`
+        # déjà rédigé pour être lu (cf. core/server.py) — sans modèle MI entraîné, par exemple,
+        # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Il ne dépend PAS
+        # du casque : le reposer ne servirait à rien, on le laisse remonter à `run()`.
+        engine, thread, issue = lancer(args, modes, synthetic, numero, secteur)
+        texte = (tr("console.demarrage.attente_test") if synthetic
+                 else tr("console.demarrage.attente_casque", numero=numero))
+        etat = attendre(engine, thread.is_alive, texte)
+        if etat == "ouvert":
+            if not synthetic:
+                memoire.retenir(numero)     # seulement APRÈS une ouverture réussie
+            return engine, thread
+        # Un moteur mort (ou abandonné) libère ce qu'il a créé AVANT qu'un autre ne soit
+        # construit : ses deux flux LSL portent les mêmes noms que ceux du suivant.
+        engine.stop()
+        thread.join(timeout=5.0)
+        engine.close()
+        # Ses flux sont RETIRÉS du réseau, pas laissés au ramasse-miettes : une référence
+        # oubliée les garderait annoncés, muets, sous les noms du moteur suivant (vu au casque le
+        # 2026-10-21 : une minuterie Qt retenait l'ancien moteur, cf. `attendre_ouverture`).
+        if not thread.is_alive():
+            engine.retirer_flux()
+        del engine
+        if etat == "abandon":
+            print("[console] ouverture abandonnée — la console ne démarre pas.")
+            return None
+        raison = issue.get("raison") or "?"
+        erreur = (tr("console.demarrage.echec_test", raison=raison) if synthetic
+                  else tr("console.demarrage.echec", numero=numero, raison=raison))
+
+
+def poser_icone(app):
+    """Pose l'icône de l'application (fenêtres, barre des tâches). Rend l'icône posée.
+
+    Un fichier absent ne vaut pas un plantage : l'icône est vide et la console s'ouvre quand même.
+    """
+    from PySide6.QtGui import QIcon
+    chemin = config.chemin_ressource("assets", "logo", "eeg-api-unicorn.ico")
+    icone = QIcon(chemin) if os.path.exists(chemin) else QIcon()
+    app.setWindowIcon(icone)
+    return icone
+
+
+def run(args):
+    modes = [m.strip() for m in (args.mode or "").split(",") if m.strip()]
+    if not args.no_raw:
+        modes.insert(0, "raw")
+    # `EngineServer` valide les modes demandés dans son constructeur et lève un `ValueError`
+    # déjà rédigé pour être lu (cf. core/server.py) — sans modèle MI entraîné, par exemple,
+    # c'est le refus normal d'un poste fraîchement cloné, pas un plantage. Un traceback autour
+    # n'ajouterait rien et enterrait ce message sous la pile : on l'attrape ici, comme le fait
+    # déjà `core/server.py` pour le même appel lancé sans interface.
+    # `QApplication` AVANT le moteur : le choix de la source est une question posée à l'écran,
+    # pas un drapeau tapé. Il faut donc une application Qt vivante avant que quoi que ce soit
+    # n'ouvre le casque.
+    app = QApplication([])
+    poser_icone(app)
+    # La langue retenue sur ce poste, AVANT le premier écran (le choix de la source) : sinon il
+    # s'afficherait dans la langue du dépôt, puis la console dans une autre.
+    appliquer_langue(Memoire().langue())
+
+    try:
+        ouverte = ouvrir_session(args, modes)
+    except ValueError as refus:
+        print(f"[console] {refus}")
+        sys.exit(2)
+    if ouverte is None:
+        sys.exit(0)
+    engine, thread = ouverte
+
+    try:
+        # `thread.is_alive` est PASSÉ à la console : c'est le seul endroit d'où l'on peut savoir
+        # que la boucle a rendu l'âme. `prepare_session()` vit dans ce fil, hors de son `try` : un
+        # casque qui refuse de s'ouvrir le tue, et sans ce prédicat l'interface annoncerait un
+        # moteur qui n'existe plus (cf. `Console._moteur_mort`).
+        console = Console(engine, moteur_vivant=thread.is_alive)
+        console.show()
+        app.exec()
+    finally:
+        # Ctrl+C ou fermeture de la fenêtre doivent fermer PROPREMENT la session BrainFlow :
+        # une session laissée ouverte empêche la suivante de s'ouvrir (BOARD_NOT_READY).
+        engine.stop()
+        thread.join(timeout=5.0)
+        # `close()` APRÈS le `join`, jamais avant : c'est le seul instant où plus personne ne
+        # peut recréer le dossier des candidats. Idempotente, donc un `close()` déjà fait
+        # ailleurs ne coûte rien.
+        engine.close()
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    sys.exit(0 if _smoke() else 1) if _ARGS.smoke else run(_ARGS)

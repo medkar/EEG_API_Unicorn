@@ -1,0 +1,3 @@
+# Normalisation des fins de ligne : LF dans le dépôt, adapté à l'OS à la sortie.
+# Repo destiné à être cloné sous Windows / macOS / Linux (étudiants).
+* text=auto

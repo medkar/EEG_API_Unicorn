@@ -1,0 +1,111 @@
+"""Les tops de la console : les deux latéralisés du Motor Imagery, plus le top neutre.
+
+Le son est de la PRÉSENTATION, pas du protocole. Si l'audio manque — machine sans carte son,
+session distante, pilote absent — la séance se déroule quand même, et la page le DIT. Un top
+silencieux qui ne s'annonce pas ferait croire à l'étudiant qu'il a raté le départ.
+
+Pourquoi latéraliser : le côté est porté par l'oreille (gauche/droite). L'étudiant n'a donc rien à
+LIRE au moment où il doit commencer à imaginer un poing — lire déplace le regard et contamine la
+fenêtre enregistrée.
+
+`TOP_ETAPE`, court et centré, dit « change d'étape MAINTENANT » : celui d'une MESURE
+(`console/mesure_page.py`), et celui de toute tâche du MI qui n'est pas un poing (pieds, mains, un
+repos…). Le contrôle alpha en dépend entièrement — la moitié de sa mesure se passe les yeux fermés,
+où l'écran ne sert plus à rien.
+"""
+
+import os
+import sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.i18n import tr  # noqa: E402
+
+FREQ_HZ = 880.0
+SR = 44100
+DUREE_COTE_S = 0.18
+
+# La clé du top neutre, EXPORTÉE : `mesure_page.py` l'importe au lieu d'écrire "TOP" chez lui.
+# Une chaîne écrite des deux côtés se serait tue en silence le jour d'un renommage — `jouer()` ne
+# lève pas sur une clé inconnue, par conception, donc rien n'aurait signalé la panne.
+TOP_ETAPE = "TOP"
+
+# Les sons que ce module sait jouer, par NOM. Un nom de classe du MI a son propre son, latéralisé
+# (oreille gauche = poing gauche) ; tout autre nom d'étape n'en a pas et reçoit le top neutre.
+# Déclaré au niveau du module, et non dans le constructeur : `connait()` doit répondre même sur une
+# machine SANS son, sinon une page choisirait un autre top selon qu'une carte audio est branchée.
+SONS = {
+    "LEFT": (True, False, DUREE_COTE_S),
+    "RIGHT": (False, True, DUREE_COTE_S),
+    TOP_ETAPE: (True, True, DUREE_COTE_S),
+}
+
+
+def connait(nom):
+    """Ce module a-t-il un son PROPRE à ce nom (autre que le top neutre) ?"""
+    return nom in SONS and nom != TOP_ETAPE
+
+
+def _onde(gauche, droite, duree):
+    """Un top stéréo entrelacé, en int16. Fondu de 10 ms aux deux bouts (anti-clic)."""
+    t = np.linspace(0, duree, int(SR * duree), endpoint=False)
+    enveloppe = np.clip(np.minimum(t / 0.01, (duree - t) / 0.01), 0, 1)
+    ton = (0.35 * np.sin(2 * np.pi * FREQ_HZ * t) * enveloppe * 32767).astype(np.int16)
+    stereo = np.zeros((len(ton), 2), dtype=np.int16)
+    if gauche:
+        stereo[:, 0] = ton
+    if droite:
+        stereo[:, 1] = ton
+    return stereo.tobytes()
+
+
+class Beeps:
+    """Les tops. `disponible` dit franchement si le son sortira."""
+
+    def __init__(self):
+        self.disponible = False
+        self.raison = ""
+        self._sinks = {}
+        self._données = {}
+        try:
+            from PySide6.QtCore import QBuffer, QByteArray
+            from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
+
+            sortie = QMediaDevices.defaultAudioOutput()
+            if sortie is None or sortie.isNull():
+                # Affichée par les pages DANS « Pas de son sur cette machine (…) » : elle ne
+                # répète donc pas « sur cette machine ».
+                self.raison = tr("pages.son.aucune_sortie")
+                return
+            fmt = QAudioFormat()
+            fmt.setSampleRate(SR)
+            fmt.setChannelCount(2)
+            fmt.setSampleFormat(QAudioFormat.Int16)
+            for cle, (g, d, duree) in SONS.items():
+                octets = QByteArray(_onde(g, d, duree))
+                tampon = QBuffer()
+                tampon.setData(octets)
+                self._données[cle] = tampon
+                self._sinks[cle] = QAudioSink(sortie, fmt)
+            self.disponible = True
+        except Exception as e:  # noqa: BLE001 - l'audio casse de mille façons, toutes équivalentes
+            self.raison = f"{type(e).__name__} : {e}"
+
+    def jouer(self, classe):
+        """Joue le top de cette classe. Ne lève jamais : un son raté n'arrête pas une séance."""
+        if not self.disponible:
+            return
+        try:
+            from PySide6.QtCore import QIODevice
+
+            sink, tampon = self._sinks.get(classe), self._données.get(classe)
+            if sink is None or tampon is None:
+                return
+            sink.stop()
+            tampon.close()
+            tampon.open(QIODevice.ReadOnly)
+            tampon.seek(0)
+            sink.start(tampon)
+        except Exception:  # noqa: BLE001
+            pass

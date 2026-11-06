@@ -1,0 +1,11 @@
+{
+  "app_name": "my-app",
+  "mode": "ssvep",
+  "params": {
+    "targets_on": "screen",
+    "target_names": ["left", "right", "up"]
+  },
+  "propose_refresh_hz": 60,
+  "stop_mode_on_exit": true,
+  "search_timeout_s": 30
+}

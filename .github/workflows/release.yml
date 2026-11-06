@@ -1,0 +1,221 @@
+# Construit l'installeur Windows d'une version et prépare sa Release, en BROUILLON.
+#
+# ⚠️ CE FICHIER TOURNE DANS LE DÉPÔT PUBLIC (github.com/medkar/EEG_API_Unicorn), où les machines
+# de GitHub Actions sont gratuites. Il est pourtant écrit dans le dépôt de développement, et arrive
+# ici avec le reste du logiciel : à chaque version, le dépôt public est vidé puis recopié. Un
+# changement fait à la main ici disparaîtrait donc à la publication suivante.
+#
+# Déclencheur : le tag `vX.Y.Z` d'une version. On peut aussi lancer le workflow à la main (onglet
+# Actions, « Run workflow », ou `gh workflow run release.yml --ref <branche ou tag>`). Lancé sur
+# une BRANCHE, il construit l'installeur et le garde comme artefact, sans Release : pratique pour
+# essayer une modification de la construction. Lancé sur un TAG (`--ref vX.Y.Z`), il prépare aussi
+# la Release en brouillon, comme un tag poussé : le job « release » ne regarde que `github.ref`.
+#
+# Windows seulement : le casque passe par le pilote Windows de g.tec, et l'installeur est un
+# installeur Windows.
+#
+# Chaque action d'un tiers (`uses:`) est épinglée par l'identifiant COMPLET d'un commit, sa
+# version en commentaire : une étiquette comme `v4` peut être déplacée par son auteur, et le
+# workflow exécuterait alors un code que personne n'a relu ; un identifiant de commit, non.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Par défaut, chaque job ne peut que LIRE le dépôt. Seul le job « release », qui crée la
+# Release, reçoit le droit d'écrire (plus bas).
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  # Sur la machine de GitHub, la sortie d'un programme part dans un tuyau, pas dans un terminal :
+  # Python l'encoderait alors en cp1252, et le premier « ⚠️ » imprimé ferait échouer l'étape.
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  build:
+    # Le dépôt de développement porte le même fichier : cette condition l'y rend inerte. Deux
+    # tests plutôt qu'un : le NOM du dépôt, et un dépôt PUBLIC (le dépôt de développement est
+    # privé, et il a porté ce nom avant d'être renommé).
+    if: github.repository == 'medkar/EEG_API_Unicorn' && !github.event.repository.private
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # `persist-credentials: false` : le jeton d'accès au dépôt n'est pas laissé dans
+      # `.git/config`, où n'importe quelle étape suivante (pip, PyInstaller…) pourrait le lire.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            build/contraintes.txt
+
+      # Les bibliothèques aux versions EXACTES de `build/contraintes.txt`, celles de
+      # l'environnement où les tests ont tourné : l'installeur embarque ce qui a été essayé, pas
+      # ce que PyPI propose le jour du tag (`requirements.txt` ne dit que des minimums).
+      # PyInstaller à une version FIXE : une autre version peut produire un autre programme.
+      - name: Dépendances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -c build/contraintes.txt pyinstaller==6.22.3
+
+      # --- Contrôles rapides, BLOQUANTS : un échec arrête la construction. ----------------------
+      # Chaque texte affiché existe dans les deux langues, avec les mêmes valeurs à insérer.
+      - name: Textes affichés
+        run: python src/core/i18n.py
+
+      # Chaque bloc de code du guide d'intégration (ses sources Markdown) est celui du fichier
+      # qu'il montre. Les PDF, eux, ne sont ni reconstruits ni comparés ici (il faudrait pandoc et
+      # typst) : ils se fabriquent sur un poste (`python outils/construire_guide.py`) et arrivent
+      # commités avec leur source.
+      - name: Guide d'intégration
+        run: python outils/construire_guide.py --verifier
+
+      # L'icône du programme correspond à ses dessins.
+      - name: Icône
+        run: python outils/generer_icone.py --verifier
+
+      # --- L'autotest du moteur, NON bloquant. --------------------------------------------------
+      # Il publie et lit de vrais flux LSL sur la machine : rien ne garantit que le réseau d'une
+      # machine de GitHub le permette. Son résultat se lit dans le journal ; il ne décide pas de
+      # la construction. Sur un poste, il passe : c'est là qu'il fait foi.
+      - name: Autotest du moteur (non bloquant)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: python src/core/server.py --smoke
+
+      # La version affichée par le programme est celle de `src/core/version.py`. Elle doit être
+      # celle du TAG : un binaire ne doit jamais dire une autre version que celle sous laquelle il
+      # est publié. Si les deux diffèrent, la construction ÉCHOUE, et le fichier n'est pas
+      # réécrit : c'est le tag qui est faux, il se corrige à la source.
+      - name: Version = tag
+        shell: python
+        run: |
+          import os, pathlib, re, sys
+          chemin = pathlib.Path("src/core/version.py")
+          lignes = re.findall(r'^VERSION = "(.*)"$', chemin.read_text(encoding="utf-8"),
+                              re.MULTILINE)
+          if len(lignes) != 1:
+              sys.exit(f"{chemin} doit avoir exactement UNE ligne VERSION = \"X.Y.Z\" "
+                       f"(trouvé : {len(lignes)})")
+          version = lignes[0]
+          if os.environ.get("GITHUB_REF_TYPE") != "tag":
+              print(f"pas un tag : la version des sources, {version}")
+              sys.exit(0)
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag != f"v{version}":
+              sys.exit(f"le tag {tag!r} ne correspond pas à {chemin}, qui dit {version!r} : "
+                       "construction arrêtée")
+          print(f"tag {tag} = version des sources")
+
+      # Inno Setup à une version FIXE, vérifiée après l'installation. 6.7.1 est la plus récente
+      # que propose Chocolatey au moment d'écrire ces lignes. `upgrade` installe s'il manque, et
+      # remplace une autre version déjà présente sur la machine.
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $voulue = "6.7.1"
+          choco upgrade innosetup --version $voulue --allow-downgrade -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco n'a pas installé Inno Setup $voulue (code $LASTEXITCODE)" }
+          $cles = @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*")
+          $vues = @(Get-ItemProperty $cles -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -like "Inno Setup*" } |
+                    ForEach-Object { $_.DisplayVersion })
+          if ($vues -notcontains $voulue) { throw "Inno Setup $voulue attendu, trouvé : $($vues -join ', ')" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup introuvable après son installation ($iscc)" }
+          Write-Host "Inno Setup $voulue : $iscc"
+
+      # Le même script que sur un poste : PyInstaller, vérification du programme construit
+      # (modules, DLL, un petit modèle de chaque sorte), puis Inno Setup. Sans `.venv`, il prend le
+      # Python de la machine, celui où les dépendances viennent d'être installées.
+      - name: Construire l'installeur
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File build\construire_installeur.ps1
+          exit $LASTEXITCODE
+
+      # L'installeur, et `sources-lgpl.md` : la version et l'adresse du code source de chaque
+      # composant sous LGPL de l'installeur (Qt, PySide6, FFmpeg, pygame), que le script de
+      # construction écrit d'après le programme construit (`build/licences_tierces.py`). Le job
+      # « release » le met dans les notes de la Release.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: installeur-windows
+          path: |
+            build/sortie/*.exe
+            build/sortie/sources-lgpl.md
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: >-
+      github.repository == 'medkar/EEG_API_Unicorn' && !github.event.repository.private
+      && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Le SEUL job qui écrit dans le dépôt : il crée la Release et y attache l'installeur.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: installeur-windows
+          path: artefacts
+
+      # `gh` (déjà installé sur les machines de GitHub) plutôt qu'une action d'un tiers : créer
+      # une Release demande le droit d'écrire dans le dépôt, et le confier à du code tiers, sur
+      # un dépôt public, c'est dépendre d'un code qu'on ne vérifie pas.
+      - name: Release (brouillon)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Ce job ne récupère pas le dépôt (seulement l'artefact) : sans GH_REPO, `gh` ne saurait
+          # pas sur quel dépôt créer la Release.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<'FIN'
+          ### Install (64-bit Windows)
+
+          1. Download `EEG-API-Unicorn-Setup-<version>.exe` below and run it. No Python needed.
+          2. The installer is **not signed**: Windows SmartScreen shows a warning the first time.
+             Click **More info**, then **Run anyway**.
+          3. Choose **Install for all users** if you can: the installer then adds a Windows
+             firewall rule, which applications on other computers and network devices need to
+             reach the console. Installed for you only, Windows asks the first time the console
+             listens to the network: allow it, public networks included.
+
+          Pair the Unicorn headset with Windows (Bluetooth) before the first launch, or open the
+          session on the test board to try everything without a headset.
+
+          Your trained models and recorded session verdicts are kept in
+          `Documents\EEG API Unicorn\`. Uninstalling or updating the application never deletes
+          them.
+
+          **Windows only.** The integration guide, the clients and the network contract are in
+          the repository: start with the README.
+
+          EEG API Unicorn is released under the MIT License.
+
+          FIN
+          # Les sources des composants sous LGPL, écrites par la construction : la LGPL admet que
+          # ce code soit sur le serveur d'un tiers si l'adresse accompagne l'installeur. Sans ce
+          # bloc, pas de Release.
+          if [ ! -s artefacts/sources-lgpl.md ]; then
+            echo "artefacts/sources-lgpl.md manque : la Release n'est pas créée" >&2
+            exit 1
+          fi
+          cat artefacts/sources-lgpl.md >> notes.md
+          ls -la artefacts
+          # --draft : rien n'est visible tant qu'un humain n'a pas relu et publié la Release.
+          gh release create "$TAG" --draft --title "$TAG" --notes-file notes.md artefacts/*.exe

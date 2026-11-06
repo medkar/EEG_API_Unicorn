@@ -1,0 +1,2421 @@
+"""Le stimulus c-VEP, en programme AUTONOME qui publie l'HORLOGE du code.
+
+⚠️ **Ce programme n'ouvre PAS le casque.** C'est ce qui permet de le lancer EN MÊME TEMPS que le
+moteur, dans deux terminaux — le même montage que pour le P300 et l'ErrP :
+
+    python src/core/server.py --mode cvep          # terminal 1 : acquiert et décode (EXIGE un
+                                                    # modèle entraîné : console, page c-VEP, « Entraîner »)
+    python src/stimulus/cvep.py           # terminal 2 : fait clignoter et marque
+
+C'est aussi l'exemple de référence pour qui voudra émettre depuis Unity : le protocole est ici,
+et surtout l'endroit exact où prendre l'horodatage.
+
+Protocole publié (figé) — UNE SEULE forme de marqueur, sur le flux
+`MARKER_STREAM_DEFAULT` (core/config.py), type "Markers", 1 voie "string", cadence irrégulière :
+
+    {"mode": "cvep", "event": "cycle", "refresh": 60.0, "targets": 6}   # le code repart à 0
+
+`targets` : le nombre de cibles affichées (`--cibles`), facultatif pour une application. Le moteur
+refuse un marqueur qui en annonce un autre que son modèle : il décoderait des cibles absentes.
+
+⚠️ **Ce marqueur ne délimite AUCUNE époque — il tient une HORLOGE**, et c'est toute la différence
+avec `p300_stimulus.py` et `errp_stimulus.py`. Là-bas un marqueur dit « un événement a eu lieu,
+découpe autour » ; ici il dit « à cet instant, le code affiché était à sa frame 0 ». Le moteur
+décode ensuite en CONTINU sur une fenêtre glissante et reconstruit, à tout instant, la position du
+code à partir de ce marqueur : c'est la **phase** (`core/modes/cvep.py:phase_a`). Sans elle, il ne
+décode rien du tout — il ne sait pas contre quoi corréler.
+
+⚠️ **La panne caractéristique de ce mode NE CASSE RIEN, et c'est pour ça que ce fichier existe.**
+Une erreur de phase de quelques frames ne lève aucune exception : les corrélations baissent, le
+moteur continue de publier, ses scores restent d'apparence honnête, et la détection se contente de
+ne presque jamais se déclencher. À l'écran c'est **indiscernable d'un étudiant qui ne fixe pas sa
+cible**. Deux gestes la produisent, et ils sont à une ligne l'un de l'autre :
+
+    1. horodater AVANT `pygame.display.flip()` au lieu d'après (une frame d'avance) ;
+    2. annoncer un `refresh` que l'écran ne tient pas (le moteur extrapole à la mauvaise vitesse).
+
+Le premier est le geste critique, identique aux deux autres émetteurs :
+
+    pygame.display.flip()
+    # L'HORODATAGE SE PREND ICI, juste après que la frame est À L'ÉCRAN. Le prendre avant décale
+    # TOUTES les phases d'une frame, et le décodeur cherche alors le code à un endroit où il n'est
+    # pas — sans qu'aucune exception ne le signale.
+    if frame % len(code) == 0:
+        outlet.push_sample([json.dumps({"mode": "cvep", "event": "cycle",
+                                        "refresh": refresh, "targets": len(plan)})],
+                           local_clock())
+
+C'est LA raison d'être de ce fichier, donc ce que `--smoke` vérifie le plus durement — mais **pas
+comme `errp_stimulus.py`, et la différence vaut d'être lue avant de recopier son test.** Là-bas,
+l'assertion qui mord est « le flip qui précède le marqueur est celui qui a CHANGÉ l'écran » : elle
+marche parce qu'entre deux feedbacks la piste est IMMOBILE, donc remonter le `push_sample`
+au-dessus du `flip` le fait tomber sur une frame identique à la précédente. Ici l'écran change à
+CHAQUE frame (c'est le clignotement), donc ce critère-là serait VERT quoi qu'on fasse — un test
+creux. Le critère c-VEP est plus exigeant : le flip qui précède le marqueur doit être celui qui a
+affiché la **frame 0 du code**, ni la 62 ni la 1. `--smoke` le lit dans les PIXELS de l'écran (voir
+`_smoke`, section « l'alignement »), pas dans le compteur de l'émetteur, qui ne peut que se donner
+raison : il échantillonne l'état ON/OFF des six disques et le compare au code attendu, en exigeant
+ZÉRO image d'écart (une tolérance de ±1 laisserait passer un décalage systématique d'une frame,
+c'est-à-dire la panne). Inverser les deux lignes ci-dessus le fait rougir.
+
+⚠️ **Ce que ce fichier NE fait pas comme `errp_stimulus.py` non plus : il ne s'arrête pas pendant
+la chauffe du moteur.** L'ErrP tient un écran statique pendant que le moteur chauffe, parce que
+`errp._jeter_marqueurs_de_chauffe` JETTE tout ce qui arrive alors — les pas joués pendant ce
+temps seraient perdus. Le c-VEP fait l'INVERSE, et c'est écrit dans `CVEPRuntime.tick` : il
+ENCAISSE les marqueurs de chauffe, « une horloge n'a pas besoin d'être bonne pour être à l'heure ».
+Les lui donner règle deux choses — le curseur de marqueurs du moteur avance (sinon la douzaine de
+marqueurs déjà sortis de son tampon compte en `marqueurs_perdus`, une alarme fausse à chaque
+démarrage), et sa première fenêtre décodée l'est avec une phase FRAÎCHE. Le clignotement démarre
+donc tout de suite ; seul le décompte de `--seconds` attend, et un bandeau dit que le décodage n'a
+pas encore commencé. La durée est LUE dans `core/modes/cvep.py` (`SPEC.rest`), pas devinée :
+`warmup_s = SSVEP_WARMUP_S` (15 s) et `duration_s = 0.0` — le c-VEP ne mesure aucun plancher de
+repos, il corrèle contre un template appris.
+
+⚠️ **La CIBLE CONSIGNÉE (le cercle autour d'un disque) n'est pas de la décoration, et elle ne part
+JAMAIS sur le réseau.** Une séance c-VEP sans vérité-terrain ne se dépouille pas : le moteur publie
+un indice de cible, et sans savoir laquelle était fixée on ne peut rien en conclure — ni justesse,
+ni ITR, rien qui ne soit du bruit. La consigne est donc AFFICHÉE (l'utilisateur sait quoi fixer) et
+IMPRIMÉE au terminal avec son horodatage LSL exact (`t=…`), comme `errp_stimulus.py` imprime ses
+pas : il suffit à raccrocher chaque ligne à l'échantillon `decoded_cvep` correspondant. Le marqueur,
+lui, ne porte que `{mode, event, refresh}` — rien d'autre, le moteur n'en lit pas plus. `--seed`
+rejoue la même SÉQUENCE de consignes (sa LONGUEUR, elle, peut différer d'une consigne quand la
+séance est bornée en secondes : cf. le ⚠️ de `poll`), et la graine est IMPRIMÉE même quand on ne la
+donne pas : une séance casque ne se répète pas, donc une séance qu'on ne peut pas rejouer ne se
+dépouille pas deux fois. Le cercle suit la règle du P300 (`rayon_cercle`) : `p300.CUE_MARGE_PX` au-delà du
+bord du disque, trait vers l'intérieur — il ne touche aucun pixel du disque ni de son contour.
+
+⚠️ **`--log CHEMIN` écrit cette vérité-terrain dans un FICHIER, et sans lui la séance 2.9 n'est pas
+dépouillable.** Le terminal ne suffit pas : c'est le seul exemplaire de la consigne, un `Ctrl+C`
+malheureux ou un tampon de console dépassé l'efface, et une séance casque ne se répète pas. Le
+format est du **JSONL** — une ligne JSON par événement, écrite puis vidée (`flush`) tout de suite —
+pour que le fichier reste complet jusqu'à la dernière ligne même si le programme est tué. Trois
+genres de ligne, et rien d'autre :
+
+    {"kind":"header","t":…,"seed":…,"refresh":60.0,"code_len":63,"cibles":[…], …}
+    {"kind":"consigne","t":…,"compter_a_partir_de":…,"cible":2,"nom":"AR-DROITE","cycle":9,"frame":504}
+    {"kind":"bilan","cycles":286,"frames":18018,"sautees":3,"cadence_s":1.0501, …}
+
+⚠️ **`t` et `compter_a_partir_de` sont des `local_clock()`** : EXACTEMENT le domaine des horodatages
+que porte `decoded_cvep`, et que `examples/receiver.py` imprime en tête de chaque ligne (`t=…`).
+Le dépouillement devient alors une comparaison de nombres — « cet échantillon est-il postérieur au
+`compter_a_partir_de` de sa consigne ? » — au lieu d'un rapprochement à l'œil entre deux fenêtres de
+terminal, qui est faux la première fois. La ligne `bilan` recopie VERBATIM le dictionnaire de
+`bilan_de_seance` : une seule source pour ce qui s'imprime et ce qui s'écrit.
+
+⚠️ L'option est **opt-in et sans valeur par défaut**, pour trois raisons : `--smoke` ne doit jamais
+pouvoir écrire quoi que ce soit hors d'un dossier temporaire, `data/` ne doit rien recevoir d'ici, et
+l'opérateur nomme son journal comme il nomme sa séance. Le fichier est ouvert en AJOUT : relancer
+l'émetteur sur le même chemin empile les séances au lieu d'en effacer une.
+
+⚠️⚠️ **COMMENT DÉPOUILLER, et le piège qui fabrique un faux verdict.** Le moteur ne publie pas un
+verdict par consigne : il décode en continu à 5 Hz. Après un changement de consigne, il lui faut
+recharger DEUX mémoires avant qu'un échantillon ne parle de la nouvelle cible — sa fenêtre de
+décision (`CVEP_DECISION_CYCLES` cycles = 2,1 s) puis son vote glissant (`CVEP_VOTE_LEN` fenêtres
+espacées de `ModeRuntime.period_s()` = 0,6 s), soit **2,7 s pendant lesquelles chaque échantillon
+publié est calculé sur du signal à cheval sur DEUX cibles**. Noter tous les `decoded_cvep` de
+`[t_consigne, t_consigne + durée]` compte donc ces 2,7 s dans le score, et **plafonne la justesse
+mesurée quel que soit le décodeur** : avec une consigne de 4 cycles (4,2 s), la transition
+couvrirait 64 % de l'intervalle, donc ~40 % de justesse au maximum — de quoi conclure que le
+décodeur ne marche pas en regardant une transition. D'où deux remèdes appliqués ensemble : la
+consigne dure `CYCLES_PAR_CIBLE` = 8 cycles (8,4 s, dont 5,7 s exploitables = 68 %), et chaque
+ligne `t=` imprime l'instant « **compter à partir de** ». **Ne note que les échantillons
+postérieurs à cet instant-là.**
+
+⚠️ **Pas de `valide_reglages` comme `p300_stimulus.py` — et ce n'est pas un oubli.** Le P300 doit
+refuser `--targets 4` parce que le moteur code six cibles en dur et que la probabilité oddball
+changerait. Ici il n'y a RIEN à régler qui touche le décodage : la géométrie (`CVEP_N_TARGETS`), le
+code (`CVEP_BITS`/`CVEP_TAPS`) et les lags viennent tous de `core/cvep_code.build_targets()`, le
+MÊME appel que fait le moteur. Émetteur et moteur ne peuvent pas diverger sans que `core/config.py`
+change pour les deux à la fois. Le seul réglage qui puisse dérégler le décodage est `--refresh`, et
+le moteur le REFUSE lui-même, bruyamment, quand il s'écarte de plus de 1 Hz de celui auquel le
+modèle a été calibré (`CVEPRuntime.maj_reference`) — c'est-à-dire au bon endroit : celui qui
+connaît le modèle.
+
+⚠️ **`--retour` entoure la cible que le moteur DÉCODE** (`stimulus/retour.py`, qui porte la règle) :
+la fenêtre lit `decoded_cvep` comme le ferait l'application d'un étudiant, en tâche de fond, et
+trace un anneau VERT à `retour.ANNEAU_ECART_PX` du bord du disque (`retour.rayon_anneau`, la règle
+des trois fenêtres) — dans le fond, sans toucher un seul pixel que les sondes de `--smoke` relisent.
+Il se trace dans l'image et se lit APRÈS le flip et le marqueur : le geste flip→horodatage
+ci-dessus n'en est pas retardé d'une instruction. Il montre la cible décodée, il ne juge pas — une
+erreur se voit, l'anneau n'est pas sur la cible désignée. En décodage, il suit la dernière décision.
+⚠️ En test (`--tester --retour`), chaque bloc est suivi d'une PHASE DE RETOUR : plus aucun cercle
+de consigne, la fenêtre attend la décision du bloc (au plus `retour.ATTENTE_DECISION_S`), la montre
+SEULE `retour.RETOUR_AFFICHE_S`, l'efface, et seulement ENSUITE cercle la cible suivante — l'anneau
+et le cercle ne sont jamais à l'écran ensemble. La phase dure un nombre ENTIER de cycles
+(`cycles_de_retour`) : le clignotement et l'horloge `cycle` continuent pendant elle, la cible
+suivante paraît sur un bord de cycle, et son `cue` part toujours sur une frame 0. L'anneau s'éteint
+donc au début du settle, `CVEP_CAL_SETTLE_CYCLES` cycles avant le `cue` : la décision suivante, qui
+lit déjà ce settle, ne voit jamais sa disparition.
+
+⚠️ **`--libre` : les cibles et l'horloge, rien d'autre.** Sans option, cette fenêtre DÉSIGNE des
+cibles (le cercle bleu, les lignes `t=`, `--log`) : c'est le protocole de dépouillement d'une
+séance, pas un essai libre. `--libre` retire la consigne et refuse `--log` (il n'y a aucune
+vérité-terrain à écrire) ; le marqueur `cycle` continue de partir — c'est une HORLOGE, sans elle
+le moteur ne décode rien. Tant que le moteur chauffe (son flux public `status`), une croix au
+centre et « ne fixe aucune cible » : la fenêtre s'ouvre dès que le mode démarre.
+
+Lancer :
+    python src/stimulus/cvep.py                  # plein écran, ESC pour quitter
+    python src/stimulus/cvep.py --libre --retour # ESSAYER LIBREMENT : on fixe ce qu'on veut,
+                                                          # l'anneau dit ce que le moteur décode
+    python src/stimulus/cvep.py --windowed       # fenêtre 1000x700 (dev)
+    python src/stimulus/cvep.py --refresh 60     # forcer le refresh (sinon auto-mesuré)
+    python src/stimulus/cvep.py --seconds 20     # 20 s de STIMULATION DÉCODABLE (la
+                                                          # chauffe du moteur ne compte pas)
+    python src/stimulus/cvep.py --seed 1         # rejouer la même SÉQUENCE de consignes
+    python src/stimulus/cvep.py --log seance.jsonl  # la VÉRITÉ-TERRAIN dans un fichier :
+                                                          # sans elle, la séance ne se dépouille pas
+    python src/stimulus/cvep.py --no-wait        # ne pas attendre le moteur (émetteur seul)
+    python src/stimulus/cvep.py --smoke          # test sans écran (CI) : phase ET rendu
+"""
+
+import argparse
+import json
+import math
+import os
+import random
+import statistics
+import sys
+import time
+
+# Permet `from core.config import ...` que le module soit lancé via
+# `python src/stimulus/cvep.py` ou importé comme `stimulus.cvep`.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.config import (CVEP_BITS, CVEP_CAL_BLOCKS, CVEP_CAL_CYCLES,  # noqa: E402
+                         CVEP_CAL_SETTLE_CYCLES, CVEP_DECISION_CYCLES, CVEP_N_TARGETS,
+                         CVEP_N_TARGETS_MAX, CVEP_N_TARGETS_MIN, CVEP_VOTE_LEN,
+                         MARKER_STREAM_DEFAULT, SEANCES_DIR, SSVEP_WARMUP_S, use_utf8_console)
+from core.cvep_code import blocs_entrelaces, build_targets, is_on  # noqa: E402
+from core.i18n import tr  # noqa: E402
+from stimulus.garde import mot_du_geste, paroles_de_seance, sous_garde_data  # noqa: E402
+from stimulus import fermeture  # noqa: E402 - le dernier geste, partagé par les 4 fenêtres
+from stimulus.ecran import (ECRAN_SDL_PRINCIPAL, EcranRefuse,  # noqa: E402
+                            au_rafraichissement, confirme_stable, hz_positif)
+from stimulus.p300 import CUE_EPAISSEUR_PX, CUE_MARGE_PX  # noqa: E402 - la règle du cercle
+from stimulus import retour as _retour  # noqa: E402 - la croix s'appelle par le module (smoke)
+from stimulus.retour import (ReposDuMoteur, Retour, SourceDecisions,  # noqa: E402
+                             StatutDuMoteur)
+from pylsl import IRREGULAR_RATE, StreamInfo, StreamOutlet, local_clock  # noqa: E402
+
+# --- Réglages d'affichage ---------------------------------------------------
+
+BG = (0, 0, 0)              # fond noir -> profondeur de modulation maximale
+ON_COLOR = (255, 255, 255)  # disque allumé
+OUTLINE = (55, 55, 70)      # contour statique : garde le repère spatial quand la cible est OFF
+FIX_DOT = (200, 40, 40)     # point de fixation CHROMATIQUE (la réponse c-VEP
+#                             est pilotée par la LUMINANCE, un point rouge n'ampute donc quasiment
+#                             pas la modulation tout en restant visible allumé comme éteint)
+CUE = (60, 130, 255)        # le cercle de consigne, juste autour du disque. BLEU comme
+                            # celui du SSVEP et du P300 (jamais vert : l'anneau VERT de la cible
+                            # décodée s'y confondrait — `retour.autotest_couleurs`)
+LABEL = (120, 120, 140)
+HUD = (70, 90, 70)
+NOTE = (110, 150, 110)      # le bandeau de chauffe : vert éteint, ne concurrence pas le stimulus
+CROIX = LABEL               # la croix de repos de `--libre` (`retour.ReposDuMoteur`), au centre
+TEXTE_REPOS = tr("fenetre.cvep.repos")   # …et le bandeau qui l'accompagne
+
+# Rayon du point de fixation, en PIXELS et non proportionnel — la valeur sous laquelle
+# les modèles c-VEP ont été calibrés. Quelques
+# pixels suffisent à ancrer le regard, et l'emprise sur le stimulus reste négligeable (~0,1 % de la
+# surface) quelle que soit la résolution.
+FIX_DOT_R = 2
+
+# La couronne : la géométrie EXACTE sous
+# laquelle les modèles c-VEP existants ont été entraînés. Les changer, c'est afficher un stimulus
+# que le modèle n'a jamais vu — sans qu'aucune exception ne le dise.
+DIST_RATIO = 0.31
+TAILLE_RATIO = 0.075
+# Le cercle de consigne suit la règle du P300 (`p300.geometrie`), IMPORTÉE et non recopiée :
+# `rayon_cercle`. Il ne touche aucun pixel du disque : son trait couvre [r + 4, r + 8[, le
+# disque s'arrête à r. Une fonction, parce
+# que `--smoke` a besoin du MÊME rayon pour aller lire ce cercle dans les pixels
+# (`point_de_sonde_cercle`) : recopié, il suffirait de le déplacer d'un côté pour que la sonde
+# lise le fond noir et ne rougisse plus.
+# L'anneau de RETOUR (`--retour`) suit la règle des trois fenêtres, `retour.rayon_anneau` : à
+# l'EXTÉRIEUR du cercle de consigne, comme au P300 (ils ne sont de toute façon jamais à l'écran
+# ensemble, cf. la phase de retour). `--smoke` relit son rayon dans les pixels, et prouve à chaque
+# image qu'il ne recouvre ni disque ni sonde (`_smoke_retour`).
+
+TAILLE_FENETRE = (1000, 700)   # `--windowed` (dev) et `--smoke`
+
+# --- LA PÉRIODE INEXPLOITABLE, et pourquoi elle doit être écrite noir sur blanc ---------------
+#
+# ⚠️ **Après un changement de consigne, les premières secondes de `decoded_cvep` sont FAUSSES par
+# construction, et rien dans le flux ne le dit.** Le moteur a DEUX mémoires en amont de chaque
+# échantillon publié :
+#   1. la FENÊTRE de décision — `CVEP_DECISION_CYCLES` cycles de code (2 x 63/60 = 2,1 s), repliés
+#      puis corrélés ;
+#   2. le VOTE GLISSANT — `CVEP_VOTE_LEN` fenêtres (3) espacées de la période du mode
+#      (`ModeRuntime.period_s()` = 0,2 s, non redéfinie par `CVEPRuntime`), soit 0,6 s de plus.
+# Tant que ces deux mémoires n'ont pas été ENTIÈREMENT rechargées depuis le changement, chaque
+# échantillon publié est calculé sur du signal à cheval sur DEUX cibles.
+#
+# ⚠️ **C'est un générateur de faux verdict.** Quelqu'un qui note tous les
+# `decoded_cvep` de `[t_consigne, t_consigne + durée]` compte ces échantillons-là dans son score et
+# conclut que le décodeur ne marche pas. Avec une consigne de 4 cycles (4,2 s), la transition
+# couvrirait 2,7 s sur 4,2 — soit **64 % des échantillons**, donc une justesse mesurée qui ne
+# pourrait pas dépasser ~40 % même avec un décodage parfait. Deux remèdes, ensemble :
+#   • la consigne dure TROIS fois la transition, pour que la part exploitable DOMINE ;
+#   • et chaque ligne `t=` du terminal imprime l'instant À PARTIR DUQUEL les échantillons comptent,
+#     pour qu'un dépouillement n'ait pas à redécouvrir ce calcul (cf. `run`).
+# `--smoke` arrime les deux constantes du moteur à leur source (cf. `_smoke`, section « la
+# transition ») : recopiées ici, elles dériveraient en silence.
+PERIODE_MOTEUR_S = 0.2        # `core/modes/runtime.py:ModeRuntime.period_s` — 5 Hz de décodage
+TRANSITION_S = CVEP_DECISION_CYCLES * (2 ** CVEP_BITS - 1) / 60.0 + CVEP_VOTE_LEN * PERIODE_MOTEUR_S
+
+# Combien de cycles du code une même cible reste consignée. DÉRIVÉ de la transition ci-dessus, pas
+# posé à la main : trois fois la transition -> deux tiers de la consigne sont exploitables. À 60 Hz
+# et aux réglages du dépôt : 8 cycles = 8,4 s, dont 2,7 s à jeter et 5,7 s à compter (68 %).
+CYCLES_PAR_CIBLE = int(math.ceil(3 * TRANSITION_S * 60.0 / (2 ** CVEP_BITS - 1)))
+
+# Ce que le moteur fait avant de décoder pour de bon : sa chauffe (l'offset DC de l'Unicorn dérive
+# après ouverture). Valeurs LUES dans `core/modes/cvep.py` (SPEC.rest) : `warmup_s=SSVEP_WARMUP_S`,
+# `duration_s=0.0` — le c-VEP ne mesure aucun plancher de repos, contrairement au SSVEP/neuro/ErrP.
+# ⚠️ Le clignotement, lui, NE S'ARRÊTE PAS pendant ce temps : cf. le ⚠️ de la docstring du module.
+ATTENTE_MOTEUR_S = SSVEP_WARMUP_S + 0.0
+
+# Une image qui met plus que ça à basculer est une frame SAUTÉE. 1,5 période : un demi-intervalle de
+# marge de part et d'autre, assez pour ne pas compter la gigue ordinaire du planificateur, assez peu
+# pour attraper une image manquée. Le compte est AFFICHÉ, jamais corrigé — une frame sautée décale le
+# code d'une frame jusqu'au marqueur suivant, et c'est le marqueur qui la résorbe (cf. `_smoke`).
+SEUIL_SAUT = 1.5
+
+
+# --- Géométrie (fonctions PURES, testables sans écran ni pygame) -------------
+
+def positions_cibles(plan, size, dist_ratio=DIST_RATIO, size_ratio=TAILLE_RATIO):
+    """`[(x, y, rayon), ...]` DANS L'ORDRE DU PLAN — donc dans l'ordre des indices publiés.
+
+    C'est la couronne réduite à ce dont un émetteur a besoin (pas de dictionnaire
+    indexé par nom : ici l'ordre EST l'information, `plan[i]` correspond à `score_i` sur le flux).
+    Les angles sont LUS dans le plan, jamais recalculés en `2πi/n` : `cvep_targets(3)` reprend
+    exactement les angles de `COMMANDS` et ne fait PAS trois tiers de tour — deux géométries pour le
+    même protocole, et l'écran ne montrerait plus les cibles sur lesquelles le modèle a été entraîné
+    (le piège que `p300_stimulus.target_positions` documente déjà).
+    """
+    w, h = size
+    cx, cy, span = w / 2.0, h / 2.0, float(min(w, h))
+    dist, r = span * dist_ratio, span * size_ratio
+    return [(int(cx + math.sin(c["angle"]) * dist),
+             int(cy - math.cos(c["angle"]) * dist),   # y écran vers le bas
+             int(r)) for c in plan]
+
+
+def point_de_sonde(x, y, r):
+    """Un point de l'écran où l'état ON/OFF d'un disque se LIT dans les pixels.
+
+    Existe pour `--smoke`, qui doit savoir ce qui est réellement affiché sans croire l'émetteur sur
+    parole. PAS le centre : le point de fixation y est dessiné, et sa couleur ne dit rien de l'état
+    du disque. À mi-rayon on est à l'intérieur du disque (donc blanc quand il est allumé) et à
+    l'intérieur du contour (donc fond noir quand il est éteint).
+    """
+    return (x + r // 2, y)
+
+
+def point_de_sonde_cercle(x, y, r):
+    """Un point de l'écran où le CERCLE DE CONSIGNE d'une cible se lit dans les pixels.
+
+    Jumeau de `point_de_sonde`, pour l'autre chose que cet écran affiche : `--smoke` doit pouvoir
+    dire QUELLE cible est réellement cerclée sans croire l'émetteur sur parole — c'est la seule
+    vérité-terrain de la calibration, et une consigne annoncée à côté de celle qui est dessinée
+    produirait une séance entière étiquetée à l'envers, sans qu'aucune exception ne le dise.
+
+    Le cercle est tracé à `rayon_cercle(r)`, en trait de `CUE_EPAISSEUR_PX` vers l'INTÉRIEUR : on
+    sonde au milieu du trait. À cette distance il n'y a rien d'autre — le disque et son contour
+    s'arrêtent à r, l'anneau de retour commence à `retour.rayon_anneau(r) - EPAISSEUR_PX`.
+    """
+    return (x + rayon_cercle(r) - CUE_EPAISSEUR_PX // 2, y)
+
+
+def rayon_cercle(r):
+    """Le rayon du cercle de consigne autour d'un disque de rayon `r` : la règle du P300
+    (`p300.geometrie` : rayon de la cible + `CUE_MARGE_PX`). Le rendu et la sonde l'appellent."""
+    return int(r) + CUE_MARGE_PX
+
+
+def en_images(secondes, refresh, au_plus=False):
+    """Une durée en IMAGES : au moins `secondes` (par défaut), ou au plus (`au_plus`). La phase de
+    retour se compte en images, comme tout ce que cette fenêtre verrouille à la frame."""
+    n = float(secondes) * float(refresh)
+    return int(math.floor(n + 1e-9)) if au_plus else int(math.ceil(n - 1e-9))
+
+
+def cycles_de_retour(L, refresh, decision_a=None, valide=True):
+    """Combien de CYCLES dure la phase de retour d'un bloc de test — la règle de `run`, en pur.
+
+    `decision_a` : l'image (comptée depuis celle du `block_end`) où la décision s'affiche, None si
+    rien n'arrive pendant l'attente ; `valide` : False pour un −1. La phase finit au premier bord de
+    cycle où l'anneau a été montré `RETOUR_AFFICHE_S` — ou, sans rien à montrer, où l'attente est
+    close : un −1 la clôt aussitôt, une absence au bout d'`ATTENTE_DECISION_S`. Un nombre ENTIER de
+    cycles : la cible suivante paraît sur un bord, et le `cue` part sur une frame 0. C'est aussi ce
+    que `core/modes/cvep_test.py` compte dans la durée qu'il annonce (`RETOUR_CYCLES_PAR_BLOC`)."""
+    if decision_a is None:
+        fin = en_images(_retour.ATTENTE_DECISION_S, refresh, au_plus=True)
+    elif valide:
+        fin = int(decision_a) + en_images(_retour.RETOUR_AFFICHE_S, refresh)
+    else:
+        fin = int(decision_a)
+    return max(1, -(-fin // int(L)))
+
+
+def bornes_de_bloc(programme, c):
+    """`(cible_fermee, ouvre)` au bord du cycle `c` du programme : la cible du bloc qui vient de se
+    FERMER (None sinon), et si un bloc ENREGISTRÉ commence ici.
+
+    Les conditions des marqueurs de `annonce_bloc` — `block_end` ferme, `cue` ouvre — écrites UNE
+    fois. C'est aussi ce qui découpe le retour en essais : un bloc fermé ouvre sa phase de retour."""
+    bloc, role, _cible = programme[c]
+    prec = programme[c - 1] if c > 0 else (None, None, None)
+    ferme = prec[2] if prec[1] == "bloc" and (role != "bloc" or bloc != prec[0]) else None
+    ouvre = role == "bloc" and (prec[1] != "bloc" or bloc != prec[0])
+    return ferme, ouvre
+
+
+def programme_de_calibration(plan, cycles=CVEP_CAL_CYCLES, n_blocs=CVEP_CAL_BLOCKS,
+                             settle=CVEP_CAL_SETTLE_CYCLES, rng=None):
+    """La séance de calibration, CYCLE PAR CYCLE : `[(n° de bloc, rôle, indice de cible), ...]`.
+
+    `rôle` vaut `"settle"` (cycle JETÉ : le regard cherche encore la nouvelle cible) ou `"bloc"`
+    (cycle enregistré). La liste se termine par un cycle de garde `(None, "fin", None)` — c'est
+    lui qui porte le marqueur qui CLÔT le dernier bloc, puisqu'un marqueur de cycle ferme toujours
+    le cycle PRÉCÉDENT.
+
+    ⚠️ **C'est ici que se joue l'appariement consigne ↔ époque**, et il tient à un décalage d'un
+    cycle. Le moteur découpe, à chaque marqueur, le cycle qui VIENT de s'écouler. L'émetteur
+    publie donc le `cue` JUSTE APRÈS le marqueur qui ouvre le premier cycle enregistré : ce
+    marqueur-là ferme le dernier cycle de settle, il arrive avant le `cue`, donc son époque n'a
+    pas de cible et n'est pas enregistrée. Publier le `cue` un marqueur plus tôt ferait entrer
+    dans le jeu d'entraînement, à CHAQUE bloc, une époque prise pendant que le regard se
+    déplaçait encore.
+
+    L'ordre des blocs est ENTRELACÉ (`core.cvep_code.blocs_entrelaces`, la règle partagée avec
+    l'appli pygame) : sans ça, chaque cible occupe une tranche de temps distincte et « quelle
+    cible » ne se distingue plus de « à quel moment ».
+    """
+    blocs = blocs_entrelaces(plan, cycles, n_blocs, rng)
+    programme = []
+    for i, (cible, n) in enumerate(blocs):
+        indice = plan.index(cible)
+        programme += [(i, "settle", indice)] * int(settle) + [(i, "bloc", indice)] * int(n)
+    programme.append((None, "fin", None))
+    return programme
+
+
+def diagnostic_cadence(mesure_s, cycle_theorique_s, refresh, code_len, tolerance=0.02):
+    """`(derive, avertissement)` — `avertissement` est None quand l'écran tient la cadence annoncée.
+
+    ⚠️ **C'est la JUMELLE du geste flip->horodatage, et elle produit exactement la même panne
+    muette.** Le marqueur dit « le code était à sa frame 0 à cet instant » ; entre deux marqueurs,
+    le moteur EXTRAPOLE la phase à `refresh` Hz (`CVEPRuntime.phase_a` : `int(age * refresh)`). Si
+    l'écran n'affiche pas à cette vitesse-là, la phase dérive à l'intérieur de chaque cycle sans
+    qu'aucune exception ne soit levée : les corrélations baissent, le moteur publie, et rien ne dit
+    pourquoi. Le cas concret est un écran 144 Hz lancé avec `--refresh 60` — le moteur ACCEPTE les
+    marqueurs (le modèle est calibré à 60, l'émetteur annonce 60, `maj_reference` ne voit rien
+    d'anormal) et décode contre une phase qui part de ~8 % par cycle.
+    Une SEULE fonction produit ce verdict, et c'est elle que `--smoke` interroge point par point :
+    écrite à même le bilan, elle resterait sans assertion — trois mutations d'une ligne
+    (comparaison inversée, compteur neutralisé, bloc supprimé) passeraient toutes au vert.
+
+    `tolerance` = 2 % : un écran 59,94 Hz annoncé à 60 dérive de 0,1 %, un vrai désaccord de mode
+    d'affichage dépasse toujours les 2 % (le plus serré, 60 contre 59,94/1,001, reste sous ; le
+    plus courant, 60 contre 75, fait 25 %).
+    """
+    derive = (float(mesure_s) - float(cycle_theorique_s)) / float(cycle_theorique_s)
+    if abs(derive) < tolerance:
+        return derive, None
+    reel = code_len / float(mesure_s)
+    return derive, (
+        f"⚠️ l'écran ne tient PAS les {refresh:.0f} Hz publiés dans les marqueurs (il affiche "
+        f"plutôt à {reel:.0f} Hz) : le moteur extrapole la phase à {refresh:.0f} Hz ENTRE deux "
+        f"marqueurs, donc il décode contre un code qui a déjà glissé. Relance avec "
+        f"`--refresh {reel:.0f}` si c'est le vrai rafraîchissement — et RÉ-ENTRAÎNE, un modèle "
+        f"vaut pour UN rafraîchissement — sinon cherche ce qui charge la machine.")
+
+
+def bilan_de_seance(cycles, frames, sautees, onsets, refresh, code_len):
+    """Le bilan de fin : ce qu'on IMPRIME et ce que `--smoke` relit, au même endroit.
+
+    Un bilan qui ne serait qu'une suite de `print` n'est gardé par aucune assertion — et c'est
+    précisément le bloc qui porte le diagnostic de la seconde panne muette de ce mode. Il rend donc
+    un dictionnaire, que `run` recopie dans son paramètre `bilan` : les deux ne peuvent pas diverger
+    puisqu'il n'y a qu'une source. Supprimer l'appel fait rougir le smoke ; le laisser en place mais
+    casser le compteur de frames sautées aussi (cf. `_smoke`, passage C3).
+    """
+    cycle_theorique = code_len / float(refresh)
+    mesure = (statistics.median(b - a for a, b in zip(onsets, onsets[1:]))
+              if len(onsets) > 1 else None)
+    derive, avertissement = (diagnostic_cadence(mesure, cycle_theorique, refresh, code_len)
+                             if mesure is not None else (None, None))
+    if frames:
+        print(f"[cvep-stim] fin : {cycles} cycles émis, {frames} frames affichées, "
+              f"{sautees} sautée(s) ({sautees / frames:.1%})")
+    else:
+        print(f"[cvep-stim] fin : {cycles} cycles émis, aucune frame affichée")
+    if mesure is not None:
+        print(f"[cvep-stim] cadence : {mesure * 1000:.1f} ms par cycle mesuré contre "
+              f"{cycle_theorique * 1000:.1f} ms annoncés ({derive:+.1%})"
+              + ("" if avertissement is None else "  " + avertissement))
+    if not cycles:
+        print("[cvep-stim] ⚠️ AUCUN marqueur n'est parti : `--seconds` couvre-t-il bien la durée "
+              "de stimulation voulue, la fenêtre a-t-elle été fermée tout de suite ?")
+    return {"cycles": cycles, "frames": frames, "sautees": sautees, "cadence_s": mesure,
+            "derive": derive, "avertissement": avertissement}
+
+
+def tirage_cible(rng, n_cibles, precedente=None):
+    """L'indice de la prochaine cible consignée — jamais deux fois la MÊME de suite.
+
+    Sans cette contrainte, une consigne sur six est invisible : le cercle reste au même endroit et
+    l'utilisateur ne sait pas qu'un nouvel essai a commencé, donc son regard ne se recale pas. Même
+    raisonnement, et même remède, que la contrainte de jonction de `p300_stimulus.blocs_melanges`.
+    Sans effet si une seule cible existe : il n'y a alors aucune alternative à tirer.
+    """
+    n_cibles = int(n_cibles)
+    if n_cibles <= 1:
+        return 0
+    tirage = rng.randrange(n_cibles)
+    while tirage == precedente:
+        tirage = rng.randrange(n_cibles)
+    return tirage
+
+
+# --- Boucle principale -------------------------------------------------------
+
+# Sentinelle de `--log` sans valeur. Un objet, pas une chaîne : aucun chemin ne peut lui être
+# égal par accident.
+_AUTO = object()
+
+
+def _chemin_journal_auto():
+    """Un nom horodaté dans `seances/`, à la racine du dépôt. Créé au besoin.
+
+    ⚠️ **Pas dans `data/`** : `data/` porte des enregistrements EEG et des modèles, et son autorité
+    d'écriture appartient au moteur seul. Un journal de séance est une trace de protocole ; il vit
+    à côté, dans un dossier gitignoré.
+
+    Le dossier vient de `core.config.SEANCES_DIR`, jamais d'un `os.path.join` recomposé ici : le
+    moteur y dépose l'AUTRE moitié de la séance (ses verdicts, cf. `start_enregistrement`), et
+    deux façons de nommer le même dossier finissent toujours par diverger — ce jour-là les deux
+    fichiers d'une même séance ne seraient plus côte à côte, et la jointure
+    demanderait de les chercher.
+    """
+    dossier = SEANCES_DIR
+    os.makedirs(dossier, exist_ok=True)
+    horodatage = time.strftime("%Y%m%d-%H%M%S")
+    return os.path.join(dossier, f"cvep_{horodatage}.jsonl")
+
+
+def run(windowed=False, refresh=None, seconds=None, smoke=False,
+        stream_name=MARKER_STREAM_DEFAULT, attente_consommateur_s=5.0, journal=None,
+        seed=None, attente_moteur_s=None, cycles_par_cible=CYCLES_PAR_CIBLE, bilan=None,
+        max_frames=None, log_path=None, calibrer=False, tester=False, cycles_calib=CVEP_CAL_CYCLES,
+        settle=CVEP_CAL_SETTLE_CYCLES, libre=False, retour=False, source_retour=None,
+        source_statut=None, ecran_hz=None, n_cibles=CVEP_N_TARGETS, noms=None):
+    """La boucle du stimulus — décodage (défaut) ou CALIBRATION (`calibrer=True`).
+
+    `n_cibles` (`--cibles`) : le nombre de cibles, celui de l'entraînement que le modèle porte. La
+    console le passe ; chaque marqueur de cycle l'annonce, et le moteur refuse un autre nombre.
+    `noms` (`--noms`) : le nom de chaque cible, affiché sous son disque ; leur nombre l'emporte sur
+    `n_cibles`. C'est ce que la console passe, lu dans le modèle ou dans « Entraîner ».
+
+    `libre` (`--libre`) retire la consigne et montre la croix de repos tant que le moteur chauffe ;
+    `retour` (`--retour`) entoure la cible décodée. `source_retour` et `source_statut` n'existent
+    que pour `--smoke` : des sources FACTICES à la place des vrais flux `decoded_cvep` et `status`
+    (cf. `stimulus/retour.py`).
+
+    `ecran_hz` (`--ecran-hz`) : le rafraîchissement auquel la séance DOIT tourner, celui que
+    portera chaque marqueur, donc le modèle. L'écran a été passé à cette valeur avant l'appel
+    (`stimulus/ecran.py`) ; ici, on le MESURE, et on lève `EcranRefuse` s'il ne la tient pas,
+    avant de créer le moindre flux. `refresh`, s'il est donné aussi, tient lieu de mesure.
+
+    ⚠️ **`--calibrer` joue EXACTEMENT le même stimulus**, à la frame près : même code, même
+    couronne, même géométrie, même geste flip→horodatage, même marqueur `cycle`. C'est la
+    condition pour que le modèle appris décrive ce que le décodage verra. Ce qui s'ajoute, ce
+    sont QUATRE marqueurs autour (`calib_start`, `cue`, `block_end`, `calib_end`) et un ordre de
+    passage des cibles qui n'est plus tiré au sort mais ENTRELACÉ (`programme_de_calibration`).
+    L'horloge `cycle`, elle, continue de battre sans interruption — y compris entre deux blocs et
+    pendant la chauffe du moteur. Sans elle il n'y a pas de phase, donc pas d'époque alignée : le
+    moteur ne décoderait pas mal, il ne décoderait RIEN.
+
+    `journal`, s'il est fourni, reçoit `(marqueur, horodatage, frame, consigne)` pour CHAQUE
+    marqueur réellement poussé ; `bilan`, s'il est fourni, reçoit le dictionnaire de
+    `bilan_de_seance` — c'est ce qui permet à `--smoke` d'ASSERTER sur le diagnostic de fin au
+    lieu de le laisser en simples `print` que rien ne garde.
+
+    `log_path` (l'option `--log`) écrit la VÉRITÉ-TERRAIN en JSONL, cf. le ⚠️ de la docstring du
+    module. C'est l'équivalent PERSISTANT de ce que `journal` donne à `--smoke` : un fichier, donc
+    dépouillable après la séance, alors que `journal` vit en mémoire et que le terminal s'efface.
+
+    `frame` (le compteur de l'émetteur) et `consigne` (le NOM de la cible à fixer) ne partent
+    JAMAIS sur le réseau — le marqueur ne porte que `{mode, event, refresh}`, cf. le ⚠️ de la
+    docstring du module. Ils n'existent que pour permettre à `--smoke` de vérifier, sur le déroulé
+    RÉEL, qu'un marqueur part à chaque redémarrage du code et que la consigne tourne.
+
+    `seed` graine le tirage des consignes : deux exécutions rejouent alors la MÊME séquence de
+    cibles, ce qui est la seule façon de refaire une séance à l'identique. `attente_moteur_s`
+    n'existe que pour que `--smoke` puisse EXERCER le bandeau de chauffe sans attendre 15 s.
+
+    `max_frames` borne la séance en IMAGES au lieu de secondes. C'est ce qui rend le rejeu
+    DÉTERMINISTE : à graine ET compte d'images égaux, deux exécutions produisent exactement la même
+    séquence de consignes, quelle que soit la charge de la machine (cf. le ⚠️ de `poll`). Pas
+    d'option de ligne de commande : une séance réelle se règle en secondes, c'est `--smoke` qui a
+    besoin de reproductibilité à l'image près — même statut que `max_run_steps` chez
+    `errp_stimulus.py`.
+    """
+    if smoke:
+        return sous_garde_data(_smoke)
+
+    # `--refresh 0` (ou négatif) diviserait par zéro au premier `L / refresh`, APRÈS avoir ouvert
+    # la fenêtre : traceback nu, pas de `pygame.quit()`, écran plein resté à l'écran. Le refus se
+    # pose donc AVANT d'ouvrir quoi que ce soit, comme `p300_stimulus.valide_reglages`.
+    if refresh is not None and float(refresh) <= 0.0:
+        print(f"[cvep-stim] REFUSÉ — --refresh {refresh} : un rafraîchissement est un nombre de "
+              f"frames par seconde, donc strictement positif. Laisse l'option de côté pour qu'il "
+              f"soit mesuré à l'écran.")
+        return False
+    # `--libre` n'a PAS de vérité-terrain : rien à entraîner, rien à noter, rien à journaliser.
+    # Refusé au terminal, avant d'ouvrir quoi que ce soit, plutôt qu'ignoré : un journal vide sous
+    # un nom de séance ferait croire à une séance dépouillable.
+    if libre and (calibrer or log_path):
+        print("[cvep-stim] REFUSÉ — --libre ne désigne aucune cible : il n'a rien à entraîner, "
+              "rien à tester, et pas de vérité-terrain à écrire avec --log.")
+        return False
+
+    # Le journal s'ouvre AVANT la fenêtre, pour la même raison que le refus ci-dessus : un dossier
+    # qui n'existe pas, un disque plein ou un fichier verrouillé doivent se dire au terminal, pas
+    # sous un plein écran qu'on ne peut plus quitter. Ouvert en AJOUT ("a") : deux séances sur le
+    # même chemin s'empilent, aucune ne s'efface.
+    fichier_log = None
+    # `--log` sans valeur : la FENÊTRE choisit le nom (horodaté, dans `seances/`), pas l'appelant,
+    # qui n'a pas à composer un chemin — et la console n'écrit jamais sur le disque.
+    if log_path is _AUTO:
+        log_path = _chemin_journal_auto()
+    if log_path:
+        try:
+            fichier_log = open(log_path, "a", encoding="utf-8")
+        except OSError as e:
+            print(f"[cvep-stim] REFUSÉ — --log {log_path} : impossible d'écrire ici ({e}). "
+                  f"Sans journal, la séance ne se dépouille pas : choisis un chemin valide.")
+            return False
+        print(f"[cvep-stim] journal (vérité-terrain, JSONL) : {log_path}")
+
+    def note_json(objet):
+        """Une ligne JSON, écrite ET VIDÉE tout de suite. Le `flush` est le point de l'exercice :
+        un émetteur tué au milieu d'une séance laisse alors un fichier complet jusqu'à sa dernière
+        ligne, ce qu'un JSON global écrit à la fin ne permettrait pas."""
+        if fichier_log is None:
+            return
+        fichier_log.write(json.dumps(objet, ensure_ascii=False) + "\n")
+        fichier_log.flush()
+
+    # Les flux du RETOUR, construits AVANT d'ouvrir la fenêtre : le nom se lit dans le catalogue des
+    # modes (1 à 2 s d'import), qui volerait le GIL au clignotement depuis un fil.
+    source_dec = source_retour
+    if retour and source_dec is None:
+        source_dec = SourceDecisions(stimulus_id="cvep")
+    source_rep = source_statut
+    if libre and source_rep is None:
+        source_rep = StatutDuMoteur()
+
+    import pygame  # import tardif : le module s'importe même sans pygame installé
+
+    from stimulus.refresh import frequence_mesuree, measure_refresh  # comme les autres stimuli
+
+    plan, code = build_targets(n=n_cibles, noms=noms)
+    L = len(code)
+    attente_moteur_s = ATTENTE_MOTEUR_S if attente_moteur_s is None else float(attente_moteur_s)
+
+    pygame.init()
+    pygame.font.init()
+
+    if windowed:
+        size = TAILLE_FENETRE
+        flags = pygame.SCALED
+    else:
+        disp_info = pygame.display.Info()
+        size = (disp_info.current_w, disp_info.current_h)
+        flags = pygame.FULLSCREEN | pygame.SCALED
+
+    # vsync=1 : le code est cadencé par le balayage écran, comme les autres stimuli — et ici c'est
+    # plus qu'un confort. Le moteur extrapole la phase à `refresh` Hz entre deux marqueurs ; sans
+    # vsync, l'écran affiche à la vitesse du processeur et la phase reconstruite est fausse dès la
+    # deuxième frame, sans qu'aucune exception ne le signale.
+    try:
+        win = pygame.display.set_mode(size, flags, vsync=1, display=ECRAN_SDL_PRINCIPAL)
+    except (TypeError, pygame.error):
+        win = pygame.display.set_mode(size, flags, display=ECRAN_SDL_PRINCIPAL)
+    pygame.display.set_caption(tr("fenetre.cvep.titre"))
+    pygame.mouse.set_visible(False)
+
+    if ecran_hz is not None:
+        try:
+            # Plusieurs chances : juste après le changement de mode, l'écran met parfois plus
+            # d'une seconde à se stabiliser (`ecran.ESSAIS_MESURE`).
+            refresh = confirme_stable(ecran_hz, lambda: refresh if refresh is not None
+                                      else frequence_mesuree(pygame, win))
+        except EcranRefuse:
+            # On FERME tout avant de propager : un plein écran noir cacherait la raison du refus.
+            pygame.quit()
+            for s in (source_dec, source_rep):
+                if s is not None:
+                    s.fermer()
+            if fichier_log is not None:
+                fichier_log.close()
+            raise
+    elif refresh is None:
+        refresh = measure_refresh(pygame, win)
+
+    # Le flux de marqueurs : nom et type FIGÉS (contrat public, core/config.py). `source_id`
+    # unique par PID -> deux instances de ce stimulus ne se confondent jamais l'une l'autre.
+    info = StreamInfo(stream_name, "Markers", 1, IRREGULAR_RATE, "string",
+                      f"cvep-stim-{os.getpid()}")
+    outlet = StreamOutlet(info)
+    # Le RETOUR cherche `decoded_cvep` depuis l'ouverture, dans son fil : l'attente du moteur
+    # ci-dessous dure jusqu'à 5 s, autant qu'elle serve. Par essai en calibration/test (un bloc,
+    # une décision), continu sinon (le mode décide à ~5 Hz).
+    anneau = Retour(source_dec, len(plan), par_essai=calibrer) if retour else None
+    # La PHASE DE RETOUR après chaque bloc : en TEST seulement — un entraînement ne publie aucune
+    # décision, il n'y aurait rien à attendre (cf. la docstring du module).
+    phase_retour = anneau is not None and tester
+    images_affiche = en_images(_retour.RETOUR_AFFICHE_S, refresh)
+    images_attente = en_images(_retour.ATTENTE_DECISION_S, refresh, au_plus=True)
+    # La croix de REPOS de l'essai libre : tant que le moteur chauffe, d'après son flux `status`.
+    repos = ReposDuMoteur(source_rep) if libre else None
+
+    print(f"[cvep-stim] refresh écran   : {refresh:.0f} Hz")
+    if libre:
+        print(f"[cvep-stim] LIBRE : {len(plan)} cibles, aucune consigne — fixe celle que tu veux. "
+              f"L'horloge « cycle » part toujours : sans elle le moteur ne décode rien.")
+    elif calibrer:
+        print(f"[cvep-stim] {len(plan)} cibles, code de {L} frames -> un cycle (et un marqueur) "
+              f"toutes les {L / refresh:.3f} s")
+    else:
+        print(f"[cvep-stim] {len(plan)} cibles, code de {L} frames -> un cycle (et un marqueur) "
+              f"toutes les {L / refresh:.3f} s ; consigne tenue {cycles_par_cible} cycles "
+              f"({cycles_par_cible * L / refresh:.1f} s)")
+    print(f"[cvep-stim] marqueurs publiés sur « {stream_name} » : "
+          f'{{"mode": "cvep", "event": "cycle", "refresh": {refresh:.1f}, '
+          f'"targets": {len(plan)}}}')
+    print(f"[cvep-stim] ⚠️ le moteur REFUSE ces marqueurs si son modèle a été calibré à plus de "
+          f"1 Hz d'écart de {refresh:.1f} Hz — il le dit, mais lis ses premières lignes")
+    # ⚠️ La graine est TIRÉE quand elle n'est pas donnée, et IMPRIMÉE dans TOUS les cas. Sans ça,
+    # une séance lancée sans `--seed` serait irrejouable, sans que personne le sache. Or une séance
+    # casque ne se répète pas : c'est la seule ligne qui permette de la rejouer plus tard pour la
+    # dépouiller autrement.
+    if seed is None:
+        seed = random.randrange(2 ** 31)
+    print(f"[cvep-stim] graine {seed} — REJOUE cette séance à l'identique avec `--seed {seed}`")
+    transition_s = CVEP_DECISION_CYCLES * L / refresh + CVEP_VOTE_LEN * PERIODE_MOTEUR_S
+
+    # --- La SÉANCE DE CALIBRATION : son programme, et ce qu'elle annonce au moteur -------------
+    programme, epoques_promises = None, 0
+    geste_seance = "le test" if tester else "l'entraînement"
+
+    if calibrer:
+        # La graine sert ici à l'ENTRELACEMENT des blocs, pas au tirage des consignes : deux
+        # calibrations à la même graine présentent les cibles dans le même ordre.
+        programme = programme_de_calibration(plan, cycles=cycles_calib, settle=settle,
+                                             rng=random.Random(seed))
+        epoques_promises = sum(1 for _b, role, _c in programme if role == "bloc")
+        n_blocs = len({b for b, role, _c in programme if role == "bloc"})
+        # La phase de retour, comptée pour une décision rendue dans le cycle qui suit le bloc (la
+        # même estimation que la console : `cvep_test.RETOUR_CYCLES_PAR_BLOC`).
+        prevus = len(programme) + (n_blocs * cycles_de_retour(L, refresh, L) if phase_retour else 0)
+        print(f"[cvep-stim] {'TEST' if tester else 'CALIBRATION'} : {n_blocs} blocs entrelacés, {cycles_calib} cycles par "
+              f"cible, {settle} cycle(s) JETÉ(S) à chaque changement de cible — "
+              f"{epoques_promises} époques annoncées au moteur, "
+              f"≈ {prevus * L / refresh / 60.0:.1f} min")
+        print(f"[cvep-stim] l'horloge « cycle » continue de battre PENDANT toute la séance, "
+              f"settle et pauses compris : sans elle le moteur n'a pas de phase, donc pas "
+              f"d'époque alignée — il ne décoderait rien du tout.")
+    elif not libre:
+        print(f"[cvep-stim] ⚠️ DÉPOUILLEMENT : les {transition_s:.1f} s qui suivent CHAQUE "
+              f"changement de consigne sont INEXPLOITABLES — la fenêtre de décision du moteur "
+              f"({CVEP_DECISION_CYCLES} cycles) et son vote ({CVEP_VOTE_LEN} fenêtres) y sont "
+              f"encore à cheval sur la cible précédente. Chaque ligne « cycle » ci-dessous donne "
+              f"l'instant « compter à partir de » : ne note les `decoded_cvep` qu'À PARTIR DE LÀ, "
+              f"sinon tu mesures une justesse plafonnée par la transition, pas par le décodeur.")
+    note_json({"kind": "header", "t": local_clock(), "iso": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "seed": int(seed), "refresh": float(refresh), "code_len": int(L),
+               "n_targets": len(plan), "cycles_par_cible": int(cycles_par_cible),
+               "transition_s": round(float(transition_s), 4), "stream": stream_name,
+               "calibration": bool(calibrer), "cibles": [c["name"] for c in plan]})
+
+    # ⚠️ Attendre le moteur AVANT de compter la stimulation — même raisonnement que les deux autres
+    # émetteurs : sans ça, un étudiant qui a oublié de lancer le moteur regarde un écran
+    # parfaitement fonctionnel sans le moindre signe que personne n'écoute. L'attente est BORNÉE et
+    # on clignote de toute façon.
+    #
+    # ⚠️ Et ici on CLIGNOTE PENDANT la chauffe, contrairement à `errp_stimulus.py` qui tient un
+    # écran statique : `CVEPRuntime.tick` ENCAISSE les marqueurs de chauffe (cf. le ⚠️ de la
+    # docstring du module). Seul le décompte de `--seconds` attend.
+    note = None
+    fin_note = 0.0
+    t_start = time.perf_counter()
+    if attente_consommateur_s > 0:
+        if not outlet.wait_for_consumers(attente_consommateur_s):
+            print(f"[cvep-stim] ⚠️ PERSONNE n'écoute « {stream_name} » après "
+                  f"{attente_consommateur_s:g} s. Le moteur est-il lancé "
+                  f"(`python src/core/server.py --mode cvep`) ? Je clignote quand même — "
+                  f"l'indicateur en haut de l'écran dit qui écoute, en direct.")
+        else:
+            print("[cvep-stim] le moteur écoute.")
+        # Le bandeau est tenu dans les DEUX cas, et c'est voulu : `wait_for_consumers` répond
+        # « non » aussi pendant que le moteur résout son inlet, c'est-à-dire exactement quand il
+        # démarre — le moment où sa chauffe commence. `--no-wait` reste là pour s'en passer.
+        if calibrer:
+            # ⚠️ En CALIBRATION la chauffe ne se comporte pas comme en décodage, et il faut le
+            # dire : `MarkerCalibrationRuntime.encaisser` JETTE tout ce qui arrive pendant ses
+            # ~15 s (l'offset DC de l'Unicorn dérive encore, ces époques ne valent rien). Le
+            # clignotement continue quand même — c'est un stimulus verrouillé à la frame, l'arrêter
+            # et le reprendre coûterait plus qu'il ne rapporte, et le sujet a besoin de voir la
+            # couronne avant son premier bloc. Le moteur compte ces marqueurs et le dit une fois.
+            print(f"[cvep-stim] le moteur chauffe ~{attente_moteur_s:g} s "
+                  f"(core/modes/cvep.py, SPEC.rest) et JETTE tout ce qui arrive pendant ce temps. "
+                  f"Le clignotement continue, mais le premier bloc ne commence qu'après : "
+                  f"installe-toi, ne bouge plus.")
+        else:
+            print(f"[cvep-stim] le moteur chauffe ~{attente_moteur_s:g} s "
+                  f"(core/modes/cvep.py, SPEC.rest) : il ENCAISSE l'horloge pendant ce temps mais "
+                  f"ne décode pas encore. Le clignotement démarre tout de suite ; `--seconds` ne "
+                  f"compte qu'après.")
+        # En libre, aucune cible n'est entourée : la consigne du bandeau perd sa seconde moitié.
+        note = (tr("fenetre.cvep.bandeau_chauffe", s=f"{attente_moteur_s:g}") if libre
+                else tr("fenetre.cvep.bandeau_chauffe_consigne", s=f"{attente_moteur_s:g}"))
+        fin_note = time.perf_counter() + attente_moteur_s
+        t_start = None
+
+    spots = positions_cibles(plan, size)
+    centres = [(x, y) for x, y, _r in spots]
+    rayon_retour = _retour.rayon_anneau(spots[0][2])
+    span = min(size)
+    font = pygame.font.SysFont("consolas", max(14, int(span * 0.022)))
+    hud_font = pygame.font.SysFont("consolas", max(12, int(span * 0.016)))
+    note_font = pygame.font.SysFont("consolas", max(16, int(span * 0.030)))
+
+    clock = pygame.time.Clock()
+    rng = random.Random(seed)
+    running = True
+    frame = 0
+    cycles = 0
+    sautees = 0
+    onsets = []                  # horodatages LSL des marqueurs -> cadence réelle des cycles
+    i_cible = None
+    c_prog = None                # l'indice du PROGRAMME en cours (calibration et test)
+    geste = None                 # ce que le bord de cycle de cette image publie (`annonce_bloc`)
+    retenus = 0                  # cycles de RETOUR déjà joués : ils n'avancent pas le programme
+    retour_k0 = retour_f0 = retour_montre0 = None   # la phase de retour en cours : cycle, image
+    #                              du `block_end`, image où l'anneau de la décision a paru
+    etat_calib = ""              # ce que le bandeau du haut dit de la séance de calibration
+    # ⚠️ La frame où le PROGRAMME commence — jamais 0 quand le moteur chauffe. Le clignotement,
+    # lui, démarre tout de suite (le sujet doit voir la couronne, et un stimulus verrouillé à la
+    # frame ne gagne rien à s'arrêter puis reprendre), mais aucun BLOC ne doit tomber dans la
+    # chauffe : `MarkerCalibrationRuntime` y jette tout, et la séance serait alors plus courte que
+    # ce que les deux écrans annoncent — comptée, dite, et quand même perdue.
+    frame_prog0 = 0 if note is None else None
+
+    def emet(m, consigne):
+        """Pousse un marqueur et l'horodate. UN SEUL endroit prend `local_clock()`."""
+        ts = local_clock()
+        outlet.push_sample([json.dumps(m)], timestamp=ts)
+        if journal is not None:
+            journal.append((m, ts, frame, consigne))
+        return ts
+
+    def poll():
+        """Événements + les deux limites d'arrêt, vérifiés à CHAQUE frame. Le c-VEP n'a pas d'unité
+        plus grosse qu'une frame à protéger : contrairement au P300 et à l'ErrP, aucun marqueur
+        déjà parti n'attend une fenêtre de signal derrière lui (les siens tiennent une horloge, ils
+        ne délimitent pas d'époque) — on peut donc couper net, à la frame près.
+
+        ⚠️ `max_frames` compte des IMAGES là où `--seconds` compte des secondes, et ce n'est pas un
+        doublon : une durée dépend de l'ordonnanceur, un compte d'images non. C'est ce qui rend une
+        séance REJOUABLE À L'IDENTIQUE — le tirage des consignes est graine par graine, mais deux
+        exécutions bornées par le temps ne s'arrêtent pas forcément sur la même image, donc la
+        seconde peut avoir une consigne de plus. Mesuré : 1 exécution sur ~8 rend un journal de
+        longueur différente (4 consignes contre 5, préfixe identique). C'est la borne en temps qui
+        est en cause, jamais la graine. Un stimulus verrouillé à la frame se borne donc en frames.
+        """
+        nonlocal running
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                running = False
+            elif e.type == pygame.KEYDOWN and e.key in (pygame.K_ESCAPE, pygame.K_q):
+                running = False
+        if max_frames is not None and frame >= int(max_frames):
+            running = False
+        if seconds is not None and t_start is not None and (time.perf_counter() - t_start) >= seconds:
+            running = False
+
+    def draw(f, consigne):
+        win.fill(BG)
+        for i, (x, y, r) in enumerate(spots):
+            pygame.draw.circle(win, OUTLINE, (x, y), r, 2)     # repère quand la cible est OFF
+            if is_on(f, plan[i]["code"]):
+                pygame.draw.circle(win, ON_COLOR, (x, y), r)
+            pygame.draw.circle(win, FIX_DOT, (x, y), FIX_DOT_R)   # ancre le regard
+            lab = font.render(plan[i]["name"], True, LABEL)
+            win.blit(lab, lab.get_rect(center=(x, y + int(r * 1.9))))
+        if consigne is not None:
+            # `rayon_cercle` : la règle du P300, juste autour du disque sans toucher un de ses
+            # pixels. C'est aussi le cercle que `--smoke` va LIRE DANS LES PIXELS pour vérifier
+            # que le `cue` publié désigne la cible réellement cerclée (`point_de_sonde_cercle`).
+            x, y, r = spots[consigne]
+            pygame.draw.circle(win, CUE, (x, y), rayon_cercle(r), CUE_EPAISSEUR_PX)
+        # L'anneau de RETOUR : après les cibles, avant le texte — dans le fond, à l'extérieur du
+        # cercle de consigne (qui n'est de toute façon jamais là en même temps).
+        if anneau is not None:
+            anneau.dessiner(pygame, win, centres, rayon_retour)
+        # La croix de REPOS (`--libre`), au centre, vide : les disques sont sur la couronne.
+        bandeau = note
+        if repos is not None and repos.en_repos:
+            _retour.dessine_croix(pygame, win, (size[0] // 2, size[1] // 2), CROIX)
+            bandeau = (TEXTE_REPOS if note is None
+                       else tr("fenetre.cvep.bandeau_avec_repos", note=note, repos=TEXTE_REPOS))
+        if bandeau is not None:
+            txt = note_font.render(bandeau, True, NOTE)
+            win.blit(txt, txt.get_rect(center=(int(size[0] / 2), int(size[1] * 0.93))))
+        # L'indicateur d'écoute, en direct : c'est la seule chose de cet écran qui distingue
+        # « ça marche » de « ça a l'air de marcher ».
+        ecoute = (tr("fenetre.cvep.hud_ecoute") if outlet.have_consumers()
+                  else tr("fenetre.cvep.hud_silence"))
+        hud = hud_font.render(
+            tr("fenetre.cvep.hud_base", cycles=cycles, fps=refresh, sautees=sautees)
+            + ("" if libre else
+               tr("fenetre.cvep.hud_cible",
+                  nom=plan[consigne]['name'] if consigne is not None else '—'))
+            + (f"{etat_calib}  |  " if etat_calib else "")
+            + tr("fenetre.cvep.hud_fin", ecoute=ecoute), True, HUD)
+        win.blit(hud, (12, 10))
+
+    def annonce_bloc(c, ts, geste="les_deux"):
+        """`block_end` puis `cue`, au bord de cycle `c` du programme. DANS CET ORDRE.
+
+        ⚠️ Les deux partent APRÈS le marqueur `cycle` de ce bord, et l'ordre entre eux compte : le
+        `block_end` ferme le bloc qui vient de finir (le marqueur `cycle` qui précède a délimité
+        sa DERNIÈRE époque), le `cue` ouvre celui qui commence (le prochain marqueur `cycle`
+        délimitera sa PREMIÈRE). Les intervertir ferait, à chaque changement de bloc, oublier la
+        cible qu'on vient d'annoncer.
+
+        `geste` coupe le bord en deux quand une PHASE DE RETOUR s'intercale : "fermer" au bord qui
+        l'ouvre (le `block_end` seul), "ouvrir" au bord où elle finit (le `cue` s'il y en a un, et
+        le bandeau) — deux bords de cycle, donc deux frames 0.
+        """
+        nonlocal etat_calib
+        bloc, role, cible = programme[c]
+        ferme, ouvre = bornes_de_bloc(programme, c)
+        if ferme is not None and geste != "ouvrir":
+            emet({"mode": "cvep", "event": "block_end"}, None)
+        if geste == "fermer":
+            return
+        if ouvre:
+            emet({"mode": "cvep", "event": "cue", "target": int(cible)}, plan[cible]["name"])
+            print(f"[cvep-stim] t={ts:.3f}  bloc {bloc + 1}/{n_blocs} : "
+                  f"fixe « {plan[cible]['name']} » (cible {cible}) — "
+                  f"{sum(1 for b, r, _c in programme if b == bloc and r == 'bloc')} cycles "
+                  f"enregistrés")
+            note_json({"kind": "consigne", "t": round(ts, 6), "compter_a_partir_de": round(ts, 6),
+                       "cible": int(cible), "nom": plan[cible]["name"],
+                       "cycle": int(cycles), "frame": int(frame), "bloc": int(bloc)})
+        if role == "fin":
+            etat_calib = tr("fenetre.cvep.etat_fin")
+        else:
+            # ⚠️ Un TEST n'enregistre rien : le moteur NOTE. Le mot est à l'écran pendant toute la
+            # séance, et c'est le seul repère de l'étudiant entre les deux gestes.
+            etat_calib = tr("fenetre.cvep.etat_bloc", i=bloc + 1, n=n_blocs, geste=(
+                (tr("fenetre.cvep.etat_note") if tester else tr("fenetre.cvep.etat_enregistre"))
+                if role == "bloc" else tr("fenetre.cvep.etat_jete")))
+
+    t_flip_precedent = None
+    seance_complete = False
+    if calibrer:
+        # ⚠️ `calib_start` part AVANT la chauffe, et c'est voulu : le socle le RETIENT pendant sa
+        # chauffe (c'est le seul marqueur qui y survit), alors qu'il compte 30 s avant de déclarer
+        # la fenêtre absente. L'envoyer après ferait courir ce délai depuis un instant où la
+        # fenêtre existe déjà.
+        emet({"mode": "cvep", "event": "calib_start", "trials": int(epoques_promises)}, None)
+        print(f"[cvep-stim] « calib_start » envoyé : {epoques_promises} époques annoncées")
+        if attente_consommateur_s > 0 and not outlet.have_consumers():
+            # ⚠️ En `--tester`, TOUT ce que cette fenêtre imprime dit « test » : elle joue le MÊME
+            # protocole que l'entraînement, et le mot est la seule chose qui les distingue à
+            # l'écran. Dire « aucun modèle ne sera entraîné » serait faux : un test n'entraîne
+            # rien.
+            print(f"[cvep-stim] ⚠️ et PERSONNE n'écoute : cette séance ne produira "
+                  f"{'AUCUN verdict' if tester else 'AUCUN modèle'}. Lance {geste_seance} depuis la "
+                  f"console, ou ferme cette fenêtre.")
+    while running:
+        poll()
+        if not running:
+            break
+        # La consigne change au BORD d'un cycle, jamais au milieu : le moteur décide sur des
+        # cycles entiers, et une consigne qui bougerait en cours de cycle rendrait la fenêtre de
+        # décision à cheval sur deux cibles — donc impossible à dépouiller.
+        if calibrer:
+            # En calibration, l'ordre des cibles ne se tire pas : il vient du programme entrelacé.
+            # `k` compte les cycles joués depuis le début du programme, retour compris ; le
+            # programme, lui, n'avance pas pendant une phase de retour (`retenus`).
+            k = None if frame_prog0 is None else (frame - frame_prog0) // L
+            bord = k is not None and k >= 0 and (frame - frame_prog0) % L == 0
+            geste = "les_deux" if bord else None
+            if retour_k0 is not None:
+                # La PHASE DE RETOUR, décidée AVANT de dessiner l'image : aucune consigne, la
+                # décision du bloc fermé seule (cf. la docstring du module et `cycles_de_retour`).
+                geste = None
+                if anneau.attend and frame - retour_f0 >= images_attente:
+                    anneau.mesure_commence()     # attente close : une décision tardive est ignorée
+                if retour_montre0 is None and anneau.anneau is not None:
+                    retour_montre0 = frame
+                if bord and (not anneau.attend if retour_montre0 is None
+                             else frame - retour_montre0 >= images_affiche):
+                    # Fini, et sur un BORD : la cible suivante paraît sur une frame 0.
+                    anneau.mesure_commence()
+                    retenus += k - retour_k0
+                    retour_k0 = None
+                    geste = "ouvrir"
+            c_prog = None if k is None else (k if retour_k0 is None else retour_k0) - retenus
+            if c_prog is not None and c_prog >= len(programme):
+                seance_complete = True
+                break
+            if (phase_retour and geste == "les_deux"
+                    and bornes_de_bloc(programme, c_prog)[0] is not None):
+                # Un bloc se FERME ici : son `block_end` part, et la phase de retour commence.
+                anneau.mesure_finie()
+                retour_k0, retour_f0, retour_montre0 = k, frame, None
+                geste = "fermer"
+            i_cible = None if c_prog is None or retour_k0 is not None else programme[c_prog][2]
+        elif not libre and frame % (L * cycles_par_cible) == 0:
+            i_cible = tirage_cible(rng, len(plan), i_cible)
+        draw(frame, i_cible)
+        pygame.display.flip()
+        # ⚠️ L'HORODATAGE SE PREND ICI, juste après que la frame est À L'ÉCRAN. Le prendre avant
+        # décale TOUTES les phases d'une frame, et le décodeur cherche alors le code à un endroit
+        # où il n'est pas — sans qu'aucune exception ne le signale, avec des corrélations qui
+        # baissent juste assez pour qu'on accuse la personne de mal fixer.
+        if frame % L == 0:
+            ts = emet({"mode": "cvep", "event": "cycle", "refresh": float(refresh),
+                       "targets": len(plan)},
+                      None if i_cible is None else plan[i_cible]["name"])
+            onsets.append(ts)
+            cycles += 1
+            # `t=` est l'horodatage LSL EXACT du marqueur : c'est lui qui permet, après la séance,
+            # de raccrocher cette ligne aux échantillons `decoded_cvep` correspondants et de
+            # calculer une justesse — sans jamais mettre la consigne sur le réseau.
+            if calibrer:
+                # ⚠️ APRÈS le marqueur de cycle, jamais avant : ce marqueur-là ferme le cycle
+                # PRÉCÉDENT, et le `cue` qui le suit ne doit valoir que pour les SUIVANTS. Inversé,
+                # chaque bloc entrerait dans le jeu d'entraînement avec une époque prise pendant
+                # que le regard se déplaçait encore. Pendant une phase de retour : rien (`geste`).
+                if geste is not None:
+                    annonce_bloc(c_prog, ts, geste)
+            elif not libre and frame % (L * cycles_par_cible) == 0:
+                # ⚠️ DEUX horodatages, et le second est celui qui compte pour un dépouillement :
+                # `compter à partir de` = `t` + la transition. Avant lui, chaque `decoded_cvep`
+                # est calculé sur une fenêtre à cheval sur la cible PRÉCÉDENTE — les compter fait
+                # mesurer la transition, pas le décodeur (cf. le ⚠️ de TRANSITION_S).
+                print(f"[cvep-stim] t={ts:.3f}  cycle {cycles} : fixe « {plan[i_cible]['name']} » "
+                      f"(cible {i_cible})  —  compter à partir de t={ts + transition_s:.3f} "
+                      f"(+{transition_s:.1f} s de transition)")
+                # La MÊME ligne, dans le fichier : c'est celle-ci qui survit à la séance. Une
+                # entrée par CONSIGNE (~36 pour 5 min), pas par cycle — c'est toute la
+                # vérité-terrain, et le reste se recalcule.
+                note_json({"kind": "consigne", "t": round(ts, 6),
+                           "compter_a_partir_de": round(ts + transition_s, 6),
+                           "cible": int(i_cible), "nom": plan[i_cible]["name"],
+                           "cycle": int(cycles), "frame": int(frame)})
+        t_flip = time.perf_counter()
+        if t_flip_precedent is not None and (t_flip - t_flip_precedent) > SEUIL_SAUT / refresh:
+            sautees += 1
+        t_flip_precedent = t_flip
+        frame += 1
+        if note is not None and t_flip >= fin_note:
+            note = None
+            t_start = time.perf_counter()   # LA STIMULATION DÉCODABLE commence ici
+            if calibrer:
+                # Le programme démarre au PROCHAIN bord de cycle, jamais au milieu d'un : un bloc
+                # ouvert en cours de cycle ferait recevoir au moteur un `cue` sans marqueur de
+                # cycle derrière lui à la bonne place.
+                frame_prog0 = ((frame + L - 1) // L) * L
+        clock.tick(int(refresh) + 5)
+        # ⚠️ Le RETOUR se lit ICI, en fin de tour : APRÈS le flip, après le marqueur et après la
+        # mesure de cadence de cette image. `pull_chunk(timeout=0)` ne coûte presque rien, mais
+        # placé avant le flip il retarderait l'image dont le marqueur porte l'horodatage — le
+        # geste que ce fichier existe pour enseigner. `--smoke` le vérifie sur l'ordre des appels.
+        if anneau is not None:
+            anneau.lire()
+        if repos is not None:
+            repos.lire()
+
+    if anneau is not None:
+        anneau.bilan("[cvep-stim]")
+        anneau.fermer()
+    if repos is not None:
+        repos.bilan("[cvep-stim]")
+        repos.fermer()
+
+    if calibrer and seance_complete:
+        emet({"mode": "cvep", "event": "calib_end"}, None)
+        print(f"[cvep-stim] {'test' if tester else 'entraînement'} terminé : "
+              f"{epoques_promises} époques annoncées, « calib_end » envoyé — le moteur "
+              f"{'note, le verdict' if tester else 'entraîne, le résultat'} s'affiche dans la console.")
+    elif calibrer:
+        # ⚠️ AUCUN `calib_end` : la séance est incomplète, et le moteur ne doit RIEN entraîner
+        # dessus. Un modèle appris sur un tiers de séance serait indiscernable d'un modèle complet
+        # dans la liste de la console, et donnerait ensuite des corrélations plausibles et fausses.
+        faits = 0 if frame_prog0 is None else max(0, c_prog if retour_k0 is not None
+                                                  else (frame - frame_prog0) // L - retenus)
+        print(f"[cvep-stim] ⚠️ {'test' if tester else 'entraînement'} INTERROMPU à "
+              f"{faits}/{len(programme or [])} cycles : AUCUN « calib_end » envoyé, donc "
+              f"{'aucun verdict ne sera rendu' if tester else 'aucun modèle ne sera entraîné'}. "
+              f"Le moteur attend — clique « Abandonner » dans la console, puis recommence.")
+
+    # Un BILAN, toujours : « 0 cycle joué » doit se lire, pas se deviner. Et surtout la CADENCE
+    # RÉELLE — c'est le seul chiffre de cette séance qui dise si le moteur a pu suivre l'horloge.
+    # ⚠️ Il vit dans `bilan_de_seance`, PAS ici : un bilan écrit à même la boucle n'est qu'une
+    # suite de `print` que rien ne garde, et c'est le bloc qui porte le diagnostic de la seconde
+    # panne muette de ce mode. Une seule source pour ce qui s'imprime et ce que `--smoke` relit.
+    resume = bilan_de_seance(cycles, frame, sautees, onsets, refresh, L)
+    resume["graine"] = seed
+    if bilan is not None:
+        bilan.update(resume)
+    # ⚠️ Le dictionnaire est recopié VERBATIM, jamais reconstruit : `bilan_de_seance` reste
+    # l'unique source de ce qui s'imprime, de ce que `--smoke` relit et de ce qui s'écrit.
+    note_json(dict(kind="bilan", **resume))
+    if fichier_log is not None:
+        fichier_log.close()   # chaque ligne est déjà vidée : ce `close` ne protège aucune donnée
+    pygame.quit()
+    # ⚠️ Le dernier marqueur (`calib_end`) doit être TIRÉ par le moteur avant que l'outlet ne
+    # meure, sinon liblsl le jette (cf. `stimulus/fermeture.py`) : test sans verdict.
+    fermeture.laisser_tirer(outlet)
+    return True
+
+
+# --- --smoke : la phase (en pur), PUIS la boucle réelle sur un écran factice --
+
+def _runtime_de_test(code_len=63, refresh=60.0):
+    """Un `CVEPRuntime` prêt à tenir une horloge, sans moteur, sans casque et sans vrai `data/`.
+
+    C'est le `_runtime_de_test` de `core/modes/cvep.py:_selftest`, réduit à ce dont le test de
+    phase a besoin : un modèle au `code_len`/`refresh` voulus, sauvegardé dans un dossier
+    TEMPORAIRE, chargé par le chemin RÉEL du runtime (`validate` puis construction).
+
+    ⚠️ `core.modes.cvep.CVEP_MODEL_PATH` est repointé le temps de la construction, puis restauré :
+    `data/` contient des enregistrements EEG d'une personne identifiable sur un dépôt public, et
+    ce fichier ne doit ni le lire ni l'écrire. Le dossier temporaire part dans le `finally`.
+    """
+    import shutil
+    import tempfile
+
+    import numpy as np
+
+    from core.config import CVEP_CHANNELS, CVEP_N_TARGETS
+    from core.cvep_decoder import CVEPModel
+    from core.modes import cvep as mode_cvep
+    from core.modes.contract import validate
+
+    modele = CVEPModel(fs=250.0, refresh=refresh, code_len=code_len, channels=CVEP_CHANNELS)
+    modele.w = np.ones(len(CVEP_CHANNELS))
+    modele.template = np.zeros(code_len)     # template PLAT : ce test ne décode rien, il compte
+    modele.cv_ = 0.5                         # des frames — aucune corrélation n'est calculée ici
+
+    dossier = tempfile.mkdtemp(prefix="cvep_stim_test_")
+    avant = mode_cvep.CVEP_MODEL_PATH
+    try:
+        mode_cvep.CVEP_MODEL_PATH = modele.save(os.path.join(dossier, "cvep_model.npz"),
+                                                n_targets=CVEP_N_TARGETS)
+        valeurs, raison = validate(mode_cvep.SPEC, {})
+        if raison is not None:
+            raise RuntimeError(f"fabrique de test cassée : {raison}")
+
+        # ⚠️ **Le détournement doit être PROUVÉ, pas espéré** : ce n'est pas une précaution
+        # théorique, c'est EXACTEMENT la faute qui écrirait un modèle entraîné sur du bruit
+        # synthétique dans le vrai `data/`, sous un nom que le catalogue liste, donc proposable par
+        # défaut à la séance suivante.
+        #
+        # Repointer `mode_cvep.CVEP_MODEL_PATH` ne marche que parce que `_modeles_disponibles`
+        # relit cette variable de module à CHAQUE appel — une propriété d'un AUTRE fichier, que
+        # rien ne promet. Le jour où elle change (un déménagement de module), `validate` élirait le
+        # modèle le plus récent du VRAI `data/` : s'il est à 60 Hz et L=63, la course de phase
+        # ci-dessous tournerait contre un modèle de séance casque **et resterait verte**.
+        choisi = valeurs.get("model", "")
+        if os.path.dirname(os.path.abspath(choisi)) != os.path.abspath(dossier):
+            raise RuntimeError(
+                f"fabrique de test cassée : le détournement de CVEP_MODEL_PATH n'a PAS pris. "
+                f"Le modèle élu est « {choisi} », hors du dossier temporaire « {dossier} » — "
+                f"ce test tournerait contre un modèle du vrai data/ sans que rien ne le dise.")
+        return mode_cvep.CVEPRuntime(mode_cvep.SPEC, valeurs, engine=None)
+    finally:
+        mode_cvep.CVEP_MODEL_PATH = avant
+        shutil.rmtree(dossier, ignore_errors=True)
+
+
+def _course_de_phase(rt, refresh, L, t0=1000.0, cycles=8, saut_a=None):
+    """Rejoue une course de rendu EN PUR et rend `[(frame, pos, ecart), ...]`, une entrée par image
+    affichée. `ecart` = phase que le MOTEUR reconstruit MOINS phase que l'émetteur a AFFICHÉE,
+    ramenée dans [-L/2, L/2[ (None si le moteur refuse de donner une phase).
+
+    ⚠️ **Deux compteurs, et c'est tout le sujet.**
+      • `pos`   : la position du code RÉELLEMENT AFFICHÉE — le compteur de l'émetteur, +1 par image
+                  qu'il dessine, exactement le `frame` de `run()` ;
+      • `frame` : la frame d'ÉCRAN écoulée depuis `t0` — l'horloge murale, +1 par balayage.
+    Ils avancent ensemble, SAUF à `saut_a` où l'écran a basculé DEUX fois pendant que l'émetteur ne
+    comptait qu'une image. C'est le cas qui arrive vraiment (vsync manqué, tour de boucle long), et
+    c'est aussi le seul endroit où l'émetteur et le moteur ont le droit d'être en désaccord — d'une
+    frame, et jusqu'au marqueur suivant.
+
+    Les instants sont pris à `t0 = 1000 s` et non à 0 : `int(age * refresh)` tronque, et l'arrondi
+    binaire de `1000.0 + 63/60.0 - 1000.0` ne vaut PAS 1,05 exactement. C'est ce que
+    `core/modes/cvep.py:_EPS_FRAME` corrige, et une course de plusieurs centaines de frames est ce
+    qui le vérifie ailleurs qu'au seul bord de cycle testé là-bas.
+    """
+    releve = []
+    pos = frame = 0
+    saute = False
+    while pos < L * cycles:
+        t = t0 + frame / refresh
+        if pos % L == 0:
+            # Le marqueur part APRÈS le flip de la frame 0 — donc à l'instant où l'écran la montre.
+            rt.maj_reference(ts=t, refresh=refresh)
+        vue = rt.phase_a(t)
+        ecart = None if vue is None else (vue - pos % L + L // 2) % L - L // 2
+        releve.append((frame, pos, ecart))
+        if saut_a is not None and frame == saut_a and not saute:
+            saute = True
+            frame += 1          # l'écran a sauté une image ; le compteur de l'émetteur, non
+        pos += 1
+        frame += 1
+    return releve
+
+
+def _consigne_ecran(pygame, sondes_cercle, couleur=None):
+    """L'indice de la cible RÉELLEMENT CERCLÉE à l'écran, lu dans les pixels — None si aucune.
+
+    La vérité-terrain d'une calibration c-VEP est la cible cerclée de bleu, et c'est elle que le
+    marqueur `cue` doit porter. Un `cue` qui annoncerait la cible que le TIRAGE a décidée, pendant
+    que l'écran en cercle une autre, produirait une séance entière étiquetée à l'envers : le bon
+    nombre d'époques, des proportions plausibles, aucune exception — et un modèle qui décode du
+    bruit. La seule façon de le voir est d'aller lire l'écran plutôt que de croire l'émetteur.
+
+    Même limite que `_etat_ecran`, et pour la même raison : valide sous le pilote `dummy` (tampon
+    unique), pas transposable telle quelle à un vrai écran à double tampon.
+    """
+    surface = pygame.display.get_surface()
+    if surface is None:
+        return None
+    couleur = CUE if couleur is None else couleur
+    for i, (x, y) in enumerate(sondes_cercle):
+        if tuple(surface.get_at((x, y))[:3]) == tuple(couleur):
+            return i
+    return None
+
+
+def _etat_ecran(pygame, sondes, seuil=3 * 128):
+    """L'état ON/OFF de CHAQUE cible, lu dans les PIXELS — pas dans le compteur de l'émetteur.
+
+    C'est ce qui permet à `--smoke` de dire QUELLE frame du code était à l'écran au moment du
+    marqueur, sans jamais demander à l'émetteur de se noter lui-même. `None` si aucune surface
+    n'existe encore (pygame fermé).
+
+    ⚠️ **À QUELLE CONDITION cette sonde est valide — à lire avant de la recopier ailleurs.** Elle
+    appelle `get_surface()` APRÈS `flip()` et suppose d'y lire la frame qui vient d'être affichée.
+    C'est vrai sous le pilote `dummy` (que `--smoke` force), parce qu'il n'y a aucun échange de
+    tampon : la surface reste celle qu'on vient de dessiner. Sous un pilote à **double tampon
+    matériel**, `flip()` ÉCHANGE les tampons et `get_surface()` rend alors le tampon d'ARRIÈRE —
+    c'est-à-dire l'image PRÉCÉDENTE, ou un contenu indéfini. La sonde y lirait une position de code
+    décalée d'une frame et accuserait un émetteur correct. Elle n'est donc pas transposable telle
+    quelle à un test qui tournerait sur un vrai écran : il faudrait alors prendre l'empreinte
+    AVANT le `flip`, sur la surface qu'on vient de dessiner.
+    """
+    surface = pygame.display.get_surface()
+    if surface is None:
+        return None
+    return tuple(sum(surface.get_at((x, y))[:3]) > seuil for x, y in sondes)
+
+
+# Les deux durées du second passage de `--smoke` (le bandeau de chauffe, puis la stimulation
+# décomptée). Nommées parce que DEUX assertions les relisent : une chauffe qui figerait l'écran ne
+# se détecte qu'en comparant l'étendue des marqueurs à la seconde de ces deux durées.
+C2_CHAUFFE_S = 0.8
+C2_SECONDES = 1.5
+
+# Combien de frames le passage C3 retient DÉLIBÉRÉMENT, pour que le compteur de frames sautées ait
+# quelque chose à compter. Sous `dummy` il n'y a jamais de vsync manqué : sans ces cales, le
+# compteur resterait à 0 en toutes circonstances et le neutraliser ne rougirait aucune assertion.
+C3_CALES = 3
+
+
+def _smoke():
+    """Trois parties, et la première est celle qui protège ce fichier.
+
+    **A. LA PHASE.** Une course de rendu rejouée EN PUR, frame par frame, contre le `CVEPRuntime`
+    RÉEL du moteur : à chaque image, la phase que le moteur reconstruirait est comparée à celle que
+    l'émetteur a AFFICHÉE. C'est le seul test du dépôt qui rende visible la panne caractéristique de
+    ce mode — quelques frames de décalage, aucune exception, des scores d'apparence honnête et une
+    détection qui ne se déclenche presque jamais, indiscernable d'un étudiant qui ne fixe pas.
+
+    **B. La géométrie**, en pur : la couronne, l'ordre des cibles, la contrainte de consigne.
+
+    **C. `run()` POUR DE VRAI**, sur `SDL_VIDEODRIVER=dummy` — le patron de `p300_stimulus.py` et
+    d'`errp_stimulus.py`. Un `--smoke` qui retournerait avant l'import de pygame laisserait SANS
+    AUCUNE COUVERTURE les lignes qui contiennent le geste flip->horodatage, la seule chose que ce
+    fichier existe pour enseigner. Et les exécuter ne suffit pas à les VÉRIFIER : `display.flip` et
+    `StreamOutlet.push_sample` sont instrumentés pour enregistrer l'ordre RÉEL des deux gestes ET
+    l'état ON/OFF des six disques, lu dans les pixels, à chaque flip.
+
+    Ce qui n'est PAS revérifié ici : le transport LSL (mûrissement, horodatage, offset d'horloge)
+    est déjà prouvé par `core/markers.py`.
+    """
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    # Posé AVANT tout import de pygame : aucun test de ce dépôt n'ouvre de fenêtre.
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
+    plan, code = build_targets()
+    L = len(code)
+
+    # =====================================================================================
+    # A. LA PHASE — LE test de ce fichier, et de tout le mode c-VEP.
+    # =====================================================================================
+    refresh = 60.0
+    rt = _runtime_de_test(code_len=L, refresh=refresh)
+    saut_a = L * 3 + 17                       # une frame sautée, une seule, au milieu de la course
+    releve = _course_de_phase(rt, refresh, L, cycles=8, saut_a=saut_a)
+    ecarts = [e for _f, _p, e in releve]
+    pires = [abs(e) for e in ecarts if e is not None]
+
+    chk(len(pires) == len(ecarts),
+        f"une phase est disponible à CHAQUE frame de la course ({len(pires)}/{len(ecarts)}) — "
+        f"une seule fenêtre sans phase, et le moteur publie un -1 au lieu d'une cible")
+
+    # Le premier marqueur du cycle qui SUIT le saut : c'est lui qui doit résorber l'erreur.
+    resorption = ((saut_a // L) + 1) * L
+    avant = [abs(e) for f, p, e in releve if e is not None and f <= saut_a]
+    pendant = [abs(e) for f, p, e in releve if e is not None and f > saut_a and p < resorption]
+    apres = [abs(e) for _f, p, e in releve if e is not None and p >= resorption]
+
+    # ⚠️ **L'assertion qui mord, et elle exige ZÉRO, pas « au plus une frame ».** Une tolérance à
+    # ±1 frame sur toute la course serait un test creux : décaler la phase d'une frame partout
+    # (`int(age * refresh) + 1`) la laisserait VERTE. Avant le moindre saut, l'accord doit être
+    # EXACT — c'est là, et seulement là, qu'un décalage systématique se voit.
+    chk(bool(avant) and max(avant) == 0,
+        f"tant qu'aucune frame n'est sautée, la phase reconstruite par le moteur est EXACTEMENT "
+        f"celle que l'émetteur affiche, sur les {len(avant)} frames de la course (pire écart "
+        f"{max(avant) if avant else '—'})")
+    chk(bool(pendant) and max(pendant) <= 1,
+        f"après une frame sautée, l'écart ne dépasse jamais UNE frame ({max(pendant) if pendant else '—'} "
+        f"sur {len(pendant)} frames) — l'émetteur a une image de retard sur l'horloge murale, et "
+        f"c'est tout")
+    chk(bool(apres) and max(apres) == 0,
+        f"...et le marqueur du cycle SUIVANT RÉSORBE l'erreur au lieu de la laisser s'accumuler "
+        f"({len(apres)} frames après, pire écart {max(apres) if apres else '—'})")
+    chk(bool(pires) and max(pires) <= 1,
+        f"sur la course ENTIÈRE, l'écart entre la phase reconstruite et la phase AFFICHÉE ne "
+        f"dépasse jamais UNE frame (pire écart mesuré : {max(pires) if pires else '—'} frames, "
+        f"sur {len(pires)} frames)")
+
+    # Le témoin de la mutation : sans frame sautée, l'accord doit être EXACT de bout en bout. Si
+    # cette assertion et celle du « pendant » étaient confondues, une phase décalée d'une frame
+    # passerait pour un saut d'image.
+    propre = [abs(e) for _f, _p, e in _course_de_phase(rt, refresh, L, cycles=8) if e is not None]
+    chk(bool(propre) and max(propre) == 0,
+        f"une course SANS aucune frame sautée n'a aucun écart du tout, sur ses {len(propre)} "
+        f"frames — sinon le décalage est dans la CONVENTION, pas dans l'écran")
+
+    # =====================================================================================
+    # B. La géométrie et la consigne, en pur
+    # =====================================================================================
+    spots = positions_cibles(plan, TAILLE_FENETRE)
+    w, h = TAILLE_FENETRE
+    chk(len(spots) == len(plan)
+        and all(0 <= x < w and 0 <= y < h and r > 0 for x, y, r in spots),
+        f"les {len(spots)} cibles tiennent dans la fenêtre {w}x{h} ({spots})")
+    # L'ORDRE est le contrat public : `plan[i]` <-> `score_i` sur `decoded_cvep`. Une couronne
+    # recalculée en 2πi/n donnerait le même dessin à 6 cibles et un autre à 3 (cf. la docstring de
+    # `positions_cibles`) — on vérifie donc que l'angle du plan est bien celui du point.
+    attendus = [(int(w / 2 + math.sin(c["angle"]) * min(w, h) * DIST_RATIO),
+                 int(h / 2 - math.cos(c["angle"]) * min(w, h) * DIST_RATIO))
+                for c in plan]
+    chk([(x, y) for x, y, _r in spots] == attendus,
+        "chaque point suit l'ANGLE de sa cible dans le plan, pas un i-ème de tour recalculé")
+    sondes = [point_de_sonde(x, y, r) for x, y, r in spots]
+    chk(all((px - x) ** 2 + (py - y) ** 2 < r ** 2 and (px, py) != (x, y)
+            for (px, py), (x, y, r) in zip(sondes, spots)),
+        "le point de sonde est DANS le disque et hors du point de fixation (sinon `--smoke` lirait "
+        "la couleur du point rouge à la place de l'état ON/OFF)")
+
+    # --- la TRANSITION : les deux constantes du moteur, arrimées à leur SOURCE ---------------
+    # Recopiées ici, elles dériveraient en silence — et c'est le chiffre qu'un dépouillement lit
+    # dans le terminal pour savoir quoi jeter. `period_s` surtout : ce n'est pas une constante de
+    # `config.py` mais une méthode de `ModeRuntime`, que `CVEPRuntime` ne redéfinit pas.
+    from core.modes.cvep import CVEPRuntime
+    from core.modes.runtime import ModeRuntime
+    chk(ModeRuntime.period_s(None) == PERIODE_MOTEUR_S
+        and "period_s" not in CVEPRuntime.__dict__,
+        f"la période du moteur ({PERIODE_MOTEUR_S:g} s) est bien celle de `ModeRuntime.period_s`, "
+        f"et `CVEPRuntime` ne la redéfinit PAS "
+        f"({ModeRuntime.period_s(None)}, redéfinie={'period_s' in CVEPRuntime.__dict__})")
+    transition_attendue = CVEP_DECISION_CYCLES * L / 60.0 + CVEP_VOTE_LEN * PERIODE_MOTEUR_S
+    chk(abs(TRANSITION_S - transition_attendue) < 1e-9,
+        f"la période inexploitable après un changement de consigne vaut {TRANSITION_S:.2f} s "
+        f"({CVEP_DECISION_CYCLES} cycles de décision = {CVEP_DECISION_CYCLES * L / 60.0:.2f} s + "
+        f"{CVEP_VOTE_LEN} fenêtres de vote = {CVEP_VOTE_LEN * PERIODE_MOTEUR_S:.2f} s)")
+    duree_consigne = CYCLES_PAR_CIBLE * L / 60.0
+    part_exploitable = (duree_consigne - TRANSITION_S) / duree_consigne
+    # ⚠️ L'assertion qui empêche le retour du faux verdict : la part EXPLOITABLE d'une
+    # consigne doit DOMINER. À 4 cycles (4,2 s) elle ne vaudrait que 36 % — un dépouillement qui compte
+    # tout l'intervalle plafonnerait donc à ~40 % de justesse, décodeur parfait ou non.
+    chk(part_exploitable >= 0.60,
+        f"une consigne dure {duree_consigne:.1f} s dont {TRANSITION_S:.1f} s de transition : "
+        f"{part_exploitable:.0%} d'échantillons exploitables (il en faut au moins 60 %, sinon "
+        f"noter tout l'intervalle mesure la transition et pas le décodeur)")
+
+    rng = random.Random(0)
+    prec, repetitions = None, 0
+    for _ in range(2000):
+        tirage = tirage_cible(rng, len(plan), prec)
+        repetitions += int(tirage == prec)
+        prec = tirage
+    chk(repetitions == 0,
+        f"une consigne ne se répète JAMAIS deux fois de suite sur 2000 tirages ({repetitions}) — "
+        f"sinon l'utilisateur ne voit pas qu'un nouvel essai a commencé")
+    chk(tirage_cible(random.Random(0), 1, 0) == 0,
+        "...et à une seule cible, la contrainte s'efface au lieu de boucler à l'infini")
+
+    # --- Le DIAGNOSTIC DE CADENCE, point par point (la jumelle du geste flip->horodatage) ------
+    # ⚠️ Écrit à même le bilan, ce verdict ne serait gardé par AUCUNE assertion : inverser
+    # `abs(derive) < 0.02` en `>= 0.02` laisserait le smoke entièrement vert, et l'avertissement ne
+    # partirait plus jamais. Il est donc interrogé des DEUX côtés du seuil, plus le cas réel qui
+    # motive tout ça : un écran 144 Hz lancé avec `--refresh 60`.
+    cyc60 = L / 60.0
+    for mesure, doit_avertir, quoi in (
+            (cyc60, False, "cadence exacte"),
+            (cyc60 * 1.019, False, "1,9 % de dérive (sous le seuil : 59,94 Hz annoncé 60, gigue)"),
+            (cyc60 * 0.981, False, "-1,9 % de dérive"),
+            (cyc60 * 1.021, True, "2,1 % de dérive (au-dessus du seuil)"),
+            (cyc60 * 0.979, True, "-2,1 % de dérive"),
+            (L / 144.0, True, "un écran 144 Hz lancé avec --refresh 60")):
+        derive, avert = diagnostic_cadence(mesure, cyc60, 60.0, L)
+        chk((avert is not None) == doit_avertir,
+            f"cadence — {quoi} ({derive:+.1%}) : "
+            f"{'AVERTIT' if avert is not None else 'se tait'}, "
+            f"{'attendu' if (avert is not None) == doit_avertir else 'ATTENDU LE CONTRAIRE'}")
+    _d, avert_144 = diagnostic_cadence(L / 144.0, cyc60, 60.0, L)
+    chk(avert_144 is not None and "144" in avert_144 and "entraîne" in avert_144.lower(),
+        f"...et l'avertissement NOMME le rafraîchissement réellement affiché et dit de ré-entraîner "
+        f"({(avert_144 or '')[:80]}…)")
+
+    # --- `--refresh 0` : refusé AVANT d'ouvrir la fenêtre, pas un ZeroDivisionError nu ---------
+    for mauvais in (0.0, -60.0):
+        chk(run(windowed=True, refresh=mauvais, seconds=0.1,
+                stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0) is False,
+            f"--refresh {mauvais:g} est REFUSÉ avant d'ouvrir la moindre fenêtre (il divisait par "
+            f"zéro après, donc traceback nu et plein écran resté à l'écran)")
+
+    # --- `ecran_hz` : l'écran du stimulus ------------------------------------------------------
+    # `refresh` tient ici le rôle de la MESURE : l'écran factice n'a pas de vsync. Le refus arrive
+    # AVANT le flux de marqueurs : sinon une horloge fantôme resterait sur le réseau.
+    module = globals()
+    vrai_outlet, crees = module["StreamOutlet"], []
+
+    def _espion(*a, **k):
+        crees.append(a)
+        return vrai_outlet(*a, **k)
+
+    module["StreamOutlet"] = _espion
+    try:
+        try:
+            run(windowed=True, refresh=165.0, ecran_hz=60.0, max_frames=L,
+                stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0)
+            refus_ecran = None
+        except EcranRefuse as e:
+            refus_ecran = str(e)
+        chk(refus_ecran is not None and "165" in refus_ecran and "60" in refus_ecran
+            and not crees,
+            f"un écran mesuré à 165 Hz pour 60 Hz demandés : REFUS qui nomme les deux, avant "
+            f"tout flux de marqueurs ({refus_ecran}, {len(crees)} flux créé(s))")
+        journal_ecran = []
+        run(windowed=True, refresh=59.6, ecran_hz=60.0, max_frames=2 * L,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            journal=journal_ecran)
+        cycles_ecran = [m for m, _ts, _f, _c in journal_ecran if m.get("event") == "cycle"]
+        chk(len(crees) == 1 and cycles_ecran
+            and all(m.get("refresh") == 60.0 for m in cycles_ecran),
+            f"un écran mesuré à 59,6 Hz pour 60 demandés : chaque marqueur de cycle porte 60, le "
+            f"VOULU, celui que le modèle apprendra ({[m.get('refresh') for m in cycles_ecran]})")
+    finally:
+        module["StreamOutlet"] = vrai_outlet
+
+    # =====================================================================================
+    # C. run() POUR DE VRAI, sur un écran factice
+    # =====================================================================================
+    # Un flux au nom DISTINCT du contrat public : les noms de flux sont partagés par toutes les
+    # instances du projet, et un smoke ne doit jamais pouvoir répondre à la place d'un vrai
+    # émetteur. `attente_consommateur_s=0` en C1 parce que personne n'écoute, par construction.
+    import shutil
+    import tempfile
+
+    import pygame
+
+    import pylsl
+
+    sondes_smoke = [point_de_sonde(x, y, r) for x, y, r in positions_cibles(plan, TAILLE_FENETRE)]
+    sondes_cercle = [point_de_sonde_cercle(x, y, r)
+                     for x, y, r in positions_cibles(plan, TAILLE_FENETRE)]
+    trace = []                   # l'ORDRE RÉEL des deux gestes, et l'écran à chaque flip
+    cercles = []                 # la cible CERCLÉE à chaque flip, lue dans les pixels — un par
+    #                              flip, donc aligné sur les entrées « flip » de `trace`
+    vrai_flip = pygame.display.flip
+    vrai_push = pylsl.StreamOutlet.push_sample
+    # C3 seulement : on FABRIQUE des frames sautées, en retenant le flip assez longtemps pour
+    # dépasser `SEUIL_SAUT`. C'est le seul moyen d'exercer le compteur de bout en bout — sous
+    # `dummy` il n'y a jamais de vsync manqué, donc il resterait à 0 quoi qu'on fasse, et le
+    # neutraliser ne rougirait rien.
+    # ⚠️ `attendre` n'est pas un raffinement : l'émetteur mesure un ÉCART entre deux flips, donc le
+    # tout premier flip d'une séance n'a pas de prédécesseur et ne peut par construction pas être
+    # compté comme sauté. Caler les toutes premières images poserait donc 3 cales pour 2 comptées.
+    cales = {"restantes": 0, "faites": 0, "duree": 0.0, "attendre": 0}
+
+    def flip_trace(*a, **k):
+        r = vrai_flip(*a, **k)
+        trace.append(("flip", _etat_ecran(pygame, sondes_smoke)))   # l'écran APRÈS le basculement
+        cercles.append(_consigne_ecran(pygame, sondes_cercle))      # ...et la cible CERCLÉE
+        if cales["attendre"] > 0:
+            cales["attendre"] -= 1
+        elif cales["restantes"] > 0:
+            cales["restantes"] -= 1
+            cales["faites"] += 1
+            time.sleep(cales["duree"])
+        return r
+
+    def push_trace(self, *a, **k):
+        # L'ÉVÉNEMENT est retenu, pas seulement le fait qu'un marqueur soit parti : en
+        # calibration, `calib_start`/`cue`/`block_end`/`calib_end` partent eux aussi par cette
+        # porte, et ceux-là ne suivent AUCUN bord de cycle. Sans cette information, l'assertion
+        # d'alignement (« le flip qui précède ce marqueur a-t-il montré la frame 0 ? ») devrait
+        # être relâchée pour les laisser passer — c'est-à-dire affaiblie exactement là où elle
+        # porte. Les sections C1/C2 n'en lisent rien : leurs marqueurs sont tous des cycles.
+        try:
+            evenement = json.loads(a[0][0]).get("event")
+        except (ValueError, TypeError, IndexError, KeyError):
+            evenement = None
+        trace.append(("push", evenement))
+        return vrai_push(self, *a, **k)
+
+    pygame.display.flip = flip_trace
+    pylsl.StreamOutlet.push_sample = push_trace
+    try:
+        journal, bilan1 = [], {}
+        # `cycles_par_cible=2` et non le défaut (8 = 8,4 s) : en 6 s de passage, le défaut ne
+        # ferait tourner la consigne qu'une fois. La VALEUR par défaut, elle, est vérifiée plus
+        # haut, sur la part exploitable qu'elle laisse — pas ici.
+        fait = run(windowed=True, refresh=60.0, seconds=6.0, cycles_par_cible=2,
+                   stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                   journal=journal, seed=0, bilan=bilan1)
+        trace_c1, journal2 = list(trace), []
+        trace.clear()
+        # C2 : le BANDEAU DE CHAUFFE, raccourci. Le moteur encaisse les marqueurs pendant sa
+        # chauffe (`CVEPRuntime.tick`), donc le clignotement ne doit PAS s'arrêter là — c'est ce
+        # que ce second passage vérifie, et c'est la divergence assumée avec `errp_stimulus.py`.
+        run(windowed=True, refresh=60.0, seconds=C2_SECONDES,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.2,
+            attente_moteur_s=C2_CHAUFFE_S, journal=journal2, seed=0)
+        trace_c2 = list(trace)
+        trace.clear()
+        # C3 : N frames RÉELLEMENT retenues -> le compteur doit en voir exactement N.
+        cales.update(restantes=C3_CALES, faites=0, duree=SEUIL_SAUT * 1.4 / 60.0, attendre=10)
+        bilan3 = {}
+        run(windowed=True, refresh=60.0, seconds=1.2,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            seed=0, bilan=bilan3)
+        trace.clear()
+        # C4/C5 : la MÊME graine doit rejouer la MÊME séquence de consignes.
+        #
+        # ⚠️ **Bornés en IMAGES, jamais en secondes.** Deux `run()` bornés par `seconds` ne
+        # s'arrêtent pas forcément sur la même image : mesuré, 1 exécution sur ~8 où le second
+        # passage rend UNE consigne de plus (préfixes identiques). Le mécanisme de graine n'y est
+        # pour rien — c'est l'ordonnanceur. Un test instable qu'on relance jusqu'au vert est un
+        # test qu'on apprend à ignorer ; on supprime donc la CAUSE au lieu de comparer des
+        # préfixes. `max_frames` rend les deux courses identiques à l'image près.
+        #
+        # 6 cycles de 63 frames à `cycles_par_cible=1` = 6 consignes : une coïncidence entre deux
+        # graines différentes y vaudrait 1/6 x (1/5)^5 ≈ 0,005 %.
+        journal4, journal5 = [], []
+        for jn in (journal4, journal5):
+            run(windowed=True, refresh=120.0, max_frames=6 * L, cycles_par_cible=1,
+                stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                journal=jn, seed=20260821)
+        # C6 : le JOURNAL DE FICHIER (`--log`), la moitié de la vérité-terrain qui SURVIT à la
+        # séance. Le terminal n'en est pas une copie : on ferme parfois les
+        # terminaux entre deux blocs, et un scrollback dépassé efface la seule consigne écrite.
+        # ⚠️ Un fichier temporaire, JAMAIS `data/` — et une SENTINELLE écrite avant l'appel, pour
+        # que le mode d'ouverture soit vérifié et pas seulement supposé : en `"w"`, elle disparaît.
+        dossier_log = tempfile.mkdtemp(prefix="cvep_stim_log_")
+        chemin_log = os.path.join(dossier_log, "seance.jsonl")
+        with open(chemin_log, "w", encoding="utf-8") as f:
+            f.write('{"kind": "sentinelle"}\n')
+        journal6, bilan6 = [], {}
+        run(windowed=True, refresh=120.0, max_frames=6 * L, cycles_par_cible=2,
+            stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+            journal=journal6, bilan=bilan6, seed=7, log_path=chemin_log)
+        with open(chemin_log, encoding="utf-8") as f:
+            lignes_log = [json.loads(l) for l in f if l.strip()]
+        shutil.rmtree(dossier_log, ignore_errors=True)
+
+        # C7 : `--calibrer`, sur le MÊME écran factice et avec la MÊME instrumentation. Ce n'est
+        # pas un second programme : c'est le même `run()`, le même code, le même geste
+        # flip->horodatage. Ce qui s'ajoute est un ordre de cibles ENTRELACÉ et quatre marqueurs
+        # de protocole autour. 240 Hz et deux cycles par cible : le passage tient en quelques
+        # secondes tout en jouant DEUX blocs par cible, donc au moins un `block_end` entre deux
+        # blocs de la MÊME cible — le cas où oublier de fermer un bloc ne se verrait pas.
+        trace.clear()
+        cercles.clear()
+        journal7, bilan7 = [], {}
+        fait7 = run(windowed=True, refresh=240.0, calibrer=True, cycles_calib=2, settle=1,
+                    stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+                    journal=journal7, bilan=bilan7, seed=3)
+        trace_c7, cercles_c7 = list(trace), list(cercles)
+        trace.clear()
+        cercles.clear()
+        # …et une séance INTERROMPUE (bornée en images bien avant la fin du programme).
+        journal8 = []
+        run(windowed=True, refresh=240.0, calibrer=True, cycles_calib=2, settle=1,
+            max_frames=3 * L, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
+            attente_consommateur_s=0.0, journal=journal8, seed=3)
+    finally:
+        pygame.display.flip = vrai_flip
+        pylsl.StreamOutlet.push_sample = vrai_push
+        cales["restantes"] = 0
+
+    chk(fait, "run() va au bout sur un écran factice (SDL_VIDEODRIVER=dummy)")
+    chk(len(journal) >= 3, f"...et a RÉELLEMENT poussé plusieurs marqueurs de cycle ({len(journal)})")
+    if not journal or not journal2:
+        chk(False, "aucun marqueur poussé : tout ce qui suit porterait sur une liste vide")
+        print("[cvep-stim] VERDICT : PROBLÈME")
+        return False
+
+    # --- Le CONTRAT du marqueur : exactement ce que le moteur sait lire, rien de plus -------
+    chk(all(m == {"mode": "cvep", "event": "cycle", "refresh": 60.0, "targets": len(plan)}
+            for m, _ts, _f, _c in journal),
+        "chaque marqueur est EXACTEMENT {mode: cvep, event: cycle, refresh: <float>, targets: "
+        "<nombre de cibles>} — le `refresh` est OBLIGATOIRE (sans lui "
+        "`CVEPRuntime._encaisser_marqueurs` les refuse tous) et la cible consignée n'y figure PAS "
+        "(cf. ⚠️ de la docstring du module)")
+    # Jusqu'à 10 cibles en couronne : deux disques voisins ne se touchent pas, et l'anneau de
+    # retour d'une cible n'atteint pas la suivante — à la plus petite taille de fenêtre.
+    for n_couronne in (CVEP_N_TARGETS_MIN, CVEP_N_TARGETS_MAX):
+        spots_n = positions_cibles(build_targets(n=n_couronne)[0], TAILLE_FENETRE)
+        ecart_n = min(math.dist(a[:2], b[:2]) for a, b in zip(spots_n, spots_n[1:] + spots_n[:1]))
+        r_n = spots_n[0][2]
+        chk(len(spots_n) == n_couronne
+            and ecart_n > r_n + _retour.rayon_anneau(r_n) + 2,
+            f"{n_couronne} cibles : {n_couronne} disques, et l'anneau de retour d'une cible "
+            f"n'atteint pas sa voisine (centres à {ecart_n:.0f} px, rayon {r_n}, anneau "
+            f"{_retour.rayon_anneau(r_n)})")
+    chk(all(isinstance(m["refresh"], float) and not isinstance(m["refresh"], bool)
+            for m, _ts, _f, _c in journal),
+        "...et le `refresh` est un FLOTTANT : `bool` hérite de `int` en Python, donc un `true` "
+        "passerait pour 1 Hz — le moteur écarte ce cas explicitement, l'émetteur ne doit pas le "
+        "produire")
+    chk(all(f % L == 0 for _m, _ts, f, _c in journal),
+        f"un marqueur par REDÉMARRAGE du code, jamais ailleurs "
+        f"({[f % L for _m, _ts, f, _c in journal][:8]})")
+
+    horodatages = [ts for _m, ts, _f, _c in journal]
+    chk(all(b > a for a, b in zip(horodatages, horodatages[1:])),
+        "les horodatages avancent strictement — un flip par cycle, un horodatage par flip")
+
+    # --- ⚠️⚠️ L'ALIGNEMENT : le flip qui précède le marqueur a-t-il montré la FRAME 0 ? -------
+    # C'est LE test du geste flip->horodatage, et il ne peut pas être celui d'`errp_stimulus.py`.
+    # Là-bas, « ce flip a CHANGÉ l'écran » suffit parce que la piste est immobile entre deux
+    # feedbacks. Ici l'écran change à chaque frame : ce critère serait VERT même en poussant le
+    # marqueur avant le flip. On lit donc CE QUI EST AFFICHÉ, dans les pixels, et on le compare au
+    # code attendu.
+    #
+    # Une seule image ne suffit pas à identifier la position du code — mesuré : 32 motifs ON/OFF
+    # distincts pour 63 positions, à 6 cibles. Une FENÊTRE de deux images consécutives, si (c'est
+    # l'assertion `table` ci-dessous). On en prend trois, pour la marge.
+    fen_sonde = 3
+    etats = [tuple(bool(is_on(f, c["code"])) for c in plan) for f in range(L)]
+    table = {tuple(etats[(f - fen_sonde + 1 + i) % L] for i in range(fen_sonde)): f
+             for f in range(L)}
+    chk(len(table) == L,
+        f"fixture : une fenêtre de {fen_sonde} images consécutives identifie SANS AMBIGUÏTÉ la "
+        f"position du code ({len(table)}/{L} motifs distincts) — sinon ce test ne saurait pas "
+        f"lire l'écran")
+    chk(len(set(etats)) < L,
+        f"...et une SEULE image ne suffirait pas ({len(set(etats))}/{L} motifs) : c'est pourquoi "
+        f"le critère « ce flip a changé l'écran » d'errp_stimulus ne peut pas servir ici")
+    # Le chiffre qui rend ce critère-là VIDE de sens ici, et qui justifie tout le détour par les
+    # pixels : sur 63 positions, une seule laisse l'écran identique à la précédente. « Ce flip a
+    # changé l'écran » est donc vrai 62 fois sur 63, quoi que fasse l'émetteur.
+    inchangees = sum(1 for f in range(L) if etats[f] == etats[(f - 1) % L])
+    chk(inchangees <= 1,
+        f"...et l'écran change à {L - inchangees} frames sur {L} : « ce flip a changé l'écran » "
+        f"serait vert même en poussant le marqueur AVANT le flip")
+
+    for nom, tr, jn in (("C1", trace_c1, journal), ("C2", trace_c2, journal2)):
+        i_push = [i for i, (quoi, _e) in enumerate(tr) if quoi == "push"]
+        chk(len(i_push) == len(jn) and all(i >= 1 and tr[i - 1][0] == "flip" for i in i_push),
+            f"[{nom}] chaque marqueur part APRÈS un flip, jamais avant "
+            f"({len(i_push)} push pour {len(jn)} marqueurs journalisés)")
+        lues = []
+        for i in i_push:
+            fen = tuple(e for quoi, e in tr[:i] if quoi == "flip")[-fen_sonde:]
+            if len(fen) == fen_sonde and None not in fen:
+                lues.append(table.get(fen))
+        chk(len(lues) >= 2 and all(p == 0 for p in lues),
+            f"[{nom}] ...et le flip qui précède le marqueur est celui qui a affiché la FRAME 0 du "
+            f"code, ni la {L - 1} ni la 1 — lu dans les PIXELS des {len(plan)} disques "
+            f"({len(lues)} marqueurs vérifiés, positions {sorted(set(lues))})")
+
+    # --- La CADENCE : un cycle = L frames, ni plus ni moins --------------------------------
+    # Le moteur extrapole la phase à `refresh` Hz jusqu'au marqueur suivant. Un cycle qui dure
+    # autre chose que `L / refresh` veut dire que l'écran ne tient pas la cadence annoncée : le
+    # moteur dérive alors ENTRE deux marqueurs, sans qu'aucune exception ne le dise.
+    cycle_theorique = L / 60.0
+    ecarts_cycles = [b - a for a, b in zip(horodatages, horodatages[1:])]
+    chk(bool(ecarts_cycles)
+        and all(abs(e - cycle_theorique) <= 0.25 * cycle_theorique for e in ecarts_cycles),
+        f"un cycle dure {cycle_theorique:.3f} s ({L} frames à 60 Hz), ±25 % — mesuré "
+        f"{statistics.median(ecarts_cycles) * 1000:.0f} ms de médiane sur {len(ecarts_cycles)} "
+        f"cycles (l'écran factice n'a pas de vsync, d'où la tolérance large)")
+
+    # --- Le clignotement NE S'ARRÊTE PAS pendant la chauffe du moteur ------------------------
+    # C2 tourne C2_CHAUFFE_S de bandeau de chauffe PUIS C2_SECONDES de stimulation décomptée. Si le
+    # bandeau tenait un écran STATIQUE — le réflexe qu'on a en recopiant `errp_stimulus.py` — il
+    # n'y aurait aucun marqueur pendant la chauffe, l'horloge du moteur ne partirait qu'après, et
+    # sa première fenêtre décodée attendrait un marqueur de plus.
+    #
+    # ⚠️ **Ce qu'il faut mesurer, c'est l'ÉTENDUE, pas les trous.** Un écran figé PENDANT la chauffe
+    # ne creuse aucun trou ENTRE deux marqueurs : il retarde simplement le premier. Un « plus grand
+    # intervalle < X » reste donc vert, quelle que soit la valeur de X — c'est exactement le test
+    # creux. L'étendue des marqueurs, elle, ne peut
+    # dépasser la seule durée décomptée QUE si la chauffe en a produit aussi.
+    ts_c2 = [ts for _m, ts, _f, _c in journal2]
+    etendue = (ts_c2[-1] - ts_c2[0]) if len(ts_c2) > 1 else 0.0
+    chk(etendue > C2_SECONDES,
+        f"[C2] les marqueurs s'étendent sur {etendue:.2f} s, PLUS que les {C2_SECONDES:g} s "
+        f"décomptées — donc le bandeau de chauffe en a produit lui aussi : le moteur les ENCAISSE "
+        f"(`CVEPRuntime.tick`), il ne les jette pas comme le fait l'ErrP")
+    chk(len(journal2) >= int((C2_CHAUFFE_S + C2_SECONDES) / cycle_theorique),
+        f"[C2] ...et il y en a au moins un par cycle des {C2_CHAUFFE_S + C2_SECONDES:g} s totales "
+        f"({len(journal2)} pour {int((C2_CHAUFFE_S + C2_SECONDES) / cycle_theorique)} attendus au "
+        f"minimum)")
+
+    # --- La consigne : elle tourne, et elle ne part pas sur le réseau ------------------------
+    consignes = [c for _m, _ts, _f, c in journal]
+    chk(len(set(consignes)) >= 2,
+        f"la cible consignée CHANGE au fil de la séance ({consignes}) — une séance à cible unique "
+        f"ne mesure rien")
+    chk(all(c in {t['name'] for t in plan} for c in consignes),
+        "...et c'est toujours un NOM de cible du plan, celui qu'on relira dans le terminal")
+
+    # --- LE BILAN DE FIN : gardé par des assertions, plus seulement imprimé ------------------
+    # ⚠️ C'est le seul garde-fou de la SECONDE panne muette de ce mode (un écran qui ne tient pas
+    # le rafraîchissement annoncé). Réduit à une suite de `print`, TROIS mutations d'une ligne le
+    # laisseraient entièrement vert : comparaison de dérive inversée, compteur de frames sautées
+    # neutralisé, bloc de bilan supprimé. Les trois rougissent.
+    chk(bilan1.get("cycles") == len(journal) and bilan1.get("frames", 0) > 0,
+        f"[C1] le bilan de fin EXISTE et compte ce que la séance a vraiment fait "
+        f"({bilan1.get('cycles')} cycles, {bilan1.get('frames')} frames)")
+    chk(bilan1.get("cadence_s") is not None and bilan1.get("derive") is not None,
+        f"[C1] ...il MESURE la cadence réelle ({bilan1.get('cadence_s')} s/cycle, "
+        f"dérive {bilan1.get('derive')})")
+    # Sous `dummy` il n'y a pas de vsync : `clock.tick(refresh + 5)` impose 65 fps, soit ~-5 % —
+    # au-dessus du seuil de 2 %. L'avertissement DOIT donc partir ici. C'est ce qui attrape la
+    # comparaison inversée sur le chemin RÉEL, en plus des six points de la fonction pure.
+    chk(bilan1.get("avertissement") is not None and abs(bilan1.get("derive", 0.0)) >= 0.02,
+        f"[C1] ...et il AVERTIT, parce que l'écran factice n'a pas de vsync et dérive de "
+        f"{bilan1.get('derive', 0.0):+.1%} — le chemin réel appelle bien le diagnostic")
+    # Tolérance en PROPORTION et non « exactement 0 » : l'écran factice n'a pas de vsync, la
+    # boucle se cadence par `clock.tick`, et son attente déborde parfois de plus de 25 ms. Mesuré
+    # sur le poste de dev, dans ce smoke (après un `pygame.quit()` dans le même processus) : de 0
+    # à 4,7 % de frames comptées sautées avec le vrai seuil. Une vraie fenêtre ne joue qu'une
+    # séance par processus et ne le voit pas. Ce que la garde attrape, ce sont les FAUX POSITIFS
+    # EN MASSE : un seuil sous une période (0,9) en compte 75 %. Un seuil d'exactement une période
+    # (8 %) ne se distingue pas de ce bruit, et une tolérance plus serrée rougirait sur un code
+    # correct. Que le compteur compte VRAIMENT est l'affaire de C3, juste en dessous.
+    chk(bilan1.get("sautees", 0) <= 0.20 * bilan1.get("frames", 1),
+        f"[C1] ...sans fabriquer de fausses frames sautées quand tout va bien "
+        f"({bilan1.get('sautees')} sur {bilan1.get('frames')})")
+    # ⚠️ **Une borne INFÉRIEURE, pas une égalité.** Une égalité `sautees == C3_CALES` rougirait par
+    # intermittence (mesuré : 1 échec sur 3 lancements, « 3 cales posées -> 4 comptées ») : sur une
+    # course de 1,2 s, une pause du ramasse-miettes dépassant `SEUIL_SAUT` ajoute une frame sautée
+    # VRAIE, que rien ne distingue d'une cale. Le compteur a raison ; c'est l'égalité qui
+    # prétendrait connaître l'avenir.
+    #
+    # Ce qui est vérifié reste ce qui compte : **le compteur voit AU MOINS toutes les cales
+    # posées** — s'il en ratait une, il ne compterait pas ce qu'il prétend compter. Le faux
+    # positif en masse, lui, est déjà couvert par C1 juste au-dessus (≤ 2 % des frames), et la
+    # borne haute ci-dessous garde le garde-fou : quelques frames de charge machine, pas dix.
+    #
+    # Un rouge qui tombe une fois sur trois finit par être ignoré, puis désactivé.
+    sautees3 = bilan3.get("sautees", 0)
+    chk(cales["faites"] == C3_CALES and C3_CALES <= sautees3 <= C3_CALES + 3,
+        f"[C3] les {C3_CALES} frames RÉELLEMENT retenues (flip bloqué "
+        f"{SEUIL_SAUT * 1.4:.1f} périodes) sont TOUTES comptées "
+        f"({cales['faites']} cales posées -> {sautees3} comptées, tolérance +3 pour la charge "
+        f"machine) — sous `dummy` il n'y a jamais de vsync manqué, donc sans ces cales le "
+        f"compteur ne prouverait rien")
+
+    # --- `--seed` tient sa promesse, et la graine est TOUJOURS connue ------------------------
+    # ⚠️ Sans ces assertions, remplacer `random.Random(seed)` par `random.Random()` laisserait tout
+    # vert. Et sans `--seed`, une graine tirée mais non imprimée rendrait la séance irrejouable
+    # sans que personne le sache. Or une séance qu'on ne peut pas rejouer ne se dépouille pas deux
+    # fois.
+    consignes4 = [c for _m, _ts, _f, c in journal4]
+    consignes5 = [c for _m, _ts, _f, c in journal5]
+    # ⚠️ On exige la MÊME LONGUEUR autant que le même contenu : comparer des listes de longueurs
+    # différentes rendrait ce contrôle instable. Bornées en frames, les deux courses en ont
+    # forcément 6.
+    chk(len(consignes4) == 6 and len(consignes5) == 6 and consignes4 == consignes5,
+        f"deux séances à la MÊME graine ET au MÊME compte d'images rejouent EXACTEMENT les mêmes "
+        f"consignes, en même nombre ({consignes4} vs {consignes5})")
+    chk(len(journal4) == len(journal5) == 6,
+        f"...et le compte de marqueurs est le même à l'image près, parce que la borne est un "
+        f"nombre d'IMAGES et non une durée ({len(journal4)} vs {len(journal5)})")
+    chk(len(set(consignes4)) >= 2,
+        f"...et cette séquence n'est pas une cible unique répétée, ce qui la rendrait "
+        f"indistinguable d'un tirage cassé ({consignes4})")
+    chk(bilan3.get("graine") == 0,
+        f"la graine DONNÉE est celle qui a servi, et le bilan la rend ({bilan3.get('graine')})")
+    # `--noms` : 8 cibles NOMMÉES ; CHAQUE marqueur de cycle annonce leur nombre au moteur.
+    journal_n8, bilan_n8 = [], {}
+    run(windowed=True, refresh=120.0, max_frames=2 * L, cycles_par_cible=1,
+        stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+        seed=0, journal=journal_n8, bilan=bilan_n8, noms=["Haut", "Bas", "Gauche", "Droite", "Feu", "Eau", "Air", "Terre"])
+    cycles8 = [m for m, _ts, _f, _c in journal_n8 if m.get("event") == "cycle"]
+    chk(cycles8 and all(m.get("targets") == 8 for m in cycles8),
+        f"lancée avec 8 cibles, la fenêtre l'annonce sur chaque marqueur de cycle "
+        f"({len(cycles8)} marqueur(s), {sorted({m.get('targets') for m in cycles8})})")
+    bilan_sans_graine = {}
+    run(windowed=True, refresh=120.0, max_frames=L, cycles_par_cible=1,
+        stream_name=MARKER_STREAM_DEFAULT + "_smoke", attente_consommateur_s=0.0,
+        seed=None, bilan=bilan_sans_graine)
+    chk(isinstance(bilan_sans_graine.get("graine"), int),
+        f"...et SANS `--seed`, une graine est TIRÉE puis annoncée, au lieu de laisser une séance "
+        f"irrejouable sans le dire ({bilan_sans_graine.get('graine')})")
+
+    # --- [C6] `--log` : la VÉRITÉ-TERRAIN dans un fichier ------------------------------------
+    # ⚠️ **C'est la clé de jointure du dépouillement, et sans elle le dépouillement n'est
+    # possible avec AUCUN outil du dépôt.** Le moteur publie un indice de cible ; la cible
+    # CONSIGNÉE ne part jamais sur le réseau. Les deux ne se rejoignent que par l'horodatage
+    # `local_clock()` — celui que ces lignes portent, et que `examples/receiver.py` imprime en tête
+    # de chaque échantillon. Un journal qui vivrait sur stdout ne survit ni à un Ctrl+C, ni à la
+    # fermeture des terminaux ENTRE deux blocs.
+    entetes = [l for l in lignes_log if l.get("kind") == "header"]
+    consignes_log = [l for l in lignes_log if l.get("kind") == "consigne"]
+    bilans_log = [l for l in lignes_log if l.get("kind") == "bilan"]
+    # Les changements de consigne du déroulé RÉEL : `run` en imprime un par bord de
+    # `L * cycles_par_cible`, et c'est exactement là qu'il doit écrire une ligne.
+    changements = [(ts, c) for _m, ts, f, c in journal6 if f % (L * 2) == 0]
+    chk(len(consignes_log) == len(changements) and len(changements) >= 2,
+        f"[C6] une ligne `consigne` par CHANGEMENT de consigne, pas une de plus ni de moins "
+        f"({len(consignes_log)} lignes pour {len(changements)} changements)")
+    chk([(round(ts, 6), c) for ts, c in changements]
+        == [(l["t"], l["nom"]) for l in consignes_log],
+        f"[C6] ...et chaque ligne porte l'horodatage LSL EXACT du marqueur et le nom de la cible "
+        f"consignée — c'est la SEULE clé qui rejoigne `decoded_cvep` "
+        f"({[(l['t'], l['nom']) for l in consignes_log]})")
+    transition_120 = CVEP_DECISION_CYCLES * L / 120.0 + CVEP_VOTE_LEN * PERIODE_MOTEUR_S
+    chk(bool(consignes_log)
+        and all(abs(l["compter_a_partir_de"] - l["t"] - transition_120) < 1e-3
+                for l in consignes_log),
+        f"[C6] ...et le second horodatage est bien `t` + la transition ({transition_120:.2f} s à "
+        f"120 Hz) : le fichier porte l'instant À PARTIR DUQUEL un échantillon compte, pas seulement "
+        f"celui où la consigne est apparue")
+    chk(len(entetes) == 1 and entetes[0]["seed"] == 7 and entetes[0]["code_len"] == L
+        and entetes[0]["cibles"] == [c["name"] for c in plan],
+        f"[C6] un en-tête, et il contient de quoi REJOUER la séance : graine, refresh, longueur du "
+        f"code, noms des cibles ({entetes[0] if entetes else entetes})")
+    # ⚠️ VERBATIM : la ligne `bilan` est le dictionnaire de `bilan_de_seance`, pas une seconde
+    # rédaction. Reconstruire les mêmes champs à la main ferait diverger le fichier de l'écran le
+    # jour où l'un des deux change — c'est l'argument que `bilan_de_seance` fait déjà valoir.
+    chk(len(bilans_log) == 1 and bilans_log[0] == dict(kind="bilan", **bilan6),
+        f"[C6] ...et un bilan, RECOPIÉ du dictionnaire de `bilan_de_seance` sans le réécrire "
+        f"({bilans_log[0] if bilans_log else bilans_log})")
+    chk(bool(lignes_log) and lignes_log[0].get("kind") == "sentinelle",
+        f"[C6] le fichier est ouvert en AJOUT : la ligne écrite AVANT la séance est toujours là "
+        f"(premier enregistrement : {lignes_log[0] if lignes_log else '—'}) — en `\"w\"`, relancer "
+        f"l'émetteur sur le même chemin effacerait la séance précédente")
+    chk(_parse_args([]).log is None,
+        f"[C6] `--log` n'a AUCUN défaut : sans l'option, rien n'est écrit nulle part — c'est ce "
+        f"qui interdit à `--smoke` de toucher `data/` ({_parse_args([]).log!r})")
+
+    # --- [C7] `--calibrer` : le MÊME stimulus, quatre marqueurs de plus autour -----------------
+    evts7 = [m["event"] for m, _ts, _f, _c in journal7]
+    cues7 = [m for m, _ts, _f, _c in journal7 if m["event"] == "cue"]
+    cycles7 = [m for m, _ts, _f, _c in journal7 if m["event"] == "cycle"]
+    chk(fait7 and evts7[:1] == ["calib_start"] and evts7[-1:] == ["calib_end"],
+        f"[C7] la séance de calibration s'OUVRE par `calib_start` et se FERME par `calib_end` "
+        f"({evts7[:2]} … {evts7[-2:]})")
+    chk(set(evts7) == {"calib_start", "cycle", "cue", "block_end", "calib_end"},
+        f"[C7] …et ne publie rien d'autre que le protocole ({sorted(set(evts7))})")
+    annonce7 = journal7[0][0]
+    chk(annonce7.get("trials") == len(cues7) * 1
+        and annonce7["trials"] == sum(1 for e in evts7 if e == "block_end"),
+        f"[C7] `calib_start` annonce des ÉPOQUES, dans l'unité que le moteur compte — un cycle "
+        f"enregistré, une époque ({annonce7.get('trials')} annoncées, {len(cues7)} blocs)")
+
+    # ⚠️⚠️ **L'HORLOGE CONTINUE DE BATTRE**, et c'est la chose qui rend ce mode différent des deux
+    # autres calibrations. Sans marqueur `cycle` il n'y a pas de phase, donc pas d'époque alignée :
+    # le moteur ne décoderait pas mal, il ne décoderait RIEN. On le mesure là où le silence serait
+    # le plus tentant — ENTRE deux blocs, pendant que le regard cherche la nouvelle cible.
+    i_cue = [i for i, e in enumerate(evts7) if e == "cue"]
+    entre = [sum(1 for e in evts7[a:b] if e == "cycle") for a, b in zip(i_cue, i_cue[1:])]
+    chk(bool(entre) and min(entre) >= 2,
+        f"[C7] l'horloge `cycle` bat SANS INTERRUPTION, y compris entre deux blocs : au moins "
+        f"{min(entre) if entre else 0} marqueur(s) entre deux `cue` consécutifs — un écran qui "
+        f"s'arrêterait pendant le settle laisserait la référence de phase du moteur PÉRIMER")
+    chk(len(cycles7) >= len(cues7) * 2,
+        f"[C7] …et il y en a au moins un par cycle affiché, settle compris ({len(cycles7)} pour "
+        f"{len(cues7)} blocs)")
+
+    # L'ORDRE au bord d'un cycle : `cycle`, puis `block_end`, puis `cue`. Le `cycle` ferme le
+    # cycle précédent ; le `cue` ne doit valoir que pour les suivants.
+    ordres = [evts7[i - 1] for i in i_cue if i >= 1]
+    chk(all(e in ("cycle", "block_end") for e in ordres),
+        f"[C7] un `cue` part TOUJOURS après le marqueur de cycle du même bord (et après le "
+        f"`block_end` qui ferme le bloc précédent) — inversé, chaque bloc entrerait dans le jeu "
+        f"d'entraînement avec une époque prise pendant que le regard se déplaçait "
+        f"({sorted(set(ordres))})")
+
+    # ⚠️⚠️ **LA CIBLE ANNONCÉE EST-ELLE CELLE QUI EST CERCLÉE ?** Lue DANS LES PIXELS, pas dans le
+    # compteur de l'émetteur — qui ne peut que se donner raison. Un `cue` qui porterait la cible
+    # que le TIRAGE a décidée pendant que l'écran en cercle une autre produirait une séance entière
+    # étiquetée à l'envers : le bon nombre d'époques, des proportions plausibles, aucune exception.
+    n_flips, lues_cue = 0, []
+    for quoi, valeur in trace_c7:
+        if quoi == "flip":
+            n_flips += 1
+        elif valeur == "cue":
+            lues_cue.append(cercles_c7[n_flips - 1] if n_flips else None)
+    annoncees = [m["target"] for m in cues7]
+    chk(len(lues_cue) == len(annoncees) and lues_cue == annoncees,
+        f"[C7] chaque `cue` porte la cible RÉELLEMENT CERCLÉE à l'écran, lue dans les pixels du "
+        f"cercle de consigne — annoncées {annoncees}, dessinées {lues_cue}")
+    chk(len(set(annoncees)) == len(plan),
+        f"[C7] …et les {len(plan)} cibles passent toutes, sinon celles qui manquent n'auraient "
+        f"aucune époque et le modèle publierait des corrélations jamais validées ({annoncees})")
+
+    # ⚠️⚠️ **L'ALIGNEMENT N'EST PAS RELÂCHÉ D'UN IOTA EN CALIBRATION.** C'est la même table, la
+    # même fenêtre de trois images, et la même exigence de ZÉRO frame d'écart que pour le
+    # décodage. Si `--calibrer` avait obligé à desserrer cette assertion, ce serait le signe que
+    # le mode calibration ne joue pas le même stimulus que le décodage — c'est-à-dire exactement
+    # ce que la calibration existe pour éviter. Les marqueurs de PROTOCOLE sont écartés parce
+    # qu'ils ne suivent aucun bord de cycle, pas parce qu'ils seraient tolérés.
+    i_push7 = [i for i, (quoi, valeur) in enumerate(trace_c7)
+               if quoi == "push" and valeur == "cycle"]
+    chk(len(i_push7) == len(cycles7) and all(i >= 1 and trace_c7[i - 1][0] == "flip"
+                                             for i in i_push7),
+        f"[C7] chaque marqueur de CYCLE part après un flip, jamais avant ({len(i_push7)} pour "
+        f"{len(cycles7)} marqueurs journalisés)")
+    lues7 = []
+    for i in i_push7:
+        fen = tuple(e for quoi, e in trace_c7[:i] if quoi == "flip")[-fen_sonde:]
+        if len(fen) == fen_sonde and None not in fen:
+            lues7.append(table.get(fen))
+    chk(len(lues7) >= 2 and all(p == 0 for p in lues7),
+        f"[C7] …et le flip qui le précède est celui qui a affiché la FRAME 0 du code, ni la "
+        f"{L - 1} ni la 1 — MÊME exigence qu'en décodage, à ZÉRO frame près "
+        f"({len(lues7)} marqueurs vérifiés, positions {sorted(set(lues7))})")
+
+    # Une séance INTERROMPUE ne publie AUCUN `calib_end` : le moteur ne doit rien entraîner sur
+    # une séance tronquée — un modèle appris sur trois cycles serait indiscernable d'un modèle
+    # complet dans la liste de la console.
+    evts8 = [m["event"] for m, _ts, _f, _c in journal8]
+    chk("calib_start" in evts8 and "calib_end" not in evts8,
+        f"[C7] une calibration INTERROMPUE publie son `calib_start` et AUCUN `calib_end` "
+        f"({evts8})")
+
+    # --- Le PROGRAMME, en pur : ce qui est enregistré, ce qui est jeté, et l'entrelacement ------
+    prog = programme_de_calibration(plan, cycles=CVEP_CAL_CYCLES, n_blocs=CVEP_CAL_BLOCKS,
+                                    settle=CVEP_CAL_SETTLE_CYCLES, rng=random.Random(0))
+    enregistres = [c for _b, role, c in prog if role == "bloc"]
+    par_cible = {i: enregistres.count(i) for i in range(len(plan))}
+    chk(set(par_cible.values()) == {CVEP_CAL_CYCLES},
+        f"chaque cible est enregistrée exactement {CVEP_CAL_CYCLES} fois ({par_cible})")
+    chk(prog[-1][1] == "fin",
+        f"…le programme se termine par un cycle de GARDE : c'est lui qui porte le marqueur qui "
+        f"CLÔT le dernier bloc, puisqu'un marqueur ferme toujours le cycle PRÉCÉDENT ({prog[-1]})")
+    debuts = [i for i, (b, role, _c) in enumerate(prog)
+              if role == "bloc" and (i == 0 or prog[i - 1][:2] != (b, "bloc"))]
+    chk(all(all(prog[j][1] == "settle" for j in range(i - CVEP_CAL_SETTLE_CYCLES, i))
+            for i in debuts if i >= CVEP_CAL_SETTLE_CYCLES),
+        f"…et chaque bloc est précédé de ses {CVEP_CAL_SETTLE_CYCLES} cycles JETÉS : sans eux, "
+        f"les premières époques d'un bloc sont enregistrées pendant que le regard cherche encore "
+        f"la cible ({len(debuts)} blocs)")
+    # ⚠️ La durée que la CONSOLE annonce vient du moteur (`CVEPCalibration.duree_protocole_s`,
+    # calculée depuis `core/config.py`), celle qui est JOUÉE vient de ce programme. Deux calculs,
+    # deux fichiers, que cette assertion relie : sans elle, un `settle` déplacé d'un côté ferait
+    # annoncer 2,8 min pour une séance de 4. Le cycle de garde est le seul écart admis (il n'est
+    # pas dans le compte du moteur), d'où la tolérance d'UN cycle.
+    from core.modes.cvep_calib import CVEPCalibration
+
+    joue_s = len(prog) * L / 60.0
+    annonce_s = CVEPCalibration.duree_protocole_s
+    chk(joue_s > 120.0 and abs(joue_s - annonce_s) <= L / 60.0 + 1e-6,
+        f"…et la DURÉE que le moteur annonce à la console est celle que ce programme joue "
+        f"vraiment ({joue_s:.0f} s jouées, {annonce_s:.0f} s annoncées, tolérance un cycle de "
+        f"garde) — un écart, et l'étudiant s'assoit pour une séance qui dure autre chose que ce "
+        f"qu'on lui a dit")
+
+    # --- `--tester` : LE MOT de la séance ----------------------------------------
+    # Cette fenêtre joue le MÊME stimulus pour entraîner et pour tester, à la frame près ; le mot
+    # est la seule chose qui les distingue. Deux branches, donc deux séances : celle qui va au
+    # bout, et celle qu'on coupe — la seconde ne doit pas répondre « aucun modèle ne sera
+    # entraîné » : un test n'entraîne rien.
+    commun_test = dict(windowed=True, refresh=240.0, calibrer=True, tester=True, cycles_calib=2,
+                       settle=1, seed=3, attente_moteur_s=0.0, attente_consommateur_s=0.0,
+                       stream_name=MARKER_STREAM_DEFAULT + "_smoke")
+    _fini, dit_fini = paroles_de_seance(run, **commun_test)
+    mot_du_geste(chk, dit_fini, "blocs entrelacés", "c-VEP (annonce)")
+    mot_du_geste(chk, dit_fini, "terminé :", "c-VEP (fin)")
+    _coupe, dit_coupe = paroles_de_seance(run, max_frames=3 * L, **commun_test)
+    mot_du_geste(chk, dit_coupe, "INTERROMPU", "c-VEP (abandon)")
+
+    # --- [C8] `--retour` et `--libre` -----------------------------------------------------------
+    _smoke_retour(chk, plan, L, table, fen_sonde)
+
+    n_cycles = len(journal)
+    print(f"[cvep-stim] --smoke : {n_cycles} cycles RÉELS poussés (écran factice), consignes "
+          f"{consignes[:6]}{'…' if len(consignes) > 6 else ''}")
+    # ⚠️ Les deux bilans ci-dessus se plaignent de la cadence, et c'est ATTENDU : le pilote `dummy`
+    # n'a pas de vsync, donc la boucle est cadencée par `clock.tick(refresh + 5)` — 65 fps au lieu
+    # de 60, soit -5 % sur la durée d'un cycle. Sur un vrai écran, le `flip` bloque au balayage et
+    # ce plafond ne sert jamais. L'avertissement n'est donc pas un faux positif : il dit vrai sur
+    # un écran factice. Ne pas l'apprendre à l'ignorer sur un vrai.
+    print("[cvep-stim] --smoke : l'avertissement de cadence ci-dessus est ATTENDU sous "
+          "SDL_VIDEODRIVER=dummy (pas de vsync -> 65 fps imposés par clock.tick, -5 %)")
+    print(f"[cvep-stim] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+def _smoke_retour(chk, plan, L, table, fen_sonde):
+    """[C8] L'ANNEAU DE RETOUR, sur l'écran factice, avec une source de décisions FACTICE.
+
+    Deux séances : un TEST (`--tester --retour`), où un moteur factice répond à chaque `block_end`
+    par la décision écrite dans son script ; puis un essai LIBRE (`--libre --retour`), où la source
+    rend des décisions à des lectures fixées. On vérifie dans les PIXELS : l'anneau entoure la
+    bonne cible, de la bonne couleur, s'efface à l'image du `cue` suivant et pendant toute la mesure,
+    n'apparaît pas sur −1 ni pour une décision tardive. Et, surtout, que les DEUX tests de ce
+    fichier qui lisent l'écran — la phase à zéro frame près, la consigne cerclée — restent vrais
+    anneau affiché, que l'anneau ne recouvre aucun pixel non-fond, et que la lecture vient APRÈS
+    le flip et le marqueur de son image. Aussi : l'extinction avant le settle lu par la décision
+    suivante, le −1, et la croix de repos (`status` factice). Et la PHASE DE RETOUR du test :
+    jamais l'anneau et le cercle ensemble, chaque décision montrée seule `RETOUR_AFFICHE_S`, une
+    absence close à l'attente, l'anneau à `retour.rayon_anneau` — lu dans les pixels, à DEUX
+    tailles d'écran."""
+    import pygame
+    import pylsl
+
+    from core.modes.cvep_calib import REFRESH_REFERENCE_HZ
+    from core.modes.cvep_test import RETOUR_CYCLES_PAR_BLOC
+    from stimulus import retour as rt
+
+    geo = {}
+
+    def geometrie(taille):
+        """Ce que les sondes lisent à cette taille d'écran (la fenêtre la recalcule de même)."""
+        spots_ = positions_cibles(plan, taille)
+        geo.update(spots=spots_, centres=[(x, y) for x, y, _r in spots_],
+                   rayon=rt.rayon_anneau(spots_[0][2]), milieu=(taille[0] // 2, taille[1] // 2),
+                   sondes=[point_de_sonde(x, y, r) for x, y, r in spots_],
+                   sondes_cercle=[point_de_sonde_cercle(x, y, r) for x, y, r in spots_])
+
+    def rayon_lu(s, anneaux):
+        """Le rayon EXTÉRIEUR de l'anneau, lu dans les PIXELS sur l'horizontale de son centre :
+        pygame en couvre 2 × rayon pixels, de x − rayon à x + rayon − 1 (mesuré)."""
+        if not anneaux:
+            return None
+        (x, y), r = geo["centres"][anneaux[0][0]], geo["spots"][0][2]
+        xs = [px for px in range(max(0, x - 3 * r), min(s.get_width(), x + 3 * r))
+              if tuple(s.get_at((px, y)))[:3] == rt.COULEUR_DECODEE]
+        return (max(xs) - min(xs) + 1) / 2.0 if xs else None
+
+    geometrie(TAILLE_FENETRE)
+    spots = geo["spots"]
+    trace = []   # ("dessin",) ("flip", état, consigne, anneaux, croix, rayon) ("push", évén.) …
+    source = [None]
+    vrai_flip, vrai_push = pygame.display.flip, pylsl.StreamOutlet.push_sample
+
+    def flip(*a, **k):
+        r = vrai_flip(*a, **k)
+        s = pygame.display.get_surface()
+        anneaux = rt.anneaux_a_l_ecran(s, geo["centres"], geo["rayon"])
+        trace.append(("flip", _etat_ecran(pygame, geo["sondes"]),
+                      _consigne_ecran(pygame, geo["sondes_cercle"]), anneaux,
+                      rt.croix_a_l_ecran(s, geo["milieu"], CROIX), rayon_lu(s, anneaux)))
+        return r
+
+    def push(self, *a, **k):
+        m = json.loads(a[0][0])
+        trace.append(("push", m.get("event")))
+        if hasattr(source[0], "marqueur"):
+            source[0].marqueur(m)
+        return vrai_push(self, *a, **k)
+
+    commun = dict(windowed=True, stream_name=MARKER_STREAM_DEFAULT + "_smoke",
+                  attente_consommateur_s=0.0, retour=True)
+    # 6 blocs d'un cycle, settle du dépôt. Chaque décision paraît 10 images après son `block_end`,
+    # dans la phase de retour ; « tard » paraît APRÈS l'attente mais AVANT le bord de cycle qui
+    # clôt la phase : le seul moment où une décision trop tardive pourrait encore s'afficher.
+    hz_t = 240.0
+    attente_t = en_images(rt.ATTENTE_DECISION_S, hz_t, au_plus=True)
+    tard_a = attente_t + (L - attente_t % L) // 2
+
+    class _MoteurRetour(rt.MoteurFactice):
+        def marqueur(self, m):
+            super().marqueur(m)
+            self._dues += [("lectures", self.lectures + tard_a, i) for i in self._tardives]
+            self._tardives = []
+
+    moteur = _MoteurRetour(len(plan), ["juste", "faux", "rien", "tard", "faux", "juste"],
+                           depart="block_end", ouverture="cycle", delai=10, trace=trace)
+    # Un PLAFOND, pour qu'une phase qui ne finirait jamais rougisse au lieu de bloquer le smoke :
+    # chaque bloc avec sa phase la plus longue (rien reçu), plus le cycle de garde.
+    plafond_t = (6 * (CVEP_CAL_SETTLE_CYCLES + 1 + cycles_de_retour(L, hz_t)) + 1) * L
+    # Le mode republie ~5 Hz : la cible 5 revient toutes les 30 images, sous `PERIME_S`.
+    script_libre = {10: 3, 30: -1, 40: -1, 50: 5, 80: 5, 110: 5, 140: 5, 170: 5}
+    statut = rt.StatutScripte({1: "warmup", 20: "decoding", 100: "baseline", 120: "decoding"})
+    # (d) à une SECONDE taille : à 1000×700 (r = 52), une règle à 1,35 × r et `retour.rayon_anneau`
+    # tombent sur le MÊME pixel (70) — une seule taille ne verrait pas un retour à cette règle.
+    # À 800×560 (r = 42) : 56 contre 60.
+    taille_2 = (800, 560)
+    module, taille_avant = sys.modules[__name__], TAILLE_FENETRE
+    pygame.display.flip, pylsl.StreamOutlet.push_sample = flip, push
+    try:
+        with rt.Instrumentation(trace) as garde_test:
+            source[0] = moteur
+            journal_t = []
+            fait_t = run(refresh=hz_t, calibrer=True, tester=True, cycles_calib=1,
+                         settle=CVEP_CAL_SETTLE_CYCLES, seed=3, journal=journal_t,
+                         source_retour=moteur, max_frames=plafond_t, **commun)
+            trace_t = list(trace)
+            trace.clear()
+        with rt.Instrumentation(trace) as garde_libre:
+            source[0] = rt.SourceScriptee(script_libre, trace=trace)
+            journal_l = []
+            fait_l = run(refresh=120.0, libre=True, max_frames=3 * L, seed=3, journal=journal_l,
+                         source_retour=source[0], source_statut=statut, **commun)
+            trace_l = list(trace)
+            trace.clear()
+        module.TAILLE_FENETRE = taille_2       # `run` lit la taille de `--windowed` ici
+        geometrie(taille_2)
+        with rt.Instrumentation(trace) as garde_2:
+            source[0] = rt.SourceScriptee({5: 2}, trace=trace)
+            run(refresh=120.0, libre=True, max_frames=40, seed=3, source_retour=source[0],
+                source_statut=rt.StatutScripte({1: "decoding"}), **commun)
+            trace_2, spots_2 = list(trace), geo["spots"]
+    finally:
+        pygame.display.flip, pylsl.StreamOutlet.push_sample = vrai_flip, vrai_push
+        module.TAILLE_FENETRE = taille_avant
+        geometrie(TAILLE_FENETRE)
+
+    def images(tr):
+        return [e for e in tr if e[0] == "flip"]
+
+    def rang_des_pushs(tr, evenement):
+        """L'image (rang de flip) qui précède chaque marqueur `evenement`."""
+        n, rangs = -1, []
+        for e in tr:
+            if e[0] == "flip":
+                n += 1
+            elif e[0] == "push" and e[1] == evenement:
+                rangs.append(n)
+        return rangs
+
+    # --- le TEST ----------------------------------------------------------------------------
+    im_t = images(trace_t)
+    anneaux_t = [e[3] for e in im_t]
+    cues, fins = rang_des_pushs(trace_t, "cue"), rang_des_pushs(trace_t, "block_end")
+    chk(fait_t and len(cues) == 6 and len(fins) == 6 and len(moteur.attendues) == 6,
+        f"[C8] le test avec retour va au bout : 6 blocs ouverts, 6 fermés, 6 décisions scriptées "
+        f"({len(cues)}, {len(fins)}, {len(moteur.attendues)})")
+    # Ce que montre la fenêtre de retour de chaque bloc, du `block_end` au `cue` suivant (ou la fin).
+    fenetres = [range(f, cues[k + 1] if k + 1 < len(cues) else len(im_t))
+                for k, f in enumerate(fins)]
+    vus = [sorted({tuple(anneaux_t[i]) for i in w} - {()}) for w in fenetres]
+    attendus = [[tuple(a)] if a else [] for a in (rt.anneau_attendu(*x) for x in moteur.attendues)]
+    chk(vus == attendus,
+        f"[C8] l'anneau VERT entoure la cible DÉCIDÉE, qu'elle soit la cible cerclée ou une autre, "
+        f"rien sur −1 ni pour une décision arrivée après l'attente — lu dans les PIXELS "
+        f"(vus {vus}, attendus {attendus})")
+    vus_justes = [a for x, a in zip(moteur.attendues, vus) if a and x[1] == x[2]]
+    vus_faux = [a for x, a in zip(moteur.attendues, vus) if a and x[1] != x[2]]
+    chk(bool(vus_justes) and bool(vus_faux),
+        "[C8] …et l'anneau a réellement été vu sur la cible désignée ET sur une autre (un test qui "
+        "ne voit qu'un cas ne prouve rien sur l'autre)")
+    pendant = [i for c, f in zip(cues, fins) for i in range(c, f + 1) if anneaux_t[i]]
+    chk(not pendant,
+        f"[C8] AUCUN anneau pendant qu'un bloc s'enregistre, de l'image du `cue` à celle du "
+        f"`block_end` — ni le précédent, ni la décision tardive ({len(pendant)} image(s) fautive(s))")
+    # 🔴 La décision SUIVANTE lit déjà le settle — la phase de retour finit AVANT lui.
+    n_silence = (CVEP_DECISION_CYCLES + 1) * L
+    avant = [i for c in cues for i in range(max(0, c - n_silence), c + 1) if anneaux_t[i]]
+    chk(not avant and any(anneaux_t),
+        f"[C8] aucun anneau dans les {CVEP_DECISION_CYCLES + 1} cycles ({n_silence} images) qui "
+        f"précèdent chaque `cue` : la décision suivante lit ce settle-là "
+        f"({len(avant)} image(s) fautive(s))")
+
+    # --- la PHASE DE RETOUR : jamais l'anneau vert et le cercle bleu suivant ensemble (ce serait
+    # confus). Tout se lit dans les PIXELS : `e[2]` = le cercle, `e[3]` = l'anneau.
+    cercles_t = [e[2] for e in im_t]
+    ensemble = [i for i in range(len(im_t)) if anneaux_t[i] and cercles_t[i] is not None]
+    chk(not ensemble and any(anneaux_t) and any(c is not None for c in cercles_t),
+        f"[C8] (a) JAMAIS un anneau vert et un cercle bleu dans la même image "
+        f"({len(ensemble)} image(s) fautive(s), premières {ensemble[:3]})")
+    # Chaque phase : de l'image du `block_end` à la première image qui cercle la cible suivante.
+    bleus = [next((i for i in range(f + 1, len(im_t)) if cercles_t[i] is not None), None)
+             for f in fins]
+    affiche_t = en_images(rt.RETOUR_AFFICHE_S, hz_t)
+    montres = [sum(1 for i in range(f, b if b is not None else len(im_t)) if anneaux_t[i])
+               for f, b in zip(fins, bleus)]
+    a_montrer = [bool(rt.anneau_attendu(*x)) for x in moteur.attendues]
+    chk(all(n >= affiche_t - 1 for n, m in zip(montres, a_montrer) if m) and any(a_montrer),
+        f"[C8] (b) chaque décision est montrée SEULE au moins {rt.RETOUR_AFFICHE_S:g} s "
+        f"({affiche_t} images, à une près) AVANT le cercle bleu suivant (images montrées : "
+        f"{[n for n, m in zip(montres, a_montrer) if m]})")
+    duree = [None if b is None else b - f for f, b in zip(fins, bleus)]
+    sans = [d for d, m in zip(duree, a_montrer) if not m and d is not None]
+    borne = cycles_de_retour(L, hz_t) * L
+    chk(len(sans) == 2 and all(d <= borne for d in sans),
+        f"[C8] (c) un −1 ou une décision ABSENTE n'allongent pas la phase au-delà de "
+        f"{rt.ATTENTE_DECISION_S:g} s d'attente, arrondis au bord de cycle qui suit ({borne} "
+        f"images) — phases mesurées {sans}")
+    # La règle, en pur (`cycles_de_retour`) et en vrai (la fenêtre) : la MÊME, à l'image près —
+    # c'est elle que `cvep_test.RETOUR_CYCLES_PAR_BLOC` compte dans la durée annoncée.
+    regle = [cycles_de_retour(L, hz_t, None if q == "tard" else moteur.delai, valide=i >= 0) * L
+             for q, i, _v in moteur.attendues]
+    chk(duree[:-1] == regle[:-1],
+        f"[C8] chaque phase dure EXACTEMENT ce que dit `cycles_de_retour` : un nombre entier de "
+        f"cycles (mesurées {duree[:-1]}, règle {regle[:-1]} ; la dernière n'a pas de cible après)")
+    chk(RETOUR_CYCLES_PAR_BLOC == cycles_de_retour(L, REFRESH_REFERENCE_HZ, L),
+        f"…et la durée que le moteur ANNONCE compte la phase comme la fenêtre la joue : "
+        f"`cvep_test.RETOUR_CYCLES_PAR_BLOC` = {RETOUR_CYCLES_PAR_BLOC}, la fenêtre "
+        f"{cycles_de_retour(L, REFRESH_REFERENCE_HZ, L)} cycles à {REFRESH_REFERENCE_HZ:g} Hz pour "
+        f"une décision rendue dans le cycle qui suit le bloc")
+    # Le `cue` part TOUJOURS sur une frame 0 : juste après le `cycle` de son bord, phase comprise.
+    apres, depuis = [], []
+    for e in trace_t:
+        if e[0] == "flip":
+            depuis = []
+        elif e[0] == "push":
+            if e[1] == "cue":
+                apres.append(depuis[:1])
+            depuis.append(e[1])
+    chk(len(apres) == 6 and all(a == ["cycle"] for a in apres),
+        f"[C8] chaque `cue` part juste après le marqueur `cycle` de son bord : la phase dure des "
+        f"cycles ENTIERS, la phase du code ne bouge pas ({apres})")
+    # (d) Le RAYON, lu dans les pixels, aux deux tailles : celui de `retour.rayon_anneau`.
+    lus_t = {e[5] for e in im_t if e[5] is not None}
+    lus_2 = {e[5] for e in images(trace_2) if e[5] is not None}
+    r1, r2 = spots[0][2], spots_2[0][2]
+    chk(lus_t == {rt.rayon_anneau(r1)} and lus_2 == {rt.rayon_anneau(r2)}
+        and int(r2 * 1.35) != rt.rayon_anneau(r2),
+        f"[C8] (d) l'anneau est tracé au rayon de `retour.rayon_anneau` — la règle du P300 — lu "
+        f"dans les PIXELS : disque {r1} -> {sorted(lus_t)} ; disque {r2} -> {sorted(lus_2)}")
+    chk(garde_2.traces > 0 and garde_2.violations == 0,
+        f"[C8] …et à la seconde taille non plus, il ne recouvre aucun pixel non-fond "
+        f"({garde_2.violations} sur {garde_2.traces} tracés)")
+    # Ni disque ni cercle de consigne : l'anneau couvre [R − épaisseur, R[, le cercle de consigne
+    # [rayon_cercle − 4, rayon_cercle[ (sa sonde [C7] au milieu), le disque s'arrête à r — l'anneau
+    # à l'EXTÉRIEUR du cercle bleu, comme au P300, aux tailles d'écran courantes aussi.
+    hors = [t for t in ((1000, 700), taille_2, (1280, 720), (1920, 1080), (2560, 1440))
+            for _x, _y, r in positions_cibles(plan, t)[:1]
+            if not (r < rayon_cercle(r) - CUE_EPAISSEUR_PX
+                    and point_de_sonde_cercle(0, 0, r)[0] < rayon_cercle(r)
+                    <= rt.rayon_anneau(r) - rt.EPAISSEUR_PX)]
+    chk(not hors,
+        f"[C8] le cercle de consigne ne touche pas le disque, et l'anneau reste à l'EXTÉRIEUR du "
+        f"cercle de consigne et de sa sonde, de 800×560 à 2560×1440 (tailles fautives : {hors})")
+
+    # Les deux sondes en pixels du fichier, rejouées ANNEAU AFFICHÉ.
+    def phases(tr):
+        lues, etats = [], []
+        for e in tr:
+            if e[0] == "flip":
+                etats.append(e[1])
+            elif e[0] == "push" and e[1] == "cycle":
+                fen = tuple(etats[-fen_sonde:])
+                if len(fen) == fen_sonde and None not in fen:
+                    lues.append(table.get(fen))
+        return lues
+
+    lues_t = phases(trace_t)
+    chk(len(lues_t) >= 10 and all(p == 0 for p in lues_t),
+        f"[C8] anneau affiché, le flip qui précède chaque `cycle` montre toujours la FRAME 0 du "
+        f"code, à ZÉRO frame près ({len(lues_t)} marqueurs, positions {sorted(set(lues_t))})")
+    cerclees = [im_t[i][2] for i in cues]
+    annoncees = [m["target"] for m, _ts, _f, _c in journal_t if m["event"] == "cue"]
+    chk(cerclees == annoncees,
+        f"[C8] …et chaque `cue` porte toujours la cible CERCLÉE, lue dans les pixels "
+        f"({annoncees} annoncées, {cerclees} cerclées)")
+    chk(garde_test.traces > 50 and garde_test.violations == 0,
+        f"[C8] l'anneau ne recouvre AUCUN pixel non-fond — ni disque, ni contour, ni consigne, ni "
+        f"étiquette : {garde_test.violations} pixel(s) touché(s) sur {garde_test.traces} tracés")
+    fautes = rt.ordre_de_lecture(trace_t, {"cycle", "cue", "block_end"})
+    lectures = sum(1 for e in trace_t if e[0] == "lecture")
+    chk(not fautes and lectures == len(im_t),
+        f"[C8] le retour se lit UNE fois par image, APRÈS son flip et ses marqueurs — jamais "
+        f"entre le dessin et le flip, jamais avant l'horodatage ({lectures} lectures pour "
+        f"{len(im_t)} images, fautes {fautes[:3]})")
+
+    # --- l'essai LIBRE ------------------------------------------------------------------------
+    im_l = images(trace_l)
+    anneaux_l = [e[3] for e in im_l]
+    attendus_l = ([[]] * 10 + [[(3, rt.COULEUR_DECODEE)]] * 40
+                  + [[(5, rt.COULEUR_DECODEE)]] * (len(im_l) - 50))
+    chk(fait_l and len(im_l) == 3 * L and anneaux_l == attendus_l,
+        f"[C8] libre : l'anneau VERT suit la dernière décision dès l'image suivante, et un −1 ne "
+        f"l'éteint PAS (images "
+        f"{[i for i, (a, b) in enumerate(zip(anneaux_l, attendus_l)) if a != b][:5]} en désaccord "
+        f"sur {len(im_l)})")
+    croix_l = [e[4] for e in im_l]
+    croix_attendue = [i < 20 or 100 <= i < 120 for i in range(len(im_l))]
+    chk(croix_l == croix_attendue and garde_libre.croix > 0,
+        f"[C8] libre : croix de repos au centre tant que le `status` du moteur dit chauffe ou "
+        f"plancher, et de NOUVEAU quand il refait son repos (images "
+        f"{[i for i, (a, b) in enumerate(zip(croix_l, croix_attendue)) if a != b][:5]} en "
+        f"désaccord, {garde_libre.croix} tracés)")
+    evts_l = {m["event"] for m, _ts, _f, _c in journal_l}
+    chk(evts_l == {"cycle"} and all(c is None for _m, _ts, _f, c in journal_l)
+        and all(e[2] is None for e in im_l),
+        f"[C8] libre : rien d'autre que l'HORLOGE part ({sorted(evts_l)}), aucune consigne n'est "
+        f"tirée ni cerclée à l'écran")
+    lues_l = phases(trace_l)
+    chk(len(lues_l) >= 2 and all(p == 0 for p in lues_l) and garde_libre.violations == 0
+        and garde_libre.traces > 0,
+        f"[C8] libre : phase à zéro frame près, croix affichée ({sorted(set(lues_l))}), et ni "
+        f"l'anneau ni la croix ne touchent un pixel non-fond ({garde_libre.violations} sur "
+        f"{garde_libre.traces} + {garde_libre.croix} tracés)")
+    refus = [run(windowed=True, refresh=60.0, libre=True, attente_consommateur_s=0.0, **k)
+             for k in ({"calibrer": True}, {"log_path": "inutile.jsonl"})]
+    chk(refus == [False, False] and not os.path.exists("inutile.jsonl"),
+        "[C8] --libre REFUSE --calibrer/--tester et --log : il n'a pas de vérité-terrain")
+
+    nom = rt.flux_decode_de("cvep")
+    chk(nom == "EEG_API_Unicorn_decoded_cvep",
+        f"le retour écoute le flux PUBLIC du mode, lu dans son contrat — le nom que "
+        f"l'application d'un étudiant résout ({nom})")
+    rt.autotest_etat(chk)
+    rt.autotest_source(chk)
+    rt.autotest_couleurs(chk)
+    rt.autotest_resolution(chk, run, "cvep")
+    rt.autotest_statut(chk)
+
+
+def _nombre_de_cibles(texte):
+    """`--cibles` : un entier dans les bornes du réglage d'entraînement, sinon refusé à la ligne
+    de commande, avant que la moindre fenêtre ne s'ouvre."""
+    try:
+        n = int(texte)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"« {texte} » n'est pas un nombre entier de cibles")
+    if not CVEP_N_TARGETS_MIN <= n <= CVEP_N_TARGETS_MAX:
+        raise argparse.ArgumentTypeError(f"{n} cibles : choisis entre {CVEP_N_TARGETS_MIN} et "
+                                         f"{CVEP_N_TARGETS_MAX}")
+    return n
+
+
+def _noms_des_cibles(texte):
+    """`--noms` : des noms séparés par des virgules, non vides, tous différents, en nombre
+    permis. Refusés à la ligne de commande, avant que la moindre fenêtre ne s'ouvre."""
+    noms = [n.strip() for n in str(texte).split(",")]
+    if any(not n for n in noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : un nom de cible est vide")
+    if len({n.casefold() for n in noms}) != len(noms):
+        raise argparse.ArgumentTypeError(f"« {texte} » : deux cibles portent le même nom")
+    if not CVEP_N_TARGETS_MIN <= len(noms) <= CVEP_N_TARGETS_MAX:
+        raise argparse.ArgumentTypeError(f"{len(noms)} cibles : choisis entre {CVEP_N_TARGETS_MIN} "
+                                         f"et {CVEP_N_TARGETS_MAX}")
+    return noms
+
+
+def _parse_args(argv):
+    p = argparse.ArgumentParser(description="Stimulus c-VEP (EEG_API_Unicorn).")
+    p.add_argument("--windowed", action="store_true", help="fenêtre au lieu du plein écran")
+    rafraichissement = p.add_mutually_exclusive_group()
+    rafraichissement.add_argument("--refresh", type=float, default=None, help=(
+        "forcer le refresh (Hz) — sinon auto-mesuré. C'est la valeur PUBLIÉE dans chaque "
+        "marqueur : le moteur refuse tout marqueur qui s'écarte de plus de 1 Hz du refresh "
+        "auquel le modèle a été calibré, et le dit"))
+    rafraichissement.add_argument("--ecran-hz", type=hz_positif, default=None, help=(
+        "le rafraîchissement auquel AFFICHER (Hz) : l'écran principal y passe le temps de la "
+        "séance, puis revient, et la fenêtre REFUSE (sortie 2) si l'écran ne le tient pas. "
+        "C'est ce que la console passe : le réglage d'« Entraîner », ou celui du modèle"))
+    p.add_argument("--seconds", type=float, default=None,
+                   help="auto-quit après N secondes de stimulation DÉCODABLE (le décompte démarre "
+                        "après la chauffe du moteur, pas pendant)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="graine du tirage des CONSIGNES : rejoue la même SÉQUENCE de cibles à "
+                        "fixer (pour dépouiller une séance hors ligne). ⚠️ Sa LONGUEUR, elle, "
+                        "peut différer d'une consigne : une séance bornée en SECONDES ne s'arrête "
+                        "pas forcément sur la même image (mesuré : 1 exécution sur ~8). Le préfixe "
+                        "est identique, et chaque consigne est horodatée — c'est ce qui compte "
+                        "pour dépouiller. Seule une borne en IMAGES (`max_frames`, réservé à "
+                        "`--smoke`) donne l'égalité stricte")
+    p.add_argument("--log", nargs="?", const=_AUTO, default=None, metavar="CHEMIN",
+                   help="écrit la VÉRITÉ-TERRAIN en JSONL (une ligne par consigne, horodatée en "
+                        "`local_clock()`, plus un en-tête et le bilan). SANS DÉFAUT : rien n'est "
+                        "écrit tant que l'option n'est pas donnée. ⚠️ Une séance "
+                        "ne se dépouille pas sans ce fichier — le terminal est le seul autre "
+                        "exemplaire, et une séance casque ne se répète pas")
+    p.add_argument("--no-wait", action="store_true",
+                   help=f"ne pas attendre le moteur (ni son bandeau de chauffe de "
+                        f"~{ATTENTE_MOTEUR_S:g} s) : émetteur seul")
+    p.add_argument("--tester", action="store_true",
+                   help="comme --calibrer (même protocole, même vérité-terrain), mais pour un "
+                        "TEST : le moteur DÉCIDE et note au lieu d'entraîner. Seule la "
+                        "formulation change — c'est ce que lance le bouton « Tester »")
+    p.add_argument("--calibrer", action="store_true",
+                   help="séance de CALIBRATION : même stimulus, plus calib_start / cue / "
+                        "block_end / calib_end autour, et un ordre de cibles ENTRELACÉ au lieu "
+                        "d'un tirage. C'est la console qui la lance ; le moteur entraîne et "
+                        "affiche le résultat")
+    p.add_argument("--cibles", type=_nombre_de_cibles, default=CVEP_N_TARGETS,
+                   help=f"nombre de cibles, de {CVEP_N_TARGETS_MIN} à {CVEP_N_TARGETS_MAX} (défaut "
+                        f"{CVEP_N_TARGETS}) : celui de l'entraînement, que le modèle porte. La "
+                        f"console le passe elle-même")
+    p.add_argument("--noms", type=_noms_des_cibles, default=None,
+                   help="le nom de chaque cible, séparés par des virgules (« Haut,Bas,Feu »), "
+                        "affichés sous les disques ; leur nombre remplace --cibles. La console le "
+                        "passe elle-même")
+    p.add_argument("--cycles", type=int, default=CVEP_CAL_CYCLES,
+                   help=f"cycles ENREGISTRÉS par cible en calibration (défaut "
+                        f"{CVEP_CAL_CYCLES}). Sans --calibrer, ce réglage ne sert à rien. ⚠️ Le "
+                        f"moteur annonce sa durée d'après le DÉFAUT : le changer ici rend le "
+                        f"« ≈ N min » de la console faux")
+    p.add_argument("--libre", action="store_true",
+                   help="ESSAI LIBRE : les cibles et l'horloge, aucune consigne, aucune "
+                        "vérité-terrain, aucun journal (refuse --log, --calibrer, --tester). C'est "
+                        "ce que lance « Tester librement » dans la console")
+    p.add_argument("--retour", action="store_true",
+                   help="entoure la cible que le moteur DÉCODE, lue sur le flux public "
+                        "decoded_cvep en tâche de fond. En test : après chaque bloc, la décision "
+                        "seule, puis la cible suivante")
+    p.add_argument("--smoke", action="store_true",
+                   help="test headless (CI) : la PHASE, la géométrie et la boucle réelle")
+    return p.parse_args(argv)
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    args = _parse_args(sys.argv[1:])
+    try:
+        with au_rafraichissement(args.ecran_hz):
+            ok = run(windowed=args.windowed, refresh=args.refresh, seconds=args.seconds,
+                     smoke=args.smoke, seed=args.seed, log_path=args.log,
+                     calibrer=args.calibrer or args.tester, tester=args.tester,
+                     cycles_calib=args.cycles, libre=args.libre, retour=args.retour,
+                     attente_consommateur_s=0.0 if args.no_wait else 5.0,
+                     ecran_hz=args.ecran_hz, n_cibles=args.cibles, noms=args.noms)
+    except EcranRefuse as refus:
+        # Sortie 2 : la fenêtre n'a rien affiché. L'écran est déjà revenu (sortie du `with`).
+        print(f"[cvep-stim] ⚠️ REFUS : {refus}")
+        sys.exit(2)
+    sys.exit(0 if ok else 1)

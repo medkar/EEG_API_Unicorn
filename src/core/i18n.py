@@ -1,0 +1,631 @@
+"""Les textes affichés, lus dans un fichier par langue — jamais écrits en dur dans le code.
+
+Aucun texte affiché n'est écrit en dur dans le code : il vit dans un fichier séparé, pour
+pouvoir ajouter des langues facilement.
+
+    src/core/langues/fr/console.json    # ce que la console écrit elle-même
+    src/core/langues/fr/modes.json      # libellés, résumés, aides et briefings des modes
+    src/core/langues/fr/mesures.json    # les mesures et les tests : briefings, verdicts
+    src/core/langues/fr/moteur.json     # refus et réponses du moteur
+    src/core/langues/fr/fenetres.json   # les fenêtres de `src/stimulus/`
+
+Un dossier par langue, plusieurs fichiers par dossier (ils sont FUSIONNÉS ; une clé présente
+dans deux fichiers est une faute). Le français est la langue SOURCE : celle des autotests, et
+celle où retombe une clé absente. **Ajouter une langue = copier `fr/` et traduire les valeurs** :
+elle apparaît dans le menu de langue de la console. Le moteur seul la lit dans `EEG_LANGUE`.
+
+Dans le code, un texte s'écrit `tr("mode.ssvep.label")`, ou avec des valeurs :
+`tr("moteur.refus.frequence", f=17, ecran=60)` pour `"{f} Hz ne divise pas {ecran} Hz"`.
+
+⚠️ Pourquoi dans `core` : le moteur produit lui-même une bonne part de ce que la console affiche
+(refus, verdicts, aides des réglages, briefings), et `core` n'importe rien du dépôt hors de
+lui-même. La console, elle, a le droit d'importer `core` : un seul chargeur sert les deux.
+
+Changer de langue EN COURS de route : les libellés des contrats (modes, réglages, aides) sont
+résolus à l'import, dans la langue de départ. Chaque texte rendu par `tr` est donc un `Texte`, qui
+se souvient de sa clé et de ses valeurs, et `retraduit()` le relit dans la langue courante : le
+catalogue que le moteur sérialise pour la console passe par lui, et la console reconstruit ses
+pages. Seul l'AFFICHAGE change : noms de flux, voies et marqueurs ne se traduisent jamais.
+
+Ce qui part vers l'application (les flux LSL) est en ANGLAIS, quelle que soit la langue de
+l'écran : un texte du catalogue qui y voyage (la consigne de repos du flux `status`) passe par
+`pour_le_contrat()`, qui le relit dans le catalogue anglais.
+
+Ce que `controle()` vérifie, et que `server.py --smoke` exécute (`[smoke-textes]`) :
+  - chaque `tr("…")` du dépôt nomme une clé qui EXISTE, avec une clé LITTÉRALE (une clé calculée
+    échapperait à toute vérification) et exactement les `{valeurs}` que le texte attend ;
+  - aucune clé du français n'est orpheline (un texte que plus rien n'affiche se traduirait pour
+    rien) ;
+  - une autre langue a TOUTES les clés du français, et aucune autre, avec les mêmes `{valeurs}` ;
+  - la console ne passe aucun texte EN DUR à un widget (`setText`, `QLabel`, `QPushButton`…) ;
+  - la console ne lit aucun texte au CHARGEMENT (`tr` hors de toute fonction) : il resterait dans
+    la langue de départ.
+"""
+
+import ast as _ast
+import json as _json
+import os as _os
+import string as _string
+
+DOSSIER = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "langues")
+LANGUE_DEFAUT = "fr"
+LANGUE_CONTRAT = "en"   # la langue de ce qui part vers l'application (flux LSL)
+
+_cache = {}
+
+
+def langue():
+    """La langue demandée (`EEG_LANGUE`), ou le français."""
+    return _os.environ.get("EEG_LANGUE", LANGUE_DEFAUT) or LANGUE_DEFAUT
+
+
+def langues_disponibles():
+    """Les codes des langues livrées (un dossier de catalogue non vide), triés."""
+    if not _os.path.isdir(DOSSIER):
+        return []
+    return sorted(code for code in _os.listdir(DOSSIER)
+                  if _os.path.isdir(_os.path.join(DOSSIER, code))
+                  and any(n.endswith(".json") for n in _os.listdir(_os.path.join(DOSSIER, code))))
+
+
+def choisir_langue(code):
+    """Passe l'affichage dans la langue `code`. Lève `ValueError` sur une langue non livrée.
+
+    Par la variable d'environnement : `langue()` la relit à chaque `tr`, le fil du moteur compris,
+    et les fenêtres de stimulus lancées ENSUITE en héritent.
+    """
+    if code not in langues_disponibles():
+        raise ValueError(f"langue inconnue : {code!r} (livrées : {', '.join(langues_disponibles())})")
+    _os.environ["EEG_LANGUE"] = code
+
+
+def nom_de_langue(code):
+    """Le nom d'une langue écrit DANS cette langue (« English », « Français ») : c'est sous ce nom
+    qu'on la reconnaît dans un menu, quelle que soit la langue affichée."""
+    return catalogue(code).get("console.langue.nom", code)
+
+
+class Texte(str):
+    """Un texte affiché qui se souvient de sa clé et de ses valeurs, pour être RETRADUIT.
+
+    C'est un `str` : il s'affiche, se compare et se concatène comme tel. Mais une concaténation,
+    un f-string ou un `.format` rendent un `str` ordinaire, qui ne se retraduit plus : seul ce que
+    `tr` rend TEL QUEL change de langue avec `retraduit()`.
+    """
+
+    def __new__(cls, texte, cle, valeurs):
+        objet = super().__new__(cls, texte)
+        objet.cle = cle
+        objet.valeurs = valeurs
+        return objet
+
+    def __reduce__(self):
+        # Copié ou enregistré (pickle, joblib), il redevient un `str` : un modèle sur le disque ne
+        # doit pas dépendre de cette classe.
+        return (str, (str(self),))
+
+
+def retraduit(x):
+    """`x` dans la langue COURANTE. Un `Texte` est relu dans le catalogue, valeurs comprises ; un
+    dict, une liste ou un tuple le sont élément par élément ; le reste est rendu tel quel."""
+    return _relit(x, None)
+
+
+def pour_le_contrat(x):
+    """`x` tel qu'il part vers l'application : en ANGLAIS, quelle que soit la langue de l'écran.
+
+    Rend des `str` ordinaires : un texte du contrat ne doit pas changer de langue plus tard."""
+    return _relit(x, LANGUE_CONTRAT)
+
+
+def _relit(x, code):
+    if isinstance(x, Nombre):
+        return x.ecrit(code)
+    if isinstance(x, Reglage):
+        return x.ecrit(code)
+    if isinstance(x, Joint):
+        morceaux = [_relit(m, code) for m in x.morceaux]
+        return x.separateur.join(map(str, morceaux)) if code else Joint(x.separateur, morceaux)
+    if isinstance(x, Texte):
+        return _resoudre(x.cle, {nom: _relit(v, code) for nom, v in x.valeurs.items()}, code)
+    if isinstance(x, dict):
+        return {k: _relit(v, code) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_relit(v, code) for v in x]
+    if isinstance(x, tuple):
+        return tuple(_relit(v, code) for v in x)
+    return x
+
+
+def catalogue(code):
+    """{clé: texte} pour une langue, tous ses fichiers fusionnés. Lève sur une clé en double."""
+    if code in _cache:
+        return _cache[code]
+    textes, origine = {}, {}
+    dossier = _os.path.join(DOSSIER, code)
+    if _os.path.isdir(dossier):
+        for nom in sorted(_os.listdir(dossier)):
+            if not nom.endswith(".json"):
+                continue
+            with open(_os.path.join(dossier, nom), encoding="utf-8") as f:
+                for cle, texte in _json.load(f).items():
+                    if cle in textes:
+                        raise ValueError(f"langue « {code} » : la clé « {cle} » est dans "
+                                         f"{origine[cle]} ET dans {nom}")
+                    textes[cle], origine[cle] = texte, nom
+    _cache[code] = textes
+    return textes
+
+
+def tr(cle, /, **valeurs):
+    """Le texte `cle` dans la langue courante, ses `{valeurs}` remplies.
+
+    `cle` est positionnel seulement : un texte peut donc avoir une valeur nommée `{cle}` sans
+    entrer en collision avec lui.
+
+    Ne lève jamais : une clé introuvable s'affiche `⟦clé⟧`, visible à l'écran sans emporter le fil
+    Qt. `controle()` garantit qu'aucune ne manque dans le dépôt.
+    """
+    return _resoudre(cle, valeurs)
+
+
+def _resoudre(cle, valeurs, code=None):
+    """Le corps de `tr`, pour une clé connue seulement à l'exécution (`retraduit`). Ailleurs, on
+    écrit `tr("…")` : `controle()` ne vérifie que les clés écrites en toutes lettres.
+
+    `code` impose une langue (le contrat) : le texte rendu est alors un `str` ordinaire."""
+    for essai in (code or langue(), LANGUE_DEFAUT):
+        texte = catalogue(essai).get(cle)
+        if texte is not None:
+            try:
+                rendu = texte.format(**valeurs)
+            except (KeyError, IndexError, ValueError):
+                rendu = texte
+            return str(rendu) if code else Texte(rendu, cle, valeurs)
+    return f"⟦{cle}⟧"
+
+
+def message_erreur(e):
+    """Ce qu'une exception montre à l'ÉCRAN.
+
+    Une `ValueError` levée par le code du projet porte une phrase déjà écrite pour l'utilisateur
+    (un refus, une séance trop pauvre) : on l'affiche seule, sans le « ValueError : » de Python,
+    qui n'est que du jargon à l'écran. Toute autre exception est un DÉFAUT : on le dit comme tel,
+    avec son type, pour qu'il se signale au lieu de passer pour une consigne.
+    """
+    if isinstance(e, ValueError) and str(e):
+        # Un `Texte` reste tel quel : `str(e)` le rendrait en `str` ordinaire, qui ne se retraduit plus.
+        if e.args and isinstance(e.args[0], (Texte, Joint)):
+            return e.args[0]
+        return str(e)
+    return tr("moteur.erreur_interne", type=type(e).__name__, detail=str(e))
+
+
+class Nombre(str):
+    """Un nombre écrit dans la langue de l'écran, qui se RÉÉCRIT avec `retraduit()`.
+
+    Comme un `Texte`, c'est un `str`. Un texte fabriqué en français dit « 2,4 min » ; passé par
+    `retraduit()` une fois l'écran en anglais, il dit « 2.4 min ». Sans ça, le nombre resterait
+    figé dans la langue où le texte est né.
+    """
+
+    def __new__(cls, x, format_, code=None):
+        # `tr` en toutes lettres pour la langue de l'écran : c'est lui que `controle()` repère.
+        separateur = str(tr("moteur.format.decimale") if code is None
+                         else _resoudre("moteur.format.decimale", {}, code))
+        objet = super().__new__(cls, f"{x:{format_}}".replace(".", separateur))
+        objet.x, objet.format_ = x, format_
+        return objet
+
+    def ecrit(self, code=None):
+        """Le même nombre dans la langue `code` (None : celle de l'écran)."""
+        return str(Nombre(self.x, self.format_, code)) if code else Nombre(self.x, self.format_)
+
+    def __reduce__(self):
+        return (str, (str(self),))
+
+
+def nombre(x, format_="g"):
+    """Un nombre écrit dans la langue de l'écran : `1.5` -> « 1,5 » en français.
+
+    Le séparateur décimal appartient à la LANGUE, pas au code : il est lu dans le catalogue.
+    Seulement pour du texte affiché — jamais pour une valeur qu'un champ de saisie relira.
+    """
+    return Nombre(x, format_)
+
+
+class Joint(str):
+    """Des morceaux joints par un séparateur, qui gardent leur identité pour être RÉÉCRITS.
+
+    Comme `Nombre` : c'est un `str`, mais `retraduit()` et `pour_le_contrat()` relisent chaque
+    morceau (un nombre, un `Texte`) avant de les rejoindre. Un `", ".join(…)` ordinaire figerait
+    « 1,5, 2,5 » dans la langue de l'écran, même en route vers l'application.
+    """
+
+    def __new__(cls, separateur, morceaux):
+        morceaux = list(morceaux)
+        objet = super().__new__(cls, separateur.join(str(m) for m in morceaux))
+        objet.separateur, objet.morceaux = separateur, morceaux
+        return objet
+
+    def __reduce__(self):
+        return (str, (str(self),))
+
+
+def joint(separateur, morceaux):
+    """`morceaux` joints par `separateur`, en gardant de quoi les réécrire dans une autre langue.
+
+    À utiliser, dans un texte de refus, à la place de `", ".join(…)` ou de `nombre(x) + unité`.
+    """
+    return Joint(separateur, morceaux)
+
+
+class Reglage(str):
+    """Le nom d'un réglage dans un refus : son LIBELLÉ à l'écran (« Coupure basse »), et, dans ce
+    qui part vers l'application (`pour_le_contrat`), ce libellé suivi de la CLÉ qu'elle envoie
+    (« Low cutoff (band_low) ») — une application écrit `band_low`, elle ne connaît pas l'écran.
+
+    Comme `Nombre` : c'est un `str`, que `retraduit()` et `pour_le_contrat()` réécrivent. Une clé
+    que le libellé dit déjà (« Model » pour `model`) n'est pas répétée.
+    """
+
+    def __new__(cls, libelle, cle):
+        objet = super().__new__(cls, str(libelle))
+        objet.libelle, objet.cle = libelle, str(cle or "")
+        return objet
+
+    def ecrit(self, code=None):
+        """Le nom dans la langue `code` (None : celle de l'écran, sans la clé)."""
+        libelle = _relit(self.libelle, code)
+        if not code:
+            return Reglage(libelle, self.cle)
+        texte = str(libelle)
+        if not self.cle or self.cle.casefold() == texte.casefold().replace(" ", "_"):
+            return texte
+        return f"{texte} ({self.cle})"
+
+    def __reduce__(self):
+        return (str, (str(self),))
+
+
+def reglage(libelle, cle):
+    """Le nom d'un réglage, pour un refus : son libellé, et sa clé vers l'application."""
+    return Reglage(libelle, cle)
+
+
+def champs(texte):
+    """Les noms des `{valeurs}` qu'un texte attend."""
+    return {nom for _, nom, _, _ in _string.Formatter().parse(texte) if nom}
+
+
+# --- le contrôle du dépôt ---------------------------------------------------------------------
+
+# Les widgets et méthodes Qt par lesquels un texte arrive à l'écran. Un littéral passé ici est un
+# texte en dur. (Les symboles seuls — « ← », « ⓘ », « · » — ne sont pas du texte : il faut une
+# lettre pour compter.)
+_WIDGETS = {"QLabel", "QPushButton", "QCheckBox", "QGroupBox", "QRadioButton", "QToolButton"}
+_METHODES = {"setText", "setTitle", "setToolTip", "setPlaceholderText", "setWindowTitle",
+             "addItem", "addItems", "addRow", "setPlainText", "setHtml", "showMessage"}
+
+
+def _a_une_lettre(noeud):
+    """Le nœud porte-t-il un morceau de texte LITTÉRAL avec au moins une lettre ?"""
+    if isinstance(noeud, _ast.Constant) and isinstance(noeud.value, str):
+        return any(c.isalpha() for c in noeud.value)
+    if isinstance(noeud, _ast.JoinedStr):
+        return any(_a_une_lettre(v) for v in noeud.values)
+    if isinstance(noeud, _ast.BinOp):
+        return _a_une_lettre(noeud.left) or _a_une_lettre(noeud.right)
+    if isinstance(noeud, _ast.IfExp):
+        return _a_une_lettre(noeud.body) or _a_une_lettre(noeud.orelse)
+    if isinstance(noeud, (_ast.List, _ast.Tuple)):
+        return any(_a_une_lettre(e) for e in noeud.elts)
+    return False
+
+
+def _nom_appel(appel):
+    f = appel.func
+    return f.id if isinstance(f, _ast.Name) else (f.attr if isinstance(f, _ast.Attribute) else "")
+
+
+def _hors_autotest(arbre):
+    """Les nœuds d'un module, SAUF le corps de ses fonctions d'autotest (`_smoke*`, `_selftest*`).
+
+    Les messages d'un autotest s'adressent au développeur, dans le terminal : ils ne sont pas
+    affichés par l'application, et les traduire n'aurait aucun sens.
+    """
+    exclus = set()
+    for n in _ast.walk(arbre):
+        if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and \
+                n.name.lstrip("_").startswith(("smoke", "selftest")):
+            exclus.update(id(m) for m in _ast.walk(n))
+    return [n for n in _ast.walk(arbre) if id(n) not in exclus]
+
+
+def _fichiers_py(racine):
+    for dossier, _, fichiers in _os.walk(racine):
+        if "__pycache__" in dossier:
+            continue
+        for nom in sorted(fichiers):
+            if nom.endswith(".py"):
+                yield _os.path.join(dossier, nom)
+
+
+def textes_en_dur(racine_console):
+    """[(fichier, ligne, extrait)] : les textes passés EN DUR à un widget de la console."""
+    trouves = []
+    for chemin in _fichiers_py(racine_console):
+        with open(chemin, encoding="utf-8") as f:
+            arbre = _ast.parse(f.read())
+        for n in _hors_autotest(arbre):
+            if not isinstance(n, _ast.Call):
+                continue
+            nom = _nom_appel(n)
+            if nom in _WIDGETS or nom in _METHODES:
+                if n.args and _a_une_lettre(n.args[0]):
+                    trouves.append((chemin, n.lineno, _ast.unparse(n.args[0])[:60]))
+    return trouves
+
+
+def textes_figes(racine_console):
+    """[(chemin, ligne, clé)] : les `tr(…)` de la console lus HORS de toute fonction.
+
+    Au niveau d'un module ou d'une classe, un texte est lu au CHARGEMENT : avant que la console ait
+    choisi sa langue, et jamais relu quand on en change. La console lit ses textes au moment de
+    les afficher (le moteur, lui, a `retraduit`).
+    """
+    figes = []
+    for chemin in _fichiers_py(racine_console):
+        with open(chemin, encoding="utf-8") as f:
+            arbre = _ast.parse(f.read(), chemin)
+
+        def parcourt(noeud, dans_une_fonction):
+            for enfant in _ast.iter_child_nodes(noeud):
+                fonction = dans_une_fonction or isinstance(
+                    enfant, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda))
+                if (not fonction and isinstance(enfant, _ast.Call)
+                        and _nom_appel(enfant) == "tr"):
+                    cle = enfant.args[0].value if enfant.args and isinstance(
+                        enfant.args[0], _ast.Constant) else "?"
+                    figes.append((chemin, enfant.lineno, cle))
+                parcourt(enfant, fonction)
+
+        parcourt(arbre, False)
+    return figes
+
+
+def appels_tr(racine_src):
+    """[(fichier, ligne, clé ou None, {noms des valeurs})] : chaque `tr(…)` du dépôt."""
+    appels = []
+    for chemin in _fichiers_py(racine_src):
+        with open(chemin, encoding="utf-8") as f:
+            arbre = _ast.parse(f.read())
+        for n in _hors_autotest(arbre):
+            if isinstance(n, _ast.Call) and _nom_appel(n) == "tr":
+                cle = (n.args[0].value if n.args and isinstance(n.args[0], _ast.Constant)
+                       and isinstance(n.args[0].value, str) else None)
+                # `**valeurs` : `k.arg` est None — noté "**", pour que le contrôle le REFUSE (il
+                # ne peut pas savoir quelles valeurs un dict portera).
+                appels.append((chemin, n.lineno, cle,
+                               {k.arg if k.arg else "**" for k in n.keywords}))
+    return appels
+
+
+def controle(racine_src, exiger_zero_en_dur=True):
+    """La liste des fautes de traduction du dépôt — vide si tout va bien."""
+    fautes = []
+    try:
+        fr = catalogue(LANGUE_DEFAUT)
+    except (ValueError, OSError, _json.JSONDecodeError) as e:
+        return [f"le catalogue français ne se charge pas : {e}"]
+    if not fr:
+        return [f"le catalogue français est VIDE ({_os.path.join(DOSSIER, LANGUE_DEFAUT)}) — "
+                f"sans lui, « 0 faute » ne voudrait rien dire"]
+
+    utilisees = set()
+    for chemin, ligne, cle, noms in appels_tr(racine_src):
+        ou = f"{_os.path.relpath(chemin, racine_src)}:{ligne}"
+        if cle is None:
+            fautes.append(f"{ou} : clé CALCULÉE — une clé doit être écrite en toutes lettres, "
+                          f"sinon rien ne peut vérifier qu'elle existe")
+            continue
+        utilisees.add(cle)
+        if "**" in noms:
+            fautes.append(f"{ou} : « {cle} » reçoit ses valeurs par `**` — écris-les une à une, "
+                          f"sinon rien ne peut vérifier qu'elles correspondent au texte")
+            continue
+        if cle not in fr:
+            fautes.append(f"{ou} : la clé « {cle} » n'existe pas en français")
+            continue
+        attendus = champs(fr[cle])
+        if noms != attendus:
+            fautes.append(f"{ou} : « {cle} » attend {sorted(attendus)}, reçoit {sorted(noms)}")
+
+    for cle in sorted(set(fr) - utilisees):
+        fautes.append(f"« {cle} » n'est affichée nulle part (texte orphelin)")
+
+    if _os.path.isdir(DOSSIER):
+        for code in sorted(os_ for os_ in _os.listdir(DOSSIER)
+                           if _os.path.isdir(_os.path.join(DOSSIER, os_))):
+            if code == LANGUE_DEFAUT:
+                continue
+            try:
+                autre = catalogue(code)
+            except (ValueError, OSError, _json.JSONDecodeError) as e:
+                fautes.append(f"la langue « {code} » ne se charge pas : {e}")
+                continue
+            manquantes = sorted(set(fr) - set(autre))
+            if manquantes:
+                fautes.append(f"langue « {code} » : {len(manquantes)} clé(s) du français "
+                              f"manquent (ex. {', '.join(manquantes[:3])}) — elles s'afficheraient "
+                              f"en français")
+            for cle, texte in autre.items():
+                if cle not in fr:
+                    fautes.append(f"langue « {code} » : « {cle} » n'existe pas en français")
+                elif champs(texte) != champs(fr[cle]):
+                    fautes.append(f"langue « {code} » : « {cle} » n'a pas les mêmes valeurs que "
+                                  f"le français ({sorted(champs(texte))} ≠ "
+                                  f"{sorted(champs(fr[cle]))})")
+
+    for chemin, ligne, cle in textes_figes(_os.path.join(racine_src, "console")):
+        fautes.append(f"{_os.path.relpath(chemin, racine_src)}:{ligne} : « {cle} » est lu au "
+                      f"CHARGEMENT (hors de toute fonction) — il resterait dans la langue de "
+                      f"départ ; lis-le au moment de l'afficher")
+
+    en_dur = textes_en_dur(_os.path.join(racine_src, "console"))
+    if exiger_zero_en_dur:
+        for chemin, ligne, extrait in en_dur:
+            fautes.append(f"{_os.path.relpath(chemin, racine_src)}:{ligne} : texte EN DUR "
+                          f"passé à un widget ({extrait})")
+    return fautes
+
+
+def _selftest():
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    import tempfile
+
+    global DOSSIER
+    vrai = DOSSIER
+    with tempfile.TemporaryDirectory() as tmp:
+        DOSSIER = tmp
+        _cache.clear()
+        _os.makedirs(_os.path.join(tmp, "fr"))
+        _os.makedirs(_os.path.join(tmp, "en"))
+        with open(_os.path.join(tmp, "fr", "a.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.bonjour": "Bonjour {nom}", "x.seul": "Seul en français"}, f)
+        with open(_os.path.join(tmp, "en", "a.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.bonjour": "Hello {nom}"}, f)
+        chk(tr("x.bonjour", nom="Léa") == "Bonjour Léa", "une valeur est remplie")
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(tr("x.bonjour", nom="Léa") == "Hello Léa", "une autre langue est lue")
+        chk(tr("x.seul") == "Seul en français",
+            "une clé absente d'une langue retombe sur le français")
+        del _os.environ["EEG_LANGUE"]
+        chk(tr("x.absente") == "⟦x.absente⟧", "une clé introuvable se VOIT, sans lever")
+        chk(tr("x.bonjour") == "Bonjour {nom}", "une valeur oubliée ne fait pas tomber l'écran")
+        # Un texte résolu en français se RETRADUIT après un changement de langue, valeurs comprises.
+        figee = tr("x.bonjour", nom="Léa")
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(isinstance(figee, Texte) and figee == "Bonjour Léa"
+            and retraduit({"a": [figee, 3]}) == {"a": ["Hello Léa", 3]},
+            f"un texte résolu avant le changement se retraduit ({retraduit(figee)!r})")
+        del _os.environ["EEG_LANGUE"]
+        contrat = pour_le_contrat({"instruction": figee})["instruction"]
+        chk(contrat == "Hello Léa" and type(contrat) is str,
+            f"ce qui part vers l'application est en ANGLAIS, l'écran restant en français ({contrat!r})")
+        # Un NOMBRE dans un texte se réécrit aussi : « 2,5 » en français, « 2.5 » en anglais, et
+        # « 2.5 » vers l'application.
+        with open(_os.path.join(tmp, "fr", "d.json"), "w", encoding="utf-8") as f:
+            _json.dump({"moteur.format.decimale": ",", "x.duree": "{m} min"}, f)
+        with open(_os.path.join(tmp, "en", "d.json"), "w", encoding="utf-8") as f:
+            _json.dump({"moteur.format.decimale": ".", "x.duree": "{m} min"}, f)
+        _cache.clear()
+        duree = tr("x.duree", m=nombre(2.46, ".1f"))
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(duree == "2,5 min" and retraduit(duree) == "2.5 min",
+            f"un nombre se réécrit au changement de langue ({duree!r} -> {retraduit(duree)!r})")
+        del _os.environ["EEG_LANGUE"]
+        chk(pour_le_contrat(duree) == "2.5 min",
+            f"…et part en anglais vers l'application ({pour_le_contrat(duree)!r})")
+        import pickle as _pickle
+        chk(type(_pickle.loads(_pickle.dumps(nombre(2.5)))) is str,
+            "enregistré (pickle), un nombre redevient un `str`")
+        j = joint(", ", [nombre(1.5), nombre(2.5)])
+        chk(str(j) == "1,5, 2,5" and pour_le_contrat(j) == "1.5, 2.5",
+            "joint se réécrit en anglais")
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(retraduit(j) == "1.5, 2.5" and isinstance(retraduit(j), Joint),
+            "joint se retraduit et reste un Joint")
+        del _os.environ["EEG_LANGUE"]
+        chk(pour_le_contrat(tr("x.duree", m=j)) == "1.5, 2.5 min",
+            "un joint dans un Texte part en anglais")
+        chk(type(_pickle.loads(_pickle.dumps(j))) is str, "enregistré (pickle), un joint redevient un `str`")
+        # Le NOM d'un réglage dans un refus : son libellé à l'écran, et sa clé en plus vers
+        # l'application, qui ne connaît que la clé qu'elle envoie.
+        with open(_os.path.join(tmp, "fr", "e.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.libelle": "Coupure basse", "x.modele": "Modèle",
+                        "x.refus": "« {reglage} » : trop haut"}, f)
+        with open(_os.path.join(tmp, "en", "e.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.libelle": "Low cutoff", "x.modele": "Model",
+                        "x.refus": "\"{reglage}\": too high"}, f)
+        _cache.clear()
+        refus = tr("x.refus", reglage=reglage(tr("x.libelle"), "band_low"))
+        chk(refus == "« Coupure basse » : trop haut"
+            and pour_le_contrat(refus) == "\"Low cutoff (band_low)\": too high",
+            f"un réglage est nommé par son libellé à l'écran, et par son libellé ET sa clé vers "
+            f"l'application ({refus!r} / {pour_le_contrat(refus)!r})")
+        _os.environ["EEG_LANGUE"] = "en"
+        chk(retraduit(refus) == "\"Low cutoff\": too high",
+            f"…même un écran en anglais ne montre pas la clé ({retraduit(refus)!r})")
+        del _os.environ["EEG_LANGUE"]
+        chk(pour_le_contrat(tr("x.refus", reglage=reglage(tr("x.modele"), "model")))
+            == "\"Model\": too high",
+            "…et une clé que le libellé dit déjà n'est pas répétée")
+        chk(type(_pickle.loads(_pickle.dumps(reglage(tr("x.libelle"), "band_low")))) is str,
+            "enregistré (pickle), un nom de réglage redevient un `str`")
+        chk(isinstance(message_erreur(ValueError(tr("x.bonjour", nom="Léa"))), Texte),
+            "une ValueError portant un Texte reste traduisible")
+        chk(type(_pickle.loads(_pickle.dumps(figee))) is str,
+            "enregistré (pickle), un `Texte` redevient un `str` : un modèle n'en dépend pas")
+        with open(_os.path.join(tmp, "fr", "c.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.cle": "la clé {cle}"}, f)
+        _cache.clear()
+        chk(tr("x.cle", cle="k") == "la clé k", "une valeur peut s'appeler `cle`")
+        with open(_os.path.join(tmp, "fr", "b.json"), "w", encoding="utf-8") as f:
+            _json.dump({"x.seul": "doublon"}, f)
+        _cache.clear()
+        try:
+            catalogue("fr")
+            chk(False, "une clé présente dans DEUX fichiers d'une langue est refusée")
+        except ValueError as e:
+            chk("a.json" in str(e) and "b.json" in str(e),
+                f"une clé présente dans DEUX fichiers d'une langue est refusée ({e})")
+
+    DOSSIER = vrai
+    _cache.clear()
+
+    # Le scanner des textes en dur : il doit voir les formes courantes, et ignorer les symboles.
+    code = ('QLabel("Bonjour")\nw.setText(f"{n} essais")\nw.setText("←")\n'
+            'w.setText(tr("x"))\nQPushButton("ⓘ")\nw.setToolTip("a" if c else "")\n')
+    arbre = _ast.parse(code)
+    vus = [n.lineno for n in _hors_autotest(arbre) if isinstance(n, _ast.Call)
+           and _nom_appel(n) in (_WIDGETS | _METHODES) and n.args and _a_une_lettre(n.args[0])]
+    chk(vus == [1, 2, 6], f"le scanner voit les textes en dur, pas les symboles ni `tr` ({vus})")
+    # Un texte lu au CHARGEMENT (module, classe) est vu ; un texte lu dans une fonction, non.
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as dossier:
+        with open(_os.path.join(dossier, "page.py"), "w", encoding="utf-8") as f:
+            f.write("\n".join(['TITRE = tr("a")', "class P:", '    X = tr("b")',
+                               "    def f(self):", '        return tr("c")', ""]))
+        figes = sorted(cle for _c, _l, cle in textes_figes(dossier))
+    chk(figes == ["a", "b"],
+        f"un texte lu au chargement est repéré, pas celui d'une fonction ({figes})")
+    # …et `tr(…, **d)` est vu comme tel, pour que `controle` le refuse.
+    appel = _ast.parse('tr("x", **d)').body[0].value
+    chk([k.arg for k in appel.keywords] == [None], "un `**` dans `tr` est repérable")
+    return ok
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    racine = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _sys.path.insert(0, racine)
+    from core.config import use_utf8_console
+    use_utf8_console()
+    if "--reste" in _sys.argv:
+        # La liste de travail d'une migration : ce qui reste en dur dans la console.
+        for chemin, ligne, extrait in textes_en_dur(_os.path.join(racine, "console")):
+            print(f"{_os.path.relpath(chemin, racine)}:{ligne}  {extrait}")
+        _sys.exit(0)
+    bon = _selftest()
+    fautes = controle(racine)
+    for faute in fautes:
+        print(f"  ÉCHEC {faute}")
+    print(f"[i18n] {len(fautes)} faute(s) — VERDICT : {'OK' if bon and not fautes else 'ÉCHEC'}")
+    _sys.exit(0 if bon and not fautes else 1)

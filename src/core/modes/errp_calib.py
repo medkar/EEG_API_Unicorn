@@ -1,0 +1,1001 @@
+"""La calibration ErrP : la fenêtre mène la piste, le MOTEUR entraîne.
+
+Sous-classe concrète de `MarkerCalibrationRuntime` (`core/modes/marker_calib.py`, à lire avant
+celui-ci), jumelle de `p300_calib.py`. Elle ne fournit que les trois choses que le socle réclame :
+
+  1. `runtime_cls_du_mode = ErrPRuntime` — la géométrie d'époque est LUE là, jamais redéclarée ici ;
+  2. `_etiquette(ts, marqueur)` — chaque `feedback` délimite une époque ET porte son étiquette ;
+  3. `_entrainer(enregistre, fs)` — xDAWN + Riemann, l'AUC hors-pli groupée par bloc, le test de
+     permutation, et une sauvegarde HORODATÉE.
+
+⚠️ **LE FILTRE SE RÈGLE ICI, ET PAS AU DÉCODAGE**, comme chez le P300 : la bande de
+« Entraîner » et le secteur du poste partent dans le modèle, qui décode toujours avec. Toute la
+validation — le balayage de nfilter, l'AUC hors-pli, la permutation, la baseline sLDA — travaille
+sur les époques filtrées UNE fois par ce même modèle (`ErrPModel.fit` : `self.core._prep`) : elle
+mesure donc le filtre qu'on enregistre, par construction. L'autotest le vérifie filtrage par
+filtrage.
+
+⚠️⚠️ **CE MODE N'A PAS DE `cue`, ET C'EST LA CHOSE À COMPRENDRE EN PREMIER.** Chez le P300 et le
+c-VEP, un marqueur ANNONCE la cible puis d'autres délimitent les époques : la vérité-terrain est
+donnée d'avance et vaut pour toute la manche. Ici l'étiquette voyage sur l'événement `feedback`
+lui-même, qui gagne un champ `error: true|false` **pendant la calibration seulement**.
+
+Et c'est bien « seulement ». **L'ErrP est une BCI PASSIVE : tout son objet est de deviner, depuis
+l'EEG seul, que la machine s'est trompée.** Un émetteur qui publierait `error` en décodage donnerait
+la réponse au moteur — sans que rien ne le signale : le flux `decoded_errp` garderait la même forme,
+les scores resteraient plausibles, et tout ce que ce produit affirme sur ce mode deviendrait faux.
+La garde est écrite des deux côtés et dans les deux sens : côté fenêtre par
+`stimulus/errp.py::marqueur_feedback` (l'unique endroit qui décide si l'étiquette part), côté moteur
+par le refus ci-dessous d'un `feedback` sans étiquette — un tel marqueur vient d'une fenêtre qui
+DÉCODE, ses époques n'ont aucune vérité-terrain, et les étiqueter « correct » par défaut glisserait
+de vraies erreurs dans la classe majoritaire, en silence.
+
+⚠️ **Un seul chemin d'épochage.** Les époques d'entraînement et celles du décodage sont
+découpées par le même appel : le socle prélève par `epoch_from_stream`, avec les `pre_s`/`post_s`
+lus sur `ErrPRuntime` — littéralement l'appel que `core/modes/errp.py` fait en décodant (marqueurs
+LSL, `time_correction`). Deux chemins distincts pourraient se désaccorder sans qu'aucun test le
+voie.
+
+⚠️ **CE FICHIER NE TESTE PAS L'ALIGNEMENT, et il ne le peut pas.** Son autotest juge un décodage,
+donc il tolère ce qu'un décodage tolère. L'alignement est gardé UN CRAN PLUS BAS, par
+`python src/core/modes/marker_calib.py`, qui compare échantillon par échantillon les deux chemins
+d'épochage sur deux géométries. Ne pas déplacer ce garde-là ici en croyant le rapprocher de son
+sujet — il n'y survivrait pas (côté P300, une translation de 150 ms laisse l'autotest de la
+sous-classe entièrement vert : un décalage d'épochage décode du bruit avec confiance).
+
+⚠️ **`ErrPRuntime` est importé TARDIVEMENT, dans la propriété**, exactement comme chez le P300 et
+pour la même raison : `core/modes/errp.py` importe ce module-ci (son `Calib` porte
+`runtime_cls=ErrPCalibration`), donc un import en tête d'ici refermerait un CYCLE. Un cycle
+module-à-module survit tant que chacun est importé par son nom de paquet — mais pas quand l'un des
+deux fichiers est lancé DIRECTEMENT (`python src/core/modes/errp.py`, l'un des autotests) : Python le charge alors sous le nom `__main__`, la garde de `sys.modules` ne joue plus, et
+le second exemplaire demande un nom pas encore défini. Différer l'import supprime l'arête au lieu de
+l'ordonner.
+
+Autotest :
+    python src/core/modes/errp_calib.py
+"""
+
+import os as _os
+import sys as _sys
+import time as _time
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+import numpy as np  # noqa: E402
+
+from core.config import (CALIB_CANDIDAT_PREFIXE, ERRP_BAND, ERRP_CAL_BLOCKS,  # noqa: E402
+                         ERRP_CAL_TRIALS, ERRP_EPOCH_S, ERRP_ERROR_RATE, ERRP_FEEDBACK_S,
+                         ERRP_MAX_RUN_STEPS, ERRP_PERM_N, ERRP_TRACK_CELLS, SECTEUR_HZ,
+                         use_utf8_console)
+from core.errp_decoder import CORRECT, ERROR, ErrPModel  # noqa: E402
+from core.errp_track import (PAUSE_FIN_COURSE_S, PAUSE_INTER_PAS_S,  # noqa: E402
+                             PAUSE_NOUVELLE_COURSE_S)
+from core.i18n import nombre, tr  # noqa: E402
+from core.modes.affichage import verifier as _verifier_affichage  # noqa: E402
+from core.modes.affichage import (depuis_table, lignes, non_mesure, pct,  # noqa: E402
+                                  texte_filtre)
+from core.modes.contract import bande_de  # noqa: E402
+from core.modes.marker_calib import MarkerCalibrationRuntime  # noqa: E402
+# ⚠️ `core.modes.errp` n'est PAS importé ici : cf. le ⚠️ de la docstring du module. Il l'est dans
+# `ErrPCalibration.runtime_cls_du_mode`, une fois le programme lancé.
+
+# Ce que l'étudiant lit AVANT de commencer, sur la page de la console. Le protocole lui-même
+# s'affiche dans la fenêtre de stimulus : ce qui est ici est ce qu'il faut avoir compris avant.
+BRIEFING = (
+    tr("calib.errp.briefing.1"),
+    tr("calib.errp.briefing.2"),
+    tr("calib.errp.briefing.3"),
+    tr("calib.errp.briefing.4"),
+    tr("calib.errp.briefing.5"),
+    tr("calib.errp.briefing.6"),
+)
+
+# La phrase d'honnêteté de l'ErrP — PROPRE à ce mode, et elle dit TROIS choses (cf. README) : ce que le détecteur attrape vraiment (TPR 0,50 / TNR 0,855 sur la séance casque
+# de référence : une erreur sur deux, une bonne commande annulée sur sept), que ces deux taux
+# sont
+# eux-mêmes optimistes (le SEUIL a été choisi en regardant les scores qui les mesurent, donc le
+# taux de bonnes commandes gardées dépasse sa cible par construction), et ce qu'il est normal
+# d'observer en séance. Celle du MI parle de 40 % à trois classes, celle du P300 de sélection
+# parmi six cibles : les recopier ici serait faux deux fois.
+HONNETETE = tr("calib.errp.honnetete")
+
+# Le verdict porte sur l'AUC hors-pli, jamais sur le TPR/TNR : ces deux-là sont mesurés au seuil
+# qui les a choisis (cf. HONNETETE), donc un verdict calé dessus se féliciterait tout seul. Le
+# palier « bon » est à 0,75 et la phrase ne laisse pas croire qu'un détecteur mono-essai à 0,78 est
+# un décodeur fiable — c'est le repère du projet, et il reste modeste.
+VERDICTS = ((0.75, tr("calib.errp.verdict.bon")),
+            (0.65, tr("calib.errp.verdict.utilisable")),
+            (0.00, tr("calib.errp.verdict.faible")))
+
+# Au-delà, l'AUC observée n'est pas distinguable de ce que le hasard produit sur ce nombre
+# d'essais. C'est le seuil usuel, et c'est la règle de rigueur de ce projet : ne jamais conclure
+# sur du bruit. Un verdict qui vanterait une AUC de 0,80 non significative sur 20 essais est
+# exactement la panne que le test de permutation existe pour empêcher.
+PERM_ALPHA = 0.05
+
+# Les planchers en dessous desquels on REFUSE d'entraîner. Ce ne sont PAS des « il en faut au
+# moins tant pour que ce soit bien » : ce sont les gardes de `ErrPModel.fit` lui-même
+# (`core/errp_decoder.py`), sous lesquelles il ne pose AUCUN score hors-pli — donc aucun seuil
+# réglable, donc un modèle que `errp_models.charger` REFUSERA au chargement. Produire un tel
+# fichier serait écrire un candidat que personne ne pourra jamais retenir.
+MIN_EPOQUES = 10
+MIN_PAR_CLASSE = 2
+
+# Paliers auxquels un marqueur refusé se DIT. Même motif que `p300_calib._PALIERS_REFUS` : une
+# ligne par ordre de grandeur. Le dire à chaque pas noierait le terminal (200 par séance), le dire
+# une seule fois laisserait une fenêtre lancée en mode DÉCODAGE — l'erreur la plus banale — ne
+# produire qu'une ligne pour une séance entière perdue.
+_PALIERS_REFUS = (1, 10, 100, 1000)
+
+# La dérive moyenne du point vers sa cible, en cases par pas : un pas correct rapproche d'une
+# case, une erreur en éloigne d'une. `max(...)` parce qu'à un taux d'erreur >= 50 % la piste est
+# une marche aléatoire qui n'arrive jamais — la formule diviserait par zéro ou changerait de signe.
+_DERIVE_PAR_PAS = max(0.05, 1.0 - 2.0 * ERRP_ERROR_RATE)
+# Combien de pas dure une course, en moyenne : la distance du centre à une extrémité, divisée par
+# la dérive, et plafonnée comme la piste le plafonne.
+_PAS_PAR_COURSE = min(float(ERRP_MAX_RUN_STEPS), (ERRP_TRACK_CELLS // 2) / _DERIVE_PAR_PAS)
+
+
+def verdict(auc, perm_p=None):
+    """Le verdict, depuis l'AUC hors-pli ET sa significativité. None quand rien n'a été mesuré.
+
+    L'ordre compte : une AUC NON significative n'est pas « faible », elle est **indistinguable du
+    hasard**, et les deux ne se corrigent pas de la même façon (l'une demande un meilleur signal,
+    l'autre plus d'essais). Les annoncer d'un même mot enverrait resaliner des électrodes qui vont
+    très bien.
+    """
+    if auc is None:
+        return tr("calib.errp.verdict.non_mesure")
+    if perm_p is not None and perm_p >= PERM_ALPHA:
+        # Le mot passé en valeur : `_lignes_errp` affiche le MÊME en face (cf. `mi_calib.verdict`).
+        return tr("calib.errp.verdict.non_significatif", mot=tr("calib.mot.non_significatif"),
+                  p=perm_p)
+    for seuil, texte in VERDICTS:
+        if auc >= seuil:
+            return texte
+    return VERDICTS[-1][1]
+
+
+def _lignes_errp(auc, perm_p, mesures, n, n_erreurs):
+    """Les trois lignes d'affichage de l'ErrP. Quatre issues, dont une propre à ce mode.
+
+    ⚠️ « NON SIGNIFICATIF » n'est pas « FAIBLE », et c'est tout l'objet de `verdict()` plus haut :
+    l'un demande un meilleur signal, l'autre plus d'essais. Il est rouge — ce modèle ne se garde
+    pas — mais sa réserve dit de NE PAS resaliner.
+    """
+    if auc is None:
+        return non_mesure(tr("calib.errp.non_mesure.raison"), tr("calib.errp.non_mesure.conseil"))
+    chiffres = tr("calib.errp.chiffres", auc=nombre(auc, ".2f"),
+                  tnr=pct(mesures["tnr"]), tpr=pct(mesures["tpr"]), n=n, n_erreurs=n_erreurs)
+    if perm_p is not None and perm_p >= PERM_ALPHA:
+        return lignes("faible", tr("calib.mot.non_significatif"), chiffres,
+                      tr("calib.errp.reserve.non_significatif"))
+    return depuis_table(auc, VERDICTS, chiffres)
+
+
+def horodatage(maintenant=None):
+    """`AAAAMMJJ_HHMMSS`, le format que portent déjà les modèles ErrP du dépôt.
+
+    ⚠️ `maintenant or _time.time()` serait faux : `0.0` (l'epoch Unix) est un instant VALIDE et
+    pourtant falsy — même piège que dans `core/modes/mi_calib.py`, où il est documenté au long.
+    """
+    return _time.strftime("%Y%m%d_%H%M%S",
+                          _time.localtime(_time.time() if maintenant is None else maintenant))
+
+
+def chemins_libres(dossier, n_epoques, prefixe=""):
+    """(chemin du modèle, chemin de l'enregistrement), les DEUX garantis libres au retour.
+
+    Jumeau exact de `core/modes/p300_calib.py::chemins_libres`, et pour la même raison : le format
+    du nom a une résolution d'une SECONDE, `save`/`savez` écrasent sans rien demander, et deux
+    séances qui finissent la même seconde produiraient sinon les mêmes deux fichiers.
+
+    ⚠️ Le motif `errp_model*.joblib` est celui que `core/errp_models.MOTIF` cherche : s'en écarter
+    produirait un modèle que la console ne proposerait jamais. Et le nom est HORODATÉ, jamais fixe
+    — `data/errp_model.joblib` est la trace casque de référence, le SEUL modèle ErrP enregistré
+    sur un vrai cerveau (AUC 0,7763, p = 0,0099, 200 essais / 5 blocs), et aucun code de ce dépôt
+    ne sait ré-entraîner depuis ses époques : l'écraser coûterait une séance entière.
+
+    `prefixe` : `CALIB_CANDIDAT_PREFIXE` quand ce qu'on écrit est un CANDIDAT — un fichier qui ne
+    doit correspondre à aucun motif de découverte tant que personne ne l'a retenu (cf. le
+    commentaire de cette constante dans `core/config.py`). Défaut `""` : un modèle définitif, écrit directement dans `data/`.
+    """
+    maintenant = _time.time()
+    while True:
+        stamp = horodatage(maintenant)
+        chemin_modele = _os.path.join(dossier, f"{prefixe}errp_model_{stamp}.joblib")
+        chemin_npz = _os.path.join(dossier,
+                                   f"{prefixe}errp_calib_{stamp}_n{int(n_epoques):03d}.npz")
+        if not _os.path.exists(chemin_modele) and not _os.path.exists(chemin_npz):
+            return chemin_modele, chemin_npz
+        maintenant += 1.0
+
+
+def groupes_contigus(n, blocs=ERRP_CAL_BLOCKS):
+    """Le numéro de BLOC de chacune des `n` époques, dans leur ordre d'arrivée.
+
+    ⚠️ **Ce sont les GROUPES de la validation croisée, et ils ne sont pas décoratifs.** Sans eux,
+    `_cv_splitter` retombe sur un `StratifiedKFold` qui mélange les époques : deux pas voisins de
+    la même course — même piste, même fatigue, même dérive d'électrode — se retrouvent l'un dans
+    l'entraînement et l'autre dans le test, et l'AUC monte pour une raison qui n'a rien à voir avec
+    l'ErrP. C'est la fuite que `GroupKFold` existe pour fermer.
+
+    Le bloc est une TRANCHE CONTIGUË de la séance (un bloc = `trials // blocks` pas d'affilée),
+    reconstruite ICI depuis l'ordre d'arrivée des marqueurs plutôt qu'annoncée par la fenêtre :
+    un marqueur de bloc de plus serait un contrat public de plus à tenir, à documenter et à ne
+    jamais perdre — pour une information que le moteur possède déjà, puisqu'il reçoit les
+    feedbacks dans l'ordre.
+    """
+    n = int(n)
+    blocs = max(1, min(int(blocs), n)) if n else 1
+    par_bloc = n / blocs
+    return [min(blocs - 1, int(i // par_bloc)) for i in range(n)]
+
+
+def entrainer(epochs, labels, fs, chemin_modele, *, pre_s, post_s, chemin_npz=None,
+              n_perm=None, blocs=ERRP_CAL_BLOCKS, band=ERRP_BAND, secteur_hz=None):
+    """Entraîne, évalue, écrit — et rend le dict que la console affiche. LÈVE si la séance est
+    trop pauvre pour valoir un modèle.
+
+    `chemin_modele` est EXPLICITE, jamais deviné ici : c'est l'appelant qui décide où écrire (la
+    calibration du moteur passe son dossier candidat). Un chemin par défaut fixe risquerait
+    d'écraser un modèle existant.
+
+    `chemin_npz` (facultatif) archive les époques BRUTES à côté du modèle, écrit AVANT le `.joblib`
+    — si le disque est plein, l'exception remonte avant que le modèle n'existe, et aucun modèle
+    orphelin ne se retrouve ÉLU comme le plus récent chargeable.
+
+    ⚠️ **`pre_s`/`post_s` sont ceux avec lesquels les époques ont RÉELLEMENT été découpées**, pas
+    une valeur par défaut reprise de la configuration. Le modèle les porte en attributs, et
+    `core/modes/errp.py::_desaccord_geometrie` les COMPARE à ce que le runtime prélève avant
+    d'accepter de décoder avec. Les laisser par défaut marcherait tant que personne ne touche à
+    `ErrPRuntime.pre_s` — et le jour où quelqu'un y touche, le mode refuserait le modèle qu'on
+    vient tout juste de calibrer, EN ACCUSANT LE MODÈLE. Aucun test ne le voit tant que les deux
+    nombres coïncident.
+
+    ⚠️ Les deux sont donc EXIGÉS, par mot-clé et sans valeur par défaut : celui qui a découpé les
+    époques est le seul à savoir avec quoi, et il n'existe aucun repli honnête. Un défaut à `None`
+    laisserait la panne se produire À DISTANCE — l'entraînement mourrait plus bas sur
+    `unsupported operand type(s) for *: 'NoneType' and 'float'`, qui ne nomme ni le paramètre
+    oublié ni la fonction qui l'a oublié. Un défaut repris de `core/config.py` serait pire :
+    il produirait SILENCIEUSEMENT un modèle plausible et faux le jour où la géométrie du runtime
+    bouge. Sans défaut, l'oubli est un `TypeError` de Python au point d'appel, qui nomme les deux
+    arguments manquants.
+
+    `n_perm` : None -> `ERRP_PERM_N` (100), la valeur du protocole. 0 saute la permutation, donc
+    rend `perm_p = None` — un autotest de câblage peut le vouloir ; une séance réelle, jamais : sans
+    p-value, rien ne distingue une AUC de 0,80 sur 20 essais d'un tirage chanceux.
+
+    `band` / `secteur_hz` : le FILTRE que le modèle apprend, et avec lequel il décodera toujours.
+    La calibration du moteur passe la bande réglée dans « Entraîner » et le secteur du poste. Les
+    défauts sont ceux d'avant les filtres réglables : la bande de toujours,
+    sans coupe-bande. Contrairement à la géométrie,
+    un défaut ici ne fabrique pas de modèle faux : le modèle PORTE son filtre et décode avec — au
+    pire, le réglage de l'étudiant est ignoré, et c'est ce que l'autotest de ce fichier fait rougir.
+    """
+    epochs = np.asarray(epochs, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    compte = np.bincount(labels, minlength=2)
+    if (len(epochs) < MIN_EPOQUES or len(set(labels.tolist())) < 2
+            or int(compte.min()) < MIN_PAR_CLASSE):
+        # En dessous, l'entraînement ne produit AUCUN score hors-pli, donc aucun seuil réglable,
+        # donc un modèle que le mode refuserait au démarrage.
+        raise ValueError(tr("calib.errp.trop_pauvre", n=len(epochs),
+                            corrects=int(compte[CORRECT]), erreurs=int(compte[ERROR]),
+                            min_total=MIN_EPOQUES, min_classe=MIN_PAR_CLASSE))
+
+    groupes = np.asarray(groupes_contigus(len(labels), blocs), dtype=int)
+    n_perm = ERRP_PERM_N if n_perm is None else int(n_perm)
+    band = (float(band[0]), float(band[1]))
+    secteur_hz = float(secteur_hz) if secteur_hz else None
+    modele = ErrPModel(fs=fs, band=band, pre_s=pre_s, post_s=post_s,
+                       secteur_hz=secteur_hz).fit(epochs, labels, groups=groupes, n_perm=n_perm)
+
+    _os.makedirs(_os.path.dirname(chemin_modele) or ".", exist_ok=True)
+    if chemin_npz:
+        # `pre_s`/`post_s` sont ARCHIVÉS avec les époques : sans eux, un ré-entraînement futur ne
+        # saurait pas où tombe l'onset du feedback dans les échantillons qu'il relit. La bande et
+        # le secteur aussi, pour refaire CE modèle depuis ces époques brutes. `secteur_hz = 0` veut
+        # dire « pas de coupe-bande » (la convention de `core/filtrage.py`) : un None ferait un
+        # tableau d'objets, illisible sans `allow_pickle`. Leur ABSENCE dans un `.npz` a un sens
+        # précis : cf. la docstring de `core/errp_models.py`.
+        np.savez(chemin_npz, epochs=epochs, labels=labels, groups=groupes, fs=fs,
+                 pre_s=modele.pre_s, post_s=modele.post_s,
+                 band=np.asarray(modele.band, dtype=float),
+                 secteur_hz=float(modele.secteur_hz or 0.0))
+    modele.save(chemin_modele)
+
+    mesures = modele.metrics_ or {"tpr": 0.0, "tnr": 0.0, "bal_acc": 0.0}
+    auc, perm_p = modele.cv_auc_, modele.perm_p_
+    verdict_txt = verdict(auc, perm_p)
+    auc_txt = "non mesurée" if auc is None else f"{auc * 100:.1f}%"
+    perm_txt = "non testée" if perm_p is None else f"p={perm_p:.3f}"
+    print(f"[errp-calib] {len(epochs)} époques ({int(compte[ERROR])} erreurs) sur "
+          f"{len(set(groupes.tolist()))} blocs — AUC erreur/correct (hors-pli, par bloc) "
+          f"{auc_txt}, permutation {perm_txt}, nfilter retenu {modele.nfilter_}")
+    print(f"[errp-calib] au seuil {modele.threshold_:+.3f} : attrape {mesures['tpr']:.0%} des "
+          f"erreurs, garde {mesures['tnr']:.0%} des bonnes commandes — {verdict_txt}")
+    print(f"[errp-calib] modèle : {chemin_modele}")
+    if chemin_npz:
+        print(f"[errp-calib] enregistrement : {chemin_npz}")
+    return {
+        "modele": chemin_modele,
+        "nom": _os.path.basename(chemin_modele),
+        "enregistrement": chemin_npz,
+        "n_essais": int(len(epochs)),
+        "n_erreurs": int(compte[ERROR]),
+        "auc": None if auc is None else float(auc),
+        "perm_p": None if perm_p is None else float(perm_p),
+        "tpr": float(mesures["tpr"]),
+        "tnr": float(mesures["tnr"]),
+        # Le niveau du hasard d'une AUC, affiché à côté d'elle par la console : 0,5, et pas 1/6
+        # comme la sélection du P300. « 0,68 » ne veut rien dire sans lui.
+        "hasard": 0.5,
+        # AVEC QUOI ce modèle a appris (bande, coupe-bande), relu du MODÈLE : une ligne du repli
+        # « Détails », la même pour les quatre entraînements (`affichage.texte_filtre`).
+        "filtre": texte_filtre(modele.band, modele.secteur_hz),
+        "verdict": verdict_txt,
+        # Ce qui s'affiche EN FACE. Un DÉTECTEUR se lit par son couple — bonnes commandes gardées,
+        # erreurs attrapées —, et l'AUC seule laisserait croire à un sélecteur.
+        **_lignes_errp(auc, perm_p, mesures, len(epochs), int(compte[ERROR])),
+        "honnetete": HONNETETE,
+    }
+
+
+def entrainer_dans(dossier, epochs, labels, fs, *, pre_s, post_s, n_perm=None,
+                   blocs=ERRP_CAL_BLOCKS, prefixe="", band=ERRP_BAND, secteur_hz=None):
+    """`entrainer`, mais c'est le DOSSIER qu'on donne : les deux noms de fichiers sont horodatés et
+    garantis libres (`chemins_libres`). C'est la porte de la calibration du moteur.
+
+    `pre_s`/`post_s` sont EXIGÉS ici aussi, et pour la même raison — cf. `entrainer`. Un défaut
+    posé sur ce passe-plat suffirait à rouvrir le trou fermé un cran plus bas.
+    `band`/`secteur_hz` passent tels quels à `entrainer` — voir la sienne.
+    """
+    chemin_modele, chemin_npz = chemins_libres(dossier, len(labels), prefixe=prefixe)
+    return entrainer(epochs, labels, fs, chemin_modele=chemin_modele, chemin_npz=chemin_npz,
+                     pre_s=pre_s, post_s=post_s, n_perm=n_perm, blocs=blocs,
+                     band=band, secteur_hz=secteur_hz)
+
+
+class ErrPCalibration(MarkerCalibrationRuntime):
+    """La calibration ErrP vue du moteur : il écoute, il découpe, il entraîne. Rien d'autre.
+
+    La ligne du temps (chauffe, essais, entraînement, les trois abandons) vient entièrement de
+    `MarkerCalibrationRuntime`. Ce qui est ici est ce que le socle ne peut pas savoir : quels
+    marqueurs délimitent une époque, ce qu'ils valent comme étiquette, et ce qu'on entraîne avec.
+    """
+
+    classes = ("correct", "erreur")
+
+    # Ce que la console affiche comme durée, hors chauffe. Calculée depuis `core/config.py` et
+    # `core/errp_track.py` — le moteur ne peut PAS la deviner, puisqu'il ne mène pas le protocole,
+    # mais il peut lire les constantes sous lesquelles ce protocole a été réglé. C'est une
+    # ESTIMATION : la longueur d'une course est aléatoire (elle dépend du tirage des erreurs et du
+    # plafond de pas), et elle vaut pour les réglages PAR DÉFAUT de la fenêtre.
+    duree_protocole_s = (ERRP_CAL_TRIALS * (ERRP_FEEDBACK_S + PAUSE_INTER_PAS_S)
+                         + (ERRP_CAL_TRIALS / _PAS_PAR_COURSE)
+                         * (PAUSE_FIN_COURSE_S + PAUSE_NOUVELLE_COURSE_S - PAUSE_INTER_PAS_S)
+                         + PAUSE_NOUVELLE_COURSE_S + ERRP_EPOCH_S)
+
+    # Combien de permutations pour la p-value. `None` = `ERRP_PERM_N` (100), la valeur du
+    # protocole. C'est un ATTRIBUT DE CLASSE et pas un littéral pour que l'autotest puisse abaisser
+    # ce nombre sans dévier du chemin d'entraînement : 100 permutations, ce sont 100 validations
+    # croisées complètes (~30 s sur une vraie séance), et un autotest qui les subirait finirait par
+    # ne plus être lancé. Le mettre à 0 en production supprimerait la seule chose qui distingue une
+    # AUC réelle d'un tirage chanceux — c'est vérifié par `_selftest`.
+    n_perm = None
+
+    def __init__(self, spec, params, engine, rng=None, dossier=None):
+        """`dossier` : où écrire — porté par `CalibrationRuntime` et SANS repli sur `DATA_DIR`.
+
+        C'est le moteur qui le donne, et c'est son dossier CANDIDAT temporaire : une calibration
+        qui choisirait elle-même écrirait dans `data/` AVANT d'annoncer sa précision, donc une
+        séance ratée y deviendrait le modèle le plus récent — celui qui est proposé par défaut —
+        sans que personne ait pu la refuser.
+        """
+        super().__init__(spec, params, engine, rng=rng, dossier=dossier)
+        self._refus = 0        # feedbacks refusés : aucune étiquette, ou étiquette illisible
+
+    # --- ce que le socle demande ---------------------------------------------
+
+    @property
+    def runtime_cls_du_mode(self):
+        """La classe qui DÉCODE l'ErrP — c'est d'elle que le socle lit `pre_s`/`post_s`.
+
+        ⚠️ Le socle attend un attribut de classe ; c'est ici une PROPRIÉTÉ, pour l'unique raison
+        expliquée en tête de module (le cycle d'import). Elle rend le même objet à chaque appel, et
+        l'import d'un module déjà chargé n'est qu'une recherche dans un dictionnaire.
+
+        ⚠️ Conséquence à connaître avant d'écrire un test : `ErrPCalibration.runtime_cls_du_mode`
+        (sur la CLASSE) rend l'objet propriété, pas `ErrPRuntime`. Ce qui compte se lit sur une
+        INSTANCE, comme le socle le fait.
+        """
+        from core.modes.errp import ErrPRuntime
+        return ErrPRuntime
+
+    def _etiquette(self, ts, marqueur):
+        """Chaque `feedback` délimite une époque ET porte son étiquette. Il n'y a pas de `cue`.
+
+        ⚠️ **Un `feedback` SANS `error` est REFUSÉ, jamais étiqueté par défaut.** C'est le marqueur
+        d'une fenêtre lancée en mode DÉCODAGE : ses époques n'ont aucune vérité-terrain. Les
+        compter « correct » — le choix qui vient naturellement, puisque c'est la classe majoritaire
+        — glisserait ~28 % de vraies erreurs dans la classe des bonnes commandes, et le modèle
+        apprendrait à ne jamais rien détecter. Rien ne le signalerait : le bon NOMBRE d'époques
+        arriverait à l'entraînement, dans des proportions plausibles.
+
+        ⚠️ **`False` est une étiquette VALIDE**, et c'est le piège de ce hook : le socle décide
+        « pas d'époque » sur `etiquette is None`, pas sur sa fausseté. Un `if not etiquette` écrit
+        un jour là-haut ferait disparaître EN SILENCE toutes les époques correctes — soit ~72 % de
+        la séance — et laisserait un jeu d'entraînement à une seule classe. `_selftest` le vérifie.
+
+        ⚠️ **Seul `bool` est accepté**, pas `1`/`0` ni `"true"`. Une étiquette est la vérité-terrain
+        du jeu d'entraînement : la deviner à partir d'un type inattendu, c'est prendre le risque de
+        l'inverser sur toute une séance. Un émetteur tiers qui enverrait autre chose doit
+        l'apprendre au premier pas, par un message, pas au moment où son modèle décode du bruit.
+        """
+        if marqueur.get("event") != "feedback":
+            return None      # un événement inconnu s'ignore : le protocole grandira
+        if "error" not in marqueur:
+            self._refuse("un « feedback » est arrivé SANS champ `error` : cette époque n'a aucune "
+                         "vérité-terrain. La fenêtre tourne-t-elle bien avec « --calibrer » ?")
+            return None
+        etiquette = marqueur.get("error")
+        if not isinstance(etiquette, bool):
+            self._refuse(f"« error: {etiquette!r} » n'est pas un booléen "
+                         f"({type(etiquette).__name__}) : on ne DEVINE pas une vérité-terrain")
+            return None
+        self.classe = (tr("calib.errp.classe.erreur") if etiquette
+                       else tr("calib.errp.classe.correct"))
+        return etiquette
+
+    def _refuse(self, detail):
+        self._refus += 1
+        if self._refus in _PALIERS_REFUS:
+            print(f"[errp-calib] marqueur refusé ({self._refus} dans cette séance) : {detail} "
+                  f"— vérifie la fenêtre de stimulus")
+
+    def _entrainer(self, enregistre, fs):
+        """Traduit les étiquettes en classes du décodeur, puis entraîne dans `self.dossier`.
+
+        `self.pre_s`/`self.post_s` : la géométrie avec laquelle le socle vient RÉELLEMENT de
+        découper ces époques, lue sur le runtime de décodage. Le modèle la porte, et le mode la
+        compare à la sienne avant d'accepter de décoder avec (`errp.py::_desaccord_geometrie`).
+        `CALIB_CANDIDAT_PREFIXE` : ce qui sort d'ici est un CANDIDAT, invisible au motif
+        `errp_model*.joblib` tant que personne ne l'a retenu.
+        """
+        epochs = [e for e, _lab in enregistre]
+        labels = [ERROR if lab else CORRECT for _e, lab in enregistre]
+        # La bande : celle que l'étudiant a réglée dans « Entraîner » (validée par le contrat du
+        # `Calib`, dans ses bornes). Le secteur : celui du POSTE, que le moteur porte — un moteur
+        # qui ne le dit pas (un autotest) prend celui par défaut.
+        return entrainer_dans(self.dossier_ou_lever(), epochs, labels, fs,
+                              pre_s=self.pre_s, post_s=self.post_s, n_perm=self.n_perm,
+                              prefixe=CALIB_CANDIDAT_PREFIXE,
+                              band=bande_de(self.params, ERRP_BAND),
+                              secteur_hz=getattr(self.engine, "secteur_hz", SECTEUR_HZ))
+
+    # --- l'état, pour l'afficheur -------------------------------------------
+
+    def state(self, now=None):
+        """Celui du socle, plus le compteur de feedbacks REFUSÉS.
+
+        Sans lui, une fenêtre lancée en mode décodage pendant une calibration ne se voit que dans
+        le terminal — et elle produit une séance entière d'époques sans étiquette, donc une
+        calibration qui échoue au bout de six minutes sans qu'on sache pourquoi.
+        """
+        base = super().state(now)
+        base["refus_etiquette"] = self._refus
+        return base
+
+
+def _selftest():
+    """Une séance de calibration entière, jouée par des marqueurs sur un tampon EEG FABRIQUÉ.
+
+    Aucun casque, aucune fenêtre, aucune attente réelle : l'horloge est donnée à `tick`, et le
+    signal porte de vrais ErrP synthétiques plantés AUX INSTANTS des feedbacks d'erreur — donc
+    l'entraînement porte sur quelque chose, et le test peut juger le CONTENU, pas seulement la
+    plomberie.
+    """
+    import glob as _glob
+    import shutil
+    import tempfile
+    from fnmatch import fnmatch
+
+    from core.config import empreinte_dossier, nom_retenu
+    from core.errp_decoder import synth_errp_epoch
+    from core.modes import errp as _errp
+
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print(f"  {'OK  ' if cond else 'ÉCHEC'} {msg}")
+        ok = ok and bool(cond)
+
+    FS = 250.0
+    SOA = 1.45              # la cadence intra-course du protocole (ERRP_FEEDBACK_S + pause)
+    N_PAS = 60
+
+    class _FausseAcq:
+        fs = FS
+
+    class _MoteurFactice:
+        """Le strict nécessaire : un tampon EEG horodaté et la file de marqueurs du moteur."""
+
+        def __init__(self, eeg, ts):
+            self.acq = _FausseAcq()
+            self.recent, self.recent_ts = eeg, ts
+            self.t0 = float(ts[0])
+            self._lots = []
+
+        def file(self, lot):
+            self._lots.append(list(lot))
+
+        def markers_murs(self, mode_id, post_s):
+            return self._lots.pop(0) if self._lots else []
+
+    def seance(n_pas=N_PAS, graine=0, taux=0.3, amp=1.6):
+        """(marqueurs, tampon EEG, horodatages, étiquettes) — un ErrP synthétique planté à chaque
+        feedback d'ERREUR, et rien à ceux qui sont corrects.
+
+        Les époques sont ensuite prélevées par le vrai chemin (`epoch_from_stream`, via le socle) :
+        c'est ce qui rend ce test capable de dire quelque chose du décodage et pas seulement du
+        câblage.
+        """
+        rng = np.random.default_rng(graine)
+        t0 = 1000.0
+        plan, verites, t = [], [], t0 + 2.0
+        for i in range(n_pas):
+            # Alternance forcée sur les premiers pas : sans elle, un tirage malheureux peut donner
+            # une classe minoritaire à un seul membre, et c'est alors le REFUS qu'on testerait
+            # sans le savoir, pas la séance nominale.
+            erreur = (i % 3 == 0) if i < 9 else bool(rng.random() < taux)
+            plan.append((t, {"mode": "errp", "event": "feedback", "error": erreur}))
+            verites.append(erreur)
+            t += SOA
+        duree = t - t0 + 3.0
+
+        ts = np.arange(t0, t0 + duree, 1.0 / FS)
+        eeg = rng.normal(0.0, 1.8, (len(ts), 8))
+        eeg += 0.7 * np.sin(2 * np.pi * 10 * (ts - t0))[:, None]        # un alpha de fond
+        # ⚠️ La géométrie est LUE sur le runtime de décodage ici AUSSI, et passée à
+        # `synth_errp_epoch` : ses défauts sont ceux de `core/config.py`, donc une fixture qui les
+        # laisserait fabriquerait une onde d'une autre longueur que la tranche où on la plante dès
+        # que quelqu'un déplace `ErrPRuntime.pre_s`. Le test lèverait un `ValueError` de
+        # broadcast au lieu de dire ce qu'il a à dire — alors que c'est précisément ce
+        # remaniement qui met à nu la géométrie SAUVEGARDÉE.
+        pre_s, post_s = _errp.ErrPRuntime.pre_s, _errp.ErrPRuntime.post_s
+        n_pre, n_post = int(round(pre_s * FS)), int(round(post_s * FS))
+        for (instant, m), erreur in zip(plan, verites):
+            if not erreur:
+                continue
+            i = int(np.searchsorted(ts, instant))
+            onde = synth_errp_epoch(True, fs=FS, pre_s=pre_s, post_s=post_s, amp=amp,
+                                    noise=0.0, rng=rng)
+            # `noise=0` ne suffit pas : `synth_errp_epoch` ajoute aussi un alpha. On ne garde que
+            # la réponse évoquée, en la centrant.
+            tranche = onde[:n_pre + n_post]
+            eeg[i - n_pre:i + n_post] += tranche - tranche.mean(axis=0)
+        return plan, eeg, ts, verites
+
+    def joue(rt, moteur, plan, pas=0.25):
+        """Fait vivre la séance : `calib_start`, la chauffe, les marqueurs, `calib_end`."""
+        t0 = moteur.t0
+        rt.tick(moteur, t0)
+        rt.encaisser(moteur, t0, {"mode": "errp", "event": "calib_start", "trials": len(plan)})
+        rt.tick(moteur, t0 + rt.warmup_s + 0.1)          # la chauffe s'écoule -> « essais »
+        for instant, m in plan:
+            rt.encaisser(moteur, instant, m)
+        rt.encaisser(moteur, plan[-1][0] + 1.0, {"mode": "errp", "event": "calib_end"})
+        t = t0 + rt.warmup_s + 0.2
+        for _ in range(10):
+            rt.tick(moteur, t)
+            if rt.terminee:
+                break
+            t += pas
+        return rt
+
+    class _CalibRapide(ErrPCalibration):
+        """La VRAIE classe, avec moins de permutations. Cf. le commentaire de `n_perm` : 100
+        validations croisées feraient de cet autotest une minute d'attente, et un autotest qu'on
+        n'ose plus lancer ne garde rien.
+
+        ⚠️ **24 et pas 12**, et ce n'est pas un arrondi. `_permutation_p` rend `(k + 1)/(n + 1)`,
+        donc la p-value la plus PETITE atteignable vaut `1/(n_perm + 1)` : à 12 permutations, le
+        plancher est 0,077 — au-dessus de `PERM_ALPHA`. Une séance parfaitement décodée n'aurait
+        alors JAMAIS pu ressortir significative, et cet autotest n'aurait exercé qu'une moitié du
+        verdict, sans que rien ne le dise. À 24, le plancher tombe à 0,040 et les deux branches
+        sont atteignables. Vérifié explicitement plus bas."""
+
+        n_perm = 24
+
+    dossier = tempfile.mkdtemp(prefix="errp_calib_")
+    empreinte_avant = empreinte_dossier()
+    try:
+        # --- 1. Le contrat : le mode déclare CETTE calibration, avec une époque dimensionnée ---
+        # PAS `is ErrPCalibration` : lancé directement, ce fichier tourne en `__main__` avec SA
+        # classe, et l'import de `core.modes.errp` juste au-dessus en a chargé une SECONDE sous le
+        # nom de paquet. Mêmes valeurs, objet différent — l'artefact mécanique que
+        # `core/modes/mi_calib.py` documente au long. On compare donc ce qui identifie.
+        calib = _errp.SPEC.calibration
+        chk(calib is not None and calib.kind == "fenetre" and calib.stimulus_id == "errp",
+            f"l'ErrP déclare une calibration menée par une FENÊTRE ({calib!r})")
+        chk(calib.runtime_cls is not None
+            and calib.runtime_cls.__name__ == ErrPCalibration.__name__,
+            f"...et le moteur sait la JOUER : son runtime_cls est renseigné "
+            f"({getattr(calib.runtime_cls, '__name__', None)})")
+        chk(abs(calib.epoch_s - (_errp.ErrPRuntime.pre_s + _errp.ErrPRuntime.post_s)) < 1e-9,
+            f"...et son epoch_s vaut la géométrie que le runtime PRÉLÈVE ({calib.epoch_s} s)")
+        chk(ErrPCalibration.duree_protocole_s > 120.0,
+            f"la durée du protocole est RENSEIGNÉE — laissée à 0, la console annoncerait « ≈ 0 min "
+            f"» pour une séance de plusieurs minutes ({ErrPCalibration.duree_protocole_s:.0f} s)")
+        chk(ErrPCalibration.n_perm is None,
+            f"la classe de PRODUCTION ne saute pas le test de permutation : sans p-value, rien ne "
+            f"distingue une AUC de 0,80 sur 20 essais d'un tirage chanceux "
+            f"({ErrPCalibration.n_perm})")
+
+        # --- 2. La géométrie est LUE sur le runtime de décodage, jamais redéclarée -------------
+        plan, eeg, ts, verites = seance()
+        moteur = _MoteurFactice(eeg, ts)
+        rt = _CalibRapide(_errp.SPEC, {}, moteur, dossier=dossier)
+        chk(rt.runtime_cls_du_mode is _errp.ErrPRuntime,
+            f"la calibration DÉSIGNE le runtime de DÉCODAGE — c'est de lui, et de nulle part "
+            f"ailleurs, que vient sa géométrie d'époque ({rt.runtime_cls_du_mode})")
+        chk(rt.pre_s == _errp.ErrPRuntime.pre_s and rt.post_s == _errp.ErrPRuntime.post_s,
+            f"...et elle en LIT pre_s/post_s ({rt.pre_s}, {rt.post_s})")
+
+        # --- 3. L'étiquette voyage sur le feedback LUI-MÊME, et `False` en est une -------------
+        joue(rt, moteur, plan)
+        chk(rt.phase == "fini", f"la séance aboutit ({rt.phase}, problème={rt.probleme!r})")
+        etiquettes = [lab for _e, lab in rt._enregistre] if rt._enregistre else []
+        chk(len(etiquettes) == len(plan) and etiquettes == verites,
+            f"une époque par feedback, étiquetée par le champ `error` de CE feedback — il n'y a "
+            f"pas de `cue` dans ce mode ({len(etiquettes)} pour {len(plan)})")
+        chk(etiquettes.count(False) > 0 and etiquettes.count(True) > 0,
+            f"...et les DEUX classes sont enregistrées : `False` est une étiquette VALIDE, pas un "
+            f"« pas d'époque ». Un `if not etiquette` dans le socle ferait disparaître EN SILENCE "
+            f"les {etiquettes.count(False)} époques correctes, soit la majorité de la séance")
+
+        res = rt.resultat or {}
+        chk(res.get("n_essais") == len(plan),
+            f"toutes les époques annoncées partent à l'entraînement ({res.get('n_essais')})")
+        chk(res.get("n_erreurs") == sum(verites),
+            f"...dont le bon nombre d'erreurs ({res.get('n_erreurs')} pour {sum(verites)})")
+
+        # --- 4. L'AUC est hors-pli, la permutation est CALCULÉE --------------------------------
+        chk(res.get("auc") is not None and 0.0 <= res["auc"] <= 1.0,
+            f"l'AUC est une probabilité ({res.get('auc')})")
+        chk(res.get("perm_p") is not None and 0.0 <= res["perm_p"] <= 1.0,
+            f"le test de permutation est CALCULÉ et rendu — c'est lui qui distingue une AUC d'un "
+            f"tirage chanceux, et le projet en fait une règle ({res.get('perm_p')})")
+        # ⚠️ Le plancher de la p-value vaut `1/(n_perm + 1)` : à trop peu de permutations, AUCUNE
+        # séance ne peut ressortir significative, et cet autotest n'exercerait qu'une moitié du
+        # verdict en restant vert. On l'exige explicitement plutôt que de le supposer.
+        chk(1.0 / (_CalibRapide.n_perm + 1) < PERM_ALPHA,
+            f"...avec assez de permutations pour que « significatif » soit ATTEIGNABLE : le "
+            f"plancher est 1/(n+1) = {1.0 / (_CalibRapide.n_perm + 1):.3f}, sous "
+            f"{PERM_ALPHA}")
+        chk(res.get("perm_p") < PERM_ALPHA,
+            f"...et sur une séance où l'onde est VRAIMENT là, la permutation la déclare "
+            f"significative ({res.get('perm_p')})")
+        chk(res.get("tpr") is not None and res.get("tnr") is not None,
+            f"le point de fonctionnement est rendu à côté ({res.get('tpr')}, {res.get('tnr')})")
+        chk(abs(res.get("hasard", 0.0) - 0.5) < 1e-9,
+            f"le niveau du hasard d'une AUC est 0,5 — pas 1/6 comme la sélection du P300 "
+            f"({res.get('hasard')})")
+        # Les trois lignes affichées EN FACE viennent de la MÊME table que ce verdict : le mot
+        # ouvre la phrase, les chiffres portent leur point de comparaison (`affichage.verifier`).
+        chk(not _verifier_affichage(res),
+            f"l'affichage du résultat est cohérent avec son verdict ({_verifier_affichage(res)})")
+        chk(res.get("verdict") == verdict(res.get("auc"), res.get("perm_p")),
+            f"le verdict est recalculé depuis l'AUC ET sa significativité, jamais depuis le "
+            f"TPR/TNR — qui sont mesurés au seuil qui les a choisis ({res.get('verdict')!r})")
+
+        # Le contenu, pas seulement la plomberie : sur ce signal, l'AUC doit battre le hasard.
+        # Sans cette ligne, un épochage décalé de 200 ms passerait tout le reste.
+        chk(res.get("auc", 0.0) > 0.5,
+            f"...et sur de l'ErrP synthétique, l'AUC BAT le hasard — un épochage décalé ne le "
+            f"pourrait pas ({res.get('auc')})")
+
+        # --- 5. La phrase d'honnêteté est celle de l'ErrP, et elle dit les TROIS choses --------
+        phrase = res.get("honnetete", "")
+        chk(bool(phrase), "le résultat porte SA phrase d'honnêteté")
+        chk("une erreur sur deux" in phrase.lower() and "sur sept" in phrase.lower(),
+            "...et elle dit ce que ce détecteur attrape VRAIMENT au réglage par défaut (une erreur "
+            "sur deux, une bonne commande annulée sur sept)")
+        chk("optimiste" in phrase.lower() and "0,776" in phrase,
+            "...que ces deux taux sont eux-mêmes OPTIMISTES — le seuil a été choisi en regardant "
+            "les scores qui le mesurent, donc le TNR dépasse sa cible PAR CONSTRUCTION")
+        chk("cinq" in phrase.lower() and "dix" in phrase.lower(),
+            "...et ce qu'il est NORMAL d'observer : sur dix erreurs délibérées, en attraper cinq "
+            "est le résultat attendu")
+        chk("trois classes" not in phrase and "40 %" not in phrase
+            and "leave-one-round-out" not in phrase,
+            "...et ce n'est celle NI du Motor Imagery NI du P300 : ni trois classes, ni une "
+            "sélection parmi six cibles")
+
+        # --- 6. Le modèle est écrit dans le dossier DONNÉ, et jamais dans le vrai data/ --------
+        chk(res.get("modele", "").startswith(dossier),
+            f"le modèle est écrit dans le dossier reçu ({res.get('modele')})")
+        chk(nom_retenu(res.get("modele", "")).startswith("errp_model_")
+            and res.get("modele", "").endswith(".joblib"),
+            f"...sous un nom HORODATÉ, jamais fixe : `data/errp_model.joblib` est la trace casque "
+            f"du 24 juillet ({_os.path.basename(res.get('modele', ''))})")
+        chk(bool(res.get("enregistrement")) and _os.path.exists(res["enregistrement"]),
+            f"...et les époques BRUTES sont archivées à côté ({res.get('enregistrement')})")
+
+        from core import errp_models
+
+        # ⚠️ Ce qui sort d'une calibration est un CANDIDAT, et il ne doit être proposé à PERSONNE
+        # tant que quelqu'un ne l'a pas retenu. Le préfixe le rend invisible au motif de
+        # découverte — sans lui, un candidat oublié dans son dossier temporaire redeviendrait « le
+        # modèle chargeable le plus récent » le jour où ce dossier serait scanné.
+        chk(_os.path.basename(res.get("modele", "")).startswith(CALIB_CANDIDAT_PREFIXE),
+            f"le modèle produit est un CANDIDAT, marqué comme tel "
+            f"({_os.path.basename(res.get('modele', ''))})")
+        chk(errp_models.modeles_disponibles(dossier) == [],
+            f"...donc INVISIBLE au motif `{errp_models.MOTIF}` : rien à découvrir dans son dossier "
+            f"({errp_models.modeles_disponibles(dossier)})")
+        chk(fnmatch(nom_retenu(res.get("modele", "")), errp_models.MOTIF),
+            f"...mais le nom sous lequel il sera RETENU, lui, correspond au motif — sinon le "
+            f"modèle enregistré ne serait jamais proposé ({nom_retenu(res.get('modele', ''))})")
+
+        # --- 6bis. Le modèle produit est ACCEPTÉ par le mode qui décodera avec -----------------
+        # `ErrPRuntime.__init__` refuse un modèle dont la géométrie d'époque n'est pas celle qu'il
+        # prélève (`_desaccord_geometrie`), et un modèle sans scores hors-pli (`_sans_scores_oof`).
+        # C'est le contrôle SYMÉTRIQUE de tout ce fichier : on a vérifié que la calibration découpe
+        # comme le décodage, on vérifie ici que ce qu'elle en SAUVEGARDE le dit aussi. Sans cette
+        # ligne, un `ErrPModel(fs=fs)` construit avec ses défauts passerait tous les tests, et le
+        # premier changement de `ErrPRuntime.pre_s` ferait refuser, au démarrage du mode, le modèle
+        # qu'on vient tout juste de calibrer — en accusant le modèle.
+        class _MoteurDuMode:
+            acq = _FausseAcq()
+            instance = "selftest"
+
+        try:
+            decodeur = _errp.ErrPRuntime(_errp.SPEC,
+                                         {"model": res["modele"], "stream_in": "x",
+                                          "tnr_target": 0.85},
+                                         _MoteurDuMode())
+            refus = None
+        except ValueError as e:
+            decodeur, refus = None, str(e)
+        chk(decodeur is not None,
+            f"le modèle sorti de cette calibration est ACCEPTÉ par le mode qui décodera avec "
+            f"({refus or 'aucun refus'})")
+        chk(refus is not None or (decodeur.model.pre_s == _errp.ErrPRuntime.pre_s
+                                  and decodeur.model.post_s == _errp.ErrPRuntime.post_s
+                                  and decodeur.model.fs == _FausseAcq.fs),
+            f"...parce qu'il PORTE la géométrie avec laquelle ses époques ont été découpées, pas "
+            f"un défaut de configuration ({getattr(decodeur, 'model', None)})")
+
+        # ...et l'autre moitié de la même garde : la géométrie ne peut pas être OMISE. Elle n'a
+        # aucun repli honnête — un défaut repris de `core/config.py` produirait silencieusement un
+        # modèle plausible et faux le jour où `ErrPRuntime.pre_s` bouge, et un défaut à `None`
+        # ferait mourir l'entraînement plus bas sur « unsupported operand type(s) for *:
+        # 'NoneType' and 'float' », qui ne nomme ni le paramètre oublié ni l'appelant qui l'a
+        # oublié. Sans défaut, Python les nomme tous les deux.
+        try:
+            entrainer_dans(dossier, [e for e, _l in rt._enregistre],
+                           [1 if lab else 0 for _e, lab in rt._enregistre], FS, n_perm=0)
+            refus_geo = None
+        except TypeError as e:
+            refus_geo = str(e)
+        chk(refus_geo is not None and "pre_s" in refus_geo and "post_s" in refus_geo,
+            f"omettre la géométrie est refusé AU POINT D'APPEL, en nommant les deux arguments "
+            f"manquants — pas vingt lignes plus bas dans un produit par None "
+            f"({refus_geo or 'AUCUN refus : un modèle a été écrit sans géométrie'})")
+
+        # --- 6ter. Le FILTRE : la bande réglée et le secteur du poste, validation comprise -----
+        # Le modèle PORTE son filtre et décode avec (`ErrPModel.core._prep`) : un réglage ignoré
+        # ne lève donc rien, il entraîne simplement sur la bande de toujours. Et une validation
+        # filtrée autrement que le modèle final mesurerait AUTRE CHOSE que lui. Ici, aucun modèle
+        # de validation n'est construit à côté : le balayage de nfilter, l'AUC hors-pli, la
+        # permutation et la sLDA travaillent sur les époques filtrées UNE fois par le modèle
+        # (`ErrPModel.fit`). On espionne quand même CHAQUE filtrage de l'entraînement : c'est ce
+        # qui rougira le jour où une validation refiltrera de son côté, avec les défauts.
+        # ⚠️ L'espion est posé sur `core.filtrage.sections`, le SEUL point par lequel passent tous
+        # les chemins (`passe_bande` le cherche dans son module à chaque appel). Un espion posé sur
+        # `p300_decoder.bandpass` laisserait échapper un re-filtrage ajouté dans `ErrPModel.fit`
+        # (balayage, permutation, sLDA) : `errp_decoder` importe `bandpass` PAR SON NOM, et garde
+        # la vraie fonction, comme tout appel direct à `passe_bande`.
+        from core import filtrage as _filtrage
+        from core.modes.contract import validate
+
+        defauts, _raison = validate(calib, {})
+        chk(defauts is not None
+            and (defauts.get("band_low"), defauts.get("band_high")) == tuple(ERRP_BAND),
+            f"« Entraîner » règle une bande, et par défaut c'est celle de toujours ({defauts})")
+        refus_b, raison_b = validate(calib, {"band_low": 8.0, "band_high": 30.0})
+        chk(refus_b is None and tr("moteur.bande.bas") in (raison_b or ""),
+            f"une bande qui retirerait l'ErrP (8-30 Hz, celle du Motor Imagery) est REFUSÉE à "
+            f"l'entrée, en nommant la coupure fautive ({raison_b})")
+        # Les bornes, des DEUX côtés de CHAQUE coupure : basse de 0,5 à 2 Hz, haute de 8 à 40 Hz.
+        # Le seul refus de 8-30 Hz laisserait survivre des bornes (0,1 ; 7,9) ou (2,5 ; 40) :
+        # chaque cas ci-dessous en tue au moins une.
+        cas_bornes = (((0.5, 10.0), None), ((2.0, 8.0), None), ((2.0, 40.0), None),
+                      ((0.4, 10.0), "moteur.bande.bas"), ((2.2, 10.0), "moteur.bande.bas"),
+                      ((1.0, 7.8), "moteur.bande.haut"), ((1.0, 41.0), "moteur.bande.haut"))
+        ecarts = []
+        for (bas_b, haut_b), fautive in cas_bornes:
+            val_b, raison_bb = validate(calib, {"band_low": bas_b, "band_high": haut_b})
+            if fautive is None and val_b is None:
+                ecarts.append(f"{bas_b}-{haut_b} refusée ({raison_bb})")
+            elif fautive is not None and (val_b is not None
+                                          or tr(fautive) not in (raison_bb or "")):
+                ecarts.append(f"{bas_b}-{haut_b} acceptée ou mal nommée ({raison_bb})")
+        chk(not ecarts,
+            f"bornes : coupure basse de 0,5 à 2 Hz, haute de 8 à 40 Hz, les quatre bords acceptés "
+            f"et chaque dépassement refusé en nommant SA coupure ({ecarts or 'aucun écart'})")
+        nominal = ErrPModel.load(res["modele"])
+        chk(tuple(nominal.core.band) == tuple(ERRP_BAND) and nominal.core.secteur_hz == SECTEUR_HZ
+            and nominal.secteur_hz == SECTEUR_HZ,
+            f"sans réglage, le modèle apprend la bande de toujours, et le secteur PAR DÉFAUT du "
+            f"poste quand le moteur ne dit pas le sien — jamais « pas de coupe-bande » "
+            f"({nominal.core.band}, {nominal.core.secteur_hz})")
+        chk(res.get("filtre") == texte_filtre(ERRP_BAND, SECTEUR_HZ),
+            f"...et « Détails » le DIT : la ligne `filtre` du résultat nomme cette bande et ce "
+            f"secteur ({res.get('filtre')!r})")
+
+        BANDE, SECTEUR = (0.5, 20.0), 60.0
+        reglages, raison_r = validate(calib, {"band_low": BANDE[0], "band_high": BANDE[1]})
+        chk(reglages is not None, f"une bande 0,5-20 Hz est dans les bornes ({raison_r})")
+        moteur_f = _MoteurFactice(eeg, ts)
+        moteur_f.secteur_hz = SECTEUR              # un poste aux Amériques
+        filtrages = []
+        vraies_sections = _filtrage.sections
+
+        def _sections_espion(fs, bande, secteur_hz=None, ordre=_filtrage.ORDRE):
+            filtrages.append((tuple(float(b) for b in bande), secteur_hz))
+            return vraies_sections(fs, bande, secteur_hz, ordre)
+
+        _filtrage.sections = _sections_espion
+        try:
+            # Un SOUS-dossier : la section 7 compte les modèles du dossier principal.
+            rt_f = _CalibRapide(_errp.SPEC, reglages or {}, moteur_f,
+                                dossier=_os.path.join(dossier, "filtre"))
+            joue(rt_f, moteur_f, plan)
+        finally:
+            _filtrage.sections = vraies_sections
+        res_f = rt_f.resultat or {}
+        chk(rt_f.phase == "fini" and res_f.get("auc") is not None
+            and res_f.get("perm_p") is not None,
+            f"la séance filtrée 0,5-20 Hz à 60 Hz aboutit, AUC hors-pli et permutation comprises "
+            f"({rt_f.phase}, {rt_f.probleme!r})")
+        autres = sorted(set(filtrages) - {(BANDE, SECTEUR)})
+        chk(filtrages and not autres,
+            f"CHAQUE filtrage de l'entraînement — modèle final, balayage de nfilter, permutation — "
+            f"porte la bande réglée et le secteur du moteur ({len(filtrages)} filtrage(s) ; "
+            f"autres : {autres or 'aucun'})")
+        modele_f = ErrPModel.load(res_f["modele"]) if res_f.get("modele") else None
+        chk(modele_f is not None and tuple(modele_f.core.band) == BANDE
+            and modele_f.core.secteur_hz == SECTEUR
+            and tuple(modele_f.band) == BANDE and modele_f.secteur_hz == SECTEUR,
+            f"...et le modèle ENREGISTRÉ les porte, dans la partie qui FILTRE (`core`) comme dans "
+            f"celle qui le décrit ({getattr(getattr(modele_f, 'core', None), 'band', None)}, "
+            f"{getattr(getattr(modele_f, 'core', None), 'secteur_hz', None)})")
+        chk(res_f.get("filtre") == texte_filtre(BANDE, SECTEUR),
+            f"...et « Détails » dit CE filtre-là, pas celui par défaut ({res_f.get('filtre')!r})")
+        try:
+            accepte_f = _errp.ErrPRuntime(_errp.SPEC, {"model": res_f["modele"], "stream_in": "x",
+                                                       "tnr_target": 0.85}, _MoteurDuMode())
+        except (KeyError, ValueError):
+            accepte_f = None
+        # La bande ET le secteur, lus sur le noyau qui FILTRE : un runtime qui remettrait l'un des
+        # deux à son défaut au chargement décoderait avec un autre filtre que celui appris.
+        noyau_f = getattr(getattr(accepte_f, "model", None), "core", None)
+        chk(noyau_f is not None and tuple(noyau_f.band) == BANDE
+            and noyau_f.secteur_hz == SECTEUR,
+            f"...et le mode l'ACCEPTE tel quel : une bande réglée ne fait pas refuser le modèle au "
+            f"démarrage, et il décode avec SA bande et SON secteur "
+            f"({getattr(noyau_f, 'band', None)}, {getattr(noyau_f, 'secteur_hz', None)})")
+        try:
+            with np.load(res_f["enregistrement"], allow_pickle=False) as archive_f:
+                archive_lu = (tuple(float(b) for b in archive_f["band"]),
+                              float(archive_f["secteur_hz"]))
+        except (KeyError, OSError, TypeError, ValueError) as e:
+            archive_lu = f"{type(e).__name__}: {e}"
+        chk(archive_lu == (BANDE, SECTEUR),
+            f"les époques BRUTES archivées disent avec quel filtre elles ont appris : un "
+            f"ré-entraînement futur doit pouvoir refaire CE modèle ({archive_lu})")
+
+        # --- 7. Une séance trop pauvre est REFUSÉE, en disant quoi faire -----------------------
+        plan_court, eeg_c, ts_c, _v = seance(n_pas=6, graine=1)
+        moteur_c = _MoteurFactice(eeg_c, ts_c)
+        rt_court = _CalibRapide(_errp.SPEC, {}, moteur_c, dossier=dossier)
+        joue(rt_court, moteur_c, plan_court)
+        chk(rt_court.phase == "annule" and "trop pauvre" in rt_court.probleme,
+            f"une séance trop pauvre refuse d'entraîner ({rt_court.phase}, {rt_court.probleme})")
+        chk("Refais une séance plus longue" in rt_court.probleme,
+            f"...en disant quoi faire ({rt_court.probleme})")
+        chk(len(_glob.glob(_os.path.join(dossier, "*errp_model*.joblib"))) == 1,
+            f"...et n'écrit AUCUN second fichier de modèle "
+            f"({_glob.glob(_os.path.join(dossier, '*errp_model*.joblib'))})")
+
+        # Une calibration sans dossier ne retombe PAS sur `data/` : elle refuse, en disant qui
+        # aurait dû lui en donner un.
+        rt_sans = _CalibRapide(_errp.SPEC, {}, _MoteurFactice(eeg, ts))
+        try:
+            rt_sans.dossier_ou_lever()
+            refus_dossier = None
+        except ValueError as e:
+            refus_dossier = str(e)
+        chk(refus_dossier is not None and "data/" in refus_dossier,
+            f"sans dossier, la calibration REFUSE au lieu de retomber sur data/ "
+            f"({(refus_dossier or 'aucun refus')[:70]}…)")
+
+        # --- 8. LA GARDE DE CETTE TÂCHE : un feedback SANS étiquette est refusé ----------------
+        # C'est le marqueur d'une fenêtre lancée en mode DÉCODAGE. L'étiqueter « correct » par
+        # défaut — la classe majoritaire, le choix qui vient naturellement — glisserait ~28 % de
+        # vraies erreurs dans les bonnes commandes, et le modèle apprendrait à ne jamais rien
+        # détecter. Rien ne le signalerait : le bon NOMBRE d'époques arriverait à l'entraînement.
+        moteur_r = _MoteurFactice(eeg, ts)
+        rt_r = _CalibRapide(_errp.SPEC, {}, moteur_r, dossier=dossier)
+        rt_r.tick(moteur_r, moteur_r.t0)
+        rt_r.encaisser(moteur_r, moteur_r.t0,
+                       {"mode": "errp", "event": "calib_start", "trials": 6})
+        rt_r.tick(moteur_r, moteur_r.t0 + rt_r.warmup_s + 0.1)
+        t_r = moteur_r.t0 + 20.0
+        rt_r.encaisser(moteur_r, t_r, {"mode": "errp", "event": "feedback"})
+        chk(rt_r.essai == 0 and rt_r._refus == 1,
+            f"un `feedback` NU (celui d'une fenêtre qui DÉCODE) est refusé, jamais étiqueté "
+            f"« correct » par défaut ({rt_r.essai} enregistrée(s), {rt_r._refus} refus)")
+        rt_r.encaisser(moteur_r, t_r + 0.1, {"mode": "errp", "event": "feedback", "error": 1})
+        chk(rt_r.essai == 0 and rt_r._refus == 2,
+            f"`error: 1` non plus : une étiquette se lit, elle ne se DEVINE pas — l'inverser sur "
+            f"toute une séance ne lèverait aucune erreur ({rt_r._refus} refus)")
+        rt_r.encaisser(moteur_r, t_r + 0.2, {"mode": "errp", "event": "feedback", "error": "true"})
+        chk(rt_r.essai == 0 and rt_r._refus == 3,
+            f"ni la chaîne « true » ({rt_r._refus} refus)")
+        rt_r.encaisser(moteur_r, t_r + 0.3, {"mode": "errp", "event": "run_start"})
+        chk(rt_r.essai == 0 and rt_r._refus == 3,
+            f"un événement INCONNU, lui, est ignoré sans être compté comme un refus : le protocole "
+            f"grandira ({rt_r._refus} refus)")
+        rt_r.encaisser(moteur_r, t_r + 0.4, {"mode": "errp", "event": "feedback", "error": False})
+        rt_r.encaisser(moteur_r, t_r + 1.9, {"mode": "errp", "event": "feedback", "error": True})
+        chk([lab for _e, lab in rt_r._enregistre] == [False, True],
+            f"...et un feedback bien formé passe, dans les deux valeurs "
+            f"({[lab for _e, lab in rt_r._enregistre]})")
+        chk(rt_r.state(now=t_r)["refus_etiquette"] == 3,
+            f"les refus sont VISIBLES dans l'instantané : sinon une fenêtre lancée en mode "
+            f"décodage ne se voit que dans un terminal que personne ne lit "
+            f"({rt_r.state(now=t_r)['refus_etiquette']})")
+
+        # --- 9. Les blocs de la validation croisée sont des tranches CONTIGUËS -----------------
+        # Sans groupes, `_cv_splitter` mélange les époques et deux pas voisins de la même course
+        # se retrouvent l'un en entraînement, l'autre en test : l'AUC monte pour une raison qui
+        # n'a rien à voir avec l'ErrP.
+        g = groupes_contigus(20, blocs=5)
+        chk(g == sorted(g) and len(set(g)) == 5 and g.count(0) == 4,
+            f"20 époques en 5 blocs contigus de 4 ({g})")
+        chk(groupes_contigus(3, blocs=5) == [0, 1, 2],
+            f"...et une séance plus courte que le nombre de blocs n'en fabrique pas de vides "
+            f"({groupes_contigus(3, blocs=5)})")
+        chk(groupes_contigus(0, blocs=5) == [],
+            "...ni ne lève sur une séance vide (le refus d'entraîner s'en charge, plus haut)")
+
+        # --- 10. Le verdict : une AUC NON significative n'est pas une AUC faible ---------------
+        chk("NON SIGNIFICATIF" in verdict(0.85, perm_p=0.4),
+            f"une belle AUC dont la permutation dit p=0,4 est déclarée INDISTINGUABLE DU HASARD — "
+            f"pas « bonne » ({verdict(0.85, perm_p=0.4)[:50]}…)")
+        chk("contact" in verdict(0.85, perm_p=0.4),
+            "...et le refus dit que ce n'est PAS un problème de contact : rallonger la séance et "
+            "resaliner ne réparent pas la même panne")
+        chk("FAIBLE" in verdict(0.55, perm_p=0.01) and "eau salée" in verdict(0.55, perm_p=0.01),
+            f"une AUC basse mais significative, elle, s'attaque par le SIGNAL "
+            f"({verdict(0.55, perm_p=0.01)[:40]}…)")
+        chk(verdict(None) and "non mesurée" in verdict(None),
+            f"et une AUC absente le dit ({verdict(None)})")
+    finally:
+        shutil.rmtree(dossier, ignore_errors=True)
+
+    chk(empreinte_dossier() == empreinte_avant,
+        "AUCUN fichier n'a bougé dans le vrai `data/` — il porte des enregistrements EEG d'une "
+        "personne identifiable, et son modèle le plus récent est celui que le moteur ÉLIT")
+
+    print(f"[errp-calib] VERDICT : {'OK' if ok else 'PROBLÈME'}")
+    return ok
+
+
+if __name__ == "__main__":
+    use_utf8_console()
+    _sys.exit(0 if _selftest() else 1)
