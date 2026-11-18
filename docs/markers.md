@@ -277,7 +277,7 @@ ten seconds of silence it otherwise spends before declaring the round abandoned.
 ## The same thing in Unity (C#)
 
 Using [LSL4Unity](https://github.com/labstreaminglayer/LSL4Unity). ⚠️ Written against the verified
-API but **never run in Unity on this machine** — the same caveat as `examples/unity/`. Tell us if
+API but **never run in Unity on this machine** — the same caveat as `EEG_API_Unicorn_Applications/Unity/exemple/`. Tell us if
 it needs fixing.
 
 ```csharp

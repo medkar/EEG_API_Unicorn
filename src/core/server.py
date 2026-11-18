@@ -39,7 +39,8 @@ cliente dise au moteur QUAND chaque cible s'est allumée — c'est à ça que se
 
 Le moteur publie les SIX modes et joue les QUATRE calibrations — voir `src/core/modes/registry.py`
 pour le catalogue complet. Une application de la MÊME machine peut régler, démarrer et arrêter un
-mode par le réseau (`core/pilotage.py`, exemple : `examples/control_client.py`) ; les entraînements
+mode par le réseau (`core/pilotage.py`, exemple :
+`EEG_API_Unicorn_Applications/Protocole/control_client.py`) ; les entraînements
 restent dans la console. Les MARQUEURS entrants existent aussi : le moteur ouvre un inlet LSL dès
 qu'un mode qui en consomme démarre (`core/markers.py`), et le contrat public de ces marqueurs est
 dans `docs/markers.md`.
@@ -65,7 +66,7 @@ Essai sur casque, en deux terminaux (le stimulus n'ouvre PAS le casque, aucun co
     python src/stimulus/ssvep.py --windowed --refresh 60        # les cibles clignotent
     python src/core/server.py --mode ssvep --refresh 60         # décode et trace en console
 Un troisième terminal montre ce que reçoit un vrai client :
-    python -u examples/receiver.py --stream decoded_ssvep
+    python -u EEG_API_Unicorn_Applications/Protocole/receiver.py --stream decoded_ssvep
 
 Même montage pour le P300, à ceci près que le stimulus PARLE au moteur (il publie l'onset de
 chaque flash sur `EEG_API_Unicorn_stim`) et qu'un modèle entraîné est exigé :
@@ -6385,11 +6386,72 @@ def _smoke_textes():
     return ok
 
 
-def _smoke_exemples():
-    """`examples/` et `clients/` ne nomment aucun flux que le moteur ne publie plus.
+# Le dossier des applications prêtes à l'emploi : une plateforme par sous-dossier, chacune avec
+# `client/` (la bibliothèque seule) et `exemple/` (une application complète, AUTONOME, qui porte
+# sa propre copie de la bibliothèque).
+DOSSIER_APPLICATIONS = "EEG_API_Unicorn_Applications"
 
-    ⚠️ Ce sont les deux endroits du dépôt qui montrent comment CONSOMMER le produit. Un exemple
-    qui nomme un flux disparu ne lève rien : `resolve_byprop` attend, puis rend une liste vide, et
+# Les copies d'une même bibliothèque : le premier chemin de chaque groupe est la référence, les
+# suivants doivent lui rester IDENTIQUES (un dossier se compare fichier par fichier). Une copie qui
+# diverge garde un défaut corrigé ailleurs, et l'élève qui copie `exemple/` ne le saura jamais.
+COPIES_APPLICATIONS = (
+    ("Python/client/eeg_api_lsl.py", "Python/exemple/eeg_api_lsl.py"),
+    ("MATLAB/client/EegApi.m", "MATLAB/exemple/EegApi.m"),
+    ("RaspberryPi/client/eeg_api_udp.py", "RaspberryPi/exemple/eeg_api_udp.py",
+     "ROS2/client/eeg_api_ros/eeg_api_ros/eeg_api_udp.py"),
+    ("ROS2/client/eeg_api_ros", "ROS2/exemple/eeg_api_ros"),
+    ("ESP32/client/EegApiDevice.h", "ESP32/exemple/EegApiDevice.h",
+     "ArduinoR4WiFi/client/EegApiDevice.h", "ArduinoR4WiFi/exemple/EegApiDevice.h"),
+    ("ESP32/client/EegApiDevice.cpp", "ESP32/exemple/EegApiDevice.cpp",
+     "ArduinoR4WiFi/client/EegApiDevice.cpp", "ArduinoR4WiFi/exemple/EegApiDevice.cpp"),
+)
+
+
+def copies_divergentes(racine):
+    """Les écarts entre les copies de `COPIES_APPLICATIONS`, sous `racine` (le dossier des
+    applications) : une liste de phrases, vide quand tout est identique. Les fins de ligne ne
+    comptent pas (git les convertit selon le poste) ; les `__pycache__` sont ignorés."""
+    def fichiers(chemin):
+        if os.path.isfile(chemin):
+            return {"": chemin}
+        trouves = {}
+        for dossier, sous, noms in os.walk(chemin):
+            sous[:] = [d for d in sous if d != "__pycache__"]
+            for nom in noms:
+                plein = os.path.join(dossier, nom)
+                trouves[os.path.relpath(plein, chemin).replace("\\", "/")] = plein
+        return trouves
+
+    def contenu(chemin):
+        with open(chemin, "rb") as f:
+            return f.read().replace(b"\r\n", b"\n")
+
+    ecarts = []
+    for reference, *copies in COPIES_APPLICATIONS:
+        if not os.path.exists(os.path.join(racine, reference)):
+            ecarts.append(f"{reference} n'existe pas")
+            continue
+        attendus = fichiers(os.path.join(racine, reference))
+        for copie in copies:
+            if not os.path.exists(os.path.join(racine, copie)):
+                ecarts.append(f"{copie} n'existe pas (copie de {reference})")
+                continue
+            trouves = fichiers(os.path.join(racine, copie))
+            for rel in sorted(set(attendus) | set(trouves)):
+                nom = f"{copie}/{rel}" if rel else copie
+                if rel not in trouves or rel not in attendus:
+                    ecarts.append(f"{nom} : présent d'un seul côté (copie de {reference})")
+                elif contenu(attendus[rel]) != contenu(trouves[rel]):
+                    ecarts.append(f"{nom} diffère de {reference}" + (f"/{rel}" if rel else ""))
+    return ecarts
+
+
+def _smoke_exemples():
+    """Les applications prêtes à l'emploi (`EEG_API_Unicorn_Applications/`) ne nomment aucun flux
+    que le moteur ne publie plus, et leurs copies d'une même bibliothèque sont identiques.
+
+    ⚠️ C'est l'endroit du dépôt qui montre comment CONSOMMER le produit. Un exemple qui nomme un
+    flux disparu ne lève rien : `resolve_byprop` attend, puis rend une liste vide, et
     l'utilisateur conclut que le moteur ne publie pas — alors qu'il publie sous un autre nom.
 
     La panne la plus probable est un renommage : c'est le registre des modes qui décide des
@@ -6423,9 +6485,8 @@ def _smoke_exemples():
     motif = re.compile(rf"(?:{re.escape(STREAM_PREFIX)}_|\b)(decoded_[a-z0-9_]+|"
                        rf"(?<={re.escape(STREAM_PREFIX)}_)[a-z0-9_]+)")
     depot = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    racine = os.path.join(depot, "examples")
-    # `clients/` aussi : les bibliothèques prêtes à l'emploi, dans tous les langages du dépôt.
-    racines = (racine, os.path.join(depot, "clients"))
+    racine = os.path.join(depot, DOSSIER_APPLICATIONS)
+    racines = (racine,)
     extensions = (".py", ".cs", ".md", ".m", ".h", ".cpp", ".ino", ".json", ".yaml")
 
     fautes, vus, cites = [], {}, set()
@@ -6455,7 +6516,7 @@ def _smoke_exemples():
     # Un dossier vidé — ou une extension oubliée — rendrait « 0 faute » sans avoir rien lu. Même
     # garde muette que les quatre sections de `_smoke_frontiere`, pour la même raison.
     for dossier_lu, n in vus.items():
-        chk(n >= 4, f"…{os.path.basename(dossier_lu)}/ contient bien des fichiers ({n} lus)")
+        chk(n >= 20, f"…{os.path.basename(dossier_lu)}/ contient bien des fichiers ({n} lus)")
     vus = sum(vus.values())
     chk(len(cites) >= 5,
         f"…dont {len(cites)} nom(s) de flux effectivement trouvé(s) : un motif cassé ne doit pas "
@@ -6470,12 +6531,20 @@ def _smoke_exemples():
     ok = ok and not fautes
     print(f"[smoke-exemples] {vus} fichier(s), {len(cites)} nom(s) de flux, {len(fautes)} faute(s)")
 
+    # Chaque `exemple/` porte sa copie de la bibliothèque, pour qu'un élève puisse le copier seul.
+    ecarts = copies_divergentes(racine)
+    for ecart in ecarts:
+        print(f"[smoke-exemples] ÉCHEC : {ecart}")
+    chk(not ecarts and len(COPIES_APPLICATIONS) >= 6,
+        f"les copies d'une même bibliothèque sont identiques ({len(COPIES_APPLICATIONS)} groupes, "
+        f"{len(ecarts)} écart(s)) — sinon : recopier le fichier de client/ dans les autres")
+
     # Le guide d'intégration (docs/guide/) montre les fichiers de configuration des clients : ils
     # sont recopiés par `outils/construire_guide.py`, jamais tapés à la main. Un fichier modifié
     # sans relancer ce script laisserait au lecteur une configuration qui n'est plus celle que le
     # client lit : on le vérifie ici.
     import subprocess
-    script = os.path.join(os.path.dirname(racine), "outils", "construire_guide.py")
+    script = os.path.join(depot, "outils", "construire_guide.py")
     verif = subprocess.run([sys.executable, script, "--verifier"], capture_output=True,
                            text=True, encoding="utf-8", errors="replace",
                            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
@@ -8452,7 +8521,8 @@ def _smoke_reseau_moteur():
 def _smoke_pilotage():
     """Une application de CETTE machine pilote le vrai moteur par le réseau, de bout en bout.
 
-    Le client exemple (`examples/control_client.py`) tourne dans un AUTRE processus, contre un
+    Le client exemple (`EEG_API_Unicorn_Applications/Protocole/control_client.py`) tourne dans
+    un AUTRE processus, contre un
     moteur réel sur le board de test : l'exemple ne peut pas cesser de marcher sans faire rougir
     ce test. Le moteur écoute un nom de flux de commandes PROPRE au test : un moteur oublié sur le
     poste écoute le nom par défaut, et n'obéit donc pas aux commandes du test.
@@ -8554,7 +8624,7 @@ def _smoke_pilotage():
     # publieraient sinon sous le même `source_id`, et `_resolve_own` prendrait le flux du voisin.
     instance = f"smoke-pilotage-{socket.gethostname()}-{pid}"
     racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    exemple = os.path.join(racine, "examples", "control_client.py")
+    exemple = os.path.join(racine, DOSSIER_APPLICATIONS, "Protocole", "control_client.py")
     # La boucle publie le brut à CHAQUE tour (~50 ms) : sans à-coup, elle ne reste jamais plus
     # d'environ 0,1 s sans publier. Une boucle qui attendrait le jugement de chaque commande
     # (~0,3 s de recherche réseau pour `stream_in`) resterait muette plus longtemps que ce seuil,
@@ -9696,7 +9766,8 @@ def _smoke_connexion():
 
 def _smoke_deconnexion():
     """« Déconnecter » et l'arrêt du moteur, vus par le CLIENT EXEMPLE
-    (`examples/control_client.py`) dans un AUTRE processus, contre un vrai moteur en écoute sur
+    (`EEG_API_Unicorn_Applications/Protocole/control_client.py`) dans un AUTRE processus, contre
+    un vrai moteur en écoute sur
     demande (celle de la console).
 
     Le client attend ses décisions sans rien envoyer. LSL ne lui dirait qu'on ne le lit plus qu'à
@@ -9749,7 +9820,7 @@ def _smoke_deconnexion():
     nom = f"{NOM_FLUX_COMMANDES}_smoke_deconnexion_{pid}"
     instance = f"smoke-deconnexion-{socket.gethostname()}-{pid}"
     racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    exemple = os.path.join(racine, "examples", "control_client.py")
+    exemple = os.path.join(racine, DOSSIER_APPLICATIONS, "Protocole", "control_client.py")
 
     class _Client:
         """Le client exemple dans un AUTRE processus. Un fil lit sa sortie ligne par ligne, avec
@@ -10424,7 +10495,8 @@ def _smoke_appareil_udp():
 
 
 def _smoke_exemple_udp():
-    """L'appareil réseau EXEMPLE (`examples/udp_device.py`), lancé dans un AUTRE processus comme
+    """L'appareil réseau EXEMPLE (`EEG_API_Unicorn_Applications/Protocole/udp_device.py`), lancé
+    dans un AUTRE processus comme
     un étudiant le lancerait, contre un vrai moteur en écoute sur demande (celle de la console).
 
     `[smoke-appareil-udp]` teste le MOTEUR en détail, avec son propre faux appareil. Celui-ci
@@ -10461,7 +10533,7 @@ def _smoke_exemple_udp():
 
     pid = os.getpid()
     racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    exemple = os.path.join(racine, "examples", "udp_device.py")
+    exemple = os.path.join(racine, DOSSIER_APPLICATIONS, "Protocole", "udp_device.py")
 
     class _Appareil:
         """L'exemple dans un AUTRE processus. Un fil lit sa sortie ligne par ligne, avec

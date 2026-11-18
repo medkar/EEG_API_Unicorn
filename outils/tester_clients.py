@@ -1,6 +1,6 @@
-"""Vérifie les clients réutilisables de clients/ : chacun contre un VRAI moteur (board de test)
-quand il tourne ici, sinon sa compilation, et que les copies d'une même bibliothèque sont
-identiques.
+"""Vérifie les applications prêtes à l'emploi d'EEG_API_Unicorn_Applications/ : chaque exemple
+contre un VRAI moteur (board de test) quand il tourne ici, sinon sa compilation, et que les copies
+d'une même bibliothèque (client/ et exemple/) sont identiques.
 
     python outils/tester_clients.py            # tout ce que ce poste sait vérifier
     python outils/tester_clients.py --vite     # sans les moteurs (copies et compilations)
@@ -19,8 +19,10 @@ import threading
 import time
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLIENTS = os.path.join(RACINE, "clients")
 sys.path.insert(0, os.path.join(RACINE, "src"))
+from core.server import DOSSIER_APPLICATIONS, copies_divergentes  # noqa: E402
+
+APPLICATIONS = os.path.join(RACINE, DOSSIER_APPLICATIONS)
 
 resultats = []
 
@@ -54,11 +56,12 @@ def arreter(srv, fil):
 
 
 def tester_python_lsl():
-    """clients/python-lsl contre le moteur seul (écoute permanente : aucun clic)."""
-    print("[clients] python-lsl", flush=True)
-    sys.path.insert(0, os.path.join(CLIENTS, "python-lsl"))
+    """Python/exemple contre le moteur seul (écoute permanente : aucun clic)."""
+    print("[clients] Python (LSL)", flush=True)
+    dossier = os.path.join(APPLICATIONS, "Python", "exemple")
+    sys.path.insert(0, dossier)
     import eeg_api_lsl
-    config = eeg_api_lsl.load_config(os.path.join(CLIENTS, "python-lsl", "config.json"))
+    config = eeg_api_lsl.load_config(os.path.join(dossier, "config.json"))
     chk(config["mode"] == "ssvep" and config["propose_refresh_hz"] == 60,
         "config.json se lit, complété par les valeurs par défaut")
     srv, fil = moteur("permanente")
@@ -71,7 +74,7 @@ def tester_python_lsl():
             "propose_params, set_params, puis start_mode : acceptés")
         reglages = srv.reglages.get("ssvep") or {}
         chk(float(reglages.get("refresh_hz", 0)) == 60.0 and len(reglages.get("freqs") or ()) == 3
-            and list(reglages.get("target_names") or ()) == ["left", "right", "up"],
+            and list(reglages.get("target_names") or ()) == ["haut", "droite", "gauche"],
             f"le moteur a retenu les réglages de config.json ({reglages.get('freqs')})")
         fin = time.time() + 90
         for decision in api.decisions():
@@ -83,16 +86,47 @@ def tester_python_lsl():
         api.close()
         time.sleep(1.0)
         chk("ssvep" not in srv.active, "close() arrête le mode que le client a démarré")
+        tester_echec_dans_la_boucle(srv, eeg_api_lsl, config)
     finally:
         arreter(srv, fil)
 
 
+def tester_echec_dans_la_boucle(srv, eeg_api_lsl, config):
+    """Un réglage ACCEPTÉ puis refusé quand la boucle l'applique (le mode tourne déjà) : le moteur
+    remet les réglages d'avant et ne le dit que par un second message, « event: failed ». Sans
+    lui, l'application croirait ses réglages en vigueur et décoderait sur ceux d'avant."""
+    srv.submit("start_mode", ids=["ssvep"])
+    fin = time.time() + 10
+    while "ssvep" not in srv.active and time.time() < fin:
+        time.sleep(0.1)
+    original = srv._set_params
+
+    def refuse(*_a, **_k):
+        raise RuntimeError("réglage refusé par le runtime (panne simulée)")
+
+    srv._set_params = refuse
+    api = eeg_api_lsl.EegApi(dict(config, app_name="tester-lsl-echec"), log=lambda _m: None)
+    leve = None
+    try:
+        api.connect()
+        api.start()
+    except eeg_api_lsl.EegApiError as e:
+        leve = str(e)
+    finally:
+        srv._set_params = original
+        api.close()
+        srv.submit("stop_mode", id="ssvep")
+    chk(leve is not None and leve.startswith("set_params") and "panne simulée" in leve,
+        f"un set_params accepté puis refusé dans la boucle : start() lève EegApiError ({leve})")
+
+
 def tester_raspberry_pi():
-    """clients/raspberry-pi (UDP) contre un moteur en écoute sur demande, comme la console."""
-    print("[clients] raspberry-pi (UDP)", flush=True)
-    sys.path.insert(0, os.path.join(CLIENTS, "raspberry-pi"))
+    """RaspberryPi/exemple (UDP) contre un moteur en écoute sur demande, comme la console."""
+    print("[clients] RaspberryPi (UDP)", flush=True)
+    dossier = os.path.join(APPLICATIONS, "RaspberryPi", "exemple")
+    sys.path.insert(0, dossier)
     import eeg_api_udp
-    config = eeg_api_udp.load_config(os.path.join(CLIENTS, "raspberry-pi", "config.json"))
+    config = eeg_api_udp.load_config(os.path.join(dossier, "config.json"))
     srv, fil = moteur("sur_demande", port_udp=0)
     port = (srv.snapshot().get("udp") or {}).get("port")
     journal, decisions, fini = [], [], threading.Event()
@@ -217,22 +251,20 @@ def doublures_ros(surcharges):
 
 
 def tester_ros2():
-    """clients/ros2 : params.yaml, la copie de la bibliothèque, puis les deux nœuds (avec des
-    doublures de rclpy) contre un moteur en écoute sur demande."""
-    print("[clients] ros2 (doublures de rclpy : ce n'est pas ROS)", flush=True)
-    paquet = os.path.join(CLIENTS, "ros2", "eeg_api_ros")
-    with open(os.path.join(CLIENTS, "raspberry-pi", "eeg_api_udp.py"), "rb") as a, \
-            open(os.path.join(paquet, "eeg_api_ros", "eeg_api_udp.py"), "rb") as b:
-        chk(a.read() == b.read(), "eeg_api_ros/eeg_api_udp.py est la copie EXACTE de "
-            "clients/raspberry-pi/eeg_api_udp.py")
+    """ROS2/exemple : params.yaml, puis le pont (paquet eeg_api_ros) et intent_to_twist (paquet
+    eeg_api_ros_example), avec des doublures de rclpy, contre un moteur en écoute sur demande."""
+    print("[clients] ROS2 (doublures de rclpy : ce n'est pas ROS)", flush=True)
+    exemple = os.path.join(APPLICATIONS, "ROS2", "exemple")
+    paquet = os.path.join(exemple, "eeg_api_ros")
+    paquet_exemple = os.path.join(exemple, "eeg_api_ros_example")
     try:
         import yaml
-        with open(os.path.join(paquet, "config", "params.yaml"), encoding="utf-8") as f:
+        with open(os.path.join(paquet_exemple, "config", "params.yaml"), encoding="utf-8") as f:
             params = yaml.safe_load(f)
         pont = params["eeg_api_bridge"]["ros__parameters"]
         import json
-        chk(isinstance(json.loads(pont["settings"]), dict),
-            "params.yaml se lit, et `settings` est un objet JSON")
+        chk(isinstance(json.loads(pont["settings"]), dict) and "intent_to_twist" in params,
+            "le params.yaml de l'exemple se lit (les deux nœuds), `settings` est un objet JSON")
     except ImportError:
         pont = None
         print("  (PyYAML absent : params.yaml non lu)")
@@ -244,7 +276,9 @@ def tester_ros2():
         surcharges["settings"] = pont["settings"]
     publie, Message = doublures_ros(surcharges)
     sys.path.insert(0, paquet)
-    from eeg_api_ros import bridge, intent_to_twist
+    sys.path.insert(0, paquet_exemple)
+    from eeg_api_ros import bridge
+    from eeg_api_ros_example import intent_to_twist
     noeud = None
     try:
         srv.submit("chercher_applications", on=True)
@@ -290,26 +324,22 @@ def tester_ros2():
         "intent_to_twist : cible 1 → 0,5 rad/s ; -1 et une décision périmée → vitesse nulle")
 
 
-# Une bibliothèque recopiée dans deux dossiers, pour que chaque dossier se suffise à lui-même :
-# les copies doivent rester IDENTIQUES, sinon un correctif n'arrive que d'un côté.
-COPIES = (
-    ("raspberry-pi/eeg_api_udp.py", "ros2/eeg_api_ros/eeg_api_ros/eeg_api_udp.py"),
-    ("esp32/esp32_client/EegApiDevice.h", "arduino-wifi/arduino_client/EegApiDevice.h"),
-    ("esp32/esp32_client/EegApiDevice.cpp", "arduino-wifi/arduino_client/EegApiDevice.cpp"),
-)
-
-# Les croquis et la carte pour laquelle chacun se compile.
+# Les croquis et la carte pour laquelle chacun se compile. Un croquis qui lit `secrets.h` (ignoré
+# par git) se compile sur une copie où `secrets.example.h` en tient lieu.
 CROQUIS = (
-    ("esp32/esp32_client", "esp32:esp32:esp32doit-devkit-v1"),
-    ("arduino-wifi/arduino_client", "arduino:renesas_uno:unor4wifi"),
+    ("ESP32/exemple", "esp32:esp32:esp32doit-devkit-v1"),
+    ("ESP32/exemple_leds", "esp32:esp32:esp32doit-devkit-v1"),
+    ("ArduinoR4WiFi/exemple", "arduino:renesas_uno:unor4wifi"),
 )
 
 
 def tester_copies():
-    print("[clients] copies d'une même bibliothèque", flush=True)
-    for a, b in COPIES:
-        with open(os.path.join(CLIENTS, a), "rb") as fa, open(os.path.join(CLIENTS, b), "rb") as fb:
-            chk(fa.read() == fb.read(), f"{a} == {b}")
+    """Chaque exemple/ porte sa copie de la bibliothèque : la même liste que [smoke-exemples]."""
+    print("[clients] copies d'une même bibliothèque (client/ et exemple/)", flush=True)
+    ecarts = copies_divergentes(APPLICATIONS)
+    for ecart in ecarts:
+        print(f"  {ecart}")
+    chk(not ecarts, f"copies identiques ({len(ecarts)} écart(s))")
 
 
 def tester_compilations():
@@ -320,11 +350,21 @@ def tester_compilations():
         print("  SAUTÉ arduino-cli absent : croquis non compilés", flush=True)
         return
     for dossier, carte in CROQUIS:
+        croquis = os.path.join(APPLICATIONS, dossier)
+        copie = None
+        if os.path.exists(os.path.join(croquis, "secrets.example.h")):
+            copie = os.path.join(tempfile.mkdtemp(prefix="tester-clients-"),
+                                 os.path.basename(croquis))
+            shutil.copytree(croquis, copie)
+            shutil.copy(os.path.join(copie, "secrets.example.h"), os.path.join(copie, "secrets.h"))
         # Un dossier de construction qui reste d'une fois sur l'autre : la seconde passe est rapide.
-        build = os.path.join(tempfile.gettempdir(), "tester-clients-" + carte.replace(":", "_"))
+        build = os.path.join(tempfile.gettempdir(), "tester-clients-"
+                             + dossier.replace("/", "_") + "-" + carte.replace(":", "_"))
         r = subprocess.run([cli, "compile", "--fqbn", carte, "--build-path", build,
-                            os.path.join(CLIENTS, dossier)],
+                            copie or croquis],
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if copie:
+            shutil.rmtree(os.path.dirname(copie), ignore_errors=True)
         if r.returncode != 0:
             print("\n".join((r.stdout + r.stderr).splitlines()[-15:]))
         chk(r.returncode == 0, f"{dossier} se compile pour {carte}")

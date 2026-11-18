@@ -31,7 +31,13 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.13"
+  # Le Python EXACT de l'environnement du projet (`.venv`), celui où les tests ont tourné :
+  # l'installeur embarque cet interpréteur. « 3.13 » prendrait le dernier 3.13.x du jour, que
+  # personne n'a essayé avec le logiciel. `actions/setup-python` télécharge cette version si la
+  # machine ne l'a pas (liste : github.com/actions/python-versions). La changer en même temps
+  # que `.venv` et `build/contraintes.txt`, après avoir rejoué les tests ; `outils/publier.py`
+  # refuse une version sans son correctif (X.Y.Z).
+  PYTHON_VERSION: "3.13.16"
   # Sur la machine de GitHub, la sortie d'un programme part dans un tuyau, pas dans un terminal :
   # Python l'encoderait alors en cp1252, et le premier « ⚠️ » imprimé ferait échouer l'étape.
   PYTHONIOENCODING: utf-8
@@ -187,6 +193,10 @@ jobs:
           cat > notes.md <<'FIN'
           ### Install (64-bit Windows)
 
+          Requires Windows 10 version 1809 or later, or Windows 11 (64-bit): the installer
+          refuses older versions of Windows, which the user interface library (Qt 6) does not
+          support.
+
           1. Download `EEG-API-Unicorn-Setup-<version>.exe` below and run it. No Python needed.
           2. The installer is **not signed**: Windows SmartScreen shows a warning the first time.
              Click **More info**, then **Run anyway**.
@@ -202,8 +212,12 @@ jobs:
           `Documents\EEG API Unicorn\`. Uninstalling or updating the application never deletes
           them.
 
-          **Windows only.** The integration guide, the clients and the network contract are in
-          the repository: start with the README.
+          The installer also copies `EEG_API_Unicorn_Applications` (for each platform, the
+          library that connects an application, and a complete example) into the folder it asks
+          for, `Documents\EEG API Unicorn\` by default.
+
+          **Windows only.** The integration guide and the network contract are in the
+          repository: start with the README.
 
           EEG API Unicorn is released under the MIT License.
 

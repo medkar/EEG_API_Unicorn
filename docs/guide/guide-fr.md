@@ -73,7 +73,7 @@ sans connexion préalable. Les commandes et les réponses sont les mêmes des de
 
 Documents de référence, en anglais : `docs/control.md` (les commandes, les réponses, le protocole
 UDP), `docs/markers.md` (les marqueurs), `docs/network.md` (le réseau et le pare-feu), et le
-`README.md` de chaque dossier de `clients/`.
+`README.md` de chaque dossier de `EEG_API_Unicorn_Applications/`.
 
 # Préparer le poste
 
@@ -87,6 +87,10 @@ UDP), `docs/markers.md` (les marqueurs), `docs/network.md` (le réseau et le par
    Cliquez sur **Informations complémentaires**, puis **Exécuter quand même**.
 3. Choisissez **Installer pour tous les utilisateurs** si vous le pouvez : l'installeur ajoute
    alors la règle du pare-feu de Windows (voir *Le réseau*).
+4. L'installeur demande ensuite où copier `EEG_API_Unicorn_Applications`, les clients et les
+   exemples prêts à l'emploi (voir *Connecter une application*) : `Documents\EEG API Unicorn`
+   par défaut. Cette copie est mise à jour à chaque nouvelle version : copiez-en un sous-dossier
+   ailleurs avant de le modifier.
 
 Lancez ensuite **EEG API Unicorn** depuis le menu Démarrer.
 
@@ -141,24 +145,34 @@ Le détail est dans `docs/network.md`.
 
 ## Choisir un client
 
-Le dossier `clients/` contient un client prêt à l'emploi par plateforme. Chacun fait toute la
-connexion à votre place. Vous ne touchez qu'à deux choses :
+Le dossier `EEG_API_Unicorn_Applications/` contient un client prêt à l'emploi par plateforme, en deux
+dossiers :
 
-- **son fichier de configuration** : le nom de l'application, le mode, ses réglages, le réseau ;
-- **son gestionnaire de décisions** : la fonction qui reçoit chaque décision, où va votre code.
+- **`client/`** : la bibliothèque seule, pour partir de zéro dans votre propre projet ;
+- **`exemple/`** : une application complète, qui se lance telle quelle : une copie de la
+  bibliothèque, le fichier de configuration et le programme d'exemple.
 
-La bibliothèque, elle, s'utilise telle quelle. Copiez le dossier dans votre projet, remplissez la
-configuration, puis remplacez le gestionnaire de décisions.
+La bibliothèque fait toute la connexion à votre place et s'utilise telle quelle. Vous ne touchez
+qu'à deux choses :
 
-| Dossier | Plateforme | Transport | Configuration | Votre code |
+- **le fichier de configuration** : le nom de l'application, le mode, ses réglages, le réseau ;
+- **le gestionnaire de décisions** : la fonction qui reçoit chaque décision, où va votre code.
+
+Copiez le dossier `exemple/` dans votre espace de travail, remplissez la configuration, lancez-le,
+puis remplacez le gestionnaire de décisions.
+
+| Dossier | Plateforme | Transport | Configuration (`exemple/`) | Votre code (`exemple/`) |
 |-----|------|---|------|------|
-| `clients/python-lsl/` | Python 3 sur un ordinateur | LSL | `config.json` | `on_decision()` dans `example.py` |
-| `clients/unity/` | Unity 6 | LSL | `StreamingAssets/eeg_api_config.json` | `onTargetChanged` ou `DecisionReceived` |
-| `clients/matlab/` | MATLAB R2016b ou ultérieur | LSL | `config.json` | `onDecision()` dans `example.m` |
-| `clients/raspberry-pi/` | Python 3, bibliothèque standard seule : Raspberry Pi, carte Linux | UDP | `config.json` | `on_decision()` dans `example.py` |
-| `clients/ros2/` | ROS 2 | UDP | `config/params.yaml` | un nœud abonné à `eeg/target` |
-| `clients/esp32/` | ESP32 (Arduino) | UDP, Wi-Fi | `config.h` | `onDecision()` dans le croquis |
-| `clients/arduino-wifi/` | Arduino UNO R4 WiFi | UDP, Wi-Fi | `config.h` | `onDecision()` dans le croquis |
+| `Python/` | Python 3 sur un ordinateur | LSL | `config.json` | `on_decision()` dans `cibles_ssvep.py` ou `example.py` |
+| `Unity/` | Unity 6 | LSL | `client/StreamingAssets/eeg_api_config.json` | `onTargetChanged` ou `DecisionReceived` |
+| `MATLAB/` | MATLAB R2016b ou ultérieur | LSL | `config.json` | `onDecision()` dans `example.m` |
+| `RaspberryPi/` | Python 3, bibliothèque standard seule : Raspberry Pi, carte Linux | UDP | `config.json` | `on_decision()` dans `example.py` |
+| `ROS2/` | ROS 2 | UDP | `eeg_api_ros_example/config/params.yaml` | un nœud abonné à `eeg/target` |
+| `ESP32/` | ESP32 (Arduino) | UDP, Wi-Fi | `config.h` | `onDecision()` dans `exemple.ino` |
+| `ArduinoR4WiFi/` | Arduino UNO R4 WiFi | UDP, Wi-Fi | `config.h` | `onDecision()` dans `exemple.ino` |
+
+Pour Unity, `exemple/` ne fait que lire les décisions d'un mode démarré dans la console ; le
+client qui se connecte et démarre le mode lui-même est dans `client/`.
 
 ## Ce qui se passe
 
@@ -199,17 +213,17 @@ board de test.
 
 ## Les clients LSL : Python, Unity, MATLAB
 
-Les trois clients lisent les mêmes clés. Voici le fichier du client Python,
-`clients/python-lsl/config.json` :
+Les trois clients lisent les mêmes clés. Voici le fichier de l'exemple Python,
+`Python/exemple/config.json` :
 
-<!-- code: clients/python-lsl/config.json -->
+<!-- code: EEG_API_Unicorn_Applications/Python/exemple/config.json -->
 ```json
 {
-  "app_name": "my-app",
+  "app_name": "mon-appli",
   "mode": "ssvep",
   "params": {
     "targets_on": "screen",
-    "target_names": ["left", "right", "up"]
+    "target_names": ["haut", "droite", "gauche"]
   },
   "propose_refresh_hz": 60,
   "stop_mode_on_exit": true,
@@ -235,7 +249,7 @@ rien dire : vérifiez l'orthographe des clés.
 
 | Client | Prérequis | Lancer | Le nom dans la console |
 |----|------|------|----|
-| Python | Python 3 et pylsl (`pip install pylsl`) | `python example.py` | `my-app-…` |
+| Python | Python 3, pylsl et pygame (`pip install pylsl pygame`) | `python cibles_ssvep.py` (les cibles à l'écran, entourées en vert quand elles sont décodées) ou `python example.py` (les décisions dans le terminal) | `mon-appli-…` |
 | Unity | `LSL.cs` et `lsl.dll`, copiés de LSL4Unity (voir le README du dossier) | ajoutez le composant **Eeg Api Client** à un GameObject, puis Play | `my-game-…` |
 | MATLAB | liblsl-Matlab dans le chemin de MATLAB | `example` | `my-matlab-app-…` |
 
@@ -254,9 +268,9 @@ rien dire : vérifiez l'orthographe des clés.
 ## Les clients UDP sur un ordinateur : Raspberry Pi, ROS 2
 
 Le client Raspberry Pi n'utilise que la bibliothèque standard de Python 3.8 ou ultérieur. Son
-fichier, `clients/raspberry-pi/config.json` :
+fichier, `RaspberryPi/exemple/config.json` :
 
-<!-- code: clients/raspberry-pi/config.json -->
+<!-- code: EEG_API_Unicorn_Applications/RaspberryPi/exemple/config.json -->
 ```json
 {
   "app_name": "my-device",
@@ -289,12 +303,15 @@ clignoter lui-même. Les clés sont celles des clients LSL, plus le réseau :
 
 Lancez-le avec `python3 example.py`. **« Identifier »** dans la console appelle `on_identify()`.
 
-**ROS 2.** Le paquet `clients/ros2/eeg_api_ros/` réutilise la même bibliothèque et publie chaque
-décision sur des topics. Son fichier, `config/params.yaml`, règle ses deux nœuds :
+**ROS 2.** `ROS2/exemple/` contient deux paquets colcon : `eeg_api_ros`, le pont, qui réutilise
+la même bibliothèque et publie chaque décision sur des topics, et `eeg_api_ros_example`, un nœud
+d'exemple. Le fichier de l'exemple, `eeg_api_ros_example/config/params.yaml`, règle les deux
+nœuds :
 
-<!-- code: clients/ros2/eeg_api_ros/config/params.yaml -->
+<!-- code: EEG_API_Unicorn_Applications/ROS2/exemple/eeg_api_ros_example/config/params.yaml -->
 ```yaml
-# The settings of the two nodes. This is the only file to edit.
+# The settings of the two nodes of the example: the bridge (package eeg_api_ros) and
+# intent_to_twist. This is the only file to edit.
 
 eeg_api_bridge:
   ros__parameters:
@@ -331,25 +348,28 @@ d'objet libre.
 | `eeg/state` | `std_msgs/String` | `announcing`, `connected`, `decoding`, `disconnected` ou `failed` |
 
 Votre nœud s'abonne à `eeg/target`. Le nœud d'exemple `intent_to_twist` en fait une vitesse : la
-vitesse de la cible décodée, ou zéro sur `-1` et sans décision depuis `timeout_s`. Copiez `eeg_api_ros/`
-dans le dossier `src/` d'un espace de travail colcon, placez-vous à sa racine, puis :
+vitesse de la cible décodée, ou zéro sur `-1` et sans décision depuis `timeout_s`. Copiez les deux
+dossiers `eeg_api_ros/` et `eeg_api_ros_example/` dans le dossier `src/` d'un espace de travail
+colcon, placez-vous à sa racine, puis :
 
 ```bash
-colcon build --packages-select eeg_api_ros        # à refaire après chaque modification de params.yaml
+colcon build --packages-select eeg_api_ros eeg_api_ros_example   # après chaque modification de params.yaml
 source install/setup.bash
-ros2 launch eeg_api_ros eeg_api.launch.py         # le pont et intent_to_twist
-ros2 launch eeg_api_ros eeg_api.launch.py with_example:=false    # le pont seul
+ros2 launch eeg_api_ros_example example.launch.py   # le pont et intent_to_twist
 ```
+
+Le pont seul, pour vos propres nœuds, est dans `ROS2/client/` : son launch est
+`ros2 launch eeg_api_ros eeg_api.launch.py`.
 
 ## Les microcontrôleurs : ESP32, Arduino UNO R4 WiFi
 
 L'ESP32 se connecte à la console par le Wi-Fi, sans ordinateur entre les deux. Pour un SSVEP, ses
 LED **sont** les cibles : elles clignotent grâce au matériel de la carte, à des fréquences que ni
-le Wi-Fi ni le programme ne décalent. Son fichier, `clients/esp32/esp32_client/config.h` :
+le Wi-Fi ni le programme ne décalent. Le fichier de l'exemple, `ESP32/exemple/config.h` :
 
-<!-- code: clients/esp32/esp32_client/config.h -->
+<!-- code: EEG_API_Unicorn_Applications/ESP32/exemple/config.h -->
 ```cpp
-// The settings of esp32_client: the only file to edit. Everything else works as it is.
+// The settings of this example: the only file to edit. Everything else works as it is.
 // ⚠️ This file holds your Wi-Fi password: do not publish it.
 
 // --- The network ----------------------------------------------------------------------------
@@ -433,19 +453,20 @@ rouge.
 
 **Compiler et téléverser.** Il faut le support des cartes ESP32 et la bibliothèque ArduinoJson 7.
 Dans l'IDE Arduino : installez « esp32 » (Espressif) dans le gestionnaire de cartes et
-« ArduinoJson » dans le gestionnaire de bibliothèques, ouvrez `esp32_client.ino`, choisissez la
+« ArduinoJson » dans le gestionnaire de bibliothèques, ouvrez `exemple.ino`, choisissez la
 carte (« DOIT ESP32 DEVKIT V1 » pour un ESP32 DevKit V1), puis Téléverser. Avec arduino-cli :
 
 ```bash
 arduino-cli core install esp32:esp32
 arduino-cli lib install ArduinoJson
-arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 esp32_client
-arduino-cli upload --fqbn esp32:esp32:esp32doit-devkit-v1 -p COM5 esp32_client
+arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 exemple
+arduino-cli upload --fqbn esp32:esp32:esp32doit-devkit-v1 -p COM5 exemple
 ```
 
-(`COM5` est un exemple : `arduino-cli board list` donne le port de la carte.)
+(`COM5` est un exemple : `arduino-cli board list` donne le port de la carte. Les commandes se
+lancent depuis le dossier qui contient `exemple/`.)
 
-**Arduino UNO R4 WiFi.** Le client `clients/arduino-wifi/` utilise la même bibliothèque, avec un
+**Arduino UNO R4 WiFi.** L'exemple `ArduinoR4WiFi/exemple/` utilise la même bibliothèque, avec un
 `config.h` presque identique : `MODE` vaut `"mi"` ou `"neuro"`, une LED par tâche dans
 `TASK_PINS` (environ 220 Ω en 5 V), et les réglages du mode dans `SETTINGS`. Pour un SSVEP sur des
 LED, prenez un ESP32 : lui seul fait clignoter les cibles par le matériel. Carte : « Arduino UNO
@@ -683,8 +704,9 @@ valoir `idle` ou `deferred` (un mode à modèle attend le choix de son modèle).
 # Écrire son propre client
 
 Cette partie sert à écrire un client sur une plateforme qui n'en a pas. Les deux bibliothèques
-`clients/python-lsl/eeg_api_lsl.py` (LSL) et `clients/raspberry-pi/eeg_api_udp.py` (UDP) en sont
-les implémentations de référence, et `docs/control.md` le contrat complet.
+`Python/client/eeg_api_lsl.py` (LSL) et `RaspberryPi/client/eeg_api_udp.py` (UDP), dans
+`EEG_API_Unicorn_Applications/`, en sont les implémentations de référence, et `docs/control.md` le contrat
+complet. `EEG_API_Unicorn_Applications/Protocole/` montre le protocole brut, étape par étape, en Python.
 
 ## Les commandes
 

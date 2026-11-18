@@ -9,9 +9,9 @@ Un bloc de code du guide n'est JAMAIS tapé à la main : chaque bloc est encadr�
 et ce script le remplace par le contenu actuel du fichier qu'il nomme. La configuration montrée par
 le guide est donc celle que les clients lisent vraiment.
 
-    <!-- code: clients/python-lsl/config.json -->     le fichier entier
-    <!-- code: examples/udp_device.py#Device.send -->  une méthode (ou une fonction) Python
-    <!-- code: examples/esp32_leds/esp32_leds.ino#hello -->   une fonction C++, avec les
+    <!-- code: EEG_API_Unicorn_Applications/Python/exemple/config.json -->   le fichier entier
+    <!-- code: …/Protocole/udp_device.py#Device.send -->   une méthode (ou une fonction) Python
+    <!-- code: …/ESP32/exemple_leds/exemple_leds.ino#hello -->   une fonction C++, avec les
                                                       commentaires // juste au-dessus
     ```json
     (ici, le contenu recopié par ce script)

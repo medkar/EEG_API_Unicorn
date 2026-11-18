@@ -1,7 +1,8 @@
 # Construire l'installeur Windows
 
 Ce dossier fabrique `EEG-API-Unicorn-Setup-<version>.exe`, un installeur qui pose le programme
-sur un Windows 64 bits **sans Python installé**.
+sur un Windows 64 bits **sans Python installé**, à partir de **Windows 10 version 1809** (voir
+« Installer »).
 
 | Fichier | Rôle |
 |---|---|
@@ -15,13 +16,17 @@ sur un Windows 64 bits **sans Python installé**.
 
 Prérequis, une fois par poste :
 
-- l'environnement du projet : `python -m venv .venv`, puis
+- l'environnement du projet, avec **Python 3.13.16** : `py -3.13 -m venv .venv`, puis
   `.venv\Scripts\python.exe -m pip install -r requirements.txt -c build\contraintes.txt pyinstaller==6.22.3`
   (`contraintes.txt` fixe la version EXACTE de chaque bibliothèque : celles avec lesquelles le
   logiciel a été testé, et que le workflow de release installe aussi). Sans `.venv`, le
   script prend le `python` du PATH : c'est ce que fait le workflow de release
   (`.github/workflows/release.yml`), qui construit l'installeur de chaque version sur une machine
-  de GitHub ;
+  de GitHub. Ce workflow installe Python à la version EXACTE de `.venv` (`PYTHON_VERSION`,
+  au correctif près) : l'installeur embarque cet interpréteur, il doit être celui des tests.
+  Après une mise à jour de `.venv`, rejouer les tests, puis changer `PYTHON_VERSION` et
+  `contraintes.txt` ensemble. `outils/publier.py` refuse une version sans son correctif
+  (« 3.13 » au lieu de « 3.13.16 ») ;
 - Inno Setup 6 : `winget install --id JRSoftware.InnoSetup -e`. Il peut s'installer pour tous
   (`Program Files (x86)\Inno Setup 6\`) ou pour l'utilisateur seul
   (`AppData\Local\Programs\Inno Setup 6\`) : le script le cherche aux deux endroits.
@@ -221,6 +226,16 @@ Le prix : 20 Mo de plus dans le dossier (chaque exécutable contient le code Pyt
 
 ## Installer
 
+### Windows 10 version 1809 au minimum
+
+L'installeur refuse un Windows plus ancien que Windows 10 version 1809 (build 17763), avec un
+message clair (`MinVersion` dans `installeur.iss`). C'est le plus ancien Windows que prend en
+charge Qt 6.12, la bibliothèque de l'interface
+([doc.qt.io/qt-6/supported-platforms.html](https://doc.qt.io/qt-6/supported-platforms.html) :
+« Windows 10 (1809 or later) », et Windows 11). Sans ce refus, le programme s'installerait sur
+un Windows 7 ou 8.1, puis refuserait de démarrer sans dire pourquoi. Après une mise à jour de
+PySide6, relire cette page et ajuster `MinVersion`.
+
 ### Pour tous, ou pour moi seulement
 
 L'assistant demande d'abord :
@@ -249,6 +264,17 @@ Les modèles entraînés et les séances enregistrées vivent dans `Documents\EE
 (`modeles\` et `seances\`), jamais dans le dossier d'installation. **Désinstaller ou mettre à jour
 n'y touche pas** : les modèles et les séances restent. Pour tout effacer, supprimer ce dossier à
 la main après la désinstallation.
+
+### Les applications d'exemple
+
+L'installeur copie aussi `EEG_API_Unicorn_Applications\` (par plateforme, la bibliothèque seule
+et un exemple complet) dans un dossier qu'il demande sur la page « Applications d'exemple » : par
+défaut `Documents\EEG API Unicorn\`, à côté de `modeles\` et `seances\`. Une mise à jour le
+remplace (et repropose le dossier choisi la fois d'avant), la désinstallation le retire : on en
+copie un sous-dossier ailleurs avant de le modifier. En silencieux, `/APPLICATIONS="C:\dossier"`
+choisit le dossier. ⚠️ Installé « pour tous », le dossier proposé est dans les Documents du compte
+qui a validé l'installation (l'administrateur) : à changer sur la page si ce n'est pas celui des
+utilisateurs.
 
 ### Le journal
 

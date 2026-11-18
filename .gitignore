@@ -36,9 +36,10 @@ crash.txt
 # le déroulé d'une séance d'une personne identifiable : ils ne partent pas sur un dépôt public.
 seances/
 
-# The Wi-Fi credentials of the ESP32 example (examples/esp32_leds/): copied from
-# secrets.example.h by whoever flashes the board, never committed.
-examples/esp32_leds/secrets.h
+# The Wi-Fi credentials of the ESP32 LEDs example: copied from secrets.example.h by whoever
+# flashes the board, never committed. Any other secrets.h too.
+EEG_API_Unicorn_Applications/ESP32/exemple_leds/secrets.h
+secrets.h
 
 # --- Installeur Windows (build/) : ce que la construction produit -----------
 # Le dossier du programme (PyInstaller), le dossier de travail de PyInstaller et l'installeur

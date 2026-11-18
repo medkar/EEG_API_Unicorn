@@ -189,7 +189,7 @@ def flux_visibles(timeout_s=DECOUVERTE_TIMEOUT_S):
         print(f"[console] impossible de lister les flux du réseau ({type(e).__name__} : {e})")
         return []
     # LSL répond UNE FOIS PAR INTERFACE RÉSEAU : le même flux revient deux ou trois fois, avec le
-    # même `source_id`. Le projet s'est déjà fait prendre (`examples/receiver.py` annonçait
+    # même `source_id`. Le projet s'est déjà fait prendre (`Protocole/receiver.py` annonçait
     # « 3 moteurs » sur une installation normale). On fond donc sur (nom, source_id) — deux
     # émetteurs réellement distincts qui portent le même nom restent, eux, deux entrées.
     uniques = {}

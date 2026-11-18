@@ -721,7 +721,7 @@ def _autotest():
     # échoue à TOUS LES COUPS. Ce n'est donc pas un test instable, c'est un use-after-free — et le
     # comportement est indéfini, le même code pouvant aussi faire tomber le processus.
     # La règle, ici et partout : **le `StreamInfo` doit rester référencé tant qu'on lit dedans.**
-    # (`examples/receiver.py` est le seul endroit du dépôt qui l'a toujours fait correctement.)
+    # (`Protocole/receiver.py` est le seul endroit du dépôt qui l'a toujours fait correctement.)
     info_in = inlet.info()
     desc = info_in.desc()
     labels, node = [], desc.child("channels").child("channel")

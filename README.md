@@ -32,6 +32,10 @@ No Python needed. Pair the headset with Windows (Bluetooth) before the first lau
 **Where your work goes**: trained models in `Documents\EEG API Unicorn\modeles`, recorded session
 verdicts in `Documents\EEG API Unicorn\seances`. Uninstalling the application keeps both.
 
+The installer also copies the ready-made applications, `EEG_API_Unicorn_Applications`, into a
+folder it asks for: `Documents\EEG API Unicorn` by default. That copy is updated with every new
+version: copy a sub-folder elsewhere before editing it.
+
 ## First launch
 
 The console first asks **what to open the session on**: your Unicorn headset (by its serial
@@ -96,10 +100,12 @@ What each mode asks of your application:
 connect an application with a ready-made client and its configuration file, how to train the
 models, what your application receives, and the protocol for writing your own client.
 
-**Ready-made clients** are in [`clients/`](clients/README.md): Python (LSL), Raspberry Pi (UDP),
-ROS 2, Unity, MATLAB, ESP32 and Arduino UNO R4 WiFi. Each one performs the handshake; what changes
-from one application to another is in one configuration file, and your code goes in its decision
-handler.
+**Ready-made applications** are in
+[`EEG_API_Unicorn_Applications/`](EEG_API_Unicorn_Applications/README.md): Python (LSL), Raspberry
+Pi (UDP), ROS 2, Unity, MATLAB, ESP32 and Arduino UNO R4 WiFi. Each platform has a `client/`
+folder, the library alone for your own project, and an `exemple/` folder, a complete application
+that runs as it is. The library performs the handshake; what changes from one application to
+another is in one configuration file, and your code goes in its decision handler.
 
 In the console, **Connect an application** lists the applications of the local network (with the
 computer they run on) and the network devices that announce themselves (with their address and
@@ -137,19 +143,22 @@ client would, and **Record verdicts** saves every published decision to a file.
 of a trained model are in the stream's description (`target_names`, `classes`). The description
 also carries `paradigm` and `decision_scale`: a threshold means nothing without its scale.
 
-The simplest client is [`examples/receiver.py`](examples/receiver.py) (it needs `pylsl` only):
+The simplest way to look at a stream is
+[`receiver.py`](EEG_API_Unicorn_Applications/Protocole/receiver.py), in
+`EEG_API_Unicorn_Applications/Protocole/` (it needs `pylsl` only):
 
 ```bash
 pip install pylsl
-python examples/receiver.py --list                  # what is on the network
-python examples/receiver.py --stream decoded_ssvep  # which target is being looked at
+cd EEG_API_Unicorn_Applications/Protocole
+python receiver.py --list                  # what is on the network
+python receiver.py --stream decoded_ssvep  # which target is being looked at
 ```
 
-Other examples: [`examples/control_client.py`](examples/control_client.py) drives the engine over
-LSL; [`examples/udp_device.py`](examples/udp_device.py) plays a network device over UDP (standard
-library only); [`examples/esp32_leds/`](examples/esp32_leds/) is a real ESP32 driving two LEDs;
-[`examples/actuator_udp.py`](examples/actuator_udp.py) turns an intent into an action, which belongs
-to the client, never to the API.
+The same folder shows the raw protocol, step by step, for writing a client in another language:
+[`control_client.py`](EEG_API_Unicorn_Applications/Protocole/control_client.py) drives the engine
+over LSL, and [`udp_device.py`](EEG_API_Unicorn_Applications/Protocole/udp_device.py) plays a
+network device over UDP (standard library only). Turning an intent into an action belongs to the
+application, never to the API.
 
 ## Run from the sources
 
@@ -176,9 +185,11 @@ program.
 ### Self-tests (no headset needed)
 
 ```bash
-python src/core/server.py --smoke     # the engine: streams, modes, package boundaries, texts, examples
+python src/core/server.py --smoke     # the engine: streams, modes, package boundaries, texts, applications
 python src/console/app.py --smoke     # the console, without a screen
 python src/core/i18n.py               # every text displayed is in the catalogues, in both languages
+python outils/tester_clients.py       # the ready-made applications against a real engine (test board),
+                                      # library copies identical, sketches compiled (arduino-cli)
 ```
 
 Most modules of `src/core/` and `src/stimulus/` also test themselves when run directly
@@ -200,8 +211,8 @@ See [`build/LISEZMOI.md`](build/LISEZMOI.md) (in French): PyInstaller, then Inno
 
 ## License
 
-EEG API Unicorn is released under the [MIT License](LICENSE): the program, the clients, the
-examples and the tools. You may copy a client library into your own application, whatever its
+EEG API Unicorn is released under the [MIT License](LICENSE): the program, the ready-made
+applications and the tools. You may copy a client library into your own application, whatever its
 licence.
 
 The installer also bundles libraries written by others (Python, Qt, BrainFlow, NumPy, SciPy,

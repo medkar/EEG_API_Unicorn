@@ -117,7 +117,7 @@
   "pages.flux.enregistrement_termine": "Terminé : {n} verdict(s) dans {chemin}. Pour analyser la séance, joins ce fichier au journal de la fenêtre de stimulus sur la colonne « t ».",
   "pages.flux.enregistrer_verdicts": "Enregistrer les verdicts",
   "pages.flux.explication": "Cette page lit le réseau comme ton application : ce qui est vide ici est vide pour elle aussi.",
-  "pages.flux.explication_bulle": "Aucun accès privilégié au moteur : un client Unity, Python ou MATLAB reçoit exactement ce qui s'affiche ici. Du code qui lit un flux : le dossier « examples/ » du dépôt (Python, Unity).",
+  "pages.flux.explication_bulle": "Aucun accès privilégié au moteur : un client Unity, Python ou MATLAB reçoit exactement ce qui s'affiche ici. Du code qui lit un flux : le dossier « EEG_API_Unicorn_Applications » (Python, Unity, MATLAB…).",
   "pages.flux.illisible": "flux illisible",
   "pages.flux.n_voies": "{n} voie(s)",
   "pages.flux.ouvert_muet": "Ouvert : {nom} ({type}). Rien reçu au dernier tour : ce mode est-il démarré et publié ?",

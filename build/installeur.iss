@@ -10,6 +10,10 @@
 ;     ISCC.exe /DVersionApp=1.0.0 build\installeur.iss
 ;
 ; Résultat : `build\sortie\EEG-API-Unicorn-Setup-1.0.0.exe`.
+;
+; L'installeur copie aussi le dossier EEG_API_Unicorn_Applications (les bibliothèques et les
+; exemples, par plateforme) là où la personne le choisit, par défaut dans Documents\EEG API
+; Unicorn. En silencieux : /APPLICATIONS="C:\un\dossier" choisit ce dossier.
 
 #define NomApp "EEG API Unicorn"
 #define ExeApp "EEG API Unicorn.exe"
@@ -61,6 +65,12 @@ PrivilegesRequiredOverridesAllowed=dialog commandline
 ; Le programme est construit en 64 bits.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 version 1809 (build 17763) au minimum : c'est le plus ancien Windows que prend en
+; charge Qt 6.12, la bibliothèque de l'interface (doc.qt.io/qt-6/supported-platforms.html). Sur un
+; Windows plus ancien, le programme s'installerait, puis refuserait de démarrer sans dire
+; pourquoi. Avec cette ligne, l'installeur refuse dès le départ, avec un message clair.
+; À revoir si PySide6 change de version.
+MinVersion=10.0.17763
 SetupIconFile=..\assets\logo\eeg-api-unicorn.ico
 UninstallDisplayIcon={app}\{#ExeApp}
 UninstallDisplayName={#NomApp}
@@ -70,6 +80,10 @@ Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern
 ShowLanguageDialog=auto
+; Le dossier des applications va par défaut dans les Documents ({userdocs}) : la page qui le
+; demande le montre et laisse le changer, y compris dans une installation « pour tous » (où
+; {userdocs} est le dossier de l'administrateur qui a validé l'installation).
+UsedUserAreasWarning=no
 
 [Languages]
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
@@ -80,6 +94,14 @@ french.PareFeu=Autorisation du programme dans le pare-feu de Windows…
 english.PareFeu=Allowing the program through Windows Firewall…
 french.Desinstaller=Désinstaller %1
 english.Desinstaller=Uninstall %1
+french.ApplicationsTitre=Applications d'exemple
+english.ApplicationsTitre=Example applications
+french.ApplicationsSousTitre=Où copier le dossier EEG_API_Unicorn_Applications ?
+english.ApplicationsSousTitre=Where should the EEG_API_Unicorn_Applications folder go?
+french.ApplicationsTexte=Le dossier EEG_API_Unicorn_Applications contient, pour chaque plateforme (Python, Unity, MATLAB, Raspberry Pi, ROS 2, ESP32, Arduino), la bibliothèque qui connecte une application à EEG API Unicorn et un exemple complet. Il sera copié dans le dossier ci-dessous et mis à jour à chaque nouvelle version : copiez-en un sous-dossier ailleurs avant de le modifier.
+french.ApplicationsVide=Choisissez un dossier pour EEG_API_Unicorn_Applications.
+english.ApplicationsVide=Choose a folder for EEG_API_Unicorn_Applications.
+english.ApplicationsTexte=The EEG_API_Unicorn_Applications folder holds, for each platform (Python, Unity, MATLAB, Raspberry Pi, ROS 2, ESP32, Arduino), the library that connects an application to EEG API Unicorn and a complete example. It will be copied into the folder below and updated with every new version: copy a sub-folder elsewhere before editing it.
 
 [Tasks]
 Name: "bureau"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -94,6 +116,9 @@ Type: filesandordirs; Name: "{app}\_internal"
 ; Tout le dossier construit : les deux exécutables, `_internal\`, et les deux avis de licence
 ; (LICENSE, THIRD-PARTY-NOTICES.txt), à côté des exécutables.
 Source: "..\dist\{#NomApp}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Les bibliothèques et les exemples, dans le dossier choisi sur la page « Applications d'exemple »
+; (le [Code] plus bas). Une mise à jour les remplace ; la désinstallation les retire.
+Source: "..\EEG_API_Unicorn_Applications\*"; DestDir: "{code:DossierApplications}\EEG_API_Unicorn_Applications"; Excludes: "__pycache__,secrets.h"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; ⚠️ Les modèles entraînés et les séances de l'utilisateur vivent dans
 ; `Documents\EEG API Unicorn\` (`modeles\`, `seances\`), jamais dans le dossier d'installation.
@@ -129,3 +154,47 @@ Filename: "{app}\{#ExeApp}"; Description: "{cm:LaunchProgram,{#NomApp}}"; Flags:
 ; retire pas.
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#NomApp}"" program=""{app}\{#ExeApp}"""; Flags: runhidden; RunOnceId: "PareFeuConsole"; Check: IsAdminInstallMode
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#NomApp}"" program=""{app}\{#ExeConsole}"""; Flags: runhidden; RunOnceId: "PareFeuCli"; Check: IsAdminInstallMode
+
+[Code]
+var
+  PageApplications: TInputDirWizardPage;
+
+// Le dossier proposé : celui de /APPLICATIONS="…" en silencieux, sinon celui d'une installation
+// précédente, sinon Documents\EEG API Unicorn.
+function DossierParDefaut(): String;
+begin
+  Result := ExpandConstant('{param:APPLICATIONS|}');
+  if Result = '' then
+    Result := GetPreviousData('DossierApplications', ExpandConstant('{userdocs}\{#NomApp}'));
+end;
+
+procedure InitializeWizard();
+begin
+  PageApplications := CreateInputDirPage(wpSelectDir, CustomMessage('ApplicationsTitre'),
+    CustomMessage('ApplicationsSousTitre'), CustomMessage('ApplicationsTexte'), False, '');
+  PageApplications.Add('');
+  PageApplications.Values[0] := DossierParDefaut();
+end;
+
+// Retenu pour la prochaine mise à jour, qui le propose de nouveau.
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'DossierApplications', PageApplications.Values[0]);
+end;
+
+// Un dossier vide enverrait les fichiers à la racine du disque.
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = PageApplications.ID) and (Trim(PageApplications.Values[0]) = '') then
+  begin
+    MsgBox(CustomMessage('ApplicationsVide'), mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+// Lu par la ligne [Files] des applications.
+function DossierApplications(Param: String): String;
+begin
+  Result := PageApplications.Values[0];
+end;

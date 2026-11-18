@@ -81,7 +81,6 @@ if _DONNEES_INSTALLE:
     DATA_DIR = _os.path.join(_DONNEES_INSTALLE, "modeles")  # modèles entraînés, enregistrements
 else:
     DATA_DIR = _os.path.join(PROJECT_ROOT, "data")      # modèles entraînés, enregistrements
-EXAMPLES_DIR = _os.path.join(PROJECT_ROOT, "examples")  # clients d'exemple (récepteur LSL, UDP)
 # Les TRACES D'UNE SÉANCE : la vérité-terrain qu'une fenêtre de stimulus journalise (`--log`) et
 # les verdicts que le moteur enregistre en face. Les deux portent la même horloge
 # (`local_clock()`), ce qui rend leur jointure purement numérique — c'est ce qu'exige le
@@ -293,7 +292,7 @@ COMMON_REFRESH = [60, 75, 90, 100, 120, 144, 165, 240]  # pour « snapper » la 
 # passer par le réglage `alpha_hz` du mode SSVEP, pas par cette valeur.
 ALPHA_PEAK_HZ = 10.5
 
-# Hôte par défaut de l'ACTIONNEUR d'exemple (examples/actuator_udp.py). Rien dans l'API n'en
+# Hôte par défaut de l'ACTIONNEUR du banc d'essai robot (un récepteur UDP). Rien dans l'API n'en
 # dépend : le moteur publie une intention neutre sur LSL, traduire ça en action appartient au
 # client. Cette valeur est celle d'un ancien montage robot, gardée parce qu'un montage
 # existant l'écoute encore. On vise le NOM mDNS, pas une IP : le Pi est en DHCP et son adresse

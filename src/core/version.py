@@ -5,4 +5,4 @@ version dont le tag n'est pas `v` suivi de cette valeur (elle ne la réécrit pa
 rester seule, sous cette forme exacte. Pour une nouvelle version, on change cette ligne, puis on
 pose le tag.
 """
-VERSION = "1.0.0"
+VERSION = "1.0.1"

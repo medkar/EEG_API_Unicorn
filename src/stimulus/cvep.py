@@ -96,7 +96,7 @@ genres de ligne, et rien d'autre :
     {"kind":"bilan","cycles":286,"frames":18018,"sautees":3,"cadence_s":1.0501, …}
 
 ⚠️ **`t` et `compter_a_partir_de` sont des `local_clock()`** : EXACTEMENT le domaine des horodatages
-que porte `decoded_cvep`, et que `examples/receiver.py` imprime en tête de chaque ligne (`t=…`).
+que porte `decoded_cvep`, et que `Protocole/receiver.py` imprime en tête de chaque ligne (`t=…`).
 Le dépouillement devient alors une comparaison de nombres — « cet échantillon est-il postérieur au
 `compter_a_partir_de` de sa consigne ? » — au lieu d'un rapprochement à l'œil entre deux fenêtres de
 terminal, qui est faux la première fois. La ligne `bilan` recopie VERBATIM le dictionnaire de
@@ -1804,7 +1804,7 @@ def _smoke():
     # ⚠️ **C'est la clé de jointure du dépouillement, et sans elle le dépouillement n'est
     # possible avec AUCUN outil du dépôt.** Le moteur publie un indice de cible ; la cible
     # CONSIGNÉE ne part jamais sur le réseau. Les deux ne se rejoignent que par l'horodatage
-    # `local_clock()` — celui que ces lignes portent, et que `examples/receiver.py` imprime en tête
+    # `local_clock()` — celui que ces lignes portent, et que `Protocole/receiver.py` imprime en tête
     # de chaque échantillon. Un journal qui vivrait sur stdout ne survit ni à un Ctrl+C, ni à la
     # fermeture des terminaux ENTRE deux blocs.
     entetes = [l for l in lignes_log if l.get("kind") == "header"]

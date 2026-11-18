@@ -145,7 +145,7 @@ def flux_de_marqueurs_visibles(timeout_s=DECOUVERTE_TIMEOUT_S):
 
     3. **Les doublons sont fondus.** LSL répond UNE FOIS PAR INTERFACE RÉSEAU : le même flux
        revient deux ou trois fois, avec le même `source_id`. Le projet s'est déjà fait prendre
-       (`examples/receiver.py` annonçait « 3 moteurs » sur une installation normale). On rend des
+       (`Protocole/receiver.py` annonçait « 3 moteurs » sur une installation normale). On rend des
        NOMS, donc l'ensemble fond les doublons naturellement — et deux émetteurs réellement
        distincts qui portent le même nom donnent bien UNE entrée, puisqu'il n'y a qu'un nom à
        désigner. C'est `MarkerInlet._arbitre` qui dira ensuite qu'ils sont deux.

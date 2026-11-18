@@ -117,7 +117,7 @@
   "pages.flux.enregistrement_termine": "Done: {n} verdict(s) in {chemin}. To analyze the session, join this file to the stimulus window's log on column \"t\".",
   "pages.flux.enregistrer_verdicts": "Record verdicts",
   "pages.flux.explication": "This page reads the network the way your app does: what is empty here is empty for it too.",
-  "pages.flux.explication_bulle": "No privileged access to the engine: a Unity, Python or MATLAB client receives exactly what is shown here. Code that reads a stream: the \"examples/\" folder of the repository (Python, Unity).",
+  "pages.flux.explication_bulle": "No privileged access to the engine: a Unity, Python or MATLAB client receives exactly what is shown here. Code that reads a stream: the \"EEG_API_Unicorn_Applications\" folder (Python, Unity, MATLAB…).",
   "pages.flux.illisible": "unreadable stream",
   "pages.flux.n_voies": "{n} channel(s)",
   "pages.flux.ouvert_muet": "Open: {nom} ({type}). Nothing received on the last cycle: is this mode started and published?",

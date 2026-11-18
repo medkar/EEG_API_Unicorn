@@ -122,7 +122,7 @@ than about 20 commands per second gets the extra ones refused.
 - **A mode with a model** (`mi`, `p300`, `errp`, `cvep`). If the mode is not running yet, your
   `start_mode` is accepted with `"deferred": true` and a `warning`: the person at the console
   chooses the model, then clicks **Start decoding**. Watch `EEG_API_Unicorn_status` until `modes`
-  lists it (that is what `examples/control_client.py` does); the P300 and ErrP decoded streams
+  lists it (that is what `EEG_API_Unicorn_Applications/Protocole/control_client.py` does); the P300 and ErrP decoded streams
   stay silent until you send markers. If that start fails (for example a model file that cannot
   be loaded), the `event: "failed"` message comes at that moment, possibly long after your
   command, with the `ref` of your `start_mode`. If the mode is already running (started before
@@ -317,7 +317,8 @@ show 30 Hz too, and its SSVEP tests will ask for a 30 Hz screen.
 
 ## A minimal client in Python
 
-The complete, commented version is [`examples/control_client.py`](../examples/control_client.py):
+The complete, commented version is
+[`EEG_API_Unicorn_Applications/Protocole/control_client.py`](../EEG_API_Unicorn_Applications/Protocole/control_client.py):
 it runs the whole SSVEP sequence above against the console or `server.py`, and stops the mode at
 the end; with `--mode mi` it starts a mode with a model and, with the console, waits until the
 person there has chosen the model. The core is short:
@@ -372,9 +373,10 @@ pylsl has been tried here.
 A microcontroller (an ESP32 that drives LEDs, for example) cannot speak LSL. It can send and
 receive UDP datagrams on the Wi-Fi: the **console** listens to them on **port 5010**. The commands
 and the replies are the ones above, one per datagram; only how the device is found and connected
-differs. [`examples/udp_device.py`](../examples/udp_device.py) plays such a device in Python, with
-the standard library only: read it before writing yours. `server.py` alone does not listen to UDP:
-without a screen, nobody can click **Connect**.
+differs.
+[`EEG_API_Unicorn_Applications/Protocole/udp_device.py`](../EEG_API_Unicorn_Applications/Protocole/udp_device.py)
+plays such a device in Python, with the standard library only: read it before writing yours.
+`server.py` alone does not listen to UDP: without a screen, nobody can click **Connect**.
 
 **One datagram = one JSON object, in UTF-8, carrying `"v": 1`**, of at most 8 KB. Any other
 datagram is ignored **without a reply**: no `v`, another version, not JSON, too big. The engine's

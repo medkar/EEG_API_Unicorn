@@ -60,12 +60,12 @@ pip install pylsl
 python -c "from pylsl import resolve_streams; [print(s.name(), s.source_id(), s.hostname()) for s in resolve_streams(wait_time=3)]"
 ```
 
-Copy `examples/receiver.py` over if you want to read actual values; it imports nothing
-from `src/`:
+Copy `EEG_API_Unicorn_Applications/Protocole/receiver.py` over if you want to read actual
+values; it imports nothing from `src/`:
 
 ```powershell
-python examples/receiver.py --list
-python examples/receiver.py --stream quality
+python receiver.py --list
+python receiver.py --stream quality
 ```
 
 Expect each stream to be listed **once per network interface** on the answering machine —
@@ -133,7 +133,7 @@ With the console, **Connect an application** lists two kinds of applications:
   stream, with the same rules as above (same subnet, firewall);
 - the **network devices** (an ESP32 on the Wi-Fi, for example) that announce themselves over UDP
   to **port 5010** of the console's computer (contract: [control.md](control.md), *Over the
-  network (UDP)*; a fake device to try it: `examples/udp_device.py`).
+  network (UDP)*; a fake device to try it: `EEG_API_Unicorn_Applications/Protocole/udp_device.py`).
 
 **The firewall of the console's computer** must let both in: the LSL ports above, and **UDP 5010,
 incoming**. The program to allow is **EEG API Unicorn** when it is installed, `python.exe` when
@@ -151,7 +151,7 @@ not been measured yet.
 **Broadcast stays on the local network.** A device's hello goes to `255.255.255.255`, which no
 router forwards. On a computer with several networks (Wi-Fi, Ethernet, a VPN such as Tailscale),
 it may also leave by the wrong one: give the device the console's IP address instead
-(`--engine-host` for `examples/udp_device.py`).
+(`--engine-host` for `EEG_API_Unicorn_Applications/Protocole/udp_device.py`).
 
 **One console per computer hears devices.** A second console on the same computer finds port 5010
 taken: it says so in orange on its **Connect an application** page, and still lists LSL
@@ -167,8 +167,9 @@ chosen in the console or given with `--serial` (without one, the computer's name
 python src/core/server.py --mode ssvep --id alice
 ```
 
-Clients should then select on it — `examples/receiver.py` warns when more than one engine
-answers, and the Unity component has an `Instance Id` field. Without this, a client attaches
+Clients should then select on it — `EEG_API_Unicorn_Applications/Protocole/receiver.py` warns
+when more than one engine answers, and the Unity component has an `Instance Id` field. Without
+this, a client attaches
 to whichever engine replied first, which may well be someone else's headset, and nothing in
 the data would look wrong.
 
